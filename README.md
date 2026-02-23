@@ -25,6 +25,12 @@ decompilation project. Think of it as a **defrag map for your decomp** —
 every byte of the original binary is a cell in a grid, colored by how
 closely your C code matches the original compiled output.
 
+### 🚀 Features
+
+- **Byte-Perfect Confidence**: Stop guessing if your C code produced the correct assembly. See exact byte comparisons visually.
+- **Fast Iteration**: Quickly identify which parts of a function are matching and which parts have diverged (e.g. register allocation differences, instruction reordering).
+- **Interactive Triage**: Click any block in the grid to immediately view the corresponding C source, disassembled binary, and hex diff.
+
 ### ✨ Highlights
 
 | | |
@@ -93,10 +99,14 @@ uv pip install -e ../recoverage
 ```bash
 # 1. Generate the coverage database (from your project directory)
 uv run rebrew catalog --json
+# Analyzes the target binary, parses your annotations, and dumps raw match data to db/data_*.json
+
 uv run rebrew build-db
+# Consumes the JSON files and builds a fast SQLite database (db/coverage.db) for the dashboard
 
 # 2. Start the dashboard
 uv run recoverage serve
+# Starts a lightweight Bottle web server serving the frontend SPA and providing the API backend
 ```
 
 > [!NOTE]
@@ -175,26 +185,21 @@ recoverage open --port 8001
 
 ---
 
-## How it works
+## Architecture & How it works
 
-**recoverage** is a pure **consumer** of the data that [rebrew](../rebrew)
-produces — the two packages are intentionally decoupled.
+**recoverage** is designed as a standalone **consumer** of the data that [rebrew](../rebrew) produces — the two packages are intentionally decoupled.
 
-```
-rebrew catalog --json          rebrew build-db           recoverage
+```text
+rebrew catalog --json          rebrew build-db           recoverage (Bottle + SQLite)
        │                             │                       │
-  db/data_*.json  ──────────▶  db/coverage.db  ──────────▶  dashboard
+  db/data_*.json  ──────────▶  db/coverage.db  ──────────▶  VanJS Dashboard
 ```
 
-1. **`rebrew catalog --json`** — scans source annotations and writes
-   `db/data_*.json` files.
-2. **`rebrew build-db`** — reads those JSON files and builds
-   `db/coverage.db` (SQLite), plus generates `CATALOG.md`.
-3. **`recoverage`** — serves the dashboard, reading the DB at startup and
-   on each API request.
+1. **`rebrew catalog --json`**: Scans your project's source annotations and writes intermediate `db/data_*.json` files containing coverage metrics.
+2. **`rebrew build-db`**: Consumes those JSON files and builds a structured `db/coverage.db` (SQLite) database, optimizing data for fast read access by the dashboard.
+3. **`recoverage`**: Starts a **Bottle** web server. The backend serves API endpoints querying the SQLite database, while the frontend is a zero-build Single Page Application (SPA) powered by **VanJS**, rendering the interactive defrag grid.
 
-You can install `recoverage` independently — no `rebrew` dependency needed
-as long as a valid `coverage.db` exists.
+You can run `recoverage` independently on any machine (or even host it remotely) as long as it has access to a compiled `coverage.db` — no `rebrew` dependency or compiler toolchain is required.
 
 ---
 
