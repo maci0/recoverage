@@ -1,0 +1,27 @@
+Metadata-Version: 2.4
+Name: recoverage
+Version: 0.1.0
+Summary: Coverage dashboard for binary-matching decompilation projects
+License-Expression: MIT
+Keywords: reverse-engineering,decompilation,code-coverage,binary-matching
+Classifier: Development Status :: 3 - Alpha
+Classifier: Intended Audience :: Developers
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Topic :: Software Development :: Disassemblers
+Requires-Python: >=3.12
+License-File: LICENSE
+Requires-Dist: bottle>=0.12
+Requires-Dist: rich>=13.0
+Requires-Dist: typer>=0.9
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0; extra == "dev"
+Provides-Extra: minify
+Requires-Dist: rjsmin>=1.2; extra == "minify"
+Requires-Dist: rcssmin>=1.1; extra == "minify"
+Provides-Extra: compress
+Requires-Dist: brotli>=1.1; extra == "compress"
+Requires-Dist: zstandard>=0.22; extra == "compress"
+Dynamic: license-file

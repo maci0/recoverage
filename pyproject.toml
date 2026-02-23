@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "recoverage"
+version = "0.1.0"
+description = "Coverage dashboard for binary-matching decompilation projects"
+requires-python = ">=3.12"
+license = "MIT"
+keywords = ["reverse-engineering", "decompilation", "code-coverage", "binary-matching"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Disassemblers",
+]
+dependencies = [
+    "bottle>=0.12",
+    "rich>=13.0",
+    "typer>=0.9",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+minify = [
+    "rjsmin>=1.2",
+    "rcssmin>=1.1",
+]
+compress = [
+    "brotli>=1.1",
+    "zstandard>=0.22",
+]
+
+[project.scripts]
+recoverage = "recoverage.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+recoverage = ["assets/*"]
+
+[tool.uv]
+package = true
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+ignore = ["E501"]

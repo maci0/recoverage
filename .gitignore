@@ -1,0 +1,8 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+coverage.db
+coverage.db-shm
+coverage.db-wal
+.pyre_configuration

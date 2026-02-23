@@ -1,0 +1,14 @@
+bottle>=0.12
+rich>=13.0
+typer>=0.9
+
+[compress]
+brotli>=1.1
+zstandard>=0.22
+
+[dev]
+pytest>=8.0
+
+[minify]
+rjsmin>=1.2
+rcssmin>=1.1
