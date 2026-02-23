@@ -9,29 +9,29 @@ const FN_URL = (t, va) => `/api/targets/${t}/functions/${va}`;
 // ============================================================================
 // Constants
 // ============================================================================
-  const MSG = {
-    LOADING: "Loading…",
-    ERROR_PREFIX: "Error: ",
-    SELECT_FUNCTION: "(select a function)",
-    NO_C_SOURCE: "(no C implementation for this function yet)",
-    NO_DOCS: "No documentation comments in source file",
-    NO_C_FOR_BLOCK: "(no C implementation)",
-    UNDOCUMENTED_BLOCK: "(undocumented block)",
-    ASM_PLACEHOLDER: "(use matcher.py --diff for disassembly)",
-    DATA_SECTION_NO_ASM: "(Data section - no assembly)",
-    BYTES_FAILED: "(failed to slice bytes from original DLL)",
-    BYTES_BSS: "(uninitialized data - no raw bytes)",
-    BYTES_LOAD_FAILED: "(original DLL not loaded)",
-    GLOBAL_VAR: "Global variable",
-    REGEN_USING_CACHE: (r) => `Using cached data. Regen available in ${r}s...`,
-    REGEN_IN_PROGRESS: "Regenerating…",
-    REGEN_UNAVAILABLE: "Regen unavailable",
-    REGEN_AVAILABLE_IN: "Regen available in",
-    SECONDS: "s",
-    NA: "(n/a)",
-    FETCH_FAILED: (url) => `(failed to load: ${url})`,
-    NO_DECL: "(no declaration found)",
-  };
+const MSG = {
+  LOADING: "Loading…",
+  ERROR_PREFIX: "Error: ",
+  SELECT_FUNCTION: "(select a function)",
+  NO_C_SOURCE: "(no C implementation for this function yet)",
+  NO_DOCS: "No documentation comments in source file",
+  NO_C_FOR_BLOCK: "(no C implementation)",
+  UNDOCUMENTED_BLOCK: "(undocumented block)",
+  ASM_PLACEHOLDER: "(use matcher.py --diff for disassembly)",
+  DATA_SECTION_NO_ASM: "(Data section - no assembly)",
+  BYTES_FAILED: "(failed to slice bytes from original DLL)",
+  BYTES_BSS: "(uninitialized data - no raw bytes)",
+  BYTES_LOAD_FAILED: "(original DLL not loaded)",
+  GLOBAL_VAR: "Global variable",
+  REGEN_USING_CACHE: (r) => `Using cached data. Regen available in ${r}s...`,
+  REGEN_IN_PROGRESS: "Regenerating…",
+  REGEN_UNAVAILABLE: "Regen unavailable",
+  REGEN_AVAILABLE_IN: "Regen available in",
+  SECONDS: "s",
+  NA: "(n/a)",
+  FETCH_FAILED: (url) => `(failed to load: ${url})`,
+  NO_DECL: "(no declaration found)",
+};
 
 function hex(n, width) {
   return "0x" + n.toString(16).toUpperCase().padStart(width, "0");
@@ -43,7 +43,7 @@ function formatBytes(buf, baseOffset = 0) {
   for (let i = 0; i < bytes.length; i += 16) {
     const slice = bytes.subarray(i, i + 16);
     const offset = (baseOffset + i).toString(16).toUpperCase().padStart(8, "0");
-    const hexParts = Array.from({length: 16}, (_, j) => j < slice.length ? slice[j].toString(16).toUpperCase().padStart(2, "0") : "  ");
+    const hexParts = Array.from({ length: 16 }, (_, j) => j < slice.length ? slice[j].toString(16).toUpperCase().padStart(2, "0") : "  ");
     const ascii = Array.from(slice, b => (b >= 32 && b <= 126) ? String.fromCharCode(b) : ".").join("");
     out += `${offset}  ${hexParts.slice(0, 8).join(" ")}  ${hexParts.slice(8, 16).join(" ")}  |${ascii}|\n`;
   }
@@ -86,10 +86,10 @@ async function loadHighlightJs() {
   script.onload = () => {
     const cScript = document.createElement('script');
     cScript.src = 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/languages/c.min.js';
-    
+
     const asmScript = document.createElement('script');
     asmScript.src = 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/languages/x86asm.min.js';
-    
+
     let loadedCount = 0;
     const checkDone = () => {
       loadedCount++;
@@ -99,10 +99,10 @@ async function loadHighlightJs() {
         resolvePromise();
       }
     };
-    
+
     cScript.onload = checkDone;
     asmScript.onload = checkDone;
-    
+
     document.head.appendChild(cScript);
     document.head.appendChild(asmScript);
   };
@@ -134,9 +134,9 @@ function extractDocs(cSourceText) {
   for (const line of lines) {
     const trimmed = line.trim();
     if (trimmed.startsWith("// NOTE:") || trimmed.startsWith("// BLOCKER:") ||
-        trimmed.startsWith("// FUNCTION:") || trimmed.startsWith("// STATUS:") ||
-        trimmed.startsWith("// ORIGIN:") || trimmed.startsWith("// SIZE:") ||
-        trimmed.startsWith("// CFLAGS:") || trimmed.startsWith("// SYMBOL:")) {
+      trimmed.startsWith("// FUNCTION:") || trimmed.startsWith("// STATUS:") ||
+      trimmed.startsWith("// ORIGIN:") || trimmed.startsWith("// SIZE:") ||
+      trimmed.startsWith("// CFLAGS:") || trimmed.startsWith("// SYMBOL:")) {
       docs.push(trimmed);
     }
   }
@@ -167,7 +167,7 @@ const App = () => {
   const modalTitle = van.state("");
   const modalContent = van.state("");
   const modalLang = van.state("");
-  
+
   const cSourceText = van.state(MSG.SELECT_FUNCTION);
   const docText = van.state(MSG.SELECT_FUNCTION);
   const bytesText = van.state(MSG.SELECT_FUNCTION);
@@ -175,7 +175,7 @@ const App = () => {
   const savedTheme = localStorage.getItem('recoverage_theme');
   const prefersLight = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches;
   const isLightMode = van.state(savedTheme === 'light' || (!savedTheme && prefersLight));
-  
+
   let lastRegenTime = 0;
   const REGEN_COOLDOWN_MS = 5000;
 
@@ -199,12 +199,12 @@ const App = () => {
       if (res.ok) {
         const d = await res.json();
         availableTargets.val = d.targets || [];
-        
+
         // Check URL params first, then localStorage, then default
         const urlParams = new URLSearchParams(window.location.search);
         const urlTarget = urlParams.get("target");
         const savedTarget = localStorage.getItem("recoverage_target");
-        
+
         if (urlTarget && availableTargets.val.some(t => t.id === urlTarget)) {
           activeTarget.val = urlTarget;
         } else if (savedTarget && availableTargets.val.some(t => t.id === savedTarget)) {
@@ -227,7 +227,7 @@ const App = () => {
       const res = await fetch(DATA_URL(activeTarget.val), { cache: "no-store" });
       if (!res.ok) throw new Error(`failed to load data`);
       const d = await res.json();
-      
+
       // Precompute cell properties for fast rendering
       if (d.sections) {
         for (const sec of Object.values(d.sections)) {
@@ -240,22 +240,34 @@ const App = () => {
           }
         }
       }
-      
+
       data.val = d;
-      
+
       if (d.sections && !d.sections[activeSection.val]) {
         const sections = Object.keys(d.sections);
         if (sections.length > 0) {
           activeSection.val = sections[0];
         }
       }
-      
+
       if (d.paths && d.paths.originalDll) {
         originalDll.val = await fetchArrayBufferSafe(d.paths.originalDll);
       }
-      
+
       const summary = d.summary || {};
       summaryData.val = { ...summary, textSize: d.sections[".text"]?.size || 0 };
+
+      // Restore last visited function
+      setTimeout(() => {
+        const lastFn = localStorage.getItem('recoverage_last_fn_' + activeTarget.val);
+        if (lastFn && data.val?.search_index?.[lastFn]) {
+          const info = data.val.search_index[lastFn];
+          jumpToAddress(parseInt(info.va, 16));
+          setTimeout(() => selectFunction(lastFn), 50);
+        } else if (lastFn) {
+          selectFunction(lastFn);
+        }
+      }, 50);
     } catch (e) {
       loadingMsg.val = MSG.ERROR_PREFIX + e.message; summaryData.val = null;
     } finally {
@@ -308,7 +320,7 @@ const App = () => {
     if (!query) return true;
     const q = query.toLowerCase();
     if (name.toLowerCase().includes(q)) return true;
-    
+
     // Check search index if available
     if (data.val && data.val.search_index && data.val.search_index[name]) {
       const info = data.val.search_index[name];
@@ -322,7 +334,7 @@ const App = () => {
     if (!data.val || !data.val.search_index) return new Set();
     const query = searchQuery.val;
     if (!query) return new Set(); // Empty set means "no filter"
-    
+
     const matched = new Set();
     for (const name of Object.keys(data.val.search_index)) {
       if (matchesSearch(name, query)) {
@@ -336,11 +348,11 @@ const App = () => {
     if (!originalDll.val || !data.val?.sections) return null;
     const sec = data.val.sections[activeSection.val];
     if (!sec || activeSection.val === ".bss") return null;
-    
+
     const va = typeof item.va === 'string' ? parseInt(item.va, 16) : item.va;
     let start = activeSection.val === ".text" ? item.fileOffset : sec.fileOffset + (va - sec.va);
     let size = activeSection.val === ".text" ? item.size : 16;
-    
+
     if (start < 0 || start + size > originalDll.val.byteLength) return null;
     return originalDll.val.slice(start, start + size);
   };
@@ -360,36 +372,37 @@ const App = () => {
       cSourceText.val = "Loading...";
       docText.val = "Loading...";
       asmText.val = "Loading assembly...";
-      
+
       try {
         const res = await fetch(FN_URL(activeTarget.val, id), { signal });
         if (!res.ok) throw new Error("Not found");
         const fn = await res.json();
-        
+
         if (signal.aborted) return;
         currentFn.val = fn;
-        
+        localStorage.setItem('recoverage_last_fn_' + activeTarget.val, id);
+
         const buf = sliceOriginalBytes(fn);
         currentBuf.val = buf;
         bytesText.val = buf ? formatBytes(buf, parseInt(fn.vaStart || fn.va, 16)) : MSG.BYTES_FAILED;
-        
+
         const sourceRoot = (data.val && data.val.paths && data.val.paths.sourceRoot) ? data.val.paths.sourceRoot : `/src/${activeTarget.val.toLowerCase()}`;
         const cPath = (fn.files && fn.files[0]) ? `${sourceRoot}/${fn.files[0]}` : null;
         const va = fn.vaStart || fn.va;
         const size = fn.size;
-        
+
         // Fetch C source and ASM concurrently
         const [cSourceRes, asmRes] = await Promise.allSettled([
           cPath ? fetchTextSafe(cPath) : Promise.resolve(MSG.NO_C_SOURCE),
           fetch(`${ASM_URL(activeTarget.val)}?va=${va}&size=${size}&section=${activeSection.val}`, { signal }).then(r => r.ok ? r.json() : null)
         ]);
-        
+
         if (signal.aborted) return;
-        
+
         const newCSource = cSourceRes.status === 'fulfilled' ? cSourceRes.value : MSG.NO_C_SOURCE;
         const newAsm = (asmRes.status === 'fulfilled' && asmRes.value && asmRes.value.asm) ? asmRes.value.asm : MSG.ASM_PLACEHOLDER;
         const newDocs = extractDocs(newCSource);
-        
+
         // Update all state synchronously to trigger a single re-render
         cSourceText.val = newCSource;
         docText.val = newDocs ? newDocs : MSG.NO_DOCS;
@@ -399,16 +412,17 @@ const App = () => {
         currentFn.val = null;
         cSourceText.val = MSG.ERROR_PREFIX + e.message;
       }
-      
+
     } else {
       // Global variable
       try {
         const res = await fetch(FN_URL(activeTarget.val, id), { signal });
         if (!res.ok) throw new Error("Not found");
         const g = await res.json();
-        
+
         if (signal.aborted) return;
         currentFn.val = { ...g, isGlobal: true };
+        localStorage.setItem('recoverage_last_fn_' + activeTarget.val, id);
         const buf = sliceOriginalBytes(g);
         currentBuf.val = buf;
         bytesText.val = buf ? formatBytes(buf, parseInt(g.va, 16)) : (activeSection.val === ".bss" ? MSG.BYTES_BSS : MSG.BYTES_FAILED);
@@ -428,11 +442,11 @@ const App = () => {
     if (!data.val || !data.val.sections) return;
     const sec = data.val.sections[activeSection.val];
     if (!sec) return;
-    
+
     const cells = sec.cells || [];
     const cell = cells[i];
     if (!cell) return;
-    
+
     if (cell.functions && cell.functions.length) {
       selectFunction(cell.functions[0]);
     } else {
@@ -440,7 +454,7 @@ const App = () => {
       cSourceText.val = MSG.NO_C_FOR_BLOCK;
       docText.val = MSG.UNDOCUMENTED_BLOCK;
       asmText.val = MSG.ASM_PLACEHOLDER;
-      
+
       if (activeSection.val === ".bss") {
         currentBuf.val = null;
         bytesText.val = MSG.BYTES_BSS;
@@ -453,7 +467,7 @@ const App = () => {
           const buf = originalDll.val.slice(start, end);
           currentBuf.val = buf;
           bytesText.val = formatBytes(buf, sec.va + cell.start);
-          
+
           if (activeSection.val === ".text") {
             // Fetch ASM for undocumented block in .text
             asmText.val = "Loading assembly...";
@@ -520,7 +534,7 @@ const App = () => {
             selectChunk(i);
             requestAnimationFrame(() => {
               requestAnimationFrame(() => {
-                const grid = document.getElementById("grid");
+                const grid = document.getElementById(`grid-${secName.replace('.', '')}`);
                 if (grid && grid.children[i]) {
                   grid.children[i].scrollIntoView({ behavior: "smooth", block: "center" });
                 }
@@ -536,22 +550,22 @@ const App = () => {
 
   const HighlightedCode = ({ lang, text }) => {
     const codeEl = code({ class: lang ? `language-${lang}` : "" }, text);
-    
+
     const doHighlight = async () => {
       if (lang) {
         await loadHighlightJs();
         codeEl.removeAttribute("data-highlighted");
-        try { 
-          window.hljs.highlightElement(codeEl); 
+        try {
+          window.hljs.highlightElement(codeEl);
           if (lang === "x86asm") {
             codeEl.innerHTML = codeEl.innerHTML.replace(/(0x[0-9a-fA-F]+)/g, '<a href="#" class="asm-link" data-addr="$1">$1</a>');
           }
-        } catch (_) {}
+        } catch (_) { }
       }
     };
-    
+
     setTimeout(doHighlight, 0);
-    
+
     codeEl.onclick = (e) => {
       if (e.target.classList.contains("asm-link")) {
         e.preventDefault();
@@ -561,11 +575,11 @@ const App = () => {
         }
       }
     };
-    
+
     return pre({ class: "code" }, codeEl);
   };
 
-    
+
   const ProgressBar = () => {
     return () => {
       if (isLoading.val) {
@@ -577,7 +591,7 @@ const App = () => {
           )
         );
       }
-      
+
       if (!data.val || !data.val.sections || !summaryData.val) {
         return div({ class: "progress-container" },
           div({ class: "progress-bar" },
@@ -587,16 +601,16 @@ const App = () => {
           )
         );
       }
-      
+
       const secName = activeSection.val;
       const sec = data.val.sections[secName];
       if (!sec) return div({ class: "subtitle" }, "Section not found");
-      
+
       let exactCount = 0, relocCount = 0, matchingCount = 0, stubCount = 0;
       let exactBytes = 0, relocBytes = 0, matchingBytes = 0, stubBytes = 0;
       let totalItems = 0;
       let coveredBytes = 0;
-      
+
       const s = summaryData.val[secName] || summaryData.val; // Fallback for .text if not nested
       if (s) {
         exactCount = s.exactMatches || 0;
@@ -610,7 +624,7 @@ const App = () => {
         totalItems = s.totalFunctions || 0;
         coveredBytes = s.coveredBytes || 0;
       }
-      
+
       let exactPct = 0, relocPct = 0, matchingPct = 0, stubPct = 0;
       if (secName === ".text") {
         const total = totalItems || 1;
@@ -625,9 +639,9 @@ const App = () => {
         matchingPct = (matchingBytes / total) * 100;
         stubPct = (stubBytes / total) * 100;
       }
-      
+
       const coveragePct = sec.size > 0 ? (coveredBytes / sec.size * 100) : 0;
-      
+
       const segments = [
         { type: "exact", pct: exactPct, count: exactCount },
         { type: "reloc", pct: relocPct, count: relocCount },
@@ -639,7 +653,7 @@ const App = () => {
         let cls = `progress-segment ${type}`;
         return () => `${cls} ${activeFilters.val.has(type) ? "active" : ""}`;
       };
-      
+
       return div({ class: "progress-container" },
         div({ class: "progress-bar" },
           div({ class: "progress-segments" },
@@ -662,14 +676,14 @@ const App = () => {
     const container = div({ class: "grid-container", style: "position: relative; min-height: 400px;" });
     const grids = {}; // secName -> div element
     let ro = null;
-    
+
     const resize = () => {
       const activeGrid = grids[activeSection.val];
       if (!activeGrid) return;
-      
+
       const sec = data.val?.sections?.[activeSection.val];
       const columns = sec?.columns || 64;
-      
+
       const styles = window.getComputedStyle(activeGrid);
       const gap = parseFloat(styles.columnGap || styles.gap || "2") || 2;
       const padL = parseFloat(styles.paddingLeft || "0") || 0;
@@ -679,38 +693,38 @@ const App = () => {
       const px = Math.max(6, Math.floor(colW));
       activeGrid.style.gridAutoRows = `${px}px`;
     };
-    
+
     ro = new ResizeObserver(resize);
-    
+
     const updateCellClasses = (gridEl, secName) => {
       const sec = data.val?.sections?.[secName];
       if (!sec || !sec.cells) return;
       const cells = sec.cells;
-      
+
       const query = searchQuery.val;
       const matchedNames = filteredFnNames.val;
       const activeIdx = secName === activeSection.val ? currentCellIndex.val : null;
-      
+
       const children = gridEl.children;
       const len = Math.min(children.length, cells.length);
-      
+
       for (let i = 0; i < len; i++) {
         const child = children[i];
         const cell = cells[i];
-        
+
         let cls = cell._baseClass;
         if (i === activeIdx) cls += " active";
-        
+
         if (query && cell._fnName && !matchedNames.has(cell._fnName)) {
           cls += " dimmed";
         }
-        
+
         if (child.className !== cls) {
           child.className = cls;
         }
       }
     };
-    
+
     van.derive(() => {
       if (isLoading.val) {
         container.innerHTML = "";
@@ -718,31 +732,31 @@ const App = () => {
         van.add(container, div({ class: "loading-overlay" }, "Loading coverage data..."));
         return;
       }
-      
+
       if (!data.val || !data.val.sections) {
         container.innerHTML = "";
         for (const k in grids) delete grids[k];
         return;
       }
-      
+
       const secName = activeSection.val;
       const sec = data.val.sections[secName];
       if (!sec) return;
-      
+
       // Hide all grids
       for (const [name, el] of Object.entries(grids)) {
         el.style.display = name === secName ? "grid" : "none";
       }
-      
+
       // Remove loading overlay if present
       const overlay = container.querySelector('.loading-overlay');
       if (overlay) overlay.remove();
-      
+
       // Create grid if it doesn't exist
       if (!grids[secName]) {
-        const gridEl = div({ 
-          class: "grid", 
-          id: `grid-${secName.replace('.','')}`,
+        const gridEl = div({
+          class: "grid",
+          id: `grid-${secName.replace('.', '')}`,
           onmousedown: (e) => {
             const cell = e.target.closest('.cell');
             if (cell) e.preventDefault();
@@ -755,16 +769,16 @@ const App = () => {
             }
           }
         });
-        
+
         grids[secName] = gridEl;
         container.appendChild(gridEl);
         ro.observe(gridEl);
-        
+
         const cells = sec.cells || [];
-        
+
         // Show loading state for this specific grid
         gridEl.style.opacity = "0.5";
-        
+
         setTimeout(() => {
           const query = searchQuery.val;
           const matchedNames = filteredFnNames.val;
@@ -775,17 +789,17 @@ const App = () => {
             const cell = cells[i];
             const style = typeof cell.span === "number" ? `grid-column: span ${cell.span};` : "";
             const title = `${i}  ${hex(cell.start, 5)}..${hex(cell.end, 5)}  ${cell.functions ? cell.functions.length : 0} fn`;
-            
+
             let cls = cell._baseClass;
             if (i === activeIdx) cls += " active";
-            
+
             if (query && cell._fnName && !matchedNames.has(cell._fnName)) {
               cls += " dimmed";
             }
-            
+
             html += `<div class="${cls}" data-index="${i}" style="${style}" title="${title}"></div>`;
           }
-          
+
           gridEl.innerHTML = html;
           gridEl.style.opacity = "1";
           resize();
@@ -796,19 +810,19 @@ const App = () => {
         updateCellClasses(grids[secName], secName);
       }
     });
-    
+
     van.derive(() => {
       // Depend on these states to trigger updates
       searchQuery.val;
       filteredFnNames.val;
       currentCellIndex.val;
-      
+
       const activeGrid = grids[activeSection.val];
       if (activeGrid && activeGrid.children.length > 0 && activeGrid.children[0].classList.contains('cell')) {
         updateCellClasses(activeGrid, activeSection.val);
       }
     });
-    
+
     van.derive(() => {
       // Handle CSS-based filtering
       const filters = activeFilters.val;
@@ -819,13 +833,13 @@ const App = () => {
           cls += ` show-${f}`;
         }
       }
-      
+
       // Apply to all cached grids
       for (const gridEl of Object.values(grids)) {
         gridEl.className = cls;
       }
     });
-    
+
     return container;
   };
 
@@ -868,21 +882,21 @@ const App = () => {
   const Panel = () => {
     const fn = currentFn.val;
     const cellIdx = currentCellIndex.val;
-    
+
     let title = "No selection";
     let metaContent = null;
     let cPath = null;
-    
+
     if (fn) {
       title = fn.name;
       const sourceRoot = (data.val && data.val.paths && data.val.paths.sourceRoot) ? data.val.paths.sourceRoot : `/src/${activeTarget.val.toLowerCase()}`;
       cPath = (fn.files && fn.files[0]) ? `${sourceRoot}/${fn.files[0]}` : null;
-      
+
       if (fn.isGlobal) {
         metaContent = div({ class: "meta-grid" },
-          div({ class: "meta-item" }, span({ class: "meta-label" }, "VA"), a({ 
-            href: "#", 
-            class: "meta-value asm-link", 
+          div({ class: "meta-item" }, span({ class: "meta-label" }, "VA"), a({
+            href: "#",
+            class: "meta-value asm-link",
             onclick: (e) => { e.preventDefault(); jumpToAddress(parseInt(fn.va)); }
           }, `0x${fn.va.toString(16).toUpperCase()}`)),
           div({ class: "meta-item" }, span({ class: "meta-label" }, "Type"), span({ class: "meta-value" }, "Global Variable")),
@@ -890,15 +904,15 @@ const App = () => {
         );
       } else {
         const statusClass = fn.status ? `status-${fn.status.toLowerCase().replace('_', '-')}` : '';
-        
+
         metaContent = div({ class: "meta-grid" },
-          div({ class: "meta-item" }, span({ class: "meta-label" }, "VA"), a({ 
-            href: "#", 
-            class: "meta-value asm-link", 
+          div({ class: "meta-item" }, span({ class: "meta-label" }, "VA"), a({
+            href: "#",
+            class: "meta-value asm-link",
             onclick: (e) => { e.preventDefault(); jumpToAddress(parseInt(fn.vaStart || fn.va)); }
           }, fn.vaStart || fn.va)),
           div({ class: "meta-item" }, span({ class: "meta-label" }, "Size"), span({ class: "meta-value" }, `${fn.size} bytes`)),
-          div({ class: "meta-item" }, span({ class: "meta-label" }, "Offset"), span({ class: "meta-value" }, `0x${(fn.fileOffset||0).toString(16).toUpperCase()}`)),
+          div({ class: "meta-item" }, span({ class: "meta-label" }, "Offset"), span({ class: "meta-value" }, `0x${(fn.fileOffset || 0).toString(16).toUpperCase()}`)),
           div({ class: "meta-item" }, span({ class: "meta-label" }, "Symbol"), span({ class: "meta-value" }, fn.symbol || "(n/a)")),
           div({ class: "meta-item" }, span({ class: "meta-label" }, "Status"), span({ class: `meta-value status-badge ${statusClass}` }, fn.status || "?")),
           div({ class: "meta-item" }, span({ class: "meta-label" }, "Origin"), span({ class: "meta-value" }, fn.origin || "?")),
@@ -910,7 +924,7 @@ const App = () => {
           fn.is_export ? div({ class: "meta-item" }, span({ class: "meta-label" }, "Type"), span({ class: "meta-value" }, "Exported function")) : null,
           fn.sha256 ? div({ class: "meta-item" }, span({ class: "meta-label" }, "SHA256"), span({ class: "meta-value" }, `${fn.sha256.substring(0, 16)}...`)) : null,
           fn.files && fn.files.length > 0 ? div({ class: "meta-item" }, span({ class: "meta-label" }, "Source"), span({ class: "meta-value" }, ...fn.files.map((file, i) => span(i > 0 ? ", " : "", a({ href: `${sourceRoot}/${file}`, target: "_blank", class: "source-link" }, file))))) : null,
-          docText.val && docText.val !== "(select a function)" && docText.val !== "No documentation comments in source file" ? 
+          docText.val && docText.val !== "(select a function)" && docText.val !== "No documentation comments in source file" ?
             div({ class: "meta-item full-width" }, span({ class: "meta-label" }, "Annotations"), pre({ class: "meta-docs" }, docText.val)) : null
         );
       }
@@ -941,18 +955,18 @@ const App = () => {
             HexLogo("C", "#3b82f6", "C Source"),
             div({ class: "section-actions" },
               button({ class: "btn copy-btn", "aria-label": "Copy C Source", onclick: (e) => copyToClipboard(cSourceText.val, e) }, "Copy"),
-              button({ class: "btn copy-btn", "aria-label": "Open C Source in Modal", onclick: () => { if(fn) { modalTitle.val = "C Source: " + fn.name; modalContent.val = cSourceText.val; modalLang.val = "c"; showModal.val = true; } } }, "Open")
+              button({ class: "btn copy-btn", "aria-label": "Open C Source in Modal", onclick: () => { if (fn) { modalTitle.val = "C Source: " + fn.name; modalContent.val = cSourceText.val; modalLang.val = "c"; showModal.val = true; } } }, "Open")
             )
           ),
           HighlightedCode({ lang: "c", text: cSourceText.val })
         ),
-        activeSection.val === ".text" ? 
+        activeSection.val === ".text" ?
           div({ class: "section" },
             div({ class: "section-title" },
               HexLogo("ASM", "#ef4444", "Assembly"),
               div({ class: "section-actions" },
                 button({ class: "btn copy-btn", "aria-label": "Copy ASM", onclick: (e) => copyToClipboard(asmText.val, e) }, "Copy"),
-                button({ class: "btn copy-btn", "aria-label": "Open ASM in Modal", onclick: () => { if(fn) { modalTitle.val = "ASM: " + fn.name; modalContent.val = asmText.val; modalLang.val = "x86asm"; showModal.val = true; } } }, "Open")
+                button({ class: "btn copy-btn", "aria-label": "Open ASM in Modal", onclick: () => { if (fn) { modalTitle.val = "ASM: " + fn.name; modalContent.val = asmText.val; modalLang.val = "x86asm"; showModal.val = true; } } }, "Open")
               )
             ),
             HighlightedCode({ lang: "x86asm", text: asmText.val })
@@ -968,7 +982,7 @@ const App = () => {
             HexLogo("01", "#10b981", "Original Bytes"),
             div({ class: "section-actions" },
               button({ class: "btn copy-btn", "aria-label": "Copy Original Bytes", onclick: (e) => copyToClipboard(bytesText.val, e) }, "Copy"),
-              button({ class: "btn copy-btn", "aria-label": "Open Original Bytes in Modal", onclick: () => { if(fn) { modalTitle.val = "Original Bytes: " + fn.name; modalContent.val = bytesText.val; modalLang.val = "hex"; showModal.val = true; } } }, "Open")
+              button({ class: "btn copy-btn", "aria-label": "Open Original Bytes in Modal", onclick: () => { if (fn) { modalTitle.val = "Original Bytes: " + fn.name; modalContent.val = bytesText.val; modalLang.val = "hex"; showModal.val = true; } } }, "Open")
             )
           ),
           HighlightedCode({ lang: "hex", text: bytesText.val })
@@ -979,7 +993,7 @@ const App = () => {
 
   const switchTab = (name) => { activeSection.val = name; currentFn.val = null; currentCellIndex.val = null; };
 
-  van.add(document.body, 
+  van.add(document.body,
     header({ class: "topbar layout-grid" },
       div({ class: "topbar-left" },
         div({ class: "title-container" },
@@ -989,7 +1003,7 @@ const App = () => {
         () => {
           if (!data.val || !data.val.sections) return div({ class: "tabs" });
           return div({ class: "tabs" },
-            ...Object.keys(data.val.sections).map(secName => 
+            ...Object.keys(data.val.sections).map(secName =>
               button({ class: () => `btn tab-btn ${activeSection.val === secName ? "active" : ""}`, onclick: () => switchTab(secName) }, secName)
             )
           );
@@ -998,7 +1012,7 @@ const App = () => {
       ),
       div({ class: "topbar-right" },
         div({ class: "search" },
-          input({ 
+          input({
             type: "text", class: "input-el",
             placeholder: "Search function name or VA...",
             "aria-label": "Search functions",
@@ -1020,15 +1034,15 @@ const App = () => {
                 onchange: (e) => {
                   const newTarget = e.target.value;
                   activeTarget.val = newTarget;
-                  
+
                   // Update URL without reloading
                   const url = new URL(window.location);
                   url.searchParams.set("target", newTarget);
                   window.history.pushState({}, "", url);
-                  
+
                   // Save to localStorage
                   localStorage.setItem("recoverage_target", newTarget);
-                  
+
                   // Reset UI state
                   currentFn.val = null;
                   currentCellIndex.val = null;
@@ -1037,20 +1051,20 @@ const App = () => {
                   bytesText.val = MSG.SELECT_FUNCTION;
                   asmText.val = MSG.ASM_PLACEHOLDER;
                   currentBuf.val = null;
-                  
+
                   // Load new data
                   loadData();
-                  
+
                   // Remove focus to hide glow
                   e.target.blur();
                 }
-              }, ...availableTargets.val.map(t => 
+              }, ...availableTargets.val.map(t =>
                 van.tags.option({ value: t.id, selected: t.id === activeTarget.val }, t.name)
               ));
             }
             return span({ style: "display: none;" });
           },
-          button({ class: "btn icon-btn", "aria-label": () => isLightMode.val ? "Switch to Dark Mode" : "Switch to Light Mode", title: () => isLightMode.val ? "Switch to Dark Mode" : "Switch to Light Mode", onclick: () => isLightMode.val = !isLightMode.val }, () => isLightMode.val ? MoonIcon() : SunIcon()),
+          button({ class: "btn icon-btn", "aria-label": () => isLightMode.val ? "Switch to Dark Mode" : "Switch to Light Mode", title: () => isLightMode.val ? "Switch to Dark Mode" : "Switch to Light Mode", onclick: () => { isLightMode.val = !isLightMode.val; localStorage.setItem('recoverage_theme', isLightMode.val ? 'light' : 'dark'); } }, () => isLightMode.val ? MoonIcon() : SunIcon()),
           button({ class: "btn icon-btn", "aria-label": "Reload data", title: "Reload", onclick: handleReload }, ReloadIcon())
         )
       )
@@ -1065,14 +1079,14 @@ const App = () => {
           div({ class: "key" }, span({ class: "swatch swatch-stub" }), span("stub"))
         ),
         Grid(),
-          div({ class: "hint" }, "Click a block to view function details. Use filters to show specific statuses.")
+        div({ class: "hint" }, "Click a block to view function details. Use filters to show specific statuses.")
       ),
       () => Panel()
     ),
     // Modal - always in DOM for CSS transitions
-    div({ 
-      class: () => `modal ${showModal.val ? "show" : ""}`, 
-      onclick: (e) => { if(e.target.classList.contains("modal")) showModal.val = false; } 
+    div({
+      class: () => `modal ${showModal.val ? "show" : ""}`,
+      onclick: (e) => { if (e.target.classList.contains("modal")) showModal.val = false; }
     },
       div({ class: "modal-content" },
         div({ class: "modal-header" },

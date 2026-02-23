@@ -394,17 +394,19 @@ def handle_api_targets():
             pass
 
     targets_list = []
-    for tid in target_ids:
-        filename = tid
-        t_info = targets_info.get(tid)
-        if isinstance(t_info, dict) and "filename" in t_info:
-            filename = Path(t_info["filename"]).name
-        targets_list.append({"id": tid, "name": filename})
-
-    if not targets_list and targets_info:
-        for tid, t_info in targets_info.items():
+    added_tids = set()
+    
+    # 1. Add targets in the order they appear in config
+    for tid, t_info in targets_info.items():
+        if tid in target_ids or not target_ids:
             filename = t_info.get("filename", tid) if isinstance(t_info, dict) else tid
             targets_list.append({"id": tid, "name": Path(filename).name})
+            added_tids.add(tid)
+            
+    # 2. Add any remaining targets from the DB that weren't in config
+    for tid in target_ids:
+        if tid not in added_tids:
+            targets_list.append({"id": tid, "name": tid})
 
     return _json_ok(
         {"targets": targets_list},
