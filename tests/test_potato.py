@@ -1,9 +1,12 @@
+import json
 import os
 import re
 import sqlite3
 import subprocess
+from io import BytesIO
 from pathlib import Path
 from urllib.parse import urlparse
+from wsgiref.util import setup_testing_defaults
 
 import pytest
 
@@ -19,6 +22,9 @@ from recoverage.potato import (
     render_potato,
     wrap_text,
 )
+from recoverage.server import app
+
+HAS_DB = os.path.exists(Path.cwd() / "db" / "coverage.db")
 
 
 def render_potato_url(url: str, name: str) -> str:
@@ -135,7 +141,7 @@ def test_format_data_inspector():
     assert "string (ascii)" in ascii_inspector and "Hello" in ascii_inspector
 
 
-@pytest.mark.skipif(not os.path.exists(Path.cwd() / "db" / "coverage.db"), reason="No coverage.db")
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
 def test_grid_structure():
     db_path = get_db_path()
     conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
@@ -202,7 +208,7 @@ URLS = [
 ]
 
 
-@pytest.mark.skipif(not os.path.exists(Path.cwd() / "db" / "coverage.db"), reason="No coverage.db")
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
 @pytest.mark.parametrize("url,name", URLS)
 def test_rendering_paths(url, name):
     html = render_potato_url(url, name)
@@ -211,3 +217,217 @@ def test_rendering_paths(url, name):
     ok, err = _test_tidy(html, name)
     if ok is False:
         pytest.fail(f"Tidy error on {name}: {err[:150]}")
+    assert "style=" not in html
+    assert "<script" not in html.lower()
+    assert "onclick=" not in html.lower()
+
+
+def _first_target() -> str:
+    conn = sqlite3.connect(f"file:{get_db_path()}?mode=ro", uri=True)
+    try:
+        c = conn.cursor()
+        c.execute("SELECT DISTINCT target FROM metadata ORDER BY target LIMIT 1")
+        row = c.fetchone()
+        return row[0] if row else ""
+    finally:
+        conn.close()
+
+
+def _find_cell_idx(target: str, section: str, predicate) -> int | None:
+    conn = sqlite3.connect(f"file:{get_db_path()}?mode=ro", uri=True)
+    try:
+        c = conn.cursor()
+        c.execute(
+            "SELECT id, functions FROM cells WHERE target = ? AND section_name = ? ORDER BY id",
+            (target, section),
+        )
+        for idx, funcs_json in c.fetchall():
+            funcs = []
+            if funcs_json:
+                funcs = json.loads(funcs_json)
+            if predicate(funcs):
+                return int(idx)
+    finally:
+        conn.close()
+    return None
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+def test_globals_detail_panel():
+    target = _first_target()
+    conn = sqlite3.connect(f"file:{get_db_path()}?mode=ro", uri=True)
+    try:
+        c = conn.cursor()
+        c.execute("SELECT name FROM globals WHERE target = ?", (target,))
+        globals_set = {row[0] for row in c.fetchall()}
+        c.execute(
+            "SELECT id, section_name, functions FROM cells WHERE target = ? AND section_name IN ('.data', '.rdata')",
+            (target,),
+        )
+        match: tuple[int, str] | None = None
+        for idx, sec, funcs_json in c.fetchall():
+            funcs = json.loads(funcs_json) if funcs_json else []
+            if any(fn in globals_set for fn in funcs):
+                match = (int(idx), sec)
+                break
+    finally:
+        conn.close()
+    if not match:
+        pytest.skip("No global-mapped .data/.rdata cell in DB")
+    idx, sec = match
+    html = render_potato_url(f"/potato?target={target}&section={sec}&idx={idx}", "globals")
+    assert "Global Variable" in html
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+def test_multi_function_cell():
+    target = _first_target()
+    idx = _find_cell_idx(target, ".text", lambda funcs: len(funcs) > 1)
+    if idx is None:
+        pytest.skip("No multi-function cell found")
+    html = render_potato_url(f"/potato?target={target}&section=.text&idx={idx}", "multi-fn")
+    assert "Block Details" in html
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+def test_function_list_view():
+    target = _first_target()
+    html = render_potato_url(f"/potato?target={target}&section=.text&view=functions", "fn-list")
+    assert "Functions" in html
+    assert "Origin" in html
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+def test_function_list_sort():
+    target = _first_target()
+    html_name = render_potato_url(
+        f"/potato?target={target}&section=.text&view=functions&sort=name", "fn-sort-name"
+    )
+    html_size = render_potato_url(
+        f"/potato?target={target}&section=.text&view=functions&sort=size", "fn-sort-size"
+    )
+    assert html_name != html_size
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+def test_function_list_status_filter():
+    target = _first_target()
+    html = render_potato_url(
+        f"/potato?target={target}&section=.text&view=functions&status=stub", "fn-status"
+    )
+    assert ("STUB" in html) or ("No functions found." in html)
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+def test_prev_next_navigation():
+    target = _first_target()
+    html = render_potato_url(f"/potato?target={target}&section=.text&idx=5", "prev-next")
+    assert "#sel" in html
+    assert "Prev" in html
+    assert "Next" in html
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+def test_skip_link():
+    target = _first_target()
+    html = render_potato_url(f"/potato?target={target}", "skip")
+    assert 'href="#grid"' in html
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+def test_accesskey_attributes():
+    target = _first_target()
+    html = render_potato_url(f"/potato?target={target}", "accesskeys")
+    assert 'accesskey="s"' in html
+    assert 'accesskey="0"' in html
+    assert 'accesskey="1"' in html
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+def test_clickable_asm_addresses():
+    target = _first_target()
+    idx = _find_cell_idx(target, ".text", lambda funcs: len(funcs) > 0)
+    if idx is None:
+        pytest.skip("No .text function cell found")
+    html = render_potato_url(f"/potato?target={target}&section=.text&idx={idx}", "asm-links")
+    if "Assembly" not in html:
+        pytest.skip("Assembly panel unavailable (missing DLL/capstone)")
+    assert re.search(r'href="\?target=.*&search=0x[0-9a-f]{8}"', html)
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+def test_back_to_main_link():
+    target = _first_target()
+    html = render_potato_url(f"/potato?target={target}", "main-link")
+    assert 'href="/"' in html
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+def test_footer_db_date():
+    target = _first_target()
+    html = render_potato_url(f"/potato?target={target}", "footer")
+    assert "DB: " in html
+    assert "recoverage" in html
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+def test_th_scope_row():
+    target = _first_target()
+    idx = _find_cell_idx(target, ".text", lambda funcs: len(funcs) > 0)
+    if idx is None:
+        pytest.skip("No function cell found")
+    html = render_potato_url(f"/potato?target={target}&section=.text&idx={idx}", "scope-row")
+    assert '<th scope="row"' in html
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+def test_label_for_search():
+    target = _first_target()
+    html = render_potato_url(f"/potato?target={target}", "labels")
+    assert 'label for="search-input"' in html
+    assert 'label for="target-select"' in html
+
+
+def _wsgi_get(
+    path: str, headers: dict[str, str] | None = None
+) -> tuple[str, dict[str, str], bytes]:
+    environ: dict[str, str | BytesIO] = {}
+    setup_testing_defaults(environ)
+    url_path, _, query = path.partition("?")
+    environ["REQUEST_METHOD"] = "GET"
+    environ["PATH_INFO"] = url_path
+    environ["QUERY_STRING"] = query
+    environ["wsgi.input"] = BytesIO(b"")
+    if headers:
+        for k, v in headers.items():
+            environ[f"HTTP_{k.upper().replace('-', '_')}"] = v
+
+    status_holder = {"status": "", "headers": {}}
+
+    def _start_response(status: str, response_headers, exc_info=None):
+        status_holder["status"] = status
+        status_holder["headers"] = {k: v for k, v in response_headers}
+        return None
+
+    result = app(environ, _start_response)
+    body = b"".join(result)
+    return status_holder["status"], status_holder["headers"], body
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+def test_etag_caching():
+    target = _first_target()
+    status, headers, _ = _wsgi_get(f"/potato?target={target}&section=.text")
+    assert status.startswith("200")
+    etag = headers.get("ETag")
+    assert etag
+
+    status2, _, _ = _wsgi_get(
+        f"/potato?target={target}&section=.text",
+        headers={"If-None-Match": etag},
+    )
+    assert status2.startswith("304")
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__, "-v"]))
