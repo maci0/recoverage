@@ -662,7 +662,7 @@ _PAGE_SRC = r"""<!DOCTYPE html>
       <table id="logo" border="0" cellpadding="0" cellspacing="0">
         <tr>
           <td><img src="{{R_LOGO_SVG}}" width="48" height="32" border="0" alt="R"></td>
-          <td valign="middle"><font face="{{MONO_FONT}}" size="5" color="{{TEXT_COLOR}}">&nbsp;<b>ReCoverage</b></font>&nbsp;<a href="/"><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">[SPA]</font></a></td>
+          <td valign="middle"><font face="{{MONO_FONT}}" size="5" color="{{TEXT_COLOR}}">&nbsp;<b>ReCoverage</b></font>&nbsp;<a href="/"><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">[SPA]</font></a>&nbsp;<a href="?target={{target}}&view=functions"><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">[Functions]</font></a></td>
         </tr>
       </table>
     </td>
@@ -842,6 +842,7 @@ def render_potato(parsed_url: ParseResult) -> str:
     active_filters = {f.strip() for f in filter_str.split(",") if f.strip()}
     idx_str = qs.get("idx", [""])[0]
     search_query = qs.get("search", [""])[0].strip()
+    view = qs.get("view", [""])[0]
 
     db_path = get_db_path()
     try:
@@ -851,9 +852,158 @@ def render_potato(parsed_url: ParseResult) -> str:
 
     try:
         c = conn.cursor()
-        return _render_potato_inner(c, conn, target, section, active_filters, idx_str, search_query)
+        return _render_potato_inner(
+            c, conn, target, section, active_filters, idx_str, search_query, view
+        )
     finally:
         conn.close()
+
+
+def _render_grid_html(
+    cells: list[dict[str, Any]],
+    sec_data: dict[str, Any],
+    active_filters: set[str],
+    search_query: str,
+    search_matched_fns: set[str],
+    idx_str: str,
+    target: str,
+    section: str,
+) -> tuple[str, int]:
+    grid_columns = sec_data.get("columns", 64)
+    if grid_columns <= 0:
+        grid_columns = 64
+
+    CELL_W = 18
+    CELL_H = 15
+
+    merged_cells = []
+    if cells:
+        curr_cell: dict[str, Any] = dict(cells[0])
+        curr_cell["orig_idx"] = 0
+        curr_col: int = int(curr_cell.get("span", 1))
+
+        for i, next_c in enumerate(cells[1:], 1):
+            n_span = int(next_c.get("span", 1))
+            if (
+                curr_cell.get("state") not in ("none", None)
+                and next_c.get("state") == curr_cell.get("state")
+                and next_c.get("functions") == curr_cell.get("functions")
+                and curr_col + n_span <= grid_columns
+            ):
+                curr_cell["span"] = curr_cell.get("span", 1) + n_span
+                curr_cell["end"] = next_c.get("end")
+                curr_col += n_span
+            else:
+                merged_cells.append(curr_cell)
+                curr_cell = dict(next_c)
+                curr_cell["orig_idx"] = i
+                if curr_col >= grid_columns:
+                    curr_col = n_span
+                else:
+                    curr_col += n_span
+        merged_cells.append(curr_cell)
+    else:
+        merged_cells = cells
+
+    sizing_tds = "".join(
+        f'<td bgcolor="{BG_COLOR}" width="{CELL_W}" height="1"></td>' for _ in range(grid_columns)
+    )
+    grid_html_parts = [
+        f'<table id="grid" border="1" frame="void" rules="all" cellpadding="0" cellspacing="0" bordercolor="{BG_COLOR}" bgcolor="{BG_COLOR}">'
+        f"<tr>{sizing_tds}</tr><tr>"
+    ]
+    curr_col = 0
+    for i, cell in enumerate(merged_cells):
+        span = cell.get("span", 1)
+        orig_idx = cell.get("orig_idx", i)
+        if curr_col >= grid_columns:
+            grid_html_parts.append("</tr><tr>")
+            curr_col = 0
+
+        state = cell.get("state", "none")
+        if state == "matching_reloc":
+            state = "matching"
+
+        dimmed = (active_filters and state != "none" and state not in active_filters) or (
+            search_query and not any(fn in search_matched_fns for fn in cell.get("functions", []))
+        )
+        bgcolor = BG_COLOR if dimmed else COLORS.get(state, COLORS["none"])
+        selected = idx_str.isdigit() and int(idx_str) == orig_idx
+        link = _build_url(
+            target, section, active_filters or None, idx=orig_idx, search=search_query
+        )
+        sec_va = sec_data.get("va", 0)
+        funcs = cell.get("functions", [])
+        title = (
+            f"{hex(sec_va + cell.get('start', 0))}..{hex(sec_va + cell.get('end', 0))} | {state}"
+        )
+        if funcs:
+            title += f" | {funcs[0]}"
+        alt_text = state
+        if funcs:
+            alt_text += f": {funcs[0]}"
+        w = CELL_W * span
+        img = f'<a href="{link}" title="{_esc(title)}"><img src="{TRANSPARENT_GIF}" width="{w}" height="{CELL_H}" border="0" alt="{_esc(alt_text)}"></a>'
+
+        if selected:
+            sel_img = (
+                f'<a href="{link}" title="{_esc(title)}">'
+                f'<img src="{TRANSPARENT_GIF}" width="{w - 2}" height="{CELL_H - 2}" border="0" alt="{_esc(alt_text)}">'
+                f"</a>"
+            )
+            grid_html_parts.append(
+                f'<td id="sel" bgcolor="{BG_COLOR}" width="{w}" height="{CELL_H}" colspan="{span}">'
+                f'<table border="1" cellpadding="0" cellspacing="0" bordercolor="{ACCENT_COLOR}" width="100%">'
+                f'<tr><td bgcolor="{bgcolor}">{sel_img}</td></tr></table></td>'
+            )
+        else:
+            grid_html_parts.append(
+                f'<td bgcolor="{bgcolor}" width="{w}" height="{CELL_H}" colspan="{span}">{img}</td>'
+            )
+        curr_col += span
+
+    remaining = int(grid_columns) - curr_col
+    if remaining > 0:
+        grid_html_parts.append(
+            f'<td bgcolor="{BG_COLOR}" width="{CELL_W * remaining}"'
+            f' height="{CELL_H}" colspan="{remaining}"></td>'
+        )
+    grid_html_parts.append("</tr></table>")
+    return "".join(grid_html_parts), len(merged_cells)
+
+
+def _render_functions_table(c: sqlite3.Cursor, target: str, search_query: str) -> tuple[str, int]:
+    query = "SELECT va, name, size, status FROM functions WHERE target = ?"
+    params: list[Any] = [target]
+    if search_query:
+        query += " AND (name LIKE ? OR CAST(va AS TEXT) LIKE ?)"
+        like = f"%{search_query}%"
+        params.extend([like, like])
+    query += " ORDER BY va ASC LIMIT 500"
+    c.execute(query, params)
+
+    rows = []
+    rows.append(
+        f'<table width="100%" border="1" cellpadding="8" cellspacing="0" bordercolor="{BORDER_COLOR}">'
+    )
+    rows.append(
+        f'<tr bgcolor="{PANEL_COLOR}"><th><font color="{MUTED_COLOR}">VA</font></th><th><font color="{MUTED_COLOR}">Name</font></th><th><font color="{MUTED_COLOR}">Size</font></th><th><font color="{MUTED_COLOR}">Status</font></th></tr>'
+    )
+    count = 0
+    for va, name, size, status in c.fetchall():
+        count += 1
+        st = status or "none"
+        if st == "matching_reloc":
+            st = "matching"
+        color = COLORS.get(st, TEXT_COLOR)
+        rows.append(
+            f'<tr><td><font face="Courier New, monospace" size="2">{hex(va)}</font></td><td><font face="Courier New, monospace" size="2"><a href="?target={target}&search={_url_quote(name)}"><font color="{ACCENT_COLOR}">{_esc(name)}</font></a></font></td><td><font face="Courier New, monospace" size="2">{size}</font></td><td><font face="Courier New, monospace" color="{color}" size="2"><b>{st.upper()}</b></font></td></tr>'
+        )
+
+    rows.append("</table>")
+    if count == 500:
+        rows.append(f'<br><font color="{MUTED_COLOR}">Showing first 500 results.</font>')
+    return "".join(rows), count
 
 
 def _render_potato_inner(
@@ -864,6 +1014,7 @@ def _render_potato_inner(
     active_filters: set[str],
     idx_str: str,
     search_query: str,
+    view: str = "",
 ) -> str:
     # Get targets (resolve display name from reccmp-project.yml)
     c.execute("SELECT DISTINCT target FROM metadata")
@@ -1091,118 +1242,25 @@ def _render_potato_inner(
     ]
 
     # ── Grid (with cell merging) ─────────────────────────────────
-    grid_columns = sec_data.get("columns", 64)
-    if grid_columns <= 0:
-        grid_columns = 64
-
-    CELL_W = 18
-    # NOTE: CELL_H < CELL_W to compensate for the browser baseline gap
-    # (~3px) added below inline images.  The <font size="1"> wrapper around
-    # the grid (in the template) keeps this gap small and predictable.
-    # Removing that wrapper will make cells taller than wide.
-    CELL_H = 15
-
-    merged_cells = []
-    if cells:
-        curr_cell: dict[str, Any] = dict(cells[0])
-        curr_cell["orig_idx"] = 0
-        curr_col: int = int(curr_cell.get("span", 1))
-
-        for i, next_c in enumerate(cells[1:], 1):
-            n_span = int(next_c.get("span", 1))
-            if (
-                curr_cell.get("state") not in ("none", None)
-                and next_c.get("state") == curr_cell.get("state")
-                and next_c.get("functions") == curr_cell.get("functions")
-                and curr_col + n_span <= grid_columns
-            ):
-                curr_cell["span"] = curr_cell.get("span", 1) + n_span
-                curr_cell["end"] = next_c.get("end")
-                curr_col += n_span
-            else:
-                merged_cells.append(curr_cell)
-                curr_cell = dict(next_c)
-                curr_cell["orig_idx"] = i
-                if curr_col >= grid_columns:
-                    curr_col = n_span
-                else:
-                    curr_col += n_span
-        merged_cells.append(curr_cell)
+    if view == "functions":
+        grid_html, block_count = _render_functions_table(c, target, search_query)
+        panel_html = ""
+        sec_stats = {}
     else:
-        merged_cells = cells
-
-    sizing_tds = "".join(
-        f'<td bgcolor="{BG_COLOR}" width="{CELL_W}" height="1"></td>' for _ in range(grid_columns)
-    )
-    grid_html_parts = [
-        f'<table id="grid" border="1" frame="void" rules="all" cellpadding="0" cellspacing="0" bordercolor="{BG_COLOR}" bgcolor="{BG_COLOR}">'
-        f"<tr>{sizing_tds}</tr><tr>"
-    ]
-    curr_col = 0
-    for i, cell in enumerate(merged_cells):
-        span = cell.get("span", 1)
-        orig_idx = cell.get("orig_idx", i)
-        if curr_col >= grid_columns:
-            grid_html_parts.append("</tr><tr>")
-            curr_col = 0
-
-        state = cell.get("state", "none")
-        if state == "matching_reloc":
-            state = "matching"
-
-        dimmed = (active_filters and state != "none" and state not in active_filters) or (
-            search_query and not any(fn in search_matched_fns for fn in cell.get("functions", []))
+        grid_html, block_count = _render_grid_html(
+            cells,
+            sec_data,
+            active_filters,
+            search_query,
+            search_matched_fns,
+            idx_str,
+            target,
+            section,
         )
-        bgcolor = BG_COLOR if dimmed else COLORS.get(state, COLORS["none"])
-        selected = idx_str.isdigit() and int(idx_str) == orig_idx
-        link = _build_url(
-            target, section, active_filters or None, idx=orig_idx, search=search_query
+        sec_stats = per_section_stats.get(section, {})
+        panel_html = _render_panel(
+            c, cells, idx_str, target, section, data, sec_data, active_filters, search_query
         )
-        sec_va = sec_data.get("va", 0)
-        funcs = cell.get("functions", [])
-        title = (
-            f"{hex(sec_va + cell.get('start', 0))}..{hex(sec_va + cell.get('end', 0))} | {state}"
-        )
-        if funcs:
-            title += f" | {funcs[0]}"
-        alt_text = state
-        if funcs:
-            alt_text += f": {funcs[0]}"
-        w = CELL_W * span
-        img = f'<a href="{link}" title="{_esc(title)}"><img src="{TRANSPARENT_GIF}" width="{w}" height="{CELL_H}" border="0" alt="{_esc(alt_text)}"></a>'
-
-        if selected:
-            sel_img = (
-                f'<a href="{link}" title="{_esc(title)}">'
-                f'<img src="{TRANSPARENT_GIF}" width="{w - 2}" height="{CELL_H - 2}" border="0" alt="{_esc(alt_text)}">'
-                f"</a>"
-            )
-            grid_html_parts.append(
-                f'<td id="sel" bgcolor="{BG_COLOR}" width="{w}" height="{CELL_H}" colspan="{span}">'
-                f'<table border="1" cellpadding="0" cellspacing="0" bordercolor="{ACCENT_COLOR}" width="100%">'
-                f'<tr><td bgcolor="{bgcolor}">{sel_img}</td></tr></table></td>'
-            )
-        else:
-            grid_html_parts.append(
-                f'<td bgcolor="{bgcolor}" width="{w}" height="{CELL_H}" colspan="{span}">{img}</td>'
-            )
-        curr_col += span
-
-    remaining = int(grid_columns) - curr_col
-    if remaining > 0:
-        grid_html_parts.append(
-            f'<td bgcolor="{BG_COLOR}" width="{CELL_W * remaining}"'
-            f' height="{CELL_H}" colspan="{remaining}"></td>'
-        )
-    grid_html_parts.append("</tr></table>")
-    grid_html = "".join(grid_html_parts)
-
-    sec_stats = per_section_stats.get(section, {})
-
-    # ── Detail panel ─────────────────────────────────────────────
-    panel_html = _render_panel(
-        c, cells, idx_str, target, section, data, sec_data, active_filters, search_query
-    )
 
     # ── Render page template ─────────────────────────────────────
     clear_search_url = _build_url(target, section, active_filters or None)
@@ -1263,7 +1321,7 @@ def _render_potato_inner(
         FILTER_INACT_R=FILTER_INACT_R,
         FILTER_INACT_MID=FILTER_INACT_MID,
         sec_stats=sec_stats,
-        block_count=len(merged_cells),
+        block_count=block_count,
         grid_html=grid_html,
         panel_html=panel_html,
         db_mtime=db_mtime_str,
