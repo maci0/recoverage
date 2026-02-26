@@ -13,7 +13,7 @@ The UI is built using a lightweight, dependency-free stack to ensure fast load t
 ## Data Pipeline
 1. `rebrew catalog --json` parses the target binary (`target.dll`) and C source annotations (`// FUNCTION:`, `// GLOBAL:`).
 2. `rebrew build-db` converts the resulting JSON into a structured SQLite database with tables for metadata, functions, globals, sections, and cells. It also pre-calculates coverage statistics for all sections to save frontend processing time.
-3. `server.py` (Bottle app) serves:
+3. The Bottle app (`server.py` + `api.py` + `ui.py`) serves:
    * Static files (index.html, app.js, style.css, van.min.js) which are **inlined and compressed** into a single response for the root `/` path to achieve a "first draw in the first TCP packet".
    * `/api/targets` endpoint that returns available targets (SERVER, Europa1400Gold, etc.) from the database.
    * `/api/targets/<target>/data` endpoint that queries SQLite for a specific target and returns lightweight metadata and section layouts (with gzip compression).
@@ -267,7 +267,9 @@ Each filter link toggles that filter on/off while preserving other active filter
 
 Potato Mode uses [Bottle](https://bottlepy.org/) for both the dev server and HTML templating:
 
-- **`server.py`** — Bottle web application with `@app.get`/`@app.post` route decorators, `request`/`response` globals, and `static_file()` for serving assets. Handles compression (brotli/zstd/gzip).
+- **`server.py`** — Bottle app factory and shared infrastructure: compression (brotli/zstd/gzip), minification, DB helpers, DLL loading, and response utilities.
+- **`api.py`** — REST API routes (`/api/*`, `/regen`) with `@app.get`/`@app.post` decorators and `request` globals.
+- **`ui.py`** — UI routes (`/`, `/potato`, static files) with index caching and `static_file()` serving.
 - **`potato.py`** — Uses Bottle's `SimpleTemplate` engine (stpl) standalone, with no dependency on the Bottle web server for rendering.
 
 ### Template Architecture

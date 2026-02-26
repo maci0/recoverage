@@ -215,7 +215,9 @@ recoverage/
     ├── __init__.py
     ├── __main__.py        # python -m recoverage
     ├── cli.py             # Typer CLI entry point
-    ├── server.py          # Bottle app + API routes
+    ├── server.py          # Bottle app, shared helpers & compression
+    ├── api.py             # REST API routes (/api/*)
+    ├── ui.py              # UI routes (/, /potato, static files)
     ├── potato.py          # Potato Mode renderer
     └── assets/
         ├── index.html     # SPA shell
