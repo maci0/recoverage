@@ -8,6 +8,8 @@ from typing import Any
 from urllib.parse import urlparse
 
 from recoverage.server import (
+    HAS_BROTLI,
+    HAS_ZSTD,
     HTTPResponse,
     _assets_dir,
     _best_encoding,
@@ -62,17 +64,59 @@ _log = logging.getLogger("recoverage")
 
 
 def _check_payload_budget(payload: bytes) -> None:
-    try:
-        compressed, enc = compress_payload(payload, "br, gzip")
-    except Exception:
+    """Warn if the inlined index payload exceeds the TCP cwnd budget.
+
+    Tries every available compression method and reports the best result.
+    If a non-installed compressor would bring the payload under budget,
+    suggests installing it.
+    """
+    import gzip as _gzip
+
+    results: list[tuple[str, int]] = []
+
+    results.append(("gzip", len(_gzip.compress(payload))))
+
+    if HAS_BROTLI:
+        try:
+            import brotli  # type: ignore[import-untyped]
+
+            results.append(("br", len(brotli.compress(payload))))
+        except Exception:
+            pass
+    if HAS_ZSTD:
+        try:
+            import zstandard as zstd  # type: ignore[import-untyped]
+
+            results.append(("zstd", len(zstd.ZstdCompressor(level=3).compress(payload))))
+        except Exception:
+            pass
+
+    if not results:
         return
-    if len(compressed) > _TCP_CWND_BUDGET:
+
+    best_name, best_size = min(results, key=lambda r: r[1])
+    if best_size <= _TCP_CWND_BUDGET:
+        return
+
+    over = best_size - _TCP_CWND_BUDGET
+    _log.warning(
+        "Inlined index payload (%s %d bytes) exceeds TCP cwnd budget (%d bytes) by %d bytes",
+        best_name,
+        best_size,
+        _TCP_CWND_BUDGET,
+        over,
+    )
+
+    suggestions = []
+    if not HAS_BROTLI:
+        suggestions.append("brotli")
+    if not HAS_ZSTD:
+        suggestions.append("zstandard")
+    if suggestions:
         _log.warning(
-            "Inlined index payload (%s %d bytes) exceeds TCP cwnd budget (%d bytes) by %d bytes",
-            enc or "raw",
-            len(compressed),
-            _TCP_CWND_BUDGET,
-            len(compressed) - _TCP_CWND_BUDGET,
+            "Install %s for better compression: pip install %s",
+            " / ".join(suggestions),
+            " ".join(suggestions),
         )
 
 

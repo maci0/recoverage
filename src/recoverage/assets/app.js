@@ -619,7 +619,7 @@ const App = () => {
 
       let exactCount = 0, relocCount = 0, matchingCount = 0, stubCount = 0;
       let exactBytes = 0, relocBytes = 0, matchingBytes = 0, stubBytes = 0;
-      let paddingBytes = 0, thunkBytes = 0;
+      let paddingBytes = 0;
       let totalItems = 0;
       let coveredBytes = 0;
 
@@ -634,12 +634,11 @@ const App = () => {
         matchingBytes = s.matchingBytes || 0;
         stubBytes = s.stubBytes || 0;
         paddingBytes = s.paddingBytes || 0;
-        thunkBytes = s.thunkBytes || 0;
         totalItems = s.totalFunctions || 0;
         coveredBytes = s.coveredBytes || 0;
       }
 
-      let exactPct = 0, relocPct = 0, matchingPct = 0, stubPct = 0, paddingPct = 0, thunkPct = 0;
+      let exactPct = 0, relocPct = 0, matchingPct = 0, stubPct = 0, paddingPct = 0;
       if (secName === ".text") {
         const total = totalItems || 1;
         exactPct = (exactCount / total) * 100;
@@ -647,7 +646,6 @@ const App = () => {
         matchingPct = (matchingCount / total) * 100;
         stubPct = (stubCount / total) * 100;
         paddingPct = sec.size > 0 ? (paddingBytes / sec.size * 100) : 0;
-        thunkPct = sec.size > 0 ? (thunkBytes / sec.size * 100) : 0;
       } else {
         const total = sec.size || 1;
         exactPct = (exactBytes / total) * 100;
@@ -664,8 +662,7 @@ const App = () => {
         { type: "reloc", pct: relocPct, count: relocCount },
         { type: "matching", pct: matchingPct, count: matchingCount },
         { type: "stub", pct: stubPct, count: stubCount },
-        { type: "padding", pct: paddingPct, count: 0 },
-        { type: "thunk", pct: thunkPct, count: 0 }
+        { type: "padding", pct: paddingPct, count: 0 }
       ];
 
       const getClasses = (type) => {
@@ -680,8 +677,7 @@ const App = () => {
             div({ class: getClasses("reloc"), style: `width: ${relocPct}%`, title: `Reloc: ${relocCount}`, onclick: () => toggleFilter("reloc") }),
             div({ class: getClasses("matching"), style: `width: ${matchingPct}%`, title: `Matching: ${matchingCount}`, onclick: () => toggleFilter("matching") }),
             div({ class: getClasses("stub"), style: `width: ${stubPct}%`, title: `Stub: ${stubCount}`, onclick: () => toggleFilter("stub") }),
-            div({ class: getClasses("padding"), style: `width: ${paddingPct}%`, title: `Padding: ${paddingBytes}B`, onclick: () => toggleFilter("padding") }),
-            div({ class: getClasses("thunk"), style: `width: ${thunkPct}%`, title: `Thunk: ${thunkBytes}B`, onclick: () => toggleFilter("thunk") })
+            div({ class: getClasses("padding"), style: `width: ${paddingPct}%`, title: `Padding: ${paddingBytes}B`, onclick: () => toggleFilter("padding") })
           ),
           div({ class: "progress-text-overlay" },
             span({ class: "stat-item" }, `${sec.size} bytes`),
@@ -1065,9 +1061,7 @@ const App = () => {
           button({ class: () => `btn filter-btn filter-reloc ${activeFilters.val.has("reloc") ? "active" : ""}`, "aria-label": "Filter reloc", onclick: () => toggleFilter("reloc") }, "R"),
           button({ class: () => `btn filter-btn filter-matching ${activeFilters.val.has("matching") ? "active" : ""}`, "aria-label": "Filter matching", onclick: () => toggleFilter("matching") }, "M"),
           button({ class: () => `btn filter-btn filter-stub ${activeFilters.val.has("stub") ? "active" : ""}`, "aria-label": "Filter stub", onclick: () => toggleFilter("stub") }, "S"),
-          button({ class: () => `btn filter-btn filter-padding ${activeFilters.val.has("padding") ? "active" : ""}`, "aria-label": "Filter padding", onclick: () => toggleFilter("padding") }, "P"),
-          button({ class: () => `btn filter-btn filter-data ${activeFilters.val.has("data") ? "active" : ""}`, "aria-label": "Filter data", onclick: () => toggleFilter("data") }, "J"),
-          button({ class: () => `btn filter-btn filter-thunk ${activeFilters.val.has("thunk") ? "active" : ""}`, "aria-label": "Filter thunk", onclick: () => toggleFilter("thunk") }, "T")
+          button({ class: () => `btn filter-btn filter-padding ${activeFilters.val.has("padding") ? "active" : ""}`, "aria-label": "Filter padding", onclick: () => toggleFilter("padding") }, "P")
         ),
         div({ class: "actions" },
           () => {
@@ -1120,9 +1114,7 @@ const App = () => {
           div({ class: "key" }, span({ class: "swatch swatch-reloc" }), span("reloc match")),
           div({ class: "key" }, span({ class: "swatch swatch-matching" }), span("near-miss")),
           div({ class: "key" }, span({ class: "swatch swatch-stub" }), span("stub")),
-          div({ class: "key" }, span({ class: "swatch swatch-padding" }), span("padding")),
-          div({ class: "key" }, span({ class: "swatch swatch-data" }), span("data")),
-          div({ class: "key" }, span({ class: "swatch swatch-thunk" }), span("thunk"))
+          div({ class: "key" }, span({ class: "swatch swatch-padding" }), span("padding"))
         ),
         Grid(),
         div({ class: "hint" }, "Click a block to view function details. Use filters to show specific statuses.")

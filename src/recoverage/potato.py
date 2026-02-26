@@ -95,15 +95,6 @@ DOT_PNGS = {
         "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76L"
         "AAAAE0lEQVR4nGM4cODKf3yYYWQoAACgS9TBQCUYVwAAAABJRU5ErkJggg=="
     ),
-    "data": (
-        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAA"
-        "EUlEQVR4nGPojvmGFTEMLQkAfbp3QYueE1MAAAAASUVORK5CYII="
-    ),
-    "thunk": (
-        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76L"
-        "AAAALElEQVR4nGNgIBb8X8g99f9C7k9QPBWb5H80jFAE1YWu4BNJCvBbQdCR+AAA"
-        "mLlMqfJkf6gAAAAASUVORK5CYII="
-    ),
     "none": (
         "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76L"
         "AAAALElEQVR4nGNgIBZoGdlM1TKy+QTFU7FJ/kfDCEVQXegKPpGkAL8VBB2JDwAA"
@@ -225,8 +216,6 @@ LEGEND_ITEMS = [
     ("matching", "near-miss"),
     ("stub", "stub"),
     ("padding", "padding"),
-    ("data", "data"),
-    ("thunk", "thunk"),
 ]
 
 
@@ -743,7 +732,7 @@ _PAGE_SRC = r"""<!DOCTYPE html>
       <table id="map" width="100%" border="1" cellpadding="0" cellspacing="0" bgcolor="{{PANEL_COLOR}}" bordercolor="{{BORDER_COLOR}}">
         <tr><td id="map-header" background="{{PANEL_HDR_PNG}}" cellpadding="8">&nbsp;<font color="{{MUTED_COLOR}}" size="2"><b>Coverage Map - {{section}}</b></font> <font color="{{MUTED_COLOR}}" size="1"> ({{block_count}} blocks)</font>
         % if sec_stats.get('total', 0) > 0:
-          <font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}"><font color="{{COLORS['exact']}}">E:{{sec_stats['exact']}}</font> <font color="{{COLORS['reloc']}}">R:{{sec_stats['reloc']}}</font> <font color="{{COLORS['matching']}}">M:{{sec_stats['matching']}}</font> <font color="{{COLORS['stub']}}">S:{{sec_stats['stub']}}</font> <font color="{{COLORS['padding']}}">P:{{sec_stats.get('padding', 0)}}</font> <font color="{{COLORS['data']}}">D:{{sec_stats.get('data', 0)}}</font> &#x2502; {{sec_stats['pct']}}% covered</font>
+          <font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}"><font color="{{COLORS['exact']}}">E:{{sec_stats['exact']}}</font> <font color="{{COLORS['reloc']}}">R:{{sec_stats['reloc']}}</font> <font color="{{COLORS['matching']}}">M:{{sec_stats['matching']}}</font> <font color="{{COLORS['stub']}}">S:{{sec_stats['stub']}}</font> <font color="{{COLORS['padding']}}">P:{{sec_stats.get('padding', 0)}}</font> &#x2502; {{sec_stats['pct']}}% covered</font>
         % end
         </td></tr>
         <tr><td bgcolor="{{PANEL_COLOR}}" cellpadding="8">
@@ -1001,14 +990,18 @@ def _render_potato_inner(
             "matching": s_matching,
             "stub": s_stub,
             "padding": s_padding,
-            "data": s_data,
-            "thunk": s_thunk,
             "covered": s_exact + s_reloc,
             "pct": s_pct,
         }
 
     # ── Filter toggle links ──────────────────────────────────────
-    _FILTER_OPTS = [("exact", "E"), ("reloc", "R"), ("matching", "M"), ("stub", "S"), ("padding", "P"), ("data", "J"), ("thunk", "T")]
+    _FILTER_OPTS = [
+        ("exact", "E"),
+        ("reloc", "R"),
+        ("matching", "M"),
+        ("stub", "S"),
+        ("padding", "P"),
+    ]
     toggle_links = {
         f: _build_url(
             target,
@@ -1062,11 +1055,7 @@ def _render_potato_inner(
 
         padding_bytes_val = sec_summ.get("paddingBytes", 0)
         seg_padding = (padding_bytes_val / sec_size * 100) if sec_size > 0 else 0
-        data_bytes_val = sec_summ.get("dataBytes", 0)
-        seg_data = (data_bytes_val / sec_size * 100) if sec_size > 0 else 0
-        thunk_bytes_val = sec_summ.get("thunkBytes", 0)
-        seg_thunk = (thunk_bytes_val / sec_size * 100) if sec_size > 0 else 0
-        seg_none = max(0, 100 - seg_exact - seg_reloc - seg_matching - seg_stub - seg_padding - seg_data - seg_thunk)
+        seg_none = max(0, 100 - seg_exact - seg_reloc - seg_matching - seg_stub - seg_padding)
         progress = {
             "sec_size": sec_size,
             "coverage_pct": (covered_bytes / sec_size * 100) if sec_size > 0 else 0,
@@ -1078,8 +1067,6 @@ def _render_potato_inner(
                 ("matching", seg_matching),
                 ("stub", seg_stub),
                 ("padding", seg_padding),
-                ("data", seg_data),
-                ("thunk", seg_thunk),
                 ("none", seg_none),
             ],
         }
@@ -1168,7 +1155,9 @@ def _render_potato_inner(
             target, section, active_filters or None, idx=orig_idx, search=search_query
         )
         sec_va = sec_data.get("va", 0)
-        title = f"{hex(sec_va + cell.get('start', 0))}..{hex(sec_va + cell.get('end', 0))} | {state}"
+        title = (
+            f"{hex(sec_va + cell.get('start', 0))}..{hex(sec_va + cell.get('end', 0))} | {state}"
+        )
         w = CELL_W * span
         img = f'<a href="{link}" title="{_esc(title)}"><img src="{TRANSPARENT_GIF}" width="{w}" height="{CELL_H}" border="0" alt=""></a>'
 
