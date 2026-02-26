@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import base64
 import json
+import os
+import re
 import sqlite3
 import struct
 import textwrap
 from collections.abc import Callable, Iterable
-from datetime import UTC
+from datetime import UTC, datetime
 from html import escape as _html_escape
 from pathlib import Path
 from typing import Any
@@ -16,8 +18,10 @@ from urllib.parse import quote as _url_quote
 from bottle import SimpleTemplate  # type: ignore
 
 from recoverage import __version__
-from recoverage.server import _db_path as get_db_path
+from recoverage.server import _db_path, resolve_targets
 from recoverage.server import _find_dll_path as _dll_path
+
+get_db_path = _db_path
 
 # --- UI Constants ---
 COLORS = {
@@ -386,22 +390,39 @@ def _highlight_c(code: str) -> str:
     return _highlight_tokens(CLexer().get_tokens(code), _get_c_colors())
 
 
-def _highlight_asm(text: str, target: str | None = None, section: str | None = None) -> str:
+def _highlight_asm(text: str, target: str = "") -> str:
     """Syntax-highlight x86 assembly using Pygments tokens and <font> tags (no CSS)."""
+
+    def _addr_link(addr: str) -> str:
+        return (
+            f'<a href="?target={_url_quote(target)}&search={_url_quote(addr.strip())}">'
+            f'<font color="#858585">{_html_escape(addr)}</font></a>'
+        )
+
+    def _link_hex_refs(html: str) -> str:
+        if not target:
+            return html
+
+        return re.sub(
+            r"0x[0-9a-f]{8}",
+            lambda m: (
+                f'<a href="?target={_url_quote(target)}&search={_url_quote(m.group(0))}">'
+                f"{m.group(0)}</a>"
+            ),
+            html,
+        )
+
     if not _pygments_available():
-        if target and section:
+        if target:
             lines = []
             for line in text.splitlines():
                 if line.startswith("0x") and "  " in line:
                     addr_end = line.index("  ")
                     addr_part, code_part = line[:addr_end], line[addr_end:]
-                    link = _build_url(target, section, search=addr_part)
-                    lines.append(
-                        f'<a href="{link}"><font color="#858585">{_html_escape(addr_part)}</font></a>'
-                        + _html_escape(code_part)
-                    )
+                    linked_code = _link_hex_refs(_html_escape(code_part))
+                    lines.append(_addr_link(addr_part) + linked_code)
                 else:
-                    lines.append(_html_escape(line))
+                    lines.append(_link_hex_refs(_html_escape(line)))
             return "\n".join(lines)
         return _html_escape(text)
     from pygments.lexers import NasmLexer  # type: ignore
@@ -414,18 +435,15 @@ def _highlight_asm(text: str, target: str | None = None, section: str | None = N
             addr_end = line.index("  ")
             addr_part, code_part = line[:addr_end], line[addr_end:]
             hl = _highlight_tokens(lexer.get_tokens(code_part), colors)
-            if target and section:
-                link = _build_url(target, section, search=addr_part)
-                result_lines.append(
-                    f'<a href="{link}"><font color="#858585">{_html_escape(addr_part)}</font></a>'
-                    + hl.rstrip("\n")
-                )
+            hl = _link_hex_refs(hl.rstrip("\n"))
+            if target:
+                result_lines.append(_addr_link(addr_part) + hl)
             else:
                 result_lines.append(
                     f'<font color="#858585">{_html_escape(addr_part)}</font>' + hl.rstrip("\n")
                 )
         else:
-            result_lines.append(_html_escape(line))
+            result_lines.append(_link_hex_refs(_html_escape(line)))
     return "\n".join(result_lines)
 
 
@@ -662,13 +680,13 @@ _PAGE_SRC = r"""<!DOCTYPE html>
       <table id="logo" border="0" cellpadding="0" cellspacing="0">
         <tr>
           <td><img src="{{R_LOGO_SVG}}" width="48" height="32" border="0" alt="R"></td>
-          <td valign="middle"><font face="{{MONO_FONT}}" size="5" color="{{TEXT_COLOR}}">&nbsp;<b>ReCoverage</b></font>&nbsp;<a href="/"><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">[SPA]</font></a>&nbsp;<a href="?target={{target}}&view=functions"><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">[Functions]</font></a></td>
+          <td valign="middle"><a href="/"><font face="{{MONO_FONT}}" size="5" color="{{TEXT_COLOR}}">&nbsp;<b>ReCoverage</b></font></a>&nbsp;<a href="/"><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">[SPA]</font></a>&nbsp;<a href="?target={{target}}&section={{section}}&view=functions"><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">[Functions]</font></a></td>
         </tr>
       </table>
     </td>
     <td valign="middle">
       <table id="section-tabs" border="0" cellpadding="0" cellspacing="4"><tr>
-      % for s_name, s_url, s_active, s_pct_str in section_tab_data:
+      % for s_name, s_url, s_active, s_pct_str, tab_idx in section_tab_data:
         <td valign="middle">
         % if s_active:
           <table border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{ACTIVE_L}}" width="16" height="32" border="0" alt=""></td><td background="{{ACTIVE_MID}}" height="32" nowrap><a href="{{s_url}}" accesskey="{{s_name[1]}}"><font face="{{MONO_FONT}}" size="3" color="#ffffff"><b>{{s_name}}</b></font></a></td><td><img src="{{ACTIVE_R}}" width="16" height="32" border="0" alt=""></td></tr></table>
@@ -693,14 +711,14 @@ _PAGE_SRC = r"""<!DOCTYPE html>
           % if active_filters:
             <input type="hidden" name="filter" value="{{','.join(sorted(active_filters))}}">
           % end
-          <label for="search-input"><font size="1" color="{{MUTED_COLOR}}">Search:&nbsp;</font></label><input id="search-input" type="text" name="search" size="18" value="{{search_query}}" placeholder="Search VA or name..."> <input type="submit" value="Go"></form>
+          <label for="search-input"><font size="1" color="{{MUTED_COLOR}}">Search:&nbsp;</font></label><input id="search-input" type="text" name="search" size="18" value="{{search_query}}" placeholder="Search VA or name..." accesskey="s"> <input type="submit" value="Go"></form>
           % if search_query:
             <br><font size="1" color="{{ACCENT_COLOR}}">Searching: &quot;{{search_query}}&quot; ({{search_match_count}} matches)</font> <a href="{{clear_search_url}}"><font size="1" color="{{MUTED_COLOR}}">[Clear search]</font></a>
           % end
         </td>
         <td valign="middle">
           <table id="filters" border="0" cellpadding="0" cellspacing="4"><tr>
-            % for fb_href, fb_label, fb_color, fb_active in filter_btn_data:
+            % for fb_href, fb_label, fb_color, fb_active, fb_key in filter_btn_data:
               <td valign="middle">
               % if fb_active:
                 <table border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{FILTER_ACT_L}}" width="16" height="32" border="0" alt=""></td><td background="{{FILTER_ACT_MID}}" height="32" nowrap><a href="{{fb_href}}" accesskey="{{fb_label[0].lower()}}"><font face="{{MONO_FONT}}" size="3" color="{{fb_color}}"><b>{{fb_label}}</b></font></a></td><td><img src="{{FILTER_ACT_R}}" width="16" height="32" border="0" alt=""></td></tr></table>
@@ -730,6 +748,11 @@ _PAGE_SRC = r"""<!DOCTYPE html>
 
 <table id="layout" width="100%" border="0" cellpadding="14" cellspacing="0">
   <tr>
+    % if view == "functions":
+    <td valign="top" width="100%">
+      {{!functions_html}}
+    </td>
+    % else:
     <td valign="top" width="75%">
       <table id="map" width="100%" border="1" cellpadding="0" cellspacing="0" bgcolor="{{PANEL_COLOR}}" bordercolor="{{BORDER_COLOR}}">
         <tr><td id="map-header" background="{{PANEL_HDR_PNG}}" cellpadding="8">&nbsp;<font color="{{MUTED_COLOR}}" size="2"><b>Coverage Map - {{section}}</b></font> <font color="{{MUTED_COLOR}}" size="1"> ({{block_count}} blocks)</font>
@@ -756,11 +779,17 @@ _PAGE_SRC = r"""<!DOCTYPE html>
         <tr><td id="panel-content" bgcolor="{{PANEL_COLOR}}" cellpadding="14" valign="top">{{!panel_html}}</td></tr>
       </table>
     </td>
+    % end
   </tr>
 </table>
-<table id="footer" width="100%" border="0" cellpadding="8" cellspacing="0"><tr><td><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">recoverage v{{version}}% if db_mtime:
- &middot; DB updated {{db_mtime}}% end
-</font></td><td align="right"><a href="https://validator.w3.org/"><img src="https://upload.wikimedia.org/wikipedia/commons/b/bb/W3C_HTML5_certified.png" width="133" height="47" alt="Valid HTML5" border="0"></a></td></tr></table>
+<table id="footer" width="100%" border="0" cellpadding="8" cellspacing="0"><tr>
+<td><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">recoverage v{{version}}
+% if db_mtime:
+ &middot; DB updated {{db_mtime}}
+% end
+</font></td>
+<td align="right"><a href="https://validator.w3.org/"><img src="https://upload.wikimedia.org/wikipedia/commons/b/bb/W3C_HTML5_certified.png" width="133" height="47" alt="Valid HTML5" border="0"></a></td>
+</tr></table>
 </font></body></html>"""
 
 _PAGE_TPL = SimpleTemplate(source=_PAGE_SRC)
@@ -772,7 +801,14 @@ _PANEL_SRC = r"""
 % if not has_cell:
 <table width="100%" border="0" cellpadding="10" cellspacing="1" bgcolor="{{BORDER_COLOR}}"><tr><td bgcolor="{{PANEL_COLOR}}" align="center"><font size="3" color="{{MUTED_COLOR}}"><b>Select a block</b></font><br><br><font color="{{MUTED_COLOR}}">Click any colored block in the grid to view details.</font></td></tr></table>
 % else:
-<table width="100%" border="0" cellpadding="0" cellspacing="0"><tr><td>&nbsp;<font size="2"><b>Block {{idx}}</b></font></td><td align="right"><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">{{!prev_link}} {{!next_link}}</font></td></tr></table>
+<table width="100%" border="0" cellpadding="0" cellspacing="0"><tr><td>&nbsp;<font size="2"><b>Block {{idx}}</b></font>
+% if prev_url:
+<a href="{{prev_url}}"><font size="1">&laquo; Prev</font></a>
+% end
+% if next_url:
+<a href="{{next_url}}"><font size="1">Next &raquo;</font></a>
+% end
+</td></tr></table>
 <table width="100%" border="0" cellpadding="3" cellspacing="1" bgcolor="{{BORDER_COLOR}}"><tr><td bgcolor="{{PANEL_COLOR}}"><font size="1" color="{{MUTED_COLOR}}"><b>Range:</b></font></td><td bgcolor="{{PANEL_COLOR}}"><font face="Courier New, monospace" size="1">{{cell_range}}</font></td></tr><tr><td bgcolor="{{PANEL_COLOR}}"><font size="1" color="{{MUTED_COLOR}}"><b>State:</b></font></td><td bgcolor="{{PANEL_COLOR}}"><font face="Courier New, monospace" size="1" color="{{state_color}}"><b>{{state_upper}}</b></font></td></tr>% if cell_label:
 <tr><td bgcolor="{{PANEL_COLOR}}"><font size="1" color="{{MUTED_COLOR}}"><b>Label:</b></font></td><td bgcolor="{{PANEL_COLOR}}"><font face="Courier New, monospace" size="1">{{cell_label}}</font></td></tr>% end
 % if parent_function:
@@ -843,6 +879,8 @@ def render_potato(parsed_url: ParseResult) -> str:
     idx_str = qs.get("idx", [""])[0]
     search_query = qs.get("search", [""])[0].strip()
     view = qs.get("view", [""])[0]
+    sort_key = qs.get("sort", ["va"])[0]
+    status_filter = qs.get("status", [""])[0]
 
     db_path = get_db_path()
     try:
@@ -853,210 +891,25 @@ def render_potato(parsed_url: ParseResult) -> str:
     try:
         c = conn.cursor()
         return _render_potato_inner(
-            c, conn, target, section, active_filters, idx_str, search_query, view
+            c,
+            conn,
+            target,
+            section,
+            active_filters,
+            idx_str,
+            search_query,
+            view,
+            sort_key,
+            status_filter,
         )
     finally:
         conn.close()
 
 
-def _render_grid_html(
-    cells: list[dict[str, Any]],
-    sec_data: dict[str, Any],
-    active_filters: set[str],
-    search_query: str,
-    search_matched_fns: set[str],
-    idx_str: str,
-    target: str,
-    section: str,
-) -> tuple[str, int]:
-    grid_columns = sec_data.get("columns", 64)
-    if grid_columns <= 0:
-        grid_columns = 64
-
-    CELL_W = 18
-    CELL_H = 15
-
-    merged_cells = []
-    if cells:
-        curr_cell: dict[str, Any] = dict(cells[0])
-        curr_cell["orig_idx"] = 0
-        curr_col: int = int(curr_cell.get("span", 1))
-
-        for i, next_c in enumerate(cells[1:], 1):
-            n_span = int(next_c.get("span", 1))
-            if (
-                curr_cell.get("state") not in ("none", None)
-                and next_c.get("state") == curr_cell.get("state")
-                and next_c.get("functions") == curr_cell.get("functions")
-                and curr_col + n_span <= grid_columns
-            ):
-                curr_cell["span"] = curr_cell.get("span", 1) + n_span
-                curr_cell["end"] = next_c.get("end")
-                curr_col += n_span
-            else:
-                merged_cells.append(curr_cell)
-                curr_cell = dict(next_c)
-                curr_cell["orig_idx"] = i
-                if curr_col >= grid_columns:
-                    curr_col = n_span
-                else:
-                    curr_col += n_span
-        merged_cells.append(curr_cell)
-    else:
-        merged_cells = cells
-
-    sizing_tds = "".join(
-        f'<td bgcolor="{BG_COLOR}" width="{CELL_W}" height="1"></td>' for _ in range(grid_columns)
-    )
-    grid_html_parts = [
-        f'<table id="grid" border="1" frame="void" rules="all" cellpadding="0" cellspacing="0" bordercolor="{BG_COLOR}" bgcolor="{BG_COLOR}">'
-        f"<tr>{sizing_tds}</tr><tr>"
-    ]
-    curr_col = 0
-    for i, cell in enumerate(merged_cells):
-        span = cell.get("span", 1)
-        orig_idx = cell.get("orig_idx", i)
-        if curr_col >= grid_columns:
-            grid_html_parts.append("</tr><tr>")
-            curr_col = 0
-
-        state = cell.get("state", "none")
-        if state == "matching_reloc":
-            state = "matching"
-
-        dimmed = (active_filters and state != "none" and state not in active_filters) or (
-            search_query and not any(fn in search_matched_fns for fn in cell.get("functions", []))
-        )
-        bgcolor = BG_COLOR if dimmed else COLORS.get(state, COLORS["none"])
-        selected = idx_str.isdigit() and int(idx_str) == orig_idx
-        link = _build_url(
-            target, section, active_filters or None, idx=orig_idx, search=search_query
-        )
-        sec_va = sec_data.get("va", 0)
-        funcs = cell.get("functions", [])
-        title = (
-            f"{hex(sec_va + cell.get('start', 0))}..{hex(sec_va + cell.get('end', 0))} | {state}"
-        )
-        if funcs:
-            title += f" | {funcs[0]}"
-        alt_text = state
-        if funcs:
-            alt_text += f": {funcs[0]}"
-        w = CELL_W * span
-        img = f'<a href="{link}" title="{_esc(title)}"><img src="{TRANSPARENT_GIF}" width="{w}" height="{CELL_H}" border="0" alt="{_esc(alt_text)}"></a>'
-
-        if selected:
-            sel_img = (
-                f'<a href="{link}" title="{_esc(title)}">'
-                f'<img src="{TRANSPARENT_GIF}" width="{w - 2}" height="{CELL_H - 2}" border="0" alt="{_esc(alt_text)}">'
-                f"</a>"
-            )
-            grid_html_parts.append(
-                f'<td id="sel" bgcolor="{BG_COLOR}" width="{w}" height="{CELL_H}" colspan="{span}">'
-                f'<table border="1" cellpadding="0" cellspacing="0" bordercolor="{ACCENT_COLOR}" width="100%">'
-                f'<tr><td bgcolor="{bgcolor}">{sel_img}</td></tr></table></td>'
-            )
-        else:
-            grid_html_parts.append(
-                f'<td bgcolor="{bgcolor}" width="{w}" height="{CELL_H}" colspan="{span}">{img}</td>'
-            )
-        curr_col += span
-
-    remaining = int(grid_columns) - curr_col
-    if remaining > 0:
-        grid_html_parts.append(
-            f'<td bgcolor="{BG_COLOR}" width="{CELL_W * remaining}"'
-            f' height="{CELL_H}" colspan="{remaining}"></td>'
-        )
-    grid_html_parts.append("</tr></table>")
-    return "".join(grid_html_parts), len(merged_cells)
-
-
-def _render_functions_table(c: sqlite3.Cursor, target: str, search_query: str) -> tuple[str, int]:
-    query = "SELECT va, name, size, status FROM functions WHERE target = ?"
-    params: list[Any] = [target]
-    if search_query:
-        query += " AND (name LIKE ? OR CAST(va AS TEXT) LIKE ?)"
-        like = f"%{search_query}%"
-        params.extend([like, like])
-    query += " ORDER BY va ASC LIMIT 500"
-    c.execute(query, params)
-
-    rows = []
-    rows.append(
-        f'<table width="100%" border="1" cellpadding="8" cellspacing="0" bordercolor="{BORDER_COLOR}">'
-    )
-    rows.append(
-        f'<tr bgcolor="{PANEL_COLOR}"><th><font color="{MUTED_COLOR}">VA</font></th><th><font color="{MUTED_COLOR}">Name</font></th><th><font color="{MUTED_COLOR}">Size</font></th><th><font color="{MUTED_COLOR}">Status</font></th></tr>'
-    )
-    count = 0
-    for va, name, size, status in c.fetchall():
-        count += 1
-        st = status or "none"
-        if st == "matching_reloc":
-            st = "matching"
-        color = COLORS.get(st, TEXT_COLOR)
-        rows.append(
-            f'<tr><td><font face="Courier New, monospace" size="2">{hex(va)}</font></td><td><font face="Courier New, monospace" size="2"><a href="?target={target}&search={_url_quote(name)}"><font color="{ACCENT_COLOR}">{_esc(name)}</font></a></font></td><td><font face="Courier New, monospace" size="2">{size}</font></td><td><font face="Courier New, monospace" color="{color}" size="2"><b>{st.upper()}</b></font></td></tr>'
-        )
-
-    rows.append("</table>")
-    if count == 500:
-        rows.append(f'<br><font color="{MUTED_COLOR}">Showing first 500 results.</font>')
-    return "".join(rows), count
-
-
-def _render_potato_inner(
+def _load_section_data(
     c: sqlite3.Cursor,
-    conn: sqlite3.Connection,
     target: str,
-    section: str,
-    active_filters: set[str],
-    idx_str: str,
-    search_query: str,
-    view: str = "",
-) -> str:
-    # Get targets (resolve display name from reccmp-project.yml)
-    c.execute("SELECT DISTINCT target FROM metadata")
-    target_ids = [row[0] for row in c.fetchall()]
-    if not target and target_ids:
-        target = target_ids[0]
-    _target_filenames: dict[str, str] = {}
-    try:
-        import yaml  # type: ignore
-
-        _yml = Path.cwd().resolve() / "reccmp-project.yml"
-        if _yml.exists():
-            with open(_yml, encoding="utf-8") as _f:
-                _doc = yaml.safe_load(_f)
-            if isinstance(_doc, dict):
-                _tcfg = _doc.get("targets", {})
-                if isinstance(_tcfg, dict):
-                    for _tid, _tinfo in _tcfg.items():
-                        fn = _tinfo.get("filename", "") if isinstance(_tinfo, dict) else ""
-                        _target_filenames[_tid] = Path(fn).name if fn else _tid
-    except Exception:
-        pass
-
-    if not _target_filenames:
-        try:
-            _toml = Path.cwd().resolve() / "rebrew.toml"
-            if _toml.exists():
-                import tomllib
-
-                _text = _toml.read_text(encoding="utf-8")
-                _doc = tomllib.loads(_text)
-                _targets_dict = _doc.get("targets", {})
-                for _tid in _targets_dict:
-                    _target_filenames[_tid] = _tid
-        except Exception:
-            pass
-    targets = (
-        [{"id": tid, "name": _target_filenames.get(tid, tid)} for tid in target_ids]
-        if target_ids
-        else []
-    )
-
+) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
     data: dict[str, Any] = {}
     c.execute("SELECT key, value FROM metadata WHERE target = ?", (target,))
     for key, val in c.fetchall():
@@ -1064,12 +917,6 @@ def _render_potato_inner(
             data[key] = json.loads(val)
         except (json.JSONDecodeError, TypeError):
             data[key] = val
-
-    if not data:
-        return (
-            f'<html><body bgcolor="#0f1216" text="#ffffff">'
-            f"No data for target {_esc(target)}</body></html>"
-        )
 
     c.execute(
         "SELECT name, va, size, fileOffset, columns FROM sections WHERE target = ?",
@@ -1093,48 +940,25 @@ def _render_potato_inner(
         sec_name = row[0]
         if sec_name in sections:
             sections[sec_name]["cells"] = json.loads(row[1])
+    return sections, data
 
-    if section not in sections and sections:
-        section = next(iter(sections))
 
-    sec_data: dict[str, Any] = sections.get(section, {})
-    cells = sec_data.get("cells", [])
-
-    # ── Search ───────────────────────────────────────────────────
-    search_matched_fns: set[str] = set()
-    if search_query:
-        like_pat = "%" + search_query.replace("%", "\\%").replace("_", "\\_") + "%"
-        c.execute(
-            "SELECT name FROM functions WHERE target = ? AND ("
-            "name LIKE ? ESCAPE '\\' OR vaStart LIKE ? ESCAPE '\\' "
-            "OR symbol LIKE ? ESCAPE '\\')",
-            (target, like_pat, like_pat, like_pat),
-        )
-        search_matched_fns.update(row[0] for row in c.fetchall())
-        c.execute(
-            "SELECT name FROM globals WHERE target = ? AND ("
-            "name LIKE ? ESCAPE '\\' OR printf('0x%x', va) LIKE ? ESCAPE '\\')",
-            (target, like_pat, like_pat),
-        )
-        search_matched_fns.update(row[0] for row in c.fetchall())
-
-    # ── Coverage stats ───────────────────────────────────────────
-    total_cells = exact_count = reloc_count = matching_count = stub_count = 0
+def _compute_section_stats(
+    c: sqlite3.Cursor,
+    target: str,
+    sections: dict[str, dict[str, Any]],
+    data: dict[str, Any],
+) -> dict[str, dict[str, int]]:
     per_section_stats: dict[str, dict[str, int]] = {}
-    _summary = data.get("summary", {})
+    summary = data.get("summary", {})
     c.execute(
         "SELECT section_name, total_cells, exact_count, reloc_count, "
         "matching_count, stub_count, padding_count, data_count, thunk_count FROM section_cell_stats WHERE target = ?",
         (target,),
     )
     for row in c.fetchall():
-        sec_name_r, s_total, s_exact, s_reloc, s_matching, s_stub, s_padding, s_data, s_thunk = row
-        total_cells += s_total
-        exact_count += s_exact
-        reloc_count += s_reloc
-        matching_count += s_matching
-        stub_count += s_stub
-        sec_summary_entry = _summary.get(sec_name_r, _summary)
+        sec_name_r, s_total, s_exact, s_reloc, s_matching, s_stub, s_padding, _, _ = row
+        sec_summary_entry = summary.get(sec_name_r, summary)
         s_covered_bytes = sec_summary_entry.get("coveredBytes", 0)
         s_sec_size = sections.get(sec_name_r, {}).get("size", 0)
         s_pct = int((s_covered_bytes / s_sec_size) * 100) if s_sec_size > 0 else 0
@@ -1148,14 +972,43 @@ def _render_potato_inner(
             "covered": s_exact + s_reloc,
             "pct": s_pct,
         }
+    return per_section_stats
 
-    # ── Filter toggle links ──────────────────────────────────────
-    _FILTER_OPTS = [
-        ("exact", "E"),
-        ("reloc", "R"),
-        ("matching", "M"),
-        ("stub", "S"),
-        ("padding", "P"),
+
+def _search_functions(c: sqlite3.Cursor, target: str, search_query: str) -> set[str]:
+    search_matched_fns: set[str] = set()
+    if not search_query:
+        return search_matched_fns
+
+    like_pat = "%" + search_query.replace("%", "\\%").replace("_", "\\_") + "%"
+    c.execute(
+        "SELECT name FROM functions WHERE target = ? AND ("
+        "name LIKE ? ESCAPE '\\' OR vaStart LIKE ? ESCAPE '\\' "
+        "OR symbol LIKE ? ESCAPE '\\')",
+        (target, like_pat, like_pat, like_pat),
+    )
+    search_matched_fns.update(row[0] for row in c.fetchall())
+    c.execute(
+        "SELECT name FROM globals WHERE target = ? AND ("
+        "name LIKE ? ESCAPE '\\' OR printf('0x%x', va) LIKE ? ESCAPE '\\')",
+        (target, like_pat, like_pat),
+    )
+    search_matched_fns.update(row[0] for row in c.fetchall())
+    return search_matched_fns
+
+
+def _build_filter_data(
+    target: str,
+    section: str,
+    active_filters: set[str],
+    search_query: str,
+) -> tuple[list[tuple[str, str, str, bool, str]], str]:
+    filter_opts = [
+        ("exact", "E", "e"),
+        ("reloc", "R", "r"),
+        ("matching", "M", "m"),
+        ("stub", "S", "s"),
+        ("padding", "P", "p"),
     ]
     toggle_links = {
         f: _build_url(
@@ -1168,88 +1021,345 @@ def _render_potato_inner(
             ),
             search=search_query,
         )
-        for f, _ in _FILTER_OPTS
+        for f, _, _ in filter_opts
     }
     all_link = _build_url(target, section, search=search_query)
-    filter_btn_data = [
+    filter_btn_data: list[tuple[str, str, str, bool, str]] = [
         (
             all_link,
             "All",
             TEXT_COLOR if not active_filters else MUTED_COLOR,
             not active_filters,
+            "0",
         )
-    ] + [(toggle_links[f], n, COLORS[f], f in active_filters) for f, n in _FILTER_OPTS]
+    ]
+    filter_btn_data.extend(
+        (toggle_links[f], label, COLORS[f], f in active_filters, key)
+        for f, label, key in filter_opts
+    )
+    return filter_btn_data, all_link
 
-    # ── Progress bar data ────────────────────────────────────────
-    progress = None
-    if total_cells > 0:
-        sec_size = sec_data.get("size", 0)
-        sec_summ = _summary.get(section, _summary)
-        covered_bytes = sec_summ.get("coveredBytes", 0)
-        total_fn = sec_summ.get("totalFunctions", 0)
-        exact_matches = sec_summ.get("exactMatches", 0)
-        reloc_matches = sec_summ.get("relocMatches", 0)
-        matching_matches = sec_summ.get("matchingMatches", 0)
-        stub_matches = sec_summ.get("stubCount", 0)
-        matched_fn = exact_matches + reloc_matches + matching_matches + stub_matches
 
-        # Use function counts for .text, byte counts for other sections
-        # (matches normal UI app.js behavior)
-        if section == ".text" and total_fn > 0:
-            seg_exact = exact_matches / total_fn * 100
-            seg_reloc = reloc_matches / total_fn * 100
-            seg_matching = matching_matches / total_fn * 100
-            seg_stub = stub_matches / total_fn * 100
-        elif sec_size > 0:
-            seg_exact = sec_summ.get("exactBytes", 0) / sec_size * 100
-            seg_reloc = sec_summ.get("relocBytes", 0) / sec_size * 100
-            seg_matching = sec_summ.get("matchingBytes", 0) / sec_size * 100
-            seg_stub = sec_summ.get("stubBytes", 0) / sec_size * 100
-        else:
-            seg_exact = seg_reloc = seg_matching = seg_stub = 0
+def _build_progress(
+    section: str,
+    sec_data: dict[str, Any],
+    data: dict[str, Any],
+    sections: dict[str, dict[str, Any]],
+) -> dict[str, Any] | None:
+    if not sections:
+        return None
 
-        padding_bytes_val = sec_summ.get("paddingBytes", 0)
-        seg_padding = (padding_bytes_val / sec_size * 100) if sec_size > 0 else 0
-        seg_none = max(0, 100 - seg_exact - seg_reloc - seg_matching - seg_stub - seg_padding)
-        progress = {
-            "sec_size": sec_size,
-            "coverage_pct": (covered_bytes / sec_size * 100) if sec_size > 0 else 0,
-            "total_fn": total_fn,
-            "matched_fn": matched_fn,
-            "segments": [
-                ("exact", seg_exact),
-                ("reloc", seg_reloc),
-                ("matching", seg_matching),
-                ("stub", seg_stub),
-                ("padding", seg_padding),
-                ("none", seg_none),
-            ],
-        }
+    summary = data.get("summary", {})
+    sec_size = sec_data.get("size", 0)
+    sec_summ = summary.get(section, summary)
+    covered_bytes = sec_summ.get("coveredBytes", 0)
+    total_fn = sec_summ.get("totalFunctions", 0)
+    exact_matches = sec_summ.get("exactMatches", 0)
+    reloc_matches = sec_summ.get("relocMatches", 0)
+    matching_matches = sec_summ.get("matchingMatches", 0)
+    stub_matches = sec_summ.get("stubCount", 0)
+    matched_fn = exact_matches + reloc_matches + matching_matches + stub_matches
 
-    # ── Section tab data ─────────────────────────────────────────
-    section_tab_data = [
-        (
-            s,
-            _build_url(target, s, active_filters or None, search=search_query),
-            s == section,
-            (
-                f" {per_section_stats.get(s, {}).get('pct', 0)}%"
-                if per_section_stats.get(s, {}).get("total", 0) > 0
-                else ""
-            ),
-        )
-        for s in sections
+    if section == ".text" and total_fn > 0:
+        seg_exact = exact_matches / total_fn * 100
+        seg_reloc = reloc_matches / total_fn * 100
+        seg_matching = matching_matches / total_fn * 100
+        seg_stub = stub_matches / total_fn * 100
+    elif sec_size > 0:
+        seg_exact = sec_summ.get("exactBytes", 0) / sec_size * 100
+        seg_reloc = sec_summ.get("relocBytes", 0) / sec_size * 100
+        seg_matching = sec_summ.get("matchingBytes", 0) / sec_size * 100
+        seg_stub = sec_summ.get("stubBytes", 0) / sec_size * 100
+    else:
+        seg_exact = seg_reloc = seg_matching = seg_stub = 0
+
+    padding_bytes = sec_summ.get("paddingBytes", 0)
+    seg_padding = (padding_bytes / sec_size * 100) if sec_size > 0 else 0
+    seg_none = max(0, 100 - seg_exact - seg_reloc - seg_matching - seg_stub - seg_padding)
+    return {
+        "sec_size": sec_size,
+        "coverage_pct": (covered_bytes / sec_size * 100) if sec_size > 0 else 0,
+        "total_fn": total_fn,
+        "matched_fn": matched_fn,
+        "segments": [
+            ("exact", seg_exact),
+            ("reloc", seg_reloc),
+            ("matching", seg_matching),
+            ("stub", seg_stub),
+            ("padding", seg_padding),
+            ("none", seg_none),
+        ],
+    }
+
+
+def _merge_cells(cells: list[dict[str, Any]], grid_columns: int) -> list[dict[str, Any]]:
+    merged_cells: list[dict[str, Any]] = []
+    if not cells:
+        return merged_cells
+
+    curr_cell: dict[str, Any] = dict(cells[0])
+    curr_cell["orig_idx"] = 0
+    curr_col: int = int(curr_cell.get("span", 1))
+
+    for i, next_c in enumerate(cells[1:], 1):
+        n_span = int(next_c.get("span", 1))
+        if (
+            curr_cell.get("state") not in ("none", None)
+            and next_c.get("state") == curr_cell.get("state")
+            and next_c.get("functions") == curr_cell.get("functions")
+            and curr_col + n_span <= grid_columns
+        ):
+            curr_cell["span"] = curr_cell.get("span", 1) + n_span
+            curr_cell["end"] = next_c.get("end")
+            curr_col += n_span
+            continue
+
+        merged_cells.append(curr_cell)
+        curr_cell = dict(next_c)
+        curr_cell["orig_idx"] = i
+        curr_col = n_span if curr_col >= grid_columns else curr_col + n_span
+
+    merged_cells.append(curr_cell)
+    return merged_cells
+
+
+def _build_grid_html(
+    merged_cells: list[dict[str, Any]],
+    sec_data: dict[str, Any],
+    grid_columns: int,
+    active_filters: set[str],
+    search_query: str,
+    search_matched_fns: set[str],
+    idx_str: str,
+    target: str,
+    section: str,
+) -> str:
+    cell_w = 18
+    cell_h = 15
+    sizing_tds = "".join(
+        f'<td bgcolor="{BG_COLOR}" width="{cell_w}" height="1"></td>' for _ in range(grid_columns)
+    )
+    grid_html_parts = [
+        f'<table id="grid" border="1" frame="void" rules="all" cellpadding="0" cellspacing="0" bordercolor="{BG_COLOR}" bgcolor="{BG_COLOR}">'
+        f"<tr>{sizing_tds}</tr><tr>"
     ]
 
+    curr_col = 0
+    sec_va = sec_data.get("va", 0)
+    for i, cell in enumerate(merged_cells):
+        span = cell.get("span", 1)
+        orig_idx = cell.get("orig_idx", i)
+        if curr_col >= grid_columns:
+            grid_html_parts.append("</tr><tr>")
+            curr_col = 0
+
+        state = cell.get("state", "none")
+        if state == "matching_reloc":
+            state = "matching"
+
+        dimmed = (active_filters and state != "none" and state not in active_filters) or (
+            search_query and not any(fn in search_matched_fns for fn in cell.get("functions", []))
+        )
+        bgcolor = BG_COLOR if dimmed else COLORS.get(state, COLORS["none"])
+        selected = idx_str.isdigit() and int(idx_str) == orig_idx
+        link = _build_url(
+            target, section, active_filters or None, idx=orig_idx, search=search_query
+        )
+        funcs = cell.get("functions", [])
+        title = (
+            f"{hex(sec_va + cell.get('start', 0))}..{hex(sec_va + cell.get('end', 0))} | {state}"
+        )
+        if funcs:
+            title += f" | {funcs[0]}"
+        alt_text = f"{state}"
+        if funcs:
+            alt_text += f": {funcs[0]}"
+        w = cell_w * span
+        img = (
+            f'<a href="{link}" title="{_esc(title)}">'
+            f'<img src="{TRANSPARENT_GIF}" width="{w}" height="{cell_h}" border="0" alt="{_esc(alt_text)}"></a>'
+        )
+
+        if selected:
+            sel_img = (
+                f'<a href="{link}" title="{_esc(title)}">'
+                f'<img src="{TRANSPARENT_GIF}" width="{w - 2}" height="{cell_h - 2}" border="0" alt="{_esc(alt_text)}">'
+                f"</a>"
+            )
+            grid_html_parts.append(
+                f'<td id="sel" bgcolor="{BG_COLOR}" width="{w}" height="{cell_h}" colspan="{span}">'
+                f'<table border="1" cellpadding="0" cellspacing="0" bordercolor="{ACCENT_COLOR}" width="100%">'
+                f'<tr><td bgcolor="{bgcolor}">{sel_img}</td></tr></table></td>'
+            )
+        else:
+            grid_html_parts.append(
+                f'<td bgcolor="{bgcolor}" width="{w}" height="{cell_h}" colspan="{span}">{img}</td>'
+            )
+        curr_col += span
+
+    remaining = int(grid_columns) - curr_col
+    if remaining > 0:
+        grid_html_parts.append(
+            f'<td bgcolor="{BG_COLOR}" width="{cell_w * remaining}"'
+            f' height="{cell_h}" colspan="{remaining}"></td>'
+        )
+    grid_html_parts.append("</tr></table>")
+    return "".join(grid_html_parts)
+
+
+def _render_function_list(
+    c: sqlite3.Cursor,
+    target: str,
+    section: str,
+    search_query: str,
+    sort_key: str,
+    status_filter: str,
+) -> str:
+    allowed_sort = {"name": "name", "size": "size", "status": "status", "va": "va"}
+    order_by = allowed_sort.get(sort_key, "va")
+
+    where = ["target = ?"]
+    params: list[Any] = [target]
+    if status_filter:
+        where.append("status = ?")
+        params.append(status_filter)
+    if search_query:
+        like = f"%{search_query}%"
+        where.append("(name LIKE ? OR symbol LIKE ? OR printf('0x%x', va) LIKE ?)")
+        params.extend([like, like, like])
+
+    where_sql = " AND ".join(where)
+    c.execute(
+        "SELECT name, va, vaStart, size, status, origin FROM functions "
+        f"WHERE {where_sql} ORDER BY {order_by}, va",
+        params,
+    )
+    rows = c.fetchall()
+
+    base = f"?target={_url_quote(target)}&section={_url_quote(section)}&view=functions"
+    if search_query:
+        base += f"&search={_url_quote(search_query)}"
+    if status_filter:
+        base += f"&status={_url_quote(status_filter)}"
+
+    parts = [
+        f'<table width="100%" border="1" cellpadding="0" cellspacing="0" bordercolor="{BORDER_COLOR}" bgcolor="{PANEL_COLOR}">',
+        f'<tr><td background="{PANEL_HDR_PNG}" cellpadding="8">'
+        f'<font color="{MUTED_COLOR}" size="2"><b>Functions</b></font> '
+        f'<font size="1" color="{MUTED_COLOR}">({len(rows)} results)</font> '
+        f'<a href="{_build_url(target, section, search=search_query)}"><font size="1" color="{ACCENT_COLOR}">[Grid View]</font></a>'
+        f"</td></tr>",
+        "<tr><td>",
+        f'<table width="100%" border="1" cellpadding="6" cellspacing="0" bordercolor="{BORDER_COLOR}">',
+        f'<tr bgcolor="{PANEL_COLOR}">'
+        f'<th><a href="{base}&sort=name"><font color="{MUTED_COLOR}">Name</font></a></th>'
+        f'<th><a href="{base}&sort=va"><font color="{MUTED_COLOR}">VA</font></a></th>'
+        f'<th><a href="{base}&sort=size"><font color="{MUTED_COLOR}">Size</font></a></th>'
+        f'<th><a href="{base}&sort=status"><font color="{MUTED_COLOR}">Status</font></a></th>'
+        f'<th><font color="{MUTED_COLOR}">Origin</font></th></tr>',
+    ]
+
+    if not rows:
+        parts.append(
+            f'<tr><td colspan="5"><font color="{MUTED_COLOR}">No functions found.</font></td></tr>'
+        )
+    else:
+        for name, va, _, size, status, origin in rows:
+            st = status or "none"
+            if st == "matching_reloc":
+                st = "matching"
+            color = COLORS.get(st, TEXT_COLOR)
+            name_link = f"?target={_url_quote(target)}&section=.text&search={_url_quote(name)}"
+            parts.append(
+                "<tr>"
+                f'<td><a href="{name_link}"><font color="{ACCENT_COLOR}">{_esc(name)}</font></a></td>'
+                f'<td><font face="Courier New, monospace" size="2">{_esc(_format_va(va))}</font></td>'
+                f'<td><font face="Courier New, monospace" size="2">{_esc(size)}</font></td>'
+                f'<td><font color="{color}" face="Courier New, monospace" size="2"><b>{_esc(st.upper())}</b></font></td>'
+                f'<td><font face="Courier New, monospace" size="2">{_esc(origin or "")}</font></td>'
+                "</tr>"
+            )
+
+    parts.append("</table></td></tr></table>")
+    return "".join(parts)
+
+
+def _render_potato_inner(
+    c: sqlite3.Cursor,
+    conn: sqlite3.Connection,
+    target: str,
+    section: str,
+    active_filters: set[str],
+    idx_str: str,
+    search_query: str,
+    view: str = "",
+    sort_key: str = "va",
+    status_filter: str = "",
+) -> str:
+    del conn
+    target_ids, targets = resolve_targets(c)
+    if not target and target_ids:
+        target = target_ids[0]
+
+    sections, data = _load_section_data(c, target)
+    if not data:
+        return (
+            f'<html><body bgcolor="#0f1216" text="#ffffff">'
+            f"No data for target {_esc(target)}</body></html>"
+        )
+
+    if section not in sections and sections:
+        section = next(iter(sections))
+
+    sec_data: dict[str, Any] = sections.get(section, {})
+    cells = sec_data.get("cells", [])
+
+    search_matched_fns = _search_functions(c, target, search_query)
+    per_section_stats = _compute_section_stats(c, target, sections, data)
+    filter_btn_data, _ = _build_filter_data(target, section, active_filters, search_query)
+    progress = _build_progress(section, sec_data, data, sections)
+
+    # ── Section tab data ─────────────────────────────────────────
+    section_tab_data = []
+    for i, s in enumerate(sections, 1):
+        section_tab_data.append(
+            (
+                s,
+                _build_url(target, s, active_filters or None, search=search_query),
+                s == section,
+                (
+                    f" {per_section_stats.get(s, {}).get('pct', 0)}%"
+                    if per_section_stats.get(s, {}).get("total", 0) > 0
+                    else ""
+                ),
+                str(i),
+            )
+        )
+
     # ── Grid (with cell merging) ─────────────────────────────────
+    functions_html = ""
     if view == "functions":
-        grid_html, block_count = _render_functions_table(c, target, search_query)
+        grid_html = ""
+        block_count = 0
         panel_html = ""
         sec_stats = {}
+        functions_html = _render_function_list(
+            c,
+            target,
+            section,
+            search_query,
+            sort_key,
+            status_filter,
+        )
     else:
-        grid_html, block_count = _render_grid_html(
-            cells,
+        grid_columns = sec_data.get("columns", 64)
+        if grid_columns <= 0:
+            grid_columns = 64
+        merged_cells = _merge_cells(cells, grid_columns)
+        grid_html = _build_grid_html(
+            merged_cells,
             sec_data,
+            grid_columns,
             active_filters,
             search_query,
             search_matched_fns,
@@ -1257,20 +1367,25 @@ def _render_potato_inner(
             target,
             section,
         )
+        block_count = len(merged_cells)
         sec_stats = per_section_stats.get(section, {})
         panel_html = _render_panel(
-            c, cells, idx_str, target, section, data, sec_data, active_filters, search_query
+            c,
+            cells,
+            idx_str,
+            target,
+            section,
+            data,
+            sec_data,
+            active_filters,
+            search_query,
         )
 
-    # ── Render page template ─────────────────────────────────────
     clear_search_url = _build_url(target, section, active_filters or None)
 
     progress_bar_png_uri = ""
     if progress:
         progress_bar_png_uri = _make_progress_png(progress["segments"], COLORS)
-
-    import os
-    from datetime import datetime
 
     db_mtime_str = ""
     try:
@@ -1299,6 +1414,7 @@ def _render_potato_inner(
         # Data
         target=target,
         section=section,
+        view=view,
         active_filters=active_filters,
         search_query=search_query,
         search_match_count=len(search_matched_fns),
@@ -1323,6 +1439,7 @@ def _render_potato_inner(
         sec_stats=sec_stats,
         block_count=block_count,
         grid_html=grid_html,
+        functions_html=functions_html,
         panel_html=panel_html,
         db_mtime=db_mtime_str,
         version=__version__,
@@ -1367,8 +1484,8 @@ def _render_panel(
         "gl_detail_rows": "",
         "cell_label": "",
         "parent_function": "",
-        "prev_link": "",
-        "next_link": "",
+        "prev_url": "",
+        "next_url": "",
         "target": "",
         "section": "",
     }
@@ -1399,15 +1516,16 @@ def _render_panel(
     parent_function = cell.get("parent_function", "")
     sec_data_dict = sec_data or {}
 
-    prev_link = (
-        f'<a href="{_build_url(target, section, active_filters, idx=idx - 1, search=search_query)}">&larr; Prev</a>'
+    prev_url = (
+        _build_url(target, section, active_filters, idx=max(0, idx - 1), search=search_query)
+        + "#sel"
         if idx > 0
-        else "&larr; Prev"
+        else ""
     )
-    next_link = (
-        f'<a href="{_build_url(target, section, active_filters, idx=idx + 1, search=search_query)}">Next &rarr;</a>'
+    next_url = (
+        _build_url(target, section, active_filters, idx=idx + 1, search=search_query) + "#sel"
         if idx < len(cells) - 1
-        else "Next &rarr;"
+        else ""
     )
 
     ctx.update(
@@ -1420,8 +1538,8 @@ def _render_panel(
             "funcs": funcs,
             "cell_label": cell_label,
             "parent_function": parent_function,
-            "prev_link": prev_link,
-            "next_link": next_link,
+            "prev_url": prev_url,
+            "next_url": next_url,
             "target": target,
             "section": section,
         }
@@ -1514,7 +1632,7 @@ def _render_panel(
                 if asm_text:
                     ctx["asm_heading"] = _section_heading("ASM", "#ef4444", "Assembly")
                     ctx["asm_html"] = _code_block_raw(
-                        _highlight_asm(wrap_text(asm_text, 55), target=target, section=section)
+                        _highlight_asm(wrap_text(asm_text, 55), target=target)
                     )
 
         # Original Bytes
