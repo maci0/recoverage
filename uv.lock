@@ -196,35 +196,31 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "bottle" },
+    { name = "brotli" },
+    { name = "rcssmin" },
     { name = "rich" },
+    { name = "rjsmin" },
     { name = "typer" },
+    { name = "zstandard" },
 ]
 
 [package.optional-dependencies]
-compress = [
-    { name = "brotli" },
-    { name = "zstandard" },
-]
 dev = [
     { name = "pytest" },
-]
-minify = [
-    { name = "rcssmin" },
-    { name = "rjsmin" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "bottle", specifier = ">=0.12" },
-    { name = "brotli", marker = "extra == 'compress'", specifier = ">=1.1" },
+    { name = "brotli", specifier = ">=1.1" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
-    { name = "rcssmin", marker = "extra == 'minify'", specifier = ">=1.1" },
+    { name = "rcssmin", specifier = ">=1.1" },
     { name = "rich", specifier = ">=13.0" },
-    { name = "rjsmin", marker = "extra == 'minify'", specifier = ">=1.2" },
+    { name = "rjsmin", specifier = ">=1.2" },
     { name = "typer", specifier = ">=0.9" },
-    { name = "zstandard", marker = "extra == 'compress'", specifier = ">=0.22" },
+    { name = "zstandard", specifier = ">=0.22" },
 ]
-provides-extras = ["dev", "minify", "compress"]
+provides-extras = ["dev"]
 
 [[package]]
 name = "rich"

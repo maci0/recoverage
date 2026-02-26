@@ -12,14 +12,12 @@ Classifier: Topic :: Software Development :: Disassemblers
 Requires-Python: >=3.12
 License-File: LICENSE
 Requires-Dist: bottle>=0.12
+Requires-Dist: brotli>=1.1
+Requires-Dist: rcssmin>=1.1
 Requires-Dist: rich>=13.0
+Requires-Dist: rjsmin>=1.2
 Requires-Dist: typer>=0.9
+Requires-Dist: zstandard>=0.22
 Provides-Extra: dev
 Requires-Dist: pytest>=8.0; extra == "dev"
-Provides-Extra: minify
-Requires-Dist: rjsmin>=1.2; extra == "minify"
-Requires-Dist: rcssmin>=1.1; extra == "minify"
-Provides-Extra: compress
-Requires-Dist: brotli>=1.1; extra == "compress"
-Requires-Dist: zstandard>=0.22; extra == "compress"
 Dynamic: license-file

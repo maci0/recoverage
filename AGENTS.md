@@ -87,7 +87,7 @@ uv run pytest tests/ -v
 ## Dependencies
 
 - `bottle>=0.12` (web server)
-- Optional: `rjsmin`/`rcssmin` (minification), `brotli`/`zstandard` (compression), `capstone` (disassembly), `pygments` (Potato Mode syntax highlighting)
+- Optional: `capstone` (disassembly), `pygments` (Potato Mode syntax highlighting)
 
 ## Code Style
 
