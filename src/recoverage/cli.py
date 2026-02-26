@@ -2,19 +2,32 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import sqlite3
 import subprocess
-import sys
 import threading
 from pathlib import Path
-from typing import Optional
 
 import typer
 
 app = typer.Typer(
     help="Coverage dashboard for binary-matching decompilation projects.",
     add_completion=False,
+    rich_markup_mode="rich",
+    epilog="""\
+[bold]Examples:[/bold]
+  recoverage serve                         Start the web dashboard (default port 8001)
+  recoverage serve --port 3000             Use custom port
+  recoverage stats                         Print coverage statistics to terminal
+  recoverage export --format csv           Export coverage data as CSV
+  recoverage check --min-coverage 50       CI gate: fail if coverage < 50%
+
+[bold]Prerequisites:[/bold]
+  Run 'rebrew catalog --json && rebrew build-db' first to create db/coverage.db.
+
+[dim]The dashboard reads from db/coverage.db (SQLite).
+Serves a single-page app at http://localhost:8001 with interactive charts.[/dim]""",
 )
 
 
@@ -41,25 +54,23 @@ def _list_targets(conn: sqlite3.Connection) -> list[str]:
     return [row[0] for row in c.fetchall()]
 
 
-def _get_stats(conn: sqlite3.Connection, target: str) -> dict:
+def _get_stats(conn: sqlite3.Connection, target: str) -> dict[str, object]:
     """Fetch coverage stats for a single target."""
     c = conn.cursor()
 
     # Summary from metadata
-    summary: dict = {}
+    summary: dict[str, object] = {}
     c.execute("SELECT value FROM metadata WHERE target = ? AND key = 'summary'", (target,))
     row = c.fetchone()
     if row:
-        try:
+        with contextlib.suppress(json.JSONDecodeError, TypeError):
             summary = json.loads(row[0])
-        except (json.JSONDecodeError, TypeError):
-            pass
 
     # Per-section stats
-    sections: dict = {}
+    sections: dict[str, dict[str, object]] = {}
     c.execute(
         "SELECT section_name, total_cells, exact_count, reloc_count, "
-        "matching_count, stub_count FROM section_cell_stats WHERE target = ?",
+        "matching_count, stub_count, data_count, thunk_count FROM section_cell_stats WHERE target = ?",
         (target,),
     )
     for row in c.fetchall():
@@ -71,6 +82,8 @@ def _get_stats(conn: sqlite3.Connection, target: str) -> dict:
             "reloc": row["reloc_count"],
             "matching": row["matching_count"],
             "stub": row["stub_count"],
+            "data": row["data_count"],
+            "thunk": row["thunk_count"],
             "matched": matched,
             "coverage_pct": round(matched / total * 100, 2) if total else 0.0,
         }
@@ -104,14 +117,18 @@ def serve(
     cors: bool = typer.Option(False, "--cors", help="Enable CORS headers for cross-origin access"),
 ) -> None:
     """Start the recoverage dashboard server."""
+    import recoverage.server as _server
     from recoverage.server import (
         _assets_dir,
-        _db_path as server_db_path,
         _project_dir,
-        app as bottle_app,
         open_browser,
     )
-    import recoverage.server as _server
+    from recoverage.server import (
+        _db_path as server_db_path,
+    )
+    from recoverage.server import (
+        app as bottle_app,
+    )
 
     if cors:
         _server.CORS_ENABLED = True
@@ -122,8 +139,8 @@ def serve(
 
     if regen:
         typer.echo("Regenerating coverage data...")
-        subprocess.check_call(["uv", "run", "rebrew", "catalog"], cwd=str(root))
-        subprocess.check_call(["uv", "run", "rebrew", "build-db"], cwd=str(root))
+        subprocess.check_call(["uv", "run", "rebrew", "catalog"], cwd=str(root), timeout=60)
+        subprocess.check_call(["uv", "run", "rebrew", "build-db"], cwd=str(root), timeout=60)
 
     typer.echo(f"Serving coverage dashboard at {url}")
     typer.echo(f"  Assets: {assets}")
@@ -141,7 +158,7 @@ def serve(
 
 @app.command()
 def stats(
-    target: Optional[str] = typer.Option(None, "--target", "-t", help="Target ID (default: all)"),
+    target: str | None = typer.Option(None, "--target", "-t", help="Target ID (default: all)"),
 ) -> None:
     """Print coverage stats as a table."""
     from rich.console import Console
@@ -164,9 +181,7 @@ def stats(
             total_fn = s.get("totalFunctions", 0)
             matched_fn = s.get("matchedFunctions", 0)
             pct = round(matched_fn / total_fn * 100, 1) if total_fn else 0
-            console.print(
-                f"  Functions: {matched_fn}/{total_fn} matched ({pct}%)"
-            )
+            console.print(f"  Functions: {matched_fn}/{total_fn} matched ({pct}%)")
 
         table = Table(show_header=True, header_style="bold")
         table.add_column("Section", style="cyan")
@@ -199,7 +214,7 @@ def stats(
 @app.command()
 def export(
     format: str = typer.Option("json", "--format", "-f", help="Output format: json, csv, md"),
-    target: Optional[str] = typer.Option(None, "--target", "-t", help="Target ID (default: all)"),
+    target: str | None = typer.Option(None, "--target", "-t", help="Target ID (default: all)"),
 ) -> None:
     """Export coverage data to stdout."""
     conn = _open_db()
@@ -237,15 +252,17 @@ def export(
                     f"| {sec['stub']} | {sec['coverage_pct']:.1f}% |"
                 )
     else:
-        typer.secho(f"Unknown format: {format}. Use json, csv, or md.", fg=typer.colors.RED, err=True)
+        typer.secho(
+            f"Unknown format: {format}. Use json, csv, or md.", fg=typer.colors.RED, err=True
+        )
         raise typer.Exit(1)
 
 
 @app.command()
 def check(
     min_coverage: float = typer.Option(..., "--min-coverage", help="Minimum coverage percentage"),
-    target: Optional[str] = typer.Option(None, "--target", "-t", help="Target ID (default: all)"),
-    section: Optional[str] = typer.Option(None, "--section", "-s", help="Section name (default: all)"),
+    target: str | None = typer.Option(None, "--target", "-t", help="Target ID (default: all)"),
+    section: str | None = typer.Option(None, "--section", "-s", help="Section name (default: all)"),
 ) -> None:
     """Check coverage against a threshold (CI gate)."""
     conn = _open_db()
@@ -263,7 +280,8 @@ def check(
             if section not in sections_to_check:
                 typer.secho(
                     f"SKIP: {tid} has no section {section}",
-                    fg=typer.colors.YELLOW, err=True,
+                    fg=typer.colors.YELLOW,
+                    err=True,
                 )
                 continue
             sections_to_check = {section: sections_to_check[section]}

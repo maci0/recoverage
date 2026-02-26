@@ -1,4 +1,5 @@
 from typing import Any
+
 from playwright.sync_api import expect  # type: ignore
 
 BASE_URL = "http://localhost:8787"

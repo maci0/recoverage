@@ -6,37 +6,36 @@ checks compliance via the W3C Nu Validator, and runs unit tests
 on helper functions and structural validation on grid tables.
 """
 
+from __future__ import annotations
+
 import json
+import os
 import re
 import struct
 import subprocess
 import sys
-import os
 from urllib.parse import urlparse
 
-# Add recoverage to path
-sys.path.insert(0, os.path.dirname(__file__))
-from potato import (  # type: ignore
-    render_potato,
-    get_db_path,
-    _format_va,
+from recoverage.potato import (
     _build_url,
-    _esc,
-    _format_hex_dump,
-    _extract_annotations,
     _cell_file_offset,
+    _esc,
+    _extract_annotations,
     _format_data_inspector,
+    _format_hex_dump,
+    _format_va,
+    get_db_path,
+    render_potato,
     wrap_text,
 )
 
 
-def test_render(url, name):
+def test_render(url: str, name: str) -> str:
     """Render a URL and return the HTML."""
-    result = render_potato(urlparse(url))
-    return result
+    return render_potato(urlparse(url))
 
 
-def test_tidy(html, name):
+def test_tidy(html: str, name: str) -> tuple[bool | None, str]:
     """Validate HTML with tidy."""
     try:
         proc = subprocess.run(
@@ -56,9 +55,9 @@ def test_tidy(html, name):
         return False, "tidy timeout"
 
 
-def run_unit_tests():
+def run_unit_tests() -> list[tuple[str, bool]]:
     """Unit tests for helper functions (no DB or rendering needed)."""
-    tests = []
+    tests: list[tuple[str, bool]] = []
 
     # ── _format_va ──────────────────────────────────────────────
     tests.append(
@@ -102,7 +101,7 @@ def run_unit_tests():
     tests.append(
         (
             "_build_url: basic",
-            "?target=SERVER&section=.text" == _build_url("SERVER", ".text"),
+            _build_url("SERVER", ".text") == "?target=SERVER&section=.text",
         )
     )
     tests.append(
@@ -426,12 +425,12 @@ int foo(void) { return 0; }
     return tests
 
 
-def run_grid_structure_tests():
+def run_grid_structure_tests() -> list[tuple[str, bool]]:
     """Validate that grid tables have correct colspan structure for all sections."""
     import sqlite3
 
-    tests = []
-    conn = sqlite3.connect(str(get_db_path()))
+    tests: list[tuple[str, bool]] = []
+    conn = sqlite3.connect(f"file:{get_db_path()}?mode=ro", uri=True)
     c = conn.cursor()
     c.execute("SELECT DISTINCT name FROM sections WHERE target='SERVER'")
     rows_db = c.fetchall() or []
@@ -457,15 +456,11 @@ def run_grid_structure_tests():
         rows = [str(r) for r in re.split(r"</tr>\s*<tr[^>]*>", table)]
 
         # First row should be the sizing row (individual 1-wide cells)
-        first_row_spans = re.findall(r'colspan="(\d+)"', rows[0]) or []
-        _has_sizing_row = len(first_row_spans) == 0  # sizing row has no colspan
         first_row_tds = re.findall(r"<td\b", rows[0]) or []
 
-        c2 = sqlite3.connect(str(get_db_path()))
+        c2 = sqlite3.connect(f"file:{get_db_path()}?mode=ro", uri=True)
         cur = c2.cursor()
-        cur.execute(
-            "SELECT columns FROM sections WHERE target='SERVER' AND name=?", (sec,)
-        )
+        cur.execute("SELECT columns FROM sections WHERE target='SERVER' AND name=?", (sec,))
         row_data = cur.fetchone()
         grid_columns = int(row_data[0]) if row_data and row_data[0] is not None else 64
         c2.close()
@@ -507,7 +502,7 @@ def run_grid_structure_tests():
     return tests
 
 
-def main():
+def main() -> int:
     # ── Unit tests ─────────────────────────────────────────────────
     print("=" * 60)
     print("Unit Tests (helper functions)")
@@ -519,10 +514,10 @@ def main():
     for name, result in run_unit_tests():
         if result:
             print(f"PASS: {name:45s}")
-            passed += 1  # type: ignore
+            passed += 1
         else:
             print(f"FAIL: {name:45s}")
-            failed += 1  # type: ignore
+            failed += 1
 
     # ── Grid structure tests ───────────────────────────────────────
     print("-" * 60)
@@ -532,10 +527,10 @@ def main():
     for name, result in run_grid_structure_tests():
         if result:
             print(f"PASS: {name:45s}")
-            passed += 1  # type: ignore
+            passed += 1
         else:
             print(f"FAIL: {name:45s}")
-            failed += 1  # type: ignore
+            failed += 1
 
     # ── Rendering path tests ───────────────────────────────────────
     print("-" * 60)
@@ -613,31 +608,31 @@ def main():
             html = test_render(url, name)
             if not html:
                 print(f"FAIL: {name:40s} - render returned empty")
-                failed += 1  # type: ignore
+                failed += 1
                 continue
 
             # Check for basic HTML structure
             if "<html" not in html or "<body" not in html:
                 print(f"FAIL: {name:40s} - missing HTML structure")
-                failed += 1  # type: ignore
+                failed += 1
                 continue
 
             # Validate with tidy
             ok, err = test_tidy(html, name)
             if ok is None:
-                tidy_missing += 1  # type: ignore
+                tidy_missing += 1
                 print(f"PASS: {name:40s} (tidy not installed)")
             elif ok:
                 print(f"PASS: {name:40s}")
-                passed += 1  # type: ignore
+                passed += 1
             else:
-                tidy_errors += 1  # type: ignore
+                tidy_errors += 1
                 print(f"FAIL: {name:40s} - tidy error: {err[:80]}")
-                failed += 1  # type: ignore
+                failed += 1
 
         except Exception as e:
             print(f"FAIL: {name:40s} - {e}")
-            failed += 1  # type: ignore
+            failed += 1
 
     # ── Content-based assertions ─────────────────────────────────
     print("-" * 60)
@@ -652,9 +647,7 @@ def main():
     def check_search_results(html):
         return "matches)" in html and "Searching:" in html
 
-    content_tests.append(
-        ("/potato?search=alloc", "search shows match count", check_search_results)
-    )
+    content_tests.append(("/potato?search=alloc", "search shows match count", check_search_results))
 
     # Search: no-result query still renders
     def check_search_no_results(html):
@@ -672,9 +665,7 @@ def main():
     def check_clear_search(html):
         return "[Clear search]" in html
 
-    content_tests.append(
-        ("/potato?search=alloc", "clear search link present", check_clear_search)
-    )
+    content_tests.append(("/potato?search=alloc", "clear search link present", check_clear_search))
 
     # Search: no clear link when no search
     def check_no_clear_when_no_search(html):
@@ -686,11 +677,7 @@ def main():
 
     # Search form is functional (has form tag with method)
     def check_search_form(html):
-        return (
-            'id="search-form"' in html
-            and 'action="/potato"' in html
-            and 'name="search"' in html
-        )
+        return 'id="search-form"' in html and 'action="/potato"' in html and 'name="search"' in html
 
     content_tests.append(("/potato", "search form is functional", check_search_form))
 
@@ -726,9 +713,7 @@ def main():
         return "<script" not in html.lower() and "javascript:" not in html.lower()
 
     content_tests.append(("/potato", "no JavaScript (default)", check_no_js))
-    content_tests.append(
-        ("/potato?section=.text&idx=0", "no JavaScript (cell)", check_no_js)
-    )
+    content_tests.append(("/potato?section=.text&idx=0", "no JavaScript (cell)", check_no_js))
 
     # No event handler attributes
     def check_no_event_handlers(html):
@@ -748,9 +733,7 @@ def main():
         html_lower = html.lower()
         return not any(attr in html_lower for attr in event_attrs)
 
-    content_tests.append(
-        ("/potato", "no event handlers (default)", check_no_event_handlers)
-    )
+    content_tests.append(("/potato", "no event handlers (default)", check_no_event_handlers))
     content_tests.append(
         (
             "/potato?section=.text&idx=0",
@@ -811,9 +794,7 @@ def main():
     def check_select_prompt(html):
         return "Select a block" in html
 
-    content_tests.append(
-        ("/potato", "no cell shows select prompt", check_select_prompt)
-    )
+    content_tests.append(("/potato", "no cell shows select prompt", check_select_prompt))
 
     # Invalid cell index also shows "Select a block"
     def check_invalid_cell_prompt(html):
@@ -856,17 +837,13 @@ def main():
     def check_va_hex(html):
         return "0x10001000" in html and "268439552" not in html
 
-    content_tests.append(
-        ("/potato?section=.text&idx=0", "VA displayed as hex", check_va_hex)
-    )
+    content_tests.append(("/potato?section=.text&idx=0", "VA displayed as hex", check_va_hex))
 
     # Original Bytes hex dump present
     def check_hex_dump(html):
         return "<b>Original Bytes</b>" in html
 
-    content_tests.append(
-        ("/potato?section=.text&idx=0", "hex dump present", check_hex_dump)
-    )
+    content_tests.append(("/potato?section=.text&idx=0", "hex dump present", check_hex_dump))
 
     # Hex dump has classic format (offset | hex | ascii)
     def check_hex_format(html):
@@ -879,14 +856,12 @@ def main():
     # Annotations section for MATCHING functions with BLOCKER
     def check_annotations():
         """Find a MATCHING function cell and check for annotations."""
-        import sqlite3 as _sq
         import json as _js
+        import sqlite3 as _sq
 
-        conn = _sq.connect(str(get_db_path()))
+        conn = _sq.connect(f"file:{get_db_path()}?mode=ro", uri=True)
         c = conn.cursor()
-        c.execute(
-            "SELECT name FROM functions WHERE target='SERVER' AND status='MATCHING' LIMIT 5"
-        )
+        c.execute("SELECT name FROM functions WHERE target='SERVER' AND status='MATCHING' LIMIT 5")
         matching = [r[0] for r in c.fetchall()]
         if not matching:
             conn.close()
@@ -931,9 +906,7 @@ def main():
         # fileOffset for cell 0 is 4096 = 0x1000, should show as 0x00001000
         return "0x00001000" in html
 
-    content_tests.append(
-        ("/potato?section=.text&idx=0", "fileOffset as hex", check_fileoffset_hex)
-    )
+    content_tests.append(("/potato?section=.text&idx=0", "fileOffset as hex", check_fileoffset_hex))
 
     # Data inspector for .data cells (non-.text with raw bytes)
     def check_data_inspector(html):
@@ -976,15 +949,12 @@ def main():
         # Section tabs should show percentage like [.text 5%]
         return "%" in html and "covered" in html
 
-    content_tests.append(
-        ("/potato", "per-section coverage stats", check_per_section_stats)
-    )
+    content_tests.append(("/potato", "per-section coverage stats", check_per_section_stats))
 
     # Inline PNG images present
     def check_inline_images(html):
         return (
-            "data:image/png;base64," in html
-            and "SCANLINE" not in html  # variable name not leaked
+            "data:image/png;base64," in html and "SCANLINE" not in html  # variable name not leaked
         )
 
     content_tests.append(("/potato", "inline PNG images present", check_inline_images))
@@ -997,31 +967,23 @@ def main():
 
     def check_topbar_gradient(html):
         # The topbar table should use background= attribute for TOPBAR_PNG, which is an SVG data URI
-        return bool(
-            re.search(r'<table[^>]*background="data:image/svg\+xml;base64,', html)
-        )
+        return bool(re.search(r'<table[^>]*background="data:image/svg\+xml;base64,', html))
 
     content_tests.append(("/potato", "topbar gradient image", check_topbar_gradient))
 
     # Legend uses colored squares (td with bgcolor)
     def check_legend_squares(html):
         return (
-            'width="12" height="12"' in html
-            and ">exact</font>" in html
-            and ">reloc</font>" in html
+            'width="12" height="12"' in html and ">exact</font>" in html and ">reloc</font>" in html
         )
 
-    content_tests.append(
-        ("/potato", "legend uses colored squares", check_legend_squares)
-    )
+    content_tests.append(("/potato", "legend uses colored squares", check_legend_squares))
 
     # Panel headers use gradient background
     def check_panel_header_gradient(html):
         return 'background="data:image/png;base64,' in html and "Coverage Map" in html
 
-    content_tests.append(
-        ("/potato", "panel header gradient", check_panel_header_gradient)
-    )
+    content_tests.append(("/potato", "panel header gradient", check_panel_header_gradient))
 
     # HTML5 lang attribute present
     def check_html5_lang(html):
@@ -1055,9 +1017,9 @@ def main():
 
     # R logo image present
     def check_r_logo(html):
-        return 'alt="R"' in html and "data:image/gif;base64," in html
+        return 'alt="R"' in html and "data:image/svg+xml;base64," in html
 
-    content_tests.append(("/potato", "R logo GIF present", check_r_logo))
+    content_tests.append(("/potato", "R logo SVG present", check_r_logo))
 
     # Target selector form
     def check_target_selector(html):
@@ -1081,17 +1043,13 @@ def main():
     def check_block_details_header(html):
         return "Block Details" in html
 
-    content_tests.append(
-        ("/potato", "block details header", check_block_details_header)
-    )
+    content_tests.append(("/potato", "block details header", check_block_details_header))
 
     # Filter links have proper colors
     def check_filter_links_present(html):
         return all(f in html for f in ["exact", "reloc", "matching", "stub"])
 
-    content_tests.append(
-        ("/potato", "filter links present", check_filter_links_present)
-    )
+    content_tests.append(("/potato", "filter links present", check_filter_links_present))
 
     # Grid cells are clickable (have <a> links)
     def check_grid_clickable(html):
@@ -1112,16 +1070,10 @@ def main():
     )
 
     # No cell = no cell selection highlight (border="2" with accent on a grid cell)
-    def check_no_highlight(html):
-        import re
+    def check_no_highlight(html: str) -> bool:
+        return not re.search(r'<td bgcolor="[^"]*" border="2" bordercolor="#06b6d4"', html)
 
-        return not re.search(
-            r'<td bgcolor="[^"]*" border="2" bordercolor="#06b6d4"', html
-        )
-
-    content_tests.append(
-        ("/potato", "no highlight without selection", check_no_highlight)
-    )
+    content_tests.append(("/potato", "no highlight without selection", check_no_highlight))
 
     # Function Details table present for .text cell with function
     def check_function_details(html):
@@ -1139,9 +1091,7 @@ def main():
     def check_fn_fields(html):
         return all(f"<b>{f}</b>" in html for f in ["name", "size", "status", "origin"])
 
-    content_tests.append(
-        ("/potato?section=.text&idx=0", "function detail fields", check_fn_fields)
-    )
+    content_tests.append(("/potato?section=.text&idx=0", "function detail fields", check_fn_fields))
 
     # vaStart is a clickable link
     def check_vastart_link(html):
@@ -1157,9 +1107,7 @@ def main():
     def check_c_source(html):
         return "<b>C Source" in html and "<pre>" in html
 
-    content_tests.append(
-        ("/potato?section=.text&idx=0", "C source code block", check_c_source)
-    )
+    content_tests.append(("/potato?section=.text&idx=0", "C source code block", check_c_source))
 
     # Range shown in panel
     def check_range_shown(html):
@@ -1176,17 +1124,6 @@ def main():
     content_tests.append(
         ("/potato?section=.text&idx=0", "monospace font for code", check_monospace)
     )
-
-    # Filter toggle behavior: clicking active filter removes it
-    def check_filter_toggle():
-        """Filter toggles work: active filter link should remove that filter."""
-        html_filtered = test_render("/potato?filter=exact", "toggle-check")
-        # The "exact" filter is active, so its link should NOT include filter=exact
-        # (clicking it removes the filter)
-        # Find links that toggle exact off
-        return bool(
-            re.search(r'<a href="[^"]*">\s*<font[^>]*><b>E</b></font>', html_filtered)
-        )
 
     content_tests.append(
         (
@@ -1210,9 +1147,7 @@ def main():
         bg_count = html.count('bgcolor="#0f1216"')
         return bg_count > 5  # many cells dimmed
 
-    content_tests.append(
-        ("/potato?search=alloc", "search dims non-matching", check_search_dims)
-    )
+    content_tests.append(("/potato?search=alloc", "search dims non-matching", check_search_dims))
 
     # Colors from the theme are applied
     def check_theme_colors(html):
@@ -1259,9 +1194,7 @@ def main():
         ]
         return not any(name in html for name in leaked)
 
-    content_tests.append(
-        ("/potato", "no leaked Python var names", check_no_leaked_vars)
-    )
+    content_tests.append(("/potato", "no leaked Python var names", check_no_leaked_vars))
     content_tests.append(
         ("/potato?section=.text&idx=0", "no leaked vars (cell)", check_no_leaked_vars)
     )
@@ -1270,9 +1203,7 @@ def main():
     def check_section_stat_counts(html):
         return "E:" in html and "R:" in html and "M:" in html and "S:" in html
 
-    content_tests.append(
-        ("/potato", "section stats E/R/M/S counts", check_section_stat_counts)
-    )
+    content_tests.append(("/potato", "section stats E/R/M/S counts", check_section_stat_counts))
 
     # All tables properly closed
     def check_tables_closed(html):
@@ -1298,14 +1229,9 @@ def main():
 
     # Hidden inputs preserve state across forms
     def check_hidden_inputs(html):
-        return (
-            'type="hidden" name="target"' in html
-            and 'type="hidden" name="section"' in html
-        )
+        return 'type="hidden" name="target"' in html and 'type="hidden" name="section"' in html
 
-    content_tests.append(
-        ("/potato", "hidden inputs preserve state", check_hidden_inputs)
-    )
+    content_tests.append(("/potato", "hidden inputs preserve state", check_hidden_inputs))
 
     # Empty cells on .data show "No functions" message
     def check_empty_data_cell(html):
@@ -1324,13 +1250,13 @@ def main():
             html = test_render(url, name)
             if check_fn(html):
                 print(f"PASS: {name:45s}")
-                passed += 1  # type: ignore
+                passed += 1
             else:
                 print(f"FAIL: {name:45s}")
-                failed += 1  # type: ignore
+                failed += 1
         except Exception as e:
             print(f"FAIL: {name:45s} - {e}")
-            failed += 1  # type: ignore
+            failed += 1
 
     # ── W3C Nu Validator (local vnu.jar) ───────────────────────────
     print("-" * 60)
@@ -1384,25 +1310,19 @@ def main():
                     timeout=30,
                 )
                 result = json.loads(proc.stderr.decode("utf-8"))
-                all_errors = [
-                    m for m in result.get("messages", []) if m.get("type") == "error"
-                ]
+                all_errors = [m for m in result.get("messages", []) if m.get("type") == "error"]
                 # Filter out expected obsolete-element errors
-                real_errors = [
-                    m for m in all_errors if m.get("message") not in EXPECTED_OBSOLETE
-                ]
+                real_errors = [m for m in all_errors if m.get("message") not in EXPECTED_OBSOLETE]
                 obsolete_count = len(all_errors) - len(real_errors)
 
                 if not real_errors:
-                    vnu_passed += 1  # type: ignore
-                    passed += 1  # type: ignore
-                    obs_str = (
-                        f" ({obsolete_count} obsolete ok)" if obsolete_count else ""
-                    )
+                    vnu_passed += 1
+                    passed += 1
+                    obs_str = f" ({obsolete_count} obsolete ok)" if obsolete_count else ""
                     print(f"PASS: {name:45s}{obs_str}")
                 else:
-                    vnu_failed += 1  # type: ignore
-                    failed += 1  # type: ignore
+                    vnu_failed += 1
+                    failed += 1
                     print(f"FAIL: {name:45s} - {len(real_errors)} structural error(s):")
                     for i, e in enumerate(real_errors):
                         if i >= 5:
@@ -1412,13 +1332,13 @@ def main():
                         print(f"       line {line}: {msg[:120]}")
 
             except FileNotFoundError:
-                vnu_skipped += 1  # type: ignore
+                vnu_skipped += 1
                 print(f"SKIP: {name:45s} (java not found)")
             except subprocess.TimeoutExpired:
-                vnu_skipped += 1  # type: ignore
+                vnu_skipped += 1
                 print(f"SKIP: {name:45s} (vnu timeout)")
             except Exception as e:
-                vnu_skipped += 1  # type: ignore
+                vnu_skipped += 1
                 print(f"SKIP: {name:45s} ({type(e).__name__}: {e})")
 
     print("=" * 60)

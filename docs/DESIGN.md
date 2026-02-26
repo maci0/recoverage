@@ -18,7 +18,7 @@ The UI is built using a lightweight, dependency-free stack to ensure fast load t
    * `/api/targets` endpoint that returns available targets (SERVER, Europa1400Gold, etc.) from the database.
    * `/api/targets/<target>/data` endpoint that queries SQLite for a specific target and returns lightweight metadata and section layouts (with gzip compression).
    * `/api/targets/<target>/functions/<va>` endpoint to fetch specific function/global details on-demand.
-   * `/api/targets/<target>/asm?va=...&size=...` endpoint that dynamically disassembles binary chunks using Capstone (with LRU caching and memory-mapped binary reads).
+   * `/api/targets/<target>/asm?va=...&size=...` endpoint that dynamically disassembles binary chunks using Capstone (with LRU caching and in-memory cached binary reads).
    * `/regen` POST endpoint to trigger `rebrew catalog --json` + `rebrew build-db` regeneration.
    * Proxied paths: `/src/target_name/*` → project root, `/original/*` → project root
 
@@ -69,6 +69,7 @@ The UI is broken down into functional VanJS components in `app.js`:
   * Ghidra/radare2 names (if different from primary name)
   * SHA256 hash (for matched functions)
   * Type badges: "IAT thunk (not reversible)", "Exported function"
+  * Parent function link: For data and thunk cells, a clickable link to the parent function that owns the data block
 * **Source Links**: Clickable links to the original `.c` files.
 * **Copy Buttons**: "Copy VA" and "Copy Symbol" in the panel header.
 * **Code Blocks**: Three distinct sections for **C Source**, **Assembly** (or **Data Inspector**), and **Original Bytes** (hex dump). Each features a custom hexagon logo and has:
@@ -109,7 +110,7 @@ The UI is broken down into functional VanJS components in `app.js`:
 ### Performance Optimizations
 * **First Draw in First TCP Packet**: `server.py` intercepts requests to `/` and inlines `index.html`, `style.css`, `app.js`, and `van.min.js` into a single response. This response is minified (using `rjsmin` and `rcssmin`) and compressed using **Brotli (`br`)** or **Zstandard (`zstd`)** (falling back to `gzip`) to ~14.5KB, fitting perfectly into the initial TCP congestion window (`cwnd`). This allows the browser to parse and render the UI shell instantly without any render-blocking network requests.
 * **Advanced Compression**: The server dynamically selects the best compression algorithm based on the `Accept-Encoding` header, prioritizing `zstd`, then `br`, and falling back to `gzip`. Brotli cuts the massive JSON payload size in half compared to gzip (e.g., 119KB down to 58KB).
-* **HTTP/1.1 Keep-Alive**: The Python server uses `protocol_version = "HTTP/1.1"` to keep TCP connections open, eliminating handshake overhead for rapid subsequent API requests.
+* **HTTP/1.1 Keep-Alive**: The Python server uses wsgiref which supports HTTP/1.1 keep-alive connections, eliminating handshake overhead for rapid subsequent API requests.
 * **ETag Caching**: The heavy `/api/data` endpoint calculates an `ETag` based on the `coverage.db` file's modification time. If the database hasn't changed, the server responds with a `304 Not Modified` (0 bytes), making page reloads instantaneous.
 * **Request Cancellation**: The UI uses `AbortController` to cancel in-flight network requests if the user clicks through multiple cells rapidly, saving bandwidth and preventing race conditions.
 * **Deferred Highlight.js**: The heavy `highlight.js` library and its CSS are not loaded initially. They are dynamically fetched from a CDN only when a user clicks on a code block for the first time.
@@ -168,17 +169,25 @@ On function/global selection:
 
 ## Database Schema
 
+The database uses a v2 schema (see [DB_FORMAT.md](../../rebrew/docs/DB_FORMAT.md) for the canonical reference).
+
 ### Tables
-* `metadata`: Key-value pairs (target exe path, pre-calculated coverage summaries, etc.)
-* `functions`: All reversed functions (va (INTEGER), name, vaStart, size, status, origin, cflags, symbol, files JSON, etc.)
-* `globals`: Global variables (va (INTEGER), name, decl, files JSON)
-* `sections`: PE sections (name, va, size, fileOffset, column count)
-* `cells`: Grid cells per section (section_name, start, end, state, functions JSON array)
+* `metadata`: Key-value pairs per target — coverage summaries, paths, `db_version` stamp
+* `functions`: All reversed functions — va (INTEGER), name, vaStart, size, status, origin, cflags, symbol, files JSON, `detected_by` JSON, `size_by_tool` JSON, `textOffset`, ghidra_name, r2_name, is_thunk, is_export, sha256
+* `globals`: Global variables — va (INTEGER), name, decl, files JSON, `origin`, `size`
+* `sections`: PE sections — name, va, size, fileOffset, unitBytes, columns
+* `cells`: Grid cells per section — section_name, start, end, state (none/exact/reloc/matching/matching_reloc/stub/padding/data/thunk), functions JSON, label, parent_function
+
+### Views
+* `section_cell_stats`: Aggregated counts per target+section — total_cells, exact_count, reloc_count, matching_count, stub_count, padding_count, data_count, thunk_count, none_count
 
 ## Future Ideas / TODOs
 * [ ] **Minimap**: A global minimap of the entire PE file on the side.
 * [ ] **XREFs**: Show cross-references for data segments (which functions read/write to this `.data` block).
 * [ ] **Diff View**: Integrate the `matcher.py --diff` output directly into the UI for "Matching" and "Stub" blocks.
+* [x] **Jump table absorption**: Switch/jump table bytes adjacent to functions are absorbed into the parent function's size rather than tracked as separate cells.
+* [x] **Parent function linking**: Data and thunk cells automatically link to their parent function (detected via `func_end_va == data_start_va`).
+* [x] **Ghidra label export**: `rebrew catalog --export-ghidra-labels` generates `ghidra_data_labels.json` from detected tables for round-trip sync.
 
 ---
 
@@ -196,7 +205,7 @@ Potato Mode is a pure HTML 5 alternative UI that works **without any CSS or Java
 - **Section navigation** (`.text`, `.data`, `.rdata`, `.bss`)
 - **Multi-select filters** (toggle multiple filters simultaneously)
 - **Search functionality** (matches function name, VA, and symbol)
-- **Clickable progress bar segments**
+- **Segmented progress bar** (coverage breakdown by status)
 - **Cell selection with detail panel**
 - **Target selector**
 - **Data Inspector** for `.data`, `.rdata`, and `.bss` sections
@@ -248,7 +257,7 @@ Each filter link toggles that filter on/off while preserving other active filter
 - **Card wrappers**: Map and Panel sections use `border="1" bordercolor="#1c2a38"` to simulate the normal UI's card containers with subtle cyan-tinted borders.
 - **Grid container**: The grid table is wrapped in an additional bordered table with `cellpadding="8"` and `bgcolor="#0f1216"`, simulating the `.map` card effect.
 - **Panel header separator**: A 1px border row between "Block Details" header and panel body.
-- **Square grid cells**: Both `CELL_W` and `CELL_H` are 14px, producing square cells matching the normal UI's aspect ratio.
+- **Grid cells**: `CELL_W` is 18px, `CELL_H` is 15px (slightly shorter to compensate for the browser baseline gap below inline images).
 - **Status badge pills**: The State value in the detail panel is wrapped in a bordered `<table>` with the status color as border, simulating the pill badge rendering.
 - **Thinner selected-cell highlight**: `border="1"` cyan outline on the selected cell (vs. the original `border="2"`).
 - **Metadata label hierarchy**: Labels use `<font size="1">` while values use `<font size="2">`, replicating the 10px/12px label-value ratio of the normal UI.
@@ -281,7 +290,7 @@ Templates use `% for`/`% if`/`% end` control flow and `{{!expr}}` for raw HTML o
 ## Testing
 Run the test harness to verify all rendering paths:
 ```bash
-python3 recoverage/test_potato.py
+python3 tests/test_potato.py
 ```
 
 This tests over 190 different rendering paths and assertions including:
@@ -293,5 +302,5 @@ This tests over 190 different rendering paths and assertions including:
 
 Playwright comparison tests verify visual and behavioral parity with the main UI:
 ```bash
-pytest recoverage/test_playwright.py
+pytest tests/test_playwright.py
 ```

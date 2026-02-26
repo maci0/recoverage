@@ -5,23 +5,23 @@ Serves a VanJS + SQLite dashboard at http://localhost:8001.
 Run from a project directory containing db/coverage.db.
 """
 
+from __future__ import annotations
 
+import contextlib
 import functools
 import gzip
+import importlib.util
 import json
-import os
 import platform
 import re
 import sqlite3
 import subprocess
-import sys
 import threading
 import webbrowser
 from pathlib import Path
-from urllib.parse import urlparse
-import importlib.util
-
 from typing import Any, cast
+from urllib.parse import urlparse
+
 import bottle  # type: ignore
 
 from recoverage import __version__
@@ -39,8 +39,8 @@ CORS_ENABLED = False
 
 
 try:
-    import rjsmin  # type: ignore
     import rcssmin  # type: ignore
+    import rjsmin  # type: ignore
 
     HAS_MINIFIERS = True
 except ImportError:
@@ -93,11 +93,16 @@ def _find_dll_path(target: str) -> Path:
         import yaml  # type: ignore
 
         yml_path = root / "reccmp-project.yml"
-        with open(yml_path, "r") as f:
+        with open(yml_path, encoding="utf-8") as f:
             project_config = yaml.safe_load(f)
-        targets = project_config.get("targets", {})
+        targets = project_config.get("targets", {}) if isinstance(project_config, dict) else {}
         target_info = targets.get(target, targets.get("SERVER", {}))
-        return root / target_info.get("filename", "original/Server/server.dll")
+        filename = (
+            target_info.get("filename", "original/Server/server.dll")
+            if isinstance(target_info, dict)
+            else "original/Server/server.dll"
+        )
+        return root / filename
     except Exception:
         return root / "original" / "Server" / "server.dll"
 
@@ -113,20 +118,18 @@ def _load_dll(target: str) -> bytes | None:
         try:
             with open(dll_path, "rb") as f:
                 DLL_DATA[target] = f.read()
-        except FileNotFoundError:
+        except OSError:
             DLL_DATA[target] = None
     return DLL_DATA[target]
 
 
 @functools.lru_cache(maxsize=2048)
-def get_disassembly(
-    va: int, size: int, file_offset: int, target: str
-) -> str:
+def get_disassembly(va: int, size: int, file_offset: int, target: str) -> str:
     target_data = _load_dll(target)
     if target_data is None:
         return ""
 
-    code_bytes = target_data[file_offset : file_offset + size]  # type: ignore
+    code_bytes = target_data[file_offset : file_offset + size]
     if len(code_bytes) < size:
         return ""
 
@@ -135,9 +138,10 @@ def get_disassembly(
     md = _capstone.Cs(_capstone.CS_ARCH_X86, _capstone.CS_MODE_32)
     md.detail = False
 
-    asm_lines = []
-    for insn in md.disasm(code_bytes, va):
-        asm_lines.append(f"0x{insn.address:08x}  {insn.mnemonic:8s} {insn.op_str}")
+    asm_lines = [
+        f"0x{insn.address:08x}  {insn.mnemonic:8s} {insn.op_str}"
+        for insn in md.disasm(code_bytes, va)
+    ]
 
     return "\n".join(asm_lines) if asm_lines else "  (no instructions)"
 
@@ -166,14 +170,26 @@ def minify_js(js: str) -> str:
 # ── Compression ────────────────────────────────────────────────────
 
 
+def _best_encoding(accept_encoding: str) -> str:
+    """Return the best available compression encoding name, or empty string."""
+    if HAS_ZSTD and "zstd" in accept_encoding:
+        return "zstd"
+    if HAS_BROTLI and "br" in accept_encoding:
+        return "br"
+    if "gzip" in accept_encoding:
+        return "gzip"
+    return ""
+
+
 def compress_payload(body: bytes, accept_encoding: str) -> tuple[bytes, str]:
     """Compress payload using the best available algorithm."""
-    if HAS_ZSTD and "zstd" in accept_encoding:
+    encoding = _best_encoding(accept_encoding)
+    if encoding == "zstd":
         cctx = zstd.ZstdCompressor(level=3)  # type: ignore
         return cctx.compress(body), "zstd"
-    if HAS_BROTLI and "br" in accept_encoding:
+    if encoding == "br":
         return brotli.compress(body), "br"  # type: ignore
-    if "gzip" in accept_encoding:
+    if encoding == "gzip":
         return gzip.compress(body), "gzip"
     return body, ""
 
@@ -193,14 +209,16 @@ _FN_JSON_SQL = (
     "'cflags', cflags, 'symbol', symbol, 'markerType', markerType, "
     "'ghidra_name', ghidra_name, 'r2_name', r2_name, "
     "'is_thunk', is_thunk, 'is_export', is_export, 'sha256', sha256, "
-    "'files', json(files)"
+    "'files', json(files), "
+    "'detected_by', json(detected_by), 'size_by_tool', json(size_by_tool), "
+    "'textOffset', textOffset"
     ")"
 )
 
 _GLOBAL_JSON_SQL = (
     "json_object("
     "'va', va, 'name', name, 'decl', decl, "
-    "'files', json(files), 'isGlobal', 1"
+    "'files', json(files), 'origin', origin, 'size', size, 'isGlobal', 1"
     ")"
 )
 
@@ -231,13 +249,13 @@ def _compressed(body: bytes, content_type: str, **headers: str) -> bytes:
     return body
 
 
-def _json_ok(data, **headers: str) -> bytes:
+def _json_ok(data: dict[str, Any] | list[Any] | bytes, **headers: str) -> bytes:
     """Return compressed JSON 200."""
-    body = json.dumps(data).encode("utf-8") if isinstance(data, dict) else data
+    body = data if isinstance(data, bytes) else json.dumps(data).encode("utf-8")
     return _compressed(body, "application/json", **headers)
 
 
-def _json_err(status: int, data: dict) -> Any:
+def _json_err(status: int, data: dict[str, Any]) -> Any:
     """Return a JSON error response."""
     body = json.dumps(data).encode("utf-8")
     accept_enc = request.headers.get("Accept-Encoding", "")
@@ -256,7 +274,7 @@ app = Bottle()
 
 
 @app.hook("after_request")
-def _cors_headers():
+def _cors_headers() -> None:
     if CORS_ENABLED:
         response.set_header("Access-Control-Allow-Origin", "*")
         response.set_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
@@ -264,7 +282,7 @@ def _cors_headers():
 
 
 @app.get("/potato")
-def handle_potato():
+def handle_potato() -> bytes | Any:
     try:
         from recoverage.potato import render_potato  # type: ignore
 
@@ -272,38 +290,41 @@ def handle_potato():
         body = render_potato(parsed).encode("utf-8")
         return _compressed(body, "text/html; charset=utf-8")
     except Exception as e:
-        return HTTPResponse(status=500, body=f"Error: {e}")
+        from html import escape as _esc
+
+        return HTTPResponse(status=500, body=f"Error: {_esc(str(e))}")
+
+
+def _build_index_payload() -> bytes:
+    """Build the inlined index.html payload. Must be called under INDEX_LOCK."""
+    global CACHED_INDEX_PAYLOAD, CACHED_INDEX_COMPRESSED
+    assets = _assets_dir()
+    html = (assets / "index.html").read_text(encoding="utf-8")
+    css = (assets / "style.css").read_text(encoding="utf-8")
+    js = (assets / "app.js").read_text(encoding="utf-8")
+    try:
+        vanjs = (assets / "van.min.js").read_text(encoding="utf-8")
+    except OSError:
+        vanjs = ""
+    html = html.replace("<!-- INJECT_CSS -->", f"<style>{minify_css(css)}</style>")
+    html = html.replace(
+        "<!-- INJECT_JS -->",
+        f"<script>{vanjs}\n{minify_js(js)}</script>",
+    )
+    CACHED_INDEX_PAYLOAD = html.encode("utf-8")
+    CACHED_INDEX_COMPRESSED.clear()
+    return CACHED_INDEX_PAYLOAD
 
 
 @app.get("/")
 @app.get("/index.html")
-def handle_index():
-    global CACHED_INDEX_PAYLOAD, CACHED_INDEX_COMPRESSED
+def handle_index() -> bytes:
     accept_encoding = request.headers.get("Accept-Encoding", "")
+    encoding = _best_encoding(accept_encoding)
 
     with INDEX_LOCK:
         if CACHED_INDEX_PAYLOAD is None:
-            assets = _assets_dir()
-            html = (assets / "index.html").read_text(encoding="utf-8")
-            css = (assets / "style.css").read_text(encoding="utf-8")
-            js = (assets / "app.js").read_text(encoding="utf-8")
-            try:
-                vanjs = (assets / "van.min.js").read_text(encoding="utf-8")
-            except FileNotFoundError:
-                vanjs = ""
-
-            html = html.replace(
-                "<!-- INJECT_CSS -->", f"<style>{minify_css(css)}</style>"
-            )
-            html = html.replace(
-                "<!-- INJECT_JS -->",
-                f"<script>{vanjs}\n{minify_js(js)}</script>",
-            )
-            CACHED_INDEX_PAYLOAD = html.encode("utf-8")
-            CACHED_INDEX_COMPRESSED.clear()
-
-    _, encoding = compress_payload(b"", accept_encoding)
-    with INDEX_LOCK:
+            _build_index_payload()
         if encoding not in CACHED_INDEX_COMPRESSED:
             compressed, _ = compress_payload(CACHED_INDEX_PAYLOAD, accept_encoding)
             CACHED_INDEX_COMPRESSED[encoding] = compressed
@@ -318,7 +339,7 @@ def handle_index():
 
 
 @app.get("/api/health")
-def handle_api_health():
+def handle_api_health() -> bytes:
     db = _db_path()
     db_info: dict[str, Any] = {"path": str(db), "exists": db.exists()}
     if db.exists():
@@ -332,24 +353,26 @@ def handle_api_health():
         c.execute("SELECT COUNT(DISTINCT target) FROM metadata")
         target_count = c.fetchone()[0]
         conn.close()
-    except Exception:
+    except sqlite3.Error:
         pass
-    return _json_ok({
-        "version": __version__,
-        "db": db_info,
-        "extras": {
-            "capstone": HAS_CAPSTONE,
-            "brotli": HAS_BROTLI,
-            "zstd": HAS_ZSTD,
-            "minify": HAS_MINIFIERS,
-        },
-        "targets_count": target_count,
-        "cors": CORS_ENABLED,
-    })
+    return _json_ok(
+        {
+            "version": __version__,
+            "db": db_info,
+            "extras": {
+                "capstone": HAS_CAPSTONE,
+                "brotli": HAS_BROTLI,
+                "zstd": HAS_ZSTD,
+                "minify": HAS_MINIFIERS,
+            },
+            "targets_count": target_count,
+            "cors": CORS_ENABLED,
+        }
+    )
 
 
 @app.get("/api/targets")
-def handle_api_targets():
+def handle_api_targets() -> bytes:
     try:
         conn = _db()
         c = conn.cursor()
@@ -359,10 +382,6 @@ def handle_api_targets():
     except sqlite3.OperationalError:
         target_ids = []
 
-    if not target_ids:
-        # DB not available or empty, try to get target from config files later
-        pass
-
     targets_info: dict[str, Any] = {}
     root = _project_dir()
     try:
@@ -370,13 +389,13 @@ def handle_api_targets():
 
         yml_path = root / "reccmp-project.yml"
         if yml_path.exists():
-            with open(yml_path, "r") as f:
+            with open(yml_path, encoding="utf-8") as f:
                 doc = yaml.safe_load(f)
                 if isinstance(doc, dict):
                     t = doc.get("targets")
                     if isinstance(t, dict):
                         targets_info.update(t)
-    except Exception:
+    except (ImportError, OSError):
         pass
 
     # Fallback to rebrew.toml if reccmp-project.yml missing or empty
@@ -386,23 +405,24 @@ def handle_api_targets():
             if toml_path.exists():
                 text = toml_path.read_text(encoding="utf-8")
                 import tomllib
+
                 doc = tomllib.loads(text)
                 targets_dict = doc.get("targets", {})
-                for tid in targets_dict.keys():
+                for tid in targets_dict:
                     targets_info[tid] = {"filename": tid}
-        except Exception:
+        except (ImportError, OSError, ValueError):
             pass
 
-    targets_list = []
-    added_tids = set()
-    
+    targets_list: list[dict[str, str]] = []
+    added_tids: set[str] = set()
+
     # 1. Add targets in the order they appear in config
     for tid, t_info in targets_info.items():
         if tid in target_ids or not target_ids:
             filename = t_info.get("filename", tid) if isinstance(t_info, dict) else tid
             targets_list.append({"id": tid, "name": Path(filename).name})
             added_tids.add(tid)
-            
+
     # 2. Add any remaining targets from the DB that weren't in config
     for tid in target_ids:
         if tid not in added_tids:
@@ -415,7 +435,7 @@ def handle_api_targets():
 
 
 @app.get("/api/targets/<target>/stats")
-def handle_api_stats(target):
+def handle_api_stats(target: str) -> bytes | Any:
     try:
         conn = _db()
     except sqlite3.OperationalError as e:
@@ -424,20 +444,18 @@ def handle_api_stats(target):
     c = conn.cursor()
 
     # Pre-computed summary from metadata
-    summary = {}
+    summary: dict[str, Any] = {}
     c.execute("SELECT value FROM metadata WHERE target = ? AND key = 'summary'", (target,))
     row = c.fetchone()
     if row:
-        try:
+        with contextlib.suppress(json.JSONDecodeError, TypeError):
             summary = json.loads(row[0])
-        except (json.JSONDecodeError, TypeError):
-            pass
 
     # Per-section stats from the view
     sections: dict[str, Any] = {}
     c.execute(
         "SELECT section_name, total_cells, exact_count, reloc_count, "
-        "matching_count, stub_count FROM section_cell_stats WHERE target = ?",
+        "matching_count, stub_count, data_count, thunk_count FROM section_cell_stats WHERE target = ?",
         (target,),
     )
     for row in c.fetchall():
@@ -449,6 +467,8 @@ def handle_api_stats(target):
             "reloc": row["reloc_count"],
             "matching": row["matching_count"],
             "stub": row["stub_count"],
+            "data": row["data_count"],
+            "thunk": row["thunk_count"],
             "matched": matched,
             "coverage_pct": round(matched / total * 100, 2) if total else 0.0,
         }
@@ -470,16 +490,18 @@ def handle_api_stats(target):
         by_status[row["status"] or "unknown"] = row["cnt"]
 
     conn.close()
-    return _json_ok({
-        "target": target,
-        "summary": summary,
-        "sections": sections,
-        "functions_by_status": by_status,
-    })
+    return _json_ok(
+        {
+            "target": target,
+            "summary": summary,
+            "sections": sections,
+            "functions_by_status": by_status,
+        }
+    )
 
 
 @app.get("/api/targets/<target>/data")
-def handle_api_data(target):
+def handle_api_data(target: str) -> bytes | Any:
     db = _db_path()
     section_filter = request.query.get("section", "").strip() or None
 
@@ -493,7 +515,7 @@ def handle_api_data(target):
         etag = f'"{etag_key}"'
         if request.headers.get("If-None-Match") == etag:
             return HTTPResponse(status=304)
-    except FileNotFoundError:
+    except OSError:
         pass
 
     try:
@@ -502,7 +524,7 @@ def handle_api_data(target):
         return _json_err(503, {"error": str(e)})
 
     c = conn.cursor()
-    data: dict = {}
+    data: dict[str, Any] = {}
 
     c.execute("SELECT key, value FROM metadata WHERE target = ?", (target,))
     for row in c.fetchall():
@@ -528,7 +550,7 @@ def handle_api_data(target):
         c.execute(
             "SELECT section_name, json_group_array(json_object("
             "'id', id, 'start', start, 'end', end, 'span', span, "
-            "'state', state, 'functions', json(functions)"
+            "'state', state, 'functions', json(functions), 'label', label, 'parent_function', parent_function"
             ")) FROM cells WHERE target = ? AND section_name = ? GROUP BY section_name",
             (target, section_filter),
         )
@@ -536,7 +558,7 @@ def handle_api_data(target):
         c.execute(
             "SELECT section_name, json_group_array(json_object("
             "'id', id, 'start', start, 'end', end, 'span', span, "
-            "'state', state, 'functions', json(functions)"
+            "'state', state, 'functions', json(functions), 'label', label, 'parent_function', parent_function"
             ")) FROM cells WHERE target = ? GROUP BY section_name",
             (target,),
         )
@@ -568,14 +590,14 @@ def handle_api_data(target):
     if section_filter:
         c.execute(
             "SELECT section_name, total_cells, exact_count, reloc_count, "
-            "matching_count, stub_count FROM section_cell_stats "
+            "matching_count, stub_count, data_count, thunk_count FROM section_cell_stats "
             "WHERE target = ? AND section_name = ?",
             (target, section_filter),
         )
     else:
         c.execute(
             "SELECT section_name, total_cells, exact_count, reloc_count, "
-            "matching_count, stub_count FROM section_cell_stats WHERE target = ?",
+            "matching_count, stub_count, data_count, thunk_count FROM section_cell_stats WHERE target = ?",
             (target,),
         )
     for row in c.fetchall():
@@ -585,6 +607,8 @@ def handle_api_data(target):
             "reloc": row["reloc_count"],
             "matching": row["matching_count"],
             "stub": row["stub_count"],
+            "data": row["data_count"],
+            "thunk": row["thunk_count"],
         }
 
     conn.close()
@@ -594,7 +618,7 @@ def handle_api_data(target):
 
 
 @app.get("/api/targets/<target>/functions")
-def handle_api_functions_list(target):
+def handle_api_functions_list(target: str) -> bytes | Any:
     """Paginated function listing with optional filters."""
     status_filter = request.query.get("status", "").strip() or None
     search = request.query.get("search", "").strip() or None
@@ -609,7 +633,7 @@ def handle_api_functions_list(target):
         offset = 0
 
     # Parse sort
-    allowed_sort = {"va", "name", "size", "status", "symbol"}
+    allowed_sort = {"va", "name", "size", "status", "symbol", "origin"}
     sort_field = "va"
     sort_dir = "ASC"
     if ":" in sort_param:
@@ -651,32 +675,35 @@ def handle_api_functions_list(target):
         f"ORDER BY {sort_field} {sort_dir} LIMIT ? OFFSET ?",
         params + [limit, offset],
     )
-    items = []
+    items: list[dict[str, Any]] = []
     for row in c.fetchall():
-        items.append({
-            "va": row["va"],
-            "name": row["name"],
-            "vaStart": row["vaStart"],
-            "size": row["size"],
-            "status": row["status"],
-            "origin": row["origin"],
-            "symbol": row["symbol"],
-            "markerType": row["markerType"],
-        })
+        items.append(
+            {
+                "va": row["va"],
+                "name": row["name"],
+                "vaStart": row["vaStart"],
+                "size": row["size"],
+                "status": row["status"],
+                "origin": row["origin"],
+                "symbol": row["symbol"],
+                "markerType": row["markerType"],
+            }
+        )
 
     conn.close()
-    return _json_ok({
-        "target": target,
-        "total": total,
-        "limit": limit,
-        "offset": offset,
-        "functions": items,
-    })
+    return _json_ok(
+        {
+            "target": target,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "functions": items,
+        }
+    )
 
 
 @app.get("/api/targets/<target>/functions/<va>")
-def handle_api_function(target, va):
-
+def handle_api_function(target: str, va: str) -> bytes | Any:
     try:
         conn = _db()
     except sqlite3.OperationalError as e:
@@ -685,14 +712,21 @@ def handle_api_function(target, va):
     c = conn.cursor()
     no_cache = "no-cache, no-store, must-revalidate"
 
-    # Try functions first (by va int or name string)
+    # Parse va once: numeric → lookup by va column, string → lookup by name
     try:
         va_int = int(va, 0)
+        is_numeric = True
+    except ValueError:
+        va_int = 0
+        is_numeric = False
+
+    # Try functions first
+    if is_numeric:
         c.execute(
             f"SELECT {_FN_JSON_SQL} FROM functions WHERE target = ? AND va = ?",
             (target, va_int),
         )
-    except ValueError:
+    else:
         c.execute(
             f"SELECT {_FN_JSON_SQL} FROM functions WHERE target = ? AND name = ?",
             (target, va),
@@ -704,13 +738,12 @@ def handle_api_function(target, va):
         return _json_ok(row[0].encode("utf-8"), Cache_Control=no_cache)
 
     # Try globals
-    try:
-        va_int = int(va, 0)
+    if is_numeric:
         c.execute(
             f"SELECT {_GLOBAL_JSON_SQL} FROM globals WHERE target = ? AND va = ?",
             (target, va_int),
         )
-    except ValueError:
+    else:
         c.execute(
             f"SELECT {_GLOBAL_JSON_SQL} FROM globals WHERE target = ? AND name = ?",
             (target, va),
@@ -725,9 +758,9 @@ def handle_api_function(target, va):
 
 
 @app.get("/api/targets/<target>/asm")
-def handle_api_asm(target):
+def handle_api_asm(target: str) -> bytes | Any:
     if not HAS_CAPSTONE:
-        return _json_err(500, {"error": "capstone not installed"})
+        return _json_err(501, {"error": "capstone not installed"})
 
     va_str = request.query.get("va")
     size_str = request.query.get("size")
@@ -739,9 +772,12 @@ def handle_api_asm(target):
 
     try:
         va = int(va_str, 0)
-        size = min(int(size_str, 0), 4096)
+        size = min(max(int(size_str, 0), 0), 4096)
     except ValueError:
         return _json_err(400, {"error": "invalid va or size"})
+
+    if size == 0:
+        return _json_err(400, {"error": "size must be positive"})
 
     try:
         conn = _db()
@@ -761,6 +797,8 @@ def handle_api_asm(target):
 
     sec = dict(row)
     file_offset = sec["fileOffset"] + (va - sec["va"])
+    if file_offset < 0:
+        return _json_err(400, {"error": "va is before section start"})
 
     if fmt == "json":
         # Structured JSON output
@@ -775,14 +813,16 @@ def handle_api_asm(target):
 
         md = _capstone.Cs(_capstone.CS_ARCH_X86, _capstone.CS_MODE_32)
         md.detail = False
-        instructions = []
+        instructions: list[dict[str, Any]] = []
         for insn in md.disasm(code_bytes, va):
-            instructions.append({
-                "addr": f"0x{insn.address:08x}",
-                "mnemonic": insn.mnemonic,
-                "op_str": insn.op_str,
-                "size": insn.size,
-            })
+            instructions.append(
+                {
+                    "addr": f"0x{insn.address:08x}",
+                    "mnemonic": insn.mnemonic,
+                    "op_str": insn.op_str,
+                    "size": insn.size,
+                }
+            )
         return _json_ok(
             {"instructions": instructions},
             Cache_Control="public, max-age=31536000",
@@ -797,15 +837,17 @@ def handle_api_asm(target):
 
 
 @app.get("/api/targets/<target>/sections/<section>/bytes")
-def handle_api_bytes(target, section):
+def handle_api_bytes(target: str, section: str) -> bytes | Any:
     """Return raw bytes from the original binary for a given section range."""
     try:
-        req_offset = int(request.query.get("offset", 0), 0)
-    except ValueError:
+        req_offset = int(request.query.get("offset", "0"), 0)
+        if req_offset < 0:
+            return _json_err(400, {"error": "invalid offset"})
+    except (ValueError, TypeError):
         return _json_err(400, {"error": "invalid offset"})
     try:
-        req_size = min(int(request.query.get("size", 256), 0), 4096)
-    except ValueError:
+        req_size = min(max(int(request.query.get("size", "256"), 0), 0), 4096)
+    except (ValueError, TypeError):
         return _json_err(400, {"error": "invalid size"})
 
     try:
@@ -833,7 +875,7 @@ def handle_api_bytes(target, section):
     chunk = target_data[file_start : file_start + req_size]
 
     # Format as hex lines (16 bytes per line)
-    hex_lines = []
+    hex_lines: list[str] = []
     for i in range(0, len(chunk), 16):
         line_bytes = chunk[i : i + 16]
         offset_str = f"{req_offset + i:08x}"
@@ -841,18 +883,21 @@ def handle_api_bytes(target, section):
         ascii_part = "".join(chr(b) if 32 <= b < 127 else "." for b in line_bytes)
         hex_lines.append(f"{offset_str}  {hex_part:<48s}  |{ascii_part}|")
 
-    return _json_ok({
-        "target": target,
-        "section": section,
-        "offset": req_offset,
-        "size": len(chunk),
-        "hex": "\n".join(hex_lines),
-        "raw": list(chunk),
-    }, Cache_Control="public, max-age=31536000")
+    return _json_ok(
+        {
+            "target": target,
+            "section": section,
+            "offset": req_offset,
+            "size": len(chunk),
+            "hex": "\n".join(hex_lines),
+            "raw": list(chunk),
+        },
+        Cache_Control="public, max-age=31536000",
+    )
 
 
 @app.post("/regen")
-def handle_regen():
+def handle_regen() -> bytes | Any:
     remote = request.environ.get("REMOTE_ADDR", "")
     if remote not in ("127.0.0.1", "::1", "localhost"):
         return _json_err(403, {"ok": False, "error": "Forbidden: localhost only"})
@@ -861,6 +906,11 @@ def handle_regen():
     with INDEX_LOCK:
         CACHED_INDEX_PAYLOAD = None
         CACHED_INDEX_COMPRESSED.clear()
+
+    # Clear DLL and disassembly caches so regen picks up new binaries
+    with DLL_LOCK:
+        DLL_DATA.clear()
+    get_disassembly.cache_clear()
 
     root = _project_dir()
     try:
@@ -888,14 +938,14 @@ def handle_regen():
 
 @app.get("/src/<filepath:path>")
 @app.get("/original/<filepath:path>")
-def serve_repo_file(filepath):
+def serve_repo_file(filepath: str) -> Any:
     """Serve source and original files from project dir (path-traversal safe)."""
     prefix = "src" if request.path.startswith("/src/") else "original"
     return static_file(filepath, root=str(_project_dir() / prefix))
 
 
 @app.get("/<filename:re:(?:app\\.js|style\\.css|van\\.min\\.js)>")
-def serve_static_asset(filename):
+def serve_static_asset(filename: str) -> Any:
     return static_file(filename, root=str(_assets_dir()))
 
 
@@ -910,9 +960,7 @@ def open_browser(url: str) -> None:
                 ["xdg-open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
             )
         elif system == "Darwin":
-            subprocess.Popen(
-                ["open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-            )
+            subprocess.Popen(["open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         elif system == "Windows":
             subprocess.Popen(
                 ["start", url],
@@ -924,6 +972,3 @@ def open_browser(url: str) -> None:
             webbrowser.open(url)
     except Exception:
         webbrowser.open(url)
-
-
-

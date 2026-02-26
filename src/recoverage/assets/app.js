@@ -161,6 +161,7 @@ const App = () => {
   const searchQuery = van.state("");
   const currentFn = van.state(null);
   const currentCellIndex = van.state(null);
+  const activeFnName = van.state("");
   const summaryData = van.state(null);
   const loadingMsg = van.state(MSG.LOADING);
   const showModal = van.state(false);
@@ -447,6 +448,8 @@ const App = () => {
     const cell = cells[i];
     if (!cell) return;
 
+    activeFnName.val = cell._fnName || "";
+
     if (cell.functions && cell.functions.length) {
       selectFunction(cell.functions[0]);
     } else {
@@ -498,13 +501,13 @@ const App = () => {
   };
 
   const copyToClipboard = (text, e) => {
-    if (!text) return;
-    navigator.clipboard.writeText(text).then(() => {
-      const btn = e.target;
-      const original = btn.textContent;
-      btn.textContent = "Copied!";
-      setTimeout(() => btn.textContent = original, 1000);
-    });
+    const btn = e.currentTarget || e.target;
+    const original = btn.textContent;
+    const flash = (msg) => { btn.textContent = msg; setTimeout(() => btn.textContent = original, 1000); };
+    if (text == null || text === undefined) { flash("Nothing"); return; }
+    const str = String(text);
+    if (!str) { flash("Empty"); return; }
+    navigator.clipboard.writeText(str).then(() => flash("Copied!")).catch(() => flash("Failed"));
   };
 
   const toggleFilter = (filter) => {
@@ -608,6 +611,7 @@ const App = () => {
 
       let exactCount = 0, relocCount = 0, matchingCount = 0, stubCount = 0;
       let exactBytes = 0, relocBytes = 0, matchingBytes = 0, stubBytes = 0;
+      let paddingBytes = 0, thunkBytes = 0;
       let totalItems = 0;
       let coveredBytes = 0;
 
@@ -621,23 +625,28 @@ const App = () => {
         relocBytes = s.relocBytes || 0;
         matchingBytes = s.matchingBytes || 0;
         stubBytes = s.stubBytes || 0;
+        paddingBytes = s.paddingBytes || 0;
+        thunkBytes = s.thunkBytes || 0;
         totalItems = s.totalFunctions || 0;
         coveredBytes = s.coveredBytes || 0;
       }
 
-      let exactPct = 0, relocPct = 0, matchingPct = 0, stubPct = 0;
+      let exactPct = 0, relocPct = 0, matchingPct = 0, stubPct = 0, paddingPct = 0, thunkPct = 0;
       if (secName === ".text") {
         const total = totalItems || 1;
         exactPct = (exactCount / total) * 100;
         relocPct = (relocCount / total) * 100;
         matchingPct = (matchingCount / total) * 100;
         stubPct = (stubCount / total) * 100;
+        paddingPct = sec.size > 0 ? (paddingBytes / sec.size * 100) : 0;
+        thunkPct = sec.size > 0 ? (thunkBytes / sec.size * 100) : 0;
       } else {
         const total = sec.size || 1;
         exactPct = (exactBytes / total) * 100;
         relocPct = (relocBytes / total) * 100;
         matchingPct = (matchingBytes / total) * 100;
         stubPct = (stubBytes / total) * 100;
+        paddingPct = (paddingBytes / total) * 100;
       }
 
       const coveragePct = sec.size > 0 ? (coveredBytes / sec.size * 100) : 0;
@@ -646,7 +655,9 @@ const App = () => {
         { type: "exact", pct: exactPct, count: exactCount },
         { type: "reloc", pct: relocPct, count: relocCount },
         { type: "matching", pct: matchingPct, count: matchingCount },
-        { type: "stub", pct: stubPct, count: stubCount }
+        { type: "stub", pct: stubPct, count: stubCount },
+        { type: "padding", pct: paddingPct, count: 0 },
+        { type: "thunk", pct: thunkPct, count: 0 }
       ];
 
       const getClasses = (type) => {
@@ -660,7 +671,9 @@ const App = () => {
             div({ class: getClasses("exact"), style: `width: ${exactPct}%`, title: `Exact: ${exactCount}`, onclick: () => toggleFilter("exact") }),
             div({ class: getClasses("reloc"), style: `width: ${relocPct}%`, title: `Reloc: ${relocCount}`, onclick: () => toggleFilter("reloc") }),
             div({ class: getClasses("matching"), style: `width: ${matchingPct}%`, title: `Matching: ${matchingCount}`, onclick: () => toggleFilter("matching") }),
-            div({ class: getClasses("stub"), style: `width: ${stubPct}%`, title: `Stub: ${stubCount}`, onclick: () => toggleFilter("stub") })
+            div({ class: getClasses("stub"), style: `width: ${stubPct}%`, title: `Stub: ${stubCount}`, onclick: () => toggleFilter("stub") }),
+            div({ class: getClasses("padding"), style: `width: ${paddingPct}%`, title: `Padding: ${paddingBytes}B`, onclick: () => toggleFilter("padding") }),
+            div({ class: getClasses("thunk"), style: `width: ${thunkPct}%`, title: `Thunk: ${thunkBytes}B`, onclick: () => toggleFilter("thunk") })
           ),
           div({ class: "progress-text-overlay" },
             span({ class: "stat-item" }, `${sec.size} bytes`),
@@ -704,6 +717,7 @@ const App = () => {
       const query = searchQuery.val;
       const matchedNames = filteredFnNames.val;
       const activeIdx = secName === activeSection.val ? currentCellIndex.val : null;
+      const activeFn = secName === activeSection.val ? activeFnName.val : "";
 
       const children = gridEl.children;
       const len = Math.min(children.length, cells.length);
@@ -713,7 +727,7 @@ const App = () => {
         const cell = cells[i];
 
         let cls = cell._baseClass;
-        if (i === activeIdx) cls += " active";
+        if (i === activeIdx || (activeFn && cell._fnName === activeFn)) cls += " active";
 
         if (query && cell._fnName && !matchedNames.has(cell._fnName)) {
           cls += " dimmed";
@@ -783,15 +797,17 @@ const App = () => {
           const query = searchQuery.val;
           const matchedNames = filteredFnNames.val;
           const activeIdx = currentCellIndex.val;
+          const activeFn = activeFnName.val;
 
           let html = "";
           for (let i = 0; i < cells.length; i++) {
             const cell = cells[i];
             const style = typeof cell.span === "number" ? `grid-column: span ${cell.span};` : "";
-            const title = `${i}  ${hex(cell.start, 5)}..${hex(cell.end, 5)}  ${cell.functions ? cell.functions.length : 0} fn`;
+            const secVa = sec.va || 0;
+            const title = `${i}  ${hex(secVa + cell.start, 8)}..${hex(secVa + cell.end, 8)}  ${cell.functions ? cell.functions.length : 0} fn`;
 
             let cls = cell._baseClass;
-            if (i === activeIdx) cls += " active";
+            if (i === activeIdx || (activeFn && cell._fnName === activeFn)) cls += " active";
 
             if (query && cell._fnName && !matchedNames.has(cell._fnName)) {
               cls += " dimmed";
@@ -816,6 +832,7 @@ const App = () => {
       searchQuery.val;
       filteredFnNames.val;
       currentCellIndex.val;
+      activeFnName.val;
 
       const activeGrid = grids[activeSection.val];
       if (activeGrid && activeGrid.children.length > 0 && activeGrid.children[0].classList.contains('cell')) {
@@ -932,10 +949,25 @@ const App = () => {
       const sec = data.val.sections[activeSection.val];
       if (sec && sec.cells) {
         const cell = sec.cells[cellIdx];
-        title = `Block ${cellIdx}`;
+        title = cell.label ? `Block ${cellIdx}: ${cell.label}` : `Block ${cellIdx}`;
         metaContent = div({ class: "meta-grid" },
-          div({ class: "meta-item full-width" }, span({ class: "meta-value" }, `${hex(cell.start, 5)}..${hex(cell.end, 5)} (no documented items)`))
+          div({ class: "meta-item" }, span({ class: "meta-label" }, "Range"), span({ class: "meta-value" }, `${hex(sec.va + cell.start, 8)}..${hex(sec.va + cell.end, 8)}`)),
+          div({ class: "meta-item" }, span({ class: "meta-label" }, "State"), span({ class: "meta-value" }, cell.state || "none")),
+          cell.label ? div({ class: "meta-item" }, span({ class: "meta-label" }, "Label"), span({ class: "meta-value" }, cell.label)) : null,
+          cell.parent_function ? div({ class: "meta-item" }, span({ class: "meta-label" }, "Parent"), span({ class: "meta-value" }, a({ href: "#", onclick: (e) => { e.preventDefault(); selectFunction(cell.parent_function); } }, cell.parent_function))) : null
         );
+      }
+    }
+
+    // Compute copyable VA: prefer fn fields, fall back to cell address range
+    let copyVA = null;
+    if (fn) {
+      copyVA = fn.vaStart || (fn.va != null ? hex(fn.va, 8) : null);
+    } else if (cellIdx !== null && data.val?.sections) {
+      const sec = data.val.sections[activeSection.val];
+      if (sec?.cells?.[cellIdx]) {
+        const cell = sec.cells[cellIdx];
+        copyVA = `${hex(sec.va + cell.start, 8)}..${hex(sec.va + cell.end, 8)}`;
       }
     }
 
@@ -944,7 +976,7 @@ const App = () => {
       div({ class: "panel-head" },
         div({ class: "panel-title" }, title),
         div({ class: "panel-actions" },
-          button({ class: "btn copy-btn", "aria-label": "Copy VA", onclick: (e) => copyToClipboard(fn?.vaStart || fn?.va, e) }, "Copy VA"),
+          button({ class: "btn copy-btn", "aria-label": "Copy VA", onclick: (e) => copyToClipboard(copyVA, e) }, "Copy VA"),
           button({ class: "btn copy-btn", "aria-label": "Copy Symbol", onclick: (e) => copyToClipboard(fn?.symbol, e) }, "Copy Symbol")
         ),
         div({ class: "panel-meta" }, metaContent)
@@ -955,7 +987,7 @@ const App = () => {
             HexLogo("C", "#3b82f6", "C Source"),
             div({ class: "section-actions" },
               button({ class: "btn copy-btn", "aria-label": "Copy C Source", onclick: (e) => copyToClipboard(cSourceText.val, e) }, "Copy"),
-              button({ class: "btn copy-btn", "aria-label": "Open C Source in Modal", onclick: () => { if (fn) { modalTitle.val = "C Source: " + fn.name; modalContent.val = cSourceText.val; modalLang.val = "c"; showModal.val = true; } } }, "Open")
+              button({ class: "btn copy-btn", "aria-label": "Open C Source in Modal", onclick: () => { const label = fn ? fn.name : "Block " + cellIdx; modalTitle.val = "C Source: " + label; modalContent.val = cSourceText.val; modalLang.val = "c"; showModal.val = true; } }, "Open")
             )
           ),
           HighlightedCode({ lang: "c", text: cSourceText.val })
@@ -966,7 +998,7 @@ const App = () => {
               HexLogo("ASM", "#ef4444", "Assembly"),
               div({ class: "section-actions" },
                 button({ class: "btn copy-btn", "aria-label": "Copy ASM", onclick: (e) => copyToClipboard(asmText.val, e) }, "Copy"),
-                button({ class: "btn copy-btn", "aria-label": "Open ASM in Modal", onclick: () => { if (fn) { modalTitle.val = "ASM: " + fn.name; modalContent.val = asmText.val; modalLang.val = "x86asm"; showModal.val = true; } } }, "Open")
+                button({ class: "btn copy-btn", "aria-label": "Open ASM in Modal", onclick: () => { const label = fn ? fn.name : "Block " + cellIdx; modalTitle.val = "ASM: " + label; modalContent.val = asmText.val; modalLang.val = "x86asm"; showModal.val = true; } }, "Open")
               )
             ),
             HighlightedCode({ lang: "x86asm", text: asmText.val })
@@ -982,7 +1014,7 @@ const App = () => {
             HexLogo("01", "#10b981", "Original Bytes"),
             div({ class: "section-actions" },
               button({ class: "btn copy-btn", "aria-label": "Copy Original Bytes", onclick: (e) => copyToClipboard(bytesText.val, e) }, "Copy"),
-              button({ class: "btn copy-btn", "aria-label": "Open Original Bytes in Modal", onclick: () => { if (fn) { modalTitle.val = "Original Bytes: " + fn.name; modalContent.val = bytesText.val; modalLang.val = "hex"; showModal.val = true; } } }, "Open")
+              button({ class: "btn copy-btn", "aria-label": "Open Original Bytes in Modal", onclick: () => { const label = fn ? fn.name : "Block " + cellIdx; modalTitle.val = "Original Bytes: " + label; modalContent.val = bytesText.val; modalLang.val = "hex"; showModal.val = true; } }, "Open")
             )
           ),
           HighlightedCode({ lang: "hex", text: bytesText.val })
@@ -1024,7 +1056,10 @@ const App = () => {
           button({ class: () => `btn filter-btn filter-exact ${activeFilters.val.has("exact") ? "active" : ""}`, "aria-label": "Filter exact", onclick: () => toggleFilter("exact") }, "E"),
           button({ class: () => `btn filter-btn filter-reloc ${activeFilters.val.has("reloc") ? "active" : ""}`, "aria-label": "Filter reloc", onclick: () => toggleFilter("reloc") }, "R"),
           button({ class: () => `btn filter-btn filter-matching ${activeFilters.val.has("matching") ? "active" : ""}`, "aria-label": "Filter matching", onclick: () => toggleFilter("matching") }, "M"),
-          button({ class: () => `btn filter-btn filter-stub ${activeFilters.val.has("stub") ? "active" : ""}`, "aria-label": "Filter stub", onclick: () => toggleFilter("stub") }, "S")
+          button({ class: () => `btn filter-btn filter-stub ${activeFilters.val.has("stub") ? "active" : ""}`, "aria-label": "Filter stub", onclick: () => toggleFilter("stub") }, "S"),
+          button({ class: () => `btn filter-btn filter-padding ${activeFilters.val.has("padding") ? "active" : ""}`, "aria-label": "Filter padding", onclick: () => toggleFilter("padding") }, "P"),
+          button({ class: () => `btn filter-btn filter-data ${activeFilters.val.has("data") ? "active" : ""}`, "aria-label": "Filter data", onclick: () => toggleFilter("data") }, "J"),
+          button({ class: () => `btn filter-btn filter-thunk ${activeFilters.val.has("thunk") ? "active" : ""}`, "aria-label": "Filter thunk", onclick: () => toggleFilter("thunk") }, "T")
         ),
         div({ class: "actions" },
           () => {
@@ -1076,7 +1111,10 @@ const App = () => {
           div({ class: "key" }, span({ class: "swatch swatch-exact" }), span("exact match")),
           div({ class: "key" }, span({ class: "swatch swatch-reloc" }), span("reloc match")),
           div({ class: "key" }, span({ class: "swatch swatch-matching" }), span("near-miss")),
-          div({ class: "key" }, span({ class: "swatch swatch-stub" }), span("stub"))
+          div({ class: "key" }, span({ class: "swatch swatch-stub" }), span("stub")),
+          div({ class: "key" }, span({ class: "swatch swatch-padding" }), span("padding")),
+          div({ class: "key" }, span({ class: "swatch swatch-data" }), span("data")),
+          div({ class: "key" }, span({ class: "swatch swatch-thunk" }), span("thunk"))
         ),
         Grid(),
         div({ class: "hint" }, "Click a block to view function details. Use filters to show specific statuses.")

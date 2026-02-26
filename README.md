@@ -35,7 +35,7 @@ closely your C code matches the original compiled output.
 
 | | |
 |---|---|
-| 🧱 **Defrag-style grid** | One cell per chunk — Exact (green), Reloc (blue), Matching (yellow), Stub (red) |
+| 🧱 **Defrag-style grid** | One cell per chunk — Exact (green), Reloc (cyan), Matching (yellow), Stub (red), None (gray) |
 | 🔎 **Function detail panel** | Click any cell to see metadata, C source, disassembly, and hex dump side-by-side |
 | 🌗 **Light & dark themes** | Retro CRT dark mode by default, clean light mode one click away |
 | 🔗 **Clickable cross-references** | Hex addresses in disassembly are live links — click to jump to that chunk |
@@ -195,8 +195,8 @@ rebrew catalog --json          rebrew build-db           recoverage (Bottle + SQ
   db/data_*.json  ──────────▶  db/coverage.db  ──────────▶  VanJS Dashboard
 ```
 
-1. **`rebrew catalog --json`**: Scans your project's source annotations and writes intermediate `db/data_*.json` files containing coverage metrics.
-2. **`rebrew build-db`**: Consumes those JSON files and builds a structured `db/coverage.db` (SQLite) database, optimizing data for fast read access by the dashboard.
+1. **`rebrew catalog --json`**: Scans your project's source annotations and writes intermediate `db/data_*.json` files containing coverage metrics. Jump table / switch data bytes are absorbed into their parent function's size. Use `--export-ghidra-labels` to generate `ghidra_data_labels.json` for round-trip Ghidra sync.
+2. **`rebrew build-db`**: Consumes those JSON files and builds a structured `db/coverage.db` (SQLite v2 schema) database, storing per-function metadata (`detected_by`, `size_by_tool`, `textOffset`), per-global metadata (`origin`, `size`), per-cell metadata (`label`, `parent_function`), and stamping `db_version` for schema detection. See [DB_FORMAT.md](../rebrew/docs/DB_FORMAT.md) for the full schema.
 3. **`recoverage`**: Starts a **Bottle** web server. The backend serves API endpoints querying the SQLite database, while the frontend is a zero-build Single Page Application (SPA) powered by **VanJS**, rendering the interactive defrag grid.
 
 You can run `recoverage` independently on any machine (or even host it remotely) as long as it has access to a compiled `coverage.db` — no `rebrew` dependency or compiler toolchain is required.
@@ -209,8 +209,8 @@ You can run `recoverage` independently on any machine (or even host it remotely)
 recoverage/
 ├── pyproject.toml
 ├── README.md
-├── DESIGN.md              # Detailed architecture & design doc
-├── docs/                  # Screenshots & mascot
+├── docs/                  # Screenshots, mascot & design doc
+│   └── DESIGN.md          # Detailed architecture & design doc
 └── src/recoverage/
     ├── __init__.py
     ├── __main__.py        # python -m recoverage

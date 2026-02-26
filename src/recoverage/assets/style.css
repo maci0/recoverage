@@ -34,6 +34,9 @@
   --reloc-bg: rgba(2, 132, 199, 0.65);
   --matching-bg: rgba(255, 200, 0, 0.65);
   --stub-bg: rgba(255, 0, 0, 0.65);
+  --padding-bg: rgba(200, 200, 220, 0.55);
+  --data-bg: rgba(139, 92, 246, 0.65);
+  --thunk-bg: rgba(249, 115, 22, 0.65);
 
   --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 
@@ -85,6 +88,9 @@
   --scroll-thumb-hover: rgba(0, 0, 0, 0.35);
   --scroll-border: #cbd5e1;
   --overlay-bg: rgba(226, 232, 240, 0.7);
+
+  --padding-bg: rgba(60, 60, 90, 0.55);
+  --thunk-bg: rgba(234, 88, 12, 0.65);
 
   /* hljs light */
   --hljs-color: #24292e;
@@ -171,7 +177,7 @@ body {
 
 .topbar {
   background: var(--topbar-bg); backdrop-filter: blur(12px); border-bottom: 1px solid var(--border);
-  position: sticky; top: 0; z-index: 10; padding: 12px 14px;
+  position: sticky; top: 0; z-index: 20; padding: 12px 14px;
   transition: background-color 0.3s ease, border-color 0.3s ease;
   display: flex; flex-wrap: wrap; gap: 14px; justify-content: space-between; align-items: center;
 }
@@ -199,6 +205,9 @@ body {
 .progress-segment.reloc { background: var(--reloc-bg); }
 .progress-segment.matching { background: var(--matching-bg); }
 .progress-segment.stub { background: var(--stub-bg); }
+.progress-segment.padding { background: var(--padding-bg); }
+.progress-segment.data { background: var(--data-bg); }
+.progress-segment.thunk { background: var(--thunk-bg); }
 
 .grid {
   display: grid; grid-template-columns: repeat(64, 1fr); gap: 2px; padding: 8px;
@@ -215,6 +224,9 @@ body {
 .cell.reloc { background: var(--reloc-bg); }
 .cell.matching { background: var(--matching-bg); }
 .cell.stub { background: var(--stub-bg); }
+.cell.padding { background: var(--padding-bg); }
+.cell.data { background: var(--data-bg); }
+.cell.thunk { background: var(--thunk-bg); }
 .cell.asm { background: rgba(42, 111, 219, 0.55); }
 .light-mode .cell { border-color: rgba(0, 0, 0, 0.12); }
 @keyframes fadeInCell { from { opacity: 0; transform: scale(0.9); } to { opacity: 1; transform: scale(1); } }
@@ -226,6 +238,9 @@ body {
 .grid.has-filters.show-reloc .cell.reloc { opacity: 1; }
 .grid.has-filters.show-matching .cell.matching { opacity: 1; }
 .grid.has-filters.show-stub .cell.stub { opacity: 1; }
+.grid.has-filters.show-padding .cell.padding { opacity: 1; }
+.grid.has-filters.show-data .cell.data { opacity: 1; }
+.grid.has-filters.show-thunk .cell.thunk { opacity: 1; }
 
 .cell:hover { outline: 1px solid var(--c); box-shadow: var(--c-shadow); z-index: 2; }
 .cell.active { box-shadow: 0 0 12px 2px var(--glow), inset 0 0 8px var(--glow); outline: 2px solid var(--c); border-color: var(--c); z-index: 3; position: relative; }
@@ -336,3 +351,6 @@ body::after { content: " "; display: block; position: fixed; top: 0; left: 0; bo
 .swatch-reloc { background: var(--reloc-bg); }
 .swatch-matching { background: var(--matching-bg); }
 .swatch-stub { background: var(--stub-bg); }
+.swatch-padding { background: var(--padding-bg); }
+.swatch-data { background: var(--data-bg); }
+.swatch-thunk { background: var(--thunk-bg); }
