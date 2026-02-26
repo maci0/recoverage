@@ -12,7 +12,6 @@ import gzip
 import importlib.util
 import json
 import platform
-import re
 import sqlite3
 import subprocess
 import threading
@@ -21,6 +20,10 @@ from pathlib import Path
 from typing import Any, cast
 
 import bottle  # type: ignore
+import brotli  # type: ignore[import-untyped]
+import rcssmin  # type: ignore[import-untyped]
+import rjsmin  # type: ignore[import-untyped]
+import zstandard as zstd  # type: ignore[import-untyped]
 
 Bottle = cast(Any, bottle.Bottle)
 request = cast(Any, bottle.request)
@@ -32,29 +35,6 @@ HAS_CAPSTONE = importlib.util.find_spec("capstone") is not None
 
 # CORS — set to True by CLI --cors flag
 CORS_ENABLED = False
-
-
-try:
-    import rcssmin  # type: ignore
-    import rjsmin  # type: ignore
-
-    HAS_MINIFIERS = True
-except ImportError:
-    HAS_MINIFIERS = False
-
-try:
-    import brotli  # type: ignore
-
-    HAS_BROTLI = True
-except ImportError:
-    HAS_BROTLI = False
-
-try:
-    import zstandard as zstd  # type: ignore
-
-    HAS_ZSTD = True
-except ImportError:
-    HAS_ZSTD = False
 
 
 # ── Path helpers ───────────────────────────────────────────────────
@@ -83,6 +63,8 @@ DLL_LOCK = threading.Lock()
 
 
 _TARGETS_CACHE: dict[str, Any] | None = None
+_TARGET_CACHE: dict[str, Any] | None = None
+_TARGET_CACHE_LOCK = threading.Lock()
 
 
 def _get_targets_config() -> dict[str, Any]:
@@ -122,6 +104,45 @@ def _get_targets_config() -> dict[str, Any]:
 
     _TARGETS_CACHE = targets_info
     return targets_info
+
+
+def clear_target_cache() -> None:
+    global _TARGETS_CACHE, _TARGET_CACHE
+    with _TARGET_CACHE_LOCK:
+        _TARGETS_CACHE = None
+        _TARGET_CACHE = None
+
+
+def resolve_targets(c: sqlite3.Cursor) -> tuple[list[str], list[dict[str, str]]]:
+    global _TARGET_CACHE
+    with _TARGET_CACHE_LOCK:
+        if _TARGET_CACHE is not None:
+            return _TARGET_CACHE["target_ids"], _TARGET_CACHE["targets_list"]
+
+    c.execute("SELECT DISTINCT target FROM metadata")
+    target_ids = [row[0] for row in c.fetchall()]
+    targets_info = _get_targets_config()
+
+    targets_list: list[dict[str, str]] = []
+    added_tids: set[str] = set()
+
+    for tid, t_info in targets_info.items():
+        if tid in target_ids or not target_ids:
+            filename = t_info.get("filename", tid) if isinstance(t_info, dict) else tid
+            targets_list.append({"id": tid, "name": Path(filename).name})
+            added_tids.add(tid)
+
+    for tid in target_ids:
+        if tid not in added_tids:
+            targets_list.append({"id": tid, "name": tid})
+
+    cache_value: dict[str, Any] = {
+        "target_ids": target_ids,
+        "targets_list": targets_list,
+    }
+    with _TARGET_CACHE_LOCK:
+        _TARGET_CACHE = cache_value
+    return target_ids, targets_list
 
 
 def _find_dll_path(target: str) -> Path:
@@ -179,21 +200,11 @@ def get_disassembly(va: int, size: int, file_offset: int, target: str) -> str:
 
 
 def minify_css(css: str) -> str:
-    if HAS_MINIFIERS:
-        return rcssmin.cssmin(css)  # type: ignore
-    css = re.sub(r"/\*[\s\S]*?\*/", "", css)
-    css = re.sub(r"\s+", " ", css)
-    css = re.sub(r"\s*([{}:;,])\s*", r"\1", css)
-    return css.strip()
+    return rcssmin.cssmin(css)
 
 
 def minify_js(js: str) -> str:
-    if HAS_MINIFIERS:
-        return rjsmin.jsmin(js)  # type: ignore
-    js = re.sub(r"^\s*//.*$", "", js, flags=re.MULTILINE)
-    js = re.sub(r"/\*[\s\S]*?\*/", "", js)
-    lines = [line.strip() for line in js.split("\n")]
-    return "\n".join(line for line in lines if line)
+    return rjsmin.jsmin(js)
 
 
 # ── Compression ────────────────────────────────────────────────────
@@ -201,9 +212,9 @@ def minify_js(js: str) -> str:
 
 def _best_encoding(accept_encoding: str) -> str:
     """Return the best available compression encoding name, or empty string."""
-    if HAS_ZSTD and "zstd" in accept_encoding:
+    if "zstd" in accept_encoding:
         return "zstd"
-    if HAS_BROTLI and "br" in accept_encoding:
+    if "br" in accept_encoding:
         return "br"
     if "gzip" in accept_encoding:
         return "gzip"
