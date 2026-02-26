@@ -82,36 +82,7 @@ def handle_api_targets() -> bytes:
     except sqlite3.OperationalError:
         target_ids = []
 
-    targets_info: dict[str, Any] = {}
-    root = _project_dir()
-    try:
-        import yaml  # type: ignore
-
-        yml_path = root / "reccmp-project.yml"
-        if yml_path.exists():
-            with open(yml_path, encoding="utf-8") as f:
-                doc = yaml.safe_load(f)
-                if isinstance(doc, dict):
-                    t = doc.get("targets")
-                    if isinstance(t, dict):
-                        targets_info.update(t)
-    except (ImportError, OSError):
-        pass
-
-    # Fallback to rebrew.toml if reccmp-project.yml missing or empty
-    if not targets_info:
-        try:
-            toml_path = root / "rebrew.toml"
-            if toml_path.exists():
-                text = toml_path.read_text(encoding="utf-8")
-                import tomllib
-
-                doc = tomllib.loads(text)
-                targets_dict = doc.get("targets", {})
-                for tid in targets_dict:
-                    targets_info[tid] = {"filename": tid}
-        except (OSError, ValueError):
-            pass
+    targets_info = _server._get_targets_config()
 
     targets_list: list[dict[str, str]] = []
     added_tids: set[str] = set()
@@ -621,6 +592,7 @@ def handle_regen() -> bytes | Any:
     with DLL_LOCK:
         DLL_DATA.clear()
     get_disassembly.cache_clear()
+    _server._TARGETS_CACHE = None
 
     root = _project_dir()
     try:

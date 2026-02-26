@@ -6,6 +6,7 @@ import sqlite3
 import struct
 import textwrap
 from collections.abc import Callable, Iterable
+from datetime import UTC
 from html import escape as _html_escape
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,10 @@ from urllib.parse import ParseResult, parse_qs
 from urllib.parse import quote as _url_quote
 
 from bottle import SimpleTemplate  # type: ignore
+
+from recoverage import __version__
+from recoverage.server import _db_path as get_db_path
+from recoverage.server import _find_dll_path as _dll_path
 
 # --- UI Constants ---
 COLORS = {
@@ -280,8 +285,8 @@ def _detail_rows(
         if val_fn:
             val = val_fn(k, v, val)
         rows.append(
-            f'<tr><td bgcolor="{PANEL_COLOR}" width="28%">'
-            f'<font size="1" color="{MUTED_COLOR}"><b>{_esc(k)}</b></font></td>'
+            f'<tr><th bgcolor="{PANEL_COLOR}" width="28%">'
+            f'<font size="1" color="{MUTED_COLOR}"><b>{_esc(k)}</b></font></th>'
             f'<td bgcolor="{PANEL_COLOR}">'
             f'<font face="Courier New, monospace" size="1">{val}</font></td></tr>'
         )
@@ -381,9 +386,23 @@ def _highlight_c(code: str) -> str:
     return _highlight_tokens(CLexer().get_tokens(code), _get_c_colors())
 
 
-def _highlight_asm(text: str) -> str:
+def _highlight_asm(text: str, target: str | None = None, section: str | None = None) -> str:
     """Syntax-highlight x86 assembly using Pygments tokens and <font> tags (no CSS)."""
     if not _pygments_available():
+        if target and section:
+            lines = []
+            for line in text.splitlines():
+                if line.startswith("0x") and "  " in line:
+                    addr_end = line.index("  ")
+                    addr_part, code_part = line[:addr_end], line[addr_end:]
+                    link = _build_url(target, section, search=addr_part)
+                    lines.append(
+                        f'<a href="{link}"><font color="#858585">{_html_escape(addr_part)}</font></a>'
+                        + _html_escape(code_part)
+                    )
+                else:
+                    lines.append(_html_escape(line))
+            return "\n".join(lines)
         return _html_escape(text)
     from pygments.lexers import NasmLexer  # type: ignore
 
@@ -395,9 +414,16 @@ def _highlight_asm(text: str) -> str:
             addr_end = line.index("  ")
             addr_part, code_part = line[:addr_end], line[addr_end:]
             hl = _highlight_tokens(lexer.get_tokens(code_part), colors)
-            result_lines.append(
-                f'<font color="#858585">{_html_escape(addr_part)}</font>' + hl.rstrip("\n")
-            )
+            if target and section:
+                link = _build_url(target, section, search=addr_part)
+                result_lines.append(
+                    f'<a href="{link}"><font color="#858585">{_html_escape(addr_part)}</font></a>'
+                    + hl.rstrip("\n")
+                )
+            else:
+                result_lines.append(
+                    f'<font color="#858585">{_html_escape(addr_part)}</font>' + hl.rstrip("\n")
+                )
         else:
             result_lines.append(_html_escape(line))
     return "\n".join(result_lines)
@@ -439,10 +465,6 @@ def _highlight_hex(text: str) -> str:
 # --- Data Helpers ---
 
 
-def get_db_path() -> Path:
-    return Path.cwd().resolve() / "db" / "coverage.db"
-
-
 def wrap_text(text: str, width: int = 45) -> str:
     """Hard-wrap text to a specific width for HTML display."""
     lines: list[str] = []
@@ -475,27 +497,6 @@ def _format_hex_dump(raw_bytes: bytes, base_offset: int = 0, max_bytes: int = 25
     if len(raw_bytes) > max_bytes:
         lines.append(f"... ({len(raw_bytes) - max_bytes} more bytes)")
     return "\n".join(lines)
-
-
-def _dll_path(target: str) -> Path:
-    """Resolve the DLL path for a target from reccmp-project.yml."""
-    project_root = Path.cwd().resolve()
-    try:
-        import yaml  # type: ignore
-
-        yml_path = project_root / "reccmp-project.yml"
-        with open(yml_path, encoding="utf-8") as f:
-            doc = yaml.safe_load(f)
-        targets_cfg = doc.get("targets", {}) if isinstance(doc, dict) else {}
-        target_info = targets_cfg.get(target, targets_cfg.get("SERVER", {}))
-        filename = (
-            target_info.get("filename", "original/Server/server.dll")
-            if isinstance(target_info, dict)
-            else "original/Server/server.dll"
-        )
-        return project_root / filename
-    except Exception:
-        return project_root / "original" / "Server" / "server.dll"
 
 
 def _get_raw_bytes(file_offset: int, size: int, target: str) -> bytes | None:
@@ -544,8 +545,8 @@ def _format_data_inspector(
 
     def _row(label: str, value: object) -> None:
         parts.append(
-            f'<tr><td bgcolor="{pc}" width="35%">'
-            f'<font size="1" color="{mc}"><b>{_esc(label)}</b></font></td>'
+            f'<tr><th bgcolor="{pc}" width="35%">'
+            f'<font size="1" color="{mc}"><b>{_esc(label)}</b></font></th>'
             f'<td bgcolor="{pc}">'
             f'<font face="Courier New, monospace" size="1">{_esc(value)}</font></td></tr>'
         )
@@ -652,6 +653,7 @@ _PAGE_SRC = r"""<!DOCTYPE html>
 <head><meta charset="utf-8"><title>ReCoverage - Potato Mode</title><link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%20100%20100%27%3E%3Ctext%20y%3D%27.9em%27%20font-size%3D%2790%27%3E%F0%9F%A5%94%3C%2Ftext%3E%3C%2Fsvg%3E"></head>
 <body bgcolor="{{BG_COLOR}}" text="{{TEXT_COLOR}}" background="{{SCANLINE_PNG}}" link="{{COLORS['reloc']}}" vlink="{{COLORS['reloc']}}" alink="{{COLORS['exact']}}">
 <font face="{{SANS_FONT}}">
+<a href="#grid-container"><font size="1" color="{{MUTED_COLOR}}">[Skip to grid]</font></a>
 
 <!-- Top Bar -->
 <table id="topbar" width="100%" border="0" cellpadding="4" cellspacing="0" background="{{TOPBAR_PNG}}">
@@ -660,7 +662,7 @@ _PAGE_SRC = r"""<!DOCTYPE html>
       <table id="logo" border="0" cellpadding="0" cellspacing="0">
         <tr>
           <td><img src="{{R_LOGO_SVG}}" width="48" height="32" border="0" alt="R"></td>
-          <td valign="middle"><font face="{{MONO_FONT}}" size="5" color="{{TEXT_COLOR}}">&nbsp;<b>ReCoverage</b></font></td>
+          <td valign="middle"><font face="{{MONO_FONT}}" size="5" color="{{TEXT_COLOR}}">&nbsp;<b>ReCoverage</b></font>&nbsp;<a href="/"><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">[SPA]</font></a></td>
         </tr>
       </table>
     </td>
@@ -669,9 +671,9 @@ _PAGE_SRC = r"""<!DOCTYPE html>
       % for s_name, s_url, s_active, s_pct_str in section_tab_data:
         <td valign="middle">
         % if s_active:
-          <table border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{ACTIVE_L}}" width="16" height="32" border="0" alt=""></td><td background="{{ACTIVE_MID}}" height="32" nowrap><a href="{{s_url}}"><font face="{{MONO_FONT}}" size="3" color="#ffffff"><b>{{s_name}}</b></font></a></td><td><img src="{{ACTIVE_R}}" width="16" height="32" border="0" alt=""></td></tr></table>
+          <table border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{ACTIVE_L}}" width="16" height="32" border="0" alt=""></td><td background="{{ACTIVE_MID}}" height="32" nowrap><a href="{{s_url}}" accesskey="{{s_name[1]}}"><font face="{{MONO_FONT}}" size="3" color="#ffffff"><b>{{s_name}}</b></font></a></td><td><img src="{{ACTIVE_R}}" width="16" height="32" border="0" alt=""></td></tr></table>
         % else:
-          <table border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{INACTIVE_L}}" width="16" height="32" border="0" alt=""></td><td background="{{INACTIVE_MID}}" height="32" nowrap><a href="{{s_url}}"><font face="{{MONO_FONT}}" size="3" color="{{MUTED_COLOR}}">{{s_name}}</font></a></td><td><img src="{{INACTIVE_R}}" width="16" height="32" border="0" alt=""></td></tr></table>
+          <table border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{INACTIVE_L}}" width="16" height="32" border="0" alt=""></td><td background="{{INACTIVE_MID}}" height="32" nowrap><a href="{{s_url}}" accesskey="{{s_name[1]}}"><font face="{{MONO_FONT}}" size="3" color="{{MUTED_COLOR}}">{{s_name}}</font></a></td><td><img src="{{INACTIVE_R}}" width="16" height="32" border="0" alt=""></td></tr></table>
         % end
         </td>
       % end
@@ -691,7 +693,7 @@ _PAGE_SRC = r"""<!DOCTYPE html>
           % if active_filters:
             <input type="hidden" name="filter" value="{{','.join(sorted(active_filters))}}">
           % end
-          <input id="search-input" type="text" name="search" size="18" value="{{search_query}}" placeholder="Search VA or name..."> <input type="submit" value="Go"></form>
+          <label for="search-input"><font size="1" color="{{MUTED_COLOR}}">Search:&nbsp;</font></label><input id="search-input" type="text" name="search" size="18" value="{{search_query}}" placeholder="Search VA or name..."> <input type="submit" value="Go"></form>
           % if search_query:
             <br><font size="1" color="{{ACCENT_COLOR}}">Searching: &quot;{{search_query}}&quot; ({{search_match_count}} matches)</font> <a href="{{clear_search_url}}"><font size="1" color="{{MUTED_COLOR}}">[Clear search]</font></a>
           % end
@@ -701,9 +703,9 @@ _PAGE_SRC = r"""<!DOCTYPE html>
             % for fb_href, fb_label, fb_color, fb_active in filter_btn_data:
               <td valign="middle">
               % if fb_active:
-                <table border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{FILTER_ACT_L}}" width="16" height="32" border="0" alt=""></td><td background="{{FILTER_ACT_MID}}" height="32" nowrap><a href="{{fb_href}}"><font face="{{MONO_FONT}}" size="3" color="{{fb_color}}"><b>{{fb_label}}</b></font></a></td><td><img src="{{FILTER_ACT_R}}" width="16" height="32" border="0" alt=""></td></tr></table>
+                <table border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{FILTER_ACT_L}}" width="16" height="32" border="0" alt=""></td><td background="{{FILTER_ACT_MID}}" height="32" nowrap><a href="{{fb_href}}" accesskey="{{fb_label[0].lower()}}"><font face="{{MONO_FONT}}" size="3" color="{{fb_color}}"><b>{{fb_label}}</b></font></a></td><td><img src="{{FILTER_ACT_R}}" width="16" height="32" border="0" alt=""></td></tr></table>
               % else:
-                <table border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{FILTER_INACT_L}}" width="16" height="32" border="0" alt=""></td><td background="{{FILTER_INACT_MID}}" height="32" nowrap><a href="{{fb_href}}"><font face="{{MONO_FONT}}" size="3" color="{{fb_color}}">{{fb_label}}</font></a></td><td><img src="{{FILTER_INACT_R}}" width="16" height="32" border="0" alt=""></td></tr></table>
+                <table border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{FILTER_INACT_L}}" width="16" height="32" border="0" alt=""></td><td background="{{FILTER_INACT_MID}}" height="32" nowrap><a href="{{fb_href}}" accesskey="{{fb_label[0].lower()}}"><font face="{{MONO_FONT}}" size="3" color="{{fb_color}}">{{fb_label}}</font></a></td><td><img src="{{FILTER_INACT_R}}" width="16" height="32" border="0" alt=""></td></tr></table>
               % end
               </td>
             % end
@@ -712,7 +714,7 @@ _PAGE_SRC = r"""<!DOCTYPE html>
         <td valign="middle">
           <form id="target-form" action="/potato" method="GET">
             <input type="hidden" name="section" value="{{section}}">
-            <select id="target-select" name="target">
+            <label for="target-select"><font size="1" color="{{MUTED_COLOR}}">Target:&nbsp;</font></label><select id="target-select" name="target">
             % for t in targets:
               <option value="{{t['id']}}" {{"selected" if t['id'] == target else ""}}>{{t['name']}}</option>
             % end
@@ -756,7 +758,9 @@ _PAGE_SRC = r"""<!DOCTYPE html>
     </td>
   </tr>
 </table>
-<table width="100%" border="0" cellpadding="8" cellspacing="0"><tr><td><a href="https://validator.w3.org/"><img src="https://upload.wikimedia.org/wikipedia/commons/b/bb/W3C_HTML5_certified.png" width="133" height="47" alt="Valid HTML5" border="0"></a></td></tr></table>
+<table id="footer" width="100%" border="0" cellpadding="8" cellspacing="0"><tr><td><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">recoverage v{{version}}% if db_mtime:
+ &middot; DB updated {{db_mtime}}% end
+</font></td><td align="right"><a href="https://validator.w3.org/"><img src="https://upload.wikimedia.org/wikipedia/commons/b/bb/W3C_HTML5_certified.png" width="133" height="47" alt="Valid HTML5" border="0"></a></td></tr></table>
 </font></body></html>"""
 
 _PAGE_TPL = SimpleTemplate(source=_PAGE_SRC)
@@ -768,7 +772,7 @@ _PANEL_SRC = r"""
 % if not has_cell:
 <table width="100%" border="0" cellpadding="10" cellspacing="1" bgcolor="{{BORDER_COLOR}}"><tr><td bgcolor="{{PANEL_COLOR}}" align="center"><font size="3" color="{{MUTED_COLOR}}"><b>Select a block</b></font><br><br><font color="{{MUTED_COLOR}}">Click any colored block in the grid to view details.</font></td></tr></table>
 % else:
-&nbsp;<font size="2"><b>Block {{idx}}</b></font><br>
+<table width="100%" border="0" cellpadding="0" cellspacing="0"><tr><td>&nbsp;<font size="2"><b>Block {{idx}}</b></font></td><td align="right"><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">{{!prev_link}} {{!next_link}}</font></td></tr></table>
 <table width="100%" border="0" cellpadding="3" cellspacing="1" bgcolor="{{BORDER_COLOR}}"><tr><td bgcolor="{{PANEL_COLOR}}"><font size="1" color="{{MUTED_COLOR}}"><b>Range:</b></font></td><td bgcolor="{{PANEL_COLOR}}"><font face="Courier New, monospace" size="1">{{cell_range}}</font></td></tr><tr><td bgcolor="{{PANEL_COLOR}}"><font size="1" color="{{MUTED_COLOR}}"><b>State:</b></font></td><td bgcolor="{{PANEL_COLOR}}"><font face="Courier New, monospace" size="1" color="{{state_color}}"><b>{{state_upper}}</b></font></td></tr>% if cell_label:
 <tr><td bgcolor="{{PANEL_COLOR}}"><font size="1" color="{{MUTED_COLOR}}"><b>Label:</b></font></td><td bgcolor="{{PANEL_COLOR}}"><font face="Courier New, monospace" size="1">{{cell_label}}</font></td></tr>% end
 % if parent_function:
@@ -1155,22 +1159,26 @@ def _render_potato_inner(
             target, section, active_filters or None, idx=orig_idx, search=search_query
         )
         sec_va = sec_data.get("va", 0)
+        funcs = cell.get("functions", [])
         title = (
             f"{hex(sec_va + cell.get('start', 0))}..{hex(sec_va + cell.get('end', 0))} | {state}"
         )
+        if funcs:
+            title += f" | {funcs[0]}"
+        alt_text = state
+        if funcs:
+            alt_text += f": {funcs[0]}"
         w = CELL_W * span
-        img = f'<a href="{link}" title="{_esc(title)}"><img src="{TRANSPARENT_GIF}" width="{w}" height="{CELL_H}" border="0" alt=""></a>'
+        img = f'<a href="{link}" title="{_esc(title)}"><img src="{TRANSPARENT_GIF}" width="{w}" height="{CELL_H}" border="0" alt="{_esc(alt_text)}"></a>'
 
         if selected:
-            # Accent border for selection highlight via nested table.
-            # Shrink image by 2px in each dimension to compensate for border.
             sel_img = (
                 f'<a href="{link}" title="{_esc(title)}">'
-                f'<img src="{TRANSPARENT_GIF}" width="{w - 2}" height="{CELL_H - 2}" border="0" alt="">'
+                f'<img src="{TRANSPARENT_GIF}" width="{w - 2}" height="{CELL_H - 2}" border="0" alt="{_esc(alt_text)}">'
                 f"</a>"
             )
             grid_html_parts.append(
-                f'<td bgcolor="{BG_COLOR}" width="{w}" height="{CELL_H}" colspan="{span}">'
+                f'<td id="sel" bgcolor="{BG_COLOR}" width="{w}" height="{CELL_H}" colspan="{span}">'
                 f'<table border="1" cellpadding="0" cellspacing="0" bordercolor="{ACCENT_COLOR}" width="100%">'
                 f'<tr><td bgcolor="{bgcolor}">{sel_img}</td></tr></table></td>'
             )
@@ -1192,7 +1200,9 @@ def _render_potato_inner(
     sec_stats = per_section_stats.get(section, {})
 
     # ── Detail panel ─────────────────────────────────────────────
-    panel_html = _render_panel(c, cells, idx_str, target, section, data, sec_data)
+    panel_html = _render_panel(
+        c, cells, idx_str, target, section, data, sec_data, active_filters, search_query
+    )
 
     # ── Render page template ─────────────────────────────────────
     clear_search_url = _build_url(target, section, active_filters or None)
@@ -1200,6 +1210,16 @@ def _render_potato_inner(
     progress_bar_png_uri = ""
     if progress:
         progress_bar_png_uri = _make_progress_png(progress["segments"], COLORS)
+
+    import os
+    from datetime import datetime
+
+    db_mtime_str = ""
+    try:
+        mtime = os.path.getmtime(get_db_path())
+        db_mtime_str = datetime.fromtimestamp(mtime, tz=UTC).strftime("%Y-%m-%d %H:%M UTC")
+    except OSError:
+        pass
 
     return _PAGE_TPL.render(
         # Constants
@@ -1246,6 +1266,8 @@ def _render_potato_inner(
         block_count=len(merged_cells),
         grid_html=grid_html,
         panel_html=panel_html,
+        db_mtime=db_mtime_str,
+        version=__version__,
     )
 
 
@@ -1257,6 +1279,8 @@ def _render_panel(
     section: str,
     data: dict[str, Any],
     sec_data: dict[str, Any] | None = None,
+    active_filters: set[str] | None = None,
+    search_query: str = "",
 ) -> str:
     """Render the right-hand detail panel HTML."""
     # Common context — constants + defaults for all panel states
@@ -1285,6 +1309,8 @@ def _render_panel(
         "gl_detail_rows": "",
         "cell_label": "",
         "parent_function": "",
+        "prev_link": "",
+        "next_link": "",
         "target": "",
         "section": "",
     }
@@ -1313,16 +1339,31 @@ def _render_panel(
     funcs = cell.get("functions", [])
     cell_label = cell.get("label", "")
     parent_function = cell.get("parent_function", "")
+    sec_data_dict = sec_data or {}
+
+    prev_link = (
+        f'<a href="{_build_url(target, section, active_filters, idx=idx - 1, search=search_query)}">&larr; Prev</a>'
+        if idx > 0
+        else "&larr; Prev"
+    )
+    next_link = (
+        f'<a href="{_build_url(target, section, active_filters, idx=idx + 1, search=search_query)}">Next &rarr;</a>'
+        if idx < len(cells) - 1
+        else "Next &rarr;"
+    )
+
     ctx.update(
         {
             "has_cell": True,
             "idx": idx,
-            "cell_range": f"{hex(sec_data.get('va', 0) + cell.get('start', 0))} .. {hex(sec_data.get('va', 0) + cell.get('end', 0))}",
+            "cell_range": f"{hex(sec_data_dict.get('va', 0) + cell.get('start', 0))} .. {hex(sec_data_dict.get('va', 0) + cell.get('end', 0))}",
             "state_upper": state.upper(),
             "state_color": state_color,
             "funcs": funcs,
             "cell_label": cell_label,
             "parent_function": parent_function,
+            "prev_link": prev_link,
+            "next_link": next_link,
             "target": target,
             "section": section,
         }
@@ -1414,7 +1455,9 @@ def _render_panel(
                 asm_text = _get_disassembly(fn_va, fn_size, fn_file_offset, target)
                 if asm_text:
                     ctx["asm_heading"] = _section_heading("ASM", "#ef4444", "Assembly")
-                    ctx["asm_html"] = _code_block_raw(_highlight_asm(wrap_text(asm_text, 55)))
+                    ctx["asm_html"] = _code_block_raw(
+                        _highlight_asm(wrap_text(asm_text, 55), target=target, section=section)
+                    )
 
         # Original Bytes
         fn_file_offset = fn_data.get("fileOffset")

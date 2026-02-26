@@ -82,25 +82,58 @@ DLL_DATA: dict[str, bytes | None] = {}
 DLL_LOCK = threading.Lock()
 
 
-def _find_dll_path(target: str) -> Path:
-    """Find the DLL path for a target from project config."""
+_TARGETS_CACHE: dict[str, Any] | None = None
+
+
+def _get_targets_config() -> dict[str, Any]:
+    global _TARGETS_CACHE
+    if _TARGETS_CACHE is not None:
+        return _TARGETS_CACHE
+
     root = _project_dir()
+    targets_info: dict[str, Any] = {}
     try:
         import yaml  # type: ignore
 
         yml_path = root / "reccmp-project.yml"
-        with open(yml_path, encoding="utf-8") as f:
-            project_config = yaml.safe_load(f)
-        targets = project_config.get("targets", {}) if isinstance(project_config, dict) else {}
-        target_info = targets.get(target, targets.get("SERVER", {}))
-        filename = (
-            target_info.get("filename", "original/Server/server.dll")
-            if isinstance(target_info, dict)
-            else "original/Server/server.dll"
-        )
-        return root / filename
-    except Exception:
-        return root / "original" / "Server" / "server.dll"
+        if yml_path.exists():
+            with open(yml_path, encoding="utf-8") as f:
+                doc = yaml.safe_load(f)
+                if isinstance(doc, dict):
+                    t = doc.get("targets")
+                    if isinstance(t, dict):
+                        targets_info.update(t)
+    except (ImportError, OSError):
+        pass
+
+    if not targets_info:
+        try:
+            import tomllib
+
+            toml_path = root / "rebrew.toml"
+            if toml_path.exists():
+                text = toml_path.read_text(encoding="utf-8")
+                doc = tomllib.loads(text)
+                targets_dict = doc.get("targets", {})
+                for tid in targets_dict:
+                    targets_info[tid] = {"filename": tid}
+        except (ImportError, OSError, ValueError):
+            pass
+
+    _TARGETS_CACHE = targets_info
+    return targets_info
+
+
+def _find_dll_path(target: str) -> Path:
+    """Find the DLL path for a target from project config."""
+    targets = _get_targets_config()
+    target_info = targets.get(target, targets.get("SERVER", {}))
+    filename = (
+        target_info.get("filename", "original/Server/server.dll")
+        if isinstance(target_info, dict)
+        else "original/Server/server.dll"
+    )
+    return _project_dir() / filename
 
 
 def _load_dll(target: str) -> bytes | None:

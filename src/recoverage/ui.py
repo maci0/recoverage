@@ -126,10 +126,25 @@ def _check_payload_budget(payload: bytes) -> None:
 @app.get("/potato")
 def handle_potato() -> bytes | Any:
     try:
-        from recoverage.potato import render_potato  # type: ignore
+        from recoverage.potato import get_db_path, render_potato  # type: ignore
+
+        db_path = get_db_path()
+        try:
+            mtime = db_path.stat().st_mtime
+            etag_key = f"{mtime}-{request.query_string}"
+            etag = f'"{etag_key}"'
+            if request.headers.get("If-None-Match") == etag:
+                return HTTPResponse(status=304)
+        except OSError:
+            etag = None
 
         parsed = urlparse(request.url)
         body = render_potato(parsed).encode("utf-8")
+
+        if etag:
+            response.set_header("ETag", etag)
+            response.set_header("Cache-Control", "no-cache, must-revalidate")
+
         return _compressed(body, "text/html; charset=utf-8")
     except Exception as e:
         from html import escape as _esc
