@@ -72,9 +72,7 @@ glance without loading the full SPA.
 ## Installation
 
 ```bash
-pip install recoverage            # minimal (Bottle + Rich + Typer)
-pip install recoverage[minify]    # + rjsmin / rcssmin
-pip install recoverage[compress]  # + brotli / zstandard
+pip install recoverage
 ```
 
 For development:
@@ -83,14 +81,12 @@ For development:
 uv pip install -e ../recoverage
 ```
 
-### Optional extras
+### Optional runtime extras
 
-| Extra | Packages | What it does |
-|-------|----------|--------------|
-| `minify` | rjsmin, rcssmin | Minifies inlined JS/CSS for smaller payloads |
-| `compress` | brotli, zstandard | Enables Brotli & Zstd response compression (falls back to gzip) |
-| *(runtime)* | capstone | Enables on-demand disassembly in the detail panel |
-| *(runtime)* | pygments | Syntax highlighting in Potato Mode |
+| Package | What it does |
+|---------|--------------|
+| capstone | Enables on-demand disassembly in the detail panel |
+| pygments | Syntax highlighting in Potato Mode |
 
 ---
 
