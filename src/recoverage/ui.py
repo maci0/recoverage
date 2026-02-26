@@ -2,18 +2,21 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import threading
 from typing import Any
 from urllib.parse import urlparse
 
+import brotli  # type: ignore[import-untyped]
+import zstandard as zstd  # type: ignore[import-untyped]
+
 from recoverage.server import (
-    HAS_BROTLI,
-    HAS_ZSTD,
     HTTPResponse,
     _assets_dir,
     _best_encoding,
     _compressed,
+    _db_path,
     _project_dir,
     app,
     compress_payload,
@@ -67,32 +70,14 @@ def _check_payload_budget(payload: bytes) -> None:
     """Warn if the inlined index payload exceeds the TCP cwnd budget.
 
     Tries every available compression method and reports the best result.
-    If a non-installed compressor would bring the payload under budget,
-    suggests installing it.
     """
     import gzip as _gzip
 
-    results: list[tuple[str, int]] = []
-
-    results.append(("gzip", len(_gzip.compress(payload))))
-
-    if HAS_BROTLI:
-        try:
-            import brotli  # type: ignore[import-untyped]
-
-            results.append(("br", len(brotli.compress(payload))))
-        except Exception:
-            pass
-    if HAS_ZSTD:
-        try:
-            import zstandard as zstd  # type: ignore[import-untyped]
-
-            results.append(("zstd", len(zstd.ZstdCompressor(level=3).compress(payload))))
-        except Exception:
-            pass
-
-    if not results:
-        return
+    results: list[tuple[str, int]] = [
+        ("gzip", len(_gzip.compress(payload))),
+        ("br", len(brotli.compress(payload))),
+        ("zstd", len(zstd.ZstdCompressor(level=3).compress(payload))),
+    ]
 
     best_name, best_size = min(results, key=lambda r: r[1])
     if best_size <= _TCP_CWND_BUDGET:
@@ -107,18 +92,6 @@ def _check_payload_budget(payload: bytes) -> None:
         over,
     )
 
-    suggestions = []
-    if not HAS_BROTLI:
-        suggestions.append("brotli")
-    if not HAS_ZSTD:
-        suggestions.append("zstandard")
-    if suggestions:
-        _log.warning(
-            "Install %s for better compression: pip install %s",
-            " / ".join(suggestions),
-            " ".join(suggestions),
-        )
-
 
 # ── Routes ─────────────────────────────────────────────────────────
 
@@ -126,26 +99,25 @@ def _check_payload_budget(payload: bytes) -> None:
 @app.get("/potato")
 def handle_potato() -> bytes | Any:
     try:
-        from recoverage.potato import get_db_path, render_potato  # type: ignore
+        from recoverage.potato import render_potato  # type: ignore
 
-        db_path = get_db_path()
-        try:
-            mtime = db_path.stat().st_mtime
-            etag_key = f"{mtime}-{request.query_string}"
-            etag = f'"{etag_key}"'
+        db = _db_path()
+        if db.exists():
+            mtime = str(db.stat().st_mtime)
+            etag = f'"{hashlib.md5((mtime + request.query_string).encode()).hexdigest()}"'
             if request.headers.get("If-None-Match") == etag:
                 return HTTPResponse(status=304)
-        except OSError:
+        else:
             etag = None
 
         parsed = urlparse(request.url)
         body = render_potato(parsed).encode("utf-8")
+        resp_body = _compressed(body, "text/html; charset=utf-8")
 
         if etag:
             response.set_header("ETag", etag)
-            response.set_header("Cache-Control", "no-cache, must-revalidate")
+        return resp_body
 
-        return _compressed(body, "text/html; charset=utf-8")
     except Exception as e:
         from html import escape as _esc
 

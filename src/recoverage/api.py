@@ -16,10 +16,7 @@ from recoverage.server import (
     _GLOBAL_JSON_SQL,
     DLL_DATA,
     DLL_LOCK,
-    HAS_BROTLI,
     HAS_CAPSTONE,
-    HAS_MINIFIERS,
-    HAS_ZSTD,
     HTTPResponse,
     _db,
     _db_path,
@@ -29,8 +26,10 @@ from recoverage.server import (
     _open_db,
     _project_dir,
     app,
+    clear_target_cache,
     get_disassembly,
     request,
+    resolve_targets,
 )
 
 
@@ -59,9 +58,6 @@ def handle_api_health() -> bytes:
             "db": db_info,
             "extras": {
                 "capstone": HAS_CAPSTONE,
-                "brotli": HAS_BROTLI,
-                "zstd": HAS_ZSTD,
-                "minify": HAS_MINIFIERS,
             },
             "targets_count": target_count,
             "cors": _server.CORS_ENABLED,
@@ -75,29 +71,14 @@ def handle_api_targets() -> bytes:
         conn = _db()
         try:
             c = conn.cursor()
-            c.execute("SELECT DISTINCT target FROM metadata")
-            target_ids = [row[0] for row in c.fetchall()]
+            _, targets_list = resolve_targets(c)
         finally:
             conn.close()
     except sqlite3.OperationalError:
-        target_ids = []
-
-    targets_info = _server._get_targets_config()
-
-    targets_list: list[dict[str, str]] = []
-    added_tids: set[str] = set()
-
-    # 1. Add targets in the order they appear in config
-    for tid, t_info in targets_info.items():
-        if tid in target_ids or not target_ids:
+        targets_list = []
+        for tid, t_info in _server._get_targets_config().items():
             filename = t_info.get("filename", tid) if isinstance(t_info, dict) else tid
             targets_list.append({"id": tid, "name": Path(filename).name})
-            added_tids.add(tid)
-
-    # 2. Add any remaining targets from the DB that weren't in config
-    for tid in target_ids:
-        if tid not in added_tids:
-            targets_list.append({"id": tid, "name": tid})
 
     return _json_ok(
         {"targets": targets_list},
@@ -587,12 +568,12 @@ def handle_regen() -> bytes | Any:
         return _json_err(403, {"ok": False, "error": "Forbidden: localhost only"})
 
     clear_index_cache()
+    clear_target_cache()
 
     # Clear DLL and disassembly caches so regen picks up new binaries
     with DLL_LOCK:
         DLL_DATA.clear()
     get_disassembly.cache_clear()
-    _server._TARGETS_CACHE = None
 
     root = _project_dir()
     try:
