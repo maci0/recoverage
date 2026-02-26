@@ -76,6 +76,14 @@ async function loadHighlightJs() {
   if (hljsLoaded) return;
   if (hljsLoadingPromise) return hljsLoadingPromise;
 
+  if (!document.getElementById('hljs-theme')) {
+    const link = document.createElement('link');
+    link.id = 'hljs-theme';
+    link.rel = 'stylesheet';
+    link.href = '/hljs.css';
+    document.head.appendChild(link);
+  }
+
   let resolvePromise;
   hljsLoadingPromise = new Promise((resolve) => {
     resolvePromise = resolve;

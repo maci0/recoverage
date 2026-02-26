@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 from typing import Any
 from urllib.parse import urlparse
@@ -52,7 +53,27 @@ def _build_index_payload() -> bytes:
     )
     CACHED_INDEX_PAYLOAD = html.encode("utf-8")
     CACHED_INDEX_COMPRESSED.clear()
+    _check_payload_budget(CACHED_INDEX_PAYLOAD)
     return CACHED_INDEX_PAYLOAD
+
+
+_TCP_CWND_BUDGET = 14_600
+_log = logging.getLogger("recoverage")
+
+
+def _check_payload_budget(payload: bytes) -> None:
+    try:
+        compressed, enc = compress_payload(payload, "br, gzip")
+    except Exception:
+        return
+    if len(compressed) > _TCP_CWND_BUDGET:
+        _log.warning(
+            "Inlined index payload (%s %d bytes) exceeds TCP cwnd budget (%d bytes) by %d bytes",
+            enc or "raw",
+            len(compressed),
+            _TCP_CWND_BUDGET,
+            len(compressed) - _TCP_CWND_BUDGET,
+        )
 
 
 # ── Routes ─────────────────────────────────────────────────────────
@@ -106,6 +127,6 @@ def serve_repo_file(filepath: str) -> Any:
     return static_file(filepath, root=str(_project_dir() / prefix))
 
 
-@app.get("/<filename:re:(?:app\\.js|style\\.css|van\\.min\\.js)>")
+@app.get("/<filename:re:(?:app\\.js|style\\.css|van\\.min\\.js|hljs\\.css)>")
 def serve_static_asset(filename: str) -> Any:
     return static_file(filename, root=str(_assets_dir()))
