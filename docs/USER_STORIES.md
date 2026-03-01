@@ -28,7 +28,7 @@ User stories for the **recoverage** coverage dashboard, organized by persona and
 
 ```mermaid
 graph TD
-    A["Project directory<br/>with rebrew.toml"] --> B{"db/coverage.db<br/>exists?"}
+    A["Project directory<br/>with rebrew-project.toml"] --> B{"db/coverage.db<br/>exists?"}
     B -->|Yes| C["recoverage --port 8001"]
     B -->|No| D["recoverage --regen"]
     D --> E["rebrew catalog --json"]

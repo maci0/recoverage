@@ -108,7 +108,7 @@ uv run recoverage serve
 > [!NOTE]
 > The server reads `db/coverage.db` relative to the **current working
 > directory**, so run it from your project root — the directory that
-> contains `rebrew.toml`.
+> contains `rebrew-project.toml`.
 
 ---
 

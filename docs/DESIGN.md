@@ -169,14 +169,16 @@ On function/global selection:
 
 ## Database Schema
 
-The database uses a v2 schema (see [DB_FORMAT.md](../../rebrew/docs/DB_FORMAT.md) for the canonical reference).
+The database uses a v3 schema (see [DB_FORMAT.md](../../rebrew/docs/DB_FORMAT.md) for the canonical reference).
 
 ### Tables
 * `metadata`: Key-value pairs per target — coverage summaries, paths, `db_version` stamp
-* `functions`: All reversed functions — va (INTEGER), name, vaStart, size, status, origin, cflags, symbol, files JSON, `detected_by` JSON, `size_by_tool` JSON, `textOffset`, ghidra_name, r2_name, is_thunk, is_export, sha256
+* `functions`: All reversed functions — va (INTEGER), name, vaStart, size, status, origin, cflags, symbol, files JSON, `detected_by` JSON, `size_by_tool` JSON, `textOffset`, ghidra_name, list_name, is_thunk, is_export, sha256, blocker, blockerDelta, size_reason, similarity
 * `globals`: Global variables — va (INTEGER), name, decl, files JSON, `origin`, `size`
 * `sections`: PE sections — name, va, size, fileOffset, unitBytes, columns
 * `cells`: Grid cells per section — section_name, start, end, state (none/exact/reloc/matching/matching_reloc/stub/padding/data/thunk), functions JSON, label, parent_function
+* `history`: Status change log (persistent, never dropped) — target, va, old_status, new_status, changed_at
+* `verify_results`: Verification results (persistent, never dropped) — target, va, verified_at, byte_delta, diff_lines
 
 ### Views
 * `section_cell_stats`: Aggregated counts per target+section — total_cells, exact_count, reloc_count, matching_count, stub_count, padding_count, data_count, thunk_count, none_count

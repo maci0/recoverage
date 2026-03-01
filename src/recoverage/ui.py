@@ -118,10 +118,14 @@ def handle_potato() -> bytes | Any:
             response.set_header("ETag", etag)
         return resp_body
 
-    except Exception as e:
-        from html import escape as _esc
+    except Exception:
+        import logging
 
-        return HTTPResponse(status=500, body=f"Error: {_esc(str(e))}")
+        logging.getLogger("recoverage").exception("Potato mode render failed")
+        return HTTPResponse(
+            status=500,
+            body="<html><body>Internal server error</body></html>",
+        )
 
 
 @app.get("/")
@@ -142,6 +146,7 @@ def handle_index() -> bytes:
 
     response.content_type = "text/html; charset=utf-8"
     response.set_header("Cache-Control", "no-cache, no-store, must-revalidate")
+    response.set_header("Vary", "Accept-Encoding")
     if encoding:
         response.set_header("Content-Encoding", encoding)
     response.set_header("Content-Length", str(len(body)))

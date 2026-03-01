@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import base64
+import contextlib
+import functools
 import json
 import os
 import re
@@ -111,23 +113,19 @@ DOT_PNGS = {
     ),
 }
 
-# ── Progress bar PNG cache ──────────────────────────────────
-_progress_png_cache: dict[tuple[tuple[str, float], ...], str] = {}
+# ── Progress bar SVG cache ──────────────────────────────────
 
 
-def _make_progress_png(
-    segments: list[tuple[str, float]],
-    colors: dict[str, str],
-    width: int = 700,
-    height: int = 32,
-    radius: int = 10,
+@functools.lru_cache(maxsize=256)
+def _progress_svg_cached(
+    cache_key: tuple[tuple[str, float], ...],
+    colors_key: tuple[tuple[str, str], ...],
+    width: int,
+    height: int,
+    radius: int,
 ) -> str:
-    """Generate an SVG with colored segments and rounded corners as a data: URI.
-    `segments` is a list of (status_key, pct) pairs. Cached by key."""
-    cache_key = tuple(segments)
-    if cache_key in _progress_png_cache:
-        return _progress_png_cache[cache_key]
-
+    """Inner LRU-cached SVG builder. All args must be hashable."""
+    colors = dict(colors_key)
     svg = [
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">'
         f'<defs><clipPath id="rc"><rect width="{width}" height="{height}" rx="{radius}" ry="{radius}"/></clipPath></defs>'
@@ -136,7 +134,7 @@ def _make_progress_png(
     ]
 
     current_x = 0.0
-    for status, pct in segments:
+    for status, pct in cache_key:
         hex_color = colors.get(status, "#1f2937")
         seg_w = width * pct / 100.0
         if seg_w > 0:
@@ -147,11 +145,23 @@ def _make_progress_png(
 
     svg.append("</g></svg>")
 
-    uri = "data:image/svg+xml;base64," + base64.b64encode("".join(svg).encode("utf-8")).decode(
+    return "data:image/svg+xml;base64," + base64.b64encode("".join(svg).encode("utf-8")).decode(
         "utf-8"
     )
-    _progress_png_cache[cache_key] = uri
-    return uri
+
+
+def _make_progress_png(
+    segments: list[tuple[str, float]],
+    colors: dict[str, str],
+    width: int = 700,
+    height: int = 32,
+    radius: int = 10,
+) -> str:
+    """Generate an SVG with colored segments and rounded corners as a data: URI.
+    `segments` is a list of (status_key, pct) pairs. LRU-cached (max 256 entries)."""
+    return _progress_svg_cached(
+        tuple(segments), tuple(sorted(colors.items())), width, height, radius
+    )
 
 
 def _make_pill_caps(
@@ -629,7 +639,7 @@ def _build_url(
     """Build a potato URL with the given parameters."""
     url = "?target=" + _url_quote(target) + "&section=" + _url_quote(section)
     if filters:
-        url += "&filter=" + ",".join(sorted(filters))
+        url += f"&filter={','.join(sorted(filters))}"
     if idx is not None:
         url += "&idx=" + str(idx)
     if search:
@@ -788,7 +798,7 @@ _PAGE_SRC = r"""<!DOCTYPE html>
  &middot; DB updated {{db_mtime}}
 % end
 </font></td>
-<td align="right"><a href="https://validator.w3.org/"><img src="https://upload.wikimedia.org/wikipedia/commons/b/bb/W3C_HTML5_certified.png" width="133" height="47" alt="Valid HTML5" border="0"></a></td>
+<td align="right"><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">HTML5</font></td>
 </tr></table>
 </font></body></html>"""
 
@@ -885,10 +895,10 @@ def render_potato(parsed_url: ParseResult) -> str:
     db_path = get_db_path()
     try:
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-    except Exception as e:
-        return f"<html><body>Database error: {_esc(str(e))}</body></html>"
+    except Exception:
+        return "<html><body>Database unavailable</body></html>"
 
-    try:
+    with contextlib.closing(conn):
         c = conn.cursor()
         return _render_potato_inner(
             c,
@@ -902,8 +912,6 @@ def render_potato(parsed_url: ParseResult) -> str:
             sort_key,
             status_filter,
         )
-    finally:
-        conn.close()
 
 
 def _load_section_data(
@@ -1215,6 +1223,7 @@ def _render_function_list(
     sort_key: str,
     status_filter: str,
 ) -> str:
+    # SAFETY: order_by is whitelisted via allowed_sort dict (no user strings reach SQL).
     allowed_sort = {"name": "name", "size": "size", "status": "status", "va": "va"}
     order_by = allowed_sort.get(sort_key, "va")
 
@@ -1569,9 +1578,11 @@ def _render_panel(
         "'va', va, 'name', name, 'vaStart', vaStart, 'size', size, "
         "'fileOffset', fileOffset, 'status', status, 'origin', origin, "
         "'cflags', cflags, 'symbol', symbol, 'markerType', markerType, "
-        "'ghidra_name', ghidra_name, 'r2_name', r2_name, "
+        "'ghidra_name', ghidra_name, 'list_name', list_name, "
         "'is_thunk', is_thunk, 'is_export', is_export, "
-        "'sha256', sha256, 'files', json(files)"
+        "'sha256', sha256, 'files', json(files), "
+        "'blocker', blocker, 'blockerDelta', blockerDelta, "
+        "'size_reason', size_reason, 'similarity', similarity"
         ") FROM functions WHERE target=? AND name=?",
         (target, fn_name),
     )
@@ -1583,6 +1594,10 @@ def _render_panel(
 
         HEX_FIELDS = {"va", "fileOffset"}
         SKIP_FIELDS = {"files", "sha256", "is_thunk", "is_export"}
+        if not fn_data.get("blocker"):
+            SKIP_FIELDS.add("blocker")
+        if fn_data.get("blockerDelta") is None:
+            SKIP_FIELDS.add("blockerDelta")
 
         # Badges
         badges: list[str] = []

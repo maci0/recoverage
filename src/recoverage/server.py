@@ -11,6 +11,7 @@ import functools
 import gzip
 import importlib.util
 import json
+import logging
 import platform
 import sqlite3
 import subprocess
@@ -67,43 +68,33 @@ _TARGET_CACHE: dict[str, Any] | None = None
 _TARGET_CACHE_LOCK = threading.Lock()
 
 
+_log = logging.getLogger("recoverage")
+
+
 def _get_targets_config() -> dict[str, Any]:
+    """Load target configuration from rebrew-project.toml (thread-safe, cached)."""
     global _TARGETS_CACHE
-    if _TARGETS_CACHE is not None:
-        return _TARGETS_CACHE
+    with _TARGET_CACHE_LOCK:
+        if _TARGETS_CACHE is not None:
+            return _TARGETS_CACHE
 
-    root = _project_dir()
-    targets_info: dict[str, Any] = {}
-    try:
-        import yaml  # type: ignore
-
-        yml_path = root / "reccmp-project.yml"
-        if yml_path.exists():
-            with open(yml_path, encoding="utf-8") as f:
-                doc = yaml.safe_load(f)
-                if isinstance(doc, dict):
-                    t = doc.get("targets")
-                    if isinstance(t, dict):
-                        targets_info.update(t)
-    except (ImportError, OSError):
-        pass
-
-    if not targets_info:
+        root = _project_dir()
+        targets_info: dict[str, Any] = {}
         try:
             import tomllib
 
-            toml_path = root / "rebrew.toml"
+            toml_path = root / "rebrew-project.toml"
             if toml_path.exists():
                 text = toml_path.read_text(encoding="utf-8")
                 doc = tomllib.loads(text)
                 targets_dict = doc.get("targets", {})
                 for tid in targets_dict:
                     targets_info[tid] = {"filename": tid}
-        except (ImportError, OSError, ValueError):
-            pass
+        except (ImportError, OSError, ValueError) as exc:
+            _log.warning("Failed to load rebrew-project.toml: %s", exc)
 
-    _TARGETS_CACHE = targets_info
-    return targets_info
+        _TARGETS_CACHE = targets_info
+        return targets_info
 
 
 def clear_target_cache() -> None:
@@ -211,12 +202,17 @@ def minify_js(js: str) -> str:
 
 
 def _best_encoding(accept_encoding: str) -> str:
-    """Return the best available compression encoding name, or empty string."""
-    if "zstd" in accept_encoding:
+    """Return the best available compression encoding name, or empty string.
+
+    Parses comma-separated tokens from Accept-Encoding to avoid false substring
+    matches (e.g. 'not-zstd' should not match 'zstd').
+    """
+    tokens = {t.strip().split(";")[0].strip().lower() for t in accept_encoding.split(",")}
+    if "zstd" in tokens:
         return "zstd"
-    if "br" in accept_encoding:
+    if "br" in tokens:
         return "br"
-    if "gzip" in accept_encoding:
+    if "gzip" in tokens:
         return "gzip"
     return ""
 
@@ -241,11 +237,12 @@ _FN_JSON_SQL = (
     "'va', va, 'name', name, 'vaStart', vaStart, 'size', size, "
     "'fileOffset', fileOffset, 'status', status, 'origin', origin, "
     "'cflags', cflags, 'symbol', symbol, 'markerType', markerType, "
-    "'ghidra_name', ghidra_name, 'r2_name', r2_name, "
+    "'ghidra_name', ghidra_name, 'list_name', list_name, "
     "'is_thunk', is_thunk, 'is_export', is_export, 'sha256', sha256, "
     "'files', json(files), "
     "'detected_by', json(detected_by), 'size_by_tool', json(size_by_tool), "
-    "'textOffset', textOffset"
+    "'textOffset', textOffset, 'blocker', blocker, 'blockerDelta', blockerDelta, "
+    "'size_reason', size_reason, 'similarity', similarity"
     ")"
 )
 
@@ -277,6 +274,7 @@ def _compressed(body: bytes, content_type: str, **headers: str) -> bytes:
     response.content_type = content_type
     if encoding:
         response.set_header("Content-Encoding", encoding)
+    response.set_header("Vary", "Accept-Encoding")
     response.set_header("Content-Length", str(len(body)))
     for k, v in headers.items():
         response.set_header(k.replace("_", "-"), v)
@@ -298,6 +296,7 @@ def _json_err(status: int, data: dict[str, Any]) -> Any:
     resp.content_type = "application/json"
     if encoding:
         resp.set_header("Content-Encoding", encoding)
+    resp.set_header("Vary", "Accept-Encoding")
     resp.set_header("Content-Length", str(len(body)))
     return resp
 
@@ -330,13 +329,13 @@ def open_browser(url: str) -> None:
         elif system == "Windows":
             subprocess.Popen(
                 ["start", url],
-                shell=True,
+                shell=True,  # noqa: S603 — required for Windows 'start'; url is internally generated
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
         else:
             webbrowser.open(url)
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         webbrowser.open(url)
 
 

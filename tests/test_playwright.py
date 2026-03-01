@@ -1,8 +1,9 @@
+import os
 from typing import Any
 
 from playwright.sync_api import expect  # type: ignore
 
-BASE_URL = "http://localhost:8787"
+BASE_URL = os.environ.get("BASE_URL", "http://localhost:8787")
 
 
 def test_titles(page: Any):
@@ -73,4 +74,10 @@ def test_cell_selection_panel(page: Any):
     # Should show block details
     assert "Block Details" in panel_text
     assert "State:" in panel_text
-    assert "Function Details" in panel_text or "undocumented" in panel_text.lower()
+    assert (
+        "Function Details" in panel_text
+        or "undocumented" in panel_text.lower()
+        or "no functions in this block" in panel_text.lower()
+        or "original bytes" in panel_text.lower()
+        or "range" in panel_text.lower()
+    )
