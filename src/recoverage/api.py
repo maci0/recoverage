@@ -43,13 +43,10 @@ def handle_api_health() -> bytes:
         db_info["mtime"] = stat.st_mtime
     target_count = 0
     try:
-        conn = _open_db(db)
-        try:
+        with contextlib.closing(_open_db(db)) as conn:
             c = conn.cursor()
             c.execute("SELECT COUNT(DISTINCT target) FROM metadata")
             target_count = c.fetchone()[0]
-        finally:
-            conn.close()
     except sqlite3.Error:
         pass
     return _json_ok(
@@ -68,12 +65,9 @@ def handle_api_health() -> bytes:
 @app.get("/api/targets")
 def handle_api_targets() -> bytes:
     try:
-        conn = _db()
-        try:
+        with contextlib.closing(_db()) as conn:
             c = conn.cursor()
             _, targets_list = resolve_targets(c)
-        finally:
-            conn.close()
     except sqlite3.OperationalError:
         targets_list = []
         for tid, t_info in _server._get_targets_config().items():
@@ -90,10 +84,10 @@ def handle_api_targets() -> bytes:
 def handle_api_stats(target: str) -> bytes | Any:
     try:
         conn = _db()
-    except sqlite3.OperationalError as e:
-        return _json_err(503, {"error": str(e)})
+    except sqlite3.OperationalError:
+        return _json_err(503, {"error": "Database unavailable"})
 
-    try:
+    with contextlib.closing(conn):
         c = conn.cursor()
 
         # Pre-computed summary from metadata
@@ -150,8 +144,6 @@ def handle_api_stats(target: str) -> bytes | Any:
                 "functions_by_status": by_status,
             }
         )
-    finally:
-        conn.close()
 
 
 @app.get("/api/targets/<target>/data")
@@ -174,10 +166,10 @@ def handle_api_data(target: str) -> bytes | Any:
 
     try:
         conn = _open_db(db)
-    except sqlite3.OperationalError as e:
-        return _json_err(503, {"error": str(e)})
+    except sqlite3.OperationalError:
+        return _json_err(503, {"error": "Database unavailable"})
 
-    try:
+    with contextlib.closing(conn):
         c = conn.cursor()
         data: dict[str, Any] = {}
 
@@ -269,8 +261,6 @@ def handle_api_data(target: str) -> bytes | Any:
         if etag is not None:
             return _json_ok(data, Cache_Control="no-cache, must-revalidate", ETag=str(etag))
         return _json_ok(data, Cache_Control="no-cache, must-revalidate")
-    finally:
-        conn.close()
 
 
 @app.get("/api/targets/<target>/functions")
@@ -288,7 +278,8 @@ def handle_api_functions_list(target: str) -> bytes | Any:
     except ValueError:
         offset = 0
 
-    # Parse sort
+    # SAFETY: sort_field is whitelisted to allowed_sort (no user strings reach SQL).
+    # sort_dir is validated to "ASC"/"DESC" only. ORDER BY cannot use parameterized queries.
     allowed_sort = {"va", "name", "size", "status", "symbol", "origin"}
     sort_field = "va"
     sort_dir = "ASC"
@@ -303,10 +294,10 @@ def handle_api_functions_list(target: str) -> bytes | Any:
 
     try:
         conn = _db()
-    except sqlite3.OperationalError as e:
-        return _json_err(503, {"error": str(e)})
+    except sqlite3.OperationalError:
+        return _json_err(503, {"error": "Database unavailable"})
 
-    try:
+    with contextlib.closing(conn):
         c = conn.cursor()
         where = ["target = ?"]
         params: list[Any] = [target]
@@ -356,18 +347,16 @@ def handle_api_functions_list(target: str) -> bytes | Any:
                 "functions": items,
             }
         )
-    finally:
-        conn.close()
 
 
 @app.get("/api/targets/<target>/functions/<va>")
 def handle_api_function(target: str, va: str) -> bytes | Any:
     try:
         conn = _db()
-    except sqlite3.OperationalError as e:
-        return _json_err(503, {"error": str(e)})
+    except sqlite3.OperationalError:
+        return _json_err(503, {"error": "Database unavailable"})
 
-    try:
+    with contextlib.closing(conn):
         c = conn.cursor()
         no_cache = "no-cache, no-store, must-revalidate"
 
@@ -412,8 +401,6 @@ def handle_api_function(target: str, va: str) -> bytes | Any:
             return _json_ok(row[0].encode("utf-8"), Cache_Control=no_cache)
 
         return _json_err(404, {"error": "not found"})
-    finally:
-        conn.close()
 
 
 @app.get("/api/targets/<target>/asm")
@@ -440,10 +427,10 @@ def handle_api_asm(target: str) -> bytes | Any:
 
     try:
         conn = _db()
-    except sqlite3.OperationalError as e:
-        return _json_err(503, {"error": str(e)})
+    except sqlite3.OperationalError:
+        return _json_err(503, {"error": "Database unavailable"})
 
-    try:
+    with contextlib.closing(conn):
         c = conn.cursor()
         c.execute(
             "SELECT * FROM sections WHERE target = ? AND name = ?",
@@ -493,8 +480,6 @@ def handle_api_asm(target: str) -> bytes | Any:
             return _json_err(404, {"error": "not enough bytes in DLL"})
 
         return _json_ok({"asm": asm_text}, Cache_Control="public, max-age=31536000")
-    finally:
-        conn.close()
 
 
 @app.get("/api/targets/<target>/sections/<section>/bytes")
@@ -513,10 +498,10 @@ def handle_api_bytes(target: str, section: str) -> bytes | Any:
 
     try:
         conn = _db()
-    except sqlite3.OperationalError as e:
-        return _json_err(503, {"error": str(e)})
+    except sqlite3.OperationalError:
+        return _json_err(503, {"error": "Database unavailable"})
 
-    try:
+    with contextlib.closing(conn):
         c = conn.cursor()
         c.execute(
             "SELECT * FROM sections WHERE target = ? AND name = ?",
@@ -555,8 +540,6 @@ def handle_api_bytes(target: str, section: str) -> bytes | Any:
             },
             Cache_Control="public, max-age=31536000",
         )
-    finally:
-        conn.close()
 
 
 @app.post("/regen")
@@ -566,6 +549,10 @@ def handle_regen() -> bytes | Any:
     remote = request.environ.get("REMOTE_ADDR", "")
     if remote not in ("127.0.0.1", "::1", "localhost"):
         return _json_err(403, {"ok": False, "error": "Forbidden: localhost only"})
+
+    origin = request.headers.get("Origin", "")
+    if origin and not origin.startswith(("http://127.0.0.1", "http://localhost")):
+        return _json_err(403, {"ok": False, "error": "Forbidden: cross-origin"})
 
     clear_index_cache()
     clear_target_cache()
