@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
+import sqlite3
 import threading
 from typing import Any
 from urllib.parse import urlparse
@@ -104,7 +106,7 @@ def handle_potato() -> bytes | Any:
         db = _db_path()
         if db.exists():
             mtime = str(db.stat().st_mtime)
-            etag = f'"{hashlib.md5((mtime + request.query_string).encode()).hexdigest()}"'
+            etag = f'"{hashlib.md5((mtime + request.query_string).encode(), usedforsecurity=False).hexdigest()}"'
             if request.headers.get("If-None-Match") == etag:
                 return HTTPResponse(status=304)
         else:
@@ -118,10 +120,8 @@ def handle_potato() -> bytes | Any:
             response.set_header("ETag", etag)
         return resp_body
 
-    except Exception:
-        import logging
-
-        logging.getLogger("recoverage").exception("Potato mode render failed")
+    except (sqlite3.Error, OSError, ValueError, KeyError, json.JSONDecodeError):
+        _log.exception("Potato mode render failed")
         return HTTPResponse(
             status=500,
             body="<html><body>Internal server error</body></html>",
@@ -138,7 +138,8 @@ def handle_index() -> bytes:
         if CACHED_INDEX_PAYLOAD is None:
             _build_index_payload()
         payload = CACHED_INDEX_PAYLOAD
-        assert payload is not None  # guaranteed by _build_index_payload()
+        if payload is None:  # pragma: no cover — _build_index_payload always sets it
+            raise RuntimeError("_build_index_payload failed to set CACHED_INDEX_PAYLOAD")
         if encoding not in CACHED_INDEX_COMPRESSED:
             compressed, _ = compress_payload(payload, accept_encoding)
             CACHED_INDEX_COMPRESSED[encoding] = compressed

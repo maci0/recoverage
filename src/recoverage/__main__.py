@@ -1,4 +1,4 @@
-"""Entry point for `python -m recoverage` and the `recoverage` console script."""
+"""Entry point for `python -m recoverage`."""
 
 from __future__ import annotations
 
