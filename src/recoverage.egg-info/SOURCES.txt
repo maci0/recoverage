@@ -19,5 +19,8 @@ src/recoverage/assets/hljs.css
 src/recoverage/assets/index.html
 src/recoverage/assets/style.css
 src/recoverage/assets/van.min.js
+tests/test_api.py
+tests/test_cli.py
 tests/test_playwright.py
 tests/test_potato.py
+tests/test_server.py

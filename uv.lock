@@ -192,7 +192,6 @@ wheels = [
 
 [[package]]
 name = "recoverage"
-version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "bottle" },
