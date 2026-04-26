@@ -18,23 +18,30 @@ recoverage/
 ├── README.md               # User-facing docs
 ├── LICENSE                  # MIT
 ├── docs/                   # Screenshots & design doc
-│   └── DESIGN.md           # Architecture and design decisions
+│   ├── DESIGN.md           # Architecture and design decisions
+│   ├── DESIGN_PRINCIPLES.md  # Core operational philosophies
+│   ├── USER_STORIES.md     # User stories with acceptance criteria
+│   └── ideas.md            # Future improvement ideas
 ├── tests/
-│   ├── test_potato.py      # Potato Mode unit tests
-│   └── test_playwright.py  # Browser integration tests
+│   ├── test_api.py          # API validation, security, SQL injection tests
+│   ├── test_cli.py          # CSV export, formatting, edge case tests
+│   ├── test_server.py       # Compression, encoding, path helper tests
+│   ├── test_potato.py       # Potato Mode unit tests
+│   └── test_playwright.py   # Browser integration tests
 └── src/recoverage/
     ├── __init__.py
     ├── __main__.py          # python -m recoverage
-    ├── cli.py               # Typer CLI entry point (serve, stats, export, check, open)
+    ├── cli.py               # Typer CLI entry point (serve, stats, export, check, regen, open)
     ├── server.py            # Bottle app, shared helpers & compression
-    ├── api.py               # REST API routes (/api/*, /regen)
+    ├── api.py               # REST API routes (/api/*)
     ├── ui.py                # UI routes (/, /potato, static files)
     ├── potato.py            # Potato Mode renderer
     └── assets/
         ├── index.html       # SPA shell
         ├── style.css        # All styles
         ├── app.js           # VanJS frontend
-        └── van.min.js       # VanJS library
+        ├── van.min.js       # VanJS library
+        └── hljs.css         # Highlight.js theme (custom hex language)
 ```
 
 ## Commands
@@ -71,7 +78,7 @@ uv run pytest tests/ -v
 | `/api/targets/<target>/functions/<va>` | GET | Function/global detail |
 | `/api/targets/<target>/asm` | GET | Disassembly (requires capstone) |
 | `/api/targets/<target>/sections/<section>/bytes` | GET | Raw byte slice |
-| `/regen` | POST | Re-run catalog + build-db (localhost only) |
+| `/api/regen` | POST | Re-run catalog + build-db (localhost only) |
 
 ## Data Pipeline
 
@@ -86,8 +93,18 @@ uv run pytest tests/ -v
 
 ## Dependencies
 
+Required:
 - `bottle>=0.12` (web server)
-- Optional: `capstone` (disassembly), `pygments` (Potato Mode syntax highlighting)
+- `brotli>=1.1` (Brotli compression)
+- `rcssmin>=1.1` (CSS minification)
+- `rich>=13.0` (terminal tables)
+- `rjsmin>=1.2` (JS minification)
+- `typer>=0.9` (CLI framework)
+- `zstandard>=0.22` (Zstandard compression)
+
+Optional:
+- `capstone` (disassembly)
+- `pygments` (Potato Mode syntax highlighting)
 
 ## Code Style
 

@@ -1,8 +1,26 @@
+# Virtual environments
 .venv/
+
+# Python bytecode
 __pycache__/
 *.pyc
+*.pyo
+
+# Testing
 .pytest_cache/
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+*.egg
+
+# Linting / type checking
+.ruff_cache/
+.mypy_cache/
+.pyre_configuration
+
+# Coverage database (runtime artifact, not source)
 coverage.db
 coverage.db-shm
 coverage.db-wal
-.pyre_configuration

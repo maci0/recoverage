@@ -153,6 +153,14 @@ recoverage check --min-coverage 60                              # all targets, a
 recoverage check --min-coverage 60 --target SERVER --section .text   # specific
 ```
 
+### `recoverage regen`
+
+Re-run `rebrew catalog` + `rebrew build-db` to regenerate `coverage.db`.
+
+```bash
+recoverage regen
+```
+
 ### `recoverage open`
 
 Open the dashboard in a browser (useful when `--no-open` was used).
@@ -177,7 +185,7 @@ recoverage open --port 8001
 | `/api/targets/<target>/functions/<va>` | GET | Single function/global detail |
 | `/api/targets/<target>/asm` | GET | Disassembly (`?format=json` for structured output) |
 | `/api/targets/<target>/sections/<section>/bytes` | GET | Raw byte slice (`?offset=&size=`) |
-| `/regen` | POST | Re-run catalog + build-db (localhost only) |
+| `/api/regen` | POST | Re-run catalog + build-db (localhost only) |
 
 ---
 
@@ -192,7 +200,7 @@ rebrew catalog --json          rebrew build-db           recoverage (Bottle + SQ
 ```
 
 1. **`rebrew catalog --json`**: Scans your project's source annotations and writes intermediate `db/data_*.json` files containing coverage metrics. Jump table / switch data bytes are absorbed into their parent function's size. Use `--export-ghidra-labels` to generate `ghidra_data_labels.json` for round-trip Ghidra sync.
-2. **`rebrew build-db`**: Consumes those JSON files and builds a structured `db/coverage.db` (SQLite v2 schema) database, storing per-function metadata (`detected_by`, `size_by_tool`, `textOffset`), per-global metadata (`origin`, `size`), per-cell metadata (`label`, `parent_function`), and stamping `db_version` for schema detection. See [DB_FORMAT.md](../rebrew/docs/DB_FORMAT.md) for the full schema.
+2. **`rebrew build-db`**: Consumes those JSON files and builds a structured `db/coverage.db` (SQLite v3 schema) database, storing per-function metadata (`detected_by`, `size_by_tool`, `textOffset`), per-global metadata (`module`, `size`), per-cell metadata (`label`, `parent_function`), and stamping `db_version` for schema detection. See [DB_FORMAT.md](../rebrew/docs/DB_FORMAT.md) for the full schema.
 3. **`recoverage`**: Starts a **Bottle** web server. The backend serves API endpoints querying the SQLite database, while the frontend is a zero-build Single Page Application (SPA) powered by **VanJS**, rendering the interactive defrag grid.
 
 You can run `recoverage` independently on any machine (or even host it remotely) as long as it has access to a compiled `coverage.db` — no `rebrew` dependency or compiler toolchain is required.
@@ -205,21 +213,31 @@ You can run `recoverage` independently on any machine (or even host it remotely)
 recoverage/
 ├── pyproject.toml
 ├── README.md
-├── docs/                  # Screenshots, mascot & design doc
-│   └── DESIGN.md          # Detailed architecture & design doc
+├── docs/                     # Screenshots, mascot & design doc
+│   ├── DESIGN.md             # Detailed architecture & design doc
+│   ├── DESIGN_PRINCIPLES.md  # Core operational philosophies
+│   ├── USER_STORIES.md       # User stories with acceptance criteria
+│   └── ideas.md              # Future improvement ideas
+├── tests/
+│   ├── test_api.py           # API validation & security tests
+│   ├── test_cli.py           # CSV export, formatting tests
+│   ├── test_server.py        # Compression, encoding tests
+│   ├── test_potato.py        # Potato Mode rendering tests
+│   └── test_playwright.py    # Browser integration tests
 └── src/recoverage/
     ├── __init__.py
-    ├── __main__.py        # python -m recoverage
-    ├── cli.py             # Typer CLI entry point
-    ├── server.py          # Bottle app, shared helpers & compression
-    ├── api.py             # REST API routes (/api/*)
-    ├── ui.py              # UI routes (/, /potato, static files)
-    ├── potato.py          # Potato Mode renderer
+    ├── __main__.py           # python -m recoverage
+    ├── cli.py                # Typer CLI entry point
+    ├── server.py             # Bottle app, shared helpers & compression
+    ├── api.py                # REST API routes (/api/*)
+    ├── ui.py                 # UI routes (/, /potato, static files)
+    ├── potato.py             # Potato Mode renderer
     └── assets/
-        ├── index.html     # SPA shell
+        ├── index.html        # SPA shell
         ├── style.css
-        ├── app.js         # VanJS frontend
-        └── van.min.js     # VanJS library (1.0 KB)
+        ├── app.js            # VanJS frontend
+        ├── van.min.js        # VanJS library (~2 KB)
+        └── hljs.css          # Highlight.js theme (custom hex language)
 ```
 
 ---

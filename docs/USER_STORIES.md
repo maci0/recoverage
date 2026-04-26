@@ -49,7 +49,7 @@ graph TD
 > **As an RE Dev**, I want to see a defrag-style grid where each cell represents a chunk of the binary so that I can instantly spot which areas are matched, partially matched, or still stubs.
 
 ### Acceptance Criteria
-- Grid cells colored by match status: Exact (green), Reloc (blue), Matching (yellow), Stub (red), ASM (purple), None (gray)
+- Grid cells colored by match status: Exact (green), Reloc (blue), Matching (yellow), Stub (red), Data (purple), Thunk (orange), Padding (silver), None (gray)
 - Grid is square and responsive (cells stay square via `ResizeObserver`)
 - Section tabs (`.text`, `.rdata`, `.data`, `.bss`) switch views instantly (cached grids)
 - Grids built via fast HTML string injection; tab switching toggles `display: none`
@@ -329,7 +329,7 @@ graph TD
 
 ### Acceptance Criteria
 - Reload button in the topbar with a 5-second cooldown to prevent spam
-- `POST /regen` triggers `rebrew catalog --json` + `rebrew build-db`
+- `POST /api/regen` triggers `rebrew catalog --json` + `rebrew build-db`
 - Only accessible from localhost (security gate)
 - Dashboard reloads data after regeneration completes
 - ETag-based caching: if DB unchanged, API returns `304 Not Modified`
@@ -343,7 +343,7 @@ sequenceDiagram
 
     U->>UI: Click Reload button
     UI->>UI: Start 5s cooldown
-    UI->>Server: POST /regen
+    UI->>Server: POST /api/regen
     Server->>Server: Verify localhost origin
 
     Server->>Rebrew: rebrew catalog --json
@@ -518,7 +518,7 @@ graph TD
 
 ## Future Features
 
-> Features tracked in [DESIGN.md](file:///home/maci/Desktop/refactor/recoverage/docs/DESIGN.md) as planned work.
+> Features tracked in [DESIGN.md](DESIGN.md) as planned work.
 
 | Feature | Description |
 |---------|-------------|

@@ -5,7 +5,7 @@ ReCoverage is a reactive, high-performance web dashboard for visualizing binary 
 
 ## Architecture
 The UI is built using a lightweight, dependency-free stack to ensure fast load times and easy maintainability:
-* **Frontend Framework**: [VanJS](https://vanjs.org/) (a 1.0kB reactive UI framework).
+* **Frontend Framework**: [VanJS](https://vanjs.org/) (a ~2 kB reactive UI framework).
 * **Styling**: Vanilla CSS with CSS Variables for theming.
 * **Backend/Data**: [Bottle](https://bottlepy.org/) web framework serving a SQLite database (`coverage.db`).
 * **Syntax Highlighting**: Highlight.js (C, x86 ASM, custom Hex language).
@@ -16,11 +16,11 @@ The UI is built using a lightweight, dependency-free stack to ensure fast load t
 3. The Bottle app (`server.py` + `api.py` + `ui.py`) serves:
    * Static files (index.html, app.js, style.css, van.min.js) which are **inlined and compressed** into a single response for the root `/` path to achieve a "first draw in the first TCP packet".
    * `/api/targets` endpoint that returns available targets (SERVER, Europa1400Gold, etc.) from the database.
-   * `/api/targets/<target>/data` endpoint that queries SQLite for a specific target and returns lightweight metadata and section layouts (with gzip compression).
+   * `/api/targets/<target>/data` endpoint that queries SQLite for a specific target and returns lightweight metadata and section layouts (compressed via zstd/brotli/gzip).
    * `/api/targets/<target>/functions/<va>` endpoint to fetch specific function/global details on-demand.
    * `/api/targets/<target>/asm?va=...&size=...` endpoint that dynamically disassembles binary chunks using Capstone (with LRU caching and in-memory cached binary reads).
-   * `/regen` POST endpoint to trigger `rebrew catalog --json` + `rebrew build-db` regeneration.
-   * Proxied paths: `/src/target_name/*` → project root, `/original/*` → project root
+   * `/api/regen` POST endpoint to trigger `rebrew catalog --json` + `rebrew build-db` regeneration.
+   * Proxied paths: `/src/*` → `project_dir/src/`, `/original/*` → `project_dir/original/`
 
 ## State Management (VanJS)
 The application state is managed using VanJS reactive primitives (`van.state`):
@@ -55,7 +55,9 @@ The UI is broken down into functional VanJS components in `app.js`:
   * **Reloc** (blue/teal) — match after masking relocations
   * **Matching** (yellow) — near-miss with structural differences
   * **Stub** (red) — far off or placeholder
-  * **ASM** (purple) — pure assembly (not reversible C)
+  * **Data** (purple) — data segment content
+  * **Thunk** (orange) — IAT thunk (not reversible)
+  * **Padding** (silver) — alignment padding
   * **None** (gray) — undocumented block
 * **Grid Caching**: Each section's grid is built once and cached in the DOM. Switching tabs simply toggles `display: none` vs `display: grid`, making tab switching instantaneous even for sections with 6,000+ chunks.
 * **Fast HTML Building**: Grids are constructed using a single massive HTML string injection (`innerHTML`) rather than creating thousands of individual DOM nodes, drastically reducing initial render time.
@@ -95,7 +97,7 @@ The UI is broken down into functional VanJS components in `app.js`:
 * **Light Mode**: Triggered by the `.light-mode` class on the `body`. Overrides CSS variables to softer grays (`#cbd5e1` background, `#e2e8f0` panels) to reduce eye strain while maintaining contrast.
 * **CRT Scanlines**: A global scanline overlay (`body::after`) using a repeating linear gradient. It is kept very faint (`0.05` opacity in dark mode, `0.02` in light mode) to add texture without overpowering the UI.
 * **Match Status Colors**:
-  * **Exact**: Green (`rgba(51, 255, 0, 0.75)`)
+  * **Exact**: Green (`rgba(16, 185, 129, 0.75)`)
   * **Reloc**: Blue/Teal (`rgba(2, 132, 199, 0.65)`)
   * **Matching**: Yellow/Amber (`rgba(255, 200, 0, 0.65)`)
   * **Stub**: Red (`rgba(255, 0, 0, 0.65)`)
@@ -111,14 +113,14 @@ The UI is broken down into functional VanJS components in `app.js`:
 * **First Draw in First TCP Packet**: `server.py` intercepts requests to `/` and inlines `index.html`, `style.css`, `app.js`, and `van.min.js` into a single response. This response is minified (using `rjsmin` and `rcssmin`) and compressed using **Brotli (`br`)** or **Zstandard (`zstd`)** (falling back to `gzip`) to ~14.5KB, fitting perfectly into the initial TCP congestion window (`cwnd`). This allows the browser to parse and render the UI shell instantly without any render-blocking network requests.
 * **Advanced Compression**: The server dynamically selects the best compression algorithm based on the `Accept-Encoding` header, prioritizing `zstd`, then `br`, and falling back to `gzip`. Brotli cuts the massive JSON payload size in half compared to gzip (e.g., 119KB down to 58KB).
 * **HTTP/1.1 Keep-Alive**: The Python server uses wsgiref which supports HTTP/1.1 keep-alive connections, eliminating handshake overhead for rapid subsequent API requests.
-* **ETag Caching**: The heavy `/api/data` endpoint calculates an `ETag` based on the `coverage.db` file's modification time. If the database hasn't changed, the server responds with a `304 Not Modified` (0 bytes), making page reloads instantaneous.
+* **ETag Caching**: The heavy `/api/targets/<target>/data` endpoint calculates an `ETag` based on the `coverage.db` file's modification time. If the database hasn't changed, the server responds with a `304 Not Modified` (0 bytes), making page reloads instantaneous.
 * **Request Cancellation**: The UI uses `AbortController` to cancel in-flight network requests if the user clicks through multiple cells rapidly, saving bandwidth and preventing race conditions.
 * **Deferred Highlight.js**: The heavy `highlight.js` library and its CSS are not loaded initially. They are dynamically fetched from a CDN only when a user clicks on a code block for the first time.
 * **On-Demand Data Fetching**: The `/api/targets/<target>/data` endpoint only returns lightweight grid layouts and metadata. Detailed function information is fetched on-demand via `/api/targets/<target>/functions/<va>` when a user clicks a cell, drastically reducing memory usage and initial load times.
 * **DOM Optimizations**: The grid uses **Event Delegation** (a single click listener on the parent container instead of 2,500+ individual listeners), **CSS Containment** (`contain: strict` on cells to prevent global layout recalculations), and **Content Visibility** (`content-visibility: auto` to skip rendering off-screen cells).
 * **Grid Caching & CSS Filtering**: To handle sections with 6,000+ chunks (like `.bss`), grids are built once via fast HTML string injection and cached. Tab switching toggles `display: none`. Filtering and search dimming are handled entirely by CSS classes on the parent container, avoiding slow JavaScript loops over thousands of DOM nodes. CSS transitions on cells were removed to eliminate GPU overhead during mass state changes.
 * **Precomputed Cell Properties**: Cell CSS classes and states are precomputed immediately after the JSON payload is fetched, preventing the UI from recalculating these strings thousands of times during the render loop.
-* **Zero-Allocation JSON**: The backend pushes JSON serialization down into the SQLite C-engine (`json_group_array`, `json_object`), allowing Python to serve the `/api/data` endpoint with almost zero memory allocation overhead.
+* **Zero-Allocation JSON**: The backend pushes JSON serialization down into the SQLite C-engine (`json_group_array`, `json_object`), allowing Python to serve the `/api/targets/<target>/data` endpoint with almost zero memory allocation overhead.
 * **SQLite WAL Mode**: The database uses Write-Ahead Logging (`PRAGMA journal_mode=WAL`) and read-only connections (`?mode=ro`), allowing the dev server to serve data concurrently without locking while the database is being regenerated in the background.
 * **LRU Caching & Memory I/O**: The `/api/asm` endpoint uses Python's `@functools.lru_cache` to store disassembled chunks in memory. The target DLL is also read into memory once (with thread-safe locking), preventing redundant disk I/O and Capstone disassembly calls during a session.
 * **Progress Bar Rendering**: The progress bar uses `overflow: hidden` on the parent container to handle border-radius clipping, avoiding brittle JavaScript calculations for segment visibility.
@@ -173,8 +175,8 @@ The database uses a v3 schema (see [DB_FORMAT.md](../../rebrew/docs/DB_FORMAT.md
 
 ### Tables
 * `metadata`: Key-value pairs per target — coverage summaries, paths, `db_version` stamp
-* `functions`: All reversed functions — va (INTEGER), name, vaStart, size, status, origin, cflags, symbol, files JSON, `detected_by` JSON, `size_by_tool` JSON, `textOffset`, ghidra_name, list_name, is_thunk, is_export, sha256, blocker, blockerDelta, size_reason, similarity
-* `globals`: Global variables — va (INTEGER), name, decl, files JSON, `origin`, `size`
+* `functions`: All reversed functions — va (INTEGER), name, vaStart, size, fileOffset, status, module, cflags, symbol, markerType, files JSON, `detected_by` JSON, `size_by_tool` JSON, `textOffset`, ghidra_name, list_name, is_thunk, is_export, sha256, blocker, blockerDelta, size_reason, similarity
+* `globals`: Global variables — va (INTEGER), name, decl, files JSON, `module`, `size`
 * `sections`: PE sections — name, va, size, fileOffset, unitBytes, columns
 * `cells`: Grid cells per section — section_name, start, end, state (none/exact/reloc/matching/matching_reloc/stub/padding/data/thunk), functions JSON, label, parent_function
 * `history`: Status change log (persistent, never dropped) — target, va, old_status, new_status, changed_at
@@ -270,7 +272,7 @@ Each filter link toggles that filter on/off while preserving other active filter
 Potato Mode uses [Bottle](https://bottlepy.org/) for both the dev server and HTML templating:
 
 - **`server.py`** — Bottle app factory and shared infrastructure: compression (brotli/zstd/gzip), minification, DB helpers, DLL loading, and response utilities.
-- **`api.py`** — REST API routes (`/api/*`, `/regen`) with `@app.get`/`@app.post` decorators and `request` globals.
+- **`api.py`** — REST API routes (`/api/*`) with `@app.get`/`@app.post` decorators and `request` globals.
 - **`ui.py`** — UI routes (`/`, `/potato`, static files) with index caching and `static_file()` serving.
 - **`potato.py`** — Uses Bottle's `SimpleTemplate` engine (stpl) standalone, with no dependency on the Bottle web server for rendering.
 
@@ -294,7 +296,7 @@ Templates use `% for`/`% if`/`% end` control flow and `{{!expr}}` for raw HTML o
 ## Testing
 Run the test harness to verify all rendering paths:
 ```bash
-python3 tests/test_potato.py
+pytest tests/test_potato.py -v
 ```
 
 This tests over 190 different rendering paths and assertions including:
