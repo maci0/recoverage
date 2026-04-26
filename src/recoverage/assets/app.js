@@ -4,8 +4,6 @@ const DATA_URL = (t) => `/api/targets/${t}/data`;
 const ASM_URL = (t) => `/api/targets/${t}/asm`;
 const FN_URL = (t, va) => `/api/targets/${t}/functions/${va}`;
 
-// Debug flag - set to false in production
-
 // ============================================================================
 // Constants
 // ============================================================================
@@ -37,6 +35,10 @@ function hex(n, width) {
   return "0x" + n.toString(16).toUpperCase().padStart(width, "0");
 }
 
+function escAttr(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
 function formatBytes(buf, baseOffset = 0) {
   const bytes = new Uint8Array(buf);
   let out = "";
@@ -64,9 +66,12 @@ async function fetchArrayBufferSafe(url) {
   return await res.arrayBuffer();
 }
 
+const VALID_STATES = new Set(["exact", "reloc", "near_match", "stub", "padding", "data", "thunk", "none"]);
+
 function computeCellClass(cell) {
   const s = cell.state;
-  return "cell" + (s ? " " + (s === "matching_reloc" ? "matching" : s) : "");
+  if (!s || !VALID_STATES.has(s)) return "cell";
+  return "cell " + s;
 }
 
 let hljsLoaded = false;
@@ -91,12 +96,18 @@ async function loadHighlightJs() {
 
   const script = document.createElement('script');
   script.src = 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js';
+  script.integrity = 'sha384-RH2xi4eIQ/gjtbs9fUXM68sLSi99C7ZWBRX1vDrVv6GQXRibxXLbwO2NGZB74MbU';
+  script.crossOrigin = 'anonymous';
   script.onload = () => {
     const cScript = document.createElement('script');
     cScript.src = 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/languages/c.min.js';
+    cScript.integrity = 'sha384-tMmX0hBMZeMrZhX6dUNxA94/DNJLl70ao6qu2N9+b/6Ep9Y2e1pBzVjxtLygIB+d';
+    cScript.crossOrigin = 'anonymous';
 
     const asmScript = document.createElement('script');
     asmScript.src = 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/languages/x86asm.min.js';
+    asmScript.integrity = 'sha384-d1w6as9peRTJh7Tgj50482oZIrj0+1guPVjy1QRfEafPvwMu6JZ/J9CiS5cT8XE9';
+    asmScript.crossOrigin = 'anonymous';
 
     let loadedCount = 0;
     const checkDone = () => {
@@ -152,12 +163,12 @@ function extractDocs(cSourceText) {
 }
 
 
-const SunIcon = () => span({ class: "icon", innerHTML: `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>` });
-const MoonIcon = () => span({ class: "icon", innerHTML: `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>` });
-const ReloadIcon = () => span({ class: "icon", innerHTML: `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>` });
+const SunIcon = () => span({ class: "icon", "aria-hidden": "true", innerHTML: `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>` });
+const MoonIcon = () => span({ class: "icon", "aria-hidden": "true", innerHTML: `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>` });
+const ReloadIcon = () => span({ class: "icon", "aria-hidden": "true", innerHTML: `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>` });
 
 const HexLogo = (label, color, titleText) => div({ class: "section-title-left" },
-  span({ class: "hex-logo", style: `color: ${color};`, innerHTML: `<svg viewBox="0 0 100 100" width="20" height="20"><polygon points="50,5 90,27.5 90,72.5 50,95 10,72.5 10,27.5" fill="currentColor" fill-opacity="0.15" stroke="currentColor" stroke-width="6" stroke-linejoin="round"/><text x="50" y="54" dominant-baseline="middle" text-anchor="middle" fill="currentColor" font-family="system-ui, -apple-system, sans-serif" font-weight="800" font-size="${label.length > 2 ? '26' : '42'}">${label}</text></svg>` }),
+  span({ class: "hex-logo", "aria-hidden": "true", style: `color: ${color};`, innerHTML: `<svg viewBox="0 0 100 100" width="20" height="20"><polygon points="50,5 90,27.5 90,72.5 50,95 10,72.5 10,27.5" fill="currentColor" fill-opacity="0.15" stroke="currentColor" stroke-width="6" stroke-linejoin="round"/><text x="50" y="54" dominant-baseline="middle" text-anchor="middle" fill="currentColor" font-family="system-ui, -apple-system, sans-serif" font-weight="800" font-size="${label.length > 2 ? '26' : '42'}">${label}</text></svg>` }),
   span({ class: "section-title-text" }, titleText)
 );
 
@@ -245,7 +256,6 @@ const App = () => {
             cell._baseClass = computeCellClass(cell);
             cell._fnName = cell.functions && cell.functions[0] ? cell.functions[0] : "";
             cell._state = cell.state || "";
-            if (cell._state === "matching_reloc") cell._state = "matching";
           }
         }
       }
@@ -286,7 +296,7 @@ const App = () => {
 
   const tryRegen = async () => {
     try {
-      const res = await fetch("/regen", { method: "POST", cache: "no-store" });
+      const res = await fetch("/api/regen", { method: "POST", cache: "no-store" });
       return res.ok;
     } catch (e) {
       console.error("Regen failed:", e);
@@ -617,8 +627,8 @@ const App = () => {
       const sec = data.val.sections[secName];
       if (!sec) return div({ class: "subtitle" }, "Section not found");
 
-      let exactCount = 0, relocCount = 0, matchingCount = 0, stubCount = 0;
-      let exactBytes = 0, relocBytes = 0, matchingBytes = 0, stubBytes = 0;
+      let exactCount = 0, relocCount = 0, nearMatchCount = 0, stubCount = 0;
+      let exactBytes = 0, relocBytes = 0, nearMatchBytes = 0, stubBytes = 0;
       let paddingBytes = 0;
       let totalItems = 0;
       let coveredBytes = 0;
@@ -627,43 +637,35 @@ const App = () => {
       if (s) {
         exactCount = s.exactMatches || 0;
         relocCount = s.relocMatches || 0;
-        matchingCount = s.matchingMatches || 0;
+        nearMatchCount = s.nearMatchCount || 0;
         stubCount = s.stubCount || 0;
         exactBytes = s.exactBytes || 0;
         relocBytes = s.relocBytes || 0;
-        matchingBytes = s.matchingBytes || 0;
+        nearMatchBytes = s.nearMatchBytes || 0;
         stubBytes = s.stubBytes || 0;
         paddingBytes = s.paddingBytes || 0;
         totalItems = s.totalFunctions || 0;
         coveredBytes = s.coveredBytes || 0;
       }
 
-      let exactPct = 0, relocPct = 0, matchingPct = 0, stubPct = 0, paddingPct = 0;
+      let exactPct = 0, relocPct = 0, nearMatchPct = 0, stubPct = 0, paddingPct = 0;
       if (secName === ".text") {
         const total = totalItems || 1;
         exactPct = (exactCount / total) * 100;
         relocPct = (relocCount / total) * 100;
-        matchingPct = (matchingCount / total) * 100;
+        nearMatchPct = (nearMatchCount / total) * 100;
         stubPct = (stubCount / total) * 100;
         paddingPct = sec.size > 0 ? (paddingBytes / sec.size * 100) : 0;
       } else {
         const total = sec.size || 1;
         exactPct = (exactBytes / total) * 100;
         relocPct = (relocBytes / total) * 100;
-        matchingPct = (matchingBytes / total) * 100;
+        nearMatchPct = (nearMatchBytes / total) * 100;
         stubPct = (stubBytes / total) * 100;
         paddingPct = (paddingBytes / total) * 100;
       }
 
       const coveragePct = sec.size > 0 ? (coveredBytes / sec.size * 100) : 0;
-
-      const segments = [
-        { type: "exact", pct: exactPct, count: exactCount },
-        { type: "reloc", pct: relocPct, count: relocCount },
-        { type: "matching", pct: matchingPct, count: matchingCount },
-        { type: "stub", pct: stubPct, count: stubCount },
-        { type: "padding", pct: paddingPct, count: 0 }
-      ];
 
       const getClasses = (type) => {
         let cls = `progress-segment ${type}`;
@@ -675,13 +677,13 @@ const App = () => {
           div({ class: "progress-segments" },
             div({ class: getClasses("exact"), style: `width: ${exactPct}%`, title: `Exact: ${exactCount}`, onclick: () => toggleFilter("exact") }),
             div({ class: getClasses("reloc"), style: `width: ${relocPct}%`, title: `Reloc: ${relocCount}`, onclick: () => toggleFilter("reloc") }),
-            div({ class: getClasses("matching"), style: `width: ${matchingPct}%`, title: `Matching: ${matchingCount}`, onclick: () => toggleFilter("matching") }),
+            div({ class: getClasses("near_match"), style: `width: ${nearMatchPct}%`, title: `Near-match: ${nearMatchCount}`, onclick: () => toggleFilter("near_match") }),
             div({ class: getClasses("stub"), style: `width: ${stubPct}%`, title: `Stub: ${stubCount}`, onclick: () => toggleFilter("stub") }),
             div({ class: getClasses("padding"), style: `width: ${paddingPct}%`, title: `Padding: ${paddingBytes}B`, onclick: () => toggleFilter("padding") })
           ),
           div({ class: "progress-text-overlay" },
             span({ class: "stat-item" }, `${sec.size} bytes`),
-            span({ class: "stat-item" }, `${exactCount + relocCount + matchingCount + stubCount} / ${totalItems} matched`),
+            span({ class: "stat-item" }, `${exactCount + relocCount + nearMatchCount + stubCount} / ${totalItems} matched`),
             span({ class: "stat-item" }, `${coveragePct.toFixed(2)}% coverage`)
           )
         )
@@ -817,7 +819,7 @@ const App = () => {
               cls += " dimmed";
             }
 
-            html += `<div class="${cls}" data-index="${i}" style="${style}" title="${title}"></div>`;
+            html += `<div class="${escAttr(cls)}" data-index="${i}" style="${style}" title="${escAttr(title)}"></div>`;
           }
 
           gridEl.innerHTML = html;
@@ -921,7 +923,7 @@ const App = () => {
             onclick: (e) => { e.preventDefault(); jumpToAddress(parseInt(fn.va)); }
           }, `0x${fn.va.toString(16).toUpperCase()}`)),
           div({ class: "meta-item" }, span({ class: "meta-label" }, "Type"), span({ class: "meta-value" }, "Global Variable")),
-          fn.files && fn.files.length > 0 ? div({ class: "meta-item" }, span({ class: "meta-label" }, "Source"), span({ class: "meta-value" }, ...fn.files.map((file, i) => span(i > 0 ? ", " : "", a({ href: `${sourceRoot}/${file}`, target: "_blank", class: "source-link" }, file))))) : null
+          fn.files && fn.files.length > 0 ? div({ class: "meta-item" }, span({ class: "meta-label" }, "Source"), span({ class: "meta-value" }, ...fn.files.map((file, i) => span(i > 0 ? ", " : "", a({ href: `${sourceRoot}/${file}`, target: "_blank", rel: "noopener noreferrer", class: "source-link" }, file))))) : null
         );
       } else {
         const statusClass = fn.status ? `status-${fn.status.toLowerCase().replace('_', '-')}` : '';
@@ -936,7 +938,7 @@ const App = () => {
           div({ class: "meta-item" }, span({ class: "meta-label" }, "Offset"), span({ class: "meta-value" }, `0x${(fn.fileOffset || 0).toString(16).toUpperCase()}`)),
           div({ class: "meta-item" }, span({ class: "meta-label" }, "Symbol"), span({ class: "meta-value" }, fn.symbol || "(n/a)")),
           div({ class: "meta-item" }, span({ class: "meta-label" }, "Status"), span({ class: `meta-value status-badge ${statusClass}` }, fn.status || "?")),
-          div({ class: "meta-item" }, span({ class: "meta-label" }, "Origin"), span({ class: "meta-value" }, fn.origin || "?")),
+          div({ class: "meta-item" }, span({ class: "meta-label" }, "Module"), span({ class: "meta-value" }, fn.module || "?")),
           div({ class: "meta-item" }, span({ class: "meta-label" }, "Compiler"), span({ class: "meta-value" }, fn.cflags || "(n/a)")),
           div({ class: "meta-item" }, span({ class: "meta-label" }, "Marker"), span({ class: "meta-value" }, fn.markerType || "?")),
           fn.blocker ? div({ class: "meta-item full-width" }, span({ class: "meta-label" }, "Blocker"), span({ class: "meta-value blocker-value" }, fn.blocker)) : null,
@@ -948,7 +950,7 @@ const App = () => {
           fn.is_thunk ? div({ class: "meta-item" }, span({ class: "meta-label" }, "Type"), span({ class: "meta-value" }, "IAT thunk (not reversible)")) : null,
           fn.is_export ? div({ class: "meta-item" }, span({ class: "meta-label" }, "Type"), span({ class: "meta-value" }, "Exported function")) : null,
           fn.sha256 ? div({ class: "meta-item" }, span({ class: "meta-label" }, "SHA256"), span({ class: "meta-value" }, `${fn.sha256.substring(0, 16)}...`)) : null,
-          fn.files && fn.files.length > 0 ? div({ class: "meta-item" }, span({ class: "meta-label" }, "Source"), span({ class: "meta-value" }, ...fn.files.map((file, i) => span(i > 0 ? ", " : "", a({ href: `${sourceRoot}/${file}`, target: "_blank", class: "source-link" }, file))))) : null,
+          fn.files && fn.files.length > 0 ? div({ class: "meta-item" }, span({ class: "meta-label" }, "Source"), span({ class: "meta-value" }, ...fn.files.map((file, i) => span(i > 0 ? ", " : "", a({ href: `${sourceRoot}/${file}`, target: "_blank", rel: "noopener noreferrer", class: "source-link" }, file))))) : null,
           docText.val && docText.val !== "(select a function)" && docText.val !== "No documentation comments in source file" ?
             div({ class: "meta-item full-width" }, span({ class: "meta-label" }, "Annotations"), pre({ class: "meta-docs" }, docText.val)) : null
         );
@@ -1034,6 +1036,7 @@ const App = () => {
   const switchTab = (name) => { activeSection.val = name; currentFn.val = null; currentCellIndex.val = null; };
 
   van.add(document.body,
+    a({ href: "#main-content", class: "skip-link" }, "Skip to main content"),
     header({ class: "topbar layout-grid" },
       div({ class: "topbar-left" },
         div({ class: "title-container" },
@@ -1053,7 +1056,7 @@ const App = () => {
       div({ class: "topbar-right" },
         div({ class: "search" },
           input({
-            type: "text", class: "input-el",
+            type: "search", class: "input-el",
             placeholder: "Search function name or VA...",
             "aria-label": "Search functions",
             oninput: handleSearch
@@ -1061,11 +1064,11 @@ const App = () => {
         ),
         div({ class: "filters" },
           button({ class: () => `btn filter-btn filter-all ${activeFilters.val.size === 0 ? "active" : ""}`, "aria-label": "Filter all", onclick: () => toggleFilter("all") }, "All"),
-          button({ class: () => `btn filter-btn filter-exact ${activeFilters.val.has("exact") ? "active" : ""}`, "aria-label": "Filter exact", onclick: () => toggleFilter("exact") }, "E"),
-          button({ class: () => `btn filter-btn filter-reloc ${activeFilters.val.has("reloc") ? "active" : ""}`, "aria-label": "Filter reloc", onclick: () => toggleFilter("reloc") }, "R"),
-          button({ class: () => `btn filter-btn filter-matching ${activeFilters.val.has("matching") ? "active" : ""}`, "aria-label": "Filter matching", onclick: () => toggleFilter("matching") }, "M"),
-          button({ class: () => `btn filter-btn filter-stub ${activeFilters.val.has("stub") ? "active" : ""}`, "aria-label": "Filter stub", onclick: () => toggleFilter("stub") }, "S"),
-          button({ class: () => `btn filter-btn filter-padding ${activeFilters.val.has("padding") ? "active" : ""}`, "aria-label": "Filter padding", onclick: () => toggleFilter("padding") }, "P")
+          button({ class: () => `btn filter-btn filter-exact ${activeFilters.val.has("exact") ? "active" : ""}`, "aria-label": "Filter exact", title: "Exact match", onclick: () => toggleFilter("exact") }, "E"),
+          button({ class: () => `btn filter-btn filter-reloc ${activeFilters.val.has("reloc") ? "active" : ""}`, "aria-label": "Filter reloc", title: "Reloc match", onclick: () => toggleFilter("reloc") }, "R"),
+          button({ class: () => `btn filter-btn filter-near_match ${activeFilters.val.has("near_match") ? "active" : ""}`, "aria-label": "Filter near-match", title: "Near-match", onclick: () => toggleFilter("near_match") }, "M"),
+          button({ class: () => `btn filter-btn filter-stub ${activeFilters.val.has("stub") ? "active" : ""}`, "aria-label": "Filter stub", title: "Stub", onclick: () => toggleFilter("stub") }, "S"),
+          button({ class: () => `btn filter-btn filter-padding ${activeFilters.val.has("padding") ? "active" : ""}`, "aria-label": "Filter padding", title: "Padding", onclick: () => toggleFilter("padding") }, "P")
         ),
         div({ class: "actions" },
           () => {
@@ -1110,13 +1113,13 @@ const App = () => {
         )
       )
     ),
-    main({ class: "layout" },
+    main({ class: "layout", id: "main-content" },
       section({ class: "map" },
         div({ class: "legend" },
           div({ class: "key" }, span({ class: "swatch swatch-none" }), span("undocumented")),
           div({ class: "key" }, span({ class: "swatch swatch-exact" }), span("exact match")),
           div({ class: "key" }, span({ class: "swatch swatch-reloc" }), span("reloc match")),
-          div({ class: "key" }, span({ class: "swatch swatch-matching" }), span("near-miss")),
+          div({ class: "key" }, span({ class: "swatch swatch-near_match" }), span("near-match")),
           div({ class: "key" }, span({ class: "swatch swatch-stub" }), span("stub")),
           div({ class: "key" }, span({ class: "swatch swatch-padding" }), span("padding"))
         ),
@@ -1128,7 +1131,25 @@ const App = () => {
     // Modal - always in DOM for CSS transitions
     div({
       class: () => `modal ${showModal.val ? "show" : ""}`,
-      onclick: (e) => { if (e.target.classList.contains("modal")) showModal.val = false; }
+      role: "dialog",
+      "aria-modal": () => showModal.val ? "true" : "false",
+      "aria-label": () => modalTitle.val || "Code viewer",
+      onclick: (e) => { if (e.target.classList.contains("modal")) showModal.val = false; },
+      onkeydown: (e) => {
+        if (e.key === 'Tab') {
+          const focusable = e.currentTarget.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
+          if (focusable.length === 0) return;
+          const first = focusable[0];
+          const last = focusable[focusable.length - 1];
+          if (e.shiftKey && document.activeElement === first) {
+            e.preventDefault();
+            last.focus();
+          } else if (!e.shiftKey && document.activeElement === last) {
+            e.preventDefault();
+            first.focus();
+          }
+        }
+      }
     },
       div({ class: "modal-content" },
         div({ class: "modal-header" },
@@ -1144,6 +1165,29 @@ const App = () => {
       )
     )
   );
+
+  // Keyboard: Escape closes modal
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && showModal.val) {
+      showModal.val = false;
+    }
+  });
+
+  // Focus management for modal
+  let lastFocusedElement = null;
+  van.derive(() => {
+    if (showModal.val) {
+      lastFocusedElement = document.activeElement;
+      requestAnimationFrame(() => {
+        const closeBtn = document.querySelector('.modal-close');
+        if (closeBtn) closeBtn.focus();
+      });
+    } else if (lastFocusedElement) {
+      const el = lastFocusedElement;
+      lastFocusedElement = null;
+      requestAnimationFrame(() => { if (el && el.focus) el.focus(); });
+    }
+  });
 };
 
 van.add(document.body, App());

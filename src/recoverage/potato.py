@@ -1,10 +1,17 @@
+"""Potato Mode — zero-JS, server-side HTML renderer for the recoverage dashboard.
+
+Generates complete HTML pages using only HTML attributes for styling (no CSS, no JS).
+Uses Bottle's SimpleTemplate engine for layout and Pygments for optional syntax
+highlighting via inline <font> tags.
+"""
+
 from __future__ import annotations
 
 import base64
 import contextlib
 import functools
 import json
-import os
+import logging
 import re
 import sqlite3
 import struct
@@ -20,17 +27,15 @@ from urllib.parse import quote as _url_quote
 from bottle import SimpleTemplate  # type: ignore
 
 from recoverage import __version__
-from recoverage.server import _db_path, resolve_targets
-from recoverage.server import _find_dll_path as _dll_path
+from recoverage.server import _db_path, _escape_like, _load_dll, get_disassembly, resolve_targets
 
-get_db_path = _db_path
+_log = logging.getLogger("recoverage")
 
 # --- UI Constants ---
 COLORS = {
     "exact": "#10b981",
     "reloc": "#0ea5e9",
-    "matching": "#f59e0b",
-    "matching_reloc": "#f59e0b",
+    "near_match": "#f59e0b",
     "stub": "#ef4444",
     "padding": "#C0C0D4",
     "data": "#8b5cf6",
@@ -47,6 +52,16 @@ ACCENT_COLOR = "#06b6d4"
 SANS_FONT = "system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif"
 MONO_FONT = "SFMono-Regular, Consolas, Liberation Mono, Courier New, monospace"
 
+# Struct format tuples for Data Inspector: (min_bytes, label, struct_format)
+_INT_FMTS: list[tuple[int, str, str]] = [
+    (1, "int8", "<b"),
+    (1, "uint8", "<B"),
+    (2, "int16", "<h"),
+    (2, "uint16", "<H"),
+    (4, "int32", "<i"),
+    (4, "uint32", "<I"),
+]
+
 TRANSPARENT_GIF = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
 
 SCANLINE_PNG = (
@@ -56,8 +71,8 @@ SCANLINE_PNG = (
 
 
 # Topbar gradient
-def _make_topbar_png() -> str:
-    """Generate a 1x80 vertical gradient SVG for the topbar."""
+def _make_topbar_svg() -> str:
+    """Generate a 1x80 vertical gradient SVG data URI for the topbar."""
     svg = (
         '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="80">'
         "<defs>"
@@ -72,7 +87,7 @@ def _make_topbar_png() -> str:
     return "data:image/svg+xml;base64," + base64.b64encode(svg.encode("utf-8")).decode("utf-8")
 
 
-TOPBAR_PNG = _make_topbar_png()
+TOPBAR_SVG = _make_topbar_svg()
 
 PANEL_HDR_PNG = (
     "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAYCAYAAAA7zJfa"
@@ -92,7 +107,7 @@ DOT_PNGS = {
         "AAAALElEQVR4nGNgIBbwLX05lW/py09QPBWb5H80jFAE1YWu4BNJCvBbQdCR+AAA"
         "6iRPqQXnp7YAAAAASUVORK5CYII="
     ),
-    "matching": (
+    "near_match": (
         "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76L"
         "AAAALElEQVR4nGNgIBZ8ncc99es87k9QPBWb5H80jFAE1YWu4BNJCvBbQdCR+AAA"
         "Q/NP6VPcCMcAAAAASUVORK5CYII="
@@ -150,7 +165,7 @@ def _progress_svg_cached(
     )
 
 
-def _make_progress_png(
+def _make_progress_svg(
     segments: list[tuple[str, float]],
     colors: dict[str, str],
     width: int = 700,
@@ -232,7 +247,7 @@ LEGEND_ITEMS = [
     ("none", "undocumented"),
     ("exact", "exact"),
     ("reloc", "reloc"),
-    ("matching", "near-miss"),
+    ("near_match", "near-match"),
     ("stub", "stub"),
     ("padding", "padding"),
 ]
@@ -329,8 +344,9 @@ def _highlight_tokens(tokens: Iterable[tuple[Any, str]], color_map: dict[Any, st
     return "".join(parts)
 
 
+@functools.lru_cache(maxsize=1)
 def _pygments_available() -> bool:
-    """Check if pygments is available (lazy import)."""
+    """Check if pygments is available (lazy import, cached)."""
     try:
         import pygments.lexers  # type: ignore # noqa: F401
 
@@ -339,6 +355,7 @@ def _pygments_available() -> bool:
         return False
 
 
+@functools.lru_cache(maxsize=1)
 def _get_c_colors() -> dict[Any, str]:
     from pygments.token import (  # type: ignore
         Comment,
@@ -363,6 +380,7 @@ def _get_c_colors() -> dict[Any, str]:
     }
 
 
+@functools.lru_cache(maxsize=1)
 def _get_asm_colors() -> dict[Any, str]:
     from pygments.token import (  # type: ignore
         Comment,
@@ -391,13 +409,29 @@ def _get_asm_colors() -> dict[Any, str]:
     }
 
 
+@functools.lru_cache(maxsize=1)
+def _get_c_lexer() -> Any:
+    from pygments.lexers import CLexer  # type: ignore
+
+    return CLexer()
+
+
+@functools.lru_cache(maxsize=1)
+def _get_nasm_lexer() -> Any:
+    from pygments.lexers import NasmLexer  # type: ignore
+
+    return NasmLexer()
+
+
+_HEX_ADDR_RE = re.compile(r"0x[0-9a-f]{8}")
+
+
 def _highlight_c(code: str) -> str:
     """Syntax-highlight C code using Pygments tokens and <font> tags (no CSS)."""
     if not _pygments_available():
         return _html_escape(code)
-    from pygments.lexers import CLexer  # type: ignore
 
-    return _highlight_tokens(CLexer().get_tokens(code), _get_c_colors())
+    return _highlight_tokens(_get_c_lexer().get_tokens(code), _get_c_colors())
 
 
 def _highlight_asm(text: str, target: str = "") -> str:
@@ -413,8 +447,7 @@ def _highlight_asm(text: str, target: str = "") -> str:
         if not target:
             return html
 
-        return re.sub(
-            r"0x[0-9a-f]{8}",
+        return _HEX_ADDR_RE.sub(
             lambda m: (
                 f'<a href="?target={_url_quote(target)}&search={_url_quote(m.group(0))}">'
                 f"{m.group(0)}</a>"
@@ -435,10 +468,9 @@ def _highlight_asm(text: str, target: str = "") -> str:
                     lines.append(_link_hex_refs(_html_escape(line)))
             return "\n".join(lines)
         return _html_escape(text)
-    from pygments.lexers import NasmLexer  # type: ignore
 
     colors = _get_asm_colors()
-    lexer = NasmLexer()
+    lexer = _get_nasm_lexer()
     result_lines: list[str] = []
     for line in text.splitlines():
         if line.startswith("0x") and "  " in line:
@@ -527,14 +559,19 @@ def _format_hex_dump(raw_bytes: bytes, base_offset: int = 0, max_bytes: int = 25
     return "\n".join(lines)
 
 
+_MAX_RAW_READ = 1 << 20  # 1 MiB — more than any plausible function or data cell
+
+
 def _get_raw_bytes(file_offset: int, size: int, target: str) -> bytes | None:
-    """Read raw bytes from the target DLL."""
-    try:
-        with open(_dll_path(target), "rb") as f:
-            f.seek(file_offset)
-            return f.read(size)
-    except OSError:
+    """Read raw bytes from the target DLL using the shared DLL cache."""
+    size = min(size, _MAX_RAW_READ)
+    dll_data = _load_dll(target)
+    if dll_data is None:
         return None
+    end = file_offset + size
+    if file_offset < 0 or end > len(dll_data):
+        return None
+    return dll_data[file_offset:end]
 
 
 def _extract_annotations(code: str) -> list[tuple[str, str]]:
@@ -580,14 +617,6 @@ def _format_data_inspector(
         )
 
     b = raw_bytes
-    _INT_FMTS = [
-        (1, "int8", "<b"),
-        (1, "uint8", "<B"),
-        (2, "int16", "<h"),
-        (2, "uint16", "<H"),
-        (4, "int32", "<i"),
-        (4, "uint32", "<I"),
-    ]
     for min_len, label, fmt in _INT_FMTS:
         if len(b) >= min_len:
             _row(label, str(struct.unpack_from(fmt, b)[0]))
@@ -639,7 +668,7 @@ def _build_url(
     """Build a potato URL with the given parameters."""
     url = "?target=" + _url_quote(target) + "&section=" + _url_quote(section)
     if filters:
-        url += f"&filter={','.join(sorted(filters))}"
+        url += "&filter=" + _url_quote(",".join(sorted(filters)))
     if idx is not None:
         url += "&idx=" + str(idx)
     if search:
@@ -648,30 +677,13 @@ def _build_url(
 
 
 def _get_disassembly(va: int, size: int, file_offset: int, target: str) -> str | None:
-    """Try to disassemble using capstone, return text or None."""
-    try:
-        import capstone  # type: ignore
-    except ImportError:
+    """Delegate to the LRU-cached server disassembly; return None when unavailable."""
+    from recoverage.server import HAS_CAPSTONE  # noqa: PLC0415
+
+    if not HAS_CAPSTONE:
         return None
-
-    try:
-        with open(_dll_path(target), "rb") as f:
-            f.seek(file_offset)
-            code_bytes = f.read(size)
-    except OSError:
-        return None
-
-    if len(code_bytes) < size:
-        return None
-
-    md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_32)
-    md.detail = False
-
-    asm_lines: list[str] = []
-    for insn in md.disasm(code_bytes, va):
-        asm_lines.append(f"0x{insn.address:08x}  {insn.mnemonic:8s} {insn.op_str}")
-
-    return "\n".join(asm_lines) if asm_lines else None
+    result = get_disassembly(va, size, file_offset, target)
+    return result or None
 
 
 # ── SimpleTemplate: Page Layout ─────────────────────────────────────
@@ -767,7 +779,7 @@ _PAGE_SRC = r"""<!DOCTYPE html>
       <table id="map" width="100%" border="1" cellpadding="0" cellspacing="0" bgcolor="{{PANEL_COLOR}}" bordercolor="{{BORDER_COLOR}}">
         <tr><td id="map-header" background="{{PANEL_HDR_PNG}}" cellpadding="8">&nbsp;<font color="{{MUTED_COLOR}}" size="2"><b>Coverage Map - {{section}}</b></font> <font color="{{MUTED_COLOR}}" size="1"> ({{block_count}} blocks)</font>
         % if sec_stats.get('total', 0) > 0:
-          <font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}"><font color="{{COLORS['exact']}}">E:{{sec_stats['exact']}}</font> <font color="{{COLORS['reloc']}}">R:{{sec_stats['reloc']}}</font> <font color="{{COLORS['matching']}}">M:{{sec_stats['matching']}}</font> <font color="{{COLORS['stub']}}">S:{{sec_stats['stub']}}</font> <font color="{{COLORS['padding']}}">P:{{sec_stats.get('padding', 0)}}</font> &#x2502; {{sec_stats['pct']}}% covered</font>
+          <font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}"><font color="{{COLORS['exact']}}">E:{{sec_stats['exact']}}</font> <font color="{{COLORS['reloc']}}">R:{{sec_stats['reloc']}}</font> <font color="{{COLORS['near_match']}}">M:{{sec_stats['near_match']}}</font> <font color="{{COLORS['stub']}}">S:{{sec_stats['stub']}}</font> <font color="{{COLORS['padding']}}">P:{{sec_stats.get('padding', 0)}}</font> &#x2502; {{sec_stats['pct']}}% covered</font>
         % end
         </td></tr>
         <tr><td bgcolor="{{PANEL_COLOR}}" cellpadding="8">
@@ -892,17 +904,17 @@ def render_potato(parsed_url: ParseResult) -> str:
     sort_key = qs.get("sort", ["va"])[0]
     status_filter = qs.get("status", [""])[0]
 
-    db_path = get_db_path()
+    db_path = _db_path()
     try:
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-    except Exception:
+    except sqlite3.Error:
+        _log.warning("Potato mode: database unavailable at %s", db_path)
         return "<html><body>Database unavailable</body></html>"
 
     with contextlib.closing(conn):
         c = conn.cursor()
         return _render_potato_inner(
             c,
-            conn,
             target,
             section,
             active_filters,
@@ -961,11 +973,11 @@ def _compute_section_stats(
     summary = data.get("summary", {})
     c.execute(
         "SELECT section_name, total_cells, exact_count, reloc_count, "
-        "matching_count, stub_count, padding_count, data_count, thunk_count FROM section_cell_stats WHERE target = ?",
+        "near_match_count, stub_count, padding_count FROM section_cell_stats WHERE target = ?",
         (target,),
     )
     for row in c.fetchall():
-        sec_name_r, s_total, s_exact, s_reloc, s_matching, s_stub, s_padding, _, _ = row
+        sec_name_r, s_total, s_exact, s_reloc, s_near_match, s_stub, s_padding = row
         sec_summary_entry = summary.get(sec_name_r, summary)
         s_covered_bytes = sec_summary_entry.get("coveredBytes", 0)
         s_sec_size = sections.get(sec_name_r, {}).get("size", 0)
@@ -974,7 +986,7 @@ def _compute_section_stats(
             "total": s_total,
             "exact": s_exact,
             "reloc": s_reloc,
-            "matching": s_matching,
+            "near_match": s_near_match,
             "stub": s_stub,
             "padding": s_padding,
             "covered": s_exact + s_reloc,
@@ -988,17 +1000,17 @@ def _search_functions(c: sqlite3.Cursor, target: str, search_query: str) -> set[
     if not search_query:
         return search_matched_fns
 
-    like_pat = "%" + search_query.replace("%", "\\%").replace("_", "\\_") + "%"
+    like_pat = _escape_like(search_query)
     c.execute(
         "SELECT name FROM functions WHERE target = ? AND ("
         "name LIKE ? ESCAPE '\\' OR vaStart LIKE ? ESCAPE '\\' "
-        "OR symbol LIKE ? ESCAPE '\\')",
+        "OR symbol LIKE ? ESCAPE '\\') LIMIT 500",
         (target, like_pat, like_pat, like_pat),
     )
     search_matched_fns.update(row[0] for row in c.fetchall())
     c.execute(
         "SELECT name FROM globals WHERE target = ? AND ("
-        "name LIKE ? ESCAPE '\\' OR printf('0x%x', va) LIKE ? ESCAPE '\\')",
+        "name LIKE ? ESCAPE '\\' OR printf('0x%x', va) LIKE ? ESCAPE '\\') LIMIT 500",
         (target, like_pat, like_pat),
     )
     search_matched_fns.update(row[0] for row in c.fetchall())
@@ -1014,7 +1026,7 @@ def _build_filter_data(
     filter_opts = [
         ("exact", "E", "e"),
         ("reloc", "R", "r"),
-        ("matching", "M", "m"),
+        ("near_match", "M", "m"),
         ("stub", "S", "s"),
         ("padding", "P", "p"),
     ]
@@ -1064,26 +1076,26 @@ def _build_progress(
     total_fn = sec_summ.get("totalFunctions", 0)
     exact_matches = sec_summ.get("exactMatches", 0)
     reloc_matches = sec_summ.get("relocMatches", 0)
-    matching_matches = sec_summ.get("matchingMatches", 0)
+    near_match_matches = sec_summ.get("nearMatchCount", 0)
     stub_matches = sec_summ.get("stubCount", 0)
-    matched_fn = exact_matches + reloc_matches + matching_matches + stub_matches
+    matched_fn = exact_matches + reloc_matches + near_match_matches + stub_matches
 
     if section == ".text" and total_fn > 0:
         seg_exact = exact_matches / total_fn * 100
         seg_reloc = reloc_matches / total_fn * 100
-        seg_matching = matching_matches / total_fn * 100
+        seg_near_match = near_match_matches / total_fn * 100
         seg_stub = stub_matches / total_fn * 100
     elif sec_size > 0:
         seg_exact = sec_summ.get("exactBytes", 0) / sec_size * 100
         seg_reloc = sec_summ.get("relocBytes", 0) / sec_size * 100
-        seg_matching = sec_summ.get("matchingBytes", 0) / sec_size * 100
+        seg_near_match = sec_summ.get("nearMatchBytes", 0) / sec_size * 100
         seg_stub = sec_summ.get("stubBytes", 0) / sec_size * 100
     else:
-        seg_exact = seg_reloc = seg_matching = seg_stub = 0
+        seg_exact = seg_reloc = seg_near_match = seg_stub = 0
 
     padding_bytes = sec_summ.get("paddingBytes", 0)
     seg_padding = (padding_bytes / sec_size * 100) if sec_size > 0 else 0
-    seg_none = max(0, 100 - seg_exact - seg_reloc - seg_matching - seg_stub - seg_padding)
+    seg_none = max(0, 100 - seg_exact - seg_reloc - seg_near_match - seg_stub - seg_padding)
     return {
         "sec_size": sec_size,
         "coverage_pct": (covered_bytes / sec_size * 100) if sec_size > 0 else 0,
@@ -1092,7 +1104,7 @@ def _build_progress(
         "segments": [
             ("exact", seg_exact),
             ("reloc", seg_reloc),
-            ("matching", seg_matching),
+            ("near_match", seg_near_match),
             ("stub", seg_stub),
             ("padding", seg_padding),
             ("none", seg_none),
@@ -1101,6 +1113,12 @@ def _build_progress(
 
 
 def _merge_cells(cells: list[dict[str, Any]], grid_columns: int) -> list[dict[str, Any]]:
+    """Merge adjacent cells with identical state+functions within a grid row.
+
+    Invariant: sum of spans in output == sum of spans in input.
+    Cells with state "none" are never merged (they represent undocumented gaps
+    that should remain individually clickable).
+    """
     merged_cells: list[dict[str, Any]] = []
     if not cells:
         return merged_cells
@@ -1142,6 +1160,14 @@ def _build_grid_html(
     target: str,
     section: str,
 ) -> str:
+    """Render the coverage grid as an HTML table.
+
+    grid_columns controls the number of cells per row. A sizing row of
+    transparent cells is emitted first so the browser allocates uniform
+    column widths regardless of colspan usage in data rows.
+    """
+    if grid_columns <= 0:
+        raise ValueError(f"grid_columns must be positive, got {grid_columns}")
     cell_w = 18
     cell_h = 15
     sizing_tds = "".join(
@@ -1162,14 +1188,15 @@ def _build_grid_html(
             curr_col = 0
 
         state = cell.get("state", "none")
-        if state == "matching_reloc":
-            state = "matching"
 
         dimmed = (active_filters and state != "none" and state not in active_filters) or (
             search_query and not any(fn in search_matched_fns for fn in cell.get("functions", []))
         )
         bgcolor = BG_COLOR if dimmed else COLORS.get(state, COLORS["none"])
-        selected = idx_str.isdigit() and int(idx_str) == orig_idx
+        try:
+            selected = int(idx_str) == orig_idx
+        except (ValueError, OverflowError):
+            selected = False
         link = _build_url(
             target, section, active_filters or None, idx=orig_idx, search=search_query
         )
@@ -1233,13 +1260,15 @@ def _render_function_list(
         where.append("status = ?")
         params.append(status_filter)
     if search_query:
-        like = f"%{search_query}%"
-        where.append("(name LIKE ? OR symbol LIKE ? OR printf('0x%x', va) LIKE ?)")
+        like = _escape_like(search_query)
+        where.append(
+            "(name LIKE ? ESCAPE '\\' OR symbol LIKE ? ESCAPE '\\' OR printf('0x%x', va) LIKE ? ESCAPE '\\')"
+        )
         params.extend([like, like, like])
 
     where_sql = " AND ".join(where)
     c.execute(
-        "SELECT name, va, vaStart, size, status, origin FROM functions "
+        "SELECT name, va, vaStart, size, status, module FROM functions "
         f"WHERE {where_sql} ORDER BY {order_by}, va",
         params,
     )
@@ -1273,11 +1302,9 @@ def _render_function_list(
             f'<tr><td colspan="5"><font color="{MUTED_COLOR}">No functions found.</font></td></tr>'
         )
     else:
-        for name, va, _, size, status, origin in rows:
+        for name, va, _, size, status, module in rows:
             st = status or "none"
-            if st == "matching_reloc":
-                st = "matching"
-            color = COLORS.get(st, TEXT_COLOR)
+            color = COLORS.get(st.lower(), TEXT_COLOR)
             name_link = f"?target={_url_quote(target)}&section=.text&search={_url_quote(name)}"
             parts.append(
                 "<tr>"
@@ -1285,7 +1312,7 @@ def _render_function_list(
                 f'<td><font face="Courier New, monospace" size="2">{_esc(_format_va(va))}</font></td>'
                 f'<td><font face="Courier New, monospace" size="2">{_esc(size)}</font></td>'
                 f'<td><font color="{color}" face="Courier New, monospace" size="2"><b>{_esc(st.upper())}</b></font></td>'
-                f'<td><font face="Courier New, monospace" size="2">{_esc(origin or "")}</font></td>'
+                f'<td><font face="Courier New, monospace" size="2">{_esc(module or "")}</font></td>'
                 "</tr>"
             )
 
@@ -1295,7 +1322,6 @@ def _render_function_list(
 
 def _render_potato_inner(
     c: sqlite3.Cursor,
-    conn: sqlite3.Connection,
     target: str,
     section: str,
     active_filters: set[str],
@@ -1305,7 +1331,6 @@ def _render_potato_inner(
     sort_key: str = "va",
     status_filter: str = "",
 ) -> str:
-    del conn
     target_ids, targets = resolve_targets(c)
     if not target and target_ids:
         target = target_ids[0]
@@ -1394,11 +1419,11 @@ def _render_potato_inner(
 
     progress_bar_png_uri = ""
     if progress:
-        progress_bar_png_uri = _make_progress_png(progress["segments"], COLORS)
+        progress_bar_png_uri = _make_progress_svg(progress["segments"], COLORS)
 
     db_mtime_str = ""
     try:
-        mtime = os.path.getmtime(get_db_path())
+        mtime = _db_path().stat().st_mtime
         db_mtime_str = datetime.fromtimestamp(mtime, tz=UTC).strftime("%Y-%m-%d %H:%M UTC")
     except OSError:
         pass
@@ -1415,7 +1440,7 @@ def _render_potato_inner(
         MONO_FONT=MONO_FONT,
         COLORS=COLORS,
         SCANLINE_PNG=SCANLINE_PNG,
-        TOPBAR_PNG=TOPBAR_PNG,
+        TOPBAR_PNG=TOPBAR_SVG,
         PANEL_HDR_PNG=PANEL_HDR_PNG,
         R_LOGO_SVG=R_LOGO_SVG,
         DOT_PNGS=DOT_PNGS,
@@ -1507,17 +1532,20 @@ def _render_panel(
         "COLORS": COLORS,
     }
 
-    if not idx_str.isdigit():
+    if not idx_str:
         return _PANEL_TPL.render(**ctx)
 
-    idx = int(idx_str)
-    if idx >= len(cells):
+    try:
+        idx = int(idx_str)
+    except (ValueError, OverflowError):
         return _PANEL_TPL.render(**ctx)
 
+    if idx < 0 or idx >= len(cells):
+        return _PANEL_TPL.render(**ctx)
+
+    # Bounds already validated by the if-guard above
     cell = cells[idx]
     state = cell.get("state", "none")
-    if state == "matching_reloc":
-        state = "matching"
     state_color = COLORS.get(state, TEXT_COLOR)
 
     funcs = cell.get("functions", [])
@@ -1576,7 +1604,7 @@ def _render_panel(
     c.execute(
         "SELECT json_object("
         "'va', va, 'name', name, 'vaStart', vaStart, 'size', size, "
-        "'fileOffset', fileOffset, 'status', status, 'origin', origin, "
+        "'fileOffset', fileOffset, 'status', status, 'module', module, "
         "'cflags', cflags, 'symbol', symbol, 'markerType', markerType, "
         "'ghidra_name', ghidra_name, 'list_name', list_name, "
         "'is_thunk', is_thunk, 'is_export', is_export, "
@@ -1592,18 +1620,18 @@ def _render_panel(
         fn_data = json.loads(fn_row[0])
         ctx["fn_data"] = fn_data
 
-        HEX_FIELDS = {"va", "fileOffset"}
-        SKIP_FIELDS = {"files", "sha256", "is_thunk", "is_export"}
+        hex_fields = {"va", "fileOffset"}
+        skip_fields = {"files", "sha256", "is_thunk", "is_export"}
         if not fn_data.get("blocker"):
-            SKIP_FIELDS.add("blocker")
+            skip_fields.add("blocker")
         if fn_data.get("blockerDelta") is None:
-            SKIP_FIELDS.add("blockerDelta")
+            skip_fields.add("blockerDelta")
 
         # Badges
         badges: list[str] = []
         if fn_data.get("is_thunk"):
             badges.append(
-                f'<font color="{COLORS.get("matching", "#f59e0b")}"><b>[IAT thunk]</b></font>'
+                f'<font color="{COLORS.get("near_match", "#f59e0b")}"><b>[IAT thunk]</b></font>'
             )
         if fn_data.get("is_export"):
             badges.append(f'<font color="{ACCENT_COLOR}"><b>[Exported]</b></font>')
@@ -1618,19 +1646,24 @@ def _render_panel(
                 return f'<a href="{va_link}"><font color="{ACCENT_COLOR}">{val}</font></a>'
             return val
 
-        ctx["detail_rows_html"] = _detail_rows(fn_data, SKIP_FIELDS, HEX_FIELDS, _fn_val)
+        ctx["detail_rows_html"] = _detail_rows(fn_data, skip_fields, hex_fields, _fn_val)
 
         # Source code + annotations
         files = fn_data.get("files", [])
         code_text = None
         if files:
             source_root = data.get("paths", {}).get("sourceRoot", f"/src/{target.lower()}")
-            c_path = Path(__file__).resolve().parent.parent / source_root.lstrip("/") / files[0]
-            try:
-                with open(c_path, encoding="utf-8") as f:
-                    code_text = f.read()
-            except OSError:
-                pass
+            # Prevent path traversal: resolve and verify the file stays inside the source tree
+            base = (Path(__file__).resolve().parent.parent / source_root.lstrip("/")).resolve()
+            c_path = (base / files[0]).resolve()
+            if not c_path.is_relative_to(base):
+                code_text = None
+            else:
+                try:
+                    with open(c_path, encoding="utf-8") as f:
+                        code_text = f.read()
+                except OSError:
+                    _log.debug("Source file not found: %s", c_path)
 
         if code_text:
             ctx["annotations"] = _extract_annotations(code_text)

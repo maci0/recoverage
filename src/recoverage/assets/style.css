@@ -32,7 +32,7 @@
 
   --exact-bg: rgba(16, 185, 129, 0.75);
   --reloc-bg: rgba(2, 132, 199, 0.65);
-  --matching-bg: rgba(255, 200, 0, 0.65);
+  --near-match-bg: rgba(255, 200, 0, 0.65);
   --stub-bg: rgba(255, 0, 0, 0.65);
   --padding-bg: rgba(200, 200, 220, 0.55);
 
@@ -171,7 +171,7 @@ body {
 .swatch-none { background: var(--none); }
 .progress-segment.exact { background: var(--exact-bg); }
 .progress-segment.reloc { background: var(--reloc-bg); }
-.progress-segment.matching { background: var(--matching-bg); }
+.progress-segment.near_match { background: var(--near-match-bg); }
 .progress-segment.stub { background: var(--stub-bg); }
 .progress-segment.padding { background: var(--padding-bg); }
 
@@ -189,7 +189,7 @@ body {
 }
 .cell.exact { background: var(--exact-bg); }
 .cell.reloc { background: var(--reloc-bg); }
-.cell.matching { background: var(--matching-bg); }
+.cell.near_match { background: var(--near-match-bg); }
 .cell.stub { background: var(--stub-bg); }
 .cell.padding { background: var(--padding-bg); }
 
@@ -202,7 +202,7 @@ body {
 .grid.has-filters .cell { opacity: 0.15; }
 .grid.has-filters.show-exact .cell.exact { opacity: 1; }
 .grid.has-filters.show-reloc .cell.reloc { opacity: 1; }
-.grid.has-filters.show-matching .cell.matching { opacity: 1; }
+.grid.has-filters.show-near_match .cell.near_match { opacity: 1; }
 .grid.has-filters.show-stub .cell.stub { opacity: 1; }
 .grid.has-filters.show-padding .cell.padding { opacity: 1; }
 
@@ -265,7 +265,7 @@ body {
 .status-badge { display: inline-block; padding: 2px 6px; border-radius: 10px; font-size: 11px; font-weight: 600; text-transform: uppercase; width: fit-content; }
 .status-exact { background: rgba(46, 160, 67, 0.2); color: #3fb950; border: 1px solid rgba(46, 160, 67, 0.4); }
 .status-reloc { background: rgba(2, 132, 199, 0.2); color: #0ea5e9; border: 1px solid rgba(2, 132, 199, 0.4); }
-.status-matching, .status-matching-reloc { background: rgba(210, 153, 34, 0.2); color: #e3b341; border: 1px solid rgba(210, 153, 34, 0.4); }
+.status-near-match { background: rgba(210, 153, 34, 0.2); color: #e3b341; border: 1px solid rgba(210, 153, 34, 0.4); }
 .status-stub { background: rgba(248, 81, 73, 0.2); color: #ff7b72; border: 1px solid rgba(248, 81, 73, 0.4); }
 
 .section-title-left { display: flex; align-items: center; gap: 8px; }
@@ -296,11 +296,31 @@ body {
 
 *:focus-visible { outline: 2px solid var(--c); outline-offset: 2px; }
 
-body::after { content: " "; display: block; position: fixed; top: 0; left: 0; bottom: 0; right: 0; background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.05) 50%); z-index: 9999; background-size: 100% 3px; pointer-events: none; }
+body::after { content: " "; display: block; position: fixed; top: 0; left: 0; bottom: 0; right: 0; background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.05) 50%); z-index: 90; background-size: 100% 3px; pointer-events: none; }
 .light-mode body::after { background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.02) 50%); }
 .swatch-exact { background: var(--exact-bg); }
 .swatch-reloc { background: var(--reloc-bg); }
-.swatch-matching { background: var(--matching-bg); }
+.swatch-near_match { background: var(--near-match-bg); }
 .swatch-stub { background: var(--stub-bg); }
 .swatch-padding { background: var(--padding-bg); }
+
+.light-mode .progress-text-overlay { color: #1e293b; text-shadow: 0 1px 2px rgba(255, 255, 255, 0.8), 0 0 4px rgba(255, 255, 255, 0.5); }
+
+.skip-link {
+  position: absolute; left: -9999px; top: auto; width: 1px; height: 1px; overflow: hidden; z-index: 999;
+}
+.skip-link:focus {
+  position: fixed; top: 4px; left: 4px; width: auto; height: auto; overflow: visible;
+  padding: 8px 16px; background: var(--panel); color: var(--c); border: 2px solid var(--c);
+  border-radius: 8px; font-size: 14px; font-weight: 600; z-index: 999;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
 

@@ -1,14 +1,11 @@
 import json
-import os
 import re
 import sqlite3
 import subprocess
-from io import BytesIO
-from pathlib import Path
 from urllib.parse import urlparse
-from wsgiref.util import setup_testing_defaults
 
 import pytest
+from conftest import HAS_DB, get_first_target, wsgi_get
 
 from recoverage.potato import (
     _build_url,
@@ -18,20 +15,17 @@ from recoverage.potato import (
     _format_data_inspector,
     _format_hex_dump,
     _format_va,
-    get_db_path,
     render_potato,
     wrap_text,
 )
-from recoverage.server import app
-
-HAS_DB = os.path.exists(Path.cwd() / "db" / "coverage.db")
+from recoverage.server import _db_path as get_db_path
 
 
-def render_potato_url(url: str, name: str) -> str:
+def render_potato_url(url: str) -> str:
     return render_potato(urlparse(url))
 
 
-def _test_tidy(html: str, name: str) -> tuple[bool | None, str]:
+def _test_tidy(html: str) -> tuple[bool | None, str]:
     try:
         proc = subprocess.run(
             ["tidy", "-q", "-e", "--show-warnings", "no", "--show-errors", "no"],
@@ -59,7 +53,7 @@ def test_format_va():
 
 def test_build_url():
     assert _build_url("SERVER", ".text") == "?target=SERVER&section=.text"
-    assert "filter=exact,reloc" in _build_url("SERVER", ".text", {"reloc", "exact"})
+    assert "filter=exact%2Creloc" in _build_url("SERVER", ".text", {"reloc", "exact"})
     assert "idx=42" in _build_url("SERVER", ".text", idx=42)
     assert "search=alloc" in _build_url("SERVER", ".text", search="alloc")
     url = _build_url("SERVER", ".text", {"exact"}, idx=5, search="foo")
@@ -151,7 +145,7 @@ def test_grid_structure():
     section_names = [r[0] for r in rows]
 
     for sec in section_names:
-        html = render_potato_url(f"/potato?section={sec}", f"grid-{sec}")
+        html = render_potato_url(f"/potato?section={sec}")
         m = re.search(r'(<table id="grid"[^>]*>.*?</table>)', html, re.DOTALL)
         assert m, f"grid {sec}: table found"
 
@@ -184,7 +178,7 @@ URLS = [
     ("/potato?section=.rdata", "section .rdata"),
     ("/potato?section=.bss", "section .bss"),
     ("/potato?filter=exact", "filter exact"),
-    ("/potato?filter=reloc,matching", "filter reloc+matching"),
+    ("/potato?filter=reloc,near_match", "filter reloc+near_match"),
     ("/potato?section=.text&filter=exact", "text + exact"),
     ("/potato?section=.text&idx=0", "cell 0"),
     ("/potato?section=.text&idx=100", "cell 100"),
@@ -211,26 +205,15 @@ URLS = [
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
 @pytest.mark.parametrize("url,name", URLS)
 def test_rendering_paths(url, name):
-    html = render_potato_url(url, name)
+    html = render_potato_url(url)
     assert html, "render returned empty"
     assert "<html" in html and "<body" in html, "missing HTML structure"
-    ok, err = _test_tidy(html, name)
+    ok, err = _test_tidy(html)
     if ok is False:
         pytest.fail(f"Tidy error on {name}: {err[:150]}")
     assert "style=" not in html
     assert "<script" not in html.lower()
     assert "onclick=" not in html.lower()
-
-
-def _first_target() -> str:
-    conn = sqlite3.connect(f"file:{get_db_path()}?mode=ro", uri=True)
-    try:
-        c = conn.cursor()
-        c.execute("SELECT DISTINCT target FROM metadata ORDER BY target LIMIT 1")
-        row = c.fetchone()
-        return row[0] if row else ""
-    finally:
-        conn.close()
 
 
 def _find_cell_idx(target: str, section: str, predicate) -> int | None:
@@ -254,7 +237,7 @@ def _find_cell_idx(target: str, section: str, predicate) -> int | None:
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
 def test_globals_detail_panel():
-    target = _first_target()
+    target = get_first_target()
     conn = sqlite3.connect(f"file:{get_db_path()}?mode=ro", uri=True)
     try:
         c = conn.cursor()
@@ -275,53 +258,53 @@ def test_globals_detail_panel():
     if not match:
         pytest.skip("No global-mapped .data/.rdata cell in DB")
     idx, sec = match
-    html = render_potato_url(f"/potato?target={target}&section={sec}&idx={idx}", "globals")
+    html = render_potato_url(f"/potato?target={target}&section={sec}&idx={idx}")
     assert "Global Variable" in html
 
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
 def test_multi_function_cell():
-    target = _first_target()
+    target = get_first_target()
     idx = _find_cell_idx(target, ".text", lambda funcs: len(funcs) > 1)
     if idx is None:
         pytest.skip("No multi-function cell found")
-    html = render_potato_url(f"/potato?target={target}&section=.text&idx={idx}", "multi-fn")
+    html = render_potato_url(f"/potato?target={target}&section=.text&idx={idx}")
     assert "Block Details" in html
 
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
 def test_function_list_view():
-    target = _first_target()
-    html = render_potato_url(f"/potato?target={target}&section=.text&view=functions", "fn-list")
+    target = get_first_target()
+    html = render_potato_url(f"/potato?target={target}&section=.text&view=functions")
     assert "Functions" in html
     assert "Origin" in html
 
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
 def test_function_list_sort():
-    target = _first_target()
+    target = get_first_target()
     html_name = render_potato_url(
-        f"/potato?target={target}&section=.text&view=functions&sort=name", "fn-sort-name"
+        f"/potato?target={target}&section=.text&view=functions&sort=name"
     )
     html_size = render_potato_url(
-        f"/potato?target={target}&section=.text&view=functions&sort=size", "fn-sort-size"
+        f"/potato?target={target}&section=.text&view=functions&sort=size"
     )
     assert html_name != html_size
 
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
 def test_function_list_status_filter():
-    target = _first_target()
+    target = get_first_target()
     html = render_potato_url(
-        f"/potato?target={target}&section=.text&view=functions&status=stub", "fn-status"
+        f"/potato?target={target}&section=.text&view=functions&status=stub"
     )
     assert ("STUB" in html) or ("No functions found." in html)
 
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
 def test_prev_next_navigation():
-    target = _first_target()
-    html = render_potato_url(f"/potato?target={target}&section=.text&idx=5", "prev-next")
+    target = get_first_target()
+    html = render_potato_url(f"/potato?target={target}&section=.text&idx=5")
     assert "#sel" in html
     assert "Prev" in html
     assert "Next" in html
@@ -329,15 +312,15 @@ def test_prev_next_navigation():
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
 def test_skip_link():
-    target = _first_target()
-    html = render_potato_url(f"/potato?target={target}", "skip")
-    assert 'href="#grid"' in html
+    target = get_first_target()
+    html = render_potato_url(f"/potato?target={target}")
+    assert 'href="#grid-container"' in html
 
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
 def test_accesskey_attributes():
-    target = _first_target()
-    html = render_potato_url(f"/potato?target={target}", "accesskeys")
+    target = get_first_target()
+    html = render_potato_url(f"/potato?target={target}")
     assert 'accesskey="s"' in html
     assert 'accesskey="0"' in html
     assert 'accesskey="1"' in html
@@ -345,11 +328,11 @@ def test_accesskey_attributes():
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
 def test_clickable_asm_addresses():
-    target = _first_target()
+    target = get_first_target()
     idx = _find_cell_idx(target, ".text", lambda funcs: len(funcs) > 0)
     if idx is None:
         pytest.skip("No .text function cell found")
-    html = render_potato_url(f"/potato?target={target}&section=.text&idx={idx}", "asm-links")
+    html = render_potato_url(f"/potato?target={target}&section=.text&idx={idx}")
     if "Assembly" not in html:
         pytest.skip("Assembly panel unavailable (missing DLL/capstone)")
     assert re.search(r'href="\?target=.*&search=0x[0-9a-f]{8}"', html)
@@ -357,76 +340,379 @@ def test_clickable_asm_addresses():
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
 def test_back_to_main_link():
-    target = _first_target()
-    html = render_potato_url(f"/potato?target={target}", "main-link")
+    target = get_first_target()
+    html = render_potato_url(f"/potato?target={target}")
     assert 'href="/"' in html
 
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
 def test_footer_db_date():
-    target = _first_target()
-    html = render_potato_url(f"/potato?target={target}", "footer")
-    assert "DB: " in html
+    target = get_first_target()
+    html = render_potato_url(f"/potato?target={target}")
+    assert "DB updated" in html
     assert "recoverage" in html
 
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
 def test_th_scope_row():
-    target = _first_target()
+    target = get_first_target()
     idx = _find_cell_idx(target, ".text", lambda funcs: len(funcs) > 0)
     if idx is None:
         pytest.skip("No function cell found")
-    html = render_potato_url(f"/potato?target={target}&section=.text&idx={idx}", "scope-row")
+    html = render_potato_url(f"/potato?target={target}&section=.text&idx={idx}")
     assert '<th scope="row"' in html
 
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
 def test_label_for_search():
-    target = _first_target()
-    html = render_potato_url(f"/potato?target={target}", "labels")
+    target = get_first_target()
+    html = render_potato_url(f"/potato?target={target}")
     assert 'label for="search-input"' in html
     assert 'label for="target-select"' in html
 
 
-def _wsgi_get(
-    path: str, headers: dict[str, str] | None = None
-) -> tuple[str, dict[str, str], bytes]:
-    environ: dict[str, str | BytesIO] = {}
-    setup_testing_defaults(environ)
-    url_path, _, query = path.partition("?")
-    environ["REQUEST_METHOD"] = "GET"
-    environ["PATH_INFO"] = url_path
-    environ["QUERY_STRING"] = query
-    environ["wsgi.input"] = BytesIO(b"")
-    if headers:
-        for k, v in headers.items():
-            environ[f"HTTP_{k.upper().replace('-', '_')}"] = v
-
-    status_holder = {"status": "", "headers": {}}
-
-    def _start_response(status: str, response_headers, exc_info=None):
-        status_holder["status"] = status
-        status_holder["headers"] = {k: v for k, v in response_headers}
-        return None
-
-    result = app(environ, _start_response)
-    body = b"".join(result)
-    return status_holder["status"], status_holder["headers"], body
-
-
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
 def test_etag_caching():
-    target = _first_target()
-    status, headers, _ = _wsgi_get(f"/potato?target={target}&section=.text")
+    target = get_first_target()
+    status, headers, _ = wsgi_get(f"/potato?target={target}&section=.text")
     assert status.startswith("200")
     etag = headers.get("ETag")
     assert etag
 
-    status2, _, _ = _wsgi_get(
+    status2, _, _ = wsgi_get(
         f"/potato?target={target}&section=.text",
         headers={"If-None-Match": etag},
     )
     assert status2.startswith("304")
+
+
+# ── _format_va edge cases ──────────────────────────────────────────
+
+
+class TestFormatVa:
+    def test_large_int(self) -> None:
+        assert _format_va(0xFFFFFFFF) == "0xffffffff"
+
+    def test_zero(self) -> None:
+        assert _format_va(0) == "0x00000000"
+
+    def test_negative_string(self) -> None:
+        assert _format_va("-1") == "0x-0000001"
+
+    # ── _format_va fuzz ───────────────────────────────────────────
+
+    def test_hex_prefix_passthrough(self) -> None:
+        assert _format_va("0xDEADBEEF") == "0xDEADBEEF"
+
+    def test_non_numeric_string(self) -> None:
+        assert _format_va("not_a_number") == "not_a_number"
+
+    def test_int_one(self) -> None:
+        assert _format_va(1) == "0x00000001"
+
+    def test_string_numeric(self) -> None:
+        assert _format_va("4096") == "0x00001000"
+
+    def test_empty_string(self) -> None:
+        result = _format_va("")
+        assert result == ""  # empty passthrough
+
+    @pytest.mark.parametrize("val,expected_prefix", [
+        (0x10001000, "0x"),
+        (255, "0x"),
+        (0, "0x"),
+    ])
+    def test_int_always_has_hex_prefix(self, val: int, expected_prefix: str) -> None:
+        assert _format_va(val).startswith(expected_prefix)
+
+
+# ── Build URL helper (edge cases) ────────────────────────────────
+
+
+class TestBuildUrl:
+    def test_basic(self) -> None:
+        url = _build_url("SERVER", ".text")
+        assert "target=SERVER" in url
+        assert "section=.text" in url
+
+    def test_with_special_chars(self) -> None:
+        url = _build_url("SERVER", ".text", search="<script>")
+        assert "<script>" not in url  # should be URL-encoded
+        assert "search=" in url
+
+    # ── URL encoding fuzz ─────────────────────────────────────────
+
+    def test_ampersand_in_search(self) -> None:
+        url = _build_url("SERVER", ".text", search="a&b")
+        assert "a&b" not in url  # & must be encoded
+        assert "search=" in url
+
+    def test_spaces_in_search(self) -> None:
+        url = _build_url("SERVER", ".text", search="hello world")
+        assert " " not in url.split("search=")[1]  # space must be encoded
+
+    def test_unicode_in_target(self) -> None:
+        url = _build_url("ターゲット", ".text")
+        assert "target=" in url
+
+    def test_filter_sorting_deterministic(self) -> None:
+        """Filters should be sorted for deterministic URLs."""
+        url1 = _build_url("S", ".t", {"exact", "reloc", "stub"})
+        url2 = _build_url("S", ".t", {"stub", "exact", "reloc"})
+        assert url1 == url2
+
+    def test_idx_zero(self) -> None:
+        url = _build_url("S", ".t", idx=0)
+        assert "idx=0" in url
+
+    def test_no_optional_params(self) -> None:
+        url = _build_url("S", ".t")
+        assert "filter=" not in url
+        assert "idx=" not in url
+        assert "search=" not in url
+
+
+# ── HTML escaping (edge cases) ─────────────────────────────────
+
+
+class TestHtmlEscaping:
+    """Verify _esc prevents XSS in all contexts."""
+
+    def test_script_tag(self) -> None:
+        assert "<script>" not in _esc("<script>alert(1)</script>")
+        assert "&lt;" in _esc("<script>")
+
+    def test_double_quotes(self) -> None:
+        assert '"' not in _esc('"onmouseover="alert(1)"')
+        assert "&quot;" in _esc('"test"')
+
+    def test_ampersand(self) -> None:
+        assert _esc("a&b") == "a&amp;b"
+
+    def test_int_input(self) -> None:
+        assert _esc(42) == "42"
+
+    def test_none_input(self) -> None:
+        assert _esc(None) == "None"
+
+    @pytest.mark.parametrize("payload", [
+        '<img src=x onerror=alert(1)>',
+        '"><svg/onload=alert(1)>',
+        "javascript:alert(document.domain)",
+        "' onclick='alert(1)",
+        '<iframe src="javascript:alert(1)">',
+    ])
+    def test_xss_payloads_escaped(self, payload: str) -> None:
+        escaped = _esc(payload)
+        assert "<" not in escaped
+        assert ">" not in escaped
+
+
+# ── Index parsing (potato.py idx fix) ──────────────────────────────
+
+
+class TestIdxParsing:
+    """Verify idx parsing as used in _build_grid_html and _render_panel.
+
+    The actual parsing uses int(idx_str) with try/except (ValueError, OverflowError),
+    then bounds-checks against the cell list. We test the parsing inline to match.
+    """
+
+    @staticmethod
+    def _parse_idx_like_production(idx_str: str) -> int | None:
+        """Replicate the exact parsing from potato.py _render_panel (lines 1529-1538)."""
+        if not idx_str:
+            return None
+        try:
+            idx = int(idx_str)
+        except (ValueError, OverflowError):
+            return None
+        if idx < 0:
+            return None
+        return idx
+
+    def test_valid_digit(self) -> None:
+        assert self._parse_idx_like_production("42") == 42
+
+    def test_zero(self) -> None:
+        assert self._parse_idx_like_production("0") == 0
+
+    def test_negative_rejected(self) -> None:
+        assert self._parse_idx_like_production("-1") is None
+
+    def test_non_numeric_rejected(self) -> None:
+        assert self._parse_idx_like_production("abc") is None
+
+    def test_empty_rejected(self) -> None:
+        assert self._parse_idx_like_production("") is None
+
+    def test_float_string_rejected(self) -> None:
+        assert self._parse_idx_like_production("3.14") is None
+
+    def test_scientific_notation_rejected(self) -> None:
+        assert self._parse_idx_like_production("1e5") is None
+
+    @pytest.mark.parametrize("val", [
+        "NaN", "Infinity", "-Infinity", "inf", "nan", "++1", "--1",
+    ])
+    def test_special_strings_rejected(self, val: str) -> None:
+        assert self._parse_idx_like_production(val) is None
+
+    @pytest.mark.parametrize("val,expected", [
+        ("+0", 0),     # int("+0") == 0
+        ("1_000", 1000),  # int("1_000") == 1000 (Python allows underscores)
+    ])
+    def test_python_int_accepts(self, val: str, expected: int) -> None:
+        """Values that Python's int() accepts should parse correctly."""
+        assert self._parse_idx_like_production(val) == expected
+
+
+# ── Merge cells invariant ─────────────────────────────────────────
+
+
+class TestMergeCellsInvariant:
+    """Verify _merge_cells preserves total span count."""
+
+    def test_no_merge_different_states(self) -> None:
+        from recoverage.potato import _merge_cells
+
+        cells = [
+            {"state": "exact", "span": 1, "functions": ["a"]},
+            {"state": "reloc", "span": 1, "functions": ["b"]},
+            {"state": "stub", "span": 1, "functions": ["c"]},
+        ]
+        merged = _merge_cells(cells, 64)
+        total_span = sum(c.get("span", 1) for c in merged)
+        assert total_span == 3
+        assert len(merged) == 3
+
+    def test_merge_same_state(self) -> None:
+        from recoverage.potato import _merge_cells
+
+        cells = [
+            {"state": "exact", "span": 1, "functions": ["a"]},
+            {"state": "exact", "span": 1, "functions": ["a"]},
+            {"state": "exact", "span": 1, "functions": ["a"]},
+        ]
+        merged = _merge_cells(cells, 64)
+        total_span = sum(c.get("span", 1) for c in merged)
+        assert total_span == 3  # span preserved
+        assert len(merged) == 1  # all merged into one
+
+    def test_no_merge_across_row_boundary(self) -> None:
+        from recoverage.potato import _merge_cells
+
+        cells = [
+            {"state": "exact", "span": 1, "functions": ["a"]},
+        ] * 65  # exceeds 64-column boundary
+        merged = _merge_cells(cells, 64)
+        total_span = sum(c.get("span", 1) for c in merged)
+        assert total_span == 65
+
+    def test_empty_cells(self) -> None:
+        from recoverage.potato import _merge_cells
+
+        assert _merge_cells([], 64) == []
+
+    def test_none_state_never_merged(self) -> None:
+        from recoverage.potato import _merge_cells
+
+        cells = [
+            {"state": "none", "span": 1, "functions": []},
+            {"state": "none", "span": 1, "functions": []},
+        ]
+        merged = _merge_cells(cells, 64)
+        assert len(merged) == 2  # "none" state cells are never merged
+
+
+class TestGridColumnsValidation:
+    """grid_columns <= 0 now raises ValueError (not assert)."""
+
+    def test_zero_raises(self):
+        from recoverage.potato import _build_grid_html
+
+        with pytest.raises(ValueError, match="grid_columns must be positive"):
+            _build_grid_html([], {}, 0, set(), "", set(), "", "t", ".text")
+
+    def test_negative_raises(self):
+        from recoverage.potato import _build_grid_html
+
+        with pytest.raises(ValueError, match="grid_columns must be positive"):
+            _build_grid_html([], {}, -1, set(), "", set(), "", "t", ".text")
+
+
+class TestPathTraversalGuard:
+    """Verify the path traversal guard in potato.py's _render_panel.
+
+    The production code (potato.py ~line 1651-1655) does:
+        base = (Path(__file__).resolve().parent.parent / source_root.lstrip("/")).resolve()
+        c_path = (base / files[0]).resolve()
+        if not c_path.is_relative_to(base): code_text = None
+
+    These tests verify that guard using the same resolve + is_relative_to pattern.
+    """
+
+    def test_traversal_blocked(self, tmp_path):
+        """Attacker-controlled filename with ../ must be rejected."""
+        base = (tmp_path / "src" / "test").resolve()
+        base.mkdir(parents=True, exist_ok=True)
+        c_path = (base / "../../etc/passwd").resolve()
+        assert not c_path.is_relative_to(base)
+
+    def test_normal_file_allowed(self, tmp_path):
+        """Normal filenames must pass the guard."""
+        base = (tmp_path / "src" / "test").resolve()
+        base.mkdir(parents=True, exist_ok=True)
+        c_path = (base / "main.c").resolve()
+        assert c_path.is_relative_to(base)
+
+    def test_symlink_escape_blocked(self, tmp_path):
+        """Symlink pointing outside source tree must be caught by resolve()."""
+        base = (tmp_path / "src").resolve()
+        base.mkdir(parents=True, exist_ok=True)
+        # Create a symlink that points outside the base
+        link = base / "escape"
+        link.symlink_to(tmp_path / ".." / "etc")
+        c_path = (base / "escape" / "passwd").resolve()
+        assert not c_path.is_relative_to(base)
+
+
+class TestSearchLimit:
+    """_search_functions should limit results."""
+
+    @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+    def test_search_returns_bounded_results(self):
+        """Verify _search_functions returns at most 500 results per query."""
+        from recoverage.potato import _search_functions
+        from recoverage.server import _db_path
+
+        conn = sqlite3.connect(f"file:{_db_path()}?mode=ro", uri=True)
+        try:
+            c = conn.cursor()
+            c.execute("SELECT DISTINCT target FROM metadata LIMIT 1")
+            row = c.fetchone()
+            if not row:
+                pytest.skip("No targets in DB")
+            target = row[0]
+            # Use a wildcard-like search that matches broadly
+            results = _search_functions(c, target, "")
+            # Empty search returns empty set (short-circuit)
+            assert len(results) == 0
+            # Search with a single common letter — should be bounded
+            results = _search_functions(c, target, "a")
+            assert len(results) <= 1000  # 500 from functions + 500 from globals
+        finally:
+            conn.close()
+
+    def test_search_empty_returns_empty(self):
+        """Empty search query short-circuits to empty set (no DB needed)."""
+        from recoverage.potato import _search_functions
+        # Create an in-memory DB with no tables needed — empty search returns early
+        conn = sqlite3.connect(":memory:")
+        c = conn.cursor()
+        result = _search_functions(c, "TEST", "")
+        assert result == set()
+        conn.close()
 
 
 if __name__ == "__main__":

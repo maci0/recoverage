@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import contextlib
+import enum
 import json
+import logging
 import sqlite3
 import subprocess
 import threading
@@ -31,7 +33,34 @@ app = typer.Typer(
 )
 
 
+def _version_callback(value: bool) -> None:
+    if value:
+        from importlib.metadata import version
+
+        typer.echo(f"recoverage {version('recoverage')}")
+        raise typer.Exit()
+
+
+@app.callback()
+def _app_callback(
+    version: bool = typer.Option(
+        False,
+        "--version",
+        "-V",
+        help="Show version and exit.",
+        callback=_version_callback,
+        is_eager=True,
+    ),
+) -> None:
+    pass
+
+
 # ── Helpers ────────────────────────────────────────────────────────
+
+class ExportFormat(enum.StrEnum):
+    json = "json"
+    csv = "csv"
+    md = "md"
 
 
 def _db_path() -> Path:
@@ -50,7 +79,7 @@ def _open_db(db_path: Path | None = None) -> sqlite3.Connection:
 
 def _list_targets(conn: sqlite3.Connection) -> list[str]:
     c = conn.cursor()
-    c.execute("SELECT DISTINCT target FROM metadata")
+    c.execute("SELECT DISTINCT target FROM metadata ORDER BY target")
     return [row[0] for row in c.fetchall()]
 
 
@@ -62,14 +91,18 @@ def _get_stats(conn: sqlite3.Connection, target: str) -> dict[str, Any]:
     c.execute("SELECT value FROM metadata WHERE target = ? AND key = 'summary'", (target,))
     row = c.fetchone()
     if row:
-        with contextlib.suppress(json.JSONDecodeError, TypeError):
+        try:
             summary = json.loads(row[0])
+        except (json.JSONDecodeError, TypeError):
+            logging.getLogger("recoverage").warning(
+                "Corrupt summary metadata for target %s", target
+            )
 
     # Per-section stats
     sections: dict[str, dict[str, Any]] = {}
     c.execute(
         "SELECT section_name, total_cells, exact_count, reloc_count, "
-        "matching_count, stub_count, data_count, thunk_count FROM section_cell_stats WHERE target = ?",
+        "near_match_count, stub_count, data_count, thunk_count FROM section_cell_stats WHERE target = ?",
         (target,),
     )
     for row in c.fetchall():
@@ -79,7 +112,7 @@ def _get_stats(conn: sqlite3.Connection, target: str) -> dict[str, Any]:
             "total_cells": total,
             "exact": row["exact_count"],
             "reloc": row["reloc_count"],
-            "matching": row["matching_count"],
+            "near_match": row["near_match_count"],
             "stub": row["stub_count"],
             "data": row["data_count"],
             "thunk": row["thunk_count"],
@@ -105,12 +138,40 @@ def _get_stats(conn: sqlite3.Connection, target: str) -> dict[str, Any]:
     return {"target": target, "summary": summary, "sections": sections, "by_status": by_status}
 
 
+def _run_regen(root: Path) -> None:
+    """Run rebrew catalog + build-db to regenerate coverage.db."""
+    from recoverage.server import REGEN_TIMEOUT  # noqa: PLC0415
+
+    for step in ("catalog", "build-db"):
+        cmd = ["uv", "run", "rebrew", step]
+        typer.echo(f"Running rebrew {step}...")
+        try:
+            subprocess.check_call(cmd, cwd=str(root), timeout=REGEN_TIMEOUT)
+        except FileNotFoundError:
+            typer.secho("Error: 'uv' not found — is it installed?", fg=typer.colors.RED, err=True)
+            raise typer.Exit(1) from None
+        except subprocess.CalledProcessError as e:
+            typer.secho(
+                f"Error: 'rebrew {step}' failed (exit code {e.returncode})",
+                fg=typer.colors.RED,
+                err=True,
+            )
+            raise typer.Exit(1) from None
+        except subprocess.TimeoutExpired:
+            typer.secho(
+                f"Error: 'rebrew {step}' timed out after {REGEN_TIMEOUT}s",
+                fg=typer.colors.RED,
+                err=True,
+            )
+            raise typer.Exit(1) from None
+
+
 # ── Commands ───────────────────────────────────────────────────────
 
 
 @app.command()
 def serve(
-    port: int = typer.Option(8001, help="Port to serve on"),
+    port: int = typer.Option(8001, "--port", "-p", help="Port to serve on"),
     no_open: bool = typer.Option(False, "--no-open", help="Don't open browser automatically"),
     regen: bool = typer.Option(False, "--regen", help="Regenerate DB before starting"),
     cors: bool = typer.Option(False, "--cors", help="Enable CORS headers for cross-origin access"),
@@ -129,6 +190,14 @@ def serve(
         app as bottle_app,
     )
 
+    # Configure logging — show INFO+ by default so operational messages are visible
+    logging.basicConfig(
+        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+        datefmt="%H:%M:%S",
+        level=logging.INFO,
+    )
+    _log = logging.getLogger("recoverage")
+
     if cors:
         _server.CORS_ENABLED = True
 
@@ -137,16 +206,16 @@ def serve(
     url = f"http://127.0.0.1:{port}"
 
     if regen:
-        typer.echo("Regenerating coverage data...")
-        subprocess.check_call(["uv", "run", "rebrew", "catalog"], cwd=str(root), timeout=60)
-        subprocess.check_call(["uv", "run", "rebrew", "build-db"], cwd=str(root), timeout=60)
+        _run_regen(root)
+
+    _log.info("Starting recoverage server on %s (port=%d, cors=%s)", url, port, cors)
 
     typer.echo(f"Serving coverage dashboard at {url}")
     typer.echo(f"  Assets: {assets}")
     typer.echo(f"  DB: {server_db_path()}")
     if cors:
         typer.echo("  CORS: enabled")
-    typer.echo("  Regen: POST /regen or click Reload in UI")
+    typer.echo("  Regen: POST /api/regen or click Reload in UI")
     typer.echo("  Stop: Ctrl+C")
 
     if not no_open:
@@ -200,7 +269,7 @@ def stats(
                     str(sec["total_cells"]),
                     str(sec["exact"]),
                     str(sec["reloc"]),
-                    str(sec["matching"]),
+                    str(sec["near_match"]),
                     str(sec["stub"]),
                     f"{sec['coverage_pct']:.1f}%",
                 )
@@ -210,7 +279,9 @@ def stats(
 
 @app.command()
 def export(
-    format: str = typer.Option("json", "--format", "-f", help="Output format: json, csv, md"),
+    output_format: ExportFormat = typer.Option(  # noqa: B008
+        ExportFormat.json, "--format", "-f", help="Output format"
+    ),
     target: str | None = typer.Option(None, "--target", "-t", help="Target ID (default: all)"),
 ) -> None:
     """Export coverage data to stdout."""
@@ -223,20 +294,44 @@ def export(
 
         all_data = [_get_stats(conn, tid) for tid in targets]
 
-    if format == "json":
+    if output_format == ExportFormat.json:
         typer.echo(json.dumps(all_data, indent=2))
 
-    elif format == "csv":
-        typer.echo("target,section,size_bytes,total_cells,exact,reloc,matching,stub,coverage_pct")
+    elif output_format == ExportFormat.csv:
+        import csv  # noqa: PLC0415
+        import sys  # noqa: PLC0415
+
+        writer = csv.writer(sys.stdout)
+        writer.writerow(
+            [
+                "target",
+                "section",
+                "size_bytes",
+                "total_cells",
+                "exact",
+                "reloc",
+                "near_match",
+                "stub",
+                "coverage_pct",
+            ]
+        )
         for data in all_data:
             for sec_name, sec in sorted(data["sections"].items()):
-                typer.echo(
-                    f"{data['target']},{sec_name},{sec.get('size_bytes', 0)},"
-                    f"{sec['total_cells']},{sec['exact']},{sec['reloc']},"
-                    f"{sec['matching']},{sec['stub']},{sec['coverage_pct']}"
+                writer.writerow(
+                    [
+                        data["target"],
+                        sec_name,
+                        sec.get("size_bytes", 0),
+                        sec["total_cells"],
+                        sec["exact"],
+                        sec["reloc"],
+                        sec["near_match"],
+                        sec["stub"],
+                        sec["coverage_pct"],
+                    ]
                 )
 
-    elif format == "md":
+    elif output_format == ExportFormat.md:
         for data in all_data:
             typer.echo(f"\n## {data['target']}\n")
             typer.echo("| Section | Size | Cells | Exact | Reloc | Match | Stub | Coverage |")
@@ -244,19 +339,14 @@ def export(
             for sec_name, sec in sorted(data["sections"].items()):
                 typer.echo(
                     f"| {sec_name} | {sec.get('size_bytes', 0):,} B | {sec['total_cells']} "
-                    f"| {sec['exact']} | {sec['reloc']} | {sec['matching']} "
+                    f"| {sec['exact']} | {sec['reloc']} | {sec['near_match']} "
                     f"| {sec['stub']} | {sec['coverage_pct']:.1f}% |"
                 )
-    else:
-        typer.secho(
-            f"Unknown format: {format}. Use json, csv, or md.", fg=typer.colors.RED, err=True
-        )
-        raise typer.Exit(1)
 
 
 @app.command()
 def check(
-    min_coverage: float = typer.Option(..., "--min-coverage", help="Minimum coverage percentage"),
+    min_coverage: float = typer.Option(..., "--min-coverage", "-m", help="Minimum coverage percentage"),
     target: str | None = typer.Option(None, "--target", "-t", help="Target ID (default: all)"),
     section: str | None = typer.Option(None, "--section", "-s", help="Section name (default: all)"),
 ) -> None:
@@ -269,6 +359,7 @@ def check(
             raise typer.Exit(1)
 
         failed = False
+        checked = 0
         for tid in targets:
             data = _get_stats(conn, tid)
             sections_to_check = data["sections"]
@@ -283,6 +374,7 @@ def check(
                 sections_to_check = {section: sections_to_check[section]}
 
             for sec_name, sec in sorted(sections_to_check.items()):
+                checked += 1
                 pct = sec["coverage_pct"]
                 if pct < min_coverage:
                     typer.secho(
@@ -296,6 +388,13 @@ def check(
                         fg=typer.colors.GREEN,
                     )
 
+    if not checked:
+        typer.secho(
+            "Error: no sections matched — nothing was checked.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(1)
     if failed:
         raise typer.Exit(1)
 
@@ -305,17 +404,13 @@ def regen() -> None:
     """Re-run rebrew catalog + build-db to regenerate coverage.db."""
     from recoverage.server import _project_dir
 
-    root = _project_dir()
-    typer.echo("Running rebrew catalog...")
-    subprocess.check_call(["uv", "run", "rebrew", "catalog"], cwd=str(root), timeout=120)
-    typer.echo("Running rebrew build-db...")
-    subprocess.check_call(["uv", "run", "rebrew", "build-db"], cwd=str(root), timeout=120)
+    _run_regen(_project_dir())
     typer.secho("Done — coverage.db regenerated.", fg=typer.colors.GREEN)
 
 
 @app.command("open")
 def open_cmd(
-    port: int = typer.Option(8001, help="Port of the running server"),
+    port: int = typer.Option(8001, "--port", "-p", help="Port of the running server"),
 ) -> None:
     """Open the dashboard in a browser."""
     from recoverage.server import open_browser

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import sqlite3
 import subprocess
 from pathlib import Path
@@ -20,6 +21,8 @@ from recoverage.server import (
     HTTPResponse,
     _db,
     _db_path,
+    _escape_like,
+    _get_capstone_md,
     _json_err,
     _json_ok,
     _load_dll,
@@ -32,15 +35,22 @@ from recoverage.server import (
     resolve_targets,
 )
 
+_log = logging.getLogger("recoverage")
+
 
 @app.get("/api/health")
 def handle_api_health() -> bytes:
     db = _db_path()
-    db_info: dict[str, Any] = {"path": str(db), "exists": db.exists()}
-    if db.exists():
+    db_info: dict[str, Any] = {"path": str(db), "exists": False}
+    status = "healthy"
+    try:
         stat = db.stat()
+        db_info["exists"] = True
         db_info["size_bytes"] = stat.st_size
         db_info["mtime"] = stat.st_mtime
+    except OSError:
+        _log.warning("Database file not accessible at %s", db)
+        status = "degraded"
     target_count = 0
     try:
         with contextlib.closing(_open_db(db)) as conn:
@@ -48,9 +58,11 @@ def handle_api_health() -> bytes:
             c.execute("SELECT COUNT(DISTINCT target) FROM metadata")
             target_count = c.fetchone()[0]
     except sqlite3.Error:
-        pass
+        _log.warning("Failed to query target count from database")
+        status = "degraded"
     return _json_ok(
         {
+            "status": status,
             "version": __version__,
             "db": db_info,
             "extras": {
@@ -58,7 +70,8 @@ def handle_api_health() -> bytes:
             },
             "targets_count": target_count,
             "cors": _server.CORS_ENABLED,
-        }
+        },
+        Cache_Control="no-cache, no-store, must-revalidate",
     )
 
 
@@ -69,6 +82,7 @@ def handle_api_targets() -> bytes:
             c = conn.cursor()
             _, targets_list = resolve_targets(c)
     except sqlite3.OperationalError:
+        _log.warning("Database unavailable, falling back to config-only target list")
         targets_list = []
         for tid, t_info in _server._get_targets_config().items():
             filename = t_info.get("filename", tid) if isinstance(t_info, dict) else tid
@@ -95,14 +109,16 @@ def handle_api_stats(target: str) -> bytes | Any:
         c.execute("SELECT value FROM metadata WHERE target = ? AND key = 'summary'", (target,))
         row = c.fetchone()
         if row:
-            with contextlib.suppress(json.JSONDecodeError, TypeError):
+            try:
                 summary = json.loads(row[0])
+            except (json.JSONDecodeError, TypeError):
+                _log.warning("Corrupt summary metadata for target %s", target)
 
         # Per-section stats from the view
         sections: dict[str, Any] = {}
         c.execute(
             "SELECT section_name, total_cells, exact_count, reloc_count, "
-            "matching_count, stub_count, data_count, thunk_count FROM section_cell_stats WHERE target = ?",
+            "near_match_count, stub_count, data_count, thunk_count FROM section_cell_stats WHERE target = ?",
             (target,),
         )
         for row in c.fetchall():
@@ -112,7 +128,7 @@ def handle_api_stats(target: str) -> bytes | Any:
                 "total_cells": total,
                 "exact": row["exact_count"],
                 "reloc": row["reloc_count"],
-                "matching": row["matching_count"],
+                "near_match": row["near_match_count"],
                 "stub": row["stub_count"],
                 "data": row["data_count"],
                 "thunk": row["thunk_count"],
@@ -142,7 +158,8 @@ def handle_api_stats(target: str) -> bytes | Any:
                 "summary": summary,
                 "sections": sections,
                 "functions_by_status": by_status,
-            }
+            },
+            Cache_Control="no-cache, no-store, must-revalidate",
         )
 
 
@@ -237,22 +254,22 @@ def handle_api_data(target: str) -> bytes | Any:
         if section_filter:
             c.execute(
                 "SELECT section_name, total_cells, exact_count, reloc_count, "
-                "matching_count, stub_count, data_count, thunk_count FROM section_cell_stats "
+                "near_match_count, stub_count, data_count, thunk_count FROM section_cell_stats "
                 "WHERE target = ? AND section_name = ?",
                 (target, section_filter),
             )
         else:
             c.execute(
                 "SELECT section_name, total_cells, exact_count, reloc_count, "
-                "matching_count, stub_count, data_count, thunk_count FROM section_cell_stats WHERE target = ?",
+                "near_match_count, stub_count, data_count, thunk_count FROM section_cell_stats WHERE target = ?",
                 (target,),
             )
         for row in c.fetchall():
             data["section_cell_stats"][row["section_name"]] = {
-                "total": row["total_cells"],
+                "total_cells": row["total_cells"],
                 "exact": row["exact_count"],
                 "reloc": row["reloc_count"],
-                "matching": row["matching_count"],
+                "near_match": row["near_match_count"],
                 "stub": row["stub_count"],
                 "data": row["data_count"],
                 "thunk": row["thunk_count"],
@@ -280,7 +297,7 @@ def handle_api_functions_list(target: str) -> bytes | Any:
 
     # SAFETY: sort_field is whitelisted to allowed_sort (no user strings reach SQL).
     # sort_dir is validated to "ASC"/"DESC" only. ORDER BY cannot use parameterized queries.
-    allowed_sort = {"va", "name", "size", "status", "symbol", "origin"}
+    allowed_sort = {"va", "name", "size", "status", "symbol", "module"}
     sort_field = "va"
     sort_dir = "ASC"
     if ":" in sort_param:
@@ -306,19 +323,23 @@ def handle_api_functions_list(target: str) -> bytes | Any:
             where.append("status = ?")
             params.append(status_filter)
         if search:
-            where.append("(name LIKE ? OR symbol LIKE ? OR CAST(va AS TEXT) LIKE ?)")
-            like = f"%{search}%"
+            where.append(
+                "(name LIKE ? ESCAPE '\\' OR symbol LIKE ? ESCAPE '\\'"
+                " OR CAST(va AS TEXT) LIKE ? ESCAPE '\\')"
+            )
+            like = _escape_like(search)
             params.extend([like, like, like])
 
         where_sql = " AND ".join(where)
 
-        # Total count
+        # SAFETY: where_sql is constructed from whitelisted column names + parameterized values.
+        # sort_field is constrained to allowed_sort set, sort_dir to "ASC"/"DESC" literals.
+        # No user-supplied strings reach the SQL statement unparameterized.
         c.execute(f"SELECT COUNT(*) FROM functions WHERE {where_sql}", params)
         total = c.fetchone()[0]
 
-        # Fetch page
         c.execute(
-            f"SELECT va, name, vaStart, size, status, origin, symbol, markerType "
+            f"SELECT va, name, vaStart, size, status, module, symbol, markerType "
             f"FROM functions WHERE {where_sql} "
             f"ORDER BY {sort_field} {sort_dir} LIMIT ? OFFSET ?",
             params + [limit, offset],
@@ -332,7 +353,7 @@ def handle_api_functions_list(target: str) -> bytes | Any:
                     "vaStart": row["vaStart"],
                     "size": row["size"],
                     "status": row["status"],
-                    "origin": row["origin"],
+                    "module": row["module"],
                     "symbol": row["symbol"],
                     "markerType": row["markerType"],
                 }
@@ -345,7 +366,8 @@ def handle_api_functions_list(target: str) -> bytes | Any:
                 "limit": limit,
                 "offset": offset,
                 "functions": items,
-            }
+            },
+            Cache_Control="no-cache, no-store, must-revalidate",
         )
 
 
@@ -445,6 +467,8 @@ def handle_api_asm(target: str) -> bytes | Any:
         file_offset = sec["fileOffset"] + (va - sec["va"])
         if file_offset < 0:
             return _json_err(400, {"error": "va is before section start"})
+        if va >= sec["va"] + sec["size"]:
+            return _json_err(400, {"error": "va is beyond section end"})
 
         if fmt == "json":
             # Structured JSON output
@@ -453,12 +477,9 @@ def handle_api_asm(target: str) -> bytes | Any:
                 return _json_err(404, {"error": "DLL not found"})
             code_bytes = target_data[file_offset : file_offset + size]
             if len(code_bytes) < size:
-                return _json_err(404, {"error": "not enough bytes in DLL"})
+                return _json_err(422, {"error": "not enough bytes in DLL"})
 
-            import capstone as _capstone  # type: ignore # noqa: PLC0415
-
-            md = _capstone.Cs(_capstone.CS_ARCH_X86, _capstone.CS_MODE_32)
-            md.detail = False
+            md = _get_capstone_md()
             instructions: list[dict[str, Any]] = []
             for insn in md.disasm(code_bytes, va):
                 instructions.append(
@@ -477,7 +498,7 @@ def handle_api_asm(target: str) -> bytes | Any:
         # Default: plain text
         asm_text = get_disassembly(va, size, file_offset, target)
         if not asm_text:
-            return _json_err(404, {"error": "not enough bytes in DLL"})
+            return _json_err(422, {"error": "not enough bytes in DLL"})
 
         return _json_ok({"asm": asm_text}, Cache_Control="public, max-age=31536000")
 
@@ -513,6 +534,8 @@ def handle_api_bytes(target: str, section: str) -> bytes | Any:
             return _json_err(404, {"error": f"section {section} not found"})
 
         sec = dict(row)
+        if req_offset >= sec["size"]:
+            return _json_err(400, {"error": "offset beyond section bounds"})
         target_data = _load_dll(target)
         if target_data is None:
             return _json_err(404, {"error": "DLL not found for target"})
@@ -542,17 +565,22 @@ def handle_api_bytes(target: str, section: str) -> bytes | Any:
         )
 
 
-@app.post("/regen")
+@app.post("/api/regen")
 def handle_regen() -> bytes | Any:
     from recoverage.ui import clear_index_cache  # noqa: PLC0415
 
     remote = request.environ.get("REMOTE_ADDR", "")
     if remote not in ("127.0.0.1", "::1", "localhost"):
-        return _json_err(403, {"ok": False, "error": "Forbidden: localhost only"})
+        return _json_err(403, {"error": "Forbidden: localhost only"})
 
     origin = request.headers.get("Origin", "")
-    if origin and not origin.startswith(("http://127.0.0.1", "http://localhost")):
-        return _json_err(403, {"ok": False, "error": "Forbidden: cross-origin"})
+    if origin:
+        from urllib.parse import urlparse as _urlparse  # noqa: PLC0415
+
+        parsed_origin = _urlparse(origin)
+        origin_host = parsed_origin.hostname or ""
+        if origin_host not in ("127.0.0.1", "localhost", "::1"):
+            return _json_err(403, {"error": "Forbidden: cross-origin"})
 
     clear_index_cache()
     clear_target_cache()
@@ -563,19 +591,23 @@ def handle_regen() -> bytes | Any:
     get_disassembly.cache_clear()
 
     root = _project_dir()
+    _log.info("Regen started from %s", remote)
     try:
         subprocess.check_call(
             ["uv", "run", "rebrew", "catalog"],
             cwd=str(root),
-            timeout=60,
+            timeout=_server.REGEN_TIMEOUT,
         )
         subprocess.check_call(
             ["uv", "run", "rebrew", "build-db"],
             cwd=str(root),
-            timeout=60,
+            timeout=_server.REGEN_TIMEOUT,
         )
+        _log.info("Regen completed successfully")
         return _json_ok({"ok": True})
     except subprocess.TimeoutExpired:
-        return _json_err(504, {"ok": False, "error": "Regen timed out"})
+        _log.error("Regen timed out after %ds", _server.REGEN_TIMEOUT)
+        return _json_err(504, {"error": "Regen timed out"})
     except subprocess.CalledProcessError as e:
-        return _json_err(500, {"ok": False, "code": e.returncode})
+        _log.error("Regen failed with exit code %d", e.returncode)
+        return _json_err(500, {"error": f"Regen failed (exit code {e.returncode})"})
