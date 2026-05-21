@@ -2,7 +2,10 @@
 """Recoverage server — coverage dashboard for binary-matching projects.
 
 Bottle WSGI app serving a VanJS + SQLite dashboard.
-Expects db/coverage.db in the working directory.
+Reads the coverage database from the path resolved by
+``recoverage._paths._resolve_db_path()``, which honours
+``rebrew-project.toml [project] db_dir`` when present and falls back to
+``./db/coverage.db`` otherwise.
 """
 
 from __future__ import annotations
@@ -60,8 +63,14 @@ def _project_dir() -> Path:
 
 
 def _db_path() -> Path:
-    """Return the path to the coverage database."""
-    return _project_dir() / "db" / "coverage.db"
+    """Return the path to the coverage database.
+
+    Delegates to ``_resolve_db_path()`` so that ``[project] db_dir`` in
+    ``rebrew-project.toml`` is honoured when present.
+    """
+    from recoverage._paths import _resolve_db_path
+
+    return _resolve_db_path()
 
 
 # ── DLL loading & disassembly ──────────────────────────────────────
@@ -311,6 +320,41 @@ _GLOBAL_JSON_SQL = (
 )
 
 
+_KNOWN_SCHEMA_VERSIONS: frozenset[str] = frozenset({"3", "4"})
+
+
+def _check_schema_version(conn: sqlite3.Connection) -> str:
+    """Read the stored db_version metadata; warn if it is not a known-compatible version.
+
+    Known-compatible versions: 3 and 4.  Version 3 is still readable because
+    none of the v4 constraints affect reads of existing data.  Any other version
+    is logged as a warning — recoverage does not abort.
+
+    Returns the version string (or ``"<unknown>"`` when not present / on error).
+    """
+    try:
+        row = conn.execute(
+            "SELECT value FROM metadata WHERE key = 'db_version' LIMIT 1"
+        ).fetchone()
+        if row is None:
+            return "<unknown>"
+        v = row[0]
+        if isinstance(v, str):
+            v = v.strip('"')
+        version = str(v)
+        if version not in _KNOWN_SCHEMA_VERSIONS:
+            _log.warning(
+                "recoverage: unexpected db_version %r (known: %s) — "
+                "some features may not work correctly",
+                version,
+                ", ".join(sorted(_KNOWN_SCHEMA_VERSIONS)),
+            )
+        return version
+    except sqlite3.Error as exc:
+        _log.warning("recoverage: could not read db_version: %s", exc)
+        return "<unknown>"
+
+
 def _open_db(db_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
@@ -318,7 +362,10 @@ def _open_db(db_path: Path) -> sqlite3.Connection:
 
 
 def _db() -> sqlite3.Connection:
-    return _open_db(_db_path())
+    conn = _open_db(_db_path())
+    version = _check_schema_version(conn)
+    _log.info("recoverage: opened coverage.db (schema v%s)", version)
+    return conn
 
 
 # ── Response helpers ───────────────────────────────────────────────

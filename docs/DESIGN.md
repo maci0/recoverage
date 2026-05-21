@@ -171,7 +171,16 @@ On function/global selection:
 
 ## Database Schema
 
-The database uses a v3 schema (see [DB_FORMAT.md](../../rebrew/docs/DB_FORMAT.md) for the canonical reference).
+The database uses a v4 schema (see [DB_FORMAT.md](../../rebrew/docs/DB_FORMAT.md) for the canonical reference).
+
+### Schema Compatibility
+
+| Schema version | Recoverage support |
+|---|---|
+| v3 | Readable — v4 adds CHECK constraints and view fixes that do not affect reads of v3 data |
+| v4 | Fully supported (current) |
+
+Recoverage performs a soft version check on every database open and logs a warning if the stored `db_version` is not one of the known-compatible versions (`3` or `4`). It never aborts on an unexpected version.
 
 ### Tables
 * `metadata`: Key-value pairs per target — coverage summaries, paths, `db_version` stamp

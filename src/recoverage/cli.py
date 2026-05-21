@@ -64,7 +64,14 @@ class ExportFormat(enum.StrEnum):
 
 
 def _db_path() -> Path:
-    return Path.cwd().resolve() / "db" / "coverage.db"
+    """Return the path to the coverage database.
+
+    Delegates to ``_resolve_db_path()`` so that ``[project] db_dir`` in
+    ``rebrew-project.toml`` is honoured when present.
+    """
+    from recoverage._paths import _resolve_db_path
+
+    return _resolve_db_path()
 
 
 def _open_db(db_path: Path | None = None) -> sqlite3.Connection:
