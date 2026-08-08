@@ -831,10 +831,13 @@ _PANEL_SRC = r"""
 <a href="{{next_url}}"><font size="1">Next &raquo;</font></a>
 % end
 </td></tr></table>
-<table width="100%" border="0" cellpadding="3" cellspacing="1" bgcolor="{{BORDER_COLOR}}"><tr><td bgcolor="{{PANEL_COLOR}}"><font size="1" color="{{MUTED_COLOR}}"><b>Range:</b></font></td><td bgcolor="{{PANEL_COLOR}}"><font face="Courier New, monospace" size="1">{{cell_range}}</font></td></tr><tr><td bgcolor="{{PANEL_COLOR}}"><font size="1" color="{{MUTED_COLOR}}"><b>State:</b></font></td><td bgcolor="{{PANEL_COLOR}}"><font face="Courier New, monospace" size="1" color="{{state_color}}"><b>{{state_upper}}</b></font></td></tr>% if cell_label:
-<tr><td bgcolor="{{PANEL_COLOR}}"><font size="1" color="{{MUTED_COLOR}}"><b>Label:</b></font></td><td bgcolor="{{PANEL_COLOR}}"><font face="Courier New, monospace" size="1">{{cell_label}}</font></td></tr>% end
+<table width="100%" border="0" cellpadding="3" cellspacing="1" bgcolor="{{BORDER_COLOR}}"><tr><td bgcolor="{{PANEL_COLOR}}"><font size="1" color="{{MUTED_COLOR}}"><b>Range:</b></font></td><td bgcolor="{{PANEL_COLOR}}"><font face="Courier New, monospace" size="1">{{cell_range}}</font></td></tr><tr><td bgcolor="{{PANEL_COLOR}}"><font size="1" color="{{MUTED_COLOR}}"><b>State:</b></font></td><td bgcolor="{{PANEL_COLOR}}"><font face="Courier New, monospace" size="1" color="{{state_color}}"><b>{{state_upper}}</b></font></td></tr>
+% if cell_label:
+<tr><td bgcolor="{{PANEL_COLOR}}"><font size="1" color="{{MUTED_COLOR}}"><b>Label:</b></font></td><td bgcolor="{{PANEL_COLOR}}"><font face="Courier New, monospace" size="1">{{cell_label}}</font></td></tr>
+% end
 % if parent_function:
-<tr><td bgcolor="{{PANEL_COLOR}}"><font size="1" color="{{MUTED_COLOR}}"><b>Parent:</b></font></td><td bgcolor="{{PANEL_COLOR}}"><font face="Courier New, monospace" size="1"><a href="?target={{target}}&section={{section}}&search={{parent_function}}"><font color="{{ACCENT_COLOR}}">{{parent_function}}</font></a></font></td></tr>% end
+<tr><td bgcolor="{{PANEL_COLOR}}"><font size="1" color="{{MUTED_COLOR}}"><b>Parent:</b></font></td><td bgcolor="{{PANEL_COLOR}}"><font face="Courier New, monospace" size="1"><a href="?target={{target}}&section={{section}}&search={{parent_function}}"><font color="{{ACCENT_COLOR}}">{{parent_function}}</font></a></font></td></tr>
+% end
 </table>
   % if not funcs:
 <font color="{{MUTED_COLOR}}"><i>No functions in this block.</i></font><br>
@@ -1601,7 +1604,17 @@ def _render_panel(
     ctx["fn_name"] = fn_name
 
     # ── Try functions table ──────────────────────────────────────
-    c.execute(
+    # Cell function entries are VA strings ("0x10001000"), matching the SPA's
+    # /functions/<va> route — parse hex and look up by va; fall back to name
+    # for legacy/name-form cells.
+    try:
+        fn_va = int(fn_name, 0)
+        is_numeric = True
+    except ValueError:
+        fn_va = 0
+        is_numeric = False
+
+    fn_sql = (
         "SELECT json_object("
         "'va', va, 'name', name, 'vaStart', vaStart, 'size', size, "
         "'fileOffset', fileOffset, 'status', status, 'module', module, "
@@ -1611,9 +1624,12 @@ def _render_panel(
         "'sha256', sha256, 'files', json(files), "
         "'blocker', blocker, 'blockerDelta', blockerDelta, "
         "'size_reason', size_reason, 'similarity', similarity"
-        ") FROM functions WHERE target=? AND name=?",
-        (target, fn_name),
+        ") FROM functions WHERE target=? AND "
     )
+    if is_numeric:
+        c.execute(fn_sql + "va=?", (target, fn_va))
+    else:
+        c.execute(fn_sql + "name=?", (target, fn_name))
     fn_row = c.fetchone()
 
     if fn_row:
@@ -1653,8 +1669,11 @@ def _render_panel(
         code_text = None
         if files:
             source_root = data.get("paths", {}).get("sourceRoot", f"/src/{target.lower()}")
-            # Prevent path traversal: resolve and verify the file stays inside the source tree
-            base = (Path(__file__).resolve().parent.parent / source_root.lstrip("/")).resolve()
+            # Prevent path traversal: resolve and verify the file stays inside
+            # the source tree.  Anchor at the PROJECT dir (cwd) — the old
+            # __file__-relative anchor resolved inside the recoverage package
+            # and silently failed every C-source load.
+            base = (Path.cwd().resolve() / source_root.lstrip("/")).resolve()
             c_path = (base / files[0]).resolve()
             if not c_path.is_relative_to(base):
                 code_text = None

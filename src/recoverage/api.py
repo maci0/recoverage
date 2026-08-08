@@ -149,10 +149,13 @@ def handle_api_stats(target: str) -> bytes | Any:
             if name in sections:
                 sections[name]["size_bytes"] = row["size"]
 
-        # Function counts by status
+        # Function counts by status.  GLOBAL/DATA marker rows live in the
+        # functions table but are data markers, not functions — exclude them
+        # to stay consistent with build_db's function_stats metadata.
         by_status: dict[str, int] = {}
         c.execute(
-            "SELECT status, COUNT(*) as cnt FROM functions WHERE target = ? GROUP BY status",
+            "SELECT status, COUNT(*) as cnt FROM functions"
+            " WHERE target = ? AND markerType NOT IN ('GLOBAL','DATA') GROUP BY status",
             (target,),
         )
         for row in c.fetchall():
@@ -322,19 +325,24 @@ def handle_api_functions_list(target: str) -> bytes | Any:
 
     with contextlib.closing(conn):
         c = conn.cursor()
-        where = ["target = ?"]
+        # Base filter: GLOBAL/DATA marker rows are data, not functions.
+        where = ["target = ? AND markerType NOT IN ('GLOBAL','DATA')"]
         params: list[Any] = [target]
 
         if status_filter:
             where.append("status = ?")
             params.append(status_filter)
         if search:
+            # vaStart (hex text) search keeps parity with Potato Mode, which
+            # matches hex addresses; CAST(va AS TEXT) alone only matches
+            # decimal spellings.
             where.append(
                 "(name LIKE ? ESCAPE '\\' OR symbol LIKE ? ESCAPE '\\'"
-                " OR CAST(va AS TEXT) LIKE ? ESCAPE '\\')"
+                " OR CAST(va AS TEXT) LIKE ? ESCAPE '\\'"
+                " OR vaStart LIKE ? ESCAPE '\\')"
             )
             like = _escape_like(search)
-            params.extend([like, like, like])
+            params.extend([like, like, like, like])
 
         where_sql = " AND ".join(where)
 
