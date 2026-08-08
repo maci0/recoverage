@@ -121,6 +121,7 @@ Start the dashboard web server.
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--port` | `8001` | HTTP port to serve on |
+| `--bind` | `127.0.0.1` | Interface to bind to (use `0.0.0.0` for LAN access) |
 | `--no-open` | off | Don't auto-open the browser |
 | `--regen` | off | Run `rebrew catalog` + `rebrew build-db` before starting |
 | `--cors` | off | Enable CORS headers for cross-origin API access |

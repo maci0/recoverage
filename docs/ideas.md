@@ -96,5 +96,7 @@ Replace per-request `sqlite3.connect()` calls with a thread-local connection poo
 ### `--bind` Flag
 Allow binding to a specific interface (default: `127.0.0.1`). Some users may want `0.0.0.0` for LAN access; the current hardcoded localhost is correct for security but inflexible.
 
-### Rate Limiting on `/api/regen`
-The 5-second cooldown exists in the frontend but not the backend. Add server-side rate limiting to prevent abuse via direct API calls.
+### ~~Rate Limiting on `/api/regen`~~ ✅ Implemented
+The 5-second cooldown now exists server-side too: `/api/regen` returns 429
+with `retry_after` when called within `_REGEN_COOLDOWN_SECONDS` of the last
+accepted attempt, so direct API calls cannot hammer `rebrew catalog`/`build-db`.

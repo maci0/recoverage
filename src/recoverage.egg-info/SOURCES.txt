@@ -3,6 +3,7 @@ README.md
 pyproject.toml
 src/recoverage/__init__.py
 src/recoverage/__main__.py
+src/recoverage/_paths.py
 src/recoverage/api.py
 src/recoverage/cli.py
 src/recoverage/potato.py
@@ -21,6 +22,7 @@ src/recoverage/assets/style.css
 src/recoverage/assets/van.min.js
 tests/test_api.py
 tests/test_cli.py
+tests/test_paths.py
 tests/test_playwright.py
 tests/test_potato.py
 tests/test_server.py

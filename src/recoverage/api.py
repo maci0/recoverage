@@ -7,6 +7,7 @@ import json
 import logging
 import sqlite3
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +37,11 @@ from recoverage.server import (
 )
 
 _log = logging.getLogger("recoverage")
+
+# Server-side regen cooldown (seconds): the UI throttles Reload clicks, but
+# direct API calls must not be able to trigger repeated rebrew catalog runs.
+_REGEN_COOLDOWN_SECONDS = 5.0
+_regen_last_attempt = 0.0  # time.monotonic() of the last accepted regen POST
 
 
 @app.get("/api/health")
@@ -567,6 +573,7 @@ def handle_api_bytes(target: str, section: str) -> bytes | Any:
 
 @app.post("/api/regen")
 def handle_regen() -> bytes | Any:
+    global _regen_last_attempt  # noqa: PLW0603
     from recoverage.ui import clear_index_cache  # noqa: PLC0415
 
     remote = request.environ.get("REMOTE_ADDR", "")
@@ -581,6 +588,20 @@ def handle_regen() -> bytes | Any:
         origin_host = parsed_origin.hostname or ""
         if origin_host not in ("127.0.0.1", "localhost", "::1"):
             return _json_err(403, {"error": "Forbidden: cross-origin"})
+
+    # Server-side cooldown: the frontend throttles Reload clicks, but direct
+    # API calls could hammer rebrew catalog/build-db (minutes of work each).
+    now = time.monotonic()
+    if now - _regen_last_attempt < _REGEN_COOLDOWN_SECONDS:
+        remaining = max(0, _REGEN_COOLDOWN_SECONDS - (now - _regen_last_attempt))
+        return _json_err(
+            429,
+            {
+                "error": "Rate limited: wait before regenerating again",
+                "retry_after": round(remaining, 1),
+            },
+        )
+    _regen_last_attempt = now
 
     clear_index_cache()
     clear_target_cache()

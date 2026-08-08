@@ -57,6 +57,7 @@ def _app_callback(
 
 # ── Helpers ────────────────────────────────────────────────────────
 
+
 class ExportFormat(enum.StrEnum):
     json = "json"
     csv = "csv"
@@ -179,6 +180,9 @@ def _run_regen(root: Path) -> None:
 @app.command()
 def serve(
     port: int = typer.Option(8001, "--port", "-p", help="Port to serve on"),
+    bind: str = typer.Option(
+        "127.0.0.1", "--bind", help="Interface to bind to (default: 127.0.0.1; use 0.0.0.0 for LAN)"
+    ),
     no_open: bool = typer.Option(False, "--no-open", help="Don't open browser automatically"),
     regen: bool = typer.Option(False, "--regen", help="Regenerate DB before starting"),
     cors: bool = typer.Option(False, "--cors", help="Enable CORS headers for cross-origin access"),
@@ -211,13 +215,17 @@ def serve(
     root = _project_dir()
     assets = _assets_dir()
     url = f"http://127.0.0.1:{port}"
+    # The browser always opens against loopback; --bind only controls the
+    # listening interface (e.g. 0.0.0.0 for LAN access to the dashboard).
+    listen_url = f"http://{bind}:{port}" if bind != "127.0.0.1" else url
 
     if regen:
         _run_regen(root)
 
-    _log.info("Starting recoverage server on %s (port=%d, cors=%s)", url, port, cors)
+    _log.info("Starting recoverage server on %s (port=%d, cors=%s)", listen_url, port, cors)
 
     typer.echo(f"Serving coverage dashboard at {url}")
+    typer.echo(f"  Listening on: {listen_url}")
     typer.echo(f"  Assets: {assets}")
     typer.echo(f"  DB: {server_db_path()}")
     if cors:
@@ -228,7 +236,7 @@ def serve(
     if not no_open:
         threading.Timer(0.5, open_browser, args=(url,)).start()
 
-    bottle_app.run(host="127.0.0.1", port=port, quiet=True, server="wsgiref")
+    bottle_app.run(host=bind, port=port, quiet=True, server="wsgiref")
 
 
 @app.command()
@@ -353,7 +361,9 @@ def export(
 
 @app.command()
 def check(
-    min_coverage: float = typer.Option(..., "--min-coverage", "-m", help="Minimum coverage percentage"),
+    min_coverage: float = typer.Option(
+        ..., "--min-coverage", "-m", help="Minimum coverage percentage"
+    ),
     target: str | None = typer.Option(None, "--target", "-t", help="Target ID (default: all)"),
     section: str | None = typer.Option(None, "--section", "-s", help="Section name (default: all)"),
 ) -> None:

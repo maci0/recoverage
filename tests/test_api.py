@@ -15,9 +15,7 @@ class TestRegenOriginValidation:
 
     def test_remote_addr_external_rejected(self) -> None:
         """Non-localhost REMOTE_ADDR should be rejected with 403."""
-        status, headers, body = wsgi_request(
-            "POST", "/api/regen", remote_addr="192.168.1.100"
-        )
+        status, headers, body = wsgi_request("POST", "/api/regen", remote_addr="192.168.1.100")
         assert status.startswith("403")
         data = json.loads(decode_body(body, headers))
         assert data["error"] == "Forbidden: localhost only"
@@ -65,9 +63,15 @@ class TestRegenOriginValidation:
         status, _, _ = wsgi_request("POST", "/api/regen", remote_addr="::1")
         assert not status.startswith("403")
 
-    @pytest.mark.parametrize("remote_addr", [
-        "10.0.0.1", "192.168.1.1", "0.0.0.0", "127.0.0.2",
-    ])
+    @pytest.mark.parametrize(
+        "remote_addr",
+        [
+            "10.0.0.1",
+            "192.168.1.1",
+            "0.0.0.0",
+            "127.0.0.2",
+        ],
+    )
     def test_non_loopback_remote_addrs_rejected(self, remote_addr: str) -> None:
         status, _, _ = wsgi_request("POST", "/api/regen", remote_addr=remote_addr)
         assert status.startswith("403")
@@ -136,18 +140,14 @@ class TestApiFunctions:
         if not target:
             pytest.skip("No targets in DB")
         # Should still return 200 — invalid sort falls back to default "va"
-        status, _, _ = wsgi_get(
-            f"/api/targets/{target}/functions?sort=DROP%20TABLE%20functions"
-        )
+        status, _, _ = wsgi_get(f"/api/targets/{target}/functions?sort=DROP%20TABLE%20functions")
         assert status.startswith("200")
 
     def test_pagination(self) -> None:
         target = get_first_target()
         if not target:
             pytest.skip("No targets in DB")
-        status, headers, body = wsgi_get(
-            f"/api/targets/{target}/functions?limit=5&offset=0"
-        )
+        status, headers, body = wsgi_get(f"/api/targets/{target}/functions?limit=5&offset=0")
         assert status.startswith("200")
         data = json.loads(decode_body(body, headers))
         assert data["limit"] == 5
@@ -158,9 +158,7 @@ class TestApiFunctions:
         target = get_first_target()
         if not target:
             pytest.skip("No targets in DB")
-        status, headers, body = wsgi_get(
-            f"/api/targets/{target}/functions?limit=9999"
-        )
+        status, headers, body = wsgi_get(f"/api/targets/{target}/functions?limit=9999")
         assert status.startswith("200")
         data = json.loads(decode_body(body, headers))
         assert data["limit"] == 500
@@ -242,9 +240,7 @@ class TestApiAsm:
         target = get_first_target()
         if not target:
             pytest.skip("No targets in DB")
-        status, headers, body = wsgi_get(
-            f"/api/targets/{target}/asm?va=0x10001000&size=0"
-        )
+        status, headers, body = wsgi_get(f"/api/targets/{target}/asm?va=0x10001000&size=0")
         if status.startswith("501"):
             pytest.skip("Capstone not installed")
         assert status.startswith("400")

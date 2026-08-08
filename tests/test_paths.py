@@ -8,7 +8,6 @@ import pytest
 
 from recoverage._paths import _resolve_db_path
 
-
 # ---------------------------------------------------------------------------
 
 

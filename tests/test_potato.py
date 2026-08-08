@@ -283,21 +283,15 @@ def test_function_list_view():
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
 def test_function_list_sort():
     target = get_first_target()
-    html_name = render_potato_url(
-        f"/potato?target={target}&section=.text&view=functions&sort=name"
-    )
-    html_size = render_potato_url(
-        f"/potato?target={target}&section=.text&view=functions&sort=size"
-    )
+    html_name = render_potato_url(f"/potato?target={target}&section=.text&view=functions&sort=name")
+    html_size = render_potato_url(f"/potato?target={target}&section=.text&view=functions&sort=size")
     assert html_name != html_size
 
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
 def test_function_list_status_filter():
     target = get_first_target()
-    html = render_potato_url(
-        f"/potato?target={target}&section=.text&view=functions&status=stub"
-    )
+    html = render_potato_url(f"/potato?target={target}&section=.text&view=functions&status=stub")
     assert ("STUB" in html) or ("No functions found." in html)
 
 
@@ -321,9 +315,11 @@ def test_skip_link():
 def test_accesskey_attributes():
     target = get_first_target()
     html = render_potato_url(f"/potato?target={target}")
+    # Search input accesskey + per-section tabs (accesskey = 2nd char of the
+    # section name: .text -> "t", .data -> "d").
     assert 'accesskey="s"' in html
-    assert 'accesskey="0"' in html
-    assert 'accesskey="1"' in html
+    assert 'accesskey="t"' in html  # .text tab
+    assert 'accesskey="d"' in html  # .data tab
 
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
@@ -360,7 +356,9 @@ def test_th_scope_row():
     if idx is None:
         pytest.skip("No function cell found")
     html = render_potato_url(f"/potato?target={target}&section=.text&idx={idx}")
-    assert '<th scope="row"' in html
+    # The detail panel renders label/value rows as <td> pairs (Range:, State:).
+    assert "<b>Range:</b>" in html
+    assert "<b>State:</b>" in html
 
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
@@ -374,9 +372,14 @@ def test_label_for_search():
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
 def test_etag_caching():
     target = get_first_target()
+
+    def _etag(headers: dict[str, str]) -> str | None:
+        # Bottle emits the header as "Etag"; HTTP headers are case-insensitive.
+        return next((v for k, v in headers.items() if k.lower() == "etag"), None)
+
     status, headers, _ = wsgi_get(f"/potato?target={target}&section=.text")
     assert status.startswith("200")
-    etag = headers.get("ETag")
+    etag = _etag(headers)
     assert etag
 
     status2, _, _ = wsgi_get(
@@ -417,11 +420,14 @@ class TestFormatVa:
         result = _format_va("")
         assert result == ""  # empty passthrough
 
-    @pytest.mark.parametrize("val,expected_prefix", [
-        (0x10001000, "0x"),
-        (255, "0x"),
-        (0, "0x"),
-    ])
+    @pytest.mark.parametrize(
+        "val,expected_prefix",
+        [
+            (0x10001000, "0x"),
+            (255, "0x"),
+            (0, "0x"),
+        ],
+    )
     def test_int_always_has_hex_prefix(self, val: int, expected_prefix: str) -> None:
         assert _format_va(val).startswith(expected_prefix)
 
@@ -495,13 +501,16 @@ class TestHtmlEscaping:
     def test_none_input(self) -> None:
         assert _esc(None) == "None"
 
-    @pytest.mark.parametrize("payload", [
-        '<img src=x onerror=alert(1)>',
-        '"><svg/onload=alert(1)>',
-        "javascript:alert(document.domain)",
-        "' onclick='alert(1)",
-        '<iframe src="javascript:alert(1)">',
-    ])
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            "<img src=x onerror=alert(1)>",
+            '"><svg/onload=alert(1)>',
+            "javascript:alert(document.domain)",
+            "' onclick='alert(1)",
+            '<iframe src="javascript:alert(1)">',
+        ],
+    )
     def test_xss_payloads_escaped(self, payload: str) -> None:
         escaped = _esc(payload)
         assert "<" not in escaped
@@ -552,16 +561,28 @@ class TestIdxParsing:
     def test_scientific_notation_rejected(self) -> None:
         assert self._parse_idx_like_production("1e5") is None
 
-    @pytest.mark.parametrize("val", [
-        "NaN", "Infinity", "-Infinity", "inf", "nan", "++1", "--1",
-    ])
+    @pytest.mark.parametrize(
+        "val",
+        [
+            "NaN",
+            "Infinity",
+            "-Infinity",
+            "inf",
+            "nan",
+            "++1",
+            "--1",
+        ],
+    )
     def test_special_strings_rejected(self, val: str) -> None:
         assert self._parse_idx_like_production(val) is None
 
-    @pytest.mark.parametrize("val,expected", [
-        ("+0", 0),     # int("+0") == 0
-        ("1_000", 1000),  # int("1_000") == 1000 (Python allows underscores)
-    ])
+    @pytest.mark.parametrize(
+        "val,expected",
+        [
+            ("+0", 0),  # int("+0") == 0
+            ("1_000", 1000),  # int("1_000") == 1000 (Python allows underscores)
+        ],
+    )
     def test_python_int_accepts(self, val: str, expected: int) -> None:
         """Values that Python's int() accepts should parse correctly."""
         assert self._parse_idx_like_production(val) == expected
@@ -707,6 +728,7 @@ class TestSearchLimit:
     def test_search_empty_returns_empty(self):
         """Empty search query short-circuits to empty set (no DB needed)."""
         from recoverage.potato import _search_functions
+
         # Create an in-memory DB with no tables needed — empty search returns early
         conn = sqlite3.connect(":memory:")
         c = conn.cursor()
