@@ -110,18 +110,32 @@ def _get_stats(conn: sqlite3.Connection, target: str) -> dict[str, Any]:
                 "Corrupt summary metadata for target %s", target
             )
 
-    # Per-section stats
+    # Per-section stats.  Coverage is BYTE-based, matching the dashboard:
+    # covered = every cell span whose state is not "none" (functions, padding,
+    # data, thunks — the same accounting as grid.py's adjusted_covered), over
+    # the section's total cell bytes.  The old cell-COUNT formula disagreed
+    # with the UI (60% vs 99.5% on the same .text), breaking the CI gate.
     sections: dict[str, dict[str, Any]] = {}
     c.execute(
-        "SELECT section_name, total_cells, exact_count, reloc_count, "
-        "near_match_count, stub_count, data_count, thunk_count FROM section_cell_stats WHERE target = ?",
+        "SELECT section_name, "
+        "SUM(CASE WHEN state != 'none' THEN end - start ELSE 0 END) AS covered_bytes, "
+        "SUM(end - start) AS total_bytes, "
+        "COUNT(*) AS total_cells, "
+        "SUM(CASE WHEN state = 'exact' THEN 1 ELSE 0 END) AS exact_count, "
+        "SUM(CASE WHEN state = 'reloc' THEN 1 ELSE 0 END) AS reloc_count, "
+        "SUM(CASE WHEN state IN ('near_match','near_matching') THEN 1 ELSE 0 END) AS near_match_count, "
+        "SUM(CASE WHEN state = 'stub' THEN 1 ELSE 0 END) AS stub_count, "
+        "SUM(CASE WHEN state = 'data' THEN 1 ELSE 0 END) AS data_count, "
+        "SUM(CASE WHEN state = 'thunk' THEN 1 ELSE 0 END) AS thunk_count "
+        "FROM cells WHERE target = ? GROUP BY section_name",
         (target,),
     )
     for row in c.fetchall():
-        total = row["total_cells"]
+        total = row["total_bytes"] or 0
+        covered = row["covered_bytes"] or 0
         matched = row["exact_count"] + row["reloc_count"]
         sections[row["section_name"]] = {
-            "total_cells": total,
+            "total_cells": row["total_cells"],
             "exact": row["exact_count"],
             "reloc": row["reloc_count"],
             "near_match": row["near_match_count"],
@@ -129,7 +143,7 @@ def _get_stats(conn: sqlite3.Connection, target: str) -> dict[str, Any]:
             "data": row["data_count"],
             "thunk": row["thunk_count"],
             "matched": matched,
-            "coverage_pct": round(matched / total * 100, 2) if total else 0.0,
+            "coverage_pct": round(covered / total * 100, 2) if total else 0.0,
         }
 
     # Section byte sizes
