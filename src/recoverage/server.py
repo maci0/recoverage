@@ -487,6 +487,22 @@ def _json_err(status: int, data: dict[str, Any]) -> Any:
 app = Bottle()
 
 
+@app.error(500)
+def _handle_sqlite_error(error: Any) -> Any:
+    """Keep the JSON error contract when a query fails after connect.
+
+    ``_db()`` open failures already return 503 JSON, but every query after
+    connect was unguarded — a corrupt/incompatible DB or SQLITE_BUSY during a
+    concurrent build-db raised inside ``c.execute`` and surfaced as Bottle's
+    HTML 500.  All sqlite3 errors become a 503 JSON response instead.
+    """
+    exc = getattr(error, "exception", None)
+    if isinstance(exc, sqlite3.Error):
+        _log.warning("Database error serving %s: %s", request.path, exc)
+        return _json_err(503, {"error": "Database unavailable"})
+    return error
+
+
 @app.hook("before_request")
 def _log_request() -> None:
     """Log incoming requests at DEBUG level for operational visibility."""
@@ -498,8 +514,7 @@ def _log_request() -> None:
         host = request.headers.get("Host", "")
         if host and _hostname_of(host) not in ALLOWED_HOSTS:
             raise _json_err(
-                400,
-                {
+                400,                {
                     "error": "Bad Request",
                     "detail": f"unexpected Host header {host!r}",
                 },

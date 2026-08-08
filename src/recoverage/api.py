@@ -302,18 +302,32 @@ def handle_api_stats(target: str) -> bytes | Any:
             except (json.JSONDecodeError, TypeError):
                 _log.warning("Corrupt summary metadata for target %s", target)
 
-        # Per-section stats from the view
+        # Per-section stats.  Coverage is BYTE-based, matching the dashboard /
+        # CLI / CI gate: covered = every cell span whose state is not "none",
+        # over the section's total cell bytes.  The old cell-COUNT formula
+        # (exact+reloc over cells) reported a different number than every
+        # other surface.
         sections: dict[str, Any] = {}
         c.execute(
-            "SELECT section_name, total_cells, exact_count, reloc_count, "
-            "near_match_count, stub_count, data_count, thunk_count FROM section_cell_stats WHERE target = ?",
+            "SELECT section_name, "
+            "SUM(CASE WHEN state != 'none' THEN end - start ELSE 0 END) AS covered_bytes, "
+            "SUM(end - start) AS total_bytes, "
+            "COUNT(*) AS total_cells, "
+            "SUM(CASE WHEN state = 'exact' THEN 1 ELSE 0 END) AS exact_count, "
+            "SUM(CASE WHEN state = 'reloc' THEN 1 ELSE 0 END) AS reloc_count, "
+            "SUM(CASE WHEN state IN ('near_match','near_matching') THEN 1 ELSE 0 END) AS near_match_count, "
+            "SUM(CASE WHEN state = 'stub' THEN 1 ELSE 0 END) AS stub_count, "
+            "SUM(CASE WHEN state = 'data' THEN 1 ELSE 0 END) AS data_count, "
+            "SUM(CASE WHEN state = 'thunk' THEN 1 ELSE 0 END) AS thunk_count "
+            "FROM cells WHERE target = ? GROUP BY section_name",
             (target,),
         )
         for row in c.fetchall():
-            total = row["total_cells"]
+            total = row["total_bytes"] or 0
+            covered = row["covered_bytes"] or 0
             matched = row["exact_count"] + row["reloc_count"]
             sections[row["section_name"]] = {
-                "total_cells": total,
+                "total_cells": row["total_cells"],
                 "exact": row["exact_count"],
                 "reloc": row["reloc_count"],
                 "near_match": row["near_match_count"],
@@ -321,7 +335,9 @@ def handle_api_stats(target: str) -> bytes | Any:
                 "data": row["data_count"],
                 "thunk": row["thunk_count"],
                 "matched": matched,
-                "coverage_pct": round(matched / total * 100, 2) if total else 0.0,
+                "covered_bytes": covered,
+                "total_bytes": total,
+                "coverage_pct": round(covered / total * 100, 2) if total else 0.0,
             }
 
         # Section byte sizes
@@ -1037,8 +1053,18 @@ def handle_regen() -> bytes | Any:
     # Server-side cooldown + serialization: the cooldown check and the
     # subprocess must be atomic — two concurrent POSTs could otherwise both
     # pass the check and run catalog/build-db in parallel, tearing the
-    # data_*.json / coverage.db (TOCTOU).
-    with _REGEN_LOCK:
+    # data_*.json / coverage.db (TOCTOU).  Non-blocking acquire: a second
+    # POST while a regen runs gets an immediate 429 instead of blocking on
+    # the lock for the whole (up to 240s) subprocess run.
+    if not _REGEN_LOCK.acquire(blocking=False):
+        return _json_err(
+            429,
+            {
+                "error": "Rate limited: regeneration already running",
+                "detail": "a catalog/build-db run is in progress",
+            },
+        )
+    try:
         if _regen_in_progress:
             return _json_err(
                 429,
@@ -1060,10 +1086,10 @@ def handle_regen() -> bytes | Any:
             )
         _regen_last_attempt = now
         _regen_in_progress = True
-        try:
-            return _do_regen(remote)
-        finally:
-            _regen_in_progress = False
+        return _do_regen(remote)
+    finally:
+        _regen_in_progress = False
+        _REGEN_LOCK.release()
 
 
 def _do_regen(remote: str) -> bytes | Any:
@@ -1091,6 +1117,13 @@ def _do_regen(remote: str) -> bytes | Any:
             cwd=str(root),
             timeout=_server.REGEN_TIMEOUT,
         )
+        # Invalidate again AFTER the new DB is in place.  The pre-run clears
+        # above only matter while the subprocesses run; the resolved-target /
+        # index caches get repopulated from the OLD db the moment anything
+        # queries them, and with no SSE client connected the watcher would
+        # never re-invalidate them (curl-only regen -> stale target dropdown).
+        clear_index_cache()
+        clear_target_cache()
         _log.info("Regen completed successfully")
         return _json_ok({"ok": True})
     except subprocess.TimeoutExpired:
