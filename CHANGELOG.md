@@ -12,11 +12,23 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   stream never blocks the dashboard).
 - Batch function lookup: `POST /api/targets/<target>/functions` with
   `{"vas": [...]}` returns details in input order (incl. `last_verify`).
+- Optional `--token` auth: `Authorization: Bearer`, `?token=`, or open
+  `/?token=<token>` to set an HttpOnly cookie so the SPA works unchanged.
+- `recoverage check --json` / `stats --json` — machine-readable output;
+  infra errors exit 2 (database missing/unreadable).
 
 ### Changed
 
 - All API error responses are standardized to
   `{"error", "code", "detail"}` (e.g. `not_found`, `rate_limited`).
+- `--allow-remote` required to bind non-loopback; SSE streams capped at 32
+  concurrent clients (thread-DoS guard); ETags are hashes of their
+  components (no raw request strings in headers); static `/src`/`/original`
+  serving resolves symlinks and verifies containment; JSON errors carry
+  `Cache-Control: no-store`.
+- `/api/targets/<t>/functions/<va>` accepts decimal VAs (the list emits
+  `va` as an int — the round-trip previously 404'd); `/data?section=`
+  with an unknown section 404s; memo/ETag/watcher are WAL-aware.
 
 ## [0.1.0] - 2026-08-08
 

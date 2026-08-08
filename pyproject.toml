@@ -14,6 +14,8 @@ classifiers = [
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Software Development :: Disassemblers",
 ]
 dependencies = [
@@ -25,6 +27,10 @@ dependencies = [
     "typer>=0.9",
     "zstandard>=0.22",
 ]
+
+[project.urls]
+Homepage = "https://github.com/relumea/recoverage"
+Repository = "https://github.com/relumea/recoverage"
 
 [project.optional-dependencies]
 dev = [
