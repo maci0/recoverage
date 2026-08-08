@@ -820,20 +820,29 @@ class TestCorsOriginAllowlist:
         srv.CORS_ALLOWED_ORIGINS = []
 
     def test_allowed_origin_echoed(self) -> None:
-        self._enable(["localhost"])
+        # Origins are matched at scheme://host[:port] granularity, not hostname.
+        self._enable(["http://localhost:5173"])
         status, headers, _ = wsgi_get("/api/health", headers={"Origin": "http://localhost:5173"})
         assert status.startswith("200")
         assert headers.get("Access-Control-Allow-Origin") == "http://localhost:5173"
         assert "Origin" in headers.get("Vary", "")
 
     def test_unknown_origin_gets_no_aca_header(self) -> None:
-        self._enable(["localhost"])
+        self._enable(["http://localhost:5173"])
         status, headers, _ = wsgi_get("/api/health", headers={"Origin": "http://evil.example.com"})
         assert status.startswith("200")
         assert "Access-Control-Allow-Origin" not in headers
 
     def test_wildcard_never_emitted(self) -> None:
         self._enable([])
+
+    def test_different_port_not_allowed(self) -> None:
+        self._enable(["http://localhost:5173"])
+        status, headers, _ = wsgi_get(
+            "/api/health", headers={"Origin": "http://localhost:9999"}
+        )
+        assert status.startswith("200")
+        assert "Access-Control-Allow-Origin" not in headers
         status, headers, _ = wsgi_get("/api/health", headers={"Origin": "http://localhost:5173"})
         assert status.startswith("200")
         assert headers.get("Access-Control-Allow-Origin") != "*"

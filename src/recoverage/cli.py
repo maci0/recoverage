@@ -231,7 +231,10 @@ def serve(
         app as bottle_app,
     )
 
-    loopback_binds = ("127.0.0.1", "localhost", "::1", "::")
+    # NOTE: "::" is the IPv6 wildcard (binds every interface) — it must NOT
+    # be treated as loopback, or --bind :: would silently expose the
+    # unauthenticated API without the --allow-remote acknowledgment.
+    loopback_binds = ("127.0.0.1", "localhost", "::1")
     is_remote = bind not in loopback_binds
     if is_remote and not allow_remote:
         typer.secho(
@@ -267,7 +270,7 @@ def serve(
     if cors:
         _server.CORS_ENABLED = True
         if cors_origin:
-            _server.CORS_ALLOWED_ORIGINS = [_server._hostname_of(o) for o in cors_origin]
+            _server.CORS_ALLOWED_ORIGINS = [_server._normalize_origin(o) for o in cors_origin]
     # Loopback binds validate the Host header (DNS-rebinding guard); remote
     # binds (user opted in via --allow-remote) skip validation.
     if is_remote:

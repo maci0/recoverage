@@ -49,8 +49,9 @@ HAS_CAPSTONE = importlib.util.find_spec("capstone") is not None
 # accepting requests.  Thread-safe: set before any worker threads exist.
 CORS_ENABLED = False
 
-# Hostnames allowed to read the API cross-origin (from --cors-origin).
-# Empty = no cross-origin reads; the wildcard "*" is never emitted.
+# Origins allowed to read the API cross-origin (normalized scheme://host[:port]
+# from --cors-origin).  Empty = no cross-origin reads; the wildcard "*" is
+# never emitted.
 CORS_ALLOWED_ORIGINS: list[str] = []
 
 # Expected Host-header hostnames.  Loopback binds validate the Host header
@@ -64,12 +65,38 @@ def _hostname_of(origin: str) -> str:
 
     Origins carry a scheme (``http://localhost:5173``); bare Host headers
     (``localhost:8001``) get a synthetic scheme so urlsplit parses both.
+    Values containing userinfo/escape characters (``evil@host``, backslash,
+    percent-encoding, control bytes) are rejected — browsers never emit them
+    in Host/Origin, so their presence means the value is not a plain header.
     """
     try:
         from urllib.parse import urlsplit
 
+        if any(ch in origin for ch in ("@", "\\", "%")) or any(ord(c) < 32 for c in origin):
+            return ""
         candidate = origin if "://" in origin else f"//{origin}"
         return (urlsplit(candidate).hostname or "").lower()
+    except ValueError:
+        return ""
+
+
+def _normalize_origin(origin: str) -> str:
+    """Normalize an Origin URL to ``scheme://host[:port]`` for allowlist matching.
+
+    ``http://localhost:5173`` → ``http://localhost:5173``; a default port is
+    dropped (``http://localhost:80`` → ``http://localhost``) so both spellings
+    match.  Returns "" for unparsable or userinfo-bearing values.
+    """
+    if _hostname_of(origin) == "":
+        return ""
+    try:
+        from urllib.parse import urlsplit
+
+        u = urlsplit(origin if "://" in origin else f"//{origin}")
+        host = (u.hostname or "").lower()
+        port = u.port
+        scheme = u.scheme or "http"
+        return f"{scheme}://{host}" + (f":{port}" if port else "")
     except ValueError:
         return ""
 
@@ -487,9 +514,14 @@ def _security_headers() -> None:
         # Echo the request origin only when it is explicitly allowed.  Never
         # emit the wildcard: the API serves unauthenticated binary bytes.
         origin = request.headers.get("Origin", "")
-        if origin and _hostname_of(origin) in CORS_ALLOWED_ORIGINS:
+        if origin and _normalize_origin(origin) in CORS_ALLOWED_ORIGINS:
             response.set_header("Access-Control-Allow-Origin", origin)
-            response.set_header("Vary", "Origin")
+            # Append to any existing Vary (compressed responses already carry
+            # "Accept-Encoding") instead of replacing it — a shared cache must
+            # key on both.
+            existing_vary = response.headers.get("Vary", "")
+            combined = ", ".join(v for v in (existing_vary, "Origin") if v)
+            response.set_header("Vary", combined)
         response.set_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         response.set_header("Access-Control-Allow-Headers", "Content-Type")
 
