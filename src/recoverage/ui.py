@@ -139,6 +139,23 @@ def handle_potato() -> bytes | Any:
 @app.get("/")
 @app.get("/index.html")
 def handle_index() -> bytes:
+    # When token auth is enabled, opening the dashboard as
+    # http://host:port/?token=<TOKEN> sets an HttpOnly SameSite cookie so
+    # the SPA's own fetch/EventSource calls authenticate without any
+    # frontend change.  API clients can use Authorization: Bearer instead.
+    from recoverage.server import _AUTH_TOKEN, _auth_token_matches
+
+    if _AUTH_TOKEN and _auth_token_matches(request.query.get("token", "")):
+        try:
+            from bottle import response as _resp
+
+            _resp.set_header(
+                "Set-Cookie",
+                f"recoverage_token={_AUTH_TOKEN}; Path=/; HttpOnly; SameSite=Strict",
+            )
+        except Exception:  # noqa: BLE001 — header failure must not break the page
+            pass
+
     accept_encoding = request.headers.get("Accept-Encoding", "")
     encoding = _best_encoding(accept_encoding)
 
@@ -169,7 +186,18 @@ def handle_index() -> bytes:
 @app.get("/original/<filepath:path>")
 def serve_repo_file(filepath: str) -> Any:
     prefix = "src" if request.path.startswith("/src/") else "original"
-    return static_file(filepath, root=str(_project_dir() / prefix))
+    root = (_project_dir() / prefix).resolve()
+    # Defense-in-depth: bottle's static_file string-prefix check does NOT
+    # resolve symlinks — a symlink inside src/ pointing outside the tree
+    # would pass the root check and serve the target.  Resolve and verify
+    # containment ourselves.
+    candidate = (root / filepath).resolve()
+    if not candidate.is_relative_to(root):
+        return HTTPResponse(
+            status=403,
+            body=b"forbidden",
+        )
+    return static_file(filepath, root=str(root))
 
 
 @app.get("/<filename:re:(?:app\\.js|style\\.css|van\\.min\\.js|hljs\\.css)>")

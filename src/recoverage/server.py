@@ -111,6 +111,20 @@ def _normalize_origin(origin: str) -> str:
 # the `recoverage stats` CLI.  ONE definition: these two queries already
 # drifted apart once (cell-count vs byte-based coverage) and were fixed in
 # lockstep twice — a single constant makes the next divergence impossible.
+def _safe_etag(*parts: object) -> str:
+    """Deterministic ETag from arbitrary parts.
+
+    Parts include request-controlled strings (VA, section, format) — they
+    are hashed so no raw request data can ever reach a response header
+    (bottle rejects control characters, but that is a library property,
+    not the app's contract).
+    """
+    import hashlib
+
+    digest = hashlib.sha256("|".join(str(p) for p in parts).encode("utf-8")).hexdigest()[:32]
+    return f'"{digest}"'
+
+
 SECTION_STATS_SQL = """
     SELECT section_name,
       SUM(CASE WHEN state != 'none' THEN end - start ELSE 0 END) AS covered_bytes,
@@ -775,6 +789,41 @@ def _json_err(status: int, data: dict[str, Any]) -> Any:
 # ── Bottle app ─────────────────────────────────────────────────────
 
 app = Bottle()
+
+# Optional token auth for the dashboard (--token): when set, every request
+# must present it via Authorization: Bearer <token>, ?token=, or the
+# HttpOnly cookie the index route sets for the SPA.  Loopback stays
+# unauthenticated when no token is configured.
+_AUTH_TOKEN: str = ""
+
+
+def _auth_token_matches(provided: str) -> bool:
+    return bool(_AUTH_TOKEN) and provided == _AUTH_TOKEN
+
+
+def _require_auth() -> None:
+    if not _AUTH_TOKEN:
+        return
+    from bottle import request
+
+    provided = request.headers.get("Authorization", "")
+    if provided.startswith("Bearer "):
+        provided = provided[len("Bearer ") :]
+    else:
+        provided = request.query.get("token", "")
+        if not provided:
+            provided = request.get_cookie("recoverage_token", default="")
+    if not _auth_token_matches(provided):
+        from bottle import HTTPResponse
+
+        raise HTTPResponse(
+            status=401,
+            body=b'{"error": "unauthorized", "code": "unauthorized", "detail": "missing or invalid token"}',
+            content_type="application/json",
+        )
+
+
+app.add_hook("before_request", _require_auth)
 
 
 @app.error(500)

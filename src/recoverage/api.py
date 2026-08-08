@@ -119,6 +119,7 @@ def _require_target(c: sqlite3.Cursor, target: str) -> Any | None:
 _SSE_POLL_INTERVAL_SECONDS = 2.0
 _SSE_HEARTBEAT_SECONDS = 15.0
 _SSE_QUEUE_MAX = 32  # per-client buffer; slow clients drop events, not memory
+_SSE_MAX_CLIENTS = 32  # cap on concurrent /api/events streams (thread DoS guard)
 
 _SSE_CLIENTS: set[queue.Queue[bytes]] = set()
 _SSE_CLIENTS_LOCK = threading.Lock()
@@ -250,8 +251,21 @@ def handle_api_events() -> Any:
     generator is closed — the client queue is removed in a ``finally``.
     """
     _ensure_db_watcher()
-    client_queue: queue.Queue[bytes] = queue.Queue(maxsize=_SSE_QUEUE_MAX)
+    # Cap concurrent SSE clients: each connection pins a server thread for
+    # the life of the stream (minutes/hours), and wsgiref has no connection
+    # limit.  A LAN client (or a cross-origin EventSource from any webpage
+    # a victim visits — no-cors, loopback) could otherwise exhaust threads.
     with _SSE_CLIENTS_LOCK:
+        if len(_SSE_CLIENTS) >= _SSE_MAX_CLIENTS:
+            return _json_err(
+                503,
+                {
+                    "error": "too many event-stream clients",
+                    "code": "rate_limited",
+                    "detail": f"max {_SSE_MAX_CLIENTS} concurrent /api/events connections",
+                },
+            )
+        client_queue: queue.Queue[bytes] = queue.Queue(maxsize=_SSE_QUEUE_MAX)
         _SSE_CLIENTS.add(client_queue)
 
     def _events() -> Generator[bytes, None, None]:
@@ -380,10 +394,9 @@ def handle_api_data(target: str) -> bytes | Any:
     try:
         snap = _snapshot_db_mtime()
         fingerprint = (snap, target, section_filter)
-        etag_key = f"{snap[0]}-{target}" if snap else f"{target}"
-        if section_filter:
-            etag_key += f"-{section_filter}"
-        etag = f'"{etag_key}"'
+        from recoverage.server import _safe_etag
+
+        etag = _safe_etag(snap[0] if snap else "", target, section_filter)
         if request.headers.get("If-None-Match") == etag:
             return HTTPResponse(
                 status=304,
@@ -952,7 +965,9 @@ def handle_api_asm(target: str) -> bytes | Any:
     # browsers after re-gen / --fix-sizes.
     try:
         db_mtime = _db_path().stat().st_mtime_ns
-        asm_etag = f'"{db_mtime}-{target}-{section}-{va}-{size}-{fmt}"'
+        from recoverage.server import _safe_etag
+
+        asm_etag = _safe_etag(db_mtime, target, section, va, size, fmt)
         if request.headers.get("If-None-Match") == asm_etag:
             return HTTPResponse(
                 status=304,
@@ -1070,7 +1085,9 @@ def handle_api_bytes(target: str, section: str) -> bytes | Any:
     # a rebuild instead of serving year-immutable stale bytes.
     try:
         db_mtime = _db_path().stat().st_mtime_ns
-        bytes_etag = f'"{db_mtime}-{target}-{section}-{req_offset}-{req_size}"'
+        from recoverage.server import _safe_etag
+
+        bytes_etag = _safe_etag(db_mtime, target, section, req_offset, req_size)
         if request.headers.get("If-None-Match") == bytes_etag:
             return HTTPResponse(
                 status=304,

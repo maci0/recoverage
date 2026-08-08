@@ -199,6 +199,12 @@ def serve(
         "--cors-origin",
         help="Origin URL allowed to read the API cross-origin (repeatable, e.g. http://localhost:5173)",
     ),
+    token: str = typer.Option(
+        None,
+        "--token",
+        help="Require this bearer token for every request (Authorization: Bearer <token>, "
+        "?token=, or open the dashboard as /?token=<token> to set the SPA cookie)",
+    ),
 ) -> None:
     """Start the recoverage dashboard server."""
     import recoverage.server as _server
@@ -254,6 +260,13 @@ def serve(
         _server.CORS_ENABLED = True
         if cors_origin:
             _server.CORS_ALLOWED_ORIGINS = [_server._normalize_origin(o) for o in cors_origin]
+    if token:
+        _server._AUTH_TOKEN = token
+        typer.secho(
+            f"token auth enabled — requests need Authorization: Bearer <token> "
+            f"(SPA: open as http://127.0.0.1:{port}/?token=<token>)",
+            fg=typer.colors.GREEN,
+        )
     # Loopback binds validate the Host header (DNS-rebinding guard); remote
     # binds (user opted in via --allow-remote) skip validation.
     if is_remote:
