@@ -285,6 +285,13 @@ def serve(
     if not no_open:
         threading.Timer(0.5, open_browser, args=(url,)).start()
 
+    # Start the DB watcher at startup (not on first /api/events connection):
+    # without it, external rebuilds leave the target/dropdown caches stale
+    # for servers that never receive an SSE client (curl-only automation).
+    from recoverage.api import _ensure_db_watcher
+
+    _ensure_db_watcher()
+
     try:
         bottle_app.run(
             host=bind,
@@ -444,7 +451,7 @@ def check(
         if json_output:
             import json
 
-            typer.echo(json.dumps({"error": "--min-coverage must be between 0 and 100", "code": 1}))
+            typer.echo(json.dumps({"error": "--min-coverage must be between 0 and 100", "exit_code": 1}))
         else:
             typer.secho(
                 f"Error: --min-coverage must be between 0 and 100, got {min_coverage!r}.",
@@ -460,7 +467,7 @@ def check(
             if json_output:
                 import json
 
-                typer.echo(json.dumps({"error": "no targets in database", "code": 1}))
+                typer.echo(json.dumps({"error": "no targets in database", "exit_code": 1}))
             else:
                 typer.secho("No targets found in database.", fg=typer.colors.YELLOW, err=True)
             raise typer.Exit(1)
@@ -560,7 +567,7 @@ def check(
             import json
 
             typer.echo(
-                json.dumps({"error": "no sections matched — nothing was checked", "code": 1})
+                json.dumps({"error": "no sections matched — nothing was checked", "exit_code": 1})
             )
         else:
             typer.secho(
@@ -576,7 +583,7 @@ def check(
             import json
 
             typer.echo(
-                json.dumps({"error": "no tracked sections — nothing was checked", "code": 1})
+                json.dumps({"error": "no tracked sections — nothing was checked", "exit_code": 1})
             )
         else:
             typer.secho(
