@@ -12,6 +12,15 @@ import tomllib
 from pathlib import Path
 
 
+def _db_path() -> Path:
+    """Return the path to the coverage database.
+
+    Delegates to ``_resolve_db_path()`` so that ``[project] db_dir`` in
+    ``rebrew-project.toml`` is honoured when present.
+    """
+    return _resolve_db_path()
+
+
 def _resolve_db_path() -> Path:
     """Resolve the coverage.db path, honouring rebrew-project.toml [project] db_dir.
 

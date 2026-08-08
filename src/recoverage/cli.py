@@ -14,6 +14,8 @@ from typing import Any
 
 import typer
 
+from recoverage._paths import _db_path
+
 app = typer.Typer(
     help="Coverage dashboard for binary-matching decompilation projects.",
     add_completion=False,
@@ -62,17 +64,6 @@ class ExportFormat(enum.StrEnum):
     json = "json"
     csv = "csv"
     md = "md"
-
-
-def _db_path() -> Path:
-    """Return the path to the coverage database.
-
-    Delegates to ``_resolve_db_path()`` so that ``[project] db_dir`` in
-    ``rebrew-project.toml`` is honoured when present.
-    """
-    from recoverage._paths import _resolve_db_path
-
-    return _resolve_db_path()
 
 
 def _open_db(db_path: Path | None = None) -> sqlite3.Connection:
@@ -189,13 +180,13 @@ def serve(
 ) -> None:
     """Start the recoverage dashboard server."""
     import recoverage.server as _server
+    from recoverage._paths import (
+        _db_path as server_db_path,
+    )
     from recoverage.server import (
         _assets_dir,
         _project_dir,
         open_browser,
-    )
-    from recoverage.server import (
-        _db_path as server_db_path,
     )
     from recoverage.server import (
         app as bottle_app,

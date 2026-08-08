@@ -29,6 +29,8 @@ import rcssmin  # type: ignore[import-untyped]
 import rjsmin  # type: ignore[import-untyped]
 import zstandard as zstd  # type: ignore[import-untyped]
 
+from recoverage._paths import _db_path
+
 # Module-level compressor — ZstdCompressor is thread-safe for compress() calls
 _ZSTD_COMPRESSOR = zstd.ZstdCompressor(level=3)
 
@@ -60,17 +62,6 @@ def _assets_dir() -> Path:
 def _project_dir() -> Path:
     """Return the project directory (cwd)."""
     return Path.cwd().resolve()
-
-
-def _db_path() -> Path:
-    """Return the path to the coverage database.
-
-    Delegates to ``_resolve_db_path()`` so that ``[project] db_dir`` in
-    ``rebrew-project.toml`` is honoured when present.
-    """
-    from recoverage._paths import _resolve_db_path
-
-    return _resolve_db_path()
 
 
 # ── DLL loading & disassembly ──────────────────────────────────────
