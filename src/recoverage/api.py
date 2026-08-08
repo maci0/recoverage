@@ -122,7 +122,9 @@ def _broadcast_db_updated(snapshot: tuple[int, int] | None) -> None:
         pass
     payload: dict[str, Any] = {
         "event": "db-updated",
-        "db": {"path": str(_db_path())},
+        # Basename only — the absolute path leaks the user's home-directory
+        # layout to any LAN/browser client (see security review).
+        "db": {"path": _db_path().name},
         "timestamp": time.time(),
     }
     if snapshot is not None:
@@ -223,7 +225,7 @@ def handle_api_events() -> Any:
 @app.get("/api/health")
 def handle_api_health() -> bytes:
     db = _db_path()
-    db_info: dict[str, Any] = {"path": str(db), "exists": False}
+    db_info: dict[str, Any] = {"path": db.name, "exists": False}
     status = "healthy"
     try:
         stat = db.stat()
@@ -1107,5 +1109,16 @@ def _do_regen(remote: str) -> bytes | Any:
             {
                 "error": f"Regen failed (exit code {e.returncode})",
                 "detail": f"rebrew build-db exited with code {e.returncode}",
+            },
+        )
+    except (OSError, subprocess.SubprocessError) as e:
+        # Missing uv, launch failure, etc. — keep the JSON error contract
+        # instead of letting an uncaught exception surface as an HTML 500.
+        _log.error("Regen could not start: %s", e)
+        return _json_err(
+            500,
+            {
+                "error": "Regen could not start",
+                "detail": f"{type(e).__name__}: {e}",
             },
         )
