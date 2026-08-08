@@ -462,8 +462,7 @@ def check(
                         failed = True
                     else:
                         typer.secho(
-                            f"SKIP: {tid} {sec_name} has no tracked cells — "
-                            "coverage not recorded",
+                            f"SKIP: {tid} {sec_name} has no tracked cells — coverage not recorded",
                             fg=typer.colors.YELLOW,
                         )
                     continue

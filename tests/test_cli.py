@@ -152,9 +152,7 @@ class TestCheckCommand:
                 " span INTEGER DEFAULT 1, state TEXT, functions TEXT DEFAULT '[]',"
                 " label TEXT, parent_function TEXT)"
             )
-            c.execute(
-                "CREATE TABLE functions (target TEXT, status TEXT, markerType TEXT)"
-            )
+            c.execute("CREATE TABLE functions (target TEXT, status TEXT, markerType TEXT)")
             c.execute(
                 "INSERT INTO metadata VALUES ('T','summary',?)",
                 (json.dumps({"totalFunctions": 1}),),
@@ -208,9 +206,7 @@ class TestCheckCommand:
                 " span INTEGER DEFAULT 1, state TEXT, functions TEXT DEFAULT '[]',"
                 " label TEXT, parent_function TEXT)"
             )
-            c.execute(
-                "CREATE TABLE functions (target TEXT, status TEXT, markerType TEXT)"
-            )
+            c.execute("CREATE TABLE functions (target TEXT, status TEXT, markerType TEXT)")
             c.execute(
                 "INSERT INTO metadata VALUES ('T','summary',?)",
                 (json.dumps({"totalFunctions": 1}),),
