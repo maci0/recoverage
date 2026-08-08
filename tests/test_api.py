@@ -1137,3 +1137,23 @@ class TestApiEtagContract:
         assert status.startswith("404")
         payload = json.loads(decode_body(body, {}))
         assert payload.get("code") == "not_found"
+
+
+class TestSseClientCap:
+    def test_excess_clients_get_503(self) -> None:
+        """More concurrent /api/events clients than the cap must be rejected
+        with 503 (thread-DoS guard)."""
+        import recoverage.api as api
+
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        with api._SSE_CLIENTS_LOCK:
+            for _ in range(api._SSE_MAX_CLIENTS):
+                api._SSE_CLIENTS.add(queue.Queue(maxsize=api._SSE_QUEUE_MAX))
+        try:
+            status, _, _ = wsgi_get("/api/events")
+            assert status.startswith("503")
+        finally:
+            with api._SSE_CLIENTS_LOCK:
+                api._SSE_CLIENTS.clear()
