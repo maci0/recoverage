@@ -147,7 +147,9 @@ recoverage export --format md       # Markdown table
 
 ### `recoverage check`
 
-CI gate — exits non-zero if coverage is below a threshold.
+CI gate — exits non-zero if coverage is below a threshold.  Sections the
+grid never records matches for (e.g. `.bss`/`.data` when only `.text`
+matches are tracked) are skipped, not failed.
 
 ```bash
 recoverage check --min-coverage 60                              # all targets, all sections
