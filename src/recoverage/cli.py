@@ -288,8 +288,9 @@ def serve(
 @app.command()
 def stats(
     target: str | None = typer.Option(None, "--target", "-t", help="Target ID (default: all)"),
+    json_output: bool = typer.Option(False, "--json", help="Output results as JSON"),
 ) -> None:
-    """Print coverage stats as a table."""
+    """Print coverage stats as a table (or JSON with --json)."""
     from rich.console import Console
     from rich.table import Table
 
@@ -299,6 +300,10 @@ def stats(
         if not targets:
             typer.secho("No targets found in database.", fg=typer.colors.YELLOW, err=True)
             raise typer.Exit(1)
+
+        if json_output:
+            typer.echo(json.dumps([_get_stats(conn, tid) for tid in targets], indent=2))
+            return
 
         console = Console()
         for tid in targets:
