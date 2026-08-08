@@ -97,62 +97,10 @@ def _list_targets(conn: sqlite3.Connection) -> list[str]:
 
 def _get_stats(conn: sqlite3.Connection, target: str) -> dict[str, Any]:
     c = conn.cursor()
+    from recoverage.server import _section_stats  # noqa: PLC0415
 
-    # Summary from metadata
-    summary: dict[str, Any] = {}
-    c.execute("SELECT value FROM metadata WHERE target = ? AND key = 'summary'", (target,))
-    row = c.fetchone()
-    if row:
-        try:
-            summary = json.loads(row[0])
-        except (json.JSONDecodeError, TypeError):
-            logging.getLogger("recoverage").warning(
-                "Corrupt summary metadata for target %s", target
-            )
-
-    # Per-section stats.  Coverage is BYTE-based, matching the dashboard:
-    # covered = every cell span whose state is not "none" (functions, padding,
-    # data, thunks — the same accounting as grid.py's adjusted_covered), over
-    # the section's total cell bytes.  The old cell-COUNT formula disagreed
-    # with the UI (60% vs 99.5% on the same .text), breaking the CI gate.
-    sections: dict[str, dict[str, Any]] = {}
-    from recoverage.server import SECTION_STATS_SQL  # noqa: PLC0415
-
-    c.execute(SECTION_STATS_SQL, (target,))
-    for row in c.fetchall():
-        total = row["total_bytes"] or 0
-        covered = row["covered_bytes"] or 0
-        matched = row["exact_count"] + row["reloc_count"]
-        sections[row["section_name"]] = {
-            "total_cells": row["total_cells"],
-            "exact": row["exact_count"],
-            "reloc": row["reloc_count"],
-            "near_match": row["near_match_count"],
-            "stub": row["stub_count"],
-            "data": row["data_count"],
-            "thunk": row["thunk_count"],
-            "matched": matched,
-            "coverage_pct": round(covered / total * 100, 2) if total else 0.0,
-        }
-
-    # Section byte sizes
-    c.execute("SELECT name, size FROM sections WHERE target = ?", (target,))
-    for row in c.fetchall():
-        if row["name"] in sections:
-            sections[row["name"]]["size_bytes"] = row["size"]
-
-    # Function counts by status.  GLOBAL/DATA marker rows are data markers,
-    # not functions — exclude them to match /api/targets/<target>/stats.
-    by_status: dict[str, int] = {}
-    c.execute(
-        "SELECT status, COUNT(*) as cnt FROM functions"
-        " WHERE target = ? AND markerType NOT IN ('GLOBAL','DATA') GROUP BY status",
-        (target,),
-    )
-    for row in c.fetchall():
-        by_status[row["status"] or "unknown"] = row["cnt"]
-
-    return {"target": target, "summary": summary, "sections": sections, "by_status": by_status}
+    stats = _section_stats(c, target)
+    return {"target": target, **stats, "by_status": stats["by_status"]}
 
 
 def _run_regen(root: Path) -> None:

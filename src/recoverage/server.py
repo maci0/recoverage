@@ -126,8 +126,69 @@ SECTION_STATS_SQL = """
 """
 
 
-# ── Path helpers ───────────────────────────────────────────────────
+def _section_stats(c: sqlite3.Cursor, target: str) -> dict[str, Any]:
+    """Byte-based per-section stats + summary + by_status for *target*.
 
+    ONE implementation shared by the ``/api/targets/<target>/stats`` endpoint
+    and the ``recoverage stats`` CLI.  The summary parse, the SECTION_STATS_SQL
+    loop, the section-size lookup, and the by-status count were copy-pasted in
+    both (and drifted twice — cell-count vs byte-based, covered_bytes presence,
+    key names); this is the single source of truth.
+    """
+    # Pre-computed summary from metadata
+    summary: dict[str, Any] = {}
+    c.execute("SELECT value FROM metadata WHERE target = ? AND key = 'summary'", (target,))
+    row = c.fetchone()
+    if row:
+        try:
+            summary = json.loads(row[0])
+        except (json.JSONDecodeError, TypeError):
+            _log.warning("Corrupt summary metadata for target %s", target)
+
+    # Per-section stats.  Coverage is BYTE-based: covered = every cell span
+    # whose state is not "none", over the section's total cell bytes.
+    sections: dict[str, Any] = {}
+    c.execute(SECTION_STATS_SQL, (target,))
+    for row in c.fetchall():
+        total = row["total_bytes"] or 0
+        covered = row["covered_bytes"] or 0
+        matched = row["exact_count"] + row["reloc_count"]
+        sections[row["section_name"]] = {
+            "total_cells": row["total_cells"],
+            "exact": row["exact_count"],
+            "reloc": row["reloc_count"],
+            "near_match": row["near_match_count"],
+            "stub": row["stub_count"],
+            "data": row["data_count"],
+            "thunk": row["thunk_count"],
+            "matched": matched,
+            "covered_bytes": covered,
+            "total_bytes": total,
+            "coverage_pct": round(covered / total * 100, 2) if total else 0.0,
+        }
+
+    # Section byte sizes
+    c.execute("SELECT name, size FROM sections WHERE target = ?", (target,))
+    for row in c.fetchall():
+        name = row["name"]
+        if name in sections:
+            sections[name]["size_bytes"] = row["size"]
+
+    # Function counts by status.  GLOBAL/DATA marker rows live in the
+    # functions table but are data markers, not functions — exclude them.
+    by_status: dict[str, int] = {}
+    c.execute(
+        "SELECT status, COUNT(*) as cnt FROM functions"
+        " WHERE target = ? AND markerType NOT IN ('GLOBAL','DATA') GROUP BY status",
+        (target,),
+    )
+    for row in c.fetchall():
+        by_status[row["status"] or "unknown"] = row["cnt"]
+
+    return {"summary": summary, "sections": sections, "by_status": by_status}
+
+
+# ── Path helpers ───────────────────────────────────────────────────
 
 def _assets_dir() -> Path:
     """Return the directory containing recoverage UI files (HTML/CSS/JS).

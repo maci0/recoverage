@@ -291,65 +291,13 @@ def handle_api_stats(target: str) -> bytes | Any:
         if not_found is not None:
             return not_found
 
-        # Pre-computed summary from metadata
-        summary: dict[str, Any] = {}
-        c.execute("SELECT value FROM metadata WHERE target = ? AND key = 'summary'", (target,))
-        row = c.fetchone()
-        if row:
-            try:
-                summary = json.loads(row[0])
-            except (json.JSONDecodeError, TypeError):
-                _log.warning("Corrupt summary metadata for target %s", target)
-
-        # Per-section stats.  Coverage is BYTE-based, matching the dashboard /
-        # CLI / CI gate: covered = every cell span whose state is not "none",
-        # over the section's total cell bytes.  Shared query (SECTION_STATS_SQL)
-        # so the API and CLI cannot drift apart again.
-        sections: dict[str, Any] = {}
-        c.execute(_server.SECTION_STATS_SQL, (target,))
-        for row in c.fetchall():
-            total = row["total_bytes"] or 0
-            covered = row["covered_bytes"] or 0
-            matched = row["exact_count"] + row["reloc_count"]
-            sections[row["section_name"]] = {
-                "total_cells": row["total_cells"],
-                "exact": row["exact_count"],
-                "reloc": row["reloc_count"],
-                "near_match": row["near_match_count"],
-                "stub": row["stub_count"],
-                "data": row["data_count"],
-                "thunk": row["thunk_count"],
-                "matched": matched,
-                "covered_bytes": covered,
-                "total_bytes": total,
-                "coverage_pct": round(covered / total * 100, 2) if total else 0.0,
-            }
-
-        # Section byte sizes
-        c.execute("SELECT name, size FROM sections WHERE target = ?", (target,))
-        for row in c.fetchall():
-            name = row["name"]
-            if name in sections:
-                sections[name]["size_bytes"] = row["size"]
-
-        # Function counts by status.  GLOBAL/DATA marker rows live in the
-        # functions table but are data markers, not functions — exclude them
-        # to stay consistent with build_db's function_stats metadata.
-        by_status: dict[str, int] = {}
-        c.execute(
-            "SELECT status, COUNT(*) as cnt FROM functions"
-            " WHERE target = ? AND markerType NOT IN ('GLOBAL','DATA') GROUP BY status",
-            (target,),
-        )
-        for row in c.fetchall():
-            by_status[row["status"] or "unknown"] = row["cnt"]
-
+        stats = _server._section_stats(c, target)
         return _json_ok(
             {
                 "target": target,
-                "summary": summary,
-                "sections": sections,
-                "functions_by_status": by_status,
+                "summary": stats["summary"],
+                "sections": stats["sections"],
+                "functions_by_status": stats["by_status"],
             },
             Cache_Control="no-cache, no-store, must-revalidate",
         )
