@@ -96,8 +96,16 @@ def _get_targets_config() -> dict[str, Any]:
                 text = toml_path.read_text(encoding="utf-8")
                 doc = tomllib.loads(text)
                 targets_dict = doc.get("targets", {})
-                for tid in targets_dict:
-                    targets_info[tid] = {"filename": tid}
+                for tid, tdata in targets_dict.items():
+                    # The DLL path comes from [targets.<tid>].binary — without
+                    # it, /asm, /bytes and Potato disasm resolve the wrong file
+                    # (previously `filename` was always the target id).
+                    filename = tid
+                    if isinstance(tdata, dict):
+                        binary = tdata.get("binary", "")
+                        if isinstance(binary, str) and binary:
+                            filename = binary
+                    targets_info[tid] = {"filename": filename}
         except (ImportError, OSError, ValueError) as exc:
             _log.warning("Failed to load rebrew-project.toml: %s", exc)
 
@@ -185,24 +193,24 @@ def _load_dll(target: str) -> bytes | None:
         return DLL_DATA[target]
 
 
-_CAPSTONE_MD: Any = None
-_CAPSTONE_MD_LOCK = threading.Lock()
+_CAPSTONE_MD_TLS = threading.local()
 
 
 def _get_capstone_md() -> Any:
-    """Return a shared Capstone disassembler instance (created on first use)."""
-    global _CAPSTONE_MD
-    if _CAPSTONE_MD is not None:
-        return _CAPSTONE_MD
-    with _CAPSTONE_MD_LOCK:
-        if _CAPSTONE_MD is not None:
-            return _CAPSTONE_MD
+    """Return a thread-local Capstone disassembler.
+
+    A single shared ``Cs`` instance is NOT safe to disassemble concurrently
+    (libcapstone is not thread-safe) — with the threaded WSGI server, request
+    threads were racing on it and producing garbage/crashes.
+    """
+    md = getattr(_CAPSTONE_MD_TLS, "md", None)
+    if md is None:
         import capstone as _capstone  # type: ignore # noqa: PLC0415
 
         md = _capstone.Cs(_capstone.CS_ARCH_X86, _capstone.CS_MODE_32)
         md.detail = False
-        _CAPSTONE_MD = md
-        return md
+        _CAPSTONE_MD_TLS.md = md
+    return md
 
 
 @functools.lru_cache(maxsize=2048)

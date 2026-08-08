@@ -46,6 +46,8 @@ _log = logging.getLogger("recoverage")
 # direct API calls must not be able to trigger repeated rebrew catalog runs.
 _REGEN_COOLDOWN_SECONDS = 5.0
 _regen_last_attempt = 0.0  # time.monotonic() of the last accepted regen POST
+_REGEN_LOCK = threading.Lock()  # serializes regen (check + subprocess, TOCTOU)
+_regen_in_progress = False  # True while catalog/build-db is running
 
 
 # ── Server-Sent Events (live DB change notifications) ─────────────
@@ -223,7 +225,7 @@ def handle_api_targets() -> bytes:
         with contextlib.closing(_db()) as conn:
             c = conn.cursor()
             _, targets_list = resolve_targets(c)
-    except sqlite3.OperationalError:
+    except sqlite3.Error:
         _log.warning("Database unavailable, falling back to config-only target list")
         targets_list = []
         for tid, t_info in _server._get_targets_config().items():
@@ -240,7 +242,7 @@ def handle_api_targets() -> bytes:
 def handle_api_stats(target: str) -> bytes | Any:
     try:
         conn = _db()
-    except sqlite3.OperationalError:
+    except sqlite3.Error:
         return _json_err(503, {"error": "Database unavailable"})
 
     with contextlib.closing(conn):
@@ -328,7 +330,7 @@ def handle_api_data(target: str) -> bytes | Any:
 
     try:
         conn = _open_db(db)
-    except sqlite3.OperationalError:
+    except sqlite3.Error:
         return _json_err(503, {"error": "Database unavailable"})
 
     with contextlib.closing(conn):
@@ -432,7 +434,7 @@ def handle_api_functions_list(target: str) -> bytes | Any:
     search = request.query.get("search", "").strip() or None
     sort_param = request.query.get("sort", "va").strip()  # field:dir
     try:
-        limit = min(int(request.query.get("limit", 50)), 500)
+        limit = min(max(int(request.query.get("limit", 50)), 1), 500)
     except ValueError:
         limit = 50
     try:
@@ -456,7 +458,7 @@ def handle_api_functions_list(target: str) -> bytes | Any:
 
     try:
         conn = _db()
-    except sqlite3.OperationalError:
+    except sqlite3.Error:
         return _json_err(503, {"error": "Database unavailable"})
 
     with contextlib.closing(conn):
@@ -619,7 +621,7 @@ def handle_api_functions_batch(target: str) -> bytes | Any:
 
     try:
         conn = _db()
-    except sqlite3.OperationalError:
+    except sqlite3.Error:
         return _json_err(503, {"error": "Database unavailable"})
 
     with contextlib.closing(conn):
@@ -677,7 +679,7 @@ def handle_api_functions_batch(target: str) -> bytes | Any:
 def handle_api_function(target: str, va: str) -> bytes | Any:
     try:
         conn = _db()
-    except sqlite3.OperationalError:
+    except sqlite3.Error:
         return _json_err(503, {"error": "Database unavailable"})
 
     with contextlib.closing(conn):
@@ -777,7 +779,7 @@ def handle_api_asm(target: str) -> bytes | Any:
 
     try:
         conn = _db()
-    except sqlite3.OperationalError:
+    except sqlite3.Error:
         return _json_err(503, {"error": "Database unavailable"})
 
     with contextlib.closing(conn):
@@ -871,7 +873,7 @@ def handle_api_bytes(target: str, section: str) -> bytes | Any:
 
     try:
         conn = _db()
-    except sqlite3.OperationalError:
+    except sqlite3.Error:
         return _json_err(503, {"error": "Database unavailable"})
 
     with contextlib.closing(conn):
@@ -931,8 +933,7 @@ def handle_api_bytes(target: str, section: str) -> bytes | Any:
 
 @app.post("/api/regen")
 def handle_regen() -> bytes | Any:
-    global _regen_last_attempt  # noqa: PLW0603
-    from recoverage.ui import clear_index_cache  # noqa: PLC0415
+    global _regen_last_attempt, _regen_in_progress  # noqa: PLW0603
 
     remote = request.environ.get("REMOTE_ADDR", "")
     if remote not in ("127.0.0.1", "::1", "localhost"):
@@ -959,20 +960,41 @@ def handle_regen() -> bytes | Any:
                 },
             )
 
-    # Server-side cooldown: the frontend throttles Reload clicks, but direct
-    # API calls could hammer rebrew catalog/build-db (minutes of work each).
-    now = time.monotonic()
-    if now - _regen_last_attempt < _REGEN_COOLDOWN_SECONDS:
-        remaining = max(0, _REGEN_COOLDOWN_SECONDS - (now - _regen_last_attempt))
-        return _json_err(
-            429,
-            {
-                "error": "Rate limited: wait before regenerating again",
-                "detail": f"retry after {remaining:.1f}s",
-                "retry_after": round(remaining, 1),
-            },
-        )
-    _regen_last_attempt = now
+    # Server-side cooldown + serialization: the cooldown check and the
+    # subprocess must be atomic — two concurrent POSTs could otherwise both
+    # pass the check and run catalog/build-db in parallel, tearing the
+    # data_*.json / coverage.db (TOCTOU).
+    with _REGEN_LOCK:
+        if _regen_in_progress:
+            return _json_err(
+                429,
+                {
+                    "error": "Rate limited: regeneration already running",
+                    "detail": "a catalog/build-db run is in progress",
+                },
+            )
+        now = time.monotonic()
+        if now - _regen_last_attempt < _REGEN_COOLDOWN_SECONDS:
+            remaining = max(0, _REGEN_COOLDOWN_SECONDS - (now - _regen_last_attempt))
+            return _json_err(
+                429,
+                {
+                    "error": "Rate limited: wait before regenerating again",
+                    "detail": f"retry after {remaining:.1f}s",
+                    "retry_after": round(remaining, 1),
+                },
+            )
+        _regen_last_attempt = now
+        _regen_in_progress = True
+        try:
+            return _do_regen(remote)
+        finally:
+            _regen_in_progress = False
+
+
+def _do_regen(remote: str) -> bytes | Any:
+    """Run catalog + build-db. Caller holds _REGEN_LOCK."""
+    from recoverage.ui import clear_index_cache  # noqa: PLC0415
 
     clear_index_cache()
     clear_target_cache()

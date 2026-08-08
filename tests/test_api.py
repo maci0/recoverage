@@ -262,6 +262,7 @@ class TestRegenRateLimit:
         import recoverage.api as _api
 
         _api._regen_last_attempt = 0.0
+        _api._regen_in_progress = False
 
     def test_rapid_second_call_rate_limited(self) -> None:
         self._reset_cooldown()
