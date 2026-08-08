@@ -194,6 +194,14 @@ def _build_synthetic_db() -> None:
             " VALUES (?, ?, ?, ?, ?)",
             (target, 0x10001000, "2026-01-01T00:00:00+00:00", 0, 0),
         )
+        # history + all required objects must exist: the schema-shape check
+        # (round-4) verifies the full object set, not just the version stamp.
+        c.execute(
+            "CREATE TABLE history ("
+            " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            " target TEXT NOT NULL, va INTEGER NOT NULL,"
+            " old_status TEXT, new_status TEXT, changed_at TEXT NOT NULL)"
+        )
         conn.commit()
     finally:
         conn.close()

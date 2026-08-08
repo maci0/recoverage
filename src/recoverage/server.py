@@ -386,7 +386,12 @@ def _check_schema_version(conn: sqlite3.Connection) -> str:
     none of the v4 constraints affect reads of existing data.  Any other version
     is logged as a warning — recoverage does not abort.
 
-    Returns the version string (or ``"<unknown>"`` when not present / on error).
+    The version stamp alone is not proof of shape: a DB stamped "4" can be
+    missing required objects (e.g. the ``history`` table) and pass this gate,
+    then 500 at query time.  A known version with missing objects is reported
+    as ``"<incomplete>"`` so endpoints can respond with a clear 503 instead.
+
+    Returns the version string (or ``"<unknown>"`` / ``"<incomplete>"``).
     """
     try:
         row = conn.execute("SELECT value FROM metadata WHERE key = 'db_version' LIMIT 1").fetchone()
@@ -396,7 +401,33 @@ def _check_schema_version(conn: sqlite3.Connection) -> str:
         if isinstance(v, str):
             v = v.strip('"')
         version = str(v)
-        if version not in _KNOWN_SCHEMA_VERSIONS:
+        if version in _KNOWN_SCHEMA_VERSIONS:
+            present = {
+                r[0]
+                for r in conn.execute(
+                    "SELECT name FROM sqlite_master"
+                    " WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%'"
+                ).fetchall()
+            }
+            required = {
+                "metadata",
+                "sections",
+                "cells",
+                "functions",
+                "globals",
+                "verify_results",
+                "history",
+                "section_cell_stats",
+            }
+            missing = required - present
+            if missing:
+                _log.warning(
+                    "recoverage: db_version %r but missing schema objects: %s",
+                    version,
+                    ", ".join(sorted(missing)),
+                )
+                return "<incomplete>"
+        else:
             _log.warning(
                 "recoverage: unexpected db_version %r (known: %s) — "
                 "some features may not work correctly",
@@ -419,6 +450,14 @@ def _db() -> sqlite3.Connection:
     conn = _open_db(_db_path())
     version = _check_schema_version(conn)
     _log.info("recoverage: opened coverage.db (schema v%s)", version)
+    if version == "<incomplete>":
+        # Stamped with a known version but missing required objects — every
+        # query would 500.  Fail fast with the standard 503 JSON contract.
+        conn.close()
+        raise sqlite3.OperationalError(
+            "coverage.db schema is incomplete (missing tables/views) — "
+            "run rebrew build-db --force to rebuild"
+        )
     return conn
 
 
@@ -506,7 +545,10 @@ def _handle_sqlite_error(error: Any) -> Any:
     if isinstance(exc, sqlite3.Error):
         _log.warning("Database error serving %s: %s", request.path, exc)
         return _json_err(503, {"error": "Database unavailable"})
-    return error
+    # Non-DB 500: delegate to bottle's default error page.  Returning the
+    # HTTPError itself would make _cast re-enter the error handler (recursion
+    # until the wsgi catch-all); returning None would emit an empty 500 body.
+    return app.default_error_handler(error)
 
 
 @app.hook("before_request")
