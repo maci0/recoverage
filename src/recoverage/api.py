@@ -81,7 +81,19 @@ def _snapshot_db_mtime() -> tuple[int, int] | None:
 
 
 def _broadcast_db_updated(snapshot: tuple[int, int] | None) -> None:
-    """Push a db-updated SSE frame to every connected client queue."""
+    """Push a db-updated SSE frame to every connected client queue.
+
+    Also invalidates the resolved-targets / index caches — an external
+    ``rebrew build-db`` (the documented workflow) must refresh the target
+    dropdown and any cached data, not just the in-app /api/regen path.
+    """
+    try:
+        clear_target_cache()
+        from recoverage.ui import clear_index_cache  # noqa: PLC0415
+
+        clear_index_cache()
+    except Exception:  # noqa: BLE001 — cache clearing is best-effort
+        pass
     payload: dict[str, Any] = {
         "event": "db-updated",
         "db": {"path": str(_db_path())},
