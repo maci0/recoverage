@@ -451,7 +451,9 @@ def check(
         if json_output:
             import json
 
-            typer.echo(json.dumps({"error": "--min-coverage must be between 0 and 100", "exit_code": 1}))
+            typer.echo(
+                json.dumps({"error": "--min-coverage must be between 0 and 100", "exit_code": 1})
+            )
         else:
             typer.secho(
                 f"Error: --min-coverage must be between 0 and 100, got {min_coverage!r}.",
