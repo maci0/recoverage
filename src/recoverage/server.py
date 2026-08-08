@@ -83,9 +83,11 @@ def _hostname_of(origin: str) -> str:
 def _normalize_origin(origin: str) -> str:
     """Normalize an Origin URL to ``scheme://host[:port]`` for allowlist matching.
 
-    ``http://localhost:5173`` → ``http://localhost:5173``; a default port is
-    dropped (``http://localhost:80`` → ``http://localhost``) so both spellings
-    match.  Returns "" for unparsable or userinfo-bearing values.
+    ``http://localhost:5173`` → ``http://localhost:5173``; a scheme-default
+    port is dropped (``http://localhost:80`` → ``http://localhost``) so both
+    spellings match; IPv6 hosts keep their brackets
+    (``http://[::1]:8001`` → ``http://[::1]:8001``).  Returns "" for
+    unparsable or userinfo-bearing values.
     """
     if _hostname_of(origin) == "":
         return ""
@@ -96,7 +98,11 @@ def _normalize_origin(origin: str) -> str:
         host = (u.hostname or "").lower()
         port = u.port
         scheme = u.scheme or "http"
-        return f"{scheme}://{host}" + (f":{port}" if port else "")
+        default_port = {"http": 80, "https": 443}.get(scheme)
+        if port == default_port:
+            port = None
+        host_part = f"[{host}]" if ":" in host else host
+        return f"{scheme}://{host_part}" + (f":{port}" if port else "")
     except ValueError:
         return ""
 

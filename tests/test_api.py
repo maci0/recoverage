@@ -898,3 +898,68 @@ class TestServeBindGuard:
         assert result.exit_code == 0
         assert "--allow-remote" in result.output
         assert "--cors-origin" in result.output
+
+
+class TestPostConnectSqliteError:
+    """Queries that fail after connect (corrupt DB, SQLITE_BUSY) must keep
+    the JSON 503 contract instead of surfacing Bottle's HTML 500."""
+
+    @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+    def test_query_failure_returns_json_503(self, monkeypatch: Any) -> None:
+        import recoverage.api as api
+
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+
+        real_conn = api._db()
+
+        class _BoomCursor:
+            def __init__(self) -> None:
+                pass
+
+            def execute(self, *a, **k):
+                raise sqlite3.OperationalError("no such table: section_cell_stats")
+
+            def fetchone(self) -> None:
+                return None
+
+            def fetchall(self) -> list:
+                return []
+
+        class _BoomConn:
+            def cursor(self):
+                return _BoomCursor()
+
+            def close(self) -> None:
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        monkeypatch.setattr(api, "_db", lambda: _BoomConn())
+        try:
+            status, headers, body = wsgi_get(f"/api/targets/{target}/stats")
+        finally:
+            real_conn.close()
+        assert status.startswith("503")
+        data = json.loads(decode_body(body, headers))
+        assert data["error"] == "Database unavailable"
+        assert data["code"] == "db_unavailable"
+
+
+class TestNormalizeOriginEdges:
+    def test_default_port_dropped(self) -> None:
+        from recoverage.server import _normalize_origin
+
+        assert _normalize_origin("http://localhost:80") == "http://localhost"
+        assert _normalize_origin("https://example.com:443") == "https://example.com"
+        assert _normalize_origin("http://localhost:5173") == "http://localhost:5173"
+
+    def test_ipv6_brackets_preserved(self) -> None:
+        from recoverage.server import _normalize_origin
+
+        assert _normalize_origin("http://[::1]:8001") == "http://[::1]:8001"
