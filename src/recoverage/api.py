@@ -432,23 +432,23 @@ def handle_api_data(target: str) -> bytes | Any:
             if sec_name in data["sections"]:
                 data["sections"][sec_name]["cells"] = json.loads(row[1])
 
-        # Lightweight search index
+        # Lightweight search index.  Names are not unique across functions and
+        # globals — keep the FIRST (functions win over globals) so navigation
+        # never silently jumps to a colliding global's VA.
         data["search_index"] = {}
         c.execute(
             "SELECT name, vaStart, symbol FROM functions WHERE target = ?",
             (target,),
         )
         for row in c.fetchall():
-            data["search_index"][row["name"]] = {
-                "va": row["vaStart"],
-                "symbol": row["symbol"],
-            }
+            data["search_index"].setdefault(
+                row["name"], {"va": row["vaStart"], "symbol": row["symbol"]}
+            )
         c.execute("SELECT name, va FROM globals WHERE target = ?", (target,))
         for row in c.fetchall():
-            data["search_index"][row["name"]] = {
-                "va": hex(row["va"]) if row["va"] else "",
-                "symbol": "",
-            }
+            data["search_index"].setdefault(
+                row["name"], {"va": hex(row["va"]) if row["va"] else "", "symbol": ""}
+            )
 
         # Per-section cell stats from SQL view
         data["section_cell_stats"] = {}
@@ -845,7 +845,9 @@ def handle_api_asm(target: str) -> bytes | Any:
 
     try:
         va = int(va_str.strip(), 16)
-        size = min(max(int(size_str.strip(), 16), 0), 4096)
+        # Decimal size (base-0 with no prefix), matching /bytes — the two
+        # endpoints must not interpret the same ?size= differently.
+        size = min(max(int(size_str.strip(), 0), 0), 4096)
     except ValueError:
         return _json_err(400, {"error": "invalid va or size"})
 

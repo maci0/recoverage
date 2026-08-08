@@ -1057,10 +1057,12 @@ def _search_functions(c: sqlite3.Cursor, target: str, search_query: str) -> set[
         return search_matched_fns
 
     like_pat = _escape_like(search_query)
+    # ORDER BY makes the 500-row cap deterministic (SQLite scan order is
+    # otherwise arbitrary for >500 matches).
     c.execute(
         "SELECT name, vaStart FROM functions WHERE target = ? AND ("
         "name LIKE ? ESCAPE '\\' OR vaStart LIKE ? ESCAPE '\\' "
-        "OR symbol LIKE ? ESCAPE '\\') LIMIT 500",
+        "OR symbol LIKE ? ESCAPE '\\') ORDER BY name, vaStart LIMIT 500",
         (target, like_pat, like_pat, like_pat),
     )
     for name, va_start in c.fetchall():
@@ -1329,9 +1331,12 @@ def _render_function_list(
         params.extend([like, like, like])
 
     where_sql = " AND ".join(where)
+    # Cap the rendered list at 500 rows (matching the API's search cap) so a
+    # large project's ?view=functions page doesn't build a multi-MB HTML
+    # document on every request.  ORDER BY keeps the cap deterministic.
     c.execute(
         "SELECT name, va, vaStart, size, status, module FROM functions "
-        f"WHERE {where_sql} ORDER BY {order_by}, va",
+        f"WHERE {where_sql} ORDER BY {order_by}, va LIMIT 500",
         params,
     )
     rows = c.fetchall()
