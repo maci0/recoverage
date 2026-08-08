@@ -216,6 +216,11 @@ _RESOLVED_TARGETS_CACHE_LOCK = threading.RLock()
 
 _log = logging.getLogger("recoverage")
 
+# Reserved metadata target holding the schema-level db_version stamp (written
+# by rebrew build-db).  It is NOT a real project target and must never appear
+# in target enumeration, stats, or the dashboard dropdown.
+SCHEMA_TARGET = "__schema__"
+
 
 def _get_targets_config() -> dict[str, Any]:
     """Load target configuration from rebrew-project.toml (thread-safe, cached)."""
@@ -266,7 +271,7 @@ def resolve_targets(c: sqlite3.Cursor) -> tuple[list[str], list[dict[str, str]]]
         if _RESOLVED_TARGETS_CACHE is not None:
             return _RESOLVED_TARGETS_CACHE["target_ids"], _RESOLVED_TARGETS_CACHE["targets_list"]
 
-        c.execute("SELECT DISTINCT target FROM metadata")
+        c.execute("SELECT DISTINCT target FROM metadata WHERE target != ?", (SCHEMA_TARGET,))
         target_ids = [row[0] for row in c.fetchall()]
         targets_info = _get_targets_config()
 
@@ -521,7 +526,8 @@ def _check_schema_version_uncached(conn: sqlite3.Connection) -> str:
         # Prefer the schema-level __schema__ stamp (deterministic across
         # targets); fall back to any per-target stamp for legacy DBs.
         row = conn.execute(
-            "SELECT value FROM metadata WHERE target = '__schema__' AND key = 'db_version' LIMIT 1"
+            "SELECT value FROM metadata WHERE target = ? AND key = 'db_version' LIMIT 1",
+            (SCHEMA_TARGET,),
         ).fetchone()
         if row is None:
             row = conn.execute(

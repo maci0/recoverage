@@ -91,7 +91,12 @@ def _open_db(db_path: Path | None = None) -> sqlite3.Connection:
 
 def _list_targets(conn: sqlite3.Connection) -> list[str]:
     c = conn.cursor()
-    c.execute("SELECT DISTINCT target FROM metadata ORDER BY target")
+    from recoverage.server import SCHEMA_TARGET
+
+    c.execute(
+        "SELECT DISTINCT target FROM metadata WHERE target != ? ORDER BY target",
+        (SCHEMA_TARGET,),
+    )
     return [row[0] for row in c.fetchall()]
 
 

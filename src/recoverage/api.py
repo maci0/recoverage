@@ -280,7 +280,11 @@ def handle_api_health() -> bytes:
     try:
         with contextlib.closing(_open_db(db)) as conn:
             c = conn.cursor()
-            c.execute("SELECT COUNT(DISTINCT target) FROM metadata")
+            # Exclude the reserved schema-version row from the target count.
+            c.execute(
+                "SELECT COUNT(DISTINCT target) FROM metadata WHERE target != ?",
+                (_server.SCHEMA_TARGET,),
+            )
             target_count = c.fetchone()[0]
     except sqlite3.Error:
         _log.warning("Failed to query target count from database")
