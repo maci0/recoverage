@@ -88,7 +88,7 @@ uv run pytest tests/ -v
    - Absorbs jump table / switch data bytes into parent function sizes
    - Links data and thunk cells to their parent function via `parent_function` field
    - `rebrew catalog --export-ghidra-labels` → generates `ghidra_data_labels.json` for round-trip Ghidra sync
-2. `rebrew build-db` → reads JSON, builds `db/coverage.db` (SQLite), generates CATALOG.md
+2. `rebrew build-db` → reads JSON, builds `db/coverage.db` (SQLite)
    - Cells table includes `label` (Ghidra data label) and `parent_function` columns
 3. `recoverage` → serves the DB as a web dashboard
    - Cell detail panel shows parent function as a clickable navigation link
