@@ -104,9 +104,7 @@ class TestCheckCommand:
         assert result.exit_code in (0, 1)
 
     def test_check_nonexistent_section(self) -> None:
-        result = runner.invoke(
-            app, ["check", "--min-coverage", "50", "--section", "NONEXISTENT"]
-        )
+        result = runner.invoke(app, ["check", "--min-coverage", "50", "--section", "NONEXISTENT"])
         assert result.exit_code == 1
 
 

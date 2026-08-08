@@ -3,9 +3,18 @@
 from __future__ import annotations
 
 import json
+import queue
+import sqlite3
+import threading
+import time
+from io import BytesIO
+from typing import Any
+from wsgiref.util import setup_testing_defaults
 
 import pytest
-from conftest import HAS_DB, decode_body, get_first_target, wsgi_get, wsgi_request
+from conftest import HAS_DB, decode_body, get_first_target, wsgi_get, wsgi_post, wsgi_request
+
+from recoverage.server import HAS_CAPSTONE
 
 # ── Regen origin validation (actual endpoint) ─────────────────────
 
@@ -311,3 +320,450 @@ class TestLastVerify:
         assert status.startswith("200")
         data = json.loads(decode_body(body, headers))
         assert "last_verify" not in data
+
+
+# ── SSE live reload (/api/events) ─────────────────────────────────
+
+
+def wsgi_stream(path: str, max_chunks: int = 1) -> tuple[str, dict[str, str], list[bytes], Any]:
+    """Call the app directly against /api/events and iterate up to max_chunks.
+
+    Returns (status, headers, chunks, result_iter).  The caller must
+    ``close()`` the returned iterator to simulate client disconnect — the
+    regular ``wsgi_get`` helper cannot be used here because the stream never
+    ends on its own.
+    """
+    environ: dict[str, Any] = {}
+    setup_testing_defaults(environ)
+    environ["REQUEST_METHOD"] = "GET"
+    environ["PATH_INFO"] = path
+    environ["QUERY_STRING"] = ""
+    environ["REMOTE_ADDR"] = "127.0.0.1"
+    environ["wsgi.input"] = BytesIO(b"")
+    environ["CONTENT_LENGTH"] = "0"
+
+    status_holder: dict[str, str | dict[str, str]] = {"status": "", "headers": {}}
+
+    def _start_response(status: str, response_headers, exc_info=None) -> None:
+        status_holder["status"] = status
+        status_holder["headers"] = {k: v for k, v in response_headers}
+
+    from recoverage.server import app
+
+    result = app(environ, _start_response)
+    chunks: list[bytes] = []
+    for chunk in result:
+        chunks.append(chunk)
+        if len(chunks) >= max_chunks:
+            break
+    return str(status_holder["status"]), dict(status_holder["headers"]), chunks, result
+
+
+class TestSseEvents:
+    """SSE stream endpoint, broadcast frames, and disconnect cleanup."""
+
+    def test_stream_headers_and_initial_comment(self) -> None:
+        import recoverage.api as api
+
+        api._stop_db_watcher()
+        result = None
+        try:
+            status, headers, chunks, result = wsgi_stream("/api/events", max_chunks=1)
+            assert status.startswith("200")
+            assert headers["Content-Type"] == "text/event-stream"
+            assert headers["Cache-Control"] == "no-cache, no-store, must-revalidate"
+            assert chunks == [b": connected\n\n"]
+        finally:
+            if result is not None:
+                result.close()
+            api._stop_db_watcher()
+
+    def test_stream_registers_and_unregisters_client(self) -> None:
+        import recoverage.api as api
+
+        api._stop_db_watcher()
+        result = None
+        try:
+            _, _, _, result = wsgi_stream("/api/events", max_chunks=1)
+            assert len(api._SSE_CLIENTS) == 1
+            result.close()  # client disconnect → generator finally
+            assert len(api._SSE_CLIENTS) == 0
+        finally:
+            if result is not None:
+                result.close()
+            api._stop_db_watcher()
+
+    def test_stream_delivers_db_updated_frame(self) -> None:
+        import recoverage.api as api
+
+        api._stop_db_watcher()
+        result = None
+        try:
+            _, _, chunks, result = wsgi_stream("/api/events", max_chunks=1)
+            assert chunks == [b": connected\n\n"]
+            api._broadcast_db_updated((123456789, 1024))
+            frame = next(iter(result))
+            assert frame.startswith(b"event: db-updated\n")
+            assert b'"event": "db-updated"' in frame
+            payload = json.loads(frame.split(b"data: ", 1)[1])
+            assert payload["db"]["mtime_ns"] == 123456789
+            assert payload["db"]["size_bytes"] == 1024
+            result.close()
+            assert len(api._SSE_CLIENTS) == 0
+        finally:
+            if result is not None:
+                result.close()
+            api._stop_db_watcher()
+
+    def test_broadcast_frame_format(self) -> None:
+        import recoverage.api as api
+
+        q: queue.Queue[bytes] = queue.Queue()
+        api._SSE_CLIENTS.add(q)
+        try:
+            api._broadcast_db_updated((987654321, 512))
+            frame = q.get_nowait()
+            assert frame.startswith(b"event: db-updated\ndata: ")
+            assert frame.endswith(b"\n\n")
+            payload = json.loads(frame.split(b"data: ", 1)[1])
+            assert payload["event"] == "db-updated"
+            assert payload["db"]["mtime_ns"] == 987654321
+            assert payload["db"]["size_bytes"] == 512
+            assert q.empty()
+        finally:
+            api._SSE_CLIENTS.discard(q)
+
+    def test_snapshot_reads_real_db(self) -> None:
+        import recoverage.api as api
+
+        snapshot = api._snapshot_db_mtime()
+        assert snapshot is not None
+        assert snapshot[1] > 0  # the synthetic DB has a non-zero size
+
+    def test_ensure_db_watcher_starts_thread(self) -> None:
+        import recoverage.api as api
+
+        api._stop_db_watcher()
+        try:
+            api._ensure_db_watcher()
+            assert api._DB_WATCHER_THREAD is not None
+            assert api._DB_WATCHER_THREAD.is_alive()
+        finally:
+            api._stop_db_watcher()
+
+    def test_stream_heartbeat(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import recoverage.api as api
+
+        api._stop_db_watcher()
+        result = None
+        try:
+            monkeypatch.setattr(api, "_SSE_HEARTBEAT_SECONDS", 0.05)
+            _, _, chunks, result = wsgi_stream("/api/events", max_chunks=2)
+            assert chunks[0] == b": connected\n\n"
+            assert chunks[1] == b": ping\n\n"
+        finally:
+            if result is not None:
+                result.close()
+            api._stop_db_watcher()
+
+
+class TestSseDbWatcher:
+    """Background watcher: polls mtime and broadcasts on change."""
+
+    def test_watcher_broadcasts_on_mtime_change(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import recoverage.api as api
+
+        seq = [(111, 1), (111, 1), (222, 2)]
+        state = {"i": 0}
+
+        def fake_snapshot() -> tuple[int, int]:
+            i = min(state["i"], len(seq) - 1)
+            value = seq[i]
+            state["i"] += 1
+            return value
+
+        calls: list[tuple[int, int]] = []
+        monkeypatch.setattr(api, "_snapshot_db_mtime", fake_snapshot)
+        monkeypatch.setattr(api, "_broadcast_db_updated", lambda s: calls.append(s))
+        monkeypatch.setattr(api, "_SSE_POLL_INTERVAL_SECONDS", 0.01)
+
+        stop = threading.Event()
+        thread = threading.Thread(target=api._db_watcher_loop, args=(stop,), daemon=True)
+        thread.start()
+        try:
+            deadline = time.monotonic() + 2
+            while len(calls) < 1 and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert calls == [(222, 2)]
+        finally:
+            stop.set()
+            thread.join(timeout=2)
+
+    def test_watcher_ignores_unchanged_mtime(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import recoverage.api as api
+
+        monkeypatch.setattr(api, "_snapshot_db_mtime", lambda: (111, 1))
+        calls: list[tuple[int, int]] = []
+        monkeypatch.setattr(api, "_broadcast_db_updated", lambda s: calls.append(s))
+        monkeypatch.setattr(api, "_SSE_POLL_INTERVAL_SECONDS", 0.01)
+
+        stop = threading.Event()
+        thread = threading.Thread(target=api._db_watcher_loop, args=(stop,), daemon=True)
+        thread.start()
+        try:
+            time.sleep(0.05)
+            assert calls == []
+        finally:
+            stop.set()
+            thread.join(timeout=2)
+
+
+# ── Threaded WSGI server ──────────────────────────────────────────
+
+
+class TestThreadingServer:
+    """The serve command must use a threaded WSGI server: the SSE /api/events
+    stream stays open indefinitely, and wsgiref's stock single-threaded server
+    would stall every other request while a client is connected."""
+
+    def test_threading_server_subclasses_mixins(self) -> None:
+        from socketserver import ThreadingMixIn
+        from wsgiref.simple_server import WSGIServer
+
+        from recoverage.cli import _ThreadingWSGIServer
+
+        assert issubclass(_ThreadingWSGIServer, ThreadingMixIn)
+        assert issubclass(_ThreadingWSGIServer, WSGIServer)
+
+    def test_threading_server_daemon_threads(self) -> None:
+        from recoverage.cli import _ThreadingWSGIServer
+
+        assert _ThreadingWSGIServer.daemon_threads is True
+
+
+# ── Batch function lookup ─────────────────────────────────────────
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+class TestBatchFunctionLookup:
+    """POST /api/targets/<target>/functions batch VA lookup."""
+
+    def _post(self, target: str, body: str | bytes) -> tuple[str, dict[str, str], bytes]:
+        return wsgi_post(
+            f"/api/targets/{target}/functions",
+            headers={"Content-Type": "application/json"},
+            body=body,
+        )
+
+    def test_batch_returns_details_with_last_verify(self) -> None:
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, headers, body = self._post(
+            target, json.dumps({"vas": ["0x10001000", "0x10001010"]})
+        )
+        assert status.startswith("200")
+        data = json.loads(decode_body(body, headers))
+        assert isinstance(data, list)
+        assert [fn["name"] for fn in data] == ["_func_a", "_func_b"]
+        assert data[0]["va"] == 0x10001000
+        assert data[0]["last_verify"]["byte_delta"] == 0
+        assert "last_verify" not in data[1]
+
+    def test_batch_omits_unknown_vas(self) -> None:
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, headers, body = self._post(
+            target, json.dumps({"vas": ["0x10001000", "0x99999999"]})
+        )
+        assert status.startswith("200")
+        data = json.loads(decode_body(body, headers))
+        assert [fn["va"] for fn in data] == [0x10001000]
+
+    def test_batch_all_unknown_vas_returns_empty_list(self) -> None:
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, headers, body = self._post(target, json.dumps({"vas": ["0x99999999"]}))
+        assert status.startswith("200")
+        assert json.loads(decode_body(body, headers)) == []
+
+    def test_batch_includes_globals(self) -> None:
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, headers, body = self._post(
+            target, json.dumps({"vas": ["0x10001000", "0x10002000"]})
+        )
+        assert status.startswith("200")
+        data = json.loads(decode_body(body, headers))
+        assert len(data) == 2
+        assert data[1]["name"] == "g_counter"
+        assert data[1]["isGlobal"] == 1
+
+    def test_batch_preserves_input_order(self) -> None:
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, headers, body = self._post(
+            target, json.dumps({"vas": ["0x10001030", "0x10001000"]})
+        )
+        assert status.startswith("200")
+        data = json.loads(decode_body(body, headers))
+        assert [fn["name"] for fn in data] == ["_func_c", "_func_a"]
+
+    def test_batch_accepts_int_vas(self) -> None:
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, headers, body = self._post(target, json.dumps({"vas": [0x10001000]}))
+        assert status.startswith("200")
+        data = json.loads(decode_body(body, headers))
+        assert [fn["name"] for fn in data] == ["_func_a"]
+
+    def test_batch_dedupes_repeated_vas(self) -> None:
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, headers, body = self._post(
+            target, json.dumps({"vas": ["0x10001000", "0x10001000"]})
+        )
+        assert status.startswith("200")
+        data = json.loads(decode_body(body, headers))
+        assert len(data) == 1
+
+    def test_batch_empty_vas_400(self) -> None:
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, headers, body = self._post(target, json.dumps({"vas": []}))
+        assert status.startswith("400")
+        data = json.loads(decode_body(body, headers))
+        assert data["code"] == "bad_request"
+
+    def test_batch_non_json_body_400(self) -> None:
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, _, _ = self._post(target, "not json at all")
+        assert status.startswith("400")
+
+    def test_batch_empty_body_400(self) -> None:
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, _, _ = self._post(target, "")
+        assert status.startswith("400")
+
+    def test_batch_body_not_object_400(self) -> None:
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, _, _ = self._post(target, json.dumps([1, 2, 3]))
+        assert status.startswith("400")
+
+    def test_batch_missing_vas_key_400(self) -> None:
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, _, _ = self._post(target, json.dumps({}))
+        assert status.startswith("400")
+
+    def test_batch_vas_not_list_400(self) -> None:
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, _, _ = self._post(target, json.dumps({"vas": "0x10001000"}))
+        assert status.startswith("400")
+
+    def test_batch_malformed_va_400(self) -> None:
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, headers, body = self._post(target, json.dumps({"vas": ["not-a-va"]}))
+        assert status.startswith("400")
+        data = json.loads(decode_body(body, headers))
+        assert data["code"] == "bad_request"
+        assert "not-a-va" in data["detail"]
+
+    def test_batch_too_many_vas_400(self) -> None:
+        import recoverage.api as api
+
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        vas = ["0x10001000"] * (api._MAX_BATCH_LOOKUP + 1)
+        status, headers, body = self._post(target, json.dumps({"vas": vas}))
+        assert status.startswith("400")
+        data = json.loads(decode_body(body, headers))
+        assert str(api._MAX_BATCH_LOOKUP) in data["error"]
+
+
+# ── Error-response consistency ────────────────────────────────────
+
+
+class TestErrorResponseShape:
+    """Every JSON error response carries {error, code, detail} (+ extras)."""
+
+    def _check(
+        self, status: str, headers: dict[str, str], body: bytes, expected_code: str
+    ) -> dict[str, Any]:
+        assert status.startswith("4") or status.startswith("5")
+        data = json.loads(decode_body(body, headers))
+        assert set(data) >= {"error", "code", "detail"}
+        assert data["code"] == expected_code
+        assert isinstance(data["error"], str) and data["error"]
+        assert isinstance(data["detail"], str)
+        return data
+
+    def test_404_function_detail(self) -> None:
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, headers, body = wsgi_get(f"/api/targets/{target}/functions/0xdeadbeef")
+        data = self._check(status, headers, body, "not_found")
+        assert "0xdeadbeef" in data["detail"]
+
+    def test_400_bad_request(self) -> None:
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, headers, body = wsgi_post(f"/api/targets/{target}/functions", body="[]")
+        self._check(status, headers, body, "bad_request")
+
+    def test_403_forbidden(self) -> None:
+        status, headers, body = wsgi_request("POST", "/api/regen", remote_addr="192.168.1.100")
+        data = self._check(status, headers, body, "forbidden")
+        assert data["error"] == "Forbidden: localhost only"
+
+    def test_429_rate_limited_preserves_extras(self) -> None:
+        import recoverage.api as api
+
+        api._regen_last_attempt = 0.0
+        wsgi_request("POST", "/api/regen", remote_addr="127.0.0.1")
+        status, headers, body = wsgi_request("POST", "/api/regen", remote_addr="127.0.0.1")
+        data = self._check(status, headers, body, "rate_limited")
+        assert data["retry_after"] >= 0
+        assert data["detail"]
+
+    def test_501_not_implemented(self) -> None:
+        if HAS_CAPSTONE:
+            pytest.skip("capstone installed — asm route serves normally")
+        status, headers, body = wsgi_get("/api/targets/FAKEDLL/asm?va=0x10001000&size=16")
+        data = self._check(status, headers, body, "not_implemented")
+        assert "capstone" in data["error"]
+
+    def test_503_db_unavailable(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import recoverage.api as api
+
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+
+        def _boom() -> sqlite3.Connection:
+            raise sqlite3.OperationalError("no such file")
+
+        monkeypatch.setattr(api, "_db", _boom)
+        status, headers, body = wsgi_get(f"/api/targets/{target}/stats")
+        self._check(status, headers, body, "db_unavailable")

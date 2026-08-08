@@ -75,11 +75,14 @@ class TestBestEncoding:
     def test_duplicate_encodings(self) -> None:
         assert _best_encoding("gzip, gzip, gzip") == "gzip"
 
-    @pytest.mark.parametrize("header,expected", [
-        ("*", ""),
-        ("zstd, br, gzip, deflate, sdch", "zstd"),
-        ("br;q=1.0, gzip;q=0.5, zstd;q=0.9", "zstd"),
-    ])
+    @pytest.mark.parametrize(
+        "header,expected",
+        [
+            ("*", ""),
+            ("zstd, br, gzip, deflate, sdch", "zstd"),
+            ("br;q=1.0, gzip;q=0.5, zstd;q=0.9", "zstd"),
+        ],
+    )
     def test_various_real_world_headers(self, header: str, expected: str) -> None:
         assert _best_encoding(header) == expected
 

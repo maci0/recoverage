@@ -324,9 +324,7 @@ def _check_schema_version(conn: sqlite3.Connection) -> str:
     Returns the version string (or ``"<unknown>"`` when not present / on error).
     """
     try:
-        row = conn.execute(
-            "SELECT value FROM metadata WHERE key = 'db_version' LIMIT 1"
-        ).fetchone()
+        row = conn.execute("SELECT value FROM metadata WHERE key = 'db_version' LIMIT 1").fetchone()
         if row is None:
             return "<unknown>"
         v = row[0]
@@ -382,9 +380,38 @@ def _json_ok(data: dict[str, Any] | list[Any] | bytes, **headers: str) -> bytes:
     return _compressed(body, "application/json", **headers)
 
 
+# Every JSON error response carries this trio: `error` (human message),
+# `code` (stable machine-readable string), `detail` (extra context, often "").
+_STATUS_ERROR_CODES: dict[int, str] = {
+    400: "bad_request",
+    403: "forbidden",
+    404: "not_found",
+    422: "unprocessable_entity",
+    429: "rate_limited",
+    500: "internal",
+    501: "not_implemented",
+    503: "db_unavailable",
+    504: "gateway_timeout",
+}
+
+
 def _json_err(status: int, data: dict[str, Any]) -> Any:
-    """Return a JSON error response."""
-    body = json.dumps(data).encode("utf-8")
+    """Return a JSON error response.
+
+    Body is always ``{"error": <human message>, "code": <machine code>,
+    "detail": <context>}``.  ``code`` defaults to a status-based mapping
+    (call sites may override it) and any extra keys in ``data`` (e.g.
+    ``retry_after``) are preserved alongside the standard trio.
+    """
+    body_data: dict[str, Any] = {
+        "error": data.get("error", "error"),
+        "code": data.get("code", _STATUS_ERROR_CODES.get(status, "internal")),
+        "detail": data.get("detail", ""),
+    }
+    for key, value in data.items():
+        if key not in body_data:
+            body_data[key] = value
+    body = json.dumps(body_data).encode("utf-8")
     accept_enc = request.headers.get("Accept-Encoding", "")
     body, encoding = compress_payload(body, accept_enc)
     resp = HTTPResponse(status=status, body=body)

@@ -10,7 +10,9 @@ import sqlite3
 import subprocess
 import threading
 from pathlib import Path
+from socketserver import ThreadingMixIn
 from typing import Any
+from wsgiref.simple_server import WSGIServer
 
 import typer
 
@@ -33,6 +35,17 @@ app = typer.Typer(
         "[dim]Reads db/coverage.db (SQLite). Serves SPA at http://localhost:8001.[/dim]"
     ),
 )
+
+
+class _ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
+    """Threaded WSGI server for the dashboard.
+
+    wsgiref's stock WSGIServer handles one connection at a time; the SSE
+    /api/events stream stays open indefinitely, which would stall every other
+    request.  ThreadingMixIn gives each connection its own daemon thread.
+    """
+
+    daemon_threads = True
 
 
 def _version_callback(value: bool) -> None:
@@ -227,7 +240,13 @@ def serve(
     if not no_open:
         threading.Timer(0.5, open_browser, args=(url,)).start()
 
-    bottle_app.run(host=bind, port=port, quiet=True, server="wsgiref")
+    bottle_app.run(
+        host=bind,
+        port=port,
+        quiet=True,
+        server="wsgiref",
+        server_class=_ThreadingWSGIServer,
+    )
 
 
 @app.command()

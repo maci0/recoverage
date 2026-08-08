@@ -210,6 +210,7 @@ def wsgi_request(
     path: str,
     headers: dict[str, str] | None = None,
     remote_addr: str = "127.0.0.1",
+    body: bytes | str = b"",
 ) -> tuple[str, dict[str, str], bytes]:
     """Issue a WSGI request against the Bottle app and return (status, headers, body)."""
     environ: dict[str, str | BytesIO] = {}
@@ -219,7 +220,10 @@ def wsgi_request(
     environ["PATH_INFO"] = url_path
     environ["QUERY_STRING"] = query
     environ["REMOTE_ADDR"] = remote_addr
-    environ["wsgi.input"] = BytesIO(b"")
+    if isinstance(body, str):
+        body = body.encode("utf-8")
+    environ["wsgi.input"] = BytesIO(body)
+    environ["CONTENT_LENGTH"] = str(len(body))
     if headers:
         for k, v in headers.items():
             environ[f"HTTP_{k.upper().replace('-', '_')}"] = v
@@ -244,8 +248,9 @@ def wsgi_post(
     path: str,
     headers: dict[str, str] | None = None,
     remote_addr: str = "127.0.0.1",
+    body: bytes | str = b"",
 ) -> tuple[str, dict[str, str], bytes]:
-    return wsgi_request("POST", path, headers, remote_addr=remote_addr)
+    return wsgi_request("POST", path, headers, remote_addr=remote_addr, body=body)
 
 
 def decode_body(body: bytes, headers: dict[str, str]) -> bytes:

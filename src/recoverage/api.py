@@ -5,9 +5,12 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import queue
 import sqlite3
 import subprocess
+import threading
 import time
+from collections.abc import Generator
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +37,7 @@ from recoverage.server import (
     get_disassembly,
     request,
     resolve_targets,
+    response,
 )
 
 _log = logging.getLogger("recoverage")
@@ -42,6 +46,138 @@ _log = logging.getLogger("recoverage")
 # direct API calls must not be able to trigger repeated rebrew catalog runs.
 _REGEN_COOLDOWN_SECONDS = 5.0
 _regen_last_attempt = 0.0  # time.monotonic() of the last accepted regen POST
+
+
+# ── Server-Sent Events (live DB change notifications) ─────────────
+#
+# A single background watcher thread polls coverage.db mtime every couple of
+# seconds and broadcasts a `db-updated` SSE frame to every connected client.
+# Each /api/events connection gets its own bounded queue; the route drains it
+# and streams frames.  When no client is connected the watcher keeps polling
+# (cheap), and client disconnects are handled by removing the queue when the
+# stream generator is closed (wsgiref closes the iterator on abrupt socket
+# teardown, which propagates GeneratorExit into the generator's finally).
+
+_SSE_POLL_INTERVAL_SECONDS = 2.0
+_SSE_HEARTBEAT_SECONDS = 15.0
+_SSE_QUEUE_MAX = 32  # per-client buffer; slow clients drop events, not memory
+
+_SSE_CLIENTS: set[queue.Queue[bytes]] = set()
+_SSE_CLIENTS_LOCK = threading.Lock()
+_DB_WATCHER_THREAD: threading.Thread | None = None
+_DB_WATCHER_STOP = threading.Event()
+_DB_WATCHER_LOCK = threading.Lock()
+
+
+def _snapshot_db_mtime() -> tuple[int, int] | None:
+    """Return (mtime_ns, size) of coverage.db, or None when unreadable."""
+    try:
+        st = _db_path().stat()
+        return st.st_mtime_ns, st.st_size
+    except OSError:
+        return None
+
+
+def _broadcast_db_updated(snapshot: tuple[int, int] | None) -> None:
+    """Push a db-updated SSE frame to every connected client queue."""
+    payload: dict[str, Any] = {
+        "event": "db-updated",
+        "db": {"path": str(_db_path())},
+        "timestamp": time.time(),
+    }
+    if snapshot is not None:
+        payload["db"]["mtime_ns"] = snapshot[0]
+        payload["db"]["size_bytes"] = snapshot[1]
+    frame = f"event: db-updated\ndata: {json.dumps(payload)}\n\n".encode()
+    with _SSE_CLIENTS_LOCK:
+        clients = list(_SSE_CLIENTS)
+    for client in clients:
+        try:
+            client.put_nowait(frame)
+        except queue.Full:
+            _log.debug("SSE client queue full — dropping db-updated event")
+
+
+def _db_watcher_loop(stop: threading.Event) -> None:
+    """Poll coverage.db mtime every few seconds and broadcast changes.
+
+    The first snapshot is the baseline; any later change (including the file
+    appearing or disappearing) broadcasts an event.  Runs until ``stop`` is
+    set, which also serves as the poll sleep so tests can drive it quickly.
+    """
+    last = _snapshot_db_mtime()
+    while not stop.is_set():
+        stop.wait(_SSE_POLL_INTERVAL_SECONDS)
+        if stop.is_set():
+            break
+        snapshot = _snapshot_db_mtime()
+        if snapshot != last:
+            last = snapshot
+            _broadcast_db_updated(snapshot)
+
+
+def _ensure_db_watcher() -> None:
+    """Start the watcher thread on first use (idempotent, thread-safe)."""
+    global _DB_WATCHER_THREAD
+    with _DB_WATCHER_LOCK:
+        if _DB_WATCHER_THREAD is not None and _DB_WATCHER_THREAD.is_alive():
+            return
+        _DB_WATCHER_STOP.clear()
+        _DB_WATCHER_THREAD = threading.Thread(
+            target=_db_watcher_loop,
+            args=(_DB_WATCHER_STOP,),
+            name="recoverage-db-watcher",
+            daemon=True,
+        )
+        _DB_WATCHER_THREAD.start()
+
+
+def _stop_db_watcher() -> None:
+    """Stop the watcher thread (used by tests)."""
+    global _DB_WATCHER_THREAD
+    _DB_WATCHER_STOP.set()
+    with _DB_WATCHER_LOCK:
+        if _DB_WATCHER_THREAD is not None:
+            _DB_WATCHER_THREAD.join(timeout=5)
+            _DB_WATCHER_THREAD = None
+
+
+@app.get("/api/events")
+def handle_api_events() -> Any:
+    """SSE stream: emits a db-updated event when coverage.db is rewritten.
+
+    Bottle streams the returned generator.  The watcher thread broadcasts to a
+    per-client queue; this route drains it.  Disconnects are detected when the
+    generator is closed — the client queue is removed in a ``finally``.
+    """
+    _ensure_db_watcher()
+    client_queue: queue.Queue[bytes] = queue.Queue(maxsize=_SSE_QUEUE_MAX)
+    with _SSE_CLIENTS_LOCK:
+        _SSE_CLIENTS.add(client_queue)
+
+    def _events() -> Generator[bytes, None, None]:
+        try:
+            yield b": connected\n\n"
+            last_heartbeat = time.monotonic()
+            while True:
+                try:
+                    frame = client_queue.get(timeout=1.0)
+                except queue.Empty:
+                    frame = None
+                if frame is not None:
+                    yield frame
+                now = time.monotonic()
+                if now - last_heartbeat >= _SSE_HEARTBEAT_SECONDS:
+                    yield b": ping\n\n"
+                    last_heartbeat = now
+        finally:
+            with _SSE_CLIENTS_LOCK:
+                _SSE_CLIENTS.discard(client_queue)
+
+    response.content_type = "text/event-stream"
+    response.set_header("Cache-Control", "no-cache, no-store, must-revalidate")
+    response.set_header("X-Accel-Buffering", "no")
+    return _events()
 
 
 @app.get("/api/health")
@@ -385,6 +521,158 @@ def handle_api_functions_list(target: str) -> bytes | Any:
         )
 
 
+# Mirrors the list endpoint's limit cap.
+_MAX_BATCH_LOOKUP = 500
+
+
+@app.post("/api/targets/<target>/functions")
+def handle_api_functions_batch(target: str) -> bytes | Any:
+    """Batch function/global lookup by VA list.
+
+    Body: ``{"vas": ["0x10001000", ...]}`` (hex strings or integers).  Returns
+    a JSON array of function/global detail objects in input order — the same
+    shape as ``GET /functions/<va>``, including the ``last_verify`` attachment.
+    VAs with no match are omitted from the response (not an error).
+    """
+    try:
+        raw = request.body.read()
+    except (OSError, ValueError):
+        raw = b""
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return _json_err(
+            400,
+            {
+                "error": "Body must be a JSON object",
+                "detail": 'expected {"vas": ["0x10001000", ...]}',
+            },
+        )
+
+    if not isinstance(payload, dict):
+        return _json_err(
+            400,
+            {
+                "error": "Body must be a JSON object",
+                "detail": 'expected {"vas": ["0x10001000", ...]}',
+            },
+        )
+    vas = payload.get("vas")
+    if not isinstance(vas, list):
+        return _json_err(
+            400,
+            {
+                "error": "vas must be an array",
+                "detail": 'expected {"vas": ["0x10001000", ...]}',
+            },
+        )
+    if not vas:
+        return _json_err(400, {"error": "vas must not be empty"})
+    if len(vas) > _MAX_BATCH_LOOKUP:
+        return _json_err(
+            400,
+            {
+                "error": f"vas list too large (max {_MAX_BATCH_LOOKUP})",
+                "detail": f"received {len(vas)} entries",
+            },
+        )
+
+    va_ints: list[int] = []
+    for entry in vas:
+        if isinstance(entry, bool):
+            return _json_err(
+                400,
+                {
+                    "error": f"invalid VA: {entry!r}",
+                    "detail": "VAs must be hex strings or integers",
+                },
+            )
+        if isinstance(entry, int):
+            va_ints.append(entry)
+        elif isinstance(entry, str):
+            try:
+                va_ints.append(int(entry, 0))
+            except ValueError:
+                return _json_err(
+                    400,
+                    {
+                        "error": f"invalid VA: {entry!r}",
+                        "detail": f"unparseable VA {entry!r}; expected hex like 0x10001000",
+                    },
+                )
+        else:
+            return _json_err(
+                400,
+                {
+                    "error": f"invalid VA: {entry!r}",
+                    "detail": "VAs must be hex strings or integers",
+                },
+            )
+
+    # Preserve input order; duplicate VAs collapse to a single result.
+    seen: set[int] = set()
+    unique_vas: list[int] = []
+    for va in va_ints:
+        if va not in seen:
+            seen.add(va)
+            unique_vas.append(va)
+
+    try:
+        conn = _db()
+    except sqlite3.OperationalError:
+        return _json_err(503, {"error": "Database unavailable"})
+
+    with contextlib.closing(conn):
+        c = conn.cursor()
+        results: list[dict[str, Any]] = []
+        if not unique_vas:
+            return _json_ok(results, Cache_Control="no-cache, no-store, must-revalidate")
+
+        placeholders = ",".join("?" * len(unique_vas))
+
+        # Functions first (parity with GET /functions/<va>), then globals.
+        fn_by_va: dict[int, dict[str, Any]] = {}
+        c.execute(
+            f"SELECT {_FN_JSON_SQL} FROM functions WHERE target = ? AND va IN ({placeholders})",
+            [target, *unique_vas],
+        )
+        for row in c.fetchall():
+            fn = json.loads(row[0])
+            fn_by_va[fn["va"]] = fn
+
+        if fn_by_va:
+            c.execute(
+                "SELECT va, verified_at, byte_delta, diff_lines FROM verify_results"
+                f" WHERE target = ? AND va IN ({placeholders})",
+                [target, *unique_vas],
+            )
+            for vr in c.fetchall():
+                fn = fn_by_va.get(vr["va"])
+                if fn is not None:
+                    fn["last_verify"] = {
+                        "verified_at": vr["verified_at"],
+                        "byte_delta": vr["byte_delta"],
+                        "diff_lines": vr["diff_lines"],
+                    }
+
+        c.execute(
+            f"SELECT {_GLOBAL_JSON_SQL} FROM globals WHERE target = ? AND va IN ({placeholders})",
+            [target, *unique_vas],
+        )
+        globals_by_va: dict[int, dict[str, Any]] = {}
+        for row in c.fetchall():
+            gl = json.loads(row[0])
+            globals_by_va[gl["va"]] = gl
+
+        for va in unique_vas:
+            if va in fn_by_va:
+                results.append(fn_by_va[va])
+            elif va in globals_by_va:
+                results.append(globals_by_va[va])
+
+        return _json_ok(results, Cache_Control="no-cache, no-store, must-revalidate")
+
+
 @app.get("/api/targets/<target>/functions/<va>")
 def handle_api_function(target: str, va: str) -> bytes | Any:
     try:
@@ -450,13 +738,25 @@ def handle_api_function(target: str, va: str) -> bytes | Any:
         if row:
             return _json_ok(row[0].encode("utf-8"), Cache_Control=no_cache)
 
-        return _json_err(404, {"error": "not found"})
+        return _json_err(
+            404,
+            {
+                "error": "not found",
+                "detail": f"no function or global matching {va!r} for target {target!r}",
+            },
+        )
 
 
 @app.get("/api/targets/<target>/asm")
 def handle_api_asm(target: str) -> bytes | Any:
     if not HAS_CAPSTONE:
-        return _json_err(501, {"error": "capstone not installed"})
+        return _json_err(
+            501,
+            {
+                "error": "capstone not installed",
+                "detail": "install capstone (pip install capstone) to enable disassembly",
+            },
+        )
 
     va_str = request.query.get("va")
     size_str = request.query.get("size")
@@ -489,7 +789,13 @@ def handle_api_asm(target: str) -> bytes | Any:
         row = c.fetchone()
 
         if not row:
-            return _json_err(404, {"error": f"section {section} not found"})
+            return _json_err(
+                404,
+                {
+                    "error": f"section {section} not found",
+                    "detail": f"target {target!r} has no section {section!r}",
+                },
+            )
 
         sec = dict(row)
         file_offset = sec["fileOffset"] + (va - sec["va"])
@@ -502,10 +808,22 @@ def handle_api_asm(target: str) -> bytes | Any:
             # Structured JSON output
             target_data = _load_dll(target)
             if target_data is None:
-                return _json_err(404, {"error": "DLL not found"})
+                return _json_err(
+                    404,
+                    {
+                        "error": "DLL not found",
+                        "detail": f"original binary for target {target!r} not found",
+                    },
+                )
             code_bytes = target_data[file_offset : file_offset + size]
             if len(code_bytes) < size:
-                return _json_err(422, {"error": "not enough bytes in DLL"})
+                return _json_err(
+                    422,
+                    {
+                        "error": "not enough bytes in DLL",
+                        "detail": f"requested {size} bytes, {len(code_bytes)} available",
+                    },
+                )
 
             md = _get_capstone_md()
             instructions: list[dict[str, Any]] = []
@@ -526,7 +844,13 @@ def handle_api_asm(target: str) -> bytes | Any:
         # Default: plain text
         asm_text = get_disassembly(va, size, file_offset, target)
         if not asm_text:
-            return _json_err(422, {"error": "not enough bytes in DLL"})
+            return _json_err(
+                422,
+                {
+                    "error": "not enough bytes in DLL",
+                    "detail": f"requested {size} bytes starting at va {va_str!r}",
+                },
+            )
 
         return _json_ok({"asm": asm_text}, Cache_Control="public, max-age=31536000")
 
@@ -559,14 +883,26 @@ def handle_api_bytes(target: str, section: str) -> bytes | Any:
         row = c.fetchone()
 
         if not row:
-            return _json_err(404, {"error": f"section {section} not found"})
+            return _json_err(
+                404,
+                {
+                    "error": f"section {section} not found",
+                    "detail": f"target {target!r} has no section {section!r}",
+                },
+            )
 
         sec = dict(row)
         if req_offset >= sec["size"]:
             return _json_err(400, {"error": "offset beyond section bounds"})
         target_data = _load_dll(target)
         if target_data is None:
-            return _json_err(404, {"error": "DLL not found for target"})
+            return _json_err(
+                404,
+                {
+                    "error": "DLL not found for target",
+                    "detail": f"original binary for target {target!r} not found",
+                },
+            )
 
         file_start = sec["fileOffset"] + req_offset
         chunk = target_data[file_start : file_start + req_size]
@@ -600,7 +936,13 @@ def handle_regen() -> bytes | Any:
 
     remote = request.environ.get("REMOTE_ADDR", "")
     if remote not in ("127.0.0.1", "::1", "localhost"):
-        return _json_err(403, {"error": "Forbidden: localhost only"})
+        return _json_err(
+            403,
+            {
+                "error": "Forbidden: localhost only",
+                "detail": f"request came from remote address {remote!r}",
+            },
+        )
 
     origin = request.headers.get("Origin", "")
     if origin:
@@ -609,7 +951,13 @@ def handle_regen() -> bytes | Any:
         parsed_origin = _urlparse(origin)
         origin_host = parsed_origin.hostname or ""
         if origin_host not in ("127.0.0.1", "localhost", "::1"):
-            return _json_err(403, {"error": "Forbidden: cross-origin"})
+            return _json_err(
+                403,
+                {
+                    "error": "Forbidden: cross-origin",
+                    "detail": f"origin host {origin_host!r} is not loopback",
+                },
+            )
 
     # Server-side cooldown: the frontend throttles Reload clicks, but direct
     # API calls could hammer rebrew catalog/build-db (minutes of work each).
@@ -620,6 +968,7 @@ def handle_regen() -> bytes | Any:
             429,
             {
                 "error": "Rate limited: wait before regenerating again",
+                "detail": f"retry after {remaining:.1f}s",
                 "retry_after": round(remaining, 1),
             },
         )
@@ -650,7 +999,19 @@ def handle_regen() -> bytes | Any:
         return _json_ok({"ok": True})
     except subprocess.TimeoutExpired:
         _log.error("Regen timed out after %ds", _server.REGEN_TIMEOUT)
-        return _json_err(504, {"error": "Regen timed out"})
+        return _json_err(
+            504,
+            {
+                "error": "Regen timed out",
+                "detail": f"exceeded {_server.REGEN_TIMEOUT}s timeout",
+            },
+        )
     except subprocess.CalledProcessError as e:
         _log.error("Regen failed with exit code %d", e.returncode)
-        return _json_err(500, {"error": f"Regen failed (exit code {e.returncode})"})
+        return _json_err(
+            500,
+            {
+                "error": f"Regen failed (exit code {e.returncode})",
+                "detail": f"rebrew build-db exited with code {e.returncode}",
+            },
+        )

@@ -172,6 +172,29 @@ const HexLogo = (label, color, titleText) => div({ class: "section-title-left" }
   span({ class: "section-title-text" }, titleText)
 );
 
+// ── Live reload via Server-Sent Events ─────────────────────────────
+// Subscribes to /api/events; a db-updated event (coverage.db rewritten by
+// rebrew build-db) triggers a grid refresh. EventSource reconnects
+// automatically, so transient stream drops are self-healing.
+let eventsDebounceTimer = null;
+
+function connectEvents(onDbUpdated) {
+  let es = null;
+  const openStream = () => {
+    es = new EventSource("/api/events");
+    es.addEventListener("db-updated", () => {
+      // Coalesce bursts — build-db may rewrite the DB in stages.
+      clearTimeout(eventsDebounceTimer);
+      eventsDebounceTimer = setTimeout(onDbUpdated, 300);
+    });
+    es.onerror = () => {
+      // EventSource retries automatically; just avoid double-connecting.
+    };
+  };
+  openStream();
+  return () => { if (es) es.close(); };
+}
+
 const App = () => {
   const data = van.state(null);
   const originalDll = van.state(null);
@@ -334,6 +357,9 @@ const App = () => {
   loadTargets().then(() => {
     loadData();
   });
+
+  // Live-reload: refresh the grid when coverage.db changes on disk.
+  connectEvents(() => loadData());
 
   const matchesSearch = (name, query) => {
     if (!query) return true;
