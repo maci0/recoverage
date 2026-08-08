@@ -84,8 +84,17 @@ def _open_db(db_path: Path | None = None) -> sqlite3.Connection:
     if not p.exists():
         typer.secho(f"Error: database not found at {p}", fg=typer.colors.RED, err=True)
         raise typer.Exit(1)
-    conn = sqlite3.connect(f"file:{p}?mode=ro", uri=True)
-    conn.row_factory = sqlite3.Row
+    try:
+        conn = sqlite3.connect(f"file:{p}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+    except sqlite3.Error as exc:
+        typer.secho(
+            f"Error: cannot open database {p}: {exc} (run 'rebrew catalog --json && "
+            "rebrew build-db' to rebuild it)",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(2) from exc
     return conn
 
 
@@ -104,19 +113,30 @@ def _resolve_targets(conn: sqlite3.Connection, target: str | None) -> list[str]:
     """Return the targets to operate on, validating a requested --target.
 
     A requested target that is not in the DB exits 1 with a clear error —
-    sibling commands must not silently succeed on a typo'd target.
+    sibling commands must not silently succeed on a typo'd target.  A DB
+    that cannot be queried (schema-less/corrupt) exits 2 with a rebuild hint
+    instead of a raw traceback.
     """
-    if target is not None:
-        known = _list_targets(conn)
-        if target not in known:
-            typer.secho(
-                f"Error: target {target!r} not found in database (have: {', '.join(known) or 'none'}).",
-                fg=typer.colors.RED,
-                err=True,
-            )
-            raise typer.Exit(1)
-        return [target]
-    return _list_targets(conn)
+    try:
+        if target is not None:
+            known = _list_targets(conn)
+            if target not in known:
+                typer.secho(
+                    f"Error: target {target!r} not found in database (have: {', '.join(known) or 'none'}).",
+                    fg=typer.colors.RED,
+                    err=True,
+                )
+                raise typer.Exit(1)
+            return [target]
+        return _list_targets(conn)
+    except sqlite3.Error as exc:
+        typer.secho(
+            f"Error: cannot query coverage database: {exc} (run 'rebrew catalog --json && "
+            "rebrew build-db' to rebuild it)",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(2) from exc
 
 
 def _get_stats(conn: sqlite3.Connection, target: str) -> dict[str, Any]:
@@ -417,26 +437,38 @@ def check(
     ),
     target: str | None = typer.Option(None, "--target", "-t", help="Target ID (default: all)"),
     section: str | None = typer.Option(None, "--section", "-s", help="Section name (default: all)"),
+    json_output: bool = typer.Option(False, "--json", help="Output results as JSON"),
 ) -> None:
     """Check coverage against a threshold (CI gate)."""
     if not 0.0 <= min_coverage <= 100.0:
-        typer.secho(
-            f"Error: --min-coverage must be between 0 and 100, got {min_coverage!r}.",
-            fg=typer.colors.RED,
-            err=True,
-        )
+        if json_output:
+            import json
+
+            typer.echo(json.dumps({"error": "--min-coverage must be between 0 and 100", "code": 1}))
+        else:
+            typer.secho(
+                f"Error: --min-coverage must be between 0 and 100, got {min_coverage!r}.",
+                fg=typer.colors.RED,
+                err=True,
+            )
         raise typer.Exit(1)
 
     with contextlib.closing(_open_db()) as conn:
         targets = _resolve_targets(conn, target)
 
         if not targets:
-            typer.secho("No targets found in database.", fg=typer.colors.YELLOW, err=True)
+            if json_output:
+                import json
+
+                typer.echo(json.dumps({"error": "no targets in database", "code": 1}))
+            else:
+                typer.secho("No targets found in database.", fg=typer.colors.YELLOW, err=True)
             raise typer.Exit(1)
 
         failed = False
         checked = 0
         compared = 0  # sections actually evaluated against the threshold
+        verdicts: list[dict[str, Any]] = []  # captured for --json output
         for tid in targets:
             data = _get_stats(conn, tid)
             sections_to_check = data["sections"]
@@ -459,51 +491,114 @@ def check(
                 # something that is not being recorded.
                 if sec.get("covered_bytes", 0) <= 0:
                     if section:
-                        typer.secho(
-                            f"FAIL: {tid} {sec_name} has no tracked cells — "
-                            "coverage is not recorded for this section",
-                            fg=typer.colors.RED,
+                        verdicts.append(
+                            {
+                                "target": tid,
+                                "section": sec_name,
+                                "status": "FAIL",
+                                "reason": "no tracked cells — coverage is not recorded for this section",
+                            }
                         )
+                        if not json_output:
+                            typer.secho(
+                                f"FAIL: {tid} {sec_name} has no tracked cells — "
+                                "coverage is not recorded for this section",
+                                fg=typer.colors.RED,
+                            )
                         failed = True
                     else:
-                        typer.secho(
-                            f"SKIP: {tid} {sec_name} has no tracked cells — coverage not recorded",
-                            fg=typer.colors.YELLOW,
+                        verdicts.append(
+                            {
+                                "target": tid,
+                                "section": sec_name,
+                                "status": "SKIP",
+                                "reason": "no tracked cells — coverage not recorded",
+                            }
                         )
+                        if not json_output:
+                            typer.secho(
+                                f"SKIP: {tid} {sec_name} has no tracked cells — coverage not recorded",
+                                fg=typer.colors.YELLOW,
+                            )
                     continue
                 compared += 1
                 pct = sec["coverage_pct"]
                 # Display at the same precision used for the comparison — a
                 # gate failing on raw 99.49% must not print "99.5% < 99.5%".
                 if pct < min_coverage:
-                    typer.secho(
-                        f"FAIL: {tid} {sec_name} coverage {pct:.2f}% < {min_coverage:.2f}%",
-                        fg=typer.colors.RED,
+                    verdicts.append(
+                        {
+                            "target": tid,
+                            "section": sec_name,
+                            "status": "FAIL",
+                            "coverage_pct": round(pct, 2),
+                        }
                     )
+                    if not json_output:
+                        typer.secho(
+                            f"FAIL: {tid} {sec_name} coverage {pct:.2f}% < {min_coverage:.2f}%",
+                            fg=typer.colors.RED,
+                        )
                     failed = True
                 else:
-                    typer.secho(
-                        f"PASS: {tid} {sec_name} coverage {pct:.2f}% >= {min_coverage:.2f}%",
-                        fg=typer.colors.GREEN,
+                    verdicts.append(
+                        {
+                            "target": tid,
+                            "section": sec_name,
+                            "status": "PASS",
+                            "coverage_pct": round(pct, 2),
+                        }
                     )
+                    if not json_output:
+                        typer.secho(
+                            f"PASS: {tid} {sec_name} coverage {pct:.2f}% >= {min_coverage:.2f}%",
+                            fg=typer.colors.GREEN,
+                        )
 
     if checked == 0:
-        typer.secho(
-            "Error: no sections matched — nothing was checked.",
-            fg=typer.colors.RED,
-            err=True,
-        )
-        raise typer.Exit(1)
-    if failed:
+        if json_output:
+            import json
+
+            typer.echo(
+                json.dumps({"error": "no sections matched — nothing was checked", "code": 1})
+            )
+        else:
+            typer.secho(
+                "Error: no sections matched — nothing was checked.",
+                fg=typer.colors.RED,
+                err=True,
+            )
         raise typer.Exit(1)
     if compared == 0:
         # Every section was skipped as untracked and nothing failed — a
         # project with no recorded coverage must not pass vacuously.
-        typer.secho(
-            "Error: no tracked sections — nothing was checked.",
-            fg=typer.colors.RED,
-            err=True,
+        if json_output:
+            import json
+
+            typer.echo(
+                json.dumps({"error": "no tracked sections — nothing was checked", "code": 1})
+            )
+        else:
+            typer.secho(
+                "Error: no tracked sections — nothing was checked.",
+                fg=typer.colors.RED,
+                err=True,
+            )
+        raise typer.Exit(1)
+    if json_output:
+        import json
+
+        typer.echo(
+            json.dumps(
+                {
+                    "passed": not failed,
+                    "min_coverage": min_coverage,
+                    "results": verdicts,
+                },
+                indent=2,
+            )
         )
+    if failed:
         raise typer.Exit(1)
 
 

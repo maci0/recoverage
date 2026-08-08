@@ -99,6 +99,15 @@ class TestCheckCommand:
         assert result.exit_code == 0
         assert "PASS" in result.output
 
+    def test_check_json_output(self) -> None:
+        """--json emits a pure JSON verdict (no text mixed into stdout)."""
+        result = runner.invoke(app, ["check", "--min-coverage", "0", "--json"])
+        assert result.exit_code == 0
+        payload = json.loads(result.output)
+        assert payload["passed"] is True
+        assert payload["min_coverage"] == 0.0
+        assert all("status" in r for r in payload["results"])
+
     def test_check_with_100_threshold(self) -> None:
         """100% threshold must produce a definitive exit code: either every
         section is at 100% (0) or at least one section fails (1)."""
