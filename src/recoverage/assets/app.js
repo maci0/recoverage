@@ -946,6 +946,7 @@ const App = () => {
           fn.ghidra_name && fn.ghidra_name !== fn.name ? div({ class: "meta-item" }, span({ class: "meta-label" }, "Ghidra"), span({ class: "meta-value" }, fn.ghidra_name)) : null,
           fn.list_name && fn.list_name !== fn.name ? div({ class: "meta-item" }, span({ class: "meta-label" }, "Func List"), span({ class: "meta-value" }, fn.list_name)) : null,
           fn.size_reason ? div({ class: "meta-item" }, span({ class: "meta-label" }, "Size Source"), span({ class: "meta-value" }, fn.size_reason)) : null,
+          fn.last_verify ? div({ class: "meta-item" }, span({ class: "meta-label" }, "Verified"), span({ class: "meta-value" }, `${fn.last_verify.verified_at}${fn.last_verify.byte_delta != null ? ` (Δ${fn.last_verify.byte_delta}B)` : ""}`)) : null,
           fn.similarity !== null && fn.similarity !== undefined ? div({ class: "meta-item" }, span({ class: "meta-label" }, "Similarity"), span({ class: "meta-value" }, `${(fn.similarity * 100).toFixed(1)}%`)) : null,
           fn.is_thunk ? div({ class: "meta-item" }, span({ class: "meta-label" }, "Type"), span({ class: "meta-value" }, "IAT thunk (not reversible)")) : null,
           fn.is_export ? div({ class: "meta-item" }, span({ class: "meta-label" }, "Type"), span({ class: "meta-value" }, "Exported function")) : null,

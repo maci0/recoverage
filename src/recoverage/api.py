@@ -418,7 +418,21 @@ def handle_api_function(target: str, va: str) -> bytes | Any:
 
         row = c.fetchone()
         if row:
-            return _json_ok(row[0].encode("utf-8"), Cache_Control=no_cache)
+            fn_json = json.loads(row[0])
+            # Attach the last `rebrew verify -o` record for this function.
+            c.execute(
+                "SELECT verified_at, byte_delta, diff_lines FROM verify_results"
+                " WHERE target = ? AND va = ?",
+                (target, fn_json["va"]),
+            )
+            vr = c.fetchone()
+            if vr:
+                fn_json["last_verify"] = {
+                    "verified_at": vr["verified_at"],
+                    "byte_delta": vr["byte_delta"],
+                    "diff_lines": vr["diff_lines"],
+                }
+            return _json_ok(json.dumps(fn_json).encode("utf-8"), Cache_Control=no_cache)
 
         # Try globals
         if is_numeric:

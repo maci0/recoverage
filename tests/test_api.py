@@ -288,3 +288,26 @@ class TestServeBindFlag:
         assert result.exit_code == 0
         assert "--bind" in result.output
         assert "127.0.0.1" in result.output
+
+
+class TestLastVerify:
+    """/functions/<va> attaches the last `rebrew verify -o` record."""
+
+    def test_function_detail_includes_last_verify(self) -> None:
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, headers, body = wsgi_get(f"/api/targets/{target}/functions/0x10001000")
+        assert status.startswith("200")
+        data = json.loads(decode_body(body, headers))
+        assert data["last_verify"]["byte_delta"] == 0
+        assert "verified_at" in data["last_verify"]
+
+    def test_function_without_verify_record_omits_field(self) -> None:
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, headers, body = wsgi_get(f"/api/targets/{target}/functions/0x10001030")
+        assert status.startswith("200")
+        data = json.loads(decode_body(body, headers))
+        assert "last_verify" not in data

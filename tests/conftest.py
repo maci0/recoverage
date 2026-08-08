@@ -182,6 +182,18 @@ def _build_synthetic_db() -> None:
             " VALUES (?, ?, ?, ?, ?, ?, ?)",
             (target, 0x10002000, "g_counter", "int g_counter", "[]", "T", 4),
         )
+        c.execute(
+            "CREATE TABLE verify_results ("
+            " target TEXT NOT NULL, va INTEGER NOT NULL,"
+            " verified_at TEXT NOT NULL,"
+            " byte_delta INTEGER, diff_lines INTEGER,"
+            " PRIMARY KEY (target, va))"
+        )
+        c.execute(
+            "INSERT INTO verify_results (target, va, verified_at, byte_delta, diff_lines)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (target, 0x10001000, "2026-01-01T00:00:00+00:00", 0, 0),
+        )
         conn.commit()
     finally:
         conn.close()
