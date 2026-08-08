@@ -152,10 +152,12 @@ def _get_stats(conn: sqlite3.Connection, target: str) -> dict[str, Any]:
         if row["name"] in sections:
             sections[row["name"]]["size_bytes"] = row["size"]
 
-    # Function counts by status
+    # Function counts by status.  GLOBAL/DATA marker rows are data markers,
+    # not functions — exclude them to match /api/targets/<target>/stats.
     by_status: dict[str, int] = {}
     c.execute(
-        "SELECT status, COUNT(*) as cnt FROM functions WHERE target = ? GROUP BY status",
+        "SELECT status, COUNT(*) as cnt FROM functions"
+        " WHERE target = ? AND markerType NOT IN ('GLOBAL','DATA') GROUP BY status",
         (target,),
     )
     for row in c.fetchall():
@@ -302,13 +304,24 @@ def serve(
     if not no_open:
         threading.Timer(0.5, open_browser, args=(url,)).start()
 
-    bottle_app.run(
-        host=bind,
-        port=port,
-        quiet=True,
-        server="wsgiref",
-        server_class=_ThreadingWSGIServer,
-    )
+    try:
+        bottle_app.run(
+            host=bind,
+            port=port,
+            quiet=True,
+            server="wsgiref",
+            server_class=_ThreadingWSGIServer,
+        )
+    except OSError as e:
+        # EADDRINUSE is the most common failure for a dashboard tool — a
+        # second instance or another dev server on the same port.
+        typer.secho(
+            f"Failed to start server on {listen_url}: {e.strerror or e} "
+            "(is another instance already running?)",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(1) from None
 
 
 @app.command()

@@ -1005,12 +1005,18 @@ def _search_functions(c: sqlite3.Cursor, target: str, search_query: str) -> set[
 
     like_pat = _escape_like(search_query)
     c.execute(
-        "SELECT name FROM functions WHERE target = ? AND ("
+        "SELECT name, vaStart FROM functions WHERE target = ? AND ("
         "name LIKE ? ESCAPE '\\' OR vaStart LIKE ? ESCAPE '\\' "
         "OR symbol LIKE ? ESCAPE '\\') LIMIT 500",
         (target, like_pat, like_pat, like_pat),
     )
-    search_matched_fns.update(row[0] for row in c.fetchall())
+    for name, va_start in c.fetchall():
+        search_matched_fns.add(name)
+        if va_start:
+            # Grid .text cells store the function's vaStart string (not the
+            # name) in their `functions` field — the dimming test compares
+            # cell entries against this set, so VA spellings must be included.
+            search_matched_fns.add(va_start)
     c.execute(
         "SELECT name FROM globals WHERE target = ? AND ("
         "name LIKE ? ESCAPE '\\' OR printf('0x%x', va) LIKE ? ESCAPE '\\') LIMIT 500",

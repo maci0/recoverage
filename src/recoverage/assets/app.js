@@ -381,9 +381,13 @@ const App = () => {
     if (!query) return new Set(); // Empty set means "no filter"
 
     const matched = new Set();
-    for (const name of Object.keys(data.val.search_index)) {
-      if (matchesSearch(name, query)) {
+    for (const [name, info] of Object.entries(data.val.search_index)) {
+      if (matchesSearch(name, query) || (info && matchesSearch(info.va || "", query))) {
         matched.add(name);
+        // Grid .text cells store the function's vaStart string (not the
+        // name) in cell.functions / _fnName — the dimming test compares
+        // against this set, so VA spellings must be included too.
+        if (info && info.va) matched.add(info.va);
       }
     }
     return matched;
