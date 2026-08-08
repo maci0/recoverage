@@ -1,9 +1,27 @@
 import os
 from typing import Any
 
+import pytest
 from playwright.sync_api import expect  # type: ignore
 
 BASE_URL = os.environ.get("BASE_URL", "http://localhost:8787")
+
+# Skip cleanly (not error) when the pinned playwright browser is not
+# installed — e.g. CI without `uv run playwright install chromium`, or a
+# version mismatch between the cache and the installed playwright package.
+try:
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as _p:
+        _p.chromium.launch(headless=True)
+    _HAS_BROWSER = True
+except Exception:  # noqa: BLE001 — browser unavailable for any reason
+    _HAS_BROWSER = False
+if not _HAS_BROWSER:
+    pytest.skip(
+        "playwright browser not installed — run 'uv run playwright install chromium'",
+        allow_module_level=True,
+    )
 
 
 def test_titles(page: Any):
