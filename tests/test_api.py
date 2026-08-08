@@ -961,3 +961,69 @@ class TestNormalizeOriginEdges:
         from recoverage.server import _normalize_origin
 
         assert _normalize_origin("http://[::1]:8001") == "http://[::1]:8001"
+
+
+class TestDataPayloadMemo:
+    """/api/targets/<t>/data memoises the assembled payload per DB fingerprint.
+
+    The endpoint materialises all cells + search index + stats on every
+    cache-missing request; the memo (keyed on db mtime_ns/size) serves
+    repeat requests without re-querying, and is cleared on rebuild.
+    """
+
+    def _make_db(self, tmp_path: Any) -> Any:
+        import sqlite3
+
+        db = tmp_path / "coverage.db"
+        conn = sqlite3.connect(db)
+        c = conn.cursor()
+        c.execute("CREATE TABLE metadata (target TEXT, key TEXT, value TEXT)")
+        c.execute(
+            "CREATE TABLE sections (target TEXT, name TEXT, va INTEGER, size INTEGER, fileOffset INTEGER)"
+        )
+        c.execute(
+            "CREATE TABLE cells (id INTEGER, target TEXT, section_name TEXT, start INTEGER, "
+            "end INTEGER, span INTEGER, state TEXT, functions TEXT, label TEXT, parent_function TEXT)"
+        )
+        c.execute(
+            "CREATE TABLE functions (target TEXT, va INTEGER, name TEXT, vaStart TEXT, size INTEGER, "
+            "status TEXT, module TEXT, cflags TEXT, symbol TEXT, markerType TEXT)"
+        )
+        c.execute("CREATE TABLE globals (target TEXT, name TEXT, va INTEGER)")
+        c.execute(
+            "CREATE VIEW section_cell_stats AS SELECT target, section_name, "
+            "COUNT(*) AS total_cells, 0 AS exact_count, 0 AS reloc_count, 0 AS near_match_count, "
+            "0 AS stub_count, 0 AS data_count, 0 AS thunk_count FROM cells GROUP BY target, section_name"
+        )
+        c.execute("INSERT INTO metadata VALUES ('GAME', 'db_version', '\"4\"')")
+        conn.commit()
+        conn.close()
+        return db
+
+    def test_memo_serves_second_request_and_clears(self, tmp_path: Any, monkeypatch: Any) -> None:
+        import recoverage.api as api
+
+        db = self._make_db(tmp_path)
+
+        def _open_like(p: Any) -> Any:
+            conn = sqlite3.connect(f"file:{p}?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            return conn
+
+        monkeypatch.setattr(api, "_db_path", lambda: db)
+        monkeypatch.setattr(api, "_open_db", _open_like)
+        monkeypatch.setattr(api, "_require_target", lambda c, t: None)
+        monkeypatch.setattr(api, "request", type("R", (), {"headers": {}, "query": {}})())
+        api._clear_data_cache()
+
+        resp1 = api.handle_api_data("GAME")
+        assert isinstance(resp1, bytes)
+        assert len(api._DATA_CACHE) == 1
+
+        # Second request: cache hit (payload identical, no query re-run).
+        resp2 = api.handle_api_data("GAME")
+        assert isinstance(resp2, bytes)
+
+        # Rebuild invalidation path.
+        api._clear_data_cache()
+        assert len(api._DATA_CACHE) == 0

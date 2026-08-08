@@ -48,6 +48,21 @@ _REGEN_COOLDOWN_SECONDS = 5.0
 _regen_last_attempt = 0.0  # time.monotonic() of the last accepted regen POST
 _REGEN_LOCK = threading.Lock()  # serializes regen (check + subprocess, TOCTOU)
 
+# Memoized /api/targets/<t>/data payloads: the endpoint materializes ALL
+# cells for the target (json_group_array over the whole cells table) plus
+# every function/global for the search index on each cache-missing request.
+# The ETag gives 304s to repeat clients, but N fresh clients each rebuilt
+# the multi-MB payload.  Keyed by (db mtime_ns, size, target, section) so a
+# rebuild (which the SSE watcher detects and funnels through
+# clear_target_cache) invalidates it.
+_DATA_CACHE: dict[tuple[int, int, str, str | None], dict[str, Any]] = {}
+_DATA_CACHE_LOCK = threading.Lock()
+
+
+def _clear_data_cache() -> None:
+    with _DATA_CACHE_LOCK:
+        _DATA_CACHE.clear()
+
 
 def _target_not_found(target: str) -> Any:
     """JSON 404 for a target-scoped endpoint referencing an unknown target."""
@@ -116,6 +131,7 @@ def _broadcast_db_updated(snapshot: tuple[int, int] | None) -> None:
     """
     try:
         clear_target_cache()
+        _clear_data_cache()
         from recoverage.ui import clear_index_cache  # noqa: PLC0415
 
         clear_index_cache()
@@ -320,8 +336,11 @@ def handle_api_data(target: str) -> bytes | Any:
 
     # ETag caching based on DB modification time + target + section
     etag = None
+    fingerprint: tuple[int, int, str, str | None] | None = None
     try:
-        mtime = db.stat().st_mtime
+        st = db.stat()
+        mtime = st.st_mtime
+        fingerprint = (st.st_mtime_ns, st.st_size, target, section_filter)
         etag_key = f"{mtime}-{target}"
         if section_filter:
             etag_key += f"-{section_filter}"
@@ -330,6 +349,16 @@ def handle_api_data(target: str) -> bytes | Any:
             return HTTPResponse(status=304)
     except OSError:
         pass
+
+    # Serve a memoized payload for an unchanged DB instead of re-running the
+    # full-table queries + recompression on every cache-missing request.
+    if fingerprint is not None:
+        with _DATA_CACHE_LOCK:
+            cached = _DATA_CACHE.get(fingerprint)
+        if cached is not None:
+            if etag is not None:
+                return _json_ok(cached, Cache_Control="no-cache, must-revalidate", ETag=str(etag))
+            return _json_ok(cached, Cache_Control="no-cache, must-revalidate")
 
     try:
         conn = _open_db(db)
@@ -429,6 +458,10 @@ def handle_api_data(target: str) -> bytes | Any:
                 "data": row["data_count"],
                 "thunk": row["thunk_count"],
             }
+
+        if fingerprint is not None:
+            with _DATA_CACHE_LOCK:
+                _DATA_CACHE[fingerprint] = data
 
         if etag is not None:
             return _json_ok(data, Cache_Control="no-cache, must-revalidate", ETag=str(etag))
@@ -1058,6 +1091,7 @@ def _do_regen(remote: str) -> bytes | Any:
 
     clear_index_cache()
     clear_target_cache()
+    _clear_data_cache()
 
     # Clear DLL and disassembly caches so regen picks up new binaries
     with DLL_LOCK:
@@ -1084,6 +1118,7 @@ def _do_regen(remote: str) -> bytes | Any:
         # never re-invalidate them (curl-only regen -> stale target dropdown).
         clear_index_cache()
         clear_target_cache()
+        _clear_data_cache()
         _log.info("Regen completed successfully")
         return _json_ok({"ok": True})
     except subprocess.TimeoutExpired:
