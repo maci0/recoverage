@@ -23,6 +23,18 @@ if not _HAS_BROWSER:
         allow_module_level=True,
     )
 
+# The tests also need a live server at BASE_URL; skip (not fail) when it
+# is not running — e.g. CI that builds but does not launch the dashboard.
+try:
+    import urllib.request
+
+    urllib.request.urlopen(f"{BASE_URL}/api/health", timeout=2).close()
+except Exception:  # noqa: BLE001 — server not reachable
+    pytest.skip(
+        f"no recoverage server at {BASE_URL} — start it with 'uv run recoverage serve'",
+        allow_module_level=True,
+    )
+
 
 def test_titles(page: Any):
     # Original UI

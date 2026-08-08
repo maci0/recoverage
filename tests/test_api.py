@@ -1093,6 +1093,37 @@ class TestDataPayloadMemo:
         api._clear_data_cache()
         assert len(api._DATA_CACHE) == 0
 
+    def test_memo_self_invalidates_on_db_change(self, tmp_path: Any, monkeypatch: Any) -> None:
+        """A DB fingerprint change (rebuild) must empty the memo — a memo
+        keyed on a constant would pass the explicit-clear test above."""
+        import os
+
+        import recoverage.api as api
+
+        db = self._make_db(tmp_path)
+
+        def _open_like(p: Any) -> Any:
+            conn = sqlite3.connect(f"file:{p}?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            return conn
+
+        monkeypatch.setattr(api, "_db_path", lambda: db)
+        monkeypatch.setattr(api, "_open_db", _open_like)
+        monkeypatch.setattr(api, "_require_target", lambda c, t: None)
+        monkeypatch.setattr(api, "request", type("R", (), {"headers": {}, "query": {}})())
+        api._clear_data_cache()
+
+        api.handle_api_data("GAME")
+        assert len(api._DATA_CACHE) == 1
+        # Simulate a rebuild: bump the DB's mtime (same content, new time).
+        st = db.stat()
+        os.utime(db, (st.st_atime + 2, st.st_mtime + 2))
+        api.handle_api_data("GAME")
+        # A constant fingerprint would still hold ONE key; two keys prove
+        # the snapshot is fingerprint-sensitive (the changed mtime produced
+        # a different cache key — a miss, not a stale hit).
+        assert len(api._DATA_CACHE) == 2
+
 
 def _header(headers: dict[str, str], name: str) -> str | None:
     """Case-insensitive header lookup (Bottle sends 'Etag', tests use 'ETag')."""
