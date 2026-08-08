@@ -705,14 +705,24 @@ const App = () => {
         return () => `${cls} ${activeFilters.val.has(type) ? "active" : ""}`;
       };
 
+      // Keyboard access for the clickable progress segments: they are
+      // div-based filter toggles, so give them a button role, tabindex, and
+      // Enter/Space activation (P1 a11y — previously mouse-only).
+      const segKeydown = (e, filter) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          toggleFilter(filter);
+        }
+      };
+
       return div({ class: "progress-container" },
         div({ class: "progress-bar" },
           div({ class: "progress-segments" },
-            div({ class: getClasses("exact"), style: `width: ${exactPct}%`, title: `Exact: ${exactCount}`, onclick: () => toggleFilter("exact") }),
-            div({ class: getClasses("reloc"), style: `width: ${relocPct}%`, title: `Reloc: ${relocCount}`, onclick: () => toggleFilter("reloc") }),
-            div({ class: getClasses("near_match"), style: `width: ${nearMatchPct}%`, title: `Near-match: ${nearMatchCount}`, onclick: () => toggleFilter("near_match") }),
-            div({ class: getClasses("stub"), style: `width: ${stubPct}%`, title: `Stub: ${stubCount}`, onclick: () => toggleFilter("stub") }),
-            div({ class: getClasses("padding"), style: `width: ${paddingPct}%`, title: `Padding: ${paddingBytes}B`, onclick: () => toggleFilter("padding") })
+            div({ class: getClasses("exact"), role: "button", tabindex: "0", "aria-pressed": () => activeFilters.val.has("exact"), "aria-label": "Toggle exact filter", style: `width: ${exactPct}%`, title: `Exact: ${exactCount}`, onclick: () => toggleFilter("exact"), onkeydown: (e) => segKeydown(e, "exact") }),
+            div({ class: getClasses("reloc"), role: "button", tabindex: "0", "aria-pressed": () => activeFilters.val.has("reloc"), "aria-label": "Toggle reloc filter", style: `width: ${relocPct}%`, title: `Reloc: ${relocCount}`, onclick: () => toggleFilter("reloc"), onkeydown: (e) => segKeydown(e, "reloc") }),
+            div({ class: getClasses("near_match"), role: "button", tabindex: "0", "aria-pressed": () => activeFilters.val.has("near_match"), "aria-label": "Toggle near-match filter", style: `width: ${nearMatchPct}%`, title: `Near-match: ${nearMatchCount}`, onclick: () => toggleFilter("near_match"), onkeydown: (e) => segKeydown(e, "near_match") }),
+            div({ class: getClasses("stub"), role: "button", tabindex: "0", "aria-pressed": () => activeFilters.val.has("stub"), "aria-label": "Toggle stub filter", style: `width: ${stubPct}%`, title: `Stub: ${stubCount}`, onclick: () => toggleFilter("stub"), onkeydown: (e) => segKeydown(e, "stub") }),
+            div({ class: getClasses("padding"), role: "button", tabindex: "0", "aria-pressed": () => activeFilters.val.has("padding"), "aria-label": "Toggle padding filter", style: `width: ${paddingPct}%`, title: `Padding: ${paddingBytes}B`, onclick: () => toggleFilter("padding"), onkeydown: (e) => segKeydown(e, "padding") })
           ),
           div({ class: "progress-text-overlay" },
             span({ class: "stat-item" }, `${sec.size} bytes`),
@@ -818,7 +828,28 @@ const App = () => {
             const cell = e.target.closest('.cell');
             if (cell) {
               const idx = parseInt(cell.getAttribute('data-index'), 10);
-              if (!isNaN(idx)) selectChunk(idx);
+              if (!isNaN(idx)) { selectChunk(idx); cell.focus(); }
+            }
+          },
+          onkeydown: (e) => {
+            // Keyboard access for the grid: Enter/Space selects the focused
+            // cell, arrows move focus along the row (P1 a11y — cells were
+            // previously mouse-only divs).
+            const cell = e.target.closest('.cell');
+            if (!cell || e.ctrlKey || e.metaKey || e.altKey) return;
+            const idx = parseInt(cell.getAttribute('data-index'), 10);
+            if (isNaN(idx)) return;
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              selectChunk(idx);
+            } else if (e.key === "ArrowRight" || e.key === "ArrowDown") {
+              e.preventDefault();
+              const next = gridEl.children[idx + 1];
+              if (next) next.focus();
+            } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+              e.preventDefault();
+              const prev = gridEl.children[idx - 1];
+              if (prev) prev.focus();
             }
           }
         });
@@ -852,7 +883,11 @@ const App = () => {
               cls += " dimmed";
             }
 
-            html += `<div class="${escAttr(cls)}" data-index="${i}" style="${style}" title="${escAttr(title)}"></div>`;
+            // tabindex="-1" keeps thousands of cells out of the sequential
+            // tab order (only the focused one is reached via arrow keys);
+            // the grid container's keydown handler implements arrow nav.
+            const label = cell._fnName ? `${cell._fnName} at ${title}` : title;
+            html += `<div class="${escAttr(cls)}" data-index="${i}" role="button" tabindex="-1" aria-label="${escAttr(label)}" style="${style}" title="${escAttr(title)}"></div>`;
           }
 
           gridEl.innerHTML = html;
@@ -1028,7 +1063,7 @@ const App = () => {
       div({ class: "panel-body" },
         div({ class: "section" },
           div({ class: "section-title" },
-            HexLogo("C", "#3b82f6", "C Source"),
+            HexLogo("C", "var(--accent-c-source)", "C Source"),
             div({ class: "section-actions" },
               button({ class: "btn copy-btn", "aria-label": "Copy C Source", onclick: (e) => copyToClipboard(cSourceText.val, e) }, "Copy"),
               button({ class: "btn copy-btn", "aria-label": "Open C Source in Modal", onclick: () => { const label = fn ? fn.name : "Block " + cellIdx; modalTitle.val = "C Source: " + label; modalContent.val = cSourceText.val; modalLang.val = "c"; showModal.val = true; } }, "Open")
@@ -1039,7 +1074,7 @@ const App = () => {
         activeSection.val === ".text" ?
           div({ class: "section" },
             div({ class: "section-title" },
-              HexLogo("ASM", "#ef4444", "Assembly"),
+              HexLogo("ASM", "var(--accent-asm)", "Assembly"),
               div({ class: "section-actions" },
                 button({ class: "btn copy-btn", "aria-label": "Copy ASM", onclick: (e) => copyToClipboard(asmText.val, e) }, "Copy"),
                 button({ class: "btn copy-btn", "aria-label": "Open ASM in Modal", onclick: () => { const label = fn ? fn.name : "Block " + cellIdx; modalTitle.val = "ASM: " + label; modalContent.val = asmText.val; modalLang.val = "x86asm"; showModal.val = true; } }, "Open")
@@ -1049,13 +1084,13 @@ const App = () => {
           ) :
           div({ class: "section" },
             div({ class: "section-title" },
-              HexLogo("{}", "#a855f7", "Data Inspector")
+              HexLogo("{}", "var(--accent-data)", "Data Inspector")
             ),
             () => DataInspector(currentBuf.val)
           ),
         div({ class: "section" },
           div({ class: "section-title" },
-            HexLogo("01", "#10b981", "Original Bytes"),
+            HexLogo("01", "var(--accent-bytes)", "Original Bytes"),
             div({ class: "section-actions" },
               button({ class: "btn copy-btn", "aria-label": "Copy Original Bytes", onclick: (e) => copyToClipboard(bytesText.val, e) }, "Copy"),
               button({ class: "btn copy-btn", "aria-label": "Open Original Bytes in Modal", onclick: () => { const label = fn ? fn.name : "Block " + cellIdx; modalTitle.val = "Original Bytes: " + label; modalContent.val = bytesText.val; modalLang.val = "hex"; showModal.val = true; } }, "Open")

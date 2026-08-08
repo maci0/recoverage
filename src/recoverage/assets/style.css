@@ -36,6 +36,22 @@
   --stub-bg: rgba(255, 0, 0, 0.65);
   --padding-bg: rgba(200, 200, 220, 0.55);
 
+  /* Accent tokens — section logos, links, badges, delta */
+  --accent-c-source: #3b82f6;
+  --accent-asm: #ef4444;
+  --accent-data: #a855f7;
+  --accent-bytes: #10b981;
+  --link: #58a6ff;
+  --link-hover: #79c0ff;
+  --link-hover-glow: rgba(88, 166, 255, 0.5);
+  --delta: #f59e0b;
+  --badge-exact-text: #3fb950;
+  --badge-reloc-text: #0ea5e9;
+  --badge-near-text: #e3b341;
+  --badge-stub-text: #ff7b72;
+  --asm-link-underline: rgba(255, 255, 255, 0.5);
+  --asm-link-hover-bg: rgba(31, 191, 117, 0.1);
+
 
   --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 
@@ -74,6 +90,22 @@
 
   --padding-bg: rgba(60, 60, 90, 0.55);
 
+  /* Accent tokens — light-mode overrides */
+  --accent-c-source: #2563eb;
+  --accent-asm: #dc2626;
+  --accent-data: #9333ea;
+  --accent-bytes: #059669;
+  --link: #0284c7;
+  --link-hover: #0369a1;
+  --link-hover-glow: rgba(2, 132, 199, 0.3);
+  --delta: #b45309;
+  --badge-exact-text: #15803d;
+  --badge-reloc-text: #0369a1;
+  --badge-near-text: #a16207;
+  --badge-stub-text: #b91c1c;
+  --asm-link-underline: rgba(0, 0, 0, 0.3);
+  --asm-link-hover-bg: rgba(2, 132, 199, 0.1);
+
 
 }
 
@@ -88,7 +120,7 @@ body {
   color: var(--text);
   text-shadow: var(--text-shadow);
   font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, "Helvetica Neue", Arial;
-  overflow-x: hidden;
+  overflow-x: clip;
   overflow-y: scroll;
   min-height: 100vh;
   transition: background-color 0.3s ease, color 0.3s ease;
@@ -105,10 +137,8 @@ body {
 .title { font-size: 16px; font-weight: 650; letter-spacing: 0.2px; }
 .subtitle { color: var(--muted); font-size: 13px; flex: 1; }
 
-.source-link { color: #58a6ff; text-decoration: none; transition: all 0.2s ease; }
-.source-link:hover { color: #79c0ff; text-decoration: underline; text-shadow: 0 0 8px rgba(88, 166, 255, 0.5); }
-.light-mode .source-link { color: #0284c7; }
-.light-mode .source-link:hover { color: #0369a1; text-shadow: none; }
+.source-link { color: var(--link); text-decoration: none; transition: all 0.2s ease; }
+.source-link:hover { color: var(--link-hover); text-decoration: underline; text-shadow: 0 0 8px var(--link-hover-glow); }
 
 .btn {
   appearance: none; border: 1px solid var(--border); background: var(--btn-bg);
@@ -221,7 +251,10 @@ body {
   background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
   min-width: 60%; max-width: 90%; max-height: 90vh; display: flex; flex-direction: column;
   overflow: hidden; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
-  transform: scale(0.95); opacity: 0; transition: transform 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.275), opacity 0.2s ease, background-color 0.3s ease, border-color 0.3s ease;
+  transform: scale(0.95); opacity: 0; transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.2s ease, background-color 0.3s ease, border-color 0.3s ease;
+}
+@media (max-width: 700px) {
+  .modal-content { min-width: 92%; max-width: 92%; }
 }
 .modal.show .modal-content { transform: scale(1); opacity: 1; }
 .modal-header { display: flex; justify-content: space-between; align-items: center; padding: 14px 18px; border-bottom: 1px solid var(--border); background: var(--modal-header-bg); flex-shrink: 0; }
@@ -247,10 +280,8 @@ body {
 .code > code { display: block; white-space: inherit; }
 .code > code.hljs { padding: 0; background: transparent; }
 
-.asm-link { color: inherit; text-decoration: underline; text-decoration-style: dotted; text-decoration-color: rgba(255, 255, 255, 0.5); cursor: pointer; transition: all 0.2s ease; }
-.asm-link:hover { color: var(--c); text-decoration-style: solid; text-decoration-color: var(--c); background: rgba(31, 191, 117, 0.1); border-radius: 2px; }
-.light-mode .asm-link { text-decoration-color: rgba(0, 0, 0, 0.3); }
-.light-mode .asm-link:hover { color: #0284c7; text-decoration-color: #0284c7; background: rgba(2, 132, 199, 0.1); }
+.asm-link { color: inherit; text-decoration: underline; text-decoration-style: dotted; text-decoration-color: var(--asm-link-underline); cursor: pointer; transition: all 0.2s ease; }
+.asm-link:hover { color: var(--c); text-decoration-style: solid; text-decoration-color: var(--c); background: var(--asm-link-hover-bg); border-radius: 2px; }
 
 .meta-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; margin-top: 6px; }
 .meta-item { display: flex; flex-direction: column; gap: 2px; background: var(--meta-item-bg); padding: 6px 8px; border-radius: 2px; border: 1px solid var(--meta-item-border); transition: all 0.3s ease; }
@@ -259,14 +290,14 @@ body {
 .meta-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); }
 .meta-value { font-size: 12px; font-family: var(--mono); color: var(--text); text-shadow: var(--text-shadow); word-break: break-all; }
 .meta-value.blocker-value { font-style: italic; opacity: 0.9; }
-.meta-value.delta-value { color: #f59e0b; font-weight: bold; }
+.meta-value.delta-value { color: var(--delta); font-weight: bold; }
 .meta-docs { margin: 0; font-size: 12px; font-family: var(--mono); color: var(--text); text-shadow: var(--text-shadow); white-space: pre-wrap; }
 
 .status-badge { display: inline-block; padding: 2px 6px; border-radius: 10px; font-size: 11px; font-weight: 600; text-transform: uppercase; width: fit-content; }
-.status-exact { background: rgba(46, 160, 67, 0.2); color: #3fb950; border: 1px solid rgba(46, 160, 67, 0.4); }
-.status-reloc { background: rgba(2, 132, 199, 0.2); color: #0ea5e9; border: 1px solid rgba(2, 132, 199, 0.4); }
-.status-near-match { background: rgba(210, 153, 34, 0.2); color: #e3b341; border: 1px solid rgba(210, 153, 34, 0.4); }
-.status-stub { background: rgba(248, 81, 73, 0.2); color: #ff7b72; border: 1px solid rgba(248, 81, 73, 0.4); }
+.status-exact { background: rgba(46, 160, 67, 0.2); color: var(--badge-exact-text); border: 1px solid rgba(46, 160, 67, 0.4); }
+.status-reloc { background: rgba(2, 132, 199, 0.2); color: var(--badge-reloc-text); border: 1px solid rgba(2, 132, 199, 0.4); }
+.status-near-match { background: rgba(210, 153, 34, 0.2); color: var(--badge-near-text); border: 1px solid rgba(210, 153, 34, 0.4); }
+.status-stub { background: rgba(248, 81, 73, 0.2); color: var(--badge-stub-text); border: 1px solid rgba(248, 81, 73, 0.4); }
 
 .section-title-left { display: flex; align-items: center; gap: 8px; }
 .hex-logo { display: flex; align-items: center; justify-content: center; filter: drop-shadow(0 0 4px currentColor); }
@@ -278,7 +309,7 @@ body {
 .light-mode .progress-bar { border: 1px solid rgba(0, 0, 0, 0.2); }
 .progress-segments { display: flex; flex-direction: row; width: 100%; height: 100%; position: absolute; top: 0; left: 0; }
 .progress-text-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; justify-content: space-between; align-items: center; padding: 0 16px; pointer-events: none; font-size: 13px; font-family: var(--mono); color: #ffffff; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8), 0 0 4px rgba(0, 0, 0, 0.5); z-index: 10; }
-.progress-segment { height: 100%; transition: width 0.3s ease, background-color 0.3s ease, box-shadow 0.3s ease, filter 0.3s ease; cursor: pointer; }
+.progress-segment { height: 100%; transition: background-color 0.3s ease, box-shadow 0.3s ease, filter 0.3s ease; cursor: pointer; }
 .progress-segment:hover { filter: brightness(1.2); outline: 1px solid var(--c); box-shadow: var(--c-shadow); z-index: 2; }
 .progress-segment.active { box-shadow: inset 0 0 12px 2px var(--glow), inset 0 0 0 2px var(--c); outline: none; z-index: 2; position: relative; }
 
@@ -322,5 +353,14 @@ body::after { content: " "; display: block; position: fixed; top: 0; left: 0; bo
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* Coarse pointers (touch): interactive targets need ≥ 44px hit area (WCAG
+ * 2.5.5). Desktop fine-pointer keeps the compact 32px control height. */
+@media (pointer: coarse) {
+  .btn, .input-el, .target-select { height: 44px; min-height: 44px; }
+  .btn.icon-btn { width: 44px; }
+  .progress-segment { min-height: 44px; }
+  .cell { min-height: 16px; }
 }
 
