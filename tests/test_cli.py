@@ -266,3 +266,30 @@ class TestExportCsv:
         result = runner.invoke(app, ["export", "--format", "csv", "--target", "BOGUS"])
         assert result.exit_code == 1
         assert "not found" in result.output or "not found" in (result.stderr_bytes or b"").decode()
+
+
+class TestCheckFailureExit:
+    def test_below_threshold_exits_1(self) -> None:
+        """A tracked section under the threshold must exit 1 (the CI gate's
+        real failure mode — previously only the tautological (0,1) assertion
+        existed)."""
+        # The synthetic DB's .text is ~87.5% covered (112/128 bytes) — a
+        # threshold above that fails the gate with the real coverage path.
+        result = runner.invoke(app, ["check", "--min-coverage", "90", "--json"])
+        assert result.exit_code == 1
+        payload = json.loads(result.output)
+        assert payload["passed"] is False
+        assert any(r["status"] == "FAIL" for r in payload["results"])
+
+
+class TestStatsJson:
+    def test_stats_json_output(self) -> None:
+        """stats --json must emit a parseable list of per-target stat dicts."""
+        result = runner.invoke(app, ["stats", "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert isinstance(data, list)
+        assert data
+        assert "target" in data[0]
+        assert "sections" in data[0]
+        assert ".text" in data[0]["sections"]

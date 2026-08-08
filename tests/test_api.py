@@ -8,6 +8,7 @@ import sqlite3
 import threading
 import time
 from io import BytesIO
+from pathlib import Path
 from typing import Any
 from wsgiref.util import setup_testing_defaults
 
@@ -450,6 +451,41 @@ class TestSseEvents:
         snapshot = api._snapshot_db_mtime()
         assert snapshot is not None
         assert snapshot[1] > 0  # the synthetic DB has a non-zero size
+
+    def test_snapshot_tracks_wal_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A WAL-only commit (no main-file change) must change the snapshot —
+        this gates the memo/ETag/watcher after every rebrew build-db."""
+        import recoverage.api as api
+
+        db = tmp_path / "coverage.db"
+        db.write_bytes(b"x" * 100)
+        wal = tmp_path / "coverage.db-wal"
+        monkeypatch.setattr(api, "_db_path", lambda: db)
+        before = api._snapshot_db_mtime()
+        assert before is not None
+        wal.write_bytes(b"y" * 100)
+        after = api._snapshot_db_mtime()
+        assert after is not None
+        assert after != before  # -wal growth changed the fingerprint
+
+    def test_snapshot_ignores_shm_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """-shm is touched by every connection — it must NOT change the
+        snapshot or ETags would be unstable between requests."""
+        import recoverage.api as api
+
+        db = tmp_path / "coverage.db"
+        db.write_bytes(b"x" * 100)
+        monkeypatch.setattr(api, "_db_path", lambda: db)
+        before = api._snapshot_db_mtime()
+        assert before is not None
+        shm = tmp_path / "coverage.db-shm"
+        shm.write_bytes(b"z" * 100)
+        after = api._snapshot_db_mtime()
+        assert after == before
 
     def test_ensure_db_watcher_starts_thread(self) -> None:
         import recoverage.api as api
@@ -1056,3 +1092,48 @@ class TestDataPayloadMemo:
         # Rebuild invalidation path.
         api._clear_data_cache()
         assert len(api._DATA_CACHE) == 0
+
+
+def _header(headers: dict[str, str], name: str) -> str | None:
+    """Case-insensitive header lookup (Bottle sends 'Etag', tests use 'ETag')."""
+    for k, v in headers.items():
+        if k.lower() == name.lower():
+            return v
+    return None
+
+
+class TestApiEtagContract:
+    """Hashed ETag + If-None-Match 304 round-trip on the /data route."""
+
+    def test_data_etag_roundtrip(self) -> None:
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, headers, _ = wsgi_get(f"/api/targets/{target}/data")
+        assert status.startswith("200")
+        etag = _header(headers, "ETag")
+        assert etag and etag.startswith('"') and etag.endswith('"')
+        # Replay with If-None-Match -> 304, empty body.
+        status, headers, body = wsgi_get(
+            f"/api/targets/{target}/data", headers={"If-None-Match": etag}
+        )
+        assert status == "304 Not Modified"
+        assert body == b""
+
+    def test_data_etag_differs_by_section(self) -> None:
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        _, h1, _ = wsgi_get(f"/api/targets/{target}/data")
+        _, h2, _ = wsgi_get(f"/api/targets/{target}/data?section=.text")
+        assert _header(h1, "ETag") != _header(h2, "ETag")
+
+    def test_unknown_section_404s(self) -> None:
+        """/data?section=<unknown> must 404 (was a silent empty grid)."""
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, _, body = wsgi_get(f"/api/targets/{target}/data?section=.nosuch")
+        assert status.startswith("404")
+        payload = json.loads(decode_body(body, {}))
+        assert payload.get("code") == "not_found"
