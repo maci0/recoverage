@@ -252,10 +252,11 @@ def _get_targets_config() -> dict[str, Any]:
 
 
 def clear_target_cache() -> None:
-    global _TOML_CONFIG_CACHE, _RESOLVED_TARGETS_CACHE
+    global _TOML_CONFIG_CACHE, _RESOLVED_TARGETS_CACHE, _SCHEMA_VERSION_CACHE
     with _RESOLVED_TARGETS_CACHE_LOCK:
         _TOML_CONFIG_CACHE = None
         _RESOLVED_TARGETS_CACHE = None
+        _SCHEMA_VERSION_CACHE = None
 
 
 def resolve_targets(c: sqlite3.Cursor) -> tuple[list[str], list[dict[str, str]]]:
@@ -461,6 +462,12 @@ _GLOBAL_JSON_SQL = (
 
 _KNOWN_SCHEMA_VERSIONS: frozenset[str] = frozenset({"3", "4"})
 
+# Schema check memoized per DB (mtime_ns, size): the check is two queries
+# (metadata + full sqlite_master scan) that would otherwise run on every
+# request; the DB only changes when build-db rewrites it, which the SSE
+# watcher already detects and funnels through clear_target_cache().
+_SCHEMA_VERSION_CACHE: tuple[tuple[int, int], str] | None = None
+
 
 def _check_schema_version(conn: sqlite3.Connection) -> str:
     """Read the stored db_version metadata; warn if it is not a known-compatible version.
@@ -476,6 +483,25 @@ def _check_schema_version(conn: sqlite3.Connection) -> str:
 
     Returns the version string (or ``"<unknown>"`` / ``"<incomplete>"``).
     """
+    global _SCHEMA_VERSION_CACHE
+    try:
+        st = _db_path().stat()
+        fingerprint = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        fingerprint = None
+    if fingerprint is not None:
+        with _RESOLVED_TARGETS_CACHE_LOCK:
+            if _SCHEMA_VERSION_CACHE is not None and _SCHEMA_VERSION_CACHE[0] == fingerprint:
+                return _SCHEMA_VERSION_CACHE[1]
+    version = _check_schema_version_uncached(conn)
+    if fingerprint is not None:
+        with _RESOLVED_TARGETS_CACHE_LOCK:
+            _SCHEMA_VERSION_CACHE = (fingerprint, version)
+    return version
+
+
+def _check_schema_version_uncached(conn: sqlite3.Connection) -> str:
+    """Uncached schema version read; see :func:`_check_schema_version`."""
     try:
         row = conn.execute("SELECT value FROM metadata WHERE key = 'db_version' LIMIT 1").fetchone()
         if row is None:
