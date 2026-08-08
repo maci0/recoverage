@@ -5,6 +5,19 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `/api/events` SSE stream — pushes `db-updated` when `coverage.db` changes;
+  the SPA auto-refreshes (server now runs on a threaded WSGI server so the
+  stream never blocks the dashboard).
+- Batch function lookup: `POST /api/targets/<target>/functions` with
+  `{"vas": [...]}` returns details in input order (incl. `last_verify`).
+
+### Changed
+
+- All API error responses are standardized to
+  `{"error", "code", "detail"}` (e.g. `not_found`, `rate_limited`).
+
 ## [0.1.0] - 2026-08-08
 
 First tagged release.  Recoverage is a coverage dashboard for binary-matching
