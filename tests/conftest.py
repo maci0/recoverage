@@ -207,10 +207,16 @@ def _build_synthetic_db() -> None:
         conn.close()
 
 
-if not _DB_FILE.exists():
+# Build the synthetic DB only when we are NOT inside a real rebrew workspace:
+# a real project has a rebrew-project.toml and its own coverage.db, which the
+# DB-gated tests must never read (assertions would depend on unrelated project
+# data, and building a synthetic DB here could clobber the real one).
+_IN_REAL_PROJECT = (Path.cwd() / "rebrew-project.toml").exists()
+
+if not _DB_FILE.exists() and not _IN_REAL_PROJECT:
     _build_synthetic_db()
 
-HAS_DB = _DB_FILE.exists()
+HAS_DB = _DB_FILE.exists() and not _IN_REAL_PROJECT
 
 
 def wsgi_request(
