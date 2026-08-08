@@ -24,4 +24,8 @@ Requires-Dist: typer>=0.9
 Requires-Dist: zstandard>=0.22
 Provides-Extra: dev
 Requires-Dist: pytest>=8.0; extra == "dev"
+Provides-Extra: capstone
+Requires-Dist: capstone>=5.0; extra == "capstone"
+Provides-Extra: pygments
+Requires-Dist: pygments>=2.0; extra == "pygments"
 Dynamic: license-file

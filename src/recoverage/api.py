@@ -936,7 +936,8 @@ def handle_api_asm(target: str) -> bytes | Any:
             501,
             {
                 "error": "capstone not installed",
-                "detail": "install capstone (pip install capstone) to enable disassembly",
+                "detail": "install the optional extra to enable disassembly: "
+                "pip install 'recoverage[capstone]'",
             },
         )
 

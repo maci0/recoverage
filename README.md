@@ -83,10 +83,13 @@ uv pip install -e ../recoverage
 
 ### Optional runtime extras
 
-| Package | What it does |
-|---------|--------------|
-| capstone | Enables on-demand disassembly in the detail panel |
-| pygments | Syntax highlighting in Potato Mode |
+Install an extra to enable its feature: `pip install 'recoverage[<extra>]'`
+(or `uv sync --extra <extra>` in a workspace).
+
+| Extra | Package | What it does |
+|-------|---------|--------------|
+| `capstone` | capstone | Enables on-demand disassembly in the detail panel |
+| `pygments` | pygments | Syntax highlighting in Potato Mode |
 
 ---
 

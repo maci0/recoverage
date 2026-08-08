@@ -36,6 +36,12 @@ Repository = "https://github.com/relumea/recoverage"
 dev = [
     "pytest>=8.0",
 ]
+capstone = [
+    "capstone>=5.0",
+]
+pygments = [
+    "pygments>=2.0",
+]
 
 [project.scripts]
 recoverage = "recoverage.cli:main"
