@@ -155,7 +155,11 @@ matches are tracked) are skipped, not failed.
 ```bash
 recoverage check --min-coverage 60                              # all targets, all sections
 recoverage check --min-coverage 60 --target SERVER --section .text   # specific
+recoverage check --min-coverage 60 --json                       # machine-readable verdict
 ```
+
+Exit codes: 0 = gate passed, 1 = coverage below threshold (or bad input),
+2 = infrastructure error (database missing/unreadable).
 
 ### `recoverage regen`
 
