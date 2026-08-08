@@ -303,24 +303,10 @@ def handle_api_stats(target: str) -> bytes | Any:
 
         # Per-section stats.  Coverage is BYTE-based, matching the dashboard /
         # CLI / CI gate: covered = every cell span whose state is not "none",
-        # over the section's total cell bytes.  The old cell-COUNT formula
-        # (exact+reloc over cells) reported a different number than every
-        # other surface.
+        # over the section's total cell bytes.  Shared query (SECTION_STATS_SQL)
+        # so the API and CLI cannot drift apart again.
         sections: dict[str, Any] = {}
-        c.execute(
-            "SELECT section_name, "
-            "SUM(CASE WHEN state != 'none' THEN end - start ELSE 0 END) AS covered_bytes, "
-            "SUM(end - start) AS total_bytes, "
-            "COUNT(*) AS total_cells, "
-            "SUM(CASE WHEN state = 'exact' THEN 1 ELSE 0 END) AS exact_count, "
-            "SUM(CASE WHEN state = 'reloc' THEN 1 ELSE 0 END) AS reloc_count, "
-            "SUM(CASE WHEN state IN ('near_match','near_matching') THEN 1 ELSE 0 END) AS near_match_count, "
-            "SUM(CASE WHEN state = 'stub' THEN 1 ELSE 0 END) AS stub_count, "
-            "SUM(CASE WHEN state = 'data' THEN 1 ELSE 0 END) AS data_count, "
-            "SUM(CASE WHEN state = 'thunk' THEN 1 ELSE 0 END) AS thunk_count "
-            "FROM cells WHERE target = ? GROUP BY section_name",
-            (target,),
-        )
+        c.execute(_server.SECTION_STATS_SQL, (target,))
         for row in c.fetchall():
             total = row["total_bytes"] or 0
             covered = row["covered_bytes"] or 0

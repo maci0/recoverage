@@ -107,6 +107,25 @@ def _normalize_origin(origin: str) -> str:
         return ""
 
 
+# Byte-based per-section stats query shared by /api/targets/<target>/stats and
+# the `recoverage stats` CLI.  ONE definition: these two queries already
+# drifted apart once (cell-count vs byte-based coverage) and were fixed in
+# lockstep twice — a single constant makes the next divergence impossible.
+SECTION_STATS_SQL = """
+    SELECT section_name,
+      SUM(CASE WHEN state != 'none' THEN end - start ELSE 0 END) AS covered_bytes,
+      SUM(end - start) AS total_bytes,
+      COUNT(*) AS total_cells,
+      SUM(CASE WHEN state = 'exact' THEN 1 ELSE 0 END) AS exact_count,
+      SUM(CASE WHEN state = 'reloc' THEN 1 ELSE 0 END) AS reloc_count,
+      SUM(CASE WHEN state IN ('near_match','near_matching') THEN 1 ELSE 0 END) AS near_match_count,
+      SUM(CASE WHEN state = 'stub' THEN 1 ELSE 0 END) AS stub_count,
+      SUM(CASE WHEN state = 'data' THEN 1 ELSE 0 END) AS data_count,
+      SUM(CASE WHEN state = 'thunk' THEN 1 ELSE 0 END) AS thunk_count
+    FROM cells WHERE target = ? GROUP BY section_name
+"""
+
+
 # ── Path helpers ───────────────────────────────────────────────────
 
 
