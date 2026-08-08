@@ -417,15 +417,28 @@ def _best_encoding(accept_encoding: str) -> str:
     """Return the best available compression encoding name, or empty string.
 
     Parses comma-separated tokens from Accept-Encoding to avoid false substring
-    matches (e.g. 'not-zstd' should not match 'zstd').
+    matches (e.g. 'not-zstd' should not match 'zstd').  Honours q-values:
+    ``gzip;q=0`` means "not acceptable" (RFC 9110) and must not be chosen,
+    and higher q wins among the supported encodings.
     """
-    tokens = {t.strip().split(";")[0].strip().lower() for t in accept_encoding.split(",")}
-    if "zstd" in tokens:
-        return "zstd"
-    if "br" in tokens:
-        return "br"
-    if "gzip" in tokens:
-        return "gzip"
+    candidates: dict[str, float] = {}
+    for t in accept_encoding.split(","):
+        parts = [p.strip().lower() for p in t.split(";")]
+        name = parts[0]
+        if not name or name == "*":
+            continue
+        q = 1.0
+        for param in parts[1:]:
+            if param.startswith("q="):
+                try:
+                    q = float(param[2:])
+                except ValueError:
+                    q = 0.0
+        if q > 0:
+            candidates[name] = max(candidates.get(name, 0.0), q)
+    for name in ("zstd", "br", "gzip"):
+        if name in candidates:
+            return name
     return ""
 
 
@@ -753,6 +766,9 @@ def _json_err(status: int, data: dict[str, Any]) -> Any:
         resp.set_header("Content-Encoding", encoding)
     resp.set_header("Vary", "Accept-Encoding")
     resp.set_header("Content-Length", str(len(body)))
+    # Errors must never be cached by intermediaries: a proxy could serve a
+    # stale 503 after the DB recovers.
+    resp.set_header("Cache-Control", "no-store")
     return resp
 
 

@@ -53,10 +53,12 @@ _REGEN_LOCK = threading.Lock()  # serializes regen (check + subprocess, TOCTOU)
 # cells for the target (json_group_array over the whole cells table) plus
 # every function/global for the search index on each cache-missing request.
 # The ETag gives 304s to repeat clients, but N fresh clients each rebuilt
-# the multi-MB payload.  Keyed by (db mtime_ns, size, target, section) so a
-# rebuild (which the SSE watcher detects and funnels through
+# the multi-MB payload.  Keyed by the WAL-aware db snapshot + target +
+# section so a rebuild (which the SSE watcher detects and funnels through
 # clear_target_cache) invalidates it.
-_DATA_CACHE: dict[tuple[int, int, str, str | None], dict[str, Any]] = {}
+# Stores serialized JSON bytes so memo hits skip re-serialization (the
+# payload is multi-MB; re-running json.dumps on every hit dominated).
+_DATA_CACHE: dict[tuple[tuple[int, int] | None, str, str | None], bytes] = {}
 _DATA_CACHE_LOCK = threading.Lock()
 # Upper bound on retained payloads: a long-running server across many rebuilds
 # must not accumulate one multi-MB payload per fingerprint forever.
@@ -68,8 +70,8 @@ def _clear_data_cache() -> None:
         _DATA_CACHE.clear()
 
 
-def _cache_data_insert(key: tuple[int, int, str, str | None], value: dict[str, Any]) -> None:
-    """Insert a memoized payload, evicting the oldest entries past the cap."""
+def _cache_data_insert(key: tuple[tuple[int, int] | None, str, str | None], value: bytes) -> None:
+    """Insert a memoized serialized payload, evicting the oldest entries past the cap."""
     with _DATA_CACHE_LOCK:
         if len(_DATA_CACHE) >= _DATA_CACHE_MAX:
             # Evict oldest (dict preserves insertion order).
@@ -126,10 +128,24 @@ _DB_WATCHER_LOCK = threading.Lock()
 
 
 def _snapshot_db_mtime() -> tuple[int, int] | None:
-    """Return (mtime_ns, size) of coverage.db, or None when unreadable."""
+    """Return (mtime_ns, size) of coverage.db, or None when unreadable.
+
+    WAL-aware: the DB runs in ``journal_mode=wal``, so a writer can commit
+    to ``coverage.db-wal`` without checkpointing the main file — main-file
+    mtime/size alone would miss the change (stale memo/ETag/watcher).  Fold
+    the -wal stat in.  (NOT -shm: sqlite touches the shared-memory index on
+    every connection, so including it would make the snapshot — and thus
+    every ETag — change between requests.)
+    """
     try:
         st = _db_path().stat()
-        return st.st_mtime_ns, st.st_size
+        acc = st.st_mtime_ns + st.st_size
+        try:
+            w = Path(f"{_db_path()}-wal").stat()
+            acc += w.st_mtime_ns + w.st_size
+        except OSError:
+            pass
+        return acc, st.st_size
     except OSError:
         return None
 
@@ -355,19 +371,24 @@ def handle_api_data(target: str) -> bytes | Any:
     section_filter = request.query.get("section", "").strip() or None
 
     # ETag caching based on DB modification time + target + section.
-    # Uses st_mtime_ns so two rebuilds within the same second get distinct
-    # ETags (a float mtime would let a browser keep a stale 304).
+    # Uses the WAL-aware snapshot (mtime_ns-precision) so two rebuilds
+    # within the same second get distinct ETags (a float mtime would let a
+    # browser keep a stale 304), and a WAL-committed change that did not
+    # checkpoint the main file still invalidates.
     etag = None
-    fingerprint: tuple[int, int, str, str | None] | None = None
+    fingerprint: tuple[tuple[int, int] | None, str, str | None] | None = None
     try:
-        st = db.stat()
-        fingerprint = (st.st_mtime_ns, st.st_size, target, section_filter)
-        etag_key = f"{st.st_mtime_ns}-{target}"
+        snap = _snapshot_db_mtime()
+        fingerprint = (snap, target, section_filter)
+        etag_key = f"{snap[0]}-{target}" if snap else f"{target}"
         if section_filter:
             etag_key += f"-{section_filter}"
         etag = f'"{etag_key}"'
         if request.headers.get("If-None-Match") == etag:
-            return HTTPResponse(status=304)
+            return HTTPResponse(
+                status=304,
+                headers={"ETag": etag, "Cache-Control": "no-cache, must-revalidate"},
+            )
     except OSError:
         pass
 
@@ -414,6 +435,18 @@ def handle_api_data(target: str) -> bytes | Any:
             sec = dict(row)
             sec["cells"] = []
             data["sections"][sec["name"]] = sec
+
+        if section_filter and not data["sections"]:
+            # Mirror /asm: an unknown section must 404, not return a silent
+            # empty grid (which would also get memoized under that key).
+            return _json_err(
+                404,
+                {
+                    "error": f"section {section_filter} not found",
+                    "code": "not_found",
+                    "detail": f"target '{target}' has no section '{section_filter}'",
+                },
+            )
 
         if section_filter:
             c.execute(
@@ -489,7 +522,7 @@ def handle_api_data(target: str) -> bytes | Any:
             }
 
         if fingerprint is not None:
-            _cache_data_insert(fingerprint, data)
+            _cache_data_insert(fingerprint, json.dumps(data).encode("utf-8"))
 
         if etag is not None:
             return _json_ok(data, Cache_Control="no-cache, must-revalidate", ETag=str(etag))
@@ -610,10 +643,22 @@ def handle_api_functions_batch(target: str) -> bytes | Any:
     shape as ``GET /functions/<va>``, including the ``last_verify`` attachment.
     VAs with no match are omitted from the response (not an error).
     """
+    # Bound the request body: this endpoint is unauthenticated and (with
+    # --allow-remote) reachable off-loopback, and the payload is fully
+    # parsed before the 500-VA cap applies.  A bounded read rejects
+    # oversized bodies whether or not Content-Length is present.
     try:
-        raw = request.body.read()
+        raw = request.body.read(64 * 1024 + 1)
     except (OSError, ValueError):
         raw = b""
+    if len(raw) > 64 * 1024:
+        return _json_err(
+            413,
+            {
+                "error": "Request body too large",
+                "detail": "expected a JSON body under 64 KiB",
+            },
+        )
     try:
         payload = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
@@ -664,12 +709,23 @@ def handle_api_functions_batch(target: str) -> bytes | Any:
                 },
             )
         if isinstance(entry, int):
+            if entry < 0:
+                return _json_err(
+                    400,
+                    {
+                        "error": f"invalid VA: {entry!r}",
+                        "detail": "VAs must be non-negative",
+                    },
+                )
             va_ints.append(entry)
         elif isinstance(entry, str):
             try:
                 # Base-16 (with or without 0x prefix), matching rebrew's
                 # parse_va — bare hex like "10001000" is valid here.
-                va_ints.append(int(entry.strip(), 16))
+                parsed_va = int(entry.strip(), 16)
+                if parsed_va < 0:
+                    raise ValueError("negative VA")
+                va_ints.append(parsed_va)
             except ValueError:
                 return _json_err(
                     400,
@@ -772,28 +828,47 @@ def handle_api_function(target: str, va: str) -> bytes | Any:
 
         no_cache = "no-cache, no-store, must-revalidate"
 
-        # Parse va once: hex string (with or without 0x, like rebrew's
-        # parse_va) -> lookup by va column; anything else -> name lookup.
-        try:
-            va_int = int(va.strip(), 16)
-            is_numeric = True
-        except ValueError:
-            va_int = 0
-            is_numeric = False
+        # Parse va into candidate lookup ints.  Hex strings: 0x-prefixed or
+        # containing a-f (rebrew's parse_va convention, bare hex valid).
+        # All-digit strings: DECIMAL first (the /functions list emits va as
+        # a decimal int — a consumer taking that value straight into this
+        # route must not 404), with a bare-hex fallback for legacy callers.
+        # Anything else -> name lookup.
+        raw_va = va.strip()
+        va_candidates: list[int] = []
+        lowered = raw_va.lower()
+        if lowered.startswith("0x") or any(c in "abcdef" for c in lowered):
+            # Hex: 0x-prefixed or contains a-f (rebrew parse_va convention).
+            with contextlib.suppress(ValueError):
+                va_candidates = [int(raw_va, 16)]
+        else:
+            # All digits: decimal first (the /functions list emits va as a
+            # decimal int — a consumer taking that value straight into this
+            # route must not 404), with a bare-hex fallback for legacy callers.
+            with contextlib.suppress(ValueError):
+                va_candidates = [int(raw_va, 10)]
+            with contextlib.suppress(ValueError):
+                va_candidates.append(int(raw_va, 16))
+        is_numeric = bool(va_candidates)
 
-        # Try functions first
+        # Try functions first (candidates in order: decimal then hex).
+        row = None
         if is_numeric:
-            c.execute(
-                f"SELECT {_FN_JSON_SQL} FROM functions WHERE target = ? AND va = ?",
-                (target, va_int),
-            )
+            for va_int in va_candidates:
+                c.execute(
+                    f"SELECT {_FN_JSON_SQL} FROM functions WHERE target = ? AND va = ?",
+                    (target, va_int),
+                )
+                row = c.fetchone()
+                if row:
+                    break
         else:
             c.execute(
                 f"SELECT {_FN_JSON_SQL} FROM functions WHERE target = ? AND name = ?",
                 (target, va),
             )
+            row = c.fetchone()
 
-        row = c.fetchone()
         if row:
             fn_json = json.loads(row[0])
             # Attach the last `rebrew verify -o` record for this function.
@@ -812,18 +887,23 @@ def handle_api_function(target: str, va: str) -> bytes | Any:
             return _json_ok(json.dumps(fn_json).encode("utf-8"), Cache_Control=no_cache)
 
         # Try globals
+        row = None
         if is_numeric:
-            c.execute(
-                f"SELECT {_GLOBAL_JSON_SQL} FROM globals WHERE target = ? AND va = ?",
-                (target, va_int),
-            )
+            for va_int in va_candidates:
+                c.execute(
+                    f"SELECT {_GLOBAL_JSON_SQL} FROM globals WHERE target = ? AND va = ?",
+                    (target, va_int),
+                )
+                row = c.fetchone()
+                if row:
+                    break
         else:
             c.execute(
                 f"SELECT {_GLOBAL_JSON_SQL} FROM globals WHERE target = ? AND name = ?",
                 (target, va),
             )
+            row = c.fetchone()
 
-        row = c.fetchone()
         if row:
             return _json_ok(row[0].encode("utf-8"), Cache_Control=no_cache)
 
@@ -874,7 +954,10 @@ def handle_api_asm(target: str) -> bytes | Any:
         db_mtime = _db_path().stat().st_mtime_ns
         asm_etag = f'"{db_mtime}-{target}-{section}-{va}-{size}-{fmt}"'
         if request.headers.get("If-None-Match") == asm_etag:
-            return HTTPResponse(status=304)
+            return HTTPResponse(
+                status=304,
+                headers={"ETag": asm_etag, "Cache-Control": "no-cache, must-revalidate"},
+            )
     except OSError:
         asm_etag = None
 
@@ -989,7 +1072,10 @@ def handle_api_bytes(target: str, section: str) -> bytes | Any:
         db_mtime = _db_path().stat().st_mtime_ns
         bytes_etag = f'"{db_mtime}-{target}-{section}-{req_offset}-{req_size}"'
         if request.headers.get("If-None-Match") == bytes_etag:
-            return HTTPResponse(status=304)
+            return HTTPResponse(
+                status=304,
+                headers={"ETag": bytes_etag, "Cache-Control": "no-cache, must-revalidate"},
+            )
     except OSError:
         bytes_etag = None
 

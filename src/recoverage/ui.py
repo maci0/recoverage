@@ -108,10 +108,15 @@ def handle_potato() -> bytes | Any:
 
         db = _db_path()
         if db.exists():
-            mtime = str(db.stat().st_mtime)
+            # st_mtime_ns: two rebuilds in the same second must get a
+            # distinct ETag (float seconds would serve a stale 304).
+            mtime = str(db.stat().st_mtime_ns)
             etag = f'"{hashlib.md5((mtime + request.query_string).encode(), usedforsecurity=False).hexdigest()}"'
             if request.headers.get("If-None-Match") == etag:
-                return HTTPResponse(status=304)
+                return HTTPResponse(
+                    status=304,
+                    headers={"ETag": etag, "Cache-Control": "no-cache, must-revalidate"},
+                )
         else:
             etag = None
 

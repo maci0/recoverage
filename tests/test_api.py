@@ -312,6 +312,17 @@ class TestLastVerify:
         assert data["last_verify"]["byte_delta"] == 0
         assert "verified_at" in data["last_verify"]
 
+    def test_function_detail_accepts_decimal_va(self) -> None:
+        """The /functions list emits va as a decimal int — taking that value
+        straight into the detail route must not 404 (round-trip contract)."""
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, _, body = wsgi_get(f"/api/targets/{target}/functions/0x10001000")
+        hex_data = json.loads(decode_body(body, {}))
+        status, _, body = wsgi_get(f"/api/targets/{target}/functions/{hex_data['va']}")
+        assert status.startswith("200")
+
     def test_function_without_verify_record_omits_field(self) -> None:
         target = get_first_target()
         if not target:
@@ -569,6 +580,18 @@ class TestBatchFunctionLookup:
         assert data[0]["va"] == 0x10001000
         assert data[0]["last_verify"]["byte_delta"] == 0
         assert "last_verify" not in data[1]
+
+    def test_batch_rejects_oversized_body(self) -> None:
+        """The batch endpoint is unauthenticated — an oversized body must be
+        rejected with 413 before it is parsed, not read into memory."""
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, _, body = wsgi_post(
+            f"/api/targets/{target}/functions",
+            body=b'{"vas": ["0x10001000"]' + b" " * 70_000 + b"}",
+        )
+        assert status.startswith("413")
 
     def test_batch_omits_unknown_vas(self) -> None:
         target = get_first_target()
