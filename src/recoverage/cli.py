@@ -473,15 +473,17 @@ def check(
                     continue
                 compared += 1
                 pct = sec["coverage_pct"]
+                # Display at the same precision used for the comparison — a
+                # gate failing on raw 99.49% must not print "99.5% < 99.5%".
                 if pct < min_coverage:
                     typer.secho(
-                        f"FAIL: {tid} {sec_name} coverage {pct:.1f}% < {min_coverage:.1f}%",
+                        f"FAIL: {tid} {sec_name} coverage {pct:.2f}% < {min_coverage:.2f}%",
                         fg=typer.colors.RED,
                     )
                     failed = True
                 else:
                     typer.secho(
-                        f"PASS: {tid} {sec_name} coverage {pct:.1f}% >= {min_coverage:.1f}%",
+                        f"PASS: {tid} {sec_name} coverage {pct:.2f}% >= {min_coverage:.2f}%",
                         fg=typer.colors.GREEN,
                     )
 
