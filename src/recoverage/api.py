@@ -47,7 +47,6 @@ _log = logging.getLogger("recoverage")
 _REGEN_COOLDOWN_SECONDS = 5.0
 _regen_last_attempt = 0.0  # time.monotonic() of the last accepted regen POST
 _REGEN_LOCK = threading.Lock()  # serializes regen (check + subprocess, TOCTOU)
-_regen_in_progress = False  # True while catalog/build-db is running
 
 
 def _target_not_found(target: str) -> Any:
@@ -1023,7 +1022,7 @@ def handle_api_bytes(target: str, section: str) -> bytes | Any:
 
 @app.post("/api/regen")
 def handle_regen() -> bytes | Any:
-    global _regen_last_attempt, _regen_in_progress  # noqa: PLW0603
+    global _regen_last_attempt  # noqa: PLW0603
 
     remote = request.environ.get("REMOTE_ADDR", "")
     if remote not in ("127.0.0.1", "::1", "localhost"):
@@ -1065,14 +1064,6 @@ def handle_regen() -> bytes | Any:
             },
         )
     try:
-        if _regen_in_progress:
-            return _json_err(
-                429,
-                {
-                    "error": "Rate limited: regeneration already running",
-                    "detail": "a catalog/build-db run is in progress",
-                },
-            )
         now = time.monotonic()
         if now - _regen_last_attempt < _REGEN_COOLDOWN_SECONDS:
             remaining = max(0, _REGEN_COOLDOWN_SECONDS - (now - _regen_last_attempt))
@@ -1085,10 +1076,8 @@ def handle_regen() -> bytes | Any:
                 },
             )
         _regen_last_attempt = now
-        _regen_in_progress = True
         return _do_regen(remote)
     finally:
-        _regen_in_progress = False
         _REGEN_LOCK.release()
 
 
