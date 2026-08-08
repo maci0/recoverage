@@ -833,7 +833,11 @@ class TestCorsOriginAllowlist:
         assert "Access-Control-Allow-Origin" not in headers
 
     def test_wildcard_never_emitted(self) -> None:
+        """An empty allowlist must never emit Access-Control-Allow-Origin:*."""
         self._enable([])
+        status, headers, _ = wsgi_get("/api/health", headers={"Origin": "http://localhost:5173"})
+        assert status.startswith("200")
+        assert "Access-Control-Allow-Origin" not in headers
 
     def test_different_port_not_allowed(self) -> None:
         self._enable(["http://localhost:5173"])

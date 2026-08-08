@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import gzip
 import threading
 from pathlib import Path
@@ -303,3 +304,52 @@ class TestLikeEscape:
         """Input '\\_' must produce escaped backslash + escaped underscore."""
         result = _escape_like("\\_")
         assert result == "%\\\\\\_%"
+
+
+class TestSchemaShapeGuard:
+    """A DB stamped with a known version but missing required schema objects
+    must report <incomplete> (endpoints then return the 503 contract)."""
+
+    def test_missing_object_reports_incomplete(self, tmp_path: Any) -> None:
+        import sqlite3
+
+        from recoverage import server as srv
+
+        db = tmp_path / "coverage.db"
+        conn = sqlite3.connect(db)
+        c = conn.cursor()
+        c.execute("CREATE TABLE metadata (target TEXT, key TEXT, value TEXT)")
+        c.execute("INSERT INTO metadata VALUES ('__schema__', 'db_version', '\"4\"')")
+        c.execute("CREATE TABLE sections (id INTEGER)")
+        # Deliberately omit history + section_cell_stats view.
+        conn.commit()
+        conn.close()
+
+        with contextlib.closing(sqlite3.connect(db)) as conn2:
+            assert srv._check_schema_version_uncached(conn2) == "<incomplete>"
+
+    def test_complete_db_reports_version(self, tmp_path: Any) -> None:
+        import sqlite3
+
+        from recoverage import server as srv
+
+        db = tmp_path / "coverage.db"
+        conn = sqlite3.connect(db)
+        c = conn.cursor()
+        c.execute("CREATE TABLE metadata (target TEXT, key TEXT, value TEXT)")
+        c.execute("INSERT INTO metadata VALUES ('__schema__', 'db_version', '\"4\"')")
+        for name in (
+            "sections",
+            "cells",
+            "functions",
+            "globals",
+            "verify_results",
+            "history",
+        ):
+            c.execute(f"CREATE TABLE {name} (id INTEGER)")
+        c.execute("CREATE VIEW section_cell_stats AS SELECT 1 AS x")
+        conn.commit()
+        conn.close()
+
+        with contextlib.closing(sqlite3.connect(db)) as conn2:
+            assert srv._check_schema_version_uncached(conn2) == "4"

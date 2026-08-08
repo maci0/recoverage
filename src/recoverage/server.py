@@ -518,7 +518,15 @@ def _check_schema_version(conn: sqlite3.Connection) -> str:
 def _check_schema_version_uncached(conn: sqlite3.Connection) -> str:
     """Uncached schema version read; see :func:`_check_schema_version`."""
     try:
-        row = conn.execute("SELECT value FROM metadata WHERE key = 'db_version' LIMIT 1").fetchone()
+        # Prefer the schema-level __schema__ stamp (deterministic across
+        # targets); fall back to any per-target stamp for legacy DBs.
+        row = conn.execute(
+            "SELECT value FROM metadata WHERE target = '__schema__' AND key = 'db_version' LIMIT 1"
+        ).fetchone()
+        if row is None:
+            row = conn.execute(
+                "SELECT value FROM metadata WHERE key = 'db_version' LIMIT 1"
+            ).fetchone()
         if row is None:
             return "<unknown>"
         v = row[0]

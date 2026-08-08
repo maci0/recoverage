@@ -81,8 +81,10 @@ class TestStatsCommand:
 
     def test_stats_with_nonexistent_target(self) -> None:
         result = runner.invoke(app, ["stats", "--target", "NONEXISTENT_TARGET_XYZ"])
-        # Should succeed but show empty/no data (not crash)
-        assert result.exit_code == 0
+        # A typo'd target must fail loudly — silently printing an empty table
+        # lets automation gate on fabricated zero-coverage data.
+        assert result.exit_code == 1
+        assert "not found" in result.output or "not found" in result.stderr_bytes.decode()
 
 
 # ── Check command ─────────────────────────────────────────────────
@@ -97,11 +99,27 @@ class TestCheckCommand:
         assert "PASS" in result.output
 
     def test_check_with_100_threshold(self) -> None:
-        """100% threshold will likely fail for most projects."""
+        """100% threshold must produce a definitive exit code: either every
+        section is at 100% (0) or at least one section fails (1)."""
         result = runner.invoke(app, ["check", "--min-coverage", "100"])
-        # Exit code 1 means a section failed, which is expected
-        # Exit code 0 means everything is at 100%, also valid
         assert result.exit_code in (0, 1)
+        if result.exit_code == 0:
+            assert "FAIL" not in result.output
+
+    def test_check_min_coverage_out_of_range(self) -> None:
+        """--min-coverage outside [0, 100] must be rejected, not silently
+        always-pass (negative) or always-fail (over 100)."""
+        for bad in ("-5", "150"):
+            result = runner.invoke(app, ["check", "--min-coverage", bad])
+            # Our explicit range validation → exit 1 with a clear message.
+            assert result.exit_code == 1
+            assert (
+                "min-coverage" in result.output.lower()
+                or "min-coverage" in (result.stderr_bytes or b"").decode().lower()
+            )
+        # Non-numeric input is a Typer parse error (exit 2) — also rejected.
+        result = runner.invoke(app, ["check", "--min-coverage", "abc"])
+        assert result.exit_code == 2
 
     def test_check_nonexistent_section(self) -> None:
         result = runner.invoke(app, ["check", "--min-coverage", "50", "--section", "NONEXISTENT"])
@@ -119,24 +137,23 @@ class TestExportNoDb:
         assert result.exit_code == 1
 
 
-# ── CSV edge cases (stdlib csv module) ────────────────────────────
+# ── Export CSV (exercises recoverage's CSV writer) ─────────────────
 
 
-class TestCsvEdgeCases:
-    """Verify CSV module handles edge cases correctly (these values could appear in exports)."""
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+class TestExportCsv:
+    def test_csv_export_has_header_and_rows(self) -> None:
+        """export --format csv must emit the header + one row per section."""
+        result = runner.invoke(app, ["export", "--format", "csv"])
+        assert result.exit_code == 0
+        lines = [ln for ln in result.output.splitlines() if ln.strip()]
+        assert lines, "CSV export produced no rows"
+        header = lines[0].split(",")
+        assert header[0] == "target"
+        assert "section" in header
+        assert "coverage_pct" in header
 
-    def test_csv_with_commas_in_values(self) -> None:
-        buf = io.StringIO()
-        writer = csv.writer(buf)
-        writer.writerow(["name,with,commas", ".data", 5000])
-        buf.seek(0)
-        rows = list(csv.reader(buf))
-        assert rows[0][0] == "name,with,commas"
-
-    def test_csv_with_quotes_in_values(self) -> None:
-        buf = io.StringIO()
-        writer = csv.writer(buf)
-        writer.writerow(['value "with" quotes', "normal"])
-        buf.seek(0)
-        rows = list(csv.reader(buf))
-        assert rows[0][0] == 'value "with" quotes'
+    def test_csv_export_target_not_found(self) -> None:
+        result = runner.invoke(app, ["export", "--format", "csv", "--target", "BOGUS"])
+        assert result.exit_code == 1
+        assert "not found" in result.output or "not found" in (result.stderr_bytes or b"").decode()

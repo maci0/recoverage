@@ -975,6 +975,14 @@ def _load_section_data(
 # safe (json.loads per request is cheap relative to the SQL aggregation).
 _POTATO_CELLS_CACHE: dict[tuple[int, int, str], list[tuple[str, str]]] = {}
 _POTATO_CELLS_CACHE_LOCK = threading.Lock()
+# Upper bound on retained payloads across rebuilds (multi-MB per entry).
+_POTATO_CELLS_CACHE_MAX = 4
+
+
+def _clear_potato_cells_cache() -> None:
+    """Clear the memoized potato cells payloads (called on DB rebuild)."""
+    with _POTATO_CELLS_CACHE_LOCK:
+        _POTATO_CELLS_CACHE.clear()
 
 
 def _load_cells_cached(c: sqlite3.Cursor, target: str) -> list[tuple[str, str]]:
@@ -1002,6 +1010,11 @@ def _load_cells_cached(c: sqlite3.Cursor, target: str) -> list[tuple[str, str]]:
 
     if fingerprint is not None:
         with _POTATO_CELLS_CACHE_LOCK:
+            if len(_POTATO_CELLS_CACHE) >= _POTATO_CELLS_CACHE_MAX:
+                for old_key in list(_POTATO_CELLS_CACHE)[
+                    : len(_POTATO_CELLS_CACHE) - _POTATO_CELLS_CACHE_MAX + 1
+                ]:
+                    _POTATO_CELLS_CACHE.pop(old_key, None)
             _POTATO_CELLS_CACHE[fingerprint] = rows
     return rows
 
@@ -1127,7 +1140,7 @@ def _build_progress(
     reloc_matches = sec_summ.get("relocMatches", 0)
     near_match_matches = sec_summ.get("nearMatchCount", 0)
     stub_matches = sec_summ.get("stubCount", 0)
-    matched_fn = exact_matches + reloc_matches + near_match_matches + stub_matches
+    matched_fn = exact_matches + reloc_matches  # NEAR_MATCHING/STUB are not matched
 
     if section == ".text" and total_fn > 0:
         seg_exact = exact_matches / total_fn * 100

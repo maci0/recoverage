@@ -95,6 +95,25 @@ def _list_targets(conn: sqlite3.Connection) -> list[str]:
     return [row[0] for row in c.fetchall()]
 
 
+def _resolve_targets(conn: sqlite3.Connection, target: str | None) -> list[str]:
+    """Return the targets to operate on, validating a requested --target.
+
+    A requested target that is not in the DB exits 1 with a clear error —
+    sibling commands must not silently succeed on a typo'd target.
+    """
+    if target is not None:
+        known = _list_targets(conn)
+        if target not in known:
+            typer.secho(
+                f"Error: target {target!r} not found in database (have: {', '.join(known) or 'none'}).",
+                fg=typer.colors.RED,
+                err=True,
+            )
+            raise typer.Exit(1)
+        return [target]
+    return _list_targets(conn)
+
+
 def _get_stats(conn: sqlite3.Connection, target: str) -> dict[str, Any]:
     c = conn.cursor()
     from recoverage.server import _section_stats  # noqa: PLC0415
@@ -270,7 +289,7 @@ def stats(
     from rich.table import Table
 
     with contextlib.closing(_open_db()) as conn:
-        targets = [target] if target else _list_targets(conn)
+        targets = _resolve_targets(conn, target)
 
         if not targets:
             typer.secho("No targets found in database.", fg=typer.colors.YELLOW, err=True)
@@ -323,7 +342,7 @@ def export(
 ) -> None:
     """Export coverage data to stdout."""
     with contextlib.closing(_open_db()) as conn:
-        targets = [target] if target else _list_targets(conn)
+        targets = _resolve_targets(conn, target)
 
         if not targets:
             typer.secho("No targets found in database.", fg=typer.colors.YELLOW, err=True)
@@ -384,14 +403,22 @@ def export(
 @app.command()
 def check(
     min_coverage: float = typer.Option(
-        ..., "--min-coverage", "-m", help="Minimum coverage percentage"
+        ..., "--min-coverage", "-m", help="Minimum coverage percentage (0-100)"
     ),
     target: str | None = typer.Option(None, "--target", "-t", help="Target ID (default: all)"),
     section: str | None = typer.Option(None, "--section", "-s", help="Section name (default: all)"),
 ) -> None:
     """Check coverage against a threshold (CI gate)."""
+    if not 0.0 <= min_coverage <= 100.0:
+        typer.secho(
+            f"Error: --min-coverage must be between 0 and 100, got {min_coverage!r}.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(1)
+
     with contextlib.closing(_open_db()) as conn:
-        targets = [target] if target else _list_targets(conn)
+        targets = _resolve_targets(conn, target)
 
         if not targets:
             typer.secho("No targets found in database.", fg=typer.colors.YELLOW, err=True)

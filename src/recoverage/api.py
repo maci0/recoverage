@@ -58,11 +58,24 @@ _REGEN_LOCK = threading.Lock()  # serializes regen (check + subprocess, TOCTOU)
 # clear_target_cache) invalidates it.
 _DATA_CACHE: dict[tuple[int, int, str, str | None], dict[str, Any]] = {}
 _DATA_CACHE_LOCK = threading.Lock()
+# Upper bound on retained payloads: a long-running server across many rebuilds
+# must not accumulate one multi-MB payload per fingerprint forever.
+_DATA_CACHE_MAX = 8
 
 
 def _clear_data_cache() -> None:
     with _DATA_CACHE_LOCK:
         _DATA_CACHE.clear()
+
+
+def _cache_data_insert(key: tuple[int, int, str, str | None], value: dict[str, Any]) -> None:
+    """Insert a memoized payload, evicting the oldest entries past the cap."""
+    with _DATA_CACHE_LOCK:
+        if len(_DATA_CACHE) >= _DATA_CACHE_MAX:
+            # Evict oldest (dict preserves insertion order).
+            for old_key in list(_DATA_CACHE)[: len(_DATA_CACHE) - _DATA_CACHE_MAX + 1]:
+                _DATA_CACHE.pop(old_key, None)
+        _DATA_CACHE[key] = value
 
 
 def _target_not_found(target: str) -> Any:
@@ -133,9 +146,11 @@ def _broadcast_db_updated(snapshot: tuple[int, int] | None) -> None:
     try:
         clear_target_cache()
         _clear_data_cache()
+        from recoverage.potato import _clear_potato_cells_cache  # noqa: PLC0415
         from recoverage.ui import clear_index_cache  # noqa: PLC0415
 
         clear_index_cache()
+        _clear_potato_cells_cache()
         # Disassembly/bytes reflect the original binary and section layout,
         # both of which change with a rebuild.  The in-app regen path clears
         # these; the external build-db path must too or /asm keeps serving
@@ -335,14 +350,15 @@ def handle_api_data(target: str) -> bytes | Any:
     db = _db_path()
     section_filter = request.query.get("section", "").strip() or None
 
-    # ETag caching based on DB modification time + target + section
+    # ETag caching based on DB modification time + target + section.
+    # Uses st_mtime_ns so two rebuilds within the same second get distinct
+    # ETags (a float mtime would let a browser keep a stale 304).
     etag = None
     fingerprint: tuple[int, int, str, str | None] | None = None
     try:
         st = db.stat()
-        mtime = st.st_mtime
         fingerprint = (st.st_mtime_ns, st.st_size, target, section_filter)
-        etag_key = f"{mtime}-{target}"
+        etag_key = f"{st.st_mtime_ns}-{target}"
         if section_filter:
             etag_key += f"-{section_filter}"
         etag = f'"{etag_key}"'
@@ -461,8 +477,7 @@ def handle_api_data(target: str) -> bytes | Any:
             }
 
         if fingerprint is not None:
-            with _DATA_CACHE_LOCK:
-                _DATA_CACHE[fingerprint] = data
+            _cache_data_insert(fingerprint, data)
 
         if etag is not None:
             return _json_ok(data, Cache_Control="no-cache, must-revalidate", ETag=str(etag))
@@ -1098,11 +1113,13 @@ def handle_regen() -> bytes | Any:
 
 def _do_regen(remote: str) -> bytes | Any:
     """Run catalog + build-db. Caller holds _REGEN_LOCK."""
+    from recoverage.potato import _clear_potato_cells_cache  # noqa: PLC0415
     from recoverage.ui import clear_index_cache  # noqa: PLC0415
 
     clear_index_cache()
     clear_target_cache()
     _clear_data_cache()
+    _clear_potato_cells_cache()
 
     # Clear DLL and disassembly caches so regen picks up new binaries
     with DLL_LOCK:
@@ -1130,6 +1147,7 @@ def _do_regen(remote: str) -> bytes | Any:
         clear_index_cache()
         clear_target_cache()
         _clear_data_cache()
+        _clear_potato_cells_cache()
         _log.info("Regen completed successfully")
         return _json_ok({"ok": True})
     except subprocess.TimeoutExpired:
