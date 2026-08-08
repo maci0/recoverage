@@ -16,6 +16,7 @@ import re
 import sqlite3
 import struct
 import textwrap
+import threading
 from collections.abc import Callable, Iterable
 from datetime import UTC, datetime
 from html import escape as _html_escape
@@ -960,6 +961,36 @@ def _load_section_data(
         sec["cells"] = []
         sections[sec["name"]] = sec
 
+    for sec_name, cells_json in _load_cells_cached(c, target):
+        if sec_name in sections:
+            sections[sec_name]["cells"] = json.loads(cells_json)
+    return sections, data
+
+
+# Potato mode fetches ALL cells for the target (json_group_array over the
+# whole cells table) on every page render — each filter toggle or sort
+# re-fetches the multi-MB payload.  Memoize per DB fingerprint: a rebuild
+# changes mtime_ns/size so the cache self-invalidates, no explicit clear
+# needed.  The JSON string is immutable, so sharing it across requests is
+# safe (json.loads per request is cheap relative to the SQL aggregation).
+_POTATO_CELLS_CACHE: dict[tuple[int, int, str], list[tuple[str, str]]] = {}
+_POTATO_CELLS_CACHE_LOCK = threading.Lock()
+
+
+def _load_cells_cached(c: sqlite3.Cursor, target: str) -> list[tuple[str, str]]:
+    """Return [(section_name, cells_json), ...] for *target*, memoized."""
+    fingerprint: tuple[int, int, str] | None = None
+    try:
+        st = _db_path().stat()
+        fingerprint = (st.st_mtime_ns, st.st_size, target)
+    except OSError:
+        pass
+    if fingerprint is not None:
+        with _POTATO_CELLS_CACHE_LOCK:
+            cached = _POTATO_CELLS_CACHE.get(fingerprint)
+        if cached is not None:
+            return cached
+
     c.execute(
         "SELECT section_name, json_group_array(json_object("
         "'id', id, 'start', start, 'end', end, 'span', span, "
@@ -967,11 +998,12 @@ def _load_section_data(
         ")) FROM cells WHERE target = ? GROUP BY section_name",
         (target,),
     )
-    for row in c.fetchall():
-        sec_name = row[0]
-        if sec_name in sections:
-            sections[sec_name]["cells"] = json.loads(row[1])
-    return sections, data
+    rows = [(str(row[0]), str(row[1])) for row in c.fetchall()]
+
+    if fingerprint is not None:
+        with _POTATO_CELLS_CACHE_LOCK:
+            _POTATO_CELLS_CACHE[fingerprint] = rows
+    return rows
 
 
 def _compute_section_stats(
