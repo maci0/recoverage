@@ -128,11 +128,12 @@ Start the dashboard web server.
 
 ### `recoverage stats`
 
-Print per-section coverage stats as a Rich table.
+Print per-section coverage stats as a Rich table, or as JSON with `--json`.
 
 ```bash
 recoverage stats                    # all targets
 recoverage stats --target SERVER    # single target
+recoverage stats --json             # machine-readable
 ```
 
 ### `recoverage export`
