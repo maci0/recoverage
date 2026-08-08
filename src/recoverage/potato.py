@@ -27,7 +27,15 @@ from urllib.parse import quote as _url_quote
 from bottle import SimpleTemplate  # type: ignore
 
 from recoverage import __version__
-from recoverage.server import _db_path, _escape_like, _load_dll, get_disassembly, resolve_targets
+from recoverage.server import (
+    _FN_JSON_SQL,
+    _GLOBAL_JSON_SQL,
+    _db_path,
+    _escape_like,
+    _load_dll,
+    get_disassembly,
+    resolve_targets,
+)
 
 _log = logging.getLogger("recoverage")
 
@@ -1620,18 +1628,7 @@ def _render_panel(
         fn_va = 0
         is_numeric = False
 
-    fn_sql = (
-        "SELECT json_object("
-        "'va', va, 'name', name, 'vaStart', vaStart, 'size', size, "
-        "'fileOffset', fileOffset, 'status', status, 'module', module, "
-        "'cflags', cflags, 'symbol', symbol, 'markerType', markerType, "
-        "'ghidra_name', ghidra_name, 'list_name', list_name, "
-        "'is_thunk', is_thunk, 'is_export', is_export, "
-        "'sha256', sha256, 'files', json(files), "
-        "'blocker', blocker, 'blockerDelta', blockerDelta, "
-        "'size_reason', size_reason, 'similarity', similarity"
-        ") FROM functions WHERE target=? AND "
-    )
+    fn_sql = "SELECT " + _FN_JSON_SQL + " FROM functions WHERE target=? AND "
     if is_numeric:
         c.execute(fn_sql + "va=?", (target, fn_va))
     else:
@@ -1726,10 +1723,7 @@ def _render_panel(
 
     # ── Try globals table ────────────────────────────────────────
     c.execute(
-        "SELECT json_object("
-        "'va', va, 'name', name, 'decl', decl, "
-        "'files', json(files)"
-        ") FROM globals WHERE target=? AND name=?",
+        "SELECT " + _GLOBAL_JSON_SQL + " FROM globals WHERE target=? AND name=?",
         (target, fn_name),
     )
     gl_row = c.fetchone()
