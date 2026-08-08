@@ -27,6 +27,7 @@ from recoverage.server import (
     _db_path,
     _escape_like,
     _get_capstone_md,
+    _get_targets_config,
     _json_err,
     _json_ok,
     _load_dll,
@@ -886,11 +887,16 @@ def handle_api_asm(target: str) -> bytes | Any:
             # Structured JSON output
             target_data = _load_dll(target)
             if target_data is None:
+                hint = (
+                    f" add [targets.{target}].binary to rebrew-project.toml"
+                    if target not in _get_targets_config()
+                    else ""
+                )
                 return _json_err(
                     404,
                     {
                         "error": "DLL not found",
-                        "detail": f"original binary for target {target!r} not found",
+                        "detail": f"original binary for target {target!r} not found;{hint}",
                     },
                 )
             code_bytes = target_data[file_offset : file_offset + size]
@@ -990,11 +996,16 @@ def handle_api_bytes(target: str, section: str) -> bytes | Any:
             return _json_err(400, {"error": "offset beyond section bounds"})
         target_data = _load_dll(target)
         if target_data is None:
+            hint = (
+                f" add [targets.{target}].binary to rebrew-project.toml"
+                if target not in _get_targets_config()
+                else ""
+            )
             return _json_err(
                 404,
                 {
                     "error": "DLL not found for target",
-                    "detail": f"original binary for target {target!r} not found",
+                    "detail": f"original binary for target {target!r} not found;{hint}",
                 },
             )
 

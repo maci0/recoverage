@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import gzip
 import threading
+from pathlib import Path
+from typing import Any
 
 import brotli
 import pytest
@@ -196,10 +198,25 @@ class TestPathHelpers:
         assert _db_path().name == "coverage.db"
         assert _db_path().parent.name == "db"
 
-    def test_find_dll_path_returns_path(self) -> None:
+    def test_find_dll_path_none_for_unconfigured_target(self) -> None:
+        """A target with no [targets.<tid>].binary must return None, not a
+        silently-served fallback (SERVER's DLL) — the caller then reports a
+        target-specific error instead of plausible-but-wrong disassembly."""
         clear_target_cache()
-        result = _find_dll_path("NONEXISTENT")
-        assert result.is_absolute()
+        assert _find_dll_path("NONEXISTENT") is None
+
+    def test_find_dll_path_resolves_configured_binary(self, monkeypatch: Any) -> None:
+        from unittest.mock import patch
+
+        from recoverage import server as srv
+
+        with (
+            patch.object(srv, "_project_dir", return_value=Path("/proj")),
+            patch.object(
+                srv, "_get_targets_config", return_value={"GAME": {"filename": "bin/game.dll"}}
+            ),
+        ):
+            assert _find_dll_path("GAME") == Path("/proj/bin/game.dll")
 
 
 # ── clear_target_cache ─────────────────────────────────────────────

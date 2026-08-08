@@ -292,15 +292,22 @@ def resolve_targets(c: sqlite3.Cursor) -> tuple[list[str], list[dict[str, str]]]
         return target_ids, targets_list
 
 
-def _find_dll_path(target: str) -> Path:
-    """Find the DLL path for a target from project config."""
+def _find_dll_path(target: str) -> Path | None:
+    """Find the DLL path for a target from project config.
+
+    Returns ``None`` when *target* has no ``[targets.<tid>].binary`` entry —
+    the caller then reports a target-specific error instead of silently
+    serving a different target's DLL (previously fell back to SERVER's
+    binary, which produced plausible-but-wrong disassembly for config-less
+    targets).
+    """
     targets = _get_targets_config()
-    target_info = targets.get(target, targets.get("SERVER", {}))
-    filename = (
-        target_info.get("filename", "original/Server/server.dll")
-        if isinstance(target_info, dict)
-        else "original/Server/server.dll"
-    )
+    if target not in targets:
+        return None
+    target_info = targets.get(target)
+    filename = target_info.get("filename", "") if isinstance(target_info, dict) else ""
+    if not filename:
+        return None
     return _project_dir() / filename
 
 
@@ -315,6 +322,14 @@ def _load_dll(target: str) -> bytes | None:
         if target in DLL_DATA:
             return DLL_DATA[target]
         dll_path = _find_dll_path(target)
+        if dll_path is None:
+            _log.warning(
+                "No [targets.%s].binary configured — cannot load DLL for target %s",
+                target,
+                target,
+            )
+            DLL_DATA[target] = None
+            return None
         try:
             file_size = dll_path.stat().st_size
             if file_size > _MAX_DLL_SIZE:
