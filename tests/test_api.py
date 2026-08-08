@@ -244,3 +244,47 @@ class TestApiAsm:
         if status.startswith("501"):
             pytest.skip("Capstone not installed")
         assert status.startswith("400")
+
+
+class TestRegenRateLimit:
+    """Server-side cooldown on /api/regen (the UI throttles, the API must too)."""
+
+    def _reset_cooldown(self) -> None:
+        import recoverage.api as _api
+
+        _api._regen_last_attempt = 0.0
+
+    def test_rapid_second_call_rate_limited(self) -> None:
+        self._reset_cooldown()
+        # First call passes the cooldown gate (fails later in the sandbox for
+        # other reasons — that's fine, the timestamp is set before subprocess).
+        status1, _, _ = wsgi_request("POST", "/api/regen", remote_addr="127.0.0.1")
+        assert not status1.startswith("429")
+
+        # Immediate second call within the cooldown window → 429.
+        status2, headers2, body2 = wsgi_request("POST", "/api/regen", remote_addr="127.0.0.1")
+        assert status2.startswith("429")
+        data = json.loads(decode_body(body2, headers2))
+        assert data["error"].startswith("Rate limited")
+        assert data["retry_after"] >= 0
+
+    def test_cooldown_expires(self) -> None:
+        """After the window elapses the endpoint accepts again."""
+        import recoverage.api as _api
+
+        self._reset_cooldown()
+        _api._regen_last_attempt = _api.time.monotonic() - _api._REGEN_COOLDOWN_SECONDS - 1
+        status, _, _ = wsgi_request("POST", "/api/regen", remote_addr="127.0.0.1")
+        assert not status.startswith("429")
+
+
+class TestServeBindFlag:
+    def test_bind_option_help(self) -> None:
+        from typer.testing import CliRunner
+
+        from recoverage.cli import app
+
+        result = CliRunner().invoke(app, ["serve", "--help"])
+        assert result.exit_code == 0
+        assert "--bind" in result.output
+        assert "127.0.0.1" in result.output
