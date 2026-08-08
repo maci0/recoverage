@@ -1144,6 +1144,7 @@ const App = () => {
             if (availableTargets.val.length > 0) {
               return van.tags.select({
                 class: "input-el target-select",
+                "aria-label": "Select target binary",
                 onchange: (e) => {
                   const newTarget = e.target.value;
                   activeTarget.val = newTarget;
