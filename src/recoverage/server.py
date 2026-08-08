@@ -526,6 +526,86 @@ def _check_schema_version(conn: sqlite3.Connection) -> str:
     return version
 
 
+def _missing_required_columns(conn: sqlite3.Connection) -> set[str]:
+    """Query-critical columns a v4 DB must have; ``table.column`` for gaps.
+
+    The name-only shape gate passes a DB stamped "4" whose ``functions``
+    table lacks ``textOffset``/``similarity`` (queried by the function
+    detail endpoint) or whose ``section_cell_stats`` view is stale — those
+    fail at query time instead of at open.  Column sets mirror the schema
+    build_db creates so drift is caught here.
+    """
+    required_columns: dict[str, set[str]] = {
+        "metadata": {"target", "key", "value"},
+        "sections": {"target", "name", "va", "size", "fileOffset", "unitBytes", "columns"},
+        "cells": {
+            "target",
+            "section_name",
+            "start",
+            "end",
+            "span",
+            "state",
+            "functions",
+            "label",
+            "parent_function",
+        },
+        "functions": {
+            "target",
+            "va",
+            "name",
+            "vaStart",
+            "size",
+            "fileOffset",
+            "status",
+            "module",
+            "cflags",
+            "symbol",
+            "markerType",
+            "ghidra_name",
+            "list_name",
+            "is_thunk",
+            "is_export",
+            "sha256",
+            "files",
+            "detected_by",
+            "size_by_tool",
+            "textOffset",
+            "blocker",
+            "blockerDelta",
+            "size_reason",
+            "similarity",
+        },
+        "globals": {"target", "va", "name", "decl", "files", "module", "size"},
+        "verify_results": {"target", "va", "verified_at", "byte_delta", "diff_lines"},
+        "section_cell_stats": {
+            "target",
+            "section_name",
+            "total_cells",
+            "exact_count",
+            "reloc_count",
+            "near_match_count",
+            "stub_count",
+            "padding_count",
+            "data_count",
+            "thunk_count",
+            "none_count",
+            "proven_count",
+            "size_mismatch_count",
+        },
+    }
+    missing: set[str] = set()
+    for obj, cols in required_columns.items():
+        try:
+            rows = conn.execute(f"PRAGMA table_info({obj})").fetchall()
+        except sqlite3.Error:
+            missing.add(obj)
+            continue
+        actual = {r[1] for r in rows}
+        for col in cols - actual:
+            missing.add(f"{obj}.{col}")
+    return missing
+
+
 def _check_schema_version_uncached(conn: sqlite3.Connection) -> str:
     """Uncached schema version read; see :func:`_check_schema_version`."""
     try:
@@ -564,6 +644,11 @@ def _check_schema_version_uncached(conn: sqlite3.Connection) -> str:
                 "section_cell_stats",
             }
             missing = required - present
+            if not missing and version == "4":
+                # Object names present — verify the query-critical columns.
+                # A DB stamped "4" whose functions table lacks textOffset /
+                # similarity (or whose view is stale) 500s at query time.
+                missing |= _missing_required_columns(conn)
             if missing:
                 _log.warning(
                     "recoverage: db_version %r but missing schema objects: %s",

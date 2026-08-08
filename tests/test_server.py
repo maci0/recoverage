@@ -336,18 +336,51 @@ class TestSchemaShapeGuard:
         db = tmp_path / "coverage.db"
         conn = sqlite3.connect(db)
         c = conn.cursor()
-        c.execute("CREATE TABLE metadata (target TEXT, key TEXT, value TEXT)")
+        # A complete v4 DB: the shape guard now verifies the query-critical
+        # columns, not just table names.
+        c.executescript(
+            """
+            CREATE TABLE metadata (target TEXT, key TEXT, value TEXT);
+            CREATE TABLE sections (
+                target TEXT, name TEXT, va INTEGER, size INTEGER,
+                fileOffset INTEGER, unitBytes INTEGER, columns INTEGER
+            );
+            CREATE TABLE cells (
+                target TEXT, section_name TEXT, start INTEGER, end INTEGER,
+                span INTEGER, state TEXT, functions TEXT, label TEXT,
+                parent_function TEXT
+            );
+            CREATE TABLE functions (
+                target TEXT, va INTEGER, name TEXT, vaStart TEXT, size INTEGER,
+                fileOffset INTEGER, status TEXT, module TEXT, cflags TEXT,
+                symbol TEXT, markerType TEXT, ghidra_name TEXT, list_name TEXT,
+                is_thunk INTEGER, is_export INTEGER, sha256 TEXT, files TEXT,
+                detected_by TEXT, size_by_tool TEXT, textOffset INTEGER,
+                blocker TEXT, blockerDelta INTEGER, size_reason TEXT,
+                similarity REAL
+            );
+            CREATE TABLE globals (
+                target TEXT, va INTEGER, name TEXT, decl TEXT, files TEXT,
+                module TEXT, size INTEGER
+            );
+            CREATE TABLE verify_results (
+                target TEXT, va INTEGER, verified_at TEXT, byte_delta INTEGER,
+                diff_lines INTEGER
+            );
+            CREATE TABLE history (
+                id INTEGER, target TEXT, va INTEGER, old_status TEXT,
+                new_status TEXT, changed_at TEXT
+            );
+            CREATE VIEW section_cell_stats AS
+                SELECT target, section_name, COUNT(*) AS total_cells,
+                0 AS exact_count, 0 AS reloc_count, 0 AS near_match_count,
+                0 AS stub_count, 0 AS padding_count, 0 AS data_count,
+                0 AS thunk_count, 0 AS none_count, 0 AS proven_count,
+                0 AS size_mismatch_count
+                FROM cells GROUP BY target, section_name;
+            """
+        )
         c.execute("INSERT INTO metadata VALUES ('__schema__', 'db_version', '\"4\"')")
-        for name in (
-            "sections",
-            "cells",
-            "functions",
-            "globals",
-            "verify_results",
-            "history",
-        ):
-            c.execute(f"CREATE TABLE {name} (id INTEGER)")
-        c.execute("CREATE VIEW section_cell_stats AS SELECT 1 AS x")
         conn.commit()
         conn.close()
 
