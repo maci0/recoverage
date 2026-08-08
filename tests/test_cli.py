@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+from pathlib import Path
 
 import pytest
 from conftest import HAS_DB
@@ -124,6 +125,109 @@ class TestCheckCommand:
     def test_check_nonexistent_section(self) -> None:
         result = runner.invoke(app, ["check", "--min-coverage", "50", "--section", "NONEXISTENT"])
         assert result.exit_code == 1
+
+    def test_check_skips_untracked_sections(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Sections whose cells are all 'none' carry no coverage signal and
+        must not fail the gate; explicitly gating one must fail loudly."""
+        import sqlite3 as _sqlite3
+
+        db = tmp_path / "cov.db"
+        conn = _sqlite3.connect(db)
+        try:
+            c = conn.cursor()
+            c.execute(
+                "CREATE TABLE metadata (target TEXT, key TEXT, value TEXT,"
+                " PRIMARY KEY (target, key))"
+            )
+            c.execute(
+                "CREATE TABLE sections (target TEXT, name TEXT, va INTEGER,"
+                " size INTEGER, fileOffset INTEGER, unitBytes INTEGER,"
+                " columns INTEGER, PRIMARY KEY (target, name))"
+            )
+            c.execute(
+                "CREATE TABLE cells (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                " target TEXT, section_name TEXT, start INTEGER, end INTEGER,"
+                " span INTEGER DEFAULT 1, state TEXT, functions TEXT DEFAULT '[]',"
+                " label TEXT, parent_function TEXT)"
+            )
+            c.execute(
+                "CREATE TABLE functions (target TEXT, status TEXT, markerType TEXT)"
+            )
+            c.execute(
+                "INSERT INTO metadata VALUES ('T','summary',?)",
+                (json.dumps({"totalFunctions": 1}),),
+            )
+            c.execute("INSERT INTO sections VALUES ('T','.text',0,100,0,16,8)")
+            c.execute("INSERT INTO sections VALUES ('T','.data',0,100,0,16,8)")
+            c.execute(
+                "INSERT INTO cells (target, section_name, start, end, state)"
+                " VALUES ('T','.text',0,50,'exact')"
+            )
+            c.execute(
+                "INSERT INTO cells (target, section_name, start, end, state)"
+                " VALUES ('T','.text',50,100,'none')"
+            )
+            c.execute(
+                "INSERT INTO cells (target, section_name, start, end, state)"
+                " VALUES ('T','.data',0,100,'none')"
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        monkeypatch.setattr("recoverage.cli._db_path", lambda: db)
+        # Untracked .data must be skipped; .text (50%) is still evaluated.
+        result = runner.invoke(app, ["check", "--min-coverage", "50"])
+        assert result.exit_code == 0
+        assert "SKIP" in result.output
+        assert "no tracked cells" in result.output
+        assert "PASS" in result.output
+        # Explicitly gating the untracked section must fail loudly.
+        result = runner.invoke(app, ["check", "--min-coverage", "50", "--section", ".data"])
+        assert result.exit_code == 1
+        assert "no tracked cells" in result.output
+        # A project with nothing tracked must not pass vacuously.
+        db2 = tmp_path / "cov2.db"
+        conn2 = _sqlite3.connect(db2)
+        try:
+            c = conn2.cursor()
+            c.execute(
+                "CREATE TABLE metadata (target TEXT, key TEXT, value TEXT,"
+                " PRIMARY KEY (target, key))"
+            )
+            c.execute(
+                "CREATE TABLE sections (target TEXT, name TEXT, va INTEGER,"
+                " size INTEGER, fileOffset INTEGER, unitBytes INTEGER,"
+                " columns INTEGER, PRIMARY KEY (target, name))"
+            )
+            c.execute(
+                "CREATE TABLE cells (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                " target TEXT, section_name TEXT, start INTEGER, end INTEGER,"
+                " span INTEGER DEFAULT 1, state TEXT, functions TEXT DEFAULT '[]',"
+                " label TEXT, parent_function TEXT)"
+            )
+            c.execute(
+                "CREATE TABLE functions (target TEXT, status TEXT, markerType TEXT)"
+            )
+            c.execute(
+                "INSERT INTO metadata VALUES ('T','summary',?)",
+                (json.dumps({"totalFunctions": 1}),),
+            )
+            c.execute("INSERT INTO sections VALUES ('T','.text',0,100,0,16,8)")
+            c.execute(
+                "INSERT INTO cells (target, section_name, start, end, state)"
+                " VALUES ('T','.text',0,100,'none')"
+            )
+            conn2.commit()
+        finally:
+            conn2.close()
+
+        monkeypatch.setattr("recoverage.cli._db_path", lambda: db2)
+        result = runner.invoke(app, ["check", "--min-coverage", "0"])
+        assert result.exit_code == 1
+        assert "nothing was checked" in result.output
 
 
 # ── Export without DB ─────────────────────────────────────────────

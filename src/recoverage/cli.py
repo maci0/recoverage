@@ -431,6 +431,7 @@ def check(
 
         failed = False
         checked = 0
+        compared = 0  # sections actually evaluated against the threshold
         for tid in targets:
             data = _get_stats(conn, tid)
             sections_to_check = data["sections"]
@@ -446,6 +447,27 @@ def check(
 
             for sec_name, sec in sorted(sections_to_check.items()):
                 checked += 1
+                # Sections whose cells are all "none" carry no coverage
+                # signal — the grid only records match states in .text — so
+                # they must not fail the gate.  An explicitly requested
+                # untracked section still fails: the user asked to gate
+                # something that is not being recorded.
+                if sec.get("covered_bytes", 0) <= 0:
+                    if section:
+                        typer.secho(
+                            f"FAIL: {tid} {sec_name} has no tracked cells — "
+                            "coverage is not recorded for this section",
+                            fg=typer.colors.RED,
+                        )
+                        failed = True
+                    else:
+                        typer.secho(
+                            f"SKIP: {tid} {sec_name} has no tracked cells — "
+                            "coverage not recorded",
+                            fg=typer.colors.YELLOW,
+                        )
+                    continue
+                compared += 1
                 pct = sec["coverage_pct"]
                 if pct < min_coverage:
                     typer.secho(
@@ -459,7 +481,7 @@ def check(
                         fg=typer.colors.GREEN,
                     )
 
-    if not checked:
+    if checked == 0:
         typer.secho(
             "Error: no sections matched — nothing was checked.",
             fg=typer.colors.RED,
@@ -467,6 +489,15 @@ def check(
         )
         raise typer.Exit(1)
     if failed:
+        raise typer.Exit(1)
+    if compared == 0:
+        # Every section was skipped as untracked and nothing failed — a
+        # project with no recorded coverage must not pass vacuously.
+        typer.secho(
+            "Error: no tracked sections — nothing was checked.",
+            fg=typer.colors.RED,
+            err=True,
+        )
         raise typer.Exit(1)
 
 
