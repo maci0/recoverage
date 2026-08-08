@@ -201,9 +201,21 @@ def serve(
     bind: str = typer.Option(
         "127.0.0.1", "--bind", help="Interface to bind to (default: 127.0.0.1; use 0.0.0.0 for LAN)"
     ),
+    allow_remote: bool = typer.Option(
+        False,
+        "--allow-remote",
+        help="Required with --bind 0.0.0.0: acknowledge that the unauthenticated API (including raw binary bytes) is exposed on the network",
+    ),
     no_open: bool = typer.Option(False, "--no-open", help="Don't open browser automatically"),
     regen: bool = typer.Option(False, "--regen", help="Regenerate DB before starting"),
-    cors: bool = typer.Option(False, "--cors", help="Enable CORS headers for cross-origin access"),
+    cors: bool = typer.Option(
+        False, "--cors", help="Enable CORS processing (allowlisted origins only)"
+    ),
+    cors_origin: list[str] | None = typer.Option(  # noqa: B008
+        None,
+        "--cors-origin",
+        help="Origin URL allowed to read the API cross-origin (repeatable, e.g. http://localhost:5173)",
+    ),
 ) -> None:
     """Start the recoverage dashboard server."""
     import recoverage.server as _server
@@ -219,6 +231,31 @@ def serve(
         app as bottle_app,
     )
 
+    loopback_binds = ("127.0.0.1", "localhost", "::1", "::")
+    is_remote = bind not in loopback_binds
+    if is_remote and not allow_remote:
+        typer.secho(
+            f"--bind {bind} exposes the unauthenticated recoverage API (including raw "
+            "binary bytes and disassembly) to every reachable host on the network. "
+            "Pass --allow-remote to confirm you want this.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(1)
+    if is_remote:
+        typer.secho(
+            "warning: serving unauthenticated binary data on the network — "
+            "restrict access at the firewall.",
+            fg=typer.colors.YELLOW,
+        )
+    if cors and not cors_origin:
+        typer.secho(
+            "warning: --cors without --cors-origin allows no cross-origin reads "
+            "(Access-Control-Allow-Origin: * is no longer emitted). "
+            "Add --cors-origin URL for each origin you want to allow.",
+            fg=typer.colors.YELLOW,
+        )
+
     # Configure logging — show INFO+ by default so operational messages are visible
     logging.basicConfig(
         format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
@@ -229,6 +266,14 @@ def serve(
 
     if cors:
         _server.CORS_ENABLED = True
+        if cors_origin:
+            _server.CORS_ALLOWED_ORIGINS = [_server._hostname_of(o) for o in cors_origin]
+    # Loopback binds validate the Host header (DNS-rebinding guard); remote
+    # binds (user opted in via --allow-remote) skip validation.
+    if is_remote:
+        _server.ALLOWED_HOSTS = None
+    else:
+        _server.ALLOWED_HOSTS = set(loopback_binds)
 
     root = _project_dir()
     assets = _assets_dir()

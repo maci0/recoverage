@@ -45,9 +45,33 @@ HTTPResponse = cast(Any, bottle.HTTPResponse)
 
 HAS_CAPSTONE = importlib.util.find_spec("capstone") is not None
 
-# CORS — mutated once at startup by CLI --cors flag before the server starts
+# CORS — configured once at startup by the CLI before the server starts
 # accepting requests.  Thread-safe: set before any worker threads exist.
 CORS_ENABLED = False
+
+# Hostnames allowed to read the API cross-origin (from --cors-origin).
+# Empty = no cross-origin reads; the wildcard "*" is never emitted.
+CORS_ALLOWED_ORIGINS: list[str] = []
+
+# Expected Host-header hostnames.  Loopback binds validate the Host header
+# to defeat DNS rebinding (an attacker's domain resolving to 127.0.0.1);
+# None = remote bind (user opted in via --allow-remote) — skip validation.
+ALLOWED_HOSTS: set[str] | None = None
+
+
+def _hostname_of(origin: str) -> str:
+    """Lowercased hostname of an Origin/Host header value ("" if unparsable).
+
+    Origins carry a scheme (``http://localhost:5173``); bare Host headers
+    (``localhost:8001``) get a synthetic scheme so urlsplit parses both.
+    """
+    try:
+        from urllib.parse import urlsplit
+
+        candidate = origin if "://" in origin else f"//{origin}"
+        return (urlsplit(candidate).hostname or "").lower()
+    except ValueError:
+        return ""
 
 
 # ── Path helpers ───────────────────────────────────────────────────
@@ -440,6 +464,19 @@ app = Bottle()
 def _log_request() -> None:
     """Log incoming requests at DEBUG level for operational visibility."""
     _log.debug("%s %s", request.method, request.path)
+    # DNS-rebinding guard for loopback installs: the Host header must name a
+    # loopback host.  Requests without a Host header (non-HTTP/1.1 clients,
+    # WSGI test harnesses) are left to the server's own address handling.
+    if ALLOWED_HOSTS is not None:
+        host = request.headers.get("Host", "")
+        if host and _hostname_of(host) not in ALLOWED_HOSTS:
+            raise _json_err(
+                400,
+                {
+                    "error": "Bad Request",
+                    "detail": f"unexpected Host header {host!r}",
+                },
+            )
 
 
 @app.hook("after_request")
@@ -447,7 +484,12 @@ def _security_headers() -> None:
     response.set_header("X-Content-Type-Options", "nosniff")
     response.set_header("X-Frame-Options", "DENY")
     if CORS_ENABLED:
-        response.set_header("Access-Control-Allow-Origin", "*")
+        # Echo the request origin only when it is explicitly allowed.  Never
+        # emit the wildcard: the API serves unauthenticated binary bytes.
+        origin = request.headers.get("Origin", "")
+        if origin and _hostname_of(origin) in CORS_ALLOWED_ORIGINS:
+            response.set_header("Access-Control-Allow-Origin", origin)
+            response.set_header("Vary", "Origin")
         response.set_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         response.set_header("Access-Control-Allow-Headers", "Content-Type")
 

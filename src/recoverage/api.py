@@ -50,6 +50,32 @@ _REGEN_LOCK = threading.Lock()  # serializes regen (check + subprocess, TOCTOU)
 _regen_in_progress = False  # True while catalog/build-db is running
 
 
+def _target_not_found(target: str) -> Any:
+    """JSON 404 for a target-scoped endpoint referencing an unknown target."""
+    return _json_err(
+        404,
+        {
+            "error": "Target not found",
+            "detail": f"no such target {target!r}",
+        },
+    )
+
+
+def _require_target(c: sqlite3.Cursor, target: str) -> Any | None:
+    """Return a 404 response if *target* is unknown, else None.
+
+    *target* is valid when it has DB rows or is declared in the project
+    config (a configured-but-not-yet-built target is still addressable).
+    """
+    try:
+        _, targets_list = resolve_targets(c)
+    except sqlite3.Error:
+        return None  # DB unavailable — let the endpoint's own 503 path run
+    if any(t.get("id") == target for t in targets_list):
+        return None
+    return _target_not_found(target)
+
+
 # ── Server-Sent Events (live DB change notifications) ─────────────
 #
 # A single background watcher thread polls coverage.db mtime every couple of
@@ -260,6 +286,10 @@ def handle_api_stats(target: str) -> bytes | Any:
     with contextlib.closing(conn):
         c = conn.cursor()
 
+        not_found = _require_target(c, target)
+        if not_found is not None:
+            return not_found
+
         # Pre-computed summary from metadata
         summary: dict[str, Any] = {}
         c.execute("SELECT value FROM metadata WHERE target = ? AND key = 'summary'", (target,))
@@ -347,6 +377,11 @@ def handle_api_data(target: str) -> bytes | Any:
 
     with contextlib.closing(conn):
         c = conn.cursor()
+
+        not_found = _require_target(c, target)
+        if not_found is not None:
+            return not_found
+
         data: dict[str, Any] = {}
 
         c.execute("SELECT key, value FROM metadata WHERE target = ?", (target,))
@@ -475,6 +510,11 @@ def handle_api_functions_list(target: str) -> bytes | Any:
 
     with contextlib.closing(conn):
         c = conn.cursor()
+
+        not_found = _require_target(c, target)
+        if not_found is not None:
+            return not_found
+
         # Base filter: GLOBAL/DATA marker rows are data, not functions.
         where = ["target = ? AND markerType NOT IN ('GLOBAL','DATA')"]
         params: list[Any] = [target]
@@ -638,6 +678,11 @@ def handle_api_functions_batch(target: str) -> bytes | Any:
 
     with contextlib.closing(conn):
         c = conn.cursor()
+
+        not_found = _require_target(c, target)
+        if not_found is not None:
+            return not_found
+
         results: list[dict[str, Any]] = []
         if not unique_vas:
             return _json_ok(results, Cache_Control="no-cache, no-store, must-revalidate")
@@ -696,6 +741,11 @@ def handle_api_function(target: str, va: str) -> bytes | Any:
 
     with contextlib.closing(conn):
         c = conn.cursor()
+
+        not_found = _require_target(c, target)
+        if not_found is not None:
+            return not_found
+
         no_cache = "no-cache, no-store, must-revalidate"
 
         # Parse va once: numeric -> lookup by va column, string -> lookup by name
@@ -796,6 +846,11 @@ def handle_api_asm(target: str) -> bytes | Any:
 
     with contextlib.closing(conn):
         c = conn.cursor()
+
+        not_found = _require_target(c, target)
+        if not_found is not None:
+            return not_found
+
         c.execute(
             "SELECT * FROM sections WHERE target = ? AND name = ?",
             (target, section),
@@ -890,6 +945,11 @@ def handle_api_bytes(target: str, section: str) -> bytes | Any:
 
     with contextlib.closing(conn):
         c = conn.cursor()
+
+        not_found = _require_target(c, target)
+        if not_found is not None:
+            return not_found
+
         c.execute(
             "SELECT * FROM sections WHERE target = ? AND name = ?",
             (target, section),

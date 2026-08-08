@@ -768,3 +768,125 @@ class TestErrorResponseShape:
         monkeypatch.setattr(api, "_db", _boom)
         status, headers, body = wsgi_get(f"/api/targets/{target}/stats")
         self._check(status, headers, body, "db_unavailable")
+
+
+# ── Host-header validation & CORS allowlist (security) ─────────────
+
+
+class TestHostHeaderValidation:
+    """Loopback installs reject unexpected Host headers (DNS-rebinding guard)."""
+
+    def _set_allowed(self, value: set[str] | None) -> None:
+        import recoverage.server as srv
+
+        srv.ALLOWED_HOSTS = value
+
+    def teardown_method(self) -> None:
+        self._set_allowed(None)
+
+    def test_loopback_host_accepted(self) -> None:
+        self._set_allowed({"127.0.0.1", "localhost", "::1"})
+        status, _, _ = wsgi_get("/api/health", headers={"Host": "localhost:8001"})
+        assert status.startswith("200")
+
+    def test_evil_host_rejected(self) -> None:
+        self._set_allowed({"127.0.0.1", "localhost", "::1"})
+        status, headers, body = wsgi_get("/api/health", headers={"Host": "evil.example.com"})
+        assert status.startswith("400")
+        data = json.loads(decode_body(body, headers))
+        assert data["error"] == "Bad Request"
+        assert "evil.example.com" in data["detail"]
+
+    def test_no_validation_when_remote_bind(self) -> None:
+        # --allow-remote binds leave ALLOWED_HOSTS None → any Host passes.
+        self._set_allowed(None)
+        status, _, _ = wsgi_get("/api/health", headers={"Host": "anything.example.com"})
+        assert status.startswith("200")
+
+
+class TestCorsOriginAllowlist:
+    """--cors never emits the wildcard; only allowlisted origins are echoed."""
+
+    def _enable(self, origins: list[str]) -> None:
+        import recoverage.server as srv
+
+        srv.CORS_ENABLED = True
+        srv.CORS_ALLOWED_ORIGINS = origins
+
+    def teardown_method(self) -> None:
+        import recoverage.server as srv
+
+        srv.CORS_ENABLED = False
+        srv.CORS_ALLOWED_ORIGINS = []
+
+    def test_allowed_origin_echoed(self) -> None:
+        self._enable(["localhost"])
+        status, headers, _ = wsgi_get("/api/health", headers={"Origin": "http://localhost:5173"})
+        assert status.startswith("200")
+        assert headers.get("Access-Control-Allow-Origin") == "http://localhost:5173"
+        assert "Origin" in headers.get("Vary", "")
+
+    def test_unknown_origin_gets_no_aca_header(self) -> None:
+        self._enable(["localhost"])
+        status, headers, _ = wsgi_get("/api/health", headers={"Origin": "http://evil.example.com"})
+        assert status.startswith("200")
+        assert "Access-Control-Allow-Origin" not in headers
+
+    def test_wildcard_never_emitted(self) -> None:
+        self._enable([])
+        status, headers, _ = wsgi_get("/api/health", headers={"Origin": "http://localhost:5173"})
+        assert status.startswith("200")
+        assert headers.get("Access-Control-Allow-Origin") != "*"
+
+
+# ── Unknown target handling (V14) ──────────────────────────────────
+
+
+class TestUnknownTarget:
+    """Target-scoped endpoints 404 on unknown targets instead of empty 200s."""
+
+    @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+    def test_stats_unknown_target_404(self) -> None:
+        status, headers, body = wsgi_get("/api/targets/DOESNOTEXIST/stats")
+        assert status.startswith("404")
+        data = json.loads(decode_body(body, headers))
+        assert data["error"] == "Target not found"
+        assert "DOESNOTEXIST" in data["detail"]
+
+    @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+    def test_functions_unknown_target_404(self) -> None:
+        status, headers, body = wsgi_get("/api/targets/DOESNOTEXIST/functions")
+        assert status.startswith("404")
+        data = json.loads(decode_body(body, headers))
+        assert data["error"] == "Target not found"
+
+    @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+    def test_known_target_still_200(self) -> None:
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, _, _ = wsgi_get(f"/api/targets/{target}/stats")
+        assert status.startswith("200")
+
+
+class TestServeBindGuard:
+    """--bind on a non-loopback interface requires --allow-remote."""
+
+    def test_non_loopback_refused_without_allow_remote(self) -> None:
+        from typer.testing import CliRunner
+
+        from recoverage.cli import app
+
+        result = CliRunner().invoke(app, ["serve", "--bind", "0.0.0.0", "--port", "8123"])
+        assert result.exit_code != 0
+        assert "--allow-remote" in result.output
+
+    def test_allow_remote_flag_documented(self) -> None:
+        from typer.testing import CliRunner
+
+        from recoverage.cli import app
+
+        result = CliRunner().invoke(app, ["serve", "--help"])
+        assert result.exit_code == 0
+        assert "--allow-remote" in result.output
+        assert "--cors-origin" in result.output
