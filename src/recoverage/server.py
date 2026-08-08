@@ -211,10 +211,12 @@ def resolve_targets(c: sqlite3.Cursor) -> tuple[list[str], list[dict[str, str]]]
         added_tids: set[str] = set()
 
         for tid, t_info in targets_info.items():
-            if tid in target_ids or not target_ids:
-                filename = t_info.get("filename", tid) if isinstance(t_info, dict) else tid
-                targets_list.append({"id": tid, "name": Path(filename).name})
-                added_tids.add(tid)
+            # Config-declared targets are always addressable, even before
+            # their first build — _require_target treats "declared in the
+            # project config" as valid, so a never-built target must not 404.
+            filename = t_info.get("filename", tid) if isinstance(t_info, dict) else tid
+            targets_list.append({"id": tid, "name": Path(filename).name})
+            added_tids.add(tid)
 
         for tid in target_ids:
             if tid not in added_tids:
