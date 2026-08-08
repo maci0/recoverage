@@ -108,15 +108,25 @@ def _snapshot_db_mtime() -> tuple[int, int] | None:
 def _broadcast_db_updated(snapshot: tuple[int, int] | None) -> None:
     """Push a db-updated SSE frame to every connected client queue.
 
-    Also invalidates the resolved-targets / index caches — an external
-    ``rebrew build-db`` (the documented workflow) must refresh the target
-    dropdown and any cached data, not just the in-app /api/regen path.
+    Also invalidates the resolved-targets / index caches AND the DLL +
+    disassembly caches — an external ``rebrew build-db`` (the documented
+    workflow) must refresh the target dropdown, any cached data, and the
+    disassembly derived from the original binary, not just the in-app
+    /api/regen path.
     """
     try:
         clear_target_cache()
         from recoverage.ui import clear_index_cache  # noqa: PLC0415
 
         clear_index_cache()
+        # Disassembly/bytes reflect the original binary and section layout,
+        # both of which change with a rebuild.  The in-app regen path clears
+        # these; the external build-db path must too or /asm keeps serving
+        # stale cached disassembly (browser ETags now revalidate, but the
+        # server-side cache must actually be empty).
+        with DLL_LOCK:
+            DLL_DATA.clear()
+        get_disassembly.cache_clear()
     except Exception:  # noqa: BLE001 — cache clearing is best-effort
         pass
     payload: dict[str, Any] = {
@@ -596,7 +606,9 @@ def handle_api_functions_batch(target: str) -> bytes | Any:
             va_ints.append(entry)
         elif isinstance(entry, str):
             try:
-                va_ints.append(int(entry, 0))
+                # Base-16 (with or without 0x prefix), matching rebrew's
+                # parse_va — bare hex like "10001000" is valid here.
+                va_ints.append(int(entry.strip(), 16))
             except ValueError:
                 return _json_err(
                     400,
@@ -699,9 +711,10 @@ def handle_api_function(target: str, va: str) -> bytes | Any:
 
         no_cache = "no-cache, no-store, must-revalidate"
 
-        # Parse va once: numeric -> lookup by va column, string -> lookup by name
+        # Parse va once: hex string (with or without 0x, like rebrew's
+        # parse_va) -> lookup by va column; anything else -> name lookup.
         try:
-            va_int = int(va, 0)
+            va_int = int(va.strip(), 16)
             is_numeric = True
         except ValueError:
             va_int = 0
@@ -782,13 +795,25 @@ def handle_api_asm(target: str) -> bytes | Any:
         return _json_err(400, {"error": "missing va or size"})
 
     try:
-        va = int(va_str, 0)
-        size = min(max(int(size_str, 0), 0), 4096)
+        va = int(va_str.strip(), 16)
+        size = min(max(int(size_str.strip(), 16), 0), 4096)
     except ValueError:
         return _json_err(400, {"error": "invalid va or size"})
 
     if size == 0:
         return _json_err(400, {"error": "size must be positive"})
+
+    # ETag bound to DB mtime + request identity: disassembly reflects the
+    # binary + section layout, which change when the DB is rebuilt.  Without
+    # this, a one-year immutable Cache-Control served stale disassembly to
+    # browsers after re-gen / --fix-sizes.
+    try:
+        db_mtime = _db_path().stat().st_mtime_ns
+        asm_etag = f'"{db_mtime}-{target}-{section}-{va}-{size}-{fmt}"'
+        if request.headers.get("If-None-Match") == asm_etag:
+            return HTTPResponse(status=304)
+    except OSError:
+        asm_etag = None
 
     try:
         conn = _db()
@@ -858,7 +883,8 @@ def handle_api_asm(target: str) -> bytes | Any:
                 )
             return _json_ok(
                 {"instructions": instructions},
-                Cache_Control="public, max-age=31536000",
+                Cache_Control="no-cache",
+                ETag=asm_etag,
             )
 
         # Default: plain text
@@ -872,7 +898,7 @@ def handle_api_asm(target: str) -> bytes | Any:
                 },
             )
 
-        return _json_ok({"asm": asm_text}, Cache_Control="public, max-age=31536000")
+        return _json_ok({"asm": asm_text}, Cache_Control="no-cache", ETag=asm_etag)
 
 
 @app.get("/api/targets/<target>/sections/<section>/bytes")
@@ -888,6 +914,16 @@ def handle_api_bytes(target: str, section: str) -> bytes | Any:
         req_size = min(max(int(request.query.get("size", "256"), 0), 0), 4096)
     except (ValueError, TypeError):
         return _json_err(400, {"error": "invalid size"})
+
+    # ETag bound to DB mtime + request identity so /bytes revalidates after
+    # a rebuild instead of serving year-immutable stale bytes.
+    try:
+        db_mtime = _db_path().stat().st_mtime_ns
+        bytes_etag = f'"{db_mtime}-{target}-{section}-{req_offset}-{req_size}"'
+        if request.headers.get("If-None-Match") == bytes_etag:
+            return HTTPResponse(status=304)
+    except OSError:
+        bytes_etag = None
 
     try:
         conn = _db()
@@ -950,7 +986,8 @@ def handle_api_bytes(target: str, section: str) -> bytes | Any:
                 "hex": "\n".join(hex_lines),
                 "raw": list(chunk),
             },
-            Cache_Control="public, max-age=31536000",
+            Cache_Control="no-cache",
+            ETag=bytes_etag,
         )
 
 

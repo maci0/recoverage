@@ -267,7 +267,10 @@ const App = () => {
     if (!activeTarget.val) return;
     isLoading.val = true;
     try {
-      const res = await fetch(DATA_URL(activeTarget.val), { cache: "no-store" });
+      // "no-cache" (not "no-store") so the server's ETag/304 path works:
+      // with no-store the browser never sends If-None-Match and the whole
+      // multi-MB dataset is re-transferred on every load.
+      const res = await fetch(DATA_URL(activeTarget.val), { cache: "no-cache" });
       if (!res.ok) throw new Error(`failed to load data`);
       const d = await res.json();
 

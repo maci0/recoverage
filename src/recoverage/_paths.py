@@ -8,6 +8,7 @@ otherwise — matching rebrew's own resolution logic as of build_db commit
 
 from __future__ import annotations
 
+import logging
 import tomllib
 from pathlib import Path
 
@@ -42,6 +43,12 @@ def _resolve_db_path() -> Path:
             db_dir = project.get("db_dir") if isinstance(project, dict) else None
             if isinstance(db_dir, str) and db_dir:
                 return (cwd / db_dir).resolve() / "coverage.db"
-        except (OSError, tomllib.TOMLDecodeError):
-            pass
+        except OSError as exc:
+            logging.warning("Could not read %s: %s", cfg, exc)
+        except tomllib.TOMLDecodeError as exc:
+            # A corrupt config must not silently switch the dashboard to a
+            # different DB than the one the user built — warn loudly.
+            logging.warning(
+                "rebrew-project.toml is not valid TOML — using default db path: %s", exc
+            )
     return cwd / "db" / "coverage.db"

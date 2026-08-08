@@ -837,9 +837,7 @@ class TestCorsOriginAllowlist:
 
     def test_different_port_not_allowed(self) -> None:
         self._enable(["http://localhost:5173"])
-        status, headers, _ = wsgi_get(
-            "/api/health", headers={"Origin": "http://localhost:9999"}
-        )
+        status, headers, _ = wsgi_get("/api/health", headers={"Origin": "http://localhost:9999"})
         assert status.startswith("200")
         assert "Access-Control-Allow-Origin" not in headers
         status, headers, _ = wsgi_get("/api/health", headers={"Origin": "http://localhost:5173"})

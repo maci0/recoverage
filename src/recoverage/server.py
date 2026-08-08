@@ -190,6 +190,7 @@ def _section_stats(c: sqlite3.Cursor, target: str) -> dict[str, Any]:
 
 # ── Path helpers ───────────────────────────────────────────────────
 
+
 def _assets_dir() -> Path:
     """Return the directory containing recoverage UI files (HTML/CSS/JS).
     These ship as package data inside the recoverage package."""
@@ -644,7 +645,8 @@ def _log_request() -> None:
         host = request.headers.get("Host", "")
         if host and _hostname_of(host) not in ALLOWED_HOSTS:
             raise _json_err(
-                400,                {
+                400,
+                {
                     "error": "Bad Request",
                     "detail": f"unexpected Host header {host!r}",
                 },

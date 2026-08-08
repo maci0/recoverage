@@ -52,6 +52,9 @@ def _build_index_payload() -> bytes:
     try:
         vanjs = (assets / "van.min.js").read_text(encoding="utf-8")
     except OSError:
+        # A shipped package asset is missing — the SPA renders but does
+        # nothing.  Log it so a broken install is diagnosable.
+        _log.warning("van.min.js missing — dashboard SPA will not function")
         vanjs = ""
     html = html.replace("<!-- INJECT_CSS -->", f"<style>{minify_css(css)}</style>")
     html = html.replace(
