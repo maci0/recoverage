@@ -96,7 +96,9 @@ def _build_synthetic_db() -> None:
             " SUM(CASE WHEN state = 'padding' THEN 1 ELSE 0 END) as padding_count,"
             " SUM(CASE WHEN state = 'data' THEN 1 ELSE 0 END) as data_count,"
             " SUM(CASE WHEN state = 'thunk' THEN 1 ELSE 0 END) as thunk_count,"
-            " SUM(CASE WHEN state = 'none' THEN 1 ELSE 0 END) as none_count"
+            " SUM(CASE WHEN state = 'none' THEN 1 ELSE 0 END) as none_count,"
+            " SUM(CASE WHEN state = 'proven' THEN 1 ELSE 0 END) as proven_count,"
+            " SUM(CASE WHEN state = 'size_mismatch' THEN 1 ELSE 0 END) as size_mismatch_count"
             " FROM cells GROUP BY target, section_name"
         )
 

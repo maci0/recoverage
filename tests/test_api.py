@@ -997,7 +997,9 @@ class TestDataPayloadMemo:
         c.execute(
             "CREATE VIEW section_cell_stats AS SELECT target, section_name, "
             "COUNT(*) AS total_cells, 0 AS exact_count, 0 AS reloc_count, 0 AS near_match_count, "
-            "0 AS stub_count, 0 AS data_count, 0 AS thunk_count FROM cells GROUP BY target, section_name"
+            "0 AS stub_count, 0 AS padding_count, 0 AS data_count, 0 AS thunk_count, "
+            "0 AS none_count, 0 AS proven_count, 0 AS size_mismatch_count "
+            "FROM cells GROUP BY target, section_name"
         )
         c.execute("INSERT INTO metadata VALUES ('GAME', 'db_version', '\"4\"')")
         conn.commit()

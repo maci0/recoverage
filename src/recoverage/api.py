@@ -454,19 +454,23 @@ def handle_api_data(target: str) -> bytes | Any:
                 row["name"], {"va": hex(row["va"]) if row["va"] else "", "symbol": ""}
             )
 
-        # Per-section cell stats from SQL view
+        # Per-section cell stats from SQL view.  All buckets are selected so
+        # consumers can sum them and reconcile with total_cells (padding,
+        # none, proven, and size_mismatch were previously omitted).
         data["section_cell_stats"] = {}
         if section_filter:
             c.execute(
                 "SELECT section_name, total_cells, exact_count, reloc_count, "
-                "near_match_count, stub_count, data_count, thunk_count FROM section_cell_stats "
+                "near_match_count, stub_count, padding_count, data_count, thunk_count, "
+                "none_count, proven_count, size_mismatch_count FROM section_cell_stats "
                 "WHERE target = ? AND section_name = ?",
                 (target, section_filter),
             )
         else:
             c.execute(
                 "SELECT section_name, total_cells, exact_count, reloc_count, "
-                "near_match_count, stub_count, data_count, thunk_count FROM section_cell_stats WHERE target = ?",
+                "near_match_count, stub_count, padding_count, data_count, thunk_count, "
+                "none_count, proven_count, size_mismatch_count FROM section_cell_stats WHERE target = ?",
                 (target,),
             )
         for row in c.fetchall():
@@ -476,8 +480,12 @@ def handle_api_data(target: str) -> bytes | Any:
                 "reloc": row["reloc_count"],
                 "near_match": row["near_match_count"],
                 "stub": row["stub_count"],
+                "padding": row["padding_count"],
                 "data": row["data_count"],
                 "thunk": row["thunk_count"],
+                "none": row["none_count"],
+                "proven": row["proven_count"],
+                "size_mismatch": row["size_mismatch_count"],
             }
 
         if fingerprint is not None:

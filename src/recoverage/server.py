@@ -121,7 +121,9 @@ SECTION_STATS_SQL = """
       SUM(CASE WHEN state IN ('near_match','near_matching') THEN 1 ELSE 0 END) AS near_match_count,
       SUM(CASE WHEN state = 'stub' THEN 1 ELSE 0 END) AS stub_count,
       SUM(CASE WHEN state = 'data' THEN 1 ELSE 0 END) AS data_count,
-      SUM(CASE WHEN state = 'thunk' THEN 1 ELSE 0 END) AS thunk_count
+      SUM(CASE WHEN state = 'thunk' THEN 1 ELSE 0 END) AS thunk_count,
+      SUM(CASE WHEN state = 'proven' THEN 1 ELSE 0 END) AS proven_count,
+      SUM(CASE WHEN state = 'size_mismatch' THEN 1 ELSE 0 END) AS size_mismatch_count
     FROM cells WHERE target = ? GROUP BY section_name
 """
 
@@ -152,7 +154,9 @@ def _section_stats(c: sqlite3.Cursor, target: str) -> dict[str, Any]:
     for row in c.fetchall():
         total = row["total_bytes"] or 0
         covered = row["covered_bytes"] or 0
-        matched = row["exact_count"] + row["reloc_count"]
+        # PROVEN is a semantic-equivalence promotion and counts as matched
+        # (consistent with the catalog grid's matchedFunctions).
+        matched = row["exact_count"] + row["reloc_count"] + row["proven_count"]
         sections[row["section_name"]] = {
             "total_cells": row["total_cells"],
             "exact": row["exact_count"],
@@ -161,6 +165,8 @@ def _section_stats(c: sqlite3.Cursor, target: str) -> dict[str, Any]:
             "stub": row["stub_count"],
             "data": row["data_count"],
             "thunk": row["thunk_count"],
+            "proven": row["proven_count"],
+            "size_mismatch": row["size_mismatch_count"],
             "matched": matched,
             "covered_bytes": covered,
             "total_bytes": total,
