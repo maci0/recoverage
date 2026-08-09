@@ -290,7 +290,8 @@ def _section_heading(label: str, color: str, title: str, extra: str = "") -> str
     return (
         f'<table border="0" cellpadding="0" cellspacing="4"><tr>'
         f'<td valign="middle">{logo}</td>'
-        f'<td valign="middle"><font size="3"><b>{title}</b></font>'
+        f'<td valign="middle">'
+        f'<h2><font size="3">{title}</font></h2>'
         f"{extra}</td></tr></table><br>"
     )
 
@@ -673,6 +674,7 @@ def _build_url(
     filters: set[str] | None = None,
     idx: int | None = None,
     search: str | None = None,
+    page: int | None = None,
 ) -> str:
     """Build a potato URL with the given parameters."""
     url = "?target=" + _url_quote(target) + "&section=" + _url_quote(section)
@@ -682,6 +684,8 @@ def _build_url(
         url += "&idx=" + str(idx)
     if search:
         url += "&search=" + _url_quote(search)
+    if page:
+        url += "&page=" + str(page)
     return url
 
 
@@ -699,7 +703,7 @@ def _get_disassembly(va: int, size: int, file_offset: int, target: str) -> str |
 
 _PAGE_SRC = r"""<!DOCTYPE html>
 <html lang="en">
-<head><meta charset="utf-8"><title>ReCoverage - Potato Mode</title><link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%20100%20100%27%3E%3Ctext%20y%3D%27.9em%27%20font-size%3D%2790%27%3E%F0%9F%A5%94%3C%2Ftext%3E%3C%2Fsvg%3E"></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>ReCoverage - Potato Mode</title><link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%20100%20100%27%3E%3Ctext%20y%3D%27.9em%27%20font-size%3D%2790%27%3E%F0%9F%A5%94%3C%2Ftext%3E%3C%2Fsvg%3E"></head>
 <body bgcolor="{{BG_COLOR}}" text="{{TEXT_COLOR}}" background="{{SCANLINE_PNG}}" link="{{COLORS['reloc']}}" vlink="{{COLORS['reloc']}}" alink="{{COLORS['exact']}}">
 <font face="{{SANS_FONT}}">
 <a href="#grid-container"><font size="1" color="{{MUTED_COLOR}}">[Skip to grid]</font></a>
@@ -711,7 +715,7 @@ _PAGE_SRC = r"""<!DOCTYPE html>
       <table id="logo" border="0" cellpadding="0" cellspacing="0">
         <tr>
           <td><img src="{{R_LOGO_SVG}}" width="48" height="32" border="0" alt="R"></td>
-          <td valign="middle"><a href="/"><font face="{{MONO_FONT}}" size="5" color="{{TEXT_COLOR}}">&nbsp;<b>ReCoverage</b></font></a>&nbsp;<a href="/"><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">[SPA]</font></a>&nbsp;<a href="?target={{target}}&section={{section}}&view=functions"><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">[Functions]</font></a></td>
+          <td valign="middle"><h1><a href="/"><font face="{{MONO_FONT}}" size="5" color="{{TEXT_COLOR}}">&nbsp;<b>ReCoverage</b></font></a></h1>&nbsp;<a href="/"><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">[SPA]</font></a>&nbsp;<a href="?target={{target}}&section={{section}}&view=functions"><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">[Functions]</font></a></td>
         </tr>
       </table>
     </td>
@@ -915,6 +919,7 @@ def render_potato(parsed_url: ParseResult) -> str:
     view = qs.get("view", [""])[0]
     sort_key = qs.get("sort", ["va"])[0]
     status_filter = qs.get("status", [""])[0]
+    page_str = qs.get("page", [""])[0]
 
     db_path = _db_path()
     try:
@@ -935,6 +940,7 @@ def render_potato(parsed_url: ParseResult) -> str:
             view,
             sort_key,
             status_filter,
+            page_str,
         )
 
 
@@ -1213,6 +1219,70 @@ def _merge_cells(cells: list[dict[str, Any]], grid_columns: int) -> list[dict[st
     return merged_cells
 
 
+# One page of grid is this many rows × the section's column count (~2k cells at
+# 64 columns, ~700 KB of table markup).  Potato Mode exists for clients that
+# cannot run the SPA, and those are the last clients that should be handed a
+# 7 MB response with 74k DOM nodes.
+_GRID_PAGE_ROWS = 32
+
+
+def _grid_page(
+    page_str: str,
+    idx_str: str,
+    merged_cells: list[dict[str, Any]],
+    page_cells: int,
+    page_count: int,
+) -> int:
+    """Resolve which grid page to render, clamped to 1..page_count.
+
+    An explicit ?page= wins.  Otherwise a selected ?idx= pulls its own page into
+    view, so following a link to a block never lands on a page without it.
+    """
+    if page_str:
+        try:
+            return max(1, min(page_count, int(page_str)))
+        except ValueError:
+            return 1
+    if idx_str:
+        try:
+            idx = int(idx_str)
+        except ValueError:
+            return 1
+        for pos, cell in enumerate(merged_cells):
+            if cell.get("orig_idx") == idx:
+                return max(1, min(page_count, pos // page_cells + 1))
+    return 1
+
+
+def _pager_html(
+    target: str,
+    section: str,
+    active_filters: set[str],
+    search_query: str,
+    page: int,
+    page_count: int,
+) -> str:
+    """Prev/Next links plus a page counter, in the surrounding table idiom."""
+    filters = active_filters or None
+
+    def link(p: int, text: str) -> str:
+        if not 1 <= p <= page_count:
+            return f'<font face="{MONO_FONT}" size="2" color="{MUTED_COLOR}">{text}</font>'
+        href = _build_url(target, section, filters, search=search_query, page=p)
+        return (
+            f'<a href="{href}">'
+            f'<font face="{MONO_FONT}" size="2" color="{ACCENT_COLOR}">{text}</font></a>'
+        )
+    return (
+        f'<table id="pager" border="0" cellpadding="4" cellspacing="0"><tr>'
+        f"<td>{link(page - 1, '[&lt; Prev]')}</td>"
+        f'<td><font face="{MONO_FONT}" size="2" color="{MUTED_COLOR}">'
+        f"&nbsp;Page {page} of {page_count}&nbsp;</font></td>"
+        f"<td>{link(page + 1, '[Next &gt;]')}</td>"
+        f"</tr></table>"
+    )
+
+
 def _build_grid_html(
     merged_cells: list[dict[str, Any]],
     sec_data: dict[str, Any],
@@ -1270,9 +1340,10 @@ def _build_grid_html(
         )
         if funcs:
             title += f" | {funcs[0]}"
-        alt_text = f"{state}"
-        if funcs:
-            alt_text += f": {funcs[0]}"
+        # The alt text IS the link's accessible name here, so it carries the
+        # same address range the title does.  With state alone, thousands of
+        # links announced as "none" with no way to tell them apart (WCAG 2.4.4).
+        alt_text = title
         w = cell_w * span
         img = (
             f'<a href="{link}" title="{_esc(title)}">'
@@ -1397,6 +1468,7 @@ def _render_potato_inner(
     view: str = "",
     sort_key: str = "va",
     status_filter: str = "",
+    page_str: str = "",
 ) -> str:
     target_ids, targets = resolve_targets(c)
     if not target and target_ids:
@@ -1457,8 +1529,18 @@ def _render_potato_inner(
         if grid_columns <= 0:
             grid_columns = 64
         merged_cells = _merge_cells(cells, grid_columns)
+        block_count = len(merged_cells)
+
+        # Paginate: a real .text section is ~25k cells, which is ~7 MB of table
+        # markup and ~74k DOM nodes — punishing on exactly the weak clients this
+        # mode exists for.  One page is _GRID_PAGE_ROWS rows of the grid.
+        page_cells = _GRID_PAGE_ROWS * grid_columns
+        page_count = max(1, -(-block_count // page_cells))
+        page = _grid_page(page_str, idx_str, merged_cells, page_cells, page_count)
+        page_slice = merged_cells[(page - 1) * page_cells : page * page_cells]
+
         grid_html = _build_grid_html(
-            merged_cells,
+            page_slice,
             sec_data,
             grid_columns,
             active_filters,
@@ -1468,7 +1550,10 @@ def _render_potato_inner(
             target,
             section,
         )
-        block_count = len(merged_cells)
+        if page_count > 1:
+            grid_html += _pager_html(
+                target, section, active_filters, search_query, page, page_count
+            )
         sec_stats = per_section_stats.get(section, {})
         panel_html = _render_panel(
             c,
