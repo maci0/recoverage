@@ -22,19 +22,37 @@
   --meta-item-bg: rgba(255, 255, 255, 0.03);
   --meta-item-border: rgba(255, 255, 255, 0.05);
   --topbar-bg: rgba(15, 23, 42, 0.6);
-  --panel-head-bg: rgba(21, 26, 33, 0.85);
   --modal-header-bg: rgba(15, 18, 22, 0.5);
   --scroll-track: var(--bg);
   --scroll-thumb: var(--border);
   --scroll-thumb-hover: var(--muted);
   --scroll-border: var(--bg);
   --overlay-bg: rgba(15, 18, 22, 0.7);
+  --modal-backdrop: rgba(0, 0, 0, 0.85);
+  --inspector-bg: rgba(0, 0, 0, 0.2);
+  --cell-border: rgba(255, 255, 255, 0.04);
+  --bar-border: rgba(255, 255, 255, 0.1);
+  --stat-scrim: rgba(15, 18, 22, 0.72);
+  --stat-text: #ffffff;
+
+  /* Height of the sticky topbar, measured at runtime (app.js) so the
+   * sticky panel header parks below it instead of underneath it. */
+  --topbar-h: 0px;
 
   --exact-bg: rgba(16, 185, 129, 0.75);
   --reloc-bg: rgba(2, 132, 199, 0.65);
   --near-match-bg: rgba(255, 200, 0, 0.65);
   --stub-bg: rgba(255, 0, 0, 0.65);
   --padding-bg: rgba(200, 200, 220, 0.55);
+
+  --badge-exact-bg: rgba(46, 160, 67, 0.2);
+  --badge-exact-border: rgba(46, 160, 67, 0.4);
+  --badge-reloc-bg: rgba(2, 132, 199, 0.2);
+  --badge-reloc-border: rgba(2, 132, 199, 0.4);
+  --badge-near-bg: rgba(210, 153, 34, 0.2);
+  --badge-near-border: rgba(210, 153, 34, 0.4);
+  --badge-stub-bg: rgba(248, 81, 73, 0.2);
+  --badge-stub-border: rgba(248, 81, 73, 0.4);
 
   /* Accent tokens — section logos, links, badges, delta */
   --accent-c-source: #3b82f6;
@@ -64,7 +82,11 @@
   --text: #0f172a;
   --border: rgba(0, 0, 0, 0.12);
   --none: rgba(0, 0, 0, 0.08);
-  --c: #0891b2;
+  /* Cyan darkened from #0891b2 (2.99:1 on --panel): --c is focus-ring,
+   * skip-link text, and loading-overlay text, so it carries a text
+   * contrast requirement, not just a non-text one.  #155e75 is 5.89:1
+   * on --panel and 4.89:1 on --bg. */
+  --c: #155e75;
   --bg-grad-1: rgba(42, 111, 219, 0.1);
   --bg-grad-2: rgba(31, 191, 117, 0.1);
   --text-shadow: 0 0 2px rgba(8, 145, 178, 0.3), 0 0 8px rgba(8, 145, 178, 0.1);
@@ -80,29 +102,36 @@
   --meta-item-bg: rgba(0, 0, 0, 0.02);
   --meta-item-border: rgba(0, 0, 0, 0.08);
   --topbar-bg: var(--panel);
-  --panel-head-bg: rgba(226, 232, 240, 0.95);
   --modal-header-bg: var(--panel);
   --scroll-track: rgba(0, 0, 0, 0.05);
   --scroll-thumb: rgba(0, 0, 0, 0.2);
   --scroll-thumb-hover: rgba(0, 0, 0, 0.35);
   --scroll-border: #cbd5e1;
   --overlay-bg: rgba(226, 232, 240, 0.7);
+  --modal-backdrop: rgba(15, 23, 42, 0.6);
+  --inspector-bg: rgba(0, 0, 0, 0.04);
+  --cell-border: rgba(0, 0, 0, 0.12);
+  --bar-border: rgba(0, 0, 0, 0.2);
+  --stat-scrim: rgba(226, 232, 240, 0.8);
+  --stat-text: #1e293b;
 
   --padding-bg: rgba(60, 60, 90, 0.55);
 
-  /* Accent tokens — light-mode overrides */
+  /* Accent tokens — light-mode overrides.  Text-bearing accents are tuned
+   * to clear 4.5:1 against the surface they sit on (--panel for badges and
+   * links, the tinted badge background for status text). */
   --accent-c-source: #2563eb;
   --accent-asm: #dc2626;
   --accent-data: #9333ea;
   --accent-bytes: #059669;
-  --link: #0284c7;
-  --link-hover: #0369a1;
+  --link: #075985;
+  --link-hover: #0c4a6e;
   --link-hover-glow: rgba(2, 132, 199, 0.3);
-  --delta: #b45309;
-  --badge-exact-text: #15803d;
-  --badge-reloc-text: #0369a1;
-  --badge-near-text: #a16207;
-  --badge-stub-text: #b91c1c;
+  --delta: #92400e;
+  --badge-exact-text: #14532d;
+  --badge-reloc-text: #075985;
+  --badge-near-text: #854d0e;
+  --badge-stub-text: #991b1b;
   --asm-link-underline: rgba(0, 0, 0, 0.3);
   --asm-link-hover-bg: rgba(2, 132, 199, 0.1);
 
@@ -134,10 +163,10 @@ body {
   background: rgba(6, 182, 212, 0.05); box-shadow: var(--c-shadow);
   display: inline-flex; align-items: center; justify-content: center; line-height: 1;
 }
-.title { font-size: 16px; font-weight: 650; letter-spacing: 0.2px; }
+.title { font-size: 16px; font-weight: 650; letter-spacing: 0.2px; margin: 0; }
 .subtitle { color: var(--muted); font-size: 13px; flex: 1; }
 
-.source-link { color: var(--link); text-decoration: none; transition: all 0.2s ease; }
+.source-link { color: var(--link); text-decoration: none; transition: color 0.2s ease, text-shadow 0.2s ease; }
 .source-link:hover { color: var(--link-hover); text-decoration: underline; text-shadow: 0 0 8px var(--link-hover-glow); }
 
 .btn {
@@ -145,9 +174,11 @@ body {
   color: var(--text); text-shadow: var(--text-shadow); height: 32px; padding: 0 12px;
   border-radius: 8px; cursor: pointer; font-size: 13px; box-sizing: border-box;
   display: inline-flex; align-items: center; justify-content: center;
-  transition: all 0.2s ease; font-family: inherit; font-weight: 600;
+  transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, box-shadow 0.2s ease;
+  font-family: inherit; font-weight: 600;
 }
-.btn:hover { background: var(--btn-bg-hover); border-color: var(--c); box-shadow: var(--c-shadow); }
+.btn:hover:not(:disabled) { background: var(--btn-bg-hover); border-color: var(--c); box-shadow: var(--c-shadow); }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .btn.active {
   background: var(--btn-active-bg); color: var(--btn-active-text);
   border-color: var(--btn-active-border); box-shadow: var(--c-shadow-active);
@@ -161,7 +192,7 @@ body {
   appearance: none; border: 1px solid var(--border); background: var(--btn-bg);
   color: var(--text); text-shadow: var(--text-shadow); height: 32px; padding: 0 12px;
   border-radius: 8px; box-sizing: border-box; font-size: 13px; width: 100%; outline: none;
-  transition: all 0.2s ease;
+  transition: background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
 }
 .input-el:focus { border-color: rgba(42, 111, 219, 0.5); box-shadow: 0 0 0 2px rgba(42, 111, 219, 0.1); }
 .input-el::placeholder { color: var(--muted); }
@@ -179,7 +210,7 @@ body {
   transition: background-color 0.3s ease, border-color 0.3s ease;
   display: flex; flex-wrap: wrap; gap: 14px; justify-content: space-between; align-items: center;
 }
-.topbar-left { display: flex; align-items: center; gap: 16px; flex: 1; min-width: 300px; }
+.topbar-left { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; flex: 1; min-width: 300px; }
 .topbar-right { display: flex; align-items: center; gap: 12px; justify-content: flex-end; flex-wrap: wrap; }
 .tabs { display: flex; gap: 6px; }
 .filters { display: flex; gap: 6px; }
@@ -190,10 +221,15 @@ body {
 
 .map, .panel {
   border: 1px solid var(--border); border-radius: 14px; background: var(--panel);
-  min-width: 0; overflow: hidden; transition: background-color 0.3s ease, border-color 0.3s ease;
+  min-width: 0; transition: background-color 0.3s ease, border-color 0.3s ease;
   box-shadow: 0 4px 12px rgba(0,0,0,0.05);
 }
-.map { padding: 14px; }
+.map { padding: 14px; overflow: hidden; }
+/* `clip`, not `hidden`: both round the corners, but `hidden` makes .panel a
+ * scrollport, which anchors .panel-head's sticky offset to a box that never
+ * scrolls (so it never sticks).  `clip` is non-scrollable, so the sticky
+ * header resolves against the viewport as intended. */
+.panel { overflow: clip; }
 
 .legend { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
 .key { display: inline-flex; gap: 8px; align-items: center; color: var(--muted); font-size: 12px; }
@@ -207,14 +243,14 @@ body {
 
 
 .grid {
-  display: grid; grid-template-columns: repeat(64, 1fr); gap: 2px; padding: 8px;
+  display: grid; grid-template-columns: repeat(var(--cols, 64), 1fr); gap: 2px; padding: 8px;
   border-radius: 12px; background: var(--grid-bg); border: 1px solid var(--border);
   user-select: none; animation: fadeInGrid 0.3s ease; position: relative; min-height: 400px; content-visibility: auto;
 }
 @keyframes fadeInGrid { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 
 .cell {
-  width: 100%; height: 100%; border-radius: 2px; border: 1px solid rgba(255, 255, 255, 0.04);
+  width: 100%; height: 100%; border-radius: 2px; border: 1px solid var(--cell-border);
   cursor: pointer; background: var(--none); contain: strict;
 }
 .cell.exact { background: var(--exact-bg); }
@@ -223,9 +259,6 @@ body {
 .cell.stub { background: var(--stub-bg); }
 .cell.padding { background: var(--padding-bg); }
 
-.cell.asm { background: rgba(42, 111, 219, 0.55); }
-.light-mode .cell { border-color: rgba(0, 0, 0, 0.12); }
-@keyframes fadeInCell { from { opacity: 0; transform: scale(0.9); } to { opacity: 1; transform: scale(1); } }
 .cell.dimmed { opacity: 0.15; }
 
 /* Fast CSS-based filtering */
@@ -243,7 +276,7 @@ body {
 
 .modal {
   display: flex; align-items: center; justify-content: center; position: fixed; z-index: 100;
-  left: 0; top: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.85); backdrop-filter: blur(4px);
+  left: 0; top: 0; width: 100%; height: 100%; background: var(--modal-backdrop); backdrop-filter: blur(4px);
   opacity: 0; visibility: hidden; transition: opacity 0.2s ease, visibility 0.2s ease;
 }
 .modal.show { opacity: 1; visibility: visible; }
@@ -264,8 +297,23 @@ body {
 .modal-content .code { margin: 0; max-height: none; min-height: 0; flex-shrink: 0; min-width: min-content; }
 
 .hint { color: var(--muted); font-size: 12px; margin-top: 10px; }
-.panel-head { padding: 14px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 12px; position: sticky; top: 0; background: var(--panel-head-bg); backdrop-filter: blur(8px); z-index: 10; }
-.panel-title { font-weight: 650; font-size: 14px; }
+
+/* Shown in the map area when there is no grid to draw: no database, no
+ * sections, or a failed fetch.  Sized like the grid it replaces so the layout
+ * does not jump when data arrives. */
+.empty-state {
+  min-height: 400px; display: grid; place-content: center; gap: 10px; padding: 40px 24px; text-align: center;
+  border: 1px dashed var(--border); border-radius: 12px; background: var(--grid-bg);
+}
+.empty-state h2 { margin: 0; font-size: 16px; font-weight: 650; }
+.empty-state p { margin: 0; max-width: 52ch; font-size: 13px; line-height: 1.5; color: var(--muted); }
+/* No backdrop-filter here: it is sticky, so the blur would repaint on every
+ * scroll frame over a grid of thousands of cells, and it sits on the panel's
+ * own surface where an opaque background looks the same. */
+.panel-head { padding: 14px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 12px; position: sticky; top: var(--topbar-h); background: var(--panel); z-index: 10; }
+/* Mangled C++ symbols have no break opportunities, and the panel clips its
+ * overflow, so without this the tail of a long name silently disappears. */
+.panel-title { font-weight: 650; font-size: 14px; margin: 0; overflow-wrap: anywhere; }
 .panel-meta { margin-top: 2px; color: var(--muted); font-family: var(--mono); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
 .panel-body { padding: 14px; display: grid; gap: 14px; min-width: 0; }
 .section { min-width: 0; overflow: hidden; }
@@ -284,9 +332,10 @@ body {
 .asm-link:hover { color: var(--c); text-decoration-style: solid; text-decoration-color: var(--c); background: var(--asm-link-hover-bg); border-radius: 2px; }
 
 .meta-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; margin-top: 6px; }
-.meta-item { display: flex; flex-direction: column; gap: 2px; background: var(--meta-item-bg); padding: 6px 8px; border-radius: 2px; border: 1px solid var(--meta-item-border); transition: all 0.3s ease; }
+.meta-item { display: flex; flex-direction: column; gap: 2px; background: var(--meta-item-bg); padding: 6px 8px; border-radius: 2px; border: 1px solid var(--meta-item-border); transition: background-color 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease; }
 .meta-item:hover { border-color: var(--c); box-shadow: var(--c-shadow); }
 .meta-item.full-width { grid-column: 1 / -1; }
+.inspector-grid { margin-top: 0; background: var(--inspector-bg); padding: 10px; border-radius: 12px; border: 1px solid var(--border); }
 .meta-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); }
 .meta-value { font-size: 12px; font-family: var(--mono); color: var(--text); text-shadow: var(--text-shadow); word-break: break-all; }
 .meta-value.blocker-value { font-style: italic; opacity: 0.9; }
@@ -294,27 +343,37 @@ body {
 .meta-docs { margin: 0; font-size: 12px; font-family: var(--mono); color: var(--text); text-shadow: var(--text-shadow); white-space: pre-wrap; }
 
 .status-badge { display: inline-block; padding: 2px 6px; border-radius: 10px; font-size: 11px; font-weight: 600; text-transform: uppercase; width: fit-content; }
-.status-exact { background: rgba(46, 160, 67, 0.2); color: var(--badge-exact-text); border: 1px solid rgba(46, 160, 67, 0.4); }
-.status-reloc { background: rgba(2, 132, 199, 0.2); color: var(--badge-reloc-text); border: 1px solid rgba(2, 132, 199, 0.4); }
-.status-near-match { background: rgba(210, 153, 34, 0.2); color: var(--badge-near-text); border: 1px solid rgba(210, 153, 34, 0.4); }
-.status-stub { background: rgba(248, 81, 73, 0.2); color: var(--badge-stub-text); border: 1px solid rgba(248, 81, 73, 0.4); }
+.status-exact { background: var(--badge-exact-bg); color: var(--badge-exact-text); border: 1px solid var(--badge-exact-border); }
+.status-reloc { background: var(--badge-reloc-bg); color: var(--badge-reloc-text); border: 1px solid var(--badge-reloc-border); }
+.status-near-match { background: var(--badge-near-bg); color: var(--badge-near-text); border: 1px solid var(--badge-near-border); }
+.status-stub { background: var(--badge-stub-bg); color: var(--badge-stub-text); border: 1px solid var(--badge-stub-border); }
 
 .section-title-left { display: flex; align-items: center; gap: 8px; }
 .hex-logo { display: flex; align-items: center; justify-content: center; filter: drop-shadow(0 0 4px currentColor); }
-.section-title-text { font-weight: 600; color: var(--text); text-shadow: var(--text-shadow); letter-spacing: 0.5px; }
+.section-title-text { font-size: 12px; font-weight: 600; margin: 0; color: var(--text); text-shadow: var(--text-shadow); letter-spacing: 0.5px; }
 .section-actions { display: flex; gap: 6px; }
 
-.progress-container { user-select: none; display: flex; flex-direction: column; gap: 6px; width: 100%; flex: 1; }
-.progress-bar { position: relative; height: 32px; width: 100%; background: var(--none); border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.1); overflow: hidden; }
-.light-mode .progress-bar { border: 1px solid rgba(0, 0, 0, 0.2); }
+/* The bar shares the topbar row with the title and the section tabs.  Below
+ * ~900px those leave it a few dozen pixels, which clips the coverage stats
+ * inside it, so it takes its own full-width row instead. */
+.progress-container { user-select: none; display: flex; flex-direction: column; gap: 6px; width: 100%; flex: 1; min-width: 320px; }
+@media (max-width: 900px) { .progress-container { flex-basis: 100%; } }
+.progress-bar { position: relative; height: 32px; width: 100%; background: var(--none); border-radius: 8px; border: 1px solid var(--bar-border); overflow: hidden; }
 .progress-segments { display: flex; flex-direction: row; width: 100%; height: 100%; position: absolute; top: 0; left: 0; }
-.progress-text-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; justify-content: space-between; align-items: center; padding: 0 16px; pointer-events: none; font-size: 13px; font-family: var(--mono); color: #ffffff; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8), 0 0 4px rgba(0, 0, 0, 0.5); z-index: 10; }
+/* The stats float over whichever segment colour happens to be underneath, so
+ * legibility would otherwise change with coverage.  Each stat carries its own
+ * scrim rather than relying on a text-shadow, which earns no contrast credit. */
+.progress-text-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 0 8px; pointer-events: none; font-size: 13px; font-family: var(--mono); z-index: 10; }
+/* text-shadow: none — the scrim carries the legibility now, and the inherited
+ * body glow put a cyan halo on the stats. */
+.stat-item { color: var(--stat-text); background: var(--stat-scrim); padding: 2px 8px; border-radius: 5px; white-space: nowrap; text-shadow: none; }
 .progress-segment { height: 100%; transition: background-color 0.3s ease, box-shadow 0.3s ease, filter 0.3s ease; cursor: pointer; }
 .progress-segment:hover { filter: brightness(1.2); outline: 1px solid var(--c); box-shadow: var(--c-shadow); z-index: 2; }
 .progress-segment.active { box-shadow: inset 0 0 12px 2px var(--glow), inset 0 0 0 2px var(--c); outline: none; z-index: 2; position: relative; }
 
 .icon { display: flex; align-items: center; justify-content: center; }
-.icon svg { width: 16px; height: 16px; }
+.icon svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.hex-logo svg { width: 20px; height: 20px; font-family: inherit; }
 
 .loading-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: var(--overlay-bg); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; z-index: 50; color: var(--c); font-family: var(--mono); font-size: 32px; font-weight: 700; letter-spacing: 1px; border-radius: inherit; animation: pulse 1.5s infinite; }
 @keyframes pulse { 0% { opacity: 0.6; text-shadow: 0 0 5px var(--c); } 50% { opacity: 1; text-shadow: 0 0 15px var(--c); } 100% { opacity: 0.6; text-shadow: 0 0 5px var(--c); } }
@@ -328,14 +387,14 @@ body {
 *:focus-visible { outline: 2px solid var(--c); outline-offset: 2px; }
 
 body::after { content: " "; display: block; position: fixed; top: 0; left: 0; bottom: 0; right: 0; background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.05) 50%); z-index: 90; background-size: 100% 3px; pointer-events: none; }
-.light-mode body::after { background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.02) 50%); }
+/* `body.light-mode`, not `.light-mode body`: the class lives on body itself,
+ * so the descendant form never matched and light mode kept the dark scanline. */
+body.light-mode::after { background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.02) 50%); }
 .swatch-exact { background: var(--exact-bg); }
 .swatch-reloc { background: var(--reloc-bg); }
 .swatch-near_match { background: var(--near-match-bg); }
 .swatch-stub { background: var(--stub-bg); }
 .swatch-padding { background: var(--padding-bg); }
-
-.light-mode .progress-text-overlay { color: #1e293b; text-shadow: 0 1px 2px rgba(255, 255, 255, 0.8), 0 0 4px rgba(255, 255, 255, 0.5); }
 
 .skip-link {
   position: absolute; left: -9999px; top: auto; width: 1px; height: 1px; overflow: hidden; z-index: 999;
@@ -353,14 +412,39 @@ body::after { content: " "; display: block; position: fixed; top: 0; left: 0; bo
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+
+  /* The loading overlay's pulse is the only "still working" signal during
+   * regen and multi-MB loads, so it survives the blanket kill as a slow
+   * opacity-only fade: no movement, no scale, feedback preserved. */
+  .loading-overlay {
+    animation: pulse-fade 2s ease-in-out infinite !important;
+    animation-duration: 2s !important;
+    animation-iteration-count: infinite !important;
+  }
 }
+@keyframes pulse-fade { 0%, 100% { opacity: 0.7; } 50% { opacity: 1; } }
 
 /* Coarse pointers (touch): interactive targets need ≥ 44px hit area (WCAG
  * 2.5.5). Desktop fine-pointer keeps the compact 32px control height. */
 @media (pointer: coarse) {
   .btn, .input-el, .target-select { height: 44px; min-height: 44px; }
   .btn.icon-btn { width: 44px; }
-  .progress-segment { min-height: 44px; }
+  /* The bar itself has to grow: it is fixed-height with overflow:hidden, so a
+   * min-height on the segments alone was clipped back to 32px. */
+  .progress-bar { height: 44px; }
   .cell { min-height: 16px; }
+}
+
+/* Phone widths: the topbar wraps to ~190px of controls.  Sticky there would
+ * hold a quarter of the viewport hostage for the whole scroll, so it scrolls
+ * away and the map gets the screen. */
+@media (max-width: 700px) {
+  .topbar { position: static; }
+  .panel-head { top: 0; }
+  /* Three stats need ~415px and the bar has ~352px on a phone, so the byte
+   * count (derivable from the panel) gives way to the two that carry the
+   * headline.  The :nth-last-child(3) guard keeps the single-item loading and
+   * error states, which are also .stat-item, visible. */
+  .stat-item:first-child:nth-last-child(3) { display: none; }
 }
 

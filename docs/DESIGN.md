@@ -8,7 +8,7 @@ The UI is built using a lightweight, dependency-free stack to ensure fast load t
 * **Frontend Framework**: [VanJS](https://vanjs.org/) (a ~2 kB reactive UI framework).
 * **Styling**: Vanilla CSS with CSS Variables for theming.
 * **Backend/Data**: [Bottle](https://bottlepy.org/) web framework serving a SQLite database (`coverage.db`).
-* **Syntax Highlighting**: Highlight.js (C, x86 ASM, custom Hex language).
+* **Syntax Highlighting**: Highlight.js (C, x86 ASM, custom Hex language), vendored in `assets/` and served from this origin so the dashboard works air-gapped.
 
 ## Data Pipeline
 1. `rebrew catalog --json` parses the target binary (`target.dll`) and C source annotations (`// FUNCTION:`, `// GLOBAL:`).
@@ -20,12 +20,13 @@ The UI is built using a lightweight, dependency-free stack to ensure fast load t
    * `/api/targets/<target>/functions/<va>` endpoint to fetch specific function/global details on-demand.
    * `/api/targets/<target>/asm?va=...&size=...` endpoint that dynamically disassembles binary chunks using Capstone (with LRU caching and in-memory cached binary reads).
    * `/api/regen` POST endpoint to trigger `rebrew catalog --json` + `rebrew build-db` regeneration.
+   * With `--token`, an unauthenticated request is answered by content type: browsers asking for `text/html` get a short page explaining that `?token=` must be appended (it never echoes the token), and API clients keep the `{error, code, detail}` JSON contract.
    * Proxied paths: `/src/*` → `project_dir/src/`, `/original/*` → `project_dir/original/`
 
 ## State Management (VanJS)
 The application state is managed using VanJS reactive primitives (`van.state`):
 * `data`: Holds the fetched SQLite data (sections, globals, functions, summary).
-* `originalDll`: Raw ArrayBuffer of the original DLL for byte slicing.
+* `originalDll`: Raw ArrayBuffer of the original DLL for byte slicing.  Fetched from `paths.originalDll` when the DB carries that metadata, otherwise from `/original/<target>.dll`, which the server proxies anyway; when neither exists the hex pane says so instead of failing silently.
 * `activeSection`: Tracks the currently selected PE section (`.text`, `.rdata`, `.data`, `.bss`).
 * `activeFilters`: A `Set` tracking which match statuses are currently visible (Exact, Reloc, Matching, Stub).
 * `searchQuery`: The current text in the search input (debounced 250ms).
@@ -36,20 +37,23 @@ The application state is managed using VanJS reactive primitives (`van.state`):
 * `activeTarget`: Current target ID (e.g., "SERVER", "Europa1400Gold").
 * `availableTargets`: List of available targets fetched from `/api/targets`.
 * `filteredFnNames`: Derived state for search filtering (Set of function names matching search query).
+* `emptyState`: `{title, detail}` when there is no map to draw — no database, no sections, an unreadable schema version, or a failed fetch.  The map area renders it in place of the grid and suppresses the legend, hint, and progress bar, all of which describe a grid that is not there.  Every load path clears `isLoading`, including the early return when no target is selected: leaving it set was what produced a spinner that never stopped on first run.
+
+  Note for future bindings: these render an empty `div()` rather than `null` when they have nothing to show.  A VanJS binding whose first result is `null` never renders again — van keeps no node to replace, so later updates are dropped.
 
 ## Components
 The UI is broken down into functional VanJS components in `app.js`:
 
 ### 1. Topbar (`header.topbar`)
 * **Logo & Title**: Retro-futuristic "R" logo with CRT scanline effects.
-* **Tabs**: Dynamic segment selectors (e.g., `.text`, `.rdata`, `.data`, `.bss`) generated based on the active target's sections.
-* **ProgressBar**: A dynamic, segmented progress bar showing coverage percentages. Text stats are overlaid on top of the colored segments. **Each segment is clickable** to toggle the corresponding filter.
+* **Tabs**: Dynamic segment selectors generated from the active target's sections, ordered by ascending VA so PE load order (`.text`, `.rdata`, `.data`, `.bss`) holds and the section carrying the work leads, instead of an alphabetical row ending in `.text`.
+* **ProgressBar**: A dynamic, segmented progress bar showing coverage percentages. It takes its own full-width row below 900px (sharing the topbar row leaves it a few dozen pixels), and drops the byte count below 700px so the two headline stats fit inside the bar. **Each segment is a filter toggle**, reachable by keyboard and carrying `aria-pressed`; segments under 0.5% are not rendered at all, since a zero-width toggle is a focus stop with nothing to point at. Text stats overlay the segments, each on its own scrim so they stay legible over any status colour.
 * **Target Selector**: Dropdown to switch between targets (e.g., `SERVER`, `GOLD`, `GOLDTL`). Persists selection to URL (`?target=XXX`) and localStorage.
 * **Search & Filters**: Debounced search input and toggleable filter buttons (All, E, R, M, S).
 * **Actions**: Theme toggle (sun/moon icons) and Reload data buttons with a 5-second cooldown to prevent spam.
 
 ### 2. Grid (`.map`)
-* A CSS Grid layout that dynamically calculates column widths using a `ResizeObserver` to keep blocks perfectly square.
+* A CSS Grid layout that keeps blocks square: the section's `columns` value is stored on the element as `data-cols` and the `ResizeObserver` derives the rendered count into `--cols`, which drives the CSS track count, the row height, and the arrow-key row step.  Below 700px the rendered count drops so cells stay at least 12px (64 columns on a 352px phone would give 2.8px cells); above it the section keeps every column it declares.  Reading it from one place is what keeps them from drifting (the track count was previously hard-coded to 64 while the row height followed the declared value, so cells were not square for any section declaring anything else).
 * Cells are colored based on their status:
   * **Exact** (green) — byte-for-byte match
   * **Reloc** (blue/teal) — match after masking relocations
@@ -62,9 +66,10 @@ The UI is broken down into functional VanJS components in `app.js`:
 * **Grid Caching**: Each section's grid is built once and cached in the DOM. Switching tabs simply toggles `display: none` vs `display: grid`, making tab switching instantaneous even for sections with 6,000+ chunks.
 * **Fast HTML Building**: Grids are constructed using a single massive HTML string injection (`innerHTML`) rather than creating thousands of individual DOM nodes, drastically reducing initial render time.
 * **CSS-Based Filtering**: Filtering and search dimming are handled by applying classes to the parent grid container (e.g., `.has-filters.show-exact`), allowing the browser's highly optimized CSS engine to instantly update thousands of cells without JavaScript loops.
+* **Keyboard & semantics**: the grid is a `listbox` of `option` cells with a roving tabindex, so exactly one cell is in the tab order no matter how many thousands the section holds. Arrow keys move focus (left/right by one, up/down by a full row), Home/End jump to the ends, Enter/Space selects, and `aria-selected` tracks the selected block.
 
 ### 3. Side Panel (`.panel`)
-* **Sticky Header**: The panel header remains visible while scrolling through long code blocks, featuring a backdrop blur.
+* **Sticky Header**: The panel header stays visible while scrolling through long code blocks, on an opaque panel background (no backdrop blur: it is sticky, so a blur would repaint on every scroll frame over a grid of thousands of cells).  It sticks at `top: var(--topbar-h)`, a custom property app.js keeps in sync with the measured topbar height, and `.panel` uses `overflow: clip` rather than `hidden` so the sticky offset resolves against the viewport instead of a box that never scrolls.
 * **Metadata Grid**: Displays key-value pairs in an auto-filling grid with tightened vertical spacing for a cohesive look:
   * VA (Clickable link that jumps to the corresponding address in the grid)
   * Size, Offset, Symbol, Status, Origin, Compiler flags, Marker type
@@ -80,8 +85,10 @@ The UI is broken down into functional VanJS components in `app.js`:
 * **Data Inspector**: When viewing `.rdata`, `.data`, or `.bss` sections, the Assembly view is replaced by a Data Inspector that instantly interprets the raw bytes as `int8`, `uint8`, `int16`, `uint16`, `int32`, `uint32`, `float32`, `float64`, and `string (ascii)`.
 * **Documentation**: Extracts annotation comments from C source (`// FUNCTION:`, `// STATUS:`, `// NOTE:`, `// BLOCKER:`, etc.) and displays them in the metadata grid.
 
-### 4. Modal (`modal`)
+### 4. Modal (`modal`, mounted by `detail.js`)
 * Custom-built modal using plain VanJS divs (no external UI library)
+* Focus moves to the Close button on open, retried across frames because the class that reveals the dialog is applied by van's batched update and `focus()` on a still-hidden element is a no-op
+* Everything outside the dialog is marked `inert` while it is open, which removes the background from both the tab order and the accessibility tree
 * Centered, floating dialog with backdrop blur
 * Displays expanded C source, ASM, or hex bytes
 * Copy button and Close button
@@ -95,7 +102,7 @@ The UI is broken down into functional VanJS components in `app.js`:
 * **CSS Variables**: Core colors are defined in `:root` (e.g., `--bg`, `--panel`, `--text`, `--border`).
 * **Dark Mode (Default)**: Cool slate/cyan/blue hacker aesthetic (`#0f1216` background) with subtle CRT glow effects (text-shadows and box-shadows using cyan `rgba(6, 182, 212, 0.3)`).
 * **Light Mode**: Triggered by the `.light-mode` class on the `body`. Overrides CSS variables to softer grays (`#cbd5e1` background, `#e2e8f0` panels) to reduce eye strain while maintaining contrast.
-* **CRT Scanlines**: A global scanline overlay (`body::after`) using a repeating linear gradient. It is kept very faint (`0.05` opacity in dark mode, `0.02` in light mode) to add texture without overpowering the UI.
+* **CRT Scanlines**: A global scanline overlay (`body::after`) using a repeating linear gradient. It is kept very faint (`0.05` opacity in dark mode, `0.02` in light mode via `body.light-mode::after`) to add texture without overpowering the UI.
 * **Match Status Colors**:
   * **Exact**: Green (`rgba(16, 185, 129, 0.75)`)
   * **Reloc**: Blue/Teal (`rgba(2, 132, 199, 0.65)`)
@@ -104,20 +111,25 @@ The UI is broken down into functional VanJS components in `app.js`:
 * **Transitions**: Smooth `0.3s ease` transitions on background colors, borders, and opacities ensure fluid theme switching and filter toggling.
 * **Scrollbars**: Custom WebKit scrollbars styled to match the active theme, with `scrollbar-gutter: stable` applied to code blocks to prevent layout shifts.
 * **Loading Overlay**: A pulsing, vertically-centered overlay with large text (`font-size: 32px`, `font-weight: 700`) provides immediate visual feedback during data fetches.
-* **Favicon**: A custom SVG data URI favicon that matches the retro-futuristic "R" logo with a cyan glow and scanline pattern.
-* **Responsive**: Two-column layout on wide screens, single-column on screens <1300px.
+* **Print**: `assets/print.css`, linked with `media="print"` so it costs nothing at first paint.  Paper drops the controls, the scanline overlay, and the copy/open affordances, keeps the status colours (`print-color-adjust: exact`), unclamps the code panes, and appends link targets after source links.
+* **Favicon**: `assets/favicon.svg`, matching the retro-futuristic "R" logo with a cyan glow and scanline pattern.  It is a served file rather than an inline data URI so it stays out of the first-packet budget.
+* **Responsive**: Two-column layout on wide screens, single-column below 1300px.  Below 700px the topbar stops being sticky (its wrapped controls would otherwise hold a quarter of a phone viewport for the whole scroll).  Under `pointer: coarse` the controls and the progress bar grow to a 44px hit area.
+* **Reduced motion**: `prefers-reduced-motion` kills animation and transition durations globally, but the loading overlay keeps an opacity-only pulse: it is the only "still working" signal during regen, and removing motion should not remove feedback.
+* **Contrast**: text-bearing tokens clear 4.5:1 on the surface they sit on, in both themes.  `--c` doubles as the focus-ring colour, so its light-mode value is tuned for text contrast rather than the 3:1 non-text floor.
 
 ## Key Implementation Details
 
 ### Performance Optimizations
 * **First Draw in First TCP Packet**: `server.py` intercepts requests to `/` and inlines `index.html`, `style.css`, `app.js`, and `van.min.js` into a single response. This response is minified (using `rjsmin` and `rcssmin`) and compressed using **Brotli (`br`)** or **Zstandard (`zstd`)** (falling back to `gzip`) to ~14.5KB, fitting perfectly into the initial TCP congestion window (`cwnd`). This allows the browser to parse and render the UI shell instantly without any render-blocking network requests.
-* **Advanced Compression**: The server dynamically selects the best compression algorithm based on the `Accept-Encoding` header, prioritizing `zstd`, then `br`, and falling back to `gzip`. Brotli cuts the massive JSON payload size in half compared to gzip (e.g., 119KB down to 58KB).
+* **Advanced Compression**: The server picks the best algorithm the client accepts, preferring `zstd`, then `br`, then `gzip`.  Dynamic responses compress brotli at quality 5, not the default 11: measured on a 5.6 MB coverage payload, q=11 costs 5.9 s of CPU for 334 KB while q=5 costs 68 ms for 444 KB, and that cost is paid per request because API responses are not cached compressed.  Clients without zstd (Safari) would otherwise stall about six seconds on every load and every live reload.  The inlined index keeps q=11: it is compressed once per encoding, cached, and has a hard byte budget.
 * **HTTP/1.1 Keep-Alive**: The Python server uses wsgiref which supports HTTP/1.1 keep-alive connections, eliminating handshake overhead for rapid subsequent API requests.
 * **ETag Caching**: The heavy `/api/targets/<target>/data` endpoint calculates an `ETag` based on the `coverage.db` file's modification time. If the database hasn't changed, the server responds with a `304 Not Modified` (0 bytes), making page reloads instantaneous.
 * **Request Cancellation**: The UI uses `AbortController` to cancel in-flight network requests if the user clicks through multiple cells rapidly, saving bandwidth and preventing race conditions.
-* **Deferred Highlight.js**: The heavy `highlight.js` library and its CSS are not loaded initially. They are dynamically fetched from a CDN only when a user clicks on a code block for the first time.
+* **Deferred Highlight.js**: The heavy `highlight.js` library and its CSS are not loaded initially. They are fetched from this origin (`/hljs.min.js`, `/hljs-c.min.js`, `/hljs-x86asm.min.js`) the first time a user clicks a code block.
+* **Deferred failure is visible, not silent**: `detailFailed` is set when `/detail.js` cannot be fetched.  The panes it owns say so, and every control that delegates to it (Copy, Open, Copy VA, Copy Symbol, Reload) goes `disabled` with the same message as its tooltip.  Optional chaining alone made each deferral crash-safe but user-hostile: the buttons looked enabled and did nothing.
+* **Deferred detail rendering**: `detail.js` carries the hex dump, the data inspector, the C annotation extractor, the custom hex highlight language, the live-reload subscription, the regen/reload handler, the clipboard helper, and the code-viewer modal with its focus and `inert` handling: everything that is not needed to paint the first frame.  app.js keeps the modal's four states so the panel's Open buttons can set them; `window.RC.mountModal` attaches the dialog once detail.js lands. It is fetched immediately after first paint, which keeps the inlined shell inside the congestion window without a visible delay. app.js publishes `window.RC` for it to read and write; until it lands, the panes it owns show a loading message and resolve reactively when it arrives.
 * **On-Demand Data Fetching**: The `/api/targets/<target>/data` endpoint only returns lightweight grid layouts and metadata. Detailed function information is fetched on-demand via `/api/targets/<target>/functions/<va>` when a user clicks a cell, drastically reducing memory usage and initial load times.
-* **DOM Optimizations**: The grid uses **Event Delegation** (a single click listener on the parent container instead of 2,500+ individual listeners), **CSS Containment** (`contain: strict` on cells to prevent global layout recalculations), and **Content Visibility** (`content-visibility: auto` to skip rendering off-screen cells).
+* **DOM Optimizations**: The grid uses **Event Delegation** (a single click listener on the parent container instead of 2,500+ individual listeners), **CSS Containment** (`contain: strict` on cells to prevent global layout recalculations), and **Content Visibility** (`content-visibility: auto` on the grid container to skip rendering it while off-screen).
 * **Grid Caching & CSS Filtering**: To handle sections with 6,000+ chunks (like `.bss`), grids are built once via fast HTML string injection and cached. Tab switching toggles `display: none`. Filtering and search dimming are handled entirely by CSS classes on the parent container, avoiding slow JavaScript loops over thousands of DOM nodes. CSS transitions on cells were removed to eliminate GPU overhead during mass state changes.
 * **Precomputed Cell Properties**: Cell CSS classes and states are precomputed immediately after the JSON payload is fetched, preventing the UI from recalculating these strings thousands of times during the render loop.
 * **Zero-Allocation JSON**: The backend pushes JSON serialization down into the SQLite C-engine (`json_group_array`, `json_object`), allowing Python to serve the `/api/targets/<target>/data` endpoint with almost zero memory allocation overhead.
@@ -162,7 +174,7 @@ On function/global selection:
 ### Search & Filtering
 * **Search**: Matches against function name, VA, and symbol (case-insensitive)
 * **Filters**: Set-based toggling; progress bar segments are clickable to quick-filter
-* **Dimming**: Non-matching cells are dimmed (opacity 0.15) rather than hidden, preserving grid layout
+* **Dimming**: Non-matching cells are dimmed (opacity 0.15) rather than hidden, preserving grid layout.  Undocumented blocks dim too: they are not matches either, and exempting them left most of the map lit during a search
 
 ### Theme Persistence
 * Checks `localStorage` for `recoverage_theme` ("light" or "dark")
@@ -211,10 +223,12 @@ Potato Mode is a pure HTML 5 alternative UI that works **without any CSS or Java
 ## Constraints
 - **NO CSS** - All styling uses only HTML attributes (`bgcolor`, `cellpadding`, `cellspacing`, `border`, `background`, etc.)
 - **NO JavaScript** - All interactivity uses plain HTML forms and links
-- **HTML 5** - Uses `<!DOCTYPE html>` for modern parsing, with `lang="en"` and `<meta charset="utf-8">`
+- **HTML 5** - Uses `<!DOCTYPE html>` for modern parsing, with `lang="en"`, `<meta charset="utf-8">`, and a viewport meta so phones render at device width instead of zooming a 980px canvas out
+- **Semantics within the constraint** - `<h1>`/`<h2>` carry the document outline (no `style=` attribute anywhere, which `tests/test_potato.py` enforces), and each grid cell's `alt` repeats its address range so links are individually identifiable rather than thousands named "none"
 
 ## Features
 - **Full coverage grid visualization** with colored cells and cell merging for large blocks
+- **Paginated grid** — a real `.text` section is ~25k cells, which unpaginated is ~7.7 MB of table markup and ~74k DOM nodes on exactly the weak clients this mode exists for.  Pages are 32 grid rows; `?page=N` navigates, and a selected `?idx=` pulls its own page into view
 - **Section navigation** (`.text`, `.data`, `.rdata`, `.bss`)
 - **Multi-select filters** (toggle multiple filters simultaneously)
 - **Search functionality** (matches function name, VA, and symbol)

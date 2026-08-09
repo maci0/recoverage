@@ -1,4 +1,4 @@
-const { a, aside, button, div, header, input, main, pre, section, span, code } = van.tags;
+const { a, aside, button, div, h1, h2, h3, header, input, main, p, pre, section, span, code } = van.tags;
 
 const DATA_URL = (t) => `/api/targets/${t}/data`;
 const ASM_URL = (t) => `/api/targets/${t}/asm`;
@@ -15,20 +15,19 @@ const MSG = {
   NO_DOCS: "No documentation comments in source file",
   NO_C_FOR_BLOCK: "(no C implementation)",
   UNDOCUMENTED_BLOCK: "(undocumented block)",
-  ASM_PLACEHOLDER: "(use matcher.py --diff for disassembly)",
+  ASM_PLACEHOLDER: "(no disassembly for this block)",
   DATA_SECTION_NO_ASM: "(Data section - no assembly)",
-  BYTES_FAILED: "(failed to slice bytes from original DLL)",
+  BYTES_FAILED: "(byte range falls outside the original binary)",
   BYTES_BSS: "(uninitialized data - no raw bytes)",
-  BYTES_LOAD_FAILED: "(original DLL not loaded)",
+  BYTES_LOAD_FAILED: "(original binary not found: expected it at /original/ in the project directory)",
   GLOBAL_VAR: "Global variable",
   REGEN_USING_CACHE: (r) => `Using cached data. Regen available in ${r}s...`,
   REGEN_IN_PROGRESS: "Regenerating…",
   REGEN_UNAVAILABLE: "Regen unavailable",
-  REGEN_AVAILABLE_IN: "Regen available in",
-  SECONDS: "s",
   NA: "(n/a)",
   FETCH_FAILED: (url) => `(failed to load: ${url})`,
   NO_DECL: "(no declaration found)",
+  DETAIL_UNAVAILABLE: "(detail view failed to load — reload the page)",
 };
 
 function hex(n, width) {
@@ -39,17 +38,19 @@ function escAttr(s) {
   return String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-function formatBytes(buf, baseOffset = 0) {
-  const bytes = new Uint8Array(buf);
-  let out = "";
-  for (let i = 0; i < bytes.length; i += 16) {
-    const slice = bytes.subarray(i, i + 16);
-    const offset = (baseOffset + i).toString(16).toUpperCase().padStart(8, "0");
-    const hexParts = Array.from({ length: 16 }, (_, j) => j < slice.length ? slice[j].toString(16).toUpperCase().padStart(2, "0") : "  ");
-    const ascii = Array.from(slice, b => (b >= 32 && b <= 126) ? String.fromCharCode(b) : ".").join("");
-    out += `${offset}  ${hexParts.slice(0, 8).join(" ")}  ${hexParts.slice(8, 16).join(" ")}  |${ascii}|\n`;
-  }
-  return out.trimEnd();
+// The hex dump and data inspector live in detail.js, which is fetched right
+// after first paint so the inlined shell stays inside the initial congestion
+// window.  Until it lands, panes that need it show MSG.LOADING.
+const detailReady = van.state(false);
+const detailFailed = van.state(false);
+
+function loadDetail() {
+  window.RC = { van, MetaItem, MSG, hex, onReady: () => { detailReady.val = true; } };
+  const el = document.createElement("script");
+  el.src = "/detail.js";
+  // Without this the panes it owns would sit on "Loading…" forever.
+  el.onerror = () => { detailFailed.val = true; };
+  document.head.appendChild(el);
 }
 
 async function fetchTextSafe(url) {
@@ -66,7 +67,31 @@ async function fetchArrayBufferSafe(url) {
   return await res.arrayBuffer();
 }
 
+const KNOWN_SCHEMA = new Set(["3", "4"]);
+
 const VALID_STATES = new Set(["exact", "reloc", "near_match", "stub", "padding", "data", "thunk", "none"]);
+
+// Section name -> grid element id.  Every dot goes, so `.rsrc.1` and `.rsrc1`
+// cannot collide the way replacing only the first one allowed.
+const gridId = (secName) => `grid-${secName.replaceAll('.', '')}`;
+
+// Legend rows: cell state -> the words used for it in the UI.
+const LEGEND = [["none", "undocumented"], ["exact", "exact match"], ["reloc", "reloc match"],
+  ["near_match", "near-match"], ["stub", "stub"], ["padding", "padding"]];
+
+// Sections in PE load order (ascending VA), which puts .text first instead of
+// leaving the section that carries all the work at the end of an alphabetical
+// row.  Sections without a VA sort last, keeping their relative order.
+const sectionNames = (s) => Object.keys(s).sort((a, b) => (s[a].va ?? 1e18) - (s[b].va ?? 1e18));
+
+// The /asm endpoint answers failures with {error, detail}; showing that beats a
+// generic placeholder, which would blame the wrong cause.
+function asmMessage(payload) {
+  if (!payload) return MSG.ASM_PLACEHOLDER;
+  if (payload.asm) return payload.asm;
+  if (payload.error) return `(${payload.error}${payload.detail ? ": " + payload.detail : ""})`;
+  return MSG.ASM_PLACEHOLDER;
+}
 
 function computeCellClass(cell) {
   const s = cell.state;
@@ -94,106 +119,48 @@ async function loadHighlightJs() {
     resolvePromise = resolve;
   });
 
-  const script = document.createElement('script');
-  script.src = 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js';
-  script.integrity = 'sha384-RH2xi4eIQ/gjtbs9fUXM68sLSi99C7ZWBRX1vDrVv6GQXRibxXLbwO2NGZB74MbU';
-  script.crossOrigin = 'anonymous';
-  script.onload = () => {
-    const cScript = document.createElement('script');
-    cScript.src = 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/languages/c.min.js';
-    cScript.integrity = 'sha384-tMmX0hBMZeMrZhX6dUNxA94/DNJLl70ao6qu2N9+b/6Ep9Y2e1pBzVjxtLygIB+d';
-    cScript.crossOrigin = 'anonymous';
+  // Served from this origin, not a CDN: reverse-engineering work routinely
+  // happens on air-gapped or locked-down machines, where a CDN fetch fails
+  // silently and every code pane renders unhighlighted.
+  const loadScript = (src) => new Promise((resolve) => {
+    const el = document.createElement('script');
+    el.src = src;
+    el.onload = resolve;
+    el.onerror = resolve;
+    document.head.appendChild(el);
+  });
 
-    const asmScript = document.createElement('script');
-    asmScript.src = 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/languages/x86asm.min.js';
-    asmScript.integrity = 'sha384-d1w6as9peRTJh7Tgj50482oZIrj0+1guPVjy1QRfEafPvwMu6JZ/J9CiS5cT8XE9';
-    asmScript.crossOrigin = 'anonymous';
-
-    let loadedCount = 0;
-    const checkDone = () => {
-      loadedCount++;
-      if (loadedCount === 2) {
-        initHighlighting();
-        hljsLoaded = true;
-        resolvePromise();
-      }
-    };
-
-    cScript.onload = checkDone;
-    asmScript.onload = checkDone;
-
-    document.head.appendChild(cScript);
-    document.head.appendChild(asmScript);
-  };
-  document.head.appendChild(script);
+  loadScript('/hljs.min.js')
+    .then(() => Promise.all([loadScript('/hljs-c.min.js'), loadScript('/hljs-x86asm.min.js')]))
+    .then(() => {
+      window.RC.initHighlighting?.();
+      hljsLoaded = true;
+      resolvePromise();
+    });
 
   return hljsLoadingPromise;
 }
 
-function initHighlighting() {
-  if (!window.hljs) return;
-  if (window.hljs.getLanguage && window.hljs.getLanguage("hex")) return;
-
-  window.hljs.registerLanguage("hex", () => ({
-    name: "Hex",
-    contains: [
-      { className: "meta", begin: /^[0-9A-Fa-f]{8}/ },
-      { className: "string", begin: /\|.*\|$/ },
-      { className: "number", begin: /\b[0-9A-Fa-f]{2}\b/ },
-    ],
-  }));
-}
-
-function extractDocs(cSourceText) {
-  if (!cSourceText || cSourceText.startsWith("(no C") || cSourceText.startsWith("(failed")) {
-    return null;
-  }
-  const lines = cSourceText.split("\n");
-  const docs = [];
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (trimmed.startsWith("// NOTE:") || trimmed.startsWith("// BLOCKER:") ||
-      trimmed.startsWith("// FUNCTION:") || trimmed.startsWith("// STATUS:") ||
-      trimmed.startsWith("// ORIGIN:") || trimmed.startsWith("// SIZE:") ||
-      trimmed.startsWith("// CFLAGS:") || trimmed.startsWith("// SYMBOL:")) {
-      docs.push(trimmed);
-    }
-  }
-  return docs.length > 0 ? docs.join("\n") : null;
-}
 
 
-const SunIcon = () => span({ class: "icon", "aria-hidden": "true", innerHTML: `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>` });
-const MoonIcon = () => span({ class: "icon", "aria-hidden": "true", innerHTML: `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>` });
-const ReloadIcon = () => span({ class: "icon", "aria-hidden": "true", innerHTML: `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>` });
+// Stroke styling lives in CSS (.icon svg), so the markup carries geometry only.
+const Icon = (body) => span({ class: "icon", "aria-hidden": "true", innerHTML: `<svg viewBox="0 0 24 24">${body}</svg>` });
+const SunIcon = () => Icon(`<circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>`);
+const MoonIcon = () => Icon(`<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>`);
+const ReloadIcon = () => Icon(`<path d="M23 4v6h-6"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>`);
 
-const HexLogo = (label, color, titleText) => div({ class: "section-title-left" },
-  span({ class: "hex-logo", "aria-hidden": "true", style: `color: ${color};`, innerHTML: `<svg viewBox="0 0 100 100" width="20" height="20"><polygon points="50,5 90,27.5 90,72.5 50,95 10,72.5 10,27.5" fill="currentColor" fill-opacity="0.15" stroke="currentColor" stroke-width="6" stroke-linejoin="round"/><text x="50" y="54" dominant-baseline="middle" text-anchor="middle" fill="currentColor" font-family="system-ui, -apple-system, sans-serif" font-weight="800" font-size="${label.length > 2 ? '26' : '42'}">${label}</text></svg>` }),
-  span({ class: "section-title-text" }, titleText)
+// One key/value tile in a .meta-grid.  `value` is either a plain string, which
+// gets the default .meta-value treatment, or a prebuilt node when it needs its
+// own classes or behaviour (links, badges, the annotations block).
+const MetaItem = (label, value, extraClass = "") => div({ class: `meta-item ${extraClass}` },
+  span({ class: "meta-label" }, label),
+  (typeof value === "string" || typeof value === "number") ? span({ class: "meta-value" }, value) : value
 );
 
-// ── Live reload via Server-Sent Events ─────────────────────────────
-// Subscribes to /api/events; a db-updated event (coverage.db rewritten by
-// rebrew build-db) triggers a grid refresh. EventSource reconnects
-// automatically, so transient stream drops are self-healing.
-let eventsDebounceTimer = null;
-
-function connectEvents(onDbUpdated) {
-  let es = null;
-  const openStream = () => {
-    es = new EventSource("/api/events");
-    es.addEventListener("db-updated", () => {
-      // Coalesce bursts — build-db may rewrite the DB in stages.
-      clearTimeout(eventsDebounceTimer);
-      eventsDebounceTimer = setTimeout(onDbUpdated, 300);
-    });
-    es.onerror = () => {
-      // EventSource retries automatically; just avoid double-connecting.
-    };
-  };
-  openStream();
-  return () => { if (es) es.close(); };
-}
+const HexLogo = (label, color, titleText) => div({ class: "section-title-left" },
+  span({ class: "hex-logo", "aria-hidden": "true", style: `color: ${color};`, innerHTML: `<svg viewBox="0 0 100 100"><polygon points="50,5 90,27.5 90,72.5 50,95 10,72.5 10,27.5" fill="currentColor" fill-opacity="0.15" stroke="currentColor" stroke-width="6" stroke-linejoin="round"/><text x="50" y="54" dominant-baseline="middle" text-anchor="middle" fill="currentColor" font-weight="800" font-size="${label.length > 2 ? '26' : '42'}">${label}</text></svg>` }),
+  h3({ class: "section-title-text" }, titleText)
+);
 
 const App = () => {
   const data = van.state(null);
@@ -215,14 +182,23 @@ const App = () => {
   const docText = van.state(MSG.SELECT_FUNCTION);
   const bytesText = van.state(MSG.SELECT_FUNCTION);
   const asmText = van.state(MSG.ASM_PLACEHOLDER);
+
+  // Every write to the hex pane goes through these two, so a selection made
+  // before detail.js has landed still resolves once formatBytes shows up, and
+  // a later message-only write cancels the pending dump instead of being
+  // overwritten by it.
+  const pendingHex = van.state(null); // {buf, base} | null
+  const showBytes = (buf, base) => { pendingHex.val = { buf, base }; };
+  const showBytesMessage = (msg) => { pendingHex.val = null; bytesText.val = msg; };
+  van.derive(() => {
+    const p = pendingHex.val;
+    if (!p) return;
+    if (detailReady.val) bytesText.val = window.RC.formatBytes(p.buf, p.base);
+    else bytesText.val = detailFailed.val ? MSG.DETAIL_UNAVAILABLE : MSG.LOADING;
+  });
   const savedTheme = localStorage.getItem('recoverage_theme');
   const prefersLight = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches;
   const isLightMode = van.state(savedTheme === 'light' || (!savedTheme && prefersLight));
-
-  let lastRegenTime = 0;
-  const REGEN_COOLDOWN_MS = 5000;
-
-  initHighlighting();
 
   van.derive(() => {
     document.body.classList.toggle('light-mode', isLightMode.val);
@@ -233,8 +209,16 @@ const App = () => {
 
   const currentBuf = van.state(null);
 
+  // Installed by Grid(); lets jumpToAddress move the grid's roving tab stop.
+  let gridFocus = null;
+
   const activeTarget = van.state("");
   const availableTargets = van.state([]);
+
+  // Set when there is nothing to draw: no database, no sections, or a failed
+  // fetch.  The map area renders this instead of a spinner that never stops.
+  const emptyState = van.state(null); // {title, detail} | null
+  const stopLoading = (state) => { emptyState.val = state; isLoading.val = false; };
 
   const loadTargets = async () => {
     try {
@@ -248,6 +232,12 @@ const App = () => {
         const urlTarget = urlParams.get("target");
         const savedTarget = localStorage.getItem("recoverage_target");
 
+        if (!availableTargets.val.length) {
+          // First run: serve started before the database was built.
+          activeTarget.val = "";
+          stopLoading({ title: "No coverage database", detail: "Run rebrew build-db to create db/coverage.db, then reload this page." });
+          return;
+        }
         if (urlTarget && availableTargets.val.some(t => t.id === urlTarget)) {
           activeTarget.val = urlTarget;
         } else if (savedTarget && availableTargets.val.some(t => t.id === savedTarget)) {
@@ -260,12 +250,16 @@ const App = () => {
       console.error("Failed to load targets:", e);
       availableTargets.val = [];
       activeTarget.val = "";
+      stopLoading({ title: "Could not reach the server", detail: e.message });
     }
   };
 
   const loadData = async () => {
-    if (!activeTarget.val) return;
+    // Without this the initial isLoading=true would never be cleared and the
+    // map would spin forever with nothing to load.
+    if (!activeTarget.val) { isLoading.val = false; return; }
     isLoading.val = true;
+    emptyState.val = null;
     try {
       // "no-cache" (not "no-store") so the server's ETag/304 path works:
       // with no-store the browser never sends If-None-Match and the whole
@@ -288,16 +282,24 @@ const App = () => {
 
       data.val = d;
 
-      if (d.sections && !d.sections[activeSection.val]) {
-        const sections = Object.keys(d.sections);
-        if (sections.length > 0) {
-          activeSection.val = sections[0];
-        }
+      const secNames = sectionNames(d.sections || {});
+      if (!secNames.length) {
+        const ver = String(d.db_version ?? "");
+        emptyState.val = {
+          title: "This target has no sections",
+          detail: ver && !KNOWN_SCHEMA.has(ver)
+            ? `The database reports schema v${ver}, which this build does not understand. Rebuild it with a matching rebrew.`
+            : "The database has no section rows yet. Rerun rebrew build-db.",
+        };
+      } else if (!d.sections[activeSection.val]) {
+        activeSection.val = secNames[0];
       }
 
-      if (d.paths && d.paths.originalDll) {
-        originalDll.val = await fetchArrayBufferSafe(d.paths.originalDll);
-      }
+      // `paths.originalDll` is optional metadata written by rebrew build-db.
+      // Without a fallback the whole Original Bytes pane goes dead, so default
+      // to the path the server already proxies (ui.py: /original/<file>).
+      const dllPath = (d.paths && d.paths.originalDll) || `/original/${activeTarget.val.toLowerCase()}.dll`;
+      originalDll.val = await fetchArrayBufferSafe(dllPath);
 
       const summary = d.summary || {};
       summaryData.val = { ...summary, textSize: d.sections[".text"]?.size || 0 };
@@ -314,39 +316,17 @@ const App = () => {
         }
       }, 50);
     } catch (e) {
-      loadingMsg.val = MSG.ERROR_PREFIX + e.message; summaryData.val = null;
+      loadingMsg.val = MSG.ERROR_PREFIX + e.message;
+      summaryData.val = null;
+      emptyState.val = { title: "Could not load coverage data", detail: e.message };
     } finally {
       isLoading.val = false;
     }
   };
 
-  const tryRegen = async () => {
-    try {
-      const res = await fetch("/api/regen", { method: "POST", cache: "no-store" });
-      return res.ok;
-    } catch (e) {
-      console.error("Regen failed:", e);
-      return false;
-    }
-  };
-
-  const handleReload = async () => {
-    const now = Date.now();
-    const timeSinceLastRegen = now - lastRegenTime;
-    if (timeSinceLastRegen < REGEN_COOLDOWN_MS) {
-      const remaining = Math.ceil((REGEN_COOLDOWN_MS - timeSinceLastRegen) / 1000);
-      loadingMsg.val = MSG.REGEN_USING_CACHE(remaining);
-      await loadData();
-    } else {
-      lastRegenTime = now;
-      loadingMsg.val = MSG.REGEN_IN_PROGRESS; summaryData.val = null;
-      const ok = await tryRegen();
-      if (!ok) {
-        loadingMsg.val = MSG.REGEN_UNAVAILABLE;
-      }
-      await loadData();
-    }
-  };
+  // The regen handler lives in detail.js: it only runs on a Reload click, long
+  // after that file lands.  It gets the two states it writes plus the reloader.
+  const handleReload = () => window.RC.handleReload?.({ loadingMsg, summaryData, loadData, MSG });
 
   let searchTimeout;
   const handleSearch = (e) => {
@@ -361,8 +341,10 @@ const App = () => {
     loadData();
   });
 
-  // Live-reload: refresh the grid when coverage.db changes on disk.
-  connectEvents(() => loadData());
+  // Live-reload: refresh the grid when coverage.db changes on disk.  The
+  // subscription lives in detail.js, so it starts once that lands rather than
+  // competing with first paint.
+  van.derive(() => { if (detailReady.val) window.RC.connectEvents(() => loadData()); });
 
   const matchesSearch = (name, query) => {
     if (!query) return true;
@@ -436,7 +418,8 @@ const App = () => {
 
         const buf = sliceOriginalBytes(fn);
         currentBuf.val = buf;
-        bytesText.val = buf ? formatBytes(buf, parseInt(fn.vaStart || fn.va, 16)) : MSG.BYTES_FAILED;
+        if (buf) showBytes(buf, parseInt(fn.vaStart || fn.va, 16));
+        else showBytesMessage(originalDll.val ? MSG.BYTES_FAILED : MSG.BYTES_LOAD_FAILED);
 
         const sourceRoot = (data.val && data.val.paths && data.val.paths.sourceRoot) ? data.val.paths.sourceRoot : `/src/${activeTarget.val.toLowerCase()}`;
         const cPath = (fn.files && fn.files[0]) ? `${sourceRoot}/${fn.files[0]}` : null;
@@ -446,14 +429,14 @@ const App = () => {
         // Fetch C source and ASM concurrently
         const [cSourceRes, asmRes] = await Promise.allSettled([
           cPath ? fetchTextSafe(cPath) : Promise.resolve(MSG.NO_C_SOURCE),
-          fetch(`${ASM_URL(activeTarget.val)}?va=${va}&size=${size}&section=${activeSection.val}`, { signal }).then(r => r.ok ? r.json() : null)
+          fetch(`${ASM_URL(activeTarget.val)}?va=${va}&size=${size}&section=${activeSection.val}`, { signal }).then(r => r.json()).catch(() => null)
         ]);
 
         if (signal.aborted) return;
 
         const newCSource = cSourceRes.status === 'fulfilled' ? cSourceRes.value : MSG.NO_C_SOURCE;
-        const newAsm = (asmRes.status === 'fulfilled' && asmRes.value && asmRes.value.asm) ? asmRes.value.asm : MSG.ASM_PLACEHOLDER;
-        const newDocs = extractDocs(newCSource);
+        const newAsm = asmRes.status === 'fulfilled' ? asmMessage(asmRes.value) : MSG.ASM_PLACEHOLDER;
+        const newDocs = window.RC.extractDocs ? window.RC.extractDocs(newCSource) : null;
 
         // Update all state synchronously to trigger a single re-render
         cSourceText.val = newCSource;
@@ -477,7 +460,9 @@ const App = () => {
         localStorage.setItem('recoverage_last_fn_' + activeTarget.val, id);
         const buf = sliceOriginalBytes(g);
         currentBuf.val = buf;
-        bytesText.val = buf ? formatBytes(buf, parseInt(g.va, 16)) : (activeSection.val === ".bss" ? MSG.BYTES_BSS : MSG.BYTES_FAILED);
+        if (buf) showBytes(buf, parseInt(g.va, 16));
+        else if (activeSection.val === ".bss") showBytesMessage(MSG.BYTES_BSS);
+        else showBytesMessage(originalDll.val ? MSG.BYTES_FAILED : MSG.BYTES_LOAD_FAILED);
         cSourceText.val = g.decl || MSG.NO_DECL;
         docText.val = MSG.GLOBAL_VAR;
         asmText.val = MSG.DATA_SECTION_NO_ASM;
@@ -511,7 +496,7 @@ const App = () => {
 
       if (activeSection.val === ".bss") {
         currentBuf.val = null;
-        bytesText.val = MSG.BYTES_BSS;
+        showBytesMessage(MSG.BYTES_BSS);
         asmText.val = MSG.DATA_SECTION_NO_ASM;
       } else if (originalDll.val) {
         const start = sec.fileOffset + cell.start;
@@ -520,46 +505,38 @@ const App = () => {
         if (start >= 0 && end <= originalDll.val.byteLength) {
           const buf = originalDll.val.slice(start, end);
           currentBuf.val = buf;
-          bytesText.val = formatBytes(buf, sec.va + cell.start);
+          showBytes(buf, sec.va + cell.start);
 
           if (activeSection.val === ".text") {
             // Fetch ASM for undocumented block in .text
             asmText.val = "Loading assembly...";
             fetch(`${ASM_URL(activeTarget.val)}?va=${sec.va + cell.start}&size=${size}&section=${activeSection.val}`)
-              .then(r => r.ok ? r.json() : null)
-              .then(asmData => {
-                if (asmData && asmData.asm) {
-                  asmText.val = asmData.asm;
-                } else {
-                  asmText.val = MSG.ASM_PLACEHOLDER;
-                }
-              })
-              .catch(() => {
-                asmText.val = MSG.ASM_PLACEHOLDER;
-              });
+              .then(r => r.json())
+              .then(asmData => { asmText.val = asmMessage(asmData); })
+              .catch(() => { asmText.val = MSG.ASM_PLACEHOLDER; });
           } else {
             asmText.val = MSG.DATA_SECTION_NO_ASM;
           }
         } else {
-          bytesText.val = MSG.BYTES_FAILED;
+          showBytesMessage(MSG.BYTES_FAILED);
           asmText.val = MSG.DATA_SECTION_NO_ASM;
         }
       } else {
-        bytesText.val = MSG.BYTES_LOAD_FAILED;
+        showBytesMessage(MSG.BYTES_LOAD_FAILED);
         asmText.val = MSG.DATA_SECTION_NO_ASM;
       }
     }
   };
 
-  const copyToClipboard = (text, e) => {
-    const btn = e.currentTarget || e.target;
-    const original = btn.textContent;
-    const flash = (msg) => { btn.textContent = msg; setTimeout(() => btn.textContent = original, 1000); };
-    if (text == null || text === undefined) { flash("Nothing"); return; }
-    const str = String(text);
-    if (!str) { flash("Empty"); return; }
-    navigator.clipboard.writeText(str).then(() => flash("Copied!")).catch(() => flash("Failed"));
-  };
+  // Copy, Open, and Reload all delegate to detail.js.  If that file never
+  // arrives they would look enabled and do nothing at all, so they go disabled
+  // and say why — the panes it owns already report the same failure.
+  const detailBound = () => ({
+    disabled: () => detailFailed.val,
+    title: () => detailFailed.val ? MSG.DETAIL_UNAVAILABLE : "",
+  });
+
+  const copyToClipboard = (text, e) => window.RC.copyToClipboard?.(text, e);
 
   const toggleFilter = (filter) => {
     const newFilters = new Set(activeFilters.val);
@@ -588,7 +565,8 @@ const App = () => {
             selectChunk(i);
             requestAnimationFrame(() => {
               requestAnimationFrame(() => {
-                const grid = document.getElementById(`grid-${secName.replace('.', '')}`);
+                gridFocus?.(secName, i);
+                const grid = document.getElementById(gridId(secName));
                 if (grid && grid.children[i]) {
                   grid.children[i].scrollIntoView({ behavior: "smooth", block: "center" });
                 }
@@ -636,6 +614,9 @@ const App = () => {
 
   const ProgressBar = () => {
     return () => {
+      // The empty state already explains the situation; a bar reading
+      // "Section not found" beside it just contradicts it.
+      if (emptyState.val) return div({ class: "progress-container" });
       if (isLoading.val) {
         return div({ class: "progress-container" },
           div({ class: "progress-bar" },
@@ -715,14 +696,25 @@ const App = () => {
         }
       };
 
+      // A segment at 0% renders zero-wide but would still be a tab stop and a
+      // screen-reader toggle with nothing to point at.  Below half a percent it
+      // is not a usable target either, so it is dropped; the E/R/M/S/P buttons
+      // remain the reliable way to reach every filter.
+      const Segment = (type, pct, label, titleText) => pct < 0.5 ? null : div({
+        class: getClasses(type), role: "button", tabindex: "0",
+        "aria-pressed": () => activeFilters.val.has(type),
+        "aria-label": label, style: `width: ${pct}%`, title: titleText,
+        onclick: () => toggleFilter(type), onkeydown: (e) => segKeydown(e, type)
+      });
+
       return div({ class: "progress-container" },
         div({ class: "progress-bar" },
           div({ class: "progress-segments" },
-            div({ class: getClasses("exact"), role: "button", tabindex: "0", "aria-pressed": () => activeFilters.val.has("exact"), "aria-label": "Toggle exact filter", style: `width: ${exactPct}%`, title: `Exact: ${exactCount}`, onclick: () => toggleFilter("exact"), onkeydown: (e) => segKeydown(e, "exact") }),
-            div({ class: getClasses("reloc"), role: "button", tabindex: "0", "aria-pressed": () => activeFilters.val.has("reloc"), "aria-label": "Toggle reloc filter", style: `width: ${relocPct}%`, title: `Reloc: ${relocCount}`, onclick: () => toggleFilter("reloc"), onkeydown: (e) => segKeydown(e, "reloc") }),
-            div({ class: getClasses("near_match"), role: "button", tabindex: "0", "aria-pressed": () => activeFilters.val.has("near_match"), "aria-label": "Toggle near-match filter", style: `width: ${nearMatchPct}%`, title: `Near-match: ${nearMatchCount}`, onclick: () => toggleFilter("near_match"), onkeydown: (e) => segKeydown(e, "near_match") }),
-            div({ class: getClasses("stub"), role: "button", tabindex: "0", "aria-pressed": () => activeFilters.val.has("stub"), "aria-label": "Toggle stub filter", style: `width: ${stubPct}%`, title: `Stub: ${stubCount}`, onclick: () => toggleFilter("stub"), onkeydown: (e) => segKeydown(e, "stub") }),
-            div({ class: getClasses("padding"), role: "button", tabindex: "0", "aria-pressed": () => activeFilters.val.has("padding"), "aria-label": "Toggle padding filter", style: `width: ${paddingPct}%`, title: `Padding: ${paddingBytes}B`, onclick: () => toggleFilter("padding"), onkeydown: (e) => segKeydown(e, "padding") })
+            Segment("exact", exactPct, "Toggle exact filter", `Exact: ${exactCount}`),
+            Segment("reloc", relocPct, "Toggle reloc filter", `Reloc: ${relocCount}`),
+            Segment("near_match", nearMatchPct, "Toggle near-match filter", `Near-match: ${nearMatchCount}`),
+            Segment("stub", stubPct, "Toggle stub filter", `Stub: ${stubCount}`),
+            Segment("padding", paddingPct, "Toggle padding filter", `Padding: ${paddingBytes}B`)
           ),
           div({ class: "progress-text-overlay" },
             span({ class: "stat-item" }, `${sec.size} bytes`),
@@ -737,23 +729,67 @@ const App = () => {
   const Grid = () => {
     const container = div({ class: "grid-container", style: "position: relative; min-height: 400px;" });
     const grids = {}; // secName -> div element
+    const focusIdx = {}; // secName -> index of the cell holding tabindex="0"
+    const selectedEl = {}; // secName -> element currently aria-selected
     let ro = null;
+
+    // Roving tabindex: exactly one cell per grid is in the tab order, and the
+    // arrow keys move both focus and that tab stop.  Without it the grid is
+    // unreachable by keyboard entirely (WCAG 2.1.1) — thousands of cells each
+    // carrying tabindex="0" would be the other, unusable, extreme.
+    const setRoving = (gridEl, secName, to, alsoFocus) => {
+      const next = gridEl.children[to];
+      if (!next) return;
+      const cur = gridEl.children[focusIdx[secName] ?? 0];
+      if (cur) cur.setAttribute("tabindex", "-1");
+      next.setAttribute("tabindex", "0");
+      focusIdx[secName] = to;
+      if (alsoFocus) next.focus();
+    };
+    const moveFocus = (gridEl, secName, to) => setRoving(gridEl, secName, to, true);
+
+    // Address jumps (VA links, asm operands) move the selection, so the tab
+    // stop has to follow or the keyboard position and the panel disagree.
+    // Actual focus only moves when the user was already in the grid, so
+    // clicking a link does not yank focus away from where they were reading.
+    gridFocus = (secName, idx) => {
+      const gridEl = grids[secName];
+      if (gridEl) setRoving(gridEl, secName, idx, gridEl.contains(document.activeElement));
+    };
+
+    // The column count is resolved once, when a grid is built, and stored on
+    // the element as --cols.  The CSS track count, the square-cell row height
+    // below, and the arrow keys all read it from there, so they cannot drift
+    // apart the way three separate `sec.columns || 64` defaults did.
+    const colsOf = (gridEl) => +gridEl.style.getPropertyValue("--cols") || +gridEl.dataset.cols || 64;
+
+    // The declared column count is a desktop figure: at 64 columns a 352px
+    // phone renders 2.8px cells, unreadable and untappable.  Below the same
+    // 700px breakpoint the stylesheet uses, the grid drops columns and grows
+    // taller so cells stay square and touch-sized; wider than that the section
+    // keeps every column it declares.
+    const minCellPx = () => (window.innerWidth < 700 ? 12 : 6);
 
     const resize = () => {
       const activeGrid = grids[activeSection.val];
       if (!activeGrid) return;
-
-      const sec = data.val?.sections?.[activeSection.val];
-      const columns = sec?.columns || 64;
 
       const styles = window.getComputedStyle(activeGrid);
       const gap = parseFloat(styles.columnGap || styles.gap || "2") || 2;
       const padL = parseFloat(styles.paddingLeft || "0") || 0;
       const padR = parseFloat(styles.paddingRight || "0") || 0;
       const usable = Math.max(0, activeGrid.clientWidth - padL - padR);
+
+      // Widest column count whose cells still clear MIN_CELL_PX, capped at the
+      // section's own value so a wide viewport never invents extra columns.
+      const min = minCellPx();
+      const declared = +activeGrid.dataset.cols || 64;
+      const fits = Math.floor((usable + gap) / (min + gap));
+      const columns = Math.max(1, Math.min(declared, fits));
+      activeGrid.style.setProperty("--cols", columns);
+
       const colW = (usable - gap * (columns - 1)) / columns;
-      const px = Math.max(6, Math.floor(colW));
-      activeGrid.style.gridAutoRows = `${px}px`;
+      activeGrid.style.gridAutoRows = `${Math.max(min, Math.floor(colW))}px`;
     };
 
     ro = new ResizeObserver(resize);
@@ -778,7 +814,7 @@ const App = () => {
         let cls = cell._baseClass;
         if (i === activeIdx || (activeFn && cell._fnName === activeFn)) cls += " active";
 
-        if (query && cell._fnName && !matchedNames.has(cell._fnName)) {
+        if (query && !matchedNames.has(cell._fnName)) {
           cls += " dimmed";
         }
 
@@ -786,24 +822,45 @@ const App = () => {
           child.className = cls;
         }
       }
+
+      // aria-selected tracks the single selected option; touching only the old
+      // and new elements keeps this off the hot path over thousands of cells.
+      const prev = selectedEl[secName];
+      const next = activeIdx !== null && activeIdx !== undefined ? children[activeIdx] : null;
+      if (prev !== next) {
+        if (prev) prev.setAttribute("aria-selected", "false");
+        if (next) next.setAttribute("aria-selected", "true");
+        selectedEl[secName] = next;
+      }
     };
 
     van.derive(() => {
-      if (isLoading.val) {
+      // A reload (button or SSE db-updated) drops every cached grid, so the
+      // per-section focus index and the selected-cell reference have to go with
+      // them: otherwise they keep pointing into detached DOM.
+      const dropGrids = () => {
         container.innerHTML = "";
-        for (const k in grids) delete grids[k];
-        van.add(container, div({ class: "loading-overlay" }, "Loading coverage data..."));
+        for (const k in grids) { delete grids[k]; delete focusIdx[k]; delete selectedEl[k]; }
+      };
+
+      if (isLoading.val) {
+        dropGrids();
+        van.add(container, div({ class: "loading-overlay", role: "status", "aria-live": "polite" }, "Loading coverage data..."));
         return;
       }
 
-      if (!data.val || !data.val.sections) {
-        container.innerHTML = "";
-        for (const k in grids) delete grids[k];
+      if (emptyState.val || !data.val || !data.val.sections) {
+        dropGrids();
         return;
       }
 
       const secName = activeSection.val;
       const sec = data.val.sections[secName];
+
+      // Overlay comes down first: returning above it left "Loading coverage
+      // data..." on screen after loading had finished.
+      const overlay = container.querySelector('.loading-overlay');
+      if (overlay) overlay.remove();
       if (!sec) return;
 
       // Hide all grids
@@ -811,15 +868,14 @@ const App = () => {
         el.style.display = name === secName ? "grid" : "none";
       }
 
-      // Remove loading overlay if present
-      const overlay = container.querySelector('.loading-overlay');
-      if (overlay) overlay.remove();
-
       // Create grid if it doesn't exist
       if (!grids[secName]) {
         const gridEl = div({
           class: "grid",
-          id: `grid-${secName.replace('.', '')}`,
+          id: gridId(secName),
+          "data-cols": sec.columns || 64,
+          role: "listbox",
+          "aria-label": `${secName} coverage map`,
           onmousedown: (e) => {
             const cell = e.target.closest('.cell');
             if (cell) e.preventDefault();
@@ -828,28 +884,30 @@ const App = () => {
             const cell = e.target.closest('.cell');
             if (cell) {
               const idx = parseInt(cell.getAttribute('data-index'), 10);
-              if (!isNaN(idx)) { selectChunk(idx); cell.focus(); }
+              if (!isNaN(idx)) { selectChunk(idx); moveFocus(gridEl, secName, idx); }
             }
           },
           onkeydown: (e) => {
-            // Keyboard access for the grid: Enter/Space selects the focused
-            // cell, arrows move focus along the row (P1 a11y — cells were
-            // previously mouse-only divs).
+            // Enter/Space selects; arrows move by one cell horizontally and by
+            // a full row vertically; Home/End jump to the ends of the section.
             const cell = e.target.closest('.cell');
             if (!cell || e.ctrlKey || e.metaKey || e.altKey) return;
             const idx = parseInt(cell.getAttribute('data-index'), 10);
             if (isNaN(idx)) return;
+            const cols = colsOf(gridEl);
+            const last = gridEl.children.length - 1;
+            const clamp = (n) => Math.max(0, Math.min(last, n));
+            const step = {
+              ArrowRight: idx + 1, ArrowLeft: idx - 1,
+              ArrowDown: idx + cols, ArrowUp: idx - cols,
+              Home: 0, End: last,
+            }[e.key];
             if (e.key === "Enter" || e.key === " ") {
               e.preventDefault();
               selectChunk(idx);
-            } else if (e.key === "ArrowRight" || e.key === "ArrowDown") {
+            } else if (step !== undefined) {
               e.preventDefault();
-              const next = gridEl.children[idx + 1];
-              if (next) next.focus();
-            } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
-              e.preventDefault();
-              const prev = gridEl.children[idx - 1];
-              if (prev) prev.focus();
+              moveFocus(gridEl, secName, clamp(step));
             }
           }
         });
@@ -868,6 +926,8 @@ const App = () => {
           const matchedNames = filteredFnNames.val;
           const activeIdx = currentCellIndex.val;
           const activeFn = activeFnName.val;
+          const roving = Math.max(0, Math.min(cells.length - 1, focusIdx[secName] ?? activeIdx ?? 0));
+          focusIdx[secName] = roving;
 
           let html = "";
           for (let i = 0; i < cells.length; i++) {
@@ -879,15 +939,15 @@ const App = () => {
             let cls = cell._baseClass;
             if (i === activeIdx || (activeFn && cell._fnName === activeFn)) cls += " active";
 
-            if (query && cell._fnName && !matchedNames.has(cell._fnName)) {
+            if (query && !matchedNames.has(cell._fnName)) {
               cls += " dimmed";
             }
 
-            // tabindex="-1" keeps thousands of cells out of the sequential
-            // tab order (only the focused one is reached via arrow keys);
-            // the grid container's keydown handler implements arrow nav.
+            // Exactly one cell carries tabindex="0" (the roving tab stop);
+            // the rest are reachable from it with the arrow keys.
             const label = cell._fnName ? `${cell._fnName} at ${title}` : title;
-            html += `<div class="${escAttr(cls)}" data-index="${i}" role="button" tabindex="-1" aria-label="${escAttr(label)}" style="${style}" title="${escAttr(title)}"></div>`;
+            const tab = i === roving ? "0" : "-1";
+            html += `<div class="${escAttr(cls)}" data-index="${i}" role="option" aria-selected="${i === activeIdx}" tabindex="${tab}" aria-label="${escAttr(label)}" style="${style}" title="${escAttr(title)}"></div>`;
           }
 
           gridEl.innerHTML = html;
@@ -934,94 +994,61 @@ const App = () => {
     return container;
   };
 
-  const DataInspector = (buf) => {
-    if (!buf || buf.byteLength === 0) {
-      return div({ class: "code", style: "padding: 14px; color: var(--muted);" }, MSG.BYTES_BSS);
-    }
-    const dv = new DataView(buf);
-    const len = buf.byteLength;
-    const safeRead = (size, readFn) => len >= size ? readFn() : "N/A";
-
-    const items = [
-      { label: "int8", val: safeRead(1, () => dv.getInt8(0)) },
-      { label: "uint8", val: safeRead(1, () => dv.getUint8(0)) },
-      { label: "int16", val: safeRead(2, () => dv.getInt16(0, true)) },
-      { label: "uint16", val: safeRead(2, () => dv.getUint16(0, true)) },
-      { label: "int32", val: safeRead(4, () => dv.getInt32(0, true)) },
-      { label: "uint32", val: safeRead(4, () => { const v = dv.getUint32(0, true); return `${v} (${hex(v, 8)})`; }) },
-      { label: "float32", val: safeRead(4, () => { const v = dv.getFloat32(0, true); return Number.isFinite(v) ? v.toPrecision(7) : v; }) },
-      { label: "float64", val: safeRead(8, () => { const v = dv.getFloat64(0, true); return Number.isFinite(v) ? v.toPrecision(15) : v; }) },
-    ];
-
-    let str = "";
-    for (let i = 0; i < Math.min(len, 64); i++) {
-      const charCode = dv.getUint8(i);
-      if (charCode === 0) break;
-      if (charCode >= 32 && charCode <= 126) str += String.fromCharCode(charCode);
-      else str += ".";
-    }
-    items.push({ label: "string (ascii)", val: `"${str}"`, full: true });
-
-    return div({ class: "meta-grid", style: "margin-top: 0; background: rgba(0,0,0,0.2); padding: 10px; border-radius: 12px; border: 1px solid var(--border);" },
-      ...items.map(item => div({ class: `meta-item ${item.full ? 'full-width' : ''}` },
-        span({ class: "meta-label" }, item.label),
-        span({ class: "meta-value" }, item.val)
-      ))
-    );
-  };
-
   const Panel = () => {
     const fn = currentFn.val;
     const cellIdx = currentCellIndex.val;
 
     let title = "No selection";
     let metaContent = null;
-    let cPath = null;
 
     if (fn) {
       title = fn.name;
       const sourceRoot = (data.val && data.val.paths && data.val.paths.sourceRoot) ? data.val.paths.sourceRoot : `/src/${activeTarget.val.toLowerCase()}`;
-      cPath = (fn.files && fn.files[0]) ? `${sourceRoot}/${fn.files[0]}` : null;
+
+      const SourceItem = () => fn.files && fn.files.length > 0
+        ? MetaItem("Source", span({ class: "meta-value" }, ...fn.files.map((file, i) =>
+            span(i > 0 ? ", " : "", a({ href: `${sourceRoot}/${file}`, target: "_blank", rel: "noopener noreferrer", class: "source-link" }, file)))))
+        : null;
 
       if (fn.isGlobal) {
         metaContent = div({ class: "meta-grid" },
-          div({ class: "meta-item" }, span({ class: "meta-label" }, "VA"), a({
+          MetaItem("VA", a({
             href: "#",
             class: "meta-value asm-link",
             onclick: (e) => { e.preventDefault(); jumpToAddress(parseInt(fn.va)); }
           }, `0x${fn.va.toString(16).toUpperCase()}`)),
-          div({ class: "meta-item" }, span({ class: "meta-label" }, "Type"), span({ class: "meta-value" }, "Global Variable")),
-          fn.files && fn.files.length > 0 ? div({ class: "meta-item" }, span({ class: "meta-label" }, "Source"), span({ class: "meta-value" }, ...fn.files.map((file, i) => span(i > 0 ? ", " : "", a({ href: `${sourceRoot}/${file}`, target: "_blank", rel: "noopener noreferrer", class: "source-link" }, file))))) : null
+          MetaItem("Type", "Global Variable"),
+          SourceItem()
         );
       } else {
         const statusClass = fn.status ? `status-${fn.status.toLowerCase().replace('_', '-')}` : '';
 
         metaContent = div({ class: "meta-grid" },
-          div({ class: "meta-item" }, span({ class: "meta-label" }, "VA"), a({
+          MetaItem("VA", a({
             href: "#",
             class: "meta-value asm-link",
             onclick: (e) => { e.preventDefault(); jumpToAddress(parseInt(fn.vaStart || fn.va)); }
           }, fn.vaStart || fn.va)),
-          div({ class: "meta-item" }, span({ class: "meta-label" }, "Size"), span({ class: "meta-value" }, `${fn.size} bytes`)),
-          div({ class: "meta-item" }, span({ class: "meta-label" }, "Offset"), span({ class: "meta-value" }, `0x${(fn.fileOffset || 0).toString(16).toUpperCase()}`)),
-          div({ class: "meta-item" }, span({ class: "meta-label" }, "Symbol"), span({ class: "meta-value" }, fn.symbol || "(n/a)")),
-          div({ class: "meta-item" }, span({ class: "meta-label" }, "Status"), span({ class: `meta-value status-badge ${statusClass}` }, fn.status || "?")),
-          div({ class: "meta-item" }, span({ class: "meta-label" }, "Module"), span({ class: "meta-value" }, fn.module || "?")),
-          div({ class: "meta-item" }, span({ class: "meta-label" }, "Compiler"), span({ class: "meta-value" }, fn.cflags || "(n/a)")),
-          div({ class: "meta-item" }, span({ class: "meta-label" }, "Marker"), span({ class: "meta-value" }, fn.markerType || "?")),
-          fn.blocker ? div({ class: "meta-item full-width" }, span({ class: "meta-label" }, "Blocker"), span({ class: "meta-value blocker-value" }, fn.blocker)) : null,
-          fn.blockerDelta !== null && fn.blockerDelta !== undefined ? div({ class: "meta-item" }, span({ class: "meta-label" }, "Delta"), span({ class: "meta-value delta-value" }, `${fn.blockerDelta} bytes`)) : null,
-          fn.ghidra_name && fn.ghidra_name !== fn.name ? div({ class: "meta-item" }, span({ class: "meta-label" }, "Ghidra"), span({ class: "meta-value" }, fn.ghidra_name)) : null,
-          fn.list_name && fn.list_name !== fn.name ? div({ class: "meta-item" }, span({ class: "meta-label" }, "Func List"), span({ class: "meta-value" }, fn.list_name)) : null,
-          fn.size_reason ? div({ class: "meta-item" }, span({ class: "meta-label" }, "Size Source"), span({ class: "meta-value" }, fn.size_reason)) : null,
-          fn.last_verify ? div({ class: "meta-item" }, span({ class: "meta-label" }, "Verified"), span({ class: "meta-value" }, `${fn.last_verify.verified_at}${fn.last_verify.byte_delta != null ? ` (Δ${fn.last_verify.byte_delta}B)` : ""}`)) : null,
-          fn.similarity !== null && fn.similarity !== undefined ? div({ class: "meta-item" }, span({ class: "meta-label" }, "Similarity"), span({ class: "meta-value" }, `${(fn.similarity * 100).toFixed(1)}%`)) : null,
-          fn.is_thunk ? div({ class: "meta-item" }, span({ class: "meta-label" }, "Type"), span({ class: "meta-value" }, "IAT thunk (not reversible)")) : null,
-          fn.is_export ? div({ class: "meta-item" }, span({ class: "meta-label" }, "Type"), span({ class: "meta-value" }, "Exported function")) : null,
-          fn.sha256 ? div({ class: "meta-item" }, span({ class: "meta-label" }, "SHA256"), span({ class: "meta-value" }, `${fn.sha256.substring(0, 16)}...`)) : null,
-          fn.files && fn.files.length > 0 ? div({ class: "meta-item" }, span({ class: "meta-label" }, "Source"), span({ class: "meta-value" }, ...fn.files.map((file, i) => span(i > 0 ? ", " : "", a({ href: `${sourceRoot}/${file}`, target: "_blank", rel: "noopener noreferrer", class: "source-link" }, file))))) : null,
-          docText.val && docText.val !== "(select a function)" && docText.val !== "No documentation comments in source file" ?
-            div({ class: "meta-item full-width" }, span({ class: "meta-label" }, "Annotations"), pre({ class: "meta-docs" }, docText.val)) : null
+          MetaItem("Size", `${fn.size} bytes`),
+          MetaItem("Offset", `0x${(fn.fileOffset || 0).toString(16).toUpperCase()}`),
+          MetaItem("Symbol", fn.symbol || MSG.NA),
+          MetaItem("Status", span({ class: `meta-value status-badge ${statusClass}` }, fn.status || "?")),
+          MetaItem("Module", fn.module || "?"),
+          MetaItem("Compiler", fn.cflags || MSG.NA),
+          MetaItem("Marker", fn.markerType || "?"),
+          fn.blocker ? MetaItem("Blocker", span({ class: "meta-value blocker-value" }, fn.blocker), "full-width") : null,
+          fn.blockerDelta != null ? MetaItem("Delta", span({ class: "meta-value delta-value" }, `${fn.blockerDelta} bytes`)) : null,
+          fn.ghidra_name && fn.ghidra_name !== fn.name ? MetaItem("Ghidra", fn.ghidra_name) : null,
+          fn.list_name && fn.list_name !== fn.name ? MetaItem("Func List", fn.list_name) : null,
+          fn.size_reason ? MetaItem("Size Source", fn.size_reason) : null,
+          fn.last_verify ? MetaItem("Verified", `${fn.last_verify.verified_at}${fn.last_verify.byte_delta != null ? ` (Δ${fn.last_verify.byte_delta}B)` : ""}`) : null,
+          fn.similarity != null ? MetaItem("Similarity", `${(fn.similarity * 100).toFixed(1)}%`) : null,
+          fn.is_thunk ? MetaItem("Type", "IAT thunk (not reversible)") : null,
+          fn.is_export ? MetaItem("Type", "Exported function") : null,
+          fn.sha256 ? MetaItem("SHA256", `${fn.sha256.substring(0, 16)}...`) : null,
+          SourceItem(),
+          docText.val && docText.val !== MSG.SELECT_FUNCTION && docText.val !== MSG.NO_DOCS
+            ? MetaItem("Annotations", pre({ class: "meta-docs" }, docText.val), "full-width") : null
         );
       }
     } else if (cellIdx !== null && data.val && data.val.sections) {
@@ -1030,13 +1057,38 @@ const App = () => {
         const cell = sec.cells[cellIdx];
         title = cell.label ? `Block ${cellIdx}: ${cell.label}` : `Block ${cellIdx}`;
         metaContent = div({ class: "meta-grid" },
-          div({ class: "meta-item" }, span({ class: "meta-label" }, "Range"), span({ class: "meta-value" }, `${hex(sec.va + cell.start, 8)}..${hex(sec.va + cell.end, 8)}`)),
-          div({ class: "meta-item" }, span({ class: "meta-label" }, "State"), span({ class: "meta-value" }, cell.state || "none")),
-          cell.label ? div({ class: "meta-item" }, span({ class: "meta-label" }, "Label"), span({ class: "meta-value" }, cell.label)) : null,
-          cell.parent_function ? div({ class: "meta-item" }, span({ class: "meta-label" }, "Parent"), span({ class: "meta-value" }, a({ href: "#", onclick: (e) => { e.preventDefault(); selectFunction(cell.parent_function); } }, cell.parent_function))) : null
+          MetaItem("Range", `${hex(sec.va + cell.start, 8)}..${hex(sec.va + cell.end, 8)}`),
+          MetaItem("State", cell.state || "none"),
+          cell.label ? MetaItem("Label", cell.label) : null,
+          cell.parent_function ? MetaItem("Parent", span({ class: "meta-value" },
+            a({ href: "#", onclick: (e) => { e.preventDefault(); selectFunction(cell.parent_function); } }, cell.parent_function))) : null
         );
       }
     }
+
+    // C Source, Assembly, and Original Bytes are the same panel section with a
+    // different logo, language, and body: title row, Copy, Open-in-modal.
+    const CodeSection = (logo, color, heading, lang, text) => div({ class: "section" },
+      div({ class: "section-title" },
+        HexLogo(logo, color, heading),
+        div({ class: "section-actions" },
+          button({ class: "btn copy-btn", "aria-label": `Copy ${heading}`, ...detailBound(), onclick: (e) => copyToClipboard(text, e) }, "Copy"),
+          button({
+            class: "btn copy-btn", "aria-label": `Open ${heading} in a larger view`, ...detailBound(),
+            onclick: () => {
+              // cellIdx is null when nothing is selected, which used to render
+              // as the literal "Block null".
+              const subject = fn ? fn.name : (cellIdx !== null ? `Block ${cellIdx}` : activeSection.val);
+              modalTitle.val = `${heading}: ${subject}`;
+              modalContent.val = text;
+              modalLang.val = lang;
+              showModal.val = true;
+            }
+          }, "Open")
+        )
+      ),
+      HighlightedCode({ lang, text })
+    );
 
     // Compute copyable VA: prefer fn fields, fall back to cell address range
     let copyVA = null;
@@ -1051,71 +1103,51 @@ const App = () => {
     }
 
     return aside({ class: "panel", id: "panel", style: "position: relative;" },
-      () => isLoading.val ? div({ class: "loading-overlay" }, "Loading...") : null,
+      () => isLoading.val ? div({ class: "loading-overlay", role: "status", "aria-live": "polite" }, "Loading...") : null,
       div({ class: "panel-head" },
-        div({ class: "panel-title" }, title),
+        h2({ class: "panel-title" }, title),
         div({ class: "panel-actions" },
-          button({ class: "btn copy-btn", "aria-label": "Copy VA", onclick: (e) => copyToClipboard(copyVA, e) }, "Copy VA"),
-          button({ class: "btn copy-btn", "aria-label": "Copy Symbol", onclick: (e) => copyToClipboard(fn?.symbol, e) }, "Copy Symbol")
+          button({ class: "btn copy-btn", "aria-label": "Copy VA", ...detailBound(), onclick: (e) => copyToClipboard(copyVA, e) }, "Copy VA"),
+          button({ class: "btn copy-btn", "aria-label": "Copy Symbol", ...detailBound(), onclick: (e) => copyToClipboard(fn?.symbol, e) }, "Copy Symbol")
         ),
         div({ class: "panel-meta" }, metaContent)
       ),
       div({ class: "panel-body" },
-        div({ class: "section" },
-          div({ class: "section-title" },
-            HexLogo("C", "var(--accent-c-source)", "C Source"),
-            div({ class: "section-actions" },
-              button({ class: "btn copy-btn", "aria-label": "Copy C Source", onclick: (e) => copyToClipboard(cSourceText.val, e) }, "Copy"),
-              button({ class: "btn copy-btn", "aria-label": "Open C Source in Modal", onclick: () => { const label = fn ? fn.name : "Block " + cellIdx; modalTitle.val = "C Source: " + label; modalContent.val = cSourceText.val; modalLang.val = "c"; showModal.val = true; } }, "Open")
-            )
-          ),
-          HighlightedCode({ lang: "c", text: cSourceText.val })
-        ),
-        activeSection.val === ".text" ?
-          div({ class: "section" },
-            div({ class: "section-title" },
-              HexLogo("ASM", "var(--accent-asm)", "Assembly"),
-              div({ class: "section-actions" },
-                button({ class: "btn copy-btn", "aria-label": "Copy ASM", onclick: (e) => copyToClipboard(asmText.val, e) }, "Copy"),
-                button({ class: "btn copy-btn", "aria-label": "Open ASM in Modal", onclick: () => { const label = fn ? fn.name : "Block " + cellIdx; modalTitle.val = "ASM: " + label; modalContent.val = asmText.val; modalLang.val = "x86asm"; showModal.val = true; } }, "Open")
-              )
+        CodeSection("C", "var(--accent-c-source)", "C Source", "c", cSourceText.val),
+        activeSection.val === ".text"
+          ? CodeSection("ASM", "var(--accent-asm)", "Assembly", "x86asm", asmText.val)
+          : div({ class: "section" },
+              div({ class: "section-title" }, HexLogo("{}", "var(--accent-data)", "Data Inspector")),
+              () => detailReady.val
+                ? window.RC.DataInspector(currentBuf.val)
+                : div({ class: "code" }, detailFailed.val ? MSG.DETAIL_UNAVAILABLE : MSG.LOADING)
             ),
-            HighlightedCode({ lang: "x86asm", text: asmText.val })
-          ) :
-          div({ class: "section" },
-            div({ class: "section-title" },
-              HexLogo("{}", "var(--accent-data)", "Data Inspector")
-            ),
-            () => DataInspector(currentBuf.val)
-          ),
-        div({ class: "section" },
-          div({ class: "section-title" },
-            HexLogo("01", "var(--accent-bytes)", "Original Bytes"),
-            div({ class: "section-actions" },
-              button({ class: "btn copy-btn", "aria-label": "Copy Original Bytes", onclick: (e) => copyToClipboard(bytesText.val, e) }, "Copy"),
-              button({ class: "btn copy-btn", "aria-label": "Open Original Bytes in Modal", onclick: () => { const label = fn ? fn.name : "Block " + cellIdx; modalTitle.val = "Original Bytes: " + label; modalContent.val = bytesText.val; modalLang.val = "hex"; showModal.val = true; } }, "Open")
-            )
-          ),
-          HighlightedCode({ lang: "hex", text: bytesText.val })
-        )
+        CodeSection("01", "var(--accent-bytes)", "Original Bytes", "hex", bytesText.val)
       )
     );
   };
 
   const switchTab = (name) => { activeSection.val = name; currentFn.val = null; currentCellIndex.val = null; };
 
+  const isFilterOn = (key) => key === "all" ? activeFilters.val.size === 0 : activeFilters.val.has(key);
+  const FilterButton = (key, label, ariaLabel, titleText) => button({
+    class: () => `btn filter-btn filter-${key} ${isFilterOn(key) ? "active" : ""}`,
+    "aria-label": ariaLabel, "aria-pressed": () => isFilterOn(key), title: titleText,
+    onclick: () => toggleFilter(key)
+  }, label);
+
   van.add(document.body,
     a({ href: "#main-content", class: "skip-link" }, "Skip to main content"),
-    header({ class: "topbar layout-grid" },
+    header({ class: "topbar" },
       div({ class: "topbar-left" },
         div({ class: "title-container" },
-          div({ class: "logo-r" }, "R"),
-          div({ class: "title" }, "ReCoverage")
+          div({ class: "logo-r", "aria-hidden": "true" }, "R"),
+          h1({ class: "title" }, "ReCoverage")
         ),
         () => {
           if (!data.val || !data.val.sections) return div({ class: "tabs" });
           return div({ class: "tabs" },
-            ...Object.keys(data.val.sections).map(secName =>
+            ...sectionNames(data.val.sections).map(secName =>
               button({ class: () => `btn tab-btn ${activeSection.val === secName ? "active" : ""}`, onclick: () => switchTab(secName) }, secName)
             )
           );
@@ -1132,12 +1164,14 @@ const App = () => {
           })
         ),
         div({ class: "filters" },
-          button({ class: () => `btn filter-btn filter-all ${activeFilters.val.size === 0 ? "active" : ""}`, "aria-label": "Filter all", onclick: () => toggleFilter("all") }, "All"),
-          button({ class: () => `btn filter-btn filter-exact ${activeFilters.val.has("exact") ? "active" : ""}`, "aria-label": "Filter exact", title: "Exact match", onclick: () => toggleFilter("exact") }, "E"),
-          button({ class: () => `btn filter-btn filter-reloc ${activeFilters.val.has("reloc") ? "active" : ""}`, "aria-label": "Filter reloc", title: "Reloc match", onclick: () => toggleFilter("reloc") }, "R"),
-          button({ class: () => `btn filter-btn filter-near_match ${activeFilters.val.has("near_match") ? "active" : ""}`, "aria-label": "Filter near-match", title: "Near-match", onclick: () => toggleFilter("near_match") }, "M"),
-          button({ class: () => `btn filter-btn filter-stub ${activeFilters.val.has("stub") ? "active" : ""}`, "aria-label": "Filter stub", title: "Stub", onclick: () => toggleFilter("stub") }, "S"),
-          button({ class: () => `btn filter-btn filter-padding ${activeFilters.val.has("padding") ? "active" : ""}`, "aria-label": "Filter padding", title: "Padding", onclick: () => toggleFilter("padding") }, "P")
+          // aria-pressed, not just an `active` class: the pressed state is
+          // otherwise carried by colour alone.
+          FilterButton("all", "All", "Filter all", "Show all statuses"),
+          FilterButton("exact", "E", "Filter exact", "Exact match"),
+          FilterButton("reloc", "R", "Filter reloc", "Reloc match"),
+          FilterButton("near_match", "M", "Filter near-match", "Near-match"),
+          FilterButton("stub", "S", "Filter stub", "Stub"),
+          FilterButton("padding", "P", "Filter padding", "Padding")
         ),
         div({ class: "actions" },
           () => {
@@ -1162,7 +1196,7 @@ const App = () => {
                   currentCellIndex.val = null;
                   cSourceText.val = MSG.SELECT_FUNCTION;
                   docText.val = MSG.SELECT_FUNCTION;
-                  bytesText.val = MSG.SELECT_FUNCTION;
+                  showBytesMessage(MSG.SELECT_FUNCTION);
                   asmText.val = MSG.ASM_PLACEHOLDER;
                   currentBuf.val = null;
 
@@ -1179,85 +1213,48 @@ const App = () => {
             return span({ style: "display: none;" });
           },
           button({ class: "btn icon-btn", "aria-label": () => isLightMode.val ? "Switch to Dark Mode" : "Switch to Light Mode", title: () => isLightMode.val ? "Switch to Dark Mode" : "Switch to Light Mode", onclick: () => { isLightMode.val = !isLightMode.val; localStorage.setItem('recoverage_theme', isLightMode.val ? 'light' : 'dark'); } }, () => isLightMode.val ? MoonIcon() : SunIcon()),
-          button({ class: "btn icon-btn", "aria-label": "Reload data", title: "Reload", onclick: handleReload }, ReloadIcon())
+          button({ class: "btn icon-btn", "aria-label": "Reload data", disabled: () => detailFailed.val, title: () => detailFailed.val ? MSG.DETAIL_UNAVAILABLE : "Reload", onclick: handleReload }, ReloadIcon())
         )
       )
     ),
     main({ class: "layout", id: "main-content" },
-      section({ class: "map" },
-        div({ class: "legend" },
-          div({ class: "key" }, span({ class: "swatch swatch-none" }), span("undocumented")),
-          div({ class: "key" }, span({ class: "swatch swatch-exact" }), span("exact match")),
-          div({ class: "key" }, span({ class: "swatch swatch-reloc" }), span("reloc match")),
-          div({ class: "key" }, span({ class: "swatch swatch-near_match" }), span("near-match")),
-          div({ class: "key" }, span({ class: "swatch swatch-stub" }), span("stub")),
-          div({ class: "key" }, span({ class: "swatch swatch-padding" }), span("padding"))
-        ),
+      section({ class: "map", "aria-label": "Coverage map" },
+        // These bindings return an empty div rather than null when they have
+        // nothing to show: a VanJS binding whose first result is null never
+        // renders again, because the update path has no node to replace.
+        () => emptyState.val ? div() : div({ class: "legend" }, ...LEGEND.map(([state, label]) =>
+          div({ class: "key" }, span({ class: `swatch swatch-${state}` }), span(label))
+        )),
+        () => emptyState.val
+          ? div({ class: "empty-state", role: "status" },
+              h2(emptyState.val.title), p(emptyState.val.detail))
+          : div(),
         Grid(),
-        div({ class: "hint" }, "Click a block to view function details. Use filters to show specific statuses.")
+        () => emptyState.val ? div() : div({ class: "hint" }, "Click a block to view function details. Use filters to show specific statuses.")
       ),
       () => Panel()
     ),
-    // Modal - always in DOM for CSS transitions
-    div({
-      class: () => `modal ${showModal.val ? "show" : ""}`,
-      role: "dialog",
-      "aria-modal": () => showModal.val ? "true" : "false",
-      "aria-label": () => modalTitle.val || "Code viewer",
-      onclick: (e) => { if (e.target.classList.contains("modal")) showModal.val = false; },
-      onkeydown: (e) => {
-        if (e.key === 'Tab') {
-          const focusable = e.currentTarget.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
-          if (focusable.length === 0) return;
-          const first = focusable[0];
-          const last = focusable[focusable.length - 1];
-          if (e.shiftKey && document.activeElement === first) {
-            e.preventDefault();
-            last.focus();
-          } else if (!e.shiftKey && document.activeElement === last) {
-            e.preventDefault();
-            first.focus();
-          }
-        }
-      }
-    },
-      div({ class: "modal-content" },
-        div({ class: "modal-header" },
-          span({ class: "modal-title" }, () => modalTitle.val),
-          div({ class: "modal-actions" },
-            button({ class: "btn copy-btn", "aria-label": "Copy Modal Content", onclick: (e) => copyToClipboard(modalContent.val, e) }, "Copy"),
-            button({ class: "btn modal-close", "aria-label": "Close Modal", onclick: () => showModal.val = false }, "Close")
-          )
-        ),
-        div({ class: "modal-body" },
-          () => HighlightedCode({ lang: modalLang.val, text: modalContent.val })
-        )
-      )
-    )
   );
 
-  // Keyboard: Escape closes modal
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && showModal.val) {
-      showModal.val = false;
-    }
-  });
+  // The panel header sticks below the topbar, whose height changes as the
+  // controls wrap.  Publish the measured height as --topbar-h.
+  const topbarEl = document.querySelector('.topbar');
+  if (topbarEl) {
+    new ResizeObserver(([entry]) => {
+      const h = entry.target.getBoundingClientRect().height;
+      document.documentElement.style.setProperty('--topbar-h', `${Math.round(h)}px`);
+    }).observe(topbarEl);
+  }
 
-  // Focus management for modal
-  let lastFocusedElement = null;
+  // The code viewer, its focus handling, and its inert backdrop live in
+  // detail.js: nothing about it is reachable until a click, long after that
+  // file lands.  Mounting is deferred with it.
   van.derive(() => {
-    if (showModal.val) {
-      lastFocusedElement = document.activeElement;
-      requestAnimationFrame(() => {
-        const closeBtn = document.querySelector('.modal-close');
-        if (closeBtn) closeBtn.focus();
-      });
-    } else if (lastFocusedElement) {
-      const el = lastFocusedElement;
-      lastFocusedElement = null;
-      requestAnimationFrame(() => { if (el && el.focus) el.focus(); });
+    if (detailReady.val) {
+      window.RC.mountModal({ showModal, modalTitle, modalContent, modalLang, HighlightedCode, copyToClipboard });
     }
   });
 };
 
 van.add(document.body, App());
+loadDetail();

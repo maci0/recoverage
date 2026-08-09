@@ -1,0 +1,68 @@
+/* Print: a coverage map ends up in status reports, so paper gets the map and
+ * the reading matter, not the controls.  Loaded with media="print", so none of
+ * this counts against the inlined first-packet budget. */
+
+@page { margin: 14mm; }
+
+body {
+  background: #fff !important;
+  background-image: none !important;
+  color: #000;
+  text-shadow: none;
+}
+
+/* The scanline overlay, the controls, and the copy/open affordances are all
+ * screen furniture. */
+body::after,
+.topbar,
+.skip-link,
+.legend .swatch,
+.panel-actions,
+.section-actions,
+.modal,
+.hint { display: none !important; }
+
+.layout { display: block; padding: 0; }
+
+.map, .panel {
+  border: 1px solid #999;
+  box-shadow: none;
+  background: #fff;
+  break-inside: avoid;
+}
+
+.panel { margin-top: 10mm; }
+.panel-head { position: static; background: #fff; }
+
+/* Cells keep their status colour: the whole point of printing this is the
+ * colour distribution.  print-color-adjust asks the browser not to strip it. */
+.grid {
+  background: #fff;
+  border-color: #999;
+  animation: none;
+  content-visibility: visible;
+  break-inside: avoid;
+}
+.cell {
+  print-color-adjust: exact;
+  -webkit-print-color-adjust: exact;
+  border-color: rgba(0, 0, 0, 0.25);
+}
+.cell.dimmed { opacity: 1; }
+
+/* Code panes print in full instead of scrolling a 220px window. */
+.code {
+  max-height: none;
+  overflow: visible;
+  white-space: pre-wrap;
+  border-color: #999;
+  background: #fff;
+  break-inside: avoid;
+}
+
+.meta-item { border-color: #ccc; background: #fff; break-inside: avoid; }
+.meta-label, .meta-value, .section-title-text, .panel-title, .title { color: #000; text-shadow: none; }
+
+/* Source links are useless as underlined blue on paper; print the target. */
+.source-link { color: #000; text-decoration: underline; }
+.source-link::after { content: " (" attr(href) ")"; font-size: 10px; color: #444; }
