@@ -456,7 +456,21 @@ def _best_encoding(accept_encoding: str) -> str:
     return ""
 
 
-def compress_payload(body: bytes, accept_encoding: str) -> tuple[bytes, str]:
+# Brotli quality is the difference between a fast response and a stalled one.
+# On a 5.6 MB coverage payload, measured: q=11 gives 334 KB in 5.9 s, q=5 gives
+# 444 KB in 68 ms.  Dynamic responses pay that cost on every request (there is
+# no compressed-response cache), and clients without zstd — Safari, older
+# browsers — land on brotli, so q=11 there means a six-second stall on every
+# load and every live reload.  110 KB is cheaper than 5.8 s on any real link.
+BROTLI_DYNAMIC_QUALITY = 5
+# The inlined index is compressed once and cached per encoding, and it has a
+# hard byte budget (the initial congestion window), so it keeps maximum effort.
+BROTLI_STATIC_QUALITY = 11
+
+
+def compress_payload(
+    body: bytes, accept_encoding: str, brotli_quality: int = BROTLI_DYNAMIC_QUALITY
+) -> tuple[bytes, str]:
     """Compress body with the best algorithm the client accepts.
 
     Returns (compressed_body, encoding_name). encoding_name is "" if no
@@ -467,7 +481,7 @@ def compress_payload(body: bytes, accept_encoding: str) -> tuple[bytes, str]:
     if encoding == "zstd":
         return _ZSTD_COMPRESSOR.compress(body), "zstd"
     if encoding == "br":
-        return brotli.compress(body), "br"  # type: ignore
+        return brotli.compress(body, quality=brotli_quality), "br"  # type: ignore
     if encoding == "gzip":
         return gzip.compress(body), "gzip"
     return body, ""
@@ -797,6 +811,25 @@ app = Bottle()
 _AUTH_TOKEN: str = ""
 
 
+# Deliberately does not echo the expected token, and carries no CSS of its own
+# beyond the handful of attributes needed to be readable on a dark background.
+_UNAUTHORIZED_HTML = (
+    b'<!doctype html><html lang="en"><head><meta charset="utf-8">'
+    b'<meta name="viewport" content="width=device-width, initial-scale=1">'
+    b"<title>ReCoverage - access token required</title></head>"
+    b'<body bgcolor="#0f1216" text="#e7edf4">'
+    b'<table width="100%" height="90%" border="0"><tr><td align="center" valign="middle">'
+    b'<font face="system-ui, sans-serif">'
+    b"<h1>Access token required</h1>"
+    b"<p>This dashboard was started with <tt>--token</tt>. Open it with the token"
+    b" appended to the URL:</p>"
+    b'<p><tt bgcolor="#151a21">?token=YOUR_TOKEN</tt></p>'
+    b'<p><font color="#8b949e" size="2">The person who started the server has the token.'
+    b" It is stored in a cookie afterwards, so you only need the URL once.</font></p>"
+    b"</font></td></tr></table></body></html>"
+)
+
+
 def _auth_token_matches(provided: str) -> bool:
     return bool(_AUTH_TOKEN) and provided == _AUTH_TOKEN
 
@@ -816,6 +849,18 @@ def _require_auth() -> None:
     if not _auth_token_matches(provided):
         from bottle import HTTPResponse
 
+        # A browser asking for a page gets a page; API clients keep the JSON
+        # error contract.  Someone handed a share URL who dropped the query
+        # string used to land on a raw JSON blob with no way to tell what to do.
+        wants_html = "text/html" in request.headers.get("Accept", "") and not request.path.startswith(
+            "/api/"
+        )
+        if wants_html:
+            raise HTTPResponse(
+                status=401,
+                body=_UNAUTHORIZED_HTML,
+                content_type="text/html; charset=utf-8",
+            )
         raise HTTPResponse(
             status=401,
             body=b'{"error": "unauthorized", "code": "unauthorized", "detail": "missing or invalid token"}',

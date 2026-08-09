@@ -14,6 +14,7 @@ import brotli  # type: ignore[import-untyped]
 import zstandard as zstd  # type: ignore[import-untyped]
 
 from recoverage.server import (
+    BROTLI_STATIC_QUALITY,
     HTTPResponse,
     _assets_dir,
     _best_encoding,
@@ -166,7 +167,11 @@ def handle_index() -> bytes:
         if payload is None:  # pragma: no cover — _build_index_payload always sets it
             raise RuntimeError("_build_index_payload failed to set CACHED_INDEX_PAYLOAD")
         if encoding not in CACHED_INDEX_COMPRESSED:
-            compressed, _ = compress_payload(payload, accept_encoding)
+            # Maximum brotli effort here: this runs once per encoding and the
+            # result is cached, and the byte budget is the whole point.
+            compressed, _ = compress_payload(
+                payload, accept_encoding, brotli_quality=BROTLI_STATIC_QUALITY
+            )
             CACHED_INDEX_COMPRESSED[encoding] = compressed
         body = CACHED_INDEX_COMPRESSED[encoding]
 
@@ -200,6 +205,9 @@ def serve_repo_file(filepath: str) -> Any:
     return static_file(filepath, root=str(root))
 
 
-@app.get("/<filename:re:(?:app\\.js|style\\.css|van\\.min\\.js|hljs\\.css)>")
+@app.get(
+    "/<filename:re:(?:app\\.js|detail\\.js|style\\.css|print\\.css|van\\.min\\.js|favicon\\.svg"
+    "|hljs\\.css|hljs\\.min\\.js|hljs-c\\.min\\.js|hljs-x86asm\\.min\\.js)>"
+)
 def serve_static_asset(filename: str) -> Any:
     return static_file(filename, root=str(_assets_dir()))
