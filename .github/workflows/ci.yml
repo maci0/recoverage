@@ -35,3 +35,19 @@ jobs:
           python-version: "3.12"
       - run: uv sync --frozen --extra dev
       - run: uv run pytest tests/ -v --ignore=tests/test_playwright.py
+
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: uv sync --frozen --extra dev
+      - name: Boot dashboard against a sample coverage.db and probe it
+        run: uv run python tools/smoke.py
+      - name: Negative smoke (corrupt DB must degrade, not lie)
+        run: uv run python tools/smoke.py --expect-failure

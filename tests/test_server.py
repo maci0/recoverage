@@ -450,3 +450,24 @@ class TestSchemaColumnGate:
 
         with contextlib.closing(sqlite3.connect(db)) as conn2:
             assert srv._check_schema_version_uncached(conn2) == "<incomplete>"
+
+
+class TestDeepLinking:
+    """J9: the SPA carries URL deep-link wiring (target/fn/section/q)."""
+
+    def test_spa_has_deep_link_code(self) -> None:
+        import importlib.resources
+
+        from recoverage import assets
+
+        app_js = importlib.resources.files(assets).joinpath("app.js").read_text(encoding="utf-8")
+        for marker in (
+            "URL_PARAMS = new URLSearchParams",
+            "const syncUrl = () =>",
+            'p.set("target"',
+            'p.set("fn"',
+            'p.set("section"',
+            'p.set("q"',
+            "history.replaceState",
+        ):
+            assert marker in app_js, f"deep-link marker missing: {marker}"

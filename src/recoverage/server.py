@@ -852,9 +852,9 @@ def _require_auth() -> None:
         # A browser asking for a page gets a page; API clients keep the JSON
         # error contract.  Someone handed a share URL who dropped the query
         # string used to land on a raw JSON blob with no way to tell what to do.
-        wants_html = "text/html" in request.headers.get("Accept", "") and not request.path.startswith(
-            "/api/"
-        )
+        wants_html = "text/html" in request.headers.get(
+            "Accept", ""
+        ) and not request.path.startswith("/api/")
         if wants_html:
             raise HTTPResponse(
                 status=401,

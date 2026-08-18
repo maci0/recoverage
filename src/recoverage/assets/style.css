@@ -185,6 +185,11 @@ body {
 }
 .btn.icon-btn { width: 32px; padding: 0; color: var(--muted); }
 .btn.icon-btn:hover { color: var(--text); }
+/* Touch devices need WCAG 2.5.8 target sizes — keep the compact desktop
+   layout, bump the hit area on coarse pointers only. */
+@media (pointer: coarse) {
+  .btn.icon-btn { width: 44px; min-height: 44px; }
+}
 .btn.filter-btn { color: var(--muted); }
 .btn.tab-btn { font-family: var(--mono); }
 

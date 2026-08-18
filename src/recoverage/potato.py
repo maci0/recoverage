@@ -707,6 +707,7 @@ _PAGE_SRC = r"""<!DOCTYPE html>
 <body bgcolor="{{BG_COLOR}}" text="{{TEXT_COLOR}}" background="{{SCANLINE_PNG}}" link="{{COLORS['reloc']}}" vlink="{{COLORS['reloc']}}" alink="{{COLORS['exact']}}">
 <font face="{{SANS_FONT}}">
 <a href="#grid-container"><font size="1" color="{{MUTED_COLOR}}">[Skip to grid]</font></a>
+<main>
 
 <!-- Top Bar -->
 <table id="topbar" width="100%" border="0" cellpadding="4" cellspacing="0" background="{{TOPBAR_PNG}}">
@@ -802,6 +803,7 @@ _PAGE_SRC = r"""<!DOCTYPE html>
           % end
           </tr></table>
           <table id="grid-container" border="1" cellpadding="8" cellspacing="0" bordercolor="{{BORDER_COLOR}}" bgcolor="{{BG_COLOR}}" width="100%"><tr><td>
+          <caption align="left"><font size="1" color="{{MUTED_COLOR}}">Coverage map - {{section}} ({{block_count}} blocks)</font></caption>
           <font size="1"><center>{{!grid_html}}</center></font>
           </td></tr></table>
         </td></tr>
@@ -825,6 +827,7 @@ _PAGE_SRC = r"""<!DOCTYPE html>
 </font></td>
 <td align="right"><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">HTML5</font></td>
 </tr></table>
+</main>
 </font></body></html>"""
 
 _PAGE_TPL = SimpleTemplate(source=_PAGE_SRC)
@@ -1273,6 +1276,7 @@ def _pager_html(
             f'<a href="{href}">'
             f'<font face="{MONO_FONT}" size="2" color="{ACCENT_COLOR}">{text}</font></a>'
         )
+
     return (
         f'<table id="pager" border="0" cellpadding="4" cellspacing="0"><tr>'
         f"<td>{link(page - 1, '[&lt; Prev]')}</td>"
@@ -1427,6 +1431,7 @@ def _render_function_list(
         f"</td></tr>",
         "<tr><td>",
         f'<table width="100%" border="1" cellpadding="6" cellspacing="0" bordercolor="{BORDER_COLOR}">',
+        f'<caption align="left"><font size="1" color="{MUTED_COLOR}">Functions for {_esc(section)} ({len(rows)} results)</font></caption>',
         f'<tr bgcolor="{PANEL_COLOR}">'
         f'<th><a href="{base}&sort=name"><font color="{MUTED_COLOR}">Name</font></a></th>'
         f'<th><a href="{base}&sort=va"><font color="{MUTED_COLOR}">VA</font></a></th>'

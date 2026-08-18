@@ -228,8 +228,7 @@ const App = () => {
         availableTargets.val = d.targets || [];
 
         // Check URL params first, then localStorage, then default
-        const urlParams = new URLSearchParams(window.location.search);
-        const urlTarget = urlParams.get("target");
+        const urlTarget = URL_PARAMS.get("target");
         const savedTarget = localStorage.getItem("recoverage_target");
 
         if (!availableTargets.val.length) {
@@ -245,6 +244,7 @@ const App = () => {
         } else {
           activeTarget.val = availableTargets.val[0].id;
         }
+        syncUrl();
       }
     } catch (e) {
       console.error("Failed to load targets:", e);
@@ -294,6 +294,11 @@ const App = () => {
       } else if (!d.sections[activeSection.val]) {
         activeSection.val = secNames[0];
       }
+      // URL section param wins over the default when valid.
+      const secParam = URL_PARAMS.get("section");
+      if (secParam && secNames.includes(secParam)) {
+        activeSection.val = secParam;
+      }
 
       // `paths.originalDll` is optional metadata written by rebrew build-db.
       // Without a fallback the whole Original Bytes pane goes dead, so default
@@ -304,9 +309,17 @@ const App = () => {
       const summary = d.summary || {};
       summaryData.val = { ...summary, textSize: d.sections[".text"]?.size || 0 };
 
-      // Restore last visited function
+      // URL ?q= restores the search query into the box and the filter.
+      const qParam = URL_PARAMS.get("q");
+      if (qParam) {
+        searchQuery.val = qParam;
+        const inputEl = document.querySelector(".search input");
+        if (inputEl) inputEl.value = qParam;
+      }
+
+      // Restore last visited function — URL ?fn= wins over localStorage.
       setTimeout(() => {
-        const lastFn = localStorage.getItem('recoverage_last_fn_' + activeTarget.val);
+        const lastFn = URL_PARAMS.get("fn") || localStorage.getItem('recoverage_last_fn_' + activeTarget.val);
         if (lastFn && data.val?.search_index?.[lastFn]) {
           const info = data.val.search_index[lastFn];
           jumpToAddress(parseInt(info.va, 16));
@@ -333,7 +346,24 @@ const App = () => {
     clearTimeout(searchTimeout);
     searchTimeout = setTimeout(() => {
       searchQuery.val = e.target.value;
+      syncUrl();
     }, 250);
+  };
+
+  // Deep-linking: keep target/function/section/search in the URL so reloads
+  // restore state and links are shareable.  replaceState (not pushState) so
+  // the URL tracks state without spamming history.
+  const URL_PARAMS = new URLSearchParams(window.location.search);
+  const syncUrl = () => {
+    const p = new URLSearchParams();
+    if (activeTarget.val) p.set("target", activeTarget.val);
+    if (currentFn.val && (currentFn.val.name || currentFn.val.vaStart)) {
+      p.set("fn", currentFn.val.name || currentFn.val.vaStart);
+    }
+    if (activeSection.val) p.set("section", activeSection.val);
+    if (searchQuery.val) p.set("q", searchQuery.val);
+    const qs = p.toString();
+    history.replaceState(null, "", qs ? "?" + qs : window.location.pathname);
   };
 
   // Initialize: load targets then data (NOT in derive - that's an anti-pattern)
@@ -415,6 +445,7 @@ const App = () => {
         if (signal.aborted) return;
         currentFn.val = fn;
         localStorage.setItem('recoverage_last_fn_' + activeTarget.val, id);
+        syncUrl();
 
         const buf = sliceOriginalBytes(fn);
         currentBuf.val = buf;
@@ -1127,7 +1158,7 @@ const App = () => {
     );
   };
 
-  const switchTab = (name) => { activeSection.val = name; currentFn.val = null; currentCellIndex.val = null; };
+  const switchTab = (name) => { activeSection.val = name; currentFn.val = null; currentCellIndex.val = null; syncUrl(); };
 
   const isFilterOn = (key) => key === "all" ? activeFilters.val.size === 0 : activeFilters.val.has(key);
   const FilterButton = (key, label, ariaLabel, titleText) => button({
