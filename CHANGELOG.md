@@ -5,6 +5,13 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Function detail panels (SPA **and** Potato mode) now show the latest
+  `rebrew verify` record: `last_verify.similarity` (0–100 code-similarity
+  score) alongside the existing byte-delta / diff-line count.  The score is
+  read from the new `verify_results.similarity` column.
+
 ## [0.2.0] - 2026-08-18
 
 ### Added

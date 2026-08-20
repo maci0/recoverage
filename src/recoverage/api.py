@@ -794,7 +794,7 @@ def handle_api_functions_batch(target: str) -> bytes | Any:
 
         if fn_by_va:
             c.execute(
-                "SELECT va, verified_at, byte_delta, diff_lines FROM verify_results"
+                "SELECT va, verified_at, byte_delta, diff_lines, similarity FROM verify_results"
                 f" WHERE target = ? AND va IN ({placeholders})",
                 [target, *unique_vas],
             )
@@ -805,6 +805,7 @@ def handle_api_functions_batch(target: str) -> bytes | Any:
                         "verified_at": vr["verified_at"],
                         "byte_delta": vr["byte_delta"],
                         "diff_lines": vr["diff_lines"],
+                        "similarity": vr["similarity"],
                     }
 
         c.execute(
@@ -886,7 +887,7 @@ def handle_api_function(target: str, va: str) -> bytes | Any:
             fn_json = json.loads(row[0])
             # Attach the last `rebrew verify -o` record for this function.
             c.execute(
-                "SELECT verified_at, byte_delta, diff_lines FROM verify_results"
+                "SELECT verified_at, byte_delta, diff_lines, similarity FROM verify_results"
                 " WHERE target = ? AND va = ?",
                 (target, fn_json["va"]),
             )
@@ -896,6 +897,7 @@ def handle_api_function(target: str, va: str) -> bytes | Any:
                     "verified_at": vr["verified_at"],
                     "byte_delta": vr["byte_delta"],
                     "diff_lines": vr["diff_lines"],
+                    "similarity": vr["similarity"],
                 }
             return _json_ok(json.dumps(fn_json).encode("utf-8"), Cache_Control=no_cache)
 

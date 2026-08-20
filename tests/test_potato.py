@@ -362,6 +362,22 @@ def test_th_scope_row():
 
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+def test_function_detail_shows_verify_similarity():
+    """The function data panel surfaces the `rebrew verify -o` record — byte
+    delta, diff-line count, and the code-similarity score."""
+    target = get_first_target()
+    # The synthetic DB seeds a verify_results row for 0x10001000 (_func_a) with
+    # similarity 87.3.  The render's per-cell `idx` is the grid position (not the
+    # cells.id), so scan render indices for the one that reaches _func_a's detail
+    # rows and carries the verify similarity.
+    for idx in range(0, 32):
+        html = render_potato_url(f"/potato?target={target}&section=.text&idx={idx}")
+        if "last_verify_similarity" in html and "87.3%" in html:
+            return
+    pytest.fail("no .text cell rendered the verified function's code-similarity (87.3%)")
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
 def test_label_for_search():
     target = get_first_target()
     html = render_potato_url(f"/potato?target={target}")

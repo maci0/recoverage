@@ -617,7 +617,7 @@ def _missing_required_columns(conn: sqlite3.Connection) -> set[str]:
             "similarity",
         },
         "globals": {"target", "va", "name", "decl", "files", "module", "size"},
-        "verify_results": {"target", "va", "verified_at", "byte_delta", "diff_lines"},
+        "verify_results": {"target", "va", "verified_at", "byte_delta", "diff_lines", "similarity"},
         "section_cell_stats": {
             "target",
             "section_name",

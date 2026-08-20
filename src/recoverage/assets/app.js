@@ -1073,6 +1073,7 @@ const App = () => {
           fn.list_name && fn.list_name !== fn.name ? MetaItem("Func List", fn.list_name) : null,
           fn.size_reason ? MetaItem("Size Source", fn.size_reason) : null,
           fn.last_verify ? MetaItem("Verified", `${fn.last_verify.verified_at}${fn.last_verify.byte_delta != null ? ` (Δ${fn.last_verify.byte_delta}B)` : ""}`) : null,
+          fn.last_verify && fn.last_verify.similarity != null ? MetaItem("Code Sim", `${fn.last_verify.similarity.toFixed(1)}%`) : null,
           fn.similarity != null ? MetaItem("Similarity", `${(fn.similarity * 100).toFixed(1)}%`) : null,
           fn.is_thunk ? MetaItem("Type", "IAT thunk (not reversible)") : null,
           fn.is_export ? MetaItem("Type", "Exported function") : null,

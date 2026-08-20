@@ -1779,6 +1779,31 @@ def _render_panel(
         fn_data = json.loads(fn_row[0])
         ctx["fn_data"] = fn_data
 
+        # Attach the latest `rebrew verify -o` record (byte_delta / diff_lines /
+        # code-similarity) so the detail panel shows verification stats the same
+        # way the SPA's last_verify does.  Keyed on the function's resolved VA
+        # (works for both name-form and VA-form cell references).  Best-effort:
+        # a function with no verify record just omits these rows.
+        fn_va_resolved = fn_data.get("va")
+        if fn_va_resolved is not None:
+            try:
+                c.execute(
+                    "SELECT verified_at, byte_delta, diff_lines, similarity"
+                    " FROM verify_results WHERE target=? AND va=?",
+                    (target, int(fn_va_resolved)),
+                )
+                vr = c.fetchone()
+            except (sqlite3.Error, ValueError, TypeError):
+                vr = None
+            if vr:
+                fn_data["last_verify_time"] = vr[0]
+                if vr[1] is not None:
+                    fn_data["last_verify_delta"] = f"{vr[1]}B"
+                if vr[2] is not None:
+                    fn_data["last_verify_diff_lines"] = vr[2]
+                if vr[3] is not None:
+                    fn_data["last_verify_similarity"] = f"{vr[3]:.1f}%"
+
         hex_fields = {"va", "fileOffset"}
         skip_fields = {"files", "sha256", "is_thunk", "is_export"}
         if not fn_data.get("blocker"):

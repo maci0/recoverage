@@ -189,12 +189,13 @@ def _build_synthetic_db() -> None:
             " target TEXT NOT NULL, va INTEGER NOT NULL,"
             " verified_at TEXT NOT NULL,"
             " byte_delta INTEGER, diff_lines INTEGER,"
+            " similarity REAL,"
             " PRIMARY KEY (target, va))"
         )
         c.execute(
-            "INSERT INTO verify_results (target, va, verified_at, byte_delta, diff_lines)"
-            " VALUES (?, ?, ?, ?, ?)",
-            (target, 0x10001000, "2026-01-01T00:00:00+00:00", 0, 0),
+            "INSERT INTO verify_results (target, va, verified_at, byte_delta, diff_lines, similarity)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            (target, 0x10001000, "2026-01-01T00:00:00+00:00", 0, 0, 87.3),
         )
         # history + all required objects must exist: the schema-shape check
         # (round-4) verifies the full object set, not just the version stamp.
