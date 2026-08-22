@@ -291,3 +291,126 @@ class TestPartialSchemaCleanExit:
         assert result.exit_code == 2
         assert "rebuild" in result.output
         assert not isinstance(result.exception, SystemExit) or result.exit_code == 2
+
+
+# ── check: exit-code and verdict contracts ────────────────────────
+
+
+class TestCheckMissingDbExitCode:
+    def test_missing_db_exits_2(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A missing database is an infrastructure error: README documents
+        exit 2 for `check` (database missing/unreadable), distinct from the
+        gate-failure exit 1 a CI consumer acts on."""
+        monkeypatch.chdir(tmp_path)
+        result = runner.invoke(app, ["check", "--min-coverage", "60"])
+        assert result.exit_code == 2
+        assert "database not found" in result.output
+
+
+class _UntrackedSectionDb:
+    """Build a minimal DB whose .rdata section has only 'none' cells."""
+
+    @staticmethod
+    def make(path: Path) -> None:
+        import sqlite3 as _sqlite3
+
+        conn = _sqlite3.connect(path)
+        try:
+            c = conn.cursor()
+            c.execute(
+                "CREATE TABLE metadata (target TEXT, key TEXT, value TEXT,"
+                " PRIMARY KEY (target, key))"
+            )
+            c.execute(
+                "CREATE TABLE sections (target TEXT, name TEXT, va INTEGER,"
+                " size INTEGER, fileOffset INTEGER, unitBytes INTEGER,"
+                " columns INTEGER, PRIMARY KEY (target, name))"
+            )
+            c.execute(
+                "CREATE TABLE cells (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                " target TEXT, section_name TEXT, start INTEGER, end INTEGER,"
+                " span INTEGER DEFAULT 1, state TEXT, functions TEXT DEFAULT '[]',"
+                " label TEXT, parent_function TEXT)"
+            )
+            c.execute("CREATE TABLE functions (target TEXT, status TEXT, markerType TEXT)")
+            c.execute(
+                "INSERT INTO metadata VALUES ('T','summary',?)",
+                (json.dumps({"totalFunctions": 1}),),
+            )
+            c.execute("INSERT INTO sections VALUES ('T','.text',0,100,0,16,8)")
+            c.execute("INSERT INTO sections VALUES ('T','.rdata',0,100,0,16,8)")
+            c.execute(
+                "INSERT INTO cells (target, section_name, start, end, state)"
+                " VALUES ('T','.text',0,100,'exact')"
+            )
+            c.execute(
+                "INSERT INTO cells (target, section_name, start, end, state)"
+                " VALUES ('T','.rdata',0,100,'none')"
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+
+class TestCheckExplicitUntrackedSectionVerdict:
+    def test_fail_verdict_reaches_json_output(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Gating an explicitly requested untracked section records FAIL; that
+        verdict — not the generic 'nothing was checked' error object — must be
+        what --json emits."""
+        db = tmp_path / "cov.db"
+        _UntrackedSectionDb.make(db)
+        monkeypatch.setattr("recoverage.cli._db_path", lambda: db)
+
+        result = runner.invoke(
+            app, ["check", "--min-coverage", "60", "--section", ".rdata", "--json"]
+        )
+        assert result.exit_code == 1
+        payload = json.loads(result.output)
+        assert payload["passed"] is False
+        assert payload["results"] == [
+            {
+                "target": "T",
+                "section": ".rdata",
+                "status": "FAIL",
+                "reason": "no tracked cells — coverage is not recorded for this section",
+            }
+        ]
+        assert "nothing was checked" not in result.output
+
+    def test_all_untracked_still_errors_without_verdicts(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With no explicit section and nothing tracked anywhere, the guard
+        still fires: no recorded coverage must not pass vacuously."""
+        db = tmp_path / "cov.db"
+        _UntrackedSectionDb.make(db)
+        monkeypatch.setattr("recoverage.cli._db_path", lambda: db)
+
+        # Drop the tracked .text cell so every section is untracked.
+        import sqlite3 as _sqlite3
+
+        conn = _sqlite3.connect(db)
+        conn.execute("DELETE FROM cells WHERE section_name = '.text'")
+        conn.commit()
+        conn.close()
+
+        result = runner.invoke(app, ["check", "--min-coverage", "0", "--json"])
+        assert result.exit_code == 1
+        payload = json.loads(result.output)
+        assert payload["error"] == "no tracked sections — nothing was checked"
+
+
+class TestServePortRange:
+    def test_out_of_range_port_rejected_cleanly(self) -> None:
+        """--port 99999 must be a clean CLI validation error, not an
+        OverflowError traceback from socket.bind after startup."""
+        result = runner.invoke(app, ["serve", "--port", "99999", "--no-open"])
+        assert result.exit_code != 0
+        assert "OverflowError" not in result.output
+        assert "not in the range" in result.output
+
+    def test_open_port_range_validated(self) -> None:
+        result = runner.invoke(app, ["open", "--port", "70000"])
+        assert result.exit_code != 0

@@ -88,11 +88,18 @@ _VERDICT_COLORS: dict[str, int] = {
 }
 
 
-def _open_db(db_path: Path | None = None) -> sqlite3.Connection:
+def _open_db(db_path: Path | None = None, *, missing_exit_code: int = 1) -> sqlite3.Connection:
+    """Open coverage.db read-only.
+
+    A missing database exits with *missing_exit_code* (``check`` passes 2:
+    its documented contract classifies a missing/unreadable database as an
+    infrastructure error, distinct from "coverage below threshold" = 1);
+    sibling commands keep their historical exit 1.
+    """
     p = db_path or _db_path()
     if not p.exists():
         typer.secho(f"Error: database not found at {p}", fg=typer.colors.RED, err=True)
-        raise typer.Exit(1)
+        raise typer.Exit(missing_exit_code)
     try:
         conn = sqlite3.connect(sqlite_ro_uri(p), uri=True)
         conn.row_factory = sqlite3.Row
@@ -202,7 +209,10 @@ def _run_regen(root: Path) -> None:
 
 @app.command()
 def serve(
-    port: int = typer.Option(8001, "--port", "-p", help="Port to serve on"),
+    # min/max keep an out-of-range --port from reaching socket.bind(), which
+    # would otherwise surface as a raw OverflowError traceback after the
+    # startup banner has already printed.
+    port: int = typer.Option(8001, "--port", "-p", min=0, max=65535, help="Port to serve on"),
     bind: str = typer.Option(
         "127.0.0.1", "--bind", help="Interface to bind to (default: 127.0.0.1; use 0.0.0.0 for LAN)"
     ),
@@ -511,7 +521,7 @@ def check(
             )
         raise typer.Exit(1)
 
-    with contextlib.closing(_open_db()) as conn:
+    with contextlib.closing(_open_db(missing_exit_code=2)) as conn:
         targets = _resolve_targets(conn, target)
 
         if not targets:
@@ -595,9 +605,12 @@ def check(
                 err=True,
             )
         raise typer.Exit(1)
-    if compared == 0:
+    if compared == 0 and not failed:
         # Every section was skipped as untracked and nothing failed — a
-        # project with no recorded coverage must not pass vacuously.
+        # project with no recorded coverage must not pass vacuously.  An
+        # explicit --section on an untracked section already produced a FAIL
+        # verdict above; that verdict (and the JSON results array) must reach
+        # the caller instead of being replaced by this generic error.
         if json_output:
             typer.echo(
                 json.dumps({"error": "no tracked sections — nothing was checked", "exit_code": 1})
@@ -635,7 +648,9 @@ def regen() -> None:
 
 @app.command("open")
 def open_cmd(
-    port: int = typer.Option(8001, "--port", "-p", help="Port of the running server"),
+    port: int = typer.Option(
+        8001, "--port", "-p", min=0, max=65535, help="Port of the running server"
+    ),
 ) -> None:
     """Open the dashboard in a browser."""
     from recoverage.server import open_browser
