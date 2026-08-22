@@ -15,6 +15,7 @@ from recoverage.potato import (
     _format_data_inspector,
     _format_hex_dump,
     _format_va,
+    _load_cells_cached,
     render_potato,
     wrap_text,
 )
@@ -751,6 +752,55 @@ class TestSearchLimit:
         result = _search_functions(c, "TEST", "")
         assert result == set()
         conn.close()
+
+
+class TestCellsCacheInvalidation:
+    """The cells memo must invalidate on a WAL-committed rebuild.
+
+    Main-file mtime alone misses it (the writer can commit to coverage.db-wal
+    without checkpointing), so the fingerprint uses the WAL-aware snapshot —
+    same contract as /data's memo and the SSE watcher."""
+
+    @staticmethod
+    def _cells_cursor() -> sqlite3.Cursor:
+        conn = sqlite3.connect(":memory:")
+        c = conn.cursor()
+        c.execute(
+            "CREATE TABLE cells ("
+            " id INTEGER PRIMARY KEY, target TEXT NOT NULL, section_name TEXT NOT NULL,"
+            " start INTEGER NOT NULL, end INTEGER NOT NULL, span INTEGER NOT NULL,"
+            " state TEXT NOT NULL, functions TEXT NOT NULL DEFAULT '[]',"
+            " label TEXT, parent_function TEXT)"
+        )
+        c.execute(
+            "INSERT INTO cells (target, section_name, start, end, span, state)"
+            " VALUES ('T', '.text', 0, 16, 1, 'exact')"
+        )
+        return c
+
+    def test_wal_only_change_forces_refetch(self, tmp_path, monkeypatch) -> None:
+        import recoverage.potato as potato
+        import recoverage.server as srv
+
+        db = tmp_path / "coverage.db"
+        db.write_bytes(b"x" * 64)
+        wal = tmp_path / "coverage.db-wal"
+        wal.write_bytes(b"")
+        monkeypatch.setattr(srv, "_db_path", lambda: db)
+
+        potato._clear_potato_cells_cache()
+        c = self._cells_cursor()
+        try:
+            _load_cells_cached(c, "T")
+            assert len(potato._POTATO_CELLS_CACHE) == 1
+            # Simulate a rebuild that commits only to -wal: main file untouched.
+            wal.write_bytes(b"y" * 64)
+            _load_cells_cached(c, "T")
+            # Two keys prove fingerprint sensitivity: the WAL change produced
+            # a cache miss (fresh query), not a stale hit.
+            assert len(potato._POTATO_CELLS_CACHE) == 2
+        finally:
+            potato._clear_potato_cells_cache()
 
 
 if __name__ == "__main__":

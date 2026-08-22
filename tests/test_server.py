@@ -223,6 +223,68 @@ class TestPathHelpers:
 # ── clear_target_cache ─────────────────────────────────────────────
 
 
+class TestDbEtag:
+    """DB-freshness ETags must key on the WAL-aware snapshot, not raw mtime.
+
+    A rebuild can commit only to coverage.db-wal (main file untouched);
+    raw-st_mtime ETags then keep answering 304 and browsers serve stale
+    /data, /asm, /bytes, and /potato responses forever.
+    """
+
+    def test_snapshot_tracks_wal_file(self, tmp_path: Path, monkeypatch: Any) -> None:
+        import recoverage.server as srv
+
+        db = tmp_path / "coverage.db"
+        db.write_bytes(b"x" * 64)
+        wal = tmp_path / "coverage.db-wal"
+        wal.write_bytes(b"")
+        monkeypatch.setattr(srv, "_db_path", lambda: db)
+        before = srv._snapshot_db_mtime()
+        assert before is not None
+        wal.write_bytes(b"y" * 64)
+        after = srv._snapshot_db_mtime()
+        assert after is not None
+        assert after != before
+
+    def test_etag_changes_on_wal_only_commit(self, tmp_path: Path, monkeypatch: Any) -> None:
+        """The /asm//bytes/potato ETag input must change when only -wal does."""
+        import recoverage.server as srv
+
+        db = tmp_path / "coverage.db"
+        db.write_bytes(b"x" * 64)
+        wal = tmp_path / "coverage.db-wal"
+        wal.write_bytes(b"")
+        monkeypatch.setattr(srv, "_db_path", lambda: db)
+        before = srv._etag_or_304("FAKEDLL", ".text", 16)
+        assert before is not None
+        wal.write_bytes(b"y" * 64)
+        after = srv._etag_or_304("FAKEDLL", ".text", 16)
+        assert after is not None
+        assert after != before
+
+    def test_etag_none_when_db_unreadable(self, tmp_path: Path, monkeypatch: Any) -> None:
+        import recoverage.server as srv
+
+        monkeypatch.setattr(srv, "_db_path", lambda: tmp_path / "missing.db")
+        assert srv._etag_or_304("T") is None
+
+    def test_matching_if_none_match_raises_304(self, tmp_path: Path, monkeypatch: Any) -> None:
+        import recoverage.server as srv
+
+        db = tmp_path / "coverage.db"
+        db.write_bytes(b"x" * 64)
+        monkeypatch.setattr(srv, "_db_path", lambda: db)
+        etag = srv._etag_or_304("T")
+
+        class _Req:
+            headers = {"If-None-Match": etag}
+
+        monkeypatch.setattr(srv, "request", _Req())
+        with pytest.raises(srv.HTTPResponse) as excinfo:
+            srv._etag_or_304("T")
+        assert excinfo.value.status_code == 304
+
+
 class TestClearTargetCache:
     def test_clear_is_safe_when_empty(self) -> None:
         clear_target_cache()

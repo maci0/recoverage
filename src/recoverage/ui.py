@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import sqlite3
@@ -19,7 +18,7 @@ from recoverage.server import (
     _assets_dir,
     _best_encoding,
     _compressed,
-    _db_path,
+    _etag_or_304,
     _project_dir,
     app,
     compress_payload,
@@ -107,22 +106,11 @@ def handle_potato() -> bytes | Any:
     try:
         from recoverage.potato import render_potato  # type: ignore
 
-        db = _db_path()
-        if db.exists():
-            # st_mtime_ns: two rebuilds in the same second must get a
-            # distinct ETag (float seconds would serve a stale 304).
-            mtime = str(db.stat().st_mtime_ns)
-            etag = f'"{hashlib.md5((mtime + request.query_string).encode(), usedforsecurity=False).hexdigest()}"'
-            if request.headers.get("If-None-Match") == etag:
-                return HTTPResponse(
-                    status=304,
-                    headers={"ETag": etag, "Cache-Control": "no-cache, must-revalidate"},
-                )
-        else:
-            etag = None
-
-        parsed = urlparse(request.url)
-        body = render_potato(parsed).encode("utf-8")
+        # WAL-aware snapshot (see _snapshot_db_mtime), not raw st_mtime: a
+        # rebuild that commits only to -wal must still mint a new ETag or
+        # browsers keep a stale 304.  Same contract as /data, /asm, /bytes.
+        etag = _etag_or_304(request.query_string)
+        body = render_potato(urlparse(request.url)).encode("utf-8")
         resp_body = _compressed(body, "text/html; charset=utf-8")
 
         if etag:

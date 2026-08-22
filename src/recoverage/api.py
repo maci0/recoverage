@@ -26,6 +26,7 @@ from recoverage.server import (
     _db,
     _db_path,
     _escape_like,
+    _etag_or_304,
     _get_capstone_md,
     _get_targets_config,
     _json_err,
@@ -33,6 +34,8 @@ from recoverage.server import (
     _load_dll,
     _open_db,
     _project_dir,
+    _safe_etag,
+    _snapshot_db_mtime,
     app,
     clear_target_cache,
     get_disassembly,
@@ -139,29 +142,6 @@ _SSE_CLIENTS_LOCK = threading.Lock()
 _DB_WATCHER_THREAD: threading.Thread | None = None
 _DB_WATCHER_STOP = threading.Event()
 _DB_WATCHER_LOCK = threading.Lock()
-
-
-def _snapshot_db_mtime() -> tuple[int, int] | None:
-    """Return (mtime_ns, size) of coverage.db, or None when unreadable.
-
-    WAL-aware: the DB runs in ``journal_mode=wal``, so a writer can commit
-    to ``coverage.db-wal`` without checkpointing the main file — main-file
-    mtime/size alone would miss the change (stale memo/ETag/watcher).  Fold
-    the -wal stat in.  (NOT -shm: sqlite touches the shared-memory index on
-    every connection, so including it would make the snapshot — and thus
-    every ETag — change between requests.)
-    """
-    try:
-        st = _db_path().stat()
-        acc = st.st_mtime_ns + st.st_size
-        try:
-            w = Path(f"{_db_path()}-wal").stat()
-            acc += w.st_mtime_ns + w.st_size
-        except OSError:
-            pass
-        return acc, st.st_size
-    except OSError:
-        return None
 
 
 def _broadcast_db_updated(snapshot: tuple[int, int] | None) -> None:
@@ -407,7 +387,6 @@ def handle_api_data(target: str) -> bytes | Any:
     try:
         snap = _snapshot_db_mtime()
         fingerprint = (snap, target, section_filter)
-        from recoverage.server import _safe_etag
 
         etag = _safe_etag(snap[0] if snap else "", target, section_filter)
         if request.headers.get("If-None-Match") == etag:
@@ -946,22 +925,12 @@ def handle_api_asm(target: str) -> bytes | Any:
     if size == 0:
         return _json_err(400, {"error": "size must be positive"})
 
-    # ETag bound to DB mtime + request identity: disassembly reflects the
-    # binary + section layout, which change when the DB is rebuilt.  Without
-    # this, a one-year immutable Cache-Control served stale disassembly to
-    # browsers after re-gen / --fix-sizes.
-    try:
-        db_mtime = _db_path().stat().st_mtime_ns
-        from recoverage.server import _safe_etag
-
-        asm_etag = _safe_etag(db_mtime, target, section, va, size, fmt)
-        if request.headers.get("If-None-Match") == asm_etag:
-            return HTTPResponse(
-                status=304,
-                headers={"ETag": asm_etag, "Cache-Control": "no-cache, must-revalidate"},
-            )
-    except OSError:
-        asm_etag = None
+    # ETag bound to the WAL-aware DB snapshot + request identity (see
+    # _etag_or_304): disassembly reflects the binary + section layout, which
+    # change when the DB is rebuilt.  Without this, a one-year immutable
+    # Cache-Control served stale disassembly to browsers after re-gen /
+    # --fix-sizes; raw st_mtime alone also missed WAL-committed rebuilds.
+    asm_etag = _etag_or_304(target, section, va, size, fmt)
 
     try:
         conn = _db()
@@ -1057,20 +1026,10 @@ def handle_api_bytes(target: str, section: str) -> bytes | Any:
     except (ValueError, TypeError):
         return _json_err(400, {"error": "invalid size"})
 
-    # ETag bound to DB mtime + request identity so /bytes revalidates after
-    # a rebuild instead of serving year-immutable stale bytes.
-    try:
-        db_mtime = _db_path().stat().st_mtime_ns
-        from recoverage.server import _safe_etag
-
-        bytes_etag = _safe_etag(db_mtime, target, section, req_offset, req_size)
-        if request.headers.get("If-None-Match") == bytes_etag:
-            return HTTPResponse(
-                status=304,
-                headers={"ETag": bytes_etag, "Cache-Control": "no-cache, must-revalidate"},
-            )
-    except OSError:
-        bytes_etag = None
+    # ETag bound to the WAL-aware DB snapshot + request identity so /bytes
+    # revalidates after a rebuild instead of serving year-immutable stale
+    # bytes (raw st_mtime alone missed WAL-committed rebuilds).
+    bytes_etag = _etag_or_304(target, section, req_offset, req_size)
 
     try:
         conn = _db()

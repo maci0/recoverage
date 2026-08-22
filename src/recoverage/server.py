@@ -125,6 +125,55 @@ def _safe_etag(*parts: object) -> str:
     return f'"{digest}"'
 
 
+def _snapshot_db_mtime() -> tuple[int, int] | None:
+    """Return (mtime_ns, size) of coverage.db, or None when unreadable.
+
+    WAL-aware: the DB runs in ``journal_mode=wal``, so a writer can commit
+    to ``coverage.db-wal`` without checkpointing the main file — main-file
+    mtime/size alone would miss the change (stale memo/ETag/watcher).  Fold
+    the -wal stat in.  (NOT -shm: sqlite touches the shared-memory index on
+    every connection, so including it would make the snapshot — and thus
+    every ETag — change between requests.)
+
+    EVERY DB-derived cache key and ETag must be built on this snapshot, not
+    raw ``st_mtime`` — raw mtimes served stale 304s after rebuilds that only
+    touched the WAL.
+    """
+    try:
+        st = _db_path().stat()
+        acc = st.st_mtime_ns + st.st_size
+        try:
+            w = Path(f"{_db_path()}-wal").stat()
+            acc += w.st_mtime_ns + w.st_size
+        except OSError:
+            pass
+        return acc, st.st_size
+    except OSError:
+        return None
+
+
+def _etag_or_304(*parts: object) -> str | None:
+    """DB-freshness ETag over the WAL-aware snapshot + *parts*; 304 on match.
+
+    Shared tail of every cacheable DB-derived endpoint (/data, /asm, /bytes,
+    /potato): compute ``_safe_etag(snapshot, parts...)``, answer
+    ``If-None-Match`` with a 304, else hand the ETag back for the caller to
+    attach to its response.  Returns None when the DB is unreadable — the
+    caller then sends no ETag (the endpoint itself fails with 503 shortly
+    after).
+    """
+    snap = _snapshot_db_mtime()
+    if snap is None:
+        return None
+    etag = _safe_etag(snap[0], *parts)
+    if request.headers.get("If-None-Match") == etag:
+        raise HTTPResponse(
+            status=304,
+            headers={"ETag": etag, "Cache-Control": "no-cache, must-revalidate"},
+        )
+    return etag
+
+
 SECTION_STATS_SQL = """
     SELECT section_name,
       SUM(CASE WHEN state != 'none' THEN end - start ELSE 0 END) AS covered_bytes,

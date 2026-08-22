@@ -458,11 +458,12 @@ class TestSseEvents:
         """A WAL-only commit (no main-file change) must change the snapshot —
         this gates the memo/ETag/watcher after every rebrew build-db."""
         import recoverage.api as api
+        import recoverage.server as srv
 
         db = tmp_path / "coverage.db"
         db.write_bytes(b"x" * 100)
         wal = tmp_path / "coverage.db-wal"
-        monkeypatch.setattr(api, "_db_path", lambda: db)
+        monkeypatch.setattr(srv, "_db_path", lambda: db)
         before = api._snapshot_db_mtime()
         assert before is not None
         wal.write_bytes(b"y" * 100)
@@ -476,10 +477,11 @@ class TestSseEvents:
         """-shm is touched by every connection — it must NOT change the
         snapshot or ETags would be unstable between requests."""
         import recoverage.api as api
+        import recoverage.server as srv
 
         db = tmp_path / "coverage.db"
         db.write_bytes(b"x" * 100)
-        monkeypatch.setattr(api, "_db_path", lambda: db)
+        monkeypatch.setattr(srv, "_db_path", lambda: db)
         before = api._snapshot_db_mtime()
         assert before is not None
         shm = tmp_path / "coverage.db-shm"
@@ -1076,6 +1078,7 @@ class TestDataPayloadMemo:
             return conn
 
         monkeypatch.setattr(api, "_db_path", lambda: db)
+        monkeypatch.setattr("recoverage.server._db_path", lambda: db)
         monkeypatch.setattr(api, "_open_db", _open_like)
         monkeypatch.setattr(api, "_require_target", lambda c, t: None)
         monkeypatch.setattr(api, "request", type("R", (), {"headers": {}, "query": {}})())
@@ -1108,6 +1111,7 @@ class TestDataPayloadMemo:
             return conn
 
         monkeypatch.setattr(api, "_db_path", lambda: db)
+        monkeypatch.setattr("recoverage.server._db_path", lambda: db)
         monkeypatch.setattr(api, "_open_db", _open_like)
         monkeypatch.setattr(api, "_require_target", lambda c, t: None)
         monkeypatch.setattr(api, "request", type("R", (), {"headers": {}, "query": {}})())
