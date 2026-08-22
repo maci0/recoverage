@@ -104,7 +104,10 @@
   const REGEN_COOLDOWN_MS = 5000;
   let lastRegenTime = 0;
   const reloadData = async ({ loadingMsg, summaryData, loadData, MSG: messages }) => {
-    const now = Date.now();
+    // performance.now() is monotonic: a wall-clock step (NTP correction,
+    // manual change) between clicks would make the Date.now() delta negative
+    // and lock regen out until real time caught back up.
+    const now = performance.now();
     const since = now - lastRegenTime;
     if (since < REGEN_COOLDOWN_MS) {
       loadingMsg.val = messages.REGEN_USING_CACHE(Math.ceil((REGEN_COOLDOWN_MS - since) / 1000));
