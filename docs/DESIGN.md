@@ -13,7 +13,7 @@ The UI is built using a lightweight, dependency-free stack to ensure fast load t
 ## Data Pipeline
 1. `rebrew catalog --json` parses the target binary (`target.dll`) and C source annotations (`// FUNCTION:`, `// GLOBAL:`).
 2. `rebrew build-db` converts the resulting JSON into a structured SQLite database with tables for metadata, functions, globals, sections, and cells. It also pre-calculates coverage statistics for all sections to save frontend processing time.
-3. The Bottle app (`server.py` + `api.py` + `ui.py`) serves:
+3. The Bottle app (`webapp.py` wires `server.py` + `api.py` + `ui.py` into the fully routed application; importing `recoverage.server` alone yields a routeless app) serves:
    * Static files (index.html, app.js, style.css, van.min.js) which are **inlined and compressed** into a single response for the root `/` path to achieve a "first draw in the first TCP packet".
    * `/api/targets` endpoint that returns available targets from the database plus any target declared under `[targets.*]` in `rebrew-project.toml` (a configured-but-not-yet-built target stays addressable).
    * `/api/targets/<target>/stats` endpoint with per-section byte-based coverage statistics (shared implementation with the `recoverage stats` CLI).
@@ -300,9 +300,10 @@ Each filter link toggles that filter on/off while preserving other active filter
 
 Potato Mode uses [Bottle](https://bottlepy.org/) for both the dev server and HTML templating:
 
-- **`server.py`** — Bottle app factory and shared infrastructure: compression (brotli/zstd/gzip), minification, DB helpers, DLL loading, and response utilities.
+- **`server.py`** — shared Bottle application (`app`: hooks, auth, error handlers) and infrastructure: compression (brotli/zstd/gzip), minification, DB helpers, DLL loading, and response utilities.
 - **`api.py`** — REST API routes (`/api/*`) with `@app.get`/`@app.post` decorators and `request` globals.
 - **`ui.py`** — UI routes (`/`, `/potato`, static files) with index caching and `static_file()` serving.
+- **`webapp.py`** — composition root: imports `api` and `ui` so their routes mount on the shared `app`; this is the module the CLI actually serves.
 - **`potato.py`** — Uses Bottle's `SimpleTemplate` engine (stpl) standalone, with no dependency on the Bottle web server for rendering.
 
 ### Template Architecture

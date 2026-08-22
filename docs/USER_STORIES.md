@@ -22,7 +22,7 @@ User stories for the **recoverage** coverage dashboard, organized by persona and
 ### Acceptance Criteria
 - `recoverage` serves a local web dashboard on port 8001
 - Dashboard auto-opens in the default browser
-- Server reads `db/coverage.db` from the current working directory
+- Server resolves `coverage.db` from the current working directory: `[project] db_dir` in `rebrew-project.toml` when set, falling back to `db/coverage.db`
 - `--regen` flag runs `rebrew catalog --json` + `rebrew build-db` before starting
 - `--no-open` flag suppresses the browser auto-open
 
