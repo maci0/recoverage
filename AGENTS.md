@@ -44,6 +44,11 @@ recoverage/
         └── hljs.css         # Highlight.js theme (custom hex language)
 ```
 
+Frontend lint tooling lives at the repo root: `package.json` (oxlint, `@oxlint/plugins`, `@rikalabs/oxlint-standards`, vnu-jar), `oxlint.config.ts` (JS/TS lint config), `tools/lint-html.mjs` (vnu check of the static HTML/CSS assets), `tools/lint-served-html.py` (vnu check of the documents the server actually serves: the SPA shell with injected CSS/JS and Potato Mode), and `tools/oxlint/`:
+
+- `tools/oxlint/anti-slop/` — vendored copy of dmmulroy/anti-slop (keep in sync with upstream).
+- `tools/oxlint/rikalabs-strict.json` — flattened copy of the `strict` preset from `@rikalabs/oxlint-standards`, regenerated with `tools/flatten-rikalabs-strict.py` (bump the package, re-run the script, re-run `npm run lint:js`). It is flattened because the published presets reference rules oxlint 1.79.0 does not implement. `oxlint.config.ts` documents the platform exceptions (browser-only SPA: `env.browser`, `typeAware: false`, style off-list with rationale).
+
 ## Commands
 
 ```bash
@@ -62,6 +67,12 @@ recoverage check --min-coverage 60  # CI gate
 
 # Tests
 uv run pytest tests/ -v
+
+# Frontend linting (requires node + java on PATH)
+npm install                 # one-time: oxlint, @oxlint/plugins, @rikalabs/oxlint-standards, vnu-jar
+npm run lint                # oxlint (Rika-Labs strict preset + vendored anti-slop) + vnu HTML/CSS
+npm run lint:js             # oxlint only
+npm run lint:html           # vnu only: static assets + served pages (SPA shell, Potato Mode)
 ```
 
 ## API Endpoints
@@ -112,3 +123,8 @@ Optional:
 
 - Python 3.12+, ruff for linting, 100-char line length
 - HTML/CSS/JS in `assets/` — no build step, VanJS for reactivity
+- JS is linted with oxlint under the `@rikalabs/oxlint-standards` strict preset
+  plus the vendored anti-slop rules; the webui is a classic-script SPA, so
+  `app.js`/`detail.js` are wrapped in IIFEs and share state via `window.RC`.
+  Rationale-bearing `oxlint-disable` comments are the sanctioned escape hatch
+  for UI error boundaries and VanJS idioms (see `oxlint.config.ts`).

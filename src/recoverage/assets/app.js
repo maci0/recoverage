@@ -1,3 +1,4 @@
+(() => {
 const { a, aside, button, div, h1, h2, h3, header, input, main, p, pre, section, span, code } = van.tags;
 
 const DATA_URL = (t) => `/api/targets/${t}/data`;
@@ -31,11 +32,11 @@ const MSG = {
 };
 
 function hex(n, width) {
-  return "0x" + n.toString(16).toUpperCase().padStart(width, "0");
+  return `0x${n.toString(16).toUpperCase().padStart(width, "0")}`;
 }
 
 function escAttr(s) {
-  return String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return String(s).replaceAll("&", "&amp;").replaceAll('"', "&quot;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }
 
 // The hex dump and data inspector live in detail.js, which is fetched right
@@ -49,8 +50,8 @@ function loadDetail() {
   const el = document.createElement("script");
   el.src = "/detail.js";
   // Without this the panes it owns would sit on "Loading…" forever.
-  el.onerror = () => { detailFailed.val = true; };
-  document.head.appendChild(el);
+  el.addEventListener("error", () => { detailFailed.val = true; });
+  document.head.append(el);
 }
 
 async function fetchTextSafe(url) {
@@ -82,61 +83,55 @@ const LEGEND = [["none", "undocumented"], ["exact", "exact match"], ["reloc", "r
 // Sections in PE load order (ascending VA), which puts .text first instead of
 // leaving the section that carries all the work at the end of an alphabetical
 // row.  Sections without a VA sort last, keeping their relative order.
-const sectionNames = (s) => Object.keys(s).sort((a, b) => (s[a].va ?? 1e18) - (s[b].va ?? 1e18));
+const sectionNames = (s) => Object.keys(s).toSorted((a, b) => (s[a].va ?? 1e18) - (s[b].va ?? 1e18));
 
 // The /asm endpoint answers failures with {error, detail}; showing that beats a
-// generic placeholder, which would blame the wrong cause.
+// generic fallback, which would blame the wrong cause.
 function asmMessage(payload) {
   if (!payload) return MSG.ASM_PLACEHOLDER;
   if (payload.asm) return payload.asm;
-  if (payload.error) return `(${payload.error}${payload.detail ? ": " + payload.detail : ""})`;
+  if (payload.error) return `(${payload.error}${payload.detail ? `: ${payload.detail}` : ""})`;
   return MSG.ASM_PLACEHOLDER;
 }
 
 function computeCellClass(cell) {
   const s = cell.state;
   if (!s || !VALID_STATES.has(s)) return "cell";
-  return "cell " + s;
+  return `cell ${s}`;
 }
 
 let hljsLoaded = false;
 let hljsLoadingPromise = null;
 
-async function loadHighlightJs() {
+function loadHighlightJs() {
   if (hljsLoaded) return;
   if (hljsLoadingPromise) return hljsLoadingPromise;
 
-  if (!document.getElementById('hljs-theme')) {
-    const link = document.createElement('link');
-    link.id = 'hljs-theme';
-    link.rel = 'stylesheet';
-    link.href = '/hljs.css';
-    document.head.appendChild(link);
+  if (!document.querySelector("#hljs-theme")) {
+    const link = document.createElement("link");
+    link.id = "hljs-theme";
+    link.rel = "stylesheet";
+    link.href = "/hljs.css";
+    document.head.append(link);
   }
-
-  let resolvePromise;
-  hljsLoadingPromise = new Promise((resolve) => {
-    resolvePromise = resolve;
-  });
 
   // Served from this origin, not a CDN: reverse-engineering work routinely
   // happens on air-gapped or locked-down machines, where a CDN fetch fails
   // silently and every code pane renders unhighlighted.
   const loadScript = (src) => new Promise((resolve) => {
-    const el = document.createElement('script');
+    const el = document.createElement("script");
     el.src = src;
-    el.onload = resolve;
-    el.onerror = resolve;
-    document.head.appendChild(el);
+    el.addEventListener("load", resolve);
+    el.addEventListener("error", resolve);
+    document.head.append(el);
   });
 
-  loadScript('/hljs.min.js')
-    .then(() => Promise.all([loadScript('/hljs-c.min.js'), loadScript('/hljs-x86asm.min.js')]))
-    .then(() => {
-      window.RC.initHighlighting?.();
-      hljsLoaded = true;
-      resolvePromise();
-    });
+  hljsLoadingPromise = (async () => {
+    await loadScript("/hljs.min.js");
+    await Promise.all([loadScript("/hljs-c.min.js"), loadScript("/hljs-x86asm.min.js")]);
+    window.RC.initHighlighting?.();
+    hljsLoaded = true;
+  })();
 
   return hljsLoadingPromise;
 }
@@ -149,12 +144,13 @@ const SunIcon = () => Icon(`<circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 2
 const MoonIcon = () => Icon(`<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>`);
 const ReloadIcon = () => Icon(`<path d="M23 4v6h-6"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>`);
 
-// One key/value tile in a .meta-grid.  `value` is either a plain string, which
-// gets the default .meta-value treatment, or a prebuilt node when it needs its
-// own classes or behaviour (links, badges, the annotations block).
-const MetaItem = (label, value, extraClass = "") => div({ class: `meta-item ${extraClass}` },
+// One key/value tile in a .meta-grid.  `valueText` is either a plain string,
+// which gets the default .meta-value treatment, or a prebuilt node when it
+// needs its own classes or behaviour (links, badges, the annotations block).
+const MetaItem = (label, valueText, extraClass = "") => div({ class: `meta-item ${extraClass}` },
   span({ class: "meta-label" }, label),
-  (typeof value === "string" || typeof value === "number") ? span({ class: "meta-value" }, value) : value
+  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- API values arrive string|number; shape-check when rendering
+  (typeof valueText === "string" || typeof valueText === "number") ? span({ class: "meta-value" }, valueText) : valueText
 );
 
 const HexLogo = (label, color, titleText) => div({ class: "section-title-left" },
@@ -231,7 +227,7 @@ const App = () => {
         const urlTarget = URL_PARAMS.get("target");
         const savedTarget = localStorage.getItem("recoverage_target");
 
-        if (!availableTargets.val.length) {
+        if (availableTargets.val.length === 0) {
           // First run: serve started before the database was built.
           activeTarget.val = "";
           stopLoading({ title: "No coverage database", detail: "Run rebrew build-db to create db/coverage.db, then reload this page." });
@@ -246,11 +242,12 @@ const App = () => {
         }
         syncUrl();
       }
-    } catch (e) {
-      console.error("Failed to load targets:", e);
+    } catch (error) { // oxlint-disable-line @rikalabs/no-silent-catch-fallback -- failure is shown to the user via the empty state
+      // oxlint-disable-next-line eslint/no-console -- keep diagnostics in the browser console
+      console.error("Failed to load targets:", error);
       availableTargets.val = [];
       activeTarget.val = "";
-      stopLoading({ title: "Could not reach the server", detail: e.message });
+      stopLoading({ title: "Could not reach the server", detail: error.message });
     }
   };
 
@@ -283,7 +280,7 @@ const App = () => {
       data.val = d;
 
       const secNames = sectionNames(d.sections || {});
-      if (!secNames.length) {
+      if (secNames.length === 0) {
         const ver = String(d.db_version ?? "");
         emptyState.val = {
           title: "This target has no sections",
@@ -292,7 +289,8 @@ const App = () => {
             : "The database has no section rows yet. Rerun rebrew build-db.",
         };
       } else if (!d.sections[activeSection.val]) {
-        activeSection.val = secNames[0];
+        const [firstSection] = secNames;
+        activeSection.val = firstSection;
       }
       // URL section param wins over the default when valid.
       const secParam = URL_PARAMS.get("section");
@@ -319,19 +317,19 @@ const App = () => {
 
       // Restore last visited function — URL ?fn= wins over localStorage.
       setTimeout(() => {
-        const lastFn = URL_PARAMS.get("fn") || localStorage.getItem('recoverage_last_fn_' + activeTarget.val);
+        const lastFn = URL_PARAMS.get("fn") || localStorage.getItem(`recoverage_last_fn_${activeTarget.val}`);
         if (lastFn && data.val?.search_index?.[lastFn]) {
           const info = data.val.search_index[lastFn];
-          jumpToAddress(parseInt(info.va, 16));
+          jumpToAddress(Number.parseInt(info.va, 16));
           setTimeout(() => selectFunction(lastFn), 50);
         } else if (lastFn) {
           selectFunction(lastFn);
         }
       }, 50);
-    } catch (e) {
-      loadingMsg.val = MSG.ERROR_PREFIX + e.message;
+    } catch (error) { // oxlint-disable-line @rikalabs/no-silent-catch-fallback -- failure is shown to the user as an error panel
+      loadingMsg.val = MSG.ERROR_PREFIX + error.message;
       summaryData.val = null;
-      emptyState.val = { title: "Could not load coverage data", detail: e.message };
+      emptyState.val = { title: "Could not load coverage data", detail: error.message };
     } finally {
       isLoading.val = false;
     }
@@ -339,10 +337,10 @@ const App = () => {
 
   // The regen handler lives in detail.js: it only runs on a Reload click, long
   // after that file lands.  It gets the two states it writes plus the reloader.
-  const handleReload = () => window.RC.handleReload?.({ loadingMsg, summaryData, loadData, MSG });
+  const reloadData = () => window.RC.reloadData?.({ loadingMsg, summaryData, loadData, MSG });
 
-  let searchTimeout;
-  const handleSearch = (e) => {
+  let searchTimeout = null;
+  const onSearchInput = (e) => {
     clearTimeout(searchTimeout);
     searchTimeout = setTimeout(() => {
       searchQuery.val = e.target.value;
@@ -363,13 +361,14 @@ const App = () => {
     if (activeSection.val) p.set("section", activeSection.val);
     if (searchQuery.val) p.set("q", searchQuery.val);
     const qs = p.toString();
-    history.replaceState(null, "", qs ? "?" + qs : window.location.pathname);
+    history.replaceState(null, "", qs ? `?${qs}` : window.location.pathname);
   };
 
   // Initialize: load targets then data (NOT in derive - that's an anti-pattern)
-  loadTargets().then(() => {
+  (async () => {
+    await loadTargets();
     loadData();
-  });
+  })();
 
   // Live-reload: refresh the grid when coverage.db changes on disk.  The
   // subscription lives in detail.js, so it starts once that lands rather than
@@ -408,14 +407,15 @@ const App = () => {
     return matched;
   });
 
-  const sliceOriginalBytes = (item) => {
+  const sliceOriginalBytes = (cell) => {
     if (!originalDll.val || !data.val?.sections) return null;
     const sec = data.val.sections[activeSection.val];
     if (!sec || activeSection.val === ".bss") return null;
 
-    const va = typeof item.va === 'string' ? parseInt(item.va, 16) : item.va;
-    let start = activeSection.val === ".text" ? item.fileOffset : sec.fileOffset + (va - sec.va);
-    let size = activeSection.val === ".text" ? item.size : 16;
+    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- /functions API returns va as hex string or number; decode at the boundary
+    const va = typeof cell.va === 'string' ? Number.parseInt(cell.va, 16) : cell.va;
+    const start = activeSection.val === ".text" ? cell.fileOffset : sec.fileOffset + (va - sec.va);
+    const size = activeSection.val === ".text" ? cell.size : 16;
 
     if (start < 0 || start + size > originalDll.val.byteLength) return null;
     return originalDll.val.slice(start, start + size);
@@ -428,7 +428,7 @@ const App = () => {
       currentAbortController.abort();
     }
     currentAbortController = new AbortController();
-    const signal = currentAbortController.signal;
+    const { signal } = currentAbortController;
 
     if (activeSection.val === ".text") {
       // Set initial loading state synchronously
@@ -444,18 +444,18 @@ const App = () => {
 
         if (signal.aborted) return;
         currentFn.val = fn;
-        localStorage.setItem('recoverage_last_fn_' + activeTarget.val, id);
+        localStorage.setItem(`recoverage_last_fn_${activeTarget.val}`, id);
         syncUrl();
 
         const buf = sliceOriginalBytes(fn);
         currentBuf.val = buf;
-        if (buf) showBytes(buf, parseInt(fn.vaStart || fn.va, 16));
+        if (buf) showBytes(buf, Number.parseInt(fn.vaStart || fn.va, 16));
         else showBytesMessage(originalDll.val ? MSG.BYTES_FAILED : MSG.BYTES_LOAD_FAILED);
 
         const sourceRoot = (data.val && data.val.paths && data.val.paths.sourceRoot) ? data.val.paths.sourceRoot : `/src/${activeTarget.val.toLowerCase()}`;
         const cPath = (fn.files && fn.files[0]) ? `${sourceRoot}/${fn.files[0]}` : null;
         const va = fn.vaStart || fn.va;
-        const size = fn.size;
+        const { size } = fn;
 
         // Fetch C source and ASM concurrently
         const [cSourceRes, asmRes] = await Promise.allSettled([
@@ -471,12 +471,12 @@ const App = () => {
 
         // Update all state synchronously to trigger a single re-render
         cSourceText.val = newCSource;
-        docText.val = newDocs ? newDocs : MSG.NO_DOCS;
+        docText.val = newDocs || MSG.NO_DOCS;
         asmText.val = newAsm;
-      } catch (e) {
-        if (e.name === 'AbortError') return;
+      } catch (error) { // oxlint-disable-line @rikalabs/no-silent-catch-fallback -- AbortError is a cancellation; other failures become error text
+        if (error.name === 'AbortError') return;
         currentFn.val = null;
-        cSourceText.val = MSG.ERROR_PREFIX + e.message;
+        cSourceText.val = MSG.ERROR_PREFIX + error.message;
       }
 
     } else {
@@ -488,19 +488,19 @@ const App = () => {
 
         if (signal.aborted) return;
         currentFn.val = { ...g, isGlobal: true };
-        localStorage.setItem('recoverage_last_fn_' + activeTarget.val, id);
+        localStorage.setItem(`recoverage_last_fn_${activeTarget.val}`, id);
         const buf = sliceOriginalBytes(g);
         currentBuf.val = buf;
-        if (buf) showBytes(buf, parseInt(g.va, 16));
+        if (buf) showBytes(buf, Number.parseInt(g.va, 16));
         else if (activeSection.val === ".bss") showBytesMessage(MSG.BYTES_BSS);
         else showBytesMessage(originalDll.val ? MSG.BYTES_FAILED : MSG.BYTES_LOAD_FAILED);
         cSourceText.val = g.decl || MSG.NO_DECL;
         docText.val = MSG.GLOBAL_VAR;
         asmText.val = MSG.DATA_SECTION_NO_ASM;
-      } catch (e) {
-        if (e.name === 'AbortError') return;
+      } catch (error) { // oxlint-disable-line @rikalabs/no-silent-catch-fallback -- AbortError is a cancellation; other failures become error text
+        if (error.name === 'AbortError') return;
         currentFn.val = null;
-        cSourceText.val = MSG.ERROR_PREFIX + e.message;
+        cSourceText.val = MSG.ERROR_PREFIX + error.message;
       }
     }
   };
@@ -517,7 +517,7 @@ const App = () => {
 
     activeFnName.val = cell._fnName || "";
 
-    if (cell.functions && cell.functions.length) {
+    if (cell.functions && cell.functions.length > 0) {
       selectFunction(cell.functions[0]);
     } else {
       currentFn.val = null;
@@ -573,76 +573,79 @@ const App = () => {
     const newFilters = new Set(activeFilters.val);
     if (filter === "all") {
       newFilters.clear();
+    } else if (newFilters.has(filter)) {
+      newFilters.delete(filter);
     } else {
-      if (newFilters.has(filter)) {
-        newFilters.delete(filter);
-      } else {
-        newFilters.add(filter);
-      }
+      newFilters.add(filter);
     }
     activeFilters.val = newFilters;
   };
 
   const jumpToAddress = (targetVa) => {
     if (!data.val || !data.val.sections) return;
+    const focusCellAfterPaint = (secName, cellIndex) => {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          gridFocus?.(secName, cellIndex);
+          const grid = document.querySelector(`#${gridId(secName)}`);
+          if (grid && grid.children[cellIndex]) {
+            grid.children[cellIndex].scrollIntoView({ behavior: "smooth", block: "center" });
+          }
+        });
+      });
+    };
     for (const [secName, sec] of Object.entries(data.val.sections)) {
       if (targetVa >= sec.va && targetVa < sec.va + sec.size) {
         const offset = targetVa - sec.va;
         const cells = sec.cells || [];
-        for (let i = 0; i < cells.length; i++) {
+        for (let i = 0; i < cells.length; i += 1) {
           const cell = cells[i];
           if (offset >= cell.start && offset < cell.end) {
             activeSection.val = secName;
             selectChunk(i);
-            requestAnimationFrame(() => {
-              requestAnimationFrame(() => {
-                gridFocus?.(secName, i);
-                const grid = document.getElementById(gridId(secName));
-                if (grid && grid.children[i]) {
-                  grid.children[i].scrollIntoView({ behavior: "smooth", block: "center" });
-                }
-              });
-            });
+            focusCellAfterPaint(secName, i);
             return;
           }
         }
       }
     }
+    // oxlint-disable-next-line eslint/no-console -- an address outside every section deserves a console warning
     console.warn("Address not found in any section:", targetVa.toString(16));
   };
 
   const HighlightedCode = ({ lang, text }) => {
     const codeEl = code({ class: lang ? `language-${lang}` : "" }, text);
 
-    const doHighlight = async () => {
+    const highlightCode = async () => {
       if (lang) {
         await loadHighlightJs();
-        codeEl.removeAttribute("data-highlighted");
+        delete codeEl.dataset.highlighted;
         try {
           window.hljs.highlightElement(codeEl);
           if (lang === "x86asm") {
-            codeEl.innerHTML = codeEl.innerHTML.replace(/(0x[0-9a-fA-F]+)/g, '<a href="#" class="asm-link" data-addr="$1">$1</a>');
+            codeEl.innerHTML = codeEl.innerHTML.replaceAll(/(?<addr>0x[0-9a-fA-F]+)/gu, '<a href="#" class="asm-link" data-addr="$<addr>">$<addr></a>');
           }
-        } catch (_) { }
+        } catch { /* highlight failures are cosmetic; the pane keeps plain text */ } // oxlint-disable-line @rikalabs/no-silent-catch-fallback -- highlight failures are cosmetic; plain text remains
       }
     };
 
-    setTimeout(doHighlight, 0);
+    setTimeout(() => { highlightCode(); }, 0);
 
-    codeEl.onclick = (e) => {
+    codeEl.addEventListener("click", (e) => {
       if (e.target.classList.contains("asm-link")) {
         e.preventDefault();
-        const addrStr = e.target.getAttribute("data-addr");
+        const addrStr = e.target.dataset.addr;
         if (addrStr) {
-          jumpToAddress(parseInt(addrStr, 16));
+          jumpToAddress(Number.parseInt(addrStr, 16));
         }
       }
-    };
+    });
 
     return pre({ class: "code" }, codeEl);
   };
 
 
+  // oxlint-disable-next-line eslint/arrow-body-style -- explicit return reads clearly for a component factory closure
   const ProgressBar = () => {
     return () => {
       // The empty state already explains the situation; a bar reading
@@ -672,8 +675,14 @@ const App = () => {
       const sec = data.val.sections[secName];
       if (!sec) return div({ class: "subtitle" }, "Section not found");
 
-      let exactCount = 0, relocCount = 0, nearMatchCount = 0, stubCount = 0;
-      let exactBytes = 0, relocBytes = 0, nearMatchBytes = 0, stubBytes = 0;
+      let exactCount = 0;
+      let relocCount = 0;
+      let nearMatchCount = 0;
+      let stubCount = 0;
+      let exactBytes = 0;
+      let relocBytes = 0;
+      let nearMatchBytes = 0;
+      let stubBytes = 0;
       let paddingBytes = 0;
       let totalItems = 0;
       let coveredBytes = 0;
@@ -693,27 +702,17 @@ const App = () => {
         coveredBytes = s.coveredBytes || 0;
       }
 
-      let exactPct = 0, relocPct = 0, nearMatchPct = 0, stubPct = 0, paddingPct = 0;
-      if (secName === ".text") {
-        const total = totalItems || 1;
-        exactPct = (exactCount / total) * 100;
-        relocPct = (relocCount / total) * 100;
-        nearMatchPct = (nearMatchCount / total) * 100;
-        stubPct = (stubCount / total) * 100;
-        paddingPct = sec.size > 0 ? (paddingBytes / sec.size * 100) : 0;
-      } else {
-        const total = sec.size || 1;
-        exactPct = (exactBytes / total) * 100;
-        relocPct = (relocBytes / total) * 100;
-        nearMatchPct = (nearMatchBytes / total) * 100;
-        stubPct = (stubBytes / total) * 100;
-        paddingPct = (paddingBytes / total) * 100;
-      }
+      const total = secName === ".text" ? (totalItems || 1) : (sec.size || 1);
+      const exactPct = ((secName === ".text" ? exactCount : exactBytes) / total) * 100;
+      const relocPct = ((secName === ".text" ? relocCount : relocBytes) / total) * 100;
+      const nearMatchPct = ((secName === ".text" ? nearMatchCount : nearMatchBytes) / total) * 100;
+      const stubPct = ((secName === ".text" ? stubCount : stubBytes) / total) * 100;
+      const paddingPct = (secName === ".text" && sec.size > 0 ? paddingBytes / sec.size : paddingBytes / total) * 100;
 
       const coveragePct = sec.size > 0 ? (coveredBytes / sec.size * 100) : 0;
 
       const getClasses = (type) => {
-        let cls = `progress-segment ${type}`;
+        const cls = `progress-segment ${type}`;
         return () => `${cls} ${activeFilters.val.has(type) ? "active" : ""}`;
       };
 
@@ -792,7 +791,7 @@ const App = () => {
     // the element as --cols.  The CSS track count, the square-cell row height
     // below, and the arrow keys all read it from there, so they cannot drift
     // apart the way three separate `sec.columns || 64` defaults did.
-    const colsOf = (gridEl) => +gridEl.style.getPropertyValue("--cols") || +gridEl.dataset.cols || 64;
+    const colsOf = (gridEl) => Number(gridEl.style.getPropertyValue("--cols")) || Number(gridEl.dataset.cols) || 64;
 
     // The declared column count is a desktop figure: at 64 columns a 352px
     // phone renders 2.8px cells, unreadable and untappable.  Below the same
@@ -806,20 +805,19 @@ const App = () => {
       if (!activeGrid) return;
 
       const styles = window.getComputedStyle(activeGrid);
-      const gap = parseFloat(styles.columnGap || styles.gap || "2") || 2;
-      const padL = parseFloat(styles.paddingLeft || "0") || 0;
-      const padR = parseFloat(styles.paddingRight || "0") || 0;
+      const gap = Number.parseFloat(styles.columnGap || styles.gap || "2") || 2;
+      const padL = Number.parseFloat(styles.paddingLeft || "0") || 0;
+      const padR = Number.parseFloat(styles.paddingRight || "0") || 0;
       const usable = Math.max(0, activeGrid.clientWidth - padL - padR);
 
       // Widest column count whose cells still clear MIN_CELL_PX, capped at the
       // section's own value so a wide viewport never invents extra columns.
       const min = minCellPx();
-      const declared = +activeGrid.dataset.cols || 64;
+      const declared = Number(activeGrid.dataset.cols) || 64;
       const fits = Math.floor((usable + gap) / (min + gap));
       const columns = Math.max(1, Math.min(declared, fits));
-      activeGrid.style.setProperty("--cols", columns);
-
       const colW = (usable - gap * (columns - 1)) / columns;
+      activeGrid.style.setProperty("--cols", columns);
       activeGrid.style.gridAutoRows = `${Math.max(min, Math.floor(colW))}px`;
     };
 
@@ -828,17 +826,17 @@ const App = () => {
     const updateCellClasses = (gridEl, secName) => {
       const sec = data.val?.sections?.[secName];
       if (!sec || !sec.cells) return;
-      const cells = sec.cells;
+      const {cells} = sec;
 
       const query = searchQuery.val;
       const matchedNames = filteredFnNames.val;
       const activeIdx = secName === activeSection.val ? currentCellIndex.val : null;
       const activeFn = secName === activeSection.val ? activeFnName.val : "";
 
-      const children = gridEl.children;
+      const {children} = gridEl;
       const len = Math.min(children.length, cells.length);
 
-      for (let i = 0; i < len; i++) {
+      for (let i = 0; i < len; i += 1) {
         const child = children[i];
         const cell = cells[i];
 
@@ -871,7 +869,7 @@ const App = () => {
       // them: otherwise they keep pointing into detached DOM.
       const dropGrids = () => {
         container.innerHTML = "";
-        for (const k in grids) { delete grids[k]; delete focusIdx[k]; delete selectedEl[k]; }
+        for (const k of Object.keys(grids)) { delete grids[k]; delete focusIdx[k]; delete selectedEl[k]; }
       };
 
       if (isLoading.val) {
@@ -900,7 +898,11 @@ const App = () => {
       }
 
       // Create grid if it doesn't exist
-      if (!grids[secName]) {
+      if (grids[secName]) {
+        // Grid already exists, just resize and update classes
+        resize();
+        updateCellClasses(grids[secName], secName);
+      } else {
         const gridEl = div({
           class: "grid",
           id: gridId(secName),
@@ -914,8 +916,8 @@ const App = () => {
           onclick: (e) => {
             const cell = e.target.closest('.cell');
             if (cell) {
-              const idx = parseInt(cell.getAttribute('data-index'), 10);
-              if (!isNaN(idx)) { selectChunk(idx); moveFocus(gridEl, secName, idx); }
+              const idx = Number.parseInt(cell.dataset.index, 10);
+              if (!Number.isNaN(idx)) { selectChunk(idx); moveFocus(gridEl, secName, idx); }
             }
           },
           onkeydown: (e) => {
@@ -923,8 +925,8 @@ const App = () => {
             // a full row vertically; Home/End jump to the ends of the section.
             const cell = e.target.closest('.cell');
             if (!cell || e.ctrlKey || e.metaKey || e.altKey) return;
-            const idx = parseInt(cell.getAttribute('data-index'), 10);
-            if (isNaN(idx)) return;
+            const idx = Number.parseInt(cell.dataset.index, 10);
+            if (Number.isNaN(idx)) return;
             const cols = colsOf(gridEl);
             const last = gridEl.children.length - 1;
             const clamp = (n) => Math.max(0, Math.min(last, n));
@@ -944,7 +946,7 @@ const App = () => {
         });
 
         grids[secName] = gridEl;
-        container.appendChild(gridEl);
+        container.append(gridEl);
         ro.observe(gridEl);
 
         const cells = sec.cells || [];
@@ -961,8 +963,9 @@ const App = () => {
           focusIdx[secName] = roving;
 
           let html = "";
-          for (let i = 0; i < cells.length; i++) {
+          for (let i = 0; i < cells.length; i += 1) {
             const cell = cells[i];
+            // oxlint-disable-next-line anti-slop/no-runtime-typeof -- span is a number when a cell spans grid columns; shape-check when rendering
             const style = typeof cell.span === "number" ? `grid-column: span ${cell.span};` : "";
             const secVa = sec.va || 0;
             const title = `${i}  ${hex(secVa + cell.start, 8)}..${hex(secVa + cell.end, 8)}  ${cell.functions ? cell.functions.length : 0} fn`;
@@ -985,19 +988,18 @@ const App = () => {
           gridEl.style.opacity = "1";
           resize();
         }, 0);
-      } else {
-        // Grid already exists, just resize and update classes
-        resize();
-        updateCellClasses(grids[secName], secName);
       }
     });
 
     van.derive(() => {
-      // Depend on these states to trigger updates
+      // Depend on these states to trigger updates — the bare .val read is a
+      // VanJS idiom: it subscribes this derive to the state without using it.
+      // oxlint-disable no-unused-expressions -- bare .val reads subscribe this derive to state
       searchQuery.val;
       filteredFnNames.val;
       currentCellIndex.val;
       activeFnName.val;
+      // oxlint-enable no-unused-expressions
 
       const activeGrid = grids[activeSection.val];
       if (activeGrid && activeGrid.children.length > 0 && activeGrid.children[0].classList.contains('cell')) {
@@ -1046,7 +1048,7 @@ const App = () => {
           MetaItem("VA", a({
             href: "#",
             class: "meta-value asm-link",
-            onclick: (e) => { e.preventDefault(); jumpToAddress(parseInt(fn.va)); }
+            onclick: (e) => { e.preventDefault(); jumpToAddress(Number.parseInt(fn.va, 16)); }
           }, `0x${fn.va.toString(16).toUpperCase()}`)),
           MetaItem("Type", "Global Variable"),
           SourceItem()
@@ -1058,7 +1060,7 @@ const App = () => {
           MetaItem("VA", a({
             href: "#",
             class: "meta-value asm-link",
-            onclick: (e) => { e.preventDefault(); jumpToAddress(parseInt(fn.vaStart || fn.va)); }
+            onclick: (e) => { e.preventDefault(); jumpToAddress(Number.parseInt(fn.vaStart || fn.va, 16)); }
           }, fn.vaStart || fn.va)),
           MetaItem("Size", `${fn.size} bytes`),
           MetaItem("Offset", `0x${(fn.fileOffset || 0).toString(16).toUpperCase()}`),
@@ -1068,16 +1070,16 @@ const App = () => {
           MetaItem("Compiler", fn.cflags || MSG.NA),
           MetaItem("Marker", fn.markerType || "?"),
           fn.blocker ? MetaItem("Blocker", span({ class: "meta-value blocker-value" }, fn.blocker), "full-width") : null,
-          fn.blockerDelta != null ? MetaItem("Delta", span({ class: "meta-value delta-value" }, `${fn.blockerDelta} bytes`)) : null,
+          fn.blockerDelta == null ? null : MetaItem("Delta", span({ class: "meta-value delta-value" }, `${fn.blockerDelta} bytes`)),
           fn.ghidra_name && fn.ghidra_name !== fn.name ? MetaItem("Ghidra", fn.ghidra_name) : null,
           fn.list_name && fn.list_name !== fn.name ? MetaItem("Func List", fn.list_name) : null,
           fn.size_reason ? MetaItem("Size Source", fn.size_reason) : null,
-          fn.last_verify ? MetaItem("Verified", `${fn.last_verify.verified_at}${fn.last_verify.byte_delta != null ? ` (Δ${fn.last_verify.byte_delta}B)` : ""}`) : null,
+          fn.last_verify ? MetaItem("Verified", `${fn.last_verify.verified_at}${fn.last_verify.byte_delta == null ? "" : ` (Δ${fn.last_verify.byte_delta}B)`}`) : null,
           fn.last_verify && fn.last_verify.similarity != null ? MetaItem("Code Sim", `${fn.last_verify.similarity.toFixed(1)}%`) : null,
-          fn.similarity != null ? MetaItem("Similarity", `${(fn.similarity * 100).toFixed(1)}%`) : null,
+          fn.similarity == null ? null : MetaItem("Similarity", `${(fn.similarity * 100).toFixed(1)}%`),
           fn.is_thunk ? MetaItem("Type", "IAT thunk (not reversible)") : null,
           fn.is_export ? MetaItem("Type", "Exported function") : null,
-          fn.sha256 ? MetaItem("SHA256", `${fn.sha256.substring(0, 16)}...`) : null,
+          fn.sha256 ? MetaItem("SHA256", `${fn.sha256.slice(0, 16)}...`) : null,
           SourceItem(),
           docText.val && docText.val !== MSG.SELECT_FUNCTION && docText.val !== MSG.NO_DOCS
             ? MetaItem("Annotations", pre({ class: "meta-docs" }, docText.val), "full-width") : null
@@ -1110,8 +1112,9 @@ const App = () => {
             onclick: () => {
               // cellIdx is null when nothing is selected, which used to render
               // as the literal "Block null".
-              const subject = fn ? fn.name : (cellIdx !== null ? `Block ${cellIdx}` : activeSection.val);
-              modalTitle.val = `${heading}: ${subject}`;
+              const subject = cellIdx === null ? activeSection.val : `Block ${cellIdx}`;
+              const headingTarget = fn ? fn.name : subject;
+              modalTitle.val = `${heading}: ${headingTarget}`;
               modalContent.val = text;
               modalLang.val = lang;
               showModal.val = true;
@@ -1125,7 +1128,7 @@ const App = () => {
     // Compute copyable VA: prefer fn fields, fall back to cell address range
     let copyVA = null;
     if (fn) {
-      copyVA = fn.vaStart || (fn.va != null ? hex(fn.va, 8) : null);
+      copyVA = fn.vaStart || (fn.va == null ? null : hex(fn.va, 8));
     } else if (cellIdx !== null && data.val?.sections) {
       const sec = data.val.sections[activeSection.val];
       if (sec?.cells?.[cellIdx]) {
@@ -1192,7 +1195,7 @@ const App = () => {
             type: "search", class: "input-el",
             placeholder: "Search function name or VA...",
             "aria-label": "Search functions",
-            oninput: handleSearch
+            oninput: onSearchInput
           })
         ),
         div({ class: "filters" },
@@ -1245,7 +1248,7 @@ const App = () => {
             return span({ style: "display: none;" });
           },
           button({ class: "btn icon-btn", "aria-label": () => isLightMode.val ? "Switch to Dark Mode" : "Switch to Light Mode", title: () => isLightMode.val ? "Switch to Dark Mode" : "Switch to Light Mode", onclick: () => { isLightMode.val = !isLightMode.val; localStorage.setItem('recoverage_theme', isLightMode.val ? 'light' : 'dark'); } }, () => isLightMode.val ? MoonIcon() : SunIcon()),
-          button({ class: "btn icon-btn", "aria-label": "Reload data", disabled: () => detailFailed.val, title: () => detailFailed.val ? MSG.DETAIL_UNAVAILABLE : "Reload", onclick: handleReload }, ReloadIcon())
+          button({ class: "btn icon-btn", "aria-label": "Reload data", disabled: () => detailFailed.val, title: () => detailFailed.val ? MSG.DETAIL_UNAVAILABLE : "Reload", onclick: reloadData }, ReloadIcon())
         )
       )
     ),
@@ -1283,10 +1286,11 @@ const App = () => {
   // file lands.  Mounting is deferred with it.
   van.derive(() => {
     if (detailReady.val) {
-      window.RC.mountModal({ showModal, modalTitle, modalContent, modalLang, HighlightedCode, copyToClipboard });
+      window.RC.mountModal({ showModal, modalTitle, modalContent, modalLang, HighlightedCode });
     }
   });
 };
 
 van.add(document.body, App());
 loadDetail();
+})();

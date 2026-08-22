@@ -1,6 +1,6 @@
 """Path resolution helpers for recoverage.
 
-Provides _resolve_db_path(), which honours ``rebrew-project.toml``
+Provides _db_path(), which honours ``rebrew-project.toml``
 ``[project] db_dir`` when present and falls back to ``./db/coverage.db``
 otherwise — matching rebrew's own resolution logic as of build_db commit
 2003831.
@@ -14,16 +14,7 @@ from pathlib import Path
 
 
 def _db_path() -> Path:
-    """Return the path to the coverage database.
-
-    Delegates to ``_resolve_db_path()`` so that ``[project] db_dir`` in
-    ``rebrew-project.toml`` is honoured when present.
-    """
-    return _resolve_db_path()
-
-
-def _resolve_db_path() -> Path:
-    """Resolve the coverage.db path, honouring rebrew-project.toml [project] db_dir.
+    """Return the path to coverage.db, honouring rebrew-project.toml [project] db_dir.
 
     Resolution order:
 

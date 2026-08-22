@@ -120,7 +120,7 @@ def test_format_data_inspector():
     test_bytes = struct.pack(
         "<bBhHiIfd", -42, 200, -1000, 60000, -100000, 3000000000, 3.14, 2.71828
     )
-    inspector = _format_data_inspector(test_bytes, "#151a21", "#334155", "#8b949e")
+    inspector = _format_data_inspector(test_bytes)
     assert "int8" in inspector and "-42" in inspector
     assert "uint8" in inspector and "214" in inspector
     assert "int16" in inspector
@@ -128,10 +128,10 @@ def test_format_data_inspector():
     assert "float32" in inspector
     assert "float64" in inspector
     assert "<table" in inspector and "</table>" in inspector
-    assert _format_data_inspector(b"", "#000", "#111", "#222") == ""
-    assert _format_data_inspector(None, "#000", "#111", "#222") == ""
+    assert _format_data_inspector(b"") == ""
+    assert _format_data_inspector(None) == ""
 
-    ascii_inspector = _format_data_inspector(b"Hello\x00World", "#000", "#111", "#222")
+    ascii_inspector = _format_data_inspector(b"Hello\x00World")
     assert "string (ascii)" in ascii_inspector and "Hello" in ascii_inspector
 
 

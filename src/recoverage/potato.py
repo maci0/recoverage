@@ -31,6 +31,7 @@ from recoverage import __version__
 from recoverage.server import (
     _FN_JSON_SQL,
     _GLOBAL_JSON_SQL,
+    HAS_CAPSTONE,
     _db_path,
     _escape_like,
     _load_dll,
@@ -188,13 +189,9 @@ def _make_progress_svg(
     )
 
 
-def _make_pill_caps(
-    height: int, fill_hex: str, border_hex: str | None = None, radius: int | None = None
-) -> tuple[str, str, str]:
-    """Generate left-cap and right-cap SVG data URIs for a pill shape.
-    Returns (left_uri, right_uri, fill_hex) for 3-cell construction."""
-    if radius is None:
-        radius = height // 2
+def _make_pill_caps(height: int, fill_hex: str, border_hex: str | None = None) -> tuple[str, str]:
+    """Generate left-cap and right-cap SVG data URIs for a pill shape."""
+    radius = height // 2
 
     def _uri(svg: str) -> str:
         return "data:image/svg+xml;base64," + base64.b64encode(svg.encode("utf-8")).decode("utf-8")
@@ -208,7 +205,7 @@ def _make_pill_caps(
         left_svg = f'<svg xmlns="http://www.w3.org/2000/svg" width="{radius}" height="{height}" viewBox="0 0 {radius} {height}"><path d="M{radius},0 A{radius},{radius} 0 0,0 {radius},{height}" fill="{fill_hex}"/></svg>'
         right_svg = f'<svg xmlns="http://www.w3.org/2000/svg" width="{radius}" height="{height}" viewBox="0 0 {radius} {height}"><path d="M0,0 A{radius},{radius} 0 0,1 0,{height}" fill="{fill_hex}"/></svg>'
 
-    return _uri(left_svg), _uri(right_svg), fill_hex
+    return _uri(left_svg), _uri(right_svg)
 
 
 def _make_pill_mid_tile(height: int, fill_hex: str, border_hex: str) -> str:
@@ -224,14 +221,14 @@ def _make_pill_mid_tile(height: int, fill_hex: str, border_hex: str) -> str:
 
 
 # Pre-compute section tab pill cap images
-ACTIVE_L, ACTIVE_R, _ = _make_pill_caps(32, "#1a3a4a", border_hex="#06b6d4")
-INACTIVE_L, INACTIVE_R, _ = _make_pill_caps(32, "#182230", border_hex="#2a3a4a")
+ACTIVE_L, ACTIVE_R = _make_pill_caps(32, "#1a3a4a", border_hex="#06b6d4")
+INACTIVE_L, INACTIVE_R = _make_pill_caps(32, "#182230", border_hex="#2a3a4a")
 ACTIVE_MID = _make_pill_mid_tile(32, "#1a3a4a", "#06b6d4")
 INACTIVE_MID = _make_pill_mid_tile(32, "#182230", "#2a3a4a")
 
 # Pre-compute filter pill cap images
-FILTER_ACT_L, FILTER_ACT_R, _ = _make_pill_caps(32, "#162438", border_hex="#2a6fdb")
-FILTER_INACT_L, FILTER_INACT_R, _ = _make_pill_caps(32, "#182230", border_hex="#2a3a4a")
+FILTER_ACT_L, FILTER_ACT_R = _make_pill_caps(32, "#162438", border_hex="#2a6fdb")
+FILTER_INACT_L, FILTER_INACT_R = _make_pill_caps(32, "#182230", border_hex="#2a3a4a")
 FILTER_ACT_MID = _make_pill_mid_tile(32, "#162438", "#2a6fdb")
 FILTER_INACT_MID = _make_pill_mid_tile(32, "#182230", "#2a3a4a")
 
@@ -284,7 +281,7 @@ def _hex_logo_svg(label: str, color: str) -> str:
     )
 
 
-def _section_heading(label: str, color: str, title: str, extra: str = "") -> str:
+def _section_heading(label: str, color: str, title: str) -> str:
     """Render a section heading with a hex logo + title text."""
     logo = _hex_logo_svg(label, color)
     return (
@@ -292,7 +289,7 @@ def _section_heading(label: str, color: str, title: str, extra: str = "") -> str
         f'<td valign="middle">{logo}</td>'
         f'<td valign="middle">'
         f'<h2><font size="3">{title}</font></h2>'
-        f"{extra}</td></tr></table><br>"
+        f"</td></tr></table><br>"
     )
 
 
@@ -597,32 +594,23 @@ def _extract_annotations(code: str) -> list[tuple[str, str]]:
     return annotations
 
 
-def _format_data_inspector(
-    raw_bytes: bytes | None,
-    panel_color: str | None = None,
-    border_color: str | None = None,
-    muted_color: str | None = None,
-) -> str:
+def _format_data_inspector(raw_bytes: bytes | None) -> str:
     """Format raw bytes as a Data Inspector table (like the main UI)."""
     if not raw_bytes:
         return ""
-
-    pc = panel_color or PANEL_COLOR
-    bc = border_color or BORDER_COLOR
-    mc = muted_color or MUTED_COLOR
 
     parts: list[str] = []
     parts.append(
         _section_heading("{}", "#a855f7", "Data Inspector")
         + f'<table width="100%" border="0" cellpadding="3" cellspacing="1"'
-        f' bgcolor="{bc}">'
+        f' bgcolor="{BORDER_COLOR}">'
     )
 
     def _row(label: str, value: object) -> None:
         parts.append(
-            f'<tr><th bgcolor="{pc}" width="35%">'
-            f'<font size="1" color="{mc}"><b>{_esc(label)}</b></font></th>'
-            f'<td bgcolor="{pc}">'
+            f'<tr><th bgcolor="{PANEL_COLOR}" width="35%">'
+            f'<font size="1" color="{MUTED_COLOR}"><b>{_esc(label)}</b></font></th>'
+            f'<td bgcolor="{PANEL_COLOR}">'
             f'<font face="Courier New, monospace" size="1">{_esc(value)}</font></td></tr>'
         )
 
@@ -687,16 +675,6 @@ def _build_url(
     if page:
         url += "&page=" + str(page)
     return url
-
-
-def _get_disassembly(va: int, size: int, file_offset: int, target: str) -> str | None:
-    """Delegate to the LRU-cached server disassembly; return None when unavailable."""
-    from recoverage.server import HAS_CAPSTONE  # noqa: PLC0415
-
-    if not HAS_CAPSTONE:
-        return None
-    result = get_disassembly(va, size, file_offset, target)
-    return result or None
 
 
 # ── SimpleTemplate: Page Layout ─────────────────────────────────────
@@ -802,8 +780,9 @@ _PAGE_SRC = r"""<!DOCTYPE html>
             <td valign="middle"><img src="{{DOT_PNGS[leg_key]}}" width="12" height="12" border="0" alt=""></td><td valign="middle"><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">{{leg_label}}</font></td>
           % end
           </tr></table>
-          <table id="grid-container" border="1" cellpadding="8" cellspacing="0" bordercolor="{{BORDER_COLOR}}" bgcolor="{{BG_COLOR}}" width="100%"><tr><td>
+          <table id="grid-container" border="1" cellpadding="8" cellspacing="0" bordercolor="{{BORDER_COLOR}}" bgcolor="{{BG_COLOR}}" width="100%">
           <caption align="left"><font size="1" color="{{MUTED_COLOR}}">Coverage map - {{section}} ({{block_count}} blocks)</font></caption>
+          <tr><td>
           <font size="1"><center>{{!grid_html}}</center></font>
           </td></tr></table>
         </td></tr>
@@ -1095,7 +1074,7 @@ def _build_filter_data(
     section: str,
     active_filters: set[str],
     search_query: str,
-) -> tuple[list[tuple[str, str, str, bool, str]], str]:
+) -> list[tuple[str, str, str, bool, str]]:
     filter_opts = [
         ("exact", "E", "e"),
         ("reloc", "R", "r"),
@@ -1130,7 +1109,7 @@ def _build_filter_data(
         (toggle_links[f], label, COLORS[f], f in active_filters, key)
         for f, label, key in filter_opts
     )
-    return filter_btn_data, all_link
+    return filter_btn_data
 
 
 def _build_progress(
@@ -1494,7 +1473,7 @@ def _render_potato_inner(
 
     search_matched_fns = _search_functions(c, target, search_query)
     per_section_stats = _compute_section_stats(c, target, sections, data)
-    filter_btn_data, _ = _build_filter_data(target, section, active_filters, search_query)
+    filter_btn_data = _build_filter_data(target, section, active_filters, search_query)
     progress = _build_progress(section, sec_data, data, sections)
 
     # ── Section tab data ─────────────────────────────────────────
@@ -1862,8 +1841,8 @@ def _render_panel(
             fn_va = fn_data.get("va")
             fn_size = fn_data.get("size")
             fn_file_offset = fn_data.get("fileOffset")
-            if fn_va and fn_size and fn_file_offset:
-                asm_text = _get_disassembly(fn_va, fn_size, fn_file_offset, target)
+            if HAS_CAPSTONE and fn_va and fn_size and fn_file_offset:
+                asm_text = get_disassembly(fn_va, fn_size, fn_file_offset, target)
                 if asm_text:
                     ctx["asm_heading"] = _section_heading("ASM", "#ef4444", "Assembly")
                     ctx["asm_html"] = _code_block_raw(

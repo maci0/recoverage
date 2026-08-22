@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from recoverage._paths import _resolve_db_path
+from recoverage._paths import _db_path
 
 # ---------------------------------------------------------------------------
 
@@ -15,7 +15,7 @@ class TestResolveDbPath:
     def test_fallback_when_no_toml(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Falls back to <cwd>/db/coverage.db when no rebrew-project.toml is present."""
         monkeypatch.chdir(tmp_path)
-        result = _resolve_db_path()
+        result = _db_path()
         assert result == tmp_path.resolve() / "db" / "coverage.db"
 
     def test_reads_db_dir_from_project_section(
@@ -25,7 +25,7 @@ class TestResolveDbPath:
         monkeypatch.chdir(tmp_path)
         toml = tmp_path / "rebrew-project.toml"
         toml.write_text('[project]\ndb_dir = "mydb"\n', encoding="utf-8")
-        result = _resolve_db_path()
+        result = _db_path()
         assert result == tmp_path.resolve() / "mydb" / "coverage.db"
 
     def test_relative_db_dir_resolved_against_cwd(
@@ -35,7 +35,7 @@ class TestResolveDbPath:
         monkeypatch.chdir(tmp_path)
         toml = tmp_path / "rebrew-project.toml"
         toml.write_text('[project]\ndb_dir = "subdir/data"\n', encoding="utf-8")
-        result = _resolve_db_path()
+        result = _db_path()
         assert result == tmp_path.resolve() / "subdir" / "data" / "coverage.db"
 
     def test_missing_db_dir_key_uses_fallback(
@@ -45,7 +45,7 @@ class TestResolveDbPath:
         monkeypatch.chdir(tmp_path)
         toml = tmp_path / "rebrew-project.toml"
         toml.write_text('[project]\nname = "myproject"\n', encoding="utf-8")
-        result = _resolve_db_path()
+        result = _db_path()
         assert result == tmp_path.resolve() / "db" / "coverage.db"
 
     def test_empty_db_dir_string_uses_fallback(
@@ -55,7 +55,7 @@ class TestResolveDbPath:
         monkeypatch.chdir(tmp_path)
         toml = tmp_path / "rebrew-project.toml"
         toml.write_text('[project]\ndb_dir = ""\n', encoding="utf-8")
-        result = _resolve_db_path()
+        result = _db_path()
         assert result == tmp_path.resolve() / "db" / "coverage.db"
 
     def test_invalid_toml_uses_fallback(
@@ -65,7 +65,7 @@ class TestResolveDbPath:
         monkeypatch.chdir(tmp_path)
         toml = tmp_path / "rebrew-project.toml"
         toml.write_text("this is not valid toml }{", encoding="utf-8")
-        result = _resolve_db_path()
+        result = _db_path()
         assert result == tmp_path.resolve() / "db" / "coverage.db"
 
     def test_no_project_section_uses_fallback(
@@ -75,7 +75,7 @@ class TestResolveDbPath:
         monkeypatch.chdir(tmp_path)
         toml = tmp_path / "rebrew-project.toml"
         toml.write_text('[targets.foo]\nbinary = "foo.exe"\n', encoding="utf-8")
-        result = _resolve_db_path()
+        result = _db_path()
         assert result == tmp_path.resolve() / "db" / "coverage.db"
 
     def test_result_ends_with_coverage_db(
@@ -85,10 +85,10 @@ class TestResolveDbPath:
         monkeypatch.chdir(tmp_path)
         toml = tmp_path / "rebrew-project.toml"
         toml.write_text('[project]\ndb_dir = "custom"\n', encoding="utf-8")
-        result = _resolve_db_path()
+        result = _db_path()
         assert result.name == "coverage.db"
 
     def test_result_is_absolute(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Returned path is always absolute."""
         monkeypatch.chdir(tmp_path)
-        assert _resolve_db_path().is_absolute()
+        assert _db_path().is_absolute()

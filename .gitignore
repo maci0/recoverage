@@ -20,6 +20,9 @@ build/
 .mypy_cache/
 .pyre_configuration
 
+# Frontend tooling (oxlint, vnu-jar)
+node_modules/
+
 # Coverage database (runtime artifact, not source)
 coverage.db
 coverage.db-shm

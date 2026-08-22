@@ -4,7 +4,7 @@
 // and fetched immediately after first paint instead.  app.js publishes what
 // this file needs on window.RC and reads the results back from it.
 (() => {
-  const { van, MetaItem, MSG, hex } = window.RC;
+  const { MetaItem, MSG, hex } = window.RC;
   const { div } = van.tags;
 
   const formatBytes = (buf, baseOffset = 0) => {
@@ -14,7 +14,7 @@
       const slice = bytes.subarray(i, i + 16);
       const offset = (baseOffset + i).toString(16).toUpperCase().padStart(8, "0");
       const hexParts = Array.from({ length: 16 }, (_, j) => j < slice.length ? slice[j].toString(16).toUpperCase().padStart(2, "0") : "  ");
-      const ascii = Array.from(slice, b => (b >= 32 && b <= 126) ? String.fromCharCode(b) : ".").join("");
+      const ascii = Array.from(slice, b => (b >= 32 && b <= 126) ? String.fromCodePoint(b) : ".").join("");
       out += `${offset}  ${hexParts.slice(0, 8).join(" ")}  ${hexParts.slice(8, 16).join(" ")}  |${ascii}|\n`;
     }
     return out.trimEnd();
@@ -40,10 +40,10 @@
     ];
 
     let str = "";
-    for (let i = 0; i < Math.min(len, 64); i++) {
+    for (let i = 0; i < Math.min(len, 64); i += 1) {
       const charCode = dv.getUint8(i);
       if (charCode === 0) break;
-      str += (charCode >= 32 && charCode <= 126) ? String.fromCharCode(charCode) : ".";
+      str += (charCode >= 32 && charCode <= 126) ? String.fromCodePoint(charCode) : ".";
     }
     items.push({ label: "string (ascii)", val: `"${str}"`, full: true });
 
@@ -78,9 +78,9 @@
     window.hljs.registerLanguage("hex", () => ({
       name: "Hex",
       contains: [
-        { className: "meta", begin: /^[0-9A-Fa-f]{8}/ },
-        { className: "string", begin: /\|.*\|$/ },
-        { className: "number", begin: /\b[0-9A-Fa-f]{2}\b/ },
+        { className: "meta", begin: /^[0-9A-Fa-f]{8}/u },
+        { className: "string", begin: /\|.*\|$/u },
+        { className: "number", begin: /\b[0-9A-Fa-f]{2}\b/u },
       ],
     }));
   };
@@ -103,24 +103,26 @@
   // state lives here because this is the only thing that touches it.
   const REGEN_COOLDOWN_MS = 5000;
   let lastRegenTime = 0;
-  const handleReload = async ({ loadingMsg, summaryData, loadData, MSG }) => {
+  const reloadData = async ({ loadingMsg, summaryData, loadData, MSG: messages }) => {
     const now = Date.now();
     const since = now - lastRegenTime;
     if (since < REGEN_COOLDOWN_MS) {
-      loadingMsg.val = MSG.REGEN_USING_CACHE(Math.ceil((REGEN_COOLDOWN_MS - since) / 1000));
+      loadingMsg.val = messages.REGEN_USING_CACHE(Math.ceil((REGEN_COOLDOWN_MS - since) / 1000));
       await loadData();
       return;
     }
     lastRegenTime = now;
-    loadingMsg.val = MSG.REGEN_IN_PROGRESS;
+    loadingMsg.val = messages.REGEN_IN_PROGRESS;
     summaryData.val = null;
     let ok = false;
     try {
-      ok = (await fetch("/api/regen", { method: "POST", cache: "no-store" })).ok;
-    } catch (e) {
-      console.error("Regen failed:", e);
+      const { ok: regenOk } = await fetch("/api/regen", { method: "POST", cache: "no-store" });
+      ok = regenOk;
+    } catch (error) { // oxlint-disable-line @rikalabs/no-silent-catch-fallback -- regen failure is reported to the user via REGEN_UNAVAILABLE
+      // oxlint-disable-next-line eslint/no-console -- keep diagnostics in the browser console
+      console.error("Regen failed:", error);
     }
-    if (!ok) loadingMsg.val = MSG.REGEN_UNAVAILABLE;
+    if (!ok) loadingMsg.val = messages.REGEN_UNAVAILABLE;
     await loadData();
   };
 
@@ -137,7 +139,7 @@
   // The expanded code viewer.  Mounted once, on first paint of detail.js, and
   // kept in the DOM afterwards so the CSS open/close transition has something
   // to animate.
-  const mountModal = ({ showModal, modalTitle, modalContent, modalLang, HighlightedCode, copyToClipboard }) => {
+  const mountModal = ({ showModal, modalTitle, modalContent, modalLang, HighlightedCode }) => {
     if (document.querySelector(".modal")) return;
     const { button, span } = van.tags;
 
@@ -198,6 +200,6 @@
     });
   };
 
-  Object.assign(window.RC, { formatBytes, DataInspector, extractDocs, initHighlighting, connectEvents, handleReload, copyToClipboard, mountModal });
+  Object.assign(window.RC, { formatBytes, DataInspector, extractDocs, initHighlighting, connectEvents, reloadData, copyToClipboard, mountModal });
   window.RC.onReady();
 })();

@@ -91,6 +91,19 @@ def _target_not_found(target: str) -> Any:
     )
 
 
+def _dll_not_found(target: str, error: str) -> Any:
+    """JSON 404 for a target whose original binary is missing or unconfigured."""
+    hint = (
+        f" add [targets.{target}].binary to rebrew-project.toml"
+        if target not in _get_targets_config()
+        else ""
+    )
+    return _json_err(
+        404,
+        {"error": error, "detail": f"original binary for target {target!r} not found;{hint}"},
+    )
+
+
 def _require_target(c: sqlite3.Cursor, target: str) -> Any | None:
     """Return a 404 response if *target* is unknown, else None.
 
@@ -436,13 +449,15 @@ def handle_api_data(target: str) -> bytes | Any:
             except (json.JSONDecodeError, TypeError):
                 data[row["key"]] = row["value"]
 
-        if section_filter:
-            c.execute(
-                "SELECT * FROM sections WHERE target = ? AND name = ?",
-                (target, section_filter),
-            )
-        else:
-            c.execute("SELECT * FROM sections WHERE target = ?", (target,))
+        # Optional ?section= narrowing: the same queries with one extra WHERE
+        # term, so no branch duplicates a query that only adds "AND name = ?".
+        sec_params: list[Any] = [target] + ([section_filter] if section_filter else [])
+        sections_clause = " AND name = ?" if section_filter else ""
+
+        c.execute(
+            f"SELECT * FROM sections WHERE target = ?{sections_clause}",
+            sec_params,
+        )
         data["sections"] = {}
         for row in c.fetchall():
             sec = dict(row)
@@ -461,22 +476,14 @@ def handle_api_data(target: str) -> bytes | Any:
                 },
             )
 
-        if section_filter:
-            c.execute(
-                "SELECT section_name, json_group_array(json_object("
-                "'id', id, 'start', start, 'end', end, 'span', span, "
-                "'state', state, 'functions', json(functions), 'label', label, 'parent_function', parent_function"
-                ")) FROM cells WHERE target = ? AND section_name = ? GROUP BY section_name",
-                (target, section_filter),
-            )
-        else:
-            c.execute(
-                "SELECT section_name, json_group_array(json_object("
-                "'id', id, 'start', start, 'end', end, 'span', span, "
-                "'state', state, 'functions', json(functions), 'label', label, 'parent_function', parent_function"
-                ")) FROM cells WHERE target = ? GROUP BY section_name",
-                (target,),
-            )
+        cells_clause = " AND section_name = ?" if section_filter else ""
+        c.execute(
+            "SELECT section_name, json_group_array(json_object("
+            "'id', id, 'start', start, 'end', end, 'span', span, "
+            "'state', state, 'functions', json(functions), 'label', label, 'parent_function', parent_function"
+            f")) FROM cells WHERE target = ?{cells_clause} GROUP BY section_name",
+            sec_params,
+        )
         for row in c.fetchall():
             sec_name = row[0]
             if sec_name in data["sections"]:
@@ -504,21 +511,13 @@ def handle_api_data(target: str) -> bytes | Any:
         # consumers can sum them and reconcile with total_cells (padding,
         # none, proven, and size_mismatch were previously omitted).
         data["section_cell_stats"] = {}
-        if section_filter:
-            c.execute(
-                "SELECT section_name, total_cells, exact_count, reloc_count, "
-                "near_match_count, stub_count, padding_count, data_count, thunk_count, "
-                "none_count, proven_count, size_mismatch_count FROM section_cell_stats "
-                "WHERE target = ? AND section_name = ?",
-                (target, section_filter),
-            )
-        else:
-            c.execute(
-                "SELECT section_name, total_cells, exact_count, reloc_count, "
-                "near_match_count, stub_count, padding_count, data_count, thunk_count, "
-                "none_count, proven_count, size_mismatch_count FROM section_cell_stats WHERE target = ?",
-                (target,),
-            )
+        c.execute(
+            "SELECT section_name, total_cells, exact_count, reloc_count, "
+            "near_match_count, stub_count, padding_count, data_count, thunk_count, "
+            f"none_count, proven_count, size_mismatch_count "
+            f"FROM section_cell_stats WHERE target = ?{cells_clause}",
+            sec_params,
+        )
         for row in c.fetchall():
             data["section_cell_stats"][row["section_name"]] = {
                 "total_cells": row["total_cells"],
@@ -865,24 +864,26 @@ def handle_api_function(target: str, va: str) -> bytes | Any:
                 va_candidates.append(int(raw_va, 16))
         is_numeric = bool(va_candidates)
 
-        # Try functions first (candidates in order: decimal then hex).
-        row = None
-        if is_numeric:
-            for va_int in va_candidates:
-                c.execute(
-                    f"SELECT {_FN_JSON_SQL} FROM functions WHERE target = ? AND va = ?",
-                    (target, va_int),
-                )
-                row = c.fetchone()
-                if row:
-                    break
-        else:
+        def _lookup(table: str, json_sql: str) -> Any | None:
+            """First matching row in *table* by VA candidates (numeric) or exact name."""
+            if is_numeric:
+                for va_int in va_candidates:
+                    c.execute(
+                        f"SELECT {json_sql} FROM {table} WHERE target = ? AND va = ?",
+                        (target, va_int),
+                    )
+                    row = c.fetchone()
+                    if row:
+                        return row
+                return None
             c.execute(
-                f"SELECT {_FN_JSON_SQL} FROM functions WHERE target = ? AND name = ?",
+                f"SELECT {json_sql} FROM {table} WHERE target = ? AND name = ?",
                 (target, va),
             )
-            row = c.fetchone()
+            return c.fetchone()
 
+        # Functions win over globals (parity with the batch endpoint).
+        row = _lookup("functions", _FN_JSON_SQL)
         if row:
             fn_json = json.loads(row[0])
             # Attach the last `rebrew verify -o` record for this function.
@@ -901,24 +902,7 @@ def handle_api_function(target: str, va: str) -> bytes | Any:
                 }
             return _json_ok(json.dumps(fn_json).encode("utf-8"), Cache_Control=no_cache)
 
-        # Try globals
-        row = None
-        if is_numeric:
-            for va_int in va_candidates:
-                c.execute(
-                    f"SELECT {_GLOBAL_JSON_SQL} FROM globals WHERE target = ? AND va = ?",
-                    (target, va_int),
-                )
-                row = c.fetchone()
-                if row:
-                    break
-        else:
-            c.execute(
-                f"SELECT {_GLOBAL_JSON_SQL} FROM globals WHERE target = ? AND name = ?",
-                (target, va),
-            )
-            row = c.fetchone()
-
+        row = _lookup("globals", _GLOBAL_JSON_SQL)
         if row:
             return _json_ok(row[0].encode("utf-8"), Cache_Control=no_cache)
 
@@ -1017,18 +1001,7 @@ def handle_api_asm(target: str) -> bytes | Any:
             # Structured JSON output
             target_data = _load_dll(target)
             if target_data is None:
-                hint = (
-                    f" add [targets.{target}].binary to rebrew-project.toml"
-                    if target not in _get_targets_config()
-                    else ""
-                )
-                return _json_err(
-                    404,
-                    {
-                        "error": "DLL not found",
-                        "detail": f"original binary for target {target!r} not found;{hint}",
-                    },
-                )
+                return _dll_not_found(target, "DLL not found")
             code_bytes = target_data[file_offset : file_offset + size]
             if len(code_bytes) < size:
                 return _json_err(
@@ -1131,18 +1104,7 @@ def handle_api_bytes(target: str, section: str) -> bytes | Any:
             return _json_err(400, {"error": "offset beyond section bounds"})
         target_data = _load_dll(target)
         if target_data is None:
-            hint = (
-                f" add [targets.{target}].binary to rebrew-project.toml"
-                if target not in _get_targets_config()
-                else ""
-            )
-            return _json_err(
-                404,
-                {
-                    "error": "DLL not found for target",
-                    "detail": f"original binary for target {target!r} not found;{hint}",
-                },
-            )
+            return _dll_not_found(target, "DLL not found for target")
 
         file_start = sec["fileOffset"] + req_offset
         chunk = target_data[file_start : file_start + req_size]

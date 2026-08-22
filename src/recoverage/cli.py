@@ -143,8 +143,7 @@ def _get_stats(conn: sqlite3.Connection, target: str) -> dict[str, Any]:
     c = conn.cursor()
     from recoverage.server import _section_stats  # noqa: PLC0415
 
-    stats = _section_stats(c, target)
-    return {"target": target, **stats, "by_status": stats["by_status"]}
+    return {"target": target, **_section_stats(c, target)}
 
 
 def _run_regen(root: Path) -> None:
@@ -462,8 +461,6 @@ def check(
     """Check coverage against a threshold (CI gate)."""
     if not 0.0 <= min_coverage <= 100.0:
         if json_output:
-            import json
-
             typer.echo(
                 json.dumps({"error": "--min-coverage must be between 0 and 100", "exit_code": 1})
             )
@@ -480,8 +477,6 @@ def check(
 
         if not targets:
             if json_output:
-                import json
-
                 typer.echo(json.dumps({"error": "no targets in database", "exit_code": 1}))
             else:
                 typer.secho("No targets found in database.", fg=typer.colors.YELLOW, err=True)
@@ -579,8 +574,6 @@ def check(
 
     if checked == 0:
         if json_output:
-            import json
-
             typer.echo(
                 json.dumps({"error": "no sections matched — nothing was checked", "exit_code": 1})
             )
@@ -595,8 +588,6 @@ def check(
         # Every section was skipped as untracked and nothing failed — a
         # project with no recorded coverage must not pass vacuously.
         if json_output:
-            import json
-
             typer.echo(
                 json.dumps({"error": "no tracked sections — nothing was checked", "exit_code": 1})
             )
@@ -608,8 +599,6 @@ def check(
             )
         raise typer.Exit(1)
     if json_output:
-        import json
-
         typer.echo(
             json.dumps(
                 {

@@ -1,0 +1,18 @@
+{
+  "name": "recoverage",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Frontend lint tooling for the recoverage dashboard (JS/TS + HTML/CSS)",
+  "scripts": {
+    "lint": "npm run lint:js && npm run lint:html",
+    "lint:js": "oxlint",
+    "lint:html": "node tools/lint-html.mjs && uv run python tools/lint-served-html.py"
+  },
+  "devDependencies": {
+    "@oxlint/plugins": "1.79.0",
+    "@rikalabs/oxlint-standards": "^0.8.1",
+    "oxlint": "1.79.0",
+    "vnu-jar": "26.8.20"
+  }
+}

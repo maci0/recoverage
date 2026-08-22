@@ -23,6 +23,31 @@ jobs:
       - run: uv sync --frozen --extra dev
       - run: uv run ruff check src/ tests/
 
+  web-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: uv sync --frozen --extra dev
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - run: npm ci
+      - name: Lint JS/TS (oxlint: Rika-Labs strict + anti-slop)
+        run: npm run lint:js
+      - name: Lint HTML/CSS (Nu Html Checker)
+        run: npm run lint:html
+
   test:
     runs-on: ubuntu-latest
     steps:

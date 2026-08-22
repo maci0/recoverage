@@ -3,7 +3,7 @@
 
 Bottle WSGI app serving a VanJS + SQLite dashboard.
 Reads the coverage database from the path resolved by
-``recoverage._paths._resolve_db_path()``, which honours
+``recoverage._paths._db_path()``, which honours
 ``rebrew-project.toml [project] db_dir`` when present and falls back to
 ``./db/coverage.db`` otherwise.
 """
