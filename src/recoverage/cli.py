@@ -16,7 +16,7 @@ from wsgiref.simple_server import WSGIServer
 
 import typer
 
-from recoverage._paths import _db_path
+from recoverage._paths import _db_path, sqlite_ro_uri
 
 app = typer.Typer(
     help="Coverage dashboard for binary-matching decompilation projects.",
@@ -86,7 +86,7 @@ def _open_db(db_path: Path | None = None) -> sqlite3.Connection:
         typer.secho(f"Error: database not found at {p}", fg=typer.colors.RED, err=True)
         raise typer.Exit(1)
     try:
-        conn = sqlite3.connect(f"file:{p}?mode=ro", uri=True)
+        conn = sqlite3.connect(sqlite_ro_uri(p), uri=True)
         conn.row_factory = sqlite3.Row
     except sqlite3.Error as exc:
         typer.secho(

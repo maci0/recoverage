@@ -13,6 +13,21 @@ import tomllib
 from pathlib import Path
 
 
+def sqlite_ro_uri(db_path: Path) -> str:
+    """Return a SQLite URI that opens *db_path* read-only.
+
+    The path must be percent-encoded (``Path.as_uri()``), not interpolated
+    raw into ``file:{p}?mode=ro``: characters reserved by SQLite's URI
+    grammar (?, starts the query, # starts the fragment, % introduces a
+    percent-escape) would truncate or silently rewrite the filename, and
+    Windows backslash separators are not valid URI form.  ``as_uri()``
+    emits an absolute forward-slash path on every platform that SQLite
+    decodes back to the exact filename on POSIX and win32 alike.
+    """
+    p = db_path if db_path.is_absolute() else Path.cwd() / db_path
+    return f"{p.as_uri()}?mode=ro"
+
+
 def _db_path() -> Path:
     """Return the path to coverage.db, honouring rebrew-project.toml [project] db_dir.
 

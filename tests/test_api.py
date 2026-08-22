@@ -15,6 +15,7 @@ from wsgiref.util import setup_testing_defaults
 import pytest
 from conftest import HAS_DB, decode_body, get_first_target, wsgi_get, wsgi_post, wsgi_request
 
+from recoverage._paths import sqlite_ro_uri
 from recoverage.server import HAS_CAPSTONE
 
 # ── Regen origin validation (actual endpoint) ─────────────────────
@@ -1112,7 +1113,7 @@ class TestDataPayloadMemo:
         db = self._make_db(tmp_path)
 
         def _open_like(p: Any) -> Any:
-            conn = sqlite3.connect(f"file:{p}?mode=ro", uri=True)
+            conn = sqlite3.connect(sqlite_ro_uri(p), uri=True)
             conn.row_factory = sqlite3.Row
             return conn
 

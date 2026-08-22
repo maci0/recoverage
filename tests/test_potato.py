@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 import pytest
 from conftest import HAS_DB, get_first_target, wsgi_get
 
+from recoverage._paths import sqlite_ro_uri
 from recoverage.potato import (
     _build_url,
     _cell_file_offset,
@@ -140,7 +141,7 @@ def test_format_data_inspector():
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
 def test_grid_structure():
     db_path = get_db_path()
-    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    conn = sqlite3.connect(sqlite_ro_uri(db_path), uri=True)
     c = conn.cursor()
     c.execute("SELECT DISTINCT name FROM sections WHERE target='SERVER'")
     rows = c.fetchall() or []
@@ -219,7 +220,7 @@ def test_rendering_paths(url, name):
 
 
 def _find_cell_idx(target: str, section: str, predicate) -> int | None:
-    conn = sqlite3.connect(f"file:{get_db_path()}?mode=ro", uri=True)
+    conn = sqlite3.connect(sqlite_ro_uri(get_db_path()), uri=True)
     try:
         c = conn.cursor()
         c.execute(
@@ -240,7 +241,7 @@ def _find_cell_idx(target: str, section: str, predicate) -> int | None:
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
 def test_globals_detail_panel():
     target = get_first_target()
-    conn = sqlite3.connect(f"file:{get_db_path()}?mode=ro", uri=True)
+    conn = sqlite3.connect(sqlite_ro_uri(get_db_path()), uri=True)
     try:
         c = conn.cursor()
         c.execute("SELECT name FROM globals WHERE target = ?", (target,))
@@ -725,7 +726,7 @@ class TestSearchLimit:
         from recoverage.potato import _search_functions
         from recoverage.server import _db_path
 
-        conn = sqlite3.connect(f"file:{_db_path()}?mode=ro", uri=True)
+        conn = sqlite3.connect(sqlite_ro_uri(_db_path()), uri=True)
         try:
             c = conn.cursor()
             c.execute("SELECT DISTINCT target FROM metadata LIMIT 1")

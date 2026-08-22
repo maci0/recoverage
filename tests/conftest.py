@@ -290,9 +290,10 @@ def decode_body(body: bytes, headers: dict[str, str]) -> bytes:
 
 def get_first_target() -> str:
     """Get the first target from the coverage database."""
+    from recoverage._paths import sqlite_ro_uri
     from recoverage.server import _db_path
 
-    conn = sqlite3.connect(f"file:{_db_path()}?mode=ro", uri=True)
+    conn = sqlite3.connect(sqlite_ro_uri(_db_path()), uri=True)
     try:
         c = conn.cursor()
         c.execute("SELECT DISTINCT target FROM metadata ORDER BY target LIMIT 1")

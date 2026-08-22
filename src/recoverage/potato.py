@@ -28,6 +28,7 @@ from urllib.parse import quote as _url_quote
 from bottle import HTTPResponse, SimpleTemplate  # type: ignore
 
 from recoverage import __version__
+from recoverage._paths import sqlite_ro_uri
 from recoverage.server import (
     _FN_JSON_SQL,
     _GLOBAL_JSON_SQL,
@@ -906,7 +907,7 @@ def render_potato(parsed_url: ParseResult) -> str:
 
     db_path = _db_path()
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = sqlite3.connect(sqlite_ro_uri(db_path), uri=True)
     except sqlite3.Error:
         _log.warning("Potato mode: database unavailable at %s", db_path)
         # Signal failure, not a 200 page: monitoring and scripts must see the

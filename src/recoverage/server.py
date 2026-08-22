@@ -29,7 +29,7 @@ import rcssmin  # type: ignore[import-untyped]
 import rjsmin  # type: ignore[import-untyped]
 import zstandard as zstd  # type: ignore[import-untyped]
 
-from recoverage._paths import _db_path
+from recoverage._paths import _db_path, sqlite_ro_uri
 
 # Module-level compressor — ZstdCompressor is thread-safe for compress() calls
 _ZSTD_COMPRESSOR = zstd.ZstdCompressor(level=3)
@@ -771,7 +771,7 @@ def _check_schema_version_uncached(conn: sqlite3.Connection) -> str:
 
 
 def _open_db(db_path: Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    conn = sqlite3.connect(sqlite_ro_uri(db_path), uri=True)
     conn.row_factory = sqlite3.Row
     return conn
 
