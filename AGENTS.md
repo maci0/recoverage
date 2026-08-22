@@ -23,14 +23,17 @@ recoverage/
 │   ├── USER_STORIES.md     # User stories with acceptance criteria
 │   └── ideas.md            # Future improvement ideas
 ├── tests/
-│   ├── test_api.py          # API validation, security, SQL injection tests
-│   ├── test_cli.py          # CSV export, formatting, edge case tests
-│   ├── test_server.py       # Compression, encoding, path helper tests
-│   ├── test_potato.py       # Potato Mode unit tests
-│   └── test_playwright.py   # Browser integration tests
+│   ├── conftest.py           # Shared fixtures (synthetic coverage.db)
+│   ├── test_api.py           # API validation, security, SQL injection tests
+│   ├── test_cli.py           # CSV export, formatting, edge case tests
+│   ├── test_paths.py         # DB path resolution tests
+│   ├── test_server.py        # Compression, encoding, path helper tests
+│   ├── test_potato.py        # Potato Mode unit tests
+│   └── test_playwright.py    # Browser integration tests
 └── src/recoverage/
     ├── __init__.py
     ├── __main__.py          # python -m recoverage
+    ├── _paths.py            # DB path resolution (rebrew-project.toml db_dir)
     ├── cli.py               # Typer CLI entry point (serve, stats, export, check, regen, open)
     ├── server.py            # Bottle app, shared helpers & compression
     ├── api.py               # REST API routes (/api/*)
@@ -39,12 +42,16 @@ recoverage/
     └── assets/
         ├── index.html       # SPA shell
         ├── style.css        # All styles
+        ├── print.css        # Print stylesheet
         ├── app.js           # VanJS frontend
+        ├── detail.js        # Deferred panel logic (hex dump, modal, live reload)
         ├── van.min.js       # VanJS library
+        ├── favicon.svg      # Retro "R" logo favicon
+        ├── hljs.min.js / hljs-c.min.js / hljs-x86asm.min.js  # Highlight.js core + grammars
         └── hljs.css         # Highlight.js theme (custom hex language)
 ```
 
-Frontend lint tooling lives at the repo root: `package.json` (oxlint, `@oxlint/plugins`, `@rikalabs/oxlint-standards`, vnu-jar), `oxlint.config.ts` (JS/TS lint config), `tools/lint-html.mjs` (vnu check of the static HTML/CSS assets), `tools/lint-served-html.py` (vnu check of the documents the server actually serves: the SPA shell with injected CSS/JS and Potato Mode), and `tools/oxlint/`:
+Frontend lint tooling lives at the repo root: `package.json` (oxlint, `@oxlint/plugins`, `@rikalabs/oxlint-standards`, vnu-jar), `oxlint.config.ts` (JS/TS lint config), `tools/lint-html.mjs` (vnu check of the static HTML/CSS assets), `tools/lint-served-html.py` (vnu check of the documents the server actually serves: the SPA shell with injected CSS/JS and Potato Mode), `tools/smoke.py` (end-to-end server smoke run by the CI `smoke` job), and `tools/oxlint/`:
 
 - `tools/oxlint/anti-slop/` — vendored copy of dmmulroy/anti-slop (keep in sync with upstream).
 - `tools/oxlint/rikalabs-strict.json` — flattened copy of the `strict` preset from `@rikalabs/oxlint-standards`, regenerated with `tools/flatten-rikalabs-strict.py` (bump the package, re-run the script, re-run `npm run lint:js`). It is flattened because the published presets reference rules oxlint 1.79.0 does not implement. `oxlint.config.ts` documents the platform exceptions (browser-only SPA: `env.browser`, `typeAware: false`, style off-list with rationale).
@@ -62,7 +69,7 @@ recoverage serve             # start dashboard on :8001
 recoverage serve --port 9000 # custom port
 recoverage serve --regen     # re-run rebrew catalog + build-db first
 recoverage serve --no-open   # don't auto-open browser
-recoverage serve --cors      # enable CORS headers
+recoverage serve --cors      # enable CORS processing (allowlist origins with --cors-origin)
 recoverage stats             # print coverage stats
 recoverage export --format csv  # export coverage data
 recoverage check --min-coverage 60  # CI gate

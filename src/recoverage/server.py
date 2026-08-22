@@ -107,10 +107,6 @@ def _normalize_origin(origin: str) -> str:
         return ""
 
 
-# Byte-based per-section stats query shared by /api/targets/<target>/stats and
-# the `recoverage stats` CLI.  ONE definition: these two queries already
-# drifted apart once (cell-count vs byte-based coverage) and were fixed in
-# lockstep twice — a single constant makes the next divergence impossible.
 def _safe_etag(*parts: object) -> str:
     """Deterministic ETag from arbitrary parts.
 
@@ -174,6 +170,10 @@ def _etag_or_304(*parts: object) -> str | None:
     return etag
 
 
+# Byte-based per-section stats query shared by /api/targets/<target>/stats and
+# the `recoverage stats` CLI.  ONE definition: these two queries already
+# drifted apart once (cell-count vs byte-based coverage) and were fixed in
+# lockstep twice — a single constant makes the next divergence impossible.
 SECTION_STATS_SQL = """
     SELECT section_name,
       SUM(CASE WHEN state != 'none' THEN end - start ELSE 0 END) AS covered_bytes,

@@ -64,6 +64,22 @@ server-rendered "Potato Mode".
   `section_cell_stats` view, functions with Ghidra/list names and thunk
   markers, verify_results imported by `build-db`).
 - Function detail surfaces the last `rebrew verify` record (`last_verify`).
+- Schema parity with rebrew is now pinned on the rebrew side:
+  `tests/test_recoverage_contract.py` runs the real `catalog --data-json` →
+  `build-db` pipeline on the fixture binary and asserts every table/column
+  recoverage queries exists (cells.label/parent_function, verify_results,
+  section_cell_stats view, ...), so a rebrew change that would break the
+  dashboard is caught in rebrew's own suite.
+- `tools/smoke.py` — end-to-end server smoke for CI: builds a synthetic
+  `db/coverage.db` (the shared rebrew build-db schema v4), boots
+  `recoverage serve`, and probes the SPA shell, health, targets/data/stats/
+  functions APIs, and Potato Mode (7 probes).  `--expect-failure` asserts a
+  corrupt DB is reported as `degraded` health rather than served as healthy.
+  Wired into CI as a `smoke` job.
+- **Deep-linking** — the SPA reads `?target=&fn=&section=&q=` from the URL
+  (restoring state on load, `fn` winning over the localStorage last-function)
+  and keeps the URL in sync on every change via `history.replaceState`.
+  Reloads restore the selected function/section/search; links are shareable.
 
 ### Changed
 
@@ -82,37 +98,9 @@ server-rendered "Potato Mode".
   strings) are looked up by VA like the SPA/API, not by name.
 - ETag caching: header lookup is case-insensitive; stale potato test
   assertions (accesskeys, detail markup) corrected to the shipped renderer.
-
-### Fixed
-
 - Potato Mode now emits a `<main>` landmark (with the existing skip-link) and
   `<caption>` on the coverage-map and functions tables — screen readers get
   table semantics instead of anonymous grids (impeccable audit).
 - Icon buttons get a 44×44px touch target on coarse pointers
   (`@media (pointer: coarse)`) — desktop layout unchanged, WCAG 2.5.8 met on
   mobile (impeccable audit).
-
-### Added
-
-- Schema parity with rebrew is now pinned on the rebrew side:
-  `tests/test_recoverage_contract.py` runs the real `catalog --data-json` →
-  `build-db` pipeline on the fixture binary and asserts every table/column
-  recoverage queries exists (cells.label/parent_function, verify_results,
-  section_cell_stats view, ...), so a rebrew change that would break the
-  dashboard is caught in rebrew's own suite.
-
-### Added
-
-- `tools/smoke.py` — end-to-end server smoke for CI: builds a synthetic
-  `db/coverage.db` (the shared rebrew build-db schema v4), boots
-  `recoverage serve`, and probes the SPA shell, health, targets/data/stats/
-  functions APIs, and Potato Mode (7 probes).  `--expect-failure` asserts a
-  corrupt DB is reported as `degraded` health rather than served as healthy.
-  Wired into CI as a `smoke` job.
-
-### Added
-
-- **Deep-linking** — the SPA reads `?target=&fn=&section=&q=` from the URL
-  (restoring state on load, `fn` winning over the localStorage last-function)
-  and keeps the URL in sync on every change via `history.replaceState`.
-  Reloads restore the selected function/section/search; links are shareable.

@@ -15,10 +15,12 @@ The UI is built using a lightweight, dependency-free stack to ensure fast load t
 2. `rebrew build-db` converts the resulting JSON into a structured SQLite database with tables for metadata, functions, globals, sections, and cells. It also pre-calculates coverage statistics for all sections to save frontend processing time.
 3. The Bottle app (`server.py` + `api.py` + `ui.py`) serves:
    * Static files (index.html, app.js, style.css, van.min.js) which are **inlined and compressed** into a single response for the root `/` path to achieve a "first draw in the first TCP packet".
-   * `/api/targets` endpoint that returns available targets (SERVER, Europa1400Gold, etc.) from the database.
+   * `/api/targets` endpoint that returns available targets from the database plus any target declared under `[targets.*]` in `rebrew-project.toml` (a configured-but-not-yet-built target stays addressable).
+   * `/api/targets/<target>/stats` endpoint with per-section byte-based coverage statistics (shared implementation with the `recoverage stats` CLI).
    * `/api/targets/<target>/data` endpoint that queries SQLite for a specific target and returns lightweight metadata and section layouts (compressed via zstd/brotli/gzip).
-   * `/api/targets/<target>/functions/<va>` endpoint to fetch specific function/global details on-demand.
+   * `/api/targets/<target>/functions/<va>` endpoint to fetch specific function/global details on-demand, plus `POST /api/targets/<target>/functions` for batch lookups by VA list.
    * `/api/targets/<target>/asm?va=...&size=...` endpoint that dynamically disassembles binary chunks using Capstone (with LRU caching and in-memory cached binary reads).
+   * `/api/events` Server-Sent Events stream that pushes a `db-updated` event whenever `coverage.db` changes on disk, so the SPA auto-refreshes without a manual reload (requires the threaded WSGI server, which gives each connection its own thread).
    * `/api/regen` POST endpoint to trigger `rebrew catalog --json` + `rebrew build-db` regeneration.
    * With `--token`, an unauthenticated request is answered by content type: browsers asking for `text/html` get a short page explaining that `?token=` must be appended (it never echoes the token), and API clients keep the `{error, code, detail}` JSON contract.
    * Proxied paths: `/src/*` → `project_dir/src/`, `/original/*` → `project_dir/original/`
@@ -122,8 +124,8 @@ The UI is broken down into functional VanJS components in `app.js`:
 ### Performance Optimizations
 * **First Draw in First TCP Packet**: `server.py` intercepts requests to `/` and inlines `index.html`, `style.css`, `app.js`, and `van.min.js` into a single response. This response is minified (using `rjsmin` and `rcssmin`) and compressed using **Brotli (`br`)** or **Zstandard (`zstd`)** (falling back to `gzip`) to ~14.5KB, fitting perfectly into the initial TCP congestion window (`cwnd`). This allows the browser to parse and render the UI shell instantly without any render-blocking network requests.
 * **Advanced Compression**: The server picks the best algorithm the client accepts, preferring `zstd`, then `br`, then `gzip`.  Dynamic responses compress brotli at quality 5, not the default 11: measured on a 5.6 MB coverage payload, q=11 costs 5.9 s of CPU for 334 KB while q=5 costs 68 ms for 444 KB, and that cost is paid per request because API responses are not cached compressed.  Clients without zstd (Safari) would otherwise stall about six seconds on every load and every live reload.  The inlined index keeps q=11: it is compressed once per encoding, cached, and has a hard byte budget.
-* **HTTP/1.1 Keep-Alive**: The Python server uses wsgiref which supports HTTP/1.1 keep-alive connections, eliminating handshake overhead for rapid subsequent API requests.
-* **ETag Caching**: The heavy `/api/targets/<target>/data` endpoint calculates an `ETag` based on the `coverage.db` file's modification time. If the database hasn't changed, the server responds with a `304 Not Modified` (0 bytes), making page reloads instantaneous.
+* **HTTP/1.0, Threaded Connections**: The server is wsgiref, which speaks HTTP/1.0 and closes the connection after each response (no keep-alive). It runs on a `ThreadingMixIn` server class so each connection gets its own daemon thread — without that, the long-lived `/api/events` SSE stream would stall every other request.
+* **ETag Caching**: The heavy `/api/targets/<target>/data` endpoint calculates an `ETag` from a WAL-aware snapshot of `coverage.db` (`mtime_ns` + size, folding in `-wal` so a rebuild that only committed to the WAL still invalidates; raw `st_mtime` served stale 304s). If the database hasn't changed, the server responds with a `304 Not Modified` (0 bytes), making page reloads instantaneous.
 * **Request Cancellation**: The UI uses `AbortController` to cancel in-flight network requests if the user clicks through multiple cells rapidly, saving bandwidth and preventing race conditions.
 * **Deferred Highlight.js**: The heavy `highlight.js` library and its CSS are not loaded initially. They are fetched from this origin (`/hljs.min.js`, `/hljs-c.min.js`, `/hljs-x86asm.min.js`) the first time a user clicks a code block.
 * **Deferred failure is visible, not silent**: `detailFailed` is set when `/detail.js` cannot be fetched.  The panes it owns say so, and every control that delegates to it (Copy, Open, Copy VA, Copy Symbol, Reload) goes `disabled` with the same message as its tooltip.  Optional chaining alone made each deferral crash-safe but user-hostile: the buttons looked enabled and did nothing.
@@ -199,17 +201,17 @@ Recoverage performs a soft version check on every database open and logs a warni
 * `functions`: All reversed functions — va (INTEGER), name, vaStart, size, fileOffset, status, module, cflags, symbol, markerType, files JSON, `detected_by` JSON, `size_by_tool` JSON, `textOffset`, ghidra_name, list_name, is_thunk, is_export, sha256, blocker, blockerDelta, size_reason, similarity
 * `globals`: Global variables — va (INTEGER), name, decl, files JSON, `module`, `size`
 * `sections`: PE sections — name, va, size, fileOffset, unitBytes, columns
-* `cells`: Grid cells per section — section_name, start, end, state (none/exact/reloc/matching/matching_reloc/stub/padding/data/thunk), functions JSON, label, parent_function
+* `cells`: Grid cells per section — section_name, start, end, state (none/exact/reloc/near_match/stub/padding/data/thunk/proven/size_mismatch; legacy DBs may spell near_match as near_matching), functions JSON, label, parent_function
 * `history`: Status change log (persistent, never dropped) — target, va, old_status, new_status, changed_at
-* `verify_results`: Verification results (persistent, never dropped) — target, va, verified_at, byte_delta, diff_lines
+* `verify_results`: Verification results (persistent, never dropped) — target, va, verified_at, byte_delta, diff_lines, similarity
 
 ### Views
-* `section_cell_stats`: Aggregated counts per target+section — total_cells, exact_count, reloc_count, matching_count, stub_count, padding_count, data_count, thunk_count, none_count
+* `section_cell_stats`: Aggregated counts per target+section — total_cells, exact_count, reloc_count, near_match_count, stub_count, padding_count, data_count, thunk_count, none_count, proven_count, size_mismatch_count
 
 ## Future Ideas / TODOs
 * [ ] **Minimap**: A global minimap of the entire PE file on the side.
 * [ ] **XREFs**: Show cross-references for data segments (which functions read/write to this `.data` block).
-* [ ] **Diff View**: Integrate the `matcher.py --diff` output directly into the UI for "Matching" and "Stub" blocks.
+* [ ] **Diff View**: Integrate the `rebrew match --diff-only` output directly into the UI for "Matching" and "Stub" blocks.
 * [x] **Jump table absorption**: Switch/jump table bytes adjacent to functions are absorbed into the parent function's size rather than tracked as separate cells.
 * [x] **Parent function linking**: Data and thunk cells automatically link to their parent function (detected via `func_end_va == data_start_va`).
 * [x] **Ghidra label export**: `rebrew catalog --export-ghidra-labels` generates `ghidra_data_labels.json` from detected tables for round-trip sync.
@@ -251,6 +253,10 @@ Potato Mode is a pure HTML 5 alternative UI that works **without any CSS or Java
 | `filter` | Comma-separated filters | `?filter=exact,reloc` |
 | `idx` | Cell index | `?idx=42` |
 | `search` | Search query | `?search=adler32` |
+| `view` | `functions` renders the function list instead of the grid | `?view=functions` |
+| `sort` | Function list sort key (`name`, `va`, `size`, `status`) | `?sort=name` |
+| `status` | Function list status filter | `?status=exact` |
+| `page` | Grid page (32 rows per page) | `?page=2` |
 
 ## Filter Toggle Behavior
 Each filter link toggles that filter on/off while preserving other active filters:

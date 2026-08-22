@@ -29,8 +29,8 @@ User stories for the **recoverage** coverage dashboard, organized by persona and
 ```mermaid
 graph TD
     A["Project directory<br/>with rebrew-project.toml"] --> B{"db/coverage.db<br/>exists?"}
-    B -->|Yes| C["recoverage --port 8001"]
-    B -->|No| D["recoverage --regen"]
+    B -->|Yes| C["recoverage serve --port 8001"]
+    B -->|No| D["recoverage serve --regen"]
     D --> E["rebrew catalog --json"]
     E --> F["rebrew build-db"]
     F --> G["db/coverage.db created"]
@@ -488,7 +488,7 @@ graph TD
 - Minified with `rjsmin`/`rcssmin` and compressed with Brotli/Zstd/gzip
 - Total payload ~14.5 KB (fits in TCP initial congestion window)
 - Compression algorithm auto-selected from `Accept-Encoding` header
-- Deferred Highlight.js loading: CDN fetch only on first code block click
+- Deferred Highlight.js loading: fetched from this origin (vendored in `assets/`) only on first code block click
 - `AbortController` cancels in-flight requests when clicking rapidly between cells
 - ETag caching returns `304 Not Modified` when DB is unchanged
 
@@ -507,7 +507,7 @@ graph TD
     I --> J["Browser parses + renders<br/>UI shell in first paint"]
 
     J --> K["User clicks code block"]
-    K --> L["Dynamically load<br/>Highlight.js from CDN"]
+    K --> L["Dynamically load<br/>Highlight.js from this origin"]
 
     style A fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
     style J fill:#d1fae5,stroke:#059669,color:#065f46
@@ -524,7 +524,7 @@ graph TD
 |---------|-------------|
 | **Minimap** | A global minimap of the entire PE file on the side |
 | **XREFs** | Show cross-references for data segments (which functions read/write to a `.data` block) |
-| **Diff View** | Integrate `rebrew-match --diff` output directly into the UI for "Matching" and "Stub" blocks |
+| **Diff View** | Integrate `rebrew match --diff-only` output directly into the UI for "Matching" and "Stub" blocks |
 
 ---
 

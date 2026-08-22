@@ -129,7 +129,8 @@ Start the dashboard web server.
 | `--token` | off | Require this token for every request (`Authorization: Bearer`, `?token=`, or open `/?token=<token>` to set the SPA cookie) |
 | `--no-open` | off | Don't auto-open the browser |
 | `--regen` | off | Run `rebrew catalog` + `rebrew build-db` before starting |
-| `--cors` | off | Enable CORS headers for cross-origin API access |
+| `--cors` | off | Enable CORS processing (allowlisted origins only; the wildcard is never emitted) |
+| `--cors-origin` | none | Origin URL allowed to read the API cross-origin (repeatable; without it `--cors` allows no cross-origin reads) |
 
 ### `recoverage stats`
 
@@ -195,10 +196,12 @@ recoverage open --port 8001
 | `/api/targets/<target>/stats` | GET | Per-section coverage stats with percentages |
 | `/api/targets/<target>/data` | GET | Section + cell data (`?section=.text` for partial) |
 | `/api/targets/<target>/functions` | GET | Paginated list (`?status=&search=&sort=&limit=&offset=`) |
+| `/api/targets/<target>/functions` | POST | Batch lookup: `{"vas": [...]}` → function/global details in input order |
 | `/api/targets/<target>/functions/<va>` | GET | Single function/global detail |
 | `/api/targets/<target>/asm` | GET | Disassembly (`?format=json` for structured output) |
 | `/api/targets/<target>/sections/<section>/bytes` | GET | Raw byte slice (`?offset=&size=`) |
-| `/api/regen` | POST | Re-run catalog + build-db (localhost only) |
+| `/api/events` | GET | Server-Sent Events: `db-updated` when coverage.db changes (SPA auto-refresh) |
+| `/api/regen` | POST | Re-run catalog + build-db (localhost only, rate-limited) |
 
 ---
 
@@ -232,14 +235,17 @@ recoverage/
 │   ├── USER_STORIES.md       # User stories with acceptance criteria
 │   └── ideas.md              # Future improvement ideas
 ├── tests/
+│   ├── conftest.py           # Shared fixtures (synthetic coverage.db)
 │   ├── test_api.py           # API validation & security tests
 │   ├── test_cli.py           # CSV export, formatting tests
+│   ├── test_paths.py         # DB path resolution tests
 │   ├── test_server.py        # Compression, encoding tests
 │   ├── test_potato.py        # Potato Mode rendering tests
 │   └── test_playwright.py    # Browser integration tests
 └── src/recoverage/
     ├── __init__.py
     ├── __main__.py           # python -m recoverage
+    ├── _paths.py             # DB path resolution (rebrew-project.toml db_dir)
     ├── cli.py                # Typer CLI entry point
     ├── server.py             # Bottle app, shared helpers & compression
     ├── api.py                # REST API routes (/api/*)
@@ -247,9 +253,15 @@ recoverage/
     ├── potato.py             # Potato Mode renderer
     └── assets/
         ├── index.html        # SPA shell
-        ├── style.css
+        ├── style.css         # All styles
+        ├── print.css         # Print stylesheet
         ├── app.js            # VanJS frontend
+        ├── detail.js         # Deferred panel logic (hex dump, modal, live reload)
         ├── van.min.js        # VanJS library (~2 KB)
+        ├── favicon.svg       # Retro "R" logo favicon
+        ├── hljs.min.js       # Highlight.js core
+        ├── hljs-c.min.js     # Highlight.js C grammar
+        ├── hljs-x86asm.min.js # Highlight.js x86 asm grammar (hex lang is in detail.js)
         └── hljs.css          # Highlight.js theme (custom hex language)
 ```
 

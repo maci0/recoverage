@@ -13,7 +13,7 @@ Lightweight summary endpoint returning only coverage stats (percentages, byte co
 Paginated function listing with optional filters (`?status=&search=&sort=&limit=&offset=`).
 
 ### `GET /api/targets/<target>/diff/<va>`
-Return a structural diff between the compiled output and the original bytes for `MATCHING` and `STUB` functions. Wraps the existing `matcher.py --diff` logic. The frontend could render this inline instead of requiring the user to run CLI commands.
+Return a structural diff between the compiled output and the original bytes for `MATCHING` and `STUB` functions. Wraps the existing `rebrew match --diff-only` logic. The frontend could render this inline instead of requiring the user to run CLI commands.
 
 ### `GET /api/targets/<target>/xrefs/<va>`
 Cross-reference lookup — which functions call this VA, and which VAs does this function call. Requires building a call graph from the disassembly (Capstone) or from annotation metadata (`// CALLERS:`, `// CALLEES:`).
@@ -34,21 +34,21 @@ Write-back annotations to source files. Accept a JSON body with annotation key-v
 ### ~~`/api/targets/<target>/data` — Partial Loading~~ ✅ Implemented
 The `/data` endpoint supports `?section=.text` to load one section at a time.
 
-### `/api/targets/<target>/functions/<va>` — Batch Mode
-Support batch function lookups via POST with a JSON array of VAs:
+### ~~`/api/targets/<target>/functions/<va>` — Batch Mode~~ ✅ Implemented
+Batch function lookups via `POST /api/targets/<target>/functions` with a JSON array of VAs:
 ```json
 { "vas": ["0x10001000", "0x10001050", "0x10001100"] }
 ```
-Returns an array of function details in one round-trip. Useful for preloading adjacent cells.
+Returns an array of function details in one round-trip (input order, unmatched VAs omitted).
 
 ### ~~`/api/targets/<target>/asm` — Output Formats~~ ✅ Implemented
 Supports `?format=json` for structured instruction objects.
 
-### Error Responses — Consistency
-Standardize all error responses to include `{ "error": "...", "code": "...", "detail": "..." }`. Currently some return `{"ok": false, "error": "..."}` and others return `{"error": "..."}`.
+### ~~Error Responses — Consistency~~ ✅ Implemented
+All error responses now carry `{ "error": "...", "code": "...", "detail": "..." }` with a stable machine-readable `code` (e.g. `not_found`, `rate_limited`).
 
 ### ~~CORS Headers~~ ✅ Implemented
-Optional CORS support via `--cors` flag.
+Optional CORS support via `--cors`; cross-origin reads are allowlist-only via repeatable `--cors-origin` flags (the wildcard is never emitted).
 
 ---
 
@@ -70,8 +70,8 @@ Open the browser to an existing running server (useful when `--no-open` was used
 
 ## WebSocket / SSE Support
 
-### Live Reload via Server-Sent Events
-Add a `/api/events` SSE stream that pushes `db-updated` events when `coverage.db` is modified (using `watchdog` or inotify). The frontend can auto-refresh the grid without polling or manual reload clicks.
+### ~~Live Reload via Server-Sent Events~~ ✅ Implemented
+`/api/events` pushes `db-updated` events when `coverage.db` is modified (mtime polling by a background watcher thread, no extra dependency). The SPA auto-refreshes the grid without polling or manual reload clicks.
 
 ### Regen Progress
 Stream `/api/regen` progress as SSE events instead of blocking until completion (which can timeout for large projects).
@@ -93,8 +93,8 @@ Replace per-request `sqlite3.connect()` calls with a thread-local connection poo
 
 ## Security
 
-### `--bind` Flag
-Allow binding to a specific interface (default: `127.0.0.1`). Some users may want `0.0.0.0` for LAN access; the current hardcoded localhost is correct for security but inflexible.
+### ~~`--bind` Flag~~ ✅ Implemented
+`--bind <interface>` selects the listening interface (default: `127.0.0.1`). Non-loopback binds require an explicit `--allow-remote` acknowledgment, since the API is unauthenticated.
 
 ### ~~Rate Limiting on `/api/regen`~~ ✅ Implemented
 The 5-second cooldown now exists server-side too: `/api/regen` returns 429

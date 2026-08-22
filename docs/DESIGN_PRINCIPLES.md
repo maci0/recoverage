@@ -23,7 +23,7 @@ Rendering grids with thousands of cells (e.g., `.text` or `.bss` sections) requi
 ## 6. On-Demand Hydration & Lazy Loading
 Memory and bandwidth are preserved by fetching heavy assets only when explicitly needed:
 - Detailed function metadata and assembly are fetched via `/api/targets/<target>/functions/<va>` only when a cell is clicked.
-- Heavy libraries like `highlight.js` are deferred and loaded from a CDN only upon the first code block interaction.
+- Heavy libraries like `highlight.js` are deferred and loaded from this origin (vendored in `assets/`, so the dashboard works air-gapped) only upon the first code block interaction.
 - Assembly generation (via Capstone) is performed on-demand and cached in memory using LRU caching.
 
 ## 7. Graceful Degradation (Potato Mode)
