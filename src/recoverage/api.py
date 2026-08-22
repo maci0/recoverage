@@ -24,6 +24,7 @@ from recoverage.server import (
     DLL_DATA,
     DLL_LOCK,
     HAS_CAPSTONE,
+    HAS_PYGMENTS,
     LOOPBACK_HOSTS,
     HTTPResponse,
     _best_encoding,
@@ -395,6 +396,7 @@ def handle_api_health() -> bytes:
             "db": db_info,
             "extras": {
                 "capstone": HAS_CAPSTONE,
+                "pygments": HAS_PYGMENTS,
             },
             "targets_count": target_count,
             "cors": _server.CORS_ENABLED,
@@ -940,7 +942,25 @@ def handle_api_asm(target: str) -> bytes | Any:
             return _section_not_found(target, section)
 
         sec = dict(row)
-        file_offset = sec["fileOffset"] + (va - sec["va"])
+        file_offset = sec["fileOffset"]
+        sec_va = sec["va"]
+        if (
+            not isinstance(file_offset, int)
+            or not isinstance(sec_va, int)
+            or not isinstance(sec["size"], int)
+        ):
+            # Sections with no file backing (.bss) carry NULL offsets; the
+            # arithmetic below would raise TypeError and surface as an HTML
+            # 500 instead of this endpoint's JSON error contract.
+            return _json_err(
+                422,
+                {
+                    "error": "section has no file backing",
+                    "detail": f"section {section!r} has NULL va/fileOffset — "
+                    "raw bytes are only served for file-backed sections",
+                },
+            )
+        file_offset += va - sec_va
         if file_offset < 0:
             return _json_err(400, {"error": "va is before section start"})
         if va >= sec["va"] + sec["size"]:
@@ -1022,6 +1042,19 @@ def handle_api_bytes(target: str, section: str) -> bytes | Any:
             return _section_not_found(target, section)
 
         sec = dict(row)
+        if not isinstance(sec["fileOffset"], int) or not isinstance(sec["size"], int):
+            # Sections with no file backing (.bss) carry a NULL fileOffset
+            # (and possibly NULL size); the arithmetic below would raise
+            # TypeError and surface as an HTML 500 instead of this
+            # endpoint's JSON error contract.
+            return _json_err(
+                422,
+                {
+                    "error": "section has no file backing",
+                    "detail": f"section {section!r} has NULL fileOffset/size — "
+                    "raw bytes are only served for file-backed sections",
+                },
+            )
         if req_offset >= sec["size"]:
             return _json_err(400, {"error": "offset beyond section bounds"})
         target_data = _load_dll(target)

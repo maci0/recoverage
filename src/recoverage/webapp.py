@@ -13,8 +13,19 @@ route registered; importing bare ``recoverage.server`` yields a routeless app.
 
 from __future__ import annotations
 
+from typing import Any
+
 import recoverage.api  # noqa: F401 — mounts /api/* routes on server.app
 import recoverage.ui  # noqa: F401 — mounts / , /potato and static routes
-from recoverage.server import app
+from recoverage.server import _json_err, app
 
 __all__ = ["app"]
+
+
+# Registered LAST (after api+ui above), this fallback keeps unmatched paths a
+# 404.  Without it, the CORS preflight catch-all in server.py — the only rule
+# matching every path — makes bottle answer unknown GETs/POSTs with "405
+# Method Not Allowed", which wrongly asserts the resource exists.
+@app.route("<path:path>", method=["GET", "POST", "PUT", "DELETE", "PATCH"])
+def _unmatched_route(path: str) -> Any:
+    return _json_err(404, {"error": "Not found", "detail": f"no such endpoint: /{path}"})

@@ -89,6 +89,7 @@ static_file = cast(Any, bottle.static_file)
 HTTPResponse = cast(Any, bottle.HTTPResponse)
 
 HAS_CAPSTONE = importlib.util.find_spec("capstone") is not None
+HAS_PYGMENTS = importlib.util.find_spec("pygments") is not None
 
 # CORS — configured once at startup by the CLI before the server starts
 # accepting requests.  Thread-safe: set before any worker threads exist.
@@ -740,11 +741,10 @@ def _check_schema_version(conn: sqlite3.Connection) -> str:
     Returns the version string (or ``"<unknown>"`` / ``"<incomplete>"``).
     """
     global _SCHEMA_VERSION_CACHE
-    try:
-        st = _db_path().stat()
-        fingerprint = (st.st_mtime_ns, st.st_size)
-    except OSError:
-        fingerprint = None
+    # WAL-aware snapshot, not raw st_mtime: a rebuild that commits only to
+    # -wal must invalidate the memo or a stale verdict (e.g. "<incomplete>")
+    # survives the fix — same contract as every other DB-derived cache key.
+    fingerprint = _snapshot_db_mtime()
     if fingerprint is not None:
         with _RESOLVED_TARGETS_CACHE_LOCK:
             if _SCHEMA_VERSION_CACHE is not None and _SCHEMA_VERSION_CACHE[0] == fingerprint:
