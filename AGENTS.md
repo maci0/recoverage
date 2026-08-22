@@ -26,6 +26,7 @@ recoverage/
 │   ├── conftest.py           # Shared fixtures (synthetic coverage.db)
 │   ├── test_api.py           # API validation, security, SQL injection tests
 │   ├── test_cli.py           # CSV export, formatting, edge case tests
+│   ├── test_lifecycle.py     # Process lifecycle: regen timeouts, browser-opener reaping
 │   ├── test_paths.py         # DB path resolution tests
 │   ├── test_server.py        # Compression, encoding, path helper tests
 │   ├── test_potato.py        # Potato Mode unit tests
@@ -39,6 +40,7 @@ recoverage/
     ├── api.py               # REST API routes (/api/*)
     ├── ui.py                # UI routes (/, /potato, static files)
     ├── potato.py            # Potato Mode renderer
+    ├── webapp.py            # Composition root: imports api+ui so app has every route
     └── assets/
         ├── index.html       # SPA shell
         ├── style.css        # All styles
