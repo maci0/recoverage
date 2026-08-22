@@ -49,6 +49,16 @@ printf '%s\\n' "$!" > "$GRANDCHILD_PID_FILE"
 wait
 """
 
+# Same hang, but also records its own PID so a test can prove the direct uv
+# child AND its grandchild are gone after an abandonment path.
+FAKE_UV_HANG_RECORD_ALL = """\
+#!/bin/sh
+printf '%s\\n' "$$" > "$CHILD_PID_FILE"
+/bin/sleep 60 &
+printf '%s\\n' "$!" > "$GRANDCHILD_PID_FILE"
+wait
+"""
+
 
 def _install_fake_uv(monkeypatch: Any, tmp_path: Path, body: str) -> Path:
     bin_dir = tmp_path / "bin"
@@ -119,6 +129,55 @@ class TestRunRegenStep:
         with pytest.raises(subprocess.TimeoutExpired) as excinfo:
             run_regen_step("catalog", tmp_path)
         assert excinfo.value.timeout == 0.3
+
+    @pytest.mark.skipif(not POSIX, reason="POSIX process groups and signals")
+    def test_keyboard_interrupt_kills_regen_tree(self, monkeypatch: Any, tmp_path: Path) -> None:
+        """Ctrl+C while proc.wait() blocks must not orphan the regen tree.
+
+        The child runs in its own session (start_new_session), so the
+        terminal's SIGINT never reaches it — without a kill on the
+        exception path, uv + rebrew survive as orphans and keep writing
+        coverage.db behind a restarted dashboard.
+        """
+        import signal
+        import threading
+
+        import recoverage.server as srv
+
+        child_pid_file = tmp_path / "child.pid"
+        grandchild_pid_file = tmp_path / "grandchild.pid"
+        monkeypatch.setenv("CHILD_PID_FILE", str(child_pid_file))
+        monkeypatch.setenv("GRANDCHILD_PID_FILE", str(grandchild_pid_file))
+        _install_fake_uv(monkeypatch, tmp_path, FAKE_UV_HANG_RECORD_ALL)
+        monkeypatch.setattr(srv, "REGEN_TIMEOUT", 30)
+
+        def _interrupt() -> None:
+            os.kill(os.getpid(), signal.SIGINT)
+
+        # Fires while the main thread is parked in proc.wait(); the generous
+        # delay guarantees Popen/wait were already entered.
+        timer = threading.Timer(0.5, _interrupt)
+        timer.daemon = True
+        with pytest.raises(KeyboardInterrupt):
+            try:
+                timer.start()
+                run_regen_step("catalog", tmp_path)
+            finally:
+                timer.cancel()
+
+        pids = [int(child_pid_file.read_text()), int(grandchild_pid_file.read_text())]
+
+        def _gone(pid: int) -> bool:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return True  # reaped by init after the group kill
+            return False
+
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and not all(_gone(p) for p in pids):
+            time.sleep(0.05)
+        assert all(_gone(p) for p in pids), f"regen tree survived Ctrl+C (orphans): {pids}"
 
 
 class TestOpenAndReap:

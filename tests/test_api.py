@@ -430,6 +430,44 @@ class TestSseEvents:
                 result.close()
             api._stop_db_watcher()
 
+    def test_stream_releases_client_on_abrupt_socket_teardown(self) -> None:
+        """Drive the real wsgiref request path with a socket that dies
+        mid-stream: finish_response must still close the app iterable when
+        writes fail, so the client queue is released deterministically.
+        A slot that leaked per vanished client would permanently erode the
+        _SSE_MAX_CLIENTS cap until restart."""
+        from io import StringIO
+        from wsgiref.simple_server import ServerHandler
+
+        import recoverage.api as api
+        from recoverage.webapp import app
+
+        class DyingSocket:
+            """A wfile whose writes fail like a vanished client's."""
+
+            def write(self, data: bytes) -> int:
+                raise BrokenPipeError(32, "Broken pipe")
+
+            def flush(self) -> None:
+                return None
+
+        api._stop_db_watcher()
+        environ: dict[str, Any] = {}
+        setup_testing_defaults(environ)
+        environ["REQUEST_METHOD"] = "GET"
+        environ["PATH_INFO"] = "/api/events"
+        environ["QUERY_STRING"] = ""
+        environ["REMOTE_ADDR"] = "127.0.0.1"
+
+        # Streaming had started (200 + headers sent) when the write fails;
+        # run() must swallow the connection error like the threaded server
+        # does and the registry must come back out clean.
+        handler = ServerHandler(BytesIO(b""), DyingSocket(), StringIO(), environ)
+        handler.run(app)
+        assert handler.status == "200 OK"
+        assert len(api._SSE_CLIENTS) == 0
+        api._stop_db_watcher()
+
     def test_stream_delivers_db_updated_frame(self) -> None:
         import recoverage.api as api
 
