@@ -70,6 +70,19 @@ class TestExportCommand:
         for i, row in enumerate(rows[1:], 1):
             assert len(row) == header_len, f"Row {i} has {len(row)} cols, expected {header_len}"
 
+    def test_export_csv_lf_terminators(self) -> None:
+        """The csv writer must emit bare \\n, never its default \\r\\n.
+
+        The default lineterminator ("\\r\\n") gets translated a second time by
+        Windows' text-mode stdout, corrupting every row to \\r\\r\\n.  Bare \\n
+        means each platform performs exactly one newline translation (CRLF on
+        Windows, LF unchanged on POSIX).
+        """
+        result = runner.invoke(app, ["export", "--format", "csv"])
+        assert result.exit_code == 0
+        assert "\r" not in result.output
+        assert "\n" in result.output
+
 
 # ── Stats command ─────────────────────────────────────────────────
 

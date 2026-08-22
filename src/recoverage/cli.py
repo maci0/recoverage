@@ -457,7 +457,10 @@ def export(
         import csv  # noqa: PLC0415
         import sys  # noqa: PLC0415
 
-        writer = csv.writer(sys.stdout)
+        # lineterminator="\n": the default "\r\n" would be translated again by
+        # Windows' text-mode stdout, corrupting every row to \r\r\n.  One \n
+        # here means the platform writes its native ending exactly once.
+        writer = csv.writer(sys.stdout, lineterminator="\n")
         writer.writerow(
             [
                 "target",

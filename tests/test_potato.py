@@ -713,7 +713,10 @@ class TestPathTraversalGuard:
         base.mkdir(parents=True, exist_ok=True)
         # Create a symlink that points outside the base
         link = base / "escape"
-        link.symlink_to(tmp_path / ".." / "etc")
+        try:
+            link.symlink_to(tmp_path / ".." / "etc")
+        except OSError:
+            pytest.skip("symlinks unavailable (Windows without developer mode)")
         c_path = (base / "escape" / "passwd").resolve()
         assert not c_path.is_relative_to(base)
 
