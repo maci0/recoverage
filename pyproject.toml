@@ -19,7 +19,7 @@ classifiers = [
     "Topic :: Software Development :: Disassemblers",
 ]
 dependencies = [
-    "bottle>=0.12",
+    "bottle>=0.13",
     "brotli>=1.1",
     "rcssmin>=1.1",
     "rich>=13.0",

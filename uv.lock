@@ -526,7 +526,7 @@ pygments = [
 
 [package.metadata]
 requires-dist = [
-    { name = "bottle", specifier = ">=0.12" },
+    { name = "bottle", specifier = ">=0.13" },
     { name = "brotli", specifier = ">=1.1" },
     { name = "capstone", marker = "extra == 'capstone'", specifier = ">=5.0" },
     { name = "playwright", marker = "extra == 'playwright'", specifier = ">=1.40" },
