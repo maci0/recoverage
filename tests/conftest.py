@@ -131,7 +131,7 @@ def _build_synthetic_db() -> None:
                 (target, ".text", 80, 96, 1, "thunk", "[]", None, "_func_a"),
                 (target, ".text", 96, 112, 1, "none", "[]", None, None),
                 (target, ".text", 112, 128, 1, "exact", "[]", None, None),
-                (target, ".data", 0, 16, 1, "data", "[]", "g_counter", None),
+                (target, ".data", 0, 16, 1, "data", '["g_counter"]', "g_counter", None),
             ],
         )
         c.executemany(

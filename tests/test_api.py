@@ -23,6 +23,14 @@ from recoverage.server import HAS_CAPSTONE
 class TestRegenOriginValidation:
     """Test origin/remote_addr checks on the actual /api/regen endpoint."""
 
+    @pytest.fixture(autouse=True)
+    def _no_real_regen(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Accepted requests must not run catalog/build-db: on a machine with
+        rebrew installed, `pytest` would rebuild the developer's real DB."""
+        import recoverage.api as api
+
+        monkeypatch.setattr(api, "_do_regen", lambda remote: api._json_ok({"ok": True}))
+
     def test_remote_addr_external_rejected(self) -> None:
         """Non-localhost REMOTE_ADDR should be rejected with 403."""
         status, headers, body = wsgi_request("POST", "/api/regen", remote_addr="192.168.1.100")
@@ -259,15 +267,25 @@ class TestApiAsm:
 class TestRegenRateLimit:
     """Server-side cooldown on /api/regen (the UI throttles, the API must too)."""
 
-    def _reset_cooldown(self) -> None:
-        import recoverage.api as _api
+    def teardown_method(self) -> None:
+        import recoverage.api as api
 
-        _api._regen_last_attempt = 0.0
+        # Accepted POSTs stamp the module-global cooldown; reset so later
+        # tests (and re-runs) start from a neutral state.
+        api._regen_last_attempt = 0.0
 
-    def test_rapid_second_call_rate_limited(self) -> None:
-        self._reset_cooldown()
-        # First call passes the cooldown gate (fails later in the sandbox for
-        # other reasons — that's fine, the timestamp is set before subprocess).
+    def _no_real_regen(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import recoverage.api as api
+
+        monkeypatch.setattr(api, "_do_regen", lambda remote: api._json_ok({"ok": True}))
+
+    def test_rapid_second_call_rate_limited(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._no_real_regen(monkeypatch)
+        import recoverage.api as api
+
+        api._regen_last_attempt = 0.0
+        # First call passes the cooldown gate (the patched _do_regen answers
+        # 200 — the timestamp is stamped before it runs).
         status1, _, _ = wsgi_request("POST", "/api/regen", remote_addr="127.0.0.1")
         assert not status1.startswith("429")
 
@@ -278,12 +296,18 @@ class TestRegenRateLimit:
         assert data["error"].startswith("Rate limited")
         assert data["retry_after"] >= 0
 
-    def test_cooldown_expires(self) -> None:
+    def test_cooldown_expires(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """After the window elapses the endpoint accepts again."""
-        import recoverage.api as _api
+        import recoverage.api as api
 
-        self._reset_cooldown()
-        _api._regen_last_attempt = _api.time.monotonic() - _api._REGEN_COOLDOWN_SECONDS - 1
+        self._no_real_regen(monkeypatch)
+        # Backdate the last attempt past the cooldown window (monkeypatch
+        # restores the original global after the test).
+        monkeypatch.setattr(
+            api,
+            "_regen_last_attempt",
+            api.time.monotonic() - api._REGEN_COOLDOWN_SECONDS - 1,
+        )
         status, _, _ = wsgi_request("POST", "/api/regen", remote_addr="127.0.0.1")
         assert not status.startswith("429")
 
