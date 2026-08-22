@@ -53,7 +53,9 @@ Frontend lint tooling lives at the repo root: `package.json` (oxlint, `@oxlint/p
 
 ```bash
 # Install
-uv pip install -e .
+uv pip install -e .            # runtime deps only
+uv pip install -e .[dev]       # + pytest, ruff (CI runs uv sync --frozen --extra dev)
+uv pip install -e .[playwright]  # browser tests: playwright, pytest-playwright
 
 # Run
 recoverage serve             # start dashboard on :8001

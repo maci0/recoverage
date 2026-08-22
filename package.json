@@ -11,7 +11,7 @@
   },
   "devDependencies": {
     "@oxlint/plugins": "1.79.0",
-    "@rikalabs/oxlint-standards": "^0.8.1",
+    "@rikalabs/oxlint-standards": "0.8.1",
     "oxlint": "1.79.0",
     "vnu-jar": "26.8.20"
   }
