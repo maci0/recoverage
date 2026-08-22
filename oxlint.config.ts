@@ -74,8 +74,9 @@ export default defineConfig({
     // - one-var "always" would merge section-organized declarations into one
     //   giant chain; "never" still enforces single-declarator statements.
     "eslint/one-var": ["error", "never"],
-    // - single-line `if (x) return y;` guards, no dangling-else hazards.
-    "eslint/curly": "off",
+    // - single-line `if (x) return y;` guards stay brace-free; multi-line
+    //   blocks must use braces (no dangling-else hazards).
+    "eslint/curly": ["error", "multi-line"],
     // - comment capitalization/placement is editorial, not contractual.
     "eslint/capitalized-comments": "off",
     "eslint/no-inline-comments": "off",

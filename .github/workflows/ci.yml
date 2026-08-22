@@ -21,7 +21,8 @@ jobs:
         with:
           python-version: "3.12"
       - run: uv sync --frozen --extra dev
-      - run: uv run ruff check src/ tests/
+      - run: uv run ruff format --check src/ tests/ tools/
+      - run: uv run ruff check src/ tests/ tools/
 
   web-lint:
     runs-on: ubuntu-latest

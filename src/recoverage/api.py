@@ -498,7 +498,8 @@ def handle_api_data(target: str) -> bytes | Any:
         c.execute(
             "SELECT section_name, json_group_array(json_object("
             "'id', id, 'start', start, 'end', end, 'span', span, "
-            "'state', state, 'functions', json(functions), 'label', label, 'parent_function', parent_function"
+            "'state', state, 'functions', json(functions), 'label', label, 'parent_function', "
+            "parent_function"
             f")) FROM cells WHERE target = ?{cells_clause} GROUP BY section_name",
             sec_params,
         )

@@ -13,6 +13,7 @@ equivalent, unicorn/no-new-buffer, which the consuming config enables).
 To bump: `npm i -D @rikalabs/oxlint-standards`, then run
 `uv run python tools/flatten-rikalabs-strict.py` and re-run `npm run lint:js`.
 """
+
 from __future__ import annotations
 
 import json
@@ -20,8 +21,12 @@ import os
 import sys
 
 PRESET_DIR = os.path.join(
-    os.path.dirname(__file__), "..", "node_modules",
-    "@rikalabs", "oxlint-standards", "presets",
+    os.path.dirname(__file__),
+    "..",
+    "node_modules",
+    "@rikalabs",
+    "oxlint-standards",
+    "presets",
 )
 OUT = os.path.join(os.path.dirname(__file__), "oxlint", "rikalabs-strict.json")
 

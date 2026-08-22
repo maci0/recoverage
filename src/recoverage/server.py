@@ -1029,7 +1029,8 @@ def open_browser(url: str) -> None:
         elif system == "Windows":
             subprocess.Popen(
                 ["start", url],
-                shell=True,  # noqa: S603 — required for Windows 'start'; url is internally generated
+                shell=True,  # noqa: S603
+                # Required for Windows 'start'; url is internally generated
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )

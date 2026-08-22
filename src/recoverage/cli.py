@@ -31,7 +31,8 @@ app = typer.Typer(
         "  recoverage check --min-coverage 50 [dim]— CI gate[/dim]\n\n"
         "  recoverage regen [dim]— re-run catalog + build-db[/dim]\n\n"
         "[bold]Prerequisites:[/bold]\n\n"
-        "  Run [dim]rebrew catalog --json && rebrew build-db[/dim] first to create db/coverage.db.\n\n"
+        "  Run [dim]rebrew catalog --json && rebrew build-db[/dim] first to create "
+        "db/coverage.db.\n\n"
         "[dim]Reads db/coverage.db (SQLite). Serves SPA at http://localhost:8001.[/dim]"
     ),
 )
@@ -198,7 +199,8 @@ def serve(
     allow_remote: bool = typer.Option(
         False,
         "--allow-remote",
-        help="Required with --bind 0.0.0.0: acknowledge that the unauthenticated API (including raw binary bytes) is exposed on the network",
+        help="Required with --bind 0.0.0.0: acknowledge that the unauthenticated API (including raw "
+        "binary bytes) is exposed on the network",
     ),
     no_open: bool = typer.Option(False, "--no-open", help="Don't open browser automatically"),
     regen: bool = typer.Option(False, "--regen", help="Regenerate DB before starting"),
@@ -208,7 +210,8 @@ def serve(
     cors_origin: list[str] | None = typer.Option(  # noqa: B008
         None,
         "--cors-origin",
-        help="Origin URL allowed to read the API cross-origin (repeatable, e.g. http://localhost:5173)",
+        help="Origin URL allowed to read the API cross-origin (repeatable, "
+        "e.g. http://localhost:5173)",
     ),
     token: str = typer.Option(
         None,
@@ -525,7 +528,8 @@ def check(
                                 "target": tid,
                                 "section": sec_name,
                                 "status": "FAIL",
-                                "reason": "no tracked cells — coverage is not recorded for this section",
+                                "reason": "no tracked cells — coverage is not recorded for this "
+                                "section",
                             }
                         )
                         if not json_output:
