@@ -791,7 +791,7 @@ class TestCellsCacheInvalidation:
         wal.write_bytes(b"")
         monkeypatch.setattr(srv, "_db_path", lambda: db)
 
-        potato._clear_potato_cells_cache()
+        potato.clear_cells_cache()
         c = self._cells_cursor()
         try:
             _load_cells_cached(c, "T")
@@ -803,7 +803,7 @@ class TestCellsCacheInvalidation:
             # a cache miss (fresh query), not a stale hit.
             assert len(potato._POTATO_CELLS_CACHE) == 2
         finally:
-            potato._clear_potato_cells_cache()
+            potato.clear_cells_cache()
 
 
 if __name__ == "__main__":

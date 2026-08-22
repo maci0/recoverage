@@ -385,7 +385,7 @@ def wsgi_stream(path: str, max_chunks: int = 1) -> tuple[str, dict[str, str], li
         status_holder["status"] = status
         status_holder["headers"] = {k: v for k, v in response_headers}
 
-    from recoverage.server import app
+    from recoverage.webapp import app
 
     result = app(environ, _start_response)
     chunks: list[bytes] = []

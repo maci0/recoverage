@@ -65,11 +65,11 @@ def _clear_derived_caches() -> None:
     """
     clear_target_cache()
     _clear_data_cache()
-    from recoverage.potato import _clear_potato_cells_cache  # noqa: PLC0415
+    from recoverage.potato import clear_cells_cache  # noqa: PLC0415
     from recoverage.ui import clear_index_cache  # noqa: PLC0415
 
     clear_index_cache()
-    _clear_potato_cells_cache()
+    clear_cells_cache()
     # Disassembly/DLL bytes reflect the original binary and section layout,
     # both of which change with a rebuild.
     with DLL_LOCK:

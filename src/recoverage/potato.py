@@ -978,7 +978,7 @@ _POTATO_CELLS_CACHE_LOCK = threading.Lock()
 _POTATO_CELLS_CACHE_MAX = 4
 
 
-def _clear_potato_cells_cache() -> None:
+def clear_cells_cache() -> None:
     """Clear the memoized potato cells payloads (called on DB rebuild)."""
     with _POTATO_CELLS_CACHE_LOCK:
         _POTATO_CELLS_CACHE.clear()

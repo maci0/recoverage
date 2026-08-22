@@ -251,9 +251,7 @@ def serve(
         _project_dir,
         open_browser,
     )
-    from recoverage.server import (
-        app as bottle_app,
-    )
+    from recoverage.webapp import app as bottle_app
 
     # NOTE: "::" is the IPv6 wildcard (binds every interface) — it must NOT
     # be treated as loopback, or --bind :: would silently expose the

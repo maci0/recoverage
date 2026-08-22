@@ -154,6 +154,38 @@ class TestCompressPayload:
         assert encoding == ""
         assert result == data
 
+    def test_concurrent_zstd_roundtrip(self) -> None:
+        """compress_payload must be safe under concurrent request threads.
+
+        A shared module-level ZstdCompressor is not supported by
+        python-zstandard (the C extension releases the GIL during compress,
+        so threads shared one ZSTD_CCtx and the process segfaulted).  Each
+        thread compresses its own payload; every output must round-trip.
+        """
+        payloads = [bytes([i % 256]) * 4096 + b"payload-%d" % i for i in range(16)]
+        results: list[tuple[bytes, str] | None] = [None] * len(payloads)
+        errors: list[BaseException] = []
+
+        def worker(idx: int) -> None:
+            try:
+                results[idx] = compress_payload(payloads[idx], "zstd")
+            except BaseException as exc:  # noqa: BLE001 — surface worker crashes
+                errors.append(exc)
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(len(payloads))]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert not errors
+        dctx = zstd.ZstdDecompressor()
+        for idx, (data, res) in enumerate(zip(payloads, results, strict=True)):
+            assert res is not None
+            compressed, encoding = res
+            assert encoding == "zstd"
+            assert dctx.decompress(compressed) == data, f"thread {idx} payload corrupted"
+
 
 # ── Minification ───────────────────────────────────────────────────
 

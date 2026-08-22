@@ -8,7 +8,7 @@ from io import BytesIO
 from pathlib import Path
 from wsgiref.util import setup_testing_defaults
 
-from recoverage.server import app
+from recoverage.webapp import app
 
 # -- Synthetic coverage.db -------------------------------------------------
 # The DB-gated tests below skip when no coverage.db is in cwd, and CI has no

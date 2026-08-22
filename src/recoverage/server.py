@@ -35,8 +35,20 @@ import zstandard as zstd  # type: ignore[import-untyped]
 
 from recoverage._paths import _db_path, sqlite_ro_uri
 
-# Module-level compressor — ZstdCompressor is thread-safe for compress() calls
-_ZSTD_COMPRESSOR = zstd.ZstdCompressor(level=3)
+# Thread-local compressor — python-zstandard gives ZstdCompressor instances NO
+# thread-safety guarantees ("do not operate on the same instance from different
+# threads") and releases the GIL inside compress(), so a shared instance raced
+# on one ZSTD_CCtx and reproducibly segfaulted the server under concurrent
+# requests.  One context per request thread (same pattern as _get_capstone_md).
+_ZSTD_COMPRESSOR_TLS = threading.local()
+
+
+def _get_zstd_compressor() -> Any:
+    md = getattr(_ZSTD_COMPRESSOR_TLS, "compressor", None)
+    if md is None:
+        md = _ZSTD_COMPRESSOR_TLS.compressor = zstd.ZstdCompressor(level=3)
+    return md
+
 
 # Shared timeout for rebrew regen subprocesses (imported by cli.py and api.py)
 REGEN_TIMEOUT = 120  # seconds — must accommodate large projects
@@ -579,7 +591,7 @@ def compress_payload(
     """
     encoding = _best_encoding(accept_encoding)
     if encoding == "zstd":
-        return _ZSTD_COMPRESSOR.compress(body), "zstd"
+        return _get_zstd_compressor().compress(body), "zstd"
     if encoding == "br":
         return brotli.compress(body, quality=brotli_quality), "br"  # type: ignore
     if encoding == "gzip":
@@ -1091,9 +1103,3 @@ def open_browser(url: str) -> None:
         _open_and_reap(url, ["start", url], shell=True)
     else:
         webbrowser.open(url)
-
-
-# ── Register routes from submodules ────────────────────────────────
-
-import recoverage.api  # noqa: F401, E402
-import recoverage.ui  # noqa: F401, E402
