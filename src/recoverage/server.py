@@ -10,12 +10,15 @@ Reads the coverage database from the path resolved by
 
 from __future__ import annotations
 
+import contextlib
 import functools
 import gzip
 import importlib.util
 import json
 import logging
+import os
 import platform
+import signal
 import sqlite3
 import subprocess
 import threading
@@ -37,6 +40,31 @@ _ZSTD_COMPRESSOR = zstd.ZstdCompressor(level=3)
 
 # Shared timeout for rebrew regen subprocesses (imported by cli.py and api.py)
 REGEN_TIMEOUT = 120  # seconds — must accommodate large projects
+
+
+def run_regen_step(step: str, root: Path) -> None:
+    """Run ``uv run rebrew <step>`` in *root*, killing the whole process group on timeout.
+
+    ``check_call(timeout=...)`` kills only the direct child (uv); the actual
+    rebrew worker is uv's grandchild and would survive, still writing
+    coverage.db while the dashboard resumes serving.  The child gets its own
+    session so the group can be signalled, and it is always reaped.
+    """
+    cmd = ["uv", "run", "rebrew", step]
+    proc = subprocess.Popen(cmd, cwd=str(root), start_new_session=(os.name == "posix"))
+    try:
+        proc.wait(timeout=REGEN_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        if os.name == "posix":
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(proc.pid, signal.SIGKILL)
+        else:
+            proc.kill()
+        proc.wait()
+        raise subprocess.TimeoutExpired(cmd, REGEN_TIMEOUT) from None
+    if proc.returncode != 0:
+        raise subprocess.CalledProcessError(proc.returncode, cmd)
+
 
 Bottle = cast(Any, bottle.Bottle)
 request = cast(Any, bottle.request)
@@ -1015,36 +1043,44 @@ def _cors_preflight(path: str) -> str:
 
 # ── Browser opener ─────────────────────────────────────────────────
 
+# Openers exit in well under a second; the bound only guards a wedged one.
+_BROWSER_OPEN_TIMEOUT = 10
+
+
+def _open_and_reap(url: str, args: list[str], shell: bool = False) -> None:
+    """Launch the opener for *url* fire-and-forget and still reap it.
+
+    Detaching (setsid/shell) does NOT keep a child from becoming a zombie —
+    only a wait() does, and nothing else ever waits on these openers.  The
+    wait is bounded so a hung opener cannot stall serve startup; past the
+    deadline it is killed and reaped.
+    """
+    try:
+        proc = subprocess.Popen(
+            args,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            # Windows 'start' needs cmd.exe; args are internally generated
+            shell=shell,
+            start_new_session=(os.name == "posix"),
+        )
+        proc.wait(timeout=_BROWSER_OPEN_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+    except (OSError, subprocess.SubprocessError):
+        webbrowser.open(url)
+
 
 def open_browser(url: str) -> None:
     system = platform.system()
-    # start_new_session=True detaches the child so it won't become a zombie
-    try:
-        if system == "Linux":
-            subprocess.Popen(
-                ["xdg-open", url],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,
-            )
-        elif system == "Darwin":
-            subprocess.Popen(
-                ["open", url],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,
-            )
-        elif system == "Windows":
-            subprocess.Popen(
-                ["start", url],
-                shell=True,  # noqa: S603
-                # Required for Windows 'start'; url is internally generated
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-        else:
-            webbrowser.open(url)
-    except (OSError, subprocess.SubprocessError):
+    if system == "Linux":
+        _open_and_reap(url, ["xdg-open", url])
+    elif system == "Darwin":
+        _open_and_reap(url, ["open", url])
+    elif system == "Windows":
+        _open_and_reap(url, ["start", url], shell=True)
+    else:
         webbrowser.open(url)
 
 

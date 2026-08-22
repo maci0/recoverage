@@ -1142,16 +1142,8 @@ def _do_regen(remote: str) -> bytes | Any:
     root = _project_dir()
     _log.info("Regen started from %s", remote)
     try:
-        subprocess.check_call(
-            ["uv", "run", "rebrew", "catalog"],
-            cwd=str(root),
-            timeout=_server.REGEN_TIMEOUT,
-        )
-        subprocess.check_call(
-            ["uv", "run", "rebrew", "build-db"],
-            cwd=str(root),
-            timeout=_server.REGEN_TIMEOUT,
-        )
+        _server.run_regen_step("catalog", root)
+        _server.run_regen_step("build-db", root)
         _clear_derived_caches()
         _log.info("Regen completed successfully")
         return _json_ok({"ok": True})

@@ -169,13 +169,15 @@ def _get_stats(conn: sqlite3.Connection, target: str) -> dict[str, Any]:
 
 def _run_regen(root: Path) -> None:
     """Run rebrew catalog + build-db to regenerate coverage.db."""
-    from recoverage.server import REGEN_TIMEOUT  # noqa: PLC0415
+    from recoverage.server import (
+        REGEN_TIMEOUT,  # noqa: PLC0415
+        run_regen_step,  # noqa: PLC0415
+    )
 
     for step in ("catalog", "build-db"):
-        cmd = ["uv", "run", "rebrew", step]
         typer.echo(f"Running rebrew {step}...")
         try:
-            subprocess.check_call(cmd, cwd=str(root), timeout=REGEN_TIMEOUT)
+            run_regen_step(step, root)
         except FileNotFoundError:
             typer.secho("Error: 'uv' not found — is it installed?", fg=typer.colors.RED, err=True)
             raise typer.Exit(1) from None
