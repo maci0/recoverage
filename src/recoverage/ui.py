@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import gzip
 import json
 import logging
 import sqlite3
@@ -14,6 +16,7 @@ import zstandard as zstd  # type: ignore[import-untyped]
 
 from recoverage.server import (
     BROTLI_STATIC_QUALITY,
+    CACHE_NO_STORE,
     HTTPResponse,
     _assets_dir,
     _best_encoding,
@@ -76,10 +79,8 @@ def _check_payload_budget(payload: bytes) -> None:
 
     Tries every available compression method and reports the best result.
     """
-    import gzip as _gzip
-
     results: list[tuple[str, int]] = [
-        ("gzip", len(_gzip.compress(payload))),
+        ("gzip", len(gzip.compress(payload))),
         ("br", len(brotli.compress(payload))),
         ("zstd", len(zstd.ZstdCompressor(level=3).compress(payload))),
     ]
@@ -135,15 +136,12 @@ def handle_index() -> bytes:
     from recoverage.server import _AUTH_TOKEN, _auth_token_matches
 
     if _AUTH_TOKEN and _auth_token_matches(request.query.get("token", "")):
-        try:
-            from bottle import response as _resp
-
-            _resp.set_header(
+        # Header failure must not break the page.
+        with contextlib.suppress(Exception):
+            response.set_header(
                 "Set-Cookie",
                 f"recoverage_token={_AUTH_TOKEN}; Path=/; HttpOnly; SameSite=Strict",
             )
-        except Exception:  # noqa: BLE001 — header failure must not break the page
-            pass
 
     accept_encoding = request.headers.get("Accept-Encoding", "")
     encoding = _best_encoding(accept_encoding)
@@ -164,7 +162,7 @@ def handle_index() -> bytes:
         body = CACHED_INDEX_COMPRESSED[encoding]
 
     response.content_type = "text/html; charset=utf-8"
-    response.set_header("Cache-Control", "no-cache, no-store, must-revalidate")
+    response.set_header("Cache-Control", CACHE_NO_STORE)
     response.set_header("Vary", "Accept-Encoding")
     if encoding:
         response.set_header("Content-Encoding", encoding)

@@ -19,6 +19,8 @@ from recoverage import server as _server
 from recoverage.server import (
     _FN_JSON_SQL,
     _GLOBAL_JSON_SQL,
+    CACHE_NO_STORE,
+    CACHE_REVALIDATE,
     DLL_DATA,
     DLL_LOCK,
     HAS_CAPSTONE,
@@ -26,6 +28,7 @@ from recoverage.server import (
     HTTPResponse,
     _best_encoding,
     _cell_bucket_row,
+    _cells_json_rows,
     _db,
     _db_path,
     _escape_like,
@@ -36,10 +39,12 @@ from recoverage.server import (
     _json_ok,
     _json_ok_precompressed,
     _load_dll,
+    _load_metadata,
     _open_db,
     _project_dir,
     _safe_etag,
     _snapshot_db_mtime,
+    _target_filename,
     app,
     clear_target_cache,
     compress_payload,
@@ -116,10 +121,7 @@ def _cache_data_insert(
     """Insert a memoized payload (raw + this request's encoded form), evicting
     the oldest entries past the cap."""
     with _DATA_CACHE_LOCK:
-        if len(_DATA_CACHE) >= _DATA_CACHE_MAX and key not in _DATA_CACHE:
-            # Evict oldest (dict preserves insertion order).
-            for old_key in list(_DATA_CACHE)[: len(_DATA_CACHE) - _DATA_CACHE_MAX + 1]:
-                _DATA_CACHE.pop(old_key, None)
+        _server._evict_oldest(_DATA_CACHE, _DATA_CACHE_MAX)
         entry = _DATA_CACHE.setdefault(key, {})
         entry["raw"] = raw
         entry[encoding] = body
@@ -355,7 +357,7 @@ def handle_api_events() -> Any:
                 _SSE_CLIENTS.discard(client_queue)
 
     response.content_type = "text/event-stream"
-    response.set_header("Cache-Control", "no-cache, no-store, must-revalidate")
+    response.set_header("Cache-Control", CACHE_NO_STORE)
     response.set_header("X-Accel-Buffering", "no")
     return _events()
 
@@ -397,7 +399,7 @@ def handle_api_health() -> bytes:
             "targets_count": target_count,
             "cors": _server.CORS_ENABLED,
         },
-        Cache_Control="no-cache, no-store, must-revalidate",
+        Cache_Control=CACHE_NO_STORE,
     )
 
 
@@ -409,14 +411,14 @@ def handle_api_targets() -> bytes:
             _, targets_list = resolve_targets(c)
     except sqlite3.Error:
         _log.warning("Database unavailable, falling back to config-only target list")
-        targets_list = []
-        for tid, t_info in _server._get_targets_config().items():
-            filename = t_info.get("filename", tid) if isinstance(t_info, dict) else tid
-            targets_list.append({"id": tid, "name": Path(filename).name})
+        targets_list = [
+            {"id": tid, "name": Path(_target_filename(tid, t_info)).name}
+            for tid, t_info in _server._get_targets_config().items()
+        ]
 
     return _json_ok(
         {"targets": targets_list},
-        Cache_Control="no-cache, no-store, must-revalidate",
+        Cache_Control=CACHE_NO_STORE,
     )
 
 
@@ -431,8 +433,28 @@ def handle_api_stats(target: str) -> bytes | Any:
                 "sections": stats["sections"],
                 "functions_by_status": stats["by_status"],
             },
-            Cache_Control="no-cache, no-store, must-revalidate",
+            Cache_Control=CACHE_NO_STORE,
         )
+
+
+def _build_search_index(c: sqlite3.Cursor, target: str) -> dict[str, Any]:
+    """Lightweight name -> {va, symbol} index for the SPA search box.
+
+    Names are not unique across functions and globals — keep the FIRST
+    (functions win over globals) so navigation never silently jumps to a
+    colliding global's VA.
+    """
+    index: dict[str, Any] = {}
+    c.execute(
+        "SELECT name, vaStart, symbol FROM functions WHERE target = ?",
+        (target,),
+    )
+    for row in c.fetchall():
+        index.setdefault(row["name"], {"va": row["vaStart"], "symbol": row["symbol"]})
+    c.execute("SELECT name, va FROM globals WHERE target = ?", (target,))
+    for row in c.fetchall():
+        index.setdefault(row["name"], {"va": hex(row["va"]) if row["va"] else "", "symbol": ""})
+    return index
 
 
 @app.get("/api/targets/<target>/data")
@@ -454,7 +476,7 @@ def handle_api_data(target: str) -> bytes | Any:
         if request.headers.get("If-None-Match") == etag:
             return HTTPResponse(
                 status=304,
-                headers={"ETag": etag, "Cache-Control": "no-cache, must-revalidate"},
+                headers={"ETag": etag, "Cache-Control": CACHE_REVALIDATE},
             )
     except OSError:
         pass
@@ -479,19 +501,12 @@ def handle_api_data(target: str) -> bytes | Any:
                 entry[encoding] = body
         if etag is not None:
             return _json_ok_precompressed(
-                body, encoding, Cache_Control="no-cache, must-revalidate", ETag=str(etag)
+                body, encoding, Cache_Control=CACHE_REVALIDATE, ETag=str(etag)
             )
-        return _json_ok_precompressed(body, encoding, Cache_Control="no-cache, must-revalidate")
+        return _json_ok_precompressed(body, encoding, Cache_Control=CACHE_REVALIDATE)
 
     with _target_cursor(target) as c:
-        data: dict[str, Any] = {}
-
-        c.execute("SELECT key, value FROM metadata WHERE target = ?", (target,))
-        for row in c.fetchall():
-            try:
-                data[row["key"]] = json.loads(row["value"])
-            except (json.JSONDecodeError, TypeError):
-                data[row["key"]] = row["value"]
+        data: dict[str, Any] = _load_metadata(c, target)
 
         # Optional ?section= narrowing: the same queries with one extra WHERE
         # term, so no branch duplicates a query that only adds "AND name = ?".
@@ -513,47 +528,23 @@ def handle_api_data(target: str) -> bytes | Any:
             # empty grid (which would also get memoized under that key).
             return _section_not_found(target, section_filter)
 
-        cells_clause = " AND section_name = ?" if section_filter else ""
-        c.execute(
-            "SELECT section_name, json_group_array(json_object("
-            "'id', id, 'start', start, 'end', end, 'span', span, "
-            "'state', state, 'functions', json(functions), 'label', label, 'parent_function', "
-            "parent_function"
-            f")) FROM cells WHERE target = ?{cells_clause} GROUP BY section_name",
-            sec_params,
-        )
-        for row in c.fetchall():
+        for row in _cells_json_rows(c, target, section_filter):
             sec_name = row[0]
             if sec_name in data["sections"]:
                 data["sections"][sec_name]["cells"] = json.loads(row[1])
 
-        # Lightweight search index.  Names are not unique across functions and
-        # globals — keep the FIRST (functions win over globals) so navigation
-        # never silently jumps to a colliding global's VA.
-        data["search_index"] = {}
-        c.execute(
-            "SELECT name, vaStart, symbol FROM functions WHERE target = ?",
-            (target,),
-        )
-        for row in c.fetchall():
-            data["search_index"].setdefault(
-                row["name"], {"va": row["vaStart"], "symbol": row["symbol"]}
-            )
-        c.execute("SELECT name, va FROM globals WHERE target = ?", (target,))
-        for row in c.fetchall():
-            data["search_index"].setdefault(
-                row["name"], {"va": hex(row["va"]) if row["va"] else "", "symbol": ""}
-            )
+        data["search_index"] = _build_search_index(c, target)
 
         # Per-section cell stats from SQL view.  All buckets are selected so
         # consumers can sum them and reconcile with total_cells (padding,
         # none, proven, and size_mismatch were previously omitted).
         data["section_cell_stats"] = {}
+        stats_clause = " AND section_name = ?" if section_filter else ""
         c.execute(
             "SELECT section_name, total_cells, exact_count, reloc_count, "
             "near_match_count, stub_count, padding_count, data_count, thunk_count, "
             f"none_count, proven_count, size_mismatch_count "
-            f"FROM section_cell_stats WHERE target = ?{cells_clause}",
+            f"FROM section_cell_stats WHERE target = ?{stats_clause}",
             sec_params,
         )
         for row in c.fetchall():
@@ -567,9 +558,18 @@ def handle_api_data(target: str) -> bytes | Any:
 
         if etag is not None:
             return _json_ok_precompressed(
-                body, encoding, Cache_Control="no-cache, must-revalidate", ETag=str(etag)
+                body, encoding, Cache_Control=CACHE_REVALIDATE, ETag=str(etag)
             )
-        return _json_ok_precompressed(body, encoding, Cache_Control="no-cache, must-revalidate")
+        return _json_ok_precompressed(body, encoding, Cache_Control=CACHE_REVALIDATE)
+
+
+# Mirrors the list endpoint's limit cap.
+_MAX_BATCH_LOOKUP = 500
+
+# Pagination offset ceiling: real function tables are orders of magnitude
+# smaller, so clamping here changes no legitimate page while keeping OFFSET
+# inside sqlite3's INTEGER range.
+_MAX_PAGE_OFFSET = 10_000_000
 
 
 @app.get("/api/targets/<target>/functions")
@@ -660,17 +660,8 @@ def handle_api_functions_list(target: str) -> bytes | Any:
                 "offset": offset,
                 "functions": items,
             },
-            Cache_Control="no-cache, no-store, must-revalidate",
+            Cache_Control=CACHE_NO_STORE,
         )
-
-
-# Mirrors the list endpoint's limit cap.
-_MAX_BATCH_LOOKUP = 500
-
-# Pagination offset ceiling: real function tables are orders of magnitude
-# smaller, so clamping here changes no legitimate page while keeping OFFSET
-# inside sqlite3's INTEGER range.
-_MAX_PAGE_OFFSET = 10_000_000
 
 
 def _last_verify_payload(vr: sqlite3.Row) -> dict[str, Any]:
@@ -780,8 +771,6 @@ def handle_api_functions_batch(target: str) -> bytes | Any:
 
     with _target_cursor(target) as c:
         results: list[dict[str, Any]] = []
-        if not unique_vas:
-            return _json_ok(results, Cache_Control="no-cache, no-store, must-revalidate")
 
         placeholders = ",".join("?" * len(unique_vas))
 
@@ -821,13 +810,13 @@ def handle_api_functions_batch(target: str) -> bytes | Any:
             elif va in globals_by_va:
                 results.append(globals_by_va[va])
 
-        return _json_ok(results, Cache_Control="no-cache, no-store, must-revalidate")
+        return _json_ok(results, Cache_Control=CACHE_NO_STORE)
 
 
 @app.get("/api/targets/<target>/functions/<va>")
 def handle_api_function(target: str, va: str) -> bytes | Any:
     with _target_cursor(target) as c:
-        no_cache = "no-cache, no-store, must-revalidate"
+        no_cache = CACHE_NO_STORE
 
         # Parse va into candidate lookup ints.  Hex strings: 0x-prefixed or
         # containing a-f (rebrew's parse_va convention, bare hex valid).
@@ -985,7 +974,7 @@ def handle_api_asm(target: str) -> bytes | Any:
                 )
             return _json_ok(
                 {"instructions": instructions},
-                Cache_Control="no-cache",
+                Cache_Control=CACHE_REVALIDATE,
                 ETag=asm_etag,
             )
 
@@ -1000,7 +989,7 @@ def handle_api_asm(target: str) -> bytes | Any:
                 },
             )
 
-        return _json_ok({"asm": asm_text}, Cache_Control="no-cache", ETag=asm_etag)
+        return _json_ok({"asm": asm_text}, Cache_Control=CACHE_REVALIDATE, ETag=asm_etag)
 
 
 @app.get("/api/targets/<target>/sections/<section>/bytes")
@@ -1060,7 +1049,7 @@ def handle_api_bytes(target: str, section: str) -> bytes | Any:
                 "hex": "\n".join(hex_lines),
                 "raw": list(chunk),
             },
-            Cache_Control="no-cache",
+            Cache_Control=CACHE_REVALIDATE,
             ETag=bytes_etag,
         )
 

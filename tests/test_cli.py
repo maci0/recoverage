@@ -272,7 +272,7 @@ class TestStatsJson:
 
 class TestPartialSchemaCleanExit:
     """A DB that lists targets but cannot answer stats queries must exit 2
-    with a rebuild hint, not a traceback (same contract as _resolve_targets)."""
+    with a rebuild hint, not a traceback (same contract as _select_targets)."""
 
     def test_stats_clean_error_on_partial_schema(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

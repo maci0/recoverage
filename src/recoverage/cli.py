@@ -88,10 +88,13 @@ _VERDICT_COLORS: dict[str, int] = {
 }
 
 
-def _open_db(db_path: Path | None = None, *, missing_exit_code: int = 1) -> sqlite3.Connection:
-    """Open coverage.db read-only.
+def _open_db_or_exit(
+    db_path: Path | None = None, *, missing_exit_code: int = 1
+) -> sqlite3.Connection:
+    """Open coverage.db read-only, exiting the process on failure.
 
-    A missing database exits with *missing_exit_code* (``check`` passes 2:
+    Named apart from ``server._open_db`` (which raises instead of exiting):
+    a missing database exits with *missing_exit_code* (``check`` passes 2:
     its documented contract classifies a missing/unreadable database as an
     infrastructure error, distinct from "coverage below threshold" = 1);
     sibling commands keep their historical exit 1.
@@ -125,9 +128,11 @@ def _list_targets(conn: sqlite3.Connection) -> list[str]:
     return [row[0] for row in c.fetchall()]
 
 
-def _resolve_targets(conn: sqlite3.Connection, target: str | None) -> list[str]:
+def _select_targets(conn: sqlite3.Connection, target: str | None) -> list[str]:
     """Return the targets to operate on, validating a requested --target.
 
+    Named apart from ``server.resolve_targets`` (the webapp's DB+config
+    merge): this one only reads the DB and validates a CLI --target choice.
     A requested target that is not in the DB exits 1 with a clear error —
     sibling commands must not silently succeed on a typo'd target.  A DB
     that cannot be queried (schema-less/corrupt) exits 2 with a rebuild hint
@@ -164,7 +169,7 @@ def _get_stats(conn: sqlite3.Connection, target: str) -> dict[str, Any]:
     except sqlite3.Error as exc:
         # A DB that lists targets but cannot answer the stats queries
         # (schema-less / partially rebuilt) must not surface as a traceback —
-        # same clean-exit contract as _resolve_targets.
+        # same clean-exit contract as _select_targets.
         typer.secho(
             f"Error: cannot read coverage statistics for target {target!r}: {exc} "
             "(run 'rebrew catalog --json && rebrew build-db' to rebuild it)",
@@ -256,8 +261,7 @@ def serve(
     # NOTE: "::" is the IPv6 wildcard (binds every interface) — it must NOT
     # be treated as loopback, or --bind :: would silently expose the
     # unauthenticated API without the --allow-remote acknowledgment.
-    loopback_binds = LOOPBACK_HOSTS
-    is_remote = bind not in loopback_binds
+    is_remote = bind not in LOOPBACK_HOSTS
     if is_remote and not allow_remote:
         typer.secho(
             f"--bind {bind} exposes the unauthenticated recoverage API (including raw "
@@ -318,7 +322,7 @@ def serve(
     if is_remote:
         _server.ALLOWED_HOSTS = None
     else:
-        _server.ALLOWED_HOSTS = set(loopback_binds)
+        _server.ALLOWED_HOSTS = set(LOOPBACK_HOSTS)
 
     root = _project_dir()
     assets = _assets_dir()
@@ -380,8 +384,8 @@ def stats(
     from rich.console import Console
     from rich.table import Table
 
-    with contextlib.closing(_open_db()) as conn:
-        targets = _resolve_targets(conn, target)
+    with contextlib.closing(_open_db_or_exit()) as conn:
+        targets = _select_targets(conn, target)
 
         if not targets:
             typer.secho("No targets found in database.", fg=typer.colors.YELLOW, err=True)
@@ -437,8 +441,8 @@ def export(
     target: str | None = typer.Option(None, "--target", "-t", help="Target ID (default: all)"),
 ) -> None:
     """Export coverage data to stdout."""
-    with contextlib.closing(_open_db()) as conn:
-        targets = _resolve_targets(conn, target)
+    with contextlib.closing(_open_db_or_exit()) as conn:
+        targets = _select_targets(conn, target)
 
         if not targets:
             typer.secho("No targets found in database.", fg=typer.colors.YELLOW, err=True)
@@ -496,6 +500,46 @@ def export(
                 )
 
 
+def _section_verdict(
+    pct: float,
+    untracked: bool,
+    section_requested: bool,
+    min_coverage: float,
+) -> tuple[str, dict[str, Any], str]:
+    """Classify one section against the gate: (status, JSON extras, human text).
+
+    Sections whose cells are all "none" carry no coverage signal — the grid
+    only records match states in .text — so they must not fail the gate.
+    An explicitly requested untracked section still fails: the user asked to
+    gate something that is not being recorded.
+    """
+    if untracked and section_requested:
+        return (
+            "FAIL",
+            {"reason": "no tracked cells — coverage is not recorded for this section"},
+            "has no tracked cells — coverage is not recorded for this section",
+        )
+    if untracked:
+        return (
+            "SKIP",
+            {"reason": "no tracked cells — coverage not recorded"},
+            "has no tracked cells — coverage not recorded",
+        )
+    # Display at the same precision used for the comparison — a gate failing
+    # on raw 99.49% must not print "99.5% < 99.5%".
+    if pct < min_coverage:
+        return (
+            "FAIL",
+            {"coverage_pct": round(pct, 2)},
+            f"coverage {pct:.2f}% < {min_coverage:.2f}%",
+        )
+    return (
+        "PASS",
+        {"coverage_pct": round(pct, 2)},
+        f"coverage {pct:.2f}% >= {min_coverage:.2f}%",
+    )
+
+
 @app.command()
 def check(
     min_coverage: float = typer.Option(
@@ -519,8 +563,8 @@ def check(
             )
         raise typer.Exit(1)
 
-    with contextlib.closing(_open_db(missing_exit_code=2)) as conn:
-        targets = _resolve_targets(conn, target)
+    with contextlib.closing(_open_db_or_exit(missing_exit_code=2)) as conn:
+        targets = _select_targets(conn, target)
 
         if not targets:
             if json_output:
@@ -548,43 +592,12 @@ def check(
 
             for sec_name, sec in sorted(sections_to_check.items()):
                 checked += 1
-                pct = sec["coverage_pct"]
-                # Sections whose cells are all "none" carry no coverage
-                # signal — the grid only records match states in .text — so
-                # they must not fail the gate.  An explicitly requested
-                # untracked section still fails: the user asked to gate
-                # something that is not being recorded.
                 untracked = sec.get("covered_bytes", 0) <= 0
                 if not untracked:
                     compared += 1
-                if untracked and section:
-                    outcome: tuple[str, dict[str, Any], str] = (
-                        "FAIL",
-                        {"reason": "no tracked cells — coverage is not recorded for this section"},
-                        "has no tracked cells — coverage is not recorded for this section",
-                    )
-                elif untracked:
-                    outcome = (
-                        "SKIP",
-                        {"reason": "no tracked cells — coverage not recorded"},
-                        "has no tracked cells — coverage not recorded",
-                    )
-                elif pct < min_coverage:
-                    # Display at the same precision used for the comparison — a
-                    # gate failing on raw 99.49% must not print "99.5% < 99.5%".
-                    outcome = (
-                        "FAIL",
-                        {"coverage_pct": round(pct, 2)},
-                        f"coverage {pct:.2f}% < {min_coverage:.2f}%",
-                    )
-                else:
-                    outcome = (
-                        "PASS",
-                        {"coverage_pct": round(pct, 2)},
-                        f"coverage {pct:.2f}% >= {min_coverage:.2f}%",
-                    )
-
-                status, extra, human = outcome
+                status, extra, human = _section_verdict(
+                    sec["coverage_pct"], untracked, bool(section), min_coverage
+                )
                 if status == "FAIL":
                     failed = True
                 verdicts.append({"target": tid, "section": sec_name, "status": status, **extra})

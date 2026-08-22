@@ -34,9 +34,12 @@ from recoverage.server import (
     _GLOBAL_JSON_SQL,
     HAS_CAPSTONE,
     VA_MAX,
+    _cells_json_rows,
     _db_path,
     _escape_like,
+    _evict_oldest,
     _load_dll,
+    _load_metadata,
     _snapshot_db_mtime,
     get_disassembly,
     resolve_targets,
@@ -940,13 +943,7 @@ def _load_section_data(
     c: sqlite3.Cursor,
     target: str,
 ) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
-    data: dict[str, Any] = {}
-    c.execute("SELECT key, value FROM metadata WHERE target = ?", (target,))
-    for key, val in c.fetchall():
-        try:
-            data[key] = json.loads(val)
-        except (json.JSONDecodeError, TypeError):
-            data[key] = val
+    data: dict[str, Any] = _load_metadata(c, target)
 
     c.execute(
         "SELECT name, va, size, fileOffset, columns FROM sections WHERE target = ?",
@@ -995,22 +992,11 @@ def _load_cells_cached(c: sqlite3.Cursor, target: str) -> list[tuple[str, str]]:
         if cached is not None:
             return cached
 
-    c.execute(
-        "SELECT section_name, json_group_array(json_object("
-        "'id', id, 'start', start, 'end', end, 'span', span, "
-        "'state', state, 'functions', json(functions), 'label', label, 'parent_function', parent_function"
-        ")) FROM cells WHERE target = ? GROUP BY section_name",
-        (target,),
-    )
-    rows = [(str(row[0]), str(row[1])) for row in c.fetchall()]
+    rows = [(str(row[0]), str(row[1])) for row in _cells_json_rows(c, target)]
 
     if fingerprint is not None:
         with _POTATO_CELLS_CACHE_LOCK:
-            if len(_POTATO_CELLS_CACHE) >= _POTATO_CELLS_CACHE_MAX:
-                for old_key in list(_POTATO_CELLS_CACHE)[
-                    : len(_POTATO_CELLS_CACHE) - _POTATO_CELLS_CACHE_MAX + 1
-                ]:
-                    _POTATO_CELLS_CACHE.pop(old_key, None)
+            _evict_oldest(_POTATO_CELLS_CACHE, _POTATO_CELLS_CACHE_MAX)
             _POTATO_CELLS_CACHE[fingerprint] = rows
     return rows
 
@@ -1449,6 +1435,31 @@ def _render_function_list(
     return "".join(parts)
 
 
+def _section_tab_data(
+    target: str,
+    section: str,
+    sections: dict[str, dict[str, Any]],
+    per_section_stats: dict[str, dict[str, int]],
+    active_filters: set[str] | None,
+    search_query: str,
+) -> list[tuple[str, str, bool, str, str]]:
+    """(name, url, is_active, pct-label, accesskey-index) for the section tabs."""
+    return [
+        (
+            s,
+            _build_url(target, s, active_filters or None, search=search_query),
+            s == section,
+            (
+                f" {per_section_stats.get(s, {}).get('pct', 0)}%"
+                if per_section_stats.get(s, {}).get("total", 0) > 0
+                else ""
+            ),
+            str(i),
+        )
+        for i, s in enumerate(sections, 1)
+    ]
+
+
 def _render_potato_inner(
     c: sqlite3.Cursor,
     target: str,
@@ -1482,23 +1493,9 @@ def _render_potato_inner(
     per_section_stats = _compute_section_stats(c, target, sections, data)
     filter_btn_data = _build_filter_data(target, section, active_filters, search_query)
     progress = _build_progress(section, sec_data, data, sections)
-
-    # ── Section tab data ─────────────────────────────────────────
-    section_tab_data = []
-    for i, s in enumerate(sections, 1):
-        section_tab_data.append(
-            (
-                s,
-                _build_url(target, s, active_filters or None, search=search_query),
-                s == section,
-                (
-                    f" {per_section_stats.get(s, {}).get('pct', 0)}%"
-                    if per_section_stats.get(s, {}).get("total", 0) > 0
-                    else ""
-                ),
-                str(i),
-            )
-        )
+    section_tab_data = _section_tab_data(
+        target, section, sections, per_section_stats, active_filters or None, search_query
+    )
 
     # ── Grid (with cell merging) ─────────────────────────────────
     functions_html = ""
@@ -1662,6 +1659,13 @@ def _panel_base_ctx() -> dict[str, Any]:
     }
 
 
+def _render_original_bytes(raw_bytes: bytes, file_offset: int) -> str:
+    """Hex dump of *raw_bytes* as an Original Bytes code block (shared by the
+    empty-cell and function-detail panel paths so both stay in one format)."""
+    hex_dump = _format_hex_dump(raw_bytes, file_offset)
+    return _code_block_raw(_highlight_hex(wrap_text(hex_dump, 72)))
+
+
 def _panel_empty_cell_bytes(
     ctx: dict[str, Any],
     cell: dict[str, Any],
@@ -1676,9 +1680,8 @@ def _panel_empty_cell_bytes(
     raw_bytes = _get_raw_bytes(cell_file_offset, cell_size, target)
     if not raw_bytes:
         return
-    hex_dump = _format_hex_dump(raw_bytes, cell_file_offset)
     ctx["hex_heading"] = _section_heading("01", "#10b981", "Original Bytes")
-    ctx["hex_dump_html"] = _code_block_raw(_highlight_hex(wrap_text(hex_dump, 72)))
+    ctx["hex_dump_html"] = _render_original_bytes(raw_bytes, cell_file_offset)
     inspector = _format_data_inspector(raw_bytes)
     if inspector:
         ctx["inspector_html"] = inspector
@@ -1829,9 +1832,8 @@ def _panel_function_detail(
     if fn_file_offset and fn_size:
         raw_bytes = _get_raw_bytes(fn_file_offset, fn_size, target)
         if raw_bytes:
-            hex_dump = _format_hex_dump(raw_bytes, fn_file_offset)
             ctx["bytes_heading"] = _section_heading("01", "#10b981", "Original Bytes")
-            ctx["bytes_html"] = _code_block_raw(_highlight_hex(wrap_text(hex_dump, 72)))
+            ctx["bytes_html"] = _render_original_bytes(raw_bytes, fn_file_offset)
             if section != ".text":
                 inspector = _format_data_inspector(raw_bytes)
                 if inspector:

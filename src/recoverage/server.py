@@ -48,10 +48,10 @@ _ZSTD_COMPRESSOR_TLS = threading.local()
 
 
 def _get_zstd_compressor() -> Any:
-    md = getattr(_ZSTD_COMPRESSOR_TLS, "compressor", None)
-    if md is None:
-        md = _ZSTD_COMPRESSOR_TLS.compressor = zstd.ZstdCompressor(level=3)
-    return md
+    compressor = getattr(_ZSTD_COMPRESSOR_TLS, "compressor", None)
+    if compressor is None:
+        compressor = _ZSTD_COMPRESSOR_TLS.compressor = zstd.ZstdCompressor(level=3)
+    return compressor
 
 
 # Shared timeout for rebrew regen subprocesses (imported by cli.py and api.py)
@@ -209,7 +209,7 @@ def _etag_or_304(*parts: object) -> str | None:
     if request.headers.get("If-None-Match") == etag:
         raise HTTPResponse(
             status=304,
-            headers={"ETag": etag, "Cache-Control": "no-cache, must-revalidate"},
+            headers={"ETag": etag, "Cache-Control": CACHE_REVALIDATE},
         )
     return etag
 
@@ -368,15 +368,16 @@ def _get_targets_config() -> dict[str, Any]:
                 doc = tomllib.loads(text)
                 targets_dict = doc.get("targets", {})
                 for tid, tdata in targets_dict.items():
-                    # The DLL path comes from [targets.<tid>].binary — without
-                    # it, /asm, /bytes and Potato disasm resolve the wrong file
-                    # (previously `filename` was always the target id).
-                    filename = tid
+                    # The DLL path comes from [targets.<tid>].binary; an
+                    # entry without one stores "" so DLL lookups report the
+                    # target-specific error instead of resolving a wrong
+                    # file (display names fall back to the target id).
+                    binary = ""
                     if isinstance(tdata, dict):
-                        binary = tdata.get("binary", "")
-                        if isinstance(binary, str) and binary:
-                            filename = binary
-                    targets_info[tid] = {"filename": filename}
+                        b = tdata.get("binary", "")
+                        if isinstance(b, str):
+                            binary = b
+                    targets_info[tid] = {"filename": binary}
         except (ImportError, OSError, ValueError) as exc:
             _log.warning("Failed to load rebrew-project.toml: %s", exc)
 
@@ -390,6 +391,17 @@ def clear_target_cache() -> None:
         _TOML_CONFIG_CACHE = None
         _RESOLVED_TARGETS_CACHE = None
         _SCHEMA_VERSION_CACHE = None
+
+
+def _target_filename(tid: str, t_info: Any) -> str:
+    """Binary filename configured for target *tid* (*tid* when unset).
+
+    ONE definition of the defensive shape check used for display names —
+    the config loader stores the raw ``binary`` value ("" when absent), and
+    both target-list builders fall back to the id here.
+    """
+    filename = t_info.get("filename", tid) if isinstance(t_info, dict) else tid
+    return filename if filename else tid
 
 
 def resolve_targets(c: sqlite3.Cursor) -> tuple[list[str], list[dict[str, str]]]:
@@ -410,8 +422,7 @@ def resolve_targets(c: sqlite3.Cursor) -> tuple[list[str], list[dict[str, str]]]
             # Config-declared targets are always addressable, even before
             # their first build — _require_target treats "declared in the
             # project config" as valid, so a never-built target must not 404.
-            filename = t_info.get("filename", tid) if isinstance(t_info, dict) else tid
-            targets_list.append({"id": tid, "name": Path(filename).name})
+            targets_list.append({"id": tid, "name": Path(_target_filename(tid, t_info)).name})
             added_tids.add(tid)
 
         for tid in target_ids:
@@ -437,8 +448,8 @@ def _find_dll_path(target: str) -> Path | None:
     targets = _get_targets_config()
     if target not in targets:
         return None
-    target_info = targets.get(target)
-    filename = target_info.get("filename", "") if isinstance(target_info, dict) else ""
+    t_info = targets.get(target)
+    filename = t_info.get("filename", "") if isinstance(t_info, dict) else ""
     if not filename:
         return None
     return _project_dir() / filename
@@ -653,6 +664,57 @@ _GLOBAL_JSON_SQL = (
     ")"
 )
 
+# Cell shape contract for BOTH consumers (SPA /data and Potato grid): the
+# json_object keys here are what app.js and potato.py render.  ONE fragment
+# so a column added for one surface cannot silently miss the other.
+_CELLS_JSON_SQL = (
+    "SELECT section_name, json_group_array(json_object("
+    "'id', id, 'start', start, 'end', end, 'span', span, "
+    "'state', state, 'functions', json(functions), 'label', label, "
+    "'parent_function', parent_function"
+    ")) FROM cells WHERE target = ?"
+)
+
+
+def _cells_json_rows(
+    c: sqlite3.Cursor, target: str, section: str | None = None
+) -> list[sqlite3.Row]:
+    """Per-section cell JSON payloads as (section_name, cells_json) rows."""
+    clause = " AND section_name = ?" if section else ""
+    params: list[Any] = [target] + ([section] if section else [])
+    c.execute(_CELLS_JSON_SQL + f"{clause} GROUP BY section_name", params)
+    return c.fetchall()
+
+
+def _evict_oldest(cache: dict[Any, Any], max_size: int) -> None:
+    """Drop oldest entries (dict insertion order) until *cache* holds < max_size.
+
+    ONE definition of the bounded-cache arithmetic shared by the /data
+    payload memo and Potato's cells memo — both cap multi-MB payloads so a
+    long-running server across many rebuilds cannot accumulate forever.
+    Caller holds the cache's own lock.
+    """
+    if len(cache) >= max_size:
+        for old_key in list(cache)[: len(cache) - max_size + 1]:
+            cache.pop(old_key, None)
+
+
+def _load_metadata(c: sqlite3.Cursor, target: str) -> dict[str, Any]:
+    """Load *target*'s metadata rows as a dict, JSON-decoding values when valid.
+
+    ONE loader for every consumer of the metadata table (SPA /data, Potato
+    summary/paths): malformed JSON falls back to the raw string instead of
+    failing the whole response.
+    """
+    data: dict[str, Any] = {}
+    c.execute("SELECT key, value FROM metadata WHERE target = ?", (target,))
+    for key, value in c.fetchall():
+        try:
+            data[key] = json.loads(value)
+        except (json.JSONDecodeError, TypeError):
+            data[key] = value
+    return data
+
 
 _KNOWN_SCHEMA_VERSIONS: frozenset[str] = frozenset({"3", "4"})
 
@@ -859,6 +921,13 @@ def _db() -> sqlite3.Connection:
 
 
 # ── Response helpers ───────────────────────────────────────────────
+
+# The two cache policies for DB-derived responses.  NO_STORE: mutable
+# payloads (target lists, grids) that must never survive a rebuild.
+# REVALIDATE: ETag-bearing payloads (/data, /asm, /bytes, /potato) that a
+# browser may keep but must re-verify with If-None-Match every time.
+CACHE_NO_STORE = "no-cache, no-store, must-revalidate"
+CACHE_REVALIDATE = "no-cache, must-revalidate"
 
 
 def _finalized(body: bytes, content_type: str, encoding: str, **headers: str) -> bytes:
