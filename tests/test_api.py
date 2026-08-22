@@ -1313,3 +1313,49 @@ class TestDataEndpointSchemaGate:
         assert status.startswith("503")
         data = json.loads(decode_body(body, {}))
         assert data["code"] == "db_unavailable"
+
+
+# ── VA integer-overflow hardening ──────────────────────────────────
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+class TestVaOverflowValidation:
+    """VAs beyond SQLite's INTEGER range must be rejected (or cleanly miss),
+    never reach sqlite3 as an OverflowError 500."""
+
+    def test_batch_rejects_huge_int_va(self) -> None:
+        status, headers, body = wsgi_post(
+            "/api/targets/FAKEDLL/functions", body=json.dumps({"vas": [2**70]})
+        )
+        assert status.startswith("400")
+        data = json.loads(decode_body(body, headers))
+        assert "out of range" in data["detail"]
+
+    def test_batch_rejects_huge_hex_string_va(self) -> None:
+        status, _, _ = wsgi_post(
+            "/api/targets/FAKEDLL/functions", body=json.dumps({"vas": ["0x" + "f" * 30]})
+        )
+        assert status.startswith("400")
+
+    def test_batch_accepts_signed_int64_max(self) -> None:
+        """The boundary itself is valid input: a miss, not an error."""
+        status, _, _ = wsgi_post(
+            "/api/targets/FAKEDLL/functions", body=json.dumps({"vas": [2**63 - 1]})
+        )
+        assert status.startswith("200")
+
+    def test_get_function_huge_va_is_404_not_500(self) -> None:
+        status, headers, body = wsgi_get(f"/api/targets/FAKEDLL/functions/{2**80}")
+        assert status.startswith("404")
+        data = json.loads(decode_body(body, headers))
+        assert data["code"] == "not_found"
+
+    def test_functions_offset_beyond_int64_clamped(self) -> None:
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, headers, body = wsgi_get(f"/api/targets/{target}/functions?offset={10**25}")
+        assert status.startswith("200")
+        data = json.loads(decode_body(body, headers))
+        # Clamped to the page ceiling; the resulting page is simply empty.
+        assert data["functions"] == []

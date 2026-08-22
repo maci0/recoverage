@@ -33,6 +33,7 @@ from recoverage.server import (
     _FN_JSON_SQL,
     _GLOBAL_JSON_SQL,
     HAS_CAPSTONE,
+    VA_MAX,
     _db_path,
     _escape_like,
     _load_dll,
@@ -1751,10 +1752,12 @@ def _panel_function_detail(
     """
     # Cell function entries are VA strings ("0x10001000"), matching the SPA's
     # /functions/<va> route — parse hex and look up by va; fall back to name
-    # for legacy/name-form cells.
+    # for legacy/name-form cells.  Out-of-range ints are treated as
+    # non-numeric: SQLite INTEGER tops out at signed 64-bit, and passing a
+    # bigger Python int raises OverflowError at execute time.
     try:
         fn_va = int(fn_name, 0)
-        is_numeric = True
+        is_numeric = 0 <= fn_va <= VA_MAX
     except ValueError:
         is_numeric = False
 

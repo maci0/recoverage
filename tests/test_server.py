@@ -6,6 +6,7 @@ import contextlib
 import gzip
 import sqlite3
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -536,3 +537,138 @@ class TestDeepLinking:
             "history.replaceState",
         ):
             assert marker in app_js, f"deep-link marker missing: {marker}"
+
+
+# ── Token auth & security headers ──────────────────────────────────
+
+
+class TestAuthTokenMatches:
+    """_auth_token_matches must accept the right token only, in constant time."""
+
+    def test_correct_token_accepted(self, monkeypatch: Any) -> None:
+        import recoverage.server as srv
+
+        monkeypatch.setattr(srv, "_AUTH_TOKEN", "hunter2")
+        assert srv._auth_token_matches("hunter2") is True
+
+    def test_wrong_token_rejected(self, monkeypatch: Any) -> None:
+        import recoverage.server as srv
+
+        monkeypatch.setattr(srv, "_AUTH_TOKEN", "hunter2")
+        assert srv._auth_token_matches("hunter3") is False
+
+    def test_empty_config_token_never_matches(self, monkeypatch: Any) -> None:
+        """No --token configured means the helper must not authenticate."""
+        import recoverage.server as srv
+
+        monkeypatch.setattr(srv, "_AUTH_TOKEN", "")
+        assert srv._auth_token_matches("") is False
+
+
+class TestTokenAuthEndpoint:
+    """WSGI-level behavior of the --token gate, incl. guess throttling."""
+
+    @pytest.fixture(autouse=True)
+    def _token(self, monkeypatch: Any) -> None:
+        import recoverage.server as srv
+
+        monkeypatch.setattr(srv, "_AUTH_TOKEN", "unit-test-token")
+        yield
+        srv._clear_auth_failures()
+
+    def test_missing_token_is_401(self) -> None:
+        from conftest import wsgi_get
+
+        status, _, _ = wsgi_get("/api/health")
+        assert status.startswith("401")
+
+    def test_bearer_token_accepted(self) -> None:
+        from conftest import wsgi_get
+
+        status, _, _ = wsgi_get("/api/health", headers={"Authorization": "Bearer unit-test-token"})
+        assert status.startswith("200")
+
+    def test_rate_limit_after_max_failures(self) -> None:
+        from conftest import wsgi_get
+
+        from recoverage.server import _AUTH_FAIL_MAX
+
+        codes = []
+        for _ in range(_AUTH_FAIL_MAX + 2):
+            status, _, _ = wsgi_get("/api/health")
+            codes.append(status.split()[0])
+        assert codes[:_AUTH_FAIL_MAX] == ["401"] * _AUTH_FAIL_MAX
+        assert all(c == "429" for c in codes[_AUTH_FAIL_MAX:])
+
+
+class TestAuthFailureLimiter:
+    """Unit behavior of the failure window."""
+
+    def test_success_clears_failures(self, monkeypatch: Any) -> None:
+        import recoverage.server as srv
+
+        monkeypatch.setattr(srv, "_AUTH_TOKEN", "tok")
+        try:
+            for _ in range(srv._AUTH_FAIL_MAX - 1):
+                srv._record_auth_failure(time.monotonic())
+            assert not srv._auth_rate_limited(time.monotonic())
+            # A successful match wipes the slate.
+            assert srv._auth_token_matches("tok")
+            srv._clear_auth_failures()
+            assert not srv._auth_rate_limited(time.monotonic())
+        finally:
+            srv._clear_auth_failures()
+
+    def test_old_entries_expire_from_window(self, monkeypatch: Any) -> None:
+        import recoverage.server as srv
+
+        try:
+            old = time.monotonic() - srv._AUTH_FAIL_WINDOW_SECONDS * 2
+            for _ in range(srv._AUTH_FAIL_MAX):
+                srv._record_auth_failure(old)
+            assert not srv._auth_rate_limited(time.monotonic())
+        finally:
+            srv._clear_auth_failures()
+
+
+class TestSecurityHeaders:
+    """Every response carries the hardening header set."""
+
+    EXPECTED = {
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY",
+        "Referrer-Policy": "no-referrer",
+    }
+
+    @pytest.mark.parametrize(
+        ("header", "value"),
+        [
+            ("X-Content-Type-Options", "nosniff"),
+            ("X-Frame-Options", "DENY"),
+            ("Referrer-Policy", "no-referrer"),
+        ],
+    )
+    def test_headers_on_api_response(self, header: str, value: str) -> None:
+        from conftest import wsgi_get
+
+        _, headers, _ = wsgi_get("/api/health")
+        assert headers.get(header) == value
+
+    def test_csp_on_api_response(self) -> None:
+        from conftest import wsgi_get
+
+        _, headers, _ = wsgi_get("/api/health")
+        csp = headers.get("Content-Security-Policy", "")
+        assert "default-src 'self'" in csp
+        assert "object-src 'none'" in csp
+        assert "base-uri 'none'" in csp
+        # The SPA injects VanJS + app.js inline; the policy must allow that.
+        assert "script-src 'self' 'unsafe-inline'" in csp
+
+    def test_csp_allows_spa_inline_script_and_self_connect(self) -> None:
+        from conftest import wsgi_get
+
+        _, headers, _ = wsgi_get("/")
+        csp = headers.get("Content-Security-Policy", "")
+        assert "'unsafe-inline'" in csp
+        assert "connect-src 'self'" in csp

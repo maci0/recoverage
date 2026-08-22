@@ -583,7 +583,9 @@ def handle_api_functions_list(target: str) -> bytes | Any:
     except ValueError:
         limit = 50
     try:
-        offset = max(int(request.query.get("offset", 0)), 0)
+        # Upper bound keeps a giant ?offset= from overflowing sqlite3's
+        # signed-64-bit INTEGER conversion (OverflowError -> raw 500).
+        offset = min(max(int(request.query.get("offset", 0)), 0), _MAX_PAGE_OFFSET)
     except ValueError:
         offset = 0
 
@@ -665,6 +667,11 @@ def handle_api_functions_list(target: str) -> bytes | Any:
 # Mirrors the list endpoint's limit cap.
 _MAX_BATCH_LOOKUP = 500
 
+# Pagination offset ceiling: real function tables are orders of magnitude
+# smaller, so clamping here changes no legitimate page while keeping OFFSET
+# inside sqlite3's INTEGER range.
+_MAX_PAGE_OFFSET = 10_000_000
+
 
 def _last_verify_payload(vr: sqlite3.Row) -> dict[str, Any]:
     """Shape a verify_results row as the ``last_verify`` object attached to
@@ -745,6 +752,8 @@ def handle_api_functions_batch(target: str) -> bytes | Any:
         if isinstance(entry, int):
             if entry < 0:
                 return invalid_va(entry, "VAs must be non-negative")
+            if entry > _server.VA_MAX:
+                return invalid_va(entry, f"VA out of range (max 0x{_server.VA_MAX:x})")
             va_ints.append(entry)
         elif isinstance(entry, str):
             try:
@@ -753,6 +762,8 @@ def handle_api_functions_batch(target: str) -> bytes | Any:
                 parsed_va = int(entry.strip(), 16)
                 if parsed_va < 0:
                     raise ValueError("negative VA")
+                if parsed_va > _server.VA_MAX:
+                    raise ValueError("VA exceeds 64 bits")
                 va_ints.append(parsed_va)
             except ValueError:
                 return invalid_va(entry, f"unparseable VA {entry!r}; expected hex like 0x10001000")
@@ -823,18 +834,26 @@ def handle_api_function(target: str, va: str) -> bytes | Any:
         # All-digit strings: DECIMAL first (the /functions list emits va as
         # a decimal int — a consumer taking that value straight into this
         # route must not 404), with a bare-hex fallback for legacy callers.
-        # Anything else -> name lookup.
+        # Anything else -> name lookup.  Candidates beyond 64 bits are
+        # dropped: SQLite INTEGER cannot hold them, and passing one would
+        # raise OverflowError instead of a clean miss.
         raw_va = va.strip()
         va_candidates: list[int] = []
         lowered = raw_va.lower()
         if lowered.startswith("0x") or any(c in "abcdef" for c in lowered):
             with contextlib.suppress(ValueError):
-                va_candidates = [int(raw_va, 16)]
+                parsed = int(raw_va, 16)
+                if parsed <= _server.VA_MAX:
+                    va_candidates = [parsed]
         else:
             with contextlib.suppress(ValueError):
-                va_candidates = [int(raw_va, 10)]
+                parsed = int(raw_va, 10)
+                if parsed <= _server.VA_MAX:
+                    va_candidates.append(parsed)
             with contextlib.suppress(ValueError):
-                va_candidates.append(int(raw_va, 16))
+                parsed = int(raw_va, 16)
+                if parsed <= _server.VA_MAX:
+                    va_candidates.append(parsed)
         is_numeric = bool(va_candidates)
 
         def _lookup(table: str, json_sql: str) -> Any | None:

@@ -13,6 +13,8 @@ from __future__ import annotations
 import contextlib
 import functools
 import gzip
+import hashlib
+import hmac
 import importlib.util
 import json
 import logging
@@ -22,7 +24,9 @@ import signal
 import sqlite3
 import subprocess
 import threading
+import time
 import webbrowser
+from collections import deque
 from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlsplit
@@ -157,8 +161,6 @@ def _safe_etag(*parts: object) -> str:
     (bottle rejects control characters, but that is a library property,
     not the app's contract).
     """
-    import hashlib
-
     digest = hashlib.sha256("|".join(str(p) for p in parts).encode("utf-8")).hexdigest()[:32]
     return f'"{digest}"'
 
@@ -620,6 +622,14 @@ def _escape_like(search: str) -> str:
     return "%" + search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
 
 
+# Upper bound for client-supplied VA integers.  SQLite INTEGER is a SIGNED
+# 64-bit value: anything larger raises OverflowError at execute time, which
+# would surface as an uncaught 500 instead of a clean 4xx/404.  No stored
+# va can exceed this (rebrew writes through the same binding), so rejecting
+# above it can never hide a real match.
+VA_MAX = (1 << 63) - 1
+
+
 # ── SQL fragments ──────────────────────────────────────────────────
 
 _FN_JSON_SQL = (
@@ -958,14 +968,62 @@ _UNAUTHORIZED_HTML = (
 
 
 def _auth_token_matches(provided: str) -> bool:
-    return bool(_AUTH_TOKEN) and provided == _AUTH_TOKEN
+    # Constant-time comparison: a plain == leaks the token one byte at a
+    # time to a client measuring response latency on a network-reachable
+    # server (--allow-remote).  Both sides are encoded because
+    # hmac.compare_digest raises TypeError on non-ASCII str — and *provided*
+    # comes straight from request headers.
+    return bool(_AUTH_TOKEN) and hmac.compare_digest(
+        provided.encode("utf-8"), _AUTH_TOKEN.encode("utf-8")
+    )
+
+
+# Failed-token-attempt throttle: without it, a network-reachable server
+# (--allow-remote + --token) accepts unlimited online guesses at the bearer
+# token.  Global (per-process), not per-source-IP — behind NAT every client
+# shares one address anyway, and the dashboard's threat model is "someone on
+# the LAN is guessing", not "multi-tenant fairness".  A success clears the
+# counter so the operator never trips their own limit.
+_AUTH_FAIL_WINDOW_SECONDS = 60.0
+_AUTH_FAIL_MAX = 10
+_auth_failures: deque[float] = deque()
+_AUTH_FAILURES_LOCK = threading.Lock()
+
+
+def _auth_rate_limited(now: float) -> bool:
+    """True once *_AUTH_FAIL_MAX* failures were recorded inside the window."""
+    with _AUTH_FAILURES_LOCK:
+        while _auth_failures and now - _auth_failures[0] > _AUTH_FAIL_WINDOW_SECONDS:
+            _auth_failures.popleft()
+        return len(_auth_failures) >= _AUTH_FAIL_MAX
+
+
+def _record_auth_failure(now: float) -> None:
+    with _AUTH_FAILURES_LOCK:
+        _auth_failures.append(now)
+
+
+def _clear_auth_failures() -> None:
+    with _AUTH_FAILURES_LOCK:
+        _auth_failures.clear()
 
 
 def _require_auth() -> None:
     if not _AUTH_TOKEN:
         return
-    from bottle import request
 
+    now = time.monotonic()
+    if _auth_rate_limited(now):
+        raise HTTPResponse(
+            status=429,
+            body=b'{"error": "rate limited", "code": "rate_limited", '
+            b'"detail": "too many failed token attempts; retry later"}',
+            content_type="application/json",
+            headers={
+                "Cache-Control": "no-store",
+                "Retry-After": str(int(_AUTH_FAIL_WINDOW_SECONDS)),
+            },
+        )
     provided = request.headers.get("Authorization", "")
     if provided.startswith("Bearer "):
         provided = provided[len("Bearer ") :]
@@ -974,8 +1032,7 @@ def _require_auth() -> None:
         if not provided:
             provided = request.get_cookie("recoverage_token", default="")
     if not _auth_token_matches(provided):
-        from bottle import HTTPResponse
-
+        _record_auth_failure(now)
         # A browser asking for a page gets a page; API clients keep the JSON
         # error contract.  Someone handed a share URL who dropped the query
         # string used to land on a raw JSON blob with no way to tell what to do.
@@ -993,6 +1050,7 @@ def _require_auth() -> None:
             body=b'{"error": "unauthorized", "code": "unauthorized", "detail": "missing or invalid token"}',
             content_type="application/json",
         )
+    _clear_auth_failures()
 
 
 app.add_hook("before_request", _require_auth)
@@ -1036,10 +1094,34 @@ def _log_request() -> None:
             )
 
 
+# Content-Security-Policy for the dashboard.  The SPA inlines VanJS + app.js
+# into the HTML shell and uses inline styles, so 'unsafe-inline' is required
+# for scripts/styles; everything else is same-origin (detail.js, hljs assets,
+# fetch/EventSource to /api/*) or data: images (grid sprites, SVG badges).
+# The policy still pins the useful gates: no plugins, no base-element hijack,
+# no framing, no off-host exfil from any future injection sink.
+_CSP = (
+    "default-src 'self'; "
+    "script-src 'self' 'unsafe-inline'; "
+    "style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data:; "
+    "connect-src 'self'; "
+    "font-src 'self'; "
+    "object-src 'none'; "
+    "base-uri 'none'; "
+    "form-action 'self'; "
+    "frame-ancestors 'none'"
+)
+
+
 @app.hook("after_request")
 def _security_headers() -> None:
     response.set_header("X-Content-Type-Options", "nosniff")
     response.set_header("X-Frame-Options", "DENY")
+    response.set_header("Content-Security-Policy", _CSP)
+    # Tokens travel in URLs (?token= share links); never let them leak to a
+    # third party via Referer if the dashboard ever navigates off-host.
+    response.set_header("Referrer-Policy", "no-referrer")
     if CORS_ENABLED:
         # Echo the request origin only when it is explicitly allowed.  Never
         # emit the wildcard: the API serves unauthenticated binary bytes.
