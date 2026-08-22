@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import gzip
+import sqlite3
 import threading
 from pathlib import Path
 from typing import Any
@@ -368,6 +369,67 @@ class TestLikeEscape:
         assert result == "%\\\\\\_%"
 
 
+def _create_v4_db(db: Path, functions_columns: str) -> None:
+    """Create a minimal v4-shaped DB stamped db_version="4".
+
+    *functions_columns* is the tail of the functions table's column list, so
+    tests can omit query-critical columns to exercise the column gate.
+    """
+    conn = sqlite3.connect(db)
+    try:
+        c = conn.cursor()
+        c.executescript(
+            f"""
+            CREATE TABLE metadata (target TEXT, key TEXT, value TEXT);
+            CREATE TABLE sections (
+                target TEXT, name TEXT, va INTEGER, size INTEGER,
+                fileOffset INTEGER, unitBytes INTEGER, columns INTEGER
+            );
+            CREATE TABLE cells (
+                target TEXT, section_name TEXT, start INTEGER, end INTEGER,
+                span INTEGER, state TEXT, functions TEXT, label TEXT,
+                parent_function TEXT
+            );
+            CREATE TABLE functions (
+                target TEXT, va INTEGER, name TEXT, vaStart TEXT, size INTEGER,
+                fileOffset INTEGER, status TEXT, module TEXT, cflags TEXT,
+                symbol TEXT, markerType TEXT, ghidra_name TEXT, list_name TEXT,
+                is_thunk INTEGER, is_export INTEGER, sha256 TEXT, files TEXT,
+                detected_by TEXT, size_by_tool TEXT, {functions_columns}
+            );
+            CREATE TABLE globals (
+                target TEXT, va INTEGER, name TEXT, decl TEXT, files TEXT,
+                module TEXT, size INTEGER
+            );
+            CREATE TABLE verify_results (
+                target TEXT, va INTEGER, verified_at TEXT, byte_delta INTEGER,
+                diff_lines INTEGER, similarity REAL
+            );
+            CREATE TABLE history (
+                id INTEGER, target TEXT, va INTEGER, old_status TEXT,
+                new_status TEXT, changed_at TEXT
+            );
+            CREATE VIEW section_cell_stats AS
+                SELECT target, section_name, COUNT(*) AS total_cells,
+                0 AS exact_count, 0 AS reloc_count, 0 AS near_match_count,
+                0 AS stub_count, 0 AS padding_count, 0 AS data_count,
+                0 AS thunk_count, 0 AS none_count, 0 AS proven_count,
+                0 AS size_mismatch_count
+                FROM cells GROUP BY target, section_name;
+            """
+        )
+        c.execute("INSERT INTO metadata VALUES ('__schema__', 'db_version', '\"4\"')")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+_FN_COLUMNS_FULL = (
+    "textOffset INTEGER, blocker TEXT, blockerDelta INTEGER, size_reason TEXT, similarity REAL"
+)
+_FN_COLUMNS_NO_TEXT_OFFSET = "blocker TEXT, blockerDelta INTEGER, size_reason TEXT, similarity REAL"
+
+
 class TestSchemaShapeGuard:
     """A DB stamped with a known version but missing required schema objects
     must report <incomplete> (endpoints then return the 503 contract)."""
@@ -396,55 +458,9 @@ class TestSchemaShapeGuard:
         from recoverage import server as srv
 
         db = tmp_path / "coverage.db"
-        conn = sqlite3.connect(db)
-        c = conn.cursor()
         # A complete v4 DB: the shape guard now verifies the query-critical
         # columns, not just table names.
-        c.executescript(
-            """
-            CREATE TABLE metadata (target TEXT, key TEXT, value TEXT);
-            CREATE TABLE sections (
-                target TEXT, name TEXT, va INTEGER, size INTEGER,
-                fileOffset INTEGER, unitBytes INTEGER, columns INTEGER
-            );
-            CREATE TABLE cells (
-                target TEXT, section_name TEXT, start INTEGER, end INTEGER,
-                span INTEGER, state TEXT, functions TEXT, label TEXT,
-                parent_function TEXT
-            );
-            CREATE TABLE functions (
-                target TEXT, va INTEGER, name TEXT, vaStart TEXT, size INTEGER,
-                fileOffset INTEGER, status TEXT, module TEXT, cflags TEXT,
-                symbol TEXT, markerType TEXT, ghidra_name TEXT, list_name TEXT,
-                is_thunk INTEGER, is_export INTEGER, sha256 TEXT, files TEXT,
-                detected_by TEXT, size_by_tool TEXT, textOffset INTEGER,
-                blocker TEXT, blockerDelta INTEGER, size_reason TEXT,
-                similarity REAL
-            );
-            CREATE TABLE globals (
-                target TEXT, va INTEGER, name TEXT, decl TEXT, files TEXT,
-                module TEXT, size INTEGER
-            );
-            CREATE TABLE verify_results (
-                target TEXT, va INTEGER, verified_at TEXT, byte_delta INTEGER,
-                diff_lines INTEGER, similarity REAL
-            );
-            CREATE TABLE history (
-                id INTEGER, target TEXT, va INTEGER, old_status TEXT,
-                new_status TEXT, changed_at TEXT
-            );
-            CREATE VIEW section_cell_stats AS
-                SELECT target, section_name, COUNT(*) AS total_cells,
-                0 AS exact_count, 0 AS reloc_count, 0 AS near_match_count,
-                0 AS stub_count, 0 AS padding_count, 0 AS data_count,
-                0 AS thunk_count, 0 AS none_count, 0 AS proven_count,
-                0 AS size_mismatch_count
-                FROM cells GROUP BY target, section_name;
-            """
-        )
-        c.execute("INSERT INTO metadata VALUES ('__schema__', 'db_version', '\"4\"')")
-        conn.commit()
-        conn.close()
+        _create_v4_db(db, _FN_COLUMNS_FULL)
 
         with contextlib.closing(sqlite3.connect(db)) as conn2:
             assert srv._check_schema_version_uncached(conn2) == "4"
@@ -460,55 +476,10 @@ class TestSchemaColumnGate:
         from recoverage import server as srv
 
         db = tmp_path / "coverage.db"
-        conn = sqlite3.connect(db)
-        c = conn.cursor()
-        c.executescript(
-            """
-            CREATE TABLE metadata (target TEXT, key TEXT, value TEXT);
-            CREATE TABLE sections (
-                target TEXT, name TEXT, va INTEGER, size INTEGER,
-                fileOffset INTEGER, unitBytes INTEGER, columns INTEGER
-            );
-            CREATE TABLE cells (
-                target TEXT, section_name TEXT, start INTEGER, end INTEGER,
-                span INTEGER, state TEXT, functions TEXT, label TEXT,
-                parent_function TEXT
-            );
-            CREATE TABLE functions (
-                target TEXT, va INTEGER, name TEXT, vaStart TEXT, size INTEGER,
-                fileOffset INTEGER, status TEXT, module TEXT, cflags TEXT,
-                symbol TEXT, markerType TEXT, ghidra_name TEXT, list_name TEXT,
-                is_thunk INTEGER, is_export INTEGER, sha256 TEXT, files TEXT,
-                detected_by TEXT, size_by_tool TEXT, blocker TEXT,
-                blockerDelta INTEGER, size_reason TEXT, similarity REAL
-            );
-            CREATE TABLE globals (
-                target TEXT, va INTEGER, name TEXT, decl TEXT, files TEXT,
-                module TEXT, size INTEGER
-            );
-            CREATE TABLE verify_results (
-                target TEXT, va INTEGER, verified_at TEXT, byte_delta INTEGER,
-                diff_lines INTEGER, similarity REAL
-            );
-            CREATE TABLE history (
-                id INTEGER, target TEXT, va INTEGER, old_status TEXT,
-                new_status TEXT, changed_at TEXT
-            );
-            CREATE VIEW section_cell_stats AS
-                SELECT target, section_name, COUNT(*) AS total_cells,
-                0 AS exact_count, 0 AS reloc_count, 0 AS near_match_count,
-                0 AS stub_count, 0 AS padding_count, 0 AS data_count,
-                0 AS thunk_count, 0 AS none_count, 0 AS proven_count,
-                0 AS size_mismatch_count
-                FROM cells GROUP BY target, section_name;
-            """
-        )
+        _create_v4_db(db, _FN_COLUMNS_NO_TEXT_OFFSET)
         # functions intentionally lacks the query-critical textOffset column
-        # (the schema above omits it) — the column gate must reject it even
-        # though every object name is present.
-        c.execute("INSERT INTO metadata VALUES ('__schema__', 'db_version', '\"4\"')")
-        conn.commit()
-        conn.close()
+        # (see _FN_COLUMNS_NO_TEXT_OFFSET) — the column gate must reject it
+        # even though every object name is present.
 
         with contextlib.closing(sqlite3.connect(db)) as conn2:
             assert srv._check_schema_version_uncached(conn2) == "<incomplete>"

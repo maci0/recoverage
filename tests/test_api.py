@@ -477,24 +477,8 @@ class TestSseEvents:
         assert snapshot is not None
         assert snapshot[1] > 0  # the synthetic DB has a non-zero size
 
-    def test_snapshot_tracks_wal_file(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """A WAL-only commit (no main-file change) must change the snapshot —
-        this gates the memo/ETag/watcher after every rebrew build-db."""
-        import recoverage.api as api
-        import recoverage.server as srv
-
-        db = tmp_path / "coverage.db"
-        db.write_bytes(b"x" * 100)
-        wal = tmp_path / "coverage.db-wal"
-        monkeypatch.setattr(srv, "_db_path", lambda: db)
-        before = api._snapshot_db_mtime()
-        assert before is not None
-        wal.write_bytes(b"y" * 100)
-        after = api._snapshot_db_mtime()
-        assert after is not None
-        assert after != before  # -wal growth changed the fingerprint
+    # WAL-only-commit coverage for _snapshot_db_mtime lives in
+    # test_server.py::TestDbEtag (same function object; kept in one place).
 
     def test_snapshot_ignores_shm_file(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

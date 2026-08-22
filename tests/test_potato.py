@@ -548,7 +548,7 @@ class TestIdxParsing:
 
     @staticmethod
     def _parse_idx_like_production(idx_str: str) -> int | None:
-        """Replicate the exact parsing from potato.py _render_panel (lines 1529-1538)."""
+        """Replicate the exact parsing from potato.py _render_panel."""
         if not idx_str:
             return None
         try:
@@ -682,14 +682,15 @@ class TestGridColumnsValidation:
 
 
 class TestPathTraversalGuard:
-    """Verify the path traversal guard in potato.py's _render_panel.
+    """Verify the path traversal guard in potato.py's _panel_fn_source_text.
 
-    The production code (potato.py ~line 1651-1655) does:
-        base = (Path(__file__).resolve().parent.parent / source_root.lstrip("/")).resolve()
+    The production guard resolves the candidate path and requires it to stay
+    inside the source root:
+        base = (Path.cwd().resolve() / source_root.lstrip("/")).resolve()
         c_path = (base / files[0]).resolve()
-        if not c_path.is_relative_to(base): code_text = None
+        if not c_path.is_relative_to(base): return None
 
-    These tests verify that guard using the same resolve + is_relative_to pattern.
+    These tests verify that resolve + is_relative_to pattern.
     """
 
     def test_traversal_blocked(self, tmp_path):
@@ -722,7 +723,8 @@ class TestSearchLimit:
 
     @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
     def test_search_returns_bounded_results(self):
-        """Verify _search_functions returns at most 500 results per query."""
+        """_search_functions caps at 500 rows per query (500 functions +
+        500 globals, so at most 1000 entries in the returned set)."""
         from recoverage.potato import _search_functions
         from recoverage.server import _db_path
 
@@ -734,9 +736,8 @@ class TestSearchLimit:
             if not row:
                 pytest.skip("No targets in DB")
             target = row[0]
-            # Use a wildcard-like search that matches broadly
-            results = _search_functions(c, target, "")
             # Empty search returns empty set (short-circuit)
+            results = _search_functions(c, target, "")
             assert len(results) == 0
             # Search with a single common letter — should be bounded
             results = _search_functions(c, target, "a")

@@ -225,6 +225,25 @@ SECTION_STATS_SQL = """
 """
 
 
+def _cell_bucket_row(row: sqlite3.Row) -> dict[str, Any]:
+    """Map a per-section stats row (SECTION_STATS_SQL or the
+    section_cell_stats view) to the short-key bucket dict served by /stats
+    and /data.  ONE definition so the two response shapes cannot drift."""
+    return {
+        "total_cells": row["total_cells"],
+        "exact": row["exact_count"],
+        "reloc": row["reloc_count"],
+        "near_match": row["near_match_count"],
+        "stub": row["stub_count"],
+        "padding": row["padding_count"],
+        "data": row["data_count"],
+        "thunk": row["thunk_count"],
+        "none": row["none_count"],
+        "proven": row["proven_count"],
+        "size_mismatch": row["size_mismatch_count"],
+    }
+
+
 def _section_stats(c: sqlite3.Cursor, target: str) -> dict[str, Any]:
     """Byte-based per-section stats + summary + by_status for *target*.
 
@@ -255,17 +274,7 @@ def _section_stats(c: sqlite3.Cursor, target: str) -> dict[str, Any]:
         # (consistent with the catalog grid's matchedFunctions).
         matched = row["exact_count"] + row["reloc_count"] + row["proven_count"]
         sections[row["section_name"]] = {
-            "total_cells": row["total_cells"],
-            "exact": row["exact_count"],
-            "reloc": row["reloc_count"],
-            "near_match": row["near_match_count"],
-            "stub": row["stub_count"],
-            "padding": row["padding_count"],
-            "data": row["data_count"],
-            "thunk": row["thunk_count"],
-            "none": row["none_count"],
-            "proven": row["proven_count"],
-            "size_mismatch": row["size_mismatch_count"],
+            **_cell_bucket_row(row),
             "matched": matched,
             "covered_bytes": covered,
             "total_bytes": total,

@@ -25,6 +25,7 @@ from recoverage.server import (
     LOOPBACK_HOSTS,
     HTTPResponse,
     _best_encoding,
+    _cell_bucket_row,
     _db,
     _db_path,
     _escape_like,
@@ -145,6 +146,17 @@ def _dll_not_found(target: str, error: str) -> Any:
     return _json_err(
         404,
         {"error": error, "detail": f"original binary for target {target!r} not found;{hint}"},
+    )
+
+
+def _section_not_found(target: str, section: str) -> Any:
+    """JSON 404 for a target-scoped endpoint referencing an unknown section."""
+    return _json_err(
+        404,
+        {
+            "error": f"section {section} not found",
+            "detail": f"target {target!r} has no section {section!r}",
+        },
     )
 
 
@@ -499,14 +511,7 @@ def handle_api_data(target: str) -> bytes | Any:
         if section_filter and not data["sections"]:
             # Mirror /asm: an unknown section must 404, not return a silent
             # empty grid (which would also get memoized under that key).
-            return _json_err(
-                404,
-                {
-                    "error": f"section {section_filter} not found",
-                    "code": "not_found",
-                    "detail": f"target '{target}' has no section '{section_filter}'",
-                },
-            )
+            return _section_not_found(target, section_filter)
 
         cells_clause = " AND section_name = ?" if section_filter else ""
         c.execute(
@@ -552,19 +557,7 @@ def handle_api_data(target: str) -> bytes | Any:
             sec_params,
         )
         for row in c.fetchall():
-            data["section_cell_stats"][row["section_name"]] = {
-                "total_cells": row["total_cells"],
-                "exact": row["exact_count"],
-                "reloc": row["reloc_count"],
-                "near_match": row["near_match_count"],
-                "stub": row["stub_count"],
-                "padding": row["padding_count"],
-                "data": row["data_count"],
-                "thunk": row["thunk_count"],
-                "none": row["none_count"],
-                "proven": row["proven_count"],
-                "size_mismatch": row["size_mismatch_count"],
-            }
+            data["section_cell_stats"][row["section_name"]] = _cell_bucket_row(row)
 
         raw_json = json.dumps(data).encode("utf-8")
         accept_enc = request.headers.get("Accept-Encoding", "")
@@ -835,13 +828,9 @@ def handle_api_function(target: str, va: str) -> bytes | Any:
         va_candidates: list[int] = []
         lowered = raw_va.lower()
         if lowered.startswith("0x") or any(c in "abcdef" for c in lowered):
-            # Hex: 0x-prefixed or contains a-f (rebrew parse_va convention).
             with contextlib.suppress(ValueError):
                 va_candidates = [int(raw_va, 16)]
         else:
-            # All digits: decimal first (the /functions list emits va as a
-            # decimal int — a consumer taking that value straight into this
-            # route must not 404), with a bare-hex fallback for legacy callers.
             with contextlib.suppress(ValueError):
                 va_candidates = [int(raw_va, 10)]
             with contextlib.suppress(ValueError):
@@ -940,13 +929,7 @@ def handle_api_asm(target: str) -> bytes | Any:
         row = c.fetchone()
 
         if not row:
-            return _json_err(
-                404,
-                {
-                    "error": f"section {section} not found",
-                    "detail": f"target {target!r} has no section {section!r}",
-                },
-            )
+            return _section_not_found(target, section)
 
         sec = dict(row)
         file_offset = sec["fileOffset"] + (va - sec["va"])
@@ -1028,13 +1011,7 @@ def handle_api_bytes(target: str, section: str) -> bytes | Any:
         row = c.fetchone()
 
         if not row:
-            return _json_err(
-                404,
-                {
-                    "error": f"section {section} not found",
-                    "detail": f"target {target!r} has no section {section!r}",
-                },
-            )
+            return _section_not_found(target, section)
 
         sec = dict(row)
         if req_offset >= sec["size"]:
