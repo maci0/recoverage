@@ -1037,6 +1037,7 @@ class TestDataPayloadMemo:
     """
 
     def _make_db(self, tmp_path: Any) -> Any:
+        """A minimal but schema-gate-valid v4 DB (passes _db()'s shape check)."""
         import sqlite3
 
         db = tmp_path / "coverage.db"
@@ -1044,7 +1045,8 @@ class TestDataPayloadMemo:
         c = conn.cursor()
         c.execute("CREATE TABLE metadata (target TEXT, key TEXT, value TEXT)")
         c.execute(
-            "CREATE TABLE sections (target TEXT, name TEXT, va INTEGER, size INTEGER, fileOffset INTEGER)"
+            "CREATE TABLE sections (target TEXT, name TEXT, va INTEGER, size INTEGER, "
+            "fileOffset INTEGER, unitBytes INTEGER, columns INTEGER)"
         )
         c.execute(
             "CREATE TABLE cells (id INTEGER, target TEXT, section_name TEXT, start INTEGER, "
@@ -1052,9 +1054,21 @@ class TestDataPayloadMemo:
         )
         c.execute(
             "CREATE TABLE functions (target TEXT, va INTEGER, name TEXT, vaStart TEXT, size INTEGER, "
-            "status TEXT, module TEXT, cflags TEXT, symbol TEXT, markerType TEXT)"
+            "fileOffset INTEGER, status TEXT, module TEXT, cflags TEXT, symbol TEXT, "
+            "markerType TEXT, ghidra_name TEXT, list_name TEXT, is_thunk INTEGER, "
+            "is_export INTEGER, sha256 TEXT, files TEXT, detected_by TEXT, size_by_tool TEXT, "
+            "textOffset INTEGER, blocker TEXT, blockerDelta INTEGER, size_reason TEXT, "
+            "similarity REAL)"
         )
-        c.execute("CREATE TABLE globals (target TEXT, name TEXT, va INTEGER)")
+        c.execute(
+            "CREATE TABLE globals (target TEXT, name TEXT, va INTEGER, decl TEXT, files TEXT, "
+            "module TEXT, size INTEGER)"
+        )
+        c.execute(
+            "CREATE TABLE verify_results (target TEXT, va INTEGER, verified_at TEXT, "
+            "byte_delta INTEGER, diff_lines TEXT, similarity REAL)"
+        )
+        c.execute("CREATE TABLE history (id INTEGER)")
         c.execute(
             "CREATE VIEW section_cell_stats AS SELECT target, section_name, "
             "COUNT(*) AS total_cells, 0 AS exact_count, 0 AS reloc_count, 0 AS near_match_count, "
@@ -1224,3 +1238,69 @@ class TestSseClientCap:
         finally:
             with api._SSE_CLIENTS_LOCK:
                 api._SSE_CLIENTS.clear()
+
+
+class TestDbWatcherResilience:
+    """A failing watcher iteration must be logged and retried, not kill the thread."""
+
+    def test_watcher_survives_broadcast_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import recoverage.api as api
+
+        seq = [(111, 1), (222, 2), (333, 3)]
+        state = {"i": 0}
+
+        def fake_snapshot() -> tuple[int, int]:
+            i = min(state["i"], len(seq) - 1)
+            value = seq[i]
+            state["i"] += 1
+            return value
+
+        calls: list[tuple[int, int]] = []
+
+        def flaky_broadcast(snapshot: tuple[int, int]) -> None:
+            calls.append(snapshot)
+            if len(calls) == 1:
+                raise RuntimeError("boom")
+
+        monkeypatch.setattr(api, "_snapshot_db_mtime", fake_snapshot)
+        monkeypatch.setattr(api, "_broadcast_db_updated", flaky_broadcast)
+        monkeypatch.setattr(api, "_SSE_POLL_INTERVAL_SECONDS", 0.01)
+
+        stop = threading.Event()
+        thread = threading.Thread(target=api._db_watcher_loop, args=(stop,), daemon=True)
+        thread.start()
+        try:
+            deadline = time.monotonic() + 2
+            while len(calls) < 2 and time.monotonic() < deadline:
+                time.sleep(0.01)
+            # First broadcast raised; the loop kept polling and delivered the
+            # next change instead of dying silently.
+            assert calls == [(222, 2), (333, 3)]
+            assert thread.is_alive()
+        finally:
+            stop.set()
+            thread.join(timeout=2)
+
+
+class TestDataEndpointSchemaGate:
+    """/data must go through the _db() schema gate like every other endpoint,
+    so an incomplete-schema DB yields the clear 503 contract."""
+
+    def test_data_503_when_db_gate_fails(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import recoverage.api as api
+
+        api._clear_data_cache()  # drop memo entries earlier tests left behind
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+
+        def _boom() -> sqlite3.Connection:
+            raise sqlite3.OperationalError(
+                "coverage.db schema is incomplete (missing tables/views)"
+            )
+
+        monkeypatch.setattr(api, "_db", _boom)
+        status, _, body = wsgi_get(f"/api/targets/{target}/data")
+        assert status.startswith("503")
+        data = json.loads(decode_body(body, {}))
+        assert data["code"] == "db_unavailable"

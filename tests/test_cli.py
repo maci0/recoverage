@@ -293,3 +293,26 @@ class TestStatsJson:
         assert "target" in data[0]
         assert "sections" in data[0]
         assert ".text" in data[0]["sections"]
+
+
+class TestPartialSchemaCleanExit:
+    """A DB that lists targets but cannot answer stats queries must exit 2
+    with a rebuild hint, not a traceback (same contract as _resolve_targets)."""
+
+    def test_stats_clean_error_on_partial_schema(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import sqlite3
+
+        db = tmp_path / "coverage.db"
+        conn = sqlite3.connect(db)
+        conn.execute("CREATE TABLE metadata (target TEXT, key TEXT, value TEXT)")
+        conn.execute("INSERT INTO metadata VALUES ('t1', 'db_version', '\"4\"')")
+        conn.commit()
+        conn.close()
+
+        monkeypatch.setattr("recoverage.cli._db_path", lambda: db)
+        result = runner.invoke(app, ["stats"])
+        assert result.exit_code == 2
+        assert "rebuild" in result.output
+        assert not isinstance(result.exception, SystemExit) or result.exit_code == 2

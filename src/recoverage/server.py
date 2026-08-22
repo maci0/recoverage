@@ -417,8 +417,14 @@ def _load_dll(target: str) -> bytes | None:
                 return None
             with open(dll_path, "rb") as f:
                 DLL_DATA[target] = f.read()
-        except OSError:
-            _log.warning("Failed to load DLL for target %s at %s", target, dll_path)
+        except OSError as exc:
+            _log.warning(
+                "Failed to load DLL for target %s at %s: %s: %s",
+                target,
+                dll_path,
+                type(exc).__name__,
+                exc,
+            )
             DLL_DATA[target] = None
         return DLL_DATA[target]
 

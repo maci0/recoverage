@@ -184,7 +184,9 @@ def _broadcast_db_updated(snapshot: tuple[int, int] | None) -> None:
             DLL_DATA.clear()
         get_disassembly.cache_clear()
     except Exception:  # noqa: BLE001 — cache clearing is best-effort
-        pass
+        # A failed invalidation leaves stale caches behind while clients are
+        # told the DB changed — that divergence must be visible in the log.
+        _log.warning("Cache invalidation during db-updated broadcast failed", exc_info=True)
     payload: dict[str, Any] = {
         "event": "db-updated",
         # Basename only — the absolute path leaks the user's home-directory
@@ -211,16 +213,26 @@ def _db_watcher_loop(stop: threading.Event) -> None:
     The first snapshot is the baseline; any later change (including the file
     appearing or disappearing) broadcasts an event.  Runs until ``stop`` is
     set, which also serves as the poll sleep so tests can drive it quickly.
+
+    Each iteration is guarded: this is a daemon thread nobody joins, so an
+    unguarded exception would kill live-reload silently for the remaining
+    lifetime of the process.
     """
     last = _snapshot_db_mtime()
     while not stop.is_set():
         stop.wait(_SSE_POLL_INTERVAL_SECONDS)
         if stop.is_set():
             break
-        snapshot = _snapshot_db_mtime()
-        if snapshot != last:
-            last = snapshot
-            _broadcast_db_updated(snapshot)
+        try:
+            snapshot = _snapshot_db_mtime()
+            if snapshot != last:
+                # Advance the baseline only after a successful broadcast: a
+                # failed iteration retries the same change on the next poll
+                # (at-least-once) instead of silently dropping the event.
+                _broadcast_db_updated(snapshot)
+                last = snapshot
+        except Exception:  # noqa: BLE001 — keep polling whatever one iteration hit
+            _log.exception("DB watcher iteration failed — continuing to poll")
 
 
 def _ensure_db_watcher() -> None:
@@ -323,8 +335,8 @@ def handle_api_health() -> bytes:
                 (_server.SCHEMA_TARGET,),
             )
             target_count = c.fetchone()[0]
-    except sqlite3.Error:
-        _log.warning("Failed to query target count from database")
+    except sqlite3.Error as exc:
+        _log.warning("Failed to query target count from database: %s", exc)
         status = "degraded"
     return _json_ok(
         {
@@ -388,7 +400,6 @@ def handle_api_stats(target: str) -> bytes | Any:
 
 @app.get("/api/targets/<target>/data")
 def handle_api_data(target: str) -> bytes | Any:
-    db = _db_path()
     section_filter = request.query.get("section", "").strip() or None
 
     # ETag caching based on DB modification time + target + section.
@@ -436,7 +447,7 @@ def handle_api_data(target: str) -> bytes | Any:
         return _json_ok_precompressed(body, encoding, Cache_Control="no-cache, must-revalidate")
 
     try:
-        conn = _open_db(db)
+        conn = _db()
     except sqlite3.Error:
         return _json_err(503, {"error": "Database unavailable"})
 

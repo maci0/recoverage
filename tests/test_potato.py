@@ -2,6 +2,7 @@ import json
 import re
 import sqlite3
 import subprocess
+from pathlib import Path
 from urllib.parse import urlparse
 
 import pytest
@@ -805,3 +806,30 @@ class TestCellsCacheInvalidation:
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+class TestDbUnavailableContract:
+    """A missing/unopenable DB must signal 503, not a 200 error page."""
+
+    def test_render_potato_raises_503_without_db(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import bottle
+
+        monkeypatch.setattr("recoverage.potato._db_path", lambda: tmp_path / "nope.db")
+        with pytest.raises(bottle.HTTPResponse) as excinfo:
+            render_potato_url("/potato")
+        assert excinfo.value.status_code == 503
+        assert "Database unavailable" in excinfo.value.body
+
+    def test_potato_route_returns_503_when_db_missing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # potato._db_path (render) and server._db_path (_snapshot_db_mtime for
+        # the ETag) must both point at the missing file.
+        missing = tmp_path / "nope.db"
+        monkeypatch.setattr("recoverage.potato._db_path", lambda: missing)
+        monkeypatch.setattr("recoverage.server._db_path", lambda: missing)
+        status, _, body = wsgi_get("/potato")
+        assert status.startswith("503")
+        assert b"Database unavailable" in body

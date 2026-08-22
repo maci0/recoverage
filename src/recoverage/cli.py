@@ -143,7 +143,19 @@ def _get_stats(conn: sqlite3.Connection, target: str) -> dict[str, Any]:
     c = conn.cursor()
     from recoverage.server import _section_stats  # noqa: PLC0415
 
-    return {"target": target, **_section_stats(c, target)}
+    try:
+        return {"target": target, **_section_stats(c, target)}
+    except sqlite3.Error as exc:
+        # A DB that lists targets but cannot answer the stats queries
+        # (schema-less / partially rebuilt) must not surface as a traceback —
+        # same clean-exit contract as _resolve_targets.
+        typer.secho(
+            f"Error: cannot read coverage statistics for target {target!r}: {exc} "
+            "(run 'rebrew catalog --json && rebrew build-db' to rebuild it)",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(2) from exc
 
 
 def _run_regen(root: Path) -> None:

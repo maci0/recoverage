@@ -25,7 +25,7 @@ from typing import Any
 from urllib.parse import ParseResult, parse_qs
 from urllib.parse import quote as _url_quote
 
-from bottle import SimpleTemplate  # type: ignore
+from bottle import HTTPResponse, SimpleTemplate  # type: ignore
 
 from recoverage import __version__
 from recoverage.server import (
@@ -909,7 +909,17 @@ def render_potato(parsed_url: ParseResult) -> str:
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     except sqlite3.Error:
         _log.warning("Potato mode: database unavailable at %s", db_path)
-        return "<html><body>Database unavailable</body></html>"
+        # Signal failure, not a 200 page: monitoring and scripts must see the
+        # DB outage (same contract as the API's 503 db_unavailable).
+        raise HTTPResponse(
+            status=503,
+            body=(
+                '<html><body bgcolor="#0f1216" text="#e7edf4">'
+                "Database unavailable — run 'rebrew catalog --json &amp;&amp; "
+                "rebrew build-db' to create it.</body></html>"
+            ),
+            headers={"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store"},
+        ) from None
 
     with contextlib.closing(conn):
         c = conn.cursor()
