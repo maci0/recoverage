@@ -1067,7 +1067,8 @@ class TestDataPayloadMemo:
         conn.close()
         return db
 
-    def test_memo_serves_second_request_and_clears(self, tmp_path: Any, monkeypatch: Any) -> None:
+    def _patch(self, tmp_path: Any, monkeypatch: Any) -> Any:
+        """Point the app at a synthetic DB and return the mock request."""
         import recoverage.api as api
 
         db = self._make_db(tmp_path)
@@ -1077,12 +1078,19 @@ class TestDataPayloadMemo:
             conn.row_factory = sqlite3.Row
             return conn
 
+        req = type("R", (), {"headers": {}, "query": {}})()
         monkeypatch.setattr(api, "_db_path", lambda: db)
         monkeypatch.setattr("recoverage.server._db_path", lambda: db)
         monkeypatch.setattr(api, "_open_db", _open_like)
         monkeypatch.setattr(api, "_require_target", lambda c, t: None)
-        monkeypatch.setattr(api, "request", type("R", (), {"headers": {}, "query": {}})())
+        monkeypatch.setattr(api, "request", req)
         api._clear_data_cache()
+        return req
+
+    def test_memo_serves_second_request_and_clears(self, tmp_path: Any, monkeypatch: Any) -> None:
+        import recoverage.api as api
+
+        self._patch(tmp_path, monkeypatch)
 
         resp1 = api.handle_api_data("GAME")
         assert isinstance(resp1, bytes)
@@ -1103,30 +1111,54 @@ class TestDataPayloadMemo:
 
         import recoverage.api as api
 
-        db = self._make_db(tmp_path)
-
-        def _open_like(p: Any) -> Any:
-            conn = sqlite3.connect(f"file:{p}?mode=ro", uri=True)
-            conn.row_factory = sqlite3.Row
-            return conn
-
-        monkeypatch.setattr(api, "_db_path", lambda: db)
-        monkeypatch.setattr("recoverage.server._db_path", lambda: db)
-        monkeypatch.setattr(api, "_open_db", _open_like)
-        monkeypatch.setattr(api, "_require_target", lambda c, t: None)
-        monkeypatch.setattr(api, "request", type("R", (), {"headers": {}, "query": {}})())
-        api._clear_data_cache()
+        self._patch(tmp_path, monkeypatch)
 
         api.handle_api_data("GAME")
         assert len(api._DATA_CACHE) == 1
         # Simulate a rebuild: bump the DB's mtime (same content, new time).
-        st = db.stat()
-        os.utime(db, (st.st_atime + 2, st.st_mtime + 2))
+        st = api._db_path().stat()
+        os.utime(api._db_path(), (st.st_atime + 2, st.st_mtime + 2))
         api.handle_api_data("GAME")
         # A constant fingerprint would still hold ONE key; two keys prove
         # the snapshot is fingerprint-sensitive (the changed mtime produced
         # a different cache key — a miss, not a stale hit).
         assert len(api._DATA_CACHE) == 2
+
+    def test_memo_stores_per_encoding_bodies(self, tmp_path: Any, monkeypatch: Any) -> None:
+        """A memo hit must serve the stored per-encoding body instead of
+        recompressing the multi-MB payload on every request, and an unseen
+        Accept-Encoding must mint its variant from the stored raw JSON."""
+        import gzip as gzip_mod
+
+        import zstandard as zstd_mod
+
+        import recoverage.api as api
+
+        req = self._patch(tmp_path, monkeypatch)
+
+        # First request (zstd): populates the memo.
+        req.headers["Accept-Encoding"] = "zstd"
+        body1 = api.handle_api_data("GAME")
+        assert isinstance(body1, bytes)
+
+        # Same encoding again: served bytes are byte-identical (no recompute).
+        body2 = api.handle_api_data("GAME")
+        assert body2 == body1
+
+        # A new encoding mints its variant from the stored raw JSON.
+        req.headers["Accept-Encoding"] = "gzip"
+        body3 = api.handle_api_data("GAME")
+        assert gzip_mod.decompress(body3) == zstd_mod.ZstdDecompressor().decompress(body1)
+
+        # Identity encoding serves the raw JSON itself.
+        req.headers.clear()
+        body4 = api.handle_api_data("GAME")
+        assert "sections" in json.loads(body4)
+
+        # One fingerprint holds all variants.
+        assert len(api._DATA_CACHE) == 1
+        entry = next(iter(api._DATA_CACHE.values()))
+        assert set(entry) == {"raw", "", "zstd", "gzip"}
 
 
 def _header(headers: dict[str, str], name: str) -> str | None:

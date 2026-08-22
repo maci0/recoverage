@@ -23,6 +23,7 @@ from recoverage.server import (
     DLL_LOCK,
     HAS_CAPSTONE,
     HTTPResponse,
+    _best_encoding,
     _db,
     _db_path,
     _escape_like,
@@ -31,6 +32,7 @@ from recoverage.server import (
     _get_targets_config,
     _json_err,
     _json_ok,
+    _json_ok_precompressed,
     _load_dll,
     _open_db,
     _project_dir,
@@ -38,6 +40,7 @@ from recoverage.server import (
     _snapshot_db_mtime,
     app,
     clear_target_cache,
+    compress_payload,
     get_disassembly,
     request,
     resolve_targets,
@@ -59,9 +62,12 @@ _REGEN_LOCK = threading.Lock()  # serializes regen (check + subprocess, TOCTOU)
 # the multi-MB payload.  Keyed by the WAL-aware db snapshot + target +
 # section so a rebuild (which the SSE watcher detects and funnels through
 # clear_target_cache) invalidates it.
-# Stores serialized JSON bytes so memo hits skip re-serialization (the
-# payload is multi-MB; re-running json.dumps on every hit dominated).
-_DATA_CACHE: dict[tuple[tuple[int, int] | None, str, str | None], bytes] = {}
+# Each value maps encoding name ("zstd"/"br"/"gzip"/"" for identity) to the
+# FINAL response body for that encoding, plus "raw" (the uncompressed JSON)
+# so a first request with an unseen Accept-Encoding can mint its variant
+# without re-running the queries or json.dumps.  Compressing the multi-MB
+# payload on every memo hit dominated repeat-request cost (~30-70 ms CPU).
+_DATA_CACHE: dict[tuple[tuple[int, int] | None, str, str | None], dict[str, bytes]] = {}
 _DATA_CACHE_LOCK = threading.Lock()
 # Upper bound on retained payloads: a long-running server across many rebuilds
 # must not accumulate one multi-MB payload per fingerprint forever.
@@ -73,14 +79,22 @@ def _clear_data_cache() -> None:
         _DATA_CACHE.clear()
 
 
-def _cache_data_insert(key: tuple[tuple[int, int] | None, str, str | None], value: bytes) -> None:
-    """Insert a memoized serialized payload, evicting the oldest entries past the cap."""
+def _cache_data_insert(
+    key: tuple[tuple[int, int] | None, str, str | None],
+    raw: bytes,
+    encoding: str,
+    body: bytes,
+) -> None:
+    """Insert a memoized payload (raw + this request's encoded form), evicting
+    the oldest entries past the cap."""
     with _DATA_CACHE_LOCK:
-        if len(_DATA_CACHE) >= _DATA_CACHE_MAX:
+        if len(_DATA_CACHE) >= _DATA_CACHE_MAX and key not in _DATA_CACHE:
             # Evict oldest (dict preserves insertion order).
             for old_key in list(_DATA_CACHE)[: len(_DATA_CACHE) - _DATA_CACHE_MAX + 1]:
                 _DATA_CACHE.pop(old_key, None)
-        _DATA_CACHE[key] = value
+        entry = _DATA_CACHE.setdefault(key, {})
+        entry["raw"] = raw
+        entry[encoding] = body
 
 
 def _target_not_found(target: str) -> Any:
@@ -398,14 +412,28 @@ def handle_api_data(target: str) -> bytes | Any:
         pass
 
     # Serve a memoized payload for an unchanged DB instead of re-running the
-    # full-table queries + recompression on every cache-missing request.
+    # full-table queries, re-serialization, and recompression on every
+    # cache-missing request.
+    entry: dict[str, bytes] | None = None
     if fingerprint is not None:
         with _DATA_CACHE_LOCK:
-            cached = _DATA_CACHE.get(fingerprint)
-        if cached is not None:
-            if etag is not None:
-                return _json_ok(cached, Cache_Control="no-cache, must-revalidate", ETag=str(etag))
-            return _json_ok(cached, Cache_Control="no-cache, must-revalidate")
+            entry = _DATA_CACHE.get(fingerprint)
+    if entry is not None:
+        accept_enc = request.headers.get("Accept-Encoding", "")
+        encoding = _best_encoding(accept_enc)
+        body = entry.get(encoding)
+        if body is None:
+            # First request for this encoding: mint the variant from the
+            # stored raw JSON (queries + json.dumps already paid for).
+            raw = entry["raw"]
+            body, _ = compress_payload(raw, accept_enc)
+            with _DATA_CACHE_LOCK:
+                entry[encoding] = body
+        if etag is not None:
+            return _json_ok_precompressed(
+                body, encoding, Cache_Control="no-cache, must-revalidate", ETag=str(etag)
+            )
+        return _json_ok_precompressed(body, encoding, Cache_Control="no-cache, must-revalidate")
 
     try:
         conn = _open_db(db)
@@ -512,12 +540,17 @@ def handle_api_data(target: str) -> bytes | Any:
                 "size_mismatch": row["size_mismatch_count"],
             }
 
+        raw_json = json.dumps(data).encode("utf-8")
+        accept_enc = request.headers.get("Accept-Encoding", "")
+        body, encoding = compress_payload(raw_json, accept_enc)
         if fingerprint is not None:
-            _cache_data_insert(fingerprint, json.dumps(data).encode("utf-8"))
+            _cache_data_insert(fingerprint, raw_json, encoding, body)
 
         if etag is not None:
-            return _json_ok(data, Cache_Control="no-cache, must-revalidate", ETag=str(etag))
-        return _json_ok(data, Cache_Control="no-cache, must-revalidate")
+            return _json_ok_precompressed(
+                body, encoding, Cache_Control="no-cache, must-revalidate", ETag=str(etag)
+            )
+        return _json_ok_precompressed(body, encoding, Cache_Control="no-cache, must-revalidate")
 
 
 @app.get("/api/targets/<target>/functions")

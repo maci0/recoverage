@@ -532,7 +532,12 @@ def compress_payload(
     if encoding == "br":
         return brotli.compress(body, quality=brotli_quality), "br"  # type: ignore
     if encoding == "gzip":
-        return gzip.compress(body), "gzip"
+        # Level 6, not gzip.compress's default 9: measured on a ~9 MB /data
+        # payload, -9 costs 2x the CPU of -6 for ~9% fewer bytes (96 ms ->
+        # 707 KB vs 45 ms -> 774 KB).  Dynamic responses pay this on every
+        # request, and scripted clients (python-requests advertises only
+        # gzip) always land here.  Same reasoning as BROTLI_DYNAMIC_QUALITY.
+        return gzip.compress(body, compresslevel=6), "gzip"
     return body, ""
 
 
@@ -783,10 +788,8 @@ def _db() -> sqlite3.Connection:
 # ── Response helpers ───────────────────────────────────────────────
 
 
-def _compressed(body: bytes, content_type: str, **headers: str) -> bytes:
-    """Compress body, set response headers, return final body."""
-    accept_enc = request.headers.get("Accept-Encoding", "")
-    body, encoding = compress_payload(body, accept_enc)
+def _finalized(body: bytes, content_type: str, encoding: str, **headers: str) -> bytes:
+    """Set payload headers for an already-final *body* and return it."""
     response.content_type = content_type
     if encoding:
         response.set_header("Content-Encoding", encoding)
@@ -797,10 +800,22 @@ def _compressed(body: bytes, content_type: str, **headers: str) -> bytes:
     return body
 
 
+def _compressed(body: bytes, content_type: str, **headers: str) -> bytes:
+    """Compress body, set response headers, return final body."""
+    accept_enc = request.headers.get("Accept-Encoding", "")
+    body, encoding = compress_payload(body, accept_enc)
+    return _finalized(body, content_type, encoding, **headers)
+
+
 def _json_ok(data: dict[str, Any] | list[Any] | bytes, **headers: str) -> bytes:
     """Return compressed JSON 200."""
     body = data if isinstance(data, bytes) else json.dumps(data).encode("utf-8")
     return _compressed(body, "application/json", **headers)
+
+
+def _json_ok_precompressed(body: bytes, encoding: str, **headers: str) -> bytes:
+    """Return a JSON 200 from an already-compressed body (no recompression)."""
+    return _finalized(body, "application/json", encoding, **headers)
 
 
 # Every JSON error response carries this trio: `error` (human message),
