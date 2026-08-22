@@ -22,6 +22,7 @@ from recoverage.server import (
     DLL_DATA,
     DLL_LOCK,
     HAS_CAPSTONE,
+    LOOPBACK_HOSTS,
     HTTPResponse,
     _best_encoding,
     _db,
@@ -48,6 +49,32 @@ from recoverage.server import (
 )
 
 _log = logging.getLogger("recoverage")
+
+# ── Cache invalidation ─────────────────────────────────────────────
+
+
+def _clear_derived_caches() -> None:
+    """Drop every cache derived from coverage.db or the original binaries.
+
+    ONE invalidation entry point, shared by the SSE ``db-updated`` broadcast
+    and both regen paths (in-app POST /api/regen): resolved targets + TOML
+    config, memoized /data payloads, the SPA search index, Potato cells, DLL
+    bytes, and cached disassembly must all go together, or one endpoint
+    serves post-rebuild data while another is still stale.
+    """
+    clear_target_cache()
+    _clear_data_cache()
+    from recoverage.potato import _clear_potato_cells_cache  # noqa: PLC0415
+    from recoverage.ui import clear_index_cache  # noqa: PLC0415
+
+    clear_index_cache()
+    _clear_potato_cells_cache()
+    # Disassembly/DLL bytes reflect the original binary and section layout,
+    # both of which change with a rebuild.
+    with DLL_LOCK:
+        DLL_DATA.clear()
+    get_disassembly.cache_clear()
+
 
 # Server-side regen cooldown (seconds): the UI throttles Reload clicks, but
 # direct API calls must not be able to trigger repeated rebrew catalog runs.
@@ -136,6 +163,30 @@ def _require_target(c: sqlite3.Cursor, target: str) -> Any | None:
     return _target_not_found(target)
 
 
+@contextlib.contextmanager
+def _target_cursor(target: str) -> Generator[sqlite3.Cursor]:
+    """Open coverage.db read-only and yield a cursor with *target* validated.
+
+    ONE shared tail for every /api/targets/<target>/* endpoint: fails the
+    request with the standard JSON contract (503 ``db_unavailable`` when the
+    DB cannot open, 404 ``not_found`` for an unknown target) by raising the
+    HTTPResponse, so handlers are straight-line code instead of repeating
+    the connect/close/validate boilerplate.  The connection always closes.
+    """
+    try:
+        conn = _db()
+    except sqlite3.Error:
+        raise _json_err(503, {"error": "Database unavailable"}) from None
+    try:
+        c = conn.cursor()
+        not_found = _require_target(c, target)
+        if not_found is not None:
+            raise not_found
+        yield c
+    finally:
+        conn.close()
+
+
 # ── Server-Sent Events (live DB change notifications) ─────────────
 #
 # A single background watcher thread polls coverage.db mtime every couple of
@@ -161,28 +212,13 @@ _DB_WATCHER_LOCK = threading.Lock()
 def _broadcast_db_updated(snapshot: tuple[int, int] | None) -> None:
     """Push a db-updated SSE frame to every connected client queue.
 
-    Also invalidates the resolved-targets / index caches AND the DLL +
-    disassembly caches — an external ``rebrew build-db`` (the documented
-    workflow) must refresh the target dropdown, any cached data, and the
-    disassembly derived from the original binary, not just the in-app
-    /api/regen path.
+    Also invalidates every derived cache (see :func:`_clear_derived_caches`)
+    — an external ``rebrew build-db`` (the documented workflow) must refresh
+    the target dropdown, any cached data, and the disassembly derived from
+    the original binary, not just the in-app /api/regen path.
     """
     try:
-        clear_target_cache()
-        _clear_data_cache()
-        from recoverage.potato import _clear_potato_cells_cache  # noqa: PLC0415
-        from recoverage.ui import clear_index_cache  # noqa: PLC0415
-
-        clear_index_cache()
-        _clear_potato_cells_cache()
-        # Disassembly/bytes reflect the original binary and section layout,
-        # both of which change with a rebuild.  The in-app regen path clears
-        # these; the external build-db path must too or /asm keeps serving
-        # stale cached disassembly (browser ETags now revalidate, but the
-        # server-side cache must actually be empty).
-        with DLL_LOCK:
-            DLL_DATA.clear()
-        get_disassembly.cache_clear()
+        _clear_derived_caches()
     except Exception:  # noqa: BLE001 — cache clearing is best-effort
         # A failed invalidation leaves stale caches behind while clients are
         # told the DB changed — that divergence must be visible in the log.
@@ -374,18 +410,7 @@ def handle_api_targets() -> bytes:
 
 @app.get("/api/targets/<target>/stats")
 def handle_api_stats(target: str) -> bytes | Any:
-    try:
-        conn = _db()
-    except sqlite3.Error:
-        return _json_err(503, {"error": "Database unavailable"})
-
-    with contextlib.closing(conn):
-        c = conn.cursor()
-
-        not_found = _require_target(c, target)
-        if not_found is not None:
-            return not_found
-
+    with _target_cursor(target) as c:
         stats = _server._section_stats(c, target)
         return _json_ok(
             {
@@ -446,18 +471,7 @@ def handle_api_data(target: str) -> bytes | Any:
             )
         return _json_ok_precompressed(body, encoding, Cache_Control="no-cache, must-revalidate")
 
-    try:
-        conn = _db()
-    except sqlite3.Error:
-        return _json_err(503, {"error": "Database unavailable"})
-
-    with contextlib.closing(conn):
-        c = conn.cursor()
-
-        not_found = _require_target(c, target)
-        if not_found is not None:
-            return not_found
-
+    with _target_cursor(target) as c:
         data: dict[str, Any] = {}
 
         c.execute("SELECT key, value FROM metadata WHERE target = ?", (target,))
@@ -594,18 +608,7 @@ def handle_api_functions_list(target: str) -> bytes | Any:
     elif sort_param in allowed_sort:
         sort_field = sort_param
 
-    try:
-        conn = _db()
-    except sqlite3.Error:
-        return _json_err(503, {"error": "Database unavailable"})
-
-    with contextlib.closing(conn):
-        c = conn.cursor()
-
-        not_found = _require_target(c, target)
-        if not_found is not None:
-            return not_found
-
+    with _target_cursor(target) as c:
         # Base filter: GLOBAL/DATA marker rows are data, not functions.
         where = ["target = ? AND markerType NOT IN ('GLOBAL','DATA')"]
         params: list[Any] = [target]
@@ -670,6 +673,18 @@ def handle_api_functions_list(target: str) -> bytes | Any:
 _MAX_BATCH_LOOKUP = 500
 
 
+def _last_verify_payload(vr: sqlite3.Row) -> dict[str, Any]:
+    """Shape a verify_results row as the ``last_verify`` object attached to
+    function details — ONE definition shared by the single-VA and batch
+    endpoints so the two response shapes cannot drift apart."""
+    return {
+        "verified_at": vr["verified_at"],
+        "byte_delta": vr["byte_delta"],
+        "diff_lines": vr["diff_lines"],
+        "similarity": vr["similarity"],
+    }
+
+
 @app.post("/api/targets/<target>/functions")
 def handle_api_functions_batch(target: str) -> bytes | Any:
     """Batch function/global lookup by VA list.
@@ -698,14 +713,7 @@ def handle_api_functions_batch(target: str) -> bytes | Any:
     try:
         payload = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
-        return _json_err(
-            400,
-            {
-                "error": "Body must be a JSON object",
-                "detail": 'expected {"vas": ["0x10001000", ...]}',
-            },
-        )
-
+        payload = None
     if not isinstance(payload, dict):
         return _json_err(
             400,
@@ -734,25 +742,16 @@ def handle_api_functions_batch(target: str) -> bytes | Any:
             },
         )
 
+    def invalid_va(entry: Any, detail: str) -> Any:
+        return _json_err(400, {"error": f"invalid VA: {entry!r}", "detail": detail})
+
     va_ints: list[int] = []
     for entry in vas:
         if isinstance(entry, bool):
-            return _json_err(
-                400,
-                {
-                    "error": f"invalid VA: {entry!r}",
-                    "detail": "VAs must be hex strings or integers",
-                },
-            )
+            return invalid_va(entry, "VAs must be hex strings or integers")
         if isinstance(entry, int):
             if entry < 0:
-                return _json_err(
-                    400,
-                    {
-                        "error": f"invalid VA: {entry!r}",
-                        "detail": "VAs must be non-negative",
-                    },
-                )
+                return invalid_va(entry, "VAs must be non-negative")
             va_ints.append(entry)
         elif isinstance(entry, str):
             try:
@@ -763,21 +762,9 @@ def handle_api_functions_batch(target: str) -> bytes | Any:
                     raise ValueError("negative VA")
                 va_ints.append(parsed_va)
             except ValueError:
-                return _json_err(
-                    400,
-                    {
-                        "error": f"invalid VA: {entry!r}",
-                        "detail": f"unparseable VA {entry!r}; expected hex like 0x10001000",
-                    },
-                )
+                return invalid_va(entry, f"unparseable VA {entry!r}; expected hex like 0x10001000")
         else:
-            return _json_err(
-                400,
-                {
-                    "error": f"invalid VA: {entry!r}",
-                    "detail": "VAs must be hex strings or integers",
-                },
-            )
+            return invalid_va(entry, "VAs must be hex strings or integers")
 
     # Preserve input order; duplicate VAs collapse to a single result.
     seen: set[int] = set()
@@ -787,18 +774,7 @@ def handle_api_functions_batch(target: str) -> bytes | Any:
             seen.add(va)
             unique_vas.append(va)
 
-    try:
-        conn = _db()
-    except sqlite3.Error:
-        return _json_err(503, {"error": "Database unavailable"})
-
-    with contextlib.closing(conn):
-        c = conn.cursor()
-
-        not_found = _require_target(c, target)
-        if not_found is not None:
-            return not_found
-
+    with _target_cursor(target) as c:
         results: list[dict[str, Any]] = []
         if not unique_vas:
             return _json_ok(results, Cache_Control="no-cache, no-store, must-revalidate")
@@ -824,12 +800,7 @@ def handle_api_functions_batch(target: str) -> bytes | Any:
             for vr in c.fetchall():
                 fn = fn_by_va.get(vr["va"])
                 if fn is not None:
-                    fn["last_verify"] = {
-                        "verified_at": vr["verified_at"],
-                        "byte_delta": vr["byte_delta"],
-                        "diff_lines": vr["diff_lines"],
-                        "similarity": vr["similarity"],
-                    }
+                    fn["last_verify"] = _last_verify_payload(vr)
 
         c.execute(
             f"SELECT {_GLOBAL_JSON_SQL} FROM globals WHERE target = ? AND va IN ({placeholders})",
@@ -851,18 +822,7 @@ def handle_api_functions_batch(target: str) -> bytes | Any:
 
 @app.get("/api/targets/<target>/functions/<va>")
 def handle_api_function(target: str, va: str) -> bytes | Any:
-    try:
-        conn = _db()
-    except sqlite3.Error:
-        return _json_err(503, {"error": "Database unavailable"})
-
-    with contextlib.closing(conn):
-        c = conn.cursor()
-
-        not_found = _require_target(c, target)
-        if not_found is not None:
-            return not_found
-
+    with _target_cursor(target) as c:
         no_cache = "no-cache, no-store, must-revalidate"
 
         # Parse va into candidate lookup ints.  Hex strings: 0x-prefixed or
@@ -918,12 +878,7 @@ def handle_api_function(target: str, va: str) -> bytes | Any:
             )
             vr = c.fetchone()
             if vr:
-                fn_json["last_verify"] = {
-                    "verified_at": vr["verified_at"],
-                    "byte_delta": vr["byte_delta"],
-                    "diff_lines": vr["diff_lines"],
-                    "similarity": vr["similarity"],
-                }
+                fn_json["last_verify"] = _last_verify_payload(vr)
             return _json_ok(json.dumps(fn_json).encode("utf-8"), Cache_Control=no_cache)
 
         row = _lookup("globals", _GLOBAL_JSON_SQL)
@@ -977,18 +932,7 @@ def handle_api_asm(target: str) -> bytes | Any:
     # --fix-sizes; raw st_mtime alone also missed WAL-committed rebuilds.
     asm_etag = _etag_or_304(target, section, va, size, fmt)
 
-    try:
-        conn = _db()
-    except sqlite3.Error:
-        return _json_err(503, {"error": "Database unavailable"})
-
-    with contextlib.closing(conn):
-        c = conn.cursor()
-
-        not_found = _require_target(c, target)
-        if not_found is not None:
-            return not_found
-
+    with _target_cursor(target) as c:
         c.execute(
             "SELECT * FROM sections WHERE target = ? AND name = ?",
             (target, section),
@@ -1076,18 +1020,7 @@ def handle_api_bytes(target: str, section: str) -> bytes | Any:
     # bytes (raw st_mtime alone missed WAL-committed rebuilds).
     bytes_etag = _etag_or_304(target, section, req_offset, req_size)
 
-    try:
-        conn = _db()
-    except sqlite3.Error:
-        return _json_err(503, {"error": "Database unavailable"})
-
-    with contextlib.closing(conn):
-        c = conn.cursor()
-
-        not_found = _require_target(c, target)
-        if not_found is not None:
-            return not_found
-
+    with _target_cursor(target) as c:
         c.execute(
             "SELECT * FROM sections WHERE target = ? AND name = ?",
             (target, section),
@@ -1141,7 +1074,7 @@ def handle_regen() -> bytes | Any:
     global _regen_last_attempt  # noqa: PLW0603
 
     remote = request.environ.get("REMOTE_ADDR", "")
-    if remote not in ("127.0.0.1", "::1", "localhost"):
+    if remote not in LOOPBACK_HOSTS:
         return _json_err(
             403,
             {
@@ -1156,7 +1089,7 @@ def handle_regen() -> bytes | Any:
 
         parsed_origin = _urlparse(origin)
         origin_host = parsed_origin.hostname or ""
-        if origin_host not in ("127.0.0.1", "localhost", "::1"):
+        if origin_host not in LOOPBACK_HOSTS:
             return _json_err(
                 403,
                 {
@@ -1199,18 +1132,12 @@ def handle_regen() -> bytes | Any:
 
 def _do_regen(remote: str) -> bytes | Any:
     """Run catalog + build-db. Caller holds _REGEN_LOCK."""
-    from recoverage.potato import _clear_potato_cells_cache  # noqa: PLC0415
-    from recoverage.ui import clear_index_cache  # noqa: PLC0415
-
-    clear_index_cache()
-    clear_target_cache()
-    _clear_data_cache()
-    _clear_potato_cells_cache()
-
-    # Clear DLL and disassembly caches so regen picks up new binaries
-    with DLL_LOCK:
-        DLL_DATA.clear()
-    get_disassembly.cache_clear()
+    # Clear derived caches before AND after: the pre-run clears matter while
+    # the subprocesses run; the resolved-target / index caches get
+    # repopulated from the OLD db the moment anything queries them, and with
+    # no SSE client connected the watcher would never re-invalidate them
+    # (curl-only regen -> stale target dropdown).
+    _clear_derived_caches()
 
     root = _project_dir()
     _log.info("Regen started from %s", remote)
@@ -1225,15 +1152,7 @@ def _do_regen(remote: str) -> bytes | Any:
             cwd=str(root),
             timeout=_server.REGEN_TIMEOUT,
         )
-        # Invalidate again AFTER the new DB is in place.  The pre-run clears
-        # above only matter while the subprocesses run; the resolved-target /
-        # index caches get repopulated from the OLD db the moment anything
-        # queries them, and with no SSE client connected the watcher would
-        # never re-invalidate them (curl-only regen -> stale target dropdown).
-        clear_index_cache()
-        clear_target_cache()
-        _clear_data_cache()
-        _clear_potato_cells_cache()
+        _clear_derived_caches()
         _log.info("Regen completed successfully")
         return _json_ok({"ok": True})
     except subprocess.TimeoutExpired:

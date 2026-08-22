@@ -485,14 +485,11 @@ def _highlight_asm(text: str, target: str = "") -> str:
         if line.startswith("0x") and "  " in line:
             addr_end = line.index("  ")
             addr_part, code_part = line[:addr_end], line[addr_end:]
-            hl = _highlight_tokens(lexer.get_tokens(code_part), colors)
-            hl = _link_hex_refs(hl.rstrip("\n"))
+            hl = _link_hex_refs(_highlight_tokens(lexer.get_tokens(code_part), colors).rstrip("\n"))
             if target:
                 result_lines.append(_addr_link(addr_part) + hl)
             else:
-                result_lines.append(
-                    f'<font color="#858585">{_html_escape(addr_part)}</font>' + hl.rstrip("\n")
-                )
+                result_lines.append(f'<font color="#858585">{_html_escape(addr_part)}</font>' + hl)
         else:
             result_lines.append(_link_hex_refs(_html_escape(line)))
     return "\n".join(result_lines)
@@ -1043,7 +1040,6 @@ def _compute_section_stats(
             "near_match": s_near_match,
             "stub": s_stub,
             "padding": s_padding,
-            "covered": s_exact + s_reloc,
             "pct": s_pct,
         }
     return per_section_stats
@@ -1626,20 +1622,9 @@ def _render_potato_inner(
     )
 
 
-def _render_panel(
-    c: sqlite3.Cursor,
-    cells: list[dict[str, Any]],
-    idx_str: str,
-    target: str,
-    section: str,
-    data: dict[str, Any],
-    sec_data: dict[str, Any] | None = None,
-    active_filters: set[str] | None = None,
-    search_query: str = "",
-) -> str:
-    """Render the right-hand detail panel HTML."""
-    # Common context — constants + defaults for all panel states
-    _empty = {
+def _panel_base_ctx() -> dict[str, Any]:
+    """Fresh template context: defaults for every panel state + color constants."""
+    return {
         "has_cell": False,
         "idx": 0,
         "cell_range": "",
@@ -1668,15 +1653,202 @@ def _render_panel(
         "next_url": "",
         "target": "",
         "section": "",
-    }
-    ctx: dict[str, Any] = {
-        **_empty,
         "PANEL_COLOR": PANEL_COLOR,
         "BORDER_COLOR": BORDER_COLOR,
         "MUTED_COLOR": MUTED_COLOR,
         "ACCENT_COLOR": ACCENT_COLOR,
         "COLORS": COLORS,
     }
+
+
+def _panel_empty_cell_bytes(
+    ctx: dict[str, Any],
+    cell: dict[str, Any],
+    sec_data: dict[str, Any] | None,
+    target: str,
+) -> None:
+    """Fill hex dump + data inspector context for a cell with no functions."""
+    cell_file_offset = _cell_file_offset(cell, sec_data)
+    cell_size = cell.get("end", 0) - cell.get("start", 0)
+    if not cell_file_offset or cell_size <= 0:
+        return
+    raw_bytes = _get_raw_bytes(cell_file_offset, cell_size, target)
+    if not raw_bytes:
+        return
+    hex_dump = _format_hex_dump(raw_bytes, cell_file_offset)
+    ctx["hex_heading"] = _section_heading("01", "#10b981", "Original Bytes")
+    ctx["hex_dump_html"] = _code_block_raw(_highlight_hex(wrap_text(hex_dump, 72)))
+    inspector = _format_data_inspector(raw_bytes)
+    if inspector:
+        ctx["inspector_html"] = inspector
+
+
+def _panel_fn_attach_verify(c: sqlite3.Cursor, target: str, fn_data: dict[str, Any]) -> None:
+    """Attach the latest `rebrew verify -o` record (byte_delta / diff_lines /
+    code-similarity) so the detail panel shows verification stats the same
+    way the SPA's last_verify does.  Keyed on the function's resolved VA
+    (works for both name-form and VA-form cell references).  Best-effort:
+    a function with no verify record just omits these rows."""
+    fn_va_resolved = fn_data.get("va")
+    if fn_va_resolved is None:
+        return
+    try:
+        c.execute(
+            "SELECT verified_at, byte_delta, diff_lines, similarity"
+            " FROM verify_results WHERE target=? AND va=?",
+            (target, int(fn_va_resolved)),
+        )
+        vr = c.fetchone()
+    except (sqlite3.Error, ValueError, TypeError):
+        vr = None
+    if not vr:
+        return
+    fn_data["last_verify_time"] = vr[0]
+    if vr[1] is not None:
+        fn_data["last_verify_delta"] = f"{vr[1]}B"
+    if vr[2] is not None:
+        fn_data["last_verify_diff_lines"] = vr[2]
+    if vr[3] is not None:
+        fn_data["last_verify_similarity"] = f"{vr[3]:.1f}%"
+
+
+def _panel_fn_source_text(data: dict[str, Any], target: str, fn_data: dict[str, Any]) -> str | None:
+    """Read the function's C source, or None when unresolvable.
+
+    Path traversal is prevented by resolving and verifying the file stays
+    inside the source tree.  Anchored at the PROJECT dir (cwd) — an older
+    __file__-relative anchor resolved inside the recoverage package and
+    silently failed every C-source load.
+    """
+    files = fn_data.get("files", [])
+    if not files:
+        return None
+    source_root = data.get("paths", {}).get("sourceRoot", f"/src/{target.lower()}")
+    base = (Path.cwd().resolve() / source_root.lstrip("/")).resolve()
+    c_path = (base / files[0]).resolve()
+    if not c_path.is_relative_to(base):
+        return None
+    try:
+        with open(c_path, encoding="utf-8") as f:
+            return f.read()
+    except OSError:
+        _log.debug("Source file not found: %s", c_path)
+        return None
+
+
+def _panel_function_detail(
+    ctx: dict[str, Any],
+    c: sqlite3.Cursor,
+    target: str,
+    section: str,
+    data: dict[str, Any],
+    fn_name: str,
+) -> bool:
+    """Populate *ctx* from the functions table for *fn_name*.
+
+    Returns False when no function matches, leaving *ctx* untouched so the
+    caller can try the globals table.
+    """
+    # Cell function entries are VA strings ("0x10001000"), matching the SPA's
+    # /functions/<va> route — parse hex and look up by va; fall back to name
+    # for legacy/name-form cells.
+    try:
+        fn_va = int(fn_name, 0)
+        is_numeric = True
+    except ValueError:
+        is_numeric = False
+
+    fn_sql = "SELECT " + _FN_JSON_SQL + " FROM functions WHERE target=? AND "
+    if is_numeric:
+        c.execute(fn_sql + "va=?", (target, fn_va))
+    else:
+        c.execute(fn_sql + "name=?", (target, fn_name))
+    fn_row = c.fetchone()
+    if not fn_row:
+        return False
+
+    fn_data = json.loads(fn_row[0])
+    ctx["fn_data"] = fn_data
+    _panel_fn_attach_verify(c, target, fn_data)
+
+    hex_fields = {"va", "fileOffset"}
+    skip_fields = {"files", "sha256", "is_thunk", "is_export"}
+    if not fn_data.get("blocker"):
+        skip_fields.add("blocker")
+    if fn_data.get("blockerDelta") is None:
+        skip_fields.add("blockerDelta")
+
+    # Badges
+    badges: list[str] = []
+    if fn_data.get("is_thunk"):
+        badges.append(
+            f'<font color="{COLORS.get("near_match", "#f59e0b")}"><b>[IAT thunk]</b></font>'
+        )
+    if fn_data.get("is_export"):
+        badges.append(f'<font color="{ACCENT_COLOR}"><b>[Exported]</b></font>')
+    badge_html = " ".join(badges)
+    if badge_html:
+        badge_html += "<br><br>"
+    ctx["badge_html"] = badge_html
+
+    def _fn_val(k: str, v: Any, val: str) -> str:
+        if k == "vaStart" and v:
+            va_link = _build_url(target, ".text")
+            return f'<a href="{va_link}"><font color="{ACCENT_COLOR}">{val}</font></a>'
+        return val
+
+    ctx["detail_rows_html"] = _detail_rows(fn_data, skip_fields, hex_fields, _fn_val)
+
+    # Source code + annotations
+    files = fn_data.get("files", [])
+    code_text = _panel_fn_source_text(data, target, fn_data)
+    if code_text:
+        ctx["annotations"] = _extract_annotations(code_text)
+        ctx["c_heading"] = _section_heading("C", "#3b82f6", f"C Source ({_esc(files[0])})")
+        ctx["code_html"] = _code_block_raw(_highlight_c(code_text))
+
+    # Assembly (only meaningful for code cells)
+    if section == ".text":
+        asm_va = fn_data.get("va")
+        asm_size = fn_data.get("size")
+        asm_file_offset = fn_data.get("fileOffset")
+        if HAS_CAPSTONE and asm_va and asm_size and asm_file_offset:
+            asm_text = get_disassembly(asm_va, asm_size, asm_file_offset, target)
+            if asm_text:
+                ctx["asm_heading"] = _section_heading("ASM", "#ef4444", "Assembly")
+                ctx["asm_html"] = _code_block_raw(
+                    _highlight_asm(wrap_text(asm_text, 55), target=target)
+                )
+
+    # Original Bytes (+ data inspector outside .text, where bytes are data)
+    fn_file_offset = fn_data.get("fileOffset")
+    fn_size = fn_data.get("size")
+    if fn_file_offset and fn_size:
+        raw_bytes = _get_raw_bytes(fn_file_offset, fn_size, target)
+        if raw_bytes:
+            hex_dump = _format_hex_dump(raw_bytes, fn_file_offset)
+            ctx["bytes_heading"] = _section_heading("01", "#10b981", "Original Bytes")
+            ctx["bytes_html"] = _code_block_raw(_highlight_hex(wrap_text(hex_dump, 72)))
+            if section != ".text":
+                inspector = _format_data_inspector(raw_bytes)
+                if inspector:
+                    ctx["inspector_html"] = inspector
+    return True
+
+
+def _render_panel(
+    c: sqlite3.Cursor,
+    cells: list[dict[str, Any]],
+    idx_str: str,
+    target: str,
+    section: str,
+    data: dict[str, Any],
+    sec_data: dict[str, Any] | None = None,
+    active_filters: set[str] | None = None,
+    search_query: str = "",
+) -> str:
+    """Render the right-hand detail panel HTML."""
+    ctx = _panel_base_ctx()
 
     if not idx_str:
         return _PANEL_TPL.render(**ctx)
@@ -1692,12 +1864,8 @@ def _render_panel(
     # Bounds already validated by the if-guard above
     cell = cells[idx]
     state = cell.get("state", "none")
-    state_color = COLORS.get(state, TEXT_COLOR)
-
     funcs = cell.get("functions", [])
-    cell_label = cell.get("label", "")
-    parent_function = cell.get("parent_function", "")
-    sec_data_dict = sec_data or {}
+    sec_va = (sec_data or {}).get("va", 0)
 
     prev_url = (
         _build_url(target, section, active_filters, idx=max(0, idx - 1), search=search_query)
@@ -1715,12 +1883,12 @@ def _render_panel(
         {
             "has_cell": True,
             "idx": idx,
-            "cell_range": f"{hex(sec_data_dict.get('va', 0) + cell.get('start', 0))} .. {hex(sec_data_dict.get('va', 0) + cell.get('end', 0))}",
+            "cell_range": f"{hex(sec_va + cell.get('start', 0))} .. {hex(sec_va + cell.get('end', 0))}",
             "state_upper": state.upper(),
-            "state_color": state_color,
+            "state_color": COLORS.get(state, TEXT_COLOR),
             "funcs": funcs,
-            "cell_label": cell_label,
-            "parent_function": parent_function,
+            "cell_label": cell.get("label", ""),
+            "parent_function": cell.get("parent_function", ""),
             "prev_url": prev_url,
             "next_url": next_url,
             "target": target,
@@ -1730,161 +1898,22 @@ def _render_panel(
 
     if not funcs:
         # Show hex dump + data inspector for empty cells
-        cell_file_offset = _cell_file_offset(cell, sec_data)
-        cell_size = cell.get("end", 0) - cell.get("start", 0)
-        if cell_file_offset and cell_size > 0:
-            raw_bytes = _get_raw_bytes(cell_file_offset, cell_size, target)
-            if raw_bytes:
-                hex_dump = _format_hex_dump(raw_bytes, cell_file_offset)
-                ctx["hex_heading"] = _section_heading("01", "#10b981", "Original Bytes")
-                ctx["hex_dump_html"] = _code_block_raw(_highlight_hex(wrap_text(hex_dump, 72)))
-                inspector = _format_data_inspector(raw_bytes)
-                if inspector:
-                    ctx["inspector_html"] = inspector
+        _panel_empty_cell_bytes(ctx, cell, sec_data, target)
         return _PANEL_TPL.render(**ctx)
 
     fn_name = funcs[0]
     ctx["fn_name"] = fn_name
-
-    # ── Try functions table ──────────────────────────────────────
-    # Cell function entries are VA strings ("0x10001000"), matching the SPA's
-    # /functions/<va> route — parse hex and look up by va; fall back to name
-    # for legacy/name-form cells.
-    try:
-        fn_va = int(fn_name, 0)
-        is_numeric = True
-    except ValueError:
-        fn_va = 0
-        is_numeric = False
-
-    fn_sql = "SELECT " + _FN_JSON_SQL + " FROM functions WHERE target=? AND "
-    if is_numeric:
-        c.execute(fn_sql + "va=?", (target, fn_va))
-    else:
-        c.execute(fn_sql + "name=?", (target, fn_name))
-    fn_row = c.fetchone()
-
-    if fn_row:
-        fn_data = json.loads(fn_row[0])
-        ctx["fn_data"] = fn_data
-
-        # Attach the latest `rebrew verify -o` record (byte_delta / diff_lines /
-        # code-similarity) so the detail panel shows verification stats the same
-        # way the SPA's last_verify does.  Keyed on the function's resolved VA
-        # (works for both name-form and VA-form cell references).  Best-effort:
-        # a function with no verify record just omits these rows.
-        fn_va_resolved = fn_data.get("va")
-        if fn_va_resolved is not None:
-            try:
-                c.execute(
-                    "SELECT verified_at, byte_delta, diff_lines, similarity"
-                    " FROM verify_results WHERE target=? AND va=?",
-                    (target, int(fn_va_resolved)),
-                )
-                vr = c.fetchone()
-            except (sqlite3.Error, ValueError, TypeError):
-                vr = None
-            if vr:
-                fn_data["last_verify_time"] = vr[0]
-                if vr[1] is not None:
-                    fn_data["last_verify_delta"] = f"{vr[1]}B"
-                if vr[2] is not None:
-                    fn_data["last_verify_diff_lines"] = vr[2]
-                if vr[3] is not None:
-                    fn_data["last_verify_similarity"] = f"{vr[3]:.1f}%"
-
-        hex_fields = {"va", "fileOffset"}
-        skip_fields = {"files", "sha256", "is_thunk", "is_export"}
-        if not fn_data.get("blocker"):
-            skip_fields.add("blocker")
-        if fn_data.get("blockerDelta") is None:
-            skip_fields.add("blockerDelta")
-
-        # Badges
-        badges: list[str] = []
-        if fn_data.get("is_thunk"):
-            badges.append(
-                f'<font color="{COLORS.get("near_match", "#f59e0b")}"><b>[IAT thunk]</b></font>'
-            )
-        if fn_data.get("is_export"):
-            badges.append(f'<font color="{ACCENT_COLOR}"><b>[Exported]</b></font>')
-        badge_html = " ".join(badges)
-        if badge_html:
-            badge_html += "<br><br>"
-        ctx["badge_html"] = badge_html
-
-        def _fn_val(k: str, v: Any, val: str) -> str:
-            if k == "vaStart" and v:
-                va_link = _build_url(target, ".text")
-                return f'<a href="{va_link}"><font color="{ACCENT_COLOR}">{val}</font></a>'
-            return val
-
-        ctx["detail_rows_html"] = _detail_rows(fn_data, skip_fields, hex_fields, _fn_val)
-
-        # Source code + annotations
-        files = fn_data.get("files", [])
-        code_text = None
-        if files:
-            source_root = data.get("paths", {}).get("sourceRoot", f"/src/{target.lower()}")
-            # Prevent path traversal: resolve and verify the file stays inside
-            # the source tree.  Anchor at the PROJECT dir (cwd) — the old
-            # __file__-relative anchor resolved inside the recoverage package
-            # and silently failed every C-source load.
-            base = (Path.cwd().resolve() / source_root.lstrip("/")).resolve()
-            c_path = (base / files[0]).resolve()
-            if not c_path.is_relative_to(base):
-                code_text = None
-            else:
-                try:
-                    with open(c_path, encoding="utf-8") as f:
-                        code_text = f.read()
-                except OSError:
-                    _log.debug("Source file not found: %s", c_path)
-
-        if code_text:
-            ctx["annotations"] = _extract_annotations(code_text)
-            ctx["c_heading"] = _section_heading("C", "#3b82f6", f"C Source ({_esc(files[0])})")
-            ctx["code_html"] = _code_block_raw(_highlight_c(code_text))
-
-        # Assembly
-        if section == ".text":
-            fn_va = fn_data.get("va")
-            fn_size = fn_data.get("size")
-            fn_file_offset = fn_data.get("fileOffset")
-            if HAS_CAPSTONE and fn_va and fn_size and fn_file_offset:
-                asm_text = get_disassembly(fn_va, fn_size, fn_file_offset, target)
-                if asm_text:
-                    ctx["asm_heading"] = _section_heading("ASM", "#ef4444", "Assembly")
-                    ctx["asm_html"] = _code_block_raw(
-                        _highlight_asm(wrap_text(asm_text, 55), target=target)
-                    )
-
-        # Original Bytes
-        fn_file_offset = fn_data.get("fileOffset")
-        fn_size = fn_data.get("size")
-        if fn_file_offset and fn_size:
-            raw_bytes = _get_raw_bytes(fn_file_offset, fn_size, target)
-            if raw_bytes:
-                hex_dump = _format_hex_dump(raw_bytes, fn_file_offset)
-                ctx["bytes_heading"] = _section_heading("01", "#10b981", "Original Bytes")
-                ctx["bytes_html"] = _code_block_raw(_highlight_hex(wrap_text(hex_dump, 72)))
-                if section != ".text":
-                    inspector = _format_data_inspector(raw_bytes)
-                    if inspector:
-                        ctx["inspector_html"] = inspector
-
-        return _PANEL_TPL.render(**ctx)
-
-    # ── Try globals table ────────────────────────────────────────
-    c.execute(
-        "SELECT " + _GLOBAL_JSON_SQL + " FROM globals WHERE target=? AND name=?",
-        (target, fn_name),
-    )
-    gl_row = c.fetchone()
-    if gl_row:
-        gl_data = json.loads(gl_row[0])
-        ctx["gl_data"] = gl_data
-        ctx["gl_detail_rows"] = _detail_rows(gl_data, skip_fields={"files"})
-    # else: fn_data and gl_data both None → "Unknown" branch in template
+    if not _panel_function_detail(ctx, c, target, section, data, fn_name):
+        # ── Try globals table ────────────────────────────────────────
+        c.execute(
+            "SELECT " + _GLOBAL_JSON_SQL + " FROM globals WHERE target=? AND name=?",
+            (target, fn_name),
+        )
+        gl_row = c.fetchone()
+        if gl_row:
+            gl_data = json.loads(gl_row[0])
+            ctx["gl_data"] = gl_data
+            ctx["gl_detail_rows"] = _detail_rows(gl_data, skip_fields={"files"})
+        # else: no function and no global → "Unknown" branch in template
 
     return _PANEL_TPL.render(**ctx)

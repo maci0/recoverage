@@ -22,6 +22,7 @@ import threading
 import webbrowser
 from pathlib import Path
 from typing import Any, cast
+from urllib.parse import urlsplit
 
 import bottle  # type: ignore
 import brotli  # type: ignore[import-untyped]
@@ -59,6 +60,11 @@ CORS_ALLOWED_ORIGINS: list[str] = []
 # None = remote bind (user opted in via --allow-remote) — skip validation.
 ALLOWED_HOSTS: set[str] | None = None
 
+# Loopback hostnames, ONE definition shared by the CLI's --bind guard, the
+# regen endpoint's remote-addr/Origin checks, and the DNS-rebinding Host
+# allowlist above.  Membership tests only — order carries no meaning.
+LOOPBACK_HOSTS: tuple[str, ...] = ("127.0.0.1", "::1", "localhost")
+
 
 def _hostname_of(origin: str) -> str:
     """Lowercased hostname of an Origin/Host header value ("" if unparsable).
@@ -69,11 +75,9 @@ def _hostname_of(origin: str) -> str:
     percent-encoding, control bytes) are rejected — browsers never emit them
     in Host/Origin, so their presence means the value is not a plain header.
     """
+    if any(ch in origin for ch in ("@", "\\", "%")) or any(ord(c) < 32 for c in origin):
+        return ""
     try:
-        from urllib.parse import urlsplit
-
-        if any(ch in origin for ch in ("@", "\\", "%")) or any(ord(c) < 32 for c in origin):
-            return ""
         candidate = origin if "://" in origin else f"//{origin}"
         return (urlsplit(candidate).hostname or "").lower()
     except ValueError:
@@ -92,8 +96,6 @@ def _normalize_origin(origin: str) -> str:
     if _hostname_of(origin) == "":
         return ""
     try:
-        from urllib.parse import urlsplit
-
         u = urlsplit(origin if "://" in origin else f"//{origin}")
         host = (u.hostname or "").lower()
         port = u.port
@@ -174,6 +176,8 @@ def _etag_or_304(*parts: object) -> str | None:
 # the `recoverage stats` CLI.  ONE definition: these two queries already
 # drifted apart once (cell-count vs byte-based coverage) and were fixed in
 # lockstep twice — a single constant makes the next divergence impossible.
+# Bucket set matches the section_cell_stats view served by /api/.../data so
+# consumers can sum the buckets and reconcile with total_cells everywhere.
 SECTION_STATS_SQL = """
     SELECT section_name,
       SUM(CASE WHEN state != 'none' THEN end - start ELSE 0 END) AS covered_bytes,
@@ -183,8 +187,10 @@ SECTION_STATS_SQL = """
       SUM(CASE WHEN state = 'reloc' THEN 1 ELSE 0 END) AS reloc_count,
       SUM(CASE WHEN state IN ('near_match','near_matching') THEN 1 ELSE 0 END) AS near_match_count,
       SUM(CASE WHEN state = 'stub' THEN 1 ELSE 0 END) AS stub_count,
+      SUM(CASE WHEN state = 'padding' THEN 1 ELSE 0 END) AS padding_count,
       SUM(CASE WHEN state = 'data' THEN 1 ELSE 0 END) AS data_count,
       SUM(CASE WHEN state = 'thunk' THEN 1 ELSE 0 END) AS thunk_count,
+      SUM(CASE WHEN state = 'none' THEN 1 ELSE 0 END) AS none_count,
       SUM(CASE WHEN state = 'proven' THEN 1 ELSE 0 END) AS proven_count,
       SUM(CASE WHEN state = 'size_mismatch' THEN 1 ELSE 0 END) AS size_mismatch_count
     FROM cells WHERE target = ? GROUP BY section_name
@@ -226,8 +232,10 @@ def _section_stats(c: sqlite3.Cursor, target: str) -> dict[str, Any]:
             "reloc": row["reloc_count"],
             "near_match": row["near_match_count"],
             "stub": row["stub_count"],
+            "padding": row["padding_count"],
             "data": row["data_count"],
             "thunk": row["thunk_count"],
+            "none": row["none_count"],
             "proven": row["proven_count"],
             "size_mismatch": row["size_mismatch_count"],
             "matched": matched,

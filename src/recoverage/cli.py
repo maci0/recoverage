@@ -80,6 +80,14 @@ class ExportFormat(enum.StrEnum):
     md = "md"
 
 
+# Verdict colors for `check` output — one emit site colors every verdict.
+_VERDICT_COLORS: dict[str, int] = {
+    "PASS": typer.colors.GREEN,
+    "SKIP": typer.colors.YELLOW,
+    "FAIL": typer.colors.RED,
+}
+
+
 def _open_db(db_path: Path | None = None) -> sqlite3.Connection:
     p = db_path or _db_path()
     if not p.exists():
@@ -226,6 +234,7 @@ def serve(
         _db_path as server_db_path,
     )
     from recoverage.server import (
+        LOOPBACK_HOSTS,
         _assets_dir,
         _project_dir,
         open_browser,
@@ -237,7 +246,7 @@ def serve(
     # NOTE: "::" is the IPv6 wildcard (binds every interface) — it must NOT
     # be treated as loopback, or --bind :: would silently expose the
     # unauthenticated API without the --allow-remote acknowledgment.
-    loopback_binds = ("127.0.0.1", "localhost", "::1")
+    loopback_binds = LOOPBACK_HOSTS
     is_remote = bind not in loopback_binds
     if is_remote and not allow_remote:
         typer.secho(
@@ -273,7 +282,20 @@ def serve(
     if cors:
         _server.CORS_ENABLED = True
         if cors_origin:
-            _server.CORS_ALLOWED_ORIGINS = [_server._normalize_origin(o) for o in cors_origin]
+            # An origin that fails to normalize must be dropped loudly: a
+            # stored "" would match every unparsable request Origin and echo
+            # it back as Access-Control-Allow-Origin.
+            allowed_origins: list[str] = []
+            for origin_url in cors_origin:
+                normalized = _server._normalize_origin(origin_url)
+                if normalized:
+                    allowed_origins.append(normalized)
+                else:
+                    typer.secho(
+                        f"warning: ignoring unparseable --cors-origin {origin_url!r}",
+                        fg=typer.colors.YELLOW,
+                    )
+            _server.CORS_ALLOWED_ORIGINS = allowed_origins
     if token:
         _server._AUTH_TOKEN = token
         typer.secho(
@@ -516,77 +538,48 @@ def check(
 
             for sec_name, sec in sorted(sections_to_check.items()):
                 checked += 1
+                pct = sec["coverage_pct"]
                 # Sections whose cells are all "none" carry no coverage
                 # signal — the grid only records match states in .text — so
                 # they must not fail the gate.  An explicitly requested
                 # untracked section still fails: the user asked to gate
                 # something that is not being recorded.
-                if sec.get("covered_bytes", 0) <= 0:
-                    if section:
-                        verdicts.append(
-                            {
-                                "target": tid,
-                                "section": sec_name,
-                                "status": "FAIL",
-                                "reason": "no tracked cells — coverage is not recorded for this "
-                                "section",
-                            }
-                        )
-                        if not json_output:
-                            typer.secho(
-                                f"FAIL: {tid} {sec_name} has no tracked cells — "
-                                "coverage is not recorded for this section",
-                                fg=typer.colors.RED,
-                            )
-                        failed = True
-                    else:
-                        verdicts.append(
-                            {
-                                "target": tid,
-                                "section": sec_name,
-                                "status": "SKIP",
-                                "reason": "no tracked cells — coverage not recorded",
-                            }
-                        )
-                        if not json_output:
-                            typer.secho(
-                                f"SKIP: {tid} {sec_name} has no tracked cells — coverage not recorded",
-                                fg=typer.colors.YELLOW,
-                            )
-                    continue
-                compared += 1
-                pct = sec["coverage_pct"]
-                # Display at the same precision used for the comparison — a
-                # gate failing on raw 99.49% must not print "99.5% < 99.5%".
-                if pct < min_coverage:
-                    verdicts.append(
-                        {
-                            "target": tid,
-                            "section": sec_name,
-                            "status": "FAIL",
-                            "coverage_pct": round(pct, 2),
-                        }
+                untracked = sec.get("covered_bytes", 0) <= 0
+                if not untracked:
+                    compared += 1
+                if untracked and section:
+                    outcome: tuple[str, dict[str, Any], str] = (
+                        "FAIL",
+                        {"reason": "no tracked cells — coverage is not recorded for this section"},
+                        "has no tracked cells — coverage is not recorded for this section",
                     )
-                    if not json_output:
-                        typer.secho(
-                            f"FAIL: {tid} {sec_name} coverage {pct:.2f}% < {min_coverage:.2f}%",
-                            fg=typer.colors.RED,
-                        )
-                    failed = True
+                elif untracked:
+                    outcome = (
+                        "SKIP",
+                        {"reason": "no tracked cells — coverage not recorded"},
+                        "has no tracked cells — coverage not recorded",
+                    )
+                elif pct < min_coverage:
+                    # Display at the same precision used for the comparison — a
+                    # gate failing on raw 99.49% must not print "99.5% < 99.5%".
+                    outcome = (
+                        "FAIL",
+                        {"coverage_pct": round(pct, 2)},
+                        f"coverage {pct:.2f}% < {min_coverage:.2f}%",
+                    )
                 else:
-                    verdicts.append(
-                        {
-                            "target": tid,
-                            "section": sec_name,
-                            "status": "PASS",
-                            "coverage_pct": round(pct, 2),
-                        }
+                    outcome = (
+                        "PASS",
+                        {"coverage_pct": round(pct, 2)},
+                        f"coverage {pct:.2f}% >= {min_coverage:.2f}%",
                     )
-                    if not json_output:
-                        typer.secho(
-                            f"PASS: {tid} {sec_name} coverage {pct:.2f}% >= {min_coverage:.2f}%",
-                            fg=typer.colors.GREEN,
-                        )
+
+                status, extra, human = outcome
+                if status == "FAIL":
+                    failed = True
+                verdicts.append({"target": tid, "section": sec_name, "status": status, **extra})
+                if not json_output:
+                    typer.secho(f"{status}: {tid} {sec_name} {human}", fg=_VERDICT_COLORS[status])
 
     if checked == 0:
         if json_output:
