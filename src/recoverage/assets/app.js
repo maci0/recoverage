@@ -39,6 +39,16 @@ function escAttr(s) {
   return String(s).replaceAll("&", "&amp;").replaceAll('"', "&quot;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }
 
+// VAs cross the API boundary as hex strings ("0x10001000" from TEXT columns)
+// or plain numbers (from INTEGER columns; /functions/<va> emits va as a
+// decimal number).  Parse only strings as hex: routing a number through
+// parseInt(x, 16) reads its DECIMAL digits as base-16 and returns an address
+// off by orders of magnitude.
+function toVa(v) {
+  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- the boundary contract is exactly "hex string | number"; decode here so no call site re-parses
+  return typeof v === "string" ? Number.parseInt(v, 16) : v;
+}
+
 // The hex dump and data inspector live in detail.js, which is fetched right
 // after first paint so the inlined shell stays inside the initial congestion
 // window.  Until it lands, panes that need it show MSG.LOADING.
@@ -320,7 +330,7 @@ const App = () => {
         const lastFn = URL_PARAMS.get("fn") || localStorage.getItem(`recoverage_last_fn_${activeTarget.val}`);
         if (lastFn && data.val?.search_index?.[lastFn]) {
           const info = data.val.search_index[lastFn];
-          jumpToAddress(Number.parseInt(info.va, 16));
+          jumpToAddress(toVa(info.va));
           setTimeout(() => selectFunction(lastFn), 50);
         } else if (lastFn) {
           selectFunction(lastFn);
@@ -412,8 +422,7 @@ const App = () => {
     const sec = data.val.sections[activeSection.val];
     if (!sec || activeSection.val === ".bss") return null;
 
-    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- /functions API returns va as hex string or number; decode at the boundary
-    const va = typeof cell.va === 'string' ? Number.parseInt(cell.va, 16) : cell.va;
+    const va = toVa(cell.va);
     const start = activeSection.val === ".text" ? cell.fileOffset : sec.fileOffset + (va - sec.va);
     const size = activeSection.val === ".text" ? cell.size : 16;
 
@@ -449,7 +458,7 @@ const App = () => {
 
         const buf = sliceOriginalBytes(fn);
         currentBuf.val = buf;
-        if (buf) showBytes(buf, Number.parseInt(fn.vaStart || fn.va, 16));
+        if (buf) showBytes(buf, toVa(fn.vaStart || fn.va));
         else showBytesMessage(originalDll.val ? MSG.BYTES_FAILED : MSG.BYTES_LOAD_FAILED);
 
         const sourceRoot = (data.val && data.val.paths && data.val.paths.sourceRoot) ? data.val.paths.sourceRoot : `/src/${activeTarget.val.toLowerCase()}`;
@@ -491,7 +500,7 @@ const App = () => {
         localStorage.setItem(`recoverage_last_fn_${activeTarget.val}`, id);
         const buf = sliceOriginalBytes(g);
         currentBuf.val = buf;
-        if (buf) showBytes(buf, Number.parseInt(g.va, 16));
+        if (buf) showBytes(buf, toVa(g.va));
         else if (activeSection.val === ".bss") showBytesMessage(MSG.BYTES_BSS);
         else showBytesMessage(originalDll.val ? MSG.BYTES_FAILED : MSG.BYTES_LOAD_FAILED);
         cSourceText.val = g.decl || MSG.NO_DECL;
@@ -1048,7 +1057,7 @@ const App = () => {
           MetaItem("VA", a({
             href: "#",
             class: "meta-value asm-link",
-            onclick: (e) => { e.preventDefault(); jumpToAddress(Number.parseInt(fn.va, 16)); }
+            onclick: (e) => { e.preventDefault(); jumpToAddress(toVa(fn.va)); }
           }, `0x${fn.va.toString(16).toUpperCase()}`)),
           MetaItem("Type", "Global Variable"),
           SourceItem()
@@ -1060,7 +1069,7 @@ const App = () => {
           MetaItem("VA", a({
             href: "#",
             class: "meta-value asm-link",
-            onclick: (e) => { e.preventDefault(); jumpToAddress(Number.parseInt(fn.vaStart || fn.va, 16)); }
+            onclick: (e) => { e.preventDefault(); jumpToAddress(toVa(fn.vaStart || fn.va)); }
           }, fn.vaStart || fn.va)),
           MetaItem("Size", `${fn.size} bytes`),
           MetaItem("Offset", `0x${(fn.fileOffset || 0).toString(16).toUpperCase()}`),
