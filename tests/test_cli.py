@@ -6,6 +6,7 @@ import csv
 import io
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 from conftest import HAS_DB
@@ -427,3 +428,32 @@ class TestServePortRange:
     def test_open_port_range_validated(self) -> None:
         result = runner.invoke(app, ["open", "--port", "70000"])
         assert result.exit_code != 0
+
+
+class TestServeBindFailure:
+    def test_bind_failure_does_not_open_browser(self, monkeypatch: Any) -> None:
+        """A bind failure (port already in use) must cancel the deferred
+        browser opener: no tab at a dead port, and the CLI exits promptly
+        instead of waiting on the opener thread at interpreter shutdown."""
+        import socket
+        import time
+
+        monkeypatch.setattr("recoverage.api._ensure_db_watcher", lambda: None)
+        opened: list[str] = []
+        monkeypatch.setattr("recoverage.server.open_browser", lambda url: opened.append(url))
+
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(("127.0.0.1", 0))
+            sock.listen(1)
+            port = sock.getsockname()[1]
+            start = time.monotonic()
+            result = runner.invoke(app, ["serve", "--port", str(port), "--bind", "127.0.0.1"])
+
+        assert result.exit_code == 1
+        assert "already running" in result.output or "Failed to start server" in result.output
+        # The timer fires 0.5s after scheduling; serve() cancels it on the
+        # failure path before exiting, so a bounded wait proves the event
+        # never happens.
+        time.sleep(0.7)
+        assert opened == []
+        assert time.monotonic() - start < 5, "serve took too long to exit after bind failure"

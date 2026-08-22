@@ -345,8 +345,14 @@ def serve(
     typer.echo("  Regen: POST /api/regen or click Reload in UI")
     typer.echo("  Stop: Ctrl+C")
 
+    browser_timer: threading.Timer | None = None
     if not no_open:
-        threading.Timer(0.5, open_browser, args=(url,)).start()
+        # Daemon + kept reference: a hung opener must never delay interpreter
+        # exit, and the bind-failure path below cancels the timer so a failed
+        # start does not pop a browser tab pointing at a dead port.
+        browser_timer = threading.Timer(0.5, open_browser, args=(url,))
+        browser_timer.daemon = True
+        browser_timer.start()
 
     # Start the DB watcher at startup (not on first /api/events connection):
     # without it, external rebuilds leave the target/dropdown caches stale
@@ -366,6 +372,8 @@ def serve(
     except OSError as e:
         # EADDRINUSE is the most common failure for a dashboard tool — a
         # second instance or another dev server on the same port.
+        if browser_timer is not None:
+            browser_timer.cancel()
         typer.secho(
             f"Failed to start server on {listen_url}: {e.strerror or e} "
             "(is another instance already running?)",
