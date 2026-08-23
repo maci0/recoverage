@@ -1098,6 +1098,22 @@ def handle_regen() -> bytes | Any:
                     "detail": f"origin host {origin_host!r} is not loopback",
                 },
             )
+    else:
+        # Origin is absent on every non-browser client (curl, scripts), so its
+        # absence alone must stay allowed — but that also lets a cross-site
+        # form POST through whenever a proxy or privacy extension strips
+        # Origin.  Browsers attach Sec-Fetch-Site to every request they make,
+        # and only they ever send "cross-site": treat that as a definitive
+        # cross-origin POST and reject it.
+        fetch_site = request.headers.get("Sec-Fetch-Site", "").strip().lower()
+        if fetch_site == "cross-site":
+            return _json_err(
+                403,
+                {
+                    "error": "Forbidden: cross-site request",
+                    "detail": f"Sec-Fetch-Site: {fetch_site} is not a same-origin regen",
+                },
+            )
 
     # Server-side cooldown + serialization: the cooldown check and the
     # subprocess must be atomic — two concurrent POSTs could otherwise both

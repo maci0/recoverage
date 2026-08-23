@@ -77,6 +77,34 @@ class TestRegenOriginValidation:
         )
         assert status.startswith("403")
 
+    def test_cross_site_fetch_metadata_rejected(self) -> None:
+        """Sec-Fetch-Site: cross-site must be rejected even without an Origin.
+
+        The Origin check fails open on absence (curl/scripts never send it);
+        browsers always attach Sec-Fetch-Site, so a stripped-Origin cross-site
+        form POST from a loopback browser still names itself here.
+        """
+        status, headers, body = wsgi_request(
+            "POST",
+            "/api/regen",
+            headers={"Sec-Fetch-Site": "cross-site"},
+            remote_addr="127.0.0.1",
+        )
+        assert status.startswith("403")
+        data = json.loads(decode_body(body, headers))
+        assert data["error"] == "Forbidden: cross-site request"
+
+    @pytest.mark.parametrize("site", ["same-origin", "same-site", "none"])
+    def test_same_site_fetch_metadata_accepted(self, site: str) -> None:
+        """Non-cross-site Sec-Fetch-Site values pass (SPA reload button)."""
+        status, _, _ = wsgi_request(
+            "POST",
+            "/api/regen",
+            headers={"Sec-Fetch-Site": site},
+            remote_addr="127.0.0.1",
+        )
+        assert not status.startswith("403")
+
     def test_ipv6_loopback_remote_addr(self) -> None:
         """::1 REMOTE_ADDR should be accepted."""
         status, _, _ = wsgi_request("POST", "/api/regen", remote_addr="::1")
