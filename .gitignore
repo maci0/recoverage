@@ -23,6 +23,9 @@ build/
 # Frontend tooling (oxlint, vnu-jar)
 node_modules/
 
+# Scratch space (experiments, probes, throwaway files)
+.scratch/
+
 # Coverage database (runtime artifact, not source)
 coverage.db
 coverage.db-shm

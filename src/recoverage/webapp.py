@@ -1,9 +1,10 @@
 """Composition root — the fully wired Bottle application.
 
 ``recoverage.server`` only defines the shared ``app`` (hooks, auth, error
-handlers); ``recoverage.api`` and ``recoverage.ui`` mount their routes on it
-at import time.  Those two imports live HERE, not at the bottom of
-server.py, so the dependency graph stays one-directional:
+handlers, and the CORS preflight catch-all); ``recoverage.api`` and
+``recoverage.ui`` mount their routes on it at import time.  Those two
+imports live HERE, not at the bottom of server.py, so the dependency graph
+stays one-directional:
 
     _paths ← server ← {potato, ui, api} ← webapp ← cli
 

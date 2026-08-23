@@ -124,7 +124,7 @@ The UI is broken down into functional VanJS components in `app.js`:
 ## Key Implementation Details
 
 ### Performance Optimizations
-* **First Draw in First TCP Packet**: `server.py` intercepts requests to `/` and inlines `index.html`, `style.css`, `app.js`, and `van.min.js` into a single response. This response is minified (using `rjsmin` and `rcssmin`) and compressed using **Brotli (`br`)** or **Zstandard (`zstd`)** (falling back to `gzip`) to ~14.5KB, fitting perfectly into the initial TCP congestion window (`cwnd`). This allows the browser to parse and render the UI shell instantly without any render-blocking network requests.
+* **First Draw in First TCP Packet**: `ui.py` intercepts requests to `/` and inlines `index.html`, `style.css`, `app.js`, and `van.min.js` into a single response. This response is minified (using `rjsmin` and `rcssmin`) and compressed using **Brotli (`br`)** or **Zstandard (`zstd`)** (falling back to `gzip`) to ~14.5KB, fitting perfectly into the initial TCP congestion window (`cwnd`). This allows the browser to parse and render the UI shell instantly without any render-blocking network requests.
 * **Advanced Compression**: The server picks the best algorithm the client accepts, preferring `zstd`, then `br`, then `gzip`.  Dynamic responses compress brotli at quality 5, not the default 11: measured on a 5.6 MB coverage payload, q=11 costs 5.9 s of CPU for 334 KB while q=5 costs 68 ms for 444 KB, and that cost is paid per request because API responses are not cached compressed.  Clients without zstd (Safari) would otherwise stall about six seconds on every load and every live reload.  The inlined index keeps q=11: it is compressed once per encoding, cached, and has a hard byte budget.
 * **HTTP/1.0, Threaded Connections**: The server is wsgiref, which speaks HTTP/1.0 and closes the connection after each response (no keep-alive). It runs on a `ThreadingMixIn` server class so each connection gets its own daemon thread — without that, the long-lived `/api/events` SSE stream would stall every other request.
 * **ETag Caching**: The heavy `/api/targets/<target>/data` endpoint calculates an `ETag` from a WAL-aware snapshot of `coverage.db` (`mtime_ns` + size, folding in `-wal` so a rebuild that only committed to the WAL still invalidates; raw `st_mtime` served stale 304s). If the database hasn't changed, the server responds with a `304 Not Modified` (0 bytes), making page reloads instantaneous.
@@ -302,10 +302,10 @@ Each filter link toggles that filter on/off while preserving other active filter
 
 Potato Mode uses [Bottle](https://bottlepy.org/) for both the dev server and HTML templating:
 
-- **`server.py`** — shared Bottle application (`app`: hooks, auth, error handlers) and infrastructure: compression (brotli/zstd/gzip), minification, DB helpers, DLL loading, and response utilities.
+- **`server.py`** — shared Bottle application (`app`: hooks, auth, error handlers, CORS preflight catch-all) and infrastructure: compression (brotli/zstd/gzip), DB helpers, DLL loading, target resolution, and response utilities.
 - **`regen.py`** — rebrew regen subprocess lifecycle (`run_regen_step`, group kill + reap): shared by the CLI's regen paths and POST /api/regen; no dependency on the web stack.
 - **`api.py`** — REST API routes (`/api/*`) with `@app.get`/`@app.post` decorators and `request` globals.
-- **`ui.py`** — UI routes (`/`, `/potato`, static files) with index caching and `static_file()` serving.
+- **`ui.py`** — UI routes (`/`, `/potato`, static files) with index caching and minification (using `rjsmin` and `rcssmin`) and `static_file()` serving.
 - **`webapp.py`** — composition root: imports `api` and `ui` so their routes mount on the shared `app`; this is the module the CLI actually serves.
 - **`potato.py`** — Uses Bottle's `SimpleTemplate` engine (stpl) standalone, with no dependency on the Bottle web server for rendering.
 
