@@ -204,10 +204,7 @@ def _get_stats(conn: sqlite3.Connection, target: str) -> dict[str, Any]:
 
 def _run_regen(root: Path) -> None:
     """Run rebrew catalog + build-db to regenerate coverage.db."""
-    from recoverage.server import (
-        REGEN_TIMEOUT,
-        run_regen_step,
-    )
+    from recoverage.regen import REGEN_TIMEOUT, run_regen_step
 
     for step in ("catalog", "build-db"):
         typer.echo(f"Running rebrew {step}...")
@@ -269,7 +266,7 @@ def _open_and_reap(url: str, args: list[str], shell: bool = False) -> None:
     except subprocess.TimeoutExpired:
         # Group kill, not just the direct opener: xdg-open wrappers can spawn
         # a grandchild that would otherwise survive the deadline.
-        from recoverage.server import _kill_and_reap
+        from recoverage.regen import _kill_and_reap
 
         _kill_and_reap(proc)
     except (OSError, subprocess.SubprocessError) as exc:
@@ -388,25 +385,21 @@ def serve(
         level=logging.INFO,
     )
 
+    allowed_origins: list[str] = []
     if cors:
-        _server.CORS_ENABLED = True
-        if cors_origin:
-            # An origin that fails to normalize must be dropped loudly: a
-            # stored "" would match every unparsable request Origin and echo
-            # it back as Access-Control-Allow-Origin.
-            allowed_origins: list[str] = []
-            for origin_url in cors_origin:
-                normalized = _server._normalize_origin(origin_url)
-                if normalized:
-                    allowed_origins.append(normalized)
-                else:
-                    typer.secho(
-                        f"warning: ignoring unparseable --cors-origin {origin_url!r}",
-                        fg=typer.colors.YELLOW,
-                    )
-            _server.CORS_ALLOWED_ORIGINS = allowed_origins
+        # An origin that fails to normalize must be dropped loudly: a stored
+        # "" would match every unparsable request Origin and echo it back as
+        # Access-Control-Allow-Origin.
+        for origin_url in cors_origin or ():
+            normalized = _server._normalize_origin(origin_url)
+            if normalized:
+                allowed_origins.append(normalized)
+            else:
+                typer.secho(
+                    f"warning: ignoring unparseable --cors-origin {origin_url!r}",
+                    fg=typer.colors.YELLOW,
+                )
     if token:
-        _server._AUTH_TOKEN = token
         typer.secho(
             f"token auth enabled — requests need Authorization: Bearer <token> "
             f"(SPA: open as http://{display_host}:{port}/?token=<token>)",
@@ -414,10 +407,12 @@ def serve(
         )
     # Loopback binds validate the Host header (DNS-rebinding guard); remote
     # binds (user opted in via --allow-remote) skip validation.
-    if is_remote:
-        _server.ALLOWED_HOSTS = None
-    else:
-        _server.ALLOWED_HOSTS = set(LOOPBACK_HOSTS)
+    _server.configure_security(
+        cors_enabled=cors,
+        cors_allowed_origins=allowed_origins,
+        auth_token=token or "",
+        allowed_hosts=None if is_remote else set(LOOPBACK_HOSTS),
+    )
 
     root = _project_dir()
     assets = _assets_dir()

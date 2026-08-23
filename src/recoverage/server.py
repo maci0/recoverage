@@ -10,7 +10,6 @@ Reads the coverage database from the path resolved by
 
 from __future__ import annotations
 
-import contextlib
 import functools
 import gzip
 import hashlib
@@ -18,13 +17,11 @@ import hmac
 import importlib.util
 import json
 import logging
-import os
-import signal
 import sqlite3
-import subprocess
 import threading
 import time
 from collections import deque
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlsplit
@@ -50,61 +47,17 @@ def _get_zstd_compressor() -> Any:
     return compressor
 
 
-# Shared timeout for rebrew regen subprocesses (imported by cli.py and api.py)
-REGEN_TIMEOUT = 120  # seconds — must accommodate large projects
-
-
-def _kill_and_reap(proc: subprocess.Popen[bytes]) -> None:
-    """Kill *proc* — on POSIX its whole session — and always reap it.
-
-    Every child we spawn gets its own session (start_new_session), so
-    terminal signals such as Ctrl+C never reach it: any abandonment path
-    must signal the process GROUP, not just the direct child, or the rebrew
-    grandchild survives and keeps writing coverage.db behind a restarted
-    dashboard.  The trailing wait() reaps the child either way (setsid does
-    not prevent zombies; only a wait does).
-    """
-    if os.name == "posix":
-        with contextlib.suppress(ProcessLookupError):
-            os.killpg(proc.pid, signal.SIGKILL)
-    else:
-        proc.kill()
-    proc.wait()
-
-
-def run_regen_step(step: str, root: Path) -> None:
-    """Run ``uv run rebrew <step>`` in *root*, killing the whole process group on timeout.
-
-    ``check_call(timeout=...)`` kills only the direct child (uv); the actual
-    rebrew worker is uv's grandchild and would survive, still writing
-    coverage.db while the dashboard resumes serving.  The child gets its own
-    session so the group can be signalled, and it is always reaped — on
-    timeouts AND on KeyboardInterrupt/SystemExit mid-wait, which would
-    otherwise orphan the still-running regen tree.
-    """
-    cmd = ["uv", "run", "rebrew", step]
-    proc = subprocess.Popen(cmd, cwd=str(root), start_new_session=(os.name == "posix"))
-    try:
-        proc.wait(timeout=REGEN_TIMEOUT)
-    except subprocess.TimeoutExpired:
-        _kill_and_reap(proc)
-        raise subprocess.TimeoutExpired(cmd, REGEN_TIMEOUT) from None
-    except BaseException:
-        # KeyboardInterrupt (Ctrl+C during serve --regen / POST /api/regen) or
-        # interpreter shutdown: the child sits in its own session, so the
-        # terminal's SIGINT did not reach it — kill the group before dying or
-        # uv+rebrew keep rebuilding coverage.db as orphans.
-        _kill_and_reap(proc)
-        raise
-    if proc.returncode != 0:
-        raise subprocess.CalledProcessError(proc.returncode, cmd)
-
-
 Bottle = cast(Any, bottle.Bottle)
 request = cast(Any, bottle.request)
 response = cast(Any, bottle.response)
 static_file = cast(Any, bottle.static_file)
 HTTPResponse = cast(Any, bottle.HTTPResponse)
+
+# The shared Bottle application.  Defined up front — above the helpers and
+# the auth/hooks section below — so a first top-down read of this module
+# finds its central object early: api.py/ui.py import it and mount routes on
+# it at import time; webapp.py composes both onto it.
+app = Bottle()
 
 HAS_CAPSTONE = importlib.util.find_spec("capstone") is not None
 HAS_PYGMENTS = importlib.util.find_spec("pygments") is not None
@@ -127,6 +80,32 @@ ALLOWED_HOSTS: set[str] | None = None
 # regen endpoint's remote-addr/Origin checks, and the DNS-rebinding Host
 # allowlist above.  Membership tests only — order carries no meaning.
 LOOPBACK_HOSTS: tuple[str, ...] = ("127.0.0.1", "::1", "localhost")
+
+
+def configure_security(
+    *,
+    cors_enabled: bool = False,
+    cors_allowed_origins: Sequence[str] = (),
+    auth_token: str = "",
+    allowed_hosts: set[str] | None = None,
+) -> None:
+    """Install the startup request-policy state: CORS, bearer token, Host allowlist.
+
+    ONE public entry point for the process-wide globals defined above.  The
+    CLI configures them through this function instead of assigning server
+    module attributes by name (two of which are private), so this module owns
+    both the storage and when/how it may change.  Call it once at startup,
+    BEFORE the WSGI server starts accepting requests — request worker threads
+    read these values without a lock.
+    """
+    global CORS_ENABLED, CORS_ALLOWED_ORIGINS, _AUTH_TOKEN, ALLOWED_HOSTS
+    CORS_ENABLED = cors_enabled
+    # Only normalized origins reach storage: an unparsable stored value would
+    # match every unparsable request Origin and echo itself back as an
+    # allow-origin.
+    CORS_ALLOWED_ORIGINS = list(cors_allowed_origins)
+    _AUTH_TOKEN = auth_token
+    ALLOWED_HOSTS = allowed_hosts
 
 
 def _hostname_of(origin: str) -> str:
@@ -1060,9 +1039,7 @@ def _json_err(status: int, data: dict[str, Any]) -> Any:
     return resp
 
 
-# ── Bottle app ─────────────────────────────────────────────────────
-
-app = Bottle()
+# ── Token auth ─────────────────────────────────────────────────────
 
 # Optional token auth for the dashboard (--token): when set, every request
 # must present it via Authorization: Bearer <token>, ?token=, or the

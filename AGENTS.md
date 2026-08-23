@@ -37,6 +37,7 @@ recoverage/
     ├── _paths.py            # DB path resolution (rebrew-project.toml db_dir)
     ├── cli.py               # Typer CLI entry point (serve, stats, export, check, regen, open)
     ├── server.py            # Bottle app, shared helpers & compression
+    ├── regen.py             # rebrew regen subprocess lifecycle (group kill + reap)
     ├── api.py               # REST API routes (/api/*)
     ├── ui.py                # UI routes (/, /potato, static files)
     ├── potato.py            # Potato Mode renderer

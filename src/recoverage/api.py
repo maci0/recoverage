@@ -16,6 +16,7 @@ from typing import Any
 
 from recoverage import __version__
 from recoverage import server as _server
+from recoverage.regen import REGEN_TIMEOUT, run_regen_step
 from recoverage.server import (
     _FN_JSON_SQL,
     _GLOBAL_JSON_SQL,
@@ -1266,18 +1267,18 @@ def _do_regen(remote: str) -> bytes | Any:
     root = _project_dir()
     _log.info("Regen started from %s", remote)
     try:
-        _server.run_regen_step("catalog", root)
-        _server.run_regen_step("build-db", root)
+        run_regen_step("catalog", root)
+        run_regen_step("build-db", root)
         _clear_derived_caches()
         _log.info("Regen completed successfully")
         return _json_ok({"ok": True})
     except subprocess.TimeoutExpired:
-        _log.error("Regen timed out after %ds", _server.REGEN_TIMEOUT)
+        _log.error("Regen timed out after %ds", REGEN_TIMEOUT)
         return _json_err(
             504,
             {
                 "error": "Regen timed out",
-                "detail": f"exceeded {_server.REGEN_TIMEOUT}s timeout",
+                "detail": f"exceeded {REGEN_TIMEOUT}s timeout",
             },
         )
     except subprocess.CalledProcessError as e:

@@ -303,6 +303,7 @@ Each filter link toggles that filter on/off while preserving other active filter
 Potato Mode uses [Bottle](https://bottlepy.org/) for both the dev server and HTML templating:
 
 - **`server.py`** — shared Bottle application (`app`: hooks, auth, error handlers) and infrastructure: compression (brotli/zstd/gzip), minification, DB helpers, DLL loading, and response utilities.
+- **`regen.py`** — rebrew regen subprocess lifecycle (`run_regen_step`, group kill + reap): shared by the CLI's regen paths and POST /api/regen; no dependency on the web stack.
 - **`api.py`** — REST API routes (`/api/*`) with `@app.get`/`@app.post` decorators and `request` globals.
 - **`ui.py`** — UI routes (`/`, `/potato`, static files) with index caching and `static_file()` serving.
 - **`webapp.py`** — composition root: imports `api` and `ui` so their routes mount on the shared `app`; this is the module the CLI actually serves.

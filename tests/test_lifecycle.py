@@ -24,7 +24,7 @@ from recoverage.cli import (
     _BROWSER_OPEN_TIMEOUT,
     _open_and_reap,
 )
-from recoverage.server import run_regen_step
+from recoverage.regen import run_regen_step
 
 POSIX = os.name == "posix"
 
@@ -94,12 +94,12 @@ class TestRunRegenStep:
     def test_timeout_kills_grandchild_and_raises(self, monkeypatch: Any, tmp_path: Path) -> None:
         """SIGKILL to uv alone would leave the rebrew grandchild running; the
         group kill must take it down too."""
-        import recoverage.server as srv
+        import recoverage.regen as regen
 
         pid_file = tmp_path / "grandchild.pid"
         monkeypatch.setenv("GRANDCHILD_PID_FILE", str(pid_file))
         _install_fake_uv(monkeypatch, tmp_path, FAKE_UV_HANG)
-        monkeypatch.setattr(srv, "REGEN_TIMEOUT", 0.5)
+        monkeypatch.setattr(regen, "REGEN_TIMEOUT", 0.5)
 
         start = time.monotonic()
         with pytest.raises(subprocess.TimeoutExpired):
@@ -121,11 +121,11 @@ class TestRunRegenStep:
     def test_timeout_raises_timeout_expired_with_command(
         self, monkeypatch: Any, tmp_path: Path
     ) -> None:
-        import recoverage.server as srv
+        import recoverage.regen as regen
 
         monkeypatch.setenv("GRANDCHILD_PID_FILE", str(tmp_path / "unused.pid"))
         _install_fake_uv(monkeypatch, tmp_path, FAKE_UV_HANG)
-        monkeypatch.setattr(srv, "REGEN_TIMEOUT", 0.3)
+        monkeypatch.setattr(regen, "REGEN_TIMEOUT", 0.3)
         with pytest.raises(subprocess.TimeoutExpired) as excinfo:
             run_regen_step("catalog", tmp_path)
         assert excinfo.value.timeout == 0.3
@@ -142,14 +142,14 @@ class TestRunRegenStep:
         import signal
         import threading
 
-        import recoverage.server as srv
+        import recoverage.regen as regen
 
         child_pid_file = tmp_path / "child.pid"
         grandchild_pid_file = tmp_path / "grandchild.pid"
         monkeypatch.setenv("CHILD_PID_FILE", str(child_pid_file))
         monkeypatch.setenv("GRANDCHILD_PID_FILE", str(grandchild_pid_file))
         _install_fake_uv(monkeypatch, tmp_path, FAKE_UV_HANG_RECORD_ALL)
-        monkeypatch.setattr(srv, "REGEN_TIMEOUT", 30)
+        monkeypatch.setattr(regen, "REGEN_TIMEOUT", 30)
 
         def _interrupt() -> None:
             os.kill(os.getpid(), signal.SIGINT)
