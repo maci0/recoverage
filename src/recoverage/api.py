@@ -1131,16 +1131,15 @@ def handle_api_asm(target: str) -> bytes | Any:
                 )
 
             md = _get_capstone_md()
-            instructions: list[dict[str, Any]] = []
-            for insn in md.disasm(code_bytes, va):
-                instructions.append(
-                    {
-                        "addr": f"0x{insn.address:08x}",
-                        "mnemonic": insn.mnemonic,
-                        "op_str": insn.op_str,
-                        "size": insn.size,
-                    }
-                )
+            instructions: list[dict[str, Any]] = [
+                {
+                    "addr": f"0x{insn.address:08x}",
+                    "mnemonic": insn.mnemonic,
+                    "op_str": insn.op_str,
+                    "size": insn.size,
+                }
+                for insn in md.disasm(code_bytes, va)
+            ]
             return _json_ok(
                 {"instructions": instructions},
                 Cache_Control=CACHE_REVALIDATE,

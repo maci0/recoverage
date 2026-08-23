@@ -626,7 +626,7 @@ def test_function_detail_shows_verify_similarity():
     # similarity 87.3.  The render's per-cell `idx` is the grid position (not the
     # cells.id), so scan render indices for the one that reaches _func_a's detail
     # rows and carries the verify similarity.
-    for idx in range(0, 32):
+    for idx in range(32):
         html = render_potato_url(f"/potato?target={target}&section=.text&idx={idx}")
         if "last_verify_similarity" in html and "87.3%" in html:
             return

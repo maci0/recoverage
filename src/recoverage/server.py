@@ -447,7 +447,7 @@ def _target_filename(tid: str, t_info: Any) -> str:
     both target-list builders fall back to the id here.
     """
     filename = t_info.get("filename", tid) if isinstance(t_info, dict) else tid
-    return filename if filename else tid
+    return filename or tid
 
 
 def resolve_targets(c: sqlite3.Cursor) -> tuple[list[str], list[dict[str, str]]]:

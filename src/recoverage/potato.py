@@ -156,10 +156,12 @@ def _progress_svg(segments: tuple[tuple[str, float], ...]) -> str:
     Segments must be a hashable tuple; the result is LRU-cached because the
     same section state renders identically on every page view."""
     svg = [
-        '<svg xmlns="http://www.w3.org/2000/svg" width="700" height="32" viewBox="0 0 700 32">'
-        '<defs><clipPath id="rc"><rect width="700" height="32" rx="10" ry="10"/></clipPath></defs>'
-        '<rect width="700" height="32" fill="#1f2937" rx="10" ry="10"/>'
-        '<g clip-path="url(#rc)">'
+        (
+            '<svg xmlns="http://www.w3.org/2000/svg" width="700" height="32" viewBox="0 0 700 32">'
+            '<defs><clipPath id="rc"><rect width="700" height="32" rx="10" ry="10"/></clipPath></defs>'
+            '<rect width="700" height="32" fill="#1f2937" rx="10" ry="10"/>'
+            '<g clip-path="url(#rc)">'
+        )
     ]
 
     current_x = 0.0
@@ -623,7 +625,7 @@ def _format_va(val: int | str) -> str:
     if isinstance(val, int):
         return f"0x{val:08x}"
     s = str(val)
-    if s.startswith("0x") or s.startswith("0X"):
+    if s.startswith(("0x", "0X")):
         return s
     try:
         return f"0x{int(s):08x}"
@@ -1308,8 +1310,10 @@ def _build_grid_html(
         f'<td bgcolor="{BG_COLOR}" width="{cell_w}" height="1"></td>' for _ in range(grid_columns)
     )
     grid_html_parts = [
-        f'<table id="grid" border="1" frame="void" rules="all" cellpadding="0" cellspacing="0" bordercolor="{BG_COLOR}" bgcolor="{BG_COLOR}">'
-        f"<tr>{sizing_tds}</tr><tr>"
+        (
+            f'<table id="grid" border="1" frame="void" rules="all" cellpadding="0" cellspacing="0" bordercolor="{BG_COLOR}" bgcolor="{BG_COLOR}">'
+            f"<tr>{sizing_tds}</tr><tr>"
+        )
     ]
 
     curr_col = 0
@@ -1424,20 +1428,24 @@ def _render_function_list(
 
     parts = [
         f'<table width="100%" border="1" cellpadding="0" cellspacing="0" bordercolor="{BORDER_COLOR}" bgcolor="{PANEL_COLOR}">',
-        f'<tr><td background="{PANEL_HDR_PNG}" cellpadding="8">'
-        f'<font color="{MUTED_COLOR}" size="2"><b>Functions</b></font> '
-        f'<font size="1" color="{MUTED_COLOR}">({len(rows)} results)</font> '
-        f'<a href="{_build_url(target, section, search=search_query)}"><font size="1" color="{ACCENT_COLOR}">[Grid View]</font></a>'
-        f"</td></tr>",
+        (
+            f'<tr><td background="{PANEL_HDR_PNG}" cellpadding="8">'
+            f'<font color="{MUTED_COLOR}" size="2"><b>Functions</b></font> '
+            f'<font size="1" color="{MUTED_COLOR}">({len(rows)} results)</font> '
+            f'<a href="{_build_url(target, section, search=search_query)}"><font size="1" color="{ACCENT_COLOR}">[Grid View]</font></a>'
+            f"</td></tr>"
+        ),
         "<tr><td>",
         f'<table width="100%" border="1" cellpadding="6" cellspacing="0" bordercolor="{BORDER_COLOR}">',
         f'<caption align="left"><font size="1" color="{MUTED_COLOR}">Functions for {_esc(section)} ({len(rows)} results)</font></caption>',
-        f'<tr bgcolor="{PANEL_COLOR}">'
-        f'<th><a href="{base}&sort=name"><font color="{MUTED_COLOR}">Name</font></a></th>'
-        f'<th><a href="{base}&sort=va"><font color="{MUTED_COLOR}">VA</font></a></th>'
-        f'<th><a href="{base}&sort=size"><font color="{MUTED_COLOR}">Size</font></a></th>'
-        f'<th><a href="{base}&sort=status"><font color="{MUTED_COLOR}">Status</font></a></th>'
-        f'<th><font color="{MUTED_COLOR}">Origin</font></th></tr>',
+        (
+            f'<tr bgcolor="{PANEL_COLOR}">'
+            f'<th><a href="{base}&sort=name"><font color="{MUTED_COLOR}">Name</font></a></th>'
+            f'<th><a href="{base}&sort=va"><font color="{MUTED_COLOR}">VA</font></a></th>'
+            f'<th><a href="{base}&sort=size"><font color="{MUTED_COLOR}">Size</font></a></th>'
+            f'<th><a href="{base}&sort=status"><font color="{MUTED_COLOR}">Status</font></a></th>'
+            f'<th><font color="{MUTED_COLOR}">Origin</font></th></tr>'
+        ),
     ]
 
     if not rows:

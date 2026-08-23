@@ -733,7 +733,7 @@ def wsgi_stream(path: str, max_chunks: int = 1) -> tuple[str, dict[str, str], li
 
     def _start_response(status: str, response_headers, exc_info=None) -> None:
         status_holder["status"] = status
-        status_holder["headers"] = {k: v for k, v in response_headers}
+        status_holder["headers"] = dict(response_headers)
 
     from recoverage.webapp import app
 
@@ -1226,7 +1226,7 @@ class TestErrorResponseShape:
     def _check(
         self, status: str, headers: dict[str, str], body: bytes, expected_code: str
     ) -> dict[str, Any]:
-        assert status.startswith("4") or status.startswith("5")
+        assert status.startswith(("4", "5"))
         data = json.loads(decode_body(body, headers))
         assert set(data) >= {"error", "code", "detail"}
         assert data["code"] == expected_code
@@ -2145,7 +2145,7 @@ class TestRepoFileServing:
         (tmp_path / "secret.txt").write_text("top secret", encoding="utf-8")
         # Bottle decodes %2E%2E%2F before routing, so this arrives as ../.
         status, _, body = wsgi_get("/src/%2e%2e/secret.txt")
-        assert status.startswith("403") or status.startswith("404")
+        assert status.startswith(("403", "404"))
         assert b"top secret" not in body
 
     def test_symlink_escape_blocked(self, tmp_path: Path, monkeypatch: Any) -> None:

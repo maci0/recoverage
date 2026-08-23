@@ -251,8 +251,7 @@ def wsgi_request(
 
     def _start_response(status: str, response_headers, exc_info=None):
         status_holder["status"] = status
-        status_holder["headers"] = {k: v for k, v in response_headers}
-        return None
+        status_holder["headers"] = dict(response_headers)
 
     result = app(environ, _start_response)
     # PEP 3333: the server MUST call close() on the returned iterable when

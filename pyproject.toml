@@ -88,11 +88,18 @@ line-length = 100
 #   TID    — import hygiene; YTT — yield-in-try/finally traps;
 #   RUF100 — flags stale or unscoped `noqa` directives (suppression hygiene);
 #   T10    — debugger/breakpoint calls must never be committed;
-#   FLY    — str.join over += loops; ICN — import conventions.
+#   FLY    — str.join over += loops; ICN — import conventions;
+#   PLE    — pylint errors (real-defect class); INT — gettext format misuse;
+#   C4     — comprehensions; RET/RSE — return/raise shape;
+#   PERF   — performance anti-patterns; PIE — misc correctness nits;
+#   ISC    — implicit string concatenation (missing-comma bug class);
+#   FURB   — clearer stdlib idioms.
 select = [
     "E", "F", "W", "I", "UP", "B", "SIM",
     "A", "ASYNC", "DTZ", "G", "N", "PGH", "TID", "YTT", "RUF100",
     "T10", "FLY", "ICN",
+    "PLE", "INT", "C4", "RET", "RSE", "PERF", "PIE", "ISC", "FURB",
+    "T20",
 ]
 ignore = []
 # typer's idiom is `param = typer.Option(...)` in signature defaults; without
@@ -105,3 +112,6 @@ extend-immutable-calls = ["typer.Option", "typer.Argument"]
 # ruff format cannot wrap string literals. Every other file must keep lines
 # within the 100-col cap above.
 "src/recoverage/potato.py" = ["E501"]
+# T201: tools/ scripts are command-line utilities whose stdout output IS their
+# interface; print is intentional there and banned everywhere else.
+"tools/*" = ["T201"]
