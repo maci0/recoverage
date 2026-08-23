@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -457,3 +458,56 @@ class TestServeBindFailure:
         time.sleep(0.7)
         assert opened == []
         assert time.monotonic() - start < 5, "serve took too long to exit after bind failure"
+
+
+class TestServeKeyboardInterrupt:
+    def test_ctrl_c_exits_cleanly(self, monkeypatch: Any) -> None:
+        """Ctrl+C is the documented stop mechanism ("Stop: Ctrl+C"): serve
+        must exit 0 quietly instead of unwinding a KeyboardInterrupt
+        traceback out of wsgiref's accept loop."""
+        from recoverage.server import app as server_app
+
+        monkeypatch.setattr("recoverage.api._ensure_db_watcher", lambda: None)
+
+        def raise_interrupt(self: Any, **kwargs: Any) -> None:
+            raise KeyboardInterrupt
+
+        # Instance-level monkeypatch breaks bottle: Bottle.__setattr__ rejects
+        # re-setting a name once it exists in the instance dict (plugin
+        # conflict guard), so patch the class method instead.
+        monkeypatch.setattr(type(server_app), "run", raise_interrupt)
+        result = runner.invoke(app, ["serve", "--no-open", "--port", "8123"])
+        assert result.exit_code == 0
+
+
+class TestBrokenPipe:
+    def test_main_converts_broken_pipe_to_clean_exit(self, monkeypatch: Any) -> None:
+        """`recoverage export | head` closing stdout early must exit
+        non-zero without a spurious traceback at interpreter shutdown."""
+        import recoverage.cli as cli
+
+        class _NoFd(io.StringIO):
+            """Captured stdout has no real fd; the devnull redirect is skipped."""
+
+            def fileno(self) -> int:
+                raise io.UnsupportedOperation("no fd")
+
+        def boom() -> None:
+            raise BrokenPipeError(32, "Broken pipe")
+
+        monkeypatch.setattr(cli, "app", boom)
+        monkeypatch.setattr(sys, "stdout", _NoFd())
+        with pytest.raises(SystemExit) as excinfo:
+            cli.main()
+        assert excinfo.value.code == 1
+
+    def test_main_reruns_app_normally_after_other_errors(self, monkeypatch: Any) -> None:
+        """Only BrokenPipeError is converted; other exceptions propagate."""
+        import recoverage.cli as cli
+
+        def boom() -> None:
+            raise RuntimeError("unrelated crash")
+
+        monkeypatch.setattr(cli, "app", boom)
+        with pytest.raises(RuntimeError):
+            cli.main()

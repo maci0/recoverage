@@ -1420,3 +1420,43 @@ class TestVaOverflowValidation:
         data = json.loads(decode_body(body, headers))
         # Clamped to the page ceiling; the resulting page is simply empty.
         assert data["functions"] == []
+
+
+class TestUnhandledErrorContract:
+    """Unexpected (non-sqlite) exceptions must be visible in the log AND keep
+    every surface's format contract: JSON on /api/*, HTML on UI routes.  The
+    server runs wsgiref with quiet=True, so without the log line the failing
+    endpoint is unidentifiable from a bare stderr traceback."""
+
+    def test_api_500_is_json_and_logged(self, monkeypatch: Any, caplog: Any) -> None:
+        import logging
+
+        import recoverage.api as api
+
+        def boom() -> None:
+            raise RuntimeError("exploding cursor")
+
+        monkeypatch.setattr(api, "_db", boom)
+        with caplog.at_level(logging.ERROR, logger="recoverage"):
+            status, headers, body = wsgi_get("/api/targets/x/stats")
+        assert status.startswith("500")
+        assert headers.get("Content-Type", "").startswith("application/json")
+        data = json.loads(decode_body(body, headers))
+        assert data["code"] == "internal"
+        assert data["error"] == "Internal server error"
+        errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+        assert any("Unhandled error serving" in r.getMessage() for r in errors)
+        assert any(r.exc_info is not None for r in errors)
+
+    def test_ui_500_stays_html(self, monkeypatch: Any) -> None:
+        import recoverage.ui as ui
+
+        def boom() -> bytes:
+            raise RuntimeError("broken asset")
+
+        monkeypatch.setattr(ui, "_build_index_payload", boom)
+        monkeypatch.setattr(ui, "CACHED_INDEX_PAYLOAD", None)
+        status, headers, body = wsgi_get("/")
+        assert status.startswith("500")
+        assert "text/html" in headers.get("Content-Type", "")
+        assert b"Internal Server Error" in decode_body(body, headers)

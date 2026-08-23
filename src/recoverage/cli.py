@@ -6,8 +6,10 @@ import contextlib
 import enum
 import json
 import logging
+import os
 import sqlite3
 import subprocess
+import sys
 import threading
 from pathlib import Path
 from socketserver import ThreadingMixIn
@@ -367,6 +369,11 @@ def serve(
             server="wsgiref",
             server_class=_ThreadingWSGIServer,
         )
+    except KeyboardInterrupt:
+        # Ctrl+C is the documented way to stop the dashboard; wsgiref's
+        # accept loop unwinds with KeyboardInterrupt — exit quietly instead
+        # of dumping a traceback.
+        pass
     except OSError as e:
         # EADDRINUSE is the most common failure for a dashboard tool — a
         # second instance or another dev server on the same port.
@@ -681,4 +688,14 @@ def open_cmd(
 
 
 def main() -> None:
-    app()
+    try:
+        app()
+    except BrokenPipeError:
+        # Downstream closed the pipe early (e.g. `recoverage export | head`):
+        # the interpreter flushes stdout at exit and would print a spurious
+        # "Exception ignored" traceback.  Point stdout's fd at devnull so the
+        # final flush succeeds (no-op when stdout has no real fd), then report
+        # the truncation with a non-zero status.
+        with contextlib.suppress(OSError, ValueError):
+            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        raise SystemExit(1) from None

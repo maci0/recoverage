@@ -513,7 +513,12 @@ def _load_dll(target: str) -> bytes | None:
                 type(exc).__name__,
                 exc,
             )
-            DLL_DATA[target] = None
+            # Transient OS failure (file being rewritten by a build, AV lock):
+            # NOT cached — DLL_DATA[target] = None here would keep the target's
+            # disassembly/bytes endpoints failing until the next rebuild
+            # broadcast clears the cache.  Retrying on the next request
+            # self-heals for free.
+            return None
         return DLL_DATA[target]
 
 
@@ -1146,21 +1151,36 @@ app.add_hook("before_request", _require_auth)
 
 
 @app.error(500)
-def _handle_sqlite_error(error: Any) -> Any:
-    """Keep the JSON error contract when a query fails after connect.
+def _handle_unexpected_error(error: Any) -> Any:
+    """Keep every surface's error contract when a handler raises unexpectedly.
 
     ``_db()`` open failures already return 503 JSON, but every query after
     connect was unguarded — a corrupt/incompatible DB or SQLITE_BUSY during a
     concurrent build-db raised inside ``c.execute`` and surfaced as Bottle's
     HTML 500.  All sqlite3 errors become a 503 JSON response instead.
+
+    Non-DB exceptions are logged here with their request context: bottle only
+    dumps the raw traceback to wsgi.errors (and ``serve`` runs wsgiref with
+    quiet=True), so without this the failing endpoint is hard to identify from
+    the log alone.  /api/* requests get the standard JSON 500 contract — the
+    SPA's fetch() handlers and API consumers parse JSON, not Bottle's HTML
+    error page — while UI routes keep Bottle's HTML error page.
     """
     exc = getattr(error, "exception", None)
     if isinstance(exc, sqlite3.Error):
         _log.warning("Database error serving %s: %s", request.path, exc)
         return _json_err(503, {"error": "Database unavailable"})
-    # Non-DB 500: delegate to bottle's default error page.  Returning the
-    # HTTPError itself would make _cast re-enter the error handler (recursion
-    # until the wsgi catch-all); returning None would emit an empty 500 body.
+    # Returning the HTTPError itself would make _cast re-enter the error
+    # handler (recursion until the wsgi catch-all); returning None would emit
+    # an empty 500 body.
+    _log.error(
+        "Unhandled error serving %s %s",
+        request.method,
+        request.path,
+        exc_info=exc or error,
+    )
+    if request.path.startswith("/api/"):
+        return _json_err(500, {"error": "Internal server error"})
     return app.default_error_handler(error)
 
 

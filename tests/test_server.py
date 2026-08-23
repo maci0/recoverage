@@ -672,3 +672,37 @@ class TestSecurityHeaders:
         csp = headers.get("Content-Security-Policy", "")
         assert "'unsafe-inline'" in csp
         assert "connect-src 'self'" in csp
+
+
+class TestLoadDllTransientFailure:
+    """A transient DLL read failure must NOT be negative-cached: caching
+    ``DLL_DATA[target] = None`` would keep the target's /asm and /bytes
+    endpoints failing until the next rebuild broadcast clears the cache,
+    even after the file comes back."""
+
+    def test_os_failure_not_cached_and_self_heals(self, tmp_path: Path, monkeypatch: Any) -> None:
+        import recoverage.server as srv
+
+        key = "__transient_test_target__"
+        holder: dict[str, Path] = {"p": tmp_path / "missing.dll"}
+        monkeypatch.setattr(srv, "_find_dll_path", lambda target: holder["p"])
+        try:
+            # stat() on the absent path raises FileNotFoundError inside
+            # _load_dll's OSError handler: logged, returned as None, NOT stored.
+            assert srv._load_dll(key) is None
+            assert key not in srv.DLL_DATA
+
+            # The file comes back (build finished, lock released): retrying on
+            # the next request self-heals with no cache invalidation in between.
+            real = tmp_path / "real.dll"
+            real.write_bytes(b"MZ-fake-binary")
+            holder["p"] = real
+            assert srv._load_dll(key) == b"MZ-fake-binary"
+            assert srv.DLL_DATA[key] == b"MZ-fake-binary"
+
+            # A later transient failure cannot poison the cached success.
+            holder["p"] = tmp_path / "gone-again.dll"
+            assert srv._load_dll(key) == b"MZ-fake-binary"
+        finally:
+            with srv.DLL_LOCK:
+                srv.DLL_DATA.pop(key, None)
