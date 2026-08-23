@@ -815,6 +815,37 @@ class TestSearchLimit:
         assert result == set()
         conn.close()
 
+    def test_globals_cap_is_deterministic(self):
+        """With >500 matches, which globals enter the dimming set must be
+        reproducible: the 500-row cap is only deterministic with an ORDER BY,
+        same invariant as the functions query above."""
+        from recoverage.potato import _search_functions
+
+        conn = sqlite3.connect(":memory:")
+        c = conn.cursor()
+        c.execute(
+            "CREATE TABLE functions (target TEXT, name TEXT, vaStart TEXT DEFAULT '',"
+            " symbol TEXT DEFAULT '')"
+        )
+        c.execute(
+            "CREATE TABLE globals (target TEXT, va INTEGER, name TEXT,"
+            " decl TEXT DEFAULT '', files TEXT DEFAULT '[]',"
+            " module TEXT DEFAULT '', size INTEGER DEFAULT 4)"
+        )
+        names = [f"glob_{i:04d}" for i in range(600)]
+        # Insert in REVERSE name order: a cap without ORDER BY follows scan
+        # order (rowid) and keeps the wrong half.
+        c.executemany(
+            "INSERT INTO globals (target, va, name) VALUES ('T', ?, ?)",
+            [(0x10000000 + i * 4, n) for i, n in enumerate(reversed(names))],
+        )
+        try:
+            result = _search_functions(c, "T", "glob_")
+            assert len(result) == 500
+            assert result == set(sorted(names)[:500])
+        finally:
+            conn.close()
+
 
 class TestCellsCacheInvalidation:
     """The cells memo must invalidate on a WAL-committed rebuild.
