@@ -106,6 +106,50 @@ class TestStatsCommand:
 # ── Check command ─────────────────────────────────────────────────
 
 
+def _make_section_db(
+    path: Path,
+    sections: list[str],
+    cells: list[tuple[str, int, int, str]],
+) -> None:
+    """Build a minimal DB: each *section* is 100 bytes with one cell per entry."""
+    import sqlite3 as _sqlite3
+
+    conn = _sqlite3.connect(path)
+    try:
+        c = conn.cursor()
+        c.execute(
+            "CREATE TABLE metadata (target TEXT, key TEXT, value TEXT,"
+            " PRIMARY KEY (target, key))"
+        )
+        c.execute(
+            "CREATE TABLE sections (target TEXT, name TEXT, va INTEGER,"
+            " size INTEGER, fileOffset INTEGER, unitBytes INTEGER,"
+            " columns INTEGER, PRIMARY KEY (target, name))"
+        )
+        c.execute(
+            "CREATE TABLE cells (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            " target TEXT, section_name TEXT, start INTEGER, end INTEGER,"
+            " span INTEGER DEFAULT 1, state TEXT, functions TEXT DEFAULT '[]',"
+            " label TEXT, parent_function TEXT)"
+        )
+        c.execute("CREATE TABLE functions (target TEXT, status TEXT, markerType TEXT)")
+        c.execute(
+            "INSERT INTO metadata VALUES ('T','summary',?)",
+            (json.dumps({"totalFunctions": 1}),),
+        )
+        for name in sections:
+            c.execute("INSERT INTO sections VALUES ('T',?,0,100,0,16,8)", (name,))
+        for sec_name, start, end, state in cells:
+            c.execute(
+                "INSERT INTO cells (target, section_name, start, end, state)"
+                " VALUES ('T',?,?,?,?)",
+                (sec_name, start, end, state),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
 class TestCheckCommand:
     def test_check_with_zero_threshold(self) -> None:
@@ -155,50 +199,8 @@ class TestCheckCommand:
     ) -> None:
         """Sections whose cells are all 'none' carry no coverage signal and
         must not fail the gate; explicitly gating one must fail loudly."""
-        import sqlite3 as _sqlite3
-
-        def make_db(
-            path: Path,
-            sections: list[str],
-            cells: list[tuple[str, int, int, str]],
-        ) -> None:
-            conn = _sqlite3.connect(path)
-            try:
-                c = conn.cursor()
-                c.execute(
-                    "CREATE TABLE metadata (target TEXT, key TEXT, value TEXT,"
-                    " PRIMARY KEY (target, key))"
-                )
-                c.execute(
-                    "CREATE TABLE sections (target TEXT, name TEXT, va INTEGER,"
-                    " size INTEGER, fileOffset INTEGER, unitBytes INTEGER,"
-                    " columns INTEGER, PRIMARY KEY (target, name))"
-                )
-                c.execute(
-                    "CREATE TABLE cells (id INTEGER PRIMARY KEY AUTOINCREMENT,"
-                    " target TEXT, section_name TEXT, start INTEGER, end INTEGER,"
-                    " span INTEGER DEFAULT 1, state TEXT, functions TEXT DEFAULT '[]',"
-                    " label TEXT, parent_function TEXT)"
-                )
-                c.execute("CREATE TABLE functions (target TEXT, status TEXT, markerType TEXT)")
-                c.execute(
-                    "INSERT INTO metadata VALUES ('T','summary',?)",
-                    (json.dumps({"totalFunctions": 1}),),
-                )
-                for name in sections:
-                    c.execute("INSERT INTO sections VALUES ('T',?,0,100,0,16,8)", (name,))
-                for sec_name, start, end, state in cells:
-                    c.execute(
-                        "INSERT INTO cells (target, section_name, start, end, state)"
-                        " VALUES ('T',?,?,?,?)",
-                        (sec_name, start, end, state),
-                    )
-                conn.commit()
-            finally:
-                conn.close()
-
         db = tmp_path / "cov.db"
-        make_db(
+        _make_section_db(
             db,
             [".text", ".data"],
             [(".text", 0, 50, "exact"), (".text", 50, 100, "none"), (".data", 0, 100, "none")],
@@ -217,7 +219,7 @@ class TestCheckCommand:
         assert "no tracked cells" in result.output
         # A project with nothing tracked must not pass vacuously.
         db2 = tmp_path / "cov2.db"
-        make_db(db2, [".text"], [(".text", 0, 100, "none")])
+        _make_section_db(db2, [".text"], [(".text", 0, 100, "none")])
 
         monkeypatch.setattr("recoverage.cli._db_path", lambda: db2)
         result = runner.invoke(app, ["check", "--min-coverage", "0"])
@@ -322,51 +324,6 @@ class TestCheckMissingDbExitCode:
         assert "database not found" in result.output
 
 
-class _UntrackedSectionDb:
-    """Build a minimal DB whose .rdata section has only 'none' cells."""
-
-    @staticmethod
-    def make(path: Path) -> None:
-        import sqlite3 as _sqlite3
-
-        conn = _sqlite3.connect(path)
-        try:
-            c = conn.cursor()
-            c.execute(
-                "CREATE TABLE metadata (target TEXT, key TEXT, value TEXT,"
-                " PRIMARY KEY (target, key))"
-            )
-            c.execute(
-                "CREATE TABLE sections (target TEXT, name TEXT, va INTEGER,"
-                " size INTEGER, fileOffset INTEGER, unitBytes INTEGER,"
-                " columns INTEGER, PRIMARY KEY (target, name))"
-            )
-            c.execute(
-                "CREATE TABLE cells (id INTEGER PRIMARY KEY AUTOINCREMENT,"
-                " target TEXT, section_name TEXT, start INTEGER, end INTEGER,"
-                " span INTEGER DEFAULT 1, state TEXT, functions TEXT DEFAULT '[]',"
-                " label TEXT, parent_function TEXT)"
-            )
-            c.execute("CREATE TABLE functions (target TEXT, status TEXT, markerType TEXT)")
-            c.execute(
-                "INSERT INTO metadata VALUES ('T','summary',?)",
-                (json.dumps({"totalFunctions": 1}),),
-            )
-            c.execute("INSERT INTO sections VALUES ('T','.text',0,100,0,16,8)")
-            c.execute("INSERT INTO sections VALUES ('T','.rdata',0,100,0,16,8)")
-            c.execute(
-                "INSERT INTO cells (target, section_name, start, end, state)"
-                " VALUES ('T','.text',0,100,'exact')"
-            )
-            c.execute(
-                "INSERT INTO cells (target, section_name, start, end, state)"
-                " VALUES ('T','.rdata',0,100,'none')"
-            )
-            conn.commit()
-        finally:
-            conn.close()
-
-
 class TestCheckExplicitUntrackedSectionVerdict:
     def test_fail_verdict_reaches_json_output(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -375,7 +332,11 @@ class TestCheckExplicitUntrackedSectionVerdict:
         verdict — not the generic 'nothing was checked' error object — must be
         what --json emits."""
         db = tmp_path / "cov.db"
-        _UntrackedSectionDb.make(db)
+        _make_section_db(
+            db,
+            [".text", ".rdata"],
+            [(".text", 0, 100, "exact"), (".rdata", 0, 100, "none")],
+        )
         monkeypatch.setattr("recoverage.cli._db_path", lambda: db)
 
         result = runner.invoke(
@@ -400,7 +361,11 @@ class TestCheckExplicitUntrackedSectionVerdict:
         """With no explicit section and nothing tracked anywhere, the guard
         still fires: no recorded coverage must not pass vacuously."""
         db = tmp_path / "cov.db"
-        _UntrackedSectionDb.make(db)
+        _make_section_db(
+            db,
+            [".text", ".rdata"],
+            [(".text", 0, 100, "exact"), (".rdata", 0, 100, "none")],
+        )
         monkeypatch.setattr("recoverage.cli._db_path", lambda: db)
 
         # Drop the tracked .text cell so every section is untracked.

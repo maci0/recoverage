@@ -640,14 +640,7 @@ class TestSecurityHeaders:
         "Referrer-Policy": "no-referrer",
     }
 
-    @pytest.mark.parametrize(
-        ("header", "value"),
-        [
-            ("X-Content-Type-Options", "nosniff"),
-            ("X-Frame-Options", "DENY"),
-            ("Referrer-Policy", "no-referrer"),
-        ],
-    )
+    @pytest.mark.parametrize(("header", "value"), sorted(EXPECTED.items()))
     def test_headers_on_api_response(self, header: str, value: str) -> None:
         from conftest import wsgi_get
 
