@@ -1003,8 +1003,8 @@ def _compute_section_stats(
     target: str,
     sections: dict[str, dict[str, Any]],
     data: dict[str, Any],
-) -> dict[str, dict[str, int]]:
-    per_section_stats: dict[str, dict[str, int]] = {}
+) -> dict[str, dict[str, Any]]:
+    per_section_stats: dict[str, dict[str, Any]] = {}
     summary = data.get("summary", {})
     c.execute(
         "SELECT section_name, total_cells, exact_count, reloc_count, "
@@ -1016,7 +1016,10 @@ def _compute_section_stats(
         sec_summary_entry = summary.get(sec_name_r, summary)
         s_covered_bytes = sec_summary_entry.get("coveredBytes", 0)
         s_sec_size = sections.get(sec_name_r, {}).get("size", 0)
-        s_pct = int((s_covered_bytes / s_sec_size) * 100) if s_sec_size > 0 else 0
+        # Same rounding as server._section_stats (round to 2dp): int() floor
+        # made the map header read "87% covered" beside the topbar's "88.0%"
+        # for the same section.
+        s_pct = round(s_covered_bytes / s_sec_size * 100, 2) if s_sec_size > 0 else 0
         per_section_stats[sec_name_r] = {
             "total": s_total,
             "exact": s_exact,

@@ -264,6 +264,27 @@ class TestApiAsm:
             pytest.skip("Capstone not installed")
         assert status.startswith("400")
 
+    def test_va_before_section_start_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A va below section start is rejected even when file_offset stays >= 0.
+
+        The synthetic .text starts at 0x10001000 with fileOffset 0x200: for
+        va = 0x10000F80 the delta is -0x80, so file_offset = 0x180 — the old
+        file_offset<0-only check passed the request and disassembled
+        pre-section bytes as code at that address.
+        """
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        # The guard runs before any disassembly, so faking the capstone probe
+        # gets us past the 501 short-circuit without the optional dependency.
+        import recoverage.api as api
+
+        monkeypatch.setattr(api, "HAS_CAPSTONE", True)
+        status, headers, body = wsgi_get(f"/api/targets/{target}/asm?va=0x10000F80&size=16")
+        assert status.startswith("400")
+        data = json.loads(decode_body(body, headers))
+        assert data["error"] == "va is before section start"
+
 
 class TestRegenRateLimit:
     """Server-side cooldown on /api/regen (the UI throttles, the API must too)."""

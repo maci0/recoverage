@@ -12,6 +12,7 @@ from recoverage._paths import sqlite_ro_uri
 from recoverage.potato import (
     _build_url,
     _cell_file_offset,
+    _compute_section_stats,
     _esc,
     _extract_annotations,
     _format_data_inspector,
@@ -52,6 +53,55 @@ def test_format_va():
     assert _format_va("0XABC") == "0XABC"
     assert _format_va("4096") == "0x00001000"
     assert _format_va("not_a_number") == "not_a_number"
+
+
+def test_section_stats_pct_rounds_like_api():
+    """The map-header percentage rounds to 2dp (same as /api .../stats).
+
+    int() truncation made 1329/1330 bytes read "99% covered" in the Potato
+    map header while the topbar, the SPA overlay, and the API all said
+    ~99.92% for the same section.
+    """
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute("CREATE TABLE cells (target TEXT, section_name TEXT, state TEXT)")
+    c.execute(
+        "CREATE VIEW section_cell_stats AS"
+        " SELECT target, section_name,"
+        " COUNT(*) as total_cells,"
+        " SUM(CASE WHEN state = 'exact' THEN 1 ELSE 0 END) as exact_count,"
+        " 0 as reloc_count, 0 as near_match_count, 0 as stub_count, 0 as padding_count"
+        " FROM cells GROUP BY target, section_name"
+    )
+    c.executemany(
+        "INSERT INTO cells (target, section_name, state) VALUES ('T', '.text', ?)",
+        [("exact",), ("exact",), ("exact",), ("none",)],
+    )
+    sections = {".text": {"size": 1330}}
+    data = {"summary": {".text": {"coveredBytes": 1329}}}
+    stats = _compute_section_stats(c, "T", sections, data)
+    assert stats[".text"]["pct"] == round(1329 / 1330 * 100, 2)
+    assert stats[".text"]["pct"] != int(1329 / 1330 * 100)
+
+
+def test_section_stats_pct_zero_size_is_zero():
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute("CREATE TABLE cells (target TEXT, section_name TEXT, state TEXT)")
+    c.execute(
+        "CREATE VIEW section_cell_stats AS"
+        " SELECT target, section_name,"
+        " COUNT(*) as total_cells,"
+        " 0 as exact_count, 0 as reloc_count, 0 as near_match_count,"
+        " 0 as stub_count, 0 as padding_count"
+        " FROM cells GROUP BY target, section_name"
+    )
+    c.execute("INSERT INTO cells (target, section_name, state) VALUES ('T', '.bss', 'none')")
+    # A NULL-size (.bss-style) section must not divide by zero: pct is 0.
+    stats = _compute_section_stats(c, "T", {".bss": {"size": 0}}, {"summary": {}})
+    assert stats[".bss"]["pct"] == 0
 
 
 def test_build_url():

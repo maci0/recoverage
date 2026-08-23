@@ -938,7 +938,11 @@ def handle_api_asm(target: str) -> bytes | Any:
                 },
             )
         file_offset += va - sec_va
-        if file_offset < 0:
+        # The va >= sec_va half is load-bearing: file_offset < 0 alone misses a
+        # va below section start whenever the negative delta is smaller than
+        # fileOffset (fileOffset + (va - sec_va) stays positive), silently
+        # disassembling bytes from before the section as if they were at va.
+        if va < sec_va or file_offset < 0:
             return _json_err(400, {"error": "va is before section start"})
         if va >= sec["va"] + sec["size"]:
             return _json_err(400, {"error": "va is beyond section end"})
