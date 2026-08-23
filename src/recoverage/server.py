@@ -19,13 +19,11 @@ import importlib.util
 import json
 import logging
 import os
-import platform
 import signal
 import sqlite3
 import subprocess
 import threading
 import time
-import webbrowser
 from collections import deque
 from pathlib import Path
 from typing import Any, cast
@@ -1330,46 +1328,3 @@ def _cors_preflight(path: str) -> str:
     """Handle CORS preflight requests. Headers are set by the after_request hook."""
     return ""
 
-
-# ── Browser opener ─────────────────────────────────────────────────
-
-# Openers exit in well under a second; the bound only guards a wedged one.
-_BROWSER_OPEN_TIMEOUT = 10
-
-
-def _open_and_reap(url: str, args: list[str], shell: bool = False) -> None:
-    """Launch the opener for *url* fire-and-forget and still reap it.
-
-    Detaching (setsid/shell) does NOT keep a child from becoming a zombie —
-    only a wait() does, and nothing else ever waits on these openers.  The
-    wait is bounded so a hung opener cannot stall serve startup; past the
-    deadline it is killed and reaped.
-    """
-    try:
-        proc = subprocess.Popen(
-            args,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            # Windows 'start' needs cmd.exe; args are internally generated
-            shell=shell,
-            start_new_session=(os.name == "posix"),
-        )
-        proc.wait(timeout=_BROWSER_OPEN_TIMEOUT)
-    except subprocess.TimeoutExpired:
-        # Group kill, not just the direct opener: xdg-open wrappers can spawn
-        # a grandchild that would otherwise survive the deadline.
-        _kill_and_reap(proc)
-    except (OSError, subprocess.SubprocessError):
-        webbrowser.open(url)
-
-
-def open_browser(url: str) -> None:
-    system = platform.system()
-    if system == "Linux":
-        _open_and_reap(url, ["xdg-open", url])
-    elif system == "Darwin":
-        _open_and_reap(url, ["open", url])
-    elif system == "Windows":
-        _open_and_reap(url, ["start", url], shell=True)
-    else:
-        webbrowser.open(url)

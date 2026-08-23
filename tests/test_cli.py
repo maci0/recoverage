@@ -466,7 +466,7 @@ class TestServeBindFailure:
 
         monkeypatch.setattr("recoverage.api._ensure_db_watcher", lambda: None)
         opened: list[str] = []
-        monkeypatch.setattr("recoverage.server.open_browser", lambda url: opened.append(url))
+        monkeypatch.setattr("recoverage.cli.open_browser", lambda url: opened.append(url))
 
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.bind(("127.0.0.1", 0))
@@ -514,7 +514,7 @@ class TestServeKeyboardInterrupt:
 
         monkeypatch.setattr("recoverage.api._ensure_db_watcher", lambda: None)
         opened: list[str] = []
-        monkeypatch.setattr("recoverage.server.open_browser", lambda url: opened.append(url))
+        monkeypatch.setattr("recoverage.cli.open_browser", lambda url: opened.append(url))
 
         def raise_interrupt(self: Any, **kwargs: Any) -> None:
             raise KeyboardInterrupt

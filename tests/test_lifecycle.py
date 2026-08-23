@@ -20,11 +20,11 @@ from typing import Any
 
 import pytest
 
-from recoverage.server import (
+from recoverage.cli import (
     _BROWSER_OPEN_TIMEOUT,
     _open_and_reap,
-    run_regen_step,
 )
+from recoverage.server import run_regen_step
 
 POSIX = os.name == "posix"
 
@@ -195,9 +195,9 @@ class TestOpenAndReap:
     def test_hung_opener_is_killed_within_bound(self, monkeypatch: Any) -> None:
         """A wedged opener must not stall serve startup forever: bounded
         wait, then kill + reap (which also prevents the zombie)."""
-        import recoverage.server as srv
+        import recoverage.cli as cli
 
-        monkeypatch.setattr(srv, "_BROWSER_OPEN_TIMEOUT", 0.3)
+        monkeypatch.setattr(cli, "_BROWSER_OPEN_TIMEOUT", 0.3)
         start = time.monotonic()
         _open_and_reap("http://127.0.0.1:8001", ["sleep", "60"])
         elapsed = time.monotonic() - start

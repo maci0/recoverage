@@ -7,10 +7,12 @@ import enum
 import json
 import logging
 import os
+import platform
 import sqlite3
 import subprocess
 import sys
 import threading
+import webbrowser
 from pathlib import Path
 from socketserver import ThreadingMixIn
 from typing import Any
@@ -238,6 +240,52 @@ def _run_regen(root: Path) -> None:
             raise typer.Exit(1) from None
 
 
+# ── Browser opener ─────────────────────────────────────────────────
+
+# Openers exit in well under a second; the bound only guards a wedged one.
+_BROWSER_OPEN_TIMEOUT = 10
+
+
+def _open_and_reap(url: str, args: list[str], shell: bool = False) -> None:
+    """Launch the opener for *url* fire-and-forget and still reap it.
+
+    Detaching (setsid/shell) does NOT keep a child from becoming a zombie —
+    only a wait() does, and nothing else ever waits on these openers.  The
+    wait is bounded so a hung opener cannot stall serve startup; past the
+    deadline it is killed and reaped.
+    """
+    try:
+        proc = subprocess.Popen(
+            args,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            # Windows 'start' needs cmd.exe; args are internally generated
+            shell=shell,
+            start_new_session=(os.name == "posix"),
+        )
+        proc.wait(timeout=_BROWSER_OPEN_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        # Group kill, not just the direct opener: xdg-open wrappers can spawn
+        # a grandchild that would otherwise survive the deadline.
+        from recoverage.server import _kill_and_reap
+
+        _kill_and_reap(proc)
+    except (OSError, subprocess.SubprocessError):
+        webbrowser.open(url)
+
+
+def open_browser(url: str) -> None:
+    system = platform.system()
+    if system == "Linux":
+        _open_and_reap(url, ["xdg-open", url])
+    elif system == "Darwin":
+        _open_and_reap(url, ["open", url])
+    elif system == "Windows":
+        _open_and_reap(url, ["start", url], shell=True)
+    else:
+        webbrowser.open(url)
+
+
 # ── Commands ───────────────────────────────────────────────────────
 
 
@@ -280,7 +328,6 @@ def serve(
         LOOPBACK_HOSTS,
         _assets_dir,
         _project_dir,
-        open_browser,
     )
     from recoverage.webapp import app as bottle_app
 
@@ -708,8 +755,6 @@ def open_cmd(
     ),
 ) -> None:
     """Open the dashboard in a browser."""
-    from recoverage.server import open_browser
-
     url = f"http://127.0.0.1:{port}"
     typer.echo(f"Opening {url}")
     open_browser(url)
