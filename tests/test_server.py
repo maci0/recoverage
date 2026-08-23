@@ -870,3 +870,75 @@ class TestLoadDllTransientFailure:
         finally:
             with srv.DLL_LOCK:
                 srv.DLL_DATA.pop(key, None)
+
+
+class TestGetDisassemblyNoNegativeCache:
+    """get_disassembly must not memoize the "" result of a DLL-load failure.
+
+    The memo sits BELOW the load guard: caching "" under (va, size,
+    file_offset, target) would pin a transient read failure past recovery
+    (the exact scenario _load_dll's no-negative-cache contract exists for),
+    replaying empty disassembly until the next rebuild broadcast.
+    """
+
+    def test_load_failure_bypasses_memo_and_self_heals(
+        self, tmp_path: Path, monkeypatch: Any
+    ) -> None:
+        import recoverage.server as srv
+
+        key = "__disasm_transient_target__"
+        holder: dict[str, Path] = {"p": tmp_path / "missing.dll"}
+        monkeypatch.setattr(srv, "_find_dll_path", lambda target: holder["p"])
+
+        calls: list[tuple[int, int, int, str]] = []
+
+        def fake_impl(va: int, size: int, file_offset: int, target: str) -> str:
+            calls.append((va, size, file_offset, target))
+            return f"disasm:{va:#x}"
+
+        monkeypatch.setattr(srv, "_disassemble_loaded", fake_impl)
+        try:
+            # Load fails: the caller sees "" and the memo was never consulted.
+            assert srv.get_disassembly(0x1000, 4, 0, key) == ""
+            assert calls == []
+
+            # The binary comes back: the same slice disassembles for real
+            # instead of replaying the pinned "".
+            real = tmp_path / "real.dll"
+            real.write_bytes(b"MZ-fake-binary")
+            holder["p"] = real
+            assert srv.get_disassembly(0x1000, 4, 0, key) == "disasm:0x1000"
+            assert calls == [(0x1000, 4, 0, key)]
+        finally:
+            with srv.DLL_LOCK:
+                srv.DLL_DATA.pop(key, None)
+
+    def test_clear_derived_caches_clears_disassembly_memo(
+        self, tmp_path: Path, monkeypatch: Any
+    ) -> None:
+        """Rebuilds must evict memoized disassembly through the shared
+        invalidation entry point (wiring guard for the split cache)."""
+        import recoverage.api
+        import recoverage.server as srv
+
+        key = "__disasm_invalidation_target__"
+        holder: dict[str, Path] = {"p": tmp_path / "missing.dll"}
+        monkeypatch.setattr(srv, "_find_dll_path", lambda target: holder["p"])
+        real = tmp_path / "real.dll"
+
+        @srv.functools.lru_cache(maxsize=16)
+        def _prime(va: int, size: int, file_offset: int, target: str) -> str:
+            return "cached"
+
+        monkeypatch.setattr(srv, "_disassemble_loaded", _prime)
+        try:
+            holder["p"] = real
+            real.write_bytes(b"MZ-fake-binary")
+            assert srv.get_disassembly(0x2000, 1, 0, key) == "cached"
+            assert _prime.cache_info().currsize == 1
+            recoverage.api._clear_derived_caches()
+            assert _prime.cache_info().currsize == 0
+        finally:
+            with srv.DLL_LOCK:
+                srv.DLL_DATA.pop(key, None)
+        _prime.cache_clear()

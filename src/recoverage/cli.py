@@ -41,6 +41,8 @@ app = typer.Typer(
     ),
 )
 
+_log = logging.getLogger("recoverage")
+
 
 class _ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
     """Threaded WSGI server for the dashboard.
@@ -270,8 +272,18 @@ def _open_and_reap(url: str, args: list[str], shell: bool = False) -> None:
         from recoverage.server import _kill_and_reap
 
         _kill_and_reap(proc)
-    except (OSError, subprocess.SubprocessError):
-        webbrowser.open(url)
+    except (OSError, subprocess.SubprocessError) as exc:
+        # Expected on minimal installs (no xdg-open/open); say why before
+        # falling back — "no browser ever appeared" must be diagnosable from
+        # the log alone instead of failing silently.
+        _log.warning(
+            "Browser opener %s failed (%s: %s) — falling back to webbrowser",
+            args[0],
+            type(exc).__name__,
+            exc,
+        )
+        if not webbrowser.open(url):
+            _log.warning("webbrowser.open(%s): no usable browser found", url)
 
 
 def open_browser(url: str) -> None:
@@ -364,7 +376,6 @@ def serve(
         datefmt="%H:%M:%S",
         level=logging.INFO,
     )
-    _log = logging.getLogger("recoverage")
 
     if cors:
         _server.CORS_ENABLED = True

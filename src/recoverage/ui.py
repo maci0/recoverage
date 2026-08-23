@@ -114,8 +114,22 @@ def handle_potato() -> bytes | Any:
             response.set_header("ETag", etag)
         return resp_body
 
+    except sqlite3.Error:
+        # A DB that opens but cannot answer queries is the same
+        # db_unavailable condition render_potato's connect guard reports as
+        # 503 — not an application bug.  One contract for both surfaces.
+        _log.exception("Potato mode database query failed")
+        return HTTPResponse(
+            status=503,
+            body=(
+                '<html><body bgcolor="#0f1216" text="#e7edf4">'
+                "Database unavailable — run 'rebrew catalog --json &amp;&amp; "
+                "rebrew build-db' to create or rebuild it.</body></html>"
+            ),
+            headers={"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store"},
+        )
     # json.JSONDecodeError needs no entry: it subclasses ValueError.
-    except (sqlite3.Error, OSError, ValueError, KeyError):
+    except (OSError, ValueError, KeyError):
         _log.exception("Potato mode render failed")
         return HTTPResponse(
             status=500,

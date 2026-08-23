@@ -556,10 +556,26 @@ def _get_capstone_md() -> Any:
     return md
 
 
-@functools.lru_cache(maxsize=2048)
 def get_disassembly(va: int, size: int, file_offset: int, target: str) -> str:
+    """Disassemble *size* bytes of *target* at *va*, memoized per slice.
+
+    The DLL-load guard deliberately stays OUTSIDE the memo cache: ``_load_dll``
+    leaves transient OS failures uncached so the next request self-heals, and
+    memoizing their "" result here would pin that outage until the next
+    rebuild broadcast happened to clear the cache.
+    """
+    if _load_dll(target) is None:
+        return ""
+    return _disassemble_loaded(va, size, file_offset, target)
+
+
+@functools.lru_cache(maxsize=2048)
+def _disassemble_loaded(va: int, size: int, file_offset: int, target: str) -> str:
+    """Cached disassembly; :func:`get_disassembly` verified the DLL loads."""
     target_data = _load_dll(target)
     if target_data is None:
+        # Raced a rebuild's DLL_DATA.clear() between the two loads; the same
+        # broadcast clears this cache, so the "" can never be served twice.
         return ""
 
     code_bytes = target_data[file_offset : file_offset + size]
@@ -573,6 +589,11 @@ def get_disassembly(va: int, size: int, file_offset: int, target: str) -> str:
     ]
 
     return "\n".join(asm_lines) if asm_lines else "  (no instructions)"
+
+
+def clear_disassembly_cache() -> None:
+    """Drop memoized disassembly (called when the original binary changes)."""
+    _disassemble_loaded.cache_clear()
 
 
 # ── Compression ────────────────────────────────────────────────────
@@ -1327,4 +1348,3 @@ def _security_headers() -> None:
 def _cors_preflight(path: str) -> str:
     """Handle CORS preflight requests. Headers are set by the after_request hook."""
     return ""
-

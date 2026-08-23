@@ -47,6 +47,7 @@ from recoverage.server import (
     _snapshot_db_mtime,
     _target_filename,
     app,
+    clear_disassembly_cache,
     clear_target_cache,
     compress_payload,
     get_disassembly,
@@ -86,7 +87,7 @@ def _clear_derived_caches() -> None:
     # both of which change with a rebuild.
     with DLL_LOCK:
         DLL_DATA.clear()
-    get_disassembly.cache_clear()
+    clear_disassembly_cache()
 
 
 # Server-side regen cooldown (seconds): the UI throttles Reload clicks, but
@@ -407,8 +408,16 @@ def handle_api_events() -> Any:
         client_queue: queue.Queue[bytes] = queue.Queue(maxsize=_SSE_QUEUE_MAX)
         _SSE_CLIENTS.add(client_queue)
     # Start the poller only once a client is actually registered; rejected
-    # connections must not leave background work behind.
-    _ensure_db_watcher()
+    # connections must not leave background work behind.  A failed start
+    # (e.g. RuntimeError under thread exhaustion) must not leave the queue
+    # registered: every leaked slot permanently shrinks the _SSE_MAX_CLIENTS
+    # cap toward a standing 503 for /api/events.
+    try:
+        _ensure_db_watcher()
+    except BaseException:
+        with _SSE_CLIENTS_LOCK:
+            _SSE_CLIENTS.discard(client_queue)
+        raise
 
     def _events() -> Generator[bytes, None, None]:
         try:

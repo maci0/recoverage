@@ -175,9 +175,7 @@ def test_null_va_section_renders_grid_and_panel(
     assert "0x0 .. 0x10" in panel
 
 
-def test_null_columns_section_renders_grid(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_null_columns_section_renders_grid(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A NULL sections.columns value (schema-legal) must fall back to the
     64-column default, not TypeError on ``None <= 0`` — which escapes
     ui.handle_potato's except tuple as a raw HTML 500.  Same crash family
