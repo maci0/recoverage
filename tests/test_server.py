@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import gzip
 import json
+import logging
 import sqlite3
 import threading
 import time
@@ -582,6 +583,17 @@ class TestTokenAuthEndpoint:
 
         status, _, _ = wsgi_get("/api/health")
         assert status.startswith("401")
+
+    def test_failed_auth_is_audit_logged(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A rejected token attempt must leave an audit trail (brute-force
+        visibility) without ever logging the attempted token value."""
+        from conftest import wsgi_get
+
+        with caplog.at_level(logging.WARNING, logger="recoverage"):
+            wsgi_get("/api/health", headers={"Authorization": "Bearer wrong-guess-123"})
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert any("invalid auth token" in r.getMessage() for r in warnings)
+        assert all("wrong-guess-123" not in r.getMessage() for r in caplog.records)
 
     def test_bearer_token_accepted(self) -> None:
         from conftest import wsgi_get

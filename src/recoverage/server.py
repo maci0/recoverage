@@ -1124,6 +1124,16 @@ def _require_auth() -> None:
             provided = request.get_cookie("recoverage_token", default="")
     if not _auth_token_matches(provided):
         _record_auth_failure(now)
+        # Audit trail for brute-force visibility: on a network-reachable
+        # server (--allow-remote --token) the throttle bounds guessing, but a
+        # silent 401 gives the operator no way to see the attempt happened.
+        # The provided value is never logged (it may be someone's near-miss
+        # guess at a secret); REMOTE_ADDR comes from the socket peer.
+        _log.warning(
+            "Rejected %s auth token from %s",
+            "missing" if not provided else "invalid",
+            request.environ.get("REMOTE_ADDR", "") or "unknown peer",
+        )
         # A browser asking for a page gets a page; API clients keep the JSON
         # error contract.  Someone handed a share URL who dropped the query
         # string used to land on a raw JSON blob with no way to tell what to do.
