@@ -92,7 +92,7 @@ sequenceDiagram
     participant U as User
     participant Grid as Grid (Event Delegation)
     participant Panel as Side Panel
-    participant API as /api/function
+    participant API as /api/targets/{target}/functions/{va}
     participant ASM as /api/asm
 
     U->>Grid: Click cell
@@ -518,13 +518,7 @@ graph TD
 
 ## Future Features
 
-> Features tracked in [DESIGN.md](DESIGN.md) as planned work.
-
-| Feature | Description |
-|---------|-------------|
-| **Minimap** | A global minimap of the entire PE file on the side |
-| **XREFs** | Show cross-references for data segments (which functions read/write to a `.data` block) |
-| **Diff View** | Integrate `rebrew match --diff-only` output directly into the UI for "Matching" and "Stub" blocks |
+Planned work (Minimap, data-segment XREFs, Diff View) is tracked in [DESIGN.md](DESIGN.md) under "Future Ideas / TODOs", which is the canonical list.
 
 ---
 

@@ -66,6 +66,9 @@ CI-oriented: exits non-zero if coverage drops below a threshold.
 ### ~~`recoverage open` Subcommand~~ ✅ Implemented
 Open the browser to an existing running server (useful when `--no-open` was used at startup).
 
+### ~~`recoverage regen` Subcommand~~ ✅ Implemented
+Re-run `rebrew catalog --json` + `rebrew build-db` from the terminal without starting the web server (same pipeline, timeout, and error handling as `serve --regen`).
+
 ---
 
 ## WebSocket / SSE Support
@@ -100,3 +103,11 @@ Replace per-request `sqlite3.connect()` calls with a thread-local connection poo
 The 5-second cooldown now exists server-side too: `/api/regen` returns 429
 with `retry_after` when called within `_REGEN_COOLDOWN_SECONDS` of the last
 accepted attempt, so direct API calls cannot hammer `rebrew catalog`/`build-db`.
+
+### ~~Token Auth~~ ✅ Implemented
+Optional `serve --token <secret>` requires every request to authenticate via
+`Authorization: Bearer <token>`, `?token=<token>`, or opening `/?token=<token>`
+once (the index route sets an HttpOnly cookie so the SPA works unchanged).
+Unauthenticated browsers asking for HTML get a short page pointing at the
+`?token=` parameter; it never echoes the token. API clients keep the
+`{error, code, detail}` JSON contract.
