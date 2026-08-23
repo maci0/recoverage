@@ -955,8 +955,19 @@ def _load_section_data(
 
     for sec_name, cells_json in _load_cells_cached(c, target):
         if sec_name in sections:
-            sections[sec_name]["cells"] = json.loads(cells_json)
+            # Keep the JSON string unparsed: only the request's resolved
+            # section ever renders cells, and json.loads of a multi-MB
+            # payload per non-rendered section is wasted CPU on every page.
+            sections[sec_name]["_cells_json"] = cells_json
     return sections, data
+
+
+def _section_cells(sec_data: dict[str, Any]) -> list[dict[str, Any]]:
+    """Parsed cells for *sec_data*, decoding its deferred ``_cells_json`` once."""
+    raw = sec_data.pop("_cells_json", None)
+    if raw is not None:
+        sec_data["cells"] = json.loads(raw)
+    return sec_data.get("cells", [])
 
 
 # Potato mode fetches ALL cells for the target (json_group_array over the
@@ -1481,7 +1492,7 @@ def _render_potato_inner(
         section = next(iter(sections))
 
     sec_data: dict[str, Any] = sections.get(section, {})
-    cells = sec_data.get("cells", [])
+    cells = _section_cells(sec_data)
 
     search_matched_fns = _search_functions(c, target, search_query)
     per_section_stats = _compute_section_stats(c, target, sections, data)

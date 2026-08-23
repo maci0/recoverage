@@ -12,6 +12,24 @@ import logging
 import tomllib
 from pathlib import Path
 
+# Memoized _db_path() result, keyed by cwd + the config file's stat
+# fingerprint.  _db_path() runs on every request (each ETag snapshot, DB open,
+# Potato render) and on every SSE watcher poll; re-reading and TOML-parsing the
+# config each time is pure waste.  The key makes a rewritten/deleted/re-pointed
+# rebrew-project.toml take effect on the next call — one stat replaces the
+# read+parse on the hot path.  Torn reads are impossible: the tuple swap is
+# atomic under the GIL, and a racing recomputation yields the same value.
+_DB_PATH_CACHE: tuple[tuple[str, tuple[int, int] | None], Path] | None = None
+
+
+def _config_fingerprint(cfg: Path) -> tuple[int, int] | None:
+    """(mtime_ns, size) of *cfg*, or None when absent/unreadable."""
+    try:
+        st = cfg.stat()
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size)
+
 
 def sqlite_ro_uri(db_path: Path) -> str:
     """Return a SQLite URI that opens *db_path* read-only.
@@ -39,16 +57,27 @@ def _db_path() -> Path:
 
     This mirrors rebrew's ``config.py`` resolution (``project_raw.get("db_dir", "db")``).
     tomllib is stdlib from Python 3.11 — no extra dependencies required.
+
+    Memoized per (cwd, config stat fingerprint): the config is re-read only when
+    the file's mtime/size changes (or cwd moves), so request-rate calls and the
+    SSE watcher pay one stat instead of a file read + TOML parse.
     """
-    cwd = Path.cwd().resolve()
+    global _DB_PATH_CACHE
+    cwd = Path.cwd()
     cfg = cwd / "rebrew-project.toml"
-    if cfg.exists():
+    fingerprint = (str(cwd), _config_fingerprint(cfg))
+    cached = _DB_PATH_CACHE
+    if cached is not None and cached[0] == fingerprint:
+        return cached[1]
+
+    resolved: Path | None = None
+    if fingerprint[1] is not None:
         try:
             data = tomllib.loads(cfg.read_text(encoding="utf-8"))
             project = data.get("project", {}) if isinstance(data, dict) else {}
             db_dir = project.get("db_dir") if isinstance(project, dict) else None
             if isinstance(db_dir, str) and db_dir:
-                return (cwd / db_dir).resolve() / "coverage.db"
+                resolved = (cwd / db_dir).resolve() / "coverage.db"
         except OSError as exc:
             logging.warning("Could not read %s: %s", cfg, exc)
         except tomllib.TOMLDecodeError as exc:
@@ -57,4 +86,7 @@ def _db_path() -> Path:
             logging.warning(
                 "rebrew-project.toml is not valid TOML — using default db path: %s", exc
             )
-    return cwd / "db" / "coverage.db"
+    if resolved is None:
+        resolved = cwd.resolve() / "db" / "coverage.db"
+    _DB_PATH_CACHE = (fingerprint, resolved)
+    return resolved

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from pathlib import Path
 from urllib.parse import unquote, urlparse
@@ -94,6 +95,60 @@ class TestResolveDbPath:
         """Returned path is always absolute."""
         monkeypatch.chdir(tmp_path)
         assert _db_path().is_absolute()
+
+
+class TestDbPathMemoInvalidation:
+    """_db_path() memoizes resolution; a changed config must still take effect."""
+
+    def test_rewritten_config_is_picked_up(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Rewriting rebrew-project.toml re-points the DB path on the next call."""
+        monkeypatch.chdir(tmp_path)
+        toml = tmp_path / "rebrew-project.toml"
+        toml.write_text('[project]\ndb_dir = "first"\n', encoding="utf-8")
+        assert _db_path() == tmp_path.resolve() / "first" / "coverage.db"
+        toml.write_text('[project]\ndb_dir = "second"\n', encoding="utf-8")
+        assert _db_path() == tmp_path.resolve() / "second" / "coverage.db"
+
+    def test_same_size_rewrite_is_picked_up(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A byte-for-byte-same-length rewrite invalidates via the stat fingerprint."""
+        monkeypatch.chdir(tmp_path)
+        toml = tmp_path / "rebrew-project.toml"
+        toml.write_text('[project]\ndb_dir = "aaaaaa"\n', encoding="utf-8")
+        assert _db_path() == tmp_path.resolve() / "aaaaaa" / "coverage.db"
+        toml.write_text('[project]\ndb_dir = "bbbbbb"\n', encoding="utf-8")
+        # Force a fresh mtime even on coarse-timestamp filesystems.
+        st = toml.stat()
+        os.utime(toml, ns=(st.st_mtime_ns + 1_000_000, st.st_mtime_ns + 1_000_000))
+        assert _db_path() == tmp_path.resolve() / "bbbbbb" / "coverage.db"
+
+    def test_deleted_config_falls_back(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Deleting the config after it was cached returns to the default path."""
+        monkeypatch.chdir(tmp_path)
+        toml = tmp_path / "rebrew-project.toml"
+        toml.write_text('[project]\ndb_dir = "custom"\n', encoding="utf-8")
+        assert _db_path() == tmp_path.resolve() / "custom" / "coverage.db"
+        toml.unlink()
+        assert _db_path() == tmp_path.resolve() / "db" / "coverage.db"
+
+    def test_cwd_change_switches_resolution(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Two directories resolve independently despite the shared memo."""
+        other = tmp_path / "other"
+        other.mkdir()
+        (tmp_path / "rebrew-project.toml").write_text(
+            '[project]\ndb_dir = "one"\n', encoding="utf-8"
+        )
+        monkeypatch.chdir(tmp_path)
+        assert _db_path() == tmp_path.resolve() / "one" / "coverage.db"
+        monkeypatch.chdir(other)
+        assert _db_path() == other.resolve() / "db" / "coverage.db"
 
 
 class TestSqliteRoUri:

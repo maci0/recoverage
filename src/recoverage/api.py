@@ -448,14 +448,17 @@ def _build_search_index(c: sqlite3.Cursor, target: str) -> dict[str, Any]:
     colliding global's VA.
     """
     index: dict[str, Any] = {}
+    # Iterate the cursor, not fetchall(): the functions table holds tens of
+    # thousands of rows on real projects, and the intermediate row list would
+    # double the transient footprint of an already multi-MB payload build.
     c.execute(
         "SELECT name, vaStart, symbol FROM functions WHERE target = ?",
         (target,),
     )
-    for row in c.fetchall():
+    for row in c:
         index.setdefault(row["name"], {"va": row["vaStart"], "symbol": row["symbol"]})
     c.execute("SELECT name, va FROM globals WHERE target = ?", (target,))
-    for row in c.fetchall():
+    for row in c:
         index.setdefault(row["name"], {"va": hex(row["va"]) if row["va"] else "", "symbol": ""})
     return index
 
