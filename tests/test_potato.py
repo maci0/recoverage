@@ -1,7 +1,9 @@
 import json
+import os
 import re
 import sqlite3
 import subprocess
+from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import quote, urlparse
 
@@ -13,6 +15,7 @@ from recoverage.potato import (
     _build_url,
     _cell_file_offset,
     _compute_section_stats,
+    _db_updated_label,
     _esc,
     _extract_annotations,
     _format_data_inspector,
@@ -468,6 +471,49 @@ def test_footer_db_date():
     html = render_potato_url(f"/potato?target={target}")
     assert "DB updated" in html
     assert "recoverage" in html
+
+
+class TestDbUpdatedLabel:
+    """DB-updated footer stamp: WAL-aware wall-clock rendering of the DB mtime."""
+
+    @staticmethod
+    def _patch_db(monkeypatch: pytest.MonkeyPatch, db: Path) -> None:
+        monkeypatch.setattr("recoverage.potato._db_path", lambda: db)
+
+    def test_missing_db_renders_empty(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._patch_db(monkeypatch, tmp_path / "nope.db")
+        assert _db_updated_label() == ""
+
+    def test_label_reflects_newer_wal_mtime(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A rebuild that commits only to -wal must advance the stamp: the main
+        file keeps its old mtime, and a main-file-only read would show a stale
+        instant while the served data already changed."""
+        db = tmp_path / "coverage.db"
+        wal = Path(f"{db}-wal")
+        db.write_bytes(b"SQLite format 3\x00")
+        wal.write_bytes(b"wal")
+        old_ns = 1_700_000_000_000_000_000
+        new_ns = old_ns + 90 * 1_000_000_000
+        os.utime(db, ns=(old_ns, old_ns))
+        os.utime(wal, ns=(new_ns, new_ns))
+        self._patch_db(monkeypatch, db)
+        expected = datetime.fromtimestamp(new_ns / 1e9, tz=UTC).strftime("%Y-%m-%d %H:%M UTC")
+        assert _db_updated_label() == expected
+
+    def test_label_without_wal_file_uses_main_mtime(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        db = tmp_path / "coverage.db"
+        db.write_bytes(b"SQLite format 3\x00")
+        ns = 1_700_000_000_000_000_000
+        os.utime(db, ns=(ns, ns))
+        self._patch_db(monkeypatch, db)
+        expected = datetime.fromtimestamp(ns / 1e9, tz=UTC).strftime("%Y-%m-%d %H:%M UTC")
+        assert _db_updated_label() == expected
 
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")

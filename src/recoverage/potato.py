@@ -952,6 +952,32 @@ def _load_section_data(
     return sections, data
 
 
+def _db_updated_mtime_ns() -> int | None:
+    """Newest mtime_ns across coverage.db and its -wal sibling, or None.
+
+    The footer's "DB updated" stamp must include -wal: a rebuild that commits
+    only to the WAL leaves the main file's mtime untouched, and reading the
+    main file alone would display a stale instant (same WAL-awareness contract
+    as _snapshot_db_mtime, rendered as wall-clock time instead of folded into
+    an opaque change token).
+    """
+    try:
+        newest = _db_path().stat().st_mtime_ns
+    except OSError:
+        return None
+    with contextlib.suppress(OSError):
+        newest = max(newest, Path(f"{_db_path()}-wal").stat().st_mtime_ns)
+    return newest
+
+
+def _db_updated_label() -> str:
+    """Render _db_updated_mtime_ns() as "YYYY-MM-DD HH:MM UTC" ("" when no DB)."""
+    mtime_ns = _db_updated_mtime_ns()
+    if mtime_ns is None:
+        return ""
+    return datetime.fromtimestamp(mtime_ns / 1e9, tz=UTC).strftime("%Y-%m-%d %H:%M UTC")
+
+
 def _section_cells(sec_data: dict[str, Any]) -> list[dict[str, Any]]:
     """Parsed cells for *sec_data*, decoding its deferred ``_cells_json`` once."""
     raw = sec_data.pop("_cells_json", None)
@@ -1560,12 +1586,7 @@ def _render_potato_inner(
     if progress:
         progress_bar_png_uri = _progress_svg(tuple(progress["segments"]))
 
-    db_mtime_str = ""
-    try:
-        mtime = _db_path().stat().st_mtime
-        db_mtime_str = datetime.fromtimestamp(mtime, tz=UTC).strftime("%Y-%m-%d %H:%M UTC")
-    except OSError:
-        pass
+    db_mtime_str = _db_updated_label()
 
     return _PAGE_TPL.render(
         # Constants
