@@ -1,0 +1,13 @@
+# Normalize line endings for a multi-platform repo.
+#
+# Every text file is stored with LF in the repository and checked out with
+# LF everywhere.  This matters beyond style: tests/test_lifecycle.py embeds
+# POSIX shell fixtures (#!/bin/sh scripts written to disk and exec'd), which
+# silently break as "bad interpreter" when a Windows checkout rewrites them
+# with CRLF.  All tooling here (python, node, java, browsers) reads LF fine,
+# so forcing LF costs nothing and removes the whole CRLF-corruption class.
+* text=auto eol=lf
+
+# True binary assets — never normalize.
+*.png binary
+*.ico binary
