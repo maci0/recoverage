@@ -1075,17 +1075,35 @@ _auth_failures: deque[float] = deque()
 _AUTH_FAILURES_LOCK = threading.Lock()
 
 
-def _auth_rate_limited(now: float) -> bool:
-    """True once *_AUTH_FAIL_MAX* failures were recorded inside the window."""
+def _auth_throttle(now: float, reserve_slot: bool) -> bool:
+    """Prune expired failures, enforce the window cap, optionally take a slot.
+
+    The prune, the cap check, and *reserve_slot*'s append must share ONE
+    critical section: as separate steps, a burst of concurrent bad-token
+    requests all observe ``len < max`` before any of them records, and every
+    one of them slips past the cap (check-then-act TOCTOU).  The slot is
+    therefore taken BEFORE the token is verified; a verified request releases
+    everything again via :func:`_clear_auth_failures`.
+
+    Returns True when the window is full — the caller answers 429.
+    """
     with _AUTH_FAILURES_LOCK:
         while _auth_failures and now - _auth_failures[0] > _AUTH_FAIL_WINDOW_SECONDS:
             _auth_failures.popleft()
-        return len(_auth_failures) >= _AUTH_FAIL_MAX
+        if len(_auth_failures) >= _AUTH_FAIL_MAX:
+            return True
+        if reserve_slot:
+            _auth_failures.append(now)
+        return False
+
+
+def _auth_rate_limited(now: float) -> bool:
+    """True once *_AUTH_FAIL_MAX* failures were recorded inside the window."""
+    return _auth_throttle(now, reserve_slot=False)
 
 
 def _record_auth_failure(now: float) -> None:
-    with _AUTH_FAILURES_LOCK:
-        _auth_failures.append(now)
+    _auth_throttle(now, reserve_slot=True)
 
 
 def _clear_auth_failures() -> None:
@@ -1098,7 +1116,11 @@ def _require_auth() -> None:
         return
 
     now = time.monotonic()
-    if _auth_rate_limited(now):
+    # Reserve a failure slot atomically with the cap check (see
+    # _auth_throttle) — reserving before verification is what keeps N
+    # concurrent guesses from all passing the cap before any of them
+    # records.  A verified token refunds everyone via the clear below.
+    if _auth_throttle(now, reserve_slot=True):
         raise HTTPResponse(
             status=429,
             body=b'{"error": "rate limited", "code": "rate_limited", '
@@ -1116,39 +1138,40 @@ def _require_auth() -> None:
         provided = request.query.get("token", "")
         if not provided:
             provided = request.get_cookie("recoverage_token", default="")
-    if not _auth_token_matches(provided):
-        _record_auth_failure(now)
-        # Audit trail for brute-force visibility: on a network-reachable
-        # server (--allow-remote --token) the throttle bounds guessing, but a
-        # silent 401 gives the operator no way to see the attempt happened.
-        # The provided value is never logged (it may be someone's near-miss
-        # guess at a secret); REMOTE_ADDR comes from the socket peer.
-        _log.warning(
-            "Rejected %s auth token from %s",
-            "missing" if not provided else "invalid",
-            request.environ.get("REMOTE_ADDR", "") or "unknown peer",
-        )
-        # A browser asking for a page gets a page; API clients keep the JSON
-        # error contract.  Someone handed a share URL who dropped the query
-        # string used to land on a raw JSON blob with no way to tell what to do.
-        wants_html = "text/html" in request.headers.get(
-            "Accept", ""
-        ) and not request.path.startswith("/api/")
-        if wants_html:
-            raise HTTPResponse(
-                status=401,
-                body=_UNAUTHORIZED_HTML,
-                content_type="text/html; charset=utf-8",
-            )
+    if _auth_token_matches(provided):
+        _clear_auth_failures()
+        return
+
+    # Audit trail for brute-force visibility: on a network-reachable server
+    # (--allow-remote --token) the throttle bounds guessing, but a silent 401
+    # gives the operator no way to see the attempt happened.  The provided
+    # value is never logged (it may be someone's near-miss guess at a
+    # secret); REMOTE_ADDR comes from the socket peer.
+    _log.warning(
+        "Rejected %s auth token from %s",
+        "missing" if not provided else "invalid",
+        request.environ.get("REMOTE_ADDR", "") or "unknown peer",
+    )
+    # A browser asking for a page gets a page; API clients keep the JSON
+    # error contract.  Someone handed a share URL who dropped the query
+    # string used to land on a raw JSON blob with no way to tell what to do.
+    wants_html = "text/html" in request.headers.get("Accept", "") and not request.path.startswith(
+        "/api/"
+    )
+    if wants_html:
         raise HTTPResponse(
             status=401,
-            body=(
-                b'{"error": "unauthorized", "code": "unauthorized", '
-                b'"detail": "missing or invalid token"}'
-            ),
-            content_type="application/json",
+            body=_UNAUTHORIZED_HTML,
+            content_type="text/html; charset=utf-8",
         )
-    _clear_auth_failures()
+    raise HTTPResponse(
+        status=401,
+        body=(
+            b'{"error": "unauthorized", "code": "unauthorized", '
+            b'"detail": "missing or invalid token"}'
+        ),
+        content_type="application/json",
+    )
 
 
 app.add_hook("before_request", _require_auth)

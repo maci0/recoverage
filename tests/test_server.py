@@ -660,6 +660,38 @@ class TestAuthFailureLimiter:
         finally:
             srv._clear_auth_failures()
 
+    def test_concurrent_reserves_never_exceed_cap(self, monkeypatch: Any) -> None:
+        """A burst of simultaneous bad-token requests must not slip past the
+        cap: the cap check and the slot append share one critical section
+        (_auth_throttle), so exactly _AUTH_FAIL_MAX reservations succeed no
+        matter how many threads race the window."""
+        import recoverage.server as srv
+
+        workers = srv._AUTH_FAIL_MAX * 6
+        barrier = threading.Barrier(workers)
+        reserved: list[bool] = []
+        lock = threading.Lock()
+
+        def worker() -> None:
+            barrier.wait()
+            got = srv._auth_throttle(time.monotonic(), reserve_slot=True)
+            with lock:
+                reserved.append(got)
+
+        threads = [threading.Thread(target=worker) for _ in range(workers)]
+        try:
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=30)
+        finally:
+            srv._clear_auth_failures()
+
+        assert all(t.ident is not None for t in threads)
+        assert len(reserved) == workers
+        assert reserved.count(False) == srv._AUTH_FAIL_MAX
+        assert reserved.count(True) == workers - srv._AUTH_FAIL_MAX
+
 
 class TestEvictOldest:
     """Bounded-cache arithmetic shared by the /data memo and Potato cells
