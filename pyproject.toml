@@ -1,5 +1,8 @@
 [build-system]
-requires = ["setuptools>=68.0"]
+# setuptools 77 is the first release implementing PEP 639 (SPDX license
+# expressions); the `license = "MIT"` field below fails validation on older
+# versions, so the floor must match.
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,6 +11,7 @@ dynamic = ["version"]
 description = "Coverage dashboard for binary-matching decompilation projects"
 requires-python = ">=3.12"
 license = "MIT"
+license-files = ["LICENSE"]
 keywords = ["reverse-engineering", "decompilation", "code-coverage", "binary-matching"]
 classifiers = [
     "Development Status :: 3 - Alpha",
