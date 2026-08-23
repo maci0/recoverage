@@ -183,107 +183,125 @@ class TestApiFunctions:
         assert data["limit"] == 500
 
 
-# ── VA boundary validation (arithmetic invariants) ─────────────────
+# ── VA boundary validation (/asm endpoint) ─────────────────────────
 
 
-class TestVaBoundaryCheck:
-    """Verify arithmetic invariants used in handle_api_asm's VA boundary checks.
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+class TestApiAsmVaBoundaries:
+    """handle_api_asm's VA window checks, exercised through the endpoint.
 
-    These test the mathematical properties that the real handler relies on —
-    the same expressions appear in the file_offset and VA boundary checks in
-    api.py's handle_api_asm. They do NOT call the endpoint directly.
+    Synthetic .text: va=0x10001000, size=0x1000, fileOffset=0x200 — chosen so
+    the historical file_offset<0-only check MISSES the below-start case (the
+    negative VA delta is smaller than fileOffset, so file_offset stays >= 0).
     """
 
-    def test_va_before_section_start(self) -> None:
-        sec_va, sec_file_offset = 0x10001000, 0x400
-        va = 0x10000000
-        file_offset = sec_file_offset + (va - sec_va)
-        assert file_offset < 0
+    @pytest.fixture(autouse=True)
+    def _capstone_available(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # The guards run before any disassembly, so faking the capstone probe
+        # gets us past the 501 short-circuit without the optional dependency.
+        import recoverage.api as api
 
-    def test_va_beyond_section_end(self) -> None:
-        sec_va, sec_size = 0x10001000, 0x1000
-        va = sec_va + sec_size + 1  # one past the end
-        assert va >= sec_va + sec_size  # rejected by handler's >= check
+        monkeypatch.setattr(api, "HAS_CAPSTONE", True)
 
-    def test_va_at_section_start(self) -> None:
-        file_offset = 0x400 + (0x10001000 - 0x10001000)
-        assert file_offset == 0x400
+    def _asm(self, target: str, query: str) -> tuple[str, dict[str, str], bytes]:
+        return wsgi_get(f"/api/targets/{target}/asm?{query}")
 
-    def test_va_just_inside_section(self) -> None:
-        sec_va, sec_size = 0x10001000, 0x1000
-        last_valid_va = sec_va + sec_size - 1
-        assert last_valid_va < sec_va + sec_size  # last byte is in-bounds
+    def test_va_below_start_with_positive_file_offset_rejected(self) -> None:
+        """va=0x10000F80: delta -0x80 so file_offset=0x180 stays >= 0 — only
+        the va < sec_va half catches this; disassembling bytes from before
+        the section as if they were at va was the bug."""
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, headers, body = self._asm(target, "va=0x10000F80&size=16")
+        assert status.startswith("400")
+        data = json.loads(decode_body(body, headers))
+        assert data["error"] == "va is before section start"
 
-    def test_va_at_exact_section_end(self) -> None:
-        """VA equal to sec_va + sec_size is out-of-bounds (handler uses >= check)."""
-        sec_va, sec_size = 0x10001000, 0x1000
-        va = sec_va + sec_size
-        # At the boundary: rejected
-        assert va >= sec_va + sec_size
-        # One byte before: accepted
-        assert (va - 1) < sec_va + sec_size
+    def test_negative_va_rejected(self) -> None:
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, headers, body = self._asm(target, "va=-0x10&size=16")
+        assert status.startswith("400")
+        data = json.loads(decode_body(body, headers))
+        assert data["error"] == "va is before section start"
 
-    def test_zero_section_size(self) -> None:
-        """Zero-size section has no valid VAs — even sec_va itself is out of bounds."""
-        sec_va, sec_size = 0x10001000, 0
-        # Every VA is out-of-bounds when size is 0
-        assert sec_va >= sec_va + sec_size
-        # With a non-zero size, sec_va would be valid
-        assert sec_va < sec_va + 1
+    def test_va_at_exact_section_end_rejected(self) -> None:
+        """VA equal to sec_va + sec_size is the first out-of-bounds address."""
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, headers, body = self._asm(target, "va=0x10002000&size=16")
+        assert status.startswith("400")
+        data = json.loads(decode_body(body, headers))
+        assert data["error"] == "va is beyond section end"
 
-    def test_max_uint32_va(self) -> None:
-        sec_va, sec_file_offset, sec_size = 0xFFFFF000, 0x400, 0x1000
-        va = 0xFFFFFFFF
-        assert va < sec_va + sec_size
-        assert sec_file_offset + (va - sec_va) == sec_file_offset + 0xFFF
+    def test_va_one_past_end_rejected(self) -> None:
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, _, _ = self._asm(target, "va=0x10002001&size=16")
+        assert status.startswith("400")
 
-    def test_file_offset_overflow_check(self) -> None:
-        sec_va, sec_file_offset = 0x80000000, 0x200
-        va = 0x00000100
-        assert sec_file_offset + (va - sec_va) < 0
+    def test_va_far_beyond_end_rejected(self) -> None:
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, _, _ = self._asm(target, "va=0xFFFFFFFF&size=16")
+        assert status.startswith("400")
+
+    def test_last_valid_va_passes_boundary_guard(self) -> None:
+        """va = section end - 1 must NOT trip either boundary check; the
+        request proceeds far enough to fail later on the missing DLL (422),
+        which proves the guard accepted the final in-bounds address."""
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, headers, body = self._asm(target, "va=0x10001FFF&size=1")
+        assert status.startswith("422")
+        data = json.loads(decode_body(body, headers))
+        assert data["error"] == "not enough bytes in DLL"
+
+    def test_zero_size_still_rejected_at_boundary_class(self) -> None:
+        """size clamps/validates before the VA checks: size=0 is its own 400."""
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, _, _ = self._asm(target, "va=0x10001000&size=0")
+        assert status.startswith("400")
 
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
 class TestApiAsm:
-    """Test /api/targets/<target>/asm boundary checks via actual endpoint."""
+    """Test /api/targets/<target>/asm request validation via actual endpoint."""
+
+    @pytest.fixture(autouse=True)
+    def _capstone_available(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # The validation under test runs before any disassembly, so faking
+        # the capstone probe gets us past the 501 short-circuit without the
+        # optional dependency.
+        import recoverage.api as api
+
+        monkeypatch.setattr(api, "HAS_CAPSTONE", True)
 
     def test_missing_params_returns_400(self) -> None:
         target = get_first_target()
         if not target:
             pytest.skip("No targets in DB")
-        status, _, _ = wsgi_get(f"/api/targets/{target}/asm")
-        # Either 400 (missing params) or 501 (no capstone) — both are correct rejections
-        assert status.startswith("4") or status.startswith("5")
+        status, headers, body = wsgi_get(f"/api/targets/{target}/asm")
+        assert status.startswith("400")
+        data = json.loads(decode_body(body, headers))
+        assert data["error"] == "missing va or size"
 
     def test_zero_size_returns_400(self) -> None:
         target = get_first_target()
         if not target:
             pytest.skip("No targets in DB")
         status, headers, body = wsgi_get(f"/api/targets/{target}/asm?va=0x10001000&size=0")
-        if status.startswith("501"):
-            pytest.skip("Capstone not installed")
-        assert status.startswith("400")
-
-    def test_va_before_section_start_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """A va below section start is rejected even when file_offset stays >= 0.
-
-        The synthetic .text starts at 0x10001000 with fileOffset 0x200: for
-        va = 0x10000F80 the delta is -0x80, so file_offset = 0x180 — the old
-        file_offset<0-only check passed the request and disassembled
-        pre-section bytes as code at that address.
-        """
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
-        # The guard runs before any disassembly, so faking the capstone probe
-        # gets us past the 501 short-circuit without the optional dependency.
-        import recoverage.api as api
-
-        monkeypatch.setattr(api, "HAS_CAPSTONE", True)
-        status, headers, body = wsgi_get(f"/api/targets/{target}/asm?va=0x10000F80&size=16")
         assert status.startswith("400")
         data = json.loads(decode_body(body, headers))
-        assert data["error"] == "va is before section start"
+        assert data["error"] == "size must be positive"
 
 
 class TestRegenRateLimit:

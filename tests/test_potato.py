@@ -3,7 +3,7 @@ import re
 import sqlite3
 import subprocess
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import pytest
 from conftest import HAS_DB, get_first_target, wsgi_get
@@ -19,6 +19,7 @@ from recoverage.potato import (
     _format_hex_dump,
     _format_va,
     _load_cells_cached,
+    _panel_fn_source_text,
     render_potato,
     wrap_text,
 )
@@ -587,75 +588,54 @@ class TestHtmlEscaping:
         assert ">" not in escaped
 
 
-# ── Index parsing (potato.py idx fix) ──────────────────────────────
+# ── Index parsing (potato.py idx handling, via the real render) ────
 
 
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
 class TestIdxParsing:
-    """Verify idx parsing as used in _build_grid_html and _render_panel.
+    """?idx= handling through the real render path.
 
-    The actual parsing uses int(idx_str) with try/except (ValueError, OverflowError),
-    then bounds-checks against the cell list. We test the parsing inline to match.
+    A valid index selects a block (Range:/State: rows); anything unparsable
+    or out of range falls back to the empty "Select a block" panel instead of
+    raising or rendering another block's details.
     """
 
-    @staticmethod
-    def _parse_idx_like_production(idx_str: str) -> int | None:
-        """Replicate the exact parsing from potato.py _render_panel."""
-        if not idx_str:
-            return None
-        try:
-            idx = int(idx_str)
-        except (ValueError, OverflowError):
-            return None
-        if idx < 0:
-            return None
-        return idx
+    EMPTY_PANEL_MARKER = "Select a block"
+    CELL_MARKER = "<b>Range:</b>"
 
-    def test_valid_digit(self) -> None:
-        assert self._parse_idx_like_production("42") == 42
+    def _render(self, idx_value: str) -> str:
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        return render_potato_url(
+            f"/potato?target={target}&section=.text&idx={quote(idx_value, safe='')}"
+        )
 
-    def test_zero(self) -> None:
-        assert self._parse_idx_like_production("0") == 0
-
-    def test_negative_rejected(self) -> None:
-        assert self._parse_idx_like_production("-1") is None
-
-    def test_non_numeric_rejected(self) -> None:
-        assert self._parse_idx_like_production("abc") is None
-
-    def test_empty_rejected(self) -> None:
-        assert self._parse_idx_like_production("") is None
-
-    def test_float_string_rejected(self) -> None:
-        assert self._parse_idx_like_production("3.14") is None
-
-    def test_scientific_notation_rejected(self) -> None:
-        assert self._parse_idx_like_production("1e5") is None
+    def test_valid_idx_selects_block(self) -> None:
+        html = self._render("0")
+        assert self.CELL_MARKER in html
+        assert self.EMPTY_PANEL_MARKER not in html
 
     @pytest.mark.parametrize(
-        "val",
+        "idx",
         [
+            "",  # absent/empty -> no selection
+            "-1",  # negative
+            "abc",  # non-numeric
+            "3.14",  # float string
+            "1e5",  # scientific notation
             "NaN",
-            "Infinity",
-            "-Infinity",
             "inf",
-            "nan",
-            "++1",
-            "--1",
+            "-inf",
+            "++1",  # int() rejects; must arrive URL-encoded
+            "999999",  # beyond the cell count
+            "99999999999999999999999999999",  # parses as bigint, out of range
         ],
     )
-    def test_special_strings_rejected(self, val: str) -> None:
-        assert self._parse_idx_like_production(val) is None
-
-    @pytest.mark.parametrize(
-        "val,expected",
-        [
-            ("+0", 0),  # int("+0") == 0
-            ("1_000", 1000),  # int("1_000") == 1000 (Python allows underscores)
-        ],
-    )
-    def test_python_int_accepts(self, val: str, expected: int) -> None:
-        """Values that Python's int() accepts should parse correctly."""
-        assert self._parse_idx_like_production(val) == expected
+    def test_invalid_idx_falls_back_to_empty_panel(self, idx: str) -> None:
+        html = self._render(idx)
+        assert self.CELL_MARKER not in html
+        assert self.EMPTY_PANEL_MARKER in html
 
 
 # ── Merge cells invariant ─────────────────────────────────────────
@@ -733,43 +713,68 @@ class TestGridColumnsValidation:
 
 
 class TestPathTraversalGuard:
-    """Verify the path traversal guard in potato.py's _panel_fn_source_text.
+    """_panel_fn_source_text must refuse to read files outside the source root.
 
     The production guard resolves the candidate path and requires it to stay
-    inside the source root:
+    inside the source tree:
         base = (Path.cwd().resolve() / source_root.lstrip("/")).resolve()
         c_path = (base / files[0]).resolve()
         if not c_path.is_relative_to(base): return None
 
-    These tests verify that resolve + is_relative_to pattern.
+    These tests drive that function directly, so a regression in potato.py
+    (dropping resolve(), dropping the containment check) fails here.
     """
 
-    def test_traversal_blocked(self, tmp_path):
+    @staticmethod
+    def _read(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rel: str, source_root: str = "src"):
+        monkeypatch.chdir(tmp_path)
+        data: dict = {"paths": {"sourceRoot": source_root}}
+        return _panel_fn_source_text(data, "T", {"files": [rel]})
+
+    def test_traversal_blocked(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Attacker-controlled filename with ../ must be rejected."""
-        base = (tmp_path / "src" / "test").resolve()
-        base.mkdir(parents=True, exist_ok=True)
-        c_path = (base / "../../etc/passwd").resolve()
-        assert not c_path.is_relative_to(base)
+        (tmp_path / "src").mkdir()
+        assert self._read(tmp_path, monkeypatch, "../../secret.txt") is None
 
-    def test_normal_file_allowed(self, tmp_path):
-        """Normal filenames must pass the guard."""
-        base = (tmp_path / "src" / "test").resolve()
-        base.mkdir(parents=True, exist_ok=True)
-        c_path = (base / "main.c").resolve()
-        assert c_path.is_relative_to(base)
+    def test_absolute_path_blocked(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """An absolute files[0] replaces the base entirely (Path join
+        semantics) and must be rejected even when the file exists."""
+        outside = tmp_path / "outside.txt"
+        outside.write_text("secret", encoding="utf-8")
+        (tmp_path / "src").mkdir()
+        assert self._read(tmp_path, monkeypatch, str(outside)) is None
 
-    def test_symlink_escape_blocked(self, tmp_path):
-        """Symlink pointing outside source tree must be caught by resolve()."""
-        base = (tmp_path / "src").resolve()
-        base.mkdir(parents=True, exist_ok=True)
-        # Create a symlink that points outside the base
-        link = base / "escape"
+    def test_normal_file_allowed(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A file inside the source tree is read and returned."""
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "main.c").write_text("int main(void) { return 0; }", encoding="utf-8")
+        result = self._read(tmp_path, monkeypatch, "main.c")
+        assert result == "int main(void) { return 0; }"
+
+    def test_missing_file_returns_none(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        (tmp_path / "src").mkdir()
+        assert self._read(tmp_path, monkeypatch, "nope.c") is None
+
+    def test_no_files_returns_none(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        data: dict = {"paths": {"sourceRoot": "src"}}
+        assert _panel_fn_source_text(data, "T", {"files": []}) is None
+        assert _panel_fn_source_text(data, "T", {}) is None
+
+    def test_symlink_escape_blocked(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Symlink pointing outside the source tree must be caught by resolve()."""
+        (tmp_path / "src").mkdir()
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "passwd").write_text("secret", encoding="utf-8")
         try:
-            link.symlink_to(tmp_path / ".." / "etc")
+            (tmp_path / "src" / "escape").symlink_to(outside)
         except OSError:
             pytest.skip("symlinks unavailable (Windows without developer mode)")
-        c_path = (base / "escape" / "passwd").resolve()
-        assert not c_path.is_relative_to(base)
+        assert self._read(tmp_path, monkeypatch, "escape/passwd") is None
 
 
 class TestSearchLimit:
@@ -860,10 +865,6 @@ class TestCellsCacheInvalidation:
             potato.clear_cells_cache()
 
 
-if __name__ == "__main__":
-    raise SystemExit(pytest.main([__file__, "-v"]))
-
-
 class TestDbUnavailableContract:
     """A missing/unopenable DB must signal 503, not a 200 error page."""
 
@@ -889,3 +890,7 @@ class TestDbUnavailableContract:
         status, _, body = wsgi_get("/potato")
         assert status.startswith("503")
         assert b"Database unavailable" in body
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__, "-v"]))
