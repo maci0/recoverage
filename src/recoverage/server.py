@@ -189,7 +189,12 @@ def _safe_etag(*parts: object) -> str:
 
 
 def _snapshot_db_mtime() -> tuple[int, int] | None:
-    """Return (mtime_ns, size) of coverage.db, or None when unreadable.
+    """Return (fingerprint, main-file size) of coverage.db, or None when unreadable.
+
+    The fingerprint folds the DB's identity into one int (main-file
+    mtime_ns + size, plus -wal's when present); element 1 is the main file's
+    size alone.  Callers must treat the fingerprint as an opaque change
+    token, never as an mtime.
 
     WAL-aware: the DB runs in ``journal_mode=wal``, so a writer can commit
     to ``coverage.db-wal`` without checkpointing the main file — main-file
@@ -215,17 +220,18 @@ def _snapshot_db_mtime() -> tuple[int, int] | None:
         return None
 
 
-def _etag_or_304(*parts: object) -> str | None:
-    """DB-freshness ETag over the WAL-aware snapshot + *parts*; 304 on match.
+def _etag_or_304(snap: tuple[int, int] | None, *parts: object) -> str | None:
+    """DB-freshness ETag over the WAL-aware snapshot *snap* + *parts*; 304 on match.
 
     Shared tail of every cacheable DB-derived endpoint (/data, /asm, /bytes,
-    /potato): compute ``_safe_etag(snapshot, parts...)``, answer
+    /potato): compute ``_safe_etag(snap[0], parts...)``, answer
     ``If-None-Match`` with a 304, else hand the ETag back for the caller to
-    attach to its response.  Returns None when the DB is unreadable — the
-    caller then sends no ETag (the endpoint itself fails with 503 shortly
-    after).
+    attach to its response.  Callers pass their own
+    :func:`_snapshot_db_mtime` result — endpoints that also key a memo on
+    that snapshot (/data) stat the DB exactly once.  Returns None when *snap*
+    is None (DB unreadable) — the caller then sends no ETag (the endpoint
+    itself fails with 503 shortly after).
     """
-    snap = _snapshot_db_mtime()
     if snap is None:
         return None
     etag = _safe_etag(snap[0], *parts)

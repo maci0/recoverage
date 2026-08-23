@@ -26,7 +26,7 @@ from recoverage.server import (
     HAS_CAPSTONE,
     HAS_PYGMENTS,
     LOOPBACK_HOSTS,
-    HTTPResponse,
+    VA_MAX,
     _best_encoding,
     _cell_bucket_row,
     _cells_json_rows,
@@ -44,7 +44,6 @@ from recoverage.server import (
     _load_metadata,
     _open_db,
     _project_dir,
-    _safe_etag,
     _snapshot_db_mtime,
     _target_filename,
     app,
@@ -203,6 +202,59 @@ def _target_cursor(target: str) -> Generator[sqlite3.Cursor]:
         conn.close()
 
 
+def _parse_va_candidates(raw_va: str) -> list[int]:
+    """Parse *raw_va* into deduped candidate lookup ints, order preserved.
+
+    ONE parser for every endpoint that resolves a ?va= spelling.  Hex
+    spellings: 0x-prefixed or containing a-f (rebrew's parse_va convention,
+    bare hex valid).  All-digit strings: DECIMAL first (the /functions list
+    emits va as a decimal int — a consumer taking that value straight into
+    this route must not miss), with a bare-hex fallback for legacy callers.
+    Candidates beyond SQLite's signed-64-bit INTEGER range are dropped:
+    passing one raises OverflowError at execute time instead of a clean
+    miss.  Negatives stay candidates so section-bounds classification can
+    report "before section start" (matching the historical va=-0x10
+    contract).
+    """
+    lowered = raw_va.lower()
+    bases = (16,) if lowered.startswith("0x") or any(c in "abcdef" for c in lowered) else (10, 16)
+    candidates: list[int] = []
+    for base in bases:
+        with contextlib.suppress(ValueError):
+            parsed = int(raw_va, base)
+            if parsed <= VA_MAX and parsed not in candidates:
+                candidates.append(parsed)
+    return candidates
+
+
+def _file_backed_section(
+    c: sqlite3.Cursor, target: str, section: str, *fields: str
+) -> dict[str, Any]:
+    """Fetch *target*'s *section* row and require int-typed *fields*, else raise.
+
+    ONE shared guard for the endpoints that do pointer arithmetic on a
+    section (asm, bytes): an unknown section raises the shared JSON 404,
+    and NULL/non-int fields — sections with no file backing (.bss) carry
+    NULL offsets — raise this endpoint family's JSON 422 contract instead of
+    letting the arithmetic raise TypeError and surface as an HTML 500.
+    """
+    c.execute("SELECT * FROM sections WHERE target = ? AND name = ?", (target, section))
+    row = c.fetchone()
+    if row is None:
+        raise _section_not_found(target, section)
+    sec = dict(row)
+    if any(not isinstance(sec[f], int) for f in fields):
+        raise _json_err(
+            422,
+            {
+                "error": "section has no file backing",
+                "detail": f"section {section!r} has NULL {'/'.join(fields)} — "
+                "raw bytes are only served for file-backed sections",
+            },
+        )
+    return sec
+
+
 # ── Server-Sent Events (live DB change notifications) ─────────────
 #
 # A single background watcher thread polls coverage.db mtime every couple of
@@ -247,7 +299,9 @@ def _broadcast_db_updated(snapshot: tuple[int, int] | None) -> None:
         "timestamp": time.time(),
     }
     if snapshot is not None:
-        payload["db"]["mtime_ns"] = snapshot[0]
+        # Opaque WAL-aware change token (see _snapshot_db_mtime) — NOT an
+        # mtime; named so clients cannot misread it as wall-clock data.
+        payload["db"]["fingerprint"] = snapshot[0]
         payload["db"]["size_bytes"] = snapshot[1]
     frame = f"event: db-updated\ndata: {json.dumps(payload)}\n\n".encode()
     with _SSE_CLIENTS_LOCK:
@@ -471,15 +525,13 @@ def handle_api_data(target: str) -> bytes | Any:
     # Uses the WAL-aware snapshot (mtime_ns-precision) so two rebuilds
     # within the same second get distinct ETags (a float mtime would let a
     # browser keep a stale 304), and a WAL-committed change that did not
-    # checkpoint the main file still invalidates.
+    # checkpoint the main file still invalidates.  The snapshot is computed
+    # once here: it is both the memo key and the ETag input (see
+    # _etag_or_304).  etag is None only when the DB is unreadable — no ETag
+    # is sent, and the queries below answer the standard 503 shortly after.
     snap = _snapshot_db_mtime()
     fingerprint: tuple[tuple[int, int] | None, str, str | None] = (snap, target, section_filter)
-    etag = _safe_etag(snap[0] if snap else "", target, section_filter)
-    if request.headers.get("If-None-Match") == etag:
-        return HTTPResponse(
-            status=304,
-            headers={"ETag": etag, "Cache-Control": CACHE_REVALIDATE},
-        )
+    etag = _etag_or_304(snap, target, section_filter)
 
     # Serve a memoized payload for an unchanged DB instead of re-running the
     # full-table queries, re-serialization, and recompression on every
@@ -498,9 +550,10 @@ def handle_api_data(target: str) -> bytes | Any:
             body, _ = compress_payload(raw, accept_enc)
             with _DATA_CACHE_LOCK:
                 entry[encoding] = body
-        return _json_ok_precompressed(
-            body, encoding, Cache_Control=CACHE_REVALIDATE, ETag=str(etag)
-        )
+        headers: dict[str, str] = {"Cache_Control": CACHE_REVALIDATE}
+        if etag:
+            headers["ETag"] = etag
+        return _json_ok_precompressed(body, encoding, **headers)
 
     with _target_cursor(target) as c:
         data: dict[str, Any] = _load_metadata(c, target)
@@ -551,13 +604,20 @@ def handle_api_data(target: str) -> bytes | Any:
         accept_enc = request.headers.get("Accept-Encoding", "")
         body, encoding = compress_payload(raw_json, accept_enc)
         _cache_data_insert(fingerprint, raw_json, encoding, body)
-        return _json_ok_precompressed(
-            body, encoding, Cache_Control=CACHE_REVALIDATE, ETag=str(etag)
-        )
+        headers: dict[str, str] = {"Cache_Control": CACHE_REVALIDATE}
+        if etag:
+            headers["ETag"] = etag
+        return _json_ok_precompressed(body, encoding, **headers)
 
 
 # Mirrors the list endpoint's limit cap.
 _MAX_BATCH_LOOKUP = 500
+
+# Bound on the batch-lookup request body: the payload is fully parsed before
+# the _MAX_BATCH_LOOKUP cap applies, so an unbounded read would let one
+# request pin memory and CPU.  The read takes cap + 1 so an oversized body
+# is detectable without a second read.
+_MAX_BATCH_BODY_BYTES = 64 * 1024
 
 # Pagination offset ceiling: real function tables are orders of magnitude
 # smaller, so clamping here changes no legitimate page while keeping OFFSET
@@ -572,7 +632,7 @@ def handle_api_functions_list(target: str) -> bytes | Any:
     search = request.query.get("search", "").strip() or None
     sort_param = request.query.get("sort", "va").strip()  # field:dir
     try:
-        limit = min(max(int(request.query.get("limit", 50)), 1), 500)
+        limit = min(max(int(request.query.get("limit", 50)), 1), _MAX_BATCH_LOOKUP)
     except ValueError:
         limit = 50
     try:
@@ -672,10 +732,10 @@ def handle_api_functions_batch(target: str) -> bytes | Any:
     # parsed before the 500-VA cap applies.  A bounded read rejects
     # oversized bodies whether or not Content-Length is present.
     try:
-        raw = request.body.read(64 * 1024 + 1)
+        raw = request.body.read(_MAX_BATCH_BODY_BYTES + 1)
     except (OSError, ValueError):
         raw = b""
-    if len(raw) > 64 * 1024:
+    if len(raw) > _MAX_BATCH_BODY_BYTES:
         return _json_err(
             413,
             {
@@ -725,8 +785,8 @@ def handle_api_functions_batch(target: str) -> bytes | Any:
         if isinstance(entry, int):
             if entry < 0:
                 return invalid_va(entry, "VAs must be non-negative")
-            if entry > _server.VA_MAX:
-                return invalid_va(entry, f"VA out of range (max 0x{_server.VA_MAX:x})")
+            if entry > VA_MAX:
+                return invalid_va(entry, f"VA out of range (max 0x{VA_MAX:x})")
             va_ints.append(entry)
         elif isinstance(entry, str):
             try:
@@ -735,7 +795,7 @@ def handle_api_functions_batch(target: str) -> bytes | Any:
                 parsed_va = int(entry.strip(), 16)
                 if parsed_va < 0:
                     raise ValueError("negative VA")
-                if parsed_va > _server.VA_MAX:
+                if parsed_va > VA_MAX:
                     raise ValueError("VA exceeds 64 bits")
                 va_ints.append(parsed_va)
             except ValueError:
@@ -800,31 +860,10 @@ def handle_api_function(target: str, va: str) -> bytes | Any:
     with _target_cursor(target) as c:
         no_cache = CACHE_NO_STORE
 
-        # Parse va into candidate lookup ints.  Hex strings: 0x-prefixed or
-        # containing a-f (rebrew's parse_va convention, bare hex valid).
-        # All-digit strings: DECIMAL first (the /functions list emits va as
-        # a decimal int — a consumer taking that value straight into this
-        # route must not 404), with a bare-hex fallback for legacy callers.
-        # Anything else -> name lookup.  Candidates beyond 64 bits are
-        # dropped: SQLite INTEGER cannot hold them, and passing one would
-        # raise OverflowError instead of a clean miss.
-        raw_va = va.strip()
-        va_candidates: list[int] = []
-        lowered = raw_va.lower()
-        if lowered.startswith("0x") or any(c in "abcdef" for c in lowered):
-            with contextlib.suppress(ValueError):
-                parsed = int(raw_va, 16)
-                if parsed <= _server.VA_MAX:
-                    va_candidates = [parsed]
-        else:
-            with contextlib.suppress(ValueError):
-                parsed = int(raw_va, 10)
-                if parsed <= _server.VA_MAX:
-                    va_candidates.append(parsed)
-            with contextlib.suppress(ValueError):
-                parsed = int(raw_va, 16)
-                if parsed <= _server.VA_MAX:
-                    va_candidates.append(parsed)
+        # Parse va into candidate lookup ints (shared spelling parser — see
+        # _parse_va_candidates); anything unparseable falls through to the
+        # exact-name lookup below.
+        va_candidates = _parse_va_candidates(va.strip())
         is_numeric = bool(va_candidates)
 
         def _lookup(table: str, json_sql: str) -> Any | None:
@@ -904,29 +943,13 @@ def handle_api_asm(target: str) -> bytes | Any:
     if size == 0:
         return _json_err(400, {"error": "size must be positive"})
 
-    # Parse va into candidate ints — same convention as GET /functions/<va>:
-    # 0x-prefixed (or hex-letter) strings are hex; all-digit strings are
-    # DECIMAL first with a bare-hex fallback for legacy callers.  The SPA
-    # builds asm URLs by interpolating JS numbers (the INTEGER section VAs it
-    # got from /data), which spell decimal — parsing those digits as base-16
-    # read an address orders of magnitude past every section and rejected
-    # each undocumented-block disassembly with "beyond section end".
-    lowered = raw_va.lower()
-    va_candidates: list[int] = []
-    if lowered.startswith("0x") or any(ch in "abcdef" for ch in lowered):
-        with contextlib.suppress(ValueError):
-            parsed = int(raw_va, 16)
-            if parsed <= _server.VA_MAX:
-                va_candidates = [parsed]
-    else:
-        for base in (10, 16):
-            with contextlib.suppress(ValueError):
-                parsed = int(raw_va, base)
-                # Negatives stay candidates: the section-bounds resolution
-                # below classifies them as "before section start", matching
-                # the historical contract for va=-0x10.
-                if parsed <= _server.VA_MAX and parsed not in va_candidates:
-                    va_candidates.append(parsed)
+    # Parse va into candidate ints via the shared spelling parser (same
+    # convention as GET /functions/<va>).  The SPA builds asm URLs by
+    # interpolating JS numbers (the INTEGER section VAs it got from /data),
+    # which spell decimal — parsing those digits as base-16 read an address
+    # orders of magnitude past every section and rejected each
+    # undocumented-block disassembly with "beyond section end".
+    va_candidates = _parse_va_candidates(raw_va)
     if not va_candidates:
         return _json_err(400, {"error": "invalid va or size"})
 
@@ -938,35 +961,11 @@ def handle_api_asm(target: str) -> bytes | Any:
     # The raw spelling (not the resolved int) keys the ETag: it is hashed, so
     # request data never reaches a header, and each spelling is just its own
     # revalidation identity.
-    asm_etag = _etag_or_304(target, section, raw_va, size, fmt)
+    asm_etag = _etag_or_304(_snapshot_db_mtime(), target, section, raw_va, size, fmt)
 
     with _target_cursor(target) as c:
-        c.execute(
-            "SELECT * FROM sections WHERE target = ? AND name = ?",
-            (target, section),
-        )
-        row = c.fetchone()
+        sec = _file_backed_section(c, target, section, "fileOffset", "va", "size")
 
-        if not row:
-            return _section_not_found(target, section)
-
-        sec = dict(row)
-        if (
-            not isinstance(sec["fileOffset"], int)
-            or not isinstance(sec["va"], int)
-            or not isinstance(sec["size"], int)
-        ):
-            # Sections with no file backing (.bss) carry NULL offsets; the
-            # arithmetic below would raise TypeError and surface as an HTML
-            # 500 instead of this endpoint's JSON error contract.
-            return _json_err(
-                422,
-                {
-                    "error": "section has no file backing",
-                    "detail": f"section {section!r} has NULL va/fileOffset — "
-                    "raw bytes are only served for file-backed sections",
-                },
-            )
         # Resolve among the decimal/hex candidate spellings: whichever lands
         # inside the section wins (decimal-first when both fit, matching
         # /functions/<va>).  No in-bounds candidate → 400, driven by the first
@@ -1050,32 +1049,10 @@ def handle_api_bytes(target: str, section: str) -> bytes | Any:
     # ETag bound to the WAL-aware DB snapshot + request identity so /bytes
     # revalidates after a rebuild instead of serving year-immutable stale
     # bytes (raw st_mtime alone missed WAL-committed rebuilds).
-    bytes_etag = _etag_or_304(target, section, req_offset, req_size)
+    bytes_etag = _etag_or_304(_snapshot_db_mtime(), target, section, req_offset, req_size)
 
     with _target_cursor(target) as c:
-        c.execute(
-            "SELECT * FROM sections WHERE target = ? AND name = ?",
-            (target, section),
-        )
-        row = c.fetchone()
-
-        if not row:
-            return _section_not_found(target, section)
-
-        sec = dict(row)
-        if not isinstance(sec["fileOffset"], int) or not isinstance(sec["size"], int):
-            # Sections with no file backing (.bss) carry a NULL fileOffset
-            # (and possibly NULL size); the arithmetic below would raise
-            # TypeError and surface as an HTML 500 instead of this
-            # endpoint's JSON error contract.
-            return _json_err(
-                422,
-                {
-                    "error": "section has no file backing",
-                    "detail": f"section {section!r} has NULL fileOffset/size — "
-                    "raw bytes are only served for file-backed sections",
-                },
-            )
+        sec = _file_backed_section(c, target, section, "fileOffset", "size")
         if req_offset >= sec["size"]:
             return _json_err(400, {"error": "offset beyond section bounds"})
         target_data = _load_dll(target)

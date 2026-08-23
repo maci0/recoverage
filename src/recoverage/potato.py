@@ -436,6 +436,14 @@ def _get_nasm_lexer() -> Any:
 _HEX_ADDR_RE = re.compile(r"0x[0-9a-f]{8}")
 
 
+def _split_asm_line(line: str) -> tuple[str, str] | None:
+    """(addr, code) for disassembly lines shaped ``0xADDR  MNEMONIC``, else None."""
+    if line.startswith("0x") and "  " in line:
+        addr_end = line.index("  ")
+        return line[:addr_end], line[addr_end:]
+    return None
+
+
 def _highlight_c(code: str) -> str:
     """Syntax-highlight C code using Pygments tokens and <font> tags (no CSS)."""
     if not _pygments_available():
@@ -465,34 +473,42 @@ def _highlight_asm(text: str, target: str = "") -> str:
             html,
         )
 
-    if not _pygments_available():
+    def _plain_line(line: str) -> str:
+        return _link_hex_refs(_html_escape(line))
+
+    def _addr_line(addr_part: str, highlighted_code: str) -> str:
         if target:
-            lines = []
-            for line in text.splitlines():
-                if line.startswith("0x") and "  " in line:
-                    addr_end = line.index("  ")
-                    addr_part, code_part = line[:addr_end], line[addr_end:]
-                    linked_code = _link_hex_refs(_html_escape(code_part))
-                    lines.append(_addr_link(addr_part) + linked_code)
-                else:
-                    lines.append(_link_hex_refs(_html_escape(line)))
-            return "\n".join(lines)
-        return _html_escape(text)
+            return _addr_link(addr_part) + highlighted_code
+        return f'<font color="#858585">{_html_escape(addr_part)}</font>' + highlighted_code
+
+    if not _pygments_available():
+        # Without pygments the whole line is escaped; only a target makes
+        # the per-line address linkification worthwhile.
+        if not target:
+            return _html_escape(text)
+        lines = []
+        for line in text.splitlines():
+            split = _split_asm_line(line)
+            if split is None:
+                lines.append(_plain_line(line))
+            else:
+                addr_part, code_part = split
+                lines.append(_addr_line(addr_part, _link_hex_refs(_html_escape(code_part))))
+        return "\n".join(lines)
 
     colors = _get_asm_colors()
     lexer = _get_nasm_lexer()
     result_lines: list[str] = []
     for line in text.splitlines():
-        if line.startswith("0x") and "  " in line:
-            addr_end = line.index("  ")
-            addr_part, code_part = line[:addr_end], line[addr_end:]
-            hl = _link_hex_refs(_highlight_tokens(lexer.get_tokens(code_part), colors).rstrip("\n"))
-            if target:
-                result_lines.append(_addr_link(addr_part) + hl)
-            else:
-                result_lines.append(f'<font color="#858585">{_html_escape(addr_part)}</font>' + hl)
+        split = _split_asm_line(line)
+        if split is None:
+            result_lines.append(_plain_line(line))
         else:
-            result_lines.append(_link_hex_refs(_html_escape(line)))
+            addr_part, code_part = split
+            hl = _link_hex_refs(
+                _highlight_tokens(lexer.get_tokens(code_part), colors).rstrip("\n")
+            )
+            result_lines.append(_addr_line(addr_part, hl))
     return "\n".join(result_lines)
 
 
@@ -1476,10 +1492,10 @@ def _render_potato_inner(
     active_filters: set[str],
     idx_str: str,
     search_query: str,
-    view: str = "",
-    sort_key: str = "va",
-    status_filter: str = "",
-    page_str: str = "",
+    view: str,
+    sort_key: str,
+    status_filter: str,
+    page_str: str,
 ) -> str:
     target_ids, targets = resolve_targets(c)
     if not target and target_ids:

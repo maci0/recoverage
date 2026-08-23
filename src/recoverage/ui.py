@@ -23,6 +23,7 @@ from recoverage.server import (
     _etag_or_304,
     _finalized,
     _project_dir,
+    _snapshot_db_mtime,
     app,
     compress_payload,
     minify_css,
@@ -112,7 +113,7 @@ def handle_potato() -> bytes | Any:
         # WAL-aware snapshot (see _snapshot_db_mtime), not raw st_mtime: a
         # rebuild that commits only to -wal must still mint a new ETag or
         # browsers keep a stale 304.  Same contract as /data, /asm, /bytes.
-        etag = _etag_or_304(request.query_string)
+        etag = _etag_or_304(_snapshot_db_mtime(), request.query_string)
         body = render_potato(urlparse(request.url)).encode("utf-8")
         resp_body = _compressed(body, "text/html; charset=utf-8")
 

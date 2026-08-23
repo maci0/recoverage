@@ -291,10 +291,10 @@ class TestDbEtag:
         wal = tmp_path / "coverage.db-wal"
         wal.write_bytes(b"")
         monkeypatch.setattr(srv, "_db_path", lambda: db)
-        before = srv._etag_or_304("FAKEDLL", ".text", 16)
+        before = srv._etag_or_304(srv._snapshot_db_mtime(), "FAKEDLL", ".text", 16)
         assert before is not None
         wal.write_bytes(b"y" * 64)
-        after = srv._etag_or_304("FAKEDLL", ".text", 16)
+        after = srv._etag_or_304(srv._snapshot_db_mtime(), "FAKEDLL", ".text", 16)
         assert after is not None
         assert after != before
 
@@ -302,7 +302,7 @@ class TestDbEtag:
         import recoverage.server as srv
 
         monkeypatch.setattr(srv, "_db_path", lambda: tmp_path / "missing.db")
-        assert srv._etag_or_304("T") is None
+        assert srv._etag_or_304(srv._snapshot_db_mtime(), "T") is None
 
     def test_matching_if_none_match_raises_304(self, tmp_path: Path, monkeypatch: Any) -> None:
         import recoverage.server as srv
@@ -310,14 +310,14 @@ class TestDbEtag:
         db = tmp_path / "coverage.db"
         db.write_bytes(b"x" * 64)
         monkeypatch.setattr(srv, "_db_path", lambda: db)
-        etag = srv._etag_or_304("T")
+        etag = srv._etag_or_304(srv._snapshot_db_mtime(), "T")
 
         class _Req:
             headers = {"If-None-Match": etag}
 
         monkeypatch.setattr(srv, "request", _Req())
         with pytest.raises(srv.HTTPResponse) as excinfo:
-            srv._etag_or_304("T")
+            srv._etag_or_304(srv._snapshot_db_mtime(), "T")
         assert excinfo.value.status_code == 304
 
 

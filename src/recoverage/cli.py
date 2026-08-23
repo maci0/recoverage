@@ -468,7 +468,6 @@ def export(
 
     elif output_format == ExportFormat.csv:
         import csv
-        import sys
 
         # lineterminator="\n": the default "\r\n" would be translated again by
         # Windows' text-mode stdout, corrupting every row to \r\r\n.  One \n

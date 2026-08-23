@@ -789,7 +789,7 @@ class TestSseEvents:
             assert frame.startswith(b"event: db-updated\n")
             assert b'"event": "db-updated"' in frame
             payload = json.loads(frame.split(b"data: ", 1)[1])
-            assert payload["db"]["mtime_ns"] == 123456789
+            assert payload["db"]["fingerprint"] == 123456789
             assert payload["db"]["size_bytes"] == 1024
             result.close()
             assert len(api._SSE_CLIENTS) == 0
@@ -810,7 +810,7 @@ class TestSseEvents:
             assert frame.endswith(b"\n\n")
             payload = json.loads(frame.split(b"data: ", 1)[1])
             assert payload["event"] == "db-updated"
-            assert payload["db"]["mtime_ns"] == 987654321
+            assert payload["db"]["fingerprint"] == 987654321
             assert payload["db"]["size_bytes"] == 512
             assert q.empty()
         finally:
