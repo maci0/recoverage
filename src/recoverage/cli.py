@@ -97,6 +97,10 @@ _VERDICT_COLORS: dict[str, int] = {
 # or control sequences when a CSV cell starts with them.
 _CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
 
+# ONE spelling of the operator-facing rebuild advice so it cannot drift
+# between the commands that embed it in their database-error messages.
+_REBUILD_HINT = "(run 'rebrew catalog --json && rebrew build-db' to rebuild it)"
+
 
 def _csv_safe(value: Any) -> Any:
     """Neutralize spreadsheet formula injection (CWE-1236) in exported cells.
@@ -130,8 +134,7 @@ def _open_db_or_exit(*, missing_exit_code: int = 1) -> sqlite3.Connection:
         conn.row_factory = sqlite3.Row
     except sqlite3.Error as exc:
         typer.secho(
-            f"Error: cannot open database {p}: {exc} (run 'rebrew catalog --json && "
-            "rebrew build-db' to rebuild it)",
+            f"Error: cannot open database {p}: {exc} {_REBUILD_HINT}",
             fg=typer.colors.RED,
             err=True,
         )
@@ -175,8 +178,7 @@ def _select_targets(conn: sqlite3.Connection, target: str | None) -> list[str]:
         return _list_targets(conn)
     except sqlite3.Error as exc:
         typer.secho(
-            f"Error: cannot query coverage database: {exc} (run 'rebrew catalog --json && "
-            "rebrew build-db' to rebuild it)",
+            f"Error: cannot query coverage database: {exc} {_REBUILD_HINT}",
             fg=typer.colors.RED,
             err=True,
         )
@@ -194,8 +196,7 @@ def _get_stats(conn: sqlite3.Connection, target: str) -> dict[str, Any]:
         # (schema-less / partially rebuilt) must not surface as a traceback —
         # same clean-exit contract as _select_targets.
         typer.secho(
-            f"Error: cannot read coverage statistics for target {target!r}: {exc} "
-            "(run 'rebrew catalog --json && rebrew build-db' to rebuild it)",
+            f"Error: cannot read coverage statistics for target {target!r}: {exc} {_REBUILD_HINT}",
             fg=typer.colors.RED,
             err=True,
         )
@@ -416,7 +417,9 @@ def serve(
 
     root = _project_dir()
     assets = _assets_dir()
-    listen_url = f"http://{display_host}:{port}" if bind != "127.0.0.1" else f"http://127.0.0.1:{port}"
+    listen_url = (
+        f"http://{display_host}:{port}" if bind != "127.0.0.1" else f"http://127.0.0.1:{port}"
+    )
     # The browser opens against the bound loopback interface: --bind ::1
     # listens on IPv6 loopback only, so the hard-coded http://127.0.0.1 (IPv4)
     # would open a tab that refuses to connect.  Remote binds keep 127.0.0.1 —

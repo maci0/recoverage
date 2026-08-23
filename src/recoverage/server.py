@@ -730,6 +730,30 @@ def _evict_oldest(cache: dict[Any, Any], max_size: int) -> None:
             cache.pop(old_key, None)
 
 
+def _format_hex_dump(raw_bytes: bytes, base_offset: int = 0, max_bytes: int | None = 256) -> str:
+    """Format bytes as the canonical 16-bytes-per-line hex dump.
+
+    ONE definition shared by the /bytes endpoint's ``hex`` payload and
+    Potato Mode's Original Bytes block (the two inline copies had already
+    drifted: a single 48-char hex column vs 8+8 byte columns).  Layout:
+    8-hex-digit offset, hex bytes in two 8-byte columns, ASCII gutter —
+    matching detail.js's client-side dump.  *max_bytes* caps the dump and
+    appends a ``... (N more bytes)`` tail; ``None`` dumps everything.
+    """
+    data = raw_bytes if max_bytes is None else raw_bytes[:max_bytes]
+    lines: list[str] = []
+    for i in range(0, len(data), 16):
+        chunk = data[i : i + 16]
+        offset = f"{base_offset + i:08x}"
+        hex_left = " ".join(f"{b:02x}" for b in chunk[:8])
+        hex_right = " ".join(f"{b:02x}" for b in chunk[8:])
+        ascii_repr = "".join(chr(b) if 32 <= b < 127 else "." for b in chunk)
+        lines.append(f"{offset}  {hex_left:<23s}  {hex_right:<23s}  |{ascii_repr}|")
+    if max_bytes is not None and len(raw_bytes) > max_bytes:
+        lines.append(f"... ({len(raw_bytes) - max_bytes} more bytes)")
+    return "\n".join(lines)
+
+
 def _load_metadata(c: sqlite3.Cursor, target: str) -> dict[str, Any]:
     """Load *target*'s metadata rows as a dict, JSON-decoding values when valid.
 

@@ -427,15 +427,18 @@ def _find_cell_idx(target: str, section: str, predicate) -> int | None:
     try:
         c = conn.cursor()
         c.execute(
-            "SELECT id, functions FROM cells WHERE target = ? AND section_name = ? ORDER BY id",
+            "SELECT functions FROM cells WHERE target = ? AND section_name = ? ORDER BY id",
             (target, section),
         )
-        for idx, funcs_json in c.fetchall():
+        # ?idx= addresses a cell by its POSITION within the section's cell
+        # list (_render_panel indexes cells[idx]; grid links carry that
+        # position), not the cells.id column.
+        for pos, (funcs_json,) in enumerate(c.fetchall()):
             funcs = []
             if funcs_json:
                 funcs = json.loads(funcs_json)
             if predicate(funcs):
-                return int(idx)
+                return pos
     finally:
         conn.close()
     return None
@@ -450,16 +453,19 @@ def test_globals_detail_panel():
         c.execute("SELECT name FROM globals WHERE target = ?", (target,))
         globals_set = {row[0] for row in c.fetchall()}
         c.execute(
-            "SELECT id, section_name, functions FROM cells "
-            "WHERE target = ? AND section_name IN ('.data', '.rdata')",
+            "SELECT section_name, functions FROM cells "
+            "WHERE target = ? AND section_name IN ('.data', '.rdata') ORDER BY id",
             (target,),
         )
         match: tuple[int, str] | None = None
-        for idx, sec, funcs_json in c.fetchall():
+        # Same position-not-id contract as _find_cell_idx above.
+        positions: dict[str, int] = {}
+        for sec, funcs_json in c.fetchall():
             funcs = json.loads(funcs_json) if funcs_json else []
-            if any(fn in globals_set for fn in funcs):
-                match = (int(idx), sec)
-                break
+            pos = positions.get(sec, 0)
+            positions[sec] = pos + 1
+            if match is None and any(fn in globals_set for fn in funcs):
+                match = (pos, sec)
     finally:
         conn.close()
     if not match:

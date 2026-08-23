@@ -35,6 +35,7 @@ from recoverage.server import (
     _db_path,
     _escape_like,
     _etag_or_304,
+    _format_hex_dump,
     _get_capstone_md,
     _get_targets_config,
     _hostname_of,
@@ -577,35 +578,27 @@ def handle_api_targets() -> bytes:
 def handle_api_stats(target: str) -> bytes | Any:
     snap = _snapshot_db_mtime()
     key = (snap, target)
+    stats: dict[str, Any] | None = None
     if snap is not None:
         with _STATS_CACHE_LOCK:
-            cached = _STATS_CACHE.get(key)
-        if cached is not None:
-            return _json_ok(
-                {
-                    "target": target,
-                    "summary": cached["summary"],
-                    "sections": cached["sections"],
-                    "functions_by_status": cached["by_status"],
-                },
-                Cache_Control=CACHE_NO_STORE,
-            )
-
-    with _target_cursor(target) as c:
-        stats = _server._section_stats(c, target)
+            stats = _STATS_CACHE.get(key)
+    if stats is None:
+        with _target_cursor(target) as c:
+            stats = _server._section_stats(c, target)
         if snap is not None:
             with _STATS_CACHE_LOCK:
                 _server._evict_oldest(_STATS_CACHE, _STATS_CACHE_MAX)
                 _STATS_CACHE[key] = stats
-        return _json_ok(
-            {
-                "target": target,
-                "summary": stats["summary"],
-                "sections": stats["sections"],
-                "functions_by_status": stats["by_status"],
-            },
-            Cache_Control=CACHE_NO_STORE,
-        )
+    # ONE response shape for memo hits and fresh builds.
+    return _json_ok(
+        {
+            "target": target,
+            "summary": stats["summary"],
+            "sections": stats["sections"],
+            "functions_by_status": stats["by_status"],
+        },
+        Cache_Control=CACHE_NO_STORE,
+    )
 
 
 def _build_search_index(c: sqlite3.Cursor, target: str) -> dict[str, Any]:
@@ -846,25 +839,23 @@ def _last_verify_payload(vr: sqlite3.Row) -> dict[str, Any]:
     }
 
 
-@app.post("/api/targets/<target>/functions")
-def handle_api_functions_batch(target: str) -> bytes | Any:
-    """Batch function/global lookup by VA list.
+def _batch_request_vas() -> tuple[list[int], Any | None]:
+    """Read + validate the POST /functions body into deduped VA ints.
 
-    Body: ``{"vas": ["0x10001000", ...]}`` (hex strings or integers).  Returns
-    a JSON array of function/global detail objects in input order — the same
-    shape as ``GET /functions/<va>``, including the ``last_verify`` attachment.
-    VAs with no match are omitted from the response (not an error).
+    Returns ``(unique_vas, None)`` on success, ``([], error_response)`` when
+    the body violates the contract: a bounded read (this endpoint is
+    unauthenticated and, with --allow-remote, reachable off-loopback — the
+    payload is fully parsed before the 500-VA cap applies), a JSON object
+    with a non-empty "vas" array capped at _MAX_BATCH_LOOKUP, and entries
+    that are integers or hex strings (base-16 with or without 0x prefix,
+    matching rebrew's parse_va — bare hex like "10001000" is valid here).
     """
-    # Bound the request body: this endpoint is unauthenticated and (with
-    # --allow-remote) reachable off-loopback, and the payload is fully
-    # parsed before the 500-VA cap applies.  A bounded read rejects
-    # oversized bodies whether or not Content-Length is present.
     try:
         raw = request.body.read(_MAX_BATCH_BODY_BYTES + 1)
     except (OSError, ValueError):
         raw = b""
     if len(raw) > _MAX_BATCH_BODY_BYTES:
-        return _json_err(
+        return [], _json_err(
             413,
             {
                 "error": "Request body too large",
@@ -876,7 +867,7 @@ def handle_api_functions_batch(target: str) -> bytes | Any:
     except (UnicodeDecodeError, json.JSONDecodeError):
         payload = None
     if not isinstance(payload, dict):
-        return _json_err(
+        return [], _json_err(
             400,
             {
                 "error": "Body must be a JSON object",
@@ -885,7 +876,7 @@ def handle_api_functions_batch(target: str) -> bytes | Any:
         )
     vas = payload.get("vas")
     if not isinstance(vas, list):
-        return _json_err(
+        return [], _json_err(
             400,
             {
                 "error": "vas must be an array",
@@ -893,9 +884,9 @@ def handle_api_functions_batch(target: str) -> bytes | Any:
             },
         )
     if not vas:
-        return _json_err(400, {"error": "vas must not be empty"})
+        return [], _json_err(400, {"error": "vas must not be empty"})
     if len(vas) > _MAX_BATCH_LOOKUP:
-        return _json_err(
+        return [], _json_err(
             400,
             {
                 "error": f"vas list too large (max {_MAX_BATCH_LOOKUP})",
@@ -909,17 +900,15 @@ def handle_api_functions_batch(target: str) -> bytes | Any:
     va_ints: list[int] = []
     for entry in vas:
         if isinstance(entry, bool):
-            return invalid_va(entry, "VAs must be hex strings or integers")
+            return [], invalid_va(entry, "VAs must be hex strings or integers")
         if isinstance(entry, int):
             if entry < 0:
-                return invalid_va(entry, "VAs must be non-negative")
+                return [], invalid_va(entry, "VAs must be non-negative")
             if entry > VA_MAX:
-                return invalid_va(entry, f"VA out of range (max 0x{VA_MAX:x})")
+                return [], invalid_va(entry, f"VA out of range (max 0x{VA_MAX:x})")
             va_ints.append(entry)
         elif isinstance(entry, str):
             try:
-                # Base-16 (with or without 0x prefix), matching rebrew's
-                # parse_va — bare hex like "10001000" is valid here.
                 parsed_va = int(entry.strip(), 16)
                 if parsed_va < 0:
                     raise ValueError("negative VA")
@@ -927,12 +916,28 @@ def handle_api_functions_batch(target: str) -> bytes | Any:
                     raise ValueError("VA exceeds 64 bits")
                 va_ints.append(parsed_va)
             except ValueError:
-                return invalid_va(entry, f"unparseable VA {entry!r}; expected hex like 0x10001000")
+                return [], invalid_va(
+                    entry, f"unparseable VA {entry!r}; expected hex like 0x10001000"
+                )
         else:
-            return invalid_va(entry, "VAs must be hex strings or integers")
+            return [], invalid_va(entry, "VAs must be hex strings or integers")
 
     # Preserve input order; duplicate VAs collapse to a single result.
-    unique_vas = list(dict.fromkeys(va_ints))
+    return list(dict.fromkeys(va_ints)), None
+
+
+@app.post("/api/targets/<target>/functions")
+def handle_api_functions_batch(target: str) -> bytes | Any:
+    """Batch function/global lookup by VA list.
+
+    Body: ``{"vas": ["0x10001000", ...]}`` (hex strings or integers).  Returns
+    a JSON array of function/global detail objects in input order — the same
+    shape as ``GET /functions/<va>``, including the ``last_verify`` attachment.
+    VAs with no match are omitted from the response (not an error).
+    """
+    unique_vas, err = _batch_request_vas()
+    if err is not None:
+        return err
 
     with _target_cursor(target) as c:
         results: list[dict[str, Any]] = []
@@ -1195,22 +1200,15 @@ def handle_api_bytes(target: str, section: str) -> bytes | Any:
             return _json_err(400, {"error": "offset beyond section bounds"})
         chunk = target_data[file_start : file_start + req_size]
 
-        # Format as hex lines (16 bytes per line)
-        hex_lines: list[str] = []
-        for i in range(0, len(chunk), 16):
-            line_bytes = chunk[i : i + 16]
-            offset_str = f"{req_offset + i:08x}"
-            hex_part = " ".join(f"{b:02x}" for b in line_bytes)
-            ascii_part = "".join(chr(b) if 32 <= b < 127 else "." for b in line_bytes)
-            hex_lines.append(f"{offset_str}  {hex_part:<48s}  |{ascii_part}|")
-
         return _json_ok(
             {
                 "target": target,
                 "section": section,
                 "offset": req_offset,
                 "size": len(chunk),
-                "hex": "\n".join(hex_lines),
+                # Shared canonical hex dump (see server._format_hex_dump);
+                # the chunk is already clamped, so dump it whole.
+                "hex": _format_hex_dump(chunk, base_offset=req_offset, max_bytes=None),
                 "raw": list(chunk),
             },
             Cache_Control=CACHE_REVALIDATE,

@@ -39,6 +39,7 @@ from recoverage.server import (
     _db_path,
     _escape_like,
     _evict_oldest,
+    _format_hex_dump,
     _load_dll,
     _load_metadata,
     _snapshot_db_mtime,
@@ -538,22 +539,6 @@ def wrap_text(text: str, width: int = 45) -> str:
 def _esc(text: object) -> str:
     """HTML-escape text for safe rendering."""
     return _html_escape(str(text))
-
-
-def _format_hex_dump(raw_bytes: bytes, base_offset: int = 0, max_bytes: int = 256) -> str:
-    """Format raw bytes as a classic hex dump (16 bytes per line)."""
-    data = raw_bytes[:max_bytes]
-    lines: list[str] = []
-    for i in range(0, len(data), 16):
-        chunk = data[i : i + 16]
-        offset = f"{base_offset + i:08x}"
-        hex_left = " ".join(f"{b:02x}" for b in chunk[:8])
-        hex_right = " ".join(f"{b:02x}" for b in chunk[8:])
-        ascii_repr = "".join(chr(b) if 32 <= b < 127 else "." for b in chunk)
-        lines.append(f"{offset}  {hex_left:<23s}  {hex_right:<23s}  |{ascii_repr}|")
-    if len(raw_bytes) > max_bytes:
-        lines.append(f"... ({len(raw_bytes) - max_bytes} more bytes)")
-    return "\n".join(lines)
 
 
 _MAX_RAW_READ = 1 << 20  # 1 MiB — more than any plausible function or data cell
@@ -1532,12 +1517,13 @@ def _render_potato_inner(
     )
 
     # ── Grid (with cell merging) ─────────────────────────────────
+    # Defaults for whichever view the request selects.
+    grid_html = ""
+    block_count = 0
+    panel_html = ""
+    sec_stats: dict[str, Any] = {}
     functions_html = ""
     if view == "functions":
-        grid_html = ""
-        block_count = 0
-        panel_html = ""
-        sec_stats = {}
         functions_html = _render_function_list(
             c,
             target,
