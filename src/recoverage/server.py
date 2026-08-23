@@ -15,6 +15,7 @@ import gzip
 import hashlib
 import hmac
 import importlib.util
+import ipaddress
 import json
 import logging
 import sqlite3
@@ -80,6 +81,32 @@ ALLOWED_HOSTS: set[str] | None = None
 # regen endpoint's remote-addr/Origin checks, and the DNS-rebinding Host
 # allowlist above.  Membership tests only — order carries no meaning.
 LOOPBACK_HOSTS: tuple[str, ...] = ("127.0.0.1", "::1", "localhost")
+
+
+def _peer_is_loopback(addr: str) -> bool:
+    """True when socket peer address *addr* connects from the local host.
+
+    Exact LOOPBACK_HOSTS membership plus IPv4-mapped IPv6 spellings
+    (``::ffff:127.0.0.1``): a dual-stack listener (e.g. ``--bind ::`` on
+    Linux, where the OS default keeps IPv4 accepted on the v6 socket)
+    reports IPv4 peers in mapped form, and plain string comparison would
+    then 403 the operator's own browser on POST /api/regen.  Parsed with
+    ipaddress rather than prefix-matching so hex spellings classify by
+    value, not text.  Deliberately NOT wider than LOOPBACK_HOSTS: other
+    127.x addresses stay rejected (pinned by tests).
+    """
+    if addr in LOOPBACK_HOSTS:
+        return True
+    try:
+        ip = ipaddress.ip_address(addr)
+    except ValueError:
+        return False
+    # .ipv4_mapped exists only on IPv6Address.
+    if isinstance(ip, ipaddress.IPv6Address):
+        v4 = ip.ipv4_mapped
+        if v4 is not None:
+            return str(v4) == "127.0.0.1"
+    return str(ip) == "::1"
 
 
 def configure_security(

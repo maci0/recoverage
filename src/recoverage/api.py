@@ -45,6 +45,7 @@ from recoverage.server import (
     _load_dll,
     _load_metadata,
     _open_db,
+    _peer_is_loopback,
     _project_dir,
     _snapshot_db_mtime,
     _target_filename,
@@ -1220,8 +1221,10 @@ def handle_api_bytes(target: str, section: str) -> bytes | Any:
 def handle_regen() -> bytes | Any:
     global _regen_last_attempt
 
-    remote = request.environ.get("REMOTE_ADDR", "")
-    if remote not in LOOPBACK_HOSTS:
+    # `or ""` also folds an explicit None environ value into the rejected-by-
+    # default path (same clean 403 as a missing REMOTE_ADDR, no TypeError).
+    remote = request.environ.get("REMOTE_ADDR") or ""
+    if not _peer_is_loopback(remote):
         return _json_err(
             403,
             {

@@ -110,6 +110,28 @@ class TestRegenOriginValidation:
         status, _, _ = wsgi_request("POST", "/api/regen", remote_addr="::1")
         assert not status.startswith("403")
 
+    def test_ipv4_mapped_loopback_remote_addr_accepted(self) -> None:
+        """::ffff:127.0.0.1 REMOTE_ADDR must pass the localhost-only guard.
+
+        Dual-stack listeners (--bind :: on Linux keeps IPv4 accepted on the
+        v6 socket) report IPv4 peers through the mapped spelling; a plain
+        string comparison would 403 the operator's own browser on reload.
+        """
+        status, _, _ = wsgi_request("POST", "/api/regen", remote_addr="::ffff:127.0.0.1")
+        assert not status.startswith("403")
+
+    @pytest.mark.parametrize(
+        "remote_addr",
+        [
+            "::ffff:192.168.1.100",  # mapped EXTERNAL peer must stay rejected
+            "::ffff:c0a8:164",  # same address in hex spelling — classify by value
+            "not-an-ip",  # unparseable: reject, never crash
+        ],
+    )
+    def test_ipv4_mapped_and_garbage_non_loopback_rejected(self, remote_addr: str) -> None:
+        status, _, _ = wsgi_request("POST", "/api/regen", remote_addr=remote_addr)
+        assert status.startswith("403")
+
     @pytest.mark.parametrize(
         "remote_addr",
         [
