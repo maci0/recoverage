@@ -1192,6 +1192,35 @@ class TestErrorResponseShape:
         status, headers, body = wsgi_get(f"/api/targets/{target}/stats")
         self._check(status, headers, body, "db_unavailable")
 
+    def test_503_db_unavailable_is_logged_with_cause(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A swallowed sqlite3.Error in the shared target cursor must not make
+        a missing/corrupt database invisible: the failure is logged with the
+        request context and the 503 detail carries the underlying cause."""
+        import logging as _logging
+
+        import recoverage.api as api
+
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+
+        def _boom() -> sqlite3.Connection:
+            raise sqlite3.OperationalError("unable to open database file")
+
+        monkeypatch.setattr(api, "_db", _boom)
+        with caplog.at_level(_logging.WARNING, logger="recoverage"):
+            status, headers, body = wsgi_get(f"/api/targets/{target}/stats")
+        self._check(status, headers, body, "db_unavailable")
+        data = json.loads(decode_body(body, headers))
+        assert "unable to open database file" in data["detail"]
+        logged = [rec.getMessage() for rec in caplog.records]
+        assert any(
+            "Database unavailable" in msg and "unable to open database file" in msg
+            for msg in logged
+        )
+
 
 # ── Host-header validation & CORS allowlist (security) ─────────────
 

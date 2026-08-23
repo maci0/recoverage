@@ -196,8 +196,10 @@ def _target_cursor(target: str) -> Generator[sqlite3.Cursor]:
     """
     try:
         conn = _db()
-    except sqlite3.Error:
-        raise _json_err(503, {"error": "Database unavailable"}) from None
+    except sqlite3.Error as exc:
+        # Logged + detailed by the shared helper — a swallowed sqlite3.Error
+        # here would make a missing/corrupt DB invisible in the server log.
+        raise _server._db_unavailable_err(exc) from None
     try:
         c = conn.cursor()
         not_found = _require_target(c, target)

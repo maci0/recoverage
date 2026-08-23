@@ -457,6 +457,53 @@ class TestServeKeyboardInterrupt:
         result = runner.invoke(app, ["serve", "--no-open", "--port", "8123"])
         assert result.exit_code == 0
 
+    def test_ctrl_c_cancels_deferred_browser_opener(self, monkeypatch: Any) -> None:
+        """A Ctrl+C inside the opener's 0.5s scheduling window is a failed
+        start: like the bind-failure path, it must cancel the timer so no
+        browser tab opens pointing at a port that was never served."""
+        import time
+
+        from recoverage.server import app as server_app
+
+        monkeypatch.setattr("recoverage.api._ensure_db_watcher", lambda: None)
+        opened: list[str] = []
+        monkeypatch.setattr("recoverage.server.open_browser", lambda url: opened.append(url))
+
+        def raise_interrupt(self: Any, **kwargs: Any) -> None:
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(type(server_app), "run", raise_interrupt)
+        result = runner.invoke(app, ["serve", "--port", "8123"])
+        assert result.exit_code == 0
+        time.sleep(0.7)  # past the timer's 0.5s deadline
+        assert opened == [], "cancelled opener still fired after Ctrl+C"
+
+
+class TestRegenLaunchFailures:
+    def test_unlaunchable_uv_exits_cleanly(self, monkeypatch: Any, tmp_path: Path) -> None:
+        """uv present on PATH but not executable (PermissionError) must get
+        the same clean exit-1 contract as a missing uv, not a raw traceback —
+        matching the API regen endpoint's OSError handling."""
+        import os
+        import stat
+
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        uv = bin_dir / "uv"
+        uv.write_text("#!/bin/sh\nexit 0\n")
+        # Deliberately NO exec bit — exec() fails with EACCES/PermissionError.
+        mode = uv.stat().st_mode & ~stat.S_IXUSR & ~stat.S_IXGRP & ~stat.S_IXOTH
+        uv.chmod(mode)
+        monkeypatch.setenv("PATH", str(bin_dir))
+
+        if os.name != "posix":
+            pytest.skip("POSIX exec-permission semantics")
+
+        result = runner.invoke(app, ["regen"])
+        assert result.exit_code == 1
+        assert "could not run 'uv'" in result.output
+        assert "Traceback" not in result.output
+
 
 class TestBrokenPipe:
     def test_main_converts_broken_pipe_to_clean_exit(self, monkeypatch: Any) -> None:

@@ -194,6 +194,16 @@ def _run_regen(root: Path) -> None:
         except FileNotFoundError:
             typer.secho("Error: 'uv' not found — is it installed?", fg=typer.colors.RED, err=True)
             raise typer.Exit(1) from None
+        except OSError as e:
+            # uv exists but cannot be launched (not executable, ENOEXEC, a
+            # PATH entry that is a plain file): same clean-exit contract as
+            # the API's regen endpoint instead of a raw traceback.
+            typer.secho(
+                f"Error: could not run 'uv' for 'rebrew {step}': {type(e).__name__}: {e}",
+                fg=typer.colors.RED,
+                err=True,
+            )
+            raise typer.Exit(1) from None
         except subprocess.CalledProcessError as e:
             typer.secho(
                 f"Error: 'rebrew {step}' failed (exit code {e.returncode})",
@@ -370,8 +380,11 @@ def serve(
     except KeyboardInterrupt:
         # Ctrl+C is the documented way to stop the dashboard; wsgiref's
         # accept loop unwinds with KeyboardInterrupt — exit quietly instead
-        # of dumping a traceback.
-        pass
+        # of dumping a traceback.  Cancel the deferred browser opener like
+        # the bind-failure path: a Ctrl+C inside the 0.5s scheduling window
+        # is also a failed start and must not pop a tab at a dead port.
+        if browser_timer is not None:
+            browser_timer.cancel()
     except OSError as e:
         # EADDRINUSE is the most common failure for a dashboard tool — a
         # second instance or another dev server on the same port.

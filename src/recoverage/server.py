@@ -1154,6 +1154,33 @@ def _require_auth() -> None:
 app.add_hook("before_request", _require_auth)
 
 
+def _db_unavailable_err(exc: sqlite3.Error) -> Any:
+    """JSON 503 for an unreadable coverage.db, logged so the failure is visible.
+
+    ONE tail for every DB-open failure path (the shared target cursor and the
+    unexpected-error handler): without the log line a missing or corrupt
+    database is invisible in the server log — the 503 only reaches the one
+    client that happened to make the request.  The response detail carries the
+    OS/SQLite cause and the rebuild hint so an operator can act on the API
+    response alone, matching Potato Mode's 503 page.
+    """
+    _log.warning(
+        "Database unavailable serving %s %s: %s: %s",
+        request.method,
+        request.path,
+        type(exc).__name__,
+        exc,
+    )
+    return _json_err(
+        503,
+        {
+            "error": "Database unavailable",
+            "detail": f"{type(exc).__name__}: {exc} — "
+            "run 'rebrew catalog --json && rebrew build-db' to create or rebuild it",
+        },
+    )
+
+
 @app.error(500)
 def _handle_unexpected_error(error: Any) -> Any:
     """Keep every surface's error contract when a handler raises unexpectedly.
@@ -1172,8 +1199,7 @@ def _handle_unexpected_error(error: Any) -> Any:
     """
     exc = getattr(error, "exception", None)
     if isinstance(exc, sqlite3.Error):
-        _log.warning("Database error serving %s: %s", request.path, exc)
-        return _json_err(503, {"error": "Database unavailable"})
+        return _db_unavailable_err(exc)
     # Returning the HTTPError itself would make _cast re-enter the error
     # handler (recursion until the wsgi catch-all); returning None would emit
     # an empty 500 body.
