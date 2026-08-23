@@ -278,17 +278,23 @@ class TestExportCsvFormulaInjection:
     A crafted name must not survive export as a spreadsheet-executable
     formula (CWE-1236): cells starting with = + - @ are apostrophe-prefixed."""
 
-    def test_formula_section_name_is_neutralized(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def _export_rows(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, section: str
+    ) -> list[list[str]]:
+        """Export a one-section DB as CSV; return the parsed rows."""
         db = tmp_path / "cov.db"
-        evil = '=HYPERLINK("http://evil.example","pwned")'
-        _make_section_db(db, [evil], [(evil, 0, 100, "exact")])
+        _make_section_db(db, [section], [(section, 0, 100, "exact")])
         monkeypatch.setattr("recoverage.cli._db_path", lambda: db)
 
         result = runner.invoke(app, ["export", "--format", "csv"])
         assert result.exit_code == 0
-        rows = list(csv.reader(io.StringIO(result.output)))
+        return list(csv.reader(io.StringIO(result.output)))
+
+    def test_formula_section_name_is_neutralized(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        evil = '=HYPERLINK("http://evil.example","pwned")'
+        rows = self._export_rows(tmp_path, monkeypatch, evil)
         sec_col = rows[0].index("section")
         assert rows[1][sec_col] == "'" + evil
 
@@ -296,26 +302,14 @@ class TestExportCsvFormulaInjection:
     def test_all_formula_leads_are_escaped(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, prefix: str
     ) -> None:
-        db = tmp_path / "cov.db"
-        _make_section_db(db, [f"{prefix}evil"], [(f"{prefix}evil", 0, 100, "exact")])
-        monkeypatch.setattr("recoverage.cli._db_path", lambda: db)
-
-        result = runner.invoke(app, ["export", "--format", "csv"])
-        assert result.exit_code == 0
-        rows = list(csv.reader(io.StringIO(result.output)))
+        rows = self._export_rows(tmp_path, monkeypatch, f"{prefix}evil")
         sec_col = rows[0].index("section")
         assert rows[1][sec_col] == f"'{prefix}evil"
 
     def test_normal_names_pass_through_untouched(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        db = tmp_path / "cov.db"
-        _make_section_db(db, [".text"], [(".text", 0, 100, "exact")])
-        monkeypatch.setattr("recoverage.cli._db_path", lambda: db)
-
-        result = runner.invoke(app, ["export", "--format", "csv"])
-        assert result.exit_code == 0
-        rows = list(csv.reader(io.StringIO(result.output)))
+        rows = self._export_rows(tmp_path, monkeypatch, ".text")
         sec_col = rows[0].index("section")
         assert rows[1][sec_col] == ".text"
 

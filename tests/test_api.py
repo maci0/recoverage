@@ -480,6 +480,33 @@ class TestApiBytes:
     def _get(self, query: str, section: str = ".text") -> tuple[str, dict[str, str], bytes]:
         return wsgi_get(f"/api/targets/FAKEDLL/sections/{section}/bytes?{query}")
 
+    def _foreign_sections_db(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, row: str
+    ) -> None:
+        """Point the app at a one-section DB whose sections row carries an
+        offset shape rebrew never writes (NULL or negative fileOffset)."""
+        import recoverage.api as api
+        import recoverage.server as srv
+
+        db = tmp_path / "coverage.db"
+        conn = sqlite3.connect(db)
+        conn.execute(
+            "CREATE TABLE sections (target TEXT, name TEXT, va INTEGER, size INTEGER,"
+            " fileOffset INTEGER, unitBytes INTEGER, columns INTEGER)"
+        )
+        conn.execute(f"INSERT INTO sections VALUES ({row})")
+        conn.commit()
+        conn.close()
+
+        def _tmp_db() -> sqlite3.Connection:
+            c = sqlite3.connect(sqlite_ro_uri(db), uri=True)
+            c.row_factory = sqlite3.Row
+            return c
+
+        monkeypatch.setattr(api, "_db", _tmp_db)
+        monkeypatch.setattr(srv, "_db_path", lambda: db)
+        monkeypatch.setattr(api, "_require_target", lambda c, t: None)
+
     def test_happy_path_serves_slice_as_hex_and_raw(self) -> None:
         status, headers, body = self._get("offset=0&size=16")
         assert status.startswith("200")
@@ -535,27 +562,7 @@ class TestApiBytes:
         """A .bss-style section (NULL va/fileOffset/size) has nothing on disk
         to slice: the endpoint must answer its JSON 422 contract instead of a
         TypeError 500 from the pointer arithmetic."""
-        import recoverage.api as api
-        import recoverage.server as srv
-
-        db = tmp_path / "coverage.db"
-        conn = sqlite3.connect(db)
-        conn.execute(
-            "CREATE TABLE sections (target TEXT, name TEXT, va INTEGER, size INTEGER,"
-            " fileOffset INTEGER, unitBytes INTEGER, columns INTEGER)"
-        )
-        conn.execute("INSERT INTO sections VALUES ('T', '.bss', NULL, NULL, NULL, 16, 8)")
-        conn.commit()
-        conn.close()
-
-        def _tmp_db() -> sqlite3.Connection:
-            c = sqlite3.connect(sqlite_ro_uri(db), uri=True)
-            c.row_factory = sqlite3.Row
-            return c
-
-        monkeypatch.setattr(api, "_db", _tmp_db)
-        monkeypatch.setattr(srv, "_db_path", lambda: db)
-        monkeypatch.setattr(api, "_require_target", lambda c, t: None)
+        self._foreign_sections_db(tmp_path, monkeypatch, "'T', '.bss', NULL, NULL, NULL, 16, 8")
         status, headers, body = wsgi_get("/api/targets/T/sections/.bss/bytes?offset=0&size=4")
         assert status.startswith("422")
         data = json.loads(decode_body(body, headers))
@@ -579,27 +586,7 @@ class TestApiBytes:
         rebrew-built DB cannot: the schema CHECKs it >= 0) must get the 400
         contract instead of Python's negative-index slicing silently serving
         tail-of-binary bytes — same guard as /asm."""
-        import recoverage.api as api
-        import recoverage.server as srv
-
-        db = tmp_path / "coverage.db"
-        conn = sqlite3.connect(db)
-        conn.execute(
-            "CREATE TABLE sections (target TEXT, name TEXT, va INTEGER, size INTEGER,"
-            " fileOffset INTEGER, unitBytes INTEGER, columns INTEGER)"
-        )
-        conn.execute("INSERT INTO sections VALUES ('T', '.text', 4096, 4096, -4096, 16, 8)")
-        conn.commit()
-        conn.close()
-
-        def _tmp_db() -> sqlite3.Connection:
-            c = sqlite3.connect(sqlite_ro_uri(db), uri=True)
-            c.row_factory = sqlite3.Row
-            return c
-
-        monkeypatch.setattr(api, "_db", _tmp_db)
-        monkeypatch.setattr(srv, "_db_path", lambda: db)
-        monkeypatch.setattr(api, "_require_target", lambda c, t: None)
+        self._foreign_sections_db(tmp_path, monkeypatch, "'T', '.text', 4096, 4096, -4096, 16, 8")
         status, headers, body = wsgi_get("/api/targets/T/sections/.text/bytes?offset=0&size=4")
         assert status.startswith("400")
         data = json.loads(decode_body(body, headers))
@@ -942,29 +929,48 @@ class TestSseEvents:
             api._stop_db_watcher()
 
 
+def _sequential_snapshot(seq: list[tuple[int, int]]) -> Any:
+    """Snapshot stub yielding *seq*'s values in order, then repeating the last."""
+    state = {"i": 0}
+
+    def fake_snapshot() -> tuple[int, int]:
+        i = min(state["i"], len(seq) - 1)
+        value = seq[i]
+        state["i"] += 1
+        return value
+
+    return fake_snapshot
+
+
+def _start_watcher(
+    api: Any, monkeypatch: pytest.MonkeyPatch, snapshot: Any, broadcast: Any
+) -> tuple[threading.Event, threading.Thread]:
+    """Patch the watcher's inputs and start one loop thread at test speed.
+
+    Caller stops and joins the returned (stop, thread) pair.
+    """
+    monkeypatch.setattr(api, "_snapshot_db_mtime", snapshot)
+    monkeypatch.setattr(api, "_broadcast_db_updated", broadcast)
+    monkeypatch.setattr(api, "_SSE_POLL_INTERVAL_SECONDS", 0.01)
+    stop = threading.Event()
+    thread = threading.Thread(target=api._db_watcher_loop, args=(stop,), daemon=True)
+    thread.start()
+    return stop, thread
+
+
 class TestSseDbWatcher:
     """Background watcher: polls mtime and broadcasts on change."""
 
     def test_watcher_broadcasts_on_mtime_change(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import recoverage.api as api
 
-        seq = [(111, 1), (111, 1), (222, 2)]
-        state = {"i": 0}
-
-        def fake_snapshot() -> tuple[int, int]:
-            i = min(state["i"], len(seq) - 1)
-            value = seq[i]
-            state["i"] += 1
-            return value
-
         calls: list[tuple[int, int]] = []
-        monkeypatch.setattr(api, "_snapshot_db_mtime", fake_snapshot)
-        monkeypatch.setattr(api, "_broadcast_db_updated", lambda s: calls.append(s))
-        monkeypatch.setattr(api, "_SSE_POLL_INTERVAL_SECONDS", 0.01)
-
-        stop = threading.Event()
-        thread = threading.Thread(target=api._db_watcher_loop, args=(stop,), daemon=True)
-        thread.start()
+        stop, thread = _start_watcher(
+            api,
+            monkeypatch,
+            _sequential_snapshot([(111, 1), (111, 1), (222, 2)]),
+            lambda s: calls.append(s),
+        )
         try:
             deadline = time.monotonic() + 2
             while len(calls) < 1 and time.monotonic() < deadline:
@@ -977,14 +983,8 @@ class TestSseDbWatcher:
     def test_watcher_ignores_unchanged_mtime(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import recoverage.api as api
 
-        monkeypatch.setattr(api, "_snapshot_db_mtime", lambda: (111, 1))
         calls: list[tuple[int, int]] = []
-        monkeypatch.setattr(api, "_broadcast_db_updated", lambda s: calls.append(s))
-        monkeypatch.setattr(api, "_SSE_POLL_INTERVAL_SECONDS", 0.01)
-
-        stop = threading.Event()
-        thread = threading.Thread(target=api._db_watcher_loop, args=(stop,), daemon=True)
-        thread.start()
+        stop, thread = _start_watcher(api, monkeypatch, lambda: (111, 1), lambda s: calls.append(s))
         try:
             time.sleep(0.05)
             assert calls == []
@@ -1611,6 +1611,77 @@ class TestNormalizeOriginEdges:
         assert _normalize_origin("http://[::1]:8001") == "http://[::1]:8001"
 
 
+def _make_schema_gate_db(tmp_path: Path, cells: list[tuple[str, int, int, str]] = ()) -> Any:
+    """A minimal but schema-gate-valid v4 DB (passes _db()'s shape check),
+    optionally seeded with (section, start, end, state) cells for target GAME."""
+    db = tmp_path / "coverage.db"
+    conn = sqlite3.connect(db)
+    c = conn.cursor()
+    c.execute("CREATE TABLE metadata (target TEXT, key TEXT, value TEXT)")
+    c.execute(
+        "CREATE TABLE sections (target TEXT, name TEXT, va INTEGER, size INTEGER, "
+        "fileOffset INTEGER, unitBytes INTEGER, columns INTEGER)"
+    )
+    c.execute(
+        "CREATE TABLE cells (id INTEGER PRIMARY KEY AUTOINCREMENT, target TEXT, "
+        "section_name TEXT, start INTEGER, end INTEGER, span INTEGER, state TEXT, "
+        "functions TEXT DEFAULT '[]', label TEXT, parent_function TEXT)"
+    )
+    c.execute(
+        "CREATE TABLE functions (target TEXT, va INTEGER, name TEXT, vaStart TEXT, "
+        "size INTEGER, "
+        "fileOffset INTEGER, status TEXT, module TEXT, cflags TEXT, symbol TEXT, "
+        "markerType TEXT, ghidra_name TEXT, list_name TEXT, is_thunk INTEGER, "
+        "is_export INTEGER, sha256 TEXT, files TEXT, detected_by TEXT, size_by_tool TEXT, "
+        "textOffset INTEGER, blocker TEXT, blockerDelta INTEGER, size_reason TEXT, "
+        "similarity REAL)"
+    )
+    c.execute(
+        "CREATE TABLE globals (target TEXT, name TEXT, va INTEGER, decl TEXT, files TEXT, "
+        "module TEXT, size INTEGER)"
+    )
+    c.execute(
+        "CREATE TABLE verify_results (target TEXT, va INTEGER, verified_at TEXT, "
+        "byte_delta INTEGER, diff_lines TEXT, similarity REAL)"
+    )
+    c.execute("CREATE TABLE history (id INTEGER)")
+    c.execute(
+        "CREATE VIEW section_cell_stats AS SELECT target, section_name, "
+        "COUNT(*) AS total_cells, 0 AS exact_count, 0 AS reloc_count, 0 AS near_match_count, "
+        "0 AS stub_count, 0 AS padding_count, 0 AS data_count, 0 AS thunk_count, "
+        "0 AS none_count, 0 AS proven_count, 0 AS size_mismatch_count "
+        "FROM cells GROUP BY target, section_name"
+    )
+    c.execute("INSERT INTO metadata VALUES ('GAME', 'db_version', '\"4\"')")
+    if cells:
+        c.executemany(
+            "INSERT INTO cells (target, section_name, start, end, span, state)"
+            " VALUES ('GAME', ?, ?, ?, 1, ?)",
+            list(cells),
+        )
+    conn.commit()
+    conn.close()
+    return db
+
+
+def _point_app_at_db(monkeypatch: pytest.MonkeyPatch, db: Any) -> Any:
+    """Point the app at a synthetic DB and return the mock request."""
+    import recoverage.api as api
+
+    def _open_like(p: Any) -> Any:
+        conn = sqlite3.connect(sqlite_ro_uri(p), uri=True)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    req = type("R", (), {"headers": {}, "query": {}})()
+    monkeypatch.setattr(api, "_db_path", lambda: db)
+    monkeypatch.setattr("recoverage.server._db_path", lambda: db)
+    monkeypatch.setattr(api, "_open_db", _open_like)
+    monkeypatch.setattr(api, "_require_target", lambda c, t: None)
+    monkeypatch.setattr(api, "request", req)
+    return req
+
+
 class TestDataPayloadMemo:
     """/api/targets/<t>/data memoises the assembled payload per DB fingerprint.
 
@@ -1620,69 +1691,13 @@ class TestDataPayloadMemo:
     """
 
     def _make_db(self, tmp_path: Any) -> Any:
-        """A minimal but schema-gate-valid v4 DB (passes _db()'s shape check)."""
-        import sqlite3
-
-        db = tmp_path / "coverage.db"
-        conn = sqlite3.connect(db)
-        c = conn.cursor()
-        c.execute("CREATE TABLE metadata (target TEXT, key TEXT, value TEXT)")
-        c.execute(
-            "CREATE TABLE sections (target TEXT, name TEXT, va INTEGER, size INTEGER, "
-            "fileOffset INTEGER, unitBytes INTEGER, columns INTEGER)"
-        )
-        c.execute(
-            "CREATE TABLE cells (id INTEGER, target TEXT, section_name TEXT, start INTEGER, "
-            "end INTEGER, span INTEGER, state TEXT, functions TEXT, label TEXT, "
-            "parent_function TEXT)"
-        )
-        c.execute(
-            "CREATE TABLE functions (target TEXT, va INTEGER, name TEXT, vaStart TEXT, "
-            "size INTEGER, "
-            "fileOffset INTEGER, status TEXT, module TEXT, cflags TEXT, symbol TEXT, "
-            "markerType TEXT, ghidra_name TEXT, list_name TEXT, is_thunk INTEGER, "
-            "is_export INTEGER, sha256 TEXT, files TEXT, detected_by TEXT, size_by_tool TEXT, "
-            "textOffset INTEGER, blocker TEXT, blockerDelta INTEGER, size_reason TEXT, "
-            "similarity REAL)"
-        )
-        c.execute(
-            "CREATE TABLE globals (target TEXT, name TEXT, va INTEGER, decl TEXT, files TEXT, "
-            "module TEXT, size INTEGER)"
-        )
-        c.execute(
-            "CREATE TABLE verify_results (target TEXT, va INTEGER, verified_at TEXT, "
-            "byte_delta INTEGER, diff_lines TEXT, similarity REAL)"
-        )
-        c.execute("CREATE TABLE history (id INTEGER)")
-        c.execute(
-            "CREATE VIEW section_cell_stats AS SELECT target, section_name, "
-            "COUNT(*) AS total_cells, 0 AS exact_count, 0 AS reloc_count, 0 AS near_match_count, "
-            "0 AS stub_count, 0 AS padding_count, 0 AS data_count, 0 AS thunk_count, "
-            "0 AS none_count, 0 AS proven_count, 0 AS size_mismatch_count "
-            "FROM cells GROUP BY target, section_name"
-        )
-        c.execute("INSERT INTO metadata VALUES ('GAME', 'db_version', '\"4\"')")
-        conn.commit()
-        conn.close()
-        return db
+        return _make_schema_gate_db(tmp_path)
 
     def _patch(self, tmp_path: Any, monkeypatch: Any) -> Any:
         """Point the app at a synthetic DB and return the mock request."""
         import recoverage.api as api
 
-        db = self._make_db(tmp_path)
-
-        def _open_like(p: Any) -> Any:
-            conn = sqlite3.connect(sqlite_ro_uri(p), uri=True)
-            conn.row_factory = sqlite3.Row
-            return conn
-
-        req = type("R", (), {"headers": {}, "query": {}})()
-        monkeypatch.setattr(api, "_db_path", lambda: db)
-        monkeypatch.setattr("recoverage.server._db_path", lambda: db)
-        monkeypatch.setattr(api, "_open_db", _open_like)
-        monkeypatch.setattr(api, "_require_target", lambda c, t: None)
-        monkeypatch.setattr(api, "request", req)
+        req = _point_app_at_db(monkeypatch, self._make_db(tmp_path))
         api._clear_data_cache()
         return req
 
@@ -2025,15 +2040,6 @@ class TestDbWatcherResilience:
     def test_watcher_survives_broadcast_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import recoverage.api as api
 
-        seq = [(111, 1), (222, 2), (333, 3)]
-        state = {"i": 0}
-
-        def fake_snapshot() -> tuple[int, int]:
-            i = min(state["i"], len(seq) - 1)
-            value = seq[i]
-            state["i"] += 1
-            return value
-
         calls: list[tuple[int, int]] = []
 
         def flaky_broadcast(snapshot: tuple[int, int]) -> None:
@@ -2041,13 +2047,12 @@ class TestDbWatcherResilience:
             if len(calls) == 1:
                 raise RuntimeError("boom")
 
-        monkeypatch.setattr(api, "_snapshot_db_mtime", fake_snapshot)
-        monkeypatch.setattr(api, "_broadcast_db_updated", flaky_broadcast)
-        monkeypatch.setattr(api, "_SSE_POLL_INTERVAL_SECONDS", 0.01)
-
-        stop = threading.Event()
-        thread = threading.Thread(target=api._db_watcher_loop, args=(stop,), daemon=True)
-        thread.start()
+        stop, thread = _start_watcher(
+            api,
+            monkeypatch,
+            _sequential_snapshot([(111, 1), (222, 2), (333, 3)]),
+            flaky_broadcast,
+        )
         try:
             deadline = time.monotonic() + 2
             while len(calls) < 2 and time.monotonic() < deadline:
@@ -2264,72 +2269,13 @@ class TestSectionStatsMemo:
     """
 
     def _make_db(self, tmp_path: Any, cells: list[tuple[str, int, int, str]]) -> Any:
-        """A minimal but schema-gate-valid v4 DB with the given cells."""
-        import sqlite3
-
-        db = tmp_path / "coverage.db"
-        conn = sqlite3.connect(db)
-        c = conn.cursor()
-        c.execute("CREATE TABLE metadata (target TEXT, key TEXT, value TEXT)")
-        c.execute(
-            "CREATE TABLE sections (target TEXT, name TEXT, va INTEGER, size INTEGER, "
-            "fileOffset INTEGER, unitBytes INTEGER, columns INTEGER)"
-        )
-        c.execute(
-            "CREATE TABLE cells (id INTEGER PRIMARY KEY AUTOINCREMENT, target TEXT, "
-            "section_name TEXT, start INTEGER, end INTEGER, span INTEGER, state TEXT, "
-            "functions TEXT DEFAULT '[]', label TEXT, parent_function TEXT)"
-        )
-        c.execute(
-            "CREATE TABLE functions (target TEXT, va INTEGER, name TEXT, vaStart TEXT, "
-            "size INTEGER, "
-            "fileOffset INTEGER, status TEXT, module TEXT, cflags TEXT, symbol TEXT, "
-            "markerType TEXT, ghidra_name TEXT, list_name TEXT, is_thunk INTEGER, "
-            "is_export INTEGER, sha256 TEXT, files TEXT, detected_by TEXT, size_by_tool TEXT, "
-            "textOffset INTEGER, blocker TEXT, blockerDelta INTEGER, size_reason TEXT, "
-            "similarity REAL)"
-        )
-        c.execute(
-            "CREATE TABLE globals (target TEXT, name TEXT, va INTEGER, decl TEXT, files TEXT, "
-            "module TEXT, size INTEGER)"
-        )
-        c.execute(
-            "CREATE TABLE verify_results (target TEXT, va INTEGER, verified_at TEXT, "
-            "byte_delta INTEGER, diff_lines TEXT, similarity REAL)"
-        )
-        c.execute("CREATE TABLE history (id INTEGER)")
-        c.execute(
-            "CREATE VIEW section_cell_stats AS SELECT target, section_name, "
-            "COUNT(*) AS total_cells, 0 AS exact_count, 0 AS reloc_count, 0 AS near_match_count, "
-            "0 AS stub_count, 0 AS padding_count, 0 AS data_count, 0 AS thunk_count, "
-            "0 AS none_count, 0 AS proven_count, 0 AS size_mismatch_count "
-            "FROM cells GROUP BY target, section_name"
-        )
-        c.execute("INSERT INTO metadata VALUES ('GAME', 'db_version', '\"4\"')")
-        c.executemany(
-            "INSERT INTO cells (target, section_name, start, end, span, state)"
-            " VALUES ('GAME', ?, ?, ?, 1, ?)",
-            [(s, a, b, st) for s, a, b, st in cells],
-        )
-        conn.commit()
-        conn.close()
-        return db
+        return _make_schema_gate_db(tmp_path, cells)
 
     def _patch(self, tmp_path: Any, monkeypatch: Any, db: Any) -> Any:
         """Point the app at *db* and return the mock request."""
         import recoverage.api as api
 
-        def _open_like(p: Any) -> Any:
-            conn = sqlite3.connect(sqlite_ro_uri(p), uri=True)
-            conn.row_factory = sqlite3.Row
-            return conn
-
-        req = type("R", (), {"headers": {}, "query": {}})()
-        monkeypatch.setattr(api, "_db_path", lambda: db)
-        monkeypatch.setattr("recoverage.server._db_path", lambda: db)
-        monkeypatch.setattr(api, "_open_db", _open_like)
-        monkeypatch.setattr(api, "_require_target", lambda c, t: None)
-        monkeypatch.setattr(api, "request", req)
+        req = _point_app_at_db(monkeypatch, db)
         api._clear_stats_cache()
         return req
 
