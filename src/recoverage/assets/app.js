@@ -604,6 +604,8 @@ const App = () => {
       });
     };
     for (const [secName, sec] of Object.entries(data.val.sections)) {
+      // oxlint-disable-next-line anti-slop/no-runtime-typeof -- API section rows carry number|null va/size (.bss has no base address); shape-check before the range math
+      if (typeof sec.va !== "number" || typeof sec.size !== "number") continue;
       if (targetVa >= sec.va && targetVa < sec.va + sec.size) {
         const offset = targetVa - sec.va;
         const cells = sec.cells || [];
@@ -1099,8 +1101,12 @@ const App = () => {
       if (sec && sec.cells) {
         const cell = sec.cells[cellIdx];
         title = cell.label ? `Block ${cellIdx}: ${cell.label}` : `Block ${cellIdx}`;
+        // NULL-va (.bss-style) sections have no base address: fall back to 0
+        // so the range row shows file-relative offsets, matching the grid
+        // titles' `sec.va || 0`, instead of rendering hex(NaN).
+        const secVa = sec.va || 0;
         metaContent = div({ class: "meta-grid" },
-          MetaItem("Range", `${hex(sec.va + cell.start, 8)}..${hex(sec.va + cell.end, 8)}`),
+          MetaItem("Range", `${hex(secVa + cell.start, 8)}..${hex(secVa + cell.end, 8)}`),
           MetaItem("State", cell.state || "none"),
           cell.label ? MetaItem("Label", cell.label) : null,
           cell.parent_function ? MetaItem("Parent", span({ class: "meta-value" },
@@ -1142,7 +1148,8 @@ const App = () => {
       const sec = data.val.sections[activeSection.val];
       if (sec?.cells?.[cellIdx]) {
         const cell = sec.cells[cellIdx];
-        copyVA = `${hex(sec.va + cell.start, 8)}..${hex(sec.va + cell.end, 8)}`;
+        const secVa = sec.va || 0;
+        copyVA = `${hex(secVa + cell.start, 8)}..${hex(secVa + cell.end, 8)}`;
       }
     }
 

@@ -105,6 +105,72 @@ def test_section_stats_pct_zero_size_is_zero():
     assert stats[".bss"]["pct"] == 0
 
 
+def test_null_va_section_renders_grid_and_panel(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A .bss-style section (NULL va/fileOffset) must render instead of
+    TypeError-500ing on hex(None + start).
+
+    The api.py /asm and /bytes endpoints document NULL va/fileOffset as the
+    normal shape for file-unbacked sections; the Potato grid and panel do the
+    same sec_va + cell.start arithmetic and crashed the whole page on it.
+    Addresses fall back to file-relative offsets (the SPA's `sec.va || 0`).
+    """
+    db = tmp_path / "coverage.db"
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "CREATE TABLE metadata (target TEXT NOT NULL, key TEXT NOT NULL,"
+        " value TEXT, PRIMARY KEY (target, key))"
+    )
+    conn.execute(
+        "CREATE TABLE sections (target TEXT NOT NULL, name TEXT NOT NULL,"
+        " va INTEGER, size INTEGER, fileOffset INTEGER, unitBytes INTEGER,"
+        " columns INTEGER, PRIMARY KEY (target, name))"
+    )
+    conn.execute(
+        "CREATE TABLE cells (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " target TEXT NOT NULL, section_name TEXT NOT NULL,"
+        " start INTEGER NOT NULL, end INTEGER NOT NULL,"
+        " span INTEGER NOT NULL DEFAULT 1, state TEXT NOT NULL,"
+        " functions TEXT NOT NULL DEFAULT '[]', label TEXT, parent_function TEXT)"
+    )
+    conn.execute(
+        "CREATE VIEW section_cell_stats AS"
+        " SELECT target, section_name, COUNT(*) as total_cells,"
+        " SUM(CASE WHEN state = 'exact' THEN 1 ELSE 0 END) as exact_count,"
+        " 0 as reloc_count, 0 as near_match_count, 0 as stub_count,"
+        " 0 as padding_count"
+        " FROM cells GROUP BY target, section_name"
+    )
+    # Unique target so the shared resolve-targets/cells caches cannot leak
+    # rows from the project coverage.db other tests use.
+    t = "NULLVA_POTATO"
+    conn.executemany(
+        "INSERT INTO metadata VALUES (?,?,?)",
+        [
+            (t, "db_version", '"4"'),
+            (t, "summary", '{"totalFunctions": 0}'),
+        ],
+    )
+    conn.execute("INSERT INTO sections VALUES (?, '.bss', NULL, 64, NULL, 16, 8)", (t,))
+    conn.executemany(
+        "INSERT INTO cells (target, section_name, start, end, span, state) VALUES (?,?,?,?,?,?)",
+        [(t, ".bss", 0, 16, 1, "data"), (t, ".bss", 16, 32, 1, "none")],
+    )
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr("recoverage.potato._db_path", lambda: db)
+
+    html = render_potato_url(f"/potato?target={t}&section=.bss")
+    assert '<table id="grid"' in html, "grid rendered for a NULL-va section"
+    # Cell titles show file-relative offsets: hex() of 0..16.
+    assert "0x0..0x10 | data" in html
+
+    panel = render_potato_url(f"/potato?target={t}&section=.bss&idx=0")
+    assert "Block 0" in panel
+    assert "0x0 .. 0x10" in panel
+
+
 def test_build_url():
     assert _build_url("SERVER", ".text") == "?target=SERVER&section=.text"
     assert "filter=exact%2Creloc" in _build_url("SERVER", ".text", {"reloc", "exact"})

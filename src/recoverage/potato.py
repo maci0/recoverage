@@ -1301,7 +1301,11 @@ def _build_grid_html(
     ]
 
     curr_col = 0
-    sec_va = sec_data.get("va", 0)
+    # Sections without file backing (.bss) carry a NULL va (the api.py /asm
+    # and /bytes endpoints document and guard this shape): fall back to 0 so
+    # titles show file-relative offsets instead of raising TypeError on
+    # None + int, which 500s the whole page.
+    sec_va = sec_data.get("va") or 0
     for i, cell in enumerate(merged_cells):
         span = cell.get("span", 1)
         orig_idx = cell.get("orig_idx", i)
@@ -1875,7 +1879,10 @@ def _render_panel(
     cell = cells[idx]
     state = cell.get("state", "none")
     funcs = cell.get("functions", [])
-    sec_va = (sec_data or {}).get("va", 0)
+    # NULL va (file-unbacked .bss) falls back to 0: same guard as the grid
+    # builder, so the panel's range row renders relative offsets instead of
+    # raising TypeError on None + int.
+    sec_va = (sec_data or {}).get("va") or 0
 
     prev_url = (
         _build_url(target, section, active_filters, idx=max(0, idx - 1), search=search_query)
