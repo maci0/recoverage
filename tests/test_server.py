@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import gzip
+import json
 import sqlite3
 import threading
 import time
@@ -600,6 +601,56 @@ class TestTokenAuthEndpoint:
         assert codes[:_AUTH_FAIL_MAX] == ["401"] * _AUTH_FAIL_MAX
         assert all(c == "429" for c in codes[_AUTH_FAIL_MAX:])
 
+    def test_query_param_token_accepted(self) -> None:
+        """The documented share-link flow: /?token=<token> authenticates."""
+        from conftest import wsgi_get
+
+        status, _, _ = wsgi_get("/api/health?token=unit-test-token")
+        assert status.startswith("200")
+
+    def test_cookie_token_accepted(self) -> None:
+        """After the SPA cookie is set, plain navigation authenticates."""
+        from conftest import wsgi_get
+
+        status, _, _ = wsgi_get(
+            "/api/health", headers={"Cookie": "recoverage_token=unit-test-token"}
+        )
+        assert status.startswith("200")
+
+    def test_ui_route_gets_html_401_page(self) -> None:
+        """A browser asking for a page gets the human-readable 401 page,
+        not a raw JSON blob with no instructions."""
+        from conftest import wsgi_get
+
+        status, headers, body = wsgi_get("/", headers={"Accept": "text/html"})
+        assert status.startswith("401")
+        assert "text/html" in headers.get("Content-Type", "")
+        assert b"Access token required" in body
+
+    def test_api_route_stays_json_401_despite_html_accept(self) -> None:
+        """API consumers keep the JSON error contract even when they send
+        Accept: text/html — only UI routes get the page."""
+        from conftest import wsgi_get
+
+        status, headers, body = wsgi_get(
+            "/api/health",
+            headers={"Accept": "text/html,application/xhtml+xml"},
+        )
+        assert status.startswith("401")
+        assert headers.get("Content-Type", "").startswith("application/json")
+        data = json.loads(body)
+        assert data["code"] == "unauthorized"
+
+    def test_valid_token_on_index_sets_httponly_cookie(self) -> None:
+        """Opening / as /?token=<token> must set the SPA's HttpOnly cookie."""
+        from conftest import wsgi_get
+
+        status, headers, _ = wsgi_get("/?token=unit-test-token")
+        assert status.startswith("200")
+        cookie = headers.get("Set-Cookie", "")
+        assert "recoverage_token=" in cookie
+        assert "HttpOnly" in cookie
+
 
 class TestAuthFailureLimiter:
     """Unit behavior of the failure window."""
@@ -629,6 +680,94 @@ class TestAuthFailureLimiter:
             assert not srv._auth_rate_limited(time.monotonic())
         finally:
             srv._clear_auth_failures()
+
+
+class TestEvictOldest:
+    """Bounded-cache arithmetic shared by the /data memo and Potato cells
+    memo: callers invoke it BEFORE inserting, so at-capacity caches shed
+    exactly one entry."""
+
+    def test_under_cap_is_noop(self) -> None:
+        from recoverage.server import _evict_oldest
+
+        cache = dict.fromkeys(range(5))
+        _evict_oldest(cache, 8)
+        assert len(cache) == 5
+
+    def test_empty_cache_is_noop(self) -> None:
+        from recoverage.server import _evict_oldest
+
+        cache: dict[int, int] = {}
+        _evict_oldest(cache, 8)
+        assert cache == {}
+
+    def test_at_cap_evicts_single_oldest(self) -> None:
+        from recoverage.server import _evict_oldest
+
+        cache = dict.fromkeys(range(8))
+        _evict_oldest(cache, 8)
+        assert len(cache) == 7
+        assert 0 not in cache  # insertion-order oldest dropped first
+
+    def test_far_over_cap_drops_down_below_cap(self) -> None:
+        from recoverage.server import _evict_oldest
+
+        cache = dict.fromkeys(range(20))
+        _evict_oldest(cache, 8)
+        assert len(cache) < 8
+        assert set(cache) == set(range(13, 20))  # newest kept, oldest gone
+
+
+class TestHostnameOf:
+    """_hostname_of is the parser behind BOTH the DNS-rebinding Host
+    allowlist and the regen Origin check — values that browsers never emit
+    (userinfo, escapes, control bytes) must parse as "" so they can never
+    match an allowlist entry."""
+
+    def test_bare_host_with_port(self) -> None:
+        from recoverage.server import _hostname_of
+
+        assert _hostname_of("localhost:8001") == "localhost"
+
+    def test_origin_url(self) -> None:
+        from recoverage.server import _hostname_of
+
+        assert _hostname_of("http://localhost:5173") == "localhost"
+
+    def test_uppercase_lowered(self) -> None:
+        from recoverage.server import _hostname_of
+
+        assert _hostname_of("HTTP://LOCALHOST:8001") == "localhost"
+
+    @pytest.mark.parametrize(
+        "origin",
+        [
+            "http://evil@localhost",  # userinfo spoofing
+            "http://local\\\\host",  # backslash confusion
+            "http://loc%61lhost",  # percent-encoding
+            "http://loc\x01alhost",  # control byte
+            "http://[::1",  # unparsable IPv6
+            "",
+        ],
+    )
+    def test_non_plain_values_parse_empty(self, origin: str) -> None:
+        from recoverage.server import _hostname_of
+
+        assert _hostname_of(origin) == ""
+
+    def test_junk_host_never_matches_allowlist(self) -> None:
+        """Garbage without scheme separators parses as a literal hostname;
+        the contract that matters is that it can never equal an allowlisted
+        loopback name."""
+        from recoverage.server import LOOPBACK_HOSTS, _hostname_of
+
+        junk = _hostname_of("not a url at all")
+        assert junk not in LOOPBACK_HOSTS
+
+    def test_ipv6_literal_kept(self) -> None:
+        from recoverage.server import _hostname_of
+
+        assert _hostname_of("http://[::1]:8001") == "::1"
 
 
 class TestSecurityHeaders:

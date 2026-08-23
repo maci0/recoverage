@@ -166,12 +166,27 @@ class TestCheckCommand:
         assert all("status" in r for r in payload["results"])
 
     def test_check_with_100_threshold(self) -> None:
-        """100% threshold must produce a definitive exit code: either every
-        section is at 100% (0) or at least one section fails (1)."""
-        result = runner.invoke(app, ["check", "--min-coverage", "100"])
-        assert result.exit_code in (0, 1)
-        if result.exit_code == 0:
-            assert "FAIL" not in result.output
+        """100% threshold must fail the synthetic DB deterministically:
+        .text sits at 87.5% covered (112/128 bytes) and .data at 100%, so
+        the gate exits 1 with exactly one FAIL verdict — the CI consumer's
+        real contract (the old assertion accepted any exit in (0, 1))."""
+        result = runner.invoke(app, ["check", "--min-coverage", "100", "--json"])
+        assert result.exit_code == 1
+        payload = json.loads(result.output)
+        assert payload["passed"] is False
+        by_section = {r["section"]: r for r in payload["results"]}
+        assert by_section[".text"]["status"] == "FAIL"
+        assert by_section[".text"]["coverage_pct"] == 87.5
+        assert by_section[".data"]["status"] == "PASS"
+
+    def test_check_out_of_range_json_emits_error_object(self) -> None:
+        """--json with an out-of-range threshold must still emit a parseable
+        JSON error (not the human-readable stderr path) before exiting 1."""
+        result = runner.invoke(app, ["check", "--min-coverage", "150", "--json"])
+        assert result.exit_code == 1
+        payload = json.loads(result.output)
+        assert payload["error"]
+        assert payload["exit_code"] == 1
 
     def test_check_min_coverage_out_of_range(self) -> None:
         """--min-coverage outside [0, 100] must be rejected, not silently

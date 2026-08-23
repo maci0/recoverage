@@ -147,6 +147,18 @@ class TestApiHealth:
         _, headers, _ = wsgi_get("/api/health")
         assert "application/json" in headers.get("Content-Type", "")
 
+    def test_health_degraded_when_db_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A missing coverage.db must be reported as degraded (with
+        exists=false), not crash the endpoint or claim healthy."""
+        import recoverage.api as api
+
+        monkeypatch.setattr(api, "_db_path", lambda: Path("/nonexistent/coverage.db"))
+        status, headers, body = wsgi_get("/api/health")
+        assert status.startswith("200")
+        data = json.loads(decode_body(body, headers))
+        assert data["status"] == "degraded"
+        assert data["db"]["exists"] is False
+
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
 class TestApiTargets:
@@ -187,8 +199,19 @@ class TestApiFunctions:
         if not target:
             pytest.skip("No targets in DB")
         # Should still return 200 — invalid sort falls back to default "va"
-        status, _, _ = wsgi_get(f"/api/targets/{target}/functions?sort=DROP%20TABLE%20functions")
+        status, headers, body = wsgi_get(
+            f"/api/targets/{target}/functions?sort=DROP%20TABLE%20functions"
+        )
         assert status.startswith("200")
+        data = json.loads(decode_body(body, headers))
+        # The fallback must actually apply: results come back va-ascending,
+        # identical to the default sort (a whitelist regression that passed
+        # raw SQL through would 500 or reorder here).
+        default_status, _, default_body = wsgi_get(f"/api/targets/{target}/functions")
+        assert [fn["va"] for fn in data["functions"]] == [
+            fn["va"] for fn in json.loads(decode_body(default_body, headers))["functions"]
+        ]
+        assert data["total"] >= 1
 
     def test_pagination(self) -> None:
         target = get_first_target()
@@ -209,6 +232,65 @@ class TestApiFunctions:
         assert status.startswith("200")
         data = json.loads(decode_body(body, headers))
         assert data["limit"] == 500
+
+    def test_status_filter_narrows_results(self) -> None:
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, headers, body = wsgi_get(f"/api/targets/{target}/functions?status=EXACT")
+        assert status.startswith("200")
+        data = json.loads(decode_body(body, headers))
+        # Synthetic DB: exactly one EXACT function (_func_a).
+        assert [fn["name"] for fn in data["functions"]] == ["_func_a"]
+        assert data["total"] == 1
+
+    def test_search_matches_name_substring(self) -> None:
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, headers, body = wsgi_get(f"/api/targets/{target}/functions?search=_func_b")
+        assert status.startswith("200")
+        data = json.loads(decode_body(body, headers))
+        assert [fn["name"] for fn in data["functions"]] == ["_func_b"]
+
+    def test_search_like_wildcards_match_literally(self) -> None:
+        """% in the search must be escaped, not act as a LIKE wildcard —
+        an unescaped pattern would return every row (or inject a pattern)."""
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, headers, body = wsgi_get(f"/api/targets/{target}/functions?search=%25")
+        assert status.startswith("200")
+        data = json.loads(decode_body(body, headers))
+        assert data["total"] == 0
+        assert data["functions"] == []
+
+    def test_invalid_limit_falls_back_to_default(self) -> None:
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, headers, body = wsgi_get(f"/api/targets/{target}/functions?limit=abc")
+        assert status.startswith("200")
+        data = json.loads(decode_body(body, headers))
+        assert data["limit"] == 50
+
+    def test_limit_zero_clamped_to_one(self) -> None:
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, headers, body = wsgi_get(f"/api/targets/{target}/functions?limit=0")
+        assert status.startswith("200")
+        data = json.loads(decode_body(body, headers))
+        assert data["limit"] == 1
+
+    def test_negative_offset_clamped_to_zero(self) -> None:
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, headers, body = wsgi_get(f"/api/targets/{target}/functions?offset=-10")
+        assert status.startswith("200")
+        data = json.loads(decode_body(body, headers))
+        assert data["offset"] == 0
 
 
 # ── VA boundary validation (/asm endpoint) ─────────────────────────
@@ -330,6 +412,127 @@ class TestApiAsm:
         assert status.startswith("400")
         data = json.loads(decode_body(body, headers))
         assert data["error"] == "size must be positive"
+
+
+# ── Raw byte slices (/sections/<section>/bytes) ────────────────────
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+class TestApiBytes:
+    """GET /api/targets/<t>/sections/<section>/bytes.
+
+    Previously untested end to end: offset/size validation, section
+    resolution, NULL-fileOffset (.bss-style) handling, missing-DLL 404s,
+    and the hex/raw payload shape.
+    """
+
+    DLL_SIZE = 2048
+
+    @pytest.fixture(autouse=True)
+    def _fake_dll(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import recoverage.api as api
+
+        # Deterministic fake binary large enough for .text's fileOffset
+        # (0x200) plus a full clamp-size window.
+        self.dll = bytes((i % 251) for i in range(self.DLL_SIZE))
+        monkeypatch.setattr(api, "_load_dll", lambda target: self.dll)
+
+    def _get(self, query: str, section: str = ".text") -> tuple[str, dict[str, str], bytes]:
+        return wsgi_get(f"/api/targets/FAKEDLL/sections/{section}/bytes?{query}")
+
+    def test_happy_path_serves_slice_as_hex_and_raw(self) -> None:
+        status, headers, body = self._get("offset=0&size=16")
+        assert status.startswith("200")
+        data = json.loads(decode_body(body, headers))
+        expected = self.dll[0x200 : 0x200 + 16]
+        assert data["raw"] == list(expected)
+        assert data["offset"] == 0
+        assert data["size"] == 16
+        # Hex dump shape: offset column + hex bytes + ASCII gutter.
+        first_line = data["hex"].splitlines()[0]
+        assert first_line.startswith("00000000")
+        assert " ".join(f"{b:02x}" for b in expected[:8]) in first_line
+
+    def test_offset_slices_from_deep_in_the_dll(self) -> None:
+        status, _, body = self._get("offset=8&size=4")
+        assert status.startswith("200")
+        data = json.loads(decode_body(body, {}))
+        assert data["raw"] == list(self.dll[0x208 : 0x208 + 4])
+        assert data["offset"] == 8
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "offset=-1&size=4",
+            "offset=abc&size=4",
+            "size=abc",
+            "offset=4096&size=4",  # >= section size (0x1000)
+        ],
+    )
+    def test_bad_offset_or_size_400(self, query: str) -> None:
+        status, headers, body = self._get(query)
+        assert status.startswith("400")
+        data = json.loads(decode_body(body, headers))
+        assert data["code"] == "bad_request"
+
+    def test_oversized_size_is_clamped_not_fatal(self) -> None:
+        status, _, body = self._get("offset=0&size=999999")
+        assert status.startswith("200")
+        data = json.loads(decode_body(body, {}))
+        assert data["size"] <= 4096
+        assert len(data["raw"]) == data["size"]
+
+    def test_unknown_section_404(self) -> None:
+        status, headers, body = self._get("offset=0&size=4", section=".nosuch")
+        assert status.startswith("404")
+        data = json.loads(decode_body(body, headers))
+        assert data["code"] == "not_found"
+        assert ".nosuch" in data["detail"]
+
+    def test_null_file_offset_returns_422(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A .bss-style section (NULL va/fileOffset/size) has nothing on disk
+        to slice: the endpoint must answer its JSON 422 contract instead of a
+        TypeError 500 from the pointer arithmetic."""
+        import recoverage.api as api
+        import recoverage.server as srv
+
+        db = tmp_path / "coverage.db"
+        conn = sqlite3.connect(db)
+        conn.execute(
+            "CREATE TABLE sections (target TEXT, name TEXT, va INTEGER, size INTEGER,"
+            " fileOffset INTEGER, unitBytes INTEGER, columns INTEGER)"
+        )
+        conn.execute("INSERT INTO sections VALUES ('T', '.bss', NULL, NULL, NULL, 16, 8)")
+        conn.commit()
+        conn.close()
+
+        def _tmp_db() -> sqlite3.Connection:
+            c = sqlite3.connect(sqlite_ro_uri(db), uri=True)
+            c.row_factory = sqlite3.Row
+            return c
+
+        monkeypatch.setattr(api, "_db", _tmp_db)
+        monkeypatch.setattr(srv, "_db_path", lambda: db)
+        monkeypatch.setattr(api, "_require_target", lambda c, t: None)
+        status, headers, body = wsgi_get("/api/targets/T/sections/.bss/bytes?offset=0&size=4")
+        assert status.startswith("422")
+        data = json.loads(decode_body(body, headers))
+        assert data["error"] == "section has no file backing"
+
+    def test_missing_dll_is_404_with_config_hint(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import recoverage.api as api
+
+        monkeypatch.setattr(api, "_load_dll", lambda target: None)
+        status, headers, body = self._get("offset=0&size=4")
+        assert status.startswith("404")
+        data = json.loads(decode_body(body, headers))
+        assert "DLL not found" in data["error"]
+        # The unconfigured-target hint tells the operator exactly what to add.
+        assert "[targets.FAKEDLL].binary" in data["detail"]
 
 
 class TestRegenRateLimit:
@@ -881,6 +1084,14 @@ class TestBatchFunctionLookup:
 class TestErrorResponseShape:
     """Every JSON error response carries {error, code, detail} (+ extras)."""
 
+    def teardown_method(self) -> None:
+        import recoverage.api as api
+
+        # The 429 test stamps the module-global regen cooldown; reset so
+        # later tests POSTing /api/regen start from a neutral state instead
+        # of inheriting this test's rate-limit window.
+        api._regen_last_attempt = 0.0
+
     def _check(
         self, status: str, headers: dict[str, str], body: bytes, expected_code: str
     ) -> dict[str, Any]:
@@ -1422,7 +1633,69 @@ class TestDataEndpointSchemaGate:
         assert data["code"] == "db_unavailable"
 
 
-# ── VA integer-overflow hardening ──────────────────────────────────
+# ── Repo source-file serving (/src, /original) ─────────────────────
+
+
+class TestRepoFileServing:
+    """GET /src/<filepath> and /original/<filepath> must never escape the
+    project root: bottle's static_file string-prefix check does not resolve
+    symlinks, so ui.serve_repo_file re-resolves and verifies containment
+    itself.  A regression there serves arbitrary host files."""
+
+    def test_file_inside_root_is_served(self, tmp_path: Path, monkeypatch: Any) -> None:
+        monkeypatch.chdir(tmp_path)
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "main.c").write_text("int main(void) { return 0; }", encoding="utf-8")
+        status, headers, body = wsgi_get("/src/main.c")
+        assert status.startswith("200")
+        assert b"int main" in body
+
+    def test_parent_traversal_blocked(self, tmp_path: Path, monkeypatch: Any) -> None:
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "src").mkdir()
+        secret = tmp_path / "secret.txt"
+        secret.write_text("top secret", encoding="utf-8")
+        status, _, body = wsgi_get("/src/../secret.txt")
+        assert status.startswith("403")
+        assert b"top secret" not in body
+
+    def test_encoded_traversal_blocked(self, tmp_path: Path, monkeypatch: Any) -> None:
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "src").mkdir()
+        (tmp_path / "secret.txt").write_text("top secret", encoding="utf-8")
+        # Bottle decodes %2E%2E%2F before routing, so this arrives as ../.
+        status, _, body = wsgi_get("/src/%2e%2e/secret.txt")
+        assert status.startswith("403") or status.startswith("404")
+        assert b"top secret" not in body
+
+    def test_symlink_escape_blocked(self, tmp_path: Path, monkeypatch: Any) -> None:
+        """A symlink INSIDE src/ pointing outside must be rejected even
+        though its textual path stays under the root."""
+        monkeypatch.chdir(tmp_path)
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "passwd").write_text("root:x:0:0", encoding="utf-8")
+        (tmp_path / "src").mkdir()
+        try:
+            (tmp_path / "src" / "escape").symlink_to(outside)
+        except OSError:
+            pytest.skip("symlinks unavailable (Windows without developer mode)")
+        status, _, body = wsgi_get("/src/escape/passwd")
+        assert status.startswith("403")
+        assert b"root:x" not in body
+
+    def test_original_prefix_serves_original_dir(self, tmp_path: Path, monkeypatch: Any) -> None:
+        monkeypatch.chdir(tmp_path)
+        orig = tmp_path / "original"
+        orig.mkdir()
+        (orig / "note.txt").write_text("original tree", encoding="utf-8")
+        status, _, body = wsgi_get("/original/note.txt")
+        assert status.startswith("200")
+        assert b"original tree" in body
+
+
+
 
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
