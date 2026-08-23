@@ -572,9 +572,11 @@ def _best_encoding(accept_encoding: str) -> str:
     """Return the best available compression encoding name, or empty string.
 
     Parses comma-separated tokens from Accept-Encoding to avoid false substring
-    matches (e.g. 'not-zstd' should not match 'zstd').  Honours q-values:
-    ``gzip;q=0`` means "not acceptable" (RFC 9110) and must not be chosen,
-    and higher q wins among the supported encodings.
+    matches (e.g. 'not-zstd' should not match 'zstd').  Honours q-values as an
+    exclusion gate only — ``gzip;q=0`` means "not acceptable" (RFC 9110) and
+    must not be chosen — then applies a fixed preference order among the
+    remaining supported encodings (zstd, then br, then gzip), regardless of
+    the tokens' relative q-values.
     """
     candidates: dict[str, float] = {}
     for t in accept_encoding.split(","):

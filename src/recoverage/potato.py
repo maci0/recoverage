@@ -1538,7 +1538,11 @@ def _render_potato_inner(
             status_filter,
         )
     else:
-        grid_columns = sec_data.get("columns", 64)
+        # A NULL columns value (schema-legal, like the NULL va/fileOffset a
+        # .bss section carries) must fall back to 64, not TypeError on
+        # None <= 0 — which escapes ui.handle_potato's except tuple as a
+        # raw HTML 500.
+        grid_columns = sec_data.get("columns") or 64
         if grid_columns <= 0:
             grid_columns = 64
         merged_cells = _merge_cells(cells, grid_columns)
@@ -1681,9 +1685,15 @@ def _panel_base_ctx() -> dict[str, Any]:
 
 def _render_original_bytes(raw_bytes: bytes, file_offset: int) -> str:
     """Hex dump of *raw_bytes* as an Original Bytes code block (shared by the
-    empty-cell and function-detail panel paths so both stay in one format)."""
+    empty-cell and function-detail panel paths so both stay in one format).
+
+    The dump must NOT be re-wrapped: _format_hex_dump emits fixed-width
+    16-byte lines (~78 chars), and wrap_text(…, 72) split each one mid-row,
+    orphaning the |ascii| column on its own line and defeating
+    _highlight_hex's line-shape detection (offset/hex/ASCII colouring).
+    """
     hex_dump = _format_hex_dump(raw_bytes, file_offset)
-    return _code_block_raw(_highlight_hex(wrap_text(hex_dump, 72)))
+    return _code_block_raw(_highlight_hex(hex_dump))
 
 
 def _panel_empty_cell_bytes(

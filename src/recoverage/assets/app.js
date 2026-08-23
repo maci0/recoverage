@@ -759,7 +759,10 @@ const App = () => {
           ),
           div({ class: "progress-text-overlay" },
             span({ class: "stat-item" }, `${sec.size} bytes`),
-            span({ class: "stat-item" }, `${exactCount + relocCount + nearMatchCount + stubCount} / ${totalItems} matched`),
+            // "Matched" counts exact + reloc only: a near-match is a miss and
+            // a stub is a stand-in, so neither counts. Same contract as
+            // Potato Mode's progress bar and /stats' per-section `matched`.
+            span({ class: "stat-item" }, `${exactCount + relocCount} / ${totalItems} matched`),
             span({ class: "stat-item" }, `${coveragePct.toFixed(2)}% coverage`)
           )
         )

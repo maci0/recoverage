@@ -23,6 +23,7 @@ from recoverage.potato import (
     _format_va,
     _load_cells_cached,
     _panel_fn_source_text,
+    _render_original_bytes,
     render_potato,
     wrap_text,
 )
@@ -172,6 +173,79 @@ def test_null_va_section_renders_grid_and_panel(
     panel = render_potato_url(f"/potato?target={t}&section=.bss&idx=0")
     assert "Block 0" in panel
     assert "0x0 .. 0x10" in panel
+
+
+def test_null_columns_section_renders_grid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A NULL sections.columns value (schema-legal) must fall back to the
+    64-column default, not TypeError on ``None <= 0`` — which escapes
+    ui.handle_potato's except tuple as a raw HTML 500.  Same crash family
+    as test_null_va_section_renders_grid_and_panel."""
+    db = tmp_path / "coverage.db"
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "CREATE TABLE metadata (target TEXT NOT NULL, key TEXT NOT NULL,"
+        " value TEXT, PRIMARY KEY (target, key))"
+    )
+    conn.execute(
+        "CREATE TABLE sections (target TEXT NOT NULL, name TEXT NOT NULL,"
+        " va INTEGER, size INTEGER, fileOffset INTEGER, unitBytes INTEGER,"
+        " columns INTEGER, PRIMARY KEY (target, name))"
+    )
+    conn.execute(
+        "CREATE TABLE cells (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " target TEXT NOT NULL, section_name TEXT NOT NULL,"
+        " start INTEGER NOT NULL, end INTEGER NOT NULL,"
+        " span INTEGER NOT NULL DEFAULT 1, state TEXT NOT NULL,"
+        " functions TEXT NOT NULL DEFAULT '[]', label TEXT, parent_function TEXT)"
+    )
+    conn.execute(
+        "CREATE VIEW section_cell_stats AS"
+        " SELECT target, section_name, COUNT(*) as total_cells,"
+        " SUM(CASE WHEN state = 'exact' THEN 1 ELSE 0 END) as exact_count,"
+        " 0 as reloc_count, 0 as near_match_count, 0 as stub_count,"
+        " 0 as padding_count"
+        " FROM cells GROUP BY target, section_name"
+    )
+    t = "NULLCOLS_POTATO"
+    conn.executemany(
+        "INSERT INTO metadata VALUES (?,?,?)",
+        [
+            (t, "db_version", '"4"'),
+            (t, "summary", '{"totalFunctions": 0}'),
+        ],
+    )
+    # columns IS NULL; everything else normal.
+    conn.execute("INSERT INTO sections VALUES (?, '.text', 4096, 64, 512, 16, NULL)", (t,))
+    conn.executemany(
+        "INSERT INTO cells (target, section_name, start, end, span, state) VALUES (?,?,?,?,?,?)",
+        [(t, ".text", 0, 16, 1, "exact"), (t, ".text", 16, 32, 1, "none")],
+    )
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr("recoverage.potato._db_path", lambda: db)
+
+    html = render_potato_url(f"/potato?target={t}&section=.text")
+    assert '<table id="grid"' in html, "grid rendered for a NULL-columns section"
+
+
+def test_render_original_bytes_keeps_dump_lines_intact() -> None:
+    """The Original Bytes dump must not be re-wrapped: every 16-byte row is a
+    fixed-width line whose offset column and |ascii| column stay on one
+    physical line, or _highlight_hex's shape detection silently degrades to
+    plain escaping and the ASCII column lands on its own ragged line."""
+    raw = bytes(range(64))
+    html = _render_original_bytes(raw, 0x200)
+    body = html.split("<pre>", 1)[1].split("</pre>", 1)[0]
+    lines = [ln for ln in body.splitlines() if ln.strip()]
+    assert len(lines) == 4, f"one output line per 16-byte row, got {len(lines)}: {lines!r}"
+    for i, line in enumerate(lines):
+        offset = f"{0x200 + i * 16:08x}"
+        assert line.startswith(f'<font color="#858585">{offset}</font>'), (
+            f"line {i} keeps its coloured offset column: {line!r}"
+        )
+        assert line.endswith("|</font>"), f"line {i} keeps its ASCII column: {line!r}"
 
 
 def test_build_url():
