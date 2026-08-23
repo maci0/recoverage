@@ -366,10 +366,17 @@ def _ensure_db_watcher() -> None:
 
 
 def _stop_db_watcher() -> None:
-    """Stop the watcher thread (used by tests)."""
+    """Stop the watcher thread (used by tests).
+
+    The stop event is set under _DB_WATCHER_LOCK so stop and
+    :func:`_ensure_db_watcher` are mutually exclusive: set-then-lock let a
+    concurrent ensure observe the still-alive thread and return, after which
+    the join here retired it — a stopped watcher with SSE clients registered
+    and nothing left to restart it.
+    """
     global _DB_WATCHER_THREAD
-    _DB_WATCHER_STOP.set()
     with _DB_WATCHER_LOCK:
+        _DB_WATCHER_STOP.set()
         if _DB_WATCHER_THREAD is not None:
             _DB_WATCHER_THREAD.join(timeout=5)
             _DB_WATCHER_THREAD = None

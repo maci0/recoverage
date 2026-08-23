@@ -855,6 +855,44 @@ class TestSseEvents:
         finally:
             api._stop_db_watcher()
 
+    def test_ensure_stop_churn_never_strands_clients_without_watcher(self) -> None:
+        """Concurrent _ensure_db_watcher/_stop_db_watcher must not leave a
+        stopped-but-referenced watcher behind.
+
+        The stop event is set under _DB_WATCHER_LOCK (not before it): set
+        outside the lock, an ensure could observe the still-alive thread and
+        return just before a stop retired it, leaving connected SSE clients
+        with no watcher and no restart until another client connected.
+        """
+        import recoverage.api as api
+
+        errors: list[BaseException] = []
+        barrier = threading.Barrier(4)
+
+        def churn(ensure: bool) -> None:
+            try:
+                barrier.wait(timeout=5)
+                for _ in range(50):
+                    if ensure:
+                        api._ensure_db_watcher()
+                    else:
+                        api._stop_db_watcher()
+            except BaseException as exc:  # surfaced via errors below
+                errors.append(exc)
+
+        threads = [
+            threading.Thread(target=churn, args=(i % 2 == 0,), daemon=True) for i in range(4)
+        ]
+        try:
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=30)
+            assert all(not t.is_alive() for t in threads), "churn workers hung"
+            assert not errors, f"errors during ensure/stop churn: {errors!r}"
+        finally:
+            api._stop_db_watcher()
+
     def test_stream_heartbeat(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import recoverage.api as api
 
