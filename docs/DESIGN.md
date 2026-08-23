@@ -18,7 +18,8 @@ The UI is built using a lightweight, dependency-free stack to ensure fast load t
    * `/api/targets` endpoint that returns available targets from the database plus any target declared under `[targets.*]` in `rebrew-project.toml` (a configured-but-not-yet-built target stays addressable).
    * `/api/targets/<target>/stats` endpoint with per-section byte-based coverage statistics (shared implementation with the `recoverage stats` CLI).
    * `/api/targets/<target>/data` endpoint that queries SQLite for a specific target and returns lightweight metadata and section layouts (compressed via zstd/brotli/gzip).
-   * `/api/targets/<target>/functions/<va>` endpoint to fetch specific function/global details on-demand, plus `POST /api/targets/<target>/functions` for batch lookups by VA list.
+   * `/api/targets/<target>/functions/<va>` endpoint to fetch specific function/global details on-demand, plus `GET`/`POST /api/targets/<target>/functions` for the paginated function list (`?status=&search=&sort=&limit=&offset=`) and batch lookups by VA list.
+   * `/api/targets/<target>/sections/<section>/bytes` endpoint serving raw hex-dumped byte slices from the original binary (`?offset=&size=`).
    * `/api/targets/<target>/asm?va=...&size=...` endpoint that dynamically disassembles binary chunks using Capstone (with LRU caching and in-memory cached binary reads).
    * `/api/events` Server-Sent Events stream that pushes a `db-updated` event whenever `coverage.db` changes on disk, so the SPA auto-refreshes without a manual reload (requires the threaded WSGI server, which gives each connection its own thread).
    * `/api/regen` POST endpoint to trigger `rebrew catalog --json` + `rebrew build-db` regeneration.
@@ -30,7 +31,7 @@ The application state is managed using VanJS reactive primitives (`van.state`):
 * `data`: Holds the fetched SQLite data (sections, globals, functions, summary).
 * `originalDll`: Raw ArrayBuffer of the original DLL for byte slicing.  Fetched from `paths.originalDll` when the DB carries that metadata, otherwise from `/original/<target>.dll`, which the server proxies anyway; when neither exists the hex pane says so instead of failing silently.
 * `activeSection`: Tracks the currently selected PE section (`.text`, `.rdata`, `.data`, `.bss`).
-* `activeFilters`: A `Set` tracking which match statuses are currently visible (Exact, Reloc, Matching, Stub).
+* `activeFilters`: A `Set` tracking which match statuses are currently visible (Exact, Reloc, Matching, Stub, Padding).
 * `searchQuery`: The current text in the search input (debounced 250ms).
 * `currentFn` / `currentCellIndex`: Tracks the currently selected block in the grid.
 * `isLightMode`: Tracks the current theme (persisted to `localStorage` as `recoverage_theme`).
@@ -51,7 +52,7 @@ The UI is broken down into functional VanJS components in `app.js`:
 * **Tabs**: Dynamic segment selectors generated from the active target's sections, ordered by ascending VA so PE load order (`.text`, `.rdata`, `.data`, `.bss`) holds and the section carrying the work leads, instead of an alphabetical row ending in `.text`.
 * **ProgressBar**: A dynamic, segmented progress bar showing coverage percentages. It takes its own full-width row below 900px (sharing the topbar row leaves it a few dozen pixels), and drops the byte count below 700px so the two headline stats fit inside the bar. **Each segment is a filter toggle**, reachable by keyboard and carrying `aria-pressed`; segments under 0.5% are not rendered at all, since a zero-width toggle is a focus stop with nothing to point at. Text stats overlay the segments, each on its own scrim so they stay legible over any status colour.
 * **Target Selector**: Dropdown to switch between targets (e.g., `SERVER`, `GOLD`, `GOLDTL`). Persists selection to URL (`?target=XXX`) and localStorage.
-* **Search & Filters**: Debounced search input and toggleable filter buttons (All, E, R, M, S).
+* **Search & Filters**: Debounced search input and toggleable filter buttons (All, E, R, M, S, P).
 * **Actions**: Theme toggle (sun/moon icons) and Reload data buttons with a 5-second cooldown to prevent spam.
 
 ### 2. Grid (`.map`)

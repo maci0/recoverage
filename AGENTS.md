@@ -118,7 +118,7 @@ npm run lint:html           # vnu only: static assets + served pages (SPA shell,
 ## Dependencies
 
 Required:
-- `bottle>=0.12` (web server)
+- `bottle>=0.13` (web server)
 - `brotli>=1.1` (Brotli compression)
 - `rcssmin>=1.1` (CSS minification)
 - `rich>=13.0` (terminal tables)

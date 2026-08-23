@@ -117,7 +117,7 @@ sequenceDiagram
 > **As a Project Lead**, I want to filter the grid to show only specific match statuses so that I can focus on stubs that need work or celebrate exact matches.
 
 ### Acceptance Criteria
-- Filter buttons: All, E (Exact), R (Reloc), M (Matching), S (Stub)
+- Filter buttons: All, E (Exact), R (Reloc), M (Matching), S (Stub), P (Padding)
 - Filters are set-based toggles (multiple can be active simultaneously)
 - Non-matching cells are dimmed (opacity 0.15), not hidden, preserving spatial layout
 - Filtering handled entirely by CSS classes on the parent container (no JS loops)

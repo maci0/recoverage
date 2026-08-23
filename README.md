@@ -238,6 +238,7 @@ recoverage/
 │   ├── conftest.py           # Shared fixtures (synthetic coverage.db)
 │   ├── test_api.py           # API validation & security tests
 │   ├── test_cli.py           # CSV export, formatting tests
+│   ├── test_lifecycle.py     # Process lifecycle (regen timeouts, opener reaping)
 │   ├── test_paths.py         # DB path resolution tests
 │   ├── test_server.py        # Compression, encoding tests
 │   ├── test_potato.py        # Potato Mode rendering tests
@@ -262,7 +263,7 @@ recoverage/
         ├── hljs.min.js       # Highlight.js core
         ├── hljs-c.min.js     # Highlight.js C grammar
         ├── hljs-x86asm.min.js # Highlight.js x86 asm grammar (hex lang is in detail.js)
-        └── hljs.css          # Highlight.js theme (custom hex language)
+        └── hljs.css          # Highlight.js theme
 ```
 
 ---
