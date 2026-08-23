@@ -78,7 +78,7 @@ pip install recoverage
 For development:
 
 ```bash
-uv pip install -e ../recoverage
+uv pip install -e .
 ```
 
 ### Optional runtime extras
@@ -253,6 +253,7 @@ recoverage/
     ├── api.py                # REST API routes (/api/*)
     ├── ui.py                 # UI routes (/, /potato, static files)
     ├── potato.py             # Potato Mode renderer
+    ├── webapp.py             # Composition root: imports api+ui so app has every route
     └── assets/
         ├── index.html        # SPA shell
         ├── style.css         # All styles
