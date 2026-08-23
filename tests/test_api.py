@@ -2209,6 +2209,30 @@ class TestUnhandledErrorContract:
         assert any("Unhandled error serving" in r.getMessage() for r in errors)
         assert any(r.exc_info is not None for r in errors)
 
+    def test_500_log_escapes_control_chars_in_path(self, monkeypatch: Any, caplog: Any) -> None:
+        """A newline decoded into the path (%0A on the wire) must not forge
+        multi-line log entries when the 500 handler reports the failing
+        request (log-forging defense — same _log_safe contract as the request
+        hook and the 503 path).  The harness passes PATH_INFO through
+        undecoded, so the raw control character goes straight into it."""
+        import logging
+
+        import recoverage.api as api
+
+        def boom() -> None:
+            raise RuntimeError("exploding cursor")
+
+        monkeypatch.setattr(api, "_db", boom)
+        forged_path = "/api/targets/br\n\nINJECTED: pwned/stats"
+        with caplog.at_level(logging.ERROR, logger="recoverage"):
+            wsgi_get(forged_path)
+        errors = [r.getMessage() for r in caplog.records if r.levelno == logging.ERROR]
+        assert any("Unhandled error serving" in m for m in errors), errors
+        # No record may carry the forged second line; the offending bytes are
+        # rendered as their \xNN escape so the request stays identifiable.
+        assert not any("\nINJECTED" in m for m in errors), errors
+        assert any("\\x0a" in m.lower() and "Unhandled error serving" in m for m in errors), errors
+
     def test_ui_500_stays_html(self, monkeypatch: Any) -> None:
         import recoverage.ui as ui
 

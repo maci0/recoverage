@@ -300,7 +300,10 @@ def _section_stats(c: sqlite3.Cursor, target: str) -> dict[str, Any]:
         try:
             summary = json.loads(row[0])
         except (json.JSONDecodeError, TypeError):
-            _log.warning("Corrupt summary metadata for target %s", target)
+            # Target ids are routable request data (/api/targets/<id>/stats)
+            # and originate in analyzed binary names, so they get the same
+            # control-char escaping as method/path before hitting the log.
+            _log.warning("Corrupt summary metadata for target %s", _log_safe(target))
 
     # Per-section stats.  Coverage is BYTE-based: covered = every cell span
     # whose state is not "none", over the section's total cell bytes.
@@ -1260,11 +1263,14 @@ def _handle_unexpected_error(error: Any) -> Any:
         return _db_unavailable_err(exc)
     # Returning the HTTPError itself would make _cast re-enter the error
     # handler (recursion until the wsgi catch-all); returning None would emit
-    # an empty 500 body.
+    # an empty 500 body.  Method/path are attacker-controlled and this fires
+    # on arbitrary unhandled exceptions, so they get the same control-char
+    # escaping as every other request log (%0A in the path would otherwise
+    # forge multi-line entries exactly when the operator reads the traceback).
     _log.error(
         "Unhandled error serving %s %s",
-        request.method,
-        request.path,
+        _log_safe(request.method),
+        _log_safe(request.path),
         exc_info=exc or error,
     )
     if request.path.startswith("/api/"):

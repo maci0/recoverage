@@ -369,6 +369,17 @@ def serve(
             "Add --cors-origin URL for each origin you want to allow.",
             fg=typer.colors.YELLOW,
         )
+    # IPv6 hosts need brackets in any URL spelling (::1 bare is parsed as
+    # host "" port ::8001).
+    display_host = f"[{bind}]" if ":" in bind else bind
+    if cors_origin and not cors:
+        # cors_origin alone has no effect (CORS processing stays off): a
+        # user who passed it must not discover that from silent behavior.
+        typer.secho(
+            "warning: --cors-origin has no effect without --cors — "
+            "CORS processing is disabled. Pass --cors to enable it.",
+            fg=typer.colors.YELLOW,
+        )
 
     # Configure logging — show INFO+ by default so operational messages are visible
     logging.basicConfig(
@@ -398,7 +409,7 @@ def serve(
         _server._AUTH_TOKEN = token
         typer.secho(
             f"token auth enabled — requests need Authorization: Bearer <token> "
-            f"(SPA: open as http://127.0.0.1:{port}/?token=<token>)",
+            f"(SPA: open as http://{display_host}:{port}/?token=<token>)",
             fg=typer.colors.GREEN,
         )
     # Loopback binds validate the Host header (DNS-rebinding guard); remote
@@ -410,10 +421,12 @@ def serve(
 
     root = _project_dir()
     assets = _assets_dir()
-    url = f"http://127.0.0.1:{port}"
-    # The browser always opens against loopback; --bind only controls the
-    # listening interface (e.g. 0.0.0.0 for LAN access to the dashboard).
-    listen_url = f"http://{bind}:{port}" if bind != "127.0.0.1" else url
+    listen_url = f"http://{display_host}:{port}" if bind != "127.0.0.1" else f"http://127.0.0.1:{port}"
+    # The browser opens against the bound loopback interface: --bind ::1
+    # listens on IPv6 loopback only, so the hard-coded http://127.0.0.1 (IPv4)
+    # would open a tab that refuses to connect.  Remote binds keep 127.0.0.1 —
+    # a wildcard/external address also answers on IPv4 loopback.
+    url = listen_url if not is_remote else f"http://127.0.0.1:{port}"
 
     if regen:
         _run_regen(root)
