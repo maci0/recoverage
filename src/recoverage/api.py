@@ -538,6 +538,9 @@ def handle_api_data(target: str) -> bytes | Any:
     snap = _snapshot_db_mtime()
     fingerprint: tuple[tuple[int, int] | None, str, str | None] = (snap, target, section_filter)
     etag = _etag_or_304(snap, target, section_filter)
+    headers: dict[str, str] = {"Cache_Control": CACHE_REVALIDATE}
+    if etag:
+        headers["ETag"] = etag
 
     # Serve a memoized payload for an unchanged DB instead of re-running the
     # full-table queries, re-serialization, and recompression on every
@@ -556,9 +559,6 @@ def handle_api_data(target: str) -> bytes | Any:
             body, _ = compress_payload(raw, accept_enc)
             with _DATA_CACHE_LOCK:
                 entry[encoding] = body
-        headers: dict[str, str] = {"Cache_Control": CACHE_REVALIDATE}
-        if etag:
-            headers["ETag"] = etag
         return _json_ok_precompressed(body, encoding, **headers)
 
     with _target_cursor(target) as c:
@@ -610,9 +610,6 @@ def handle_api_data(target: str) -> bytes | Any:
         accept_enc = request.headers.get("Accept-Encoding", "")
         body, encoding = compress_payload(raw_json, accept_enc)
         _cache_data_insert(fingerprint, raw_json, encoding, body)
-        headers: dict[str, str] = {"Cache_Control": CACHE_REVALIDATE}
-        if etag:
-            headers["ETag"] = etag
         return _json_ok_precompressed(body, encoding, **headers)
 
 

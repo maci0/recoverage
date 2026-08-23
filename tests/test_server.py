@@ -24,8 +24,6 @@ from recoverage.server import (
     _project_dir,
     clear_target_cache,
     compress_payload,
-    minify_css,
-    minify_js,
 )
 
 # ── _best_encoding ─────────────────────────────────────────────────
@@ -188,40 +186,6 @@ class TestCompressPayload:
             compressed, encoding = res
             assert encoding == "zstd"
             assert dctx.decompress(compressed) == data, f"thread {idx} payload corrupted"
-
-
-# ── Minification ───────────────────────────────────────────────────
-
-
-class TestMinification:
-    def test_minify_css_removes_whitespace(self) -> None:
-        css = "body {\n  color: red;\n  margin: 0;\n}"
-        result = minify_css(css)
-        assert len(result) < len(css)
-        assert "color:red" in result or "color: red" in result
-
-    def test_minify_js_removes_whitespace(self) -> None:
-        js = "function foo() {\n  return 42;\n}"
-        result = minify_js(js)
-        assert len(result) <= len(js)
-        assert "return 42" in result
-
-    def test_minify_css_empty(self) -> None:
-        assert minify_css("") == ""
-
-    def test_minify_js_empty(self) -> None:
-        assert minify_js("") == ""
-
-    def test_minify_css_already_minified(self) -> None:
-        css = "body{color:red;margin:0}"
-        result = minify_css(css)
-        assert "color:red" in result
-
-    def test_minify_js_preserves_strings(self) -> None:
-        """String literals with whitespace must be preserved."""
-        js = 'var x = "hello   world";'
-        result = minify_js(js)
-        assert "hello   world" in result
 
 
 # ── Path helpers ───────────────────────────────────────────────────

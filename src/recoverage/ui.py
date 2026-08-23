@@ -11,6 +11,8 @@ from typing import Any
 from urllib.parse import urlparse
 
 import brotli  # type: ignore[import-untyped]
+import rcssmin  # type: ignore[import-untyped]
+import rjsmin  # type: ignore[import-untyped]
 import zstandard as zstd
 
 from recoverage.server import (
@@ -26,8 +28,6 @@ from recoverage.server import (
     _snapshot_db_mtime,
     app,
     compress_payload,
-    minify_css,
-    minify_js,
     request,
     response,
     static_file,
@@ -56,10 +56,10 @@ def _build_index_payload() -> bytes:
         # nothing.  Log it so a broken install is diagnosable.
         _log.warning("van.min.js missing — dashboard SPA will not function")
         vanjs = ""
-    html = html.replace("<!-- INJECT_CSS -->", f"<style>{minify_css(css)}</style>")
+    html = html.replace("<!-- INJECT_CSS -->", f"<style>{rcssmin.cssmin(css)}</style>")
     html = html.replace(
         "<!-- INJECT_JS -->",
-        f"<script>{vanjs}\n{minify_js(js)}</script>",
+        f"<script>{vanjs}\n{rjsmin.jsmin(js)}</script>",
     )
     payload = html.encode("utf-8")
     _check_payload_budget(payload)

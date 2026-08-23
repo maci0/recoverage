@@ -33,8 +33,6 @@ from urllib.parse import urlsplit
 
 import bottle  # type: ignore[import-untyped]
 import brotli  # type: ignore[import-untyped]
-import rcssmin  # type: ignore[import-untyped]
-import rjsmin  # type: ignore[import-untyped]
 import zstandard as zstd
 
 from recoverage._paths import _db_path, sqlite_ro_uri
@@ -567,17 +565,6 @@ def get_disassembly(va: int, size: int, file_offset: int, target: str) -> str:
     return "\n".join(asm_lines) if asm_lines else "  (no instructions)"
 
 
-# ── Minification ───────────────────────────────────────────────────
-
-
-def minify_css(css: str) -> str:
-    return rcssmin.cssmin(css)
-
-
-def minify_js(js: str) -> str:
-    return rjsmin.jsmin(js)
-
-
 # ── Compression ────────────────────────────────────────────────────
 
 
@@ -994,6 +981,7 @@ _STATUS_ERROR_CODES: dict[int, str] = {
     400: "bad_request",
     403: "forbidden",
     404: "not_found",
+    413: "payload_too_large",
     422: "unprocessable_entity",
     429: "rate_limited",
     500: "internal",

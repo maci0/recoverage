@@ -149,29 +149,25 @@ DOT_PNGS = {
 
 
 @functools.lru_cache(maxsize=256)
-def _progress_svg_cached(
-    cache_key: tuple[tuple[str, float], ...],
-    colors_key: tuple[tuple[str, str], ...],
-    width: int,
-    height: int,
-    radius: int,
-) -> str:
-    """Inner LRU-cached SVG builder. All args must be hashable."""
-    colors = dict(colors_key)
+def _progress_svg(segments: tuple[tuple[str, float], ...]) -> str:
+    """SVG (data URI) with one colored segment per (state, pct), rounded corners.
+
+    Segments must be a hashable tuple; the result is LRU-cached because the
+    same section state renders identically on every page view."""
     svg = [
-        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">'
-        f'<defs><clipPath id="rc"><rect width="{width}" height="{height}" rx="{radius}" ry="{radius}"/></clipPath></defs>'
-        f'<rect width="{width}" height="{height}" fill="#1f2937" rx="{radius}" ry="{radius}"/>'
+        '<svg xmlns="http://www.w3.org/2000/svg" width="700" height="32" viewBox="0 0 700 32">'
+        '<defs><clipPath id="rc"><rect width="700" height="32" rx="10" ry="10"/></clipPath></defs>'
+        '<rect width="700" height="32" fill="#1f2937" rx="10" ry="10"/>'
         '<g clip-path="url(#rc)">'
     ]
 
     current_x = 0.0
-    for status, pct in cache_key:
-        hex_color = colors.get(status, "#1f2937")
-        seg_w = width * pct / 100.0
+    for status, pct in segments:
+        hex_color = COLORS.get(status, "#1f2937")
+        seg_w = 700 * pct / 100.0
         if seg_w > 0:
             svg.append(
-                f'<rect x="{current_x:.2f}" y="0" width="{seg_w:.2f}" height="{height}" fill="{hex_color}"/>'
+                f'<rect x="{current_x:.2f}" y="0" width="{seg_w:.2f}" height="32" fill="{hex_color}"/>'
             )
         current_x += seg_w
 
@@ -179,20 +175,6 @@ def _progress_svg_cached(
 
     return "data:image/svg+xml;base64," + base64.b64encode("".join(svg).encode("utf-8")).decode(
         "utf-8"
-    )
-
-
-def _make_progress_svg(
-    segments: list[tuple[str, float]],
-    colors: dict[str, str],
-    width: int = 700,
-    height: int = 32,
-    radius: int = 10,
-) -> str:
-    """Generate an SVG with colored segments and rounded corners as a data: URI.
-    `segments` is a list of (status_key, pct) pairs. LRU-cached (max 256 entries)."""
-    return _progress_svg_cached(
-        tuple(segments), tuple(sorted(colors.items())), width, height, radius
     )
 
 
@@ -307,8 +289,8 @@ def _code_block_raw(highlighted_html: str) -> str:
 
 def _detail_rows(
     data_dict: dict[str, Any],
-    skip_fields: set[str] | tuple[str, ...] = (),
-    hex_fields: set[str] | tuple[str, ...] = (),
+    skip_fields: set[str],
+    hex_fields: set[str],
     val_fn: Callable[[str, Any, str], str] | None = None,
 ) -> str:
     """Generate <tr> rows for a key-value detail table."""
@@ -452,8 +434,11 @@ def _highlight_c(code: str) -> str:
     return _highlight_tokens(_get_c_lexer().get_tokens(code), _get_c_colors())
 
 
-def _highlight_asm(text: str, target: str = "") -> str:
-    """Syntax-highlight x86 assembly using Pygments tokens and <font> tags (no CSS)."""
+def _highlight_asm(text: str, target: str) -> str:
+    """Syntax-highlight x86 assembly using Pygments tokens and <font> tags (no CSS).
+
+    Addresses and bare hex references become search links into *target*'s grid.
+    """
 
     def _addr_link(addr: str) -> str:
         return (
@@ -462,9 +447,6 @@ def _highlight_asm(text: str, target: str = "") -> str:
         )
 
     def _link_hex_refs(html: str) -> str:
-        if not target:
-            return html
-
         return _HEX_ADDR_RE.sub(
             lambda m: (
                 f'<a href="?target={_url_quote(target)}&search={_url_quote(m.group(0))}">'
@@ -477,15 +459,9 @@ def _highlight_asm(text: str, target: str = "") -> str:
         return _link_hex_refs(_html_escape(line))
 
     def _addr_line(addr_part: str, highlighted_code: str) -> str:
-        if target:
-            return _addr_link(addr_part) + highlighted_code
-        return f'<font color="#858585">{_html_escape(addr_part)}</font>' + highlighted_code
+        return _addr_link(addr_part) + highlighted_code
 
     if not _pygments_available():
-        # Without pygments the whole line is escaped; only a target makes
-        # the per-line address linkification worthwhile.
-        if not target:
-            return _html_escape(text)
         lines = []
         for line in text.splitlines():
             split = _split_asm_line(line)
@@ -1582,7 +1558,7 @@ def _render_potato_inner(
 
     progress_bar_png_uri = ""
     if progress:
-        progress_bar_png_uri = _make_progress_svg(progress["segments"], COLORS)
+        progress_bar_png_uri = _progress_svg(tuple(progress["segments"]))
 
     db_mtime_str = ""
     try:
@@ -1944,7 +1920,7 @@ def _render_panel(
         if gl_row:
             gl_data = json.loads(gl_row[0])
             ctx["gl_data"] = gl_data
-            ctx["gl_detail_rows"] = _detail_rows(gl_data, skip_fields={"files"})
+            ctx["gl_detail_rows"] = _detail_rows(gl_data, skip_fields={"files"}, hex_fields=set())
         # else: no function and no global → "Unknown" branch in template
 
     return _PANEL_TPL.render(**ctx)

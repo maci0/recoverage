@@ -90,9 +90,7 @@ _VERDICT_COLORS: dict[str, int] = {
 }
 
 
-def _open_db_or_exit(
-    db_path: Path | None = None, *, missing_exit_code: int = 1
-) -> sqlite3.Connection:
+def _open_db_or_exit(*, missing_exit_code: int = 1) -> sqlite3.Connection:
     """Open coverage.db read-only, exiting the process on failure.
 
     Named apart from ``server._open_db`` (which raises instead of exiting):
@@ -101,7 +99,7 @@ def _open_db_or_exit(
     infrastructure error, distinct from "coverage below threshold" = 1);
     sibling commands keep their historical exit 1.
     """
-    p = db_path or _db_path()
+    p = _db_path()
     if not p.exists():
         typer.secho(f"Error: database not found at {p}", fg=typer.colors.RED, err=True)
         raise typer.Exit(missing_exit_code)
