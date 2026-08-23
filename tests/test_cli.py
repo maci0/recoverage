@@ -341,6 +341,67 @@ class TestStatsJson:
         assert ".text" in data[0]["sections"]
 
 
+class TestStatsNullSectionSize:
+    def test_stats_survives_null_section_size(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A schema-legal NULL sections.size on a section that has cells must
+        render as "0 B", not crash `recoverage stats`/`export` with a raw
+        TypeError from f"{size_bytes:,}" (None is not formattable)."""
+        import sqlite3
+
+        db = tmp_path / "coverage.db"
+        conn = sqlite3.connect(db)
+        try:
+            c = conn.cursor()
+            c.execute("CREATE TABLE metadata (target TEXT, key TEXT, value TEXT)")
+            c.execute(
+                "CREATE TABLE sections (target TEXT, name TEXT, va INTEGER,"
+                " size INTEGER, fileOffset INTEGER, unitBytes INTEGER,"
+                " columns INTEGER, PRIMARY KEY (target, name))"
+            )
+            c.execute(
+                "CREATE TABLE cells (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                " target TEXT, section_name TEXT, start INTEGER, end INTEGER,"
+                " span INTEGER DEFAULT 1, state TEXT, functions TEXT DEFAULT '[]',"
+                " label TEXT, parent_function TEXT)"
+            )
+            c.execute("CREATE TABLE functions (target TEXT, status TEXT, markerType TEXT)")
+            c.execute(
+                "CREATE VIEW section_cell_stats AS"
+                " SELECT target, section_name, COUNT(*) as total_cells,"
+                " SUM(CASE WHEN state = 'exact' THEN 1 ELSE 0 END) as exact_count,"
+                " SUM(CASE WHEN state = 'reloc' THEN 1 ELSE 0 END) as reloc_count,"
+                " SUM(CASE WHEN state IN ('near_match','near_matching') THEN 1 ELSE 0 END)"
+                "   as near_match_count,"
+                " SUM(CASE WHEN state = 'stub' THEN 1 ELSE 0 END) as stub_count,"
+                " SUM(CASE WHEN state = 'padding' THEN 1 ELSE 0 END) as padding_count,"
+                " SUM(CASE WHEN state = 'data' THEN 1 ELSE 0 END) as data_count,"
+                " SUM(CASE WHEN state = 'thunk' THEN 1 ELSE 0 END) as thunk_count,"
+                " SUM(CASE WHEN state = 'none' THEN 1 ELSE 0 END) as none_count,"
+                " SUM(CASE WHEN state = 'proven' THEN 1 ELSE 0 END) as proven_count,"
+                " SUM(CASE WHEN state = 'size_mismatch' THEN 1 ELSE 0 END)"
+                "   as size_mismatch_count"
+                " FROM cells GROUP BY target, section_name"
+            )
+            c.execute("INSERT INTO metadata VALUES ('T','summary','{}')")
+            # .bss shape: every column NULL except identity.
+            c.execute("INSERT INTO sections VALUES ('T','.bss',NULL,NULL,NULL,NULL,NULL)")
+            c.execute(
+                "INSERT INTO cells (target, section_name, start, end, state)"
+                " VALUES ('T','.bss',0,16,'none')"
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        monkeypatch.setattr("recoverage.cli._db_path", lambda: db)
+        result = runner.invoke(app, ["stats"])
+        assert result.exit_code == 0
+        assert ".bss" in result.output
+        assert "0 B" in result.output
+
+
 class TestPartialSchemaCleanExit:
     """A DB that lists targets but cannot answer stats queries must exit 2
     with a rebuild hint, not a traceback (same contract as _select_targets)."""

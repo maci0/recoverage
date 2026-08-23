@@ -12,6 +12,7 @@ from conftest import HAS_DB, get_first_target, wsgi_get
 
 from recoverage._paths import sqlite_ro_uri
 from recoverage.potato import (
+    _build_progress,
     _build_url,
     _cell_file_offset,
     _compute_section_stats,
@@ -108,6 +109,34 @@ def test_section_stats_pct_zero_size_is_zero():
     # A NULL-size (.bss-style) section must not divide by zero: pct is 0.
     stats = _compute_section_stats(c, "T", {".bss": {"size": 0}}, {"summary": {}})
     assert stats[".bss"]["pct"] == 0
+    conn.close()
+
+
+def test_section_stats_pct_null_size_is_zero():
+    """Same contract as the zero-size case above, with an actual NULL.
+
+    dict.get("size", 0) returns None for a schema-legal NULL column, and
+    `None > 0` raised TypeError — a raw 500 through handle_potato's except
+    tuple — instead of the pct 0 this asserts.
+    """
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute("CREATE TABLE cells (target TEXT, section_name TEXT, state TEXT)")
+    c.execute(
+        "CREATE VIEW section_cell_stats AS"
+        " SELECT target, section_name,"
+        " COUNT(*) as total_cells,"
+        " 0 as exact_count, 0 as reloc_count, 0 as near_match_count,"
+        " 0 as stub_count, 0 as padding_count"
+        " FROM cells GROUP BY target, section_name"
+    )
+    c.execute("INSERT INTO cells (target, section_name, state) VALUES ('T', '.bss', 'none')")
+    stats = _compute_section_stats(c, "T", {".bss": {"size": None}}, {"summary": {}})
+    assert stats[".bss"]["pct"] == 0
+    sec = {"name": ".bss", "va": None, "size": None}
+    progress = _build_progress(".bss", sec, {"summary": {}}, {".bss": {}})
+    assert progress["coverage_pct"] == 0
     conn.close()
 
 

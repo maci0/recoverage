@@ -310,6 +310,16 @@ def _section_stats(c: sqlite3.Cursor, target: str) -> dict[str, Any]:
             # and originate in analyzed binary names, so they get the same
             # control-char escaping as method/path before hitting the log.
             _log.warning("Corrupt summary metadata for target %s", _log_safe(target))
+        else:
+            if not isinstance(summary, dict):
+                # Valid JSON but not an object (foreign/hand-edited DB): the
+                # CLI reads totalFunctions off it with .get() and would crash
+                # with AttributeError.  Treat like corrupt JSON above.
+                _log.warning(
+                    "Summary metadata for target %s is not an object",
+                    _log_safe(target),
+                )
+                summary = {}
 
     # Per-section stats.  Coverage is BYTE-based: covered = every cell span
     # whose state is not "none", over the section's total cell bytes.
@@ -334,7 +344,12 @@ def _section_stats(c: sqlite3.Cursor, target: str) -> dict[str, Any]:
     for row in c.fetchall():
         name = row["name"]
         if name in sections:
-            sections[name]["size_bytes"] = row["size"]
+            # `or 0`, not raw: a NULL size is schema-legal (the .bss shape),
+            # and the CLI formats size_bytes with `:,` — None would crash
+            # `recoverage stats`/`export` with a TypeError.  A section of
+            # unknown size has zero known bytes, same treatment as
+            # total_bytes/covered_bytes above.
+            sections[name]["size_bytes"] = row["size"] or 0
 
     # Function counts by status.  GLOBAL/DATA marker rows live in the
     # functions table but are data markers, not functions — exclude them.

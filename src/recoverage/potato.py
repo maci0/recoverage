@@ -1029,8 +1029,13 @@ def _compute_section_stats(
     sections: dict[str, dict[str, Any]],
     data: dict[str, Any],
 ) -> dict[str, dict[str, Any]]:
-    per_section_stats: dict[str, dict[str, Any]] = {}
+    # A non-object summary (valid JSON of another type in a foreign DB) would
+    # crash .get() below with AttributeError — same guard as
+    # server._section_stats applies to its own summary read.
     summary = data.get("summary", {})
+    if not isinstance(summary, dict):
+        summary = {}
+    per_section_stats: dict[str, dict[str, Any]] = {}
     c.execute(
         "SELECT section_name, total_cells, exact_count, reloc_count, "
         "near_match_count, stub_count, padding_count FROM section_cell_stats WHERE target = ?",
@@ -1040,7 +1045,11 @@ def _compute_section_stats(
         sec_name_r, s_total, s_exact, s_reloc, s_near_match, s_stub, s_padding = row
         sec_summary_entry = summary.get(sec_name_r, summary)
         s_covered_bytes = sec_summary_entry.get("coveredBytes", 0)
-        s_sec_size = sections.get(sec_name_r, {}).get("size", 0)
+        # `or 0`, not .get("size", 0): a NULL size is schema-legal (.bss-style
+        # sections carry NULL columns like va/fileOffset) and dict.get returns
+        # the stored None — which then raises TypeError on `> 0` below and
+        # 500s the whole page.  Same guard as the va/columns fallbacks above.
+        s_sec_size = sections.get(sec_name_r, {}).get("size") or 0
         # Same rounding as server._section_stats (round to 2dp): int() floor
         # made the map header read "87% covered" beside the topbar's "88.0%"
         # for the same section.
@@ -1141,7 +1150,14 @@ def _build_progress(
         return None
 
     summary = data.get("summary", {})
-    sec_size = sec_data.get("size", 0)
+    if not isinstance(summary, dict):
+        # Valid JSON of another type (foreign DB): .get() below would raise
+        # AttributeError.  Same guard as _compute_section_stats.
+        summary = {}
+    # `or 0`, not .get("size", 0): a NULL size is schema-legal and .get would
+    # return the stored None, crashing every `sec_size > 0` guard below with
+    # TypeError (which escapes handle_potato's except tuple as a raw 500).
+    sec_size = sec_data.get("size") or 0
     sec_summ = summary.get(section, summary)
     covered_bytes = sec_summ.get("coveredBytes", 0)
     total_fn = sec_summ.get("totalFunctions", 0)
