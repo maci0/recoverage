@@ -110,9 +110,9 @@ uv run recoverage serve
 ```
 
 > [!NOTE]
-> The server reads `db/coverage.db` relative to the **current working
-> directory**, so run it from your project root — the directory that
-> contains `rebrew-project.toml`.
+> The server resolves `coverage.db` from the **current working directory**:
+> `[project] db_dir` in `rebrew-project.toml` when set, falling back to
+> `db/coverage.db` — so run it from your project root.
 
 ---
 
@@ -250,6 +250,7 @@ recoverage/
     ├── _paths.py             # DB path resolution (rebrew-project.toml db_dir)
     ├── cli.py                # Typer CLI entry point
     ├── server.py             # Bottle app, shared helpers & compression
+    ├── regen.py              # rebrew regen subprocess lifecycle (group kill + reap)
     ├── api.py                # REST API routes (/api/*)
     ├── ui.py                 # UI routes (/, /potato, static files)
     ├── potato.py             # Potato Mode renderer
