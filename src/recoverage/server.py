@@ -956,7 +956,9 @@ def _open_db(db_path: Path) -> sqlite3.Connection:
 def _db() -> sqlite3.Connection:
     conn = _open_db(_db_path())
     version = _check_schema_version(conn)
-    _log.info("recoverage: opened coverage.db (schema v%s)", version)
+    # DEBUG: this runs on every DB-touching request; an INFO line here makes
+    # the operational log one "opened coverage.db" entry per request.
+    _log.debug("recoverage: opened coverage.db (schema v%s)", version)
     if version == "<incomplete>":
         # Stamped with a known version but missing required objects — every
         # query would 500.  Fail fast with the standard 503 JSON contract.

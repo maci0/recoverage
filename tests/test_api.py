@@ -1776,6 +1776,172 @@ class TestDataPayloadMemo:
         assert ui.CACHED_INDEX_PAYLOAD == b"shell-bytes"
         assert ui.CACHED_INDEX_COMPRESSED == {"gzip": b"shell-gz"}
 
+    def _gated_open(
+        self, tmp_path: Any, monkeypatch: Any, release: threading.Event
+    ) -> tuple[Any, list[int]]:
+        """Patch ``_open_db`` to record every call and park the FIRST caller
+        on *release* — freezing the payload build mid-flight so the test can
+        observe what concurrent requests do while a build is in progress.
+
+        Also installs thread-independent request/response stand-ins for the
+        ``server`` module: worker threads have no bottle request context
+        (thread-local), and the compression/ETag helpers resolve those names
+        from server's namespace."""
+        import recoverage.api as api
+        import recoverage.server as server_mod
+
+        self._patch(tmp_path, monkeypatch)
+
+        open_calls: list[int] = []
+        lock = threading.Lock()
+        # The payload build opens its connection through server._db(), whose
+        # body resolves _open_db in server's module namespace.
+        real_open_db = server_mod._open_db
+
+        def counting_open(p: Any) -> Any:
+            with lock:
+                open_calls.append(1)
+                first = len(open_calls) == 1
+            if first:
+                assert release.wait(timeout=15), "builder parked forever in _open_db"
+            return real_open_db(p)
+
+        monkeypatch.setattr(server_mod, "_open_db", counting_open)
+
+        fake_req: Any = type("R", (), {"headers": {}, "query": {}, "environ": {}})()
+        fake_resp: Any = type(
+            "R", (), {"content_type": None, "set_header": lambda self, k, v: None}
+        )()
+        monkeypatch.setattr(server_mod, "request", fake_req)
+        monkeypatch.setattr(server_mod, "response", fake_resp)
+        return api, open_calls
+
+    def test_concurrent_cold_misses_single_flight(self, tmp_path: Any, monkeypatch: Any) -> None:
+        """Simultaneous cold misses share ONE payload build.
+
+        A rebuild broadcast clears the memo and wakes every SSE client, which
+        all refetch /data at once; without single-flight each of those misses
+        re-runs the full-table queries + serialization.  The first builder is
+        frozen inside _open_db while the rest arrive: each must come back with
+        identical bytes having opened the DB zero extra times."""
+        import recoverage.api as api
+
+        release = threading.Event()
+        _, open_calls = self._gated_open(tmp_path, monkeypatch, release)
+
+        workers = 4
+        barrier = threading.Barrier(workers + 1)
+        results: list[Any] = []
+        errors: list[BaseException] = []
+
+        def worker() -> None:
+            try:
+                barrier.wait(timeout=15)
+                results.append(api.handle_api_data("GAME"))
+            except BaseException as exc:  # surfaced below, not swallowed
+                errors.append(exc)
+
+        threads = [threading.Thread(target=worker) for _ in range(workers)]
+        for t in threads:
+            t.start()
+        barrier.wait(timeout=15)
+
+        # Give the followers time to reach the checkout point while the
+        # builder sits frozen in _open_db; a duplicate build would show up as
+        # a second _open_db call.
+        time.sleep(0.3)
+        assert len(open_calls) <= 1, "concurrent cold miss started a duplicate build"
+        release.set()
+
+        for t in threads:
+            t.join(timeout=30)
+            assert not t.is_alive(), "worker hung waiting on the build event"
+
+        assert not errors
+        assert len(results) == workers
+        assert all(isinstance(r, bytes) for r in results)
+        assert all(r == results[0] for r in results)
+        assert len(open_calls) == 1
+        # Every registered build event drains when its owner finishes.
+        assert api._DATA_CACHE_BUILDING == {}
+        assert len(api._DATA_CACHE) == 1
+
+    def test_follower_waits_for_inflight_build_without_touching_db(
+        self, tmp_path: Any, monkeypatch: Any
+    ) -> None:
+        """A request arriving while another thread's build is registered must
+        park on the build event — it must not run its own queries."""
+        import recoverage.api as api
+
+        never = threading.Event()
+        _, open_calls = self._gated_open(tmp_path, monkeypatch, never)
+        snap = api._snapshot_db_mtime()
+        assert snap is not None
+        key: tuple[tuple[int, int], str, None] = (snap, "GAME", None)
+        built = threading.Event()
+        api._DATA_CACHE_BUILDING[key] = built
+
+        outcome: list[Any] = []
+
+        def follower() -> None:
+            outcome.append(api.handle_api_data("GAME"))
+
+        t = threading.Thread(target=follower)
+        t.start()
+        try:
+            t.join(timeout=1.0)
+            assert t.is_alive(), "follower did not wait for the in-flight build"
+            assert open_calls == [], "follower opened the DB despite an in-flight build"
+            api._DATA_CACHE[key] = {"raw": b'{"memoized": true}'}
+        finally:
+            built.set()
+        t.join(timeout=15)
+        assert not t.is_alive(), "follower never woke"
+        assert outcome == [b'{"memoized": true}']
+        assert open_calls == []
+        # The follower owns nothing: the manually registered event is left
+        # for its owner, so pop it the way an owner's finally would.
+        api._DATA_CACHE_BUILDING.pop(key, None)
+
+    def test_follower_survives_leader_404(self, tmp_path: Any, monkeypatch: Any) -> None:
+        """A follower parked on an in-flight build whose owner short-circuits
+        (unknown ?section= 404) must wake, find no memo, and produce its own
+        404 — not hang, not serve a stale/empty payload."""
+        import recoverage.api as api
+
+        release = threading.Event()
+        _, open_calls = self._gated_open(tmp_path, monkeypatch, release)
+        req = type("R", (), {"headers": {}, "query": {"section": "nope"}})()
+        monkeypatch.setattr(api, "request", req)
+        api._clear_data_cache()
+
+        snap = api._snapshot_db_mtime()
+        assert snap is not None
+        key: tuple[tuple[int, int], str, str | None] = (snap, "GAME", "nope")
+        built = threading.Event()
+        api._DATA_CACHE_BUILDING[key] = built
+
+        outcome: list[Any] = []
+
+        def follower() -> None:
+            try:
+                outcome.append(("returned", api.handle_api_data("GAME")))
+            except Exception as exc:
+                outcome.append(("raised", exc))
+
+        t = threading.Thread(target=follower)
+        t.start()
+        t.join(timeout=0.3)
+        assert t.is_alive(), "follower did not wait for the in-flight build"
+        built.set()
+        release.set()  # the follower's own build may now open the DB
+        t.join(timeout=15)
+        assert not t.is_alive(), "404 path deadlocked the follower"
+        kind, resp = outcome[0]
+        assert kind == "returned" and str(resp.status).startswith("404")
+        assert open_calls == [1]
+        api._DATA_CACHE_BUILDING.pop(key, None)
+
 
 def _header(headers: dict[str, str], name: str) -> str | None:
     """Case-insensitive header lookup (Bottle sends 'Etag', tests use 'ETag')."""

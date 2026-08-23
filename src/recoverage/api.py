@@ -113,11 +113,59 @@ _DATA_CACHE_LOCK = threading.Lock()
 # Upper bound on retained payloads: a long-running server across many rebuilds
 # must not accumulate one multi-MB payload per fingerprint forever.
 _DATA_CACHE_MAX = 8
+# Single-flight build coordination: fingerprint -> Event set while one thread
+# runs the queries/serialization for that key.  A rebuild broadcast clears the
+# memo and wakes every connected SSE client, which all refetch /data at once;
+# without this, each of those cold misses materializes its own multi-MB
+# payload (full-table json_group_array + search index + json.dumps).
+_DATA_CACHE_BUILDING: dict[tuple[tuple[int, int] | None, str, str | None], threading.Event] = {}
 
 
 def _clear_data_cache() -> None:
+    # Deliberately leaves _DATA_CACHE_BUILDING alone: each Event is owned by
+    # the thread that registered it and is set in that thread's finally, so
+    # waiters always wake.  Clearing here could strand a waiter on an Event
+    # nobody will ever set.  A waiter that wakes to a cleared memo simply
+    # builds the (post-clear) payload itself.
     with _DATA_CACHE_LOCK:
         _DATA_CACHE.clear()
+
+
+def _data_cache_checkout(
+    key: tuple[tuple[int, int] | None, str, str | None],
+) -> tuple[dict[str, bytes] | None, threading.Event | None]:
+    """Return ``(memo_entry, owned_event)`` for *key*.
+
+    - Memo hit: ``(<entry>, None)`` — serve it.
+    - No entry, no in-flight build: ``(None, <event>)`` — caller builds and
+      MUST pass *owned_event* to :func:`_data_cache_build_done` in a finally.
+    - Build already running: waits for it, then returns whatever the memo
+      holds now (None when the leader failed or short-circuited with a 404 —
+      the caller then builds its own payload).
+    """
+    with _DATA_CACHE_LOCK:
+        entry = _DATA_CACHE.get(key)
+        if entry is not None:
+            return entry, None
+        event = _DATA_CACHE_BUILDING.get(key)
+        if event is None:
+            event = _DATA_CACHE_BUILDING[key] = threading.Event()
+            return None, event
+    # Follower path (outside the lock): the leader's finally always sets the
+    # event — success, error, or 404 short-circuit alike.
+    event.wait()
+    with _DATA_CACHE_LOCK:
+        return _DATA_CACHE.get(key), None
+
+
+def _data_cache_build_done(
+    key: tuple[tuple[int, int] | None, str, str | None], event: threading.Event
+) -> None:
+    """Release followers of *key* (owner only — see :func:`_data_cache_checkout`)."""
+    with _DATA_CACHE_LOCK:
+        if _DATA_CACHE_BUILDING.get(key) is event:
+            del _DATA_CACHE_BUILDING[key]
+    event.set()
 
 
 def _cache_data_insert(
@@ -564,10 +612,9 @@ def handle_api_data(target: str) -> bytes | Any:
 
     # Serve a memoized payload for an unchanged DB instead of re-running the
     # full-table queries, re-serialization, and recompression on every
-    # cache-missing request.
-    entry: dict[str, bytes] | None
-    with _DATA_CACHE_LOCK:
-        entry = _DATA_CACHE.get(fingerprint)
+    # cache-missing request.  A cold miss single-flights: concurrent misses
+    # (the post-rebuild SSE refetch herd) share one build.
+    entry, building = _data_cache_checkout(fingerprint)
     if entry is not None:
         accept_enc = request.headers.get("Accept-Encoding", "")
         encoding = _best_encoding(accept_enc)
@@ -581,56 +628,60 @@ def handle_api_data(target: str) -> bytes | Any:
                 entry[encoding] = body
         return _json_ok_precompressed(body, encoding, **headers)
 
-    with _target_cursor(target) as c:
-        data: dict[str, Any] = _load_metadata(c, target)
+    try:
+        with _target_cursor(target) as c:
+            data: dict[str, Any] = _load_metadata(c, target)
 
-        # Optional ?section= narrowing: the same queries with one extra WHERE
-        # term, so no branch duplicates a query that only adds "AND name = ?".
-        sec_params: list[Any] = [target] + ([section_filter] if section_filter else [])
-        sections_clause = " AND name = ?" if section_filter else ""
+            # Optional ?section= narrowing: the same queries with one extra WHERE
+            # term, so no branch duplicates a query that only adds "AND name = ?".
+            sec_params: list[Any] = [target] + ([section_filter] if section_filter else [])
+            sections_clause = " AND name = ?" if section_filter else ""
 
-        c.execute(
-            f"SELECT * FROM sections WHERE target = ?{sections_clause}",
-            sec_params,
-        )
-        data["sections"] = {}
-        for row in c.fetchall():
-            sec = dict(row)
-            sec["cells"] = []
-            data["sections"][sec["name"]] = sec
+            c.execute(
+                f"SELECT * FROM sections WHERE target = ?{sections_clause}",
+                sec_params,
+            )
+            data["sections"] = {}
+            for row in c.fetchall():
+                sec = dict(row)
+                sec["cells"] = []
+                data["sections"][sec["name"]] = sec
 
-        if section_filter and not data["sections"]:
-            # Mirror /asm: an unknown section must 404, not return a silent
-            # empty grid (which would also get memoized under that key).
-            return _section_not_found(target, section_filter)
+            if section_filter and not data["sections"]:
+                # Mirror /asm: an unknown section must 404, not return a silent
+                # empty grid (which would also get memoized under that key).
+                return _section_not_found(target, section_filter)
 
-        for row in _cells_json_rows(c, target, section_filter):
-            sec_name = row[0]
-            if sec_name in data["sections"]:
-                data["sections"][sec_name]["cells"] = json.loads(row[1])
+            for row in _cells_json_rows(c, target, section_filter):
+                sec_name = row[0]
+                if sec_name in data["sections"]:
+                    data["sections"][sec_name]["cells"] = json.loads(row[1])
 
-        data["search_index"] = _build_search_index(c, target)
+            data["search_index"] = _build_search_index(c, target)
 
-        # Per-section cell stats from SQL view.  All buckets are selected so
-        # consumers can sum them and reconcile with total_cells (padding,
-        # none, proven, and size_mismatch were previously omitted).
-        data["section_cell_stats"] = {}
-        stats_clause = " AND section_name = ?" if section_filter else ""
-        c.execute(
-            "SELECT section_name, total_cells, exact_count, reloc_count, "
-            "near_match_count, stub_count, padding_count, data_count, thunk_count, "
-            f"none_count, proven_count, size_mismatch_count "
-            f"FROM section_cell_stats WHERE target = ?{stats_clause}",
-            sec_params,
-        )
-        for row in c.fetchall():
-            data["section_cell_stats"][row["section_name"]] = _cell_bucket_row(row)
+            # Per-section cell stats from SQL view.  All buckets are selected so
+            # consumers can sum them and reconcile with total_cells (padding,
+            # none, proven, and size_mismatch were previously omitted).
+            data["section_cell_stats"] = {}
+            stats_clause = " AND section_name = ?" if section_filter else ""
+            c.execute(
+                "SELECT section_name, total_cells, exact_count, reloc_count, "
+                "near_match_count, stub_count, padding_count, data_count, thunk_count, "
+                f"none_count, proven_count, size_mismatch_count "
+                f"FROM section_cell_stats WHERE target = ?{stats_clause}",
+                sec_params,
+            )
+            for row in c.fetchall():
+                data["section_cell_stats"][row["section_name"]] = _cell_bucket_row(row)
 
-        raw_json = json.dumps(data).encode("utf-8")
-        accept_enc = request.headers.get("Accept-Encoding", "")
-        body, encoding = compress_payload(raw_json, accept_enc)
-        _cache_data_insert(fingerprint, raw_json, encoding, body)
-        return _json_ok_precompressed(body, encoding, **headers)
+            raw_json = json.dumps(data).encode("utf-8")
+            accept_enc = request.headers.get("Accept-Encoding", "")
+            body, encoding = compress_payload(raw_json, accept_enc)
+            _cache_data_insert(fingerprint, raw_json, encoding, body)
+            return _json_ok_precompressed(body, encoding, **headers)
+    finally:
+        if building is not None:
+            _data_cache_build_done(fingerprint, building)
 
 
 # Mirrors the list endpoint's limit cap.
