@@ -95,6 +95,36 @@ def _check_payload_budget(payload: bytes) -> None:
     )
 
 
+def warm_index_cache() -> None:
+    """Pre-build the SPA shell payload and every compressed variant.
+
+    ``handle_index`` otherwise pays the asset read + minify + three
+    full-strength compressions under INDEX_LOCK on the FIRST client's
+    request; ``serve`` runs this from a daemon thread before the listener
+    starts so every first hit is a pure lookup.  Failures are logged and
+    left lazy: the request path rebuilds whatever is missing.
+    """
+    global CACHED_INDEX_PAYLOAD
+    try:
+        with INDEX_LOCK:
+            if CACHED_INDEX_PAYLOAD is None:
+                CACHED_INDEX_PAYLOAD = _build_index_payload()
+            payload = CACHED_INDEX_PAYLOAD
+            # The exact encodings _best_encoding can return; passing each as
+            # the Accept-Encoding value selects it directly.
+            for encoding in ("zstd", "br", "gzip", ""):
+                if encoding not in CACHED_INDEX_COMPRESSED:
+                    compressed, _ = compress_payload(
+                        payload, encoding, brotli_quality=BROTLI_STATIC_QUALITY
+                    )
+                    CACHED_INDEX_COMPRESSED[encoding] = compressed
+    except Exception:
+        _log.warning(
+            "SPA shell cache warm-up failed — first index request will build it instead",
+            exc_info=True,
+        )
+
+
 # ── Routes ─────────────────────────────────────────────────────────
 
 

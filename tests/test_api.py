@@ -1553,6 +1553,11 @@ class TestPostConnectSqliteError:
         if not target:
             pytest.skip("No targets in DB")
 
+        # A warm /stats memo returns before touching the cursor at all; this
+        # test exercises the post-connect query-failure path, so it must
+        # start from a cold memo.
+        api._clear_stats_cache()
+
         real_conn = api._db()
 
         class _BoomCursor:
@@ -1768,10 +1773,12 @@ class TestDataPayloadMemo:
         monkeypatch.setattr(ui, "CACHED_INDEX_PAYLOAD", b"shell-bytes")
         monkeypatch.setattr(ui, "CACHED_INDEX_COMPRESSED", {"gzip": b"shell-gz"})
         api._DATA_CACHE[((123, 456), "GAME", None)] = {"raw": b"{}"}
+        api._STATS_CACHE[(123, "GAME")] = {"summary": {}, "sections": {}, "by_status": {}}
 
         api._clear_derived_caches()
 
         assert len(api._DATA_CACHE) == 0
+        assert len(api._STATS_CACHE) == 0
         assert server_mod._RESOLVED_TARGETS_CACHE is None
         assert ui.CACHED_INDEX_PAYLOAD == b"shell-bytes"
         assert ui.CACHED_INDEX_COMPRESSED == {"gzip": b"shell-gz"}
@@ -2245,3 +2252,186 @@ class TestUnhandledErrorContract:
         assert status.startswith("500")
         assert "text/html" in headers.get("Content-Type", "")
         assert b"Internal Server Error" in decode_body(body, headers)
+
+
+class TestSectionStatsMemo:
+    """/api/targets/<t>/stats memoises per WAL-aware DB fingerprint + target.
+
+    One request re-runs the full-cells-table SECTION_STATS_SQL aggregation
+    plus three more queries; repeat callers (a polling consumer) must not
+    re-pay that scan while the DB is unchanged, and a rebuild (fingerprint
+    change) must never serve stale buckets.
+    """
+
+    def _make_db(self, tmp_path: Any, cells: list[tuple[str, int, int, str]]) -> Any:
+        """A minimal but schema-gate-valid v4 DB with the given cells."""
+        import sqlite3
+
+        db = tmp_path / "coverage.db"
+        conn = sqlite3.connect(db)
+        c = conn.cursor()
+        c.execute("CREATE TABLE metadata (target TEXT, key TEXT, value TEXT)")
+        c.execute(
+            "CREATE TABLE sections (target TEXT, name TEXT, va INTEGER, size INTEGER, "
+            "fileOffset INTEGER, unitBytes INTEGER, columns INTEGER)"
+        )
+        c.execute(
+            "CREATE TABLE cells (id INTEGER PRIMARY KEY AUTOINCREMENT, target TEXT, "
+            "section_name TEXT, start INTEGER, end INTEGER, span INTEGER, state TEXT, "
+            "functions TEXT DEFAULT '[]', label TEXT, parent_function TEXT)"
+        )
+        c.execute(
+            "CREATE TABLE functions (target TEXT, va INTEGER, name TEXT, vaStart TEXT, "
+            "size INTEGER, "
+            "fileOffset INTEGER, status TEXT, module TEXT, cflags TEXT, symbol TEXT, "
+            "markerType TEXT, ghidra_name TEXT, list_name TEXT, is_thunk INTEGER, "
+            "is_export INTEGER, sha256 TEXT, files TEXT, detected_by TEXT, size_by_tool TEXT, "
+            "textOffset INTEGER, blocker TEXT, blockerDelta INTEGER, size_reason TEXT, "
+            "similarity REAL)"
+        )
+        c.execute(
+            "CREATE TABLE globals (target TEXT, name TEXT, va INTEGER, decl TEXT, files TEXT, "
+            "module TEXT, size INTEGER)"
+        )
+        c.execute(
+            "CREATE TABLE verify_results (target TEXT, va INTEGER, verified_at TEXT, "
+            "byte_delta INTEGER, diff_lines TEXT, similarity REAL)"
+        )
+        c.execute("CREATE TABLE history (id INTEGER)")
+        c.execute(
+            "CREATE VIEW section_cell_stats AS SELECT target, section_name, "
+            "COUNT(*) AS total_cells, 0 AS exact_count, 0 AS reloc_count, 0 AS near_match_count, "
+            "0 AS stub_count, 0 AS padding_count, 0 AS data_count, 0 AS thunk_count, "
+            "0 AS none_count, 0 AS proven_count, 0 AS size_mismatch_count "
+            "FROM cells GROUP BY target, section_name"
+        )
+        c.execute("INSERT INTO metadata VALUES ('GAME', 'db_version', '\"4\"')")
+        c.executemany(
+            "INSERT INTO cells (target, section_name, start, end, span, state)"
+            " VALUES ('GAME', ?, ?, ?, 1, ?)",
+            [(s, a, b, st) for s, a, b, st in cells],
+        )
+        conn.commit()
+        conn.close()
+        return db
+
+    def _patch(self, tmp_path: Any, monkeypatch: Any, db: Any) -> Any:
+        """Point the app at *db* and return the mock request."""
+        import recoverage.api as api
+
+        def _open_like(p: Any) -> Any:
+            conn = sqlite3.connect(sqlite_ro_uri(p), uri=True)
+            conn.row_factory = sqlite3.Row
+            return conn
+
+        req = type("R", (), {"headers": {}, "query": {}})()
+        monkeypatch.setattr(api, "_db_path", lambda: db)
+        monkeypatch.setattr("recoverage.server._db_path", lambda: db)
+        monkeypatch.setattr(api, "_open_db", _open_like)
+        monkeypatch.setattr(api, "_require_target", lambda c, t: None)
+        monkeypatch.setattr(api, "request", req)
+        api._clear_stats_cache()
+        return req
+
+    def test_memo_hit_skips_the_queries(self, tmp_path: Any, monkeypatch: Any) -> None:
+        import recoverage.api as api
+
+        db = self._make_db(tmp_path, [(".text", 0, 16, "exact"), (".text", 16, 32, "none")])
+        self._patch(tmp_path, monkeypatch, db)
+
+        first = api.handle_api_stats("GAME")
+        assert isinstance(first, bytes)
+        assert len(api._STATS_CACHE) == 1
+
+        # A second request must not touch the database at all: an _open_db
+        # whose connections explode proves the answer came from the memo.
+        def _boom_open(p: Any) -> Any:
+            raise AssertionError("memo hit re-opened the database")
+
+        monkeypatch.setattr(api, "_open_db", _boom_open)
+        second = api.handle_api_stats("GAME")
+        assert second == first
+
+        api._clear_stats_cache()
+        assert len(api._STATS_CACHE) == 0
+
+    def test_memo_self_invalidates_on_db_change(self, tmp_path: Any, monkeypatch: Any) -> None:
+        """A rebuild must change the result: new cells + a fingerprint bump
+        produce fresh buckets; the snapshot keying (not an explicit clear)
+        is what makes the fresh result visible."""
+        import os
+
+        import recoverage.api as api
+
+        db = self._make_db(tmp_path, [(".text", 0, 16, "exact")])
+        self._patch(tmp_path, monkeypatch, db)
+
+        body1 = json.loads(api.handle_api_stats("GAME"))
+        assert body1["sections"][".text"]["total_cells"] == 1
+
+        # Simulate a rebuild: more cells committed to the DB.
+        rw = sqlite3.connect(db)
+        rw.execute(
+            "INSERT INTO cells (target, section_name, start, end, span, state)"
+            " VALUES ('GAME', '.text', 16, 32, 1, 'exact')"
+        )
+        rw.commit()
+        rw.close()
+        st = db.stat()
+        os.utime(db, (st.st_atime + 2, st.st_mtime + 2))
+
+        body2 = json.loads(api.handle_api_stats("GAME"))
+        assert body2["sections"][".text"]["total_cells"] == 2
+        # The stale pre-rebuild entry still sits under its own key until
+        # eviction; the changed fingerprint produced a second cache entry.
+        assert len(api._STATS_CACHE) == 2
+
+
+class TestIndexWarmup:
+    """ui.warm_index_cache pre-builds the SPA shell and every compressed
+    variant off the request path so handle_index's first hit is a lookup."""
+
+    def test_warm_builds_payload_and_all_encodings(self, monkeypatch: Any) -> None:
+        import recoverage.ui as ui
+
+        monkeypatch.setattr(ui, "CACHED_INDEX_PAYLOAD", None)
+        monkeypatch.setattr(ui, "CACHED_INDEX_COMPRESSED", {})
+
+        ui.warm_index_cache()
+
+        assert ui.CACHED_INDEX_PAYLOAD
+        assert b"<html" in ui.CACHED_INDEX_PAYLOAD.lower()
+        # Every encoding _best_encoding can return is prebuilt, including
+        # identity; the identity variant is the payload itself.
+        assert set(ui.CACHED_INDEX_COMPRESSED) == {"zstd", "br", "gzip", ""}
+        assert ui.CACHED_INDEX_COMPRESSED[""] == ui.CACHED_INDEX_PAYLOAD
+
+    def test_warm_is_idempotent(self, monkeypatch: Any) -> None:
+        import recoverage.ui as ui
+
+        monkeypatch.setattr(ui, "CACHED_INDEX_PAYLOAD", None)
+        monkeypatch.setattr(ui, "CACHED_INDEX_COMPRESSED", {})
+        ui.warm_index_cache()
+        snapshot = dict(ui.CACHED_INDEX_COMPRESSED)
+
+        ui.warm_index_cache()
+
+        assert snapshot == ui.CACHED_INDEX_COMPRESSED
+
+    def test_warm_failure_is_logged_and_left_lazy(self, monkeypatch: Any, caplog: Any) -> None:
+        import logging
+
+        import recoverage.ui as ui
+
+        monkeypatch.setattr(ui, "CACHED_INDEX_PAYLOAD", None)
+        monkeypatch.setattr(ui, "CACHED_INDEX_COMPRESSED", {})
+
+        def boom() -> bytes:
+            raise OSError("asset gone")
+
+        monkeypatch.setattr(ui, "_build_index_payload", boom)
+        with caplog.at_level(logging.WARNING, logger="recoverage"):
+            ui.warm_index_cache()
+
+        assert ui.CACHED_INDEX_PAYLOAD is None
+        assert any("warm-up failed" in r.getMessage() for r in caplog.records)

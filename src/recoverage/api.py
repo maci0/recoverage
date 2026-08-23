@@ -81,6 +81,7 @@ def _clear_derived_caches() -> None:
     """
     clear_target_cache()
     _clear_data_cache()
+    _clear_stats_cache()
     from recoverage.potato import clear_cells_cache
 
     clear_cells_cache()
@@ -182,6 +183,24 @@ def _cache_data_insert(
         entry = _DATA_CACHE.setdefault(key, {})
         entry["raw"] = raw
         entry[encoding] = body
+
+
+# Memoized /stats results, keyed by the WAL-aware DB snapshot + target.
+# handle_api_stats re-runs the full-cells-table SECTION_STATS_SQL aggregation
+# plus three more queries on every request; a polling consumer must not re-pay
+# that scan while the DB is unchanged.  Same self-invalidation contract as the
+# /data payload memo: a rebuild changes the snapshot, so stale entries miss.
+# Lives HERE, not in server._section_stats, because only this module knows
+# which database its connections come from (the CLI passes its own cursor).
+_STATS_CACHE: dict[tuple[tuple[int, int] | None, str], dict[str, Any]] = {}
+_STATS_CACHE_LOCK = threading.Lock()
+_STATS_CACHE_MAX = 16
+
+
+def _clear_stats_cache() -> None:
+    """Drop memoized /stats results (called on DB rebuild)."""
+    with _STATS_CACHE_LOCK:
+        _STATS_CACHE.clear()
 
 
 def _target_not_found(target: str) -> Any:
@@ -556,8 +575,28 @@ def handle_api_targets() -> bytes:
 
 @app.get("/api/targets/<target>/stats")
 def handle_api_stats(target: str) -> bytes | Any:
+    snap = _snapshot_db_mtime()
+    key = (snap, target)
+    if snap is not None:
+        with _STATS_CACHE_LOCK:
+            cached = _STATS_CACHE.get(key)
+        if cached is not None:
+            return _json_ok(
+                {
+                    "target": target,
+                    "summary": cached["summary"],
+                    "sections": cached["sections"],
+                    "functions_by_status": cached["by_status"],
+                },
+                Cache_Control=CACHE_NO_STORE,
+            )
+
     with _target_cursor(target) as c:
         stats = _server._section_stats(c, target)
+        if snap is not None:
+            with _STATS_CACHE_LOCK:
+                _server._evict_oldest(_STATS_CACHE, _STATS_CACHE_MAX)
+                _STATS_CACHE[key] = stats
         return _json_ok(
             {
                 "target": target,
