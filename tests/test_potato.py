@@ -88,6 +88,7 @@ def test_section_stats_pct_rounds_like_api():
     stats = _compute_section_stats(c, "T", sections, data)
     assert stats[".text"]["pct"] == round(1329 / 1330 * 100, 2)
     assert stats[".text"]["pct"] != int(1329 / 1330 * 100)
+    conn.close()
 
 
 def test_section_stats_pct_zero_size_is_zero():
@@ -107,6 +108,7 @@ def test_section_stats_pct_zero_size_is_zero():
     # A NULL-size (.bss-style) section must not divide by zero: pct is 0.
     stats = _compute_section_stats(c, "T", {".bss": {"size": 0}}, {"summary": {}})
     assert stats[".bss"]["pct"] == 0
+    conn.close()
 
 
 def test_null_va_section_renders_grid_and_panel(
@@ -1157,6 +1159,7 @@ class TestCellsCacheInvalidation:
             assert len(potato._POTATO_CELLS_CACHE) == 2
         finally:
             potato.clear_cells_cache()
+            c.connection.close()
 
 
 class TestDbUnavailableContract:

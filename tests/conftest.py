@@ -255,7 +255,15 @@ def wsgi_request(
         return None
 
     result = app(environ, _start_response)
-    body = b"".join(result)
+    # PEP 3333: the server MUST call close() on the returned iterable when
+    # provided — that is what closes handles behind responses like
+    # static_file's open file object. Skipping it leaks fds until GC.
+    try:
+        body = b"".join(result)
+    finally:
+        close = getattr(result, "close", None)
+        if close is not None:
+            close()
     return str(status_holder["status"]), dict(status_holder["headers"]), body
 
 

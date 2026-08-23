@@ -93,7 +93,7 @@ const LEGEND = [["none", "undocumented"], ["exact", "exact match"], ["reloc", "r
 // Sections in PE load order (ascending VA), which puts .text first instead of
 // leaving the section that carries all the work at the end of an alphabetical
 // row.  Sections without a VA sort last, keeping their relative order.
-const sectionNames = (s) => Object.keys(s).toSorted((a, b) => (s[a].va ?? 1e18) - (s[b].va ?? 1e18));
+const sectionNames = (s) => Object.keys(s).toSorted((x, y) => (s[x].va ?? 1e18) - (s[y].va ?? 1e18));
 
 // The /asm endpoint answers failures with {error, detail}; showing that beats a
 // generic fallback, which would blame the wrong cause.
@@ -197,9 +197,9 @@ const App = () => {
   const showBytes = (buf, base) => { pendingHex.val = { buf, base }; };
   const showBytesMessage = (msg) => { pendingHex.val = null; bytesText.val = msg; };
   van.derive(() => {
-    const p = pendingHex.val;
-    if (!p) return;
-    if (detailReady.val) bytesText.val = window.RC.formatBytes(p.buf, p.base);
+    const pending = pendingHex.val;
+    if (!pending) return;
+    if (detailReady.val) bytesText.val = window.RC.formatBytes(pending.buf, pending.base);
     else bytesText.val = detailFailed.val ? MSG.DETAIL_UNAVAILABLE : MSG.LOADING;
   });
   const savedTheme = localStorage.getItem('recoverage_theme');
@@ -363,14 +363,14 @@ const App = () => {
   // the URL tracks state without spamming history.
   const URL_PARAMS = new URLSearchParams(window.location.search);
   const syncUrl = () => {
-    const p = new URLSearchParams();
-    if (activeTarget.val) p.set("target", activeTarget.val);
+    const params = new URLSearchParams();
+    if (activeTarget.val) params.set("target", activeTarget.val);
     if (currentFn.val && (currentFn.val.name || currentFn.val.vaStart)) {
-      p.set("fn", currentFn.val.name || currentFn.val.vaStart);
+      params.set("fn", currentFn.val.name || currentFn.val.vaStart);
     }
-    if (activeSection.val) p.set("section", activeSection.val);
-    if (searchQuery.val) p.set("q", searchQuery.val);
-    const qs = p.toString();
+    if (activeSection.val) params.set("section", activeSection.val);
+    if (searchQuery.val) params.set("q", searchQuery.val);
+    const qs = params.toString();
     history.replaceState(null, "", qs ? `?${qs}` : window.location.pathname);
   };
 

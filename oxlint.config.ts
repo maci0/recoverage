@@ -104,10 +104,10 @@ export default defineConfig({
     // The rule's suggested fix (Number(x) for parseFloat(x)) breaks computed
     // CSS lengths: Number("12px") is NaN while parseFloat("12px") is 12.
     "unicorn/prefer-number-coercion": "off",
-    // oxlint misreports the top-level `const { a, p, ... } = van.tags`
-    // destructure as shadowing globals that do not exist; real shadows (the
-    // reloadData param, mountModal's copyToClipboard) are fixed by rename.
-    "eslint/no-shadow": "off",
+    // Enforced from the preset: the van.tags destructures (`a`, `p`, ...) are
+    // element factories, so a local reusing those names hides an HTML tag.
+    // Real collisions are fixed by rename, not by turning the rule off.
+    "eslint/no-shadow": "error",
     // Vendored anti-slop rules (dmmulroy), enforced on top of the preset.
     "anti-slop/no-chained-type-assertions": "error",
     "anti-slop/no-conditional-empty-object-spread": "error",

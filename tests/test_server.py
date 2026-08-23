@@ -499,10 +499,10 @@ class TestDeepLinking:
         for marker in (
             "URL_PARAMS = new URLSearchParams",
             "const syncUrl = () =>",
-            'p.set("target"',
-            'p.set("fn"',
-            'p.set("section"',
-            'p.set("q"',
+            'params.set("target"',
+            'params.set("fn"',
+            'params.set("section"',
+            'params.set("q"',
             "history.replaceState",
         ):
             assert marker in app_js, f"deep-link marker missing: {marker}"

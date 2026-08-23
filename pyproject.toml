@@ -66,6 +66,10 @@ package = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--ignore=tests/test_playwright.py"
+# Every warning is a failure: the suite runs clean, so a new ResourceWarning
+# (unclosed socket/file/connection), deprecation, or unraisable exception
+# must break the build instead of scrolling past.
+filterwarnings = ["error"]
 
 [tool.ruff]
 target-version = "py312"
@@ -78,10 +82,13 @@ line-length = 100
 #   DTZ    — naive datetime; G — logging format-string misuse;
 #   N      — naming conventions; PGH — bans blanket noqa / type: ignore;
 #   TID    — import hygiene; YTT — yield-in-try/finally traps;
-#   RUF100 — flags stale or unscoped `noqa` directives (suppression hygiene).
+#   RUF100 — flags stale or unscoped `noqa` directives (suppression hygiene);
+#   T10    — debugger/breakpoint calls must never be committed;
+#   FLY    — str.join over += loops; ICN — import conventions.
 select = [
     "E", "F", "W", "I", "UP", "B", "SIM",
     "A", "ASYNC", "DTZ", "G", "N", "PGH", "TID", "YTT", "RUF100",
+    "T10", "FLY", "ICN",
 ]
 ignore = []
 # typer's idiom is `param = typer.Option(...)` in signature defaults; without
