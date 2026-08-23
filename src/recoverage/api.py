@@ -591,6 +591,59 @@ def _build_search_index(c: sqlite3.Cursor, target: str) -> dict[str, Any]:
     return index
 
 
+def _build_data_raw(c: sqlite3.Cursor, target: str, section_filter: str | None) -> bytes:
+    """Query and serialize the full /data payload (sections + cells + search index).
+
+    Raises the shared JSON 404 for an unknown *section_filter*.  Pure DB
+    work — caching/compression stays in the endpoint.
+    """
+    data: dict[str, Any] = _load_metadata(c, target)
+
+    # Optional ?section= narrowing: the same queries with one extra WHERE
+    # term, so no branch duplicates a query that only adds "AND name = ?".
+    sec_params: list[Any] = [target] + ([section_filter] if section_filter else [])
+    sections_clause = " AND name = ?" if section_filter else ""
+
+    c.execute(
+        f"SELECT * FROM sections WHERE target = ?{sections_clause}",
+        sec_params,
+    )
+    data["sections"] = {}
+    for row in c.fetchall():
+        sec = dict(row)
+        sec["cells"] = []
+        data["sections"][sec["name"]] = sec
+
+    if section_filter and not data["sections"]:
+        # Mirror /asm: an unknown section must 404, not return a silent
+        # empty grid (which would also get memoized under that key).
+        raise _section_not_found(target, section_filter)
+
+    for row in _cells_json_rows(c, target, section_filter):
+        sec_name = row[0]
+        if sec_name in data["sections"]:
+            data["sections"][sec_name]["cells"] = json.loads(row[1])
+
+    data["search_index"] = _build_search_index(c, target)
+
+    # Per-section cell stats from SQL view.  All buckets are selected so
+    # consumers can sum them and reconcile with total_cells (padding,
+    # none, proven, and size_mismatch were previously omitted).
+    data["section_cell_stats"] = {}
+    stats_clause = " AND section_name = ?" if section_filter else ""
+    c.execute(
+        "SELECT section_name, total_cells, exact_count, reloc_count, "
+        "near_match_count, stub_count, padding_count, data_count, thunk_count, "
+        f"none_count, proven_count, size_mismatch_count "
+        f"FROM section_cell_stats WHERE target = ?{stats_clause}",
+        sec_params,
+    )
+    for row in c.fetchall():
+        data["section_cell_stats"][row["section_name"]] = _cell_bucket_row(row)
+
+    return json.dumps(data).encode("utf-8")
+
+
 @app.get("/api/targets/<target>/data")
 def handle_api_data(target: str) -> bytes | Any:
     section_filter = request.query.get("section", "").strip() or None
@@ -630,51 +683,7 @@ def handle_api_data(target: str) -> bytes | Any:
 
     try:
         with _target_cursor(target) as c:
-            data: dict[str, Any] = _load_metadata(c, target)
-
-            # Optional ?section= narrowing: the same queries with one extra WHERE
-            # term, so no branch duplicates a query that only adds "AND name = ?".
-            sec_params: list[Any] = [target] + ([section_filter] if section_filter else [])
-            sections_clause = " AND name = ?" if section_filter else ""
-
-            c.execute(
-                f"SELECT * FROM sections WHERE target = ?{sections_clause}",
-                sec_params,
-            )
-            data["sections"] = {}
-            for row in c.fetchall():
-                sec = dict(row)
-                sec["cells"] = []
-                data["sections"][sec["name"]] = sec
-
-            if section_filter and not data["sections"]:
-                # Mirror /asm: an unknown section must 404, not return a silent
-                # empty grid (which would also get memoized under that key).
-                return _section_not_found(target, section_filter)
-
-            for row in _cells_json_rows(c, target, section_filter):
-                sec_name = row[0]
-                if sec_name in data["sections"]:
-                    data["sections"][sec_name]["cells"] = json.loads(row[1])
-
-            data["search_index"] = _build_search_index(c, target)
-
-            # Per-section cell stats from SQL view.  All buckets are selected so
-            # consumers can sum them and reconcile with total_cells (padding,
-            # none, proven, and size_mismatch were previously omitted).
-            data["section_cell_stats"] = {}
-            stats_clause = " AND section_name = ?" if section_filter else ""
-            c.execute(
-                "SELECT section_name, total_cells, exact_count, reloc_count, "
-                "near_match_count, stub_count, padding_count, data_count, thunk_count, "
-                f"none_count, proven_count, size_mismatch_count "
-                f"FROM section_cell_stats WHERE target = ?{stats_clause}",
-                sec_params,
-            )
-            for row in c.fetchall():
-                data["section_cell_stats"][row["section_name"]] = _cell_bucket_row(row)
-
-            raw_json = json.dumps(data).encode("utf-8")
+            raw_json = _build_data_raw(c, target, section_filter)
             accept_enc = request.headers.get("Accept-Encoding", "")
             body, encoding = compress_payload(raw_json, accept_enc)
             _cache_data_insert(fingerprint, raw_json, encoding, body)
@@ -697,6 +706,11 @@ _MAX_BATCH_BODY_BYTES = 64 * 1024
 # smaller, so clamping here changes no legitimate page while keeping OFFSET
 # inside sqlite3's INTEGER range.
 _MAX_PAGE_OFFSET = 10_000_000
+
+# Upper bound for a binary-slice request (?size= on /asm and /bytes): both
+# endpoints clamp identically so the same query string cannot mean two
+# different window sizes.
+_MAX_SLICE_SIZE = 4096
 
 
 @app.get("/api/targets/<target>/functions")
@@ -878,12 +892,7 @@ def handle_api_functions_batch(target: str) -> bytes | Any:
             return invalid_va(entry, "VAs must be hex strings or integers")
 
     # Preserve input order; duplicate VAs collapse to a single result.
-    seen: set[int] = set()
-    unique_vas: list[int] = []
-    for va in va_ints:
-        if va not in seen:
-            seen.add(va)
-            unique_vas.append(va)
+    unique_vas = list(dict.fromkeys(va_ints))
 
     with _target_cursor(target) as c:
         results: list[dict[str, Any]] = []
@@ -1010,7 +1019,7 @@ def handle_api_asm(target: str) -> bytes | Any:
     try:
         # Decimal size (base-0 with no prefix), matching /bytes — the two
         # endpoints must not interpret the same ?size= differently.
-        size = min(max(int(size_str.strip(), 0), 0), 4096)
+        size = min(max(int(size_str.strip(), 0), 0), _MAX_SLICE_SIZE)
     except ValueError:
         return _json_err(400, {"error": "invalid va or size"})
 
@@ -1116,9 +1125,13 @@ def handle_api_bytes(target: str, section: str) -> bytes | Any:
     except (ValueError, TypeError):
         return _json_err(400, {"error": "invalid offset"})
     try:
-        req_size = min(max(int(request.query.get("size", "256"), 0), 0), 4096)
+        req_size = min(max(int(request.query.get("size", "256"), 0), 0), _MAX_SLICE_SIZE)
     except (ValueError, TypeError):
         return _json_err(400, {"error": "invalid size"})
+    # Same positivity contract as /asm: an empty slice is a rejected query,
+    # not a valid empty dump.
+    if req_size == 0:
+        return _json_err(400, {"error": "size must be positive"})
 
     # ETag bound to the WAL-aware DB snapshot + request identity so /bytes
     # revalidates after a rebuild instead of serving year-immutable stale

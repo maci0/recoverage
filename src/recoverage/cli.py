@@ -15,7 +15,7 @@ import threading
 import webbrowser
 from pathlib import Path
 from socketserver import ThreadingMixIn
-from typing import Any
+from typing import Any, NoReturn
 from wsgiref.simple_server import WSGIServer
 
 import typer
@@ -642,6 +642,21 @@ def _section_verdict(
     )
 
 
+def _gate_error(
+    human: str, payload: dict[str, Any], json_output: bool, fg: int = typer.colors.RED
+) -> NoReturn:
+    """Emit a check-gate failure in --json or human form, then exit 1.
+
+    ONE tail for every `check` failure so the two output modes cannot drift
+    (each mode's message/payload stays at its single call site).
+    """
+    if json_output:
+        typer.echo(json.dumps(payload))
+    else:
+        typer.secho(human, fg=fg, err=True)
+    raise typer.Exit(1)
+
+
 @app.command()
 def check(
     min_coverage: float = typer.Option(
@@ -653,27 +668,22 @@ def check(
 ) -> None:
     """Check coverage against a threshold (CI gate)."""
     if not 0.0 <= min_coverage <= 100.0:
-        if json_output:
-            typer.echo(
-                json.dumps({"error": "--min-coverage must be between 0 and 100", "exit_code": 1})
-            )
-        else:
-            typer.secho(
-                f"Error: --min-coverage must be between 0 and 100, got {min_coverage!r}.",
-                fg=typer.colors.RED,
-                err=True,
-            )
-        raise typer.Exit(1)
+        _gate_error(
+            f"Error: --min-coverage must be between 0 and 100, got {min_coverage!r}.",
+            {"error": "--min-coverage must be between 0 and 100", "exit_code": 1},
+            json_output,
+        )
 
     with contextlib.closing(_open_db_or_exit(missing_exit_code=2)) as conn:
         targets = _select_targets(conn, target)
 
         if not targets:
-            if json_output:
-                typer.echo(json.dumps({"error": "no targets in database", "exit_code": 1}))
-            else:
-                typer.secho("No targets found in database.", fg=typer.colors.YELLOW, err=True)
-            raise typer.Exit(1)
+            _gate_error(
+                "No targets found in database.",
+                {"error": "no targets in database", "exit_code": 1},
+                json_output,
+                fg=typer.colors.YELLOW,
+            )
 
         failed = False
         checked = 0
@@ -707,34 +717,22 @@ def check(
                     typer.secho(f"{status}: {tid} {sec_name} {human}", fg=_VERDICT_COLORS[status])
 
     if checked == 0:
-        if json_output:
-            typer.echo(
-                json.dumps({"error": "no sections matched — nothing was checked", "exit_code": 1})
-            )
-        else:
-            typer.secho(
-                "Error: no sections matched — nothing was checked.",
-                fg=typer.colors.RED,
-                err=True,
-            )
-        raise typer.Exit(1)
+        _gate_error(
+            "Error: no sections matched — nothing was checked.",
+            {"error": "no sections matched — nothing was checked", "exit_code": 1},
+            json_output,
+        )
     if compared == 0 and not failed:
         # Every section was skipped as untracked and nothing failed — a
         # project with no recorded coverage must not pass vacuously.  An
         # explicit --section on an untracked section already produced a FAIL
         # verdict above; that verdict (and the JSON results array) must reach
         # the caller instead of being replaced by this generic error.
-        if json_output:
-            typer.echo(
-                json.dumps({"error": "no tracked sections — nothing was checked", "exit_code": 1})
-            )
-        else:
-            typer.secho(
-                "Error: no tracked sections — nothing was checked.",
-                fg=typer.colors.RED,
-                err=True,
-            )
-        raise typer.Exit(1)
+        _gate_error(
+            "Error: no tracked sections — nothing was checked.",
+            {"error": "no tracked sections — nothing was checked", "exit_code": 1},
+            json_output,
+        )
     if json_output:
         typer.echo(
             json.dumps(

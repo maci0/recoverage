@@ -880,6 +880,25 @@ _PANEL_TPL = SimpleTemplate(source=_PANEL_SRC)
 # ── Rendering Logic ─────────────────────────────────────────────────
 
 
+def _db_unavailable_page() -> HTTPResponse:
+    """503 HTML page for an unreadable/unqueryable coverage.db in Potato Mode.
+
+    ONE definition shared by the connect guard in :func:`render_potato` and
+    ui.handle_potato's query-failure tail so both surfaces carry the same
+    message (the two inline copies had already drifted: "to create it" vs
+    "to create or rebuild it").
+    """
+    return HTTPResponse(
+        status=503,
+        body=(
+            '<html><body bgcolor="#0f1216" text="#e7edf4">'
+            "Database unavailable — run 'rebrew catalog --json &amp;&amp; "
+            "rebrew build-db' to create or rebuild it.</body></html>"
+        ),
+        headers={"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store"},
+    )
+
+
 def render_potato(parsed_url: ParseResult) -> str:
     qs = parse_qs(parsed_url.query, keep_blank_values=True)
     target = qs.get("target", [""])[0]
@@ -900,15 +919,7 @@ def render_potato(parsed_url: ParseResult) -> str:
         _log.warning("Potato mode: database unavailable at %s", db_path)
         # Signal failure, not a 200 page: monitoring and scripts must see the
         # DB outage (same contract as the API's 503 db_unavailable).
-        raise HTTPResponse(
-            status=503,
-            body=(
-                '<html><body bgcolor="#0f1216" text="#e7edf4">'
-                "Database unavailable — run 'rebrew catalog --json &amp;&amp; "
-                "rebrew build-db' to create it.</body></html>"
-            ),
-            headers={"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store"},
-        ) from None
+        raise _db_unavailable_page() from None
 
     with contextlib.closing(conn):
         c = conn.cursor()
@@ -1512,10 +1523,8 @@ def _render_potato_inner(
         section = next(iter(sections))
 
     sec_data: dict[str, Any] = sections.get(section, {})
-    cells = _section_cells(sec_data)
 
     search_matched_fns = _search_functions(c, target, search_query)
-    per_section_stats = _compute_section_stats(c, target, sections, data)
     filter_btn_data = _build_filter_data(target, section, active_filters, search_query)
     progress = _build_progress(section, sec_data, data, sections)
     section_tab_data = _section_tab_data(
@@ -1538,6 +1547,10 @@ def _render_potato_inner(
             status_filter,
         )
     else:
+        # Only the grid view renders cells; the functions view must not pay
+        # the json.loads of a multi-MB payload per page render.
+        cells = _section_cells(sec_data)
+        per_section_stats = _compute_section_stats(c, target, sections, data)
         # A NULL columns value (schema-legal, like the NULL va/fileOffset a
         # .bss section carries) must fall back to 64, not TypeError on
         # None <= 0 — which escapes ui.handle_potato's except tuple as a

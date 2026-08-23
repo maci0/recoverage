@@ -1938,7 +1938,11 @@ class TestDataPayloadMemo:
         t.join(timeout=15)
         assert not t.is_alive(), "404 path deadlocked the follower"
         kind, resp = outcome[0]
-        assert kind == "returned" and str(resp.status).startswith("404")
+        # The unknown-section 404 is raised by _build_data_raw (a raised
+        # HTTPResponse is what bottle renders as the response); the direct
+        # call observes the raised shape.  Either way the follower must see
+        # its own 404, never a stale/empty payload.
+        assert kind == "raised" and str(resp.status).startswith("404")
         assert open_calls == [1]
         api._DATA_CACHE_BUILDING.pop(key, None)
 

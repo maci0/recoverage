@@ -101,7 +101,7 @@ def _check_payload_budget(payload: bytes) -> None:
 @app.get("/potato")
 def handle_potato() -> bytes | Any:
     try:
-        from recoverage.potato import render_potato
+        from recoverage.potato import _db_unavailable_page, render_potato
 
         # WAL-aware snapshot (see _snapshot_db_mtime), not raw st_mtime: a
         # rebuild that commits only to -wal must still mint a new ETag or
@@ -117,17 +117,10 @@ def handle_potato() -> bytes | Any:
     except sqlite3.Error:
         # A DB that opens but cannot answer queries is the same
         # db_unavailable condition render_potato's connect guard reports as
-        # 503 — not an application bug.  One contract for both surfaces.
+        # 503 — not an application bug.  One contract (and one page) for
+        # both surfaces.
         _log.exception("Potato mode database query failed")
-        return HTTPResponse(
-            status=503,
-            body=(
-                '<html><body bgcolor="#0f1216" text="#e7edf4">'
-                "Database unavailable — run 'rebrew catalog --json &amp;&amp; "
-                "rebrew build-db' to create or rebuild it.</body></html>"
-            ),
-            headers={"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store"},
-        )
+        return _db_unavailable_page()
     # json.JSONDecodeError needs no entry: it subclasses ValueError.
     except (OSError, ValueError, KeyError):
         _log.exception("Potato mode render failed")
