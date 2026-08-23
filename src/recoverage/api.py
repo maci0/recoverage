@@ -65,16 +65,22 @@ def _clear_derived_caches() -> None:
 
     ONE invalidation entry point, shared by the SSE ``db-updated`` broadcast
     and both regen paths (in-app POST /api/regen): resolved targets + TOML
-    config, memoized /data payloads, the SPA search index, Potato cells, DLL
-    bytes, and cached disassembly must all go together, or one endpoint
-    serves post-rebuild data while another is still stale.
+    config, memoized /data payloads (including the SPA search index they
+    carry), Potato cells, DLL bytes, and cached disassembly must all go
+    together, or one endpoint serves post-rebuild data while another is
+    still stale.
+
+    The SPA shell cache (ui.CACHED_INDEX_PAYLOAD) is deliberately NOT
+    invalidated here: it is built solely from static package assets and has
+    no dependence on coverage.db.  Clearing it on every rebuild would make
+    the next / request re-read the assets, re-minify, and redo the three
+    full-strength budget compressions under INDEX_LOCK for zero staleness
+    benefit.
     """
     clear_target_cache()
     _clear_data_cache()
     from recoverage.potato import clear_cells_cache
-    from recoverage.ui import clear_index_cache
 
-    clear_index_cache()
     clear_cells_cache()
     # Disassembly/DLL bytes reflect the original binary and section layout,
     # both of which change with a rebuild.

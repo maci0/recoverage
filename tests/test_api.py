@@ -1539,6 +1539,28 @@ class TestDataPayloadMemo:
         entry = next(iter(api._DATA_CACHE.values()))
         assert set(entry) == {"raw", "", "zstd", "gzip"}
 
+    def test_derived_cache_clear_spares_spa_shell(self, tmp_path: Any, monkeypatch: Any) -> None:
+        """_clear_derived_caches (the db-updated / regen invalidation path)
+        must empty every DB-derived cache but leave the SPA shell cache
+        alone: the shell is built purely from static assets and never goes
+        stale on a rebuild, so dropping it would only re-read + re-minify +
+        re-compress it under INDEX_LOCK on the next request."""
+        import recoverage.api as api
+        import recoverage.server as server_mod
+        import recoverage.ui as ui
+
+        self._patch(tmp_path, monkeypatch)
+        monkeypatch.setattr(ui, "CACHED_INDEX_PAYLOAD", b"shell-bytes")
+        monkeypatch.setattr(ui, "CACHED_INDEX_COMPRESSED", {"gzip": b"shell-gz"})
+        api._DATA_CACHE[((123, 456), "GAME", None)] = {"raw": b"{}"}
+
+        api._clear_derived_caches()
+
+        assert len(api._DATA_CACHE) == 0
+        assert server_mod._RESOLVED_TARGETS_CACHE is None
+        assert ui.CACHED_INDEX_PAYLOAD == b"shell-bytes"
+        assert ui.CACHED_INDEX_COMPRESSED == {"gzip": b"shell-gz"}
+
 
 def _header(headers: dict[str, str], name: str) -> str | None:
     """Case-insensitive header lookup (Bottle sends 'Etag', tests use 'ETag')."""

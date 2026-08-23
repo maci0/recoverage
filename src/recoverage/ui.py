@@ -40,13 +40,6 @@ CACHED_INDEX_COMPRESSED: dict[str, bytes] = {}
 INDEX_LOCK = threading.Lock()
 
 
-def clear_index_cache() -> None:
-    global CACHED_INDEX_PAYLOAD, CACHED_INDEX_COMPRESSED
-    with INDEX_LOCK:
-        CACHED_INDEX_PAYLOAD = None
-        CACHED_INDEX_COMPRESSED.clear()
-
-
 def _build_index_payload() -> bytes:
     """Read the SPA shell, inline minified CSS/JS into it, return it.
 
