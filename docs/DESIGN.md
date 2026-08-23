@@ -31,7 +31,7 @@ The application state is managed using VanJS reactive primitives (`van.state`):
 * `data`: Holds the fetched SQLite data (sections, globals, functions, summary).
 * `originalDll`: Raw ArrayBuffer of the original DLL for byte slicing.  Fetched from `paths.originalDll` when the DB carries that metadata, otherwise from `/original/<target>.dll`, which the server proxies anyway; when neither exists the hex pane says so instead of failing silently.
 * `activeSection`: Tracks the currently selected PE section (`.text`, `.rdata`, `.data`, `.bss`).
-* `activeFilters`: A `Set` tracking which match statuses are currently visible (Exact, Reloc, Matching, Stub, Padding).
+* `activeFilters`: A `Set` tracking which match statuses are currently visible (exact, reloc, near_match, stub, padding).
 * `searchQuery`: The current text in the search input (debounced 250ms).
 * `currentFn` / `currentCellIndex`: Tracks the currently selected block in the grid.
 * `isLightMode`: Tracks the current theme (persisted to `localStorage` as `recoverage_theme`).
@@ -60,12 +60,12 @@ The UI is broken down into functional VanJS components in `app.js`:
 * Cells are colored based on their status:
   * **Exact** (green) — byte-for-byte match
   * **Reloc** (blue/teal) — match after masking relocations
-  * **Matching** (yellow) — near-miss with structural differences
+  * **Near-match** (yellow) — near-miss with structural differences (DB state `near_match`)
   * **Stub** (red) — far off or placeholder
-  * **Data** (purple) — data segment content
-  * **Thunk** (orange) — IAT thunk (not reversible)
   * **Padding** (silver) — alignment padding
   * **None** (gray) — undocumented block
+
+  Data and thunk cells keep their DB states but render with the undocumented gray here: their dedicated purple/orange tints were removed together with the data/thunk filters. Potato Mode still colors those states.
 * **Grid Caching**: Each section's grid is built once and cached in the DOM. Switching tabs simply toggles `display: none` vs `display: grid`, making tab switching instantaneous even for sections with 6,000+ chunks.
 * **Fast HTML Building**: Grids are constructed using a single massive HTML string injection (`innerHTML`) rather than creating thousands of individual DOM nodes, drastically reducing initial render time.
 * **CSS-Based Filtering**: Filtering and search dimming are handled by applying classes to the parent grid container (e.g., `.has-filters.show-exact`), allowing the browser's highly optimized CSS engine to instantly update thousands of cells without JavaScript loops.
@@ -109,8 +109,9 @@ The UI is broken down into functional VanJS components in `app.js`:
 * **Match Status Colors**:
   * **Exact**: Green (`rgba(16, 185, 129, 0.75)`)
   * **Reloc**: Blue/Teal (`rgba(2, 132, 199, 0.65)`)
-  * **Matching**: Yellow/Amber (`rgba(255, 200, 0, 0.65)`)
+  * **Near-match**: Yellow/Amber (`rgba(255, 200, 0, 0.65)`)
   * **Stub**: Red (`rgba(255, 0, 0, 0.65)`)
+  * **Padding**: Silver (`rgba(200, 200, 220, 0.55)`)
 * **Transitions**: Smooth `0.3s ease` transitions on background colors, borders, and opacities ensure fluid theme switching and filter toggling.
 * **Scrollbars**: Custom WebKit scrollbars styled to match the active theme, with `scrollbar-gutter: stable` applied to code blocks to prevent layout shifts.
 * **Loading Overlay**: A pulsing, vertically-centered overlay with large text (`font-size: 32px`, `font-weight: 700`) provides immediate visual feedback during data fetches.
@@ -212,7 +213,7 @@ Recoverage performs a soft version check on every database open and logs a warni
 ## Future Ideas / TODOs
 * [ ] **Minimap**: A global minimap of the entire PE file on the side.
 * [ ] **XREFs**: Show cross-references for data segments (which functions read/write to this `.data` block).
-* [ ] **Diff View**: Integrate the `rebrew match --diff-only` output directly into the UI for "Matching" and "Stub" blocks.
+* [ ] **Diff View**: Integrate the `rebrew match --diff-only` output directly into the UI for "Near-match" and "Stub" blocks.
 * [x] **Jump table absorption**: Switch/jump table bytes adjacent to functions are absorbed into the parent function's size rather than tracked as separate cells.
 * [x] **Parent function linking**: Data and thunk cells automatically link to their parent function (detected via `func_end_va == data_start_va`).
 * [x] **Ghidra label export**: `rebrew catalog --export-ghidra-labels` generates `ghidra_data_labels.json` from detected tables for round-trip sync.
@@ -271,7 +272,7 @@ Each filter link toggles that filter on/off while preserving other active filter
 |---------|-------|-----|
 | Exact | Green | `#10b981` |
 | Reloc | Blue | `#0ea5e9` |
-| Matching | Yellow | `#f59e0b` |
+| Near-match | Yellow | `#f59e0b` |
 | Stub | Red | `#ef4444` |
 | None | Dark Gray | `#3F4958` |
 | Background | Dark | `#0f1216` |

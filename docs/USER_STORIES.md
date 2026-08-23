@@ -49,7 +49,7 @@ graph TD
 > **As an RE Dev**, I want to see a defrag-style grid where each cell represents a chunk of the binary so that I can instantly spot which areas are matched, partially matched, or still stubs.
 
 ### Acceptance Criteria
-- Grid cells colored by match status: Exact (green), Reloc (blue), Matching (yellow), Stub (red), Data (purple), Thunk (orange), Padding (silver), None (gray)
+- Grid cells colored by match status: Exact (green), Reloc (blue), Near-match (yellow), Stub (red), Padding (silver), None (gray); data and thunk cells render as undocumented (gray)
 - Grid is square and responsive (cells stay square via `ResizeObserver`)
 - Section tabs (`.text`, `.rdata`, `.data`, `.bss`) switch views instantly (cached grids)
 - Grids built via fast HTML string injection; tab switching toggles `display: none`
@@ -117,7 +117,7 @@ sequenceDiagram
 > **As a Project Lead**, I want to filter the grid to show only specific match statuses so that I can focus on stubs that need work or celebrate exact matches.
 
 ### Acceptance Criteria
-- Filter buttons: All, E (Exact), R (Reloc), M (Matching), S (Stub), P (Padding)
+- Filter buttons: All, E (Exact), R (Reloc), M (Near-match), S (Stub), P (Padding)
 - Filters are set-based toggles (multiple can be active simultaneously)
 - Non-matching cells are dimmed (opacity 0.15), not hidden, preserving spatial layout
 - Filtering handled entirely by CSS classes on the parent container (no JS loops)
@@ -234,7 +234,7 @@ graph TD
 > **As a Project Lead**, I want an at-a-glance progress bar showing coverage percentages by status so that I can track decompilation progress without counting cells.
 
 ### Acceptance Criteria
-- Segmented progress bar with Exact (green), Reloc (blue), Matching (yellow), Stub (red)
+- Segmented progress bar with Exact (green), Reloc (blue), Near-match (yellow), Stub (red), Padding (silver)
 - Coverage stats overlaid: total bytes, matched bytes, percentage
 - Each segment is clickable to filter the grid by that status
 - Stats are precomputed in the DB and served via API
@@ -244,13 +244,13 @@ graph LR
     subgraph "Progress Bar"
         E["Exact<br/>42%"]
         R["Reloc<br/>18%"]
-        M["Matching<br/>15%"]
+        M["Near-match<br/>15%"]
         S["Stub<br/>25%"]
     end
 
     E -->|Click| FE["Filter: Exact only"]
     R -->|Click| FR["Filter: Reloc only"]
-    M -->|Click| FM["Filter: Matching only"]
+    M -->|Click| FM["Filter: Near-match only"]
     S -->|Click| FS["Filter: Stub only"]
 
     style E fill:#33ff00,stroke:#059669,color:#000
