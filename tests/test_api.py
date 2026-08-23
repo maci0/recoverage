@@ -897,6 +897,48 @@ class TestSseEvents:
         finally:
             api._stop_db_watcher()
 
+    def test_stop_join_timeout_keeps_reference_and_blocks_duplicate(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A watcher wedged past the join deadline must stay referenced.
+
+        Nulling the reference after a timed-out join would let the next
+        _ensure_db_watcher clear the stop event and start a SECOND poller
+        beside the still-running one; the wedged thread then un-wedges, sees
+        stop cleared, and keeps broadcasting duplicates as an untracked
+        thread forever. Keeping the reference makes ensure return early and
+        leaves stop set, so the wedged loop retires itself once it unwinds.
+        """
+        import recoverage.api as api
+
+        api._stop_db_watcher()
+        unblock = threading.Event()
+
+        def wedged_loop(stop: threading.Event) -> None:
+            unblock.wait(timeout=10)
+
+        monkeypatch.setattr(api, "_db_watcher_loop", wedged_loop)
+        monkeypatch.setattr(api, "_DB_WATCHER_JOIN_TIMEOUT", 0.05)
+        try:
+            api._ensure_db_watcher()
+            wedged = api._DB_WATCHER_THREAD
+            assert wedged is not None
+            assert wedged.is_alive()
+
+            api._stop_db_watcher()  # join deadline passes while it is wedged
+            assert api._DB_WATCHER_THREAD is wedged
+            assert api._DB_WATCHER_THREAD.is_alive()
+
+            api._ensure_db_watcher()  # must not start a second poller
+            assert api._DB_WATCHER_THREAD is wedged
+
+            unblock.set()
+            wedged.join(timeout=5)
+            assert not wedged.is_alive()
+        finally:
+            unblock.set()
+            api._stop_db_watcher()
+
     def test_ensure_stop_churn_never_strands_clients_without_watcher(self) -> None:
         """Concurrent _ensure_db_watcher/_stop_db_watcher must not leave a
         stopped-but-referenced watcher behind.

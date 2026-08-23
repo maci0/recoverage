@@ -354,6 +354,9 @@ _SSE_CLIENTS_LOCK = threading.Lock()
 _DB_WATCHER_THREAD: threading.Thread | None = None
 _DB_WATCHER_STOP = threading.Event()
 _DB_WATCHER_LOCK = threading.Lock()
+# Grace period _stop_db_watcher gives a wedged watcher before giving up on
+# the join (must comfortably exceed _SSE_POLL_INTERVAL_SECONDS).
+_DB_WATCHER_JOIN_TIMEOUT = 5.0
 
 
 def _broadcast_db_updated(snapshot: tuple[int, int] | None) -> None:
@@ -444,13 +447,28 @@ def _stop_db_watcher() -> None:
     concurrent ensure observe the still-alive thread and return, after which
     the join here retired it — a stopped watcher with SSE clients registered
     and nothing left to restart it.
+
+    A join that times out KEEPS the reference. Nulling it would let the next
+    ensure clear the (still set) stop event and start a SECOND poller beside
+    the wedged one, which then un-wedges, sees stop cleared, and keeps
+    broadcasting duplicates as an untracked thread forever. With the
+    reference retained, ensure returns early while the thread is alive and
+    stop stays set — the wedged loop retires itself at its next loop check,
+    and a later stop retries the join.
     """
     global _DB_WATCHER_THREAD
     with _DB_WATCHER_LOCK:
         _DB_WATCHER_STOP.set()
         if _DB_WATCHER_THREAD is not None:
-            _DB_WATCHER_THREAD.join(timeout=5)
-            _DB_WATCHER_THREAD = None
+            _DB_WATCHER_THREAD.join(timeout=_DB_WATCHER_JOIN_TIMEOUT)
+            if _DB_WATCHER_THREAD.is_alive():
+                _log.warning(
+                    "DB watcher did not stop within %.1fs — leaving it referenced "
+                    "so no second poller starts alongside it",
+                    _DB_WATCHER_JOIN_TIMEOUT,
+                )
+            else:
+                _DB_WATCHER_THREAD = None
 
 
 @app.get("/api/events")
