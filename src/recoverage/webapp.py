@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Any
 
-import recoverage.api  # noqa: F401 — mounts /api/* routes on server.app
+import recoverage.api  # mounts /api/* routes on server.app
 import recoverage.ui  # noqa: F401 — mounts / , /potato and static routes
 from recoverage.server import _json_err, app
 

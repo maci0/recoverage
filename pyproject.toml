@@ -72,7 +72,17 @@ target-version = "py312"
 line-length = 100
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+# Core groups (E/F/W/I/UP/B/SIM) plus correctness-oriented groups proven clean
+# on this tree:
+#   A      — shadowing builtins; ASYNC — blocking calls in async code;
+#   DTZ    — naive datetime; G — logging format-string misuse;
+#   N      — naming conventions; PGH — bans blanket noqa / type: ignore;
+#   TID    — import hygiene; YTT — yield-in-try/finally traps;
+#   RUF100 — flags stale or unscoped `noqa` directives (suppression hygiene).
+select = [
+    "E", "F", "W", "I", "UP", "B", "SIM",
+    "A", "ASYNC", "DTZ", "G", "N", "PGH", "TID", "YTT", "RUF100",
+]
 ignore = []
 # typer's idiom is `param = typer.Option(...)` in signature defaults; without
 # this, B008 would demand a noqa on every CLI option (typer docs recommend it).

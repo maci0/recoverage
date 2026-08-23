@@ -118,8 +118,7 @@ def _make_section_db(
     try:
         c = conn.cursor()
         c.execute(
-            "CREATE TABLE metadata (target TEXT, key TEXT, value TEXT,"
-            " PRIMARY KEY (target, key))"
+            "CREATE TABLE metadata (target TEXT, key TEXT, value TEXT, PRIMARY KEY (target, key))"
         )
         c.execute(
             "CREATE TABLE sections (target TEXT, name TEXT, va INTEGER,"
@@ -141,8 +140,7 @@ def _make_section_db(
             c.execute("INSERT INTO sections VALUES ('T',?,0,100,0,16,8)", (name,))
         for sec_name, start, end, state in cells:
             c.execute(
-                "INSERT INTO cells (target, section_name, start, end, state)"
-                " VALUES ('T',?,?,?,?)",
+                "INSERT INTO cells (target, section_name, start, end, state) VALUES ('T',?,?,?,?)",
                 (sec_name, start, end, state),
             )
         conn.commit()
