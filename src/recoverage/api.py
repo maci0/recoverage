@@ -893,8 +893,8 @@ def handle_api_asm(target: str) -> bytes | Any:
     if not va_str or not size_str:
         return _json_err(400, {"error": "missing va or size"})
 
+    raw_va = va_str.strip()
     try:
-        va = int(va_str.strip(), 16)
         # Decimal size (base-0 with no prefix), matching /bytes — the two
         # endpoints must not interpret the same ?size= differently.
         size = min(max(int(size_str.strip(), 0), 0), 4096)
@@ -904,12 +904,41 @@ def handle_api_asm(target: str) -> bytes | Any:
     if size == 0:
         return _json_err(400, {"error": "size must be positive"})
 
+    # Parse va into candidate ints — same convention as GET /functions/<va>:
+    # 0x-prefixed (or hex-letter) strings are hex; all-digit strings are
+    # DECIMAL first with a bare-hex fallback for legacy callers.  The SPA
+    # builds asm URLs by interpolating JS numbers (the INTEGER section VAs it
+    # got from /data), which spell decimal — parsing those digits as base-16
+    # read an address orders of magnitude past every section and rejected
+    # each undocumented-block disassembly with "beyond section end".
+    lowered = raw_va.lower()
+    va_candidates: list[int] = []
+    if lowered.startswith("0x") or any(ch in "abcdef" for ch in lowered):
+        with contextlib.suppress(ValueError):
+            parsed = int(raw_va, 16)
+            if parsed <= _server.VA_MAX:
+                va_candidates = [parsed]
+    else:
+        for base in (10, 16):
+            with contextlib.suppress(ValueError):
+                parsed = int(raw_va, base)
+                # Negatives stay candidates: the section-bounds resolution
+                # below classifies them as "before section start", matching
+                # the historical contract for va=-0x10.
+                if parsed <= _server.VA_MAX and parsed not in va_candidates:
+                    va_candidates.append(parsed)
+    if not va_candidates:
+        return _json_err(400, {"error": "invalid va or size"})
+
     # ETag bound to the WAL-aware DB snapshot + request identity (see
     # _etag_or_304): disassembly reflects the binary + section layout, which
     # change when the DB is rebuilt.  Without this, a one-year immutable
     # Cache-Control served stale disassembly to browsers after re-gen /
     # --fix-sizes; raw st_mtime alone also missed WAL-committed rebuilds.
-    asm_etag = _etag_or_304(target, section, va, size, fmt)
+    # The raw spelling (not the resolved int) keys the ETag: it is hashed, so
+    # request data never reaches a header, and each spelling is just its own
+    # revalidation identity.
+    asm_etag = _etag_or_304(target, section, raw_va, size, fmt)
 
     with _target_cursor(target) as c:
         c.execute(
@@ -922,11 +951,9 @@ def handle_api_asm(target: str) -> bytes | Any:
             return _section_not_found(target, section)
 
         sec = dict(row)
-        file_offset = sec["fileOffset"]
-        sec_va = sec["va"]
         if (
-            not isinstance(file_offset, int)
-            or not isinstance(sec_va, int)
+            not isinstance(sec["fileOffset"], int)
+            or not isinstance(sec["va"], int)
             or not isinstance(sec["size"], int)
         ):
             # Sections with no file backing (.bss) carry NULL offsets; the
@@ -940,15 +967,25 @@ def handle_api_asm(target: str) -> bytes | Any:
                     "raw bytes are only served for file-backed sections",
                 },
             )
-        file_offset += va - sec_va
-        # The va >= sec_va half is load-bearing: file_offset < 0 alone misses a
-        # va below section start whenever the negative delta is smaller than
-        # fileOffset (fileOffset + (va - sec_va) stays positive), silently
-        # disassembling bytes from before the section as if they were at va.
-        if va < sec_va or file_offset < 0:
-            return _json_err(400, {"error": "va is before section start"})
-        if va >= sec["va"] + sec["size"]:
+        # Resolve among the decimal/hex candidate spellings: whichever lands
+        # inside the section wins (decimal-first when both fit, matching
+        # /functions/<va>).  No in-bounds candidate → 400, driven by the first
+        # candidate so "before start" vs "beyond end" stays meaningful.
+        sec_va = sec["va"]
+        va = next(
+            (cand for cand in va_candidates if sec_va <= cand < sec_va + sec["size"]),
+            None,
+        )
+        if va is None:
+            if va_candidates[0] < sec_va:
+                return _json_err(400, {"error": "va is before section start"})
             return _json_err(400, {"error": "va is beyond section end"})
+        file_offset = sec["fileOffset"] + va - sec_va
+        if file_offset < 0:
+            # Unreachable for a schema-valid sections row (fileOffset carries a
+            # CHECK >= 0 and va >= sec_va here) — kept so a foreign DB without
+            # that constraint cannot read bytes from before the file.
+            return _json_err(400, {"error": "va is before section start"})
 
         if fmt == "json":
             # Structured JSON output

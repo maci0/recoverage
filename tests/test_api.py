@@ -381,6 +381,46 @@ class TestApiAsmVaBoundaries:
         status, _, _ = self._asm(target, "va=0x10001000&size=0")
         assert status.startswith("400")
 
+    def test_decimal_va_spelling_accepted(self) -> None:
+        """The SPA interpolates JS numbers into ?va= — decimal digits.
+
+        268439648 is 0x10001060, inside .text: parsing those digits as base-16
+        read an address orders of magnitude past the section and answered 400
+        for every undocumented-block disassembly request.
+        """
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, headers, body = self._asm(target, "va=268439648&size=16")
+        # Past the boundary guards and far enough to fail on the missing DLL.
+        assert status.startswith("422")
+        data = json.loads(decode_body(body, headers))
+        assert data["error"] == "not enough bytes in DLL"
+
+    def test_decimal_and_hex_spellings_agree(self) -> None:
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        dec_status, _, _ = self._asm(target, "va=268439552&size=1")
+        hex_status, _, _ = self._asm(target, "va=0x10001000&size=1")
+        assert dec_status == hex_status
+
+    def test_bare_hex_legacy_caller_still_resolves(self) -> None:
+        """All-digit '10001060': decimal spelling sits below section start, so
+        the bare-hex fallback candidate must be the one resolved."""
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, _, _ = self._asm(target, "va=10001060&size=16")
+        assert status.startswith("422")
+
+    def test_unparseable_va_rejected(self) -> None:
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, _, _ = self._asm(target, "va=zzz&size=16")
+        assert status.startswith("400")
+
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
 class TestApiAsm:
@@ -521,9 +561,7 @@ class TestApiBytes:
         data = json.loads(decode_body(body, headers))
         assert data["error"] == "section has no file backing"
 
-    def test_missing_dll_is_404_with_config_hint(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_missing_dll_is_404_with_config_hint(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import recoverage.api as api
 
         monkeypatch.setattr(api, "_load_dll", lambda target: None)
@@ -1693,9 +1731,6 @@ class TestRepoFileServing:
         status, _, body = wsgi_get("/original/note.txt")
         assert status.startswith("200")
         assert b"original tree" in body
-
-
-
 
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
