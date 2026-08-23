@@ -817,6 +817,27 @@ class TestSecurityHeaders:
         assert "connect-src 'self'" in csp
 
 
+class TestLogInjection:
+    """Request-derived log fields cannot forge multi-line entries: the path
+    is percent-decoded by the time it reaches the app, so %0A arrives as a
+    raw newline unless escaped before logging."""
+
+    def test_log_safe_escapes_control_characters(self) -> None:
+        from recoverage.server import _log_safe
+
+        assert _log_safe("normal/path?q=1") == "normal/path?q=1"
+        assert _log_safe("a\nb\rc\x00d\x7f") == "a\\x0ab\\x0dc\\x00d\\x7f"
+
+    def test_newline_in_path_stays_one_log_line(self, caplog: pytest.LogCaptureFixture) -> None:
+        from conftest import wsgi_get
+
+        with caplog.at_level(logging.DEBUG, logger="recoverage"):
+            wsgi_get("/api/health\nX-Forged: yes")
+        msgs = [r.getMessage() for r in caplog.records if r.name == "recoverage"]
+        assert any("X-Forged" in m for m in msgs), "request was not logged at all"
+        assert all("\n" not in m and "\r" not in m for m in msgs)
+
+
 class TestLoadDllTransientFailure:
     """A transient DLL read failure must NOT be negative-cached: caching
     ``DLL_DATA[target] = None`` would keep the target's /asm and /bytes

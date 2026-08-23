@@ -273,6 +273,53 @@ class TestExportCsv:
         assert "not found" in result.output or "not found" in (result.stderr_bytes or b"").decode()
 
 
+class TestExportCsvFormulaInjection:
+    """Section names originate in analyzed PE binaries — untrusted input.
+    A crafted name must not survive export as a spreadsheet-executable
+    formula (CWE-1236): cells starting with = + - @ are apostrophe-prefixed."""
+
+    def test_formula_section_name_is_neutralized(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        db = tmp_path / "cov.db"
+        evil = '=HYPERLINK("http://evil.example","pwned")'
+        _make_section_db(db, [evil], [(evil, 0, 100, "exact")])
+        monkeypatch.setattr("recoverage.cli._db_path", lambda: db)
+
+        result = runner.invoke(app, ["export", "--format", "csv"])
+        assert result.exit_code == 0
+        rows = list(csv.reader(io.StringIO(result.output)))
+        sec_col = rows[0].index("section")
+        assert rows[1][sec_col] == "'" + evil
+
+    @pytest.mark.parametrize("prefix", ["=", "+", "-", "@", "\t"])
+    def test_all_formula_leads_are_escaped(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, prefix: str
+    ) -> None:
+        db = tmp_path / "cov.db"
+        _make_section_db(db, [f"{prefix}evil"], [(f"{prefix}evil", 0, 100, "exact")])
+        monkeypatch.setattr("recoverage.cli._db_path", lambda: db)
+
+        result = runner.invoke(app, ["export", "--format", "csv"])
+        assert result.exit_code == 0
+        rows = list(csv.reader(io.StringIO(result.output)))
+        sec_col = rows[0].index("section")
+        assert rows[1][sec_col] == f"'{prefix}evil"
+
+    def test_normal_names_pass_through_untouched(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        db = tmp_path / "cov.db"
+        _make_section_db(db, [".text"], [(".text", 0, 100, "exact")])
+        monkeypatch.setattr("recoverage.cli._db_path", lambda: db)
+
+        result = runner.invoke(app, ["export", "--format", "csv"])
+        assert result.exit_code == 0
+        rows = list(csv.reader(io.StringIO(result.output)))
+        sec_col = rows[0].index("section")
+        assert rows[1][sec_col] == ".text"
+
+
 class TestCheckFailureExit:
     def test_below_threshold_exits_1(self) -> None:
         """A tracked section under the threshold must exit 1 (the CI gate's

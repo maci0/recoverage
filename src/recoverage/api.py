@@ -1074,6 +1074,12 @@ def handle_api_bytes(target: str, section: str) -> bytes | Any:
             return _dll_not_found(target, "DLL not found for target")
 
         file_start = sec["fileOffset"] + req_offset
+        if file_start < 0:
+            # Same guard as /asm: unreachable for a schema-valid sections row
+            # (fileOffset carries CHECK >= 0), kept so a foreign DB with a
+            # negative offset cannot slice from before the file — Python's
+            # negative indexing would silently serve tail-of-binary bytes.
+            return _json_err(400, {"error": "offset beyond section bounds"})
         chunk = target_data[file_start : file_start + req_size]
 
         # Format as hex lines (16 bytes per line)

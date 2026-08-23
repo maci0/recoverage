@@ -371,6 +371,18 @@ _RESOLVED_TARGETS_CACHE_LOCK = threading.RLock()
 
 _log = logging.getLogger("recoverage")
 
+# Control characters (C0 + DEL), which would otherwise let a crafted URL
+# forge multi-line entries in the request log (%0A in the path percent-
+# decodes to a raw newline).  Each is replaced by its \xNN escape so the
+# offending request stays identifiable while remaining one log line.
+_LOG_CONTROL_CHARS = {c: f"\\x{c:02x}" for c in range(32)} | {127: "\\x7f"}
+
+
+def _log_safe(value: str) -> str:
+    """Escape control characters in untrusted text destined for the log."""
+    return value.translate(_LOG_CONTROL_CHARS)
+
+
 # Reserved metadata target holding the schema-level db_version stamp (written
 # by rebrew build-db).  It is NOT a real project target and must never appear
 # in target enumeration, stats, or the dashboard dropdown.
@@ -1191,8 +1203,8 @@ def _db_unavailable_err(exc: sqlite3.Error) -> Any:
     """
     _log.warning(
         "Database unavailable serving %s %s: %s: %s",
-        request.method,
-        request.path,
+        _log_safe(request.method),
+        _log_safe(request.path),
         type(exc).__name__,
         exc,
     )
@@ -1242,13 +1254,24 @@ def _handle_unexpected_error(error: Any) -> Any:
 @app.hook("before_request")
 def _log_request() -> None:
     """Log incoming requests at DEBUG level for operational visibility."""
-    _log.debug("%s %s", request.method, request.path)
+    # Method/path are attacker-controlled (the path is percent-decoded), so
+    # control characters are escaped to keep the log line-per-request.
+    _log.debug("%s %s", _log_safe(request.method), _log_safe(request.path))
     # DNS-rebinding guard for loopback installs: the Host header must name a
     # loopback host.  Requests without a Host header (non-HTTP/1.1 clients,
     # WSGI test harnesses) are left to the server's own address handling.
     if ALLOWED_HOSTS is not None:
         host = request.headers.get("Host", "")
         if host and _hostname_of(host) not in ALLOWED_HOSTS:
+            # Audit trail: a rejected Host on a loopback bind is a
+            # DNS-rebinding attempt signal; without it the 400 leaves no
+            # trace for incident investigation.  %r escapes control
+            # characters, so the hostile value cannot forge log lines.
+            _log.warning(
+                "Rejected request with unexpected Host header %r from %s",
+                host,
+                request.environ.get("REMOTE_ADDR", "") or "unknown peer",
+            )
             raise _json_err(
                 400,
                 {

@@ -572,6 +572,39 @@ class TestApiBytes:
         # The unconfigured-target hint tells the operator exactly what to add.
         assert "[targets.FAKEDLL].binary" in data["detail"]
 
+    def test_negative_file_offset_is_rejected(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A foreign DB whose sections row carries a negative fileOffset (a
+        rebrew-built DB cannot: the schema CHECKs it >= 0) must get the 400
+        contract instead of Python's negative-index slicing silently serving
+        tail-of-binary bytes — same guard as /asm."""
+        import recoverage.api as api
+        import recoverage.server as srv
+
+        db = tmp_path / "coverage.db"
+        conn = sqlite3.connect(db)
+        conn.execute(
+            "CREATE TABLE sections (target TEXT, name TEXT, va INTEGER, size INTEGER,"
+            " fileOffset INTEGER, unitBytes INTEGER, columns INTEGER)"
+        )
+        conn.execute("INSERT INTO sections VALUES ('T', '.text', 4096, 4096, -4096, 16, 8)")
+        conn.commit()
+        conn.close()
+
+        def _tmp_db() -> sqlite3.Connection:
+            c = sqlite3.connect(sqlite_ro_uri(db), uri=True)
+            c.row_factory = sqlite3.Row
+            return c
+
+        monkeypatch.setattr(api, "_db", _tmp_db)
+        monkeypatch.setattr(srv, "_db_path", lambda: db)
+        monkeypatch.setattr(api, "_require_target", lambda c, t: None)
+        status, headers, body = wsgi_get("/api/targets/T/sections/.text/bytes?offset=0&size=4")
+        assert status.startswith("400")
+        data = json.loads(decode_body(body, headers))
+        assert data["code"] == "bad_request"
+
 
 class TestRegenRateLimit:
     """Server-side cooldown on /api/regen (the UI throttles, the API must too)."""
@@ -1286,6 +1319,20 @@ class TestHostHeaderValidation:
         data = json.loads(decode_body(body, headers))
         assert data["error"] == "Bad Request"
         assert "evil.example.com" in data["detail"]
+
+    def test_evil_host_rejection_is_audit_logged(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A rejected Host header on a loopback bind is a DNS-rebinding
+        attempt signal; the 400 must leave a WARNING audit trail."""
+        import logging
+
+        self._set_allowed({"127.0.0.1", "localhost", "::1"})
+        with caplog.at_level(logging.WARNING, logger="recoverage"):
+            status, _, _ = wsgi_get("/api/health", headers={"Host": "evil.example.com"})
+        assert status.startswith("400")
+        assert any("unexpected Host header" in r.getMessage() for r in caplog.records)
+        # The hostile value may appear (repr-escaped), but the peer address
+        # must be there for investigation.
+        assert any("127.0.0.1" in r.getMessage() for r in caplog.records)
 
     def test_no_validation_when_remote_bind(self) -> None:
         # --allow-remote binds leave ALLOWED_HOSTS None → any Host passes.

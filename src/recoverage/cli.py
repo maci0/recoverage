@@ -89,6 +89,24 @@ _VERDICT_COLORS: dict[str, int] = {
     "FAIL": typer.colors.RED,
 }
 
+# Leading characters spreadsheets (Excel, LibreOffice) interpret as formulas
+# or control sequences when a CSV cell starts with them.
+_CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _csv_safe(value: Any) -> Any:
+    """Neutralize spreadsheet formula injection (CWE-1236) in exported cells.
+
+    Target ids and section names originate in analyzed PE binaries, so a
+    malicious sample can plant a section named ``=HYPERLINK(...)`` or
+    ``@SUM(...)`` that Excel executes when the exported file is opened.
+    Prefixing with an apostrophe forces text interpretation (the standard
+    OWASP mitigation); numeric and ordinary fields pass through untouched.
+    """
+    if isinstance(value, str) and value.startswith(_CSV_FORMULA_PREFIXES):
+        return f"'{value}"
+    return value
+
 
 def _open_db_or_exit(*, missing_exit_code: int = 1) -> sqlite3.Connection:
     """Open coverage.db read-only, exiting the process on failure.
@@ -501,8 +519,8 @@ def export(
             for sec_name, sec in sorted(data["sections"].items()):
                 writer.writerow(
                     [
-                        data["target"],
-                        sec_name,
+                        _csv_safe(data["target"]),
+                        _csv_safe(sec_name),
                         sec.get("size_bytes", 0),
                         sec["total_cells"],
                         sec["exact"],
