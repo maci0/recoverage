@@ -220,7 +220,7 @@ class TestPathHelpers:
             assert _find_dll_path("GAME") == Path("/proj/bin/game.dll")
 
 
-# ── clear_target_cache ─────────────────────────────────────────────
+# ── DB-freshness ETags ─────────────────────────────────────────────
 
 
 class TestDbEtag:
@@ -283,6 +283,9 @@ class TestDbEtag:
         with pytest.raises(srv.HTTPResponse) as excinfo:
             srv._etag_or_304(srv._snapshot_db_mtime(), "T")
         assert excinfo.value.status_code == 304
+
+
+# ── clear_target_cache ─────────────────────────────────────────────
 
 
 class TestClearTargetCache:

@@ -173,7 +173,7 @@
     // so a single requestAnimationFrame can run while it is still
     // `visibility: hidden`, and focus() on a hidden element is a silent no-op.
     // Retry until it takes.
-    // ponytail: bounded at 10 frames; if focus has not landed by then the
+    // Retry is bounded at 10 frames; if focus has not landed by then the
     // dialog is not being shown at all, and looping further would just spin.
     const focusWhenVisible = (el, framesLeft = 10) => {
       if (!el) return;
