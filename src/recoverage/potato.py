@@ -196,21 +196,17 @@ def _make_progress_svg(
     )
 
 
-def _make_pill_caps(height: int, fill_hex: str, border_hex: str | None = None) -> tuple[str, str]:
+def _make_pill_caps(height: int, fill_hex: str, border_hex: str) -> tuple[str, str]:
     """Generate left-cap and right-cap SVG data URIs for a pill shape."""
     radius = height // 2
 
     def _uri(svg: str) -> str:
         return "data:image/svg+xml;base64," + base64.b64encode(svg.encode("utf-8")).decode("utf-8")
 
-    if border_hex:
-        r = radius - 0.5
-        h1 = height - 0.5
-        left_svg = f'<svg xmlns="http://www.w3.org/2000/svg" width="{radius}" height="{height}" viewBox="0 0 {radius} {height}"><path d="M{radius},0.5 A{r},{r} 0 0,0 {radius},{h1}" fill="{fill_hex}" stroke="{border_hex}" stroke-width="1"/></svg>'
-        right_svg = f'<svg xmlns="http://www.w3.org/2000/svg" width="{radius}" height="{height}" viewBox="0 0 {radius} {height}"><path d="M0,0.5 A{r},{r} 0 0,1 0,{h1}" fill="{fill_hex}" stroke="{border_hex}" stroke-width="1"/></svg>'
-    else:
-        left_svg = f'<svg xmlns="http://www.w3.org/2000/svg" width="{radius}" height="{height}" viewBox="0 0 {radius} {height}"><path d="M{radius},0 A{radius},{radius} 0 0,0 {radius},{height}" fill="{fill_hex}"/></svg>'
-        right_svg = f'<svg xmlns="http://www.w3.org/2000/svg" width="{radius}" height="{height}" viewBox="0 0 {radius} {height}"><path d="M0,0 A{radius},{radius} 0 0,1 0,{height}" fill="{fill_hex}"/></svg>'
+    r = radius - 0.5
+    h1 = height - 0.5
+    left_svg = f'<svg xmlns="http://www.w3.org/2000/svg" width="{radius}" height="{height}" viewBox="0 0 {radius} {height}"><path d="M{radius},0.5 A{r},{r} 0 0,0 {radius},{h1}" fill="{fill_hex}" stroke="{border_hex}" stroke-width="1"/></svg>'
+    right_svg = f'<svg xmlns="http://www.w3.org/2000/svg" width="{radius}" height="{height}" viewBox="0 0 {radius} {height}"><path d="M0,0.5 A{r},{r} 0 0,1 0,{h1}" fill="{fill_hex}" stroke="{border_hex}" stroke-width="1"/></svg>'
 
     return _uri(left_svg), _uri(right_svg)
 
@@ -704,7 +700,7 @@ _PAGE_SRC = r"""<!DOCTYPE html>
     </td>
     <td valign="middle">
       <table id="section-tabs" border="0" cellpadding="0" cellspacing="4"><tr>
-      % for s_name, s_url, s_active, s_pct_str, tab_idx in section_tab_data:
+      % for s_name, s_url, s_active in section_tab_data:
         <td valign="middle">
         % if s_active:
           <table border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{ACTIVE_L}}" width="16" height="32" border="0" alt=""></td><td background="{{ACTIVE_MID}}" height="32" nowrap><a href="{{s_url}}" accesskey="{{s_name[1]}}"><font face="{{MONO_FONT}}" size="3" color="#ffffff"><b>{{s_name}}</b></font></a></td><td><img src="{{ACTIVE_R}}" width="16" height="32" border="0" alt=""></td></tr></table>
@@ -1440,24 +1436,17 @@ def _section_tab_data(
     target: str,
     section: str,
     sections: dict[str, dict[str, Any]],
-    per_section_stats: dict[str, dict[str, int]],
     active_filters: set[str] | None,
     search_query: str,
-) -> list[tuple[str, str, bool, str, str]]:
-    """(name, url, is_active, pct-label, accesskey-index) for the section tabs."""
+) -> list[tuple[str, str, bool]]:
+    """(name, url, is_active) for the section tabs."""
     return [
         (
             s,
             _build_url(target, s, active_filters or None, search=search_query),
             s == section,
-            (
-                f" {per_section_stats.get(s, {}).get('pct', 0)}%"
-                if per_section_stats.get(s, {}).get("total", 0) > 0
-                else ""
-            ),
-            str(i),
         )
-        for i, s in enumerate(sections, 1)
+        for s in sections
     ]
 
 
@@ -1495,7 +1484,7 @@ def _render_potato_inner(
     filter_btn_data = _build_filter_data(target, section, active_filters, search_query)
     progress = _build_progress(section, sec_data, data, sections)
     section_tab_data = _section_tab_data(
-        target, section, sections, per_section_stats, active_filters or None, search_query
+        target, section, sections, active_filters or None, search_query
     )
 
     # ── Grid (with cell merging) ─────────────────────────────────

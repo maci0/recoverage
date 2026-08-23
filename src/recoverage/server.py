@@ -438,19 +438,14 @@ def resolve_targets(c: sqlite3.Cursor) -> tuple[list[str], list[dict[str, str]]]
         target_ids = [row[0] for row in c.fetchall()]
         targets_info = _get_targets_config()
 
-        targets_list: list[dict[str, str]] = []
-        added_tids: set[str] = set()
-
-        for tid, t_info in targets_info.items():
-            # Config-declared targets are always addressable, even before
-            # their first build — _require_target treats "declared in the
-            # project config" as valid, so a never-built target must not 404.
-            targets_list.append({"id": tid, "name": Path(_target_filename(tid, t_info)).name})
-            added_tids.add(tid)
-
-        for tid in target_ids:
-            if tid not in added_tids:
-                targets_list.append({"id": tid, "name": tid})
+        # Config-declared targets come first and are always addressable, even
+        # before their first build — _require_target treats "declared in the
+        # project config" as valid, so a never-built target must not 404.
+        targets_list = [
+            {"id": tid, "name": Path(_target_filename(tid, t_info)).name}
+            for tid, t_info in targets_info.items()
+        ]
+        targets_list += [{"id": tid, "name": tid} for tid in target_ids if tid not in targets_info]
 
         _RESOLVED_TARGETS_CACHE = {
             "target_ids": target_ids,

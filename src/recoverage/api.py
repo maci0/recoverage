@@ -36,6 +36,7 @@ from recoverage.server import (
     _etag_or_304,
     _get_capstone_md,
     _get_targets_config,
+    _hostname_of,
     _json_err,
     _json_ok,
     _json_ok_precompressed,
@@ -468,28 +469,21 @@ def handle_api_data(target: str) -> bytes | Any:
     # within the same second get distinct ETags (a float mtime would let a
     # browser keep a stale 304), and a WAL-committed change that did not
     # checkpoint the main file still invalidates.
-    etag = None
-    fingerprint: tuple[tuple[int, int] | None, str, str | None] | None = None
-    try:
-        snap = _snapshot_db_mtime()
-        fingerprint = (snap, target, section_filter)
-
-        etag = _safe_etag(snap[0] if snap else "", target, section_filter)
-        if request.headers.get("If-None-Match") == etag:
-            return HTTPResponse(
-                status=304,
-                headers={"ETag": etag, "Cache-Control": CACHE_REVALIDATE},
-            )
-    except OSError:
-        pass
+    snap = _snapshot_db_mtime()
+    fingerprint: tuple[tuple[int, int] | None, str, str | None] = (snap, target, section_filter)
+    etag = _safe_etag(snap[0] if snap else "", target, section_filter)
+    if request.headers.get("If-None-Match") == etag:
+        return HTTPResponse(
+            status=304,
+            headers={"ETag": etag, "Cache-Control": CACHE_REVALIDATE},
+        )
 
     # Serve a memoized payload for an unchanged DB instead of re-running the
     # full-table queries, re-serialization, and recompression on every
     # cache-missing request.
-    entry: dict[str, bytes] | None = None
-    if fingerprint is not None:
-        with _DATA_CACHE_LOCK:
-            entry = _DATA_CACHE.get(fingerprint)
+    entry: dict[str, bytes] | None
+    with _DATA_CACHE_LOCK:
+        entry = _DATA_CACHE.get(fingerprint)
     if entry is not None:
         accept_enc = request.headers.get("Accept-Encoding", "")
         encoding = _best_encoding(accept_enc)
@@ -501,11 +495,9 @@ def handle_api_data(target: str) -> bytes | Any:
             body, _ = compress_payload(raw, accept_enc)
             with _DATA_CACHE_LOCK:
                 entry[encoding] = body
-        if etag is not None:
-            return _json_ok_precompressed(
-                body, encoding, Cache_Control=CACHE_REVALIDATE, ETag=str(etag)
-            )
-        return _json_ok_precompressed(body, encoding, Cache_Control=CACHE_REVALIDATE)
+        return _json_ok_precompressed(
+            body, encoding, Cache_Control=CACHE_REVALIDATE, ETag=str(etag)
+        )
 
     with _target_cursor(target) as c:
         data: dict[str, Any] = _load_metadata(c, target)
@@ -555,14 +547,10 @@ def handle_api_data(target: str) -> bytes | Any:
         raw_json = json.dumps(data).encode("utf-8")
         accept_enc = request.headers.get("Accept-Encoding", "")
         body, encoding = compress_payload(raw_json, accept_enc)
-        if fingerprint is not None:
-            _cache_data_insert(fingerprint, raw_json, encoding, body)
-
-        if etag is not None:
-            return _json_ok_precompressed(
-                body, encoding, Cache_Control=CACHE_REVALIDATE, ETag=str(etag)
-            )
-        return _json_ok_precompressed(body, encoding, Cache_Control=CACHE_REVALIDATE)
+        _cache_data_insert(fingerprint, raw_json, encoding, body)
+        return _json_ok_precompressed(
+            body, encoding, Cache_Control=CACHE_REVALIDATE, ETag=str(etag)
+        )
 
 
 # Mirrors the list endpoint's limit cap.
@@ -639,20 +627,9 @@ def handle_api_functions_list(target: str) -> bytes | Any:
             f"ORDER BY {sort_field} {sort_dir} LIMIT ? OFFSET ?",
             params + [limit, offset],
         )
-        items: list[dict[str, Any]] = []
-        for row in c.fetchall():
-            items.append(
-                {
-                    "va": row["va"],
-                    "name": row["name"],
-                    "vaStart": row["vaStart"],
-                    "size": row["size"],
-                    "status": row["status"],
-                    "module": row["module"],
-                    "symbol": row["symbol"],
-                    "markerType": row["markerType"],
-                }
-            )
+        # SELECT enumerates exactly the response fields; dict(row) carries the
+        # same keys, in the same order, as an explicit per-field dict would.
+        items: list[dict[str, Any]] = [dict(row) for row in c.fetchall()]
 
         return _json_ok(
             {
@@ -1103,10 +1080,9 @@ def handle_regen() -> bytes | Any:
 
     origin = request.headers.get("Origin", "")
     if origin:
-        from urllib.parse import urlparse as _urlparse
-
-        parsed_origin = _urlparse(origin)
-        origin_host = parsed_origin.hostname or ""
+        # Same hardened parser as the Host allowlist: userinfo-bearing or
+        # otherwise non-plain values parse as "" and are rejected.
+        origin_host = _hostname_of(origin)
         if origin_host not in LOOPBACK_HOSTS:
             return _json_err(
                 403,

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import contextlib
 import gzip
-import json
 import logging
 import sqlite3
 import threading
@@ -22,6 +21,7 @@ from recoverage.server import (
     _best_encoding,
     _compressed,
     _etag_or_304,
+    _finalized,
     _project_dir,
     app,
     compress_payload,
@@ -47,7 +47,10 @@ def clear_index_cache() -> None:
 
 
 def _build_index_payload() -> bytes:
-    global CACHED_INDEX_PAYLOAD, CACHED_INDEX_COMPRESSED
+    """Read the SPA shell, inline minified CSS/JS into it, return it.
+
+    Pure: caching is the caller's job (it already holds INDEX_LOCK).
+    """
     assets = _assets_dir()
     html = (assets / "index.html").read_text(encoding="utf-8")
     css = (assets / "style.css").read_text(encoding="utf-8")
@@ -64,10 +67,9 @@ def _build_index_payload() -> bytes:
         "<!-- INJECT_JS -->",
         f"<script>{vanjs}\n{minify_js(js)}</script>",
     )
-    CACHED_INDEX_PAYLOAD = html.encode("utf-8")
-    CACHED_INDEX_COMPRESSED.clear()
-    _check_payload_budget(CACHED_INDEX_PAYLOAD)
-    return CACHED_INDEX_PAYLOAD
+    payload = html.encode("utf-8")
+    _check_payload_budget(payload)
+    return payload
 
 
 _TCP_CWND_BUDGET = 14_600
@@ -118,7 +120,8 @@ def handle_potato() -> bytes | Any:
             response.set_header("ETag", etag)
         return resp_body
 
-    except (sqlite3.Error, OSError, ValueError, KeyError, json.JSONDecodeError):
+    # json.JSONDecodeError needs no entry: it subclasses ValueError.
+    except (sqlite3.Error, OSError, ValueError, KeyError):
         _log.exception("Potato mode render failed")
         return HTTPResponse(
             status=500,
@@ -133,6 +136,7 @@ def handle_index() -> bytes:
     # http://host:port/?token=<TOKEN> sets an HttpOnly SameSite cookie so
     # the SPA's own fetch/EventSource calls authenticate without any
     # frontend change.  API clients can use Authorization: Bearer instead.
+    global CACHED_INDEX_PAYLOAD
     from recoverage.server import _AUTH_TOKEN, _auth_token_matches
 
     if _AUTH_TOKEN and _auth_token_matches(request.query.get("token", "")):
@@ -148,10 +152,8 @@ def handle_index() -> bytes:
 
     with INDEX_LOCK:
         if CACHED_INDEX_PAYLOAD is None:
-            _build_index_payload()
+            CACHED_INDEX_PAYLOAD = _build_index_payload()
         payload = CACHED_INDEX_PAYLOAD
-        if payload is None:  # pragma: no cover — _build_index_payload always sets it
-            raise RuntimeError("_build_index_payload failed to set CACHED_INDEX_PAYLOAD")
         if encoding not in CACHED_INDEX_COMPRESSED:
             # Maximum brotli effort here: this runs once per encoding and the
             # result is cached, and the byte budget is the whole point.
@@ -161,13 +163,7 @@ def handle_index() -> bytes:
             CACHED_INDEX_COMPRESSED[encoding] = compressed
         body = CACHED_INDEX_COMPRESSED[encoding]
 
-    response.content_type = "text/html; charset=utf-8"
-    response.set_header("Cache-Control", CACHE_NO_STORE)
-    response.set_header("Vary", "Accept-Encoding")
-    if encoding:
-        response.set_header("Content-Encoding", encoding)
-    response.set_header("Content-Length", str(len(body)))
-    return body
+    return _finalized(body, "text/html; charset=utf-8", encoding, Cache_Control=CACHE_NO_STORE)
 
 
 # ── Static file serving ────────────────────────────────────────────

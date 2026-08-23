@@ -248,9 +248,6 @@ def serve(
 ) -> None:
     """Start the recoverage dashboard server."""
     import recoverage.server as _server
-    from recoverage._paths import (
-        _db_path as server_db_path,
-    )
     from recoverage.server import (
         LOOPBACK_HOSTS,
         _assets_dir,
@@ -340,7 +337,7 @@ def serve(
     typer.echo(f"Serving coverage dashboard at {url}")
     typer.echo(f"  Listening on: {listen_url}")
     typer.echo(f"  Assets: {assets}")
-    typer.echo(f"  DB: {server_db_path()}")
+    typer.echo(f"  DB: {_db_path()}")
     if cors:
         typer.echo("  CORS: enabled")
     typer.echo("  Regen: POST /api/regen or click Reload in UI")
