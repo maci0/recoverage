@@ -1097,10 +1097,12 @@ class TestDataPayloadMemo:
         )
         c.execute(
             "CREATE TABLE cells (id INTEGER, target TEXT, section_name TEXT, start INTEGER, "
-            "end INTEGER, span INTEGER, state TEXT, functions TEXT, label TEXT, parent_function TEXT)"
+            "end INTEGER, span INTEGER, state TEXT, functions TEXT, label TEXT, "
+            "parent_function TEXT)"
         )
         c.execute(
-            "CREATE TABLE functions (target TEXT, va INTEGER, name TEXT, vaStart TEXT, size INTEGER, "
+            "CREATE TABLE functions (target TEXT, va INTEGER, name TEXT, vaStart TEXT, "
+            "size INTEGER, "
             "fileOffset INTEGER, status TEXT, module TEXT, cflags TEXT, symbol TEXT, "
             "markerType TEXT, ghidra_name TEXT, list_name TEXT, is_thunk INTEGER, "
             "is_export INTEGER, sha256 TEXT, files TEXT, detected_by TEXT, size_by_tool TEXT, "

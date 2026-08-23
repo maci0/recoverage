@@ -31,11 +31,11 @@ from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlsplit
 
-import bottle  # type: ignore
+import bottle  # type: ignore[import-untyped]
 import brotli  # type: ignore[import-untyped]
 import rcssmin  # type: ignore[import-untyped]
 import rjsmin  # type: ignore[import-untyped]
-import zstandard as zstd  # type: ignore[import-untyped]
+import zstandard as zstd
 
 from recoverage._paths import _db_path, sqlite_ro_uri
 
@@ -534,7 +534,7 @@ def _get_capstone_md() -> Any:
     """
     md = getattr(_CAPSTONE_MD_TLS, "md", None)
     if md is None:
-        import capstone as _capstone  # type: ignore # noqa: PLC0415
+        import capstone as _capstone  # type: ignore[import-not-found]
 
         md = _capstone.Cs(_capstone.CS_ARCH_X86, _capstone.CS_MODE_32)
         md.detail = False
@@ -629,7 +629,7 @@ def compress_payload(
     if encoding == "zstd":
         return _get_zstd_compressor().compress(body), "zstd"
     if encoding == "br":
-        return brotli.compress(body, quality=brotli_quality), "br"  # type: ignore
+        return brotli.compress(body, quality=brotli_quality), "br"
     if encoding == "gzip":
         # Level 6, not gzip.compress's default 9: measured on a ~9 MB /data
         # payload, -9 costs 2x the CPU of -6 for ~9% fewer bytes (96 ms ->
@@ -1138,7 +1138,10 @@ def _require_auth() -> None:
             )
         raise HTTPResponse(
             status=401,
-            body=b'{"error": "unauthorized", "code": "unauthorized", "detail": "missing or invalid token"}',
+            body=(
+                b'{"error": "unauthorized", "code": "unauthorized", '
+                b'"detail": "missing or invalid token"}'
+            ),
             content_type="application/json",
         )
     _clear_auth_failures()

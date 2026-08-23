@@ -170,7 +170,7 @@ class TestCompressPayload:
         def worker(idx: int) -> None:
             try:
                 results[idx] = compress_payload(payloads[idx], "zstd")
-            except BaseException as exc:  # noqa: BLE001 — surface worker crashes
+            except BaseException as exc:
                 errors.append(exc)
 
         threads = [threading.Thread(target=worker, args=(i,)) for i in range(len(payloads))]

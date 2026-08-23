@@ -73,4 +73,14 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM"]
-ignore = ["E501"]
+ignore = []
+# typer's idiom is `param = typer.Option(...)` in signature defaults; without
+# this, B008 would demand a noqa on every CLI option (typer docs recommend it).
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["typer.Option", "typer.Argument"]
+
+[tool.ruff.lint.per-file-ignores]
+# E501: potato.py embeds a server-side HTML template as long literal lines;
+# ruff format cannot wrap string literals. Every other file must keep lines
+# within the 100-col cap above.
+"src/recoverage/potato.py" = ["E501"]

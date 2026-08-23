@@ -12,7 +12,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 import brotli  # type: ignore[import-untyped]
-import zstandard as zstd  # type: ignore[import-untyped]
+import zstandard as zstd
 
 from recoverage.server import (
     BROTLI_STATIC_QUALITY,
@@ -105,7 +105,7 @@ def _check_payload_budget(payload: bytes) -> None:
 @app.get("/potato")
 def handle_potato() -> bytes | Any:
     try:
-        from recoverage.potato import render_potato  # type: ignore
+        from recoverage.potato import render_potato
 
         # WAL-aware snapshot (see _snapshot_db_mtime), not raw st_mtime: a
         # rebuild that commits only to -wal must still mint a new ETag or

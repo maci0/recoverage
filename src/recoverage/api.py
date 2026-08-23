@@ -71,8 +71,8 @@ def _clear_derived_caches() -> None:
     """
     clear_target_cache()
     _clear_data_cache()
-    from recoverage.potato import clear_cells_cache  # noqa: PLC0415
-    from recoverage.ui import clear_index_cache  # noqa: PLC0415
+    from recoverage.potato import clear_cells_cache
+    from recoverage.ui import clear_index_cache
 
     clear_index_cache()
     clear_cells_cache()
@@ -234,7 +234,7 @@ def _broadcast_db_updated(snapshot: tuple[int, int] | None) -> None:
     """
     try:
         _clear_derived_caches()
-    except Exception:  # noqa: BLE001 — cache clearing is best-effort
+    except Exception:
         # A failed invalidation leaves stale caches behind while clients are
         # told the DB changed — that divergence must be visible in the log.
         _log.warning("Cache invalidation during db-updated broadcast failed", exc_info=True)
@@ -282,7 +282,7 @@ def _db_watcher_loop(stop: threading.Event) -> None:
                 # (at-least-once) instead of silently dropping the event.
                 _broadcast_db_updated(snapshot)
                 last = snapshot
-        except Exception:  # noqa: BLE001 — keep polling whatever one iteration hit
+        except Exception:
             _log.exception("DB watcher iteration failed — continuing to poll")
 
 
@@ -1089,7 +1089,7 @@ def handle_api_bytes(target: str, section: str) -> bytes | Any:
 
 @app.post("/api/regen")
 def handle_regen() -> bytes | Any:
-    global _regen_last_attempt  # noqa: PLW0603
+    global _regen_last_attempt
 
     remote = request.environ.get("REMOTE_ADDR", "")
     if remote not in LOOPBACK_HOSTS:
@@ -1103,7 +1103,7 @@ def handle_regen() -> bytes | Any:
 
     origin = request.headers.get("Origin", "")
     if origin:
-        from urllib.parse import urlparse as _urlparse  # noqa: PLC0415
+        from urllib.parse import urlparse as _urlparse
 
         parsed_origin = _urlparse(origin)
         origin_host = parsed_origin.hostname or ""

@@ -247,7 +247,8 @@ def test_globals_detail_panel():
         c.execute("SELECT name FROM globals WHERE target = ?", (target,))
         globals_set = {row[0] for row in c.fetchall()}
         c.execute(
-            "SELECT id, section_name, functions FROM cells WHERE target = ? AND section_name IN ('.data', '.rdata')",
+            "SELECT id, section_name, functions FROM cells "
+            "WHERE target = ? AND section_name IN ('.data', '.rdata')",
             (target,),
         )
         match: tuple[int, str] | None = None

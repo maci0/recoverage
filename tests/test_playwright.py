@@ -2,7 +2,7 @@ import os
 from typing import Any
 
 import pytest
-from playwright.sync_api import expect  # type: ignore
+from playwright.sync_api import expect
 
 BASE_URL = os.environ.get("BASE_URL", "http://localhost:8787")
 
@@ -15,7 +15,7 @@ try:
     with sync_playwright() as _p:
         _p.chromium.launch(headless=True)
     _HAS_BROWSER = True
-except Exception:  # noqa: BLE001 — browser unavailable for any reason
+except Exception:
     _HAS_BROWSER = False
 if not _HAS_BROWSER:
     pytest.skip(
@@ -29,7 +29,7 @@ try:
     import urllib.request
 
     urllib.request.urlopen(f"{BASE_URL}/api/health", timeout=2).close()
-except Exception:  # noqa: BLE001 — server not reachable
+except Exception:
     pytest.skip(
         f"no recoverage server at {BASE_URL} — start it with 'uv run recoverage serve'",
         allow_module_level=True,

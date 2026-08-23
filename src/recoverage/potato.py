@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import contextlib
 import functools
+import importlib.util
 import json
 import logging
 import re
@@ -25,7 +26,7 @@ from typing import Any
 from urllib.parse import ParseResult, parse_qs
 from urllib.parse import quote as _url_quote
 
-from bottle import HTTPResponse, SimpleTemplate  # type: ignore
+from bottle import HTTPResponse, SimpleTemplate  # type: ignore[import-untyped]
 
 from recoverage import __version__
 from recoverage._paths import sqlite_ro_uri
@@ -359,18 +360,18 @@ def _highlight_tokens(tokens: Iterable[tuple[Any, str]], color_map: dict[Any, st
 
 @functools.lru_cache(maxsize=1)
 def _pygments_available() -> bool:
-    """Check if pygments is available (lazy import, cached)."""
+    """Check if pygments is available (lazy, cached)."""
+    # find_spec imports only the parent package; a missing pygments raises
+    # ModuleNotFoundError (an ImportError) exactly like the old probe import.
     try:
-        import pygments.lexers  # type: ignore # noqa: F401
-
-        return True
+        return importlib.util.find_spec("pygments.lexers") is not None
     except ImportError:
         return False
 
 
 @functools.lru_cache(maxsize=1)
 def _get_c_colors() -> dict[Any, str]:
-    from pygments.token import (  # type: ignore
+    from pygments.token import (  # type: ignore[import-untyped]
         Comment,
         Keyword,
         Name,
@@ -395,7 +396,7 @@ def _get_c_colors() -> dict[Any, str]:
 
 @functools.lru_cache(maxsize=1)
 def _get_asm_colors() -> dict[Any, str]:
-    from pygments.token import (  # type: ignore
+    from pygments.token import (  # type: ignore[import-untyped]
         Comment,
         Keyword,
         Name,
@@ -424,14 +425,14 @@ def _get_asm_colors() -> dict[Any, str]:
 
 @functools.lru_cache(maxsize=1)
 def _get_c_lexer() -> Any:
-    from pygments.lexers import CLexer  # type: ignore
+    from pygments.lexers import CLexer  # type: ignore[import-untyped]
 
     return CLexer()
 
 
 @functools.lru_cache(maxsize=1)
 def _get_nasm_lexer() -> Any:
-    from pygments.lexers import NasmLexer  # type: ignore
+    from pygments.lexers import NasmLexer  # type: ignore[import-untyped]
 
     return NasmLexer()
 

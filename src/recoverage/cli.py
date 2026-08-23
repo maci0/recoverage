@@ -143,7 +143,8 @@ def _select_targets(conn: sqlite3.Connection, target: str | None) -> list[str]:
             known = _list_targets(conn)
             if target not in known:
                 typer.secho(
-                    f"Error: target {target!r} not found in database (have: {', '.join(known) or 'none'}).",
+                    f"Error: target {target!r} not found in database "
+                    f"(have: {', '.join(known) or 'none'}).",
                     fg=typer.colors.RED,
                     err=True,
                 )
@@ -162,7 +163,7 @@ def _select_targets(conn: sqlite3.Connection, target: str | None) -> list[str]:
 
 def _get_stats(conn: sqlite3.Connection, target: str) -> dict[str, Any]:
     c = conn.cursor()
-    from recoverage.server import _section_stats  # noqa: PLC0415
+    from recoverage.server import _section_stats
 
     try:
         return {"target": target, **_section_stats(c, target)}
@@ -182,8 +183,8 @@ def _get_stats(conn: sqlite3.Connection, target: str) -> dict[str, Any]:
 def _run_regen(root: Path) -> None:
     """Run rebrew catalog + build-db to regenerate coverage.db."""
     from recoverage.server import (
-        REGEN_TIMEOUT,  # noqa: PLC0415
-        run_regen_step,  # noqa: PLC0415
+        REGEN_TIMEOUT,
+        run_regen_step,
     )
 
     for step in ("catalog", "build-db"):
@@ -224,15 +225,15 @@ def serve(
     allow_remote: bool = typer.Option(
         False,
         "--allow-remote",
-        help="Required with --bind 0.0.0.0: acknowledge that the unauthenticated API (including raw "
-        "binary bytes) is exposed on the network",
+        help="Required with --bind 0.0.0.0: acknowledge that the unauthenticated "
+        "API (including raw binary bytes) is exposed on the network",
     ),
     no_open: bool = typer.Option(False, "--no-open", help="Don't open browser automatically"),
     regen: bool = typer.Option(False, "--regen", help="Regenerate DB before starting"),
     cors: bool = typer.Option(
         False, "--cors", help="Enable CORS processing (allowlisted origins only)"
     ),
-    cors_origin: list[str] | None = typer.Option(  # noqa: B008
+    cors_origin: list[str] | None = typer.Option(
         None,
         "--cors-origin",
         help="Origin URL allowed to read the API cross-origin (repeatable, "
@@ -443,7 +444,7 @@ def stats(
 
 @app.command()
 def export(
-    output_format: ExportFormat = typer.Option(  # noqa: B008
+    output_format: ExportFormat = typer.Option(
         ExportFormat.json, "--format", "-f", help="Output format"
     ),
     target: str | None = typer.Option(None, "--target", "-t", help="Target ID (default: all)"),
@@ -462,8 +463,8 @@ def export(
         typer.echo(json.dumps(all_data, indent=2))
 
     elif output_format == ExportFormat.csv:
-        import csv  # noqa: PLC0415
-        import sys  # noqa: PLC0415
+        import csv
+        import sys
 
         # lineterminator="\n": the default "\r\n" would be translated again by
         # Windows' text-mode stdout, corrupting every row to \r\r\n.  One \n

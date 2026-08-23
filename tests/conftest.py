@@ -72,7 +72,8 @@ def _build_synthetic_db() -> None:
             " blocker TEXT,"
             " blockerDelta INTEGER CHECK (blockerDelta IS NULL OR blockerDelta >= 0),"
             " size_reason TEXT,"
-            " similarity REAL CHECK (similarity IS NULL OR (similarity >= 0.0 AND similarity <= 1.0)),"
+            " similarity REAL CHECK (similarity IS NULL OR "
+            "(similarity >= 0.0 AND similarity <= 1.0)),"
             " PRIMARY KEY (target, va))"
         )
         c.execute(
@@ -193,7 +194,8 @@ def _build_synthetic_db() -> None:
             " PRIMARY KEY (target, va))"
         )
         c.execute(
-            "INSERT INTO verify_results (target, va, verified_at, byte_delta, diff_lines, similarity)"
+            "INSERT INTO verify_results "
+            "(target, va, verified_at, byte_delta, diff_lines, similarity)"
             " VALUES (?, ?, ?, ?, ?, ?)",
             (target, 0x10001000, "2026-01-01T00:00:00+00:00", 0, 0, 87.3),
         )
