@@ -1386,6 +1386,53 @@ class TestCorsOriginAllowlist:
         assert status.startswith("200")
         assert headers.get("Access-Control-Allow-Origin") != "*"
 
+    # ── Preflight: the only OPTIONS route in the app ──────────────────
+
+    def test_preflight_allowed_origin(self) -> None:
+        """A browser preflight for an allowlisted origin must carry the
+        allowlist echo and the advertised method/header set, with an empty
+        preflight body."""
+        self._enable(["http://localhost:5173"])
+        status, headers, body = wsgi_request(
+            "OPTIONS",
+            "/api/health",
+            headers={
+                "Origin": "http://localhost:5173",
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+        assert status.startswith("200")
+        assert body == b""
+        assert headers.get("Access-Control-Allow-Origin") == "http://localhost:5173"
+        methods = headers.get("Access-Control-Allow-Methods", "")
+        assert "GET" in methods and "POST" in methods and "OPTIONS" in methods
+        assert "Content-Type" in headers.get("Access-Control-Allow-Headers", "")
+
+    def test_preflight_unknown_origin_gets_no_acao(self) -> None:
+        """Preflight for a non-allowlisted origin answers 200 but must not
+        grant cross-origin access."""
+        self._enable(["http://localhost:5173"])
+        status, headers, _ = wsgi_request(
+            "OPTIONS",
+            "/api/health",
+            headers={
+                "Origin": "http://evil.example.com",
+                "Access-Control-Request-Method": "POST",
+            },
+        )
+        assert status.startswith("200")
+        assert "Access-Control-Allow-Origin" not in headers
+
+    def test_preflight_without_cors_flag_has_no_cors_headers(self) -> None:
+        """Without --cors the OPTIONS route still exists (no 405) but leaks
+        no Access-Control-* headers at all."""
+        import recoverage.server as srv
+
+        srv.CORS_ENABLED = False
+        status, headers, _ = wsgi_request("OPTIONS", "/api/health")
+        assert status.startswith("200")
+        assert not any(k.startswith("Access-Control") for k in headers)
+
 
 # ── Unknown target handling (V14) ──────────────────────────────────
 
@@ -1415,6 +1462,60 @@ class TestUnknownTarget:
             pytest.skip("No targets in DB")
         status, _, _ = wsgi_get(f"/api/targets/{target}/stats")
         assert status.startswith("200")
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+class TestConfiguredUnbuiltTarget:
+    """A target declared in rebrew-project.toml but absent from coverage.db
+    must stay addressable: _require_target counts config membership as valid
+    (a never-built target must not 404), and /api/targets lists config-only
+    entries even before their first build."""
+
+    NEW_TARGET = "NEWBIE"
+
+    @pytest.fixture(autouse=True)
+    def _declared_target(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import recoverage.server as srv
+        from recoverage.server import clear_target_cache
+
+        monkeypatch.setattr(
+            srv,
+            "_get_targets_config",
+            lambda: {self.NEW_TARGET: {"filename": "bin/newbie.dll"}},
+        )
+        clear_target_cache()
+        # resolve_targets memoises; later tests must not see NEWBIE.
+        yield
+        clear_target_cache()
+
+    def test_unbuilt_target_functions_list_is_200_not_404(self) -> None:
+        status, headers, body = wsgi_get(f"/api/targets/{self.NEW_TARGET}/functions")
+        assert status.startswith("200")
+        data = json.loads(decode_body(body, headers))
+        assert data["total"] == 0
+        assert data["functions"] == []
+
+    def test_unbuilt_target_listed_in_targets_endpoint(self) -> None:
+        """Config-declared targets come first and DB targets are still listed."""
+        status, headers, body = wsgi_get("/api/targets")
+        assert status.startswith("200")
+        ids = [t["id"] for t in json.loads(decode_body(body, headers))["targets"]]
+        assert ids[0] == self.NEW_TARGET
+        assert get_first_target() in ids
+
+    def test_db_down_still_lists_config_only_targets(self, monkeypatch: Any) -> None:
+        """With the DB unreadable, /api/targets falls back to the config list
+        instead of 500ing — the SPA needs a target dropdown either way."""
+        import recoverage.api as api
+
+        def _boom() -> sqlite3.Connection:
+            raise sqlite3.OperationalError("unable to open database file")
+
+        monkeypatch.setattr(api, "_db", _boom)
+        status, headers, body = wsgi_get("/api/targets")
+        assert status.startswith("200")
+        ids = [t["id"] for t in json.loads(decode_body(body, headers))["targets"]]
+        assert self.NEW_TARGET in ids
 
 
 class TestServeBindGuard:

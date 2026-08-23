@@ -334,37 +334,46 @@ def test_format_data_inspector():
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
 def test_grid_structure():
+    """Every section's grid sizes its spacer row to the section column count
+    and every merged row's colspans sum back to exactly that count."""
+    target = get_first_target()
+    if not target:
+        pytest.skip("No targets in DB")
     db_path = get_db_path()
     conn = sqlite3.connect(sqlite_ro_uri(db_path), uri=True)
-    c = conn.cursor()
-    c.execute("SELECT DISTINCT name FROM sections WHERE target='SERVER'")
-    rows = c.fetchall() or []
-    section_names = [r[0] for r in rows]
+    try:
+        c = conn.cursor()
+        c.execute("SELECT DISTINCT name FROM sections WHERE target=?", (target,))
+        section_names = [r[0] for r in c.fetchall()]
+        # A targetless query used to make this loop vacuous: the test passed
+        # without executing a single assertion (hardcoded target name).
+        assert section_names, f"target {target!r} has no sections to check"
 
-    for sec in section_names:
-        html = render_potato_url(f"/potato?section={sec}")
-        m = re.search(r'(<table id="grid"[^>]*>.*?</table>)', html, re.DOTALL)
-        assert m, f"grid {sec}: table found"
+        for sec in section_names:
+            html = render_potato_url(f"/potato?target={target}&section={sec}")
+            m = re.search(r'(<table id="grid"[^>]*>.*?</table>)', html, re.DOTALL)
+            assert m, f"grid {sec}: table found"
 
-        table = m.group(1)
-        table_rows = [str(r) for r in re.split(r"</tr>\s*<tr[^>]*>", table)]
-        first_row_tds = re.findall(r"<td\b", table_rows[0]) or []
+            table = m.group(1)
+            table_rows = [str(r) for r in re.split(r"</tr>\s*<tr[^>]*>", table)]
+            first_row_tds = re.findall(r"<td\b", table_rows[0]) or []
 
-        c.execute("SELECT columns FROM sections WHERE target='SERVER' AND name=?", (sec,))
-        row_data = c.fetchone()
-        grid_columns = int(row_data[0]) if row_data and row_data[0] is not None else 64
+            c.execute("SELECT columns FROM sections WHERE target=? AND name=?", (target, sec))
+            row_data = c.fetchone()
+            grid_columns = int(row_data[0]) if row_data and row_data[0] is not None else 64
 
-        assert len(first_row_tds) >= grid_columns, f"grid {sec}: sizing row"
+            assert len(first_row_tds) >= grid_columns, f"grid {sec}: sizing row"
 
-        for ri in range(1, len(table_rows)):
-            row = table_rows[ri]
-            spans = re.findall(r'colspan="(\d+)"', row) or []
-            if spans:
-                total = sum(int(s) for s in spans)
-                assert total == grid_columns, (
-                    f"grid {sec}: row {ri} sums to {total} not {grid_columns}"
-                )
-    conn.close()
+            for ri in range(1, len(table_rows)):
+                row = table_rows[ri]
+                spans = re.findall(r'colspan="(\d+)"', row) or []
+                if spans:
+                    total = sum(int(s) for s in spans)
+                    assert total == grid_columns, (
+                        f"grid {sec}: row {ri} sums to {total} not {grid_columns}"
+                    )
+    finally:
+        conn.close()
 
 
 # List of URLs to test
