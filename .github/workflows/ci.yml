@@ -44,18 +44,27 @@ jobs:
           distribution: temurin
           java-version: "17"
       - run: npm ci
-      - name: Lint JS/TS (oxlint: Rika-Labs strict + anti-slop)
+      - name: "Lint JS/TS (oxlint: Rika-Labs strict + anti-slop)"
         run: npm run lint:js
       - name: Lint HTML/CSS (Nu Html Checker)
         run: npm run lint:html
 
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest]
         # Keep in sync with the Python classifiers in pyproject.toml.
         python-version: ["3.12", "3.13", "3.14"]
+        # The README claims recoverage "runs independently on any machine",
+        # and pip users run it on all three OSes; exercise that claim on at
+        # least one non-Linux runner per OS instead of asserting it untested.
+        include:
+          - os: macos-latest
+            python-version: "3.12"
+          - os: windows-latest
+            python-version: "3.12"
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5

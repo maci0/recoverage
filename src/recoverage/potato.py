@@ -505,9 +505,7 @@ def _highlight_asm(text: str, target: str = "") -> str:
             result_lines.append(_plain_line(line))
         else:
             addr_part, code_part = split
-            hl = _link_hex_refs(
-                _highlight_tokens(lexer.get_tokens(code_part), colors).rstrip("\n")
-            )
+            hl = _link_hex_refs(_highlight_tokens(lexer.get_tokens(code_part), colors).rstrip("\n"))
             result_lines.append(_addr_line(addr_part, hl))
     return "\n".join(result_lines)
 
