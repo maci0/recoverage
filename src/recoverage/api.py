@@ -383,7 +383,6 @@ def handle_api_events() -> Any:
     per-client queue; this route drains it.  Disconnects are detected when the
     generator is closed — the client queue is removed in a ``finally``.
     """
-    _ensure_db_watcher()
     # Cap concurrent SSE clients: each connection pins a server thread for
     # the life of the stream (minutes/hours), and wsgiref has no connection
     # limit.  A LAN client (or a cross-origin EventSource from any webpage
@@ -400,6 +399,9 @@ def handle_api_events() -> Any:
             )
         client_queue: queue.Queue[bytes] = queue.Queue(maxsize=_SSE_QUEUE_MAX)
         _SSE_CLIENTS.add(client_queue)
+    # Start the poller only once a client is actually registered; rejected
+    # connections must not leave background work behind.
+    _ensure_db_watcher()
 
     def _events() -> Generator[bytes, None, None]:
         try:

@@ -90,6 +90,7 @@ Install an extra to enable its feature: `pip install 'recoverage[<extra>]'`
 |-------|---------|--------------|
 | `capstone` | capstone | Enables on-demand disassembly in the detail panel |
 | `pygments` | pygments | Syntax highlighting in Potato Mode |
+| `playwright` | playwright, pytest-playwright | Browser integration tests (`tests/test_playwright.py`) |
 
 ---
 
