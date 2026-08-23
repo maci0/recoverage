@@ -1821,6 +1821,11 @@ def _panel_function_detail(
         if k == "vaStart" and v:
             va_link = _build_url(target, ".text")
             return f'<a href="{va_link}"><font color="{ACCENT_COLOR}">{val}</font></a>'
+        # functions.similarity is stored as a 0-1 fraction (schema CHECK); the
+        # SPA renders it scaled by 100 with a "%" (app.js), so Potato Mode must
+        # too instead of showing the bare fraction.
+        if k == "similarity" and isinstance(v, int | float) and not isinstance(v, bool):
+            return f"{v * 100:.1f}%"
         return val
 
     ctx["detail_rows_html"] = _detail_rows(fn_data, skip_fields, hex_fields, _fn_val)

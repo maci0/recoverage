@@ -552,6 +552,85 @@ def test_label_for_search():
     assert 'label for="target-select"' in html
 
 
+def test_function_detail_similarity_fraction_rendered_as_percent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """functions.similarity is stored as a 0-1 fraction (schema CHECK) and the
+    SPA renders it scaled by 100 with a "%" (app.js).  Potato Mode's detail
+    rows must show the same percentage, not the bare fraction."""
+    db = tmp_path / "coverage.db"
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "CREATE TABLE metadata (target TEXT NOT NULL, key TEXT NOT NULL,"
+        " value TEXT, PRIMARY KEY (target, key))"
+    )
+    conn.execute(
+        "CREATE TABLE sections (target TEXT NOT NULL, name TEXT NOT NULL,"
+        " va INTEGER, size INTEGER, fileOffset INTEGER, unitBytes INTEGER,"
+        " columns INTEGER, PRIMARY KEY (target, name))"
+    )
+    conn.execute(
+        "CREATE TABLE cells (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " target TEXT NOT NULL, section_name TEXT NOT NULL,"
+        " start INTEGER NOT NULL, end INTEGER NOT NULL,"
+        " span INTEGER NOT NULL DEFAULT 1, state TEXT NOT NULL,"
+        " functions TEXT NOT NULL DEFAULT '[]', label TEXT, parent_function TEXT)"
+    )
+    conn.execute(
+        "CREATE TABLE functions ("
+        " target TEXT NOT NULL, va INTEGER NOT NULL CHECK (va >= 0),"
+        " name TEXT NOT NULL DEFAULT '', vaStart TEXT NOT NULL DEFAULT '',"
+        " size INTEGER NOT NULL DEFAULT 0 CHECK (size >= 0), fileOffset INTEGER,"
+        " status TEXT NOT NULL DEFAULT 'UNKNOWN', module TEXT NOT NULL DEFAULT '',"
+        " cflags TEXT, symbol TEXT, markerType TEXT NOT NULL DEFAULT 'FUNCTION',"
+        " ghidra_name TEXT, list_name TEXT,"
+        " is_thunk INTEGER NOT NULL DEFAULT 0, is_export INTEGER NOT NULL DEFAULT 0,"
+        " sha256 TEXT, files TEXT NOT NULL DEFAULT '[]',"
+        " detected_by TEXT NOT NULL DEFAULT '[]', size_by_tool TEXT NOT NULL DEFAULT '{}',"
+        " textOffset INTEGER, blocker TEXT, blockerDelta INTEGER, size_reason TEXT,"
+        " similarity REAL CHECK (similarity IS NULL OR"
+        " (similarity >= 0.0 AND similarity <= 1.0)),"
+        " PRIMARY KEY (target, va))"
+    )
+    conn.execute(
+        "CREATE VIEW section_cell_stats AS"
+        " SELECT target, section_name, COUNT(*) as total_cells,"
+        " SUM(CASE WHEN state = 'exact' THEN 1 ELSE 0 END) as exact_count,"
+        " 0 as reloc_count, 0 as near_match_count, 0 as stub_count,"
+        " 0 as padding_count"
+        " FROM cells GROUP BY target, section_name"
+    )
+    # Unique target so the shared resolve-targets/cells caches cannot leak
+    # rows from the project coverage.db other tests use.
+    t = "SIMFRAC_POTATO"
+    conn.executemany(
+        "INSERT INTO metadata VALUES (?,?,?)",
+        [
+            (t, "db_version", '"4"'),
+            (t, "summary", '{"totalFunctions": 1}'),
+        ],
+    )
+    conn.execute("INSERT INTO sections VALUES (?, '.text', 256, 64, 16, 16, 8)", (t,))
+    conn.execute(
+        "INSERT INTO cells (target, section_name, start, end, span, state, functions)"
+        " VALUES (?, '.text', 0, 32, 1, 'exact', '[\"_func_sim\"]')",
+        (t,),
+    )
+    conn.execute(
+        "INSERT INTO functions (target, va, name, vaStart, size, fileOffset, status,"
+        " similarity) VALUES (?, 256, '_func_sim', '0x100', 32, 16, 'EXACT', 0.8734)",
+        (t,),
+    )
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr("recoverage.potato._db_path", lambda: db)
+
+    panel = render_potato_url(f"/potato?target={t}&section=.text&idx=0")
+    assert "<b>similarity</b>" in panel
+    assert "87.3%" in panel
+    assert "0.8734" not in panel
+
+
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
 def test_etag_caching():
     target = get_first_target()
