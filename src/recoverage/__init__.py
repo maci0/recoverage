@@ -8,7 +8,7 @@ Module map (dependencies point one way, left to right):
   routes itself
 - ``potato``      — server-side HTML renderer (imports server)
 - ``ui``          — SPA/static routes (imports server; lazily potato)
-- ``api``         — /api/* routes (imports server; lazily ui/potato)
+- ``api``         — /api/* routes (imports server; lazily potato)
 - ``webapp``      — composition root: imports api+ui so ``app`` has every
   route; import this when you need a fully wired app
 - ``cli``         — Typer entry point (serves ``webapp.app``)
