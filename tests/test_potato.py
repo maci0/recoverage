@@ -22,7 +22,7 @@ from recoverage.potato import (
     _format_data_inspector,
     _format_hex_dump,
     _format_va,
-    _load_cells_cached,
+    _load_grid_cells,
     _panel_fn_source_text,
     _render_original_bytes,
     render_potato,
@@ -1157,7 +1157,7 @@ class TestSearchLimit:
 
 
 class TestCellsCacheInvalidation:
-    """The cells memo must invalidate on a WAL-committed rebuild.
+    """The grid memo must invalidate on a WAL-committed rebuild.
 
     Main-file mtime alone misses it (the writer can commit to coverage.db-wal
     without checkpointing), so the fingerprint uses the WAL-aware snapshot —
@@ -1193,14 +1193,34 @@ class TestCellsCacheInvalidation:
         potato.clear_cells_cache()
         c = self._cells_cursor()
         try:
-            _load_cells_cached(c, "T")
-            assert len(potato._POTATO_CELLS_CACHE) == 1
+            _load_grid_cells(c, "T", ".text", 64)
+            assert len(potato._GRID_CACHE) == 1
             # Simulate a rebuild that commits only to -wal: main file untouched.
             wal.write_bytes(b"y" * 64)
-            _load_cells_cached(c, "T")
+            _load_grid_cells(c, "T", ".text", 64)
             # Two keys prove fingerprint sensitivity: the WAL change produced
             # a cache miss (fresh query), not a stale hit.
-            assert len(potato._POTATO_CELLS_CACHE) == 2
+            assert len(potato._GRID_CACHE) == 2
+        finally:
+            potato.clear_cells_cache()
+            c.connection.close()
+
+    def test_clear_cells_cache_drops_entries(self) -> None:
+        import recoverage.potato as potato
+
+        potato._GRID_CACHE[("fp", "T", ".text", 64)] = ([], [])  # type: ignore[assignment]
+        potato.clear_cells_cache()
+        assert not potato._GRID_CACHE
+
+    def test_unknown_section_yields_empty_cells(self) -> None:
+        import recoverage.potato as potato
+
+        potato.clear_cells_cache()
+        c = self._cells_cursor()
+        try:
+            cells, merged = _load_grid_cells(c, "T", ".missing", 64)
+            assert cells == []
+            assert merged == []
         finally:
             potato.clear_cells_cache()
             c.connection.close()

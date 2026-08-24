@@ -941,12 +941,6 @@ def _load_section_data(
         sec["cells"] = []
         sections[sec["name"]] = sec
 
-    for sec_name, cells_json in _load_cells_cached(c, target):
-        if sec_name in sections:
-            # Keep the JSON string unparsed: only the request's resolved
-            # section ever renders cells, and json.loads of a multi-MB
-            # payload per non-rendered section is wasted CPU on every page.
-            sections[sec_name]["_cells_json"] = cells_json
     return sections, data
 
 
@@ -976,51 +970,98 @@ def _db_updated_label() -> str:
     return datetime.fromtimestamp(mtime_ns / 1e9, tz=UTC).strftime("%Y-%m-%d %H:%M UTC")
 
 
-def _section_cells(sec_data: dict[str, Any]) -> list[dict[str, Any]]:
-    """Parsed cells for *sec_data*, decoding its deferred ``_cells_json`` once."""
-    raw = sec_data.pop("_cells_json", None)
-    if raw is not None:
-        sec_data["cells"] = json.loads(raw)
-    return sec_data.get("cells", [])
-
-
-# Potato mode fetches ALL cells for the target (json_group_array over the
-# whole cells table) on every page render — each filter toggle or sort
-# re-fetches the multi-MB payload.  Memoize per DB fingerprint: a rebuild
-# changes the WAL-aware snapshot (mtime_ns/size incl. -wal — raw main-file
-# mtime missed WAL-committed rebuilds) so the cache self-invalidates, no
-# explicit clear needed.  The JSON string is immutable, so sharing it across
-# requests is safe (json.loads per request is cheap relative to the SQL
-# aggregation).
-_POTATO_CELLS_CACHE: dict[tuple[int, int, str], list[tuple[str, str]]] = {}
-_POTATO_CELLS_CACHE_LOCK = threading.Lock()
-# Upper bound on retained payloads across rebuilds (multi-MB per entry).
-_POTATO_CELLS_CACHE_MAX = 4
+# Potato mode re-derived the grid input on EVERY page render: json.loads of
+# the section's multi-MB cells payload plus a full-list merge pass (~120 ms
+# measured at 25k cells) dominated each request even though the SQL beneath
+# them was already memoized — every filter toggle, search, and pager click
+# re-paid it.  Cache the derived (parsed, merged) pair instead, keyed by the
+# WAL-aware snapshot + target + section + column count: a rebuild changes
+# the fingerprint and misses, so the cache self-invalidates with the same
+# contract as /data's memo.  Entries are read-only after publication (grid,
+# pager, and panel only read them), so sharing across requests/threads is
+# safe; each retained entry costs roughly what one render already allocated
+# transiently, and _GRID_CACHE_MAX bounds retention across rebuilds.
+_GRID_CACHE: dict[
+    tuple[int, int, str, str, int],
+    tuple[list[dict[str, Any]], list[dict[str, Any]]],
+] = {}
+_GRID_CACHE_LOCK = threading.Lock()
+_GRID_CACHE_MAX = 4
 
 
 def clear_cells_cache() -> None:
-    """Clear the memoized potato cells payloads (called on DB rebuild)."""
-    with _POTATO_CELLS_CACHE_LOCK:
-        _POTATO_CELLS_CACHE.clear()
+    """Clear the memoized potato grid payloads (called on DB rebuild)."""
+    with _GRID_CACHE_LOCK:
+        _GRID_CACHE.clear()
+    with _POTATO_STATS_CACHE_LOCK:
+        _POTATO_STATS_CACHE.clear()
 
 
-def _load_cells_cached(c: sqlite3.Cursor, target: str) -> list[tuple[str, str]]:
-    """Return [(section_name, cells_json), ...] for *target*, memoized."""
+def _load_grid_cells(
+    c: sqlite3.Cursor, target: str, section: str, grid_columns: int
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Return ``(cells, merged_cells)`` for *section*, memoized per DB snapshot.
+
+    Only the requested section's JSON is fetched and decoded — sibling
+    sections never render cells, so materializing their multi-MB payloads
+    was pure waste.
+    """
     snap = _snapshot_db_mtime()
-    fingerprint: tuple[int, int, str] | None = (*snap, target) if snap is not None else None
-    if fingerprint is not None:
-        with _POTATO_CELLS_CACHE_LOCK:
-            cached = _POTATO_CELLS_CACHE.get(fingerprint)
+    key = (*snap, target, section, int(grid_columns)) if snap is not None else None
+    if key is not None:
+        with _GRID_CACHE_LOCK:
+            cached = _GRID_CACHE.get(key)
         if cached is not None:
             return cached
 
-    rows = [(str(row[0]), str(row[1])) for row in _cells_json_rows(c, target)]
+    rows = _cells_json_rows(c, target, section)
+    # An unknown or cell-less section decodes to no cells (same empty shape
+    # the unfiltered loader produced by absence).
+    cells: list[dict[str, Any]] = json.loads(rows[0][1]) if rows else []
+    merged = _merge_cells(cells, grid_columns)
+    entry = (cells, merged)
 
-    if fingerprint is not None:
-        with _POTATO_CELLS_CACHE_LOCK:
-            _evict_oldest(_POTATO_CELLS_CACHE, _POTATO_CELLS_CACHE_MAX)
-            _POTATO_CELLS_CACHE[fingerprint] = rows
-    return rows
+    if key is not None:
+        with _GRID_CACHE_LOCK:
+            _evict_oldest(_GRID_CACHE, _GRID_CACHE_MAX)
+            _GRID_CACHE[key] = entry
+    return entry
+
+
+# Per-section bucket stats for the map header (see _section_stats_cached).
+_POTATO_STATS_CACHE: dict[tuple[int, int, str], dict[str, dict[str, Any]]] = {}
+_POTATO_STATS_CACHE_LOCK = threading.Lock()
+_POTATO_STATS_CACHE_MAX = 16
+
+
+def _section_stats_cached(
+    c: sqlite3.Cursor,
+    target: str,
+    sections: dict[str, dict[str, Any]],
+    data: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    """:func:`_compute_section_stats`, memoized per WAL-aware snapshot + target.
+
+    The section_cell_stats view re-aggregates the whole cells table on every
+    call (~12 ms measured at 25k cells) yet the result changes only when the
+    DB does; every pager/filter click re-paid it.  All three inputs derive
+    from the same DB state, so the snapshot alone keys the memo (same
+    self-invalidating contract as _GRID_CACHE).  Entries are small — one
+    dict per section — so the cap is generous.
+    """
+    snap = _snapshot_db_mtime()
+    key = (*snap, target) if snap is not None else None
+    if key is not None:
+        with _POTATO_STATS_CACHE_LOCK:
+            cached = _POTATO_STATS_CACHE.get(key)
+        if cached is not None:
+            return cached
+    stats = _compute_section_stats(c, target, sections, data)
+    if key is not None:
+        with _POTATO_STATS_CACHE_LOCK:
+            _evict_oldest(_POTATO_STATS_CACHE, _POTATO_STATS_CACHE_MAX)
+            _POTATO_STATS_CACHE[key] = stats
+    return stats
 
 
 def _compute_section_stats(
@@ -1332,6 +1373,15 @@ def _build_grid_html(
         )
     ]
 
+    # Link/attribute fragments that are identical for every cell on the page,
+    # hoisted out of the loop (quoting + escaping ~2k times per render was
+    # measurable).  The pieces reassemble to exactly what _build_url produces
+    # for each cell: ?target&section[&filter]&idx=N[&search].
+    link_prefix = f"?target={_url_quote(target)}&section={_url_quote(section)}" + (
+        f"&filter={_url_quote(','.join(sorted(active_filters)))}" if active_filters else ""
+    )
+    link_suffix = f"&search={_url_quote(search_query)}" if search_query else ""
+
     curr_col = 0
     # Sections without file backing (.bss) carry a NULL va (the api.py /asm
     # and /bytes endpoints document and guard this shape): fall back to 0 so
@@ -1355,9 +1405,7 @@ def _build_grid_html(
             selected = int(idx_str) == orig_idx
         except (ValueError, OverflowError):
             selected = False
-        link = _build_url(
-            target, section, active_filters or None, idx=orig_idx, search=search_query
-        )
+        link = f"{link_prefix}&idx={orig_idx}{link_suffix}"
         funcs = cell.get("functions", [])
         title = (
             f"{hex(sec_va + cell.get('start', 0))}..{hex(sec_va + cell.get('end', 0))} | {state}"
@@ -1367,17 +1415,17 @@ def _build_grid_html(
         # The alt text IS the link's accessible name here, so it carries the
         # same address range the title does.  With state alone, thousands of
         # links announced as "none" with no way to tell them apart (WCAG 2.4.4).
-        alt_text = title
+        escaped_title = _esc(title)
         w = cell_w * span
         img = (
-            f'<a href="{link}" title="{_esc(title)}">'
-            f'<img src="{TRANSPARENT_GIF}" width="{w}" height="{cell_h}" border="0" alt="{_esc(alt_text)}"></a>'
+            f'<a href="{link}" title="{escaped_title}">'
+            f'<img src="{TRANSPARENT_GIF}" width="{w}" height="{cell_h}" border="0" alt="{escaped_title}"></a>'
         )
 
         if selected:
             sel_img = (
-                f'<a href="{link}" title="{_esc(title)}">'
-                f'<img src="{TRANSPARENT_GIF}" width="{w - 2}" height="{cell_h - 2}" border="0" alt="{_esc(alt_text)}">'
+                f'<a href="{link}" title="{escaped_title}">'
+                f'<img src="{TRANSPARENT_GIF}" width="{w - 2}" height="{cell_h - 2}" border="0" alt="{escaped_title}">'
                 f"</a>"
             )
             grid_html_parts.append(
@@ -1558,9 +1606,7 @@ def _render_potato_inner(
         )
     else:
         # Only the grid view renders cells; the functions view must not pay
-        # the json.loads of a multi-MB payload per page render.
-        cells = _section_cells(sec_data)
-        per_section_stats = _compute_section_stats(c, target, sections, data)
+        # any cells work (fetch, decode, or merge).
         # A NULL columns value (schema-legal, like the NULL va/fileOffset a
         # .bss section carries) must fall back to 64, not TypeError on
         # None <= 0 — which escapes ui.handle_potato's except tuple as a
@@ -1568,7 +1614,8 @@ def _render_potato_inner(
         grid_columns = sec_data.get("columns") or 64
         if grid_columns <= 0:
             grid_columns = 64
-        merged_cells = _merge_cells(cells, grid_columns)
+        cells, merged_cells = _load_grid_cells(c, target, section, grid_columns)
+        per_section_stats = _section_stats_cached(c, target, sections, data)
         block_count = len(merged_cells)
 
         # Paginate: a real .text section is ~25k cells, which is ~7 MB of table
