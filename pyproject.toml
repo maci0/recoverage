@@ -16,6 +16,10 @@ keywords = ["reverse-engineering", "decompilation", "code-coverage", "binary-mat
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
+    # Pure-Python package; every dependency ships wheels for the three OSes
+    # the test matrix exercises (see .github/workflows/ci.yml) and README
+    # claims "any machine".
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
