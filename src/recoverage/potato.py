@@ -1465,7 +1465,10 @@ def _render_function_list(
     allowed_sort = {"name": "name", "size": "size", "status": "status", "va": "va"}
     order_by = allowed_sort.get(sort_key, "va")
 
-    where = ["target = ?"]
+    # Base filter: GLOBAL/DATA marker rows live in the functions table but are
+    # data markers, not functions — same exclusion as the API list endpoint
+    # and _section_stats, so both surfaces list the same rows.
+    where = ["target = ?", "markerType NOT IN ('GLOBAL','DATA')"]
     params: list[Any] = [target]
     if status_filter:
         where.append("status = ?")
@@ -1860,7 +1863,17 @@ def _panel_fn_source_text(data: dict[str, Any], target: str, fn_data: dict[str, 
     files = fn_data.get("files", [])
     if not files:
         return None
-    source_root = data.get("paths", {}).get("sourceRoot", f"/src/{target.lower()}")
+    # A non-object paths value (valid JSON of another type in a foreign DB)
+    # would crash .get() below with AttributeError — which escapes
+    # handle_potato's except tuple as a raw 500.  Same guard as the summary
+    # reads in _compute_section_stats/_build_progress.
+    paths = data.get("paths")
+    default_source_root = f"/src/{target.lower()}"
+    source_root = (
+        paths.get("sourceRoot", default_source_root)
+        if isinstance(paths, dict)
+        else default_source_root
+    )
     base = (Path.cwd().resolve() / source_root.lstrip("/")).resolve()
     c_path = (base / files[0]).resolve()
     if not c_path.is_relative_to(base):
@@ -1931,7 +1944,10 @@ def _panel_function_detail(
 
     def _fn_val(k: str, v: Any, val: str) -> str:
         if k == "vaStart" and v:
-            va_link = _build_url(target, ".text")
+            # Same jump contract as the asm address links: carry the address
+            # as ?search= so the grid highlights this function's chunk instead
+            # of merely switching to .text.
+            va_link = _build_url(target, ".text", search=str(v))
             return f'<a href="{va_link}"><font color="{ACCENT_COLOR}">{val}</font></a>'
         # functions.similarity is stored as a 0-1 fraction (schema CHECK); the
         # SPA renders it scaled by 100 with a "%" (app.js), so Potato Mode must
@@ -2050,11 +2066,25 @@ def _render_panel(
     ctx["fn_name"] = fn_name
     if not _panel_function_detail(ctx, c, target, section, data, fn_name):
         # ── Try globals table ────────────────────────────────────────
-        c.execute(
-            "SELECT " + _GLOBAL_JSON_SQL + " FROM globals WHERE target=? AND name=?",
-            (target, fn_name),
-        )
-        gl_row = c.fetchone()
+        # Same resolution order as GET /functions/<va>: cell entries may name
+        # a global by its VA string (the spelling _panel_function_detail
+        # already resolves against functions), so try VA candidates first and
+        # fall back to the exact-name lookup for legacy name-form cells.
+        gl_row = None
+        for cand in _parse_va_candidates(fn_name):
+            c.execute(
+                "SELECT " + _GLOBAL_JSON_SQL + " FROM globals WHERE target=? AND va=?",
+                (target, cand),
+            )
+            gl_row = c.fetchone()
+            if gl_row:
+                break
+        if gl_row is None:
+            c.execute(
+                "SELECT " + _GLOBAL_JSON_SQL + " FROM globals WHERE target=? AND name=?",
+                (target, fn_name),
+            )
+            gl_row = c.fetchone()
         if gl_row:
             gl_data = json.loads(gl_row[0])
             ctx["gl_data"] = gl_data
