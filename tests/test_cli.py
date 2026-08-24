@@ -179,6 +179,37 @@ class TestCheckCommand:
         assert by_section[".text"]["coverage_pct"] == 87.5
         assert by_section[".data"]["status"] == "PASS"
 
+    def test_check_gate_compares_unrounded_ratio(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The gate decides on the RAW byte ratio, not the 2dp-rounded
+        coverage_pct: 999997/1000000 bytes is truly 99.9997% covered even
+        though _section_stats stores it as 100.0, so --min-coverage 100 must
+        FAIL — and a ratio exactly at the threshold still PASSes."""
+        db = tmp_path / "cov.db"
+        _make_section_db(
+            db,
+            [".text"],
+            [(".text", 0, 999_997, "exact"), (".text", 999_997, 1_000_000, "none")],
+        )
+        monkeypatch.setattr("recoverage.cli._db_path", lambda: db)
+        result = runner.invoke(app, ["check", "--min-coverage", "100", "--json"])
+        assert result.exit_code == 1
+        payload = json.loads(result.output)
+        assert payload["passed"] is False
+
+        exact_db = tmp_path / "exact.db"
+        _make_section_db(
+            exact_db,
+            [".text"],
+            [(".text", 0, 875, "exact"), (".text", 875, 1_000, "none")],
+        )
+        monkeypatch.setattr("recoverage.cli._db_path", lambda: exact_db)
+        result = runner.invoke(app, ["check", "--min-coverage", "87.5", "--json"])
+        assert result.exit_code == 0
+        payload = json.loads(result.output)
+        assert payload["passed"] is True
+
     def test_check_out_of_range_json_emits_error_object(self) -> None:
         """--json with an out-of-range threshold must still emit a parseable
         JSON error (not the human-readable stderr path) before exiting 1."""

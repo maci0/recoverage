@@ -627,6 +627,13 @@ def _section_verdict(
 ) -> tuple[str, dict[str, Any], str]:
     """Classify one section against the gate: (status, JSON extras, human text).
 
+    *pct* is the UNROUNDED coverage percentage — callers recompute it from
+    the raw covered/total byte counts, because the gate must decide on the
+    true ratio: comparing the 2dp display value _section_stats stores lets
+    99.9997% (stored as 100.0) pass a --min-coverage 100 gate.  Display and
+    the JSON payload stay at 2dp so a verdict never quotes numbers that
+    disagree with what /stats serves.
+
     Sections whose cells are all "none" carry no coverage signal — the grid
     only records match states in .text — so they must not fail the gate.
     An explicitly requested untracked section still fails: the user asked to
@@ -644,8 +651,9 @@ def _section_verdict(
             {"reason": "no tracked cells — coverage not recorded"},
             "has no tracked cells — coverage not recorded",
         )
-    # Display at the same precision used for the comparison — a gate failing
-    # on raw 99.49% must not print "99.5% < 99.5%".
+    # Compare exact, display rounded (see docstring): a gate failing on raw
+    # 99.4937% prints "99.49% < 99.50%", and a threshold the true ratio did
+    # not reach can never be crossed by display rounding.
     if pct < min_coverage:
         return (
             "FAIL",
@@ -721,11 +729,20 @@ def check(
 
             for sec_name, sec in sorted(sections_to_check.items()):
                 checked += 1
-                untracked = sec.get("covered_bytes", 0) <= 0
+                covered = sec.get("covered_bytes") or 0
+                untracked = covered <= 0
                 if not untracked:
                     compared += 1
+                # Gate on the UNROUNDED byte ratio (see _section_verdict):
+                # sec["coverage_pct"] is pre-rounded to 2dp for display.
+                total_bytes = sec.get("total_bytes") or 0
+                pct = (
+                    covered / total_bytes * 100
+                    if total_bytes
+                    else float(sec.get("coverage_pct") or 0.0)
+                )
                 status, extra, human = _section_verdict(
-                    sec["coverage_pct"], untracked, bool(section), min_coverage
+                    pct, untracked, bool(section), min_coverage
                 )
                 if status == "FAIL":
                     failed = True
