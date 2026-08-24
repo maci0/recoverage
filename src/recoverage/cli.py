@@ -766,12 +766,12 @@ def check(
                     compared += 1
                 # Gate on the UNROUNDED byte ratio (see _section_verdict):
                 # sec["coverage_pct"] is pre-rounded to 2dp for display.
+                # total_bytes == 0 implies covered == 0 (cell spans are
+                # non-negative, so covered <= total), i.e. an untracked
+                # section whose verdict never reads pct, so no fallback
+                # value can ever reach a comparison here.
                 total_bytes = sec.get("total_bytes") or 0
-                pct = (
-                    covered / total_bytes * 100
-                    if total_bytes
-                    else float(sec.get("coverage_pct") or 0.0)
-                )
+                pct = covered / total_bytes * 100 if total_bytes else 0.0
                 status, extra, human = _section_verdict(pct, untracked, bool(section), min_coverage)
                 if status == "FAIL":
                     failed = True
