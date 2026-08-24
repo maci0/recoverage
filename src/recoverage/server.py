@@ -10,6 +10,7 @@ Reads the coverage database from the path resolved by
 
 from __future__ import annotations
 
+import contextlib
 import functools
 import gzip
 import hashlib
@@ -714,6 +715,32 @@ def _escape_like(search: str) -> str:
 VA_MAX = (1 << 63) - 1
 
 
+def _parse_va_candidates(raw_va: str) -> list[int]:
+    """Parse *raw_va* into deduped candidate lookup ints, order preserved.
+
+    ONE parser for every surface that resolves a VA spelling (the
+    /functions/<va> and /asm routes, Potato's detail panel).  Hex
+    spellings: 0x-prefixed or containing a-f (rebrew's parse_va convention,
+    bare hex valid).  All-digit strings: DECIMAL first (the /functions list
+    emits va as a decimal int — a consumer taking that value straight into
+    this route must not miss), with a bare-hex fallback for legacy callers.
+    Candidates beyond SQLite's signed-64-bit INTEGER range are dropped:
+    passing one raises OverflowError at execute time instead of a clean
+    miss.  Negatives stay candidates so section-bounds classification can
+    report "before section start" (matching the historical va=-0x10
+    contract).
+    """
+    lowered = raw_va.lower()
+    bases = (16,) if lowered.startswith("0x") or any(c in "abcdef" for c in lowered) else (10, 16)
+    candidates: list[int] = []
+    for base in bases:
+        with contextlib.suppress(ValueError):
+            parsed = int(raw_va, base)
+            if parsed <= VA_MAX and parsed not in candidates:
+                candidates.append(parsed)
+    return candidates
+
+
 # ── SQL fragments ──────────────────────────────────────────────────
 
 _FN_JSON_SQL = (
@@ -1062,6 +1089,7 @@ def _json_ok_precompressed(body: bytes, encoding: str, **headers: str) -> bytes:
 # `code` (stable machine-readable string), `detail` (extra context, often "").
 _STATUS_ERROR_CODES: dict[int, str] = {
     400: "bad_request",
+    401: "unauthorized",
     403: "forbidden",
     404: "not_found",
     413: "payload_too_large",
@@ -1074,13 +1102,15 @@ _STATUS_ERROR_CODES: dict[int, str] = {
 }
 
 
-def _json_err(status: int, data: dict[str, Any]) -> Any:
+def _json_err(status: int, data: dict[str, Any], **headers: str) -> Any:
     """Return a JSON error response.
 
     Body is always ``{"error": <human message>, "code": <machine code>,
     "detail": <context>}``.  ``code`` defaults to a status-based mapping
     (call sites may override it) and any extra keys in ``data`` (e.g.
-    ``retry_after``) are preserved alongside the standard trio.
+    ``retry_after``) are preserved alongside the standard trio.  Extra
+    response headers (e.g. ``Retry_After=...``, underscores become dashes)
+    ride along for statuses that carry them (429).
     """
     body_data: dict[str, Any] = {
         "error": data.get("error", "error"),
@@ -1102,6 +1132,8 @@ def _json_err(status: int, data: dict[str, Any]) -> Any:
     # Errors must never be cached by intermediaries: a proxy could serve a
     # stale 503 after the DB recovers.
     resp.set_header("Cache-Control", "no-store")
+    for k, v in headers.items():
+        resp.set_header(k.replace("_", "-"), v)
     return resp
 
 
@@ -1202,15 +1234,12 @@ def _require_auth() -> None:
     # concurrent guesses from all passing the cap before any of them
     # records.  A verified token refunds everyone via the clear below.
     if _auth_throttle(now, reserve_slot=True):
-        raise HTTPResponse(
-            status=429,
-            body=b'{"error": "rate limited", "code": "rate_limited", '
-            b'"detail": "too many failed token attempts; retry later"}',
-            content_type="application/json",
-            headers={
-                "Cache-Control": "no-store",
-                "Retry-After": str(int(_AUTH_FAIL_WINDOW_SECONDS)),
-            },
+        # Same JSON error contract as every endpoint (code "rate_limited");
+        # Retry-After tells the client when the failure window frees up.
+        raise _json_err(
+            429,
+            {"error": "rate limited", "detail": "too many failed token attempts; retry later"},
+            Retry_After=str(int(_AUTH_FAIL_WINDOW_SECONDS)),
         )
     provided = request.headers.get("Authorization", "")
     if provided.startswith("Bearer "):
@@ -1245,13 +1274,9 @@ def _require_auth() -> None:
             body=_UNAUTHORIZED_HTML,
             content_type="text/html; charset=utf-8",
         )
-    raise HTTPResponse(
-        status=401,
-        body=(
-            b'{"error": "unauthorized", "code": "unauthorized", '
-            b'"detail": "missing or invalid token"}'
-        ),
-        content_type="application/json",
+    raise _json_err(
+        401,
+        {"error": "unauthorized", "detail": "missing or invalid token"},
     )
 
 

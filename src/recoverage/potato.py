@@ -34,7 +34,6 @@ from recoverage.server import (
     _FN_JSON_SQL,
     _GLOBAL_JSON_SQL,
     HAS_CAPSTONE,
-    VA_MAX,
     _cells_json_rows,
     _db_path,
     _escape_like,
@@ -42,6 +41,7 @@ from recoverage.server import (
     _format_hex_dump,
     _load_dll,
     _load_metadata,
+    _parse_va_candidates,
     _snapshot_db_mtime,
     get_disassembly,
     resolve_targets,
@@ -305,7 +305,7 @@ def _detail_rows(
             val = _esc(_format_va(v))
         else:
             sv = str(v)
-            val = _esc(wrap_text(sv, 40)) if len(sv) > 40 else _esc(sv)
+            val = _esc(_wrap_text(sv, 40)) if len(sv) > 40 else _esc(sv)
         if val_fn:
             val = val_fn(k, v, val)
         rows.append(
@@ -525,7 +525,7 @@ def _highlight_hex(text: str) -> str:
 # --- Data Helpers ---
 
 
-def wrap_text(text: str, width: int = 45) -> str:
+def _wrap_text(text: str, width: int = 45) -> str:
     """Hard-wrap text to a specific width for HTML display."""
     lines: list[str] = []
     for line in text.splitlines():
@@ -1382,6 +1382,13 @@ def _build_grid_html(
     )
     link_suffix = f"&search={_url_quote(search_query)}" if search_query else ""
 
+    # Selection target parsed ONCE for the whole page: comparing each cell's
+    # orig_idx against it replaces a per-cell int() (up to ~2k parses/render).
+    try:
+        sel_idx: int | None = int(idx_str)
+    except (ValueError, OverflowError):
+        sel_idx = None
+
     curr_col = 0
     # Sections without file backing (.bss) carry a NULL va (the api.py /asm
     # and /bytes endpoints document and guard this shape): fall back to 0 so
@@ -1401,10 +1408,7 @@ def _build_grid_html(
             search_query and not any(fn in search_matched_fns for fn in cell.get("functions", []))
         )
         bgcolor = BG_COLOR if dimmed else COLORS.get(state, COLORS["none"])
-        try:
-            selected = int(idx_str) == orig_idx
-        except (ValueError, OverflowError):
-            selected = False
+        selected = orig_idx == sel_idx
         link = f"{link_prefix}&idx={orig_idx}{link_suffix}"
         funcs = cell.get("functions", [])
         title = (
@@ -1553,6 +1557,71 @@ def _section_tab_data(
     ]
 
 
+def _render_grid_view(
+    c: sqlite3.Cursor,
+    target: str,
+    section: str,
+    sec_data: dict[str, Any],
+    sections: dict[str, dict[str, Any]],
+    data: dict[str, Any],
+    active_filters: set[str],
+    idx_str: str,
+    search_query: str,
+    search_matched_fns: set[str],
+    page_str: str,
+) -> tuple[str, int, str, dict[str, Any]]:
+    """Assemble the map view: (grid_html, block_count, panel_html, sec_stats).
+
+    Linear pipeline over the section's cells — fetch, merge, paginate, render
+    grid + detail panel.  Only the grid view calls this, so the functions view
+    never pays any cells work (fetch, decode, or merge).
+    """
+    # A NULL columns value (schema-legal, like the NULL va/fileOffset a .bss
+    # section carries) must fall back to 64, not TypeError on None <= 0 —
+    # which escapes ui.handle_potato's except tuple as a raw HTML 500.
+    grid_columns = sec_data.get("columns") or 64
+    if grid_columns <= 0:
+        grid_columns = 64
+    cells, merged_cells = _load_grid_cells(c, target, section, grid_columns)
+    per_section_stats = _section_stats_cached(c, target, sections, data)
+    block_count = len(merged_cells)
+
+    # Paginate: a real .text section is ~25k cells, which is ~7 MB of table
+    # markup and ~74k DOM nodes — punishing on exactly the weak clients this
+    # mode exists for.  One page is _GRID_PAGE_ROWS rows of the grid.
+    page_cells = _GRID_PAGE_ROWS * grid_columns
+    page_count = max(1, -(-block_count // page_cells))
+    page = _grid_page(page_str, idx_str, merged_cells, page_cells, page_count)
+    page_slice = merged_cells[(page - 1) * page_cells : page * page_cells]
+
+    grid_html = _build_grid_html(
+        page_slice,
+        sec_data,
+        grid_columns,
+        active_filters,
+        search_query,
+        search_matched_fns,
+        idx_str,
+        target,
+        section,
+    )
+    if page_count > 1:
+        grid_html += _pager_html(target, section, active_filters, search_query, page, page_count)
+    sec_stats = per_section_stats.get(section, {})
+    panel_html = _render_panel(
+        c,
+        cells,
+        idx_str,
+        target,
+        section,
+        data,
+        sec_data,
+        active_filters,
+        search_query,
+    )
+    return grid_html, block_count, panel_html, sec_stats
+
+
 def _render_potato_inner(
     c: sqlite3.Cursor,
     target: str,
@@ -1588,7 +1657,6 @@ def _render_potato_inner(
         target, section, sections, active_filters or None, search_query
     )
 
-    # ── Grid (with cell merging) ─────────────────────────────────
     # Defaults for whichever view the request selects.
     grid_html = ""
     block_count = 0
@@ -1605,53 +1673,18 @@ def _render_potato_inner(
             status_filter,
         )
     else:
-        # Only the grid view renders cells; the functions view must not pay
-        # any cells work (fetch, decode, or merge).
-        # A NULL columns value (schema-legal, like the NULL va/fileOffset a
-        # .bss section carries) must fall back to 64, not TypeError on
-        # None <= 0 — which escapes ui.handle_potato's except tuple as a
-        # raw HTML 500.
-        grid_columns = sec_data.get("columns") or 64
-        if grid_columns <= 0:
-            grid_columns = 64
-        cells, merged_cells = _load_grid_cells(c, target, section, grid_columns)
-        per_section_stats = _section_stats_cached(c, target, sections, data)
-        block_count = len(merged_cells)
-
-        # Paginate: a real .text section is ~25k cells, which is ~7 MB of table
-        # markup and ~74k DOM nodes — punishing on exactly the weak clients this
-        # mode exists for.  One page is _GRID_PAGE_ROWS rows of the grid.
-        page_cells = _GRID_PAGE_ROWS * grid_columns
-        page_count = max(1, -(-block_count // page_cells))
-        page = _grid_page(page_str, idx_str, merged_cells, page_cells, page_count)
-        page_slice = merged_cells[(page - 1) * page_cells : page * page_cells]
-
-        grid_html = _build_grid_html(
-            page_slice,
+        grid_html, block_count, panel_html, sec_stats = _render_grid_view(
+            c,
+            target,
+            section,
             sec_data,
-            grid_columns,
+            sections,
+            data,
             active_filters,
+            idx_str,
             search_query,
             search_matched_fns,
-            idx_str,
-            target,
-            section,
-        )
-        if page_count > 1:
-            grid_html += _pager_html(
-                target, section, active_filters, search_query, page, page_count
-            )
-        sec_stats = per_section_stats.get(section, {})
-        panel_html = _render_panel(
-            c,
-            cells,
-            idx_str,
-            target,
-            section,
-            data,
-            sec_data,
-            active_filters,
-            search_query,
+            page_str,
         )
 
     clear_search_url = _build_url(target, section, active_filters or None)
@@ -1758,7 +1791,7 @@ def _render_original_bytes(raw_bytes: bytes, file_offset: int) -> str:
     empty-cell and function-detail panel paths so both stay in one format).
 
     The dump must NOT be re-wrapped: _format_hex_dump emits fixed-width
-    16-byte lines (~78 chars), and wrap_text(…, 72) split each one mid-row,
+    16-byte lines (~78 chars), and _wrap_text(…, 72) split each one mid-row,
     orphaning the |ascii| column on its own line and defeating
     _highlight_hex's line-shape detection (offset/hex/ASCII colouring).
     """
@@ -1854,22 +1887,21 @@ def _panel_function_detail(
     caller can try the globals table.
     """
     # Cell function entries are VA strings ("0x10001000"), matching the SPA's
-    # /functions/<va> route — parse hex and look up by va; fall back to name
-    # for legacy/name-form cells.  Out-of-range ints are treated as
-    # non-numeric: SQLite INTEGER tops out at signed 64-bit, and passing a
-    # bigger Python int raises OverflowError at execute time.
-    try:
-        fn_va = int(fn_name, 0)
-        is_numeric = 0 <= fn_va <= VA_MAX
-    except ValueError:
-        is_numeric = False
+    # /functions/<va> route — resolve via the shared spelling parser (see
+    # server._parse_va_candidates: 0x-hex, bare hex, or decimal) and look up
+    # by va; fall back to name for legacy/name-form cells.
+    va_candidates = _parse_va_candidates(fn_name)
 
     fn_sql = "SELECT " + _FN_JSON_SQL + " FROM functions WHERE target=? AND "
-    if is_numeric:
-        c.execute(fn_sql + "va=?", (target, fn_va))
-    else:
+    fn_row = None
+    for cand in va_candidates:
+        c.execute(fn_sql + "va=?", (target, cand))
+        fn_row = c.fetchone()
+        if fn_row:
+            break
+    if fn_row is None and not va_candidates:
         c.execute(fn_sql + "name=?", (target, fn_name))
-    fn_row = c.fetchone()
+        fn_row = c.fetchone()
     if not fn_row:
         return False
 
@@ -1928,7 +1960,7 @@ def _panel_function_detail(
             if asm_text:
                 ctx["asm_heading"] = _section_heading("ASM", "#ef4444", "Assembly")
                 ctx["asm_html"] = _code_block_raw(
-                    _highlight_asm(wrap_text(asm_text, 55), target=target)
+                    _highlight_asm(_wrap_text(asm_text, 55), target=target)
                 )
 
     # Original Bytes (+ data inspector outside .text, where bytes are data)

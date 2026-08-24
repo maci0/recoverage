@@ -325,7 +325,7 @@ def serve(
         help="Origin URL allowed to read the API cross-origin (repeatable, "
         "e.g. http://localhost:5173)",
     ),
-    token: str = typer.Option(
+    token: str | None = typer.Option(
         None,
         "--token",
         help="Require this bearer token for every request (Authorization: Bearer <token>, "
@@ -417,9 +417,7 @@ def serve(
 
     root = _project_dir()
     assets = _assets_dir()
-    listen_url = (
-        f"http://{display_host}:{port}" if bind != "127.0.0.1" else f"http://127.0.0.1:{port}"
-    )
+    listen_url = f"http://{display_host}:{port}"
     # The browser opens against the bound loopback interface: --bind ::1
     # listens on IPv6 loopback only, so the hard-coded http://127.0.0.1 (IPv4)
     # would open a tab that refuses to connect.  Remote binds keep 127.0.0.1 —

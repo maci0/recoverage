@@ -45,6 +45,7 @@ from recoverage.server import (
     _load_dll,
     _load_metadata,
     _open_db,
+    _parse_va_candidates,
     _peer_is_loopback,
     _project_dir,
     _snapshot_db_mtime,
@@ -279,31 +280,6 @@ def _target_cursor(target: str) -> Generator[sqlite3.Cursor]:
         yield c
     finally:
         conn.close()
-
-
-def _parse_va_candidates(raw_va: str) -> list[int]:
-    """Parse *raw_va* into deduped candidate lookup ints, order preserved.
-
-    ONE parser for every endpoint that resolves a ?va= spelling.  Hex
-    spellings: 0x-prefixed or containing a-f (rebrew's parse_va convention,
-    bare hex valid).  All-digit strings: DECIMAL first (the /functions list
-    emits va as a decimal int — a consumer taking that value straight into
-    this route must not miss), with a bare-hex fallback for legacy callers.
-    Candidates beyond SQLite's signed-64-bit INTEGER range are dropped:
-    passing one raises OverflowError at execute time instead of a clean
-    miss.  Negatives stay candidates so section-bounds classification can
-    report "before section start" (matching the historical va=-0x10
-    contract).
-    """
-    lowered = raw_va.lower()
-    bases = (16,) if lowered.startswith("0x") or any(c in "abcdef" for c in lowered) else (10, 16)
-    candidates: list[int] = []
-    for base in bases:
-        with contextlib.suppress(ValueError):
-            parsed = int(raw_va, base)
-            if parsed <= VA_MAX and parsed not in candidates:
-                candidates.append(parsed)
-    return candidates
 
 
 def _file_backed_section(
@@ -1207,7 +1183,7 @@ def handle_api_bytes(target: str, section: str) -> bytes | Any:
             return _json_err(400, {"error": "offset beyond section bounds"})
         target_data = _load_dll(target)
         if target_data is None:
-            return _dll_not_found(target, "DLL not found for target")
+            return _dll_not_found(target, "DLL not found")
 
         file_start = sec["fileOffset"] + req_offset
         if file_start < 0:

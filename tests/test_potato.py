@@ -25,8 +25,8 @@ from recoverage.potato import (
     _load_grid_cells,
     _panel_fn_source_text,
     _render_original_bytes,
+    _wrap_text,
     render_potato,
-    wrap_text,
 )
 from recoverage.server import _db_path as get_db_path
 
@@ -299,9 +299,9 @@ def test_esc():
 
 
 def test_wrap_text():
-    assert wrap_text("hello", 10) == "hello"
-    assert "\n" in wrap_text("a" * 100, 45)
-    assert wrap_text("line1\nline2", 45) == "line1\nline2"
+    assert _wrap_text("hello", 10) == "hello"
+    assert "\n" in _wrap_text("a" * 100, 45)
+    assert _wrap_text("line1\nline2", 45) == "line1\nline2"
 
 
 def test_format_hex_dump():
