@@ -80,7 +80,10 @@ async function fetchArrayBufferSafe(url) {
 
 const KNOWN_SCHEMA = new Set(["3", "4"]);
 
-const VALID_STATES = new Set(["exact", "reloc", "near_match", "stub", "padding", "data", "thunk", "none"]);
+// All v4 cell states (rebrew DB_FORMAT.md): the five filterable ones, data/
+// thunk (render with the undocumented gray here), proven and size_mismatch
+// (newer v4 states), plus near_matching (legacy spelling of near_match).
+const VALID_STATES = new Set(["exact", "reloc", "near_match", "near_matching", "stub", "padding", "data", "thunk", "proven", "size_mismatch", "none"]);
 
 // Section name -> grid element id.  Every dot goes, so `.rsrc.1` and `.rsrc1`
 // cannot collide the way replacing only the first one allowed.

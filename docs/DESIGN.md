@@ -60,7 +60,9 @@ The UI is broken down into functional VanJS components in `app.js`:
 * Cells are colored based on their status:
   * **Exact** (green) — byte-for-byte match
   * **Reloc** (blue/teal) — match after masking relocations
-  * **Near-match** (yellow) — near-miss with structural differences (DB state `near_match`)
+  * **Near-match** (yellow) — near-miss with structural differences (DB state `near_match`; legacy DBs may spell it `near_matching`, which renders identically)
+  * **Proven** (bold cyan) — post-verify semantic-equivalence promotion (`proven`)
+  * **Size mismatch** (yellow) — compiled size differs from the original (`size_mismatch`)
   * **Stub** (red) — far off or placeholder
   * **Padding** (silver) — alignment padding
   * **None** (gray) — undocumented block
@@ -110,6 +112,7 @@ The UI is broken down into functional VanJS components in `app.js`:
   * **Exact**: Green (`rgba(16, 185, 129, 0.75)`)
   * **Reloc**: Blue/Teal (`rgba(2, 132, 199, 0.65)`)
   * **Near-match**: Yellow/Amber (`rgba(255, 200, 0, 0.65)`)
+  * **Proven**: Bold Cyan (`rgba(6, 182, 212, 0.8)`)
   * **Stub**: Red (`rgba(255, 0, 0, 0.65)`)
   * **Padding**: Silver (`rgba(200, 200, 220, 0.55)`)
 * **Transitions**: Smooth `0.3s ease` transitions on background colors, borders, and opacities ensure fluid theme switching and filter toggling.

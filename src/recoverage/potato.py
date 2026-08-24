@@ -54,6 +54,12 @@ COLORS = {
     "exact": "#10b981",
     "reloc": "#0ea5e9",
     "near_match": "#f59e0b",
+    # Legacy spelling of near_match (rebrew DB_FORMAT.md); same yellow.
+    "near_matching": "#f59e0b",
+    # Post-verify semantic promotion — bold cyan per rebrew DB_FORMAT.md.
+    "proven": "#06b6d4",
+    # SIZE_MISMATCH state — yellow per rebrew DB_FORMAT.md.
+    "size_mismatch": "#f59e0b",
     "stub": "#ef4444",
     "padding": "#C0C0D4",
     "data": "#8b5cf6",

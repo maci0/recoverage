@@ -1005,6 +1005,46 @@ class TestMergeCellsInvariant:
         assert len(merged) == 2  # "none" state cells are never merged
 
 
+class TestV4StateColors:
+    """Every v4 cell state renders with its DB_FORMAT.md color, never the
+    undocumented gray: proven (post-verify promotion) and legacy
+    near_matching / size_mismatch previously fell through to COLORS["none"],
+    hiding verified work as holes in the map while /stats counted them."""
+
+    @staticmethod
+    def _cell_bgcolor(state: str) -> str:
+        from recoverage.potato import _build_grid_html
+
+        html = _build_grid_html(
+            [{"state": state, "span": 1, "functions": ["f"], "start": 0, "end": 1}],
+            {},
+            64,
+            set(),
+            "",
+            set(),
+            "",
+            "t",
+            ".text",
+        )
+        # Anchor on this cell's own alt text: the sizing row in front of the
+        # data row also carries bgcolor attributes.
+        anchor = html.index(f'0x0..0x1 | {state}')
+        marker = html.rindex('bgcolor="', 0, anchor) + len('bgcolor="')
+        return html[marker : html.index('"', marker)]
+
+    def test_proven_renders_cyan(self) -> None:
+        assert self._cell_bgcolor("proven") == "#06b6d4"
+
+    def test_legacy_near_matching_renders_yellow(self) -> None:
+        assert self._cell_bgcolor("near_matching") == "#f59e0b"
+
+    def test_size_mismatch_renders_yellow(self) -> None:
+        assert self._cell_bgcolor("size_mismatch") == "#f59e0b"
+
+    def test_unknown_state_still_falls_back_to_none_gray(self) -> None:
+        assert self._cell_bgcolor("some_future_state") == "#3F4958"
+
+
 class TestGridColumnsValidation:
     """grid_columns <= 0 now raises ValueError (not assert)."""
 
