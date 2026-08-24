@@ -91,3 +91,21 @@ jobs:
         run: uv run python tools/smoke.py
       - name: Negative smoke (corrupt DB must degrade, not lie)
         run: uv run python tools/smoke.py --expect-failure
+
+  sbom:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          enable-cache: true
+      # Hash-pinned inventory of the full resolved tree (runtime deps plus
+      # every extra) so consumers and vuln scanners can see exactly what a
+      # given build was made from. The npm devDependencies never ship with
+      # the package, so they are not part of this inventory.
+      - name: Export hashed dependency inventory
+        run: uv export --frozen --all-extras --format requirements-txt --hashes --output-file recoverage-python-sbom.txt
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: recoverage-python-sbom
+          path: recoverage-python-sbom.txt

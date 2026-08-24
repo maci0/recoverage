@@ -271,6 +271,26 @@ recoverage/
 
 ---
 
+## Vendored third-party assets
+
+The browser libraries under `src/recoverage/assets/` are vendored so the
+dashboard works air-gapped (see `docs/DESIGN.md`); nothing is fetched from a
+CDN at runtime. Licenses and versions are recorded here because the minified
+blobs themselves carry little provenance:
+
+| File | Upstream | Version | License |
+|------|----------|---------|---------|
+| `van.min.js` | [VanJS](https://github.com/vanjs-org/van) core, classic-script build (`window.van`) | not embedded in the blob | MIT ([upstream license](https://github.com/vanjs-org/van/blob/main/LICENSE)) |
+| `hljs.min.js` | [Highlight.js](https://highlightjs.org) core | 11.11.1 (in-file banner) | BSD-3-Clause |
+| `hljs-c.min.js` | Highlight.js `c` grammar | compiled for 11.11.1 | BSD-3-Clause |
+| `hljs-x86asm.min.js` | Highlight.js `x86asm` grammar | compiled for 11.11.1 | BSD-3-Clause |
+
+`hljs.css` is a first-party theme (not upstream Highlight.js CSS). When
+re-vendoring any of these files, keep the upstream license banner in the
+minified output so this table stays verifiable against the blobs.
+
+---
+
 ## License
 
 MIT
