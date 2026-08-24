@@ -80,7 +80,7 @@ graph TD
 > **As an RE Dev**, I want to click a cell in the grid and see the function's metadata, C source, disassembly, and hex dump side-by-side so that I can evaluate match quality without leaving the dashboard.
 
 ### Acceptance Criteria
-- Side panel shows: VA, size, offset, symbol, status, origin, cflags, marker type
+- Side panel shows: VA, size, offset, symbol, status, module, cflags, marker type
 - C source fetched from project files and syntax-highlighted
 - ASM generated on-demand via Capstone (`/api/targets/<target>/asm`)
 - Original bytes formatted as hex dump (16 bytes/line)

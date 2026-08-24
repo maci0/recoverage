@@ -75,7 +75,7 @@ The UI is broken down into functional VanJS components in `app.js`:
 * **Sticky Header**: The panel header stays visible while scrolling through long code blocks, on an opaque panel background (no backdrop blur: it is sticky, so a blur would repaint on every scroll frame over a grid of thousands of cells).  It sticks at `top: var(--topbar-h)`, a custom property app.js keeps in sync with the measured topbar height, and `.panel` uses `overflow: clip` rather than `hidden` so the sticky offset resolves against the viewport instead of a box that never scrolls.
 * **Metadata Grid**: Displays key-value pairs in an auto-filling grid with tightened vertical spacing for a cohesive look:
   * VA (Clickable link that jumps to the corresponding address in the grid)
-  * Size, Offset, Symbol, Status, Origin, Compiler flags, Marker type
+  * Size, Offset, Symbol, Status, Module, Compiler flags, Marker type
   * Ghidra/radare2 names (if different from primary name)
   * SHA256 hash (for matched functions)
   * Type badges: "IAT thunk (not reversible)", "Exported function"
