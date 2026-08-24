@@ -22,6 +22,7 @@ import logging
 import sqlite3
 import threading
 import time
+import tomllib
 from collections import deque
 from collections.abc import Sequence
 from pathlib import Path
@@ -422,8 +423,6 @@ def _get_targets_config() -> dict[str, Any]:
         root = _project_dir()
         targets_info: dict[str, Any] = {}
         try:
-            import tomllib
-
             toml_path = root / "rebrew-project.toml"
             if toml_path.exists():
                 text = toml_path.read_text(encoding="utf-8")
@@ -440,7 +439,7 @@ def _get_targets_config() -> dict[str, Any]:
                         if isinstance(b, str):
                             binary = b
                     targets_info[tid] = {"filename": binary}
-        except (ImportError, OSError, ValueError) as exc:
+        except (OSError, ValueError) as exc:
             _log.warning("Failed to load rebrew-project.toml: %s", exc)
 
         _TOML_CONFIG_CACHE = targets_info
@@ -1208,15 +1207,6 @@ def _auth_throttle(now: float, reserve_slot: bool) -> bool:
         if reserve_slot:
             _auth_failures.append(now)
         return False
-
-
-def _auth_rate_limited(now: float) -> bool:
-    """True once *_AUTH_FAIL_MAX* failures were recorded inside the window."""
-    return _auth_throttle(now, reserve_slot=False)
-
-
-def _record_auth_failure(now: float) -> None:
-    _auth_throttle(now, reserve_slot=True)
 
 
 def _clear_auth_failures() -> None:

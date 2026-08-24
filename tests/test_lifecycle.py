@@ -215,3 +215,66 @@ class TestOpenAndReap:
             return  # no children at all — nothing leaked
         assert pid == 0, "an opener child was left unreaped (zombie)"
         del status
+
+
+class TestClientConnectionDeadline:
+    """Every accepted client connection's handler thread must have a release
+    deadline.
+
+    ThreadingMixIn caps neither threads nor connections: without a socket
+    deadline on the request handler, a peer that connects and then goes silent
+    (crashed laptop, dropped NAT mapping) pins its handler thread forever in
+    the request-line read, and an SSE client that stops reading pins it in the
+    response write.  The handler's ``timeout`` turns both stalls into
+    socket.timeout so the thread exits and the connection is released.
+    """
+
+    def test_silent_peer_releases_handler_thread(self) -> None:
+        import socket
+        import threading
+        from wsgiref.simple_server import WSGIRequestHandler
+
+        from recoverage.cli import _ThreadingWSGIServer
+
+        class _ShortDeadlineHandler(WSGIRequestHandler):
+            timeout = 0.5
+
+            def address_string(self) -> str:
+                return self.client_address[0]
+
+            def log_request(self, code: int | str = "-", size: int | str = "-") -> None:
+                pass
+
+            def log_message(self, *args: Any, **kwargs: Any) -> None:
+                pass  # keep "Request timed out" noise out of the test output
+
+        server = _ThreadingWSGIServer(("127.0.0.1", 0), _ShortDeadlineHandler)
+        # block_on_close=False keeps a regressed (wedged) handler from turning
+        # teardown into a hang; daemon threads die with the test process.
+        server.block_on_close = False
+        port = server.server_address[1]
+        accept_thread = threading.Thread(target=server.serve_forever, daemon=True)
+        accept_thread.start()
+        try:
+            baseline = threading.active_count()
+            with socket.create_connection(("127.0.0.1", port), timeout=5):
+                # Connected, nothing sent: the handler thread parks in the
+                # request-line read on this connection.
+                spawned = baseline + 1
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline and threading.active_count() < spawned:
+                    time.sleep(0.02)
+                assert threading.active_count() >= spawned, (
+                    "handler thread never started for the accepted connection"
+                )
+
+                # The 0.5s deadline must retire that same thread.
+                deadline = time.monotonic() + 10
+                while time.monotonic() < deadline and threading.active_count() > baseline:
+                    time.sleep(0.05)
+                assert threading.active_count() <= baseline, (
+                    "silent-peer handler thread never released (unbounded thread pinning)"
+                )
+        finally:
+            server.shutdown()
+            server.server_close()

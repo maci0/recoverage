@@ -7,10 +7,10 @@ This script validates the assembled documents a browser receives:
   - GET /       — the SPA shell with style.css and app.js injected server-side
   - GET /potato — the fully server-rendered Potato Mode page
 
-It boots the real server against a synthetic coverage.db (the same builder the
-test suite uses via tests/conftest.py), fetches both documents, and runs the
-Nu Html Checker (vnu.jar) over them with ``--also-check-css``, which also
-validates the embedded CSS.
+It boots the real server against a synthetic coverage.db (the shared builder
+in tools/_serve_harness.py, same one tools/smoke.py uses), fetches both
+documents, and runs the Nu Html Checker (vnu.jar) over them with
+``--also-check-css``, which also validates the embedded CSS.
 
 Potato Mode deliberately renders HTML4-era markup (``<font>``, ``bgcolor``,
 ``cellpadding``, ... — see the "no CSS" docstrings in potato.py). The obsolete
@@ -23,64 +23,15 @@ Requires: uv (project venv), java on PATH, and ``npm install`` already run
 
 from __future__ import annotations
 
-import http.client
-import socket
 import subprocess
 import sys
 import tempfile
-import time
 from pathlib import Path
 
+from _serve_harness import build_sample_db, get, running_server, wait_for
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
-TESTS_DIR = REPO_ROOT / "tests"
 VNU_JAR = REPO_ROOT / "node_modules" / "vnu-jar" / "build" / "dist" / "vnu.jar"
-
-
-def _free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
-def _build_sample_db(project_dir: Path) -> Path:
-    """Build db/coverage.db using the shared synthetic schema builder.
-
-    Same approach as tools/smoke.py: conftest builds the DB at cwd/db/coverage.db
-    as an import side effect, so the chdir must happen before the import.
-    """
-    import os
-
-    db_dir = project_dir / "db"
-    db_dir.mkdir(parents=True, exist_ok=True)
-    old_cwd = Path.cwd()
-    try:
-        os.chdir(project_dir)
-        sys.path.insert(0, str(TESTS_DIR))
-        import conftest  # noqa: F401 — builds the synthetic DB on import
-    finally:
-        os.chdir(old_cwd)
-    return db_dir / "coverage.db"
-
-
-def _wait_for(predicate, timeout: float = 30.0) -> bool:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if predicate():
-            return True
-        time.sleep(0.3)
-    return False
-
-
-def _get(port: int, path: str) -> tuple[int, bytes]:
-    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
-    try:
-        conn.request("GET", path, headers={"Accept-Encoding": "identity"})
-        resp = conn.getresponse()
-        return resp.status, resp.read()
-    except (ConnectionRefusedError, OSError):
-        return 0, b""
-    finally:
-        conn.close()
 
 
 def main() -> int:
@@ -91,26 +42,18 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as td:
         project_dir = Path(td) / "proj"
         project_dir.mkdir()
-        db = _build_sample_db(project_dir)
-        if not db.is_file():
+        if not build_sample_db(project_dir).is_file():
             print("sample coverage.db not built")
             return 1
 
-        port = _free_port()
-        proc = subprocess.Popen(
-            [sys.executable, "-m", "recoverage", "serve", "--no-open", "--port", str(port)],
-            cwd=str(project_dir),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        try:
-            if not _wait_for(lambda: _get(port, "/api/health")[0] == 200):
+        with running_server(project_dir) as (port, _):
+            if not wait_for(lambda: get(port, "/api/health")[0] == 200):
                 print("server never became healthy")
                 return 1
 
             docs: dict[str, Path] = {}
             for path, name in (("/", "spa.html"), ("/potato", "potato.html")):
-                status, body = _get(port, path)
+                status, body = get(port, path)
                 if status != 200:
                     print(f"GET {path} -> {status}; cannot lint served document")
                     return 1
@@ -144,12 +87,6 @@ def main() -> int:
                 if result.returncode != 0:
                     print("served-document lint failed")
                     return result.returncode
-        finally:
-            proc.terminate()
-            try:
-                proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                proc.kill()
 
     print("served-document lint passed.")
     return 0

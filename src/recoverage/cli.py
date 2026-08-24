@@ -16,7 +16,7 @@ import webbrowser
 from pathlib import Path
 from socketserver import ThreadingMixIn
 from typing import Any, NoReturn
-from wsgiref.simple_server import WSGIServer
+from wsgiref.simple_server import WSGIRequestHandler, WSGIServer
 
 import typer
 
@@ -53,6 +53,36 @@ class _ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
     """
 
     daemon_threads = True
+
+
+# Hard deadline for every socket operation on a client connection (the request
+# read and each response write).  Without it a half-open TCP peer (crashed
+# laptop, dropped NAT mapping) or an SSE client that stops reading pins its
+# handler thread forever: ThreadingMixIn caps neither threads nor connections,
+# so wedged peers silently accumulate until process exit.  With the deadline,
+# socket.timeout unwinds the stalled op and the thread exits, releasing the
+# connection and (for /api/events) its bounded SSE slot.  Generous multiples
+# of the 15s SSE heartbeat (_SSE_HEARTBEAT_SECONDS) so only a genuinely
+# stalled peer can trip it — healthy streams write far more often.
+_CLIENT_SOCKET_TIMEOUT_SECONDS = 120
+
+
+class _QuietTimeoutRequestHandler(WSGIRequestHandler):
+    """wsgiref request handler with the per-connection deadline above.
+
+    Also carries bottle's FixedHandler behavior (peer address without reverse
+    DNS; no per-request logging): passing ``handler_class`` to Bottle replaces
+    FixedHandler wholesale, so both overrides must be reproduced here.
+    ``serve`` always runs with quiet=True.
+    """
+
+    timeout = _CLIENT_SOCKET_TIMEOUT_SECONDS
+
+    def address_string(self) -> str:
+        return self.client_address[0]
+
+    def log_request(self, code: int | str = "-", size: int | str = "-") -> None:
+        pass
 
 
 def _version_callback(value: bool) -> None:
@@ -469,6 +499,7 @@ def serve(
             quiet=True,
             server="wsgiref",
             server_class=_ThreadingWSGIServer,
+            handler_class=_QuietTimeoutRequestHandler,
         )
     except KeyboardInterrupt:
         # Ctrl+C is the documented way to stop the dashboard; wsgiref's
@@ -741,9 +772,7 @@ def check(
                     if total_bytes
                     else float(sec.get("coverage_pct") or 0.0)
                 )
-                status, extra, human = _section_verdict(
-                    pct, untracked, bool(section), min_coverage
-                )
+                status, extra, human = _section_verdict(pct, untracked, bool(section), min_coverage)
                 if status == "FAIL":
                     failed = True
                 verdicts.append({"target": tid, "section": sec_name, "status": status, **extra})

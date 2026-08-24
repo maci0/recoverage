@@ -542,6 +542,36 @@ class TestServePortRange:
         assert result.exit_code != 0
 
 
+class TestServeServerWiring:
+    def test_run_gets_threaded_server_and_bounded_handler(self, monkeypatch: Any) -> None:
+        """serve must wire the threaded server class AND the request handler
+        carrying the per-connection socket deadline.  ThreadingMixIn caps
+        neither threads nor connections; without the handler's timeout, a
+        silent peer (crashed laptop, dropped NAT mapping) or an SSE client
+        that stops reading pins its handler thread forever."""
+        import recoverage.cli as cli
+        from recoverage.server import app as server_app
+
+        captured: dict[str, Any] = {}
+
+        monkeypatch.setattr("recoverage.api._ensure_db_watcher", lambda: None)
+
+        def capture_run(self: Any, **kwargs: Any) -> None:
+            captured.update(kwargs)
+
+        # Instance-level monkeypatch breaks bottle: Bottle.__setattr__ rejects
+        # re-setting a name once it exists in the instance dict (plugin
+        # conflict guard), so patch the class method instead.
+        monkeypatch.setattr(type(server_app), "run", capture_run)
+        result = runner.invoke(app, ["serve", "--no-open", "--port", "8123"])
+        assert result.exit_code == 0
+        assert captured["server_class"] is cli._ThreadingWSGIServer
+        assert captured["server_class"].daemon_threads is True
+        assert captured["handler_class"] is cli._QuietTimeoutRequestHandler
+        handler = captured["handler_class"]
+        assert handler.timeout == cli._CLIENT_SOCKET_TIMEOUT_SECONDS > 0
+
+
 class TestServeBindFailure:
     def test_bind_failure_does_not_open_browser(self, monkeypatch: Any) -> None:
         """A bind failure (port already in use) must cancel the deferred

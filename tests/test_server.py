@@ -640,12 +640,12 @@ class TestAuthFailureLimiter:
         monkeypatch.setattr(srv, "_AUTH_TOKEN", "tok")
         try:
             for _ in range(srv._AUTH_FAIL_MAX - 1):
-                srv._record_auth_failure(time.monotonic())
-            assert not srv._auth_rate_limited(time.monotonic())
+                srv._auth_throttle(time.monotonic(), reserve_slot=True)
+            assert not srv._auth_throttle(time.monotonic(), reserve_slot=False)
             # A successful match wipes the slate.
             assert srv._auth_token_matches("tok")
             srv._clear_auth_failures()
-            assert not srv._auth_rate_limited(time.monotonic())
+            assert not srv._auth_throttle(time.monotonic(), reserve_slot=False)
         finally:
             srv._clear_auth_failures()
 
@@ -655,8 +655,8 @@ class TestAuthFailureLimiter:
         try:
             old = time.monotonic() - srv._AUTH_FAIL_WINDOW_SECONDS * 2
             for _ in range(srv._AUTH_FAIL_MAX):
-                srv._record_auth_failure(old)
-            assert not srv._auth_rate_limited(time.monotonic())
+                srv._auth_throttle(old, reserve_slot=True)
+            assert not srv._auth_throttle(time.monotonic(), reserve_slot=False)
         finally:
             srv._clear_auth_failures()
 

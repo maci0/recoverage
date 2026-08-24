@@ -1028,7 +1028,7 @@ class TestV4StateColors:
         )
         # Anchor on this cell's own alt text: the sizing row in front of the
         # data row also carries bgcolor attributes.
-        anchor = html.index(f'0x0..0x1 | {state}')
+        anchor = html.index(f"0x0..0x1 | {state}")
         marker = html.rindex('bgcolor="', 0, anchor) + len('bgcolor="')
         return html[marker : html.index('"', marker)]
 
