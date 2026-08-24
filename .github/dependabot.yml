@@ -1,0 +1,31 @@
+# Keep both lockfiles and CI actions current. Weekly cadence; minor/patch
+# updates are grouped into one PR per ecosystem so majors stay individually
+# reviewable. Bumping @rikalabs/oxlint-standards additionally requires
+# re-running tools/flatten-rikalabs-strict.py (see AGENTS.md).
+version: 2
+
+updates:
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      uv-minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      npm-minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
