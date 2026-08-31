@@ -32,7 +32,7 @@ dependencies = [
     "rcssmin>=1.1",
     "rich>=13.0",
     "rjsmin>=1.2",
-    "typer>=0.9",
+    "typer>=0.27.2",
     "zstandard>=0.22",
 ]
 
@@ -42,8 +42,8 @@ Repository = "https://github.com/relumea/recoverage"
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=8.0",
-    "ruff>=0.9",
+    "pytest>=9.1.1",
+    "ruff>=0.16.5",
 ]
 capstone = [
     "capstone>=5.0",
@@ -53,7 +53,7 @@ playwright = [
     "pytest-playwright>=0.6",
 ]
 pygments = [
-    "pygments>=2.0",
+    "pygments>=2.21.0",
 ]
 
 [project.scripts]
