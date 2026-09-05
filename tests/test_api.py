@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import queue
+import re
 import sqlite3
 import threading
 import time
@@ -17,6 +18,17 @@ from conftest import HAS_DB, decode_body, get_first_target, wsgi_get, wsgi_post,
 
 from recoverage._paths import sqlite_ro_uri
 from recoverage.server import HAS_CAPSTONE
+
+# Typer 0.27 help paints option names with ANSI even under CliRunner
+# isolation on CI (FORCE_COLOR / a detected tty). Strip before matching
+# flag text so the assertion is about the documented name, not the paint.
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+_NO_COLOR_ENV = {"NO_COLOR": "1", "FORCE_COLOR": None, "CLICOLOR_FORCE": None}
+
+
+def _plain(text: str) -> str:
+    return _ANSI_RE.sub("", text)
+
 
 # ── Regen origin validation (actual endpoint) ─────────────────────
 
@@ -669,10 +681,11 @@ class TestServeBindFlag:
 
         from recoverage.cli import app
 
-        result = CliRunner().invoke(app, ["serve", "--help"])
+        result = CliRunner().invoke(app, ["serve", "--help"], env=_NO_COLOR_ENV)
         assert result.exit_code == 0
-        assert "--bind" in result.output
-        assert "127.0.0.1" in result.output
+        help_text = _plain(result.output)
+        assert "--bind" in help_text
+        assert "127.0.0.1" in help_text
 
 
 class TestLastVerify:
@@ -1599,10 +1612,11 @@ class TestServeBindGuard:
 
         from recoverage.cli import app
 
-        result = CliRunner().invoke(app, ["serve", "--help"])
+        result = CliRunner().invoke(app, ["serve", "--help"], env=_NO_COLOR_ENV)
         assert result.exit_code == 0
-        assert "--allow-remote" in result.output
-        assert "--cors-origin" in result.output
+        help_text = _plain(result.output)
+        assert "--allow-remote" in help_text
+        assert "--cors-origin" in help_text
 
 
 class TestPostConnectSqliteError:

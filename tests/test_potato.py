@@ -38,18 +38,26 @@ def render_potato_url(url: str) -> str:
 def _test_tidy(html: str) -> tuple[bool | None, str]:
     try:
         proc = subprocess.run(
-            ["tidy", "-q", "-e", "--show-warnings", "no", "--show-errors", "0"],
+            ["tidy", "-q", "-e"],
             input=html.encode("utf-8"),
             capture_output=True,
             timeout=30,
         )
-        if proc.returncode > 1:
-            return False, proc.stderr.decode("utf-8")
-        return True, ""
     except FileNotFoundError:
         return None, "tidy not installed"
     except subprocess.TimeoutExpired:
         return False, "tidy timeout"
+    diag = (proc.stderr or b"").decode("utf-8", "replace") or (proc.stdout or b"").decode(
+        "utf-8", "replace"
+    )
+    if proc.returncode > 1:
+        # Apple tidy on macOS runners is not HTML Tidy 5: it exits 2 with
+        # empty diagnostics, so treat that as "no usable tidy" rather than
+        # a document error.
+        if not diag.strip():
+            return None, "tidy produced no diagnostics"
+        return False, diag
+    return True, ""
 
 
 def test_format_va():
