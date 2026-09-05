@@ -11,9 +11,9 @@
     "lint:html": "bun tools/lint-html.mjs && uv run python tools/lint-served-html.py"
   },
   "devDependencies": {
-    "@oxlint/plugins": "1.79.0",
+    "@oxlint/plugins": "1.81.0",
     "@rikalabs/oxlint-standards": "0.8.1",
-    "oxlint": "1.79.0",
-    "vnu-jar": "26.8.20"
+    "oxlint": "1.81.0",
+    "vnu-jar": "26.8.30"
   }
 }
