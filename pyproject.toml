@@ -1,7 +1,7 @@
 [build-system]
 # setuptools 77 is the first release implementing PEP 639 (SPDX license
 # expressions); the `license = "MIT"` field below fails validation on older
-# versions, so the floor must match.
+# versions, so the floor must stay at or above that.
 requires = ["setuptools>=84.0.0"]
 build-backend = "setuptools.build_meta"
 

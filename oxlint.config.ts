@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
  * 1. `tools/oxlint/rikalabs-strict.json` — a flattened, checked-in copy of the
  *    `strict` preset from @rikalabs/oxlint-standards (see
  *    tools/flatten-rikalabs-strict.py). It is flattened because the published
- *    presets reference a few rules oxlint 1.79.0 does not implement, and oxlint
+ *    presets reference a few rules oxlint 1.81.0 does not implement, and oxlint
  *    rejects configs that mention unknown rules even as "off".
  * 2. The vendored anti-slop plugin (tools/oxlint/anti-slop — a curated copy of
  *    dmmulroy/anti-slop, MIT) that rejects low-evidence patterns typical of
@@ -55,7 +55,7 @@ export default defineConfig({
     },
   ],
   rules: {
-    // The preset's oxc/no-new-buffer does not exist in oxlint 1.79.0; the
+    // The preset's oxc/no-new-buffer does not exist in oxlint 1.81.0; the
     // same rule lives under unicorn. Keep the preset's intent.
     "unicorn/no-new-buffer": "error",
     // Browser-only SPA: `window` is the precise, self-documenting global;
@@ -84,6 +84,9 @@ export default defineConfig({
     //   callbacks; declarations grouped by domain order, not alphabet.
     "eslint/func-style": "off",
     "eslint/sort-vars": "off",
+    // Closures only run after the IIFE has finished, so a later const is
+    // initialized before the call. Reordering would invert domain grouping.
+    "eslint/no-use-before-define": "off",
     // VanJS components are closures over shared state; the main App component
     // is ~900 lines of orchestration and the 60-line cap would force
     // artificial fragmentation.

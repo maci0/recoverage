@@ -1987,7 +1987,12 @@ def _panel_function_detail(
         asm_va = fn_data.get("va")
         asm_size = fn_data.get("size")
         asm_file_offset = fn_data.get("fileOffset")
-        if HAS_CAPSTONE and asm_va is not None and asm_size is not None and asm_file_offset is not None:
+        if (
+            HAS_CAPSTONE
+            and asm_va is not None
+            and asm_size is not None
+            and asm_file_offset is not None
+        ):
             asm_text = get_disassembly(asm_va, asm_size, asm_file_offset, target)
             if asm_text:
                 ctx["asm_heading"] = _section_heading("ASM", "#ef4444", "Assembly")

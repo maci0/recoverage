@@ -652,8 +652,7 @@ def export(
                     f" | {sec.get('size_bytes', 0):,} B | {sec['total_cells']}"
                 )
                 typer.echo(
-                    row
-                    + f" | {sec['exact']} | {sec['reloc']} | {sec['near_match']} "
+                    row + f" | {sec['exact']} | {sec['reloc']} | {sec['near_match']} "
                     f"| {sec['exact']} | {sec['reloc']} | {sec['near_match']} "
                     f"| {sec['stub']} | {sec['coverage_pct']:.1f}% |"
                 )

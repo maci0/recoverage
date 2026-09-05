@@ -38,7 +38,7 @@ def render_potato_url(url: str) -> str:
 def _test_tidy(html: str) -> tuple[bool | None, str]:
     try:
         proc = subprocess.run(
-            ["tidy", "-q", "-e", "--show-warnings", "no", "--show-errors", "no"],
+            ["tidy", "-q", "-e", "--show-warnings", "no", "--show-errors", "0"],
             input=html.encode("utf-8"),
             capture_output=True,
             timeout=30,

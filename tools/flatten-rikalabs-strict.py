@@ -3,7 +3,7 @@
 @rikalabs/oxlint-standards package.
 
 The Rika-Labs presets reference a handful of rules that the currently
-published oxlint (1.79.0) does not implement, and oxlint rejects a config
+published oxlint (1.81.0) does not implement, and oxlint rejects a config
 that mentions an unknown rule even when set to "off" — so the preset chain
 cannot be consumed via `extends` until those rules land in oxlint. This
 script flattens the `strict` preset chain into a single checked-in JSON that
