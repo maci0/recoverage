@@ -1,3 +1,4 @@
+import functools
 import json
 import os
 import re
@@ -35,7 +36,22 @@ def render_potato_url(url: str) -> str:
     return render_potato(urlparse(url))
 
 
+@functools.cache
+def _have_html5_tidy() -> bool:
+    """HTML Tidy 5 understands <main>; Apple's 2006 tidy does not."""
+    try:
+        proc = subprocess.run(["tidy", "-version"], capture_output=True, timeout=5)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+    text = b"".join((proc.stdout, proc.stderr)).decode("utf-8", "replace").lower()
+    return "version 5" in text
+
+
 def _test_tidy(html: str) -> tuple[bool | None, str]:
+    # VNU is the HTML5 gate (bun run lint:html). tidy is extra, and only
+    # HTML Tidy 5 can judge this document; Apple tidy rejects <main>.
+    if not _have_html5_tidy():
+        return None, "html5 tidy not available"
     try:
         proc = subprocess.run(
             ["tidy", "-q", "-e"],
@@ -51,9 +67,6 @@ def _test_tidy(html: str) -> tuple[bool | None, str]:
         "utf-8", "replace"
     )
     if proc.returncode > 1:
-        # Apple tidy on macOS runners is not HTML Tidy 5: it exits 2 with
-        # empty diagnostics, so treat that as "no usable tidy" rather than
-        # a document error.
         if not diag.strip():
             return None, "tidy produced no diagnostics"
         return False, diag
