@@ -76,8 +76,8 @@ def _db_path() -> Path:
             data = tomllib.loads(cfg.read_text(encoding="utf-8"))
             project = data.get("project", {}) if isinstance(data, dict) else {}
             db_dir = project.get("db_dir") if isinstance(project, dict) else None
-            if isinstance(db_dir, str) and db_dir:
-                resolved = (cwd / db_dir).resolve() / "coverage.db"
+            if isinstance(db_dir, str) and db_dir.strip():
+                resolved = (cwd / db_dir.strip()).resolve() / "coverage.db"
         except OSError as exc:
             logging.warning("Could not read %s: %s", cfg, exc)
         except tomllib.TOMLDecodeError as exc:

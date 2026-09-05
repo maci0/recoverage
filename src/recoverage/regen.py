@@ -32,7 +32,7 @@ def _kill_and_reap(proc: subprocess.Popen[bytes]) -> None:
     not prevent zombies; only a wait does).
     """
     if os.name == "posix":
-        with contextlib.suppress(ProcessLookupError):
+        with contextlib.suppress(ProcessLookupError, PermissionError):
             os.killpg(proc.pid, signal.SIGKILL)
     else:
         proc.kill()

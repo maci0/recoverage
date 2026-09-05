@@ -3,11 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "packageManager": "bun@1.4.0",
   "description": "Frontend lint tooling for the recoverage dashboard (JS/TS + HTML/CSS)",
   "scripts": {
-    "lint": "npm run lint:js && npm run lint:html",
+    "lint": "bun run lint:js && bun run lint:html",
     "lint:js": "oxlint",
-    "lint:html": "node tools/lint-html.mjs && uv run python tools/lint-served-html.py"
+    "lint:html": "bun tools/lint-html.mjs && uv run python tools/lint-served-html.py"
   },
   "devDependencies": {
     "@oxlint/plugins": "1.79.0",

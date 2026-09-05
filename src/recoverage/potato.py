@@ -259,6 +259,8 @@ LEGEND_ITEMS = [
 def _hex_logo_svg(label: str, color: str) -> str:
     """Generate a hex-shaped SVG logo as a base64 data-URI image tag."""
     font_size = 26 if len(label) > 2 else 42
+    safe_label = _html_escape(label)
+    safe_alt = _html_escape(label)
     svg = (
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="20" height="20">'
         f'<polygon points="50,5 90,27.5 90,72.5 50,95 10,72.5 10,27.5"'
@@ -266,12 +268,12 @@ def _hex_logo_svg(label: str, color: str) -> str:
         f' stroke-width="6" stroke-linejoin="round"/>'
         f'<text x="50" y="54" dominant-baseline="middle" text-anchor="middle"'
         f' fill="{color}" font-family="monospace" font-weight="800"'
-        f' font-size="{font_size}">{label}</text></svg>'
+        f' font-size="{font_size}">{safe_label}</text></svg>'
     )
     b64 = base64.b64encode(svg.encode("utf-8")).decode("utf-8")
     return (
         f'<img src="data:image/svg+xml;base64,{b64}"'
-        f' width="20" height="20" border="0" alt="{label}">'
+        f' width="20" height="20" border="0" alt="{safe_alt}">'
     )
 
 
@@ -620,10 +622,10 @@ def _cell_file_offset(cell: dict[str, Any], sec_data: dict[str, Any] | None) -> 
     """Calculate file offset for a cell from its section metadata."""
     if not sec_data:
         return None
-    sec_file_offset = sec_data.get("fileOffset", 0)
+    sec_file_offset = sec_data.get("fileOffset")
     if not sec_file_offset:
         return None
-    return sec_file_offset + cell.get("start", 0)
+    return int(sec_file_offset) + cell.get("start", 0)
 
 
 def _format_va(val: int | str) -> str:
@@ -1278,6 +1280,8 @@ def _merge_cells(cells: list[dict[str, Any]], grid_columns: int) -> list[dict[st
         curr_cell = dict(next_c)
         curr_cell["orig_idx"] = i
         curr_col = n_span if curr_col >= grid_columns else curr_col + n_span
+        if curr_col > grid_columns:
+            curr_col = n_span
 
     merged_cells.append(curr_cell)
     return merged_cells
@@ -1367,6 +1371,7 @@ def _build_grid_html(
     """
     if grid_columns <= 0:
         raise ValueError(f"grid_columns must be positive, got {grid_columns}")
+    grid_columns = min(grid_columns, 256)
     cell_w = 18
     cell_h = 15
     sizing_tds = "".join(
@@ -1591,6 +1596,7 @@ def _render_grid_view(
     grid_columns = sec_data.get("columns") or 64
     if grid_columns <= 0:
         grid_columns = 64
+    grid_columns = min(grid_columns, 256)
     cells, merged_cells = _load_grid_cells(c, target, section, grid_columns)
     per_section_stats = _section_stats_cached(c, target, sections, data)
     block_count = len(merged_cells)
@@ -1817,7 +1823,7 @@ def _panel_empty_cell_bytes(
     """Fill hex dump + data inspector context for a cell with no functions."""
     cell_file_offset = _cell_file_offset(cell, sec_data)
     cell_size = cell.get("end", 0) - cell.get("start", 0)
-    if not cell_file_offset or cell_size <= 0:
+    if cell_file_offset is None or cell_size <= 0:
         return
     raw_bytes = _get_raw_bytes(cell_file_offset, cell_size, target)
     if not raw_bytes:
@@ -1881,13 +1887,17 @@ def _panel_fn_source_text(data: dict[str, Any], target: str, fn_data: dict[str, 
         else default_source_root
     )
     base = (Path.cwd().resolve() / source_root.lstrip("/")).resolve()
-    c_path = (base / files[0]).resolve()
+    raw = files[0]
+    # Reject absolute paths and parent traversal before resolve
+    if Path(raw).is_absolute() or ".." in Path(raw).parts:
+        return None
+    c_path = (base / raw).resolve()
     if not c_path.is_relative_to(base):
         return None
     try:
         with open(c_path, encoding="utf-8") as f:
             return f.read()
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         _log.debug("Source file not found: %s", c_path)
         return None
 
@@ -1977,7 +1987,7 @@ def _panel_function_detail(
         asm_va = fn_data.get("va")
         asm_size = fn_data.get("size")
         asm_file_offset = fn_data.get("fileOffset")
-        if HAS_CAPSTONE and asm_va and asm_size and asm_file_offset:
+        if HAS_CAPSTONE and asm_va is not None and asm_size is not None and asm_file_offset is not None:
             asm_text = get_disassembly(asm_va, asm_size, asm_file_offset, target)
             if asm_text:
                 ctx["asm_heading"] = _section_heading("ASM", "#ef4444", "Assembly")
@@ -1988,7 +1998,7 @@ def _panel_function_detail(
     # Original Bytes (+ data inspector outside .text, where bytes are data)
     fn_file_offset = fn_data.get("fileOffset")
     fn_size = fn_data.get("size")
-    if fn_file_offset and fn_size:
+    if fn_file_offset is not None and fn_size is not None:
         raw_bytes = _get_raw_bytes(fn_file_offset, fn_size, target)
         if raw_bytes:
             ctx["bytes_heading"] = _section_heading("01", "#10b981", "Original Bytes")

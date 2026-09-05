@@ -213,10 +213,10 @@ def _snapshot_db_mtime() -> tuple[int, int] | None:
     """
     try:
         st = _db_path().stat()
-        acc = st.st_mtime_ns + st.st_size
+        acc = (st.st_mtime_ns << 32) ^ (st.st_size & 0xFFFFFFFF)
         try:
             w = Path(f"{_db_path()}-wal").stat()
-            acc += w.st_mtime_ns + w.st_size
+            acc ^= (w.st_mtime_ns << 32) ^ (w.st_size & 0xFFFFFFFF)
         except OSError:
             pass
         return acc, st.st_size
@@ -239,11 +239,23 @@ def _etag_or_304(snap: tuple[int, int] | None, *parts: object) -> str | None:
     if snap is None:
         return None
     etag = _safe_etag(snap[0], *parts)
-    if request.headers.get("If-None-Match") == etag:
-        raise HTTPResponse(
-            status=304,
-            headers={"ETag": etag, "Cache-Control": CACHE_REVALIDATE},
-        )
+    raw = request.headers.get("If-None-Match", "")
+    # Handle weak validators (W/"..."), comma-separated lists, and "*".
+    candidates = [c.strip() for c in raw.split(",")] if raw else []
+    for cand in candidates:
+        if cand == "*":
+            raise HTTPResponse(
+                status=304,
+                headers={"ETag": etag, "Cache-Control": CACHE_REVALIDATE},
+            )
+        # Strip weak prefix W/ per RFC 9110.
+        if cand.startswith("W/"):
+            cand = cand[2:].strip()
+        if cand == etag:
+            raise HTTPResponse(
+                status=304,
+                headers={"ETag": etag, "Cache-Control": CACHE_REVALIDATE},
+            )
     return etag
 
 
@@ -413,26 +425,30 @@ def _log_safe(value: str) -> str:
 SCHEMA_TARGET = "__schema__"
 
 
+_TOML_CACHE_MTIME: tuple[int, int] | None = None
+
+
 def _get_targets_config() -> dict[str, Any]:
     """Load target configuration from rebrew-project.toml (thread-safe, cached)."""
-    global _TOML_CONFIG_CACHE
+    global _TOML_CONFIG_CACHE, _TOML_CACHE_MTIME
+    toml_path = _project_dir() / "rebrew-project.toml"
+    try:
+        current = (toml_path.stat().st_mtime_ns, toml_path.stat().st_size)
+    except OSError:
+        current = None
     with _RESOLVED_TARGETS_CACHE_LOCK:
-        if _TOML_CONFIG_CACHE is not None:
+        if _TOML_CONFIG_CACHE is not None and current == _TOML_CACHE_MTIME:
             return _TOML_CONFIG_CACHE
 
         root = _project_dir()
         targets_info: dict[str, Any] = {}
         try:
-            toml_path = root / "rebrew-project.toml"
-            if toml_path.exists():
-                text = toml_path.read_text(encoding="utf-8")
+            toml_path2 = root / "rebrew-project.toml"
+            if toml_path2.exists():
+                text = toml_path2.read_text(encoding="utf-8")
                 doc = tomllib.loads(text)
                 targets_dict = doc.get("targets", {})
                 for tid, tdata in targets_dict.items():
-                    # The DLL path comes from [targets.<tid>].binary; an
-                    # entry without one stores "" so DLL lookups report the
-                    # target-specific error instead of resolving a wrong
-                    # file (display names fall back to the target id).
                     binary = ""
                     if isinstance(tdata, dict):
                         b = tdata.get("binary", "")
@@ -443,13 +459,15 @@ def _get_targets_config() -> dict[str, Any]:
             _log.warning("Failed to load rebrew-project.toml: %s", exc)
 
         _TOML_CONFIG_CACHE = targets_info
+        _TOML_CACHE_MTIME = current
         return targets_info
 
 
 def clear_target_cache() -> None:
-    global _TOML_CONFIG_CACHE, _RESOLVED_TARGETS_CACHE, _SCHEMA_VERSION_CACHE
+    global _TOML_CONFIG_CACHE, _TOML_CACHE_MTIME, _RESOLVED_TARGETS_CACHE, _SCHEMA_VERSION_CACHE
     with _RESOLVED_TARGETS_CACHE_LOCK:
         _TOML_CONFIG_CACHE = None
+        _TOML_CACHE_MTIME = None
         _RESOLVED_TARGETS_CACHE = None
         _SCHEMA_VERSION_CACHE = None
 
@@ -521,18 +539,24 @@ def _load_dll(target: str) -> bytes | None:
     with DLL_LOCK:
         if target in DLL_DATA:
             return DLL_DATA[target]
-        dll_path = _find_dll_path(target)
-        if dll_path is None:
+    dll_path = _find_dll_path(target)
+    if dll_path is None:
+        with DLL_LOCK:
+            if target in DLL_DATA:
+                return DLL_DATA[target]
             _log.warning(
                 "No [targets.%s].binary configured — cannot load DLL for target %s",
                 target,
                 target,
             )
             DLL_DATA[target] = None
-            return None
-        try:
-            file_size = dll_path.stat().st_size
-            if file_size > _MAX_DLL_SIZE:
+        return None
+    try:
+        file_size = dll_path.stat().st_size
+        if file_size > _MAX_DLL_SIZE:
+            with DLL_LOCK:
+                if target in DLL_DATA:
+                    return DLL_DATA[target]
                 _log.warning(
                     "DLL %s (%d MiB) exceeds %d MiB limit, skipping",
                     dll_path,
@@ -540,24 +564,34 @@ def _load_dll(target: str) -> bytes | None:
                     _MAX_DLL_SIZE >> 20,
                 )
                 DLL_DATA[target] = None
-                return None
-            with open(dll_path, "rb") as f:
-                DLL_DATA[target] = f.read()
-        except OSError as exc:
-            _log.warning(
-                "Failed to load DLL for target %s at %s: %s: %s",
-                target,
-                dll_path,
-                type(exc).__name__,
-                exc,
-            )
-            # Transient OS failure (file being rewritten by a build, AV lock):
-            # NOT cached — DLL_DATA[target] = None here would keep the target's
-            # disassembly/bytes endpoints failing until the next rebuild
-            # broadcast clears the cache.  Retrying on the next request
-            # self-heals for free.
             return None
-        return DLL_DATA[target]
+        data = dll_path.read_bytes()
+        if len(data) > _MAX_DLL_SIZE:
+            with DLL_LOCK:
+                if target in DLL_DATA:
+                    return DLL_DATA[target]
+                _log.warning(
+                    "DLL %s (%d MiB) exceeds %d MiB limit after read, skipping",
+                    dll_path,
+                    len(data) >> 20,
+                    _MAX_DLL_SIZE >> 20,
+                )
+                DLL_DATA[target] = None
+            return None
+    except OSError as exc:
+        _log.warning(
+            "Failed to load DLL for target %s at %s: %s: %s",
+            target,
+            dll_path,
+            type(exc).__name__,
+            exc,
+        )
+        return None
+    with DLL_LOCK:
+        if target in DLL_DATA:
+            return DLL_DATA[target]
+        DLL_DATA[target] = data
+        return data
 
 
 _CAPSTONE_MD_TLS = threading.local()
@@ -822,16 +856,23 @@ def _format_hex_dump(raw_bytes: bytes, base_offset: int = 0, max_bytes: int | No
     return "\n".join(lines)
 
 
+_METADATA_VALUE_MAX_BYTES = 1 * 1024 * 1024
+
+
 def _load_metadata(c: sqlite3.Cursor, target: str) -> dict[str, Any]:
     """Load *target*'s metadata rows as a dict, JSON-decoding values when valid.
 
     ONE loader for every consumer of the metadata table (SPA /data, Potato
     summary/paths): malformed JSON falls back to the raw string instead of
-    failing the whole response.
+    failing the whole response.  Values larger than 1 MiB are kept as raw
+    strings to bound json.loads work per-row.
     """
     data: dict[str, Any] = {}
     c.execute("SELECT key, value FROM metadata WHERE target = ?", (target,))
     for key, value in c.fetchall():
+        if isinstance(value, str) and len(value.encode("utf-8")) > _METADATA_VALUE_MAX_BYTES:
+            data[key] = value
+            continue
         try:
             data[key] = json.loads(value)
         except (json.JSONDecodeError, TypeError):
@@ -1218,19 +1259,6 @@ def _require_auth() -> None:
     if not _AUTH_TOKEN:
         return
 
-    now = time.monotonic()
-    # Reserve a failure slot atomically with the cap check (see
-    # _auth_throttle) — reserving before verification is what keeps N
-    # concurrent guesses from all passing the cap before any of them
-    # records.  A verified token refunds everyone via the clear below.
-    if _auth_throttle(now, reserve_slot=True):
-        # Same JSON error contract as every endpoint (code "rate_limited");
-        # Retry-After tells the client when the failure window frees up.
-        raise _json_err(
-            429,
-            {"error": "rate limited", "detail": "too many failed token attempts; retry later"},
-            Retry_After=str(int(_AUTH_FAIL_WINDOW_SECONDS)),
-        )
     provided = request.headers.get("Authorization", "")
     if provided.startswith("Bearer "):
         provided = provided[len("Bearer ") :]
@@ -1241,6 +1269,14 @@ def _require_auth() -> None:
     if _auth_token_matches(provided):
         _clear_auth_failures()
         return
+
+    now = time.monotonic()
+    if _auth_throttle(now, reserve_slot=True):
+        raise _json_err(
+            429,
+            {"error": "rate limited", "detail": "too many failed token attempts; retry later"},
+            Retry_After=str(int(_AUTH_FAIL_WINDOW_SECONDS)),
+        )
 
     # Audit trail for brute-force visibility: on a network-reachable server
     # (--allow-remote --token) the throttle bounds guessing, but a silent 401
@@ -1394,20 +1430,24 @@ def _security_headers() -> None:
     # Tokens travel in URLs (?token= share links); never let them leak to a
     # third party via Referer if the dashboard ever navigates off-host.
     response.set_header("Referrer-Policy", "no-referrer")
-    if CORS_ENABLED:
-        # Echo the request origin only when it is explicitly allowed.  Never
-        # emit the wildcard: the API serves unauthenticated binary bytes.
-        origin = request.headers.get("Origin", "")
-        if origin and _normalize_origin(origin) in CORS_ALLOWED_ORIGINS:
-            response.set_header("Access-Control-Allow-Origin", origin)
-            # Append to any existing Vary (compressed responses already carry
-            # "Accept-Encoding") instead of replacing it — a shared cache must
-            # key on both.
-            existing_vary = response.headers.get("Vary", "")
-            combined = ", ".join(v for v in (existing_vary, "Origin") if v)
-            response.set_header("Vary", combined)
+    origin = request.headers.get("Origin", "")
+    if CORS_ENABLED and origin and _normalize_origin(origin) in CORS_ALLOWED_ORIGINS:
+        response.set_header("Access-Control-Allow-Origin", origin)
+        # Append to any existing Vary (compressed responses already carry
+        # "Accept-Encoding") instead of replacing it — a shared cache must
+        # key on both.
+        existing_vary = response.headers.get("Vary", "")
+        combined = ", ".join(v for v in (existing_vary, "Origin") if v)
+        response.set_header("Vary", combined)
         response.set_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         response.set_header("Access-Control-Allow-Headers", "Content-Type")
+        response.set_header("Access-Control-Allow-Credentials", "true")
+    elif origin:
+        # Ensure caches key on Origin even when not allowed.
+        existing_vary = response.headers.get("Vary", "")
+        if "Origin" not in existing_vary:
+            combined = ", ".join(v for v in (existing_vary, "Origin") if v)
+            response.set_header("Vary", combined)
 
 
 @app.route("<path:path>", method="OPTIONS")

@@ -12,7 +12,7 @@
 // The served documents (SPA shell with injected CSS/JS, Potato Mode) are
 // validated separately by tools/lint-served-html.py.
 //
-// Requires: java on PATH, and `npm install` already run (for vnu-jar).
+// Requires: java on PATH, and `bun install` already run (for vnu-jar).
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -26,7 +26,7 @@ const HTML_FILES = ["index.html"];
 const CSS_FILES = ["hljs.css", "print.css", "style.css"];
 
 if (!existsSync(vnuJar)) {
-  console.error("vnu.jar not found; run `npm install` first.");
+  console.error("vnu.jar not found; run `bun install` first.");
   process.exit(2);
 }
 

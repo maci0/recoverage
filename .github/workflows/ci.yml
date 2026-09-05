@@ -35,19 +35,18 @@ jobs:
         with:
           python-version: "3.12"
       - run: uv sync --frozen --extra dev
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: oven-sh/setup-bun@v2
         with:
-          node-version: "22"
-          cache: npm
+          bun-version: "1.4.0"
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5 (v4 deprecated upstream)
         with:
           distribution: temurin
           java-version: "17"
-      - run: npm ci
+      - run: bun install --frozen-lockfile
       - name: "Lint JS/TS (oxlint: Rika-Labs strict + anti-slop)"
-        run: npm run lint:js
+        run: bun run lint:js
       - name: Lint HTML/CSS (Nu Html Checker)
-        run: npm run lint:html
+        run: bun run lint:html
 
   test:
     runs-on: ${{ matrix.os }}

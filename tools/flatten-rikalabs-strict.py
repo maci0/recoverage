@@ -10,8 +10,8 @@ script flattens the `strict` preset chain into a single checked-in JSON that
 drops the missing rules (remapping oxc/no-new-buffer to its oxlint
 equivalent, unicorn/no-new-buffer, which the consuming config enables).
 
-To bump: `npm i -D @rikalabs/oxlint-standards`, then run
-`uv run python tools/flatten-rikalabs-strict.py` and re-run `npm run lint:js`.
+To bump: `bun add -d @rikalabs/oxlint-standards`, then run
+`uv run python tools/flatten-rikalabs-strict.py` and re-run `bun run lint:js`.
 """
 
 from __future__ import annotations
@@ -53,7 +53,7 @@ def load(path: str) -> dict:
 
 def main() -> int:
     if not os.path.isdir(PRESET_DIR):
-        print(f"error: {PRESET_DIR} not found; run `npm install` first", file=sys.stderr)
+        print(f"error: {PRESET_DIR} not found; run `bun install` first", file=sys.stderr)
         return 1
 
     merged: dict = {"plugins": set(), "categories": {}, "rules": {}, "overrides": []}

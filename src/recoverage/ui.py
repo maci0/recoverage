@@ -15,6 +15,7 @@ import rcssmin  # type: ignore[import-untyped]
 import rjsmin  # type: ignore[import-untyped]
 import zstandard as zstd
 
+import recoverage.server as _server
 from recoverage.server import (
     BROTLI_STATIC_QUALITY,
     CACHE_NO_STORE,
@@ -47,8 +48,16 @@ def _build_index_payload() -> bytes:
     """
     assets = _assets_dir()
     html = (assets / "index.html").read_text(encoding="utf-8")
-    css = (assets / "style.css").read_text(encoding="utf-8")
-    js = (assets / "app.js").read_text(encoding="utf-8")
+    try:
+        css = (assets / "style.css").read_text(encoding="utf-8")
+    except OSError:
+        _log.warning("style.css missing — dashboard SPA will render unstyled")
+        css = ""
+    try:
+        js = (assets / "app.js").read_text(encoding="utf-8")
+    except OSError:
+        _log.warning("app.js missing — dashboard SPA will not function")
+        js = ""
     try:
         vanjs = (assets / "van.min.js").read_text(encoding="utf-8")
     except OSError:
@@ -106,18 +115,16 @@ def warm_index_cache() -> None:
     """
     global CACHED_INDEX_PAYLOAD
     try:
+        payload = _build_index_payload()
+        compressed_variants: dict[str, bytes] = {}
+        for encoding in ("zstd", "br", "gzip", ""):
+            c, _ = compress_payload(payload, encoding, brotli_quality=BROTLI_STATIC_QUALITY)
+            compressed_variants[encoding] = c
         with INDEX_LOCK:
             if CACHED_INDEX_PAYLOAD is None:
-                CACHED_INDEX_PAYLOAD = _build_index_payload()
-            payload = CACHED_INDEX_PAYLOAD
-            # The exact encodings _best_encoding can return; passing each as
-            # the Accept-Encoding value selects it directly.
-            for encoding in ("zstd", "br", "gzip", ""):
-                if encoding not in CACHED_INDEX_COMPRESSED:
-                    compressed, _ = compress_payload(
-                        payload, encoding, brotli_quality=BROTLI_STATIC_QUALITY
-                    )
-                    CACHED_INDEX_COMPRESSED[encoding] = compressed
+                CACHED_INDEX_PAYLOAD = payload
+            for enc, comp in compressed_variants.items():
+                CACHED_INDEX_COMPRESSED.setdefault(enc, comp)
     except Exception:
         _log.warning(
             "SPA shell cache warm-up failed — first index request will build it instead",
@@ -136,7 +143,13 @@ def handle_potato() -> bytes | Any:
         # WAL-aware snapshot (see _snapshot_db_mtime), not raw st_mtime: a
         # rebuild that commits only to -wal must still mint a new ETag or
         # browsers keep a stale 304.  Same contract as /data, /asm, /bytes.
-        etag = _etag_or_304(_snapshot_db_mtime(), request.query_string)
+        qs = request.query_string
+        if isinstance(qs, bytes):
+            qs = qs.decode("utf-8", errors="replace")
+        # Redact token from ETag input so query-string ETag doesn't leak it.
+        if "token=" in qs:
+            qs = "&".join(p for p in qs.split("&") if not p.startswith("token="))
+        etag = _etag_or_304(_snapshot_db_mtime(), qs)
         body = render_potato(urlparse(request.url)).encode("utf-8")
         resp_body = _compressed(body, "text/html; charset=utf-8")
 
@@ -168,14 +181,13 @@ def handle_index() -> bytes:
     # the SPA's own fetch/EventSource calls authenticate without any
     # frontend change.  API clients can use Authorization: Bearer instead.
     global CACHED_INDEX_PAYLOAD
-    from recoverage.server import _AUTH_TOKEN, _auth_token_matches
 
-    if _AUTH_TOKEN and _auth_token_matches(request.query.get("token", "")):
+    if _server._AUTH_TOKEN and _server._auth_token_matches(request.query.get("token", "")):
         # Header failure must not break the page.
         with contextlib.suppress(Exception):
             response.set_header(
                 "Set-Cookie",
-                f"recoverage_token={_AUTH_TOKEN}; Path=/; HttpOnly; SameSite=Strict",
+                f"recoverage_token={_server._AUTH_TOKEN}; Path=/; HttpOnly; SameSite=Strict",
             )
 
     accept_encoding = request.headers.get("Accept-Encoding", "")
@@ -183,16 +195,38 @@ def handle_index() -> bytes:
 
     with INDEX_LOCK:
         if CACHED_INDEX_PAYLOAD is None:
-            CACHED_INDEX_PAYLOAD = _build_index_payload()
-        payload = CACHED_INDEX_PAYLOAD
-        if encoding not in CACHED_INDEX_COMPRESSED:
-            # Maximum brotli effort here: this runs once per encoding and the
-            # result is cached, and the byte budget is the whole point.
-            compressed, _ = compress_payload(
-                payload, accept_encoding, brotli_quality=BROTLI_STATIC_QUALITY
-            )
-            CACHED_INDEX_COMPRESSED[encoding] = compressed
-        body = CACHED_INDEX_COMPRESSED[encoding]
+            payload_local: bytes | None = None
+            encoding_local = encoding
+            need_build = True
+        else:
+            payload = CACHED_INDEX_PAYLOAD
+            if encoding in CACHED_INDEX_COMPRESSED:
+                body = CACHED_INDEX_COMPRESSED[encoding]
+                return _finalized(
+                    body, "text/html; charset=utf-8", encoding, Cache_Control=CACHE_NO_STORE
+                )
+            # Need to compress for this encoding but payload already cached.
+            payload_local = payload
+            encoding_local = encoding
+            need_build = False
+    if need_build:
+        payload_local = _build_index_payload()
+        compressed, _ = compress_payload(
+            payload_local, accept_encoding, brotli_quality=BROTLI_STATIC_QUALITY
+        )
+        with INDEX_LOCK:
+            if CACHED_INDEX_PAYLOAD is None:
+                CACHED_INDEX_PAYLOAD = payload_local
+            CACHED_INDEX_COMPRESSED.setdefault(encoding_local, compressed)
+            body = CACHED_INDEX_COMPRESSED[encoding_local]
+    else:
+        assert payload_local is not None
+        compressed, _ = compress_payload(
+            payload_local, accept_encoding, brotli_quality=BROTLI_STATIC_QUALITY
+        )
+        with INDEX_LOCK:
+            CACHED_INDEX_COMPRESSED.setdefault(encoding_local, compressed)
+            body = CACHED_INDEX_COMPRESSED[encoding_local]
 
     return _finalized(body, "text/html; charset=utf-8", encoding, Cache_Control=CACHE_NO_STORE)
 

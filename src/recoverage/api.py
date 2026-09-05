@@ -158,7 +158,8 @@ def _data_cache_checkout(
             return None, event
     # Follower path (outside the lock): the leader's finally always sets the
     # event — success, error, or 404 short-circuit alike.
-    event.wait()
+    # Timeout prevents an indefinite block if the leader dies without setting.
+    event.wait(timeout=30.0)
     with _DATA_CACHE_LOCK:
         return _DATA_CACHE.get(key), None
 
@@ -249,6 +250,12 @@ def _require_target(c: sqlite3.Cursor, target: str) -> Any | None:
     """
     try:
         _, targets_list = resolve_targets(c)
+    except sqlite3.OperationalError as exc:
+        # Transient SQLITE_BUSY / locked — must surface as 503, not be
+        # swallowed as "unknown target" or silent success.
+        if "busy" in str(exc).lower() or "locked" in str(exc).lower():
+            raise
+        return None  # DB unavailable — let the endpoint's own 503 path run
     except sqlite3.Error:
         return None  # DB unavailable — let the endpoint's own 503 path run
     if any(t.get("id") == target for t in targets_list):
@@ -604,18 +611,26 @@ def _build_search_index(c: sqlite3.Cursor, target: str) -> dict[str, Any]:
     colliding global's VA.
     """
     index: dict[str, Any] = {}
-    # Iterate the cursor, not fetchall(): the functions table holds tens of
-    # thousands of rows on real projects, and the intermediate row list would
-    # double the transient footprint of an already multi-MB payload build.
+    # Use fetchall() to snapshot rows before reusing the cursor for the
+    # globals query — iterating the cursor directly while re-executing on
+    # the same cursor is fragile if the caller holds an open iteration.
     c.execute(
         "SELECT name, vaStart, symbol FROM functions WHERE target = ?",
         (target,),
     )
-    for row in c:
+    for row in c.fetchall():
         index.setdefault(row["name"], {"va": row["vaStart"], "symbol": row["symbol"]})
-    c.execute("SELECT name, va FROM globals WHERE target = ?", (target,))
-    for row in c:
-        index.setdefault(row["name"], {"va": hex(row["va"]) if row["va"] else "", "symbol": ""})
+    # Separate cursor for globals so the functions iteration above cannot
+    # be clobbered by cursor reuse.
+    c2 = c.connection.cursor()
+    try:
+        c2.execute("SELECT name, va FROM globals WHERE target = ?", (target,))
+        for row in c2.fetchall():
+            va_val = row["va"]
+            va_str = hex(va_val) if va_val is not None else ""
+            index.setdefault(row["name"], {"va": va_str, "symbol": ""})
+    finally:
+        c2.close()
     return index
 
 
@@ -745,7 +760,11 @@ _MAX_SLICE_SIZE = 4096
 def handle_api_functions_list(target: str) -> bytes | Any:
     """Paginated function listing with optional filters."""
     status_filter = request.query.get("status", "").strip() or None
-    search = request.query.get("search", "").strip() or None
+    _raw_search = request.query.get("search", "").strip() or None
+    # Bound search length to prevent unbounded LIKE patterns (DoS).
+    if _raw_search is not None and len(_raw_search) > 500:
+        return _json_err(400, {"error": "search query too long", "detail": "max 500 characters"})
+    search = _raw_search
     sort_param = request.query.get("sort", "va").strip()  # field:dir
     try:
         limit = min(max(int(request.query.get("limit", 50)), 1), _MAX_BATCH_LOOKUP)
@@ -767,8 +786,11 @@ def handle_api_functions_list(target: str) -> bytes | Any:
         sf, sd = sort_param.split(":", 1)
         if sf in allowed_sort:
             sort_field = sf
-        if sd.lower() == "desc":
-            sort_dir = "DESC"
+            if sd.lower() == "desc":
+                sort_dir = "DESC"
+            elif sd.lower() != "asc" and sd != "":
+                sort_dir = "ASC"
+        # unknown sort_field → ignore entire sort_param (don't apply tainted sort_dir)
     elif sort_param in allowed_sort:
         sort_field = sort_param
 
@@ -904,7 +926,15 @@ def _batch_request_vas() -> tuple[list[int], Any | None]:
             va_ints.append(entry)
         elif isinstance(entry, str):
             try:
-                parsed_va = int(entry.strip(), 16)
+                s = entry.strip()
+                # Strip optional 0x/0X prefix before base-16 parse so both
+                # "0x1000" and bare "10001000" are accepted (auditor: int(...,16) with
+                # 0x prefix is implementation-defined; be explicit).
+                if s.lower().startswith("0x"):
+                    s = s[2:]
+                if not s:
+                    raise ValueError("empty VA")
+                parsed_va = int(s, 16)
                 if parsed_va < 0:
                     raise ValueError("negative VA")
                 if parsed_va > VA_MAX:
@@ -1134,10 +1164,12 @@ def handle_api_asm(target: str) -> bytes | Any:
                 }
                 for insn in md.disasm(code_bytes, va)
             ]
+            headers_asm: dict[str, str] = {"Cache_Control": CACHE_REVALIDATE}
+            if asm_etag is not None:
+                headers_asm["ETag"] = asm_etag
             return _json_ok(
                 {"instructions": instructions},
-                Cache_Control=CACHE_REVALIDATE,
-                ETag=asm_etag,
+                **headers_asm,
             )
 
         # Default: plain text
@@ -1151,7 +1183,10 @@ def handle_api_asm(target: str) -> bytes | Any:
                 },
             )
 
-        return _json_ok({"asm": asm_text}, Cache_Control=CACHE_REVALIDATE, ETag=asm_etag)
+        headers_asm2: dict[str, str] = {"Cache_Control": CACHE_REVALIDATE}
+        if asm_etag is not None:
+            headers_asm2["ETag"] = asm_etag
+        return _json_ok({"asm": asm_text}, **headers_asm2)
 
 
 @app.get("/api/targets/<target>/sections/<section>/bytes")
@@ -1181,6 +1216,10 @@ def handle_api_bytes(target: str, section: str) -> bytes | Any:
         sec = _file_backed_section(c, target, section, "fileOffset", "size")
         if req_offset >= sec["size"]:
             return _json_err(400, {"error": "offset beyond section bounds"})
+        # Overflow guard: req_offset + req_size exceeding section size would
+        # slice past the section's file range.
+        if req_offset + req_size > sec["size"]:
+            return _json_err(400, {"error": "offset+size beyond section bounds"})
         target_data = _load_dll(target)
         if target_data is None:
             return _dll_not_found(target, "DLL not found")
@@ -1194,6 +1233,9 @@ def handle_api_bytes(target: str, section: str) -> bytes | Any:
             return _json_err(400, {"error": "offset beyond section bounds"})
         chunk = target_data[file_start : file_start + req_size]
 
+        headers_bytes: dict[str, str] = {"Cache_Control": CACHE_REVALIDATE}
+        if bytes_etag is not None:
+            headers_bytes["ETag"] = bytes_etag
         return _json_ok(
             {
                 "target": target,
@@ -1205,8 +1247,7 @@ def handle_api_bytes(target: str, section: str) -> bytes | Any:
                 "hex": _format_hex_dump(chunk, base_offset=req_offset, max_bytes=None),
                 "raw": list(chunk),
             },
-            Cache_Control=CACHE_REVALIDATE,
-            ETag=bytes_etag,
+            **headers_bytes,
         )
 
 

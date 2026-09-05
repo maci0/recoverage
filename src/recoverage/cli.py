@@ -321,7 +321,7 @@ def open_browser(url: str) -> None:
     elif system == "Darwin":
         _open_and_reap(url, ["open", url])
     elif system == "Windows":
-        _open_and_reap(url, ["start", url], shell=True)
+        _open_and_reap(url, ["cmd", "/c", "start", "", url])
     else:
         webbrowser.open(url)
 
@@ -638,13 +638,22 @@ def export(
                 )
 
     elif output_format == ExportFormat.md:
+
+        def _md_safe(s: str) -> str:
+            return s.replace("|", "\\|").replace("\n", " ").replace("\r", "")
+
         for data in all_data:
-            typer.echo(f"\n## {data['target']}\n")
+            typer.echo(f"\n## {_md_safe(data['target'])}\n")
             typer.echo("| Section | Size | Cells | Exact | Reloc | Match | Stub | Coverage |")
             typer.echo("|---------|------|-------|-------|-------|-------|------|----------|")
             for sec_name, sec in sorted(data["sections"].items()):
+                row = (
+                    f"| {_md_safe(sec_name)}"
+                    f" | {sec.get('size_bytes', 0):,} B | {sec['total_cells']}"
+                )
                 typer.echo(
-                    f"| {sec_name} | {sec.get('size_bytes', 0):,} B | {sec['total_cells']} "
+                    row
+                    + f" | {sec['exact']} | {sec['reloc']} | {sec['near_match']} "
                     f"| {sec['exact']} | {sec['reloc']} | {sec['near_match']} "
                     f"| {sec['stub']} | {sec['coverage_pct']:.1f}% |"
                 )
@@ -842,5 +851,10 @@ def main() -> None:
         # final flush succeeds (no-op when stdout has no real fd), then report
         # the truncation with a non-zero status.
         with contextlib.suppress(OSError, ValueError):
-            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+            fd = os.open(os.devnull, os.O_WRONLY)
+            try:
+                os.dup2(fd, sys.stdout.fileno())
+            finally:
+                with contextlib.suppress(OSError):
+                    os.close(fd)
         raise SystemExit(1) from None

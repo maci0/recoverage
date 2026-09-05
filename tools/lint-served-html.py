@@ -36,7 +36,7 @@ VNU_JAR = REPO_ROOT / "node_modules" / "vnu-jar" / "build" / "dist" / "vnu.jar"
 
 def main() -> int:
     if not VNU_JAR.is_file():
-        print("vnu.jar not found; run `npm install` first.")
+        print("vnu.jar not found; run `bun install` first.")
         return 2
 
     with tempfile.TemporaryDirectory() as td:

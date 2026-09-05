@@ -57,7 +57,7 @@ recoverage/
 Frontend lint tooling lives at the repo root: `package.json` (oxlint, `@oxlint/plugins`, `@rikalabs/oxlint-standards`, vnu-jar), `oxlint.config.ts` (JS/TS lint config), `tools/lint-html.mjs` (vnu check of the static HTML/CSS assets), `tools/lint-served-html.py` (vnu check of the documents the server actually serves: the SPA shell with injected CSS/JS and Potato Mode), `tools/smoke.py` (end-to-end server smoke run by the CI `smoke` job), and `tools/oxlint/`:
 
 - `tools/oxlint/anti-slop/` — vendored copy of dmmulroy/anti-slop (keep in sync with upstream).
-- `tools/oxlint/rikalabs-strict.json` — flattened copy of the `strict` preset from `@rikalabs/oxlint-standards`, regenerated with `tools/flatten-rikalabs-strict.py` (bump the package, re-run the script, re-run `npm run lint:js`). It is flattened because the published presets reference rules oxlint 1.79.0 does not implement. `oxlint.config.ts` documents the platform exceptions (browser-only SPA: `env.browser`, `typeAware: false`, style off-list with rationale).
+- `tools/oxlint/rikalabs-strict.json` — flattened copy of the `strict` preset from `@rikalabs/oxlint-standards`, regenerated with `tools/flatten-rikalabs-strict.py` (bump the package, re-run the script, re-run `bun run lint:js`). It is flattened because the published presets reference rules oxlint 1.79.0 does not implement. `oxlint.config.ts` documents the platform exceptions (browser-only SPA: `env.browser`, `typeAware: false`, style off-list with rationale).
 
 ## Commands
 
@@ -81,10 +81,10 @@ recoverage check --min-coverage 60  # CI gate
 uv run pytest tests/ -v
 
 # Frontend linting (requires node + java on PATH)
-npm install                 # one-time: oxlint, @oxlint/plugins, @rikalabs/oxlint-standards, vnu-jar
-npm run lint                # oxlint (Rika-Labs strict preset + vendored anti-slop) + vnu HTML/CSS
-npm run lint:js             # oxlint only
-npm run lint:html           # vnu only: static assets + served pages (SPA shell, Potato Mode)
+bun install                 # one-time: oxlint, @oxlint/plugins, @rikalabs/oxlint-standards, vnu-jar
+bun run lint                # oxlint (Rika-Labs strict preset + vendored anti-slop) + vnu HTML/CSS
+bun run lint:js             # oxlint only
+bun run lint:html           # vnu only: static assets + served pages (SPA shell, Potato Mode)
 ```
 
 ## API Endpoints
