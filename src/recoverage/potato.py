@@ -31,14 +31,14 @@ from bottle import HTTPResponse, SimpleTemplate  # type: ignore[import-untyped]
 from recoverage import __version__
 from recoverage._paths import sqlite_ro_uri
 from recoverage.server import (
-    _FN_JSON_SQL,
-    _GLOBAL_JSON_SQL,
     HAS_CAPSTONE,
     _cells_json_rows,
     _db_path,
     _escape_like,
     _evict_oldest,
+    _fn_json_sql,
     _format_hex_dump,
+    _global_json_sql,
     _load_dll,
     _load_metadata,
     _parse_va_candidates,
@@ -1921,7 +1921,7 @@ def _panel_function_detail(
     # by va; fall back to name for legacy/name-form cells.
     va_candidates = _parse_va_candidates(fn_name)
 
-    fn_sql = "SELECT " + _FN_JSON_SQL + " FROM functions WHERE target=? AND "
+    fn_sql = "SELECT " + _fn_json_sql(c) + " FROM functions WHERE target=? AND "
     fn_row = None
     for cand in va_candidates:
         c.execute(fn_sql + "va=?", (target, cand))
@@ -2094,7 +2094,7 @@ def _render_panel(
         gl_row = None
         for cand in _parse_va_candidates(fn_name):
             c.execute(
-                "SELECT " + _GLOBAL_JSON_SQL + " FROM globals WHERE target=? AND va=?",
+                "SELECT " + _global_json_sql(c) + " FROM globals WHERE target=? AND va=?",
                 (target, cand),
             )
             gl_row = c.fetchone()
@@ -2102,7 +2102,7 @@ def _render_panel(
                 break
         if gl_row is None:
             c.execute(
-                "SELECT " + _GLOBAL_JSON_SQL + " FROM globals WHERE target=? AND name=?",
+                "SELECT " + _global_json_sql(c) + " FROM globals WHERE target=? AND name=?",
                 (target, fn_name),
             )
             gl_row = c.fetchone()

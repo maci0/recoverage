@@ -776,6 +776,50 @@ def _parse_va_candidates(raw_va: str) -> list[int]:
 
 # ── SQL fragments ──────────────────────────────────────────────────
 
+#: Optional v6 columns, probed per connection: older DBs (v5 and below)
+#: lack them, and the endpoints degrade instead of 500ing.
+_V6_FUNCTION_COLS = ("updated_by", "updated_at")
+_V6_GLOBAL_COLS = ("status",)
+_V6_VERIFY_COLS = ("reg_delta", "effective_match")
+
+
+def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    """Column names of *table*; empty set when the table is missing."""
+    try:
+        rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    except sqlite3.Error:
+        return set()
+    return {r[1] for r in rows}
+
+
+def _fn_json_sql(conn: sqlite3.Connection) -> str:
+    """Function detail projection, extended with v6 columns when present."""
+    cols = _table_columns(conn, "functions")
+    extra = "".join(f", '{c}', {c}" for c in _V6_FUNCTION_COLS if c in cols)
+    return _FN_JSON_SQL[:-1] + extra + ")"
+
+
+def _global_json_sql(conn: sqlite3.Connection) -> str:
+    """Global detail projection, extended with v6 status when present."""
+    cols = _table_columns(conn, "globals")
+    extra = "".join(f", '{c}', {c}" for c in _V6_GLOBAL_COLS if c in cols)
+    return _GLOBAL_JSON_SQL[:-1] + extra + ")"
+
+
+def _verify_select(conn: sqlite3.Connection) -> str:
+    """verify_results column list, extended with v6 columns when present."""
+    cols = _table_columns(conn, "verify_results")
+    extra = "".join(f", {c}" for c in _V6_VERIFY_COLS if c in cols)
+    return "SELECT va, verified_at, byte_delta, diff_lines, similarity" + extra
+
+
+def _verify_one_select(conn: sqlite3.Connection) -> str:
+    """Single-row verify_results projection, extended when v6 is present."""
+    cols = _table_columns(conn, "verify_results")
+    extra = "".join(f", {c}" for c in _V6_VERIFY_COLS if c in cols)
+    return "SELECT verified_at, byte_delta, diff_lines, similarity" + extra
+
+
 _FN_JSON_SQL = (
     "json_object("
     "'va', va, 'name', name, 'vaStart', vaStart, 'size', size, "
@@ -880,7 +924,7 @@ def _load_metadata(c: sqlite3.Cursor, target: str) -> dict[str, Any]:
     return data
 
 
-_KNOWN_SCHEMA_VERSIONS: frozenset[str] = frozenset({"3", "4"})
+_KNOWN_SCHEMA_VERSIONS: frozenset[str] = frozenset({"3", "4", "5", "6"})
 
 # Schema check memoized per DB (mtime_ns, size): the check is two queries
 # (metadata + full sqlite_master scan) that would otherwise run on every
@@ -1037,10 +1081,14 @@ def _check_schema_version_uncached(conn: sqlite3.Connection) -> str:
                 "section_cell_stats",
             }
             missing = required - present
-            if not missing and version == "4":
+            if not missing and version in ("4", "5", "6"):
                 # Object names present — verify the query-critical columns.
                 # A DB stamped "4" whose functions table lacks textOffset /
                 # similarity (or whose view is stale) 500s at query time.
+                # v6 additions (updated_by/updated_at, globals.status,
+                # verify reg_delta/effective_match) are read tolerantly by
+                # the endpoints, so absence degrades rather than 503s —
+                # but the shape gate still reports them for visibility.
                 missing |= _missing_required_columns(conn)
             if missing:
                 _log.warning(

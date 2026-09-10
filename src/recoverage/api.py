@@ -18,8 +18,6 @@ from recoverage import __version__
 from recoverage import server as _server
 from recoverage.regen import REGEN_TIMEOUT, run_regen_step
 from recoverage.server import (
-    _FN_JSON_SQL,
-    _GLOBAL_JSON_SQL,
     CACHE_NO_STORE,
     CACHE_REVALIDATE,
     DLL_DATA,
@@ -35,9 +33,11 @@ from recoverage.server import (
     _db_path,
     _escape_like,
     _etag_or_304,
+    _fn_json_sql,
     _format_hex_dump,
     _get_capstone_md,
     _get_targets_config,
+    _global_json_sql,
     _hostname_of,
     _json_err,
     _json_ok,
@@ -50,6 +50,8 @@ from recoverage.server import (
     _project_dir,
     _snapshot_db_mtime,
     _target_filename,
+    _verify_one_select,
+    _verify_select,
     app,
     clear_disassembly_cache,
     clear_target_cache,
@@ -848,11 +850,16 @@ def _last_verify_payload(vr: sqlite3.Row) -> dict[str, Any]:
     """Shape a verify_results row as the ``last_verify`` object attached to
     function details — ONE definition shared by the single-VA and batch
     endpoints so the two response shapes cannot drift apart."""
+    keys = vr.keys()
     return {
         "verified_at": vr["verified_at"],
         "byte_delta": vr["byte_delta"],
         "diff_lines": vr["diff_lines"],
         "similarity": vr["similarity"],
+        "reg_delta": vr["reg_delta"] if "reg_delta" in keys else None,
+        "effective_match": bool(vr["effective_match"])
+        if "effective_match" in keys and vr["effective_match"] is not None
+        else None,
     }
 
 
@@ -972,7 +979,7 @@ def handle_api_functions_batch(target: str) -> bytes | Any:
         # Functions first (parity with GET /functions/<va>), then globals.
         fn_by_va: dict[int, dict[str, Any]] = {}
         c.execute(
-            f"SELECT {_FN_JSON_SQL} FROM functions WHERE target = ? AND va IN ({placeholders})",
+            f"SELECT {_fn_json_sql(c)} FROM functions WHERE target = ? AND va IN ({placeholders})",
             [target, *unique_vas],
         )
         for row in c.fetchall():
@@ -981,7 +988,7 @@ def handle_api_functions_batch(target: str) -> bytes | Any:
 
         if fn_by_va:
             c.execute(
-                "SELECT va, verified_at, byte_delta, diff_lines, similarity FROM verify_results"
+                f"{_verify_select(c)} FROM verify_results"
                 f" WHERE target = ? AND va IN ({placeholders})",
                 [target, *unique_vas],
             )
@@ -991,7 +998,8 @@ def handle_api_functions_batch(target: str) -> bytes | Any:
                     fn["last_verify"] = _last_verify_payload(vr)
 
         c.execute(
-            f"SELECT {_GLOBAL_JSON_SQL} FROM globals WHERE target = ? AND va IN ({placeholders})",
+            f"SELECT {_global_json_sql(c)} FROM globals "
+            f"WHERE target = ? AND va IN ({placeholders})",
             [target, *unique_vas],
         )
         globals_by_va: dict[int, dict[str, Any]] = {}
@@ -1038,12 +1046,12 @@ def handle_api_function(target: str, va: str) -> bytes | Any:
             return c.fetchone()
 
         # Functions win over globals (parity with the batch endpoint).
-        row = _lookup("functions", _FN_JSON_SQL)
+        row = _lookup("functions", _fn_json_sql(c))
         if row:
             fn_json = json.loads(row[0])
             # Attach the last `rebrew verify -o` record for this function.
             c.execute(
-                "SELECT verified_at, byte_delta, diff_lines, similarity FROM verify_results"
+                f"{_verify_one_select(c)} FROM verify_results"
                 " WHERE target = ? AND va = ?",
                 (target, fn_json["va"]),
             )
@@ -1052,7 +1060,7 @@ def handle_api_function(target: str, va: str) -> bytes | Any:
                 fn_json["last_verify"] = _last_verify_payload(vr)
             return _json_ok(json.dumps(fn_json).encode("utf-8"), Cache_Control=no_cache)
 
-        row = _lookup("globals", _GLOBAL_JSON_SQL)
+        row = _lookup("globals", _global_json_sql(c))
         if row:
             return _json_ok(row[0].encode("utf-8"), Cache_Control=no_cache)
 
