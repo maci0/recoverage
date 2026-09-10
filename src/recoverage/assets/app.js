@@ -1092,6 +1092,7 @@ const App = () => {
           fn.size_reason ? MetaItem("Size Source", fn.size_reason) : null,
           fn.last_verify ? MetaItem("Verified", `${fn.last_verify.verified_at}${fn.last_verify.byte_delta == null ? "" : ` (Δ${fn.last_verify.byte_delta}B)`}`) : null,
           fn.last_verify && fn.last_verify.similarity != null ? MetaItem("Code Sim", `${fn.last_verify.similarity.toFixed(1)}%`) : null,
+          fn.last_verify && fn.last_verify.reg_delta != null ? MetaItem("Reg Delta", `${fn.last_verify.reg_delta}`) : null,
           fn.last_verify && fn.last_verify.effective_match ? MetaItem("Effective", "register-only delta — prove candidate") : null,
           fn.updated_by ? MetaItem("Updated By", `${fn.updated_by}${fn.updated_at ? ` (${fn.updated_at})` : ""}`) : null,
           fn.similarity == null ? null : MetaItem("Similarity", `${(fn.similarity * 100).toFixed(1)}%`),

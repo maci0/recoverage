@@ -910,6 +910,7 @@ def render_potato(parsed_url: ParseResult) -> str:
     db_path = _db_path()
     try:
         conn = sqlite3.connect(sqlite_ro_uri(db_path), uri=True)
+        conn.row_factory = sqlite3.Row
     except sqlite3.Error:
         _log.warning("Potato mode: database unavailable at %s", db_path)
         # Signal failure, not a 200 page: monitoring and scripts must see the
@@ -1845,9 +1846,10 @@ def _panel_fn_attach_verify(c: sqlite3.Cursor, target: str, fn_data: dict[str, A
     if fn_va_resolved is None:
         return
     try:
+        cols = {r[1] for r in c.execute("PRAGMA table_info(verify_results)").fetchall()}
+        extra = "".join(f", {col}" for col in ("reg_delta", "effective_match") if col in cols)
         c.execute(
-            "SELECT verified_at, byte_delta, diff_lines, similarity"
-            " FROM verify_results WHERE target=? AND va=?",
+            "SELECT verified_at, byte_delta, diff_lines, similarity" + extra + " FROM verify_results WHERE target=? AND va=?",
             (target, int(fn_va_resolved)),
         )
         vr = c.fetchone()
@@ -1862,6 +1864,11 @@ def _panel_fn_attach_verify(c: sqlite3.Cursor, target: str, fn_data: dict[str, A
         fn_data["last_verify_diff_lines"] = vr[2]
     if vr[3] is not None:
         fn_data["last_verify_similarity"] = f"{vr[3]:.1f}%"
+    keys = vr.keys() if hasattr(vr, "keys") else set()
+    if "reg_delta" in keys and vr["reg_delta"] is not None:
+        fn_data["last_verify_reg_delta"] = vr["reg_delta"]
+    if "effective_match" in keys and vr["effective_match"]:
+        fn_data["last_verify_effective"] = True
 
 
 def _panel_fn_source_text(data: dict[str, Any], target: str, fn_data: dict[str, Any]) -> str | None:
