@@ -10,8 +10,8 @@ from urllib.parse import quote, urlparse
 
 import pytest
 from conftest import HAS_DB, get_first_target, wsgi_get
+from rebrew_workspace import sqlite_ro_uri
 
-from recoverage._paths import sqlite_ro_uri
 from recoverage.potato import (
     _build_progress,
     _build_url,

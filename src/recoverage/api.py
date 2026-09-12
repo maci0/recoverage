@@ -14,6 +14,8 @@ from collections.abc import Generator
 from pathlib import Path
 from typing import Any
 
+from rebrew_workspace import VA_MAX, parse_va_candidates
+
 from recoverage import __version__
 from recoverage import server as _server
 from recoverage.regen import REGEN_TIMEOUT, run_regen_step
@@ -25,7 +27,6 @@ from recoverage.server import (
     HAS_CAPSTONE,
     HAS_PYGMENTS,
     LOOPBACK_HOSTS,
-    VA_MAX,
     _best_encoding,
     _cell_bucket_row,
     _cells_json_rows,
@@ -45,7 +46,6 @@ from recoverage.server import (
     _load_dll,
     _load_metadata,
     _open_db,
-    _parse_va_candidates,
     _peer_is_loopback,
     _project_dir,
     _snapshot_db_mtime,
@@ -1027,10 +1027,10 @@ def handle_api_function(target: str, va: str) -> bytes | Any:
     with _target_cursor(target) as c:
         no_cache = CACHE_NO_STORE
 
-        # Parse va into candidate lookup ints (shared spelling parser — see
-        # _parse_va_candidates); anything unparseable falls through to the
-        # exact-name lookup below.
-        va_candidates = _parse_va_candidates(va.strip())
+        # Parse va into candidate lookup ints (shared spelling parser:
+        # rebrew_workspace.parse_va_candidates); anything unparseable falls
+        # through to the exact-name lookup below.
+        va_candidates = parse_va_candidates(va.strip())
         is_numeric = bool(va_candidates)
 
         def _lookup(table: str, json_sql: str) -> Any | None:
@@ -1115,7 +1115,7 @@ def handle_api_asm(target: str) -> bytes | Any:
     # which spell decimal — parsing those digits as base-16 read an address
     # orders of magnitude past every section and rejected each
     # undocumented-block disassembly with "beyond section end".
-    va_candidates = _parse_va_candidates(raw_va)
+    va_candidates = parse_va_candidates(raw_va)
     if not va_candidates:
         return _json_err(400, {"error": "invalid va or size"})
 

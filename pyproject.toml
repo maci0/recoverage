@@ -30,6 +30,10 @@ dependencies = [
     "bottle>=0.13",
     "brotli>=1.1",
     "rcssmin>=1.1",
+    # Shared rebrew-project.toml + coverage.db resolution (stdlib only), so
+    # recoverage does not carry its own copy.  Resolved from the sibling
+    # checkout by [tool.uv.sources] below.
+    "rebrew-workspace",
     "rich>=15.0.0",
     "rjsmin>=1.2",
     "typer>=0.27.2",
@@ -70,6 +74,12 @@ recoverage = ["assets/*"]
 
 [tool.uv]
 package = true
+
+[tool.uv.sources]
+# Sibling-checkout path dep (see `rebrew-workspace` above): uv resolves it from
+# ../rebrew-workspace relative to this pyproject.toml, keeping the manifest
+# free of machine-specific absolute paths.
+rebrew-workspace = { path = "../rebrew-workspace", editable = true }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

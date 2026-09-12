@@ -27,9 +27,9 @@ from urllib.parse import ParseResult, parse_qs
 from urllib.parse import quote as _url_quote
 
 from bottle import HTTPResponse, SimpleTemplate  # type: ignore[import-untyped]
+from rebrew_workspace import parse_va_candidates, sqlite_ro_uri
 
 from recoverage import __version__
-from recoverage._paths import sqlite_ro_uri
 from recoverage.server import (
     HAS_CAPSTONE,
     _cells_json_rows,
@@ -41,7 +41,6 @@ from recoverage.server import (
     _global_json_sql,
     _load_dll,
     _load_metadata,
-    _parse_va_candidates,
     _snapshot_db_mtime,
     get_disassembly,
     resolve_targets,
@@ -1925,10 +1924,10 @@ def _panel_function_detail(
     caller can try the globals table.
     """
     # Cell function entries are VA strings ("0x10001000"), matching the SPA's
-    # /functions/<va> route — resolve via the shared spelling parser (see
-    # server._parse_va_candidates: 0x-hex, bare hex, or decimal) and look up
-    # by va; fall back to name for legacy/name-form cells.
-    va_candidates = _parse_va_candidates(fn_name)
+    # /functions/<va> route.  Resolve via the shared spelling parser
+    # (rebrew_workspace.parse_va_candidates: 0x-hex, bare hex, or decimal) and
+    # look up by va; fall back to name for legacy/name-form cells.
+    va_candidates = parse_va_candidates(fn_name)
 
     fn_sql = "SELECT " + _fn_json_sql(c) + " FROM functions WHERE target=? AND "
     fn_row = None
@@ -2101,7 +2100,7 @@ def _render_panel(
         # already resolves against functions), so try VA candidates first and
         # fall back to the exact-name lookup for legacy name-form cells.
         gl_row = None
-        for cand in _parse_va_candidates(fn_name):
+        for cand in parse_va_candidates(fn_name):
             c.execute(
                 "SELECT " + _global_json_sql(c) + " FROM globals WHERE target=? AND va=?",
                 (target, cand),

@@ -484,12 +484,26 @@ wheels = [
 ]
 
 [[package]]
+name = "rebrew-workspace"
+version = "0.1.0"
+source = { editable = "../rebrew-workspace" }
+
+[package.metadata]
+requires-dist = [
+    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.3" },
+]
+provides-extras = ["dev"]
+
+[[package]]
 name = "recoverage"
 source = { editable = "." }
 dependencies = [
     { name = "bottle" },
     { name = "brotli" },
     { name = "rcssmin" },
+    { name = "rebrew-workspace" },
     { name = "rich" },
     { name = "rjsmin" },
     { name = "typer" },
@@ -522,6 +536,7 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.1.1" },
     { name = "pytest-playwright", marker = "extra == 'playwright'", specifier = ">=0.6" },
     { name = "rcssmin", specifier = ">=1.1" },
+    { name = "rebrew-workspace", editable = "../rebrew-workspace" },
     { name = "rich", specifier = ">=15.0.0" },
     { name = "rjsmin", specifier = ">=1.2" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.16.5" },

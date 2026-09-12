@@ -124,6 +124,7 @@ Required:
 - `bottle>=0.13` (web server)
 - `brotli>=1.1` (Brotli compression)
 - `rcssmin>=1.1` (CSS minification)
+- `rebrew-workspace` (shared `rebrew-project.toml` + coverage.db resolution; sibling path dep pinned in `[tool.uv.sources]`)
 - `rich>=13.0` (terminal tables)
 - `rjsmin>=1.2` (JS minification)
 - `typer>=0.9` (CLI framework)

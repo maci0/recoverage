@@ -10,7 +10,6 @@ Reads the coverage database from the path resolved by
 
 from __future__ import annotations
 
-import contextlib
 import functools
 import gzip
 import hashlib
@@ -22,7 +21,6 @@ import logging
 import sqlite3
 import threading
 import time
-import tomllib
 from collections import deque
 from collections.abc import Sequence
 from pathlib import Path
@@ -33,7 +31,20 @@ import bottle  # type: ignore[import-untyped]
 import brotli  # type: ignore[import-untyped]
 import zstandard as zstd
 
-from recoverage._paths import _db_path, sqlite_ro_uri
+# SCHEMA_TARGET is the reserved metadata target holding the schema-level
+# db_version stamp (written by rebrew build-db).  It is NOT a real project
+# target and must never appear in target enumeration, stats, or the dashboard
+# dropdown.
+from rebrew_workspace import (
+    CONFIG_NAME,
+    SCHEMA_TARGET,
+    read_config,
+    sqlite_ro_uri,
+    target_binary,
+    targets_table,
+)
+
+from recoverage._paths import _db_path
 
 # Thread-local compressor — python-zstandard gives ZstdCompressor instances NO
 # thread-safety guarantees ("do not operate on the same instance from different
@@ -419,19 +430,19 @@ def _log_safe(value: str) -> str:
     return value.translate(_LOG_CONTROL_CHARS)
 
 
-# Reserved metadata target holding the schema-level db_version stamp (written
-# by rebrew build-db).  It is NOT a real project target and must never appear
-# in target enumeration, stats, or the dashboard dropdown.
-SCHEMA_TARGET = "__schema__"
-
-
 _TOML_CACHE_MTIME: tuple[int, int] | None = None
 
 
 def _get_targets_config() -> dict[str, Any]:
-    """Load target configuration from rebrew-project.toml (thread-safe, cached)."""
+    """Load target configuration from rebrew-project.toml (thread-safe, cached).
+
+    Each value's ``filename`` is the target binary resolved against the project
+    root ("" when the target configures none), the shape ``_target_filename``
+    and ``_find_dll_path`` consume.
+    """
     global _TOML_CONFIG_CACHE, _TOML_CACHE_MTIME
-    toml_path = _project_dir() / "rebrew-project.toml"
+    root = _project_dir()
+    toml_path = root / CONFIG_NAME
     try:
         current = (toml_path.stat().st_mtime_ns, toml_path.stat().st_size)
     except OSError:
@@ -440,23 +451,15 @@ def _get_targets_config() -> dict[str, Any]:
         if _TOML_CONFIG_CACHE is not None and current == _TOML_CACHE_MTIME:
             return _TOML_CONFIG_CACHE
 
-        root = _project_dir()
+        config = read_config(root)
+        if toml_path.is_file() and not config:
+            # read_config swallows the read/decode error and returns {}; a
+            # present file that yields nothing is unreadable or not valid TOML.
+            _log.warning("Failed to load %s: unreadable or invalid TOML", CONFIG_NAME)
         targets_info: dict[str, Any] = {}
-        try:
-            toml_path2 = root / "rebrew-project.toml"
-            if toml_path2.exists():
-                text = toml_path2.read_text(encoding="utf-8")
-                doc = tomllib.loads(text)
-                targets_dict = doc.get("targets", {})
-                for tid, tdata in targets_dict.items():
-                    binary = ""
-                    if isinstance(tdata, dict):
-                        b = tdata.get("binary", "")
-                        if isinstance(b, str):
-                            binary = b
-                    targets_info[tid] = {"filename": binary}
-        except (OSError, ValueError) as exc:
-            _log.warning("Failed to load rebrew-project.toml: %s", exc)
+        for tid, entry in targets_table(config).items():
+            binary = target_binary(root, entry)
+            targets_info[tid] = {"filename": str(binary) if binary is not None else ""}
 
         _TOML_CONFIG_CACHE = targets_info
         _TOML_CACHE_MTIME = current
@@ -740,40 +743,6 @@ def _escape_like(search: str) -> str:
     return "%" + search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
 
 
-# Upper bound for client-supplied VA integers.  SQLite INTEGER is a SIGNED
-# 64-bit value: anything larger raises OverflowError at execute time, which
-# would surface as an uncaught 500 instead of a clean 4xx/404.  No stored
-# va can exceed this (rebrew writes through the same binding), so rejecting
-# above it can never hide a real match.
-VA_MAX = (1 << 63) - 1
-
-
-def _parse_va_candidates(raw_va: str) -> list[int]:
-    """Parse *raw_va* into deduped candidate lookup ints, order preserved.
-
-    ONE parser for every surface that resolves a VA spelling (the
-    /functions/<va> and /asm routes, Potato's detail panel).  Hex
-    spellings: 0x-prefixed or containing a-f (rebrew's parse_va convention,
-    bare hex valid).  All-digit strings: DECIMAL first (the /functions list
-    emits va as a decimal int — a consumer taking that value straight into
-    this route must not miss), with a bare-hex fallback for legacy callers.
-    Candidates beyond SQLite's signed-64-bit INTEGER range are dropped:
-    passing one raises OverflowError at execute time instead of a clean
-    miss.  Negatives stay candidates so section-bounds classification can
-    report "before section start" (matching the historical va=-0x10
-    contract).
-    """
-    lowered = raw_va.lower()
-    bases = (16,) if lowered.startswith("0x") or any(c in "abcdef" for c in lowered) else (10, 16)
-    candidates: list[int] = []
-    for base in bases:
-        with contextlib.suppress(ValueError):
-            parsed = int(raw_va, base)
-            if parsed <= VA_MAX and parsed not in candidates:
-                candidates.append(parsed)
-    return candidates
-
-
 # ── SQL fragments ──────────────────────────────────────────────────
 
 #: Optional v6 columns, probed per connection: older DBs (v5 and below)
@@ -1046,8 +1015,8 @@ def _missing_required_columns(conn: sqlite3.Connection) -> set[str]:
 def _check_schema_version_uncached(conn: sqlite3.Connection) -> str:
     """Uncached schema version read; see :func:`_check_schema_version`."""
     try:
-        # Prefer the schema-level __schema__ stamp (deterministic across
-        # targets); fall back to any per-target stamp for legacy DBs.
+        # Prefer the SCHEMA_TARGET stamp (deterministic across targets); fall
+        # back to any per-target stamp for legacy DBs.
         row = conn.execute(
             "SELECT value FROM metadata WHERE target = ? AND key = 'db_version' LIMIT 1",
             (SCHEMA_TARGET,),

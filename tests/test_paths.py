@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 import os
-import sqlite3
 from pathlib import Path
-from urllib.parse import unquote, urlparse
 
 import pytest
 
-from recoverage._paths import _db_path, sqlite_ro_uri
+from recoverage._paths import _db_path
 
 # ---------------------------------------------------------------------------
 
@@ -149,49 +147,3 @@ class TestDbPathMemoInvalidation:
         assert _db_path() == tmp_path.resolve() / "one" / "coverage.db"
         monkeypatch.chdir(other)
         assert _db_path() == other.resolve() / "db" / "coverage.db"
-
-
-class TestSqliteRoUri:
-    def test_appends_mode_ro_query(self) -> None:
-        uri = sqlite_ro_uri(Path("/some/proj/db/coverage.db"))
-        assert uri.startswith("file:///")
-        assert uri.endswith("?mode=ro")
-
-    def test_percent_encodes_uri_reserved_characters(self) -> None:
-        """?, #, and % in the path must be encoded or SQLite truncates/rewrites it."""
-        # A bare "/proj ..." is relative on Windows (no drive), so compare
-        # suffix-wise instead of assuming one absolute spelling per platform.
-        p = Path("/proj 1#2?3%/db/coverage.db")
-        path_part = urlparse(sqlite_ro_uri(p)).path
-        assert unquote(path_part).endswith("/proj 1#2?3%/db/coverage.db")
-
-    def test_relative_path_resolved_against_cwd(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.chdir(tmp_path)
-        uri = sqlite_ro_uri(Path("db/coverage.db"))
-        assert urlparse(uri).path.endswith("/db/coverage.db")
-
-    def test_round_trip_open_db_in_hostile_directory(self, tmp_path: Path) -> None:
-        """A real read-only open under a directory full of URI-reserved characters.
-
-        The name must also be a legal Windows filename (no ``?``), so the
-        query-separator class is covered by the percent-encode unit test
-        above instead; #, %, &, = and + exercise escaping in a real open.
-        """
-        db_dir = tmp_path / "dir with # % & = + spaces"
-        db_dir.mkdir()
-        db = db_dir / "coverage.db"
-        conn = sqlite3.connect(db)
-        conn.execute("CREATE TABLE t (v TEXT)")
-        conn.execute("INSERT INTO t VALUES ('ok')")
-        conn.commit()
-        conn.close()
-
-        ro = sqlite3.connect(sqlite_ro_uri(db), uri=True)
-        try:
-            assert ro.execute("SELECT v FROM t").fetchone()[0] == "ok"
-            with pytest.raises(sqlite3.OperationalError):
-                ro.execute("INSERT INTO t VALUES ('no')")
-        finally:
-            ro.close()

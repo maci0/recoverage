@@ -17,6 +17,7 @@ import pytest
 import zstandard as zstd
 
 from recoverage.server import (
+    SCHEMA_TARGET,
     _best_encoding,
     _db_path,
     _escape_like,
@@ -420,7 +421,10 @@ def _create_v4_db(db: Path, functions_columns: str) -> None:
                 FROM cells GROUP BY target, section_name;
             """
         )
-        c.execute("INSERT INTO metadata VALUES ('__schema__', 'db_version', '\"4\"')")
+        c.execute(
+            "INSERT INTO metadata VALUES (?, 'db_version', '\"4\"')",
+            (SCHEMA_TARGET,),
+        )
         conn.commit()
     finally:
         conn.close()
@@ -445,7 +449,10 @@ class TestSchemaShapeGuard:
         conn = sqlite3.connect(db)
         c = conn.cursor()
         c.execute("CREATE TABLE metadata (target TEXT, key TEXT, value TEXT)")
-        c.execute("INSERT INTO metadata VALUES ('__schema__', 'db_version', '\"4\"')")
+        c.execute(
+            "INSERT INTO metadata VALUES (?, 'db_version', '\"4\"')",
+            (SCHEMA_TARGET,),
+        )
         c.execute("CREATE TABLE sections (id INTEGER)")
         # Deliberately omit history + section_cell_stats view.
         conn.commit()

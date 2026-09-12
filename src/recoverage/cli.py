@@ -19,8 +19,9 @@ from typing import Any, NoReturn
 from wsgiref.simple_server import WSGIRequestHandler, WSGIServer
 
 import typer
+from rebrew_workspace import sqlite_ro_uri
 
-from recoverage._paths import _db_path, sqlite_ro_uri
+from recoverage._paths import _db_path
 
 app = typer.Typer(
     help="Coverage dashboard for binary-matching decompilation projects.",
