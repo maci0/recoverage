@@ -642,28 +642,53 @@ class TestServeKeyboardInterrupt:
         assert opened == [], "cancelled opener still fired after Ctrl+C"
 
 
-class TestRegenLaunchFailures:
-    def test_unlaunchable_rebrew_exits_cleanly(self, monkeypatch: Any, tmp_path: Path) -> None:
-        """rebrew named by RECOVERAGE_REBREW but not executable (PermissionError)
-        must get the same clean exit-1 contract as a missing rebrew, not a raw
-        traceback — matching the API regen endpoint's OSError handling."""
-        import os
-        import stat
+class TestRegenFailures:
+    def test_failing_in_process_regen_exits_cleanly(self, monkeypatch: Any) -> None:
+        """A rebrew failure inside run_regen must get the clean exit-1 contract
+        (not a raw traceback), matching the API regen endpoint's JSON 500."""
+        import recoverage.regen as regen
 
-        rebrew = tmp_path / "rebrew"
-        rebrew.write_text("#!/bin/sh\nexit 0\n")
-        # Deliberately NO exec bit — exec() fails with EACCES/PermissionError.
-        # Set explicitly: a non-executable file is invisible to PATH lookup.
-        mode = rebrew.stat().st_mode & ~stat.S_IXUSR & ~stat.S_IXGRP & ~stat.S_IXOTH
-        rebrew.chmod(mode)
-        monkeypatch.setenv("RECOVERAGE_REBREW", str(rebrew))
+        def boom(root: Path) -> None:
+            raise RuntimeError("catastrophic catalog failure")
 
-        if os.name != "posix":
-            pytest.skip("POSIX exec-permission semantics")
+        monkeypatch.setattr(regen, "run_regen", boom)
 
         result = runner.invoke(app, ["regen"])
         assert result.exit_code == 1
-        assert "could not run rebrew" in result.output
+        assert "catastrophic catalog failure" in result.output
+        assert "Traceback" not in result.output
+
+    def test_missing_rebrew_extra_exits_cleanly(self, monkeypatch: Any) -> None:
+        """rebrew absent (the regen extra not installed) surfaces the
+        actionable install hint instead of a traceback."""
+        import recoverage.regen as regen
+
+        def boom(root: Path) -> None:
+            raise ImportError(
+                "rebrew is required for regen; install it with 'pip install recoverage[regen]'"
+            )
+
+        monkeypatch.setattr(regen, "run_regen", boom)
+
+        result = runner.invoke(app, ["regen"])
+        assert result.exit_code == 1
+        assert "recoverage[regen]" in result.output
+        assert "Traceback" not in result.output
+
+    def test_rebrew_error_exit_is_not_a_traceback(self, monkeypatch: Any) -> None:
+        """rebrew's error_exit raises typer.Exit, which is click's Exit (a
+        RuntimeError), not SystemExit: it must not escape as a traceback."""
+        import typer
+
+        import recoverage.regen as regen
+
+        def boom(root: Path) -> None:
+            raise typer.Exit(2)
+
+        monkeypatch.setattr(regen, "run_regen", boom)
+
+        result = runner.invoke(app, ["regen"])
+        assert result.exit_code == 1
         assert "Traceback" not in result.output
 
 

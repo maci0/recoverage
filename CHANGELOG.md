@@ -3,6 +3,23 @@
 All notable user-visible changes to Recoverage are recorded here.  The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.2.0] - 2026-09-13
+
+### Changed
+
+- **Regen calls rebrew in-process instead of spawning its CLI.**  `recoverage
+  regen`, `serve --regen` and `POST /api/regen` load `rebrew-project.toml` once
+  and call rebrew's `run_catalog` + `build_db` module functions inside the
+  dashboard process, replacing the `rebrew` console-script subprocess (and its
+  120-second timeout and process-group kill) introduced in 1.1.1.
+  `RECOVERAGE_REBREW` is gone.  There is no timeout any more, so a regen always
+  runs to completion, and the dashboard's threaded server keeps answering
+  requests while it works.  `POST /api/regen` reports a failure as HTTP 500;
+  the 504 timeout response is gone.
+- rebrew is now an optional dependency, the `regen` extra (`pip install
+  'recoverage[regen]'`).  Without it the regen commands exit 1 (or answer HTTP
+  500) with an install hint; every other command keeps working without rebrew.
+
 ## [1.1.1] - 2026-09-13
 
 ### Fixed

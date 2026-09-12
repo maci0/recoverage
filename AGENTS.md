@@ -7,8 +7,10 @@ It serves a VanJS + SQLite dashboard visualising per-byte match status across
 PE sections (`.text`, `.data`, `.bss`). Two modes: a modern SPA (default) and
 a retro "Potato Mode" that renders entirely in server-side HTML tables.
 
-This package is a **consumer** of data produced by `rebrew`. It has no
-dependency on rebrew — it only needs a valid `coverage.db` file.
+This package is a **consumer** of data produced by `rebrew`.  It does not
+require rebrew to serve a dashboard — only a valid `coverage.db` file.  The
+regen commands call rebrew's `run_catalog`/`build_db` in-process through the
+optional `regen` extra; see `src/recoverage/regen.py`.
 
 ## Project Structure
 
@@ -26,7 +28,7 @@ recoverage/
 │   ├── conftest.py           # Shared fixtures (synthetic coverage.db)
 │   ├── test_api.py           # API validation, security, SQL injection tests
 │   ├── test_cli.py           # CSV export, formatting, edge case tests
-│   ├── test_lifecycle.py     # Process lifecycle: regen timeouts, browser-opener reaping
+│   ├── test_lifecycle.py     # Lifecycle: regen ordering, browser-opener reaping
 │   ├── test_paths.py         # DB path resolution tests
 │   ├── test_server.py        # Compression, encoding, path helper tests
 │   ├── test_potato.py        # Potato Mode unit tests
@@ -37,7 +39,7 @@ recoverage/
     ├── _paths.py            # DB path resolution (rebrew-project.toml db_dir)
     ├── cli.py               # Typer CLI entry point (serve, stats, export, check, regen, open)
     ├── server.py            # Bottle app, shared helpers & compression
-    ├── regen.py             # rebrew regen subprocess lifecycle (group kill + reap)
+    ├── regen.py             # In-process rebrew regen (calls rebrew as a library)
     ├── api.py               # REST API routes (/api/*)
     ├── ui.py                # UI routes (/, /potato, static files)
     ├── potato.py            # Potato Mode renderer
@@ -66,6 +68,7 @@ Frontend lint tooling lives at the repo root: `package.json` (oxlint, `@oxlint/p
 uv pip install -e .            # runtime deps only
 uv pip install -e .[dev]       # + pytest, ruff (CI runs uv sync --frozen --extra dev)
 uv pip install -e .[playwright]  # browser tests: playwright, pytest-playwright
+uv pip install -e .[regen]     # + rebrew, for in-process `recoverage regen`
 
 # Run
 recoverage serve             # start dashboard on :8001
@@ -133,6 +136,7 @@ Required:
 Optional:
 - `capstone` (disassembly)
 - `pygments` (Potato Mode syntax highlighting)
+- `rebrew` (in-process `recoverage regen`, `serve --regen`, `POST /api/regen`; the `regen` extra)
 
 ## Code Style
 

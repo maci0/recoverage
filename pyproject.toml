@@ -59,6 +59,11 @@ playwright = [
 pygments = [
     "pygments>=2.21.0",
 ]
+regen = [
+    # In-process `recoverage regen` / `serve --regen` / POST /api/regen; the
+    # sibling checkout is pinned in [tool.uv.sources] below.
+    "rebrew",
+]
 
 [project.scripts]
 recoverage = "recoverage.cli:main"
@@ -76,10 +81,10 @@ recoverage = ["assets/*"]
 package = true
 
 [tool.uv.sources]
-# Sibling-checkout path dep (see `rebrew-workspace` above): uv resolves it from
-# ../rebrew-workspace relative to this pyproject.toml, keeping the manifest
-# free of machine-specific absolute paths.
+# Sibling-checkout path deps: uv resolves them relative to this pyproject.toml,
+# keeping the manifest free of machine-specific absolute paths.
 rebrew-workspace = { path = "../rebrew-workspace", editable = true }
+rebrew = { path = "../rebrew", editable = true }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

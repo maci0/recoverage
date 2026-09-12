@@ -7,18 +7,18 @@ import json
 import logging
 import queue
 import sqlite3
-import subprocess
 import threading
 import time
 from collections.abc import Generator
 from pathlib import Path
 from typing import Any
 
+import typer
 from rebrew_workspace import VA_MAX, parse_va_candidates
 
 from recoverage import __version__
 from recoverage import server as _server
-from recoverage.regen import REGEN_TIMEOUT, run_regen_step
+from recoverage.regen import run_regen
 from recoverage.server import (
     CACHE_NO_STORE,
     CACHE_REVALIDATE,
@@ -101,7 +101,7 @@ def _clear_derived_caches() -> None:
 # direct API calls must not be able to trigger repeated rebrew catalog runs.
 _REGEN_COOLDOWN_SECONDS = 5.0
 _regen_last_attempt = 0.0  # time.monotonic() of the last accepted regen POST
-_REGEN_LOCK = threading.Lock()  # serializes regen (check + subprocess, TOCTOU)
+_REGEN_LOCK = threading.Lock()  # serializes regen (check + run, TOCTOU)
 
 # Memoized /api/targets/<t>/data payloads: the endpoint materializes ALL
 # cells for the target (json_group_array over the whole cells table) plus
@@ -1310,12 +1310,12 @@ def handle_regen() -> bytes | Any:
                 },
             )
 
-    # Server-side cooldown + serialization: the cooldown check and the
-    # subprocess must be atomic — two concurrent POSTs could otherwise both
-    # pass the check and run catalog/build-db in parallel, tearing the
-    # data_*.json / coverage.db (TOCTOU).  Non-blocking acquire: a second
-    # POST while a regen runs gets an immediate 429 instead of blocking on
-    # the lock for the whole (up to 240s) subprocess run.
+    # Server-side cooldown + serialization: the cooldown check and the regen
+    # run must be atomic — two concurrent POSTs could otherwise both pass the
+    # check and run catalog/build-db in parallel, tearing the data_*.json /
+    # coverage.db (TOCTOU).  Non-blocking acquire: a second POST while a regen
+    # runs gets an immediate 429 instead of blocking on the lock for the whole
+    # run.
     if not _REGEN_LOCK.acquire(blocking=False):
         return _json_err(
             429,
@@ -1343,48 +1343,41 @@ def handle_regen() -> bytes | Any:
 
 
 def _do_regen(remote: str) -> bytes | Any:
-    """Run catalog + build-db. Caller holds _REGEN_LOCK."""
+    """Run catalog + build-db in-process. Caller holds _REGEN_LOCK."""
     # Clear derived caches before AND after: the pre-run clears matter while
-    # the subprocesses run; the resolved-target / index caches get
-    # repopulated from the OLD db the moment anything queries them, and with
-    # no SSE client connected the watcher would never re-invalidate them
-    # (curl-only regen -> stale target dropdown).
+    # the regen runs; the resolved-target / index caches get repopulated from
+    # the OLD db the moment anything queries them, and with no SSE client
+    # connected the watcher would never re-invalidate them (curl-only regen ->
+    # stale target dropdown).
     _clear_derived_caches()
 
     root = _project_dir()
     _log.info("Regen started from %s", remote)
     try:
-        run_regen_step("catalog", root)
-        run_regen_step("build-db", root)
-        _clear_derived_caches()
-        _log.info("Regen completed successfully")
-        return _json_ok({"ok": True})
-    except subprocess.TimeoutExpired:
-        _log.error("Regen timed out after %ds", REGEN_TIMEOUT)
-        return _json_err(
-            504,
-            {
-                "error": "Regen timed out",
-                "detail": f"exceeded {REGEN_TIMEOUT}s timeout",
-            },
-        )
-    except subprocess.CalledProcessError as e:
-        _log.error("Regen failed with exit code %d", e.returncode)
+        run_regen(root)
+    except typer.Exit as e:
+        # rebrew's error_exit reports the failure itself and raises
+        # typer.Exit — click's Exit, a RuntimeError, not SystemExit.  Map it
+        # to the JSON 500 contract instead of letting it escape as a traceback.
+        _log.error("Regen failed: rebrew exited with status %s", e.exit_code)
         return _json_err(
             500,
             {
-                "error": f"Regen failed (exit code {e.returncode})",
-                "detail": f"rebrew build-db exited with code {e.returncode}",
+                "error": "Regen failed",
+                "detail": f"rebrew exited with status {e.exit_code}",
             },
         )
-    except (OSError, subprocess.SubprocessError) as e:
-        # Missing rebrew, launch failure, etc. — keep the JSON error contract
-        # instead of letting an uncaught exception surface as an HTML 500.
-        _log.error("Regen could not start: %s", e)
+    except Exception as e:
+        # Missing rebrew (ImportError), a rebrew exception, a filesystem
+        # error: keep the JSON error contract instead of an HTML 500.
+        _log.error("Regen failed: %s: %s", type(e).__name__, e)
         return _json_err(
             500,
             {
-                "error": "Regen could not start",
+                "error": "Regen failed",
                 "detail": f"{type(e).__name__}: {e}",
             },
         )
+    _clear_derived_caches()
+    _log.info("Regen completed successfully")
+    return _json_ok({"ok": True})

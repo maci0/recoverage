@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import platform
+import signal
 import sqlite3
 import subprocess
 import sys
@@ -235,46 +236,53 @@ def _get_stats(conn: sqlite3.Connection, target: str) -> dict[str, Any]:
 
 
 def _run_regen(root: Path) -> None:
-    """Run rebrew catalog + build-db to regenerate coverage.db."""
-    from recoverage.regen import REGEN_TIMEOUT, run_regen_step
+    """Regenerate coverage.db by calling rebrew's catalog + build-db in-process."""
+    from recoverage.regen import run_regen
 
-    for step in ("catalog", "build-db"):
-        typer.echo(f"Running rebrew {step}...")
-        try:
-            run_regen_step(step, root)
-        except FileNotFoundError as e:
-            typer.secho(f"Error: {e}", fg=typer.colors.RED, err=True)
-            raise typer.Exit(1) from None
-        except OSError as e:
-            # rebrew exists but cannot be launched (not executable, ENOEXEC,
-            # a PATH entry that is a plain file): same clean-exit contract as
-            # the API's regen endpoint instead of a raw traceback.
-            typer.secho(
-                f"Error: could not run rebrew for '{step}': {type(e).__name__}: {e}",
-                fg=typer.colors.RED,
-                err=True,
-            )
-            raise typer.Exit(1) from None
-        except subprocess.CalledProcessError as e:
-            typer.secho(
-                f"Error: 'rebrew {step}' failed (exit code {e.returncode})",
-                fg=typer.colors.RED,
-                err=True,
-            )
-            raise typer.Exit(1) from None
-        except subprocess.TimeoutExpired:
-            typer.secho(
-                f"Error: 'rebrew {step}' timed out after {REGEN_TIMEOUT}s",
-                fg=typer.colors.RED,
-                err=True,
-            )
-            raise typer.Exit(1) from None
+    typer.echo("Running rebrew catalog + build-db...")
+    try:
+        run_regen(root)
+    except ImportError as e:
+        # rebrew not installed (the optional `regen` extra): the message
+        # already names the fix.
+        typer.secho(f"Error: {e}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1) from None
+    except typer.Exit:
+        # rebrew's error_exit reports the failure itself and raises
+        # typer.Exit — click's Exit, a RuntimeError, not SystemExit — which
+        # would otherwise escape as a raw traceback.  Keep the exit-1 contract.
+        raise typer.Exit(1) from None
+    except Exception as e:
+        # Same clean exit-1 contract for any other in-process failure.
+        typer.secho(
+            f"Error: rebrew regen failed: {type(e).__name__}: {e}",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(1) from None
 
 
 # ── Browser opener ─────────────────────────────────────────────────
 
 # Openers exit in well under a second; the bound only guards a wedged one.
 _BROWSER_OPEN_TIMEOUT = 10
+
+
+def _kill_and_reap(proc: subprocess.Popen[bytes]) -> None:
+    """Kill *proc* — on POSIX its whole session — and always reap it.
+
+    Every opener gets its own session (start_new_session), so a terminal
+    signal never reaches it: the abandonment paths must signal the process
+    GROUP, not just the direct child, or an xdg-open wrapper's grandchild
+    survives.  The trailing wait() reaps the child either way (setsid does
+    not prevent zombies; only a wait does).
+    """
+    if os.name == "posix":
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(proc.pid, signal.SIGKILL)
+    else:
+        proc.kill()
+    proc.wait()
 
 
 def _open_and_reap(url: str, args: list[str], shell: bool = False) -> None:
@@ -296,10 +304,6 @@ def _open_and_reap(url: str, args: list[str], shell: bool = False) -> None:
         )
         proc.wait(timeout=_BROWSER_OPEN_TIMEOUT)
     except subprocess.TimeoutExpired:
-        # Group kill, not just the direct opener: xdg-open wrappers can spawn
-        # a grandchild that would otherwise survive the deadline.
-        from recoverage.regen import _kill_and_reap
-
         _kill_and_reap(proc)
     except (OSError, subprocess.SubprocessError) as exc:
         # Expected on minimal installs (no xdg-open/open); say why before

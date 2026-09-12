@@ -90,6 +90,7 @@ Install an extra to enable its feature: `pip install 'recoverage[<extra>]'`
 |-------|---------|--------------|
 | `capstone` | capstone | Enables on-demand disassembly in the detail panel |
 | `pygments` | pygments | Syntax highlighting in Potato Mode |
+| `regen` | rebrew | Enables `recoverage regen`, `serve --regen` and `POST /api/regen` |
 | `playwright` | playwright, pytest-playwright | Browser integration tests (`tests/test_playwright.py`) |
 
 ---
@@ -176,10 +177,11 @@ Re-run `rebrew catalog` + `rebrew build-db` to regenerate `coverage.db`.
 recoverage regen
 ```
 
-The `rebrew` console script is resolved from `PATH`; `RECOVERAGE_REBREW` names
-an explicit path when it is not on `PATH`.  Recoverage runs it directly, never
-through a project toolchain runner such as `uv run`, which resolves and may
-rewrite the workspace environment and needs uv itself on `PATH`.
+Requires the `regen` extra (`pip install 'recoverage[regen]'`): recoverage calls
+rebrew's catalog and build-db functions as a library, in its own process, not
+by spawning the `rebrew` console script.  The run has no timeout, so it always
+runs to completion; the dashboard's threaded server keeps serving while it is
+busy.  Without the extra the command exits 1 with the install hint.
 
 ### `recoverage open`
 
@@ -225,7 +227,7 @@ rebrew catalog --json          rebrew build-db           recoverage (Bottle + SQ
 2. **`rebrew build-db`**: Consumes those JSON files and builds a structured `db/coverage.db` (SQLite v4 schema) database, storing per-function metadata (`detected_by`, `size_by_tool`, `textOffset`), per-global metadata (`module`, `size`), per-cell metadata (`label`, `parent_function`), and stamping `db_version` for schema detection. See [DB_FORMAT.md](../rebrew/docs/DB_FORMAT.md) for the full schema.
 3. **`recoverage`**: Starts a **Bottle** web server. The backend serves API endpoints querying the SQLite database, while the frontend is a zero-build Single Page Application (SPA) powered by **VanJS**, rendering the interactive defrag grid.
 
-You can run `recoverage` independently on any machine (or even host it remotely) as long as it has access to a compiled `coverage.db` — no `rebrew` dependency or compiler toolchain is required.
+You can run `recoverage` independently on any machine (or even host it remotely) as long as it has access to a compiled `coverage.db` — no `rebrew` dependency or compiler toolchain is required.  Only the regen commands (`recoverage regen`, `serve --regen`, `POST /api/regen`) call into rebrew, through the optional `regen` extra.
 
 ---
 
@@ -244,7 +246,7 @@ recoverage/
 │   ├── conftest.py           # Shared fixtures (synthetic coverage.db)
 │   ├── test_api.py           # API validation & security tests
 │   ├── test_cli.py           # CSV export, formatting tests
-│   ├── test_lifecycle.py     # Process lifecycle (regen timeouts, opener reaping)
+│   ├── test_lifecycle.py     # Lifecycle (regen ordering, opener reaping, deadlines)
 │   ├── test_paths.py         # DB path resolution tests
 │   ├── test_server.py        # Compression, encoding tests
 │   ├── test_potato.py        # Potato Mode rendering tests
@@ -255,7 +257,7 @@ recoverage/
     ├── _paths.py             # DB path resolution (rebrew-project.toml db_dir)
     ├── cli.py                # Typer CLI entry point
     ├── server.py             # Bottle app, shared helpers & compression
-    ├── regen.py              # rebrew regen subprocess lifecycle (group kill + reap)
+    ├── regen.py              # In-process rebrew regen (catalog + build-db)
     ├── api.py                # REST API routes (/api/*)
     ├── ui.py                 # UI routes (/, /potato, static files)
     ├── potato.py             # Potato Mode renderer

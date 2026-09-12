@@ -67,7 +67,7 @@ CI-oriented: exits non-zero if coverage drops below a threshold.
 Open the browser to an existing running server (useful when `--no-open` was used at startup).
 
 ### ~~`recoverage regen` Subcommand~~ ✅ Implemented
-Re-run `rebrew catalog --json` + `rebrew build-db` from the terminal without starting the web server (same pipeline, timeout, and error handling as `serve --regen`).
+Re-run `rebrew catalog --json` + `rebrew build-db` from the terminal without starting the web server (same in-process pipeline and error handling as `serve --regen`).
 
 ---
 
@@ -77,7 +77,7 @@ Re-run `rebrew catalog --json` + `rebrew build-db` from the terminal without sta
 `/api/events` pushes `db-updated` events when `coverage.db` is modified (mtime polling by a background watcher thread, no extra dependency). The SPA auto-refreshes the grid without polling or manual reload clicks.
 
 ### Regen Progress
-Stream `/api/regen` progress as SSE events instead of blocking until completion (which can timeout for large projects).
+Stream `/api/regen` progress as SSE events instead of blocking the request until completion (a long regen keeps the connection open for its whole run).
 
 ---
 

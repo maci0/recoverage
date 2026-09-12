@@ -675,6 +675,53 @@ class TestRegenRateLimit:
         assert not status.startswith("429")
 
 
+class TestRegenFailureMapping:
+    """_do_regen maps in-process rebrew failures to the JSON 500 contract.
+
+    There is no timeout any more, so a ``typer.Exit`` from rebrew's
+    ``error_exit`` is a failure, never a 504.
+    """
+
+    def teardown_method(self) -> None:
+        import recoverage.api as api
+
+        api._regen_last_attempt = 0.0
+
+    def _post_regen(self, monkeypatch: pytest.MonkeyPatch, exc: BaseException) -> Any:
+        import recoverage.api as api
+
+        def boom(root: Path) -> None:
+            raise exc
+
+        # Patch the name api.py bound, and pin _project_dir so the test never
+        # touches the real workspace.
+        monkeypatch.setattr(api, "run_regen", boom)
+        monkeypatch.setattr(api, "_project_dir", lambda: Path("/nonexistent"))
+        api._regen_last_attempt = 0.0
+        return wsgi_request("POST", "/api/regen", remote_addr="127.0.0.1")
+
+    def test_rebrew_error_exit_is_500_not_504(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import typer
+
+        status, headers, body = self._post_regen(monkeypatch, typer.Exit(2))
+        assert status.startswith("500")
+        data = json.loads(decode_body(body, headers))
+        assert data["detail"] == "rebrew exited with status 2"
+
+    def test_missing_rebrew_is_500(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        status, headers, body = self._post_regen(monkeypatch, ImportError("rebrew is required"))
+        assert status.startswith("500")
+        data = json.loads(decode_body(body, headers))
+        assert "ImportError" in data["detail"]
+        assert "rebrew" in data["detail"]
+
+    def test_ordinary_rebrew_exception_is_500(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        status, headers, body = self._post_regen(monkeypatch, ValueError("corrupt JSON"))
+        assert status.startswith("500")
+        data = json.loads(decode_body(body, headers))
+        assert data["detail"] == "ValueError: corrupt JSON"
+
+
 class TestServeBindFlag:
     def test_bind_option_help(self) -> None:
         from typer.testing import CliRunner
@@ -1309,9 +1356,12 @@ class TestErrorResponseShape:
         data = self._check(status, headers, body, "forbidden")
         assert data["error"] == "Forbidden: localhost only"
 
-    def test_429_rate_limited_preserves_extras(self) -> None:
+    def test_429_rate_limited_preserves_extras(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import recoverage.api as api
 
+        # The first POST must pass the cooldown gate without running a real
+        # regen (rebrew would rebuild the developer's coverage.db).
+        monkeypatch.setattr(api, "_do_regen", lambda remote: api._json_ok({"ok": True}))
         api._regen_last_attempt = 0.0
         wsgi_request("POST", "/api/regen", remote_addr="127.0.0.1")
         status, headers, body = wsgi_request("POST", "/api/regen", remote_addr="127.0.0.1")
