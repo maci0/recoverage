@@ -3,10 +3,14 @@
 All notable user-visible changes to Recoverage are recorded here.  The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [1.1.0] - 2026-09-13
 
 ### Changed
 
+- Recoverage resolves `rebrew-project.toml`, the `db/coverage.db` path, the
+  schema stamp and the read-only DB URI through the shared `rebrew-workspace`
+  package, so the dashboard and rebrew cannot drift on the same workspace.  No
+  command, route or on-disk format changes.
 - The inlined index payload is back inside the initial TCP congestion window.
   The assembly fetch, its error formatting, and the highlight.js loading and
   highlighting moved from the inlined `app.js` into the deferred `detail.js`
