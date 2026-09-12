@@ -83,6 +83,13 @@ def _check_payload_budget(payload: bytes) -> None:
     """Warn if the inlined index payload exceeds the TCP cwnd budget.
 
     Tries every available compression method and reports the best result.
+
+    The budget is the initial congestion window (10 x 1460-byte MSS), so the
+    payload should arrive in one round trip.  It does not currently fit, and
+    cannot be split further: ``index.html`` carries no static markup, so every
+    inlined byte is code ``app.js`` needs to paint the first frame (everything
+    deferrable already lives in ``detail.js``).  The warning is therefore a
+    ratchet: it names the exact overage on every start so growth stays visible.
     """
     results: list[tuple[str, int]] = [
         ("gzip", len(gzip.compress(payload))),
@@ -96,7 +103,9 @@ def _check_payload_budget(payload: bytes) -> None:
 
     over = best_size - _TCP_CWND_BUDGET
     _log.warning(
-        "Inlined index payload (%s %d bytes) exceeds TCP cwnd budget (%d bytes) by %d bytes",
+        "Inlined index payload (%s %d bytes) exceeds TCP cwnd budget (%d bytes) by %d bytes"
+        " (the SPA shell is built entirely by app.js; there is no static markup to defer,"
+        " see docs/DESIGN.md)",
         best_name,
         best_size,
         _TCP_CWND_BUDGET,

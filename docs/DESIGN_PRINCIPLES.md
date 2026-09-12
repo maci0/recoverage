@@ -6,7 +6,7 @@ This document outlines the core architectural and operational philosophies that 
 The UI is built to be as light and fast as possible. We avoid heavy frontend frameworks, relying instead on VanJS (a ~2 kB reactive library) and Vanilla CSS. The backend uses the minimal Bottle framework to serve data. The goal is uncompromising speed and low maintenance overhead.
 
 ## 2. First Draw in First TCP Packet
-Initial page load time is critical. The entire Single Page Application (SPA) shell—including `index.html`, `style.css`, `app.js`, and `van.min.js`—must be inlined, minified, and aggressively compressed (via Brotli or Zstd). The total payload should fit within the initial TCP congestion window (~14.5 KB), ensuring instantaneous rendering without render-blocking network round-trips.
+Initial page load time is critical. The entire Single Page Application (SPA) shell, including `index.html`, `style.css`, `app.js`, and `van.min.js`, must be inlined, minified, and aggressively compressed (via Brotli or Zstd), and the target is the initial TCP congestion window (10 x 1460-byte MSS). The shell does not currently fit: the SPA builds its whole UI in `app.js` (`index.html` has no static markup), so nothing can be deferred without a blank first paint, and the split into `detail.js` has already taken the code that could be. `ui._check_payload_budget` prints the overage on every start; treat growth as a regression, not as headroom.
 
 ## 3. Decoupled Architecture
 Recoverage is a pure data consumer. It must remain strictly decoupled from the `rebrew` matching tools. It expects a structured SQLite database (`coverage.db`) and never modifies it. This one-way data flow guarantees that the dashboard never interferes with the underlying decompilation pipeline.
