@@ -85,6 +85,78 @@
     }));
   };
 
+  // Highlight.js, the /asm formatting, and the code-pane highlighting live
+  // here rather than in app.js: none of them is needed to paint the first
+  // frame, and the inlined shell has to fit the initial TCP congestion window.
+  // app.js keeps the pane and its text; it calls in for both.
+  let hljsLoaded = false;
+  let hljsLoadingPromise = null;
+
+  const loadHighlightJs = () => {
+    if (hljsLoaded) return;
+    if (hljsLoadingPromise) return hljsLoadingPromise;
+
+    if (!document.querySelector("#hljs-theme")) {
+      const link = document.createElement("link");
+      link.id = "hljs-theme";
+      link.rel = "stylesheet";
+      link.href = "/hljs.css";
+      document.head.append(link);
+    }
+
+    // Served from this origin, not a CDN: reverse-engineering work routinely
+    // happens on air-gapped or locked-down machines, where a CDN fetch fails
+    // silently and every code pane renders unhighlighted.
+    const loadScript = (src) => new Promise((resolve) => {
+      const el = document.createElement("script");
+      el.src = src;
+      el.addEventListener("load", resolve);
+      el.addEventListener("error", resolve);
+      document.head.append(el);
+    });
+
+    hljsLoadingPromise = (async () => {
+      await loadScript("/hljs.min.js");
+      await Promise.all([loadScript("/hljs-c.min.js"), loadScript("/hljs-x86asm.min.js")]);
+      initHighlighting();
+      hljsLoaded = true;
+    })();
+
+    return hljsLoadingPromise;
+  };
+
+  const highlightInto = async (codeEl, lang) => {
+    if (!lang) return;
+    await loadHighlightJs();
+    delete codeEl.dataset.highlighted;
+    try {
+      window.hljs.highlightElement(codeEl);
+      if (lang === "x86asm") {
+        codeEl.innerHTML = codeEl.innerHTML.replaceAll(/(?<addr>0x[0-9a-fA-F]+)/gu, '<a href="#" class="asm-link" data-addr="$<addr>">$<addr></a>');
+      }
+    } catch { /* highlight failures are cosmetic; the pane keeps plain text */ } // oxlint-disable-line @rikalabs/no-silent-catch-fallback -- highlight failures are cosmetic; plain text remains
+  };
+
+  // The /asm endpoint answers failures with {error, detail}; showing that beats a
+  // generic fallback, which would blame the wrong cause.
+  const asmMessage = (payload) => {
+    if (!payload) return MSG.ASM_PLACEHOLDER;
+    if (payload.asm) return payload.asm;
+    if (payload.error) return `(${payload.error}${payload.detail ? `: ${payload.detail}` : ""})`;
+    return MSG.ASM_PLACEHOLDER;
+  };
+
+  // Fetch disassembly for the current selection and hand the text back through
+  // *set*: the pane's state belongs to app.js.  An aborted request (a newer
+  // selection superseded this one) writes nothing.
+  const loadAsm = ({ url, set, signal }) => {
+    if (!url) return;
+    fetch(url, { signal })
+      .then((r) => r.json())
+      .then((data) => { if (!signal?.aborted) set(asmMessage(data)); })
+      .catch(() => { if (!signal?.aborted) set(MSG.ASM_PLACEHOLDER); });
+  };
+
   // Live reload via Server-Sent Events: subscribes to /api/events, where a
   // db-updated event (coverage.db rewritten by rebrew build-db) triggers a grid
   // refresh.  EventSource reconnects on its own, so stream drops self-heal.
@@ -203,6 +275,6 @@
     });
   };
 
-  Object.assign(window.RC, { formatBytes, DataInspector, extractDocs, initHighlighting, connectEvents, reloadData, copyToClipboard, mountModal });
+  Object.assign(window.RC, { formatBytes, DataInspector, extractDocs, initHighlighting, highlightInto, loadAsm, connectEvents, reloadData, copyToClipboard, mountModal });
   window.RC.onReady();
 })();

@@ -96,55 +96,10 @@ const LEGEND = [["none", "undocumented"], ["exact", "exact match"], ["reloc", "r
 // row.  Sections without a VA sort last, keeping their relative order.
 const sectionNames = (s) => Object.keys(s).toSorted((x, y) => (s[x].va ?? 1e18) - (s[y].va ?? 1e18));
 
-// The /asm endpoint answers failures with {error, detail}; showing that beats a
-// generic fallback, which would blame the wrong cause.
-function asmMessage(payload) {
-  if (!payload) return MSG.ASM_PLACEHOLDER;
-  if (payload.asm) return payload.asm;
-  if (payload.error) return `(${payload.error}${payload.detail ? `: ${payload.detail}` : ""})`;
-  return MSG.ASM_PLACEHOLDER;
-}
-
 function computeCellClass(cell) {
   const s = cell.state;
   if (!s || !VALID_STATES.has(s)) return "cell";
   return `cell ${s}`;
-}
-
-let hljsLoaded = false;
-let hljsLoadingPromise = null;
-
-function loadHighlightJs() {
-  if (hljsLoaded) return;
-  if (hljsLoadingPromise) return hljsLoadingPromise;
-
-  if (!document.querySelector("#hljs-theme")) {
-    const link = document.createElement("link");
-    link.id = "hljs-theme";
-    link.rel = "stylesheet";
-    link.href = "/hljs.css";
-    document.head.append(link);
-  }
-
-  // Served from this origin, not a CDN: reverse-engineering work routinely
-  // happens on air-gapped or locked-down machines, where a CDN fetch fails
-  // silently and every code pane renders unhighlighted.
-  const loadScript = (src) => new Promise((resolve) => {
-    const el = document.createElement("script");
-    el.src = src;
-    el.addEventListener("load", resolve);
-    el.addEventListener("error", resolve);
-    document.head.append(el);
-  });
-
-  hljsLoadingPromise = (async () => {
-    await loadScript("/hljs.min.js");
-    await Promise.all([loadScript("/hljs-c.min.js"), loadScript("/hljs-x86asm.min.js")]);
-    window.RC.initHighlighting?.();
-    hljsLoaded = true;
-  })();
-
-  return hljsLoadingPromise;
 }
 
 // Stroke styling lives in CSS (.icon svg), so the markup carries geometry only.
@@ -471,22 +426,22 @@ const App = () => {
         const va = fn.vaStart || fn.va;
         const { size } = fn;
 
-        // Fetch C source and ASM concurrently
-        const [cSourceRes, asmRes] = await Promise.allSettled([
-          cPath ? fetchTextSafe(cPath) : Promise.resolve(MSG.NO_C_SOURCE),
-          fetch(`${ASM_URL(activeTarget.val)}?va=${va}&size=${size}&section=${activeSection.val}`, { signal }).then(r => r.json()).catch(() => null)
-        ]);
+        // Fetch C source here; the disassembly loads through detail.js, which
+        // owns the /asm formatting (and is not in the inlined shell).
+        const newCSource = cPath ? await fetchTextSafe(cPath) : MSG.NO_C_SOURCE;
+        window.RC.loadAsm?.({
+          url: `${ASM_URL(activeTarget.val)}?va=${va}&size=${size}&section=${activeSection.val}`,
+          set: (text) => { asmText.val = text; },
+          signal,
+        });
 
         if (signal.aborted) return;
 
-        const newCSource = cSourceRes.status === 'fulfilled' ? cSourceRes.value : MSG.NO_C_SOURCE;
-        const newAsm = asmRes.status === 'fulfilled' ? asmMessage(asmRes.value) : MSG.ASM_PLACEHOLDER;
         const newDocs = window.RC.extractDocs ? window.RC.extractDocs(newCSource) : null;
 
         // Update all state synchronously to trigger a single re-render
         cSourceText.val = newCSource;
         docText.val = newDocs || MSG.NO_DOCS;
-        asmText.val = newAsm;
       } catch (error) { // oxlint-disable-line @rikalabs/no-silent-catch-fallback -- AbortError is a cancellation; other failures become error text
         if (error.name === 'AbortError') return;
         currentFn.val = null;
@@ -555,10 +510,10 @@ const App = () => {
           if (activeSection.val === ".text") {
             // Fetch ASM for undocumented block in .text
             asmText.val = "Loading assembly...";
-            fetch(`${ASM_URL(activeTarget.val)}?va=${sec.va + cell.start}&size=${size}&section=${activeSection.val}`)
-              .then(r => r.json())
-              .then(asmData => { asmText.val = asmMessage(asmData); })
-              .catch(() => { asmText.val = MSG.ASM_PLACEHOLDER; });
+            window.RC.loadAsm?.({
+              url: `${ASM_URL(activeTarget.val)}?va=${sec.va + cell.start}&size=${size}&section=${activeSection.val}`,
+              set: (text) => { asmText.val = text; },
+            });
           } else {
             asmText.val = MSG.DATA_SECTION_NO_ASM;
           }
@@ -631,22 +586,9 @@ const App = () => {
 
   const HighlightedCode = ({ lang, text }) => {
     const codeEl = code({ class: lang ? `language-${lang}` : "" }, text);
-
-    const highlightCode = async () => {
-      if (lang) {
-        await loadHighlightJs();
-        delete codeEl.dataset.highlighted;
-        try {
-          window.hljs.highlightElement(codeEl);
-          if (lang === "x86asm") {
-            codeEl.innerHTML = codeEl.innerHTML.replaceAll(/(?<addr>0x[0-9a-fA-F]+)/gu, '<a href="#" class="asm-link" data-addr="$<addr>">$<addr></a>');
-          }
-        } catch { /* highlight failures are cosmetic; the pane keeps plain text */ } // oxlint-disable-line @rikalabs/no-silent-catch-fallback -- highlight failures are cosmetic; plain text remains
-      }
-    };
-
-    setTimeout(() => { highlightCode(); }, 0);
-
+    setTimeout(() => { window.RC.highlightInto?.(codeEl, lang); }, 0);
+    // detail.js rewrites asm operands into .asm-link anchors during the
+    // highlight pass; following one is app.js's job (it owns the selection).
     codeEl.addEventListener("click", (e) => {
       if (e.target.classList.contains("asm-link")) {
         e.preventDefault();
@@ -656,7 +598,6 @@ const App = () => {
         }
       }
     });
-
     return pre({ class: "code" }, codeEl);
   };
 

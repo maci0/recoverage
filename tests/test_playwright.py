@@ -1,4 +1,5 @@
 import os
+import re
 from typing import Any
 
 import pytest
@@ -111,3 +112,26 @@ def test_cell_selection_panel(page: Any):
         or "original bytes" in panel_text.lower()
         or "range" in panel_text.lower()
     )
+
+
+def test_asm_pane_renders_disassembly(page: Any):
+    """The asm fetch, formatting, and highlight live in detail.js (out of the
+    inlined shell), so selecting a function must still fill the Assembly
+    section — text first, then the highlight pass."""
+    page.goto(f"{BASE_URL}/?section=.text")
+    page.wait_for_selector(".grid")
+    page.locator(".tab-btn", has_text=".text").click()
+    page.wait_for_timeout(500)
+
+    matched = page.locator(".cell.exact, .cell.reloc, .cell.near_match").first
+    if matched.count() == 0:
+        pytest.skip("no matched cell in .text to select")
+    matched.click()
+
+    asm = page.locator("#panel .section", has_text="Assembly").first
+    expect(asm).to_contain_text(
+        re.compile(r"\b(push|mov|pop|ret|call|lea|xor|add|sub|cmp|jmp|test|inc|dec)\b"),
+        timeout=15000,
+    )
+    # highlightInto() adds hljs's class; unhighlighted plain text would not.
+    expect(asm.locator("code.hljs")).to_have_count(1, timeout=15000)

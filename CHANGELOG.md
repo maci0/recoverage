@@ -5,6 +5,15 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- The inlined index payload is back inside the initial TCP congestion window.
+  The assembly fetch, its error formatting, and the highlight.js loading and
+  highlighting moved from the inlined `app.js` into the deferred `detail.js`
+  (about 500 compressed bytes).  Nothing changes visually: the Assembly pane
+  fills in as soon as `detail.js` lands, the way the hex and data panes already
+  did, and asm operand links still jump to their address.
+
 ### Added
 
 - `/api/targets/<target>/data` carries `known_schema`: the schema versions this
