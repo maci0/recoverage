@@ -78,8 +78,6 @@ async function fetchArrayBufferSafe(url) {
   return await res.arrayBuffer();
 }
 
-const KNOWN_SCHEMA = new Set(["3", "4"]);
-
 // All v4 cell states (rebrew DB_FORMAT.md): the five filterable ones, data/
 // thunk (render with the undocumented gray here), proven and size_mismatch
 // (newer v4 states), plus near_matching (legacy spelling of near_match).
@@ -293,9 +291,15 @@ const App = () => {
       const secNames = sectionNames(d.sections || {});
       if (secNames.length === 0) {
         const ver = String(d.db_version ?? "");
+        // The accepted set comes from the payload (api.known_schema), so the
+        // message tracks the server's schema support instead of a copy that
+        // goes stale.  Without it, fall back to the benign wording rather than
+        // accuse a schema this build was never told about.
+        const known = d.known_schema ?? [];
+        const unknownSchema = ver !== "" && known.length > 0 && !known.includes(ver);
         emptyState.val = {
           title: "This target has no sections",
-          detail: ver && !KNOWN_SCHEMA.has(ver)
+          detail: unknownSchema
             ? `The database reports schema v${ver}, which this build does not understand. Rebuild it with a matching rebrew.`
             : "The database has no section rows yet. Rerun rebrew build-db.",
         };

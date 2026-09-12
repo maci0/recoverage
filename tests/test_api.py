@@ -2168,6 +2168,22 @@ class TestDataEndpointSchemaGate:
         assert data["code"] == "db_unavailable"
 
 
+class TestKnownSchemaContract:
+    """/data carries the accepted schema set, so the SPA's "schema not
+    understood" wording tracks the server instead of a stale client copy."""
+
+    def test_data_payload_lists_known_schema(self) -> None:
+        from recoverage import server as server_mod
+
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, _, body = wsgi_get(f"/api/targets/{target}/data")
+        assert status.startswith("200")
+        data = json.loads(decode_body(body, {}))
+        assert data["known_schema"] == sorted(server_mod.KNOWN_SCHEMA_VERSIONS)
+
+
 # ── Repo source-file serving (/src, /original) ─────────────────────
 
 

@@ -3,6 +3,22 @@
 All notable user-visible changes to Recoverage are recorded here.  The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- `/api/targets/<target>/data` carries `known_schema`: the schema versions this
+  build understands (the server's `KNOWN_SCHEMA_VERSIONS`).  The addition is
+  additive; the existing fields are unchanged.
+
+### Fixed
+
+- The SPA no longer hardcodes the schema versions it accepts.  It was pinned at
+  3/4, so a v5 or v6 database with no section rows was reported as "this build
+  does not understand the schema" (rebrew writes 6 today).  It now reads the
+  payload's `known_schema`, and uses the neutral wording when the server does
+  not send one.
+
 ## [1.0.0] - 2026-09-12
 
 First stable release.  From 1.0.0 the HTTP API, the CLI, and the

@@ -671,6 +671,12 @@ def _build_data_raw(c: sqlite3.Cursor, target: str, section_filter: str | None) 
 
     data["search_index"] = _build_search_index(c, target)
 
+    # The accepted schema set travels with the payload: the SPA's empty-state
+    # message needs it to tell "no section rows yet" from "this build does not
+    # understand the DB", and a second copy hardcoded in app.js would drift as
+    # rebrew advances the schema.
+    data["known_schema"] = sorted(_server.KNOWN_SCHEMA_VERSIONS)
+
     # Per-section cell stats from SQL view.  All buckets are selected so
     # consumers can sum them and reconcile with total_cells (padding,
     # none, proven, and size_mismatch were previously omitted).

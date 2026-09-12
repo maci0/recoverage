@@ -107,7 +107,9 @@ bun run lint:html           # vnu only: static assets + served pages (SPA shell,
 
 ## Data Pipeline
 
-1. `rebrew catalog --json` → writes `db/data_*.json` in the project workspace
+1. `rebrew catalog` (or `--data-json`) → writes `db/data_*.json` in the project
+   workspace; `--json` alone only prints a summary, and `recoverage --regen`
+   runs the bare form for exactly this reason
    - Absorbs jump table / switch data bytes into parent function sizes
    - Links data and thunk cells to their parent function via `parent_function` field
    - `rebrew catalog --export-ghidra-labels` → generates `ghidra_data_labels.json` for round-trip Ghidra sync

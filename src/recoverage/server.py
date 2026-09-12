@@ -924,7 +924,7 @@ def _load_metadata(c: sqlite3.Cursor, target: str) -> dict[str, Any]:
     return data
 
 
-_KNOWN_SCHEMA_VERSIONS: frozenset[str] = frozenset({"3", "4", "5", "6"})
+KNOWN_SCHEMA_VERSIONS: frozenset[str] = frozenset({"3", "4", "5", "6"})
 
 # Schema check memoized per DB (mtime_ns, size): the check is two queries
 # (metadata + full sqlite_master scan) that would otherwise run on every
@@ -1062,7 +1062,7 @@ def _check_schema_version_uncached(conn: sqlite3.Connection) -> str:
         if isinstance(v, str):
             v = v.strip('"')
         version = str(v)
-        if version in _KNOWN_SCHEMA_VERSIONS:
+        if version in KNOWN_SCHEMA_VERSIONS:
             present = {
                 r[0]
                 for r in conn.execute(
@@ -1102,7 +1102,7 @@ def _check_schema_version_uncached(conn: sqlite3.Connection) -> str:
                 "recoverage: unexpected db_version %r (known: %s) — "
                 "some features may not work correctly",
                 version,
-                ", ".join(sorted(_KNOWN_SCHEMA_VERSIONS)),
+                ", ".join(sorted(KNOWN_SCHEMA_VERSIONS)),
             )
         return version
     except sqlite3.Error as exc:
