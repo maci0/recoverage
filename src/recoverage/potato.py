@@ -1849,7 +1849,9 @@ def _panel_fn_attach_verify(c: sqlite3.Cursor, target: str, fn_data: dict[str, A
         cols = {r[1] for r in c.execute("PRAGMA table_info(verify_results)").fetchall()}
         extra = "".join(f", {col}" for col in ("reg_delta", "effective_match") if col in cols)
         c.execute(
-            "SELECT verified_at, byte_delta, diff_lines, similarity" + extra + " FROM verify_results WHERE target=? AND va=?",
+            "SELECT verified_at, byte_delta, diff_lines, similarity"
+            + extra
+            + " FROM verify_results WHERE target=? AND va=?",
             (target, int(fn_va_resolved)),
         )
         vr = c.fetchone()

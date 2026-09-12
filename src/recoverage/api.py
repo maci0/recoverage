@@ -1051,8 +1051,7 @@ def handle_api_function(target: str, va: str) -> bytes | Any:
             fn_json = json.loads(row[0])
             # Attach the last `rebrew verify -o` record for this function.
             c.execute(
-                f"{_verify_one_select(c)} FROM verify_results"
-                " WHERE target = ? AND va = ?",
+                f"{_verify_one_select(c)} FROM verify_results WHERE target = ? AND va = ?",
                 (target, fn_json["va"]),
             )
             vr = c.fetchone()
