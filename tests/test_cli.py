@@ -643,28 +643,27 @@ class TestServeKeyboardInterrupt:
 
 
 class TestRegenLaunchFailures:
-    def test_unlaunchable_uv_exits_cleanly(self, monkeypatch: Any, tmp_path: Path) -> None:
-        """uv present on PATH but not executable (PermissionError) must get
-        the same clean exit-1 contract as a missing uv, not a raw traceback —
-        matching the API regen endpoint's OSError handling."""
+    def test_unlaunchable_rebrew_exits_cleanly(self, monkeypatch: Any, tmp_path: Path) -> None:
+        """rebrew named by RECOVERAGE_REBREW but not executable (PermissionError)
+        must get the same clean exit-1 contract as a missing rebrew, not a raw
+        traceback — matching the API regen endpoint's OSError handling."""
         import os
         import stat
 
-        bin_dir = tmp_path / "bin"
-        bin_dir.mkdir()
-        uv = bin_dir / "uv"
-        uv.write_text("#!/bin/sh\nexit 0\n")
+        rebrew = tmp_path / "rebrew"
+        rebrew.write_text("#!/bin/sh\nexit 0\n")
         # Deliberately NO exec bit — exec() fails with EACCES/PermissionError.
-        mode = uv.stat().st_mode & ~stat.S_IXUSR & ~stat.S_IXGRP & ~stat.S_IXOTH
-        uv.chmod(mode)
-        monkeypatch.setenv("PATH", str(bin_dir))
+        # Set explicitly: a non-executable file is invisible to PATH lookup.
+        mode = rebrew.stat().st_mode & ~stat.S_IXUSR & ~stat.S_IXGRP & ~stat.S_IXOTH
+        rebrew.chmod(mode)
+        monkeypatch.setenv("RECOVERAGE_REBREW", str(rebrew))
 
         if os.name != "posix":
             pytest.skip("POSIX exec-permission semantics")
 
         result = runner.invoke(app, ["regen"])
         assert result.exit_code == 1
-        assert "could not run 'uv'" in result.output
+        assert "could not run rebrew" in result.output
         assert "Traceback" not in result.output
 
 

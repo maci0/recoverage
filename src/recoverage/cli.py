@@ -242,15 +242,15 @@ def _run_regen(root: Path) -> None:
         typer.echo(f"Running rebrew {step}...")
         try:
             run_regen_step(step, root)
-        except FileNotFoundError:
-            typer.secho("Error: 'uv' not found — is it installed?", fg=typer.colors.RED, err=True)
+        except FileNotFoundError as e:
+            typer.secho(f"Error: {e}", fg=typer.colors.RED, err=True)
             raise typer.Exit(1) from None
         except OSError as e:
-            # uv exists but cannot be launched (not executable, ENOEXEC, a
-            # PATH entry that is a plain file): same clean-exit contract as
+            # rebrew exists but cannot be launched (not executable, ENOEXEC,
+            # a PATH entry that is a plain file): same clean-exit contract as
             # the API's regen endpoint instead of a raw traceback.
             typer.secho(
-                f"Error: could not run 'uv' for 'rebrew {step}': {type(e).__name__}: {e}",
+                f"Error: could not run rebrew for '{step}': {type(e).__name__}: {e}",
                 fg=typer.colors.RED,
                 err=True,
             )

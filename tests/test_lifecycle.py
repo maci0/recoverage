@@ -2,9 +2,9 @@
 
 Pins the two resource-lifecycle fixes:
 
-- ``run_regen_step`` must kill the WHOLE regen process group on timeout (the
-  rebrew worker is uv's grandchild; killing only uv orphans it while it is
-  still writing coverage.db) and always reap the child.
+- ``run_regen_step`` must kill the WHOLE regen process group on timeout
+  (rebrew spawns docker/wine workers; killing only the direct child orphans
+  them while they are still writing coverage.db) and always reap the child.
 - ``_open_and_reap`` must reap the browser-opener child (setsid alone does not
   prevent zombies) and bound its wait so a hung opener cannot stall serve.
 """
@@ -28,103 +28,118 @@ from recoverage.regen import run_regen_step
 
 POSIX = os.name == "posix"
 
-FAKE_UV_OK = """\
+FAKE_REBREW_OK = """\
 #!/bin/sh
 exit 0
 """
 
-FAKE_UV_FAIL = """\
+FAKE_REBREW_FAIL = """\
 #!/bin/sh
 echo boom >&2
 exit 3
 """
 
-# Stays alive past the timeout with a live grandchild; records the
-# grandchild's PID so the test can prove the GROUP kill reached it.
-# Absolute /bin/sleep: the fake PATH below replaces the real one.
-FAKE_UV_HANG = """\
+# Stays alive past the timeout with a live worker; records the worker's PID so
+# the test can prove the GROUP kill reached it. Absolute /bin/sleep: the fake
+# PATH below replaces the real one.
+FAKE_REBREW_HANG = """\
 #!/bin/sh
 /bin/sleep 60 &
-printf '%s\\n' "$!" > "$GRANDCHILD_PID_FILE"
+printf '%s\\n' "$!" > "$WORKER_PID_FILE"
 wait
 """
 
-# Same hang, but also records its own PID so a test can prove the direct uv
-# child AND its grandchild are gone after an abandonment path.
-FAKE_UV_HANG_RECORD_ALL = """\
+# Same hang, but also records its own PID so a test can prove the direct
+# rebrew child AND its worker are gone after an abandonment path.
+FAKE_REBREW_HANG_RECORD_ALL = """\
 #!/bin/sh
 printf '%s\\n' "$$" > "$CHILD_PID_FILE"
 /bin/sleep 60 &
-printf '%s\\n' "$!" > "$GRANDCHILD_PID_FILE"
+printf '%s\\n' "$!" > "$WORKER_PID_FILE"
 wait
 """
 
 
-def _install_fake_uv(monkeypatch: Any, tmp_path: Path, body: str) -> Path:
+def _install_fake_rebrew(monkeypatch: Any, tmp_path: Path, body: str) -> Path:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
-    uv = bin_dir / "uv"
-    uv.write_text(body)
-    uv.chmod(uv.stat().st_mode | stat.S_IEXEC)
+    rebrew = bin_dir / "rebrew"
+    rebrew.write_text(body)
+    rebrew.chmod(rebrew.stat().st_mode | stat.S_IEXEC)
     monkeypatch.setenv("PATH", str(bin_dir))
-    return uv
+    # Keep the tests hermetic: an ambient override would shadow the fake PATH.
+    monkeypatch.delenv("RECOVERAGE_REBREW", raising=False)
+    return rebrew
 
 
 @pytest.mark.skipif(not POSIX, reason="POSIX process groups")
 class TestRunRegenStep:
     def test_success_returns_none(self, monkeypatch: Any, tmp_path: Path) -> None:
-        _install_fake_uv(monkeypatch, tmp_path, FAKE_UV_OK)
+        _install_fake_rebrew(monkeypatch, tmp_path, FAKE_REBREW_OK)
         assert run_regen_step("catalog", tmp_path) is None
 
     def test_nonzero_exit_raises_called_process_error(
         self, monkeypatch: Any, tmp_path: Path
     ) -> None:
-        _install_fake_uv(monkeypatch, tmp_path, FAKE_UV_FAIL)
+        _install_fake_rebrew(monkeypatch, tmp_path, FAKE_REBREW_FAIL)
         with pytest.raises(subprocess.CalledProcessError) as excinfo:
             run_regen_step("build-db", tmp_path)
         assert excinfo.value.returncode == 3
 
-    def test_missing_uv_raises_file_not_found(self, monkeypatch: Any, tmp_path: Path) -> None:
+    def test_missing_rebrew_raises_file_not_found(self, monkeypatch: Any, tmp_path: Path) -> None:
         empty = tmp_path / "empty"
         empty.mkdir()
         monkeypatch.setenv("PATH", str(empty))
+        monkeypatch.delenv("RECOVERAGE_REBREW", raising=False)
         with pytest.raises(FileNotFoundError):
             run_regen_step("catalog", tmp_path)
 
-    def test_timeout_kills_grandchild_and_raises(self, monkeypatch: Any, tmp_path: Path) -> None:
-        """SIGKILL to uv alone would leave the rebrew grandchild running; the
-        group kill must take it down too."""
+    def test_env_override_names_the_executable(self, monkeypatch: Any, tmp_path: Path) -> None:
+        """RECOVERAGE_REBREW pins the executable when it is not on PATH."""
+        rebrew = tmp_path / "elsewhere" / "rebrew"
+        rebrew.parent.mkdir()
+        rebrew.write_text(FAKE_REBREW_OK)
+        rebrew.chmod(rebrew.stat().st_mode | stat.S_IEXEC)
+        empty = tmp_path / "empty"
+        empty.mkdir()
+        monkeypatch.setenv("PATH", str(empty))
+        monkeypatch.setenv("RECOVERAGE_REBREW", str(rebrew))
+        assert run_regen_step("catalog", tmp_path) is None
+
+    def test_timeout_kills_child_process_group(self, monkeypatch: Any, tmp_path: Path) -> None:
+        """SIGKILL to the direct child alone would leave rebrew's worker
+        running; the group kill must take it down too."""
         import recoverage.regen as regen
 
-        pid_file = tmp_path / "grandchild.pid"
-        monkeypatch.setenv("GRANDCHILD_PID_FILE", str(pid_file))
-        _install_fake_uv(monkeypatch, tmp_path, FAKE_UV_HANG)
+        pid_file = tmp_path / "worker.pid"
+        monkeypatch.setenv("WORKER_PID_FILE", str(pid_file))
+        _install_fake_rebrew(monkeypatch, tmp_path, FAKE_REBREW_HANG)
         monkeypatch.setattr(regen, "REGEN_TIMEOUT", 0.5)
 
         start = time.monotonic()
         with pytest.raises(subprocess.TimeoutExpired):
             run_regen_step("catalog", tmp_path)
         elapsed = time.monotonic() - start
-        assert elapsed < 10, "timeout path must not block anywhere near the grandchild lifetime"
+        assert elapsed < 10, "timeout path must not block anywhere near the worker lifetime"
 
-        grandchild_pid = int(pid_file.read_text().strip())
+        worker_pid = int(pid_file.read_text().strip())
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
             try:
-                os.kill(grandchild_pid, 0)
+                os.kill(worker_pid, 0)
             except ProcessLookupError:
                 break  # reaped by init after the group kill — the fix works
             time.sleep(0.05)
         else:
-            pytest.fail("grandchild survived the regen timeout (process-group leak)")
+            pytest.fail("worker survived the regen timeout (process-group leak)")
 
     def test_timeout_raises_timeout_expired_with_command(
         self, monkeypatch: Any, tmp_path: Path
     ) -> None:
         import recoverage.regen as regen
 
-        monkeypatch.setenv("GRANDCHILD_PID_FILE", str(tmp_path / "unused.pid"))
-        _install_fake_uv(monkeypatch, tmp_path, FAKE_UV_HANG)
+        monkeypatch.setenv("WORKER_PID_FILE", str(tmp_path / "unused.pid"))
+        _install_fake_rebrew(monkeypatch, tmp_path, FAKE_REBREW_HANG)
         monkeypatch.setattr(regen, "REGEN_TIMEOUT", 0.3)
         with pytest.raises(subprocess.TimeoutExpired) as excinfo:
             run_regen_step("catalog", tmp_path)
@@ -136,8 +151,8 @@ class TestRunRegenStep:
 
         The child runs in its own session (start_new_session), so the
         terminal's SIGINT never reaches it — without a kill on the
-        exception path, uv + rebrew survive as orphans and keep writing
-        coverage.db behind a restarted dashboard.
+        exception path, rebrew and its workers survive as orphans and keep
+        writing coverage.db behind a restarted dashboard.
         """
         import signal
         import threading
@@ -145,10 +160,10 @@ class TestRunRegenStep:
         import recoverage.regen as regen
 
         child_pid_file = tmp_path / "child.pid"
-        grandchild_pid_file = tmp_path / "grandchild.pid"
+        worker_pid_file = tmp_path / "worker.pid"
         monkeypatch.setenv("CHILD_PID_FILE", str(child_pid_file))
-        monkeypatch.setenv("GRANDCHILD_PID_FILE", str(grandchild_pid_file))
-        _install_fake_uv(monkeypatch, tmp_path, FAKE_UV_HANG_RECORD_ALL)
+        monkeypatch.setenv("WORKER_PID_FILE", str(worker_pid_file))
+        _install_fake_rebrew(monkeypatch, tmp_path, FAKE_REBREW_HANG_RECORD_ALL)
         monkeypatch.setattr(regen, "REGEN_TIMEOUT", 30)
 
         def _interrupt() -> None:
@@ -165,7 +180,7 @@ class TestRunRegenStep:
             finally:
                 timer.cancel()
 
-        pids = [int(child_pid_file.read_text()), int(grandchild_pid_file.read_text())]
+        pids = [int(child_pid_file.read_text()), int(worker_pid_file.read_text())]
 
         def _gone(pid: int) -> bool:
             try:

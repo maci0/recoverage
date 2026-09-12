@@ -1378,7 +1378,7 @@ def _do_regen(remote: str) -> bytes | Any:
             },
         )
     except (OSError, subprocess.SubprocessError) as e:
-        # Missing uv, launch failure, etc. — keep the JSON error contract
+        # Missing rebrew, launch failure, etc. — keep the JSON error contract
         # instead of letting an uncaught exception surface as an HTML 500.
         _log.error("Regen could not start: %s", e)
         return _json_err(

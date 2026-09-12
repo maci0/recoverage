@@ -21,4 +21,4 @@ Module map (dependencies point one way, left to right):
 Route modules register on import; there are no cycles.
 """
 
-__version__ = "1.1.0"
+__version__ = "1.1.1"

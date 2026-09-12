@@ -176,6 +176,11 @@ Re-run `rebrew catalog` + `rebrew build-db` to regenerate `coverage.db`.
 recoverage regen
 ```
 
+The `rebrew` console script is resolved from `PATH`; `RECOVERAGE_REBREW` names
+an explicit path when it is not on `PATH`.  Recoverage runs it directly, never
+through a project toolchain runner such as `uv run`, which resolves and may
+rewrite the workspace environment and needs uv itself on `PATH`.
+
 ### `recoverage open`
 
 Open the dashboard in a browser (useful when `--no-open` was used).

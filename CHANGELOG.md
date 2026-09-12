@@ -3,6 +3,18 @@
 All notable user-visible changes to Recoverage are recorded here.  The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.1.1] - 2026-09-13
+
+### Fixed
+
+- **Regen runs `rebrew` directly instead of `uv run rebrew`.**  The dashboard
+  and `POST /api/regen` invoke the `rebrew` console script resolved from `PATH`
+  (`RECOVERAGE_REBREW` overrides it), the way reportal resolves its engine.
+  `uv run` is a developer toolchain runner: it resolves and may rewrite the
+  workspace environment, needs uv and the network, and fails outright when the
+  workspace pins a uv other than the installed one.  A missing `rebrew` now
+  reports `rebrew not found on PATH; install it or set RECOVERAGE_REBREW`.
+
 ## [1.1.0] - 2026-09-13
 
 ### Changed
