@@ -27,7 +27,7 @@ from urllib.parse import ParseResult, parse_qs
 from urllib.parse import quote as _url_quote
 
 from bottle import HTTPResponse, SimpleTemplate  # type: ignore[import-untyped]
-from rebrew_workspace import parse_va_candidates, sqlite_ro_uri
+from rebrew.workspace import parse_va_candidates, sqlite_ro_uri
 
 from recoverage import __version__
 from recoverage.server import (
@@ -1925,7 +1925,7 @@ def _panel_function_detail(
     """
     # Cell function entries are VA strings ("0x10001000"), matching the SPA's
     # /functions/<va> route.  Resolve via the shared spelling parser
-    # (rebrew_workspace.parse_va_candidates: 0x-hex, bare hex, or decimal) and
+    # (rebrew.workspace.parse_va_candidates: 0x-hex, bare hex, or decimal) and
     # look up by va; fall back to name for legacy/name-form cells.
     va_candidates = parse_va_candidates(fn_name)
 

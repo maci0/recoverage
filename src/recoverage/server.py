@@ -35,7 +35,7 @@ import zstandard as zstd
 # db_version stamp (written by rebrew build-db).  It is NOT a real project
 # target and must never appear in target enumeration, stats, or the dashboard
 # dropdown.
-from rebrew_workspace import (
+from rebrew.workspace import (
     CONFIG_NAME,
     SCHEMA_TARGET,
     read_config,

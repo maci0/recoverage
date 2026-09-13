@@ -3,6 +3,18 @@
 All notable user-visible changes to Recoverage are recorded here.  The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.3.0] - 2026-09-13
+
+### Changed
+
+- Workspace resolution moved from the standalone `rebrew-workspace`
+  distribution into `rebrew.workspace`; recoverage imports `rebrew.workspace`
+  for `rebrew-project.toml` + coverage.db resolution.
+- rebrew is now a required dependency rather than the optional `regen` extra.
+  The `regen` extra is gone, `recoverage regen`, `serve --regen` and
+  `POST /api/regen` work on a plain install, and the "install the extra" hint
+  is gone.  A regen failure still exits 1 (or answers HTTP 500).
+
 ## [1.2.0] - 2026-09-13
 
 ### Changed

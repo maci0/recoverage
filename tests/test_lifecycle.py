@@ -85,21 +85,19 @@ class TestRunRegen:
             ("build_db", tmp_path),
         ]
 
-    def test_missing_rebrew_reports_the_extra(
+    def test_missing_rebrew_import_error_propagates(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        # None in sys.modules is the deterministic "rebrew is not installed"
-        # signal, whether or not the optional extra is installed in the env.
+        # None in sys.modules is the deterministic "rebrew cannot be imported"
+        # signal.  rebrew is a required dependency, so an ImportError here is a
+        # broken install: run_regen lets it propagate and the callers map it to
+        # their exit-1 / HTTP-500 contract.
         monkeypatch.setitem(sys.modules, "rebrew", None)
         for name in ("rebrew.config", "rebrew.catalog", "rebrew.build_db"):
             monkeypatch.delitem(sys.modules, name, raising=False)
 
-        with pytest.raises(ImportError) as excinfo:
+        with pytest.raises(ImportError):
             run_regen(tmp_path)
-
-        message = str(excinfo.value)
-        assert "recoverage[regen]" in message
-        assert "rebrew" in message
 
     def test_rebrew_failure_propagates(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path

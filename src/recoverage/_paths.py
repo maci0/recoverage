@@ -1,7 +1,7 @@
 """Path resolution helpers for recoverage.
 
 Provides _db_path(), recoverage's memoized wrapper around the shared
-``rebrew_workspace.db_path`` resolution: ``rebrew-project.toml``
+``rebrew.workspace.db_path`` resolution: ``rebrew-project.toml``
 ``[project] db_dir`` when present, ``./db/coverage.db`` otherwise.
 """
 
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from rebrew_workspace import CONFIG_NAME, db_path
+from rebrew.workspace import CONFIG_NAME, db_path
 
 # Memoized _db_path() result, keyed by cwd + the config file's stat
 # fingerprint.  _db_path() runs on every request (each ETag snapshot, DB open,
@@ -33,7 +33,7 @@ def _config_fingerprint(cfg: Path) -> tuple[int, int] | None:
 def _db_path() -> Path:
     """Return the path to coverage.db, honouring rebrew-project.toml [project] db_dir.
 
-    Resolution is ``rebrew_workspace.db_path(cwd)``: ``[project].db_dir``
+    Resolution is ``rebrew.workspace.db_path(cwd)``: ``[project].db_dir``
     resolved against cwd when present, else ``<cwd>/db/coverage.db``.  A
     missing, unreadable or invalid config falls back to the default (the
     shared reader never raises).

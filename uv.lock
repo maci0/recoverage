@@ -712,7 +712,6 @@ dependencies = [
     { name = "lief" },
     { name = "numpy" },
     { name = "python-flirt" },
-    { name = "rebrew-workspace" },
     { name = "rich" },
     { name = "tomlkit" },
     { name = "tree-sitter" },
@@ -736,7 +735,6 @@ requires-dist = [
     { name = "numpy", specifier = ">=1.26" },
     { name = "python-flirt", specifier = ">=0.9.10" },
     { name = "rapidfuzz", marker = "extra == 'similarity'", specifier = ">=3.13" },
-    { name = "rebrew-workspace", editable = "../rebrew-workspace" },
     { name = "resembl", marker = "extra == 'similarity'", directory = "../resembl" },
     { name = "rich", specifier = ">=13.0" },
     { name = "tomlkit", specifier = ">=0.12" },
@@ -758,26 +756,13 @@ dev = [
 ]
 
 [[package]]
-name = "rebrew-workspace"
-version = "0.1.0"
-source = { editable = "../rebrew-workspace" }
-
-[package.metadata]
-requires-dist = [
-    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.3" },
-]
-provides-extras = ["dev"]
-
-[[package]]
 name = "recoverage"
 source = { editable = "." }
 dependencies = [
     { name = "bottle" },
     { name = "brotli" },
     { name = "rcssmin" },
-    { name = "rebrew-workspace" },
+    { name = "rebrew" },
     { name = "rich" },
     { name = "rjsmin" },
     { name = "typer" },
@@ -799,9 +784,6 @@ playwright = [
 pygments = [
     { name = "pygments" },
 ]
-regen = [
-    { name = "rebrew" },
-]
 
 [package.metadata]
 requires-dist = [
@@ -813,15 +795,14 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.1.1" },
     { name = "pytest-playwright", marker = "extra == 'playwright'", specifier = ">=0.6" },
     { name = "rcssmin", specifier = ">=1.1" },
-    { name = "rebrew", marker = "extra == 'regen'", editable = "../rebrew" },
-    { name = "rebrew-workspace", editable = "../rebrew-workspace" },
+    { name = "rebrew", editable = "../rebrew" },
     { name = "rich", specifier = ">=15.0.0" },
     { name = "rjsmin", specifier = ">=1.2" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.16.5" },
     { name = "typer", specifier = ">=0.27.2" },
     { name = "zstandard", specifier = ">=0.22" },
 ]
-provides-extras = ["dev", "capstone", "playwright", "pygments", "regen"]
+provides-extras = ["dev", "capstone", "playwright", "pygments"]
 
 [[package]]
 name = "requests"

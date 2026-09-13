@@ -90,7 +90,6 @@ Install an extra to enable its feature: `pip install 'recoverage[<extra>]'`
 |-------|---------|--------------|
 | `capstone` | capstone | Enables on-demand disassembly in the detail panel |
 | `pygments` | pygments | Syntax highlighting in Potato Mode |
-| `regen` | rebrew | Enables `recoverage regen`, `serve --regen` and `POST /api/regen` |
 | `playwright` | playwright, pytest-playwright | Browser integration tests (`tests/test_playwright.py`) |
 
 ---
@@ -177,11 +176,10 @@ Re-run `rebrew catalog` + `rebrew build-db` to regenerate `coverage.db`.
 recoverage regen
 ```
 
-Requires the `regen` extra (`pip install 'recoverage[regen]'`): recoverage calls
-rebrew's catalog and build-db functions as a library, in its own process, not
-by spawning the `rebrew` console script.  The run has no timeout, so it always
-runs to completion; the dashboard's threaded server keeps serving while it is
-busy.  Without the extra the command exits 1 with the install hint.
+recoverage calls rebrew's catalog and build-db functions as a library, in its
+own process, not by spawning the `rebrew` console script.  The run has no
+timeout, so it always runs to completion; the dashboard's threaded server keeps
+serving while it is busy.  A failure exits 1.
 
 ### `recoverage open`
 
@@ -227,7 +225,7 @@ rebrew catalog --json          rebrew build-db           recoverage (Bottle + SQ
 2. **`rebrew build-db`**: Consumes those JSON files and builds a structured `db/coverage.db` (SQLite v4 schema) database, storing per-function metadata (`detected_by`, `size_by_tool`, `textOffset`), per-global metadata (`module`, `size`), per-cell metadata (`label`, `parent_function`), and stamping `db_version` for schema detection. See [DB_FORMAT.md](../rebrew/docs/DB_FORMAT.md) for the full schema.
 3. **`recoverage`**: Starts a **Bottle** web server. The backend serves API endpoints querying the SQLite database, while the frontend is a zero-build Single Page Application (SPA) powered by **VanJS**, rendering the interactive defrag grid.
 
-You can run `recoverage` independently on any machine (or even host it remotely) as long as it has access to a compiled `coverage.db` — no `rebrew` dependency or compiler toolchain is required.  Only the regen commands (`recoverage regen`, `serve --regen`, `POST /api/regen`) call into rebrew, through the optional `regen` extra.
+You can run `recoverage` independently on any machine (or even host it remotely) as long as it has access to a compiled `coverage.db`.  rebrew is a required dependency (it provides the shared workspace/config resolution and the in-process regen), but no project workspace or compiler toolchain is required to serve the dashboard.
 
 ---
 

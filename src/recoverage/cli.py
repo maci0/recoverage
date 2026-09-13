@@ -20,7 +20,7 @@ from typing import Any, NoReturn
 from wsgiref.simple_server import WSGIRequestHandler, WSGIServer
 
 import typer
-from rebrew_workspace import sqlite_ro_uri
+from rebrew.workspace import sqlite_ro_uri
 
 from recoverage._paths import _db_path
 
@@ -242,11 +242,6 @@ def _run_regen(root: Path) -> None:
     typer.echo("Running rebrew catalog + build-db...")
     try:
         run_regen(root)
-    except ImportError as e:
-        # rebrew not installed (the optional `regen` extra): the message
-        # already names the fix.
-        typer.secho(f"Error: {e}", fg=typer.colors.RED, err=True)
-        raise typer.Exit(1) from None
     except typer.Exit:
         # rebrew's error_exit reports the failure itself and raises
         # typer.Exit — click's Exit, a RuntimeError, not SystemExit — which

@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import typer
-from rebrew_workspace import VA_MAX, parse_va_candidates
+from rebrew.workspace import VA_MAX, parse_va_candidates
 
 from recoverage import __version__
 from recoverage import server as _server
@@ -1028,7 +1028,7 @@ def handle_api_function(target: str, va: str) -> bytes | Any:
         no_cache = CACHE_NO_STORE
 
         # Parse va into candidate lookup ints (shared spelling parser:
-        # rebrew_workspace.parse_va_candidates); anything unparseable falls
+        # rebrew.workspace.parse_va_candidates); anything unparseable falls
         # through to the exact-name lookup below.
         va_candidates = parse_va_candidates(va.strip())
         is_numeric = bool(va_candidates)
@@ -1368,8 +1368,8 @@ def _do_regen(remote: str) -> bytes | Any:
             },
         )
     except Exception as e:
-        # Missing rebrew (ImportError), a rebrew exception, a filesystem
-        # error: keep the JSON error contract instead of an HTML 500.
+        # A rebrew exception, an import error, a filesystem error: keep the
+        # JSON error contract instead of an HTML 500.
         _log.error("Regen failed: %s: %s", type(e).__name__, e)
         return _json_err(
             500,

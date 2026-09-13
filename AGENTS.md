@@ -7,10 +7,12 @@ It serves a VanJS + SQLite dashboard visualising per-byte match status across
 PE sections (`.text`, `.data`, `.bss`). Two modes: a modern SPA (default) and
 a retro "Potato Mode" that renders entirely in server-side HTML tables.
 
-This package is a **consumer** of data produced by `rebrew`.  It does not
-require rebrew to serve a dashboard — only a valid `coverage.db` file.  The
-regen commands call rebrew's `run_catalog`/`build_db` in-process through the
-optional `regen` extra; see `src/recoverage/regen.py`.
+This package is a **consumer** of data produced by `rebrew`, which it depends
+on as a library: `rebrew.workspace` provides the shared `rebrew-project.toml` +
+`coverage.db` resolution (stdlib only), and the regen commands call rebrew's
+`run_catalog`/`build_db` in-process; see `src/recoverage/regen.py`.  Serving a
+dashboard needs no project workspace or compiler toolchain, only a valid
+`coverage.db` file.
 
 ## Project Structure
 
@@ -68,7 +70,6 @@ Frontend lint tooling lives at the repo root: `package.json` (oxlint, `@oxlint/p
 uv pip install -e .            # runtime deps only
 uv pip install -e .[dev]       # + pytest, ruff (CI runs uv sync --frozen --extra dev)
 uv pip install -e .[playwright]  # browser tests: playwright, pytest-playwright
-uv pip install -e .[regen]     # + rebrew, for in-process `recoverage regen`
 
 # Run
 recoverage serve             # start dashboard on :8001
@@ -127,7 +128,7 @@ Required:
 - `bottle>=0.13` (web server)
 - `brotli>=1.1` (Brotli compression)
 - `rcssmin>=1.1` (CSS minification)
-- `rebrew-workspace` (shared `rebrew-project.toml` + coverage.db resolution; sibling path dep pinned in `[tool.uv.sources]`)
+- `rebrew` (sibling path dep pinned in `[tool.uv.sources]`): `rebrew.workspace` for shared `rebrew-project.toml` + coverage.db resolution, plus rebrew's catalog/build-db for in-process regen
 - `rich>=13.0` (terminal tables)
 - `rjsmin>=1.2` (JS minification)
 - `typer>=0.9` (CLI framework)
@@ -136,7 +137,6 @@ Required:
 Optional:
 - `capstone` (disassembly)
 - `pygments` (Potato Mode syntax highlighting)
-- `rebrew` (in-process `recoverage regen`, `serve --regen`, `POST /api/regen`; the `regen` extra)
 
 ## Code Style
 

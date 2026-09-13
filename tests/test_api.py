@@ -15,7 +15,7 @@ from wsgiref.util import setup_testing_defaults
 
 import pytest
 from conftest import HAS_DB, decode_body, get_first_target, wsgi_get, wsgi_post, wsgi_request
-from rebrew_workspace import sqlite_ro_uri
+from rebrew.workspace import sqlite_ro_uri
 
 from recoverage.server import HAS_CAPSTONE
 

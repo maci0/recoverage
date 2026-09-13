@@ -658,21 +658,20 @@ class TestRegenFailures:
         assert "catastrophic catalog failure" in result.output
         assert "Traceback" not in result.output
 
-    def test_missing_rebrew_extra_exits_cleanly(self, monkeypatch: Any) -> None:
-        """rebrew absent (the regen extra not installed) surfaces the
-        actionable install hint instead of a traceback."""
+    def test_missing_rebrew_import_error_exits_cleanly(self, monkeypatch: Any) -> None:
+        """rebrew is a required dependency, so an ImportError means a broken
+        install: it gets the generic exit-1 contract, with no install hint."""
         import recoverage.regen as regen
 
         def boom(root: Path) -> None:
-            raise ImportError(
-                "rebrew is required for regen; install it with 'pip install recoverage[regen]'"
-            )
+            raise ImportError("No module named 'rebrew'")
 
         monkeypatch.setattr(regen, "run_regen", boom)
 
         result = runner.invoke(app, ["regen"])
         assert result.exit_code == 1
-        assert "recoverage[regen]" in result.output
+        assert "No module named 'rebrew'" in result.output
+        assert "recoverage[regen]" not in result.output
         assert "Traceback" not in result.output
 
     def test_rebrew_error_exit_is_not_a_traceback(self, monkeypatch: Any) -> None:
