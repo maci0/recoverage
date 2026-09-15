@@ -221,7 +221,8 @@ body {
 }
 .topbar-left { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; flex: 1; min-width: 300px; }
 .topbar-right { display: flex; align-items: center; gap: 12px; justify-content: flex-end; flex-wrap: wrap; }
-.tabs { display: flex; gap: 6px; }
+.tabs { display: flex; gap: 6px; overflow-x: auto; max-width: 100%; min-width: 0; flex: 1 1 auto; scrollbar-width: thin; mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent); }
+.tabs:has(.tab-btn:last-child.active) { mask-image: none; }
 .filters { display: flex; gap: 6px; }
 .actions { display: flex; gap: 8px; align-items: center; }
 
@@ -423,6 +424,7 @@ body.light-mode::after { background: linear-gradient(rgba(18, 16, 16, 0) 50%, rg
  * away and the map gets the screen. */
 @media (max-width: 700px) {
   .topbar { position: static; }
+  .topbar-left { min-width: 0; }
   .panel-head { top: 0; }
   /* Three stats need ~415px and the bar has ~352px on a phone, so the byte
    * count (derivable from the panel) gives way to the two that carry the

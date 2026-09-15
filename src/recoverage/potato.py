@@ -151,15 +151,14 @@ DOT_PNGS = {
     ),
 }
 
-# ── Progress bar SVG cache ──────────────────────────────────
+# ── Progress bar SVG ────────────────────────────────────────
 
 
-@functools.lru_cache(maxsize=256)
 def _progress_svg(segments: tuple[tuple[str, float], ...]) -> str:
     """SVG (data URI) with one colored segment per (state, pct), rounded corners.
 
-    Segments must be a hashable tuple; the result is LRU-cached because the
-    same section state renders identically on every page view."""
+    Deliberately uncached: pct floats make repeat keys rare, so the memo
+    never hits and only pins entries."""
     svg = [
         (
             '<svg xmlns="http://www.w3.org/2000/svg" width="700" height="32" viewBox="0 0 700 32">'
@@ -653,11 +652,11 @@ _PAGE_SRC = r"""<!DOCTYPE html>
       <table id="logo" border="0" cellpadding="0" cellspacing="0">
         <tr>
           <td><img src="{{R_LOGO_SVG}}" width="48" height="32" border="0" alt="R"></td>
-          <td valign="middle"><h1><a href="/"><font face="{{MONO_FONT}}" size="5" color="{{TEXT_COLOR}}">&nbsp;<b>ReCoverage</b></font></a></h1>&nbsp;<a href="/"><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">[SPA]</font></a>&nbsp;<a href="?target={{target}}&section={{section}}&view=functions"><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">[Functions]</font></a></td>
+          <td valign="middle" nowrap><h1><a href="/"><font face="{{MONO_FONT}}" size="5" color="{{TEXT_COLOR}}">&nbsp;<b>ReCoverage</b></font></a></h1>&nbsp;<a href="/"><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">[SPA]</font></a>&nbsp;<a href="?target={{target}}&section={{section}}&view=functions"><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">[Functions]</font></a></td>
         </tr>
       </table>
     </td>
-    <td valign="middle">
+    <td valign="middle" width="100%">
       <table id="section-tabs" border="0" cellpadding="0" cellspacing="4"><tr>
       % for s_name, s_url, s_active in section_tab_data:
         <td valign="middle">
@@ -670,26 +669,39 @@ _PAGE_SRC = r"""<!DOCTYPE html>
       % end
       </tr></table>
     </td>
-    % if progress:
-    <td valign="middle">
-      <table id="progress-bar" width="700" border="0" cellpadding="0" cellspacing="0"><tr>
-        <td background="{{progress_bar_png}}" align="center" height="32"><font face="{{MONO_FONT}}" size="3" color="#ffffff"><b>{{progress['sec_size']}}</b>b &middot; <b>{{progress['matched_fn']}}/{{progress['total_fn']}}</b> matched &middot; <b>{{"%.1f" % progress['coverage_pct']}}%</b></font></td>
-      </tr></table>
-    </td>
-    % end
-    <td valign="middle" nowrap>
-      <table id="controls" border="0" cellpadding="0" cellspacing="2"><tr>
-        <td valign="middle">
+  </tr>
+  <tr>
+    <td valign="middle" colspan="2">
+      <table id="controls" border="0" cellpadding="0" cellspacing="2" width="100%">
+        % if progress:
+        <tr><td valign="middle" width="100%">
+          <table id="progress-bar" width="100%" border="0" cellpadding="0" cellspacing="0"><tr>
+            <td background="{{progress_bar_png}}" align="center" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="#ffffff"><b>{{progress['sec_size']}}</b>b &middot; <b>{{progress['matched_fn']}}/{{progress['total_fn']}}</b> matched &middot; <b>{{"%.1f" % progress['coverage_pct']}}%</b></font></td>
+          </tr></table>
+        </td></tr>
+        % end
+        <tr><td valign="middle" nowrap>
           <form id="search-form" action="/potato" method="GET"><input type="hidden" name="target" value="{{target}}"><input type="hidden" name="section" value="{{section}}">
           % if active_filters:
             <input type="hidden" name="filter" value="{{','.join(sorted(active_filters))}}">
           % end
-          <label for="search-input"><font size="1" color="{{MUTED_COLOR}}">Search:&nbsp;</font></label><input id="search-input" type="text" name="search" size="18" value="{{search_query}}" placeholder="Search VA or name..." accesskey="s"> <input type="submit" value="Go"></form>
+          <label for="search-input"><font size="1" color="{{MUTED_COLOR}}">Search:&nbsp;</font></label><input id="search-input" type="text" name="search" size="14" value="{{search_query}}" placeholder="Search VA or name..." accesskey="s"> <input type="submit" value="Go"></form>
           % if search_query:
             <br><font size="1" color="{{ACCENT_COLOR}}">Searching: &quot;{{search_query}}&quot; ({{search_match_count}} matches)</font> <a href="{{clear_search_url}}"><font size="1" color="{{MUTED_COLOR}}">[Clear search]</font></a>
           % end
-        </td>
-        <td valign="middle">
+        </td></tr>
+        <tr><td valign="middle" nowrap>
+          <form id="target-form" action="/potato" method="GET">
+            <input type="hidden" name="section" value="{{section}}">
+            <label for="target-select"><font size="1" color="{{MUTED_COLOR}}">Target:&nbsp;</font></label><select id="target-select" name="target">
+            % for t in targets:
+              <option value="{{t['id']}}" {{"selected" if t['id'] == target else ""}}>{{t['name']}}</option>
+            % end
+            </select>
+            <input type="submit" value="Go">
+          </form>
+        </td></tr>
+        <tr><td valign="middle">
           <table id="filters" border="0" cellpadding="0" cellspacing="4"><tr>
             % for fb_href, fb_label, fb_color, fb_active, fb_key in filter_btn_data:
               <td valign="middle">
@@ -702,18 +714,7 @@ _PAGE_SRC = r"""<!DOCTYPE html>
             % end
           </tr></table>
         </td>
-        <td valign="middle">
-          <form id="target-form" action="/potato" method="GET">
-            <input type="hidden" name="section" value="{{section}}">
-            <label for="target-select"><font size="1" color="{{MUTED_COLOR}}">Target:&nbsp;</font></label><select id="target-select" name="target">
-            % for t in targets:
-              <option value="{{t['id']}}" {{"selected" if t['id'] == target else ""}}>{{t['name']}}</option>
-            % end
-            </select>
-            <input type="submit" value="Go">
-          </form>
-        </td>
-      </tr></table>
+        </tr></table>
     </td>
   </tr>
 </table>

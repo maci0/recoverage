@@ -890,6 +890,12 @@ const App = () => {
       HighlightedCode({ lang, text })
     );
 
+    // Hint for the copy buttons when they have nothing to copy.
+    const copyHint = (copied, what) => {
+      if (copied != null) return detailFailed.val ? MSG.DETAIL_UNAVAILABLE : "";
+      return `Select a ${what} first`;
+    };
+
     // Compute copyable VA: prefer fn fields, fall back to cell address range
     let copyVA = null;
     if (fn) {
@@ -908,8 +914,8 @@ const App = () => {
       div({ class: "panel-head" },
         h2({ class: "panel-title" }, title),
         div({ class: "panel-actions" },
-          button({ class: "btn copy-btn", "aria-label": "Copy VA", ...detailBound(), onclick: (e) => copyToClipboard(copyVA, e) }, "Copy VA"),
-          button({ class: "btn copy-btn", "aria-label": "Copy Symbol", ...detailBound(), onclick: (e) => copyToClipboard(fn?.symbol, e) }, "Copy Symbol")
+          button({ class: "btn copy-btn", "aria-label": "Copy VA", disabled: () => detailFailed.val || copyVA == null, title: () => copyHint(copyVA, "block"), onclick: (e) => copyToClipboard(copyVA, e) }, "Copy VA"),
+          button({ class: "btn copy-btn", "aria-label": "Copy Symbol", disabled: () => detailFailed.val || fn?.symbol == null, title: () => copyHint(fn?.symbol, "function"), onclick: (e) => copyToClipboard(fn?.symbol, e) }, "Copy Symbol")
         ),
         div({ class: "panel-meta" }, metaContent)
       ),
