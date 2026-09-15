@@ -9,7 +9,7 @@ build-backend = "setuptools.build_meta"
 name = "recoverage"
 dynamic = ["version"]
 description = "Coverage dashboard for binary-matching decompilation projects"
-requires-python = ">=3.12"
+requires-python = ">=3.13"
 license = "MIT"
 license-files = ["LICENSE"]
 keywords = ["reverse-engineering", "decompilation", "code-coverage", "binary-matching"]
@@ -21,7 +21,6 @@ classifiers = [
     # claims "any machine".
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
     "Topic :: Software Development :: Disassemblers",
@@ -48,14 +47,14 @@ Repository = "https://github.com/relumea/recoverage"
 [project.optional-dependencies]
 dev = [
     "pytest>=9.1.1",
-    "ruff>=0.16.5",
+    "ruff>=0.16.7",
 ]
 capstone = [
     "capstone>=5.0",
 ]
 playwright = [
-    "playwright>=1.40",
-    "pytest-playwright>=0.6",
+    "playwright>=1.62",
+    "pytest-playwright>=0.9.0",
 ]
 pygments = [
     "pygments>=2.21.0",
@@ -75,6 +74,10 @@ recoverage = ["assets/*"]
 
 [tool.uv]
 package = true
+# rebrew pins typer==0.24.1 (0.25+ sandboxes command globals).  Recoverage
+# already ships 0.27.2 and its CLI/tests need that; override the path-dep pin
+# so `uv lock --upgrade` can still resolve the rest of the tree.
+override-dependencies = ["typer>=0.27.2"]
 
 [tool.uv.sources]
 # Sibling-checkout path dep: uv resolves it relative to this pyproject.toml,
@@ -90,7 +93,7 @@ addopts = "--ignore=tests/test_playwright.py"
 filterwarnings = ["error"]
 
 [tool.ruff]
-target-version = "py312"
+target-version = "py313"
 line-length = 100
 
 [tool.ruff.lint]
