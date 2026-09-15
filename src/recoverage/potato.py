@@ -861,9 +861,18 @@ def _db_unavailable_page() -> HTTPResponse:
     return HTTPResponse(
         status=503,
         body=(
-            '<html><body bgcolor="#0f1216" text="#e7edf4">'
-            "Database unavailable — run 'rebrew catalog --json &amp;&amp; "
-            "rebrew build-db' to create or rebuild it.</body></html>"
+            '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
+            '<meta name="viewport" content="width=device-width, initial-scale=1">'
+            "<title>ReCoverage — database unavailable</title></head>"
+            f'<body bgcolor="{BG_COLOR}" text="{TEXT_COLOR}">'
+            f'<font face="{MONO_FONT}">'
+            '<table width="100%" height="90%" border="0"><tr><td align="center" valign="middle">'
+            "<h1>Database unavailable</h1>"
+            f'<p><font color="{MUTED_COLOR}">Run '
+            "'rebrew catalog --json &amp;&amp; rebrew build-db' to create or rebuild it,"
+            ' then <a href="/potato">retry Potato Mode</a> or '
+            '<a href="/">open the SPA</a>.</font></p>'
+            "</td></tr></table></font></body></html>"
         ),
         headers={"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store"},
     )
@@ -1652,8 +1661,16 @@ def _render_potato_inner(
     sections, data = _load_section_data(c, target)
     if not data:
         return (
-            f'<html><body bgcolor="#0f1216" text="#ffffff">'
-            f"No data for target {_esc(target)}</body></html>"
+            '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
+            '<meta name="viewport" content="width=device-width, initial-scale=1">'
+            f"<title>ReCoverage — no data for {_esc(target)}</title></head>"
+            f'<body bgcolor="{BG_COLOR}" text="{TEXT_COLOR}">'
+            f'<font face="{MONO_FONT}">'
+            '<table width="100%" height="90%" border="0"><tr><td align="center" valign="middle">'
+            f"<h1>No data for target {_esc(target)}</h1>"
+            f'<p><font color="{MUTED_COLOR}">Pick a built target from '
+            '<a href="/potato">Potato Mode</a> or <a href="/">the SPA</a>.</font></p>'
+            "</td></tr></table></font></body></html>"
         )
 
     if section not in sections and sections:
