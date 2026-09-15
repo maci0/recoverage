@@ -86,10 +86,10 @@ def _check_payload_budget(payload: bytes) -> None:
 
     The budget is the initial congestion window (10 x 1460-byte MSS), so the
     payload should arrive in one round trip.  It currently fits with little to
-    spare: everything deferrable (the asm fetch, its formatting, and the
-    highlight.js load among it) lives in ``detail.js``, so a new byte has to
-    come out of there rather than out of the window.  The warning is the
-    ratchet that says so, naming the exact overage.
+    spare: everything deferrable (the asm fetch, its formatting, the canvas
+    coverage map, and the highlight.js load among it) lives in ``detail.js``,
+    so a new byte has to come out of there rather than out of the window.  The
+    warning is the ratchet that says so, naming the exact overage.
     """
     results: list[tuple[str, int]] = [
         ("gzip", len(gzip.compress(payload))),

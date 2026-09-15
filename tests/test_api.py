@@ -2232,6 +2232,67 @@ class TestKnownSchemaContract:
         assert status.startswith("200")
         data = json.loads(decode_body(body, {}))
         assert data["known_schema"] == sorted(server_mod.KNOWN_SCHEMA_VERSIONS)
+        for sec in data["sections"].values():
+            assert isinstance(sec["cells"], list)
+            for cell in sec["cells"]:
+                assert {"start", "end", "state"} <= cell.keys()
+
+
+class TestDumpsWithCells:
+    """The /data serializer splices sqlite json_group_array output instead of
+    round-tripping cells through json.loads/dumps."""
+
+    def test_splices_preencoded_arrays(self) -> None:
+        from recoverage.api import _dumps_with_cells
+
+        raw = _dumps_with_cells(
+            {
+                "target": "GAME",
+                "sections": {".text": {"name": ".text", "va": 1}, ".data": {"name": ".data"}},
+            },
+            {".text": '[{"id":1,"state":"exact"}]'},
+        )
+        data = json.loads(raw)
+        assert data["target"] == "GAME"
+        assert data["sections"][".text"]["cells"] == [{"id": 1, "state": "exact"}]
+        assert data["sections"][".text"]["va"] == 1
+        assert data["sections"][".data"]["cells"] == []
+
+    def test_empty_section_dict(self) -> None:
+        from recoverage.api import _dumps_with_cells
+
+        data = json.loads(_dumps_with_cells({"sections": {"x": {}}}, {"x": "[1]"}))
+        assert data["sections"]["x"] == {"cells": [1]}
+
+    def test_none_omits_cells_key(self) -> None:
+        from recoverage.api import _dumps_with_cells
+
+        data = json.loads(
+            _dumps_with_cells(
+                {"sections": {".text": {"va": 1}, ".data": {"va": 2}}},
+                {".text": "[]", ".data": None},
+            )
+        )
+        assert data["sections"][".text"]["cells"] == []
+        assert "cells" not in data["sections"][".data"]
+        assert data["sections"][".data"]["va"] == 2
+
+
+class TestSectionFilterKeepsSiblings:
+    """?section= omits sibling cell arrays but still lists every section."""
+
+    def test_section_query_keeps_all_section_rows(self) -> None:
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, _, body = wsgi_get(f"/api/targets/{target}/data?section=.text")
+        assert status.startswith("200")
+        data = json.loads(decode_body(body, {}))
+        assert ".text" in data["sections"]
+        assert isinstance(data["sections"][".text"].get("cells"), list)
+        for name, sec in data["sections"].items():
+            if name != ".text":
+                assert "cells" not in sec
 
 
 # ── Repo source-file serving (/src, /original) ─────────────────────

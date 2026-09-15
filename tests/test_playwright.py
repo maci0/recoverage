@@ -64,20 +64,18 @@ def test_sections_present(page: Any):
 
 
 def test_text_section_cells(page: Any):
-    # Original UI
+    # Original UI — the map is one canvas, not one DOM node per cell.
     page.goto(f"{BASE_URL}/")
-    page.wait_for_selector(".grid")
+    page.wait_for_selector(".grid-canvas")
     page.locator(".tab-btn", has_text=".text").click()
     page.wait_for_timeout(500)  # wait for render
-    og_cells = page.locator(".cell").count()
+    canvas = page.locator(".grid-canvas")
+    box = canvas.bounding_box()
+    assert box is not None and box["width"] > 50 and box["height"] > 50
 
-    # Potato UI
+    # Potato UI still paints one <td> per merged cell.
     page.goto(f"{BASE_URL}/potato?section=.text")
     pt_cells = page.locator("#grid td[bgcolor]").count()
-
-    # The cell counts might differ slightly due to merging in potato mode,
-    # but they should both be substantial (e.g. > 500)
-    assert og_cells > 500
     assert pt_cells > 500
 
 
@@ -119,14 +117,17 @@ def test_asm_pane_renders_disassembly(page: Any):
     inlined shell), so selecting a function must still fill the Assembly
     section — text first, then the highlight pass."""
     page.goto(f"{BASE_URL}/?section=.text")
-    page.wait_for_selector(".grid")
+    page.wait_for_selector(".grid-canvas")
     page.locator(".tab-btn", has_text=".text").click()
     page.wait_for_timeout(500)
 
-    matched = page.locator(".cell.exact, .cell.reloc, .cell.near_match").first
-    if matched.count() == 0:
-        pytest.skip("no matched cell in .text to select")
-    matched.click()
+    canvas = page.locator(".grid-canvas")
+    box = canvas.bounding_box()
+    if box is None:
+        pytest.skip("coverage map canvas did not layout")
+    # Click the first cell (padding 8 + half a cell). Selecting whatever
+    # lives at 0,0 is enough to exercise the asm pane.
+    canvas.click(position={"x": min(12, box["width"] / 2), "y": min(12, box["height"] / 2)})
 
     asm = page.locator("#panel .section", has_text="Assembly").first
     expect(asm).to_contain_text(

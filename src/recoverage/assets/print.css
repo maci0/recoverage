@@ -34,21 +34,19 @@ body::after,
 .panel { margin-top: 10mm; }
 .panel-head { position: static; background: #fff; }
 
-/* Cells keep their status colour: the whole point of printing this is the
- * colour distribution.  print-color-adjust asks the browser not to strip it. */
+/* The canvas map keeps its status colour: the whole point of printing this
+ * is the colour distribution.  print-color-adjust asks the browser not to
+ * strip it. */
 .grid {
   background: #fff;
   border-color: #999;
   animation: none;
-  content-visibility: visible;
   break-inside: avoid;
 }
-.cell {
+.grid-canvas {
   print-color-adjust: exact;
   -webkit-print-color-adjust: exact;
-  border-color: rgba(0, 0, 0, 0.25);
 }
-.cell.dimmed { opacity: 1; }
 
 /* Code panes print in full instead of scrolling a 220px window. */
 .code {

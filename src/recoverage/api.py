@@ -492,7 +492,7 @@ def handle_api_events() -> Any:
             _SSE_CLIENTS.discard(client_queue)
         raise
 
-    def _events() -> Generator[bytes, None, None]:
+    def _events() -> Generator[bytes]:
         try:
             yield b": connected\n\n"
             last_heartbeat = time.monotonic()
@@ -644,30 +644,31 @@ def _build_data_raw(c: sqlite3.Cursor, target: str, section_filter: str | None) 
     """
     data: dict[str, Any] = _load_metadata(c, target)
 
-    # Optional ?section= narrowing: the same queries with one extra WHERE
-    # term, so no branch duplicates a query that only adds "AND name = ?".
-    sec_params: list[Any] = [target] + ([section_filter] if section_filter else [])
-    sections_clause = " AND name = ?" if section_filter else ""
-
-    c.execute(
-        f"SELECT * FROM sections WHERE target = ?{sections_clause}",
-        sec_params,
-    )
+    # Always load every section row so the SPA can render tabs from a
+    # ?section= payload.  Cells are the multi-MB part: omit siblings when
+    # the client asked for one section (null, not []).
+    c.execute("SELECT * FROM sections WHERE target = ?", (target,))
     data["sections"] = {}
     for row in c.fetchall():
-        sec = dict(row)
-        sec["cells"] = []
-        data["sections"][sec["name"]] = sec
+        data["sections"][row["name"]] = dict(row)
 
-    if section_filter and not data["sections"]:
+    if section_filter and section_filter not in data["sections"]:
         # Mirror /asm: an unknown section must 404, not return a silent
         # empty grid (which would also get memoized under that key).
         raise _section_not_found(target, section_filter)
 
+    # SQLite already emitted each section's cells as a JSON array.  Parsing
+    # that into Python and json.dumps-ing it back was ~70 ms of the ~115 ms
+    # cold /data build on an 80k-cell DB, for identical bytes.  Keep the
+    # strings and splice them into the envelope below.
+    cells_json: dict[str, str | None] = {}
     for row in _cells_json_rows(c, target, section_filter):
         sec_name = row[0]
         if sec_name in data["sections"]:
-            data["sections"][sec_name]["cells"] = json.loads(row[1])
+            cells_json[sec_name] = row[1]
+    if section_filter:
+        for name in data["sections"]:
+            cells_json.setdefault(name, None)
 
     data["search_index"] = _build_search_index(c, target)
 
@@ -682,17 +683,55 @@ def _build_data_raw(c: sqlite3.Cursor, target: str, section_filter: str | None) 
     # none, proven, and size_mismatch were previously omitted).
     data["section_cell_stats"] = {}
     stats_clause = " AND section_name = ?" if section_filter else ""
+    stats_params: list[Any] = [target] + ([section_filter] if section_filter else [])
     c.execute(
         "SELECT section_name, total_cells, exact_count, reloc_count, "
         "near_match_count, stub_count, padding_count, data_count, thunk_count, "
         f"none_count, proven_count, size_mismatch_count "
         f"FROM section_cell_stats WHERE target = ?{stats_clause}",
-        sec_params,
+        stats_params,
     )
     for row in c.fetchall():
         data["section_cell_stats"][row["section_name"]] = _cell_bucket_row(row)
 
-    return json.dumps(data).encode("utf-8")
+    return _dumps_with_cells(data, cells_json)
+
+
+def _dumps_with_cells(data: dict[str, Any], cells_json: dict[str, str | None]) -> bytes:
+    """Serialize *data* while splicing pre-encoded ``cells`` JSON arrays.
+
+    ``data["sections"][name]`` is the section row *without* a cells key.
+    *cells_json* maps names to ``json_group_array`` output, or ``None`` to
+    omit the key (SPA lazy-load).  Missing names become ``[]``.
+    """
+    sections = data.pop("sections")
+    rest = json.dumps(data, separators=(",", ":"))
+    parts: list[str] = ["{"]
+    if rest != "{}":
+        parts.append(rest[1:-1])
+        parts.append(",")
+    parts.append('"sections":{')
+    first = True
+    for name, sec in sections.items():
+        if not first:
+            parts.append(",")
+        first = False
+        sec_json = json.dumps(sec, separators=(",", ":"))
+        cells = cells_json.get(name, "[]")
+        # ponytail: string splice, not a JSON encoder — cells is already a
+        # json_group_array array.  Rebuild as one object if we grow a binary
+        # cells encoding.
+        if cells is None:
+            spliced = "{}" if sec_json == "{}" else sec_json
+        elif sec_json == "{}":
+            spliced = '{"cells":' + cells + "}"
+        else:
+            spliced = sec_json[:-1] + ',"cells":' + cells + "}"
+        parts.append(json.dumps(name))
+        parts.append(":")
+        parts.append(spliced)
+    parts.append("}}")
+    return "".join(parts).encode("utf-8")
 
 
 @app.get("/api/targets/<target>/data")

@@ -252,41 +252,11 @@ body {
 
 
 .grid {
-  display: grid; grid-template-columns: repeat(var(--cols, 64), 1fr); gap: 2px; padding: 8px;
-  border-radius: 12px; background: var(--grid-bg); border: 1px solid var(--border);
-  user-select: none; animation: fadeInGrid 0.3s ease; position: relative; min-height: 400px; content-visibility: auto;
+  display: block; padding: 0; border-radius: 12px; background: var(--grid-bg); border: 1px solid var(--border);
+  user-select: none; animation: fadeInGrid 0.3s ease; position: relative; min-height: 400px; overflow: auto;
 }
+.grid-canvas { display: block; }
 @keyframes fadeInGrid { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
-
-.cell {
-  width: 100%; height: 100%; border-radius: 2px; border: 1px solid var(--cell-border);
-  cursor: pointer; background: var(--none); contain: strict;
-}
-.cell.exact { background: var(--exact-bg); }
-.cell.reloc { background: var(--reloc-bg); }
-.cell.near_match { background: var(--near-match-bg); }
-.cell.stub { background: var(--stub-bg); }
-.cell.padding { background: var(--padding-bg); }
-.cell.proven { background: var(--proven-bg); }
-/* Legacy near_match spelling and SIZE_MISMATCH carry the near-match yellow
- * (rebrew DB_FORMAT.md); the panel's State field tells them apart. */
-.cell.near_matching { background: var(--near-match-bg); }
-.cell.size_mismatch { background: var(--near-match-bg); }
-
-.cell.dimmed { opacity: 0.15; }
-
-/* Fast CSS-based filtering */
-.grid.has-filters .cell { opacity: 0.15; }
-.grid.has-filters.show-exact .cell.exact { opacity: 1; }
-.grid.has-filters.show-reloc .cell.reloc { opacity: 1; }
-.grid.has-filters.show-near_match .cell.near_match { opacity: 1; }
-.grid.has-filters.show-stub .cell.stub { opacity: 1; }
-.grid.has-filters.show-padding .cell.padding { opacity: 1; }
-
-
-.cell:hover { outline: 1px solid var(--c); box-shadow: var(--c-shadow); z-index: 2; }
-.cell.active { box-shadow: 0 0 12px 2px var(--glow), inset 0 0 8px var(--glow); outline: 2px solid var(--c); border-color: var(--c); z-index: 3; position: relative; }
-.light-mode .cell.active { outline: 2px solid rgba(0, 0, 0, 0.8); box-shadow: 0 0 12px 2px rgba(0, 0, 0, 0.15); }
 
 .modal {
   display: flex; align-items: center; justify-content: center; position: fixed; z-index: 100;
@@ -446,7 +416,6 @@ body.light-mode::after { background: linear-gradient(rgba(18, 16, 16, 0) 50%, rg
   /* The bar itself has to grow: it is fixed-height with overflow:hidden, so a
    * min-height on the segments alone was clipped back to 32px. */
   .progress-bar { height: 44px; }
-  .cell { min-height: 16px; }
 }
 
 /* Phone widths: the topbar wraps to ~190px of controls.  Sticky there would

@@ -1,11 +1,9 @@
-// Detail rendering for a selected block: the hex dump and the data inspector.
-// Both are needed only after the first cell click, so they are kept out of the
-// inlined index payload (which has to fit the initial TCP congestion window)
-// and fetched immediately after first paint instead.  app.js publishes what
-// this file needs on window.RC and reads the results back from it.
+// Deferred SPA work kept out of the inlined index payload (TCP congestion window):
+// hex dump, data inspector, and the canvas coverage map.  app.js publishes
+// what this file needs on window.RC and reads the results back from it.
 (() => {
   const { MetaItem, MSG, hex } = window.RC;
-  const { div } = van.tags;
+  const { canvas, div } = van.tags;
 
   const formatBytes = (buf, baseOffset = 0) => {
     const bytes = new Uint8Array(buf);
@@ -275,6 +273,276 @@
     });
   };
 
-  Object.assign(window.RC, { formatBytes, DataInspector, extractDocs, initHighlighting, highlightInto, loadAsm, connectEvents, reloadData, copyToClipboard, mountModal });
+
+  const mountGrid = ({
+    container, data, isLoading, emptyState, activeSection, activeFilters,
+    searchQuery, filteredFnNames, currentCellIndex, activeFnName, isLightMode,
+    selectChunk, packSection, gridId, setGridFocus,
+  }) => {
+    const PALETTE_VARS = ["--none", "--exact-bg", "--reloc-bg", "--near-match-bg", "--stub-bg", "--padding-bg", "--proven-bg"];
+    const FILTER_KEY = ["", "exact", "reloc", "near_match", "stub", "padding", ""];
+    const grids = {};
+    let ro = null;
+
+    const paletteOf = (el) => PALETTE_VARS.map((v) => getComputedStyle(el).getPropertyValue(v).trim());
+    const minCellPx = () => (window.innerWidth < 700 ? 12 : 6);
+
+    const layoutOf = (wrap) => {
+      const gap = 2;
+      const pad = 8;
+      const usable = Math.max(0, wrap.clientWidth - pad * 2);
+      const min = minCellPx();
+      const declared = Number(wrap.dataset.cols) || 64;
+      const fits = Math.floor((usable + gap) / (min + gap));
+      const cols = Math.max(1, Math.min(declared, fits));
+      const cell = Math.max(min, (usable - gap * (cols - 1)) / cols);
+      return { cols, gap, pad, cell };
+    };
+
+    const walk = (pack, cols, fn) => {
+      let col = 0;
+      let row = 0;
+      for (let i = 0; i < pack.n; i += 1) {
+        const s = pack.spans[i];
+        if (col + s > cols && col > 0) { row += 1; col = 0; }
+        fn(i, col, row, s);
+        col += s;
+        if (col >= cols) { col = 0; row += 1; }
+      }
+      return row + (col > 0 ? 1 : 0);
+    };
+
+    // Layout (walk, rows, hit-map, canvas size) is cached per section and
+    // recomputed only when cols/pack change; filter/search/active/focus
+    // changes just redraw rects.  getComputedStyle reads are cached too —
+    // the palette only changes on theme toggle.
+    const layout = (secName, pack, force) => {
+      const g = grids[secName];
+      const lay = layoutOf(g.wrap);
+      const key = `${lay.cols}x${pack.n}`;
+      if (!force && g.layKey === key) return g;
+      g.lay = lay;
+      g.layKey = key;
+      g.cols = lay.cols;
+      const { cols, gap, pad, cell } = lay;
+      // Row count first: walk is cheap, and sizing the map needs it upfront.
+      let rows = 1;
+      {
+        let col = 0;
+        for (let i = 0; i < pack.n; i += 1) {
+          const s = pack.spans[i];
+          if (col + s > cols && col > 0) { rows += 1; col = 0; }
+          col += s;
+          if (col >= cols) { col = 0; rows += 1; }
+        }
+      }
+      g.rows = rows;
+      const map = new Int32Array(rows * cols);
+      map.fill(-1);
+      const cellRow = new Int32Array(pack.n);
+      walk(pack, cols, (i, col, row, s) => {
+        cellRow[i] = row;
+        const base = row * cols + col;
+        for (let k = 0; k < s; k += 1) map[base + k] = i;
+      });
+      g.map = map;
+      g.cellRow = cellRow;
+      const w = pad * 2 + cols * cell + Math.max(0, cols - 1) * gap;
+      const h = pad * 2 + rows * cell + Math.max(0, rows - 1) * gap;
+      const dpr = Math.min(2, window.devicePixelRatio || 1);
+      g.canvas.style.width = `${w}px`;
+      g.canvas.style.height = `${h}px`;
+      g.canvas.width = Math.max(1, Math.round(w * dpr));
+      g.canvas.height = Math.max(1, Math.round(h * dpr));
+      g.cssW = w;
+      g.cssH = h;
+      g.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      return g;
+    };
+
+    const palette = (secName, force) => {
+      const g = grids[secName];
+      if (!force && g.pal) return g;
+      g.pal = paletteOf(g.wrap);
+      g.accent = getComputedStyle(g.wrap).getPropertyValue("--c").trim();
+      return g;
+    };
+
+    const paint = (secName, opts = {}) => {
+      const g = grids[secName];
+      const sec = data.val?.sections?.[secName];
+      if (!g || !sec) return;
+      if (sec.cells == null) return;
+      // oxlint-disable-next-line @rikalabs/no-pass-through-intermediate-vars -- pack feeds layout + the draw walk below, not a single passthrough
+      const pack = packSection(sec);
+      layout(secName, pack, opts.relayout);
+      palette(secName, opts.retheme);
+      const { cols, gap, pad, cell } = g.lay;
+      const { ctx, pal, accent } = g;
+      const filters = activeFilters.val;
+      const filtering = filters.size > 0;
+      const query = searchQuery.val;
+      const matched = filteredFnNames.val;
+      const activeIdx = currentCellIndex.val;
+      const activeFn = activeFnName.val;
+      const focusIdx = g.focus ?? 0;
+      ctx.clearRect(0, 0, g.cssW, g.cssH);
+      walk(pack, cols, (i, col, row, s) => {
+        const x = pad + col * (cell + gap);
+        const y = pad + row * (cell + gap);
+        const cw = s * cell + (s - 1) * gap;
+        const dim = (filtering && !filters.has(FILTER_KEY[pack.states[i]])) || (query && !matched.has(pack.fns[i]));
+        ctx.globalAlpha = dim ? 0.15 : 1;
+        ctx.fillStyle = pal[pack.states[i]] || pal[0];
+        ctx.fillRect(x, y, cw, cell);
+        if (i === activeIdx || (activeFn && pack.fns[i] === activeFn)) {
+          ctx.globalAlpha = 1;
+          ctx.strokeStyle = accent;
+          ctx.lineWidth = 2;
+          ctx.strokeRect(x + 0.5, y + 0.5, cw - 1, cell - 1);
+        } else if (i === focusIdx && document.activeElement === g.wrap) {
+          ctx.globalAlpha = 1;
+          ctx.strokeStyle = accent;
+          ctx.lineWidth = 1;
+          ctx.setLineDash([2, 2]);
+          ctx.strokeRect(x + 0.5, y + 0.5, cw - 1, cell - 1);
+          ctx.setLineDash([]);
+        }
+      });
+      ctx.globalAlpha = 1;
+    };
+
+    const hit = (secName, px, py) => {
+      const g = grids[secName];
+      if (!g || !g.lay || !g.map) return -1;
+      const { cols, gap, pad, cell } = g.lay;
+      const gx = px - pad;
+      const gy = py - pad;
+      if (gx < 0 || gy < 0) return -1;
+      const stride = cell + gap;
+      const col = Math.floor(gx / stride);
+      const row = Math.floor(gy / stride);
+      if (col < 0 || row < 0 || col >= cols || row >= (g.rows || 0)) return -1;
+      if (gx - col * stride > cell || gy - row * stride > cell) return -1;
+      const idx = g.map[row * cols + col];
+      return idx < 0 ? -1 : idx;
+    };
+
+    const scrollCell = (secName, idx) => {
+      const g = grids[secName];
+      if (!g || !g.lay || !g.cellRow || idx < 0 || idx >= g.cellRow.length) return;
+      const { gap, pad, cell } = g.lay;
+      const y = pad + g.cellRow[idx] * (cell + gap);
+      const top = g.wrap.getBoundingClientRect().top + window.scrollY + y;
+      window.scrollTo({ top: Math.max(0, top - window.innerHeight / 3), behavior: "smooth" });
+    };
+
+    setGridFocus((secName, idx) => {
+      const g = grids[secName];
+      if (!g) return;
+      g.focus = idx;
+      if (g.wrap.contains(document.activeElement)) g.wrap.focus();
+      paint(secName);
+      scrollCell(secName, idx);
+    });
+
+    ro = new ResizeObserver(() => {
+      if (grids[activeSection.val]) paint(activeSection.val, { relayout: true });
+    });
+
+    van.derive(() => {
+      const dropGrids = () => {
+        container.innerHTML = "";
+        for (const k of Object.keys(grids)) delete grids[k];
+      };
+      if (isLoading.val) {
+        dropGrids();
+        van.add(container, div({ class: "loading-overlay", role: "status", "aria-live": "polite" }, "Loading coverage data..."));
+        return;
+      }
+      if (emptyState.val || !data.val || !data.val.sections) {
+        dropGrids();
+        return;
+      }
+      const secName = activeSection.val;
+      const sec = data.val.sections[secName];
+      const overlay = container.querySelector(".loading-overlay");
+      if (overlay) overlay.remove();
+      if (!sec || sec.cells == null) return;
+      for (const [name, g] of Object.entries(grids)) {
+        g.wrap.style.display = name === secName ? "block" : "none";
+      }
+      if (grids[secName]) { paint(secName); return; }
+
+      const wrap = div({
+        class: "grid",
+        id: gridId(secName),
+        "data-cols": sec.columns || 64,
+        role: "listbox",
+        tabindex: "0",
+        "aria-label": `${secName} coverage map`,
+        onclick: (e) => {
+          const rect = wrap.getBoundingClientRect();
+          const idx = hit(secName, e.clientX - rect.left, e.clientY - rect.top);
+          if (idx >= 0) { grids[secName].focus = idx; selectChunk(idx); wrap.focus(); paint(secName); }
+        },
+        onmousemove: (e) => {
+          const rect = wrap.getBoundingClientRect();
+          const idx = hit(secName, e.clientX - rect.left, e.clientY - rect.top);
+          if (idx < 0) { wrap.title = ""; wrap.style.cursor = "default"; return; }
+          wrap.style.cursor = "pointer";
+          const pack = packSection(sec);
+          const secVa = sec.va || 0;
+          wrap.title = `${idx}  ${hex(secVa + pack.starts[idx], 8)}..${hex(secVa + pack.ends[idx], 8)}  ${pack.fns[idx] ? 1 : 0} fn`;
+        },
+        onkeydown: (e) => {
+          if (e.ctrlKey || e.metaKey || e.altKey) return;
+          const pack = packSection(sec);
+          const last = pack.n - 1;
+          if (last < 0) return;
+          const g = grids[secName];
+          const cols = g?.cols || Number(wrap.dataset.cols) || 64;
+          const idx = g?.focus ?? 0;
+          const step = { ArrowRight: idx + 1, ArrowLeft: idx - 1, ArrowDown: idx + cols, ArrowUp: idx - cols, Home: 0, End: last }[e.key];
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            selectChunk(idx);
+            paint(secName);
+          } else if (step !== undefined) {
+            e.preventDefault();
+            g.focus = Math.max(0, Math.min(last, step));
+            wrap.focus();
+            paint(secName);
+            scrollCell(secName, g.focus);
+          }
+        },
+      });
+      // oxlint-disable-next-line @rikalabs/no-pass-through-intermediate-vars -- canvas is stored and appended; ctx is a second use, not an alias
+      const mapCanvas = canvas({ class: "grid-canvas" });
+      wrap.append(mapCanvas);
+      grids[secName] = { wrap, canvas: mapCanvas, ctx: mapCanvas.getContext("2d"), cols: Number(wrap.dataset.cols) || 64, lay: null, focus: 0 };
+      container.append(wrap);
+      ro.observe(wrap);
+      requestAnimationFrame(() => paint(secName));
+    });
+
+    let lastTheme = null;
+    van.derive(() => {
+      // oxlint-disable no-unused-expressions -- bare .val reads subscribe this derive to state
+      searchQuery.val;
+      filteredFnNames.val;
+      currentCellIndex.val;
+      activeFnName.val;
+      activeFilters.val;
+      const theme = isLightMode.val;
+      // oxlint-enable no-unused-expressions
+      const name = activeSection.val;
+      const retheme = theme !== lastTheme;
+      lastTheme = theme;
+      if (grids[name]) paint(name, { retheme });
+    });
+  };
+
+  Object.assign(window.RC, { formatBytes, DataInspector, extractDocs, initHighlighting, highlightInto, loadAsm, connectEvents, reloadData, copyToClipboard, mountModal, mountGrid });
   window.RC.onReady();
 })();

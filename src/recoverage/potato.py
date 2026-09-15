@@ -1259,31 +1259,51 @@ def _merge_cells(cells: list[dict[str, Any]], grid_columns: int) -> list[dict[st
     if not cells:
         return merged_cells
 
-    curr_cell: dict[str, Any] = dict(cells[0])
-    curr_cell["orig_idx"] = 0
-    curr_col: int = int(curr_cell.get("span", 1))
+    # One dict copy per OUTPUT row, not per input cell: accumulate span/end
+    # in locals and materialize only at flush.  Real .text grids are
+    # overwhelmingly unmergeable "none" runs, where the old loop copied
+    # every dict just to append it unchanged.
+    start_idx = 0
+    acc_span = 0
+    acc_end: Any = None
+    acc_col = 0
+    acc_state: Any = None
+    acc_fns: Any = None
+    acc_cell: dict[str, Any] | None = None
 
-    for i, next_c in enumerate(cells[1:], 1):
-        n_span = int(next_c.get("span", 1))
+    def flush() -> None:
+        if acc_cell is not None:
+            merged_cells.append(
+                {**acc_cell, "orig_idx": start_idx, "span": acc_span, "end": acc_end}
+            )
+
+    for i, cell in enumerate(cells):
+        state = cell.get("state")
+        fns = cell.get("functions")
+        span = int(cell.get("span", 1))
         if (
-            curr_cell.get("state") not in ("none", None)
-            and next_c.get("state") == curr_cell.get("state")
-            and next_c.get("functions") == curr_cell.get("functions")
-            and curr_col + n_span <= grid_columns
+            acc_cell is not None
+            and state not in ("none", None)
+            and state == acc_state
+            and fns == acc_fns
+            and acc_col + span <= grid_columns
         ):
-            curr_cell["span"] = curr_cell.get("span", 1) + n_span
-            curr_cell["end"] = next_c.get("end")
-            curr_col += n_span
+            acc_span += span
+            acc_end = cell.get("end")
+            acc_col += span
             continue
+        flush()
+        start_idx = i
+        acc_cell = cell
+        acc_state = state
+        acc_fns = fns
+        acc_span = span
+        acc_end = cell.get("end")
+        acc_col = span if acc_col >= grid_columns else acc_col + span
+        if acc_col > grid_columns:
+            acc_col = span
 
-        merged_cells.append(curr_cell)
-        curr_cell = dict(next_c)
-        curr_cell["orig_idx"] = i
-        curr_col = n_span if curr_col >= grid_columns else curr_col + n_span
-        if curr_col > grid_columns:
-            curr_col = n_span
-
-    merged_cells.append(curr_cell)
+    flush()
     return merged_cells
 
 

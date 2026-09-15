@@ -3,6 +3,42 @@
 All notable user-visible changes to Recoverage are recorded here.  The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- Python floor is now 3.13 (was 3.12): the required `rebrew` dependency
+  raised its own floor, and fresh installs on 3.12 could no longer resolve.
+  CI matrix and classifiers follow.
+
+### Changed
+
+- **Coverage map paints on a canvas.**  The SPA no longer builds one DOM node
+  per cell (tens of thousands on a real target).  The map is packed into typed
+  arrays and drawn in one pass; click, keyboard, tooltip, filters, and print
+  still work.  First paint no longer waits on the original binary download.
+- **`/data` skips a JSON round-trip of the cells table.**  SQLite already
+  emits each section's cells as JSON; the envelope splices those arrays in
+  instead of `json.loads` + `json.dumps` (~70 ms saved on an 80k-cell DB).
+- **SPA first paint fetches one section.**  `GET /data?section=.text` still
+  lists every section (tabs, stats) but omits sibling cell arrays; the map
+  loads the rest when you switch tabs or jump to an address.
+- **Potato grid merge avoids per-cell dict copies.**  One copy per merged
+  output row instead of one per input cell; `?section=.text` stats query is
+  filtered too (first paint `/data` 27 ms → 22 ms on a 64k-cell DB).
+- **Canvas map caches layout and palette.**  Hit-map, row table, canvas size,
+  and CSS palette are built once per section and reused; filter/search/focus
+  repaints only redraw rects, and jump-to-cell scroll is O(1).  Repaint
+  ≈ 21 ms med in Chromium on a 39k-cell map (incl. a frame wait).
+- **Live reload no longer flashes the map.**  Background refresh (SSE
+  `db-updated`, regen) keeps the old map visible and swaps when new data
+  lands; the loading overlay and error panel are first-paint only.  Verified
+  in Chromium: zero overlay flashes across a real rebuild.
+- **Original binary loads on first click, not first paint.**  The multi-MB
+  `/original` download moved from `loadData` to first cell selection, cutting
+  first-load transfer ~3.2 MB → ~0.35 MB on a real target; the bytes pane
+  shows loading state until the slice arrives.
+
 ## [1.3.0] - 2026-09-13
 
 ### Changed

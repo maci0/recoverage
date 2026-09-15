@@ -1,7 +1,7 @@
 (() => {
 const { a, aside, button, div, h1, h2, h3, header, input, main, p, pre, section, span, code } = van.tags;
 
-const DATA_URL = (t) => `/api/targets/${t}/data`;
+const DATA_URL = (t, secName) => `/api/targets/${t}/data${secName ? `?section=${encodeURIComponent(secName)}` : ""}`;
 const ASM_URL = (t) => `/api/targets/${t}/asm`;
 const FN_URL = (t, va) => `/api/targets/${t}/functions/${va}`;
 
@@ -33,10 +33,6 @@ const MSG = {
 
 function hex(n, width) {
   return `0x${n.toString(16).toUpperCase().padStart(width, "0")}`;
-}
-
-function escAttr(s) {
-  return String(s).replaceAll("&", "&amp;").replaceAll('"', "&quot;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }
 
 // VAs cross the API boundary as hex strings ("0x10001000" from TEXT columns)
@@ -78,11 +74,6 @@ async function fetchArrayBufferSafe(url) {
   return await res.arrayBuffer();
 }
 
-// All v4 cell states (rebrew DB_FORMAT.md): the five filterable ones, data/
-// thunk (render with the undocumented gray here), proven and size_mismatch
-// (newer v4 states), plus near_matching (legacy spelling of near_match).
-const VALID_STATES = new Set(["exact", "reloc", "near_match", "near_matching", "stub", "padding", "data", "thunk", "proven", "size_mismatch", "none"]);
-
 // Section name -> grid element id.  Every dot goes, so `.rsrc.1` and `.rsrc1`
 // cannot collide the way replacing only the first one allowed.
 const gridId = (secName) => `grid-${secName.replaceAll('.', '')}`;
@@ -96,10 +87,36 @@ const LEGEND = [["none", "undocumented"], ["exact", "exact match"], ["reloc", "r
 // row.  Sections without a VA sort last, keeping their relative order.
 const sectionNames = (s) => Object.keys(s).toSorted((x, y) => (s[x].va ?? 1e18) - (s[y].va ?? 1e18));
 
-function computeCellClass(cell) {
-  const s = cell.state;
-  if (!s || !VALID_STATES.has(s)) return "cell";
-  return `cell ${s}`;
+// Packed SoA for the coverage map: parallel typed arrays, one slot per cell.
+// AoS (array of {state, span, ...}) thrashes the cache on every paint/hit-test;
+// these columns stay hot.  Built lazily per section on first paint.
+// State ids index CSS vars at paint time so light-mode tokens still apply.
+const STATE_ID = {
+  none: 0, data: 0, thunk: 0,
+  exact: 1, reloc: 2,
+  near_match: 3, near_matching: 3, size_mismatch: 3,
+  stub: 4, padding: 5, proven: 6,
+};
+
+function packSection(sec) {
+  if (sec._pack) return sec._pack;
+  const cells = sec.cells || [];
+  const n = cells.length;
+  const starts = new Uint32Array(n);
+  const ends = new Uint32Array(n);
+  const spans = new Uint16Array(n);
+  const states = new Uint8Array(n);
+  const fns = [];
+  for (let i = 0; i < n; i += 1) {
+    const cell = cells[i];
+    starts[i] = cell.start ?? 0;
+    ends[i] = cell.end ?? 0;
+    spans[i] = cell.span || 1;
+    states[i] = STATE_ID[cell.state] || 0;
+    fns.push(cell.functions && cell.functions[0] ? cell.functions[0] : "");
+  }
+  sec._pack = { n, starts, ends, spans, states, fns };
+  return sec._pack;
 }
 
 // Stroke styling lives in CSS (.icon svg), so the markup carries geometry only.
@@ -219,28 +236,25 @@ const App = () => {
     // Without this the initial isLoading=true would never be cleared and the
     // map would spin forever with nothing to load.
     if (!activeTarget.val) { isLoading.val = false; return; }
-    isLoading.val = true;
-    emptyState.val = null;
+    // Background refresh (SSE db-updated, regen) keeps the old map on
+    // screen and swaps when new data lands.  Full-overlay loading is only
+    // for first paint — flashing the whole map on every rebuild is jank.
+    const firstPaint = !data.val;
+    if (firstPaint) {
+      isLoading.val = true;
+      emptyState.val = null;
+    }
     try {
       // "no-cache" (not "no-store") so the server's ETag/304 path works:
       // with no-store the browser never sends If-None-Match and the whole
       // multi-MB dataset is re-transferred on every load.
-      const res = await fetch(DATA_URL(activeTarget.val), { cache: "no-cache" });
+      // First paint only needs the visible section's cells.  Sibling tabs
+      // still get their metadata; cells arrive on switchTab / jumpToAddress.
+      const wanted = URL_PARAMS.get("section") || activeSection.val || ".text";
+      let res = await fetch(DATA_URL(activeTarget.val, wanted), { cache: "no-cache" });
+      if (!res.ok) res = await fetch(DATA_URL(activeTarget.val), { cache: "no-cache" });
       if (!res.ok) throw new Error(`failed to load data`);
       const d = await res.json();
-
-      // Precompute cell properties for fast rendering
-      if (d.sections) {
-        for (const sec of Object.values(d.sections)) {
-          if (!sec.cells) continue;
-          for (const cell of sec.cells) {
-            cell._baseClass = computeCellClass(cell);
-            cell._fnName = cell.functions && cell.functions[0] ? cell.functions[0] : "";
-            cell._state = cell.state || "";
-          }
-        }
-      }
-
       data.val = d;
 
       const secNames = sectionNames(d.sections || {});
@@ -268,11 +282,9 @@ const App = () => {
         activeSection.val = secParam;
       }
 
-      // `paths.originalDll` is optional metadata written by rebrew build-db.
-      // Without a fallback the whole Original Bytes pane goes dead, so default
-      // to the path the server already proxies (ui.py: /original/<file>).
-      const dllPath = (d.paths && d.paths.originalDll) || `/original/${activeTarget.val.toLowerCase()}.dll`;
-      originalDll.val = await fetchArrayBufferSafe(dllPath);
+      // The original binary (multi-MB) loads lazily on first cell selection
+      // (see ensureOriginalDll) — fetching it here would put megabytes on
+      // first paint that only the hex/asm panes ever need.
 
       const summary = d.summary || {};
       summaryData.val = { ...summary, textSize: d.sections[".text"]?.size || 0 };
@@ -297,9 +309,16 @@ const App = () => {
         }
       }, 50);
     } catch (error) { // oxlint-disable-line @rikalabs/no-silent-catch-fallback -- failure is shown to the user as an error panel
-      loadingMsg.val = MSG.ERROR_PREFIX + error.message;
-      summaryData.val = null;
-      emptyState.val = { title: "Could not load coverage data", detail: error.message };
+      // Background refresh must not replace a good map with an error panel
+      // on a transient failure — log it and keep the stale map.
+      if (firstPaint) {
+        loadingMsg.val = MSG.ERROR_PREFIX + error.message;
+        summaryData.val = null;
+        emptyState.val = { title: "Could not load coverage data", detail: error.message };
+      } else {
+        // oxlint-disable-next-line eslint/no-console -- a failed background refresh is otherwise invisible
+        console.error("Background refresh failed:", error);
+      }
     } finally {
       isLoading.val = false;
     }
@@ -369,13 +388,38 @@ const App = () => {
       if (matchesSearch(name, query) || (info && matchesSearch(info.va || "", query))) {
         matched.add(name);
         // Grid .text cells store the function's vaStart string (not the
-        // name) in cell.functions / _fnName — the dimming test compares
+        // name) in cell.functions / pack.fns — the dimming test compares
         // against this set, so VA spellings must be included too.
         if (info && info.va) matched.add(info.va);
       }
     }
     return matched;
   });
+
+  // Start the original-binary download once, on first need.  When it lands,
+  // re-slice the active selection if its bytes pane is still waiting — the
+  // null-DLL branches below show LOADING until then, LOAD_FAILED on error.
+  const ensureOriginalDll = () => {
+    if (originalDll.val || ensureOriginalDll.inflight) return;
+    const d = data.val;
+    const dllPath =
+      (d && d.paths && d.paths.originalDll) || `/original/${activeTarget.val.toLowerCase()}.dll`;
+    ensureOriginalDll.inflight = fetchArrayBufferSafe(dllPath).then((buf) => {
+      ensureOriginalDll.inflight = null;
+      originalDll.val = buf;
+      if (currentCellIndex.val == null || currentBuf.val != null) return;
+      if (buf) selectChunk(currentCellIndex.val);
+      else showBytesMessage(MSG.BYTES_LOAD_FAILED);
+    });
+  };
+
+  // Bytes pane message when slicing failed: out-of-range vs binary
+  // missing.  A missing binary still downloading reads as LOADING.
+  const bytesMissMessage = () => {
+    if (originalDll.val) return MSG.BYTES_FAILED;
+    if (ensureOriginalDll.inflight) return MSG.LOADING;
+    return MSG.BYTES_LOAD_FAILED;
+  };
 
   const sliceOriginalBytes = (cell) => {
     if (!originalDll.val || !data.val?.sections) return null;
@@ -393,6 +437,7 @@ const App = () => {
   let currentAbortController = null;
 
   const selectFunction = async (id) => {
+    ensureOriginalDll();
     if (currentAbortController) {
       currentAbortController.abort();
     }
@@ -419,7 +464,7 @@ const App = () => {
         const buf = sliceOriginalBytes(fn);
         currentBuf.val = buf;
         if (buf) showBytes(buf, toVa(fn.vaStart || fn.va));
-        else showBytesMessage(originalDll.val ? MSG.BYTES_FAILED : MSG.BYTES_LOAD_FAILED);
+        else showBytesMessage(bytesMissMessage());
 
         const sourceRoot = (data.val && data.val.paths && data.val.paths.sourceRoot) ? data.val.paths.sourceRoot : `/src/${activeTarget.val.toLowerCase()}`;
         const cPath = (fn.files && fn.files[0]) ? `${sourceRoot}/${fn.files[0]}` : null;
@@ -462,7 +507,7 @@ const App = () => {
         currentBuf.val = buf;
         if (buf) showBytes(buf, toVa(g.va));
         else if (activeSection.val === ".bss") showBytesMessage(MSG.BYTES_BSS);
-        else showBytesMessage(originalDll.val ? MSG.BYTES_FAILED : MSG.BYTES_LOAD_FAILED);
+        else showBytesMessage(bytesMissMessage());
         cSourceText.val = g.decl || MSG.NO_DECL;
         docText.val = MSG.GLOBAL_VAR;
         asmText.val = MSG.DATA_SECTION_NO_ASM;
@@ -476,6 +521,7 @@ const App = () => {
 
   const selectChunk = (i) => {
     currentCellIndex.val = i;
+    ensureOriginalDll();
     if (!data.val || !data.val.sections) return;
     const sec = data.val.sections[activeSection.val];
     if (!sec) return;
@@ -484,7 +530,8 @@ const App = () => {
     const cell = cells[i];
     if (!cell) return;
 
-    activeFnName.val = cell._fnName || "";
+    const pack = packSection(sec);
+    activeFnName.val = pack.fns[i] || "";
 
     if (cell.functions && cell.functions.length > 0) {
       selectFunction(cell.functions[0]);
@@ -522,7 +569,7 @@ const App = () => {
           asmText.val = MSG.DATA_SECTION_NO_ASM;
         }
       } else {
-        showBytesMessage(MSG.BYTES_LOAD_FAILED);
+        showBytesMessage(ensureOriginalDll.inflight ? MSG.LOADING : MSG.BYTES_LOAD_FAILED);
         asmText.val = MSG.DATA_SECTION_NO_ASM;
       }
     }
@@ -557,28 +604,33 @@ const App = () => {
         requestAnimationFrame(() => {
           gridFocus?.(secName, cellIndex);
           const grid = document.querySelector(`#${gridId(secName)}`);
-          if (grid && grid.children[cellIndex]) {
-            grid.children[cellIndex].scrollIntoView({ behavior: "smooth", block: "center" });
-          }
+          if (grid) grid.scrollIntoView({ behavior: "smooth", block: "nearest" });
         });
       });
+    };
+    const locate = (secName, sec) => {
+      const offset = targetVa - sec.va;
+      const pack = packSection(sec);
+      for (let i = 0; i < pack.n; i += 1) {
+        if (offset >= pack.starts[i] && offset < pack.ends[i]) {
+          activeSection.val = secName;
+          selectChunk(i);
+          focusCellAfterPaint(secName, i);
+          return true;
+        }
+      }
+      return false;
     };
     for (const [secName, sec] of Object.entries(data.val.sections)) {
       // oxlint-disable-next-line anti-slop/no-runtime-typeof -- API section rows carry number|null va/size (.bss has no base address); shape-check before the range math
       if (typeof sec.va !== "number" || typeof sec.size !== "number") continue;
-      if (targetVa >= sec.va && targetVa < sec.va + sec.size) {
-        const offset = targetVa - sec.va;
-        const cells = sec.cells || [];
-        for (let i = 0; i < cells.length; i += 1) {
-          const cell = cells[i];
-          if (offset >= cell.start && offset < cell.end) {
-            activeSection.val = secName;
-            selectChunk(i);
-            focusCellAfterPaint(secName, i);
-            return;
-          }
-        }
-      }
+      if (targetVa < sec.va || targetVa >= sec.va + sec.size) continue;
+      if (sec.cells != null) { locate(secName, sec); return; }
+      void ensureSectionCells(secName).then(() => {
+        const fresh = data.val?.sections?.[secName];
+        if (fresh) locate(secName, fresh);
+      });
+      return;
     }
     // oxlint-disable-next-line eslint/no-console -- an address outside every section deserves a console warning
     console.warn("Address not found in any section:", targetVa.toString(16));
@@ -719,272 +771,17 @@ const App = () => {
 
   const Grid = () => {
     const container = div({ class: "grid-container", style: "position: relative; min-height: 400px;" });
-    const grids = {}; // secName -> div element
-    const focusIdx = {}; // secName -> index of the cell holding tabindex="0"
-    const selectedEl = {}; // secName -> element currently aria-selected
-    let ro = null;
-
-    // Roving tabindex: exactly one cell per grid is in the tab order, and the
-    // arrow keys move both focus and that tab stop.  Without it the grid is
-    // unreachable by keyboard entirely (WCAG 2.1.1) — thousands of cells each
-    // carrying tabindex="0" would be the other, unusable, extreme.
-    const setRoving = (gridEl, secName, to, alsoFocus) => {
-      const next = gridEl.children[to];
-      if (!next) return;
-      const cur = gridEl.children[focusIdx[secName] ?? 0];
-      if (cur) cur.setAttribute("tabindex", "-1");
-      next.setAttribute("tabindex", "0");
-      focusIdx[secName] = to;
-      if (alsoFocus) next.focus();
-    };
-    const moveFocus = (gridEl, secName, to) => setRoving(gridEl, secName, to, true);
-
-    // Address jumps (VA links, asm operands) move the selection, so the tab
-    // stop has to follow or the keyboard position and the panel disagree.
-    // Actual focus only moves when the user was already in the grid, so
-    // clicking a link does not yank focus away from where they were reading.
-    gridFocus = (secName, idx) => {
-      const gridEl = grids[secName];
-      if (gridEl) setRoving(gridEl, secName, idx, gridEl.contains(document.activeElement));
-    };
-
-    // The column count is resolved once, when a grid is built, and stored on
-    // the element as --cols.  The CSS track count, the square-cell row height
-    // below, and the arrow keys all read it from there, so they cannot drift
-    // apart the way three separate `sec.columns || 64` defaults did.
-    const colsOf = (gridEl) => Number(gridEl.style.getPropertyValue("--cols")) || Number(gridEl.dataset.cols) || 64;
-
-    // The declared column count is a desktop figure: at 64 columns a 352px
-    // phone renders 2.8px cells, unreadable and untappable.  Below the same
-    // 700px breakpoint the stylesheet uses, the grid drops columns and grows
-    // taller so cells stay square and touch-sized; wider than that the section
-    // keeps every column it declares.
-    const minCellPx = () => (window.innerWidth < 700 ? 12 : 6);
-
-    const resize = () => {
-      const activeGrid = grids[activeSection.val];
-      if (!activeGrid) return;
-
-      const styles = window.getComputedStyle(activeGrid);
-      const gap = Number.parseFloat(styles.columnGap || styles.gap || "2") || 2;
-      const padL = Number.parseFloat(styles.paddingLeft || "0") || 0;
-      const padR = Number.parseFloat(styles.paddingRight || "0") || 0;
-      const usable = Math.max(0, activeGrid.clientWidth - padL - padR);
-
-      // Widest column count whose cells still clear MIN_CELL_PX, capped at the
-      // section's own value so a wide viewport never invents extra columns.
-      const min = minCellPx();
-      const declared = Number(activeGrid.dataset.cols) || 64;
-      const fits = Math.floor((usable + gap) / (min + gap));
-      const columns = Math.max(1, Math.min(declared, fits));
-      const colW = (usable - gap * (columns - 1)) / columns;
-      activeGrid.style.setProperty("--cols", columns);
-      activeGrid.style.gridAutoRows = `${Math.max(min, Math.floor(colW))}px`;
-    };
-
-    ro = new ResizeObserver(resize);
-
-    const updateCellClasses = (gridEl, secName) => {
-      const sec = data.val?.sections?.[secName];
-      if (!sec || !sec.cells) return;
-      const {cells} = sec;
-
-      const query = searchQuery.val;
-      const matchedNames = filteredFnNames.val;
-      const activeIdx = secName === activeSection.val ? currentCellIndex.val : null;
-      const activeFn = secName === activeSection.val ? activeFnName.val : "";
-
-      const {children} = gridEl;
-      const len = Math.min(children.length, cells.length);
-
-      for (let i = 0; i < len; i += 1) {
-        const child = children[i];
-        const cell = cells[i];
-
-        let cls = cell._baseClass;
-        if (i === activeIdx || (activeFn && cell._fnName === activeFn)) cls += " active";
-
-        if (query && !matchedNames.has(cell._fnName)) {
-          cls += " dimmed";
-        }
-
-        if (child.className !== cls) {
-          child.className = cls;
-        }
-      }
-
-      // aria-selected tracks the single selected option; touching only the old
-      // and new elements keeps this off the hot path over thousands of cells.
-      const prev = selectedEl[secName];
-      const next = activeIdx !== null && activeIdx !== undefined ? children[activeIdx] : null;
-      if (prev !== next) {
-        if (prev) prev.setAttribute("aria-selected", "false");
-        if (next) next.setAttribute("aria-selected", "true");
-        selectedEl[secName] = next;
-      }
-    };
-
+    let mounted = false;
     van.derive(() => {
-      // A reload (button or SSE db-updated) drops every cached grid, so the
-      // per-section focus index and the selected-cell reference have to go with
-      // them: otherwise they keep pointing into detached DOM.
-      const dropGrids = () => {
-        container.innerHTML = "";
-        for (const k of Object.keys(grids)) { delete grids[k]; delete focusIdx[k]; delete selectedEl[k]; }
-      };
-
-      if (isLoading.val) {
-        dropGrids();
-        van.add(container, div({ class: "loading-overlay", role: "status", "aria-live": "polite" }, "Loading coverage data..."));
-        return;
-      }
-
-      if (emptyState.val || !data.val || !data.val.sections) {
-        dropGrids();
-        return;
-      }
-
-      const secName = activeSection.val;
-      const sec = data.val.sections[secName];
-
-      // Overlay comes down first: returning above it left "Loading coverage
-      // data..." on screen after loading had finished.
-      const overlay = container.querySelector('.loading-overlay');
-      if (overlay) overlay.remove();
-      if (!sec) return;
-
-      // Hide all grids
-      for (const [name, el] of Object.entries(grids)) {
-        el.style.display = name === secName ? "grid" : "none";
-      }
-
-      // Create grid if it doesn't exist
-      if (grids[secName]) {
-        // Grid already exists, just resize and update classes
-        resize();
-        updateCellClasses(grids[secName], secName);
-      } else {
-        const gridEl = div({
-          class: "grid",
-          id: gridId(secName),
-          "data-cols": sec.columns || 64,
-          role: "listbox",
-          "aria-label": `${secName} coverage map`,
-          onmousedown: (e) => {
-            const cell = e.target.closest('.cell');
-            if (cell) e.preventDefault();
-          },
-          onclick: (e) => {
-            const cell = e.target.closest('.cell');
-            if (cell) {
-              const idx = Number.parseInt(cell.dataset.index, 10);
-              if (!Number.isNaN(idx)) { selectChunk(idx); moveFocus(gridEl, secName, idx); }
-            }
-          },
-          onkeydown: (e) => {
-            // Enter/Space selects; arrows move by one cell horizontally and by
-            // a full row vertically; Home/End jump to the ends of the section.
-            const cell = e.target.closest('.cell');
-            if (!cell || e.ctrlKey || e.metaKey || e.altKey) return;
-            const idx = Number.parseInt(cell.dataset.index, 10);
-            if (Number.isNaN(idx)) return;
-            const cols = colsOf(gridEl);
-            const last = gridEl.children.length - 1;
-            const clamp = (n) => Math.max(0, Math.min(last, n));
-            const step = {
-              ArrowRight: idx + 1, ArrowLeft: idx - 1,
-              ArrowDown: idx + cols, ArrowUp: idx - cols,
-              Home: 0, End: last,
-            }[e.key];
-            if (e.key === "Enter" || e.key === " ") {
-              e.preventDefault();
-              selectChunk(idx);
-            } else if (step !== undefined) {
-              e.preventDefault();
-              moveFocus(gridEl, secName, clamp(step));
-            }
-          }
-        });
-
-        grids[secName] = gridEl;
-        container.append(gridEl);
-        ro.observe(gridEl);
-
-        const cells = sec.cells || [];
-
-        // Show loading state for this specific grid
-        gridEl.style.opacity = "0.5";
-
-        setTimeout(() => {
-          const query = searchQuery.val;
-          const matchedNames = filteredFnNames.val;
-          const activeIdx = currentCellIndex.val;
-          const activeFn = activeFnName.val;
-          const roving = Math.max(0, Math.min(cells.length - 1, focusIdx[secName] ?? activeIdx ?? 0));
-          focusIdx[secName] = roving;
-
-          let html = "";
-          for (let i = 0; i < cells.length; i += 1) {
-            const cell = cells[i];
-            // oxlint-disable-next-line anti-slop/no-runtime-typeof -- span is a number when a cell spans grid columns; shape-check when rendering
-            const style = typeof cell.span === "number" ? `grid-column: span ${cell.span};` : "";
-            const secVa = sec.va || 0;
-            const title = `${i}  ${hex(secVa + cell.start, 8)}..${hex(secVa + cell.end, 8)}  ${cell.functions ? cell.functions.length : 0} fn`;
-
-            let cls = cell._baseClass;
-            if (i === activeIdx || (activeFn && cell._fnName === activeFn)) cls += " active";
-
-            if (query && !matchedNames.has(cell._fnName)) {
-              cls += " dimmed";
-            }
-
-            // Exactly one cell carries tabindex="0" (the roving tab stop);
-            // the rest are reachable from it with the arrow keys.
-            const label = cell._fnName ? `${cell._fnName} at ${title}` : title;
-            const tab = i === roving ? "0" : "-1";
-            html += `<div class="${escAttr(cls)}" data-index="${i}" role="option" aria-selected="${i === activeIdx}" tabindex="${tab}" aria-label="${escAttr(label)}" style="${style}" title="${escAttr(title)}"></div>`;
-          }
-
-          gridEl.innerHTML = html;
-          gridEl.style.opacity = "1";
-          resize();
-        }, 0);
-      }
+      if (!detailReady.val || mounted) return;
+      mounted = true;
+      window.RC.mountGrid({
+        container, data, isLoading, emptyState, activeSection, activeFilters,
+        searchQuery, filteredFnNames, currentCellIndex, activeFnName, isLightMode,
+        selectChunk, packSection, gridId,
+        setGridFocus: (fn) => { gridFocus = fn; },
+      });
     });
-
-    van.derive(() => {
-      // Depend on these states to trigger updates — the bare .val read is a
-      // VanJS idiom: it subscribes this derive to the state without using it.
-      // oxlint-disable no-unused-expressions -- bare .val reads subscribe this derive to state
-      searchQuery.val;
-      filteredFnNames.val;
-      currentCellIndex.val;
-      activeFnName.val;
-      // oxlint-enable no-unused-expressions
-
-      const activeGrid = grids[activeSection.val];
-      if (activeGrid && activeGrid.children.length > 0 && activeGrid.children[0].classList.contains('cell')) {
-        updateCellClasses(activeGrid, activeSection.val);
-      }
-    });
-
-    van.derive(() => {
-      // Handle CSS-based filtering
-      const filters = activeFilters.val;
-      let cls = "grid";
-      if (filters.size > 0) {
-        cls += " has-filters";
-        for (const f of filters) {
-          cls += ` show-${f}`;
-        }
-      }
-
-      // Apply to all cached grids
-      for (const gridEl of Object.values(grids)) {
-        gridEl.className = cls;
-      }
-    });
-
     return container;
   };
 
@@ -1131,7 +928,37 @@ const App = () => {
     );
   };
 
-  const switchTab = (name) => { activeSection.val = name; currentFn.val = null; currentCellIndex.val = null; syncUrl(); };
+  const ensureSectionCells = async (name) => {
+    const d = data.val;
+    const sec = d?.sections?.[name];
+    if (!sec || sec.cells != null) return;
+    if (sec._cellsInflight) { await sec._cellsInflight; return; }
+    sec._cellsInflight = (async () => {
+      const res = await fetch(DATA_URL(activeTarget.val, name), { cache: "no-cache" });
+      if (!res.ok) throw new Error(`failed to load ${name}`);
+      const slice = await res.json();
+      const incoming = slice.sections?.[name];
+      if (incoming && incoming.cells != null && data.val?.sections?.[name] === sec) {
+        sec.cells = incoming.cells;
+        delete sec._pack;
+        data.val = { ...data.val, sections: { ...data.val.sections, [name]: sec } };
+      }
+    })();
+    try {
+      await sec._cellsInflight;
+    } catch (error) { // oxlint-disable-line @rikalabs/no-silent-catch-fallback -- next switch retries; log so a dead tab is diagnosable
+      // oxlint-disable-next-line eslint/no-console -- keep diagnostics in the browser console
+      console.error("Failed to load section cells:", name, error);
+    } finally { delete sec._cellsInflight; }
+  };
+
+  const switchTab = (name) => {
+    activeSection.val = name;
+    currentFn.val = null;
+    currentCellIndex.val = null;
+    syncUrl();
+    void ensureSectionCells(name);
+  };
 
   const isFilterOn = (key) => key === "all" ? activeFilters.val.size === 0 : activeFilters.val.has(key);
   const FilterButton = (key, label, ariaLabel, titleText) => button({
@@ -1195,7 +1022,10 @@ const App = () => {
                   // Save to localStorage
                   localStorage.setItem("recoverage_target", newTarget);
 
-                  // Reset UI state
+                  // Reset UI state.  Dropping the old target's data makes
+                  // loadData treat this as a first paint (overlay + errors),
+                  // not a background refresh of the same map.
+                  data.val = null;
                   currentFn.val = null;
                   currentCellIndex.val = null;
                   cSourceText.val = MSG.SELECT_FUNCTION;
