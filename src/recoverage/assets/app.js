@@ -856,7 +856,7 @@ const App = () => {
         // titles' `sec.va || 0`, instead of rendering hex(NaN).
         const secVa = sec.va || 0;
         metaContent = div({ class: "meta-grid" },
-          MetaItem("Range", `${hex(secVa + cell.start, 8)}..${hex(secVa + cell.end, 8)}`),
+          MetaItem("Range", `${hex(secVa + cell.start, 8)}..${hex(secVa + cell.end, 8)}`, "nowrap"),
           MetaItem("State", cell.state || "none"),
           cell.label ? MetaItem("Label", cell.label) : null,
           cell.parent_function ? MetaItem("Parent", span({ class: "meta-value" },

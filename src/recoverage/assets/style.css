@@ -320,6 +320,8 @@ body {
 .meta-item { display: flex; flex-direction: column; gap: 2px; background: var(--meta-item-bg); padding: 6px 8px; border-radius: 2px; border: 1px solid var(--meta-item-border); transition: background-color 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease; }
 .meta-item:hover { border-color: var(--c); box-shadow: var(--c-shadow); }
 .meta-item.full-width { grid-column: 1 / -1; }
+/* Address ranges must not wrap mid-address (break-all splits hex pairs). */
+.meta-item.nowrap .meta-value { white-space: nowrap; }
 .inspector-grid { margin-top: 0; background: var(--inspector-bg); padding: 10px; border-radius: 12px; border: 1px solid var(--border); }
 .meta-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); }
 .meta-value { font-size: 12px; font-family: var(--mono); color: var(--text); text-shadow: var(--text-shadow); word-break: break-all; }
