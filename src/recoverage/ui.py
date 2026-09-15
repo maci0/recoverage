@@ -202,39 +202,26 @@ def handle_index() -> bytes:
     encoding = _best_encoding(accept_encoding)
 
     with INDEX_LOCK:
-        if CACHED_INDEX_PAYLOAD is None:
-            payload_local: bytes | None = None
-            encoding_local = encoding
-            need_build = True
-        else:
-            payload = CACHED_INDEX_PAYLOAD
-            if encoding in CACHED_INDEX_COMPRESSED:
-                body = CACHED_INDEX_COMPRESSED[encoding]
-                return _finalized(
-                    body, "text/html; charset=utf-8", encoding, Cache_Control=CACHE_NO_STORE
-                )
-            # Need to compress for this encoding but payload already cached.
-            payload_local = payload
-            encoding_local = encoding
-            need_build = False
-    if need_build:
+        if CACHED_INDEX_PAYLOAD is not None and encoding in CACHED_INDEX_COMPRESSED:
+            body = CACHED_INDEX_COMPRESSED[encoding]
+            return _finalized(
+                body, "text/html; charset=utf-8", encoding, Cache_Control=CACHE_NO_STORE
+            )
+        # Build the payload only on a true cold miss; otherwise compress the
+        # cached payload for this (previously unseen) encoding.
+        payload_local = CACHED_INDEX_PAYLOAD
+        build = payload_local is None
+    if build:
         payload_local = _build_index_payload()
-        compressed, _ = compress_payload(
-            payload_local, accept_encoding, brotli_quality=BROTLI_STATIC_QUALITY
-        )
-        with INDEX_LOCK:
-            if CACHED_INDEX_PAYLOAD is None:
-                CACHED_INDEX_PAYLOAD = payload_local
-            CACHED_INDEX_COMPRESSED.setdefault(encoding_local, compressed)
-            body = CACHED_INDEX_COMPRESSED[encoding_local]
-    else:
-        assert payload_local is not None
-        compressed, _ = compress_payload(
-            payload_local, accept_encoding, brotli_quality=BROTLI_STATIC_QUALITY
-        )
-        with INDEX_LOCK:
-            CACHED_INDEX_COMPRESSED.setdefault(encoding_local, compressed)
-            body = CACHED_INDEX_COMPRESSED[encoding_local]
+    assert payload_local is not None
+    compressed, _ = compress_payload(
+        payload_local, accept_encoding, brotli_quality=BROTLI_STATIC_QUALITY
+    )
+    with INDEX_LOCK:
+        if CACHED_INDEX_PAYLOAD is None:
+            CACHED_INDEX_PAYLOAD = payload_local
+        CACHED_INDEX_COMPRESSED.setdefault(encoding, compressed)
+        body = CACHED_INDEX_COMPRESSED[encoding]
 
     return _finalized(body, "text/html; charset=utf-8", encoding, Cache_Control=CACHE_NO_STORE)
 

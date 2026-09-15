@@ -347,18 +347,21 @@ def _highlight_tokens(tokens: Iterable[tuple[Any, str]], color_map: dict[Any, st
 
 
 @functools.lru_cache(maxsize=1)
-def _pygments_available() -> bool:
-    """Check if pygments is available (lazy, cached)."""
+def _pygments() -> tuple[Any, dict[Any, str], Any, dict[Any, str]] | None:
+    """(CLexer, c_colors, NasmLexer, asm_colors), or None when unavailable.
+
+    ONE lazy loader for the optional pygments stack: the old five maxsize=1
+    singletons (availability probe, two lexers, two near-identical color
+    maps) shared one import gate and one lifetime, so they share one cache.
+    """
     # find_spec imports only the parent package; a missing pygments raises
     # ModuleNotFoundError (an ImportError) exactly like the old probe import.
     try:
-        return importlib.util.find_spec("pygments.lexers") is not None
+        if importlib.util.find_spec("pygments.lexers") is None:
+            return None
     except ImportError:
-        return False
-
-
-@functools.lru_cache(maxsize=1)
-def _get_c_colors() -> dict[Any, str]:
+        return None
+    from pygments.lexers import CLexer, NasmLexer  # type: ignore[import-untyped]
     from pygments.token import (  # type: ignore[import-untyped]
         Comment,
         Keyword,
@@ -369,35 +372,22 @@ def _get_c_colors() -> dict[Any, str]:
         String,
     )
 
-    return {
+    base = {
         Comment: "#6a9955",
-        Comment.Preproc: "#c586c0",
         Keyword: "#569cd6",
         Keyword.Type: "#4ec9b0",
         String: "#ce9178",
-        Number: "#b5cea8",
-        Name.Function: "#dcdcaa",
         Operator: "#d4d4d4",
         Punctuation: "#d4d4d4",
     }
-
-
-@functools.lru_cache(maxsize=1)
-def _get_asm_colors() -> dict[Any, str]:
-    from pygments.token import (  # type: ignore[import-untyped]
-        Comment,
-        Keyword,
-        Name,
-        Number,
-        Operator,
-        Punctuation,
-        String,
-    )
-
-    return {
-        Comment: "#6a9955",
-        Keyword: "#569cd6",
-        Keyword.Type: "#4ec9b0",
+    c_colors = {
+        **base,
+        Comment.Preproc: "#c586c0",
+        Number: "#b5cea8",
+        Name.Function: "#dcdcaa",
+    }
+    asm_colors = {
+        **base,
         Name.Builtin: "#dcdcaa",
         Name.Function: "#dcdcaa",
         Name.Label: "#9cdcfe",
@@ -405,24 +395,8 @@ def _get_asm_colors() -> dict[Any, str]:
         Number: "#b5cea8",
         Number.Hex: "#b5cea8",
         Number.Integer: "#b5cea8",
-        Operator: "#d4d4d4",
-        Punctuation: "#d4d4d4",
-        String: "#ce9178",
     }
-
-
-@functools.lru_cache(maxsize=1)
-def _get_c_lexer() -> Any:
-    from pygments.lexers import CLexer  # type: ignore[import-untyped]
-
-    return CLexer()
-
-
-@functools.lru_cache(maxsize=1)
-def _get_nasm_lexer() -> Any:
-    from pygments.lexers import NasmLexer  # type: ignore[import-untyped]
-
-    return NasmLexer()
+    return CLexer(), c_colors, NasmLexer(), asm_colors
 
 
 _HEX_ADDR_RE = re.compile(r"0x[0-9a-f]{8}")
@@ -438,10 +412,11 @@ def _split_asm_line(line: str) -> tuple[str, str] | None:
 
 def _highlight_c(code: str) -> str:
     """Syntax-highlight C code using Pygments tokens and <font> tags (no CSS)."""
-    if not _pygments_available():
+    pg = _pygments()
+    if pg is None:
         return _html_escape(code)
-
-    return _highlight_tokens(_get_c_lexer().get_tokens(code), _get_c_colors())
+    c_lexer, c_colors, _, _ = pg
+    return _highlight_tokens(c_lexer.get_tokens(code), c_colors)
 
 
 def _highlight_asm(text: str, target: str) -> str:
@@ -471,7 +446,8 @@ def _highlight_asm(text: str, target: str) -> str:
     def _addr_line(addr_part: str, highlighted_code: str) -> str:
         return _addr_link(addr_part) + highlighted_code
 
-    if not _pygments_available():
+    pg = _pygments()
+    if pg is None:
         lines = []
         for line in text.splitlines():
             split = _split_asm_line(line)
@@ -482,8 +458,7 @@ def _highlight_asm(text: str, target: str) -> str:
                 lines.append(_addr_line(addr_part, _link_hex_refs(_html_escape(code_part))))
         return "\n".join(lines)
 
-    colors = _get_asm_colors()
-    lexer = _get_nasm_lexer()
+    _, _, lexer, colors = pg
     result_lines: list[str] = []
     for line in text.splitlines():
         split = _split_asm_line(line)

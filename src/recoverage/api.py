@@ -220,7 +220,7 @@ def _target_not_found(target: str) -> Any:
     )
 
 
-def _dll_not_found(target: str, error: str) -> Any:
+def _dll_not_found(target: str) -> Any:
     """JSON 404 for a target whose original binary is missing or unconfigured."""
     hint = (
         f" add [targets.{target}].binary to rebrew-project.toml"
@@ -229,7 +229,10 @@ def _dll_not_found(target: str, error: str) -> Any:
     )
     return _json_err(
         404,
-        {"error": error, "detail": f"original binary for target {target!r} not found;{hint}"},
+        {
+            "error": "DLL not found",
+            "detail": f"original binary for target {target!r} not found;{hint}",
+        },
     )
 
 
@@ -1064,8 +1067,6 @@ def handle_api_functions_batch(target: str) -> bytes | Any:
 @app.get("/api/targets/<target>/functions/<va>")
 def handle_api_function(target: str, va: str) -> bytes | Any:
     with _target_cursor(target) as c:
-        no_cache = CACHE_NO_STORE
-
         # Parse va into candidate lookup ints (shared spelling parser:
         # rebrew.workspace.parse_va_candidates); anything unparseable falls
         # through to the exact-name lookup below.
@@ -1102,11 +1103,11 @@ def handle_api_function(target: str, va: str) -> bytes | Any:
             vr = c.fetchone()
             if vr:
                 fn_json["last_verify"] = _last_verify_payload(vr)
-            return _json_ok(json.dumps(fn_json).encode("utf-8"), Cache_Control=no_cache)
+            return _json_ok(json.dumps(fn_json).encode("utf-8"), Cache_Control=CACHE_NO_STORE)
 
         row = _lookup("globals", _global_json_sql(c))
         if row:
-            return _json_ok(row[0].encode("utf-8"), Cache_Control=no_cache)
+            return _json_ok(row[0].encode("utf-8"), Cache_Control=CACHE_NO_STORE)
 
         return _json_err(
             404,
@@ -1195,7 +1196,7 @@ def handle_api_asm(target: str) -> bytes | Any:
             # Structured JSON output
             target_data = _load_dll(target)
             if target_data is None:
-                return _dll_not_found(target, "DLL not found")
+                return _dll_not_found(target)
             code_bytes = target_data[file_offset : file_offset + size]
             if len(code_bytes) < size:
                 return _json_err(
@@ -1274,7 +1275,7 @@ def handle_api_bytes(target: str, section: str) -> bytes | Any:
             return _json_err(400, {"error": "offset+size beyond section bounds"})
         target_data = _load_dll(target)
         if target_data is None:
-            return _dll_not_found(target, "DLL not found")
+            return _dll_not_found(target)
 
         file_start = sec["fileOffset"] + req_offset
         if file_start < 0:

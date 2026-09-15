@@ -140,7 +140,7 @@ Optional:
 
 ## Code Style
 
-- Python 3.12+, ruff for linting, 100-char line length
+- Python 3.13+, ruff for linting, 100-char line length
 - HTML/CSS/JS in `assets/` — no build step, VanJS for reactivity
 - JS is linted with oxlint under the `@rikalabs/oxlint-standards` strict preset
   plus the vendored anti-slop rules; the webui is a classic-script SPA, so
