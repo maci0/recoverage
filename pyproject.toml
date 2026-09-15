@@ -74,10 +74,6 @@ recoverage = ["assets/*"]
 
 [tool.uv]
 package = true
-# rebrew pins typer==0.24.1 (0.25+ sandboxes command globals).  Recoverage
-# already ships 0.27.2 and its CLI/tests need that; override the path-dep pin
-# so `uv lock --upgrade` can still resolve the rest of the tree.
-override-dependencies = ["typer>=0.27.2"]
 
 [tool.uv.sources]
 # Sibling-checkout path dep: uv resolves it relative to this pyproject.toml,
