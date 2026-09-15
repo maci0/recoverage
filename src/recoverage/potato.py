@@ -674,8 +674,8 @@ _PAGE_SRC = r"""<!DOCTYPE html>
     <td valign="middle" colspan="2">
       <table id="controls" border="0" cellpadding="0" cellspacing="2" width="100%">
         % if progress:
-        <tr><td valign="middle" width="100%">
-          <table id="progress-bar" width="100%" border="0" cellpadding="0" cellspacing="0"><tr>
+        <tr><td valign="middle" width="100%" align="center">
+          <table id="progress-bar" width="700" border="0" cellpadding="0" cellspacing="0"><tr>
             <td background="{{progress_bar_png}}" align="center" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="#ffffff"><b>{{progress['sec_size']}}</b>b &middot; <b>{{progress['matched_fn']}}/{{progress['total_fn']}}</b> matched &middot; <b>{{"%.1f" % progress['coverage_pct']}}%</b></font></td>
           </tr></table>
         </td></tr>
