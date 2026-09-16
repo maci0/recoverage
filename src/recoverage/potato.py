@@ -119,37 +119,21 @@ PANEL_HDR_PNG = (
     "Tn082gH6xSG4aTtBqgAAAABJRU5ErkJggg=="
 )
 
-DOT_PNGS = {
-    "exact": (
-        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76L"
-        "AAAALElEQVR4nGNgIBYI7GycKrCz8RMUT8Um+R8NIxRBdaEr+ESSAvxWEHQkPgAA"
-        "qPlFacmQSekAAAAASUVORK5CYII="
-    ),
-    "reloc": (
-        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76L"
-        "AAAALElEQVR4nGNgIBbwLX05lW/py09QPBWb5H80jFAE1YWu4BNJCvBbQdCR+AAA"
-        "6iRPqQXnp7YAAAAASUVORK5CYII="
-    ),
-    "near_match": (
-        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76L"
-        "AAAALElEQVR4nGNgIBZ8ncc99es87k9QPBWb5H80jFAE1YWu4BNJCvBbQdCR+AAA"
-        "Q/NP6VPcCMcAAAAASUVORK5CYII="
-    ),
-    "stub": (
-        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76L"
-        "AAAALElEQVR4nGNgIBa8d3GZ+t7F5RMUT8Um+R8NIxRBdaEr+ESSAvxWEHQkPgAA"
-        "tfZLCZAK8p8AAAAASUVORK5CYII="
-    ),
-    "padding": (
-        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76L"
-        "AAAAE0lEQVR4nGM4cODKf3yYYWQoAACgS9TBQCUYVwAAAABJRU5ErkJggg=="
-    ),
-    "none": (
-        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76L"
-        "AAAALElEQVR4nGNgIBZoGdlM1TKy+QTFU7FJ/kfDCEVQXegKPpGkAL8VBB2JDwAA"
-        "MBQvKdOWrVAAAAAASUVORK5CYII="
-    ),
-}
+
+def _dot_uri(fill_hex: str) -> str:
+    """12px rounded-square swatch data URI in *fill_hex*, for legend keys."""
+    svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12">'
+        f'<rect x="0.5" y="0.5" width="11" height="11" rx="3" fill="{fill_hex}"'
+        f' stroke="{BORDER_COLOR}"/></svg>'
+    )
+    return "data:image/svg+xml;base64," + base64.b64encode(svg.encode("utf-8")).decode("utf-8")
+
+
+# Derived from COLORS so a legend key can never drift from the block colour it
+# documents (these were six hand-encoded PNG blobs, and the states without one —
+# data, thunk — rendered on the grid with nothing in the legend to explain them).
+DOT_PNGS = {state: _dot_uri(color) for state, color in COLORS.items()}
 
 # ── Progress bar SVG ────────────────────────────────────────
 
@@ -157,11 +141,16 @@ DOT_PNGS = {
 def _progress_svg(segments: tuple[tuple[str, float], ...]) -> str:
     """SVG (data URI) with one colored segment per (state, pct), rounded corners.
 
+    viewBox-only (no fixed width/height): the <td> renders it at 100% width
+    via width="100%", so the bar fills any viewport — a fixed 700px lattice
+    overflowed phones and clipped the stats text mid-word.  Segment geometry
+    is in 0..700 viewBox units; the browser scales it to the cell width.
+
     Deliberately uncached: pct floats make repeat keys rare, so the memo
     never hits and only pins entries."""
     svg = [
         (
-            '<svg xmlns="http://www.w3.org/2000/svg" width="700" height="32" viewBox="0 0 700 32">'
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 32" preserveAspectRatio="none">'
             '<defs><clipPath id="rc"><rect width="700" height="32" rx="10" ry="10"/></clipPath></defs>'
             '<rect width="700" height="32" fill="#1f2937" rx="10" ry="10"/>'
             '<g clip-path="url(#rc)">'
@@ -241,12 +230,18 @@ R_LOGO_SVG = (
     "bmNob3I9J21pZGRsZScgZmlsdGVyPSd1cmwoI2cpJz5SPC90ZXh0Pjwvc3ZnPg=="
 )
 
+# Every state the grid can paint needs a key here: data (purple) and thunk
+# (orange) cells were rendering with no legend entry, so those blocks had no
+# way to be identified.  The SPA greys them out; Potato Mode keeps the colours
+# (docs/DESIGN.md "Potato Mode still colors those states"), so it must say so.
 LEGEND_ITEMS = [
     ("none", "undocumented"),
     ("exact", "exact"),
     ("reloc", "reloc"),
     ("near_match", "near-match"),
     ("stub", "stub"),
+    ("data", "data"),
+    ("thunk", "thunk"),
     ("padding", "padding"),
 ]
 
@@ -306,6 +301,12 @@ def _detail_rows(
     rows: list[str] = []
     for k, v in data_dict.items():
         if k in skip_fields:
+            continue
+        # NULL/empty cells are noise, not information: a test DB function
+        # carries ~8 of them (ghidra_name, similarity, size_reason...), which
+        # buried the rows that name the function.  The SPA panel renders the
+        # same fields conditionally, so both surfaces omit the same absence.
+        if v is None or v == "" or v == [] or v == {}:
             continue
         if k in hex_fields:
             val = _esc(_format_va(v))
@@ -644,6 +645,14 @@ _PAGE_SRC = r"""<!DOCTYPE html>
 <font face="{{SANS_FONT}}">
 <a href="#grid-container"><font size="1" color="{{MUTED_COLOR}}">[Skip to grid]</font></a>
 <main>
+<!-- Page wrapper: the grid is a fixed-width lattice (grid_columns x cell_w), so
+     on a narrow viewport it is wider than the window.  Without this wrapper the
+     width="100%" chrome below (topbar, divider, layout, footer) resolves against
+     the VIEWPORT while the grid pushes the document wider, leaving the header
+     and footer visibly cut off mid-page with an unpainted band beside them.  A
+     shrink-to-fit outer cell makes those percentages resolve against the content
+     width instead, so the chrome spans the whole scrollable page. -->
+<table id="page" width="100%" border="0" cellpadding="0" cellspacing="0"><tr><td>
 
 <!-- Top Bar -->
 <table id="topbar" width="100%" border="0" cellpadding="4" cellspacing="0" background="{{TOPBAR_PNG}}">
@@ -660,10 +669,13 @@ _PAGE_SRC = r"""<!DOCTYPE html>
       <table id="section-tabs" border="0" cellpadding="0" cellspacing="4"><tr>
       % for s_name, s_url, s_active in section_tab_data:
         <td valign="middle">
+        <!-- The <a> wraps the whole pill table, not just the label.  Wrapping
+             only the text made the clickable area the ~20px glyph while the
+             32px pill around it looked like the button and did nothing. -->
         % if s_active:
-          <table border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{ACTIVE_L}}" width="16" height="32" border="0" alt=""></td><td background="{{ACTIVE_MID}}" height="32" nowrap><a href="{{s_url}}" accesskey="{{s_name[1]}}"><font face="{{MONO_FONT}}" size="3" color="#ffffff"><b>{{s_name}}</b></font></a></td><td><img src="{{ACTIVE_R}}" width="16" height="32" border="0" alt=""></td></tr></table>
+          <a href="{{s_url}}" accesskey="{{s_name[1]}}"><table border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{ACTIVE_L}}" width="16" height="32" border="0" alt=""></td><td background="{{ACTIVE_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="#ffffff"><b>{{s_name}}</b></font></td><td><img src="{{ACTIVE_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
         % else:
-          <table border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{INACTIVE_L}}" width="16" height="32" border="0" alt=""></td><td background="{{INACTIVE_MID}}" height="32" nowrap><a href="{{s_url}}" accesskey="{{s_name[1]}}"><font face="{{MONO_FONT}}" size="3" color="{{MUTED_COLOR}}">{{s_name}}</font></a></td><td><img src="{{INACTIVE_R}}" width="16" height="32" border="0" alt=""></td></tr></table>
+          <a href="{{s_url}}" accesskey="{{s_name[1]}}"><table border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{INACTIVE_L}}" width="16" height="32" border="0" alt=""></td><td background="{{INACTIVE_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="{{MUTED_COLOR}}">{{s_name}}</font></td><td><img src="{{INACTIVE_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
         % end
         </td>
       % end
@@ -674,23 +686,38 @@ _PAGE_SRC = r"""<!DOCTYPE html>
     <td valign="middle" colspan="2">
       <table id="controls" border="0" cellpadding="0" cellspacing="2" width="100%">
         % if progress:
-        <tr><td valign="middle" width="100%" align="center">
-          <table id="progress-bar" width="700" border="0" cellpadding="0" cellspacing="0"><tr>
-            <td background="{{progress_bar_png}}" align="center" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="#ffffff"><b>{{progress['sec_size']}}</b>b &middot; <b>{{progress['matched_fn']}}/{{progress['total_fn']}}</b> matched &middot; <b>{{"%.1f" % progress['coverage_pct']}}%</b></font></td>
+        <tr><td colspan="4" valign="middle" width="100%" align="center">
+          <!-- Fluid bar: the SVG is viewBox-only, so width="100%" stretches
+               it to the cell on any viewport instead of overflowing a phone
+               with a fixed 700px lattice.  The stats sit in a second cell
+               below the bar (same contract as the SPA's stats row): overlaying
+               them on the image clipped mid-word on narrow screens, because
+               the text width is fixed while the image shrinks. -->
+          <table id="progress-bar" width="100%" border="0" cellpadding="0" cellspacing="1"><tr>
+            <td align="center" height="14"><img src="{{progress_bar_png}}" width="100%" height="14" border="0" alt=""></td>
+          </tr><tr>
+            <td align="center"><font face="{{MONO_FONT}}" size="2" color="{{TEXT_COLOR}}"><b>{{progress['sec_size']}}</b>b &middot; <b>{{progress['matched_fn']}}/{{progress['total_fn']}}</b> matched &middot; <b>{{"%.1f" % progress['coverage_pct']}}%</b></font></td>
           </tr></table>
         </td></tr>
         % end
-        <tr><td valign="middle" nowrap>
+        <!-- Search and target share the first row; the filter pills take
+             their own second row.  As one row the three groups need ~1000px,
+             which overflowed a 390px phone and clipped the filters (E/R/M/S/P
+             half off-screen).  Two rows fit everywhere the 700px progress bar
+             above them already fits. -->
+        <tr>
+        <td valign="middle" nowrap>
           <form id="search-form" action="/potato" method="GET"><input type="hidden" name="target" value="{{target}}"><input type="hidden" name="section" value="{{section}}">
           % if active_filters:
             <input type="hidden" name="filter" value="{{','.join(sorted(active_filters))}}">
           % end
           <label for="search-input"><font size="1" color="{{MUTED_COLOR}}">Search:&nbsp;</font></label><input id="search-input" type="text" name="search" size="14" value="{{search_query}}" placeholder="Search VA or name..." accesskey="s"> <input type="submit" value="Go"></form>
-          % if search_query:
-            <br><font size="1" color="{{ACCENT_COLOR}}">Searching: &quot;{{search_query}}&quot; ({{search_match_count}} matches)</font> <a href="{{clear_search_url}}"><font size="1" color="{{MUTED_COLOR}}">[Clear search]</font></a>
-          % end
-        </td></tr>
-        <tr><td valign="middle" nowrap>
+        </td>
+        <!-- Spacer cells, not &nbsp; text: <form> is a block box, so a leading
+             text node in the same cell pushed the form onto its own line and
+             left the Search and Target groups on staggered baselines. -->
+        <td width="16"></td>
+        <td valign="middle" nowrap>
           <form id="target-form" action="/potato" method="GET">
             <input type="hidden" name="section" value="{{section}}">
             <label for="target-select"><font size="1" color="{{MUTED_COLOR}}">Target:&nbsp;</font></label><select id="target-select" name="target">
@@ -700,63 +727,93 @@ _PAGE_SRC = r"""<!DOCTYPE html>
             </select>
             <input type="submit" value="Go">
           </form>
-        </td></tr>
-        <tr><td valign="middle">
+        </td>
+        <td valign="middle" width="100%"></td>
+        </tr>
+        <tr>
+        <td valign="middle" colspan="4">
           <table id="filters" border="0" cellpadding="0" cellspacing="4"><tr>
             % for fb_href, fb_label, fb_color, fb_active, fb_key in filter_btn_data:
               <td valign="middle">
+              <!-- Anchor wraps the whole pill: see the section-tab note above.
+                   These are the worst case — a single-letter label gave E/R/M/S/P
+                   a 10px-wide hit target inside a 32px-wide pill. -->
               % if fb_active:
-                <table border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{FILTER_ACT_L}}" width="16" height="32" border="0" alt=""></td><td background="{{FILTER_ACT_MID}}" height="32" nowrap><a href="{{fb_href}}" accesskey="{{fb_label[0].lower()}}"><font face="{{MONO_FONT}}" size="3" color="{{fb_color}}"><b>{{fb_label}}</b></font></a></td><td><img src="{{FILTER_ACT_R}}" width="16" height="32" border="0" alt=""></td></tr></table>
+                <a href="{{fb_href}}" accesskey="{{fb_label[0].lower()}}"><table border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{FILTER_ACT_L}}" width="16" height="32" border="0" alt=""></td><td background="{{FILTER_ACT_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="{{fb_color}}"><b>{{fb_label}}</b></font></td><td><img src="{{FILTER_ACT_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
               % else:
-                <table border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{FILTER_INACT_L}}" width="16" height="32" border="0" alt=""></td><td background="{{FILTER_INACT_MID}}" height="32" nowrap><a href="{{fb_href}}" accesskey="{{fb_label[0].lower()}}"><font face="{{MONO_FONT}}" size="3" color="{{fb_color}}">{{fb_label}}</font></a></td><td><img src="{{FILTER_INACT_R}}" width="16" height="32" border="0" alt=""></td></tr></table>
+                <a href="{{fb_href}}" accesskey="{{fb_label[0].lower()}}"><table border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{FILTER_INACT_L}}" width="16" height="32" border="0" alt=""></td><td background="{{FILTER_INACT_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="{{fb_color}}">{{fb_label}}</font></td><td><img src="{{FILTER_INACT_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
               % end
               </td>
             % end
           </tr></table>
         </td>
-        </tr></table>
+        </tr>
+        % if search_query:
+        <tr><td colspan="4" valign="middle" nowrap><font size="1" color="{{ACCENT_COLOR}}">Searching: &quot;{{search_query}}&quot; ({{search_match_count}} matches)</font> <a href="{{clear_search_url}}"><font size="1" color="{{MUTED_COLOR}}">[Clear search]</font></a></td></tr>
+        % end
+        </table>
     </td>
   </tr>
 </table>
 <table id="topbar-divider" width="100%" border="0" cellpadding="0" cellspacing="0" bgcolor="#1c2a38"><tr><td height="1"></td></tr></table>
 
 <table id="layout" width="100%" border="0" cellpadding="14" cellspacing="0">
+  <!-- Map and panel stack as separate rows.  As side-by-side cells the
+       fixed-width grid lattice plus the panel's width floor forced the page
+       past 500px on a 390px phone, clipping both.  Stacked, each takes the
+       full width; the panel follows the map like the SPA below 1300px. -->
+  % if view == "functions":
   <tr>
-    % if view == "functions":
     <td valign="top" width="100%">
       {{!functions_html}}
     </td>
+  </tr>
     % else:
-    <td valign="top" width="75%">
-      <table id="map" width="100%" border="1" cellpadding="0" cellspacing="0" bgcolor="{{PANEL_COLOR}}" bordercolor="{{BORDER_COLOR}}">
-        <tr><td id="map-header" background="{{PANEL_HDR_PNG}}" cellpadding="8">&nbsp;<font color="{{MUTED_COLOR}}" size="2"><b>Coverage Map - {{section}}</b></font> <font color="{{MUTED_COLOR}}" size="1"> ({{block_count}} blocks)</font>
+  <tr>
+    <td valign="top" width="100%">
+      <table id="map" width="100%" border="1" cellpadding="0" cellspacing="0" bgcolor="{{PANEL_COLOR}}" bordercolor="{{BORDER_COLOR}}">        <tr><td id="map-header" background="{{PANEL_HDR_PNG}}" cellpadding="8">&nbsp;<font color="{{MUTED_COLOR}}" size="2"><b>Coverage Map - {{section}}</b></font> <font color="{{MUTED_COLOR}}" size="1"> ({{block_count}} blocks)</font>
         % if sec_stats.get('total', 0) > 0:
-          <font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}"><font color="{{COLORS['exact']}}">E:{{sec_stats['exact']}}</font> <font color="{{COLORS['reloc']}}">R:{{sec_stats['reloc']}}</font> <font color="{{COLORS['near_match']}}">M:{{sec_stats['near_match']}}</font> <font color="{{COLORS['stub']}}">S:{{sec_stats['stub']}}</font> <font color="{{COLORS['padding']}}">P:{{sec_stats.get('padding', 0)}}</font> &#x2502; {{sec_stats['pct']}}% covered</font>
+          <br>&nbsp;<font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">E:<font color="{{COLORS['exact']}}">{{sec_stats['exact']}}</font> R:<font color="{{COLORS['reloc']}}">{{sec_stats['reloc']}}</font> M:<font color="{{COLORS['near_match']}}">{{sec_stats['near_match']}}</font> S:<font color="{{COLORS['stub']}}">{{sec_stats['stub']}}</font> P:<font color="{{COLORS['padding']}}">{{sec_stats.get('padding', 0)}}</font> &#x2502; {{sec_stats['pct']}}% covered</font>
         % end
         </td></tr>
         <tr><td bgcolor="{{PANEL_COLOR}}" cellpadding="8">
-          <table id="legend" border="0" cellpadding="0" cellspacing="4"><tr>
-          % for leg_key, leg_label in LEGEND_ITEMS:
-            <td valign="middle"><img src="{{DOT_PNGS[leg_key]}}" width="12" height="12" border="0" alt=""></td><td valign="middle"><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">{{leg_label}}</font></td>
+          <!-- Two keys per row in a fixed 2-column lattice: nine keys as a
+               single row need ~900px, which overflowed the map cell on phones
+               and wrapped mid-key ("near- / match") once it could wrap.
+               One key per row fixed the wrap but cost ~200px of vertical
+               space for a legend.  Fixed pairs fit a 390px phone (each pair
+               is ~260px) and cost half the height. -->
+          <table id="legend" border="0" cellpadding="0" cellspacing="2">
+          % for i in range(0, len(LEGEND_ITEMS), 2):
+            <tr>
+            % for leg_key, leg_label in LEGEND_ITEMS[i:i+2]:
+              <td valign="middle"><img src="{{DOT_PNGS[leg_key]}}" width="12" height="12" border="0" alt=""></td><td valign="middle" nowrap><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">{{leg_label}}&nbsp;&nbsp;</font></td>
+            % end
+            </tr>
           % end
-          </tr></table>
+          </table>
           <table id="grid-container" border="1" cellpadding="8" cellspacing="0" bordercolor="{{BORDER_COLOR}}" bgcolor="{{BG_COLOR}}" width="100%">
-          <caption align="left"><font size="1" color="{{MUTED_COLOR}}">Coverage map - {{section}} ({{block_count}} blocks)</font></caption>
+          <!-- Labels the grid for the "[Skip to grid]" target, which lands here.
+               It deliberately does NOT repeat the panel header directly above
+               ("Coverage Map - {{section}} ({{block_count}} blocks)") — rendered
+               back to back, the two read as the same heading printed twice. -->
+          <caption align="left"><font size="1" color="{{MUTED_COLOR}}">Click a block to inspect it.</font></caption>
           <tr><td>
           <font size="1"><center>{{!grid_html}}</center></font>
           </td></tr></table>
         </td></tr>
       </table>
-    </td>
-    <td valign="top" width="25%">
+  </tr>
+  <tr>
+    <td valign="top" width="100%">
       <table id="panel" width="100%" border="1" cellpadding="0" cellspacing="0" bgcolor="{{PANEL_COLOR}}" bordercolor="{{BORDER_COLOR}}">
         <tr><td id="panel-header" background="{{PANEL_HDR_PNG}}" cellpadding="8">&nbsp;<font color="{{MUTED_COLOR}}" size="2"><b>Block Details</b></font></td></tr>
         <tr><td height="1" bgcolor="{{BORDER_COLOR}}"></td></tr>
         <tr><td id="panel-content" bgcolor="{{PANEL_COLOR}}" cellpadding="14" valign="top">{{!panel_html}}</td></tr>
       </table>
     </td>
-    % end
   </tr>
+    % end
 </table>
 <table id="footer" width="100%" border="0" cellpadding="8" cellspacing="0"><tr>
 <td><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">recoverage v{{version}}
@@ -766,6 +823,7 @@ _PAGE_SRC = r"""<!DOCTYPE html>
 </font></td>
 <td align="right"><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">HTML5</font></td>
 </tr></table>
+</td></tr></table>
 </main>
 </font></body></html>"""
 
@@ -933,6 +991,15 @@ def _load_section_data(
         sec: dict[str, Any] = dict(zip(_sec_keys, row, strict=True))
         sec["cells"] = []
         sections[sec["name"]] = sec
+    # PE load order (ascending VA), matching the SPA's sectionNames sort: the
+    # section carrying the work (.text) leads instead of trailing an
+    # alphabetical row.  Sections without a VA sort last.
+    sections = dict(
+        sorted(
+            sections.items(),
+            key=lambda kv: kv[1].get("va") if kv[1].get("va") is not None else 1e18,
+        )
+    )
 
     return sections, data
 
@@ -1377,8 +1444,13 @@ def _build_grid_html(
     if grid_columns <= 0:
         raise ValueError(f"grid_columns must be positive, got {grid_columns}")
     grid_columns = min(grid_columns, 256)
-    cell_w = 18
-    cell_h = 15
+    # Fixed 12px lattice: at 64 columns that is ~770px, which overflowed a
+    # 390px phone and pushed the detail panel off-screen (the layout is a
+    # fixed 75/25 split with no CSS to stack it).  12px keeps blocks legible
+    # and tappable on desktop; narrow sections render the same size, so every
+    # section shares one predictable block size.
+    cell_w = 12
+    cell_h = 12
     sizing_tds = "".join(
         f'<td bgcolor="{BG_COLOR}" width="{cell_w}" height="1"></td>' for _ in range(grid_columns)
     )
@@ -1524,7 +1596,6 @@ def _render_function_list(
         ),
         "<tr><td>",
         f'<table width="100%" border="1" cellpadding="6" cellspacing="0" bordercolor="{BORDER_COLOR}">',
-        f'<caption align="left"><font size="1" color="{MUTED_COLOR}">Functions for {_esc(section)} ({len(rows)} results)</font></caption>',
         (
             f'<tr bgcolor="{PANEL_COLOR}">'
             f'<th><a href="{base}&sort=name"><font color="{MUTED_COLOR}">Name</font></a></th>'
@@ -1738,6 +1809,7 @@ def _render_potato_inner(
         TOPBAR_PNG=TOPBAR_SVG,
         PANEL_HDR_PNG=PANEL_HDR_PNG,
         R_LOGO_SVG=R_LOGO_SVG,
+        TRANSPARENT_GIF=TRANSPARENT_GIF,
         DOT_PNGS=DOT_PNGS,
         LEGEND_ITEMS=LEGEND_ITEMS,
         # Data

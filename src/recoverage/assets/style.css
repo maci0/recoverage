@@ -32,8 +32,6 @@
   --inspector-bg: rgba(0, 0, 0, 0.2);
   --cell-border: rgba(255, 255, 255, 0.04);
   --bar-border: rgba(255, 255, 255, 0.1);
-  --stat-scrim: rgba(15, 18, 22, 0.72);
-  --stat-text: #ffffff;
 
   /* Height of the sticky topbar, measured at runtime (app.js) so the
    * sticky panel header parks below it instead of underneath it. */
@@ -116,8 +114,6 @@
   --inspector-bg: rgba(0, 0, 0, 0.04);
   --cell-border: rgba(0, 0, 0, 0.12);
   --bar-border: rgba(0, 0, 0, 0.2);
-  --stat-scrim: rgba(226, 232, 240, 0.8);
-  --stat-text: #1e293b;
 
   --padding-bg: rgba(60, 60, 90, 0.55);
 
@@ -254,7 +250,7 @@ body {
 
 .grid {
   display: block; padding: 0; border-radius: 12px; background: var(--grid-bg); border: 1px solid var(--border);
-  user-select: none; animation: fadeInGrid 0.3s ease; position: relative; min-height: 400px; overflow: auto;
+  user-select: none; animation: fadeInGrid 0.3s ease; position: relative; min-height: 120px; overflow: auto;
 }
 .grid-canvas { display: block; }
 @keyframes fadeInGrid { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
@@ -340,20 +336,18 @@ body {
 .section-title-text { font-size: 12px; font-weight: 600; margin: 0; color: var(--text); text-shadow: var(--text-shadow); letter-spacing: 0.5px; }
 .section-actions { display: flex; gap: 6px; }
 
-/* The bar shares the topbar row with the title and the section tabs.  Below
- * ~900px those leave it a few dozen pixels, which clips the coverage stats
- * inside it, so it takes its own full-width row instead. */
-.progress-container { user-select: none; display: flex; flex-direction: column; gap: 6px; width: 100%; flex: 1; min-width: 320px; }
-@media (max-width: 900px) { .progress-container { flex-basis: 100%; } }
-.progress-bar { position: relative; height: 32px; width: 100%; background: var(--none); border-radius: 8px; border: 1px solid var(--bar-border); overflow: hidden; }
+/* The bar gets its own full-width row below the title/tabs: sharing the row
+ * left it a few dozen pixels, which clipped the coverage stats inside it. */
+.progress-container { user-select: none; display: flex; flex-direction: column; gap: 6px; width: 100%; flex: 1 1 100%; min-width: 320px; order: 10; }
+.progress-bar { position: relative; height: 14px; width: 100%; background: var(--none); border-radius: 7px; border: 1px solid var(--bar-border); overflow: hidden; }
 .progress-segments { display: flex; flex-direction: row; width: 100%; height: 100%; position: absolute; top: 0; left: 0; }
-/* The stats float over whichever segment colour happens to be underneath, so
- * legibility would otherwise change with coverage.  Each stat carries its own
- * scrim rather than relying on a text-shadow, which earns no contrast credit. */
-.progress-text-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 0 8px; pointer-events: none; font-size: 13px; font-family: var(--mono); z-index: 10; }
-/* text-shadow: none — the scrim carries the legibility now, and the inherited
- * body glow put a cyan halo on the stats. */
-.stat-item { color: var(--stat-text); background: var(--stat-scrim); padding: 2px 8px; border-radius: 5px; white-space: nowrap; text-shadow: none; }
+/* Loading/error states reuse the text-row typography (they render in place
+ * of the stats, not over segment colours, so no scrim). */
+.stat-item { font-size: 12px; font-family: var(--mono); color: var(--muted); white-space: nowrap; }
+/* The stats sit above the bar as plain text (on the panel, not over segment
+ * colours).  Phone widths keep the same structure: the text row wraps, the
+ * bar stays a pure 32px segment strip. */
+.progress-stats { display: flex; flex-wrap: wrap; gap: 4px 12px; }
 .progress-segment { height: 100%; transition: background-color 0.3s ease, box-shadow 0.3s ease, filter 0.3s ease; cursor: pointer; }
 .progress-segment:hover { filter: brightness(1.2); outline: 1px solid var(--c); box-shadow: var(--c-shadow); z-index: 2; }
 .progress-segment.active { box-shadow: inset 0 0 12px 2px var(--glow), inset 0 0 0 2px var(--c); outline: none; z-index: 2; position: relative; }
@@ -412,13 +406,12 @@ body.light-mode::after { background: linear-gradient(rgba(18, 16, 16, 0) 50%, rg
 @keyframes pulse-fade { 0%, 100% { opacity: 0.7; } 50% { opacity: 1; } }
 
 /* Coarse pointers (touch): interactive targets need ≥ 44px hit area (WCAG
- * 2.5.5). Desktop fine-pointer keeps the compact 32px control height. */
+ * 2.5.5). Desktop fine-pointer keeps the compact 32px control height.  The
+ * bar stays slim: its segments are display-only and the filter buttons below
+ * are the touch targets. */
 @media (pointer: coarse) {
   .btn, .input-el, .target-select { height: 44px; min-height: 44px; }
   .btn.icon-btn { width: 44px; }
-  /* The bar itself has to grow: it is fixed-height with overflow:hidden, so a
-   * min-height on the segments alone was clipped back to 32px. */
-  .progress-bar { height: 44px; }
 }
 
 /* Phone widths: the topbar wraps to ~190px of controls.  Sticky there would
@@ -428,10 +421,5 @@ body.light-mode::after { background: linear-gradient(rgba(18, 16, 16, 0) 50%, rg
   .topbar { position: static; }
   .topbar-left { min-width: 0; }
   .panel-head { top: 0; }
-  /* Three stats need ~415px and the bar has ~352px on a phone, so the byte
-   * count (derivable from the panel) gives way to the two that carry the
-   * headline.  The :nth-last-child(3) guard keeps the single-item loading and
-   * error states, which are also .stat-item, visible. */
-  .stat-item:first-child:nth-last-child(3) { display: none; }
 }
 

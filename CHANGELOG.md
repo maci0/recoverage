@@ -3,6 +3,32 @@
 All notable user-visible changes to Recoverage are recorded here.  The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.4.1] - 2026-09-16
+
+### Fixed
+
+- **SPA progress stats never clip.** The stats sit above the bar as wrapping
+  plain text and the bar is a slim 14px segment strip, so every viewport —
+  1440px desktop to 390px phone — shows `size · matched · coverage %` where
+  the old in-bar overlay truncated mid-word.
+- **SPA Copy/Open stay disabled on empty panes.** Copying `(select a
+  function)` or opening a modal of it is never useful; the buttons disable
+  with a "Select a block first" hint until a real selection lands (and while
+  `detail.js` is still loading).
+- **Canvas map no longer paints a phantom row.** Sections whose cells fill
+  the last row exactly rendered one extra blank row (~250px of empty grid on
+  the test DB). Row count now matches the layout walk.
+- **Potato progress bar fits phones.** The fixed 700px bar overflowed narrow
+  screens and clipped its stats; it is fluid-width with the stats in a cell
+  below, and the map header stats wrap to their own line.
+- **Potato layout stacks map over panel.** The fixed 75/25 split forced the
+  page past 500px on a 390px phone, clipping both columns; stacked, each
+  takes the full width (like the SPA below 1300px). Grid cells are 12px.
+- **Potato detail panel drops empty rows.** NULL/empty fields (`ghidra_name
+  None`, `similarity None`, …) no longer bury the populated rows; the
+  duplicate `Functions for .text` caption is gone; the legend is a
+  two-column nowrap lattice; section tabs lead with `.text` (PE load order).
+
 ## [1.4.0] - 2026-09-15
 
 ### Fixed

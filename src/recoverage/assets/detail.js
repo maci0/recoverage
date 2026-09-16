@@ -292,9 +292,12 @@
       const pad = 8;
       const usable = Math.max(0, wrap.clientWidth - pad * 2);
       const min = minCellPx();
-      const declared = Number(wrap.dataset.cols) || 64;
-      const fits = Math.floor((usable + gap) / (min + gap));
-      const cols = Math.max(1, Math.min(declared, fits));
+      // Never render fewer columns than the section declares: shrinking the
+      // lattice below the declared count re-wraps cells onto extra rows and
+      // leaves a blank band under a short canvas (an 8-cell section at 8
+      // declared columns painted one row of 6px cells, then ~250px of grid
+      // background).  Narrow screens shrink the cells to `min` instead.
+      const cols = Number(wrap.dataset.cols) || 64;
       const cell = Math.max(min, (usable - gap * (cols - 1)) / cols);
       return { cols, gap, pad, cell };
     };
@@ -309,6 +312,10 @@
         col += s;
         if (col >= cols) { col = 0; row += 1; }
       }
+      // A row filled exactly (col == 0 here) is already counted by the
+      // in-loop row += 1; only a partial trailing row needs one more.  The
+      // old `row + 1` counted a phantom second row for an 8-cell section at
+      // 8 columns — one row of cells over ~250px of blank grid background.
       return row + (col > 0 ? 1 : 0);
     };
 
@@ -326,7 +333,9 @@
       g.cols = lay.cols;
       const { cols, gap, pad, cell } = lay;
       // Row count first: walk is cheap, and sizing the map needs it upfront.
-      let rows = 1;
+      // Same exact-fill rule as walk() above: a trailing row filled exactly
+      // is already counted, so an empty section (n == 0) is 0 rows, not 1.
+      let rows = 0;
       {
         let col = 0;
         for (let i = 0; i < pack.n; i += 1) {
@@ -335,9 +344,10 @@
           col += s;
           if (col >= cols) { col = 0; rows += 1; }
         }
+        if (col > 0) rows += 1;
       }
       g.rows = rows;
-      const map = new Int32Array(rows * cols);
+      const map = new Int32Array(Math.max(1, rows) * cols);
       map.fill(-1);
       const cellRow = new Int32Array(pack.n);
       walk(pack, cols, (i, col, row, s) => {

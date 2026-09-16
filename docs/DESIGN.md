@@ -50,13 +50,13 @@ The UI is broken down into functional VanJS components in `app.js`:
 ### 1. Topbar (`header.topbar`)
 * **Logo & Title**: Retro-futuristic "R" logo with CRT scanline effects.
 * **Tabs**: Dynamic segment selectors generated from the active target's sections, ordered by ascending VA so PE load order (`.text`, `.rdata`, `.data`, `.bss`) holds and the section carrying the work leads, instead of an alphabetical row ending in `.text`.
-* **ProgressBar**: A dynamic, segmented progress bar showing coverage percentages. It takes its own full-width row below 900px (sharing the topbar row leaves it a few dozen pixels), and drops the byte count below 700px so the two headline stats fit inside the bar. **Each segment is a filter toggle**, reachable by keyboard and carrying `aria-pressed`; segments under 0.5% are not rendered at all, since a zero-width toggle is a focus stop with nothing to point at. Text stats overlay the segments, each on its own scrim so they stay legible over any status colour.
+* **ProgressBar**: A stats row (`size · matched · coverage %`) above a slim 14px segmented bar. The stats live outside the bar as plain text so they can never clip; the bar itself is a pure segment strip. **Each segment is a filter toggle**, reachable by keyboard and carrying `aria-pressed`; segments under 0.5% are not rendered at all, since a zero-width toggle is a focus stop with nothing to point at.
 * **Target Selector**: Dropdown to switch between targets (e.g., `SERVER`, `GOLD`, `GOLDTL`). Persists selection to URL (`?target=XXX`) and localStorage.
 * **Search & Filters**: Debounced search input and toggleable filter buttons (All, E, R, M, S, P).
 * **Actions**: Theme toggle (sun/moon icons) and Reload data buttons with a 5-second cooldown to prevent spam.
 
 ### 2. Grid (`.map`)
-* A CSS Grid layout that keeps blocks square: the section's `columns` value is stored on the element as `data-cols` and the `ResizeObserver` derives the rendered count into `--cols`, which drives the CSS track count, the row height, and the arrow-key row step.  Below 700px the rendered count drops so cells stay at least 12px (64 columns on a 352px phone would give 2.8px cells); above it the section keeps every column it declares.  Reading it from one place is what keeps them from drifting (the track count was previously hard-coded to 64 while the row height followed the declared value, so cells were not square for any section declaring anything else).
+* A canvas map that always renders every declared column: the section's `columns` value is stored on the element as `data-cols` and drives the lattice, the row height, and the arrow-key row step. Narrow screens shrink the cells (floor 6px desktop, 12px phone) instead of re-wrapping them onto extra rows, which left a blank band under short sections. Reading the column count from one place is what keeps the track count, row height, and keyboard step from drifting.
 * Cells are colored based on their status:
   * **Exact** (green) — byte-for-byte match
   * **Reloc** (blue/teal) — match after masking relocations

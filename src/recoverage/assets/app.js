@@ -577,10 +577,16 @@ const App = () => {
 
   // Copy, Open, and Reload all delegate to detail.js.  If that file never
   // arrives they would look enabled and do nothing at all, so they go disabled
-  // and say why — the panes it owns already report the same failure.
+  // and say why — the panes it owns already report the same failure.  Same
+  // while it is still loading: copyToClipboard is a no-op until it lands.
+  const detailTitle = () => {
+    if (detailFailed.val) return MSG.DETAIL_UNAVAILABLE;
+    if (detailReady.val) return "";
+    return MSG.LOADING;
+  };
   const detailBound = () => ({
-    disabled: () => detailFailed.val,
-    title: () => detailFailed.val ? MSG.DETAIL_UNAVAILABLE : "",
+    disabled: () => !detailReady.val || detailFailed.val,
+    title: detailTitle,
   });
 
   const copyToClipboard = (text, e) => window.RC.copyToClipboard?.(text, e);
@@ -662,20 +668,16 @@ const App = () => {
       if (emptyState.val) return div({ class: "progress-container" });
       if (isLoading.val) {
         return div({ class: "progress-container" },
-          div({ class: "progress-bar" },
-            div({ class: "progress-text-overlay", style: "justify-content: center;" },
-              span({ class: "stat-item" }, "Loading...")
-            )
+          div({ class: "progress-stats" },
+            span({ class: "stat-item" }, "Loading...")
           )
         );
       }
 
       if (!data.val || !data.val.sections || !summaryData.val) {
         return div({ class: "progress-container" },
-          div({ class: "progress-bar" },
-            div({ class: "progress-text-overlay", style: "justify-content: center;" },
-              span({ class: "stat-item" }, loadingMsg.val)
-            )
+          div({ class: "progress-stats" },
+            span({ class: "stat-item" }, loadingMsg.val)
           )
         );
       }
@@ -747,6 +749,15 @@ const App = () => {
       });
 
       return div({ class: "progress-container" },
+        div({ class: "progress-stats" },
+          span({ class: "stat-item stat-bytes" }, `${sec.size} bytes`),
+          // "Matched" counts exact + reloc only: a near-match is a miss and
+          // a stub is a stand-in, so neither counts. Same contract as
+          // Potato Mode's progress bar. (/stats' per-section `matched`
+          // additionally counts proven, the semantic-equivalence promotion.)
+          span({ class: "stat-item stat-matched" }, `${exactCount + relocCount} / ${totalItems} matched`),
+          span({ class: "stat-item stat-coverage" }, `${coveragePct.toFixed(2)}% coverage`)
+        ),
         div({ class: "progress-bar" },
           div({ class: "progress-segments" },
             Segment("exact", exactPct, "Toggle exact filter", `Exact: ${exactCount}`),
@@ -754,15 +765,6 @@ const App = () => {
             Segment("near_match", nearMatchPct, "Toggle near-match filter", `Near-match: ${nearMatchCount}`),
             Segment("stub", stubPct, "Toggle stub filter", `Stub: ${stubCount}`),
             Segment("padding", paddingPct, "Toggle padding filter", `Padding: ${paddingBytes}B`)
-          ),
-          div({ class: "progress-text-overlay" },
-            span({ class: "stat-item" }, `${sec.size} bytes`),
-            // "Matched" counts exact + reloc only: a near-match is a miss and
-            // a stub is a stand-in, so neither counts. Same contract as
-            // Potato Mode's progress bar. (/stats' per-section `matched`
-            // additionally counts proven, the semantic-equivalence promotion.)
-            span({ class: "stat-item" }, `${exactCount + relocCount} / ${totalItems} matched`),
-            span({ class: "stat-item" }, `${coveragePct.toFixed(2)}% coverage`)
           )
         )
       );
@@ -770,7 +772,7 @@ const App = () => {
   };
 
   const Grid = () => {
-    const container = div({ class: "grid-container", style: "position: relative; min-height: 400px;" });
+    const container = div({ class: "grid-container", style: "position: relative; min-height: 120px;" });
     let mounted = false;
     van.derive(() => {
       if (!detailReady.val || mounted) return;
@@ -867,13 +869,23 @@ const App = () => {
 
     // C Source, Assembly, and Original Bytes are the same panel section with a
     // different logo, language, and body: title row, Copy, Open-in-modal.
+    // Copy/Open go disabled while the pane holds an empty-state message —
+    // copying "(select a function)" or opening a modal of it is never what
+    // the user wants; the tooltip says what to do instead.
+    const isEmptyMessage = (text) => text === MSG.SELECT_FUNCTION || text === MSG.ASM_PLACEHOLDER
+      || text === MSG.NO_C_SOURCE || text === MSG.NO_C_FOR_BLOCK || text === MSG.UNDOCUMENTED_BLOCK
+      || text === MSG.DATA_SECTION_NO_ASM || text === MSG.BYTES_FAILED || text === MSG.BYTES_BSS
+      || text === MSG.BYTES_LOAD_FAILED || text === MSG.GLOBAL_VAR || text === MSG.NO_DECL
+      || text === MSG.NA || text === MSG.LOADING || text === MSG.DETAIL_UNAVAILABLE
+      // oxlint-disable-next-line anti-slop/no-runtime-typeof -- pane text is string|derived-state; guard before .startsWith, not a type contract
+      || (typeof text === "string" && (text.startsWith(MSG.ERROR_PREFIX) || text.startsWith("(failed to load:")));
     const CodeSection = (logo, color, heading, lang, text) => div({ class: "section" },
       div({ class: "section-title" },
         HexLogo(logo, color, heading),
         div({ class: "section-actions" },
-          button({ class: "btn copy-btn", "aria-label": `Copy ${heading}`, ...detailBound(), onclick: (e) => copyToClipboard(text, e) }, "Copy"),
+          button({ class: "btn copy-btn", "aria-label": `Copy ${heading}`, ...detailBound(), disabled: () => !detailReady.val || detailFailed.val || isEmptyMessage(text), title: () => isEmptyMessage(text) ? "Select a block first" : detailTitle(), onclick: (e) => copyToClipboard(text, e) }, "Copy"),
           button({
-            class: "btn copy-btn", "aria-label": `Open ${heading} in a larger view`, ...detailBound(),
+            class: "btn copy-btn", "aria-label": `Open ${heading} in a larger view`, ...detailBound(), disabled: () => !detailReady.val || detailFailed.val || isEmptyMessage(text), title: () => isEmptyMessage(text) ? "Select a block first" : detailTitle(),
             onclick: () => {
               // cellIdx is null when nothing is selected, which used to render
               // as the literal "Block null".
@@ -892,11 +904,15 @@ const App = () => {
 
     // Hint for the copy buttons when they have nothing to copy.
     const copyHint = (copied, what) => {
-      if (copied != null) return detailFailed.val ? MSG.DETAIL_UNAVAILABLE : "";
-      return `Select a ${what} first`;
+      if (copied == null) return `Select a ${what} first`;
+      if (detailFailed.val) return MSG.DETAIL_UNAVAILABLE;
+      if (detailReady.val) return "";
+      return MSG.LOADING;
     };
 
-    // Compute copyable VA: prefer fn fields, fall back to cell address range
+    // Compute copyable VA: prefer fn fields, fall back to cell address range.
+    // Copy VA / Copy Symbol delegate to detail.js: until it lands there is
+    // nothing to copy with, so they stay disabled instead of looking live.
     let copyVA = null;
     if (fn) {
       copyVA = fn.vaStart || (fn.va == null ? null : hex(fn.va, 8));
@@ -914,8 +930,8 @@ const App = () => {
       div({ class: "panel-head" },
         h2({ class: "panel-title" }, title),
         div({ class: "panel-actions" },
-          button({ class: "btn copy-btn", "aria-label": "Copy VA", disabled: () => detailFailed.val || copyVA == null, title: () => copyHint(copyVA, "block"), onclick: (e) => copyToClipboard(copyVA, e) }, "Copy VA"),
-          button({ class: "btn copy-btn", "aria-label": "Copy Symbol", disabled: () => detailFailed.val || fn?.symbol == null, title: () => copyHint(fn?.symbol, "function"), onclick: (e) => copyToClipboard(fn?.symbol, e) }, "Copy Symbol")
+          button({ class: "btn copy-btn", "aria-label": "Copy VA", disabled: () => !detailReady.val || detailFailed.val || copyVA == null, title: () => copyHint(copyVA, "block"), onclick: (e) => copyToClipboard(copyVA, e) }, "Copy VA"),
+          button({ class: "btn copy-btn", "aria-label": "Copy Symbol", disabled: () => !detailReady.val || detailFailed.val || fn?.symbol == null, title: () => copyHint(fn?.symbol, "function"), onclick: (e) => copyToClipboard(fn?.symbol, e) }, "Copy Symbol")
         ),
         div({ class: "panel-meta" }, metaContent)
       ),
