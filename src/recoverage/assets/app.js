@@ -936,16 +936,24 @@ const App = () => {
         div({ class: "panel-meta" }, metaContent)
       ),
       div({ class: "panel-body" },
-        CodeSection("C", "var(--accent-c-source)", "C Source", "c", cSourceText.val),
-        activeSection.val === ".text"
-          ? CodeSection("ASM", "var(--accent-asm)", "Assembly", "x86asm", asmText.val)
-          : div({ class: "section" },
-              div({ class: "section-title" }, HexLogo("{}", "var(--accent-data)", "Data Inspector")),
-              () => detailReady.val
-                ? window.RC.DataInspector(currentBuf.val)
-                : div({ class: "code" }, detailFailed.val ? MSG.DETAIL_UNAVAILABLE : MSG.LOADING)
-            ),
-        CodeSection("01", "var(--accent-bytes)", "Original Bytes", "hex", bytesText.val)
+        // Nothing is selected at first paint, so the three code sections would
+        // lay out stand-in text and copy buttons for nobody: the boot layout
+        // walks 205 objects, 61 of them these.  One muted line until there is
+        // something to show.
+        (fn || cellIdx !== null)
+          ? [
+              CodeSection("C", "var(--accent-c-source)", "C Source", "c", cSourceText.val),
+              activeSection.val === ".text"
+                ? CodeSection("ASM", "var(--accent-asm)", "Assembly", "x86asm", asmText.val)
+                : div({ class: "section" },
+                    div({ class: "section-title" }, HexLogo("{}", "var(--accent-data)", "Data Inspector")),
+                    () => detailReady.val
+                      ? window.RC.DataInspector(currentBuf.val)
+                      : div({ class: "code" }, detailFailed.val ? MSG.DETAIL_UNAVAILABLE : MSG.LOADING)
+                  ),
+              CodeSection("01", "var(--accent-bytes)", "Original Bytes", "hex", bytesText.val)
+            ]
+          : div({ class: "hint" }, MSG.SELECT_FUNCTION)
       )
     );
   };
@@ -1097,7 +1105,10 @@ const App = () => {
   const topbarEl = document.querySelector('.topbar');
   if (topbarEl) {
     new ResizeObserver(([entry]) => {
-      const h = entry.target.getBoundingClientRect().height;
+      // The entry already carries the border-box height; measuring with
+      // getBoundingClientRect() inside the callback forces a second layout.
+      const borderBox = entry.borderBoxSize?.[0]?.blockSize;
+      const h = borderBox ?? entry.target.getBoundingClientRect().height;
       document.documentElement.style.setProperty('--topbar-h', `${Math.round(h)}px`);
     }).observe(topbarEl);
   }

@@ -93,6 +93,11 @@ SCANLINE_PNG = (
 )
 
 
+def _svg_uri(svg: str) -> str:
+    """Inline an SVG document as a base64 data URI."""
+    return "data:image/svg+xml;base64," + base64.b64encode(svg.encode("utf-8")).decode("utf-8")
+
+
 # Topbar gradient
 def _make_topbar_svg() -> str:
     """Generate a 1x80 vertical gradient SVG data URI for the topbar."""
@@ -107,7 +112,7 @@ def _make_topbar_svg() -> str:
         '<rect width="1" height="80" fill="url(#grad)" />'
         "</svg>"
     )
-    return "data:image/svg+xml;base64," + base64.b64encode(svg.encode("utf-8")).decode("utf-8")
+    return _svg_uri(svg)
 
 
 TOPBAR_SVG = _make_topbar_svg()
@@ -127,7 +132,7 @@ def _dot_uri(fill_hex: str) -> str:
         f'<rect x="0.5" y="0.5" width="11" height="11" rx="3" fill="{fill_hex}"'
         f' stroke="{BORDER_COLOR}"/></svg>'
     )
-    return "data:image/svg+xml;base64," + base64.b64encode(svg.encode("utf-8")).decode("utf-8")
+    return _svg_uri(svg)
 
 
 # Derived from COLORS so a legend key can never drift from the block colour it
@@ -169,24 +174,18 @@ def _progress_svg(segments: tuple[tuple[str, float], ...]) -> str:
 
     svg.append("</g></svg>")
 
-    return "data:image/svg+xml;base64," + base64.b64encode("".join(svg).encode("utf-8")).decode(
-        "utf-8"
-    )
+    return _svg_uri("".join(svg))
 
 
 def _make_pill_caps(height: int, fill_hex: str, border_hex: str) -> tuple[str, str]:
     """Generate left-cap and right-cap SVG data URIs for a pill shape."""
     radius = height // 2
-
-    def _uri(svg: str) -> str:
-        return "data:image/svg+xml;base64," + base64.b64encode(svg.encode("utf-8")).decode("utf-8")
-
     r = radius - 0.5
     h1 = height - 0.5
     left_svg = f'<svg xmlns="http://www.w3.org/2000/svg" width="{radius}" height="{height}" viewBox="0 0 {radius} {height}"><path d="M{radius},0.5 A{r},{r} 0 0,0 {radius},{h1}" fill="{fill_hex}" stroke="{border_hex}" stroke-width="1"/></svg>'
     right_svg = f'<svg xmlns="http://www.w3.org/2000/svg" width="{radius}" height="{height}" viewBox="0 0 {radius} {height}"><path d="M0,0.5 A{r},{r} 0 0,1 0,{h1}" fill="{fill_hex}" stroke="{border_hex}" stroke-width="1"/></svg>'
 
-    return _uri(left_svg), _uri(right_svg)
+    return _svg_uri(left_svg), _svg_uri(right_svg)
 
 
 def _make_pill_mid_tile(height: int, fill_hex: str, border_hex: str) -> str:
@@ -198,7 +197,7 @@ def _make_pill_mid_tile(height: int, fill_hex: str, border_hex: str) -> str:
     svg += f'<rect x="0" y="0" width="1" height="1" fill="{border_hex}"/>'
     svg += f'<rect x="0" y="{h1}" width="1" height="1" fill="{border_hex}"/>'
     svg += "</svg>"
-    return "data:image/svg+xml;base64," + base64.b64encode(svg.encode("utf-8")).decode("utf-8")
+    return _svg_uri(svg)
 
 
 # Pre-compute section tab pill cap images
@@ -263,11 +262,7 @@ def _hex_logo_svg(label: str, color: str) -> str:
         f' fill="{color}" font-family="monospace" font-weight="800"'
         f' font-size="{font_size}">{safe_label}</text></svg>'
     )
-    b64 = base64.b64encode(svg.encode("utf-8")).decode("utf-8")
-    return (
-        f'<img src="data:image/svg+xml;base64,{b64}"'
-        f' width="20" height="20" border="0" alt="{safe_alt}">'
-    )
+    return f'<img src="{_svg_uri(svg)}" width="20" height="20" border="0" alt="{safe_alt}">'
 
 
 def _section_heading(label: str, color: str, title: str) -> str:
@@ -1102,12 +1097,11 @@ def _section_stats_cached(
 ) -> dict[str, dict[str, Any]]:
     """:func:`_compute_section_stats`, memoized per WAL-aware snapshot + target.
 
-    The section_cell_stats view re-aggregates the whole cells table on every
-    call (~12 ms measured at 25k cells) yet the result changes only when the
-    DB does; every pager/filter click re-paid it.  All three inputs derive
-    from the same DB state, so the snapshot alone keys the memo (same
-    self-invalidating contract as _GRID_CACHE).  Entries are small — one
-    dict per section — so the cap is generous.
+    Costs a query per call, yet the result changes only when the DB does, and
+    every pager/filter click used to re-pay it.  All three inputs derive from
+    the same DB state, so the snapshot alone keys the memo (same
+    self-invalidating contract as _GRID_CACHE).  Entries are small — one dict
+    per section — so the cap is generous.
     """
     snap = _snapshot_db_mtime()
     key = (*snap, target) if snap is not None else None
@@ -1307,14 +1301,24 @@ def _merge_cells(cells: list[dict[str, Any]], grid_columns: int) -> list[dict[st
     Cells with state "none" are never merged (they represent undocumented gaps
     that should remain individually clickable).
     """
-    merged_cells: list[dict[str, Any]] = []
     if not cells:
-        return merged_cells
+        return []
 
-    # One dict copy per OUTPUT row, not per input cell: accumulate span/end
-    # in locals and materialize only at flush.  Real .text grids are
-    # overwhelmingly unmergeable "none" runs, where the old loop copied
-    # every dict just to append it unchanged.
+    # The output list is built LAZILY, at the first merge.  Until one happens
+    # the rows are the input cells unchanged, so they are handed back by
+    # reference instead of copied.  The no-merge case is the common one by a
+    # wide margin: merging needs a real match state on BOTH cells (see the guard
+    # below) and the large sections are 99.7-100% "none" cells, so a 39k-cell
+    # .text grid produces ZERO merged runs — 38,919 flushes for 38,918 cells.
+    # Copying a row per cell cost ~26 ms of a ~49 ms cold render.
+    #
+    # Returning the parsed cells is safe because every consumer reads
+    # span/end/state/functions off the cell (all present in the parsed JSON) and
+    # reconstructs orig_idx from its own position when the key is absent — the
+    # render loop defaults to page_offset + i, _grid_page to its enumerate pos.
+    # For any row before the first merge those positions ARE the original
+    # indices, which is why the untouched prefix needs no annotation.
+    out: list[dict[str, Any]] | None = None
     start_idx = 0
     acc_span = 0
     acc_end: Any = None
@@ -1324,10 +1328,10 @@ def _merge_cells(cells: list[dict[str, Any]], grid_columns: int) -> list[dict[st
     acc_cell: dict[str, Any] | None = None
 
     def flush() -> None:
-        if acc_cell is not None:
-            merged_cells.append(
-                {**acc_cell, "orig_idx": start_idx, "span": acc_span, "end": acc_end}
-            )
+        # No-op until the first merge: everything flushed before one is an
+        # unmerged single cell, already covered by the `cells[:start_idx]` slice.
+        if out is not None and acc_cell is not None:
+            out.append({**acc_cell, "orig_idx": start_idx, "span": acc_span, "end": acc_end})
 
     for i, cell in enumerate(cells):
         state = cell.get("state")
@@ -1340,6 +1344,9 @@ def _merge_cells(cells: list[dict[str, Any]], grid_columns: int) -> list[dict[st
             and fns == acc_fns
             and acc_col + span <= grid_columns
         ):
+            if out is None:
+                # First merge: every row before the pending run is untouched.
+                out = cells[:start_idx]
             acc_span += span
             acc_end = cell.get("end")
             acc_col += span
@@ -1355,8 +1362,10 @@ def _merge_cells(cells: list[dict[str, Any]], grid_columns: int) -> list[dict[st
         if acc_col > grid_columns:
             acc_col = span
 
+    if out is None:
+        return cells
     flush()
-    return merged_cells
+    return out
 
 
 # One page of grid is this many rows × the section's column count (~2k cells at
@@ -1389,7 +1398,10 @@ def _grid_page(
         except ValueError:
             return 1
         for pos, cell in enumerate(merged_cells):
-            if cell.get("orig_idx") == idx:
+            # `pos` as the default matches the render loop's `i` default: when
+            # _merge_cells took its no-merge fast path the rows carry no
+            # orig_idx and the enumerate position IS the original index.
+            if cell.get("orig_idx", pos) == idx:
                 return max(1, min(page_count, pos // page_cells + 1))
     return 1
 
@@ -1434,12 +1446,18 @@ def _build_grid_html(
     idx_str: str,
     target: str,
     section: str,
+    page_offset: int = 0,
 ) -> str:
     """Render the coverage grid as an HTML table.
 
     grid_columns controls the number of cells per row. A sizing row of
     transparent cells is emitted first so the browser allocates uniform
     column widths regardless of colspan usage in data rows.
+
+    *page_offset* is the index of this page's first row within the whole merged
+    list, needed only to reconstruct ``orig_idx`` for rows that carry none:
+    _merge_cells returns the parsed cells untouched when a section cannot merge
+    anything, and those cells have no ``orig_idx`` of their own.
     """
     if grid_columns <= 0:
         raise ValueError(f"grid_columns must be positive, got {grid_columns}")
@@ -1485,7 +1503,9 @@ def _build_grid_html(
     sec_va = sec_data.get("va") or 0
     for i, cell in enumerate(merged_cells):
         span = cell.get("span", 1)
-        orig_idx = cell.get("orig_idx", i)
+        # Absent orig_idx means the no-merge fast path returned the parsed cells;
+        # the global index is then this page's offset plus this position.
+        orig_idx = cell.get("orig_idx", page_offset + i)
         if curr_col >= grid_columns:
             grid_html_parts.append("</tr><tr>")
             curr_col = 0
@@ -1683,7 +1703,8 @@ def _render_grid_view(
     page_cells = _GRID_PAGE_ROWS * grid_columns
     page_count = max(1, -(-block_count // page_cells))
     page = _grid_page(page_str, idx_str, merged_cells, page_cells, page_count)
-    page_slice = merged_cells[(page - 1) * page_cells : page * page_cells]
+    page_offset = (page - 1) * page_cells
+    page_slice = merged_cells[page_offset : page_offset + page_cells]
 
     grid_html = _build_grid_html(
         page_slice,
@@ -1695,6 +1716,7 @@ def _render_grid_view(
         idx_str,
         target,
         section,
+        page_offset,
     )
     if page_count > 1:
         grid_html += _pager_html(target, section, active_filters, search_query, page, page_count)
@@ -1725,9 +1747,16 @@ def _render_potato_inner(
     status_filter: str,
     page_str: str,
 ) -> str:
-    target_ids, targets = resolve_targets(c)
-    if not target and target_ids:
-        target = target_ids[0]
+    _, targets = resolve_targets(c)
+    if not target and targets:
+        # Default from `targets`, NOT `target_ids`: resolve_targets returns two
+        # different orderings — target_ids is raw DB order, targets is
+        # config-declared-first.  Potato rendered its dropdown from `targets`
+        # but defaulted from `target_ids[0]`, so on a project whose config
+        # order differs from its metadata order the two surfaces opened on
+        # different targets (SPA defaults to /api/targets[0], which is this
+        # same list) and the dropdown's first entry was not the selected one.
+        target = targets[0]["id"]
 
     sections, data = _load_section_data(c, target)
     if not data:

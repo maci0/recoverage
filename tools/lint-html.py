@@ -1,0 +1,117 @@
+#!/usr/bin/env python3
+"""Validate the dashboard's HTML and CSS with the Nu Html Checker (vnu.jar).
+
+Two passes, one vnu runner:
+
+  Static assets (``src/recoverage/assets``) — the source files as shipped.
+  ``index.html`` is validated directly; the CSS files use ``--css``, which
+  forces CSS-validation mode (vnu cannot parse a bare ``.css`` file as HTML).
+  This pass used to be a separate Node script (``tools/lint-html.mjs``); it was
+  folded in here because both passes need the same jar path, the same
+  ``java -jar`` invocation and the same missing-jar message, and keeping them in
+  two languages meant two places to update when that plumbing changed.
+
+  Served documents — what a browser actually receives, which the static pass
+  cannot see because the server assembles them: ``GET /`` (the SPA shell with
+  ``style.css`` and ``app.js`` injected) and ``GET /potato`` (fully
+  server-rendered).  Both use ``--also-check-css`` so the embedded CSS is
+  validated too.
+
+Potato Mode deliberately renders HTML4-era markup (``<font>``, ``bgcolor``,
+``cellpadding``, ... — see the "no CSS" docstrings in potato.py).  The obsolete
+family is filtered for that document as the documented retro contract, while
+every other message stays fatal — the SPA shell is checked strictly.
+
+The gate fails on any vnu message of any severity — nothing is skipped.
+
+Requires: uv (project venv), java on PATH, and ``bun install`` already run
+(for vnu-jar).
+"""
+
+from __future__ import annotations
+
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+from _serve_harness import build_sample_db, get, running_server, wait_for
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+VNU_JAR = REPO_ROOT / "node_modules" / "vnu-jar" / "build" / "dist" / "vnu.jar"
+ASSETS_DIR = REPO_ROOT / "src" / "recoverage" / "assets"
+
+#: Shipped asset files vnu validates.  The list is explicit rather than globbed
+#: so adding a vendored asset is a deliberate choice (hljs.css is ours to serve
+#: too, which is why it is here).
+HTML_FILES = ("index.html",)
+CSS_FILES = ("hljs.css", "print.css", "style.css")
+
+
+def run_vnu(args: list[str], paths: list[str | Path]) -> int:
+    """Run vnu over *paths*; return its exit status (non-zero = findings)."""
+    cmd = ["java", "-jar", str(VNU_JAR), *args, *(str(p) for p in paths)]
+    print(f"vnu: {' '.join(cmd)}")
+    return subprocess.run(cmd).returncode
+
+
+def lint_static_assets() -> int:
+    """Validate the shipped assets; 0 when clean."""
+    rc = run_vnu([], [ASSETS_DIR / f for f in HTML_FILES])
+    if rc != 0:
+        return rc
+    return run_vnu(["--css"], [ASSETS_DIR / f for f in CSS_FILES])
+
+
+def main() -> int:
+    if not VNU_JAR.is_file():
+        print("vnu.jar not found; run `bun install` first.")
+        return 2
+
+    rc = lint_static_assets()
+    if rc != 0:
+        print("static-asset lint failed")
+        return rc
+
+    with tempfile.TemporaryDirectory() as td:
+        project_dir = Path(td) / "proj"
+        project_dir.mkdir()
+        if not build_sample_db(project_dir).is_file():
+            print("sample coverage.db not built")
+            return 1
+
+        with running_server(project_dir) as (port, _):
+            if not wait_for(lambda: get(port, "/api/health")[0] == 200):
+                print("server never became healthy")
+                return 1
+
+            docs: dict[str, Path] = {}
+            for path, name in (("/", "spa.html"), ("/potato", "potato.html")):
+                status, body = get(port, path)
+                if status != 200:
+                    print(f"GET {path} -> {status}; cannot lint served document")
+                    return 1
+                (project_dir / name).write_bytes(body)
+                docs[name] = project_dir / name
+
+            # SPA shell: strict — any vnu message of any severity fails the gate.
+            # Potato Mode: the obsolete-element/attribute family (<font>,
+            # bgcolor, valign, ...) is the documented retro design, so hide
+            # those messages; every other message still fails the gate.
+            # (vnu's --filterpattern matches the full message, hence the .*)
+            rc = run_vnu(["--also-check-css"], [docs["spa.html"]])
+            if rc == 0:
+                rc = run_vnu(
+                    ["--also-check-css", "--filterpattern", ".*obsolete.*"],
+                    [docs["potato.html"]],
+                )
+            if rc != 0:
+                print("served-document lint failed")
+                return rc
+
+    print("HTML/CSS lint passed.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

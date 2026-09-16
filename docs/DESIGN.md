@@ -139,7 +139,8 @@ The UI is broken down into functional VanJS components in `app.js`:
 * **DOM Optimizations**: The grid uses **Event Delegation** (a single click listener on the parent container instead of 2,500+ individual listeners), **CSS Containment** (`contain: strict` on cells to prevent global layout recalculations), and **Content Visibility** (`content-visibility: auto` on the grid container to skip rendering it while off-screen).
 * **Grid Caching & CSS Filtering**: To handle sections with 6,000+ chunks (like `.bss`), grids are built once via fast HTML string injection and cached. Tab switching toggles `display: none`. Filtering and search dimming are handled entirely by CSS classes on the parent container, avoiding slow JavaScript loops over thousands of DOM nodes. CSS transitions on cells were removed to eliminate GPU overhead during mass state changes.
 * **Precomputed Cell Properties**: Cell CSS classes and states are precomputed immediately after the JSON payload is fetched, preventing the UI from recalculating these strings thousands of times during the render loop.
-* **SQL-Side Cell Grouping**: Cells leave SQLite as one `json_group_array` string per section (`json_object` shapes each cell), not one row per cell, so a 25k-cell section crosses into Python as a handful of strings instead of tens of thousands of rows.
+* **SQL-Side Cell Grouping**: Cells leave SQLite as one `json_group_array` string per section (`json_object` shapes each cell), not one row per cell, so a 25k-cell section crosses into Python as a handful of strings instead of tens of thousands of rows.  The projection deliberately omits `cells.id`: no consumer reads it, and as the only high-entropy column per row it cost 4.3x on the wire (the 39k-cell `.text` payload compressed 322 KB with it and 74 KB without).  The projection lives in `rebrew.workspace.CELLS_JSON_OBJECT_SQL`, shared by `build-db` and this server so the two cannot drift.
+* **Precomputed Cell JSON and Section Stats**: `rebrew build-db` materializes the per-section cell JSON (`section_cells_json`, zstd level 3) and the coverage buckets (`section_cell_stats`, a view through schema v6 and a build-time table from v7).  Reading them costs ~0.3 ms where re-running the group-by cost 10.7 ms and re-aggregating the stats view cost 17.3 ms — together 92% of a cold `/data` build.  Measured cold `/data`: 24.8 ms → 3.4 ms for one section and 38.9 ms → 6.8 ms for all sections, with payloads identical apart from the `db_version` stamp.  Both are derived from `cells` and rebuilt whole on every build, so they cannot go stale between builds; recoverage prefers them and falls back to the live queries when a database predates them, so a pre-v7 database stays readable even though `build-db` itself requires `--force` to migrate it.
 * **SQLite WAL Mode**: The database uses Write-Ahead Logging (`PRAGMA journal_mode=WAL`) and read-only connections (`?mode=ro`), allowing the dev server to serve data concurrently without locking while the database is being regenerated in the background.
 * **LRU Caching & Memory I/O**: The `/api/asm` endpoint uses Python's `@functools.lru_cache` to store disassembled chunks in memory. The target DLL is also read into memory once (with thread-safe locking), preventing redundant disk I/O and Capstone disassembly calls during a session.
 * **Progress Bar Rendering**: The progress bar uses `overflow: hidden` on the parent container to handle border-radius clipping, avoiding brittle JavaScript calculations for segment visibility.
@@ -197,9 +198,12 @@ The database uses a v4 schema (see [DB_FORMAT.md](../../rebrew/docs/DB_FORMAT.md
 | Schema version | Recoverage support |
 |---|---|
 | v3 | Readable — v4 adds CHECK constraints and view fixes that do not affect reads of v3 data |
-| v4 | Fully supported (current) |
+| v4 | Fully supported |
+| v5 | Fully supported — `verify_results` gained `reg_delta` and `effective_match` |
+| v6 | Fully supported — `functions` gained `updated_by`/`updated_at`, `globals` gained `status`, `history` gained `updated_by` |
+| v7 | Fully supported (current) — `section_cell_stats` became a table and `section_cells_json` was added, both materialized by `build-db` |
 
-Recoverage performs a soft version check on every database open and logs a warning if the stored `db_version` is not one of the known-compatible versions (`3` or `4`). It never aborts on an unexpected version.
+Recoverage performs a soft version check on every database open and logs a warning if the stored `db_version` is not one of the known-compatible versions (`3`, `4`, `5`, `6`, `7`). It never aborts on an unexpected version — `/data` carries the accepted set as `known_schema` so the SPA can tell a stale server from an empty database.
 
 ### Tables
 * `metadata`: Key-value pairs per target — coverage summaries, paths, `db_version` stamp
@@ -209,9 +213,14 @@ Recoverage performs a soft version check on every database open and logs a warni
 * `cells`: Grid cells per section — section_name, start, end, state (none/exact/reloc/near_match/stub/padding/data/thunk/proven/size_mismatch; legacy DBs may spell near_match as near_matching), functions JSON, label, parent_function
 * `history`: Status change log (persistent, never dropped) — target, va, old_status, new_status, changed_at
 * `verify_results`: Verification results (persistent, never dropped) — target, va, verified_at, byte_delta, diff_lines, similarity
+* `section_cell_stats`: Coverage buckets per target+section — total_cells, exact_count, reloc_count, near_match_count, stub_count, padding_count, data_count, thunk_count, none_count, proven_count, size_mismatch_count, other_count
+* `section_cells_json`: Per target+section cell JSON, pre-aggregated and zstd-compressed — target, section_name, `cells_zstd`
 
 ### Views
-* `section_cell_stats`: Aggregated counts per target+section — total_cells, exact_count, reloc_count, near_match_count, stub_count, padding_count, data_count, thunk_count, none_count, proven_count, size_mismatch_count
+None as of schema v7.  `section_cell_stats` **was** a view; from v7 `rebrew build-db` writes it as a table, because as a view every reader re-aggregated the whole `cells` table (13 `SUM(CASE state = …)` over 64k rows ≈ 17.3 ms per request).  A v6 database still carries the view and is still *served*: every consumer queries it as `SELECT … FROM section_cell_stats WHERE target = ?`, which is indifferent to table-vs-view.  (`build-db` itself needs `--force` to move such a database to v7.)
+
+### Derived objects
+`section_cell_stats` and `section_cells_json` are both derived from `cells` and rebuilt whole by `rebrew build-db`.  `build_db` is the only writer of `cells`, so neither can go stale between builds.  Both are named in the v7 integrity check, which is what makes the `db_version` stamp meaningful; the live-query fallback is what keeps a pre-v7 database readable.  The blob codec is identified by its column name (`cells_zstd`), not by the version, so a cache written in an older codec is declined rather than mis-decoded.
 
 ## Future Ideas / TODOs
 * [ ] **Minimap**: A global minimap of the entire PE file on the side.
@@ -308,7 +317,7 @@ Potato Mode uses [Bottle](https://bottlepy.org/) for both the dev server and HTM
 - **`server.py`** — shared Bottle application (`app`: hooks, auth, error handlers, CORS preflight catch-all) and infrastructure: compression (brotli/zstd/gzip), DB helpers, DLL loading, target resolution, and response utilities.
 - **`regen.py`** — in-process rebrew regen (`run_regen`): loads `rebrew-project.toml` once and calls rebrew's `run_catalog` + `build_db` module functions; shared by the CLI's regen paths and POST /api/regen.  rebrew is a required dependency, but its catalog/build-db imports are deferred into `run_regen` so only the regen paths pay for the heavy rebrew stack.
 - **`api.py`** — REST API routes (`/api/*`) with `@app.get`/`@app.post` decorators and `request` globals.
-- **`ui.py`** — UI routes (`/`, `/potato`, static files) with index caching and minification (using `rjsmin` and `rcssmin`) and `static_file()` serving.
+- **`ui.py`** — UI routes (`/`, `/potato`, static files) with index caching and minification (using `rjsmin` and `rcssmin`).  The inlined shell is compressed once per encoding under `INDEX_LOCK` and served from `CACHED_INDEX_COMPRESSED`; the standalone assets (`detail.js`, the `hljs` set, CSS, favicon) are compressed at maximum brotli effort and memoized per `(filename, encoding)` in `_STATIC_CACHE`, falling through to `static_file()` only when the client advertises no supported encoding, so Range and `If-Modified-Since` still work there.
 - **`webapp.py`** — composition root: imports `api` and `ui` so their routes mount on the shared `app`; this is the module the CLI actually serves.
 - **`potato.py`** — Uses Bottle's `SimpleTemplate` engine (stpl) standalone, with no dependency on the Bottle web server for rendering.
 

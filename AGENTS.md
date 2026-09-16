@@ -58,7 +58,7 @@ recoverage/
         └── hljs.css         # Highlight.js theme (custom hex language)
 ```
 
-Frontend lint tooling lives at the repo root: `package.json` (oxlint, `@oxlint/plugins`, `@rikalabs/oxlint-standards`, vnu-jar), `oxlint.config.ts` (JS/TS lint config), `tools/lint-html.mjs` (vnu check of the static HTML/CSS assets), `tools/lint-served-html.py` (vnu check of the documents the server actually serves: the SPA shell with injected CSS/JS and Potato Mode), `tools/smoke.py` (end-to-end server smoke run by the CI `smoke` job), and `tools/oxlint/`:
+Frontend lint tooling lives at the repo root: `package.json` (oxlint, `@oxlint/plugins`, `@rikalabs/oxlint-standards`, vnu-jar), `oxlint.config.ts` (JS/TS lint config), `tools/lint-html.py` (vnu check of both the static HTML/CSS assets and the documents the server actually serves: the SPA shell with injected CSS/JS and Potato Mode), `tools/smoke.py` (end-to-end server smoke run by the CI `smoke` job), and `tools/oxlint/`:
 
 - `tools/oxlint/anti-slop/` — vendored copy of dmmulroy/anti-slop (keep in sync with upstream).
 - `tools/oxlint/rikalabs-strict.json` — flattened copy of the `strict` preset from `@rikalabs/oxlint-standards`, regenerated with `tools/flatten-rikalabs-strict.py` (bump the package, re-run the script, re-run `bun run lint:js`). It is flattened because the published presets reference rules oxlint 1.83.0 does not implement. `oxlint.config.ts` documents the platform exceptions (browser-only SPA: `env.browser`, `typeAware: false`, style off-list with rationale).
@@ -119,6 +119,17 @@ bun run lint:html           # vnu only: static assets + served pages (SPA shell,
    - `rebrew catalog --export-ghidra-labels` → generates `ghidra_data_labels.json` for round-trip Ghidra sync
 2. `rebrew build-db` → reads JSON, builds `db/coverage.db` (SQLite)
    - Cells table includes `label` (Ghidra data label) and `parent_function` columns
+   - Also materializes the two objects the server reads rather than re-deriving:
+     `section_cell_stats` (coverage buckets per section; a view through schema
+     v6, a table from v7) and `section_cells_json` (per-section cell JSON, zstd).
+     Both are derived from `cells` and rebuilt whole on every build.
+     `server._cells_json_rows` prefers the cache and falls back to the live
+     `json_group_array` query when a DB predates it — that fallback is what keeps
+     pre-v7 databases serving, so keep it when editing that path.  The cache's
+     codec is identified by its column name (`cells_zstd`), not by `db_version`,
+     so a table written in an older codec is declined rather than mis-decoded.
+   - The cell JSON projection is `rebrew.workspace.CELLS_JSON_OBJECT_SQL`,
+     shared with the producer so the cached and live shapes cannot drift
 3. `recoverage` → serves the DB as a web dashboard
    - Cell detail panel shows parent function as a clickable navigation link
 

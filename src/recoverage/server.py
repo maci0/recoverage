@@ -22,7 +22,7 @@ import sqlite3
 import threading
 import time
 from collections import deque
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlsplit
@@ -36,8 +36,12 @@ import zstandard as zstd
 # target and must never appear in target enumeration, stats, or the dashboard
 # dropdown.
 from rebrew.workspace import (
+    CELLS_JSON_OBJECT_SQL,
     CONFIG_NAME,
     SCHEMA_TARGET,
+    SECTION_CELLS_COLUMN,
+    SECTION_CELLS_TABLE,
+    decode_section_cells,
     read_config,
     sqlite_ro_uri,
     target_binary,
@@ -274,9 +278,31 @@ def _etag_or_304(snap: tuple[int, int] | None, *parts: object) -> str | None:
 # the `recoverage stats` CLI.  ONE definition: these two queries already
 # drifted apart once (cell-count vs byte-based coverage) and were fixed in
 # lockstep twice — a single constant makes the next divergence impossible.
-# Bucket set matches the section_cell_stats view served by /api/.../data so
-# consumers can sum the buckets and reconcile with total_cells everywhere.
+#
+# Only the three values that need `cells` are computed here.  The other nine
+# buckets come from section_cell_stats, which rebrew materializes per section
+# (~0.01 ms); adding all thirteen SUM(CASE ...) expressions to this scan cost
+# ~15 ms on a 64k-cell target against ~6 ms for these three.  The one bucket
+# that differs between the two sources is exact_count — the materialized table
+# folds state 'verified' into it for the grid legend, this endpoint counts only
+# 'exact' — so exact_count stays cells-side to keep these numbers unchanged.
 SECTION_STATS_SQL = """
+    SELECT section_name,
+      SUM(CASE WHEN state != 'none' THEN end - start ELSE 0 END) AS covered_bytes,
+      SUM(end - start) AS total_bytes,
+      SUM(CASE WHEN state = 'exact' THEN 1 ELSE 0 END) AS exact_count
+    FROM cells WHERE target = ? GROUP BY section_name
+"""
+
+# The other nine buckets, per section, already aggregated by rebrew.
+_SECTION_BUCKETS_SQL = "SELECT * FROM section_cell_stats WHERE target = ?"
+
+# Every bucket computed from `cells` in one pass.  Used ONLY when
+# section_cell_stats is absent or empty — a hand-made or partial database (the
+# CLI's own fixtures build exactly that), which the pre-split single-query
+# version handled and which must keep working.  Kept verbatim so the numbers are
+# the ones the split was verified against.
+_SECTION_STATS_FULL_SQL = """
     SELECT section_name,
       SUM(CASE WHEN state != 'none' THEN end - start ELSE 0 END) AS covered_bytes,
       SUM(end - start) AS total_bytes,
@@ -295,10 +321,53 @@ SECTION_STATS_SQL = """
 """
 
 
+def _per_section_buckets(
+    c: sqlite3.Cursor, target: str, cell_side: dict[str, sqlite3.Row]
+) -> Iterator[tuple[str, dict[str, Any], int, int]]:
+    """Yield ``(section_name, buckets, covered_bytes, total_bytes)`` per section.
+
+    Prefers rebrew's materialized ``section_cell_stats`` for the nine buckets it
+    already aggregates (~0.01 ms) and takes the byte sums plus ``exact_count``
+    from *cell_side*, which was computed from `cells`.  When that table is absent
+    or empty, every bucket comes from `cells` instead — the single-query path
+    this endpoint used before the split.
+    """
+    try:
+        c.execute(_SECTION_BUCKETS_SQL, (target,))
+        rows = c.fetchall()
+    except sqlite3.Error:
+        rows = []
+    if rows:
+        for row in rows:
+            name = row["section_name"]
+            side = cell_side.get(name)
+            buckets = _cell_bucket_row(row)
+            if side is not None:
+                # exact_count counts only 'exact' here; the materialized table
+                # folds 'verified' into it for the grid legend.
+                buckets["exact"] = side["exact_count"]
+            yield (
+                name,
+                buckets,
+                (side["covered_bytes"] if side is not None else 0) or 0,
+                (side["total_bytes"] if side is not None else 0) or 0,
+            )
+        return
+    c.execute(_SECTION_STATS_FULL_SQL, (target,))
+    for row in c.fetchall():
+        yield (
+            row["section_name"],
+            _cell_bucket_row(row),
+            row["covered_bytes"] or 0,
+            row["total_bytes"] or 0,
+        )
+
+
 def _cell_bucket_row(row: sqlite3.Row) -> dict[str, Any]:
-    """Map a per-section stats row (SECTION_STATS_SQL or the
-    section_cell_stats view) to the short-key bucket dict served by /stats
-    and /data.  ONE definition so the two response shapes cannot drift."""
+    """Map a per-section stats row (SECTION_STATS_SQL, or the
+    section_cell_stats table for the nine buckets it supplies) to the
+    short-key bucket dict served by /stats and /data.  ONE definition so the
+    two response shapes cannot drift."""
     return {
         "total_cells": row["total_cells"],
         "exact": row["exact_count"],
@@ -348,16 +417,18 @@ def _section_stats(c: sqlite3.Cursor, target: str) -> dict[str, Any]:
 
     # Per-section stats.  Coverage is BYTE-based: covered = every cell span
     # whose state is not "none", over the section's total cell bytes.
-    sections: dict[str, Any] = {}
+    cell_side: dict[str, sqlite3.Row] = {}
     c.execute(SECTION_STATS_SQL, (target,))
     for row in c.fetchall():
-        total = row["total_bytes"] or 0
-        covered = row["covered_bytes"] or 0
+        cell_side[row["section_name"]] = row
+
+    sections: dict[str, Any] = {}
+    for name, buckets, covered, total in _per_section_buckets(c, target, cell_side):
         # PROVEN is a semantic-equivalence promotion and counts as matched
         # (consistent with the catalog grid's matchedFunctions).
-        matched = row["exact_count"] + row["reloc_count"] + row["proven_count"]
-        sections[row["section_name"]] = {
-            **_cell_bucket_row(row),
+        matched = buckets["exact"] + buckets["reloc"] + buckets["proven"]
+        sections[name] = {
+            **buckets,
             "matched": matched,
             "covered_bytes": covered,
             "total_bytes": total,
@@ -811,25 +882,70 @@ _GLOBAL_JSON_SQL = (
 )
 
 # Cell shape contract for BOTH consumers (SPA /data and Potato grid): the
-# json_object keys here are what app.js and potato.py render.  ONE fragment
-# so a column added for one surface cannot silently miss the other.
+# json_object keys here are what app.js and potato.py render.  The projection
+# comes from rebrew.workspace — the SAME constant build_db materializes into
+# section_cells_json — so the cache path and this live fallback cannot drift
+# into serving different cell shapes.  See CELLS_JSON_OBJECT_SQL for why `id`
+# is not part of it.
 _CELLS_JSON_SQL = (
-    "SELECT section_name, json_group_array(json_object("
-    "'id', id, 'start', start, 'end', end, 'span', span, "
-    "'state', state, 'functions', json(functions), 'label', label, "
-    "'parent_function', parent_function"
-    ")) FROM cells WHERE target = ?"
+    f"SELECT section_name, json_group_array({CELLS_JSON_OBJECT_SQL}) FROM cells WHERE target = ?"
 )
+
+
+def _has_materialized_cells(c: sqlite3.Cursor) -> bool:
+    """Whether this DB carries rebrew's precomputed cell JSON in the current codec.
+
+    One query answers all three cases, because it asks for the COLUMN rather than
+    the table: no table (pre-v7 database), a table in the old zlib codec (a
+    database built before the codec switch), and the current zstd column.  Only
+    the last is decoded; the others are served by the live query, which is
+    correct — just slower — and self-heals on the next ``build-db``.  Probing the
+    column is also why the codec needs no version check here.
+
+    Deliberately NOT memoized.  The check costs 0.002 ms against the ~9 ms it
+    saves, and memoizing it would have to be keyed by something — a bare
+    module global assumes one DB per process, which is false for the tests and
+    for any caller that re-points _db_path, and it fails *loudly and wrongly*
+    by querying a table that is not there.  A fingerprint-keyed memo would cost
+    about as much as the query it replaces.
+    """
+    try:
+        c.execute(
+            "SELECT 1 FROM pragma_table_info(?) WHERE name = ?",
+            (SECTION_CELLS_TABLE, SECTION_CELLS_COLUMN),
+        )
+        return c.fetchone() is not None
+    except sqlite3.Error:
+        # Unreadable schema: treat as absent and use the live query.
+        return False
 
 
 def _cells_json_rows(
     c: sqlite3.Cursor, target: str, section: str | None = None
-) -> list[sqlite3.Row]:
-    """Per-section cell JSON payloads as (section_name, cells_json) rows."""
+) -> list[tuple[str, str]]:
+    """Per-section cell JSON payloads as (section_name, cells_json) rows.
+
+    Prefers rebrew's materialized ``section_cells_json`` table — reading and
+    decompressing one pre-aggregated zstd blob (measured 0.3 ms to read, ~0.47 ms
+    to inflate the largest 4.13 MB section) beats re-running
+    ``json_group_array`` over every cell (10.7 ms on a 39k-cell section).
+    Falls back to the live query when the table is absent or written in an older
+    codec, so a pre-v7 database keeps working and self-heals on its next build.
+    """
+    if _has_materialized_cells(c):
+        clause = " AND section_name = ?" if section else ""
+        params: list[Any] = [target] + ([section] if section else [])
+        c.execute(
+            f"SELECT section_name, {SECTION_CELLS_COLUMN} FROM {SECTION_CELLS_TABLE}"
+            f" WHERE target = ?{clause}",
+            params,
+        )
+        return [(row[0], decode_section_cells(row[1])) for row in c.fetchall()]
+
     clause = " AND section_name = ?" if section else ""
-    params: list[Any] = [target] + ([section] if section else [])
+    params = [target] + ([section] if section else [])
     c.execute(_CELLS_JSON_SQL + f"{clause} GROUP BY section_name", params)
-    return c.fetchall()
+    return [(row[0], row[1]) for row in c.fetchall()]
 
 
 def _evict_oldest(cache: dict[Any, Any], max_size: int) -> None:
@@ -893,7 +1009,7 @@ def _load_metadata(c: sqlite3.Cursor, target: str) -> dict[str, Any]:
     return data
 
 
-KNOWN_SCHEMA_VERSIONS: frozenset[str] = frozenset({"3", "4", "5", "6"})
+KNOWN_SCHEMA_VERSIONS: frozenset[str] = frozenset({"3", "4", "5", "6", "7"})
 
 # Schema check memoized per DB (mtime_ns, size): the check is two queries
 # (metadata + full sqlite_master scan) that would otherwise run on every
@@ -905,9 +1021,9 @@ _SCHEMA_VERSION_CACHE: tuple[tuple[int, int], str] | None = None
 def _check_schema_version(conn: sqlite3.Connection) -> str:
     """Read the stored db_version metadata; warn if it is not a known-compatible version.
 
-    Known-compatible versions: 3 and 4.  Version 3 is still readable because
-    none of the v4 constraints affect reads of existing data.  Any other version
-    is logged as a warning — recoverage does not abort.
+    Known-compatible versions: 3 through 7.  Version 3 is still readable
+    because none of the v4 constraints affect reads of existing data.  Any other
+    version is logged as a warning — recoverage does not abort.
 
     The version stamp alone is not proof of shape: a DB stamped "4" can be
     missing required objects (e.g. the ``history`` table) and pass this gate,
@@ -937,9 +1053,9 @@ def _missing_required_columns(conn: sqlite3.Connection) -> set[str]:
 
     The name-only shape gate passes a DB stamped "4" whose ``functions``
     table lacks ``textOffset``/``similarity`` (queried by the function
-    detail endpoint) or whose ``section_cell_stats`` view is stale — those
-    fail at query time instead of at open.  Column sets mirror the schema
-    build_db creates so drift is caught here.
+    detail endpoint) or whose ``section_cell_stats`` table is missing a
+    counted bucket — those fail at query time instead of at open.  Column sets
+    mirror the schema build_db creates so drift is caught here.
     """
     required_columns: dict[str, set[str]] = {
         "metadata": {"target", "key", "value"},
@@ -1050,7 +1166,7 @@ def _check_schema_version_uncached(conn: sqlite3.Connection) -> str:
                 "section_cell_stats",
             }
             missing = required - present
-            if not missing and version in ("4", "5", "6"):
+            if not missing and version in ("4", "5", "6", "7"):
                 # Object names present — verify the query-critical columns.
                 # A DB stamped "4" whose functions table lacks textOffset /
                 # similarity (or whose view is stale) 500s at query time.

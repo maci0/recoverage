@@ -7,6 +7,7 @@ import gzip
 import logging
 import sqlite3
 import threading
+from pathlib import PurePosixPath
 from typing import Any
 from urllib.parse import urlparse
 
@@ -19,6 +20,7 @@ import recoverage.server as _server
 from recoverage.server import (
     BROTLI_STATIC_QUALITY,
     CACHE_NO_STORE,
+    CACHE_REVALIDATE,
     HTTPResponse,
     _assets_dir,
     _best_encoding,
@@ -247,9 +249,55 @@ def serve_repo_file(filepath: str) -> Any:
     return static_file(filepath, root=str(root))
 
 
+# Compressed static assets, memoized per (filename, encoding).  These files
+# ship with the package and cannot change under a running server, so the
+# compression is paid once per encoding and every later hit is a dict lookup —
+# which is why this uses BROTLI_STATIC_QUALITY like the index, not the dynamic
+# quality (measured on hljs.min.js: q=11 is 37.7 KB vs q=5's 41.4 KB, and its
+# 101 ms runs once instead of per request).
+#
+# static_file served these raw: detail.js is on the first-paint critical path
+# at 25 KB (9 KB zstd), and hljs.min.js — fetched when a function's asm pane
+# opens — is 127 KB raw vs 38 KB brotli.  Compressing the whole set saves
+# ~112 KB of transfer.
+_STATIC_CACHE: dict[tuple[str, str], bytes] = {}
+_STATIC_LOCK = threading.Lock()
+
+_STATIC_TYPES = {
+    ".js": "application/javascript; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".svg": "image/svg+xml",
+}
+
+
 @app.get(
     "/<filename:re:(?:app\\.js|detail\\.js|style\\.css|print\\.css|van\\.min\\.js|favicon\\.svg"
     "|hljs\\.css|hljs\\.min\\.js|hljs-c\\.min\\.js|hljs-x86asm\\.min\\.js)>"
 )
 def serve_static_asset(filename: str) -> Any:
-    return static_file(filename, root=str(_assets_dir()))
+    accept_encoding = request.headers.get("Accept-Encoding", "")
+    encoding = _best_encoding(accept_encoding)
+    if not encoding:
+        # No shared encoding: hand off to bottle, which still does Range and
+        # If-Modified-Since on the raw file.
+        return static_file(filename, root=str(_assets_dir()))
+
+    key = (filename, encoding)
+    with _STATIC_LOCK:
+        body = _STATIC_CACHE.get(key)
+    if body is None:
+        path = _assets_dir() / filename
+        try:
+            raw = path.read_bytes()
+        except OSError:
+            # Missing/unreadable asset: let bottle produce the 404, don't 500.
+            return static_file(filename, root=str(_assets_dir()))
+        body, encoding = compress_payload(
+            raw, accept_encoding, brotli_quality=BROTLI_STATIC_QUALITY
+        )
+        with _STATIC_LOCK:
+            _STATIC_CACHE[key] = body
+
+    suffix = PurePosixPath(filename).suffix.lower()
+    content_type = _STATIC_TYPES.get(suffix, "application/octet-stream")
+    return _finalized(body, content_type, encoding, Cache_Control=CACHE_REVALIDATE)

@@ -1,6 +1,6 @@
 """Shared harness for booting the dashboard against a synthetic coverage.db.
 
-Used by tools/smoke.py and tools/lint-served-html.py: both build the synthetic
+Used by tools/smoke.py and tools/lint-html.py: both build the synthetic
 DB via tests/conftest (imported for its side effect), start ``recoverage
 serve`` on a free local port, probe documents over HTTP, and always stop the
 server process.

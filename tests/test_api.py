@@ -5,19 +5,28 @@ from __future__ import annotations
 import json
 import queue
 import re
+import shutil
 import sqlite3
 import threading
 import time
+import zlib
 from io import BytesIO
 from pathlib import Path
 from typing import Any
 from wsgiref.util import setup_testing_defaults
 
 import pytest
+import zstandard
 from conftest import HAS_DB, decode_body, get_first_target, wsgi_get, wsgi_post, wsgi_request
-from rebrew.workspace import sqlite_ro_uri
+from rebrew.workspace import (
+    CELLS_JSON_OBJECT_SQL,
+    SECTION_CELLS_COLUMN,
+    SECTION_CELLS_TABLE,
+    sqlite_ro_uri,
+)
 
 from recoverage.server import HAS_CAPSTONE
+from recoverage.server import _db_path as get_db_path
 
 # Typer 0.27 help paints option names with ANSI even under CliRunner
 # isolation on CI (FORCE_COLOR / a detected tty). Strip before matching
@@ -2236,6 +2245,162 @@ class TestKnownSchemaContract:
             assert isinstance(sec["cells"], list)
             for cell in sec["cells"]:
                 assert {"start", "end", "state"} <= cell.keys()
+
+    def test_cells_omit_row_id(self) -> None:
+        """No consumer reads cells.id, and as the only high-entropy column it
+        cost 4.3x on the wire (322 KB -> 75 KB zstd on a 39k-cell section).
+        Re-adding it would silently undo that, so pin the served key set."""
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, _, body = wsgi_get(f"/api/targets/{target}/data")
+        assert status.startswith("200")
+        data = json.loads(decode_body(body, {}))
+        seen = {k for sec in data["sections"].values() for cell in sec["cells"] for k in cell}
+        assert seen and "id" not in seen
+        # The spine every consumer reads is always present.  The remaining
+        # fields (functions/label/parent_function) are OMITTED when they carry
+        # no information — see CELLS_JSON_OBJECT_SQL, which drops null and empty
+        # values — so they cannot be asserted unconditionally here.
+        assert {"start", "end", "span", "state"} <= seen
+
+
+class TestMaterializedCellsCache:
+    """recoverage serves rebrew's precomputed per-section cell JSON.
+
+    build_db writes ``section_cells_json`` so a dashboard does not re-run
+    ``json_group_array`` over every cell; the endpoint prefers it and falls
+    back to the live query when a DB predates it.  The two paths must be
+    interchangeable, so this pins them to byte-identical payloads — a
+    divergence here silently changes what every grid renders.
+
+    The cache is encoded here with zstd directly rather than through a shared
+    helper: the codec deliberately does NOT live in ``rebrew.workspace`` (that
+    module is stdlib-only), so the only thing linking producer and consumer is
+    the column name.  A test that went through rebrew's own encoder could pass
+    while the reader's decoder disagreed.
+    """
+
+    @staticmethod
+    def _encode(cells_json: str) -> bytes:
+        return zstandard.ZstdCompressor(level=3).compress(cells_json.encode("utf-8"))
+
+    def _payload(self, db: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
+        import recoverage.api as api
+        import recoverage.server as srv
+
+        monkeypatch.setattr(srv, "_db_path", lambda: db)
+        monkeypatch.setattr(api, "_db_path", lambda: db)
+        # The probe and the assembled-payload memo are per DB generation;
+        # dropping them is what makes the app re-read a mutated DB.
+        api._clear_derived_caches()
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, _, body = wsgi_get(f"/api/targets/{target}/data")
+        assert status.startswith("200")
+        return json.loads(decode_body(body, {}))
+
+    def _populate_cache(self, db: Path) -> None:
+        """Fill section_cells_json the way build_db does, via the shared codec."""
+        conn = sqlite3.connect(db)
+        c = conn.cursor()
+        c.execute(
+            f"CREATE TABLE {SECTION_CELLS_TABLE} ("
+            " target TEXT NOT NULL, section_name TEXT NOT NULL,"
+            f" {SECTION_CELLS_COLUMN} BLOB NOT NULL,"
+            " PRIMARY KEY (target, section_name)) WITHOUT ROWID"
+        )
+        c.executemany(
+            f"INSERT INTO {SECTION_CELLS_TABLE} VALUES (?, ?, ?)",
+            [
+                (tgt, sec, self._encode(cells_json))
+                for tgt, sec, cells_json in c.execute(
+                    f"SELECT target, section_name, json_group_array({CELLS_JSON_OBJECT_SQL})"
+                    " FROM cells GROUP BY target, section_name"
+                ).fetchall()
+            ],
+        )
+        conn.commit()
+        conn.close()
+
+    def test_materialized_and_live_paths_agree(self, tmp_path: Path, monkeypatch: Any) -> None:
+        src = get_db_path()
+        if not src.is_file():
+            pytest.skip("No DB")
+        db = tmp_path / "coverage.db"
+        shutil.copy(src, db)
+
+        live = self._payload(db, monkeypatch)
+        assert live["sections"], "fixture DB has no sections to compare"
+
+        self._populate_cache(db)
+        cached = self._payload(db, monkeypatch)
+
+        assert cached == live
+
+    def test_legacy_codec_column_falls_back(self, tmp_path: Path, monkeypatch: Any) -> None:
+        """A cache table in the old zlib codec must be ignored, not mis-decoded.
+
+        The codec moved zlib -> zstd, and the column name is the only signal the
+        reader has.  The old column must therefore route to the live query: the
+        failure mode this guards is a zstd decoder being handed a zlib stream,
+        which is an exception in the middle of building the payload, not a wrong
+        answer.
+        """
+        src = get_db_path()
+        if not src.is_file():
+            pytest.skip("No DB")
+        db = tmp_path / "coverage.db"
+        shutil.copy(src, db)
+        live = self._payload(db, monkeypatch)
+
+        conn = sqlite3.connect(db)
+        c = conn.cursor()
+        c.execute(
+            f"CREATE TABLE {SECTION_CELLS_TABLE} ("
+            " target TEXT NOT NULL, section_name TEXT NOT NULL,"
+            " cells_zlib BLOB NOT NULL,"
+            " PRIMARY KEY (target, section_name)) WITHOUT ROWID"
+        )
+        c.executemany(
+            f"INSERT INTO {SECTION_CELLS_TABLE} VALUES (?, ?, ?)",
+            [
+                (tgt, sec, zlib.compress(cells_json.encode("utf-8")))
+                for tgt, sec, cells_json in c.execute(
+                    f"SELECT target, section_name, json_group_array({CELLS_JSON_OBJECT_SQL})"
+                    " FROM cells GROUP BY target, section_name"
+                ).fetchall()
+            ],
+        )
+        conn.commit()
+        conn.close()
+
+        # Same payload as the live query — the stale-coded cache was declined.
+        assert self._payload(db, monkeypatch) == live
+
+    def test_cache_is_actually_used(self, tmp_path: Path, monkeypatch: Any) -> None:
+        """Guard the assertion above against passing vacuously.
+
+        If the endpoint ignored the cache table, the equality test would still
+        pass — both sides would be the live query.  Poison the cached bytes so
+        only a genuinely-served cache can show through.
+        """
+        src = get_db_path()
+        if not src.is_file():
+            pytest.skip("No DB")
+        db = tmp_path / "coverage.db"
+        shutil.copy(src, db)
+
+        self._populate_cache(db)
+        conn = sqlite3.connect(db)
+        sentinel = self._encode("[]")
+        conn.execute(f"UPDATE {SECTION_CELLS_TABLE} SET {SECTION_CELLS_COLUMN} = ?", (sentinel,))
+        conn.commit()
+        conn.close()
+
+        payload = self._payload(db, monkeypatch)
+        assert all(sec["cells"] == [] for sec in payload["sections"].values())
 
 
 class TestDumpsWithCells:

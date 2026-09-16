@@ -3,6 +3,61 @@
 All notable user-visible changes to Recoverage are recorded here.  The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.5.0] - 2026-09-17
+
+Requires `rebrew>=2.4.0`: the cell projection, the `cells_zstd` codec and the
+v7 schema objects all ship from `rebrew.workspace`, and `server.py` imports
+`CELLS_JSON_OBJECT_SQL` at module scope.
+
+### Fixed
+
+- **Potato Mode and the SPA now open the same target.** `resolve_targets`
+  returns two differently-ordered lists — `target_ids` (raw DB order) and
+  `targets` (config-declared first) — and Potato rendered its dropdown from the
+  second while defaulting from `target_ids[0]`.  On a project whose config order
+  differs from its metadata order the two surfaces disagreed, and Potato's
+  selected target was not even its own dropdown's first entry.  Potato now
+  defaults from the same list the SPA's `/api/targets` serves.
+
+### Changed
+
+- **Static assets are compressed and memoized.** `detail.js`, `app.js`,
+  `style.css`, `print.css`, `van.min.js`, `favicon.svg` and the three
+  `hljs` files were served raw by `static_file`; they now ship with the same
+  content negotiation as every other response, compressed once per encoding at
+  maximum brotli effort and cached for the process. `detail.js` drops from
+  25 KB to 9 KB on the first-paint path and the asm-pane set from 153 KB to
+  45 KB.  Requests without a supported `Accept-Encoding` still fall through to
+  `static_file`, so Range and `If-Modified-Since` behave as before.
+- **Cell JSON no longer carries `cells.id`.**  No consumer read it, and as the
+  only high-entropy column per row it was defeating compression: the 39k-cell
+  `.text` payload goes from 322 KB to 74 KB on the wire (a 39k-cell section's
+  full-target payload from 518 KB to 124 KB).  The projection is now the shared
+  `rebrew.workspace.CELLS_JSON_OBJECT_SQL`.
+- **`/data` and Potato read rebrew's materialized objects.**  The per-section
+  cell JSON (`section_cells_json`, schema v7) and coverage buckets
+  (`section_cell_stats`) are read directly instead of being re-derived, and the
+  server falls back to the equivalent live queries when a database predates
+  them, so a v6 database keeps serving.  The cache's codec is identified by its
+  column name (`cells_zstd`), not by `db_version`, so a table written in an
+  older codec is declined rather than mis-decoded.  Cold `/data` build:
+  24.8 ms → 3.4 ms for one section and 38.9 ms → 6.8 ms for all sections, with
+  payloads identical apart from the `db_version` stamp.
+- **Schema v7 accepted.**  `known_schema` in the `/data` payload now advertises
+  `3`–`7`, so a v7 database is not reported as an unknown schema.
+- **`/stats` reads the materialized coverage buckets.**  Per-section byte
+  counts come from `section_cell_stats` in one query instead of a 13-branch
+  `CASE` aggregate over every cell, falling back to that aggregate for a
+  database without the table.  Cold `/stats`: 17.1 ms → 7.2 ms (p95 19.0 →
+  8.5 ms), field-for-field identical — `exact_count` still counts only
+  `'exact'`, while the grid legend keeps folding `'verified'` into it.
+- **The SPA's detail panel fills in when you select something.**  At first
+  paint nothing is selected, so the three code panes used to lay out stand-in
+  text and copy buttons for nobody; the panel body now holds one muted line
+  until there is a selection.  The boot layout walks 147 objects instead of
+  205 and the document starts 58 nodes smaller.  Selecting a block, a
+  function, or a `?fn=` deep link renders the panes as before.
+
 ## [1.4.1] - 2026-09-16
 
 ### Fixed
