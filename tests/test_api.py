@@ -25,7 +25,6 @@ from rebrew.workspace import (
     sqlite_ro_uri,
 )
 
-from recoverage.server import HAS_CAPSTONE
 from recoverage.server import _db_path as get_db_path
 
 # Typer 0.27 help paints option names with ANSI even under CliRunner
@@ -1378,9 +1377,10 @@ class TestErrorResponseShape:
         assert data["retry_after"] >= 0
         assert data["detail"]
 
-    def test_501_not_implemented(self) -> None:
-        if HAS_CAPSTONE:
-            pytest.skip("capstone installed — asm route serves normally")
+    def test_501_not_implemented(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import recoverage.api as api
+
+        monkeypatch.setattr(api, "HAS_CAPSTONE", False)
         status, headers, body = wsgi_get("/api/targets/FAKEDLL/asm?va=0x10001000&size=16")
         data = self._check(status, headers, body, "not_implemented")
         assert "capstone" in data["error"]

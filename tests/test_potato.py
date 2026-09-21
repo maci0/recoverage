@@ -526,11 +526,79 @@ def test_globals_detail_panel():
 
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
-def test_multi_function_cell():
+def test_multi_function_cell(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    import recoverage.server as _server
+
     target = get_first_target()
     idx = _find_cell_idx(target, ".text", lambda funcs: len(funcs) > 1)
     if idx is None:
-        pytest.skip("No multi-function cell found")
+        db = tmp_path / "coverage.db"
+        conn = sqlite3.connect(db)
+        conn.execute(
+            "CREATE TABLE metadata (target TEXT NOT NULL, key TEXT NOT NULL,"
+            " value TEXT, PRIMARY KEY (target, key))"
+        )
+        conn.execute(
+            "CREATE TABLE sections (target TEXT NOT NULL, name TEXT NOT NULL,"
+            " va INTEGER, size INTEGER, fileOffset INTEGER, unitBytes INTEGER,"
+            " columns INTEGER, PRIMARY KEY (target, name))"
+        )
+        conn.execute(
+            "CREATE TABLE cells (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            " target TEXT NOT NULL, section_name TEXT NOT NULL,"
+            " start INTEGER NOT NULL, end INTEGER NOT NULL,"
+            " span INTEGER NOT NULL DEFAULT 1, state TEXT NOT NULL,"
+            " functions TEXT NOT NULL DEFAULT '[]', label TEXT, parent_function TEXT)"
+        )
+        conn.execute(
+            "CREATE VIEW section_cell_stats AS"
+            " SELECT target, section_name, COUNT(*) as total_cells,"
+            " SUM(CASE WHEN state = 'exact' THEN 1 ELSE 0 END) as exact_count,"
+            " 0 as reloc_count, 0 as near_match_count, 0 as stub_count,"
+            " 0 as padding_count"
+            " FROM cells GROUP BY target, section_name"
+        )
+        t = "MULTIFN_POTATO"
+        conn.executemany(
+            "INSERT INTO metadata VALUES (?,?,?)",
+            [(t, "db_version", '"4"'), (t, "summary", '{"totalFunctions": 0}')],
+        )
+        conn.execute("INSERT INTO sections VALUES (?, '.text', 4096, 32, 512, 16, 8)", (t,))
+        conn.execute(
+            "INSERT INTO cells (target, section_name, start, end, span, state, functions)"
+            " VALUES (?,?,?,?,?,?,?)",
+            (t, ".text", 0, 16, 1, "exact", '["_a", "_b"]'),
+        )
+        conn.execute(
+            "CREATE TABLE functions (target TEXT NOT NULL, va INTEGER NOT NULL,"
+            " name TEXT NOT NULL DEFAULT '', vaStart TEXT NOT NULL DEFAULT '',"
+            " size INTEGER, fileOffset INTEGER, status TEXT NOT NULL DEFAULT 'UNKNOWN',"
+            " module TEXT NOT NULL DEFAULT '', cflags TEXT, symbol TEXT,"
+            " markerType TEXT NOT NULL DEFAULT 'FUNCTION',"
+            " ghidra_name TEXT, list_name TEXT,"
+            " is_thunk INTEGER NOT NULL DEFAULT 0, is_export INTEGER NOT NULL DEFAULT 0,"
+            " sha256 TEXT, files TEXT NOT NULL DEFAULT '[]',"
+            " detected_by TEXT NOT NULL DEFAULT '[]', size_by_tool TEXT NOT NULL DEFAULT '{}',"
+            " textOffset INTEGER, blocker TEXT, blockerDelta INTEGER,"
+            " size_reason TEXT, similarity REAL, PRIMARY KEY (target, va))"
+        )
+        conn.execute(
+            "CREATE TABLE globals (target TEXT NOT NULL, va INTEGER NOT NULL,"
+            " name TEXT NOT NULL DEFAULT '', decl TEXT NOT NULL DEFAULT '',"
+            " files TEXT NOT NULL DEFAULT '[]', module TEXT NOT NULL DEFAULT '',"
+            " size INTEGER NOT NULL DEFAULT 4, PRIMARY KEY (target, va))"
+        )
+        conn.execute(
+            "CREATE TABLE verify_results (target TEXT NOT NULL, va INTEGER NOT NULL,"
+            " verified_at TEXT NOT NULL, byte_delta INTEGER, diff_lines INTEGER,"
+            " similarity REAL, PRIMARY KEY (target, va))"
+        )
+        conn.commit()
+        conn.close()
+        monkeypatch.setattr("recoverage.potato._db_path", lambda: db)
+        monkeypatch.setattr("recoverage.server._db_path", lambda: db)
+        _server.clear_target_cache()
+        target, idx = t, 0
     html = render_potato_url(f"/potato?target={target}&section=.text&idx={idx}")
     assert "Block Details" in html
 
@@ -586,14 +654,18 @@ def test_accesskey_attributes():
 
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
-def test_clickable_asm_addresses():
+def test_clickable_asm_addresses(monkeypatch: pytest.MonkeyPatch) -> None:
+    from recoverage import potato as _potato
+
     target = get_first_target()
     idx = _find_cell_idx(target, ".text", lambda funcs: len(funcs) > 0)
     if idx is None:
         pytest.skip("No .text function cell found")
+    monkeypatch.setattr(
+        _potato, "get_disassembly", lambda *a, **k: "0x10001000  mov eax, 0x10001010"
+    )
     html = render_potato_url(f"/potato?target={target}&section=.text&idx={idx}")
-    if "Assembly" not in html:
-        pytest.skip("Assembly panel unavailable (missing DLL/capstone)")
+    assert "Assembly" in html
     assert re.search(r'href="\?target=.*&search=0x[0-9a-f]{8}"', html)
 
 
