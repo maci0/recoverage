@@ -97,7 +97,7 @@ Replace per-request `sqlite3.connect()` calls with a thread-local connection poo
 ## Security
 
 ### ~~`--bind` Flag~~ ✅ Implemented
-`--bind <interface>` selects the listening interface (default: `127.0.0.1`). Non-loopback binds require an explicit `--allow-remote` acknowledgment, since the API is unauthenticated.
+`--bind <interface>` selects the listening interface (default: `127.0.0.1`). Non-loopback binds require an explicit `--allow-remote` acknowledgment, since the API is unauthenticated unless `serve --token` is given.
 
 ### ~~Rate Limiting on `/api/regen`~~ ✅ Implemented
 The 5-second cooldown now exists server-side too: `/api/regen` returns 429

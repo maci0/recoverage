@@ -784,9 +784,8 @@ def _build_search_index(c: sqlite3.Cursor, target: str) -> dict[str, Any]:
     try:
         c2.execute("SELECT name, va FROM globals WHERE target = ?", (target,))
         for row in c2.fetchall():
-            va_val = row["va"]
-            va_str = hex(va_val) if va_val is not None else ""
-            index.setdefault(row["name"], {"va": va_str, "symbol": ""})
+            va = row["va"]
+            index.setdefault(row["name"], {"va": hex(va) if va is not None else "", "symbol": ""})
     finally:
         c2.close()
     return index
@@ -871,11 +870,9 @@ def _dumps_with_cells(data: dict[str, Any], cells_json: dict[str, str | None]) -
         parts.append(rest[1:-1])
         parts.append(",")
     parts.append('"sections":{')
-    first = True
-    for name, sec in sections.items():
-        if not first:
+    for i, (name, sec) in enumerate(sections.items()):
+        if i:
             parts.append(",")
-        first = False
         sec_json = json.dumps(sec, separators=(",", ":"))
         cells = cells_json.get(name, "[]")
         # String splice, not a JSON encoder: cells is already a JSON array
@@ -1088,9 +1085,8 @@ def handle_api_functions_list(target: str) -> bytes | Any:
 
         where_sql = " AND ".join(where)
 
-        # SAFETY: where_sql is constructed from whitelisted column names + parameterized values.
-        # sort_field is constrained to allowed_sort set, sort_dir to "ASC"/"DESC" literals.
-        # No user-supplied strings reach the SQL statement unparameterized.
+        # SAFETY: where_sql joins whitelisted column fragments with
+        # parameterized values; sort_field/sort_dir were whitelisted above.
         #
         # One pinned read snapshot for the COUNT and the page: they are two
         # separate statements, and Python's sqlite3 opens a deferred
@@ -1468,7 +1464,6 @@ def handle_api_asm(target: str) -> bytes | Any:
         headers_asm = _revalidate_headers(asm_etag)
 
         if fmt == "json":
-            # Structured JSON output
             target_data = _load_dll(target)
             if target_data is None:
                 return _dll_not_found(target)
@@ -1497,7 +1492,6 @@ def handle_api_asm(target: str) -> bytes | Any:
                 **headers_asm,
             )
 
-        # Default: plain text
         asm_text = get_disassembly(va, size, file_offset, target)
         if not asm_text:
             return _json_err(
@@ -1687,7 +1681,7 @@ def handle_regen() -> bytes | Any:
         now = time.monotonic()
         since = math.inf if _regen_last_attempt is None else now - _regen_last_attempt
         if since < _REGEN_COOLDOWN_SECONDS:
-            remaining = max(0, _REGEN_COOLDOWN_SECONDS - since)
+            remaining = _REGEN_COOLDOWN_SECONDS - since
             return _json_err(
                 429,
                 {

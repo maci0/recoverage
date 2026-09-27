@@ -5,7 +5,8 @@ edit-test loop, and the one command that reproduces CI before you push.
 
 ## Bootstrap (clean clone)
 
-Needs [uv](https://docs.astral.sh/uv/) (CI resolves against 0.12.14) and the
+Needs [uv](https://docs.astral.sh/uv/) (0.12.14 or newer; the Makefile warns
+below that) and the
 sibling [rebrew](https://github.com/maci0/rebrew) checkout at `../rebrew`.
 The interpreter is pinned in `.python-version` (3.13, the version CI's lint,
 web-lint and smoke jobs run); uv downloads it if the host has no 3.13, and
@@ -93,8 +94,8 @@ That is the local mirror of CI, and each target is the command CI runs:
 
 CI also builds an SBOM from `uv.lock` (`uv export`); it needs no local step.
 
-Every target is a wrapper around the third column, and every one of those
-commands runs on the whole test matrix (Linux, macOS, Windows). `make` itself
+Every target is a wrapper around the third column. Only the `test` row runs on
+the whole matrix (Linux, macOS, Windows); every other job is Linux-only. `make` itself
 is not: it is not preinstalled on Windows or in a bare Git for Windows shell,
 so run the command from the table directly there. The same applies to
 `make clone-rebrew`, whose two moves are `git clone --depth 1 --branch v2.13.1

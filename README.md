@@ -30,7 +30,7 @@ closely your C code matches the original compiled output.
 
 - **Byte-Perfect Confidence**: Stop guessing if your C code produced the correct assembly. See exact byte comparisons visually.
 - **Fast Iteration**: Quickly identify which parts of a function are matching and which parts have diverged (e.g. register allocation differences, instruction reordering).
-- **Interactive Triage**: Click any block in the grid to immediately view the corresponding C source, disassembled binary, and hex diff.
+- **Interactive Triage**: Click any block in the grid to view the corresponding C source and hex diff, plus the disassembled binary once you install the `capstone` extra.
 
 ### Details
 
@@ -384,6 +384,7 @@ recoverage/
 │   ├── test_potato.py        # Potato Mode rendering tests
 │   ├── test_perf.py         # Deterministic perf regression gates (work counters, not wall clock)
 │   ├── test_release.py       # Release contract (version, changelog, declared floors)
+│   ├── test_serve_harness.py # The smoke + lint-html harness contract
 │   └── test_playwright.py    # Browser integration tests
 └── src/recoverage/
     ├── __init__.py
@@ -428,9 +429,10 @@ check.
 | `smoke` | ubuntu, Python 3.13 | boots `recoverage serve` against a synthetic `coverage.db` and probes the SPA shell, health, target data/stats/functions and Potato Mode, then repeats with a corrupt database to prove it reports `degraded` instead of healthy |
 | `sbom` | ubuntu | `uv export --frozen --all-extras --hashes` as a build artifact: the exact resolved tree behind a given build, plus the rebrew tag and commit the path dependency was pinned at |
 
-Every job installs with `uv sync --frozen --extra dev` and then runs tools
-through `uv run --frozen`, so `uv.lock` is never rewritten by a run; a stale
-lock fails the build instead of drifting. Playwright and the
+Every job but `sbom` installs with `uv sync --frozen --extra dev` and then runs
+tools through `uv run --frozen`, so `uv.lock` is never rewritten by a run; a
+stale lock fails the build instead of drifting. `sbom` skips the sync because
+`uv export --frozen` reads the lock alone. Playwright and the
 `capstone`/`pygments` extras are never installed, so the
 matrix is the same set on every runner.
 

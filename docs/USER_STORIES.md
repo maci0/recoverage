@@ -211,7 +211,7 @@ graph TD
 - Target selector dropdown populated from `/api/targets`
 - Selection persisted to URL (`?target=XXX`) and `localStorage`
 - Switching targets fetches new data, rebuilds grids, and resets panel
-- Loading overlay shown during data fetch
+- The loading overlay is first-paint only: switching targets rebuilds in place rather than flashing the whole map (see 1.4.0 in the changelog)
 
 ```mermaid
 graph TD
@@ -221,8 +221,7 @@ graph TD
     D --> E["Fetch /api/targets/<target>/data"]
     E --> F["Build grids + progress bar"]
 
-    G["Select different target<br/>from dropdown"] --> H["Show loading overlay"]
-    H --> I["Fetch new target data"]
+    G["Select different target<br/>from dropdown"] --> I["Fetch new target data"]
     I --> J["Rebuild grids<br/>+ update progress bar"]
     J --> K["Persist selection to<br/>URL + localStorage"]
 
@@ -497,7 +496,7 @@ graph TD
 ### Acceptance Criteria
 - HTML, CSS, JS, and VanJS library inlined into a single response
 - Minified with `rjsmin`/`rcssmin` and compressed with Brotli/Zstd/gzip
-- Total payload 14,534 B brotli, against a 14,600-byte budget (the TCP initial congestion window), so 66 bytes of headroom remain; `ui._check_payload_budget` warns with the exact overage if it grows past that
+- Total payload roughly 14.5 KB brotli, against a 14,600-byte budget (the TCP initial congestion window), so the headroom is thin; `ui._check_payload_budget` prints the exact compressed size and warns with the overage if it grows past that
 - Everything deferrable (asm, hex, data inspector, live reload) lives in `detail.js`, which the shell preloads, so a new byte comes out of `detail.js` rather than out of the window
 - Compression algorithm auto-selected from `Accept-Encoding` header
 - Deferred Highlight.js loading: fetched from this origin (vendored in `assets/`) only on first code block click
@@ -513,7 +512,7 @@ graph TD
     E -->|zstd| F["Zstandard compress"]
     E -->|br| G["Brotli compress"]
     E -->|gzip| H["Gzip compress"]
-    F --> I["14,534 B response<br/>(brotli is the smallest)"]
+    F --> I["~14.5 KB response<br/>(brotli is the smallest)"]
     G --> I
     H --> I
     I --> J["Browser parses + renders<br/>UI shell in first paint"]

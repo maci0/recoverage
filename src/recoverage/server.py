@@ -508,7 +508,6 @@ def _section_stats(c: sqlite3.Cursor, target: str) -> dict[str, Any]:
 
 
 def _read_section_stats(c: sqlite3.Cursor, target: str) -> dict[str, Any]:
-    """_section_stats body, run against the snapshot read_snapshot pinned."""
     # Pre-computed summary, read from the target's own metadata row
     summary: dict[str, Any] = {}
     c.execute("SELECT value FROM metadata WHERE target = ? AND key = 'summary'", (target,))
@@ -589,7 +588,6 @@ def _assets_dir() -> Path:
 
 
 def _project_dir() -> Path:
-    """Return the project directory (cwd)."""
     return Path.cwd().resolve()
 
 

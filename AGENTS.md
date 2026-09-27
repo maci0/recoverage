@@ -49,6 +49,7 @@ recoverage/
 │   ├── test_perf.py         # Deterministic perf regression gates (work counters, not wall clock)
 │   ├── test_release.py       # Release contract: version, changelog, declared floors
 │   ├── test_fuzz.py          # Seeded mutation campaigns over the untrusted-input surfaces
+│   ├── test_serve_harness.py # The smoke + lint-html harness contract
 │   └── test_playwright.py    # Browser integration tests
 └── src/recoverage/
     ├── __init__.py

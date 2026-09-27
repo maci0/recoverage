@@ -17,8 +17,9 @@ SET_STRICT = set -eu; if (set -o pipefail) 2>/dev/null; then set -o pipefail; fi
 # `make setup UV_SYNC_FLAGS=` to add an extra (e.g. `--extra capstone`).
 UV_SYNC_FLAGS ?= --frozen --extra dev
 
-# uv version CI resolves against; warn (do not fail) when the local one is
-# older, matching the sibling rebrew checkout's policy.
+# uv floor the local toolchain is checked against; warn (do not fail) when the
+# installed one is older, matching the sibling rebrew checkout's policy.  CI
+# installs uv unpinned (astral-sh/setup-uv with no version input).
 UV_VERSION ?= 0.12.14
 
 # The rebrew tag/commit pin lives in tools/ci_clone_rebrew.sh, the one place
@@ -72,7 +73,7 @@ help:
 ensure-uv:
 	@$(SET_STRICT) \
 	if ! command -v uv >/dev/null 2>&1; then \
-	  echo "ERROR: uv not on PATH (required for setup/test/lint; CI pins UV_VERSION=$(UV_VERSION))."; \
+	  echo "ERROR: uv not on PATH (required for setup/test/lint; $(UV_VERSION)+ is the tested floor)."; \
 	  echo "Install it from https://docs.astral.sh/uv/ then re-run 'make setup'."; \
 	  exit 1; \
 	fi
@@ -105,7 +106,7 @@ warn-uv-version: ensure-uv
 	uv_ver=$$(uv --version | awk '{print $$2}'); \
 	lowest=$$(printf '%s\n%s\n' "$$uv_ver" "$(UV_VERSION)" | sort -t. -k1,1n -k2,2n -k3,3n | sed -n '1p'); \
 	if [ "$$lowest" != "$(UV_VERSION)" ]; then \
-	  echo "WARNING: uv $$uv_ver is older than the CI pin UV_VERSION=$(UV_VERSION)."; \
+	  echo "WARNING: uv $$uv_ver is older than the tested floor UV_VERSION=$(UV_VERSION)."; \
 	  echo "Sync usually still works; upgrade when you can (https://docs.astral.sh/uv/)."; \
 	  echo "To silence this: make setup UV_VERSION=$$uv_ver"; \
 	fi

@@ -643,7 +643,7 @@ def _format_data_inspector(raw_bytes: bytes | None) -> str:
     if len(b) >= 8:
         _row("float64", f"{struct.unpack_from('<d', b)[0]:.6g}")
 
-    null_terminated = b[:64].split(b"\x00")[0] if b[:64] else b""
+    null_terminated = b[:64].split(b"\x00")[0]
     ascii_str = "".join(chr(x) if 32 <= x < 127 else "." for x in null_terminated)
     if ascii_str:
         display = ascii_str if len(ascii_str) <= 40 else ascii_str[:37] + "..."
@@ -672,7 +672,7 @@ def _format_va(val: int | str) -> str:
         return s
     try:
         return f"0x{int(s):08x}"
-    except (ValueError, TypeError):
+    except ValueError:
         return s
 
 
@@ -1123,7 +1123,7 @@ def _load_section_data(
     sections = dict(
         sorted(
             sections.items(),
-            key=lambda kv: (_SECTION_VA_MAX if kv[1]["va"] is None else int(kv[1]["va"]),),
+            key=lambda kv: _SECTION_VA_MAX if kv[1]["va"] is None else int(kv[1]["va"]),
         )
     )
 
@@ -1696,7 +1696,7 @@ def _build_grid_html(
     # orig_idx against it replaces a per-cell int() (up to ~2k parses/render).
     try:
         sel_idx: int | None = int(idx_str)
-    except (ValueError, OverflowError):
+    except ValueError:
         sel_idx = None
 
     curr_col = 0
@@ -1755,7 +1755,7 @@ def _build_grid_html(
             )
         curr_col += span
 
-    remaining = int(grid_columns) - curr_col
+    remaining = grid_columns - curr_col
     if remaining > 0:
         grid_html_parts.append(
             f'<td bgcolor="{BG_COLOR}" width="{cell_w * remaining}"'
@@ -2047,9 +2047,7 @@ def _render_potato_inner(
 
     clear_search_url = _build_url(target, section, active_filters or None)
 
-    progress_bar_png_uri = ""
-    if progress:
-        progress_bar_png_uri = _progress_svg(tuple(progress["segments"]))
+    progress_bar_png_uri = _progress_svg(tuple(progress["segments"])) if progress else ""
 
     db_mtime_str = _db_updated_label()
 
@@ -2396,13 +2394,12 @@ def _render_panel(
 
     try:
         idx = int(idx_str)
-    except (ValueError, OverflowError):
+    except ValueError:
         return _PANEL_TPL.render(**ctx)
 
     if idx < 0 or idx >= len(cells):
         return _PANEL_TPL.render(**ctx)
 
-    # Bounds already validated by the if-guard above
     cell = cells[idx]
     state = cell.get("state", "none")
     funcs = cell.get("functions", [])
@@ -2449,7 +2446,6 @@ def _render_panel(
     )
 
     if not funcs:
-        # Show hex dump + data inspector for empty cells
         _panel_empty_cell_bytes(ctx, cell, sec_data, target)
         return _PANEL_TPL.render(**ctx)
 

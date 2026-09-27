@@ -389,7 +389,7 @@ Run the test harness to verify all rendering paths:
 pytest tests/test_potato.py -v
 ```
 
-This is 93 test functions, 132 collected cases, covering 189 assertions across:
+This suite covers:
 - All sections (`.text`, `.data`, `.rdata`, `.bss`)
 - Single and multi-filter combinations
 - Cell selection at various indices
