@@ -79,7 +79,7 @@ COLORS = {
     "exact": "#10b981",
     "reloc": "#0ea5e9",
     "near_match": "#f59e0b",
-    # Legacy spelling of near_match (rebrew DB_FORMAT.md); same yellow.
+    # Canonical spelling of near_match (rebrew DB_FORMAT.md); same yellow.
     "near_matching": "#f59e0b",
     # Post-verify semantic promotion — bold cyan per rebrew DB_FORMAT.md.
     "proven": "#06b6d4",
@@ -91,8 +91,9 @@ COLORS = {
     "thunk": "#f97316",
     "none": "#3F4958",
     # Data-metadata verdicts.  VERIFIED is a match (build_db counts it as
-    # exact); DRIFT and UNCHECKED are not.  One violet for all three problem
-    # states, matching the SPA's --other-bg.
+    # exact), so it takes the exact green; DRIFT and UNCHECKED are the two
+    # problem states here, and both take _COLORS_PROBLEM, the hue the SPA
+    # paints --other-bg.
     "verified": "#10b981",
     "drift": _COLORS_PROBLEM,
     "unchecked": _COLORS_PROBLEM,
@@ -126,12 +127,11 @@ SANS_FONT = "system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif"
 MONO_FONT = "SFMono-Regular, Consolas, Liberation Mono, Courier New, monospace"
 
 # The keys a ?filter= may name, and the cell states each one stands for.  A
-# filter is a key, not a state name, so the states that share a row (and a
-# colour) with another one stay reachable from the same pill: without this,
-# an older database spelling a cell VERIFIED, NEAR_MATCHING or SIZE_MISMATCH
-# dimmed out under the exact and near-match filters while the SPA, which
-# packs those onto the same cell state, kept them lit.  The two renderers
-# disagreed about what a filter shows.
+# filter is a key, not a state name, so the states the SPA packs onto one cell
+# state (its STATE_ID: VERIFIED onto exact, NEAR_MATCHING and SIZE_MISMATCH
+# onto near_match) stay reachable from the same pill here: without this, a
+# VERIFIED byte dimmed out under the exact filter in Potato Mode while the SPA
+# kept it lit.  The two renderers disagreed about what a filter shows.
 FILTER_STATES: dict[str, frozenset[str]] = {
     "exact": frozenset({"exact", "verified"}),
     "reloc": frozenset({"reloc"}),
@@ -2047,9 +2047,11 @@ def _render_function_list(
             )
     else:
         # One row's link differs from the next only in the quoted name; the
-        # quoted target is the same string 500 times, so it is built once
-        # (same hoist as _build_grid_html's link_prefix).
-        link_prefix = f"?target={_url_quote(target)}&section=.text&search="
+        # quoted target and section are the same string 500 times, so they are
+        # built once (same hoist as _build_grid_html's link_prefix).  The
+        # section is the one this list was rendered under: a hardcoded .text
+        # here opened the panel in the wrong section for every other list.
+        link_prefix = f"?target={_url_quote(target)}&section={_url_quote(section)}&search="
         for name, va, _, size, status, module in rows:
             st = status or "none"
             color = COLORS.get(st.lower(), TEXT_COLOR)
@@ -2349,6 +2351,10 @@ def _render_original_bytes(raw_bytes: bytes, file_offset: int) -> str:
     16-byte lines (~78 chars), and _wrap_text(…, 72) split each one mid-row,
     orphaning the |ascii| column on its own line and defeating
     _highlight_hex's line-shape detection (offset/hex/ASCII colouring).
+
+    Capped at _format_hex_dump's default 256 bytes: a cell or a function larger
+    than that renders 256 bytes and a ``... (N more bytes)`` line, which the
+    panel renders as it stands.  Pass max_bytes=None to dump a whole slice.
     """
     hex_dump = _format_hex_dump(raw_bytes, file_offset)
     return _code_block_raw(_highlight_hex(hex_dump))

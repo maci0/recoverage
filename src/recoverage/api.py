@@ -1125,7 +1125,8 @@ def handle_api_data(target: str) -> bytes | Any:
             _data_cache_build_done(fingerprint, building)
 
 
-# Mirrors the list endpoint's limit cap.
+# The per-page cap the function list clamps ?limit= to, and the number of VAs
+# one batch lookup accepts.
 _MAX_BATCH_LOOKUP = 500
 
 # Bound on the batch-lookup request body: the payload is fully parsed before
@@ -1585,7 +1586,7 @@ def handle_api_function(target: str, va: str) -> bytes | Any:
     target = path_param(target)
     va = path_param(va)
     with _target_cursor(target) as c:
-        # The resolution below is up to seven statements (VA candidates, exact
+        # The resolution below is several statements (VA candidates, exact
         # name, folded name — for functions, then for globals) plus the
         # verify_results read, so the whole answer is pinned to ONE read
         # snapshot (see server.read_snapshot).  Unpinned, a `rebrew build-db`
@@ -1595,8 +1596,9 @@ def handle_api_function(target: str, va: str) -> bytes | Any:
         with _server.read_snapshot(c):
             # One shared resolution order (server._lookup_by_va_or_name): VA
             # candidates first, then the exact name for a name-form lookup.  The
-            # stripped spelling is used for both, so "?va=%20Foo" resolves the same
-            # way the value is spelled in the database.
+            # value comes from the path, and the stripped spelling is used for
+            # both, so a URL carrying a padded name resolves the same way the
+            # name is spelled in the database.
             value = va.strip()
 
             # Functions win over globals (parity with the batch endpoint).
@@ -1891,7 +1893,8 @@ def handle_regen() -> bytes | Any:
     same state as the first, but it is minutes of work and a second write of
     coverage.db.  Send an ``Idempotency-Key`` header to make a retry cheap:
     the key is remembered once the run completes (see ``_REGEN_KEY_TTL_SECONDS``
-    and ``_REGEN_KEY_MAX`` for the retention window) and a later request
+    for the retention window and ``_REGEN_KEY_MAX`` for the ledger's cap) and a
+    later request
     carrying it is answered from the ledger with ``Idempotent-Replay: true``
     instead of re-running.  A run that failed is not recorded, so retrying a
     failure retries for real.  Without the header, every POST re-runs.

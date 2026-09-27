@@ -94,8 +94,9 @@ CORS_ALLOWED_ORIGINS: list[str] = []
 ALLOWED_HOSTS: set[str] | None = None
 
 # Loopback hostnames, ONE definition shared by the CLI's --bind guard, the
-# regen endpoint's remote-addr/Origin checks, and the DNS-rebinding Host
-# allowlist above.  Membership tests only — order carries no meaning.
+# regen endpoint's peer check and its no-Host fallback (see
+# origin_is_this_dashboard), and the DNS-rebinding Host allowlist above.
+# Membership tests only — order carries no meaning.
 LOOPBACK_HOSTS: tuple[str, ...] = ("127.0.0.1", "::1", "localhost")
 
 
@@ -1607,8 +1608,10 @@ def _format_hex_dump(raw_bytes: bytes, base_offset: int = 0, max_bytes: int | No
     Potato Mode's Original Bytes block (the two inline copies had already
     drifted: a single 48-char hex column vs 8+8 byte columns).  Layout:
     8-hex-digit offset, hex bytes in two 8-byte columns, ASCII gutter —
-    matching detail.js's client-side dump.  *max_bytes* caps the dump and
-    appends a ``... (N more bytes)`` tail; ``None`` dumps everything.
+    the same layout as detail.js's client-side dump, which upper-cases the
+    hex, so the two renderings of one slice differ in case.  *max_bytes*
+    caps the dump and appends a ``... (N more bytes)`` tail; ``None`` dumps
+    everything.
     """
     data = raw_bytes if max_bytes is None else raw_bytes[:max_bytes]
     lines: list[str] = []
@@ -1653,10 +1656,11 @@ def _load_metadata(c: sqlite3.Cursor, target: str) -> dict[str, Any]:
 # invalid_va). None of those add or remove a column this server queries.
 KNOWN_SCHEMA_VERSIONS: frozenset[str] = frozenset({"3", "4", "5", "6", "7", "8", "9", "10"})
 
-# Schema check memoized per DB (mtime_ns, size): the check is two queries
-# (metadata + full sqlite_master scan) that would otherwise run on every
-# request; the DB only changes when build-db rewrites it, which the SSE
-# watcher already detects and funnels through clear_target_cache().
+# Schema check memoized on the DB's read snapshot (see
+# _snapshot_db_mtime): the check is two queries (metadata + full sqlite_master
+# scan) that would otherwise run on every request; the DB only changes when
+# build-db rewrites it, which the SSE watcher already detects and funnels
+# through clear_target_cache().
 _SCHEMA_VERSION_CACHE: tuple[tuple[int, int], str] | None = None
 
 
@@ -1763,12 +1767,12 @@ def _missing_required_columns(conn: sqlite3.Connection) -> set[str]:
     }
     missing: set[str] = set()
     for obj, cols in required_columns.items():
-        try:
-            rows = conn.execute(f"PRAGMA table_info({obj})").fetchall()
-        except sqlite3.Error:
-            missing.add(obj)
-            continue
-        actual = {r[1] for r in rows}
+        # No guard, for the reason _table_columns gives: PRAGMA table_info
+        # answers a name no table carries with zero rows, so a table the
+        # database lacks lands in `cols - actual` and every column of it is
+        # reported missing.  A sqlite3.Error here is a database that could not
+        # be read, and it belongs to the 503 contract, not to this set.
+        actual = _table_columns(conn, obj)
         for col in cols - actual:
             missing.add(f"{obj}.{col}")
     return missing

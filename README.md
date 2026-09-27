@@ -307,7 +307,7 @@ deployment that moved off `8001` needs no second place to configure.
 | `/api/targets/<target>/asm` | GET | Disassembly (`?format=json` for structured output) |
 | `/api/targets/<target>/sections/<section>/bytes` | GET | Raw byte slice (`?offset=&size=`) |
 | `/api/events` | GET | Server-Sent Events: `db-updated` when coverage.db changes (SPA auto-refresh) |
-| `/api/regen` | POST | Re-run catalog + build-db (localhost only, rate-limited; optional `Idempotency-Key` header) |
+| `/api/regen` | POST | Re-run catalog + build-db (loopback peer and, when present, same-origin only; rate-limited; optional `Idempotency-Key` header) |
 
 A regen rebuilds `coverage.db` from scratch, so running it twice leaves the
 same state as running it once. Send an `Idempotency-Key` header with the
@@ -481,13 +481,16 @@ recoverage/
 │   ├── smoke.py              # End-to-end server smoke run
 │   ├── _serve_harness.py     # Shared boot-and-probe harness for the two above
 │   ├── ci_clone_rebrew.sh    # Clones the ../rebrew path dep at a pinned commit
+│   ├── normalize_sdist.py     # Pins the sdist's mtimes/order/header for a reproducible build
 │   ├── flatten-rikalabs-strict.py  # Regenerates tools/oxlint/rikalabs-strict.json (MIT) from @rikalabs/oxlint-standards 0.8.1
 │   └── oxlint/               # Vendored anti-slop rules + the flattened strict preset
 ├── tests/
 │   ├── conftest.py           # Shared fixtures (synthetic coverage.db)
 │   ├── test_api.py           # API validation & security tests
+│   ├── test_build.py         # Shipped files and reproducible build bytes
 │   ├── test_cli.py           # CSV export, formatting tests
 │   ├── test_config.py        # RECOVERAGE_* parsing, precedence, fail-fast
+│   ├── test_import_graph.py  # The import rules the modules rely on
 │   ├── test_lifecycle.py     # Lifecycle (regen ordering, opener reaping, deadlines)
 │   ├── test_paths.py         # DB path resolution tests
 │   ├── test_server.py        # Compression, encoding tests
