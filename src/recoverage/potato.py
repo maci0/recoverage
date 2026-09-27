@@ -322,7 +322,6 @@ def _hex_logo_svg(label: str, color: str) -> str:
     """Generate a hex-shaped SVG logo as a base64 data-URI image tag."""
     font_size = 26 if len(label) > 2 else 42
     safe_label = _html_escape(label)
-    safe_alt = _html_escape(label)
     svg = (
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="20" height="20">'
         f'<polygon points="50,5 90,27.5 90,72.5 50,95 10,72.5 10,27.5"'
@@ -332,7 +331,7 @@ def _hex_logo_svg(label: str, color: str) -> str:
         f' fill="{color}" font-family="monospace" font-weight="800"'
         f' font-size="{font_size}">{safe_label}</text></svg>'
     )
-    return f'<img src="{_svg_uri(svg)}" width="20" height="20" border="0" alt="{safe_alt}">'
+    return f'<img src="{_svg_uri(svg)}" width="20" height="20" border="0" alt="{safe_label}">'
 
 
 def _section_heading(label: str, color: str, title: str) -> str:

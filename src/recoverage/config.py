@@ -68,10 +68,8 @@ DEFAULT_LOG_LEVEL: Final = logging.INFO
 
 #: Level names accepted from the environment, and the values they resolve to.
 #: Read from the stdlib's own table rather than restated here, so the accepted
-#: spellings are exactly the ones ``logging.getLevelName`` understands.
-LOG_LEVELS: Final[Mapping[str, int]] = {
-    name: value for name, value in logging.getLevelNamesMapping().items() if isinstance(name, str)
-}
+#: spellings are exactly the ones ``logging.getLevelNamesMapping`` understands.
+LOG_LEVELS: Final[Mapping[str, int]] = logging.getLevelNamesMapping()
 
 #: A port of 0 asks the OS for an ephemeral port; both bounds are the ones
 #: socket.bind() enforces, checked here so a bad value is a startup error.

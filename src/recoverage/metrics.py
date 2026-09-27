@@ -50,11 +50,8 @@ class RequestStats:
         self._by_status: dict[str, int] = {}
 
     def start(self) -> None:
-        self._lock.acquire()
-        try:
+        with self._lock:
             self._in_flight += 1
-        finally:
-            self._lock.release()
 
     def finish(self, route: str, status: int, duration_ms: float, timed: bool = True) -> None:
         """Record one completed request.

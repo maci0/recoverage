@@ -260,7 +260,7 @@ def _build_synthetic_db(db_file: Path) -> None:
 # data, and building a synthetic DB here could clobber the real one).
 _IN_REAL_PROJECT = (Path.cwd() / "rebrew-project.toml").exists()
 
-if not _DB_FILE.exists() and not _IN_REAL_PROJECT:
+if not _IN_REAL_PROJECT:
     _build_synthetic_db(_DB_FILE)
 
 HAS_DB = _DB_FILE.exists() and not _IN_REAL_PROJECT

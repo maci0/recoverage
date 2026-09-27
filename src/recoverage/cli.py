@@ -14,6 +14,7 @@ import subprocess
 import sys
 import threading
 import webbrowser
+from collections.abc import Iterator
 from pathlib import Path
 from socketserver import ThreadingMixIn
 from typing import Any, NamedTuple, NoReturn
@@ -474,6 +475,32 @@ def _select_targets(
             2,
             json_output,
         )
+
+
+@contextlib.contextmanager
+def _open_targets(
+    target: str | None, *, missing_exit_code: int = 1, json_output: bool = False
+) -> Iterator[tuple[sqlite3.Connection, list[str]]]:
+    """Yield the open database and the targets the command operates on.
+
+    Open, ``--target`` validation and the empty-database exit are one
+    contract for every command that reads targets, so they are written once
+    here.  *missing_exit_code* is ``check``'s 2 for an unreadable database;
+    the siblings keep their historical 1.
+    """
+    with contextlib.closing(
+        _open_db_or_exit(missing_exit_code=missing_exit_code, json_output=json_output)
+    ) as conn:
+        targets = _select_targets(conn, target, json_output=json_output)
+        if not targets:
+            _fail(
+                "No targets found in database.",
+                "no targets in database",
+                1,
+                json_output,
+                fg=typer.colors.YELLOW,
+            )
+        yield conn, targets
 
 
 def _get_stats(
@@ -947,18 +974,7 @@ def stats(
     from rich.console import Console
     from rich.table import Table
 
-    with contextlib.closing(_open_db_or_exit(json_output=json_output)) as conn:
-        targets = _select_targets(conn, target, json_output=json_output)
-
-        if not targets:
-            _fail(
-                "No targets found in database.",
-                "no targets in database",
-                1,
-                json_output,
-                fg=typer.colors.YELLOW,
-            )
-
+    with _open_targets(target, json_output=json_output) as (conn, targets):
         if json_output:
             typer.echo(
                 json.dumps([_get_stats(conn, tid, json_output=True) for tid in targets], indent=2)
@@ -1032,18 +1048,7 @@ def export(
     """
     _use_utf8_stdout()
     json_output = output_format is ExportFormat.json
-    with contextlib.closing(_open_db_or_exit(json_output=json_output)) as conn:
-        targets = _select_targets(conn, target, json_output=json_output)
-
-        if not targets:
-            _fail(
-                "No targets found in database.",
-                "no targets in database",
-                1,
-                json_output,
-                fg=typer.colors.YELLOW,
-            )
-
+    with _open_targets(target, json_output=json_output) as (conn, targets):
         all_data = [_get_stats(conn, tid, json_output=json_output) for tid in targets]
 
     if output_format == ExportFormat.json:
@@ -1163,18 +1168,7 @@ def check(
             json_output,
         )
 
-    with contextlib.closing(_open_db_or_exit(missing_exit_code=2, json_output=json_output)) as conn:
-        targets = _select_targets(conn, target, json_output=json_output)
-
-        if not targets:
-            _fail(
-                "No targets found in database.",
-                "no targets in database",
-                1,
-                json_output,
-                fg=typer.colors.YELLOW,
-            )
-
+    with _open_targets(target, missing_exit_code=2, json_output=json_output) as (conn, targets):
         failed = False
         checked = 0
         compared = 0  # sections actually evaluated against the threshold
