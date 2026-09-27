@@ -709,7 +709,7 @@ _log = logging.getLogger("recoverage")
 # same reason as C0: every consumer that breaks a log on \n breaks on them
 # too, and a percent-escaped %C2%85 (NEL) or %E2%80%A8 reaches _log_safe
 # decoded.  Bidi controls stay out: they reorder a line rather than split it,
-# which is the log-injection question sec-review owns.
+# so escaping them is a log-injection question, not a line-splitting one.
 _LOG_CONTROL_CHARS = (
     {c: f"\\x{c:02x}" for c in range(32)}
     | {127: "\\x7f"}

@@ -400,8 +400,8 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
 - `_log_safe` escapes the characters that end a log line, which is C0, DEL,
   the C1 controls, and U+2028/U+2029 (a header value carries those literally,
   and every viewer that breaks on `\n` breaks on them). It deliberately leaves
-  bidi controls alone: those reorder a line rather than split it, which is
-  the log-injection question `sec-review` owns.
+  bidi controls alone: those reorder a line rather than split it, so escaping
+  them is a log-injection question, not a line-splitting one.
 - `server.set_auth_cookie` is the one place the `?token=` share-link cookie is
   written, and every page route a share link can land on calls it: `/` and
   `/potato`. Both pages link with relative URLs, so the cookie is what carries
