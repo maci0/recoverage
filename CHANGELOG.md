@@ -211,6 +211,15 @@ module ships in the published package. See *Breaking*.
 
 ### Fixed
 
+- **A partially populated cache dropped whole sections.** The dashboard
+  prefers `section_cell_stats` and `section_cells_json` over re-deriving them
+  from `cells`, and it decided which to use by asking whether they exist. A
+  database carrying a current-codec cache that covers only some of a target's
+  sections passed that check, so the sections it omitted were never read from
+  anywhere: they reported no coverage in `/stats` or the Potato map header, and
+  their grid rendered as a section of entirely `none` bytes. Every read now
+  takes the union of the cache and the sections it should have covered, filling
+  only the gap and only from `cells`.
 - **A drive-relative `files[0]` read the wrong file on Windows.** Potato
   Mode's C-source loader rejected absolute paths and `..`, but a
   drive-relative name (`C:foo.c`) is neither, and joining it onto the

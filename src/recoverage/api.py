@@ -872,7 +872,10 @@ def _read_data_raw(c: sqlite3.Cursor, target: str, section_filter: str | None) -
     # cold /data build on an 80k-cell DB, for identical bytes.  Keep the
     # strings and splice them into the envelope below.
     cells_json: dict[str, str | None] = {}
-    for row in _cells_json_rows(c, target, section_filter):
+    # data["sections"] is every section row for the target, so a materialized
+    # section_cells_json that covers only some of them cannot silently blank
+    # the rest: _cells_json_rows re-aggregates the gaps from `cells`.
+    for row in _cells_json_rows(c, target, section_filter, set(data["sections"])):
         sec_name = row[0]
         if sec_name in data["sections"]:
             cells_json[sec_name] = row[1]

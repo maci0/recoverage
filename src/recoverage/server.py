@@ -453,7 +453,9 @@ def _per_section_buckets(
     materialized column carries them.  When that table is absent or empty, every
     bucket comes from `cells` instead — the single-query path this endpoint used
     before the split — using the definitions _SECTION_STATS_FULL_SQL keeps in
-    step with build_db's.
+    step with build_db's.  When it is present but covers only some of the
+    sections `cells` has, the missing ones are filled from `cells` too, so a
+    partial cache never drops a section from the response.
 
     The two paths return the same numbers for the same database.  They did
     not: the materialized `exact_count` (which counts 'verified' as exact, like
@@ -468,8 +470,10 @@ def _per_section_buckets(
     except sqlite3.Error:
         rows = []
     if rows:
+        covered: set[str] = set()
         for row in rows:
             name = row["section_name"]
+            covered.add(name)
             side = cell_side.get(name)
             yield (
                 name,
@@ -477,6 +481,24 @@ def _per_section_buckets(
                 (side["covered_bytes"] if side is not None else 0) or 0,
                 (side["total_bytes"] if side is not None else 0) or 0,
             )
+        # A section_cell_stats that is present but PARTIAL (a scoped rebuild, a
+        # hand-made database) must not drop the sections it omits: the cells
+        # scan already in *cell_side* proves they exist, and a section missing
+        # from /stats reports no coverage at all.  Re-aggregate the gap from
+        # `cells`, which is the source of truth, so the response covers the same
+        # sections either way.
+        gap = [name for name in cell_side if name not in covered]
+        if gap:
+            c.execute(_SECTION_STATS_FULL_SQL, (target,))
+            for row in c.fetchall():
+                if row["section_name"] not in gap:
+                    continue
+                yield (
+                    row["section_name"],
+                    _cell_bucket_row(row),
+                    cell_side[row["section_name"]]["covered_bytes"] or 0,
+                    cell_side[row["section_name"]]["total_bytes"] or 0,
+                )
         return
     c.execute(_SECTION_STATS_FULL_SQL, (target,))
     for row in c.fetchall():
@@ -1353,7 +1375,10 @@ def _has_materialized_cells(c: sqlite3.Cursor) -> bool:
 
 
 def _cells_json_rows(
-    c: sqlite3.Cursor, target: str, section: str | None = None
+    c: sqlite3.Cursor,
+    target: str,
+    section: str | None = None,
+    expected_sections: set[str] | None = None,
 ) -> list[tuple[str, str]]:
     """Per-section cell JSON payloads as (section_name, cells_json) rows.
 
@@ -1363,6 +1388,17 @@ def _cells_json_rows(
     ``json_group_array`` over every cell (10.7 ms on a 39k-cell section).
     Falls back to the live query when the table is absent or written in an older
     codec, so a pre-v7 database keeps working and self-heals on its next build.
+
+    *expected_sections* is the section-name set the caller already read from
+    ``sections``.  When the materialized table is PARTIAL (present and current
+    codec, but missing a section, as a scoped rebuild or a hand-made database
+    leaves it), the
+    missing sections are re-aggregated from ``cells`` rather than dropped: a
+    dropped section renders as an empty grid, and every one of its bytes reads
+    as ``none`` in the SPA and Potato Mode, which is a wrong answer rather than
+    a slow one.  The caller already holds the section list inside the same
+    pinned snapshot, so the extra query only runs when a section is actually
+    missing.
     """
     clause = " AND section_name = ?" if section else ""
     params: list[Any] = [target, *([section] if section else [])]
@@ -1372,8 +1408,47 @@ def _cells_json_rows(
             f" WHERE target = ?{clause}",
             params,
         )
-        return [(row[0], decode_section_cells(row[1])) for row in c.fetchall()]
+        rows = [(row[0], decode_section_cells(row[1])) for row in c.fetchall()]
+        missing = _uncovered_sections({name for name, _ in rows}, expected_sections)
+        if not missing:
+            return rows
+        rows += _live_cells_json_rows(c, target, missing)
+        return rows
 
+    return _live_cells_json_rows(c, target, None, section)
+
+
+def _uncovered_sections(present: set[str], expected: set[str] | None) -> list[str]:
+    """Expected section names *present* does not cover, in a stable order."""
+    if not expected:
+        return []
+    return sorted(name for name in expected if name not in present)
+
+
+def _live_cells_json_rows(
+    c: sqlite3.Cursor,
+    target: str,
+    only: list[str] | None,
+    section: str | None = None,
+) -> list[tuple[str, str]]:
+    """``json_group_array`` over ``cells`` for *target*, narrowed by *section*
+    and/or *only*.
+
+    *only* names the sections to aggregate; every other section is skipped, so
+    filling the gap a partial cache left does not re-aggregate the whole target.
+    """
+    clause = ""
+    params: list[Any] = [target]
+    if section is not None:
+        clause = " AND section_name = ?"
+        params.append(section)
+    if only is not None:
+        if not only:
+            return []
+        # SAFETY: placeholders is only "?,?,...", its length comes from *only*,
+        # and every value reaches the statement parameterized.
+        clause += f" AND section_name IN ({','.join('?' * len(only))})"
+        params.extend(only)
     c.execute(_CELLS_JSON_SQL + f"{clause} GROUP BY section_name", params)
     return [(row[0], row[1]) for row in c.fetchall()]
 

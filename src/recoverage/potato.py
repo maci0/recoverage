@@ -32,6 +32,7 @@ from recoverage import __version__
 from recoverage._paths import _db_path
 from recoverage.disasm import HAS_CAPSTONE, get_disassembly
 from recoverage.server import (
+    _SECTION_STATS_FULL_SQL,
     CACHE_NO_STORE,
     CACHE_REVALIDATE,
     NOT_DATA_MARKER_SQL,
@@ -1224,7 +1225,10 @@ def _load_grid_cells(
         if cached is not None:
             return cached[0], cached[1], cached[2]
 
-    rows = _cells_json_rows(c, target, section)
+    # {section}: a materialized section_cells_json that does not cover this
+    # section is re-aggregated from `cells` rather than rendering an empty grid,
+    # which would report every byte in the section as `none`.
+    rows = _cells_json_rows(c, target, section, {section} if section is not None else None)
     # An unknown or cell-less section decodes to no cells: _cells_json_rows
     # returns no rows and the grid renders empty.
     cells: list[dict[str, Any]] = json.loads(rows[0][1]) if rows else []
@@ -1405,18 +1409,6 @@ def _compute_section_stats(
         s_stub,
         s_padding,
     ) in buckets_iter:
-        sec_summary_entry = summary.get(sec_name_r, summary)
-        s_covered_bytes = sec_summary_entry.get("coveredBytes", 0)
-        # `or 0`, not .get("size", 0): a NULL size is schema-legal (.bss-style
-        # sections carry NULL columns like va/fileOffset) and dict.get returns
-        # the stored None — which then raises TypeError on `> 0` below and
-        # 500s the whole page.  Same "or" guard as the va/columns fallbacks in
-        # _build_grid_html and _render_grid_view.
-        s_sec_size = sections.get(sec_name_r, {}).get("size") or 0
-        # Same rounding as server._section_stats (round to 2dp): int() floor
-        # made the map header read "87% covered" beside the topbar's "88.0%"
-        # for the same section.
-        s_pct = round(s_covered_bytes / s_sec_size * 100, 2) if s_sec_size > 0 else 0
         per_section_stats[sec_name_r] = {
             "total": s_total,
             "exact": s_exact,
@@ -1424,9 +1416,52 @@ def _compute_section_stats(
             "near_match": s_near_match,
             "stub": s_stub,
             "padding": s_padding,
-            "pct": s_pct,
+            "pct": _section_pct(summary, sections, sec_name_r),
         }
+    # A section_cell_stats that is present but covers only some of the target's
+    # sections leaves the rest out of the map header.  Re-aggregate the gap from
+    # `cells`, the source of truth and the same query the /stats endpoint falls
+    # back to, so the header counts the sections /stats does.
+    if set(per_section_stats) != set(sections):
+        # Same guard as the two queries above: a cells table too narrow for the
+        # live aggregation leaves the gap unfilled rather than 500ing the page.
+        try:
+            c.execute(_SECTION_STATS_FULL_SQL, (target,))
+            gap_rows = c.fetchall()
+        except sqlite3.Error:
+            gap_rows = []
+        for row in gap_rows:
+            sec_name_r = row["section_name"]
+            if sec_name_r in per_section_stats or sec_name_r not in sections:
+                continue
+            per_section_stats[sec_name_r] = {
+                "total": row["total_cells"],
+                "exact": row["exact_count"],
+                "reloc": row["reloc_count"],
+                "near_match": row["near_match_count"],
+                "stub": row["stub_count"],
+                "padding": row["padding_count"],
+                "pct": _section_pct(summary, sections, sec_name_r),
+            }
     return per_section_stats
+
+
+def _section_pct(summary: dict[str, Any], sections: dict[str, dict[str, Any]], name: str) -> float:
+    """Covered percentage for section *name*, from the summary's byte counts.
+
+    A section-level summary entry is used when the summary carries one;
+    otherwise the summary is read as the section's own entry.  ``or 0``, not
+    .get("size", 0): a NULL size is schema-legal (.bss-style sections carry
+    NULL columns like va/fileOffset) and dict.get returns the stored None,
+    which then raises TypeError on ``> 0`` and 500s the whole page.
+    """
+    sec_summary_entry = summary.get(name, summary)
+    covered = sec_summary_entry.get("coveredBytes", 0)
+    size = sections.get(name, {}).get("size") or 0
+    # Same rounding as server._section_stats (round to 2dp): int() floor made
+    # the map header read "87% covered" beside the topbar's "88.0%" for the
+    # same section.
+    return round(covered / size * 100, 2) if size > 0 else 0
 
 
 #: Rows each search query may scan.  The cap bounds the work a single search

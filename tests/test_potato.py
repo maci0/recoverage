@@ -193,6 +193,56 @@ def test_section_stats_pct_null_size_is_zero():
     conn.close()
 
 
+def test_section_stats_fills_a_partial_section_cell_stats():
+    """A materialized section_cell_stats covering only some sections still
+    reports the rest.
+
+    The table is a cache over `cells`; a scoped rebuild or a hand-made database
+    can carry one that omits a section, and the map header then showed no counts
+    for it at all.  The gap is re-aggregated from `cells`, the same fallback
+    /api .../stats uses, so the two surfaces agree on the section set.
+    """
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute(
+        "CREATE TABLE cells (target TEXT, section_name TEXT, start INT, end INT,"
+        " span INT, state TEXT)"
+    )
+    c.execute(
+        "CREATE TABLE section_cell_stats (target TEXT, section_name TEXT,"
+        " total_cells INT, exact_count INT, reloc_count INT, near_match_count INT,"
+        " stub_count INT, padding_count INT)"
+    )
+    c.executemany(
+        "INSERT INTO cells (target, section_name, start, end, span, state)"
+        " VALUES ('T', ?, ?, ?, 1, ?)",
+        [
+            (".text", 0, 1, "exact"),
+            (".text", 1, 2, "exact"),
+            (".data", 0, 1, "exact"),
+            (".data", 1, 2, "none"),
+        ],
+    )
+    # Only .text made it into the cache.
+    c.execute(
+        "INSERT INTO section_cell_stats"
+        " SELECT target, section_name, COUNT(*),"
+        " SUM(state IN ('exact','verified')), 0, 0, 0, 0"
+        " FROM cells WHERE section_name = '.text' GROUP BY target, section_name"
+    )
+
+    sections = {".text": {"size": 2}, ".data": {"size": 2}}
+    stats = _compute_section_stats(c, "T", sections, {"summary": {}})
+
+    assert set(stats) == {".text", ".data"}
+    assert stats[".data"]["total"] == 2
+    assert stats[".data"]["exact"] == 1
+    # .text still answers from the cache it was already answered from.
+    assert stats[".text"]["total"] == 2
+    conn.close()
+
+
 def test_progress_bar_segments_share_one_denominator():
     """Every segment of a progress bar is a share of ONE denominator.
 

@@ -254,6 +254,12 @@ The release policy is not written down anywhere else, so it is stated here and
      makes `other_count` sum to `total_cells` are documented in `docs/DESIGN.md`
      (database schema section); `server._cell_bucket_row` always emits the
      `other` key, 0 when the source predates the column.
+   - A cache that is present but covers only SOME of the target's sections is
+     the third case, and the one a presence check misses: the reader fills the
+     gap from `cells` rather than dropping the section
+     (`server._cells_json_rows`'s `expected_sections`, `server._per_section_buckets`,
+     `potato._compute_section_stats`). A dropped section reports no coverage at
+     all, and a dropped cell payload paints a whole section as `none` bytes.
 3. `recoverage` → serves the DB as a web dashboard
    - Cell detail panel shows parent function as a clickable navigation link
 

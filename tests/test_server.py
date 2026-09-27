@@ -1557,6 +1557,182 @@ class TestBucketReconciliation:
         assert materialized["matched"] == 3
 
 
+class TestPartialDerivedTables:
+    """A PARTIAL derived table must not drop sections it does not cover.
+
+    rebrew's `section_cell_stats` and `section_cells_json` are caches over
+    `cells`.  Both are read in preference to a live aggregation, and a presence
+    check alone does not prove they hold every section: a scoped rebuild, or a
+    hand-made database, can carry a current-codec table that covers only some of
+    the sections `cells` has.  The omitted section then vanished from the
+    response: no stats at all, and (for the cell JSON) an empty grid that reads
+    as a whole section of `none` bytes, which is a wrong answer rather than a
+    slow one.
+    """
+
+    SECTIONS = (".text", ".data")
+    #: .text gets two exact cells, .data one exact and one none, so the two
+    #: sections' numbers differ and a dropped section cannot pass unnoticed.
+    CELLS = (
+        (".text", 0, 1, "exact"),
+        (".text", 1, 2, "exact"),
+        (".data", 0, 1, "exact"),
+        (".data", 1, 2, "none"),
+    )
+
+    @classmethod
+    def _db(cls) -> sqlite3.Connection:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        c = conn.cursor()
+        # The column set CELLS_JSON_OBJECT_SQL names, so the live fallback in
+        # the cell-JSON tests below builds the same shape the cache stores.
+        c.execute(
+            "CREATE TABLE cells (target TEXT, section_name TEXT, start INT,"
+            " end INT, span INT, state TEXT, functions TEXT, label TEXT,"
+            " parent_function TEXT)"
+        )
+        c.execute("CREATE TABLE metadata (target TEXT, key TEXT, value TEXT)")
+        c.execute("CREATE TABLE sections (target TEXT, name TEXT, va INT, size INT)")
+        c.execute("CREATE TABLE functions (target TEXT, va INT, status TEXT, markerType TEXT)")
+        c.executemany(
+            "INSERT INTO sections (target, name, va, size) VALUES ('T', ?, 0x1000, 2)",
+            [(name,) for name in cls.SECTIONS],
+        )
+        c.executemany(
+            "INSERT INTO cells (target, section_name, start, end, span, state)"
+            " VALUES ('T', ?, ?, ?, 1, ?)",
+            cls.CELLS,
+        )
+        return conn
+
+    @classmethod
+    def _partial_section_cell_stats(cls, c: sqlite3.Cursor, only: str) -> None:
+        """A materialized section_cell_stats holding *only* section *only*."""
+        c.execute(
+            "CREATE TABLE section_cell_stats (target TEXT, section_name TEXT,"
+            " total_cells INT, exact_count INT, reloc_count INT,"
+            " near_match_count INT, stub_count INT, padding_count INT,"
+            " data_count INT, thunk_count INT, none_count INT,"
+            " proven_count INT, size_mismatch_count INT, other_count INT)"
+        )
+        c.execute(
+            "INSERT INTO section_cell_stats SELECT target, section_name,"
+            " COUNT(*), SUM(state IN ('exact','verified')), SUM(state='reloc'),"
+            " SUM(state IN ('near_match','near_matching')), SUM(state='stub'),"
+            " SUM(state='padding'), SUM(state='data'), SUM(state='thunk'),"
+            " SUM(state='none'), SUM(state='proven'),"
+            " SUM(state='size_mismatch'), 0"
+            " FROM cells WHERE section_name = ? GROUP BY target, section_name",
+            (only,),
+        )
+
+    def test_partial_section_cell_stats_keeps_the_missing_section(self) -> None:
+        import recoverage.server as srv
+
+        conn = self._db()
+        try:
+            c = conn.cursor()
+            self._partial_section_cell_stats(c, ".text")
+            stats = srv._section_stats(c, "T")["sections"]
+        finally:
+            conn.close()
+
+        assert set(stats) == set(self.SECTIONS)
+        # .data comes from `cells`: one covered byte of two, and both its cells
+        # bucketed, so the section reports what the live query reports.
+        assert stats[".data"]["total_cells"] == 2
+        assert stats[".data"]["exact"] == 1
+        assert stats[".data"]["none"] == 1
+        assert stats[".data"]["covered_bytes"] == 1
+        assert stats[".data"]["total_bytes"] == 2
+        assert stats[".data"]["coverage_pct"] == 50.0
+
+    def test_partial_section_cell_stats_does_not_re_emit_covered_sections(self) -> None:
+        """The covered sections keep the materialized numbers, not a second copy."""
+        import recoverage.server as srv
+
+        conn = self._db()
+        try:
+            c = conn.cursor()
+            self._partial_section_cell_stats(c, ".text")
+            c.execute(
+                "UPDATE section_cell_stats SET total_cells = 99 WHERE section_name = ?", (".text",)
+            )
+            stats = srv._section_stats(c, "T")["sections"]
+        finally:
+            conn.close()
+
+        assert stats[".text"]["total_cells"] == 99
+        assert len(stats) == 2
+
+    def test_partial_section_cells_json_re_aggregates_the_gap(self) -> None:
+        """A materialized section_cells_json missing a section is filled from cells."""
+        from rebrew.workspace import SECTION_CELLS_COLUMN, SECTION_CELLS_TABLE, encode_section_cells
+
+        import recoverage.server as srv
+
+        cached = encode_section_cells('[{"start": 0, "end": 1, "span": 1, "state": "exact"}]')
+        conn = self._db()
+        try:
+            c = conn.cursor()
+            c.execute(
+                f"CREATE TABLE {SECTION_CELLS_TABLE} (target TEXT, section_name TEXT,"
+                f" {SECTION_CELLS_COLUMN} BLOB, PRIMARY KEY (target, section_name))"
+            )
+            c.execute(
+                f"INSERT INTO {SECTION_CELLS_TABLE} VALUES ('T', '.text', ?)",
+                (cached,),
+            )
+            rows = dict(srv._cells_json_rows(c, "T", None, set(self.SECTIONS)))
+        finally:
+            conn.close()
+
+        assert set(rows) == set(self.SECTIONS)
+        # .text still comes from the cache, verbatim; .data is aggregated live
+        # and carries the cells the cache omitted.  Without the gap fill .data
+        # would be absent, and _dumps_with_cells would splice an empty array,
+        # a whole section painted as `none`.
+        assert [cell["state"] for cell in json.loads(rows[".text"])] == ["exact"]
+        assert [cell["state"] for cell in json.loads(rows[".data"])] == ["exact", "none"]
+
+    def test_complete_section_cells_json_runs_no_live_fallback(self) -> None:
+        """A cache that covers every expected section answers alone."""
+        from rebrew.workspace import SECTION_CELLS_COLUMN, SECTION_CELLS_TABLE, encode_section_cells
+
+        import recoverage.server as srv
+
+        payload = encode_section_cells('[{"start": 0, "end": 1, "span": 1, "state": "exact"}]')
+        conn = self._db()
+        try:
+            c = conn.cursor()
+            c.execute(
+                f"CREATE TABLE {SECTION_CELLS_TABLE} (target TEXT, section_name TEXT,"
+                f" {SECTION_CELLS_COLUMN} BLOB, PRIMARY KEY (target, section_name))"
+            )
+            c.executemany(
+                f"INSERT INTO {SECTION_CELLS_TABLE} VALUES ('T', ?, ?)",
+                [(name, payload) for name in self.SECTIONS],
+            )
+            calls: list[str] = []
+            original = srv._live_cells_json_rows
+
+            def _counting(*args: Any, **kwargs: Any) -> list[tuple[str, str]]:
+                calls.append("live")
+                return original(*args, **kwargs)
+
+            srv._live_cells_json_rows = _counting  # type: ignore[assignment]
+            try:
+                rows = dict(srv._cells_json_rows(c, "T", None, set(self.SECTIONS)))
+            finally:
+                srv._live_cells_json_rows = original  # type: ignore[assignment]
+        finally:
+            conn.close()
+
+        assert set(rows) == set(self.SECTIONS)
+        assert calls == []
+
+
 class TestSpaStateVocabulary:
     """The SPA's STATE_ID must cover every state rebrew can write.
 
