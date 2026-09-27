@@ -39,6 +39,11 @@ module ships in the published package. See *Breaking*.
 - **`recoverage open` reads `RECOVERAGE_PORT`.** It defaulted to `8001` while
   `serve` read the environment, so a deployment off the default port had to be
   repeated in every `open` invocation. The flag still wins.
+- **The distribution ships a `NOTICE`.** The wheel bundles the vendored
+  VanJS and Highlight.js assets, whose grants travelled only in the GitHub
+  README, so an installed copy carried the MIT license and no way back to
+  either. `NOTICE` names each bundled blob with its source and license, and is
+  listed in `license-files` so it ships alongside `LICENSE`.
 
 ### Breaking
 

@@ -11,8 +11,11 @@ third-party preset whose license and origin are no longer recorded.
 
 from __future__ import annotations
 
+import ast
 import json
 import re
+import sys
+import tomllib
 from itertools import pairwise
 from pathlib import Path
 
@@ -24,6 +27,14 @@ _README = _ROOT / "README.md"
 _PACKAGE_JSON = _ROOT / "package.json"
 _FLATTEN = _ROOT / "tools" / "flatten-rikalabs-strict.py"
 _DERIVED_PRESET = _ROOT / "tools" / "oxlint" / "rikalabs-strict.json"
+
+# Declared distributions that are correct without ever appearing in an import
+# statement, and the mechanism that runs them instead. Every entry needs a
+# reason: an unexplained one is how a genuinely stale declaration survives.
+_CLI_ONLY = {
+    "ruff": "the lint gate invokes it as `python -m ruff`, never imports it",
+    "pytest-playwright": "a pytest plugin, loaded by entry point, that only supplies fixtures",
+}
 
 # A CI job header: two spaces, a name, a colon, and nothing else on the line.
 _JOB_RE = re.compile(r"^  (?P<name>[a-z][a-z0-9-]*):$", re.MULTILINE)
@@ -129,3 +140,140 @@ class TestCheckedInLintPreset:
         expected = re.search(r'^EXPECTED_LICENSE = "([^"]+)"$', flatten, re.MULTILINE)
         assert expected, "the flatten script no longer pins the upstream license"
         assert "package.json" in flatten and "EXPECTED_LICENSE" in flatten.split("def main")[-1]
+
+
+def _python_sources() -> list[Path]:
+    """Every first-party Python file: the package, the tests, the tools."""
+    return [
+        path
+        for directory in ("src", "tests", "tools")
+        for path in sorted((_ROOT / directory).rglob("*.py"))
+    ]
+
+
+def _imported_modules() -> set[str]:
+    """Top-level names of the absolute imports across those files.
+
+    `ast` rather than a pattern, so a name inside a string or a comment is not
+    a dependency and a relative import is not read as a third-party one.
+    """
+    names: set[str] = set()
+    for path in _python_sources():
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                names.update(alias.name.split(".")[0] for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and not node.level:
+                assert node.module, f"{path}: relative or empty from-import"
+                names.add(node.module.split(".")[0])
+    return names
+
+
+def _probed_modules() -> set[str]:
+    """Names passed to `importlib.util.find_spec`, the optional-extra probe.
+
+    An extra whose only use is a capability check is never imported at module
+    scope, so the probe is what proves the dependency is still wired up.
+    """
+    return {
+        name.split(".")[0]
+        for name in re.findall(
+            r'find_spec\(\s*"(?P<name>[A-Za-z0-9_.]+)"',
+            "\n".join(p.read_text(encoding="utf-8") for p in _python_sources()),
+        )
+    }
+
+
+def _declared_distributions() -> dict[str, str]:
+    """Declared distribution name -> the top-level module it provides.
+
+    Runtime dependencies and every extra: an extra that is declared but never
+    reached is the same unused dependency with a narrower blast radius.
+    """
+    project = tomllib.loads((_ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    requirements = list(project["dependencies"])
+    for extra in project.get("optional-dependencies", {}).values():
+        requirements.extend(extra)
+    names: dict[str, str] = {}
+    for requirement in requirements:
+        dist = re.match(r"[A-Za-z0-9][A-Za-z0-9._-]*", requirement).group()
+        names[re.sub(r"[-_.]+", "-", dist).lower()] = dist.lower().replace("-", "_")
+    return names
+
+
+class TestDeclaredDependencies:
+    def test_every_declared_distribution_is_reachable(self) -> None:
+        """No declared dependency is dead weight.
+
+        An unused runtime dependency is installed on every user's machine and
+        widens the supply chain for code that never runs; an unused extra is
+        the same cost for whoever asks for it. Reachability is an import, an
+        `importlib.util.find_spec` probe, or a recorded CLI invocation.
+        """
+        used = _imported_modules() | _probed_modules()
+        unreachable = {
+            dist: "no import, find_spec probe, or recorded CLI invocation"
+            for dist, module in _declared_distributions().items()
+            if module not in used and dist not in _CLI_ONLY
+        }
+        assert not unreachable, f"declared but never used: {sorted(unreachable)}"
+        for dist, reason in _CLI_ONLY.items():
+            assert dist in _declared_distributions(), (
+                f"_CLI_ONLY lists {dist!r}, which pyproject.toml no longer declares; "
+                "its exemption has outlived the dependency"
+            )
+            assert reason.strip(), f"_CLI_ONLY[{dist!r}] needs the reason it is exempt"
+
+    def test_every_third_party_import_is_declared(self) -> None:
+        """No import reaches a package the manifest does not name.
+
+        Importing a package that is only present transitively works until the
+        dependency that drags it in changes its own tree, at which point the
+        break lands in a release rather than in the pull request that caused
+        it. A first-party sibling module is not a dependency.
+        """
+        first_party = {p.stem for p in _python_sources()} | {"recoverage"}
+        declared = set(_declared_distributions().values())
+        undeclared = {
+            name
+            for name in _imported_modules()
+            if name not in sys.stdlib_module_names
+            and name not in first_party
+            and name not in declared
+        }
+        assert not undeclared, f"imported but not declared in pyproject.toml: {sorted(undeclared)}"
+
+
+class TestBundledThirdPartyAssets:
+    """The wheel ships vendored browser blobs, so their grants have to ship too.
+
+    `package-data` globs the whole assets directory, so a minified third-party
+    blob written there lands in every install whether or not anyone records
+    where it came from. README documents the provenance; NOTICE is what a
+    consumer of the built wheel actually receives.
+    """
+
+    def test_notice_ships_with_the_distribution(self) -> None:
+        """A NOTICE nothing packages is a NOTICE no downstream consumer sees."""
+        project = tomllib.loads((_ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+        assert "NOTICE" in project["license-files"], (
+            "license-files omits NOTICE, so the bundled third-party grants stay out of the wheel"
+        )
+        assert (_ROOT / "NOTICE").is_file()
+
+    def test_every_bundled_third_party_blob_is_credited(self) -> None:
+        """Every vendored asset is named in NOTICE with a license and a source.
+
+        The vendored blobs are the minified ones: first-party sources (app.js,
+        detail.js) are not minified, so the suffix is the boundary between
+        "written here" and "copied from somewhere".
+        """
+        notice = (_ROOT / "NOTICE").read_text(encoding="utf-8")
+        bundled = sorted((_ROOT / "src" / "recoverage" / "assets").glob("*.min.js"))
+        assert bundled, "no vendored assets found; the glob this check relies on has moved"
+        for blob in bundled:
+            rel = blob.relative_to(_ROOT).as_posix()
+            entry = re.search(rf"^.*{re.escape(rel)}.*?$\n\n", notice, re.MULTILINE | re.DOTALL)
+            assert entry, f"NOTICE does not credit {rel}, which ships in the wheel"
+            assert "License:" in entry.group(0), f"NOTICE names {rel} without its license"
+            assert "Upstream:" in entry.group(0), f"NOTICE names {rel} without its source"

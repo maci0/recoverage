@@ -24,6 +24,7 @@ recoverage/
 ├── CONTRIBUTING.md         # Bootstrap, edit-test loop, local/CI parity table
 ├── Makefile                # Contributor targets (`make help`); wraps the CI commands
 ├── LICENSE                  # MIT
+├── NOTICE                   # Grants for the third-party browser assets bundled in the wheel
 ├── package.json            # bun scripts: lint, lint:js, lint:html
 ├── .yamllint.yaml          # yamllint config for .github/ (document-start, 100 cols)
 ├── oxlint.config.ts        # JS/TS lint config (see the tooling notes below)
@@ -50,6 +51,7 @@ recoverage/
 │   ├── test_potato.py        # Potato Mode unit tests
 │   ├── test_perf.py          # Deterministic perf gates (work counters, not wall clock)
 │   ├── test_release.py       # Release contract: version, changelog, declared floors
+│   ├── test_supply_chain.py  # Pins: rebrew ref/sha, declared-vs-imported deps, bundled-asset grants
 │   ├── test_fuzz.py          # Seeded mutation campaigns over the untrusted-input surfaces
 │   ├── test_serve_harness.py # The smoke + lint-html harness contract
 │   └── test_playwright.py    # Browser integration tests

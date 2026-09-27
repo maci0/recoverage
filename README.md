@@ -501,3 +501,7 @@ revision: re-vendor it by replacing the directory from upstream, then re-run
 ## License
 
 MIT
+
+The wheel also bundles the third-party assets listed above. Their grants ship
+as [`NOTICE`](NOTICE), which `license-files` puts in the distribution metadata
+next to the MIT license.
