@@ -370,9 +370,9 @@ recoverage/
     ├── server.py             # Bottle app, shared helpers & compression
     ├── regen.py              # In-process rebrew regen (catalog + build-db)
     ├── api.py                # REST API routes (/api/*)
-    ├── ui.py                 # UI routes (/, /potato, static files)
-    ├── potato.py             # Potato Mode renderer
-    ├── webapp.py             # Composition root: imports api+ui so app has every route
+    ├── ui.py                 # UI routes (/, static files)
+    ├── potato.py             # Potato Mode renderer + the /potato route
+    ├── webapp.py             # Composition root: imports api+ui+potato so app has every route
     └── assets/
         ├── index.html        # SPA shell
         ├── style.css         # All styles

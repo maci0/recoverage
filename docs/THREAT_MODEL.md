@@ -15,10 +15,10 @@ LAN case (`--allow-remote`).
 
 | # | Risk | Where | Mitigation in code |
 |---|------|-------|--------------------|
-| 1 | Default deployment is unauthenticated: on `--allow-remote` without `--token` every host on the network reads project sources, original binaries, hex bytes and disassembly | `cli.py:393-408`, `ui.py:245-260`, `api.py:1351`, `api.py:1227` | Acknowledgement only: a red banner and exit 1 without `--allow-remote`; `--token` is opt-in and never required alongside a remote bind |
-| 2 | No request rate limit on the expensive read endpoints; a multi-MB grid build plus brotli/zstd compression is CPU- and memory-bound per request | `api.py:834` (`/data`), `potato.py` via `ui.py:151`, `api.py:1227` (`/asm`) | Bounded per-process caches with oldest-entry eviction (`server.py:999`); the only hard connection cap is on `/api/events` (`api.py:390`) |
+| 1 | Default deployment is unauthenticated: on `--allow-remote` without `--token` every host on the network reads project sources, original binaries, hex bytes and disassembly | `cli.py:393-408`, `ui.py:198-213`, `api.py:1351`, `api.py:1227` | Acknowledgement only: a red banner and exit 1 without `--allow-remote`; `--token` is opt-in and never required alongside a remote bind |
+| 2 | No request rate limit on the expensive read endpoints; a multi-MB grid build plus brotli/zstd compression is CPU- and memory-bound per request | `api.py:834` (`/data`), `potato.py:1020` (`/potato`), `api.py:1227` (`/asm`) | Bounded per-process caches with oldest-entry eviction (`server.py:1017`); the only hard connection cap is on `/api/events` (`api.py:390`) |
 | 3 | Global auth throttle: 10 failures per 60 s per process, not per source, so any one client can 429 the operator and every other client | `server.py:1465-1491` | The cap is intentional and documented as global; it bounds online guessing but has no per-source key |
-| 4 | No transport security. The token travels as `?token=` in a URL and in a cookie, in cleartext on any non-loopback bind | `ui.py:206-212`, `server.py:1509-1515` | `Referrer-Policy: no-referrer` (`server.py:1683`), `HttpOnly; SameSite=Strict` cookie, constant-time compare (`server.py:1448`) |
+| 4 | No transport security. The token travels as `?token=` in a URL and in a cookie, in cleartext on any non-loopback bind | `ui.py:158-165`, `server.py:1509-1515` | `Referrer-Policy: no-referrer` (`server.py:1683`), `HttpOnly; SameSite=Strict` cookie, constant-time compare (`server.py:1448`) |
 | 5 | `rebrew-project.toml` is trusted input: it decides which DB is read, which binaries are disassembled, and which directories `/src` and `/original` serve from | `_paths.py:36`, `server.py:538`, `server.py:504` | None beyond TOML parsing; the file is assumed to come from the operator's own checkout |
 | 6 | DoS by thread exhaustion: `wsgiref` runs one thread per connection, has no idle timeout and no connection limit | `cli.py:513` | Only `/api/events` is capped (`api.py:583-592`) |
 | 7 | Any local process can trigger a full re-catalog and DB rebuild (disk and CPU), repeatedly within the cooldown | `api.py:1413-1487` | Loopback peer check, loopback-`Origin` and `Sec-Fetch-Site: cross-site` rejection, single-flight lock, `_REGEN_COOLDOWN_SECONDS` |
@@ -33,13 +33,13 @@ supported-versions table exists either (there is no `SECURITY.md`).
 
 Network (all on the single Bottle app, all threaded):
 
-- `GET /` and `GET /index.html` - `ui.py:197`. Inlines and compresses the whole
+- `GET /` and `GET /index.html` - `ui.py:150`. Inlines and compresses the whole
   SPA; sets the auth cookie from `?token=`.
-- `GET /potato` - `ui.py:151`, rendered by `potato.py`. Full server-side HTML of
-  the entire coverage map.
-- `GET /src/<path>`, `GET /original/<path>` - `ui.py:245`. Proxies the project's
+- `GET /potato` - `potato.py:1020`, which owns both the route and the
+  renderer. Full server-side HTML of the entire coverage map.
+- `GET /src/<path>`, `GET /original/<path>` - `ui.py:198`. Proxies the project's
   source tree and original binaries to the browser.
-- `GET /<asset>` (allowlist regex) - `ui.py:317`. Package-shipped JS/CSS/SVG.
+- `GET /<asset>` (allowlist regex) - `ui.py:272`. Package-shipped JS/CSS/SVG.
 - `GET /api/health` `api.py:613`, `GET /api/targets` `api.py:661`.
 - `GET /api/targets/<t>/stats|functions|functions/<va>|asm|data|sections/<s>/bytes`
   - `api.py:680`, `api.py:903`, `api.py:1169`, `api.py:1227`, `api.py:834`,

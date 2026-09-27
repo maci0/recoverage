@@ -18,6 +18,7 @@ from rebrew.workspace import VA_MAX, parse_va_candidates
 
 from recoverage import __version__
 from recoverage import server as _server
+from recoverage._paths import _db_path
 from recoverage.regen import run_regen
 from recoverage.server import (
     _SECTION_BUCKETS_SQL,
@@ -32,7 +33,6 @@ from recoverage.server import (
     _cell_bucket_row,
     _cells_json_rows,
     _db,
-    _db_path,
     _escape_like,
     _etag_or_304,
     _fn_json_sql,

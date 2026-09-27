@@ -21,6 +21,17 @@ module ships in the published package. See *Breaking*.
   `RECOVERAGE_*` name, each exit 2 naming the variable. The resolved settings
   are printed on startup, the token as `token=set`.
 
+### Changed
+
+- **The `/potato` route lives in `recoverage.potato`, next to the renderer it
+  serves.** `ui.handle_potato` imported the renderer inside the handler body
+  and reached back for a private helper; the route now sits with
+  `render_potato` and `webapp` imports `potato` alongside `api` and `ui`.
+  Same responses, same headers, same 503 and 500 bodies.
+- **`_db_path` is imported from `recoverage._paths`, not re-exported through
+  `recoverage.server`.** `api`, `potato` and `cli` now name the same module as
+  the helper's owner.
+
 ### Breaking
 
 - **`server.resolve_targets` returns the one ordered target list, not a

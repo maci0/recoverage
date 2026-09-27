@@ -23,18 +23,22 @@ from datetime import UTC, datetime
 from html import escape as _html_escape
 from pathlib import Path
 from typing import Any
-from urllib.parse import ParseResult, parse_qs
+from urllib.parse import ParseResult, parse_qs, urlparse
 from urllib.parse import quote as _url_quote
 
 from bottle import HTTPResponse, SimpleTemplate  # type: ignore[import-untyped]
 from rebrew.workspace import parse_va_candidates
 
 from recoverage import __version__
+from recoverage._paths import _db_path
 from recoverage.server import (
+    CACHE_NO_STORE,
+    CACHE_REVALIDATE,
     HAS_CAPSTONE,
     _cells_json_rows,
-    _db_path,
+    _compressed,
     _escape_like,
+    _etag_or_304,
     _evict_oldest,
     _fn_json_sql,
     _format_hex_dump,
@@ -44,8 +48,11 @@ from recoverage.server import (
     _open_db,
     _snapshot_db_mtime,
     _verify_one_select,
+    app,
     get_disassembly,
+    request,
     resolve_targets,
+    response,
 )
 
 _log = logging.getLogger("recoverage")
@@ -930,9 +937,9 @@ def _db_unavailable_page() -> HTTPResponse:
     """503 HTML page for an unreadable/unqueryable coverage.db in Potato Mode.
 
     ONE definition shared by the connect guard in :func:`render_potato` and
-    ui.handle_potato's query-failure tail so both surfaces carry the same
-    message (the two inline copies had already drifted: "to create it" vs
-    "to create or rebuild it").
+    the query-failure tail of :func:`handle_potato`, so both surfaces carry
+    the same message (the two inline copies had already drifted: "to create
+    it" vs "to create or rebuild it").
     """
     return HTTPResponse(
         status=503,
@@ -958,7 +965,7 @@ def render_potato(parsed_url: ParseResult) -> str:
     """Render the Potato Mode page for *parsed_url*'s query string.
 
     Raises the 503 page from :func:`_db_unavailable_page` when coverage.db
-    cannot be opened; ``ui.handle_potato`` does not catch it, so it leaves the
+    cannot be opened; the route below does not catch it, so it leaves the
     route as a response rather than a render error.
     """
     qs = parse_qs(parsed_url.query, keep_blank_values=True)
@@ -995,6 +1002,55 @@ def render_potato(parsed_url: ParseResult) -> str:
             sort_key=sort_key,
             status_filter=status_filter,
             page_str=page_str,
+        )
+
+
+# ── HTTP surface ───────────────────────────────────────────────────
+#
+# The /potato route lives with the renderer it serves, not in recoverage.ui:
+# the handler's only job is ETag + cache policy around render_potato.
+
+
+@app.get("/potato")
+def handle_potato() -> bytes | Any:
+    try:
+        # WAL-aware snapshot (see _snapshot_db_mtime), not raw st_mtime: a
+        # rebuild that commits only to -wal must still mint a new ETag or
+        # browsers keep a stale 304.  Same contract as /data, /asm, /bytes.
+        qs = request.query_string
+        if isinstance(qs, bytes):
+            qs = qs.decode("utf-8", errors="replace")
+        # Redact token from ETag input so query-string ETag doesn't leak it.
+        if "token=" in qs:
+            qs = "&".join(p for p in qs.split("&") if not p.startswith("token="))
+        etag = _etag_or_304(_snapshot_db_mtime(), qs)
+        body = render_potato(urlparse(request.url)).encode("utf-8")
+        # Every other DB-derived response carries an explicit cache policy;
+        # /potato was the one surface sent with none, which leaves the browser
+        # free to apply heuristic freshness and a shared cache free to store
+        # and replay a page that may have been rendered for a token-bearing
+        # client.  CACHE_REVALIDATE keeps the ETag's cheap 304s while forcing
+        # revalidation before every reuse.
+        resp_body = _compressed(body, "text/html; charset=utf-8", Cache_Control=CACHE_REVALIDATE)
+
+        if etag:
+            response.set_header("ETag", etag)
+        return resp_body
+
+    except sqlite3.Error:
+        # A DB that opens but cannot answer queries is the same
+        # db_unavailable condition render_potato's connect guard reports as
+        # 503 — not an application bug.  One contract (and one page) for
+        # both surfaces.
+        _log.exception("Potato mode database query failed")
+        return _db_unavailable_page()
+    # json.JSONDecodeError needs no entry: it subclasses ValueError.
+    except (OSError, ValueError, KeyError):
+        _log.exception("Potato mode render failed")
+        return HTTPResponse(
+            status=500,
+            body="<html><body>Internal server error</body></html>",
+            headers={"Cache-Control": CACHE_NO_STORE},
         )
 
 
@@ -1744,7 +1800,7 @@ def _render_grid_view(
     """
     # A NULL columns value (schema-legal, like the NULL va/fileOffset a .bss
     # section carries) must fall back to 64, not TypeError on None <= 0 —
-    # which escapes ui.handle_potato's except tuple as a raw HTML 500.
+    # which escapes handle_potato's except tuple as a raw HTML 500.
     grid_columns = sec_data.get("columns") or 64
     if grid_columns <= 0:
         grid_columns = 64

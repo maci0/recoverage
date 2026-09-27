@@ -73,7 +73,8 @@ CI also builds an SBOM from `uv.lock` (`uv export`); it needs no local step.
 ## Adding to the tree
 
 - Backend modules live in `src/recoverage/`; `webapp.py` is the composition
-  root that imports `api.py` and `ui.py` so the app has every route.
+  root that imports `api.py`, `ui.py` and `potato.py` so the app has every
+  route.
 - Tests live in `tests/`, one module per source module, and reuse the
   `tests/conftest.py` fixtures for the synthetic database.
 - `filterwarnings = ["error"]` in `pyproject.toml` means a new

@@ -18,7 +18,7 @@ The UI is built using a lightweight, dependency-free stack to ensure fast load t
 ## Data Pipeline
 1. `rebrew catalog` parses the target binary (`target.dll`) and C source annotations (`// FUNCTION:`, `// GLOBAL:`).
 2. `rebrew build-db` converts the resulting JSON into a structured SQLite database with tables for metadata, functions, globals, sections, and cells. It also pre-calculates coverage statistics for all sections to save frontend processing time.
-3. The Bottle app (`webapp.py` wires `server.py` + `api.py` + `ui.py` into the fully routed application; importing `recoverage.server` alone yields a routeless app) serves:
+3. The Bottle app (`webapp.py` wires `server.py` + `api.py` + `ui.py` + `potato.py` into the fully routed application; importing `recoverage.server` alone yields a routeless app) serves:
    * Static files (index.html, app.js, style.css, van.min.js) which are **inlined and compressed** into a single response for the root `/` path to achieve a "first draw in the first TCP packet".
    * `/api/targets` endpoint that returns available targets from the database plus any target declared under `[targets.*]` in `rebrew-project.toml` (a configured-but-not-yet-built target stays addressable).
    * `/api/targets/<target>/stats` endpoint with per-section byte-based coverage statistics (shared implementation with the `recoverage stats` CLI).
@@ -349,9 +349,9 @@ Potato Mode uses [Bottle](https://bottlepy.org/) for both the dev server and HTM
 - **`server.py`** — shared Bottle application (`app`: hooks, auth, error handlers, CORS preflight catch-all) and infrastructure: compression (brotli/zstd/gzip), DB helpers, DLL loading, target resolution, and response utilities.
 - **`regen.py`** — in-process rebrew regen (`run_regen`): loads `rebrew-project.toml` once and calls rebrew's `run_catalog` + `build_db` module functions; shared by the CLI's regen paths and POST /api/regen.  rebrew is a required dependency, but its catalog/build-db imports are deferred into `run_regen` so only the regen paths pay for the heavy rebrew stack.
 - **`api.py`** — REST API routes (`/api/*`) with `@app.get`/`@app.post` decorators and `request` globals.
-- **`ui.py`** — UI routes (`/`, `/potato`, static files) with index caching and minification (using `rjsmin` and `rcssmin`).  The inlined shell is compressed once per encoding under `INDEX_LOCK` and served from `CACHED_INDEX_COMPRESSED`; the standalone assets (`detail.js`, the `hljs` set, CSS, favicon) are compressed at maximum brotli effort and memoized per `(filename, encoding)` in `_STATIC_CACHE`, falling through to `static_file()` only when the client advertises no supported encoding, so Range and `If-Modified-Since` still work there.
-- **`webapp.py`** — composition root: imports `api` and `ui` so their routes mount on the shared `app`; this is the module the CLI actually serves.
-- **`potato.py`** — Uses Bottle's `SimpleTemplate` engine (stpl) standalone, with no dependency on the Bottle web server for rendering.
+- **`ui.py`** — UI routes (`/`, static files) with index caching and minification (using `rjsmin` and `rcssmin`).  The inlined shell is compressed once per encoding under `INDEX_LOCK` and served from `CACHED_INDEX_COMPRESSED`; the standalone assets (`detail.js`, the `hljs` set, CSS, favicon) are compressed at maximum brotli effort and memoized per `(filename, encoding)` in `_STATIC_CACHE`, falling through to `static_file()` only when the client advertises no supported encoding, so Range and `If-Modified-Since` still work there.
+- **`webapp.py`** — composition root: imports `api`, `ui` and `potato` so their routes mount on the shared `app`; this is the module the CLI actually serves.
+- **`potato.py`** — Potato Mode: the `/potato` route plus the renderer behind it.  It uses Bottle's `SimpleTemplate` engine (stpl) for the markup; only the thin route handler touches the Bottle web server.
 
 ### Template Architecture
 

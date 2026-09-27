@@ -6,11 +6,9 @@ import contextlib
 import gzip
 import hashlib
 import logging
-import sqlite3
 import threading
 from pathlib import PurePosixPath
 from typing import Any
-from urllib.parse import urlparse
 
 import brotli  # type: ignore[import-untyped]
 import rcssmin  # type: ignore[import-untyped]
@@ -25,13 +23,10 @@ from recoverage.server import (
     HTTPResponse,
     _assets_dir,
     _best_encoding,
-    _compressed,
-    _etag_or_304,
     _finalized,
     _if_none_match_matches,
     _project_dir,
     _safe_etag,
-    _snapshot_db_mtime,
     app,
     compress_payload,
     request,
@@ -146,51 +141,9 @@ def warm_index_cache() -> None:
 
 
 # ── Routes ─────────────────────────────────────────────────────────
-
-
-@app.get("/potato")
-def handle_potato() -> bytes | Any:
-    try:
-        from recoverage.potato import _db_unavailable_page, render_potato
-
-        # WAL-aware snapshot (see _snapshot_db_mtime), not raw st_mtime: a
-        # rebuild that commits only to -wal must still mint a new ETag or
-        # browsers keep a stale 304.  Same contract as /data, /asm, /bytes.
-        qs = request.query_string
-        if isinstance(qs, bytes):
-            qs = qs.decode("utf-8", errors="replace")
-        # Redact token from ETag input so query-string ETag doesn't leak it.
-        if "token=" in qs:
-            qs = "&".join(p for p in qs.split("&") if not p.startswith("token="))
-        etag = _etag_or_304(_snapshot_db_mtime(), qs)
-        body = render_potato(urlparse(request.url)).encode("utf-8")
-        # Every other DB-derived response carries an explicit cache policy;
-        # /potato was the one surface sent with none, which leaves the browser
-        # free to apply heuristic freshness and a shared cache free to store
-        # and replay a page that may have been rendered for a token-bearing
-        # client.  CACHE_REVALIDATE keeps the ETag's cheap 304s while forcing
-        # revalidation before every reuse.
-        resp_body = _compressed(body, "text/html; charset=utf-8", Cache_Control=CACHE_REVALIDATE)
-
-        if etag:
-            response.set_header("ETag", etag)
-        return resp_body
-
-    except sqlite3.Error:
-        # A DB that opens but cannot answer queries is the same
-        # db_unavailable condition render_potato's connect guard reports as
-        # 503 — not an application bug.  One contract (and one page) for
-        # both surfaces.
-        _log.exception("Potato mode database query failed")
-        return _db_unavailable_page()
-    # json.JSONDecodeError needs no entry: it subclasses ValueError.
-    except (OSError, ValueError, KeyError):
-        _log.exception("Potato mode render failed")
-        return HTTPResponse(
-            status=500,
-            body="<html><body>Internal server error</body></html>",
-            headers={"Cache-Control": CACHE_NO_STORE},
-        )
+#
+# /potato is registered by recoverage.potato, which owns the renderer; only
+# the SPA shell and the static assets below belong to this module.
 
 
 @app.get("/")
