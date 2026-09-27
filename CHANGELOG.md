@@ -159,6 +159,19 @@ module ships in the published package. See *Breaking*.
   `GET /src/%00` raised out of the route and returned bottle's 500 page with a
   traceback. No filename holds a NUL, so the request is now refused before the
   filesystem is touched.
+- **`/api/health` reports a rebuild that committed only to the WAL.** Its
+  `db.mtime` was the main file's `st_mtime`, the one remaining raw-mtime read
+  in a freshness field: `coverage.db` runs in WAL mode, so a `rebrew build-db`
+  that commits without checkpointing leaves that value where it was, and
+  health reported a rebuild that had already happened as not yet done. It now
+  reads the newest stamp across `coverage.db` and its `-wal` sibling, the same
+  contract the ETags, the memos, the SSE watcher and the Potato Mode footer
+  already use, and adds `db.mtime_utc`: the same instant as ISO-8601 with an
+  explicit `+00:00`, so a client no longer has to assume the server's zone.
+- **The event-stream 503 states one retry time, not two.** Its body said to
+  retry after the poll interval while the `Retry-After` header said the
+  heartbeat interval, so a client reading the header waited three times as long
+  as one reading the body. Both now send the poll interval.
 - **`make test` and the other `uv run` targets work on a clean clone without
   `make setup` first.** They now pass `--extra dev` the way `make setup` does,
   so a contributor who runs the loop before the bootstrap gets the tests

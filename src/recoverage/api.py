@@ -12,6 +12,7 @@ import sqlite3
 import threading
 import time
 from collections.abc import Generator
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -664,7 +665,11 @@ def handle_api_events() -> Any:
                     "detail": f"max {_SSE_MAX_CLIENTS} concurrent /api/events connections",
                     "retry_after": _SSE_POLL_INTERVAL_SECONDS,
                 },
-                Retry_After=str(int(_SSE_HEARTBEAT_SECONDS)),
+                # One value in both places: a client that reads the header
+                # instead of the body (the auth throttle and /api/regen send
+                # the same header) must not be told a different wait than one
+                # the JSON states.
+                Retry_After=str(int(_SSE_POLL_INTERVAL_SECONDS)),
             )
         client_queue: queue.Queue[bytes] = queue.Queue(maxsize=_SSE_QUEUE_MAX)
         _SSE_CLIENTS.add(client_queue)
@@ -691,7 +696,9 @@ def handle_api_health() -> bytes:
     """Liveness and environment report: status, version, DB stat, extras, targets.
 
     status is "degraded" (not an error) when coverage.db cannot be stat'ed or
-    queried; db.path is the basename only, never the absolute path.
+    queried; db.path is the basename only, never the absolute path.  db.mtime
+    is epoch seconds and db.mtime_utc the same instant as an ISO-8601 instant
+    (``+00:00``); both are absent when the DB cannot be stat'ed.
     """
     db = _db_path()
     db_info: dict[str, Any] = {"path": db.name, "exists": False}
@@ -700,10 +707,19 @@ def handle_api_health() -> bytes:
         stat = db.stat()
         db_info["exists"] = True
         db_info["size_bytes"] = stat.st_size
-        db_info["mtime"] = stat.st_mtime
     except OSError:
         _log.warning("Database file not accessible at %s", db)
         status = "degraded"
+    # Freshness is the newest mtime across the DB and its -wal sibling: a
+    # rebuild that commits only to the WAL leaves the main file's mtime where
+    # it was, and every other DB-freshness surface (ETags, memos, the SSE
+    # watcher, Potato Mode's footer) already reads the WAL-aware stamp.
+    mtime_ns = _server._newest_mtime_ns(db)
+    if mtime_ns is not None:
+        # Seconds since the epoch (UTC) plus the same instant spelled out with
+        # an explicit zone, so a client never has to assume the host's TZ.
+        db_info["mtime"] = mtime_ns / 1e9
+        db_info["mtime_utc"] = datetime.fromtimestamp(mtime_ns / 1e9, tz=UTC).isoformat()
     target_count = 0
     try:
         with contextlib.closing(_open_db(db)) as conn:

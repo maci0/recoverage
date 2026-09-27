@@ -22,7 +22,7 @@ Cross-reference lookup — which functions call this VA, and which VAs does this
 Raw byte slice endpoint with `?offset=N&size=M` params.
 
 ### ~~`GET /api/health`~~ ✅ Implemented
-Simple health check returning server version, DB path, DB size, DB mtime, optional extras installed, and available targets count.
+Simple health check returning server version, DB path, DB size, DB mtime (WAL-aware, as epoch seconds and as an ISO-8601 UTC instant), optional extras installed, and available targets count.
 
 ### `POST /api/targets/<target>/functions/<va>/annotate`
 Write-back annotations to source files. Accept a JSON body with annotation key-value pairs (`NOTE`, `BLOCKER`, `STATUS`, etc.) and patch the corresponding `.c` file. Enables in-browser editing of annotations without leaving the dashboard.

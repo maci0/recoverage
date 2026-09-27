@@ -297,6 +297,23 @@ def _snapshot_db_mtime() -> tuple[int, int] | None:
     return acc, st.st_size
 
 
+def _newest_mtime_ns(db: Path) -> int | None:
+    """Newest mtime_ns across *db* and its -wal sibling, or None.
+
+    The same WAL-awareness contract as :func:`_snapshot_db_mtime`, as a
+    plain instant instead of a folded token: for the surfaces that RENDER the
+    freshness time (``/api/health``, Potato Mode's footer stamp) rather than
+    key a cache on it.
+    """
+    try:
+        newest = db.stat().st_mtime_ns
+    except OSError:
+        return None
+    with contextlib.suppress(OSError):
+        newest = max(newest, Path(f"{db}-wal").stat().st_mtime_ns)
+    return newest
+
+
 def _if_none_match_matches(raw: str, etag: str) -> bool:
     """Whether an ``If-None-Match`` header value already covers *etag*.
 

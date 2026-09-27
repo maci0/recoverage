@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import queue
 import re
 import shutil
@@ -10,6 +11,7 @@ import sqlite3
 import threading
 import time
 import zlib
+from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -237,6 +239,63 @@ class TestApiHealth:
         data = json.loads(decode_body(body, headers))
         assert data["status"] == "degraded"
         assert data["db"]["exists"] is False
+        assert "mtime" not in data["db"]
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+class TestHealthDbMtime:
+    """/api/health's freshness stamp is WAL-aware and zone-explicit.
+
+    A rebuild commits to coverage.db-wal without necessarily moving the main
+    file's mtime, so a main-file-only stamp reports a rebuild that already
+    happened as not yet done; and an epoch float carries no zone, so a client
+    has to assume one.  mtime_utc is the same instant with the offset spelled
+    out.
+    """
+
+    def test_mtime_follows_a_wal_only_rebuild(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import recoverage.api as api
+
+        db = tmp_path / "coverage.db"
+        wal = Path(f"{db}-wal")
+        db.write_bytes(b"SQLite format 3\x00")
+        wal.write_bytes(b"wal")
+        old_ns = 1_700_000_000_000_000_000
+        new_ns = old_ns + 90 * 1_000_000_000
+        os.utime(db, ns=(old_ns, old_ns))
+        os.utime(wal, ns=(old_ns, old_ns))
+        monkeypatch.setattr(api, "_db_path", lambda: db)
+
+        status, headers, body = wsgi_get("/api/health")
+        assert status.startswith("200")
+        data = json.loads(decode_body(body, headers))["db"]
+        assert data["mtime"] == pytest.approx(old_ns / 1e9)
+        assert data["mtime_utc"] == "2023-11-14T22:13:20+00:00"
+
+        os.utime(wal, ns=(new_ns, new_ns))
+        status, headers, body = wsgi_get("/api/health")
+        assert status.startswith("200")
+        data = json.loads(decode_body(body, headers))["db"]
+        assert data["mtime"] == pytest.approx(new_ns / 1e9)
+        assert data["mtime_utc"] == "2023-11-14T22:14:50+00:00"
+        assert data["mtime_utc"].endswith("+00:00")
+
+    def test_mtime_utc_is_utc_regardless_of_host_tz(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The same DB stamp must render identically on a host in any zone:
+        a server-local rendering would move the reported instant with TZ."""
+        monkeypatch.setenv("TZ", "Asia/Tokyo")
+        try:
+            time.tzset()
+            status, headers, body = wsgi_get("/api/health")
+        finally:
+            monkeypatch.delenv("TZ", raising=False)
+            time.tzset()
+        assert status.startswith("200")
+        data = json.loads(decode_body(body, headers))["db"]
+        assert data["mtime_utc"].endswith("+00:00")
+        assert data["mtime_utc"] == datetime.fromtimestamp(data["mtime"], tz=UTC).isoformat()
 
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
@@ -2564,6 +2623,24 @@ class TestSseClientCap:
         try:
             status, _, _ = wsgi_get("/api/events")
             assert status.startswith("503")
+        finally:
+            with api._SSE_CLIENTS_LOCK:
+                api._SSE_CLIENTS.clear()
+
+    def test_503_retry_after_header_matches_body(self) -> None:
+        """The header and the body must state the same wait: a client that
+        reads Retry-After (the auth throttle and /api/regen send the same
+        header) must not be told a longer or shorter retry than the JSON."""
+        import recoverage.api as api
+
+        with api._SSE_CLIENTS_LOCK:
+            for _ in range(api._SSE_MAX_CLIENTS):
+                api._SSE_CLIENTS.add(queue.Queue(maxsize=api._SSE_QUEUE_MAX))
+        try:
+            status, headers, body = wsgi_get("/api/events")
+            assert status.startswith("503")
+            payload = json.loads(decode_body(body, headers))
+            assert int(headers["Retry-After"]) == int(payload["retry_after"])
         finally:
             with api._SSE_CLIENTS_LOCK:
                 api._SSE_CLIENTS.clear()

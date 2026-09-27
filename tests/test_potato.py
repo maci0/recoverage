@@ -844,7 +844,10 @@ class TestDbUpdatedLabel:
 
     @staticmethod
     def _patch_db(monkeypatch: pytest.MonkeyPatch, db: Path) -> None:
+        # The stamp is read through server._db_mtime_ns, so the path both the
+        # renderer and that helper resolve is the one to redirect.
         monkeypatch.setattr("recoverage.potato._db_path", lambda: db)
+        monkeypatch.setattr("recoverage.server._db_path", lambda: db)
 
     def test_missing_db_renders_empty(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
