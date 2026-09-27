@@ -60,6 +60,7 @@ recoverage/
     ├── config.py            # RECOVERAGE_* env: flag defaults, validation, startup banner
     ├── cli.py               # Typer CLI entry point (serve, stats, export, check, regen, open)
     ├── server.py            # Bottle app, shared helpers & compression
+    ├── disasm.py            # Capstone disassembly (optional extra): probe, thread-local Cs, memo
     ├── regen.py             # In-process rebrew regen (calls rebrew as a library)
     ├── api.py               # REST API routes (/api/*)
     ├── ui.py                # UI routes (/, static files)

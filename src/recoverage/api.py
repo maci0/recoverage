@@ -21,6 +21,12 @@ from rebrew.workspace import VA_MAX, parse_va_candidates
 from recoverage import __version__
 from recoverage import server as _server
 from recoverage._paths import _db_path
+from recoverage.disasm import (
+    HAS_CAPSTONE,
+    clear_disassembly_cache,
+    get_capstone_md,
+    get_disassembly,
+)
 from recoverage.regen import run_regen
 from recoverage.server import (
     _SECTION_BUCKETS_SQL,
@@ -28,7 +34,6 @@ from recoverage.server import (
     CACHE_REVALIDATE,
     DLL_DATA,
     DLL_LOCK,
-    HAS_CAPSTONE,
     HAS_PYGMENTS,
     LOOPBACK_HOSTS,
     NOT_DATA_MARKER_SQL,
@@ -40,7 +45,6 @@ from recoverage.server import (
     _etag_or_304,
     _fn_json_sql,
     _format_hex_dump,
-    _get_capstone_md,
     _get_targets_config,
     _global_json_sql,
     _header,
@@ -58,10 +62,8 @@ from recoverage.server import (
     _verify_one_select,
     _verify_select,
     app,
-    clear_disassembly_cache,
     clear_target_cache,
     compress_payload,
-    get_disassembly,
     path_param,
     request,
     resolve_targets,
@@ -1491,7 +1493,7 @@ def handle_api_asm(target: str) -> bytes | Any:
                     },
                 )
 
-            md = _get_capstone_md()
+            md = get_capstone_md()
             instructions: list[dict[str, Any]] = [
                 {
                     "addr": f"0x{insn.address:08x}",

@@ -30,10 +30,10 @@ from bottle import HTTPResponse, SimpleTemplate  # type: ignore[import-untyped]
 
 from recoverage import __version__
 from recoverage._paths import _db_path
+from recoverage.disasm import HAS_CAPSTONE, get_disassembly
 from recoverage.server import (
     CACHE_NO_STORE,
     CACHE_REVALIDATE,
-    HAS_CAPSTONE,
     NOT_DATA_MARKER_SQL,
     _cells_json_rows,
     _compressed,
@@ -50,7 +50,6 @@ from recoverage.server import (
     _snapshot_db_mtime,
     _verify_one_select,
     app,
-    get_disassembly,
     request,
     resolve_targets,
     response,

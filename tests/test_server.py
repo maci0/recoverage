@@ -1249,6 +1249,7 @@ class TestGetDisassemblyNoNegativeCache:
     def test_load_failure_bypasses_memo_and_self_heals(
         self, tmp_path: Path, monkeypatch: Any
     ) -> None:
+        import recoverage.disasm as disasm
         import recoverage.server as srv
 
         key = "__disasm_transient_target__"
@@ -1261,10 +1262,10 @@ class TestGetDisassemblyNoNegativeCache:
             calls.append((va, size, file_offset, target))
             return f"disasm:{va:#x}"
 
-        monkeypatch.setattr(srv, "_disassemble_loaded", fake_impl)
+        monkeypatch.setattr(disasm, "_disassemble_loaded", fake_impl)
         try:
             # Load fails: the caller sees "" and the memo was never consulted.
-            assert srv.get_disassembly(0x1000, 4, 0, key) == ""
+            assert disasm.get_disassembly(0x1000, 4, 0, key) == ""
             assert calls == []
 
             # The binary comes back: the same slice disassembles for real
@@ -1272,7 +1273,7 @@ class TestGetDisassemblyNoNegativeCache:
             real = tmp_path / "real.dll"
             real.write_bytes(b"MZ-fake-binary")
             holder["p"] = real
-            assert srv.get_disassembly(0x1000, 4, 0, key) == "disasm:0x1000"
+            assert disasm.get_disassembly(0x1000, 4, 0, key) == "disasm:0x1000"
             assert calls == [(0x1000, 4, 0, key)]
         finally:
             with srv.DLL_LOCK:
@@ -1284,6 +1285,7 @@ class TestGetDisassemblyNoNegativeCache:
         """Rebuilds must evict memoized disassembly through the shared
         invalidation entry point (wiring guard for the split cache)."""
         import recoverage.api
+        import recoverage.disasm as disasm
         import recoverage.server as srv
 
         key = "__disasm_invalidation_target__"
@@ -1291,15 +1293,15 @@ class TestGetDisassemblyNoNegativeCache:
         monkeypatch.setattr(srv, "_find_dll_path", lambda target: holder["p"])
         real = tmp_path / "real.dll"
 
-        @srv.functools.lru_cache(maxsize=16)
+        @disasm.functools.lru_cache(maxsize=16)
         def _prime(va: int, size: int, file_offset: int, target: str) -> str:
             return "cached"
 
-        monkeypatch.setattr(srv, "_disassemble_loaded", _prime)
+        monkeypatch.setattr(disasm, "_disassemble_loaded", _prime)
         try:
             holder["p"] = real
             real.write_bytes(b"MZ-fake-binary")
-            assert srv.get_disassembly(0x2000, 1, 0, key) == "cached"
+            assert disasm.get_disassembly(0x2000, 1, 0, key) == "cached"
             assert _prime.cache_info().currsize == 1
             recoverage.api._clear_derived_caches()
             assert _prime.cache_info().currsize == 0

@@ -11,7 +11,6 @@ Reads the coverage database from the path resolved by
 from __future__ import annotations
 
 import contextlib
-import functools
 import gzip
 import hashlib
 import hmac
@@ -57,7 +56,8 @@ from recoverage._paths import _db_path
 # thread-safety guarantees ("do not operate on the same instance from different
 # threads") and releases the GIL inside compress(), so a shared instance raced
 # on one ZSTD_CCtx and reproducibly segfaulted the server under concurrent
-# requests.  One context per request thread (same pattern as _get_capstone_md).
+# requests.  One context per request thread (same pattern as
+# disasm.get_capstone_md).
 _ZSTD_COMPRESSOR_TLS = threading.local()
 
 
@@ -80,7 +80,6 @@ HTTPResponse = cast(Any, bottle.HTTPResponse)
 # it at import time; webapp.py composes both onto it.
 app = Bottle()
 
-HAS_CAPSTONE = importlib.util.find_spec("capstone") is not None
 HAS_PYGMENTS = importlib.util.find_spec("pygments") is not None
 
 # CORS — configured once at startup by the CLI before the server starts
@@ -600,7 +599,7 @@ def _project_dir() -> Path:
     return Path.cwd().resolve()
 
 
-# ── DLL loading & disassembly ──────────────────────────────────────
+# ── DLL loading ────────────────────────────────────────────────────
 
 DLL_DATA: dict[str, bytes | None] = {}
 DLL_LOCK = threading.Lock()
@@ -820,82 +819,6 @@ def _load_dll(target: str) -> bytes | None:
             return DLL_DATA[target]
         DLL_DATA[target] = data
         return data
-
-
-_CAPSTONE_MD_TLS = threading.local()
-
-
-def _get_capstone_md() -> Any:
-    """Return a thread-local Capstone disassembler.
-
-    A single shared ``Cs`` instance is NOT safe to disassemble concurrently
-    (libcapstone is not thread-safe) — with the threaded WSGI server, request
-    threads were racing on it and producing garbage/crashes.
-    """
-    md = getattr(_CAPSTONE_MD_TLS, "md", None)
-    if md is None:
-        import capstone as _capstone  # type: ignore[import-not-found]
-
-        md = _capstone.Cs(_capstone.CS_ARCH_X86, _capstone.CS_MODE_32)
-        md.detail = False
-        _CAPSTONE_MD_TLS.md = md
-    return md
-
-
-def get_disassembly(va: int, size: int, file_offset: int, target: str) -> str:
-    """Disassemble *size* bytes of *target* at *va*, memoized per slice.
-
-    The DLL-load guard deliberately stays OUTSIDE the memo cache: ``_load_dll``
-    leaves transient OS failures uncached so the next request self-heals, and
-    memoizing their "" result here would pin that outage until the next
-    rebuild broadcast happened to clear the cache.
-    """
-    if _load_dll(target) is None:
-        return ""
-    return _disassemble_loaded(va, size, file_offset, target)
-
-
-#: Memo entries for :func:`_disassemble_loaded`, sized by the memo's own
-#: worst-case RETAINED BYTES rather than by a plausible row count: one entry is
-#: the rendered text of a ``?size=`` slice, and the SPA asks for a whole cell's
-#: worth (app.js sends ``size=cell.size``, up to the endpoint's 4096-byte
-#: clamp).  Measured: 4096 bytes of x86 renders to 72 KB of text (~1900
-#: lines), so a 2048-entry memo retains up to ~148 MB for a cache whose hits
-#: are rare — the ETag answers the browser's repeat clicks with a 304 before
-#: the memo is consulted, so only non-browser repeats reach it.  128 entries
-#: bounds the worst case near 9 MB and still covers a work session that
-#: revisits the same slices.
-_DISASSEMBLY_MEMO_MAX = 128
-
-
-@functools.lru_cache(maxsize=_DISASSEMBLY_MEMO_MAX)
-def _disassemble_loaded(va: int, size: int, file_offset: int, target: str) -> str:
-    """Cached disassembly; :func:`get_disassembly` verified the DLL loads."""
-    target_data = _load_dll(target)
-    if target_data is None:
-        # Raced a rebuild's DLL_DATA.clear() between the two loads, so this
-        # slice is unresolvable rather than empty.  The "" lands in the memo
-        # behind the broadcast's clear_disassembly_cache(), so it survives
-        # until the next rebuild; the client refetches after the db-updated
-        # frame.
-        return ""
-
-    code_bytes = target_data[file_offset : file_offset + size]
-    if len(code_bytes) < size:
-        return ""
-
-    md = _get_capstone_md()
-    asm_lines = [
-        f"0x{insn.address:08x}  {insn.mnemonic:8s} {insn.op_str}"
-        for insn in md.disasm(code_bytes, va)
-    ]
-
-    return "\n".join(asm_lines) if asm_lines else "  (no instructions)"
-
-
-def clear_disassembly_cache() -> None:
-    """Drop memoized disassembly (called when the original binary changes)."""
-    _disassemble_loaded.cache_clear()
 
 
 # ── Compression ────────────────────────────────────────────────────
