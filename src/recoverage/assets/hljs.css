@@ -1,15 +1,20 @@
-/* First-party theme.  Every token is taken from the app's own palette
- * (style.css): text, the four status hues, the cyan accent, and the link
- * colour.  Each one clears 4.5:1 on --code-bg in its theme. */
+/* First-party theme.  The tokens the app already owns are read from
+ * style.css rather than restated, so the code pane follows a palette change
+ * instead of drifting one release behind it.  The four steps below are the
+ * exceptions, for one reason: a status hue is tuned as a translucent cell
+ * fill, and at that value on a dark --code-bg it does not clear 4.5:1 as
+ * 12px text.  Each is a lightened step of the hue it stands for. */
 :root {
   --hljs-bg: transparent;
-  --hljs-color: #e7edf4;
-  --hljs-keyword: #f87171;
+  --hljs-color: var(--text);
+  --hljs-keyword: var(--badge-stub-text);
+  /* Function and type names take the data accent's hue, lifted for text: not
+   * the cell state's own value, which is the "unclassified" slot. */
   --hljs-title: #d8b4fe;
-  --hljs-attr: #7dd3fc;
+  --hljs-attr: var(--link);
   --hljs-string: #fcd34d;
   --hljs-symbol: #5eead4;
-  --hljs-comment: #8b949e;
+  --hljs-comment: var(--muted);
   --hljs-name: #6ee7b7;
   --hljs-section: #67e8f9;
   --hljs-bullet: #fcd34d;
@@ -22,17 +27,17 @@
  * the same neutral family as the frame around it rather than on a stock
  * blue-gray.  Each value clears 4.5:1 on the light --code-bg. */
 .light-mode {
-  --hljs-color: #0c1417;
-  --hljs-keyword: #991b1b;
+  --hljs-color: var(--text);
+  --hljs-keyword: var(--badge-stub-text);
   --hljs-title: #6d28d9;
-  --hljs-attr: #075985;
-  --hljs-string: #854d0e;
+  --hljs-attr: var(--link);
+  --hljs-string: var(--badge-near-text);
   --hljs-symbol: #0f766e;
-  --hljs-comment: #3c4f57;
-  --hljs-name: #14532d;
-  --hljs-section: #12566c;
-  --hljs-bullet: #854d0e;
-  --hljs-addition-color: #14532d;
+  --hljs-comment: var(--muted);
+  --hljs-name: var(--badge-exact-text);
+  --hljs-section: var(--c);
+  --hljs-bullet: var(--badge-near-text);
+  --hljs-addition-color: var(--badge-exact-text);
   --hljs-addition-bg: #e8f8ef;
   --hljs-deletion-color: #7f1d1d;
   --hljs-deletion-bg: #fdeaea;

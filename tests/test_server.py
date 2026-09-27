@@ -2726,3 +2726,61 @@ class TestSpaDbSuppliedPathsStaySameOrigin:
                 f"currentDllPath/currentSourceRoot must validate paths.{consumer} "
                 "through sameOriginPath before it reaches fetch() or an href"
             )
+
+
+class TestHljsThemeFollowsAppTokens:
+    """hljs.css must read the app's palette, not restate it.
+
+    The two stylesheets are separate files, so a colour restated as a hex
+    literal is a value that survives a palette change in style.css as an
+    orphan: the code pane keeps the old hue and nothing fails. A var()
+    reference follows. A lightened step of a status hue is legitimate and
+    stays a literal, because it is a different value on purpose.
+    """
+
+    @staticmethod
+    def _css() -> tuple[str, str]:
+        import importlib.resources
+
+        from recoverage import assets
+
+        base = importlib.resources.files(assets)
+        return (
+            base.joinpath("style.css").read_text(encoding="utf-8"),
+            base.joinpath("hljs.css").read_text(encoding="utf-8"),
+        )
+
+    @staticmethod
+    def _declarations(css: str, selector: str) -> dict[str, str]:
+        import re
+
+        body = css.split(f"{selector} {{", 1)[1].split("\n}", 1)[0]
+        return dict(re.findall(r"(--[a-z0-9-]+):\s*([^;]+);", body))
+
+    def test_every_referenced_token_is_declared(self) -> None:
+        import re
+
+        style_css, hljs_css = self._css()
+        declared = set(self._declarations(style_css, ":root"))
+        declared |= set(self._declarations(style_css, ".light-mode"))
+        for name in sorted(set(re.findall(r"var\((--[a-z0-9-]+)\)", hljs_css))):
+            if name.startswith("--hljs-"):
+                continue
+            assert name in declared, f"hljs.css reads {name}, which style.css never declares"
+
+    @pytest.mark.parametrize(("selector", "css_index"), [(":root", 0), (".light-mode", 1)])
+    def test_no_app_token_is_restated_as_a_literal(self, selector: str, css_index: int) -> None:
+        import re
+
+        style_css, hljs_css = self._css()
+        app_values = {
+            value.strip()
+            for value in self._declarations(style_css, selector).values()
+            if value.strip().startswith("#")
+        }
+        theme = hljs_css.split(f"{selector} {{", 1)[1].split("\n}", 1)[0]
+        literals = {m.group(0).lower() for m in re.finditer(r"#[0-9a-fA-F]{3,8}\b", theme)}
+        assert not (literals & app_values), (
+            f"hljs.css {selector} spells {sorted(literals & app_values)} by hand; "
+            "reference the token so the code pane follows a palette change"
+        )

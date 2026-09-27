@@ -149,6 +149,20 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **The dashboard dropped its frosted surfaces.** The topbar and the loading
+  overlay are opaque now, with no `backdrop-filter`: over the near-black
+  ground the blur showed nothing, and both sit over content that repaints
+  (the whole map), so the blur cost a re-filter per frame. The loading
+  overlay's pulse was always the signal, not the glass. The modal scrim keeps
+  its blur, which is the one place the effect carries an affordance.
+
+- **The code theme follows the app palette.** `assets/hljs.css` reads
+  `--text`, `--muted`, `--link` and the status text tokens from `style.css`
+  instead of restating their hexes, so a palette change reaches the code pane
+  rather than leaving it on last release's hue. The four values that stay
+  literals are lightened steps of a status hue, which a status hue tuned as a
+  cell fill cannot be.
+
 - **`?status=` on the paginated function list rejects a status rebrew does not
   define.** `GET /api/targets/<target>/functions?status=` answers `400` naming
   the accepted values for anything outside rebrew's status vocabulary, where it
