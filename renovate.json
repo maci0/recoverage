@@ -3,6 +3,11 @@
   "extends": ["config:recommended", "schedule:weekly"],
   "packageRules": [
     {
+      "groupName": "uv-minor-and-patch",
+      "matchManagers": ["pep621", "uv"],
+      "matchUpdateTypes": ["minor", "patch"]
+    },
+    {
       "groupName": "npm-minor-and-patch",
       "matchManagers": ["npm"],
       "matchUpdateTypes": ["minor", "patch"]
