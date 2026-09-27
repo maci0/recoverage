@@ -453,13 +453,19 @@
     // packSection returns a fresh object per section version and after a lazy
     // cells fetch (it deletes sec._pack), so identity is exactly "the cells
     // changed" — a superset of what the old key caught, and it drops the
-    // per-paint string build.
+    // per-paint string build.  The wrapper's width joins the key below.
     const layout = (secName, pack, force) => {
       const g = grids[secName];
-      if (!force && g.layPack === pack) return g;
+      // The wrapper's own width is part of the key, not just the cell count: a
+      // hidden section (`display: none`) reports clientWidth 0, so the
+      // ResizeObserver never relaid it out, and a section first laid out before
+      // a window resize came back painted (and hit-mapped) at the old geometry.
+      const width = g.wrap.clientWidth;
+      if (!force && g.layPack === pack && g.layWidth === width) return g;
       const lay = layoutOf(g.wrap);
       g.lay = lay;
       g.layPack = pack;
+      g.layWidth = width;
       g.cols = lay.cols;
       const { cols, gap, pad, cell } = lay;
       // Row count first: walk is cheap, and sizing the map needs it upfront.
@@ -613,6 +619,16 @@
       const y = pad + g.cellRow[idx] * (cell + gap);
       const top = g.wrap.getBoundingClientRect().top + window.scrollY + y;
       window.scrollTo({ top: Math.max(0, top - window.innerHeight / 3), behavior: "smooth" });
+      // Vertically the lattice is as tall as the page, so the window is the
+      // scrollport.  Horizontally it is the wrapper: on a narrow viewport the
+      // 12px minimum cell makes the lattice wider than the frame, and a jump
+      // (search Enter, an asm link, an arrow-key walk) otherwise leaves the
+      // cell it just selected off-screen.
+      const x = g.cellX[idx];
+      const right = x + g.cellW[idx];
+      if (x < g.wrap.scrollLeft || right > g.wrap.scrollLeft + g.wrap.clientWidth) {
+        g.wrap.scrollTo({ left: Math.max(0, x - g.wrap.clientWidth / 3), behavior: "smooth" });
+      }
     };
 
     setGridFocus((secName, idx) => {
@@ -682,13 +698,20 @@
         role: "listbox",
         tabindex: "0",
         "aria-label": `${secName} coverage map`,
+        // Pointer position is resolved against the CANVAS, not the wrapper: the
+        // lattice's own coordinates are canvas-relative, and the canvas rect
+        // already carries the wrapper's scroll offset and excludes the wrapper's
+        // 1px border. Measured against the wrapper, a map scrolled sideways
+        // (every narrow viewport, where the 12px minimum cell makes the lattice
+        // wider than the frame) put the click on whichever cell happened to sit
+        // under the same viewport coordinates.
         onclick: (e) => {
-          const rect = wrap.getBoundingClientRect();
+          const rect = grids[secName].canvas.getBoundingClientRect();
           const idx = hit(secName, e.clientX - rect.left, e.clientY - rect.top);
           if (idx >= 0) { grids[secName].focus = idx; selectChunk(idx); wrap.focus(); paint(secName); }
         },
         onmousemove: (e) => {
-          const rect = wrap.getBoundingClientRect();
+          const rect = grids[secName].canvas.getBoundingClientRect();
           const idx = hit(secName, e.clientX - rect.left, e.clientY - rect.top);
           if (idx < 0) { wrap.title = ""; wrap.style.cursor = "default"; return; }
           wrap.style.cursor = "pointer";

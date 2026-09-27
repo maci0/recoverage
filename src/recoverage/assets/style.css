@@ -329,6 +329,10 @@ body {
 .modal-content .code { margin: 0; max-height: none; min-height: 0; flex-shrink: 0; min-width: min-content; }
 
 .hint { color: var(--muted); font-size: 12px; margin-top: 10px; }
+/* A jump that landed nowhere: same slot and rhythm as .hint, the accent
+   colour and the status role are what separate "the map says this" from
+   "the map is still loading". */
+.hint-notice { color: var(--c); }
 
 /* Shown in the map area when there is no grid to draw: no database, no
  * sections, or a failed fetch.  Sized like the grid it replaces so the layout

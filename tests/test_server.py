@@ -1937,6 +1937,91 @@ class TestSpaGridLayoutMemo:
         assert "delete sec._pack;" in app_js
         assert "sec._pack = " in app_js
 
+    def test_layout_also_keys_on_the_wrapper_width(self) -> None:
+        """A hidden section reports clientWidth 0, so the ResizeObserver never
+        relaid it out: a section first laid out before a window resize comes
+        back painted and hit-mapped at the old geometry."""
+        detail_js = self._detail_js()
+        assert "g.layWidth === width" in detail_js
+        assert "g.layWidth = width" in detail_js
+        assert "const width = g.wrap.clientWidth;" in detail_js
+
+    def test_pointer_position_is_measured_against_the_canvas(self) -> None:
+        """The lattice's own coordinates are canvas-relative, and the canvas
+        rect already carries the wrapper's scroll offset and excludes its 1px
+        border. Measured against the wrapper, a map scrolled sideways (every
+        narrow viewport, where the 12px minimum cell makes the lattice wider
+        than the frame) selects whichever cell sits under the same viewport
+        coordinates."""
+        detail_js = self._detail_js()
+        assert "const rect = wrap.getBoundingClientRect();" not in detail_js, (
+            "pointer hit-test measured against the scrollable wrapper"
+        )
+        assert detail_js.count("canvas.getBoundingClientRect()") >= 2
+
+    def test_a_keyboard_jump_scrolls_the_map_horizontally_too(self) -> None:
+        """Arrow keys, search Enter and asm links all end in scrollCell, and on
+        a narrow viewport the selected cell is off-screen sideways."""
+        detail_js = self._detail_js()
+        assert "g.wrap.scrollTo({ left:" in detail_js
+
+
+class TestSpaJumpFeedback:
+    """A jump to an address no block covers must say so, not do nothing.
+
+    The only signal was a console warning, which the person clicking the VA
+    link or the asm operand never sees, so the control read as dead. The
+    notice rides the hint's own slot (no layout shift) and times itself out.
+    """
+
+    @staticmethod
+    def _app_js() -> str:
+        import importlib.resources
+
+        from recoverage import assets
+
+        return importlib.resources.files(assets).joinpath("app.js").read_text(encoding="utf-8")
+
+    def test_an_uncovered_address_reports_itself(self) -> None:
+        app_js = self._app_js()
+        assert "flashNavNotice(MSG.JUMP_NO_BLOCK(" in app_js
+        assert "const navNotice = van.state(null);" in app_js
+        assert "navNoticeTimer = setTimeout" in app_js
+
+    def test_the_notice_is_rendered_with_a_live_region(self) -> None:
+        app_js = self._app_js()
+        assert 'class: "hint hint-notice", role: "status"' in app_js
+
+
+class TestSpaStackedLayoutSelection:
+    """Selecting a block must be visible wherever the panel is.
+
+    Below 1300px the panel stacks under the map, and the .text lattice runs
+    thousands of pixels tall, so a block clicked near the top of the map
+    updates a panel far outside the viewport and the click reads as dead.
+    """
+
+    @staticmethod
+    def _app_js() -> str:
+        import importlib.resources
+
+        from recoverage import assets
+
+        return importlib.resources.files(assets).joinpath("app.js").read_text(encoding="utf-8")
+
+    def test_a_selection_brings_an_offscreen_panel_into_view(self) -> None:
+        app_js = self._app_js()
+        assert "panel.getBoundingClientRect().top >= window.innerHeight" in app_js
+        assert 'panel.scrollIntoView({ behavior: "smooth", block: "start" })' in app_js
+        assert "revealPanelIfOffscreen();" in app_js
+
+    def test_it_never_scrolls_a_panel_that_is_already_visible(self) -> None:
+        """Scrolling unconditionally would yank the map out from under the
+        click on the side-by-side layout, where the panel is on screen."""
+        app_js = self._app_js()
+        body = app_js.split("const revealPanelIfOffscreen = ", 1)[1].split("};", 1)[0]
+        assert "if (" in body, "the scroll is no longer guarded by a visibility test"
+
 
 class TestSpaResourceTeardown:
     """The SPA must release what it registers, on every path that drops it.

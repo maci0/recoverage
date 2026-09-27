@@ -21,6 +21,10 @@ const encPath = (path) => String(path).split("/").map((seg) => enc(seg)).join("/
 // to the server-proxied default.  The colon test is positional: after the
 // first "/" a colon is an ordinary character in a path segment, before it a
 // colon starts a scheme.
+// How long a "nothing to select" notice stays on screen before the live stats
+// it shares a row with come back.
+const NAV_NOTICE_MS = 4000;
+
 const PATH_CONTROL_MAX = 0x1F;
 const PATH_DELETE = 0x7F;
 const isControlChar = (ch) => {
@@ -62,6 +66,7 @@ const MSG = {
   NA: "(n/a)",
   FETCH_FAILED: (url) => `(failed to load: ${url})`,
   NO_DECL: "(no declaration found)",
+  JUMP_NO_BLOCK: (va) => `No block covers ${va} in this target, so there is nothing to select.`,
   DETAIL_UNAVAILABLE: "(detail view failed to load — reload the page)",
   HIGHLIGHT_UNAVAILABLE: "(syntax highlighting unavailable — the code below is unhighlighted)",
 };
@@ -256,6 +261,20 @@ const App = () => {
   // | null, read by the grid, which would otherwise sit on an empty frame with
   // no way back: the tab is unusable and nothing says why.
   const cellLoadError = van.state(null);
+
+  // A jump to an address that no block covers (an asm operand pointing into a
+  // gap between sections, a VA link for an address the target never claimed)
+  // used to be silent: the console warning is not something the person
+  // clicking the link can see, so the click read as a dead control.  The
+  // notice times itself out for the same reason the regen message does: it
+  // rides a row that is showing live stats once it expires.
+  const navNotice = van.state(null);
+  let navNoticeTimer = null;
+  const flashNavNotice = (text) => {
+    navNotice.val = text;
+    clearTimeout(navNoticeTimer);
+    navNoticeTimer = setTimeout(() => { navNotice.val = null; }, NAV_NOTICE_MS);
+  };
 
   const loadTargets = async () => {
     try {
@@ -714,6 +733,19 @@ const App = () => {
     }
   };
 
+  // Below 1300px the panel stacks under the map, and the .text lattice runs
+  // thousands of pixels tall: a block clicked near the top of it updates a
+  // panel that is nowhere near the viewport, so the click reads as dead. The
+  // panel is brought in only when it is actually off-screen, which leaves the
+  // side-by-side layout and a short section exactly as they were.
+  const revealPanelIfOffscreen = () => {
+    const panel = document.querySelector("#panel");
+    if (!panel) return;
+    if (panel.getBoundingClientRect().top >= window.innerHeight) {
+      panel.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  };
+
   const selectChunk = (i) => {
     currentCellIndex.val = i;
     // Selecting a cell supersedes whatever selection was still in flight.
@@ -780,6 +812,7 @@ const App = () => {
         asmText.val = MSG.DATA_SECTION_NO_ASM;
       }
     }
+    revealPanelIfOffscreen();
   };
 
   // Copy, Open, Copy VA and Copy Symbol all delegate to detail.js.  If that
@@ -848,6 +881,7 @@ const App = () => {
     }
     // oxlint-disable-next-line eslint/no-console -- an address outside every section deserves a console warning
     console.warn("Address not found in any section:", targetVa.toString(16));
+    flashNavNotice(MSG.JUMP_NO_BLOCK(hex(targetVa, 8)));
   };
 
   const HighlightedCode = ({ lang, text }) => {
@@ -1285,6 +1319,9 @@ const App = () => {
               h2(emptyState.val.title), p(emptyState.val.detail))
           : div(),
         Grid(),
+        // Same slot as the hint, so a notice never moves what the user is
+        // reaching for; it replaces the hint for as long as it is up.
+        () => (emptyState.val || !navNotice.val) ? div() : div({ class: "hint hint-notice", role: "status" }, navNotice.val),
         () => emptyState.val ? div() : SearchHint()
       ),
       () => Panel()
