@@ -33,6 +33,7 @@ recoverage/
 │   ├── DESIGN.md           # Architecture and design decisions
 │   ├── DESIGN_PRINCIPLES.md  # Core operational philosophies
 │   ├── USER_STORIES.md     # User stories with acceptance criteria
+│   ├── THREAT_MODEL.md     # Attack surface, trust boundaries, risk ranking
 │   ├── ideas.md            # Future improvement ideas
 │   └── *.png               # Screenshots for the README
 ├── tools/                  # lint-html.py, smoke.py, _serve_harness.py, oxlint/

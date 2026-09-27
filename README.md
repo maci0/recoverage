@@ -239,7 +239,19 @@ rebrew catalog                 rebrew build-db           recoverage (Bottle + SQ
 2. **`rebrew build-db`**: Consumes those JSON files and builds a structured `db/coverage.db` (SQLite, `db_version` `"10"`) database, storing per-function metadata (`detected_by`, `size_by_tool`, `textOffset`), per-global metadata (`module`, `size`), per-cell metadata (`label`, `parent_function`), and stamping `db_version` for schema detection.  It also materializes the two objects the dashboard reads instead of re-deriving them on every request: the per-section coverage buckets (`section_cell_stats`) and the per-section cell JSON (`section_cells_json`, zstd, cells ordered by `start`).  Both are derived from `cells` and rebuilt on every build, so a database produced by an older rebrew is still *served*. The server falls back to the equivalent live queries. `rebrew build-db` requires `--force` to migrate a database whose stamp is not `"10"`. See [DB_FORMAT.md](../rebrew/docs/DB_FORMAT.md) for the full schema.
 3. **`recoverage`**: Starts a **Bottle** web server. The backend serves API endpoints querying the SQLite database, while the frontend is a zero-build Single Page Application (SPA) powered by **VanJS**, rendering the interactive defrag grid.
 
-You can run `recoverage` independently on any machine (or even host it remotely) as long as it has access to a compiled `coverage.db`.  rebrew is a required dependency (it provides the shared workspace/config resolution and the in-process regen), but no project workspace or compiler toolchain is required to serve the dashboard.
+You can run `recoverage` independently on any machine (or even host it remotely, see the caveat below) as long as it has access to a compiled `coverage.db`.  rebrew is a required dependency (it provides the shared workspace/config resolution and the in-process regen), but no project workspace or compiler toolchain is required to serve the dashboard.
+
+### Hosting it on a network
+
+`recoverage serve` binds `127.0.0.1` and serves, unauthenticated, the project's
+`src/` tree, its `original/` binaries, raw byte slices and disassembly. That is
+fine on your own machine and is the reason the default is loopback. Serving it
+beyond that needs both `--allow-remote` (the acknowledgement the CLI requires
+for any non-loopback `--bind`) and `--token` (the bearer check every request
+then has to pass); `--cors` is for a separate local frontend origin and is never
+needed for the dashboard's own page. There is no TLS, so a token on a network
+bind travels in cleartext. The full picture, including what the code does not
+cover, is in [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md).
 
 ---
 
@@ -253,6 +265,7 @@ recoverage/
 │   ├── DESIGN.md             # Detailed architecture & design doc
 │   ├── DESIGN_PRINCIPLES.md  # Core operational philosophies
 │   ├── USER_STORIES.md       # User stories with acceptance criteria
+│   ├── THREAT_MODEL.md       # Attack surface, trust boundaries, risks
 │   └── ideas.md              # Future improvement ideas
 ├── tests/
 │   ├── conftest.py           # Shared fixtures (synthetic coverage.db)

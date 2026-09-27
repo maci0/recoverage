@@ -1,0 +1,217 @@
+# ReCoverage Threat Model
+
+Scope: the `recoverage` package as shipped (`src/recoverage/`) and the way it
+is started (`recoverage serve`). Every claim below carries a file reference so
+a later pass can re-verify it. Last reviewed: 2026-09-27.
+
+What ReCoverage is: a read-mostly web dashboard over one local SQLite database
+(`coverage.db`) that rebrew's pipeline produces, served by Bottle on
+`wsgiref` (`src/recoverage/cli.py:349`). The intended audience is a single
+developer on their own machine, viewing a decompilation project they control.
+Everything below is scoped to that deployment, plus the explicitly supported
+LAN case (`--allow-remote`).
+
+## Risk-ranked summary
+
+| # | Risk | Where | Mitigation in code |
+|---|------|-------|--------------------|
+| 1 | Default deployment is unauthenticated: on `--allow-remote` without `--token` every host on the network reads project sources, original binaries, hex bytes and disassembly | `cli.py:393-408`, `ui.py:245-260`, `api.py:1351`, `api.py:1227` | Acknowledgement only: a red banner and exit 1 without `--allow-remote`; `--token` is opt-in and never required alongside a remote bind |
+| 2 | No request rate limit on the expensive read endpoints; a multi-MB grid build plus brotli/zstd compression is CPU- and memory-bound per request | `api.py:834` (`/data`), `potato.py` via `ui.py:151`, `api.py:1227` (`/asm`) | Bounded per-process caches with oldest-entry eviction (`server.py:999`); the only hard connection cap is on `/api/events` (`api.py:390`) |
+| 3 | Global auth throttle: 10 failures per 60 s per process, not per source, so any one client can 429 the operator and every other client | `server.py:1465-1491` | The cap is intentional and documented as global; it bounds online guessing but has no per-source key |
+| 4 | No transport security. The token travels as `?token=` in a URL and in a cookie, in cleartext on any non-loopback bind | `ui.py:206-212`, `server.py:1509-1515` | `Referrer-Policy: no-referrer` (`server.py:1683`), `HttpOnly; SameSite=Strict` cookie, constant-time compare (`server.py:1448`) |
+| 5 | `rebrew-project.toml` is trusted input: it decides which DB is read, which binaries are disassembled, and which directories `/src` and `/original` serve from | `_paths.py:36`, `server.py:538`, `server.py:504` | None beyond TOML parsing; the file is assumed to come from the operator's own checkout |
+| 6 | DoS by thread exhaustion: `wsgiref` runs one thread per connection, has no idle timeout and no connection limit | `cli.py:513` | Only `/api/events` is capped (`api.py:583-592`) |
+| 7 | Any local process can trigger a full re-catalog and DB rebuild (disk and CPU), repeatedly within the cooldown | `api.py:1413-1487` | Loopback peer check, loopback-`Origin` and `Sec-Fetch-Site: cross-site` rejection, single-flight lock, `_REGEN_COOLDOWN_SECONDS` |
+| 8 | Response `detail` fields carry raw exception text (filesystem paths, sqlite messages) to the client | `server.py:1579-1585`, `api.py:1515-1525` | Tracebacks never reach a response body (`server.py:1590-1623`); only the one-line exception class and message do |
+| 9 | Untrusted native binary is parsed in-process by capstone and by the DLL reader | `server.py:640-706`, `server.py:725` | Size cap `_MAX_DLL_SIZE` and read-only mode; a malformed DLL can still fault or wedge the worker |
+| 10 | No per-client identity: every action is attributable only to a shared token, and only to the socket peer | `server.py:1498` | Rejected-token and rejected-Host events are logged with the peer address (`server.py:1533`, `server.py:1642`); regen start and completion are logged (`api.py:1500`, `api.py:1527`) |
+
+Owner and review cadence: not stated in the repository. No disclosure contact or
+supported-versions table exists either (there is no `SECURITY.md`).
+
+## Entry points
+
+Network (all on the single Bottle app, all threaded):
+
+- `GET /` and `GET /index.html` - `ui.py:197`. Inlines and compresses the whole
+  SPA; sets the auth cookie from `?token=`.
+- `GET /potato` - `ui.py:151`, rendered by `potato.py`. Full server-side HTML of
+  the entire coverage map.
+- `GET /src/<path>`, `GET /original/<path>` - `ui.py:245`. Proxies the project's
+  source tree and original binaries to the browser.
+- `GET /<asset>` (allowlist regex) - `ui.py:317`. Package-shipped JS/CSS/SVG.
+- `GET /api/health` `api.py:613`, `GET /api/targets` `api.py:661`.
+- `GET /api/targets/<t>/stats|functions|functions/<va>|asm|data|sections/<s>/bytes`
+  - `api.py:680`, `api.py:903`, `api.py:1169`, `api.py:1227`, `api.py:834`,
+  `api.py:1351`.
+- `POST /api/targets/<t>/functions` - `api.py:1109`, the only body-carrying
+  endpoint.
+- `GET /api/events` - `api.py:570`, Server-Sent Events, long-lived.
+- `POST /api/regen` - `api.py:1413`, the only state-changing endpoint.
+- `OPTIONS <path>` - `server.py:1704`, CORS preflight catch-all.
+- `GET|POST|PUT|DELETE|PATCH <path>` catch-all 404 - `webapp.py:34`.
+
+Request-controlled values that matter: `Host`, `Origin`, `Sec-Fetch-Site`,
+`Authorization`, `Cookie`, `Accept-Encoding`, `If-None-Match`, `Referer` are
+headers; `token`, `target`, `va`, `section`, `status`, `search`, `sort`,
+`limit`, `offset`, `size`, `offset` are query values; `{"vas": [...]}` is the
+only request body.
+
+Non-network entry points:
+
+- CLI: `serve`, `regen`, `stats`, `export`, `check`, `open` (`cli.py`). The
+  operator's shell is the trust source; no environment variable is read
+  anywhere in `src/`.
+- `rebrew-project.toml` in the working directory, re-read on stat change
+  (`_paths.py:36`, `server.py:538`).
+- The target binary named by `[targets.*].binary` (`server.py:621`).
+- Filesystem: `db/coverage.db` (opened `mode=ro` with `PRAGMA query_only`,
+  `server.py:1281`), `<project>/src`, `<project>/original`.
+- Browser opener subprocess `xdg-open` / `open` / `cmd /c start` (`cli.py:333-342`),
+  argv list, no shell, reaped with a timeout.
+
+Dependency and deployment surface: wsgiref's threaded server (no TLS, no
+connection cap), Bottle, and rebrew, which is imported in-process by
+`regen.py:29` for `recoverage regen`, `serve --regen` and `POST /api/regen`.
+
+## Trust boundaries
+
+1. **Browser or LAN client to the app.** Everything in the request above is
+   untrusted. Validation point: a global `before_request` chain
+   (`server.py:1560` auth, `server.py:1626` Host allowlist), then per-handler
+   bounds (`_MAX_BATCH_BODY_BYTES`, `_MAX_BATCH_LOOKUP` at `api.py:883-889`;
+   `_MAX_PAGE_OFFSET` at `api.py:894`; `_MAX_SLICE_SIZE` at `api.py:899`).
+2. **App to database.** `coverage.db` is written by rebrew and read-only here
+   (`server.py:1281`). The app trusts row content as data, never as SQL: values
+   are bound parameters throughout, and the only interpolated fragment is a
+   fixed `where_sql` assembled from constants at `api.py:255`. LIKE searches are
+   escaped at `server.py:854`. The DB file itself is a boundary: a rewritten
+   `coverage.db` is picked up live, and the SSE watcher (`api.py:438`) pushes
+   `db-updated` so the SPA re-reads it.
+3. **App to project filesystem.** `/src` and `/original` are served from the
+   project directory with an explicit resolve-and-contain check, because
+   Bottle's own prefix check does not resolve symlinks (`ui.py:249-259`).
+4. **App to local process (regen).** The only privilege transition: a POST makes
+   the server load rebrew and rebuild the DB, with the process's own filesystem
+   authority (`regen.py:29`).
+5. **Config to runtime.** `rebrew-project.toml` selects the DB path, the target
+   binary path and the served trees, with no signature or allowlist.
+6. **CLI to host.** The browser opener and the bind address are operator
+   decisions, not attacker input.
+
+## Assets
+
+- Project C sources under `<project>/src` and original binaries under
+  `<project>/original` and `db/coverage.db` (reverse-engineering output, the
+  thing worth stealing).
+- The `--token` bearer value, the only credential the system holds.
+- Server process availability and the host's CPU, memory and disk, all consumed
+  by `/data`, `/potato`, `/asm` and regen.
+- The integrity of `coverage.db`: a wrong or stale map misdirects hours of
+  decompilation work, which is the reputation-shaped asset here.
+
+## Threats per boundary
+
+**Client to app.** Spoofing: a page on any origin can drive a loopback browser
+at the dashboard; mitigated by the Host allowlist on loopback binds
+(`server.py:1635-1653`) and by the `Sec-Fetch-Site` rejection on regen
+(`api.py:1448`). Tampering: only regen writes, and only from loopback.
+Information disclosure: `/src` and `/original` proxy the whole project tree, and
+the byte and asm endpoints serve arbitrary offsets of the original binary
+(`api.py:1351`, `api.py:1227`) with no per-resource authorization. Denial of
+service: no per-client quota anywhere; only `/api/events` and the auth window
+are bounded. Elevation of privilege: an unauthenticated remote peer reaching a
+non-loopback bind gets every read the operator gets, which is the whole asset
+set.
+
+**App to database.** Tampering is bounded by `mode=ro` and `query_only`
+(`server.py:1281`) plus the shared `coverage_db_lock`. Denial of service
+remains: a large `functions` table with a `search` term is served by a
+counting query and a page query per request (`api.py:231`, `api.py:903`).
+
+**App to filesystem.** Traversal and symlink escape are handled explicitly
+(`ui.py:254`); what remains is that the trees are served in full, so a `.env`
+or a key committed under `src/` is published to every client.
+
+**App to local process.** A local, unauthenticated process can trigger regen.
+Origin and `Sec-Fetch-Site` checks stop the browser-shaped version; they do not
+stop a local binary, and the check is skipped entirely when no `Origin` is sent
+(`api.py:1441-1456`). Regen runs with no timeout by design (`regen.py:16`).
+
+**Config to runtime.** A `rebrew-project.toml` from a cloned or shared project
+silently redirects the served trees and the database. There is no prompt and no
+warning when a config changes under a running server; the memoized path just
+recomputes (`_paths.py:44-54`).
+
+## Mitigations present, mapped
+
+| Control | File | Covers |
+|---------|------|--------|
+| Optional bearer token, constant-time compare | `server.py:1448`, `server.py:1498` | Spoofing, unauthorized read |
+| Global failure throttle with 429 + `Retry-After` | `server.py:1471` | Online token guessing, and audit logging of each failure |
+| Host header allowlist on loopback binds | `server.py:96`, `server.py:1635` | DNS rebinding |
+| Remote-bind acknowledgement, hard exit 1 without `--allow-remote` | `cli.py:393-402` | Accidental LAN exposure |
+| `Sec-Fetch-Site: cross-site` and loopback-`Origin` gate on regen | `api.py:1428-1456` | Cross-site POST |
+| Single-flight lock + cooldown on regen | `api.py:1464-1487` | Concurrent torn rebuilds, regen flood |
+| CSP, `nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` | `server.py:1662-1683` | Injection, framing, token leak via Referer |
+| CORS allowlist, no wildcard ever emitted | `server.py:1684-1701`, `cli.py:436-447` | Cross-origin reads |
+| Symlink-resolving containment on `/src`, `/original` | `ui.py:254` | Path traversal |
+| Allowlist regex for package assets | `ui.py:317` | Arbitrary file read from the assets dir |
+| Bounded request body, VA list, page offset, slice size | `api.py:883-899`, `api.py:1026` | Memory and CPU exhaustion per request |
+| `SSE_MAX_CLIENTS` cap and leak-proof unregistering | `api.py:390`, `api.py:514-567` | Thread exhaustion via event streams |
+| `_MAX_DLL_SIZE` and LRU read caches | `server.py:664` | Memory blowup on a large target |
+| Read-only DB connection, `query_only`, busy timeout | `server.py:1281` | Accidental writes, lock contention |
+| JSON error contract, no tracebacks in bodies, control-char-escaped logs | `server.py:1384`, `server.py:1590`, `server.py:530` | Information disclosure, log forgery |
+
+## Unmitigated, ranked
+
+1. No enforced pairing of `--allow-remote` with `--token` (risk 1 above). A
+   warning is printed and the process exits; nothing stops `--bind 0.0.0.0
+   --allow-remote` from publishing sources and binaries.
+2. No per-client rate limiting or quota on the read endpoints; `wsgiref` will
+   happily serve a flood of `/data` or `/potato` renders.
+3. Global auth throttle with no per-source key, so one client can lock out the
+   operator for the rest of the window.
+4. No TLS and no token transport hardening; the token is a URL parameter by
+   design, which puts it in browser history, shell history and any proxy log.
+5. Trusted-by-assumption `rebrew-project.toml`; the served trees follow it.
+6. No per-resource authorization anywhere: the token is all-or-nothing, so a
+   read-only viewer and the operator have identical reach.
+7. No audit persistence: the only trail is stderr at INFO and above, request
+   logging is DEBUG (`server.py:1626`), and nothing distinguishes one holder of
+   the shared token from another.
+8. Capstone and the DLL reader parse attacker-shaped binaries in-process; a
+   crafted target is a worker-level availability and memory-safety risk that
+   only the size cap touches.
+
+## Abuse cases
+
+- A hostile but authenticated LAN user with the shared token can scrape the
+  whole project: `/src` for sources, `/original/<t>.dll` and
+  `/api/targets/<t>/sections/<s>/bytes?size=4096` for the binary, `/api/targets/<t>/data`
+  for the map. Nothing distinguishes browsing from bulk extraction; the only
+  bound is the page and slice caps.
+- A local process without any token can loop `POST /api/regen` to consume the
+  host's CPU and rewrite `db/`, degrading the dashboard for the operator. The
+  cooldown bounds rate, not volume.
+- Any webpage a developer visits can hold 32 `/api/events` connections to their
+  own loopback dashboard (`api.py:583`), exhausting the process's threads
+  without any credential, because the SPA's EventSource is same-origin and
+  no-cors from a cross-site page.
+- Client-side enforcement is trusted nowhere except the grid's filter toggles;
+  every filter is re-derived server-side in `/data` and `/functions`, so the
+  client cannot widen its own view. The server-side `status` and `search`
+  filters are the real boundary, and they are unfiltered when the request
+  omits them.
+
+## Response readiness
+
+- Security-relevant events that reach the log: rejected token (peer address
+  only, never the value, `server.py:1533`), rejected Host header
+  (`server.py:1642`), unhandled errors (`server.py:1615`), DB unavailability
+  (`server.py:1572`), regen start and completion (`api.py:1500`). Everything
+  else is DEBUG and off by default.
+- No documented path from "a vulnerability was reported" to "a fix shipped"
+  exists in the repository, and there is no `SECURITY.md`: no disclosure
+  contact, no supported-versions table. Left for a human to fill in; not
+  invented here.
