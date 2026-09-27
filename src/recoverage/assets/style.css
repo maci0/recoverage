@@ -317,6 +317,13 @@ body {
 }
 .code > code { display: block; white-space: inherit; }
 .code > code.hljs { padding: 0; background: transparent; }
+/* Shown when the highlight.js chunks never arrived. The note is a pseudo-element
+   so the pane's DOM (and the disassembly text in it) is untouched; the same
+   sentence rides on the element's title, which is what assistive tech reads. */
+.code > code[data-highlight-state="unavailable"]::before {
+  content: attr(data-highlight-note); display: block; white-space: normal; margin-bottom: 8px;
+  color: var(--muted); font-style: italic;
+}
 
 .asm-link { color: inherit; text-decoration: underline; text-decoration-style: dotted; text-decoration-color: var(--asm-link-underline); cursor: pointer; transition: all 0.2s ease; }
 .asm-link:hover { color: var(--c); text-decoration-style: solid; text-decoration-color: var(--c); background: var(--asm-link-hover-bg); border-radius: 2px; }

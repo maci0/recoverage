@@ -90,42 +90,61 @@
   let hljsLoaded = false;
   let hljsLoadingPromise = null;
 
-  const loadHighlightJs = () => {
-    if (hljsLoaded) return;
-    if (hljsLoadingPromise) return hljsLoadingPromise;
+  // A failed chunk must not be silent: the pane would sit on plain text with
+  // no hint that the highlighter is missing, and (before this reset) no retry
+  // either, because a resolved promise was cached as success for the session.
+  // Drop the memo on failure so the next pane opened tries again.
+  const loadHighlightJs = async () => {
+    if (hljsLoaded) return true;
+    if (!hljsLoadingPromise) {
+      if (!document.querySelector("#hljs-theme")) {
+        const link = document.createElement("link");
+        link.id = "hljs-theme";
+        link.rel = "stylesheet";
+        link.href = "/hljs.css";
+        document.head.append(link);
+      }
 
-    if (!document.querySelector("#hljs-theme")) {
-      const link = document.createElement("link");
-      link.id = "hljs-theme";
-      link.rel = "stylesheet";
-      link.href = "/hljs.css";
-      document.head.append(link);
+      // Served from this origin, not a CDN: reverse-engineering work routinely
+      // happens on air-gapped or locked-down machines, where a CDN fetch fails
+      // silently and every code pane renders unhighlighted.
+      const loadScript = (src) => new Promise((resolve, reject) => {
+        const el = document.createElement("script");
+        el.src = src;
+        el.addEventListener("load", resolve);
+        el.addEventListener("error", () => reject(new Error(`failed to load ${src}`)));
+        document.head.append(el);
+      });
+
+      hljsLoadingPromise = (async () => {
+        await loadScript("/hljs.min.js");
+        await Promise.all([loadScript("/hljs-c.min.js"), loadScript("/hljs-x86asm.min.js")]);
+        initHighlighting();
+        hljsLoaded = true;
+      })();
+      hljsLoadingPromise.catch(() => { hljsLoadingPromise = null; });
     }
-
-    // Served from this origin, not a CDN: reverse-engineering work routinely
-    // happens on air-gapped or locked-down machines, where a CDN fetch fails
-    // silently and every code pane renders unhighlighted.
-    const loadScript = (src) => new Promise((resolve) => {
-      const el = document.createElement("script");
-      el.src = src;
-      el.addEventListener("load", resolve);
-      el.addEventListener("error", resolve);
-      document.head.append(el);
-    });
-
-    hljsLoadingPromise = (async () => {
-      await loadScript("/hljs.min.js");
-      await Promise.all([loadScript("/hljs-c.min.js"), loadScript("/hljs-x86asm.min.js")]);
-      initHighlighting();
-      hljsLoaded = true;
-    })();
-
-    return hljsLoadingPromise;
+    let failed = false;
+    try {
+      await hljsLoadingPromise;
+    } catch (error) { // oxlint-disable-line @rikalabs/no-silent-catch-fallback -- "failed" is the contract, not a swallow: the caller renders MSG.HIGHLIGHT_UNAVAILABLE and the memo above is cleared so the next pane retries
+      failed = true;
+      // oxlint-disable-next-line eslint/no-console -- a chunk that never arrived is worth a console trace alongside the in-pane notice
+      console.warn("recoverage: highlight.js failed to load", error);
+    }
+    return !failed && window.hljs != null;
   };
 
   const highlightInto = async (codeEl, lang) => {
     if (!lang) return;
-    await loadHighlightJs();
+    if (!await loadHighlightJs()) {
+      // Say so instead of dropping the reader into unhighlighted text with no
+      // explanation; the disassembly itself is left intact.
+      codeEl.dataset.highlightState = "unavailable";
+      codeEl.dataset.highlightNote = MSG.HIGHLIGHT_UNAVAILABLE;
+      codeEl.title = MSG.HIGHLIGHT_UNAVAILABLE;
+      return;
+    }
     delete codeEl.dataset.highlighted;
     try {
       window.hljs.highlightElement(codeEl);

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import gzip
+import hashlib
 import logging
 import sqlite3
 import threading
@@ -28,6 +29,7 @@ from recoverage.server import (
     _etag_or_304,
     _finalized,
     _project_dir,
+    _safe_etag,
     _snapshot_db_mtime,
     app,
     compress_payload,
@@ -269,7 +271,18 @@ def serve_repo_file(filepath: str) -> Any:
 # at 25 KB (9 KB zstd), and hljs.min.js — fetched when a function's asm pane
 # opens — is 127 KB raw vs 38 KB brotli.  Compressing the whole set saves
 # ~112 KB of transfer.
-_STATIC_CACHE: dict[tuple[str, str], bytes] = {}
+#
+# Each entry carries a strong ETag next to the body.  CACHE_REVALIDATE alone
+# ("no-cache") forces the browser back on every load, and with no validator to
+# compare, the only answer is to re-send all 55 KB: a repeat visit to the
+# dashboard re-downloaded detail.js (9.5 KB) and every asm pane opening
+# re-downloaded hljs.min.js (45.6 KB) plus its grammars (8.9 KB).  With the
+# ETag those repeat visits answer 304: no body, no decompression, no parse.
+# max-age is deliberately NOT raised — the URLs are not content-hashed, so a
+# package upgrade changes the bytes under the same name and a long-lived
+# freshness lifetime would pin the browser to old JS.  Revalidate cheaply
+# instead of guessing.
+_STATIC_CACHE: dict[tuple[str, str], tuple[str, bytes]] = {}
 _STATIC_LOCK = threading.Lock()
 
 _STATIC_TYPES = {
@@ -277,6 +290,28 @@ _STATIC_TYPES = {
     ".css": "text/css; charset=utf-8",
     ".svg": "image/svg+xml",
 }
+
+
+def _asset_etag(filename: str, encoding: str, raw: bytes) -> str:
+    """Strong validator for a static asset, from its bytes and its encoding.
+
+    The encoding is part of the tag because it is part of the representation:
+    one file compressed as brotli and as zstd is two different bodies, and a
+    strong validator must not match across them.  Vary: Accept-Encoding keeps
+    shared caches from mixing them; this keeps client caches honest too.
+    """
+    return _safe_etag("static", filename, encoding, hashlib.sha256(raw).hexdigest())
+
+
+def _client_has_asset(etag: str) -> bool:
+    """Whether the request's If-None-Match already covers *etag* (RFC 9110 13.1.2).
+
+    Weak comparison, which is what If-None-Match calls for: a browser holding
+    the asset as W/"..." still gets its 304.  Handles the comma-separated list
+    and the "*" form.
+    """
+    raw = request.headers.get("If-None-Match", "")
+    return any(c.strip() == "*" or c.strip().removeprefix("W/") == etag for c in raw.split(","))
 
 
 @app.get(
@@ -293,8 +328,8 @@ def serve_static_asset(filename: str) -> Any:
 
     key = (filename, encoding)
     with _STATIC_LOCK:
-        body = _STATIC_CACHE.get(key)
-    if body is None:
+        entry = _STATIC_CACHE.get(key)
+    if entry is None:
         path = _assets_dir() / filename
         try:
             raw = path.read_bytes()
@@ -304,9 +339,18 @@ def serve_static_asset(filename: str) -> Any:
         body, encoding = compress_payload(
             raw, accept_encoding, brotli_quality=BROTLI_STATIC_QUALITY
         )
+        # A racing thread may already have filled this key; keep whichever
+        # landed first so every client sees one body under one ETag.
         with _STATIC_LOCK:
-            _STATIC_CACHE[key] = body
+            entry = _STATIC_CACHE.setdefault(key, (_asset_etag(filename, encoding, raw), body))
+
+    etag, body = entry
+    if _client_has_asset(etag):
+        return HTTPResponse(
+            status=304,
+            headers={"ETag": etag, "Vary": "Accept-Encoding", "Cache-Control": CACHE_REVALIDATE},
+        )
 
     suffix = PurePosixPath(filename).suffix.lower()
     content_type = _STATIC_TYPES.get(suffix, "application/octet-stream")
-    return _finalized(body, content_type, encoding, Cache_Control=CACHE_REVALIDATE)
+    return _finalized(body, content_type, encoding, ETag=etag, Cache_Control=CACHE_REVALIDATE)

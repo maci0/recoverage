@@ -830,6 +830,81 @@ class TestEvictOldest:
         assert set(cache) == set(range(13, 20))  # newest kept, oldest gone
 
 
+class TestStaticAssetRevalidation:
+    """Static assets answer If-None-Match with a 304 and no body.
+
+    Cache-Control is no-cache, so the browser revalidates on every load; with
+    no validator the only answer was the full body again (45 KB of hljs.min.js
+    per asm pane, 9.5 KB of detail.js per visit). The ETag must be stable
+    across requests, distinct per encoding, and must reject a stale tag.
+
+    wsgiref title-cases header names on the way out, so the tag arrives as
+    "Etag"; HTTP field names are case-insensitive either way.
+    """
+
+    def test_asset_carries_an_etag(self) -> None:
+        from conftest import wsgi_get
+
+        status, headers, body = wsgi_get("/detail.js", headers={"Accept-Encoding": "gzip"})
+        assert status == "200 OK"
+        assert headers["Etag"]
+        assert body
+
+    def test_matching_if_none_match_returns_empty_304(self) -> None:
+        from conftest import wsgi_get
+
+        _, headers, _ = wsgi_get("/detail.js", headers={"Accept-Encoding": "gzip"})
+        etag = headers["Etag"]
+        status, headers_304, body = wsgi_get(
+            "/detail.js",
+            headers={"Accept-Encoding": "gzip", "If-None-Match": etag},
+        )
+        assert status == "304 Not Modified"
+        assert body == b""
+        assert headers_304["Etag"] == etag
+        assert headers_304["Vary"] == "Accept-Encoding"
+
+    def test_weak_validator_still_matches(self) -> None:
+        from conftest import wsgi_get
+
+        _, headers, _ = wsgi_get("/detail.js", headers={"Accept-Encoding": "gzip"})
+        weak = f"W/{headers['Etag']}"
+        status, _, _ = wsgi_get(
+            "/detail.js", headers={"Accept-Encoding": "gzip", "If-None-Match": weak}
+        )
+        assert status == "304 Not Modified"
+
+    def test_stale_etag_gets_the_full_body(self) -> None:
+        from conftest import wsgi_get
+
+        status, _, body = wsgi_get(
+            "/detail.js",
+            headers={"Accept-Encoding": "gzip", "If-None-Match": '"not-the-tag"'},
+        )
+        assert status == "200 OK"
+        assert body
+
+    def test_etag_differs_per_encoding(self) -> None:
+        """br and zstd are different representations of the same file: a
+        strong validator must not match across them."""
+        from conftest import wsgi_get
+
+        _, br_headers, _ = wsgi_get("/detail.js", headers={"Accept-Encoding": "br"})
+        _, zstd_headers, _ = wsgi_get("/detail.js", headers={"Accept-Encoding": "zstd"})
+        assert br_headers["Etag"] != zstd_headers["Etag"]
+
+    def test_index_preloads_detail_js(self) -> None:
+        """detail.js is requested by the inlined app.js, so the shell
+        advertises it during the preload scan instead of a round trip later."""
+        from conftest import decode_body, wsgi_get
+
+        _, headers, body = wsgi_get("/", headers={"Accept-Encoding": "gzip"})
+        html = decode_body(body, headers).decode("utf-8")
+        assert 'rel="preload"' in html
+        assert 'href="/detail.js"' in html
+        assert 'as="script"' in html
+
+
 class TestHostnameOf:
     """_hostname_of is the parser behind BOTH the DNS-rebinding Host
     allowlist and the regen Origin check — values that browsers never emit

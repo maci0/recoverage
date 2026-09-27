@@ -29,6 +29,7 @@ const MSG = {
   FETCH_FAILED: (url) => `(failed to load: ${url})`,
   NO_DECL: "(no declaration found)",
   DETAIL_UNAVAILABLE: "(detail view failed to load — reload the page)",
+  HIGHLIGHT_UNAVAILABLE: "(syntax highlighting unavailable — the code below is unhighlighted)",
 };
 
 function hex(n, width) {
@@ -45,9 +46,11 @@ function toVa(v) {
   return typeof v === "string" ? Number.parseInt(v, 16) : v;
 }
 
-// The hex dump and data inspector live in detail.js, which is fetched right
-// after first paint so the inlined shell stays inside the initial congestion
-// window.  Until it lands, panes that need it show MSG.LOADING.
+// The hex dump and data inspector live in detail.js, which the shell preloads
+// (see index.html) and which app.js requests on the next line, so the fetch
+// overlaps the shell's own download instead of starting a round trip later.
+// The inlined shell stays inside the initial congestion window.  Until it
+// lands, panes that need it show MSG.LOADING.
 const detailReady = van.state(false);
 const detailFailed = van.state(false);
 
