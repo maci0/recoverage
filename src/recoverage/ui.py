@@ -111,7 +111,7 @@ def _check_payload_budget(payload: bytes) -> None:
 
     The budget is the initial congestion window (10 x 1460-byte MSS), so the
     payload should arrive in one round trip.  The shipped shell measures
-    ~14.1 KB under brotli q11, the highest quality the library offers, which
+    ~14.2 KB under brotli q11, the highest quality the library offers, which
     fits; the margin is thin, and everything deferrable (the asm fetch, its
     formatting, the canvas coverage map, and the highlight.js load among it)
     lives in ``detail.js``, so further gains have to come from there.  The

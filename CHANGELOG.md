@@ -217,6 +217,12 @@ module ships in the published package. See *Breaking*.
   source root resolved it against the drive's own working directory. The
   guard now keys on the path's `anchor`, which covers the drive, the
   leading separator, and a UNC share alike.
+- **`/api/health`'s `mean_ms` averaged in the requests it excludes.**
+  `/api/events` holds its response open by design, so its "duration" is
+  connection lifetime; it is already kept out of `max_ms` and the slow count.
+  The mean divided by every finished request anyway, so a browser tab left on
+  the dashboard for an hour dragged the reported average down to a fraction of
+  the real service time. It now averages the timed requests only.
 - **The verified code-similarity reads 100x low.** `verify_results.similarity`
   is stored as a 0-1 fraction (the column CHECKs the unit interval, and
   rebrew's verify import divides its percent scale by 100), but the SPA and

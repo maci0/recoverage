@@ -45,6 +45,7 @@ class RequestStats:
         self._sum_ms = 0.0
         self._timed = 0
         self._in_flight = 0
+        self._timed = 0
         self._by_route: dict[str, dict[str, int]] = {}
         self._by_status: dict[str, int] = {}
 
@@ -71,8 +72,8 @@ class RequestStats:
             if slow:
                 self._slow += 1
             if timed:
-                self._sum_ms += duration_ms
                 self._timed += 1
+                self._sum_ms += duration_ms
                 self._max_ms = max(self._max_ms, duration_ms)
             bucket = f"{status // 100}xx"
             self._by_status[bucket] = self._by_status.get(bucket, 0) + 1
@@ -118,14 +119,16 @@ class RequestStats:
     def snapshot(self) -> dict[str, Any]:
         """A JSON-ready copy of the counters.
 
-        ``mean_ms`` is a lifetime average over the timed requests only, so
-        the open SSE stream (counted in ``total``, absent from the sum) does
-        not drag it down; it moves when the workload changes.  ``max_ms`` is
-        the worst single timed request since start.  Neither is a
-        percentile: keeping every sample to compute one would cost more than
-        the number is worth here.
-        ``in_flight`` counts requests currently inside a handler, so a
-        snapshot taken from ``/api/health`` includes the request asking.
+        ``mean_ms`` is a lifetime average over every timed request, so it
+        moves when the workload changes.  The mean divides by the timed
+        count, not by ``total``, so a connection held open by an
+        :data:`UNBOUNDED_ROUTES` route is counted in ``total`` and absent
+        from the sum, and drags neither figure down.  ``max_ms`` is the
+        worst single timed request since start.  Neither is a percentile:
+        keeping every sample to compute one would cost more than the number
+        is worth here.  ``in_flight`` counts requests currently inside a
+        handler, so a snapshot taken from ``/api/health`` includes the
+        request asking.
         """
         with self._lock:
             mean = self._sum_ms / self._timed if self._timed else 0.0
@@ -156,6 +159,7 @@ class RequestStats:
             self._sum_ms = 0.0
             self._timed = 0
             self._max_ms = 0.0
+            self._timed = 0
             self._by_route.clear()
             self._by_status.clear()
 

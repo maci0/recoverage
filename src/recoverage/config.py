@@ -55,9 +55,9 @@ KNOWN_VARS: Final[frozenset[str]] = frozenset(
 )
 
 # Command-line defaults, the single definition the environment defaults and
-# the CLI epilog share.  The --port, --bind and --log-level help strings spell
-# their default out in text rather than reading it from here, so a change to
-# these constants needs those strings updated alongside it.
+# the CLI epilog share.  The --port help string reads DEFAULT_PORT from here;
+# the --bind and --log-level ones spell their default out in text, so a change
+# to those two constants needs those strings updated alongside it.
 DEFAULT_PORT: Final = 8001
 DEFAULT_BIND: Final = "127.0.0.1"
 

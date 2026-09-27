@@ -384,7 +384,7 @@ NOT_DATA_MARKER_SQL = "(markerType IS NULL OR markerType NOT IN ({types}))".form
 #
 # Only the two values that need `cells` are computed here.  Every cell count
 # comes from section_cell_stats, which rebrew materializes per section
-# (~0.01 ms); adding the eleven SUM(CASE ...) expressions and a COUNT(*) to
+# (~0.01 ms); adding the twelve SUM(CASE ...) expressions and a COUNT(*) to
 # this scan cost ~15 ms on a 64k-cell target against ~6 ms for these two.  That
 # includes exact_count: the cells-side copy that used to sit here counted
 # 'exact' alone while every other surface (rebrew's materialized table, /data,

@@ -495,7 +495,7 @@ def _broadcast_db_updated(snapshot: tuple[int, int] | None) -> None:
     payload: dict[str, Any] = {
         "event": "db-updated",
         # Basename only — the absolute path leaks the user's home-directory
-        # layout to any LAN/browser client (see security review).
+        # layout to any LAN/browser client (docs/THREAT_MODEL.md).
         "db": {"path": _db_path().name},
         "timestamp": clock.wall_time(),
     }

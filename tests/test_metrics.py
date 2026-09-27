@@ -220,6 +220,21 @@ class TestStats:
         assert snap["max_ms"] == 0.0
         assert snap["slow"] == 0
 
+    def test_held_open_route_does_not_dilute_the_mean(self) -> None:
+        """mean_ms averages the timed requests only.
+
+        A connection the server holds open by design (SSE) is excluded from
+        the latency extremes, so averaging over `total` instead of the timed
+        count would report a mean the same connection is not in, and an idle
+        dashboard with one browser tab open reads a third of its real latency.
+        """
+        metrics.REQUESTS.finish("/api/events", 200, 900_000.0, timed=False)
+        metrics.REQUESTS.finish("/api/targets", 200, 10.0)
+        metrics.REQUESTS.finish("/api/targets", 200, 30.0)
+        snap = metrics.REQUESTS.snapshot()
+        assert snap["total"] == 3
+        assert snap["mean_ms"] == 20.0
+
     def test_route_label_falls_back_to_the_first_segment(self) -> None:
         assert metrics.route_label("/api/targets/FAKEDLL/data", None) == "/api"
         assert metrics.route_label("/", None) == "/"

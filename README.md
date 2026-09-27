@@ -41,7 +41,7 @@ closely your C code matches the original compiled output.
 | Light and dark themes | Retro CRT dark mode by default, clean light mode one click away |
 | Clickable cross-references | Hex addresses in the disassembly are live links that jump to that chunk |
 | Interactive progress bar | Segmented by state; click a segment to filter the grid |
-| First draw in first TCP packet | HTML, CSS, and JS inlined and compressed (Brotli/Zstd) to ~14.5 KB |
+| First draw in first TCP packet | HTML, CSS, and JS inlined and compressed (Brotli/Zstd) to ~14.2 KB |
 | Potato Mode | Zero-JS server-rendered fallback for constrained environments |
 | Live regen | Re-catalog and rebuild from the browser without restarting the server |
 
@@ -466,15 +466,20 @@ recoverage/
 │   ├── test_paths.py         # DB path resolution tests
 │   ├── test_server.py        # Compression, encoding tests
 │   ├── test_potato.py        # Potato Mode rendering tests
-│   ├── test_perf.py         # Deterministic perf regression gates (work counters, not wall clock)
+│   ├── test_perf.py          # Deterministic perf regression gates (work counters, not wall clock)
+│   ├── test_metrics.py       # Request id, RED counters, slow-request log line
 │   ├── test_release.py       # Release contract (version, changelog, declared floors)
+│   ├── test_supply_chain.py  # Pins: rebrew ref/sha, declared-vs-imported deps, vendored-asset grants
+│   ├── test_fuzz.py          # Seeded mutation campaigns over the untrusted-input surfaces
 │   ├── test_serve_harness.py # The smoke + lint-html harness contract
 │   └── test_playwright.py    # Browser integration tests
 └── src/recoverage/
     ├── __init__.py
     ├── __main__.py           # python -m recoverage
     ├── _paths.py             # DB path resolution (rebrew-project.toml db_dir)
+    ├── clock.py              # The one time source the request path reads
     ├── config.py             # RECOVERAGE_* env: defaults, validation, startup banner
+    ├── metrics.py            # In-process RED counters, read by /api/health
     ├── cli.py                # Typer CLI entry point
     ├── server.py             # Bottle app, shared helpers & compression
     ├── disasm.py             # Capstone disassembly (optional extra)
