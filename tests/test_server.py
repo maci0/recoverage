@@ -323,8 +323,30 @@ class TestDbEtag:
 
 class TestClearTargetCache:
     def test_clear_is_safe_when_empty(self) -> None:
+        """Clearing an already-empty cache is a no-op, not a KeyError.
+
+        Asserting the resulting state rather than "did not raise" also pins
+        the part that is easy to get wrong: a second clear must leave every
+        global None, not a half-reset pair.
+        """
+        import recoverage.server as srv
+
         clear_target_cache()
-        clear_target_cache()  # should not raise
+        srv._TOML_CONFIG_CACHE = {"a": 1}
+        srv._TOML_CACHE_MTIME = (1, 2)
+        srv._RESOLVED_TARGETS_CACHE = ["T"]
+        srv._SCHEMA_VERSION_CACHE = 3
+
+        clear_target_cache()
+        assert srv._TOML_CONFIG_CACHE is None
+        assert srv._TOML_CACHE_MTIME is None
+        assert srv._RESOLVED_TARGETS_CACHE is None
+        assert srv._SCHEMA_VERSION_CACHE is None
+
+        # Idempotent: a second clear over the emptied state changes nothing.
+        clear_target_cache()
+        assert srv._TOML_CONFIG_CACHE is None
+        assert srv._RESOLVED_TARGETS_CACHE is None
 
     def test_thread_safety(self) -> None:
         errors: list[Exception] = []
@@ -1447,6 +1469,42 @@ class TestSpaStateVocabulary:
             base.joinpath("detail.js").read_text(encoding="utf-8"),
         )
 
+    def _window_rc_keys(self, app_js: str) -> set[str]:
+        """Top-level key names of the ``window.RC = { ... }`` literal in *app_js*.
+
+        detail.js reads its shared state off ``window.RC``, so the contract is
+        which names are published, not the order or spelling of the literal.
+        Splitting on commas is wrong: the object holds arrow bodies with their
+        own commas, so the scan tracks brace depth and only yields keys that
+        sit at depth 1.
+        """
+        import re
+
+        literal = re.search(r"window\.RC\s*=\s*\{", app_js)
+        assert literal is not None, "app.js never publishes window.RC"
+        body = app_js[literal.end() :]
+        keys: set[str] = set()
+        depth = 1
+        start = 0
+        for i, ch in enumerate(body):
+            if ch in "{([":
+                depth += 1
+            elif ch in "})]":
+                depth -= 1
+                if depth == 0:
+                    segment = body[start:i]
+                    key = segment.split(":", 1)[0].strip()
+                    if key:
+                        keys.add(key)
+                    return keys
+            elif ch == "," and depth == 1:
+                segment = body[start:i]
+                key = segment.split(":", 1)[0].strip()
+                if key:
+                    keys.add(key)
+                start = i + 1
+        raise AssertionError("window.RC literal is never closed")
+
     def test_state_id_covers_every_known_cell_state(self) -> None:
         from rebrew.build_db import _KNOWN_CELL_STATES
 
@@ -1484,9 +1542,9 @@ class TestSpaStateVocabulary:
         labels = re.search(r"const STATE_LABEL = \[(.*?)\];", app_js, re.DOTALL).group(1)
         assert len([v for v in labels.split(",") if v.strip()]) == 8
         assert "STATE_LABEL" in detail_js
-        assert "window.RC = { van, MetaItem, MSG, hex, STATE_LABEL" in app_js, (
-            "not published on window.RC, so the tooltip reads undefined"
-        )
+        published = self._window_rc_keys(app_js)
+        missing = sorted({"STATE_LABEL"} - published)
+        assert missing == [], f"read by detail.js but not published on window.RC: {missing}"
 
     def test_cell_tooltip_names_the_state_and_function(self) -> None:
         """The hover title must say what the cell is, not print a 0/1 flag.

@@ -2034,6 +2034,20 @@ def _make_schema_gate_db(tmp_path: Path, cells: list[tuple[str, int, int, str]] 
     return db
 
 
+def _fake_request(query: dict[str, str] | None = None) -> Any:
+    """A thread-independent stand-in for bottle's request local.
+
+    Handlers read ``request`` from *their own* module globals, so one
+    stand-in has to be installed in every module that touches it: ``api``
+    reads ``request.query`` for ``?section=`` while the shared ETag and
+    compression helpers in ``server`` read ``request.headers``. Patching only
+    ``api.request`` leaves the server half falling back to bottle's empty
+    default environ, which is how a caller-supplied section filter silently
+    disappears.
+    """
+    return type("R", (), {"headers": {}, "query": dict(query or {}), "environ": {}})()
+
+
 def _point_app_at_db(monkeypatch: pytest.MonkeyPatch, db: Any) -> Any:
     """Point the app at a synthetic DB and return the mock request."""
     import recoverage.api as api
@@ -2049,7 +2063,7 @@ def _point_app_at_db(monkeypatch: pytest.MonkeyPatch, db: Any) -> Any:
     def _open_like(p: Any) -> Any:
         return real_open_db(p)
 
-    req = type("R", (), {"headers": {}, "query": {}})()
+    req = _fake_request()
     monkeypatch.setattr(api, "_db_path", lambda: db)
     monkeypatch.setattr("recoverage.server._db_path", lambda: db)
     monkeypatch.setattr(server_mod, "_open_db", _open_like)
@@ -2263,8 +2277,8 @@ class TestDataPayloadMemo:
 
         monkeypatch.setattr(server_mod, "_open_db", counting_open)
 
-        query: dict[str, str] = {}
-        fake_req: Any = type("R", (), {"headers": {}, "query": query, "environ": {}})()
+        fake_req: Any = _fake_request()
+        query: dict[str, str] = fake_req.query
         fake_resp: Any = type(
             "R", (), {"content_type": None, "set_header": lambda self, k, v: None}
         )()
@@ -2368,12 +2382,16 @@ class TestDataPayloadMemo:
         (unknown ?section= 404) must wake, find no memo, and produce its own
         404 — not hang, not serve a stale/empty payload."""
         import recoverage.api as api
+        import recoverage.server as server_mod
 
         release = threading.Event()
-        _, open_calls, query = self._gated_open(tmp_path, monkeypatch, release)
-        query["section"] = "nope"
-        req = type("R", (), {"headers": {}, "query": {}})()
-        monkeypatch.setattr(api, "request", req)
+        _, open_calls, _ = self._gated_open(tmp_path, monkeypatch, release)
+        # The section filter is read by server.query_param, which resolves
+        # `request` from the *server* module globals, so the stand-in has to
+        # be patched there; patching api.request would leave the handler
+        # building the unfiltered payload and this test would pass on the
+        # wrong path.
+        monkeypatch.setattr(server_mod, "request", _fake_request({"section": "nope"}))
         api._clear_data_cache()
 
         snap = api._snapshot_db_mtime()
@@ -2391,21 +2409,31 @@ class TestDataPayloadMemo:
                 outcome.append(("raised", exc))
 
         t = threading.Thread(target=follower)
-        t.start()
-        t.join(timeout=0.3)
-        assert t.is_alive(), "follower did not wait for the in-flight build"
-        built.set()
-        release.set()  # the follower's own build may now open the DB
-        t.join(timeout=15)
-        assert not t.is_alive(), "404 path deadlocked the follower"
-        kind, resp = outcome[0]
-        # The unknown-section 404 is raised by _build_data_raw (a raised
-        # HTTPResponse is what bottle renders as the response); the direct
-        # call observes the raised shape.  Either way the follower must see
-        # its own 404, never a stale/empty payload.
-        assert kind == "raised" and str(resp.status).startswith("404")
-        assert open_calls == [1]
-        api._DATA_CACHE_BUILDING.pop(key, None)
+        try:
+            t.start()
+            t.join(timeout=0.3)
+            assert t.is_alive(), "follower did not wait for the in-flight build"
+            assert open_calls == [], "follower opened the DB despite an in-flight build"
+            built.set()
+            release.set()  # the follower's own build may now open the DB
+            t.join(timeout=15)
+            assert not t.is_alive(), "404 path deadlocked the follower"
+            kind, resp = outcome[0]
+            # The unknown-section 404 is raised by _build_data_raw (a raised
+            # HTTPResponse is what bottle renders as the response); the direct
+            # call observes the raised shape.  Either way the follower must
+            # see its own 404, never a stale/empty payload.
+            assert kind == "raised" and str(resp.status).startswith("404")
+            # Exactly one build ran: the follower's own. A leader build here
+            # would mean the follower joined an in-flight payload instead.
+            assert open_calls == [1]
+            assert api._DATA_CACHE == {}
+        finally:
+            # The event is process-global state no thread owns (the leader
+            # that would have set it never ran), so a failure above must not
+            # strand it for a later test.
+            built.set()
+            api._DATA_CACHE_BUILDING.pop(key, None)
 
 
 def _header(headers: dict[str, str], name: str) -> str | None:
