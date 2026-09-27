@@ -354,16 +354,19 @@ class TestConfigCommand:
         monkeypatch.setenv("RECOVERAGE_CORS_ORIGIN", "http://localhost:5173")
         result = CliRunner().invoke(app, ["config", "--json"])
         assert result.exit_code == 0
-        assert json.loads(result.output) == config.active_config(
-            port=config.DEFAULT_PORT,
-            bind=config.DEFAULT_BIND,
-            allow_remote=False,
-            cors=True,
-            cors_origin=["http://localhost:5173"],
-            token=None,
-            db=None,
-            log_level=config.DEFAULT_LOG_LEVEL,
-        )
+        # A literal, not config.active_config(...): rendering both sides with
+        # the same function makes any change to the rendered shape (the token
+        # mask, db="auto", "none" for an empty origin list) pass unnoticed.
+        assert json.loads(result.output) == {
+            "bind": config.DEFAULT_BIND,
+            "port": str(config.DEFAULT_PORT),
+            "allow_remote": "false",
+            "cors": "true",
+            "cors_origin": "http://localhost:5173",
+            "db": "auto",
+            "log_level": "INFO",
+            "token": "unset",
+        }
 
     def test_bad_value_exits_2_without_a_traceback(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from typer.testing import CliRunner

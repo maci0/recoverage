@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import queue
@@ -2338,7 +2339,9 @@ class TestDataPayloadMemo:
         assert isinstance(resp1, bytes)
         assert len(api._DATA_CACHE) == 1
         key = next(iter(api._DATA_CACHE))
-        entry_before = dict(api._DATA_CACHE[key])
+        # deepcopy, not dict(): a memo hit writes the stored body back into the
+        # entry in place, so a shallow copy would be compared against itself.
+        entry_before = copy.deepcopy(api._DATA_CACHE[key])
 
         # Second request: a memo hit serves the stored body verbatim, so the
         # bytes must be identical and the entry must survive the call. Checking

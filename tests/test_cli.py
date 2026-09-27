@@ -67,8 +67,11 @@ class TestColorOptOut:
 
     def test_opt_out_does_not_leak_into_the_next_run(self) -> None:
         """The global flag is per invocation, not sticky process state."""
-        assert runner.invoke(app, ["--no-color", "check", "--min-coverage", "0"], color=True)
+        first = runner.invoke(app, ["--no-color", "check", "--min-coverage", "0"], color=True)
+        assert first.exit_code == 0
+        assert "\x1b[" not in first.output, "the opt-out run must already be uncolored"
         result = runner.invoke(app, ["check", "--min-coverage", "0"], color=True)
+        assert result.exit_code == 0
         assert "\x1b[" in result.output
 
     def test_errors_honor_the_opt_out(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -607,7 +610,9 @@ class TestPartialSchemaCleanExit:
         result = runner.invoke(app, ["stats"])
         assert result.exit_code == 2
         assert "rebuild" in result.output
-        assert not isinstance(result.exception, SystemExit) or result.exit_code == 2
+        # The partial schema must surface as the clean exit 2 above, not as a
+        # leaked sqlite3 error riding out through the runner.
+        assert not isinstance(result.exception, sqlite3.OperationalError)
 
 
 # ── check: exit-code and verdict contracts ────────────────────────

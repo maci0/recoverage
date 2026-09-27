@@ -360,7 +360,11 @@ class TestCheckedInLintPreset:
         flatten = _FLATTEN.read_text(encoding="utf-8")
         expected = re.search(r'^EXPECTED_LICENSE = "([^"]+)"$', flatten, re.MULTILINE)
         assert expected, "the flatten script no longer pins the upstream license"
-        assert "package.json" in flatten and "EXPECTED_LICENSE" in flatten.split("def main")[-1]
+        # The comparison itself, not merely the identifier's presence: naming
+        # EXPECTED_LICENSE in a message would satisfy a substring check.
+        assert re.search(r'manifest\.get\("license"\)\s*!=\s*EXPECTED_LICENSE', flatten), (
+            "the flatten script no longer compares the package license against the pin"
+        )
 
 
 def _python_sources() -> list[Path]:

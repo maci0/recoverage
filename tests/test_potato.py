@@ -803,11 +803,23 @@ def test_function_list_no_match_status_filter_offers_a_way_back():
     assert "[Clear filter]" in html
 
 
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
 def test_search_status_line_explains_an_empty_result():
-    """The SPA's search line spells out what to try; Potato's must match."""
-    from recoverage.potato import _PAGE_SRC
+    """The SPA's search line spells out what to try; Potato's must match.
 
-    assert "no matches. Check the spelling, or search by VA." in _PAGE_SRC
+    Rendered, not read off _PAGE_SRC: the literal is behind the
+    `search_match_count == 0` branch, so a template check alone stays green
+    when the count never reaches it (the hint on every search, or on none).
+    """
+    target = get_first_target()
+    if not target:
+        pytest.skip("No targets in DB")
+    hint = "no matches. Check the spelling, or search by VA."
+    empty = render_potato_url(f"/potato?target={target}&search=zzz_no_such_function")
+    assert hint in empty
+    assert "(0 matches)" in empty
+    hit = render_potato_url(f"/potato?target={target}&search=_func_a")
+    assert hint not in hit
 
 
 def test_parent_url_selects_the_parents_own_block():
@@ -834,6 +846,18 @@ def test_parent_url_selects_the_parents_own_block():
     # The template renders the built URL; it does not hand-write one.
     assert 'href="{{parent_url}}"' in _PANEL_SRC
     assert "search={{parent_function}}" not in _PANEL_SRC
+
+    # And the panel really publishes it. Without this, dropping the
+    # parent_url assignment in _render_panel renders href="" and both
+    # assertions above still pass, because they read the template constant.
+    from conftest import get_first_target
+
+    target = get_first_target()
+    if not target:
+        pytest.skip("No targets in DB")
+    html = render_potato_url(f"/potato?target={target}&section=.text&idx=5")
+    assert 'href="?target=FAKEDLL&amp;section=.text&amp;idx=0#sel"' in html
+    assert "Parent:" in html
 
 
 def test_parent_url_index_matches_the_linear_walk():
@@ -946,7 +970,11 @@ def test_clickable_asm_addresses(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     html = render_potato_url(f"/potato?target={target}&section=.text&idx={idx}")
     assert "Assembly" in html
-    assert re.search(r'href="\?target=.*&search=0x[0-9a-f]{8}"', html)
+    # The section-less shape: the function-detail row also links to
+    # `?target=T&section=.text&search=0x...`, which a `.*` regex would have
+    # matched, so the assertion held even with the ASM address unlinked.
+    assert f'href="?target={target}&search=0x10001000"' in html
+    assert f'href="?target={target}&search=0x10001010"' in html
 
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
@@ -1216,8 +1244,10 @@ class TestBuildUrl:
         assert " " not in url.split("search=")[1]  # space must be encoded
 
     def test_unicode_in_target(self) -> None:
+        from urllib.parse import quote
+
         url = _build_url("ターゲット", ".text")
-        assert "target=" in url
+        assert f"target={quote('ターゲット')}" in url
 
     def test_filter_sorting_deterministic(self) -> None:
         """Filters should be sorted for deterministic URLs."""
