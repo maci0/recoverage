@@ -211,6 +211,12 @@ module ships in the published package. See *Breaking*.
 
 ### Fixed
 
+- **A drive-relative `files[0]` read the wrong file on Windows.** Potato
+  Mode's C-source loader rejected absolute paths and `..`, but a
+  drive-relative name (`C:foo.c`) is neither, and joining it onto the
+  source root resolved it against the drive's own working directory. The
+  guard now keys on the path's `anchor`, which covers the drive, the
+  leading separator, and a UNC share alike.
 - **The verified code-similarity reads 100x low.** `verify_results.similarity`
   is stored as a 0-1 fraction (the column CHECKs the unit interval, and
   rebrew's verify import divides its percent scale by 100), but the SPA and

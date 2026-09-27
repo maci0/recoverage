@@ -21,7 +21,7 @@ import threading
 from collections.abc import Callable, Iterable
 from datetime import UTC, datetime
 from html import escape as _html_escape
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Any
 from urllib.parse import ParseResult, parse_qs, urlparse
 from urllib.parse import quote as _url_quote
@@ -2296,6 +2296,19 @@ def _panel_fn_attach_verify(c: sqlite3.Cursor, target: str, fn_data: dict[str, A
         fn_data["last_verify_effective"] = True
 
 
+def _is_plain_relative(path: PurePath) -> bool:
+    """Whether *path* is a plain relative name, safe to join onto a source root.
+
+    ``anchor`` rather than ``is_absolute()``: on Windows a drive-relative
+    name (``C:foo.c``) is not absolute, and joining one onto the source root
+    silently reinterprets it as ``<drive>:/foo.c`` instead of the file the
+    database named.  An anchor covers every such form — the drive, the
+    leading separator, and a UNC share — and is empty for a plain name on
+    both path flavours.
+    """
+    return not path.anchor and ".." not in path.parts
+
+
 def _panel_fn_source_text(data: dict[str, Any], target: str, fn_data: dict[str, Any]) -> str | None:
     """Read the function's C source, or None when unresolvable.
 
@@ -2320,8 +2333,8 @@ def _panel_fn_source_text(data: dict[str, Any], target: str, fn_data: dict[str, 
     )
     base = (Path.cwd().resolve() / source_root.lstrip("/")).resolve()
     raw = files[0]
-    # Reject absolute paths and parent traversal before resolve
-    if Path(raw).is_absolute() or ".." in Path(raw).parts:
+    # Reject anchored paths and parent traversal before resolve
+    if not _is_plain_relative(Path(raw)):
         return None
     c_path = (base / raw).resolve()
     if not c_path.is_relative_to(base):

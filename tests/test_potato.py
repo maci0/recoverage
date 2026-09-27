@@ -6,7 +6,7 @@ import re
 import sqlite3
 import subprocess
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from urllib.parse import quote, urlparse
 
 import pytest
@@ -25,6 +25,7 @@ from recoverage.potato import (
     _format_data_inspector,
     _format_hex_dump,
     _format_va,
+    _is_plain_relative,
     _load_grid_cells,
     _panel_fn_source_text,
     _progress_svg,
@@ -1547,6 +1548,36 @@ class TestPathTraversalGuard:
         data: dict = {"paths": {"sourceRoot": "src"}}
         assert _panel_fn_source_text(data, "T", {"files": []}) is None
         assert _panel_fn_source_text(data, "T", {}) is None
+
+    @pytest.mark.parametrize(
+        "name",
+        ["main.c", "a/b.c", "a\\b.c", "..foo.c", "foo..c", "./main.c"],
+    )
+    def test_plain_relative_names_accepted(self, name: str) -> None:
+        """Both flavours read a name as plain when the host agrees; a POSIX
+        host cannot see a Windows drive-relative name at all, so the
+        cross-platform rule is pinned through PureWindowsPath below."""
+        assert _is_plain_relative(PurePosixPath(name))
+
+    @pytest.mark.parametrize(
+        ("name", "why"),
+        [
+            ("/etc/passwd", "absolute"),
+            ("//srv/share/main.c", "UNC share"),
+            ("C:foo.c", "drive-relative: joins as <drive>:/foo.c, not the named file"),
+            ("../secret.txt", "parent traversal"),
+            ("a/../../secret.txt", "parent traversal mid-path"),
+            (r"a\..\..\secret.txt", "parent traversal with Windows separators"),
+        ],
+    )
+    def test_anchored_or_traversing_names_refused(self, name: str, why: str) -> None:
+        """The guard keys on ``anchor``, not ``is_absolute()``: on Windows
+        ``C:foo.c`` is not absolute, yet joining it onto the source root
+        reads a different file than the database named.  Pinned through
+        PureWindowsPath so the rule is tested on every host, not only where
+        the flavour is the native one."""
+        assert why  # the case table documents intent, not behaviour
+        assert not _is_plain_relative(PureWindowsPath(name))
 
     def test_symlink_escape_blocked(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Symlink pointing outside the source tree must be caught by resolve()."""
