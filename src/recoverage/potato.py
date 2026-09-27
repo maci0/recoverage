@@ -1197,9 +1197,12 @@ def _search_functions(c: sqlite3.Cursor, target: str, search_query: str) -> set[
             # name) in their `functions` field — the dimming test compares
             # cell entries against this set, so VA spellings must be included.
             search_matched_fns.add(va_start)
+    # Same '0x'-prefixed spelling the address columns print, so an address
+    # copied out of a Potato table matches when pasted into the search box.
+    # The 500-row cap applies to rows selected, not to the returned set.
     c.execute(
         "SELECT name FROM globals WHERE target = ? AND ("
-        "name LIKE ? ESCAPE '\\' OR printf('0x%x', va) LIKE ? ESCAPE '\\') "
+        "name LIKE ? ESCAPE '\\' OR ('0x' || printf('%x', va)) LIKE ? ESCAPE '\\') "
         "ORDER BY name LIMIT 500",
         (target, like_pat, like_pat),
     )
@@ -1597,8 +1600,13 @@ def _render_function_list(
         params.append(status_filter)
     if search_query:
         like = _escape_like(search_query)
+        # '0x' || printf('%x', va) is the spelling _format_va prints in the
+        # VA column below, so an address copied out of this very table matches
+        # when pasted into the search box.  printf('0x%x', va) has no prefix
+        # and could never match it.
         where.append(
-            "(name LIKE ? ESCAPE '\\' OR symbol LIKE ? ESCAPE '\\' OR printf('0x%x', va) LIKE ? ESCAPE '\\')"
+            "(name LIKE ? ESCAPE '\\' OR symbol LIKE ? ESCAPE '\\'"
+            " OR ('0x' || printf('%x', va)) LIKE ? ESCAPE '\\')"
         )
         params.extend([like, like, like])
 

@@ -514,6 +514,13 @@ const App = () => {
     const start = activeSection.val === ".text" ? cell.fileOffset : sec.fileOffset + (va - sec.va);
     const size = activeSection.val === ".text" ? cell.size : 16;
 
+    // fileOffset/size are nullable (a section with no file backing, a
+    // function of unknown size).  `null < 0` and `null + n > len` are both
+    // false, so the arithmetic below would pass a null start straight into
+    // ArrayBuffer.slice and label the first bytes of the binary with this
+    // function's VA.  Refuse instead, exactly as the server's
+    // _file_backed_section does for sections.
+    if (!Number.isInteger(start) || !Number.isInteger(size) || size < 0) return null;
     if (start < 0 || start + size > buf.byteLength) return null;
     return buf.slice(start, start + size);
   };
@@ -577,7 +584,15 @@ const App = () => {
         // selection has rendered, and clearing here would wipe it.
         if (error.name === 'AbortError' || signal.aborted) return;
         currentFn.val = null;
+        currentBuf.val = null;
         cSourceText.val = MSG.ERROR_PREFIX + error.message;
+        // The three loading placeholders set above must be cleared too, or a
+        // failed lookup (a cell naming a function the DB does not carry) left
+        // the Assembly pane reading "Loading assembly..." forever and left
+        // Copy/Open enabled, copying that literal.
+        showBytesMessage(bytesMissMessage());
+        docText.val = MSG.NO_DOCS;
+        asmText.val = MSG.ASM_PLACEHOLDER;
       }
 
     } else {
@@ -601,7 +616,13 @@ const App = () => {
       } catch (error) { // oxlint-disable-line @rikalabs/no-silent-catch-fallback -- AbortError is a cancellation; other failures become error text
         if (error.name === 'AbortError' || signal.aborted) return;
         currentFn.val = null;
+        currentBuf.val = null;
         cSourceText.val = MSG.ERROR_PREFIX + error.message;
+        // Same reset as the .text branch: without it the panes keep showing
+        // the previously selected entry next to the error.
+        showBytesMessage(bytesMissMessage());
+        docText.val = MSG.NO_DOCS;
+        asmText.val = MSG.DATA_SECTION_NO_ASM;
       }
     }
   };

@@ -669,13 +669,11 @@ def export(
             typer.echo("| Section | Size | Cells | Exact | Reloc | Match | Stub | Coverage |")
             typer.echo("|---------|------|-------|-------|-------|-------|------|----------|")
             for sec_name, sec in sorted(data["sections"].items()):
-                row = (
+                typer.echo(
                     f"| {_md_safe(sec_name)}"
                     f" | {sec.get('size_bytes', 0):,} B | {sec['total_cells']}"
-                )
-                typer.echo(
-                    row + f" | {sec['exact']} | {sec['reloc']} | {sec['near_match']} "
-                    f"| {sec['stub']} | {sec['coverage_pct']:.1f}% |"
+                    f" | {sec['exact']} | {sec['reloc']} | {sec['near_match']}"
+                    f" | {sec['stub']} | {sec['coverage_pct']:.1f}% |"
                 )
 
 
