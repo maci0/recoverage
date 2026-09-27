@@ -22,14 +22,6 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # The sibling rebrew checkout that [tool.uv.sources] resolves against
-      # does not exist on a clean runner, and actions/checkout cannot write
-      # outside GITHUB_WORKSPACE.  The pin (tag + commit) lives in
-      # tools/ci_clone_rebrew.sh, the one `make clone-rebrew` also runs, and
-      # the script fails when the tag no longer resolves to the commit.
-      - name: Clone the sibling rebrew checkout
-        shell: bash
-        run: bash tools/ci_clone_rebrew.sh "$GITHUB_WORKSPACE/../rebrew"
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           enable-cache: true
@@ -58,9 +50,6 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Clone the sibling rebrew checkout
-        shell: bash
-        run: bash tools/ci_clone_rebrew.sh "$GITHUB_WORKSPACE/../rebrew"
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           enable-cache: true
@@ -116,9 +105,6 @@ jobs:
             python-version: "3.13"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Clone the sibling rebrew checkout
-        shell: bash
-        run: bash tools/ci_clone_rebrew.sh "$GITHUB_WORKSPACE/../rebrew"
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           enable-cache: true
@@ -139,9 +125,6 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Clone the sibling rebrew checkout
-        shell: bash
-        run: bash tools/ci_clone_rebrew.sh "$GITHUB_WORKSPACE/../rebrew"
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           enable-cache: true

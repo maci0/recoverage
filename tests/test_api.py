@@ -2276,14 +2276,17 @@ class TestDataPayloadMemo:
         observe what concurrent requests do while a build is in progress.
 
         Also installs thread-independent request/response stand-ins for the
-        ``server`` module: worker threads have no bottle request context
-        (thread-local), and the compression/ETag helpers resolve those names
-        from server's namespace.  *query* rides on that stand-in, which is
-        where ``query_param`` reads the query string from, and the stand-in's
-        ``query`` dict is returned so a test can assert on it: a test that
-        exercises a ``?section=`` (or any other) parameter has to pass it here
-        rather than patching ``api.request`` alone, which only supplies
-        Accept-Encoding."""
+        ``server`` AND ``api`` modules: worker threads have no bottle request
+        context (thread-local), and while the request's query string is read
+        through ``api._query_param`` (api's own ``request`` global), the
+        compression/ETag helpers resolve ``request.headers`` from server's
+        namespace.  *query* rides on both stand-ins, which is where
+        ``query_param`` and ``_query_param`` read the query string from, and
+        the stand-in's ``query`` dict is returned so a test can assert on it: a
+        test that exercises a ``?section=`` (or any other) parameter has to
+        pass it here rather than patching one module's ``request``, which
+        leaves the other half falling back to bottle's empty default and
+        silently drops the filter the assertions depend on."""
         import recoverage.api as api
         import recoverage.server as server_mod
 
@@ -2310,6 +2313,7 @@ class TestDataPayloadMemo:
         fake_resp: Any = type(
             "R", (), {"content_type": None, "set_header": lambda self, k, v: None}
         )()
+        monkeypatch.setattr(api, "request", fake_req)
         monkeypatch.setattr(server_mod, "request", fake_req)
         monkeypatch.setattr(server_mod, "response", fake_resp)
         return api, open_calls, query
