@@ -6,11 +6,20 @@ handlers, and the CORS preflight catch-all); ``recoverage.api``,
 time.  Those three imports live HERE, not at the bottom of server.py, so the
 dependency graph stays one-directional:
 
-    config ← _paths ← server ← {potato, ui, api, disasm} ← webapp ← cli
+    config ← _paths ← server ← disasm ← {api, potato, ui} ← webapp ← cli
 
-(api and cli additionally import regen — an in-process rebrew catalog/build-db
-wrapper with no in-package dependencies; rebrew's heavy imports stay off the
-dashboard's start path.)
+``disasm`` sits one level below the route modules, not beside them: it is a
+pure capability (availability probe, thread-local ``Cs``, per-slice memo) that
+reaches UP into ``server`` for the DLL byte cache.  It holds no route and
+imports none of them, which ``tests/test_import_graph.py`` pins as a named
+exception so a second capability module cannot spread the same reach.
+
+``regen`` (an in-process rebrew catalog/build-db wrapper with no in-package
+dependencies) is a leaf both ``api`` and ``cli`` import; rebrew's heavy imports
+stay off the dashboard's start path.  ``cli`` imports ``api`` and ``ui``
+directly as well as through here, for their startup hooks
+(``_ensure_db_watcher``, ``warm_index_cache``) — those run after this module is
+imported, so they add no edge back into the composition root.
 
 Import this module (or run the CLI) whenever you need an app with every
 route registered; importing bare ``recoverage.server`` yields a routeless app.

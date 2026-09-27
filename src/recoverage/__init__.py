@@ -16,7 +16,7 @@ Module map (dependencies point one way, left to right):
 - ``ui``          — SPA/static routes (imports server; /potato is mounted by
   potato)
 - ``disasm``      — Capstone disassembly: availability probe, thread-local Cs,
-  per-slice memo (imports server)
+  per-slice memo (imports server; a capability module, so it imports no route)
 - ``api``         — /api/* routes (imports server+regen+disasm; lazily potato)
 - ``webapp``      — composition root: imports api+ui so ``app`` has every
   route; import this when you need a fully wired app
@@ -24,6 +24,8 @@ Module map (dependencies point one way, left to right):
   server+regen for config and stats helpers)
 
 Route modules register on import; there are no cycles.
+``tests/test_import_graph.py`` enforces the level order above and the
+acyclicity, so a new module has to declare where it sits.
 """
 
 __version__ = "1.6.0"
