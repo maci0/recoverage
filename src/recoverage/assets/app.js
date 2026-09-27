@@ -81,7 +81,8 @@ const gridId = (secName) => `grid-${secName.replaceAll('.', '')}`;
 
 // Legend rows: cell state -> the words used for it in the UI.
 const LEGEND = [["none", "undocumented"], ["exact", "exact match"], ["reloc", "reloc match"],
-  ["near_match", "near-match"], ["stub", "stub"], ["padding", "padding"]];
+  ["near_match", "near-match"], ["stub", "stub"], ["padding", "padding"],
+  ["compile_error", "problem"]];
 
 // Sections in PE load order (ascending VA), which puts .text first instead of
 // leaving the section that carries all the work at the end of an alphabetical
@@ -92,11 +93,20 @@ const sectionNames = (s) => Object.keys(s).toSorted((x, y) => (s[x].va ?? 1e18) 
 // AoS (array of {state, span, ...}) thrashes the cache on every paint/hit-test;
 // these columns stay hot.  Built lazily per section on first paint.
 // State ids index CSS vars at paint time so light-mode tokens still apply.
+// Packs every state rebrew can write to cells.state.  An unlisted state must
+// not fall through to 0: build_db counts 'verified' as an exact match and
+// covered_bytes covers every state != 'none', so painting it as an
+// undocumented gap contradicts the number beside it.  The tooling-failure
+// states share slot 7 ("other") — distinguishable from a gap, without
+// spending a palette entry on each.
 const STATE_ID = {
   none: 0, data: 0, thunk: 0,
-  exact: 1, reloc: 2,
+  exact: 1, verified: 1, reloc: 2,
   near_match: 3, near_matching: 3, size_mismatch: 3,
   stub: 4, padding: 5, proven: 6,
+  compile_error: 7, extract_error: 7, invalid_va: 7,
+  missing_file: 7, missing_size: 7, skip: 7, unknown: 7,
+  drift: 7, unchecked: 7,
 };
 
 function packSection(sec) {

@@ -294,8 +294,8 @@
     searchQuery, filteredFnNames, currentCellIndex, activeFnName, isLightMode,
     selectChunk, packSection, gridId, setGridFocus,
   }) => {
-    const PALETTE_VARS = ["--none", "--exact-bg", "--reloc-bg", "--near-match-bg", "--stub-bg", "--padding-bg", "--proven-bg"];
-    const FILTER_KEY = ["", "exact", "reloc", "near_match", "stub", "padding", ""];
+    const PALETTE_VARS = ["--none", "--exact-bg", "--reloc-bg", "--near-match-bg", "--stub-bg", "--padding-bg", "--proven-bg", "--other-bg"];
+    const FILTER_KEY = ["", "exact", "reloc", "near_match", "stub", "padding", "", ""];
     const grids = {};
     let ro = null;
 

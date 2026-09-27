@@ -50,6 +50,16 @@ from recoverage.server import (
 _log = logging.getLogger("recoverage")
 
 # --- UI Constants ---
+# Every state rebrew's build_db can write to cells.state needs a key here, or
+# the grid falls back to COLORS["none"] and paints the cell as an undocumented
+# gap.  That fallback is a data-fidelity bug, not a cosmetic one: build_db
+# counts 'verified' as an exact match (section_cell_stats folds it into
+# exact_count) and covered_bytes covers every state != 'none', so a VERIFIED
+# byte shown as "undocumented" contradicts the number printed beside it.  The
+# problem states (tooling failures and unclassified annotations) share one
+# colour: they are distinguishable from a gap, which is the point, without
+# spending eleven legend rows on states an operator cannot act on individually.
+_COLORS_PROBLEM = "#a855f7"
 COLORS = {
     "exact": "#10b981",
     "reloc": "#0ea5e9",
@@ -65,6 +75,19 @@ COLORS = {
     "data": "#8b5cf6",
     "thunk": "#f97316",
     "none": "#3F4958",
+    # Data-metadata verdicts.  VERIFIED is a match (build_db counts it as
+    # exact); DRIFT and UNCHECKED are not.  One violet for all three problem
+    # states, matching the SPA's --other-bg.
+    "verified": "#10b981",
+    "drift": _COLORS_PROBLEM,
+    "unchecked": _COLORS_PROBLEM,
+    "compile_error": _COLORS_PROBLEM,
+    "extract_error": _COLORS_PROBLEM,
+    "invalid_va": _COLORS_PROBLEM,
+    "missing_file": _COLORS_PROBLEM,
+    "missing_size": _COLORS_PROBLEM,
+    "skip": _COLORS_PROBLEM,
+    "unknown": _COLORS_PROBLEM,
 }
 BG_COLOR = "#0f1216"
 PANEL_COLOR = "#151a21"
@@ -240,9 +263,11 @@ LEGEND_ITEMS = [
     ("reloc", "reloc"),
     ("near_match", "near-match"),
     ("stub", "stub"),
+    ("proven", "proven"),
     ("data", "data"),
     ("thunk", "thunk"),
     ("padding", "padding"),
+    ("compile_error", "problem"),
 ]
 
 

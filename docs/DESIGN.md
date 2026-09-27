@@ -71,9 +71,12 @@ The UI is broken down into functional VanJS components in `app.js`:
   * **Size mismatch** (yellow) — compiled size differs from the original (`size_mismatch`)
   * **Stub** (red) — far off or placeholder
   * **Padding** (silver) — alignment padding
+  * **Problem** (violet) — tooling failures and unclassified annotations (`compile_error`, `extract_error`, `invalid_va`, `missing_file`, `missing_size`, `skip`, `unknown`, plus the data `drift` / `unchecked` verdicts)
   * **None** (gray) — undocumented block
 
   Data and thunk cells keep their DB states but render with the undocumented gray here: their dedicated purple/orange tints were removed together with the data/thunk filters. Potato Mode still colors those states.
+
+  Every state `build_db` can write has a slot. An unlisted state used to fall through to the undocumented gray, which contradicted `/stats`: `covered_bytes` covers every state but `none`, and `verified` is folded into `exact_count`, so those bytes were counted as covered while drawn as gaps. `verified` therefore packs as an exact match; the problem states share one violet.
 * **Grid Caching**: Each section's layout (cell walk, row packing, hit-map, canvas size) is computed once and cached, and only the active section is painted, making tab switching instantaneous even for sections with 6,000+ chunks.
 * **Canvas Painting**: Each section's grid is a single `<canvas>` painted from precomputed per-cell rectangles, one batched path per state (~12 ms to ~2.6 ms at 39k cells), rather than thousands of individual DOM nodes.
 * **Canvas-Based Filtering**: Filter and search dimming are a second alpha pass (`globalAlpha = 0.15`) over the same rectangles, not CSS class toggling and not a per-cell DOM walk.
@@ -222,7 +225,7 @@ Recoverage performs a soft version check on every database open and logs a warni
 * `cells`: Grid cells per section — section_name, start, end, state (none/exact/reloc/near_match/stub/padding/data/thunk/proven/size_mismatch; legacy DBs may spell near_match as near_matching), functions JSON, label, parent_function
 * `history`: Status change log (persistent, never dropped) — target, va, old_status, new_status, changed_at
 * `verify_results`: Verification results (persistent, never dropped) — target, va, verified_at, byte_delta, diff_lines, similarity
-* `section_cell_stats`: Coverage buckets per target+section — total_cells, exact_count, reloc_count, near_match_count, stub_count, padding_count, data_count, thunk_count, none_count, proven_count, size_mismatch_count, other_count
+* `section_cell_stats`: Coverage buckets per target+section — total_cells, exact_count, reloc_count, near_match_count, stub_count, padding_count, data_count, thunk_count, none_count, proven_count, size_mismatch_count, other_count.  `other_count` is the producer's catch-all for the states no named bucket claims (tooling failures, unclassified annotations, the data drift/unchecked verdicts), so `total_cells` equals the sum of the buckets; `/stats` and `/data` serve it as `other` and compute the same catch-all on the live-query fallback, which is why the two paths report the same total.  A `section_cell_stats` written before that column reports `other: 0` rather than omitting the key.
 * `section_cells_json`: Per target+section cell JSON, pre-aggregated and zstd-compressed — target, section_name, `cells_zstd`
 
 ### Views
@@ -258,6 +261,7 @@ Potato Mode is a pure HTML 5 alternative UI that works **without any CSS or Java
 - **Multi-select filters** (toggle multiple filters simultaneously)
 - **Search functionality** (matches function name, VA, and symbol)
 - **Segmented progress bar** (coverage breakdown by status)
+- **A color and a legend row for every cell state** `build_db` can write, shared with the SPA's `STATE_ID` vocabulary.  A state with no color falls back to the undocumented gray, which contradicts the counts printed beside the grid
 - **Cell selection with detail panel**
 - **Target selector**
 - **Data Inspector** for `.data`, `.rdata`, and `.bss` sections

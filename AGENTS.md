@@ -134,6 +134,13 @@ bun run lint:html           # vnu only: static assets + served pages (SPA shell,
    - The cell JSON projection is `rebrew.workspace.CELLS_JSON_OBJECT_SQL`, and
      the ordered aggregate is `SECTION_CELLS_AGG_SQL`. Both are shared with the
      producer so the cached and live results cannot drift.
+   - `section_cell_stats` carries an `other_count` catch-all so `total_cells`
+     reconciles with the sum of the buckets. `server._cell_bucket_row` serves it
+     as `other`, and `_SECTION_STATS_FULL_SQL` (the fallback used when the table
+     is absent) computes the same catch-all, so both sources report one total.
+     A table written before that column serves `other: 0`; the key is never
+     dropped, because a consumer summing the buckets must not read the residual
+     as zero-sized.
 3. `recoverage` → serves the DB as a web dashboard
    - Cell detail panel shows parent function as a clickable navigation link
 
@@ -167,6 +174,13 @@ clone` of recoverage, or any git worktree, must be given the sibling layout (or
 
 - Python 3.13+, ruff for linting, 100-char line length
 - HTML/CSS/JS in `assets/` — no build step, VanJS for reactivity
+- The cell-state vocabulary is owned by rebrew (`rebrew.build_db._KNOWN_CELL_STATES`)
+  and must be covered on the rendering side: `potato.COLORS` + `LEGEND_ITEMS`,
+  `app.js` `STATE_ID`, and `detail.js` `PALETTE_VARS`/`FILTER_KEY`. An unmapped
+  state paints as an undocumented gap, which contradicts `/stats` — `verified`
+  is counted there as an exact match. Tests in `test_potato.py`
+  (`TestCellStateVocabularyCoverage`) and `test_server.py` (`TestSpaStateVocabulary`)
+  fail on a gap; extend all of them together when rebrew adds a state.
 - JS is linted with oxlint under the `@rikalabs/oxlint-standards` strict preset
   plus the vendored anti-slop rules; the webui is a classic-script SPA, so
   `app.js`/`detail.js` are wrapped in IIFEs and share state via `window.RC`.

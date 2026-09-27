@@ -1070,3 +1070,218 @@ class TestGetDisassemblyNoNegativeCache:
             with srv.DLL_LOCK:
                 srv.DLL_DATA.pop(key, None)
         _prime.cache_clear()
+
+
+class TestBucketReconciliation:
+    """total_cells must equal the sum of the counted buckets on BOTH paths.
+
+    rebrew's build_db writes an `other_count` catch-all into
+    section_cell_stats for exactly this reason: without it the residual states
+    (compile_error, extract_error, invalid_va, missing_file, missing_size,
+    skip, unknown, drift, unchecked) vanish and the buckets silently
+    undercount.  The live-query fallback carried no such catch-all, so the
+    same database answered two different totals depending on whether the
+    materialized table was present.
+    """
+
+    @staticmethod
+    def _cells_db() -> sqlite3.Connection:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        c = conn.cursor()
+        c.execute(
+            "CREATE TABLE cells (target TEXT, section_name TEXT, start INT,"
+            " end INT, span INT, state TEXT)"
+        )
+        c.execute("CREATE TABLE metadata (target TEXT, key TEXT, value TEXT)")
+        c.execute("CREATE TABLE sections (target TEXT, name TEXT, va INT, size INT)")
+        c.execute("CREATE TABLE functions (target TEXT, va INT, status TEXT, markerType TEXT)")
+        states = [
+            "exact",
+            "reloc",
+            "near_match",
+            "stub",
+            "padding",
+            "data",
+            "thunk",
+            "none",
+            "proven",
+            "size_mismatch",
+            "compile_error",
+            "skip",
+            "unknown",
+        ]
+        c.executemany(
+            "INSERT INTO cells (target, section_name, start, end, span, state)"
+            " VALUES ('T', '.text', ?, ?, 1, ?)",
+            [(i, i + 1, s) for i, s in enumerate(states)],
+        )
+        return conn
+
+    def test_fallback_path_reconciles(self) -> None:
+        import recoverage.server as srv
+
+        conn = self._cells_db()
+        try:
+            c = conn.cursor()
+            # No section_cell_stats: the live-query fallback answers.
+            stats = srv._section_stats(c, "T")
+        finally:
+            conn.close()
+        sec = stats["sections"][".text"]
+        assert sec["other"] == 3
+        counted = sum(
+            sec[k]
+            for k in (
+                "exact",
+                "reloc",
+                "near_match",
+                "stub",
+                "padding",
+                "data",
+                "thunk",
+                "none",
+                "proven",
+                "size_mismatch",
+                "other",
+            )
+        )
+        assert counted == sec["total_cells"]
+
+    def test_materialized_path_reconciles(self) -> None:
+        import recoverage.server as srv
+
+        conn = self._cells_db()
+        try:
+            c = conn.cursor()
+            c.execute(
+                "CREATE TABLE section_cell_stats (target TEXT, section_name TEXT,"
+                " total_cells INT, exact_count INT, reloc_count INT,"
+                " near_match_count INT, stub_count INT, padding_count INT,"
+                " data_count INT, thunk_count INT, none_count INT,"
+                " proven_count INT, size_mismatch_count INT, other_count INT)"
+            )
+            # rebrew's definition: 'verified' folds into exact_count.
+            c.execute(
+                "INSERT INTO section_cell_stats SELECT target, section_name,"
+                " COUNT(*),"
+                " SUM(state IN ('exact','verified')), SUM(state='reloc'),"
+                " SUM(state IN ('near_match','near_matching')), SUM(state='stub'),"
+                " SUM(state='padding'), SUM(state='data'), SUM(state='thunk'),"
+                " SUM(state='none'), SUM(state='proven'),"
+                " SUM(state='size_mismatch'),"
+                " SUM(state NOT IN ('exact','verified','reloc','near_match',"
+                " 'near_matching','stub','padding','data','thunk','none','proven',"
+                " 'size_mismatch'))"
+                " FROM cells GROUP BY target, section_name"
+            )
+            stats = srv._section_stats(c, "T")
+        finally:
+            conn.close()
+        sec = stats["sections"][".text"]
+        assert sec["other"] == 3
+        counted = sum(
+            sec[k]
+            for k in (
+                "exact",
+                "reloc",
+                "near_match",
+                "stub",
+                "padding",
+                "data",
+                "thunk",
+                "none",
+                "proven",
+                "size_mismatch",
+                "other",
+            )
+        )
+        assert counted == sec["total_cells"]
+
+    def test_absent_other_count_column_reports_zero(self) -> None:
+        """A pre-catch-all section_cell_stats keeps the key, at 0."""
+        import recoverage.server as srv
+
+        conn = self._cells_db()
+        try:
+            c = conn.cursor()
+            c.execute(
+                "CREATE TABLE section_cell_stats (target TEXT, section_name TEXT,"
+                " total_cells INT, exact_count INT, reloc_count INT,"
+                " near_match_count INT, stub_count INT, padding_count INT,"
+                " data_count INT, thunk_count INT, none_count INT,"
+                " proven_count INT, size_mismatch_count INT)"
+            )
+            c.execute(
+                "INSERT INTO section_cell_stats SELECT target, section_name,"
+                " COUNT(*), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 FROM cells"
+                " GROUP BY target, section_name"
+            )
+            stats = srv._section_stats(c, "T")
+        finally:
+            conn.close()
+        assert stats["sections"][".text"]["other"] == 0
+
+
+class TestSpaStateVocabulary:
+    """The SPA's STATE_ID must cover every state rebrew can write.
+
+    An unmapped state packed to slot 0 and painted as an undocumented gap,
+    contradicting /stats (which counts 'verified' as exact and covered_bytes
+    over every state != 'none'). PALETTE_VARS and FILTER_KEY are indexed by the
+    same ids, so they must stay the same length.
+    """
+
+    @staticmethod
+    def _assets() -> tuple[str, str]:
+        import importlib.resources
+
+        from recoverage import assets
+
+        base = importlib.resources.files(assets)
+        return (
+            base.joinpath("app.js").read_text(encoding="utf-8"),
+            base.joinpath("detail.js").read_text(encoding="utf-8"),
+        )
+
+    def test_state_id_covers_every_known_cell_state(self) -> None:
+        from rebrew.build_db import _KNOWN_CELL_STATES
+
+        app_js, _ = self._assets()
+        block = app_js.split("const STATE_ID = {", 1)[1].split("};", 1)[0]
+        mapped = {
+            line.split(":")[0].strip()
+            for line in block.replace("\n", " ").split(",")
+            if ":" in line
+        }
+        missing = sorted(_KNOWN_CELL_STATES - mapped)
+        assert missing == [], f"cell states the SPA paints as undocumented: {missing}"
+
+    def test_verified_is_not_packed_as_none(self) -> None:
+        app_js, _ = self._assets()
+        block = app_js.split("const STATE_ID = {", 1)[1].split("};", 1)[0]
+        assert "verified: 1" in block
+        assert "verified: 0" not in block
+
+    def test_palette_and_filter_arrays_match_the_state_count(self) -> None:
+        """STATE_ID tops out at 7; both lookup tables must be that long.
+
+        A short array makes pal[st] undefined (silently --none) and
+        FILTER_KEY[st] undefined (a filter mismatch on every such cell).
+        """
+        import re
+
+        _, detail_js = self._assets()
+        palette = re.search(r"const PALETTE_VARS = \[(.*?)\];", detail_js).group(1)
+        filters = re.search(r"const FILTER_KEY = \[(.*?)\];", detail_js).group(1)
+        assert palette.count('"--') == 8
+        assert len([v for v in filters.split(",") if v.strip()]) == 8
+
+    def test_other_bg_token_is_defined(self) -> None:
+        import importlib.resources
+
+        from recoverage import assets
+
+        css = importlib.resources.files(assets).joinpath("style.css").read_text(encoding="utf-8")
+        assert "--other-bg:" in css
+        assert ".swatch-compile_error" in css

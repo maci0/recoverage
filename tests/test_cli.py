@@ -753,3 +753,21 @@ class TestBrokenPipe:
         monkeypatch.setattr(cli, "app", boom)
         with pytest.raises(RuntimeError):
             cli.main()
+
+
+def test_export_md_rows_match_the_header() -> None:
+    """Every markdown row must have as many cells as the header.
+
+    The row builder emitted near_match twice against an 8-column header, so
+    Stub rendered under the Coverage heading and the real coverage landed in an
+    unlabeled 9th column — every markdown export read as a malformed table.
+    """
+    result = runner.invoke(app, ["export", "--format", "md"])
+    assert result.exit_code == 0
+    lines = [ln for ln in result.output.splitlines() if ln.strip()]
+    header = next(ln for ln in lines if ln.startswith("| Section |"))
+    ncols = header.count("|") - 1
+    for line in lines:
+        if not line.startswith("| ") or set(line) <= set("|- "):
+            continue
+        assert line.count("|") - 1 == ncols, f"row does not match header: {line}"

@@ -45,6 +45,11 @@
    * DB_FORMAT.md — the accent at exact's alpha so it reads as the
    * strongest match state, distinct from reloc's bluer cyan. */
   --proven-bg: rgba(6, 182, 212, 0.8);
+  /* Tooling-failure and unclassified-annotation states (compile_error,
+   * extract_error, invalid_va, missing_file, missing_size, skip, unknown,
+   * drift, unchecked).  Distinct from --none so a cell the pipeline could not
+   * classify is not read as a byte nobody has looked at. */
+  --other-bg: rgba(168, 85, 247, 0.55);
 
   --badge-exact-bg: rgba(46, 160, 67, 0.2);
   --badge-exact-border: rgba(46, 160, 67, 0.4);
@@ -380,6 +385,7 @@ body.light-mode::after { background: linear-gradient(rgba(18, 16, 16, 0) 50%, rg
 .swatch-near_match { background: var(--near-match-bg); }
 .swatch-stub { background: var(--stub-bg); }
 .swatch-padding { background: var(--padding-bg); }
+.swatch-compile_error { background: var(--other-bg); }
 
 .skip-link {
   position: absolute; left: -9999px; top: auto; width: 1px; height: 1px; overflow: hidden; z-index: 999;

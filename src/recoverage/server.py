@@ -302,6 +302,14 @@ _SECTION_BUCKETS_SQL = "SELECT * FROM section_cell_stats WHERE target = ?"
 # CLI's own fixtures build exactly that), which the pre-split single-query
 # version handled and which must keep working.  Kept verbatim so the numbers are
 # the ones the split was verified against.
+#
+# other_count is the same catch-all rebrew's build_db writes into
+# section_cell_stats, so the two sources cannot disagree about the residual
+# and total_cells reconciles with the bucket sum on this path too.  It differs
+# from rebrew's in one place: this query's exact_count counts 'exact' only
+# (the endpoint's documented contract — _per_section_buckets overwrites the
+# materialized exact with the same cells-side value), so 'verified' lands in
+# other_count here while rebrew folds it into exact_count.
 _SECTION_STATS_FULL_SQL = """
     SELECT section_name,
       SUM(CASE WHEN state != 'none' THEN end - start ELSE 0 END) AS covered_bytes,
@@ -316,7 +324,11 @@ _SECTION_STATS_FULL_SQL = """
       SUM(CASE WHEN state = 'thunk' THEN 1 ELSE 0 END) AS thunk_count,
       SUM(CASE WHEN state = 'none' THEN 1 ELSE 0 END) AS none_count,
       SUM(CASE WHEN state = 'proven' THEN 1 ELSE 0 END) AS proven_count,
-      SUM(CASE WHEN state = 'size_mismatch' THEN 1 ELSE 0 END) AS size_mismatch_count
+      SUM(CASE WHEN state = 'size_mismatch' THEN 1 ELSE 0 END) AS size_mismatch_count,
+      SUM(CASE WHEN state NOT IN (
+        'exact', 'reloc', 'near_match', 'near_matching', 'stub', 'padding',
+        'data', 'thunk', 'none', 'proven', 'size_mismatch'
+      ) THEN 1 ELSE 0 END) AS other_count
     FROM cells WHERE target = ? GROUP BY section_name
 """
 
@@ -367,8 +379,16 @@ def _cell_bucket_row(row: sqlite3.Row) -> dict[str, Any]:
     """Map a per-section stats row (SECTION_STATS_SQL, or the
     section_cell_stats table for the ten non-exact buckets it supplies) to the
     short-key bucket dict served by /stats and /data.  ONE definition so the
-    two response shapes cannot drift."""
-    return {
+    two response shapes cannot drift.
+
+    ``other`` is the producer's catch-all (rebrew counts compile_error,
+    extract_error, invalid_va, missing_file, missing_size, skip, unknown and
+    the data drift/unchecked verdicts there so total_cells reconciles with the
+    bucket sum).  Both query paths compute it; a database whose
+    section_cell_stats predates the column reports 0 rather than dropping the
+    key, so the served shape is the same either way.
+    """
+    buckets: dict[str, Any] = {
         "total_cells": row["total_cells"],
         "exact": row["exact_count"],
         "reloc": row["reloc_count"],
@@ -381,6 +401,14 @@ def _cell_bucket_row(row: sqlite3.Row) -> dict[str, Any]:
         "proven": row["proven_count"],
         "size_mismatch": row["size_mismatch_count"],
     }
+    # row.keys(), not a bare subscript: a v6-era section_cell_stats (or the
+    # pre-other_count view a hand-made DB carries) has no such column, and
+    # sqlite3.Row raises IndexError on a missing name.  `in row` is NOT the
+    # spelling: sqlite3.Row.__contains__ iterates the row's VALUES, not its
+    # keys, so it answers False for a column that is present.
+    has_other = "other_count" in row.keys()  # noqa: SIM118 -- Row membership is by value
+    buckets["other"] = row["other_count"] if has_other else 0
+    return buckets
 
 
 def _section_stats(c: sqlite3.Cursor, target: str) -> dict[str, Any]:

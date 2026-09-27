@@ -1502,3 +1502,44 @@ class TestDefaultTargetMatchesSpa:
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+class TestCellStateVocabularyCoverage:
+    """Every state rebrew can write to cells.state has a Potato colour.
+
+    A missing key made the grid fall back to COLORS["none"], so a cell the
+    pipeline could not classify rendered as an undocumented gap. That is a
+    data-fidelity bug, not cosmetics: /stats reports covered_bytes over
+    "state != 'none'" and folds 'verified' into exact_count, so those cells
+    were counted as covered while drawn as holes.
+    """
+
+    def test_every_known_cell_state_has_a_color(self) -> None:
+        from rebrew.build_db import _KNOWN_CELL_STATES
+
+        from recoverage.potato import COLORS
+
+        missing = sorted(_KNOWN_CELL_STATES - set(COLORS))
+        assert missing == [], f"cell states with no color (render as undocumented): {missing}"
+
+    def test_verified_renders_as_a_match_not_a_gap(self) -> None:
+        """build_db counts 'verified' as exact; it must not read as 'none'."""
+        from recoverage.potato import COLORS
+
+        assert COLORS["verified"] == COLORS["exact"]
+        assert COLORS["verified"] != COLORS["none"]
+
+    def test_problem_states_are_distinguishable_from_none(self) -> None:
+        from recoverage.potato import COLORS
+
+        for state in ("compile_error", "extract_error", "invalid_va", "skip"):
+            assert COLORS[state] != COLORS["none"], state
+
+    def test_legend_names_the_problem_group(self) -> None:
+        """A state nobody can identify is the defect this class started from."""
+        from recoverage.potato import COLORS, LEGEND_ITEMS
+
+        keys = [k for k, _ in LEGEND_ITEMS]
+        assert "compile_error" in keys
+        # No legend row may point at a colour the map cannot paint.
+        assert set(keys) <= set(COLORS)
