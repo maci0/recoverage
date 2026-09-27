@@ -5,6 +5,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-09-27
+
 ### Added
 
 - **The type checker runs in CI.** `mypy` is a dev dependency and
