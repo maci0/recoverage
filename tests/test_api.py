@@ -35,6 +35,12 @@ from recoverage.server import _db_path as get_db_path
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 _NO_COLOR_ENV = {"NO_COLOR": "1", "FORCE_COLOR": None, "CLICOLOR_FORCE": None}
 
+# time.tzset() is compiled in only where the platform has a C library
+# time-zone API, so it does not exist on Windows.  The host-zone test below
+# sets TZ and re-reads it, which is exactly what tzset does; without it there
+# is no way to move the process into another zone.
+HAS_TZSET = hasattr(time, "tzset")
+
 
 def _plain(text: str) -> str:
     return _ANSI_RE.sub("", text)
@@ -306,6 +312,7 @@ class TestHealthDbMtime:
         assert data["mtime_utc"] == "2023-11-14T22:14:50+00:00"
         assert data["mtime_utc"].endswith("+00:00")
 
+    @pytest.mark.skipif(not HAS_TZSET, reason="no time.tzset() on this platform")
     def test_mtime_utc_is_utc_regardless_of_host_tz(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The same DB stamp must render identically on a host in any zone:
         a server-local rendering would move the reported instant with TZ."""

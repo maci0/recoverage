@@ -6,12 +6,14 @@ Pins:
   build-db module functions in order, in this process (no subprocess), and a
   second run repeats that sequence instead of appending to or skipping it.
 - ``_open_and_reap`` must reap the browser-opener child (setsid alone does not
-  prevent zombies) and bound its wait so a hung opener cannot stall serve.
+  prevent zombies), bound its wait so a hung opener cannot stall serve, and
+  detach the opener from the console on every platform that needs it.
 """
 
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 import time
 import types
@@ -242,6 +244,23 @@ class TestOpenAndReap:
         assert _BROWSER_OPEN_TIMEOUT > 0, "production opener wait must stay bounded"
         assert elapsed >= 0.3, f"waited {elapsed:.2f}s: the bound was not applied"
         assert elapsed < 5, f"hung opener blocked {elapsed:.1f}s (unbounded wait)"
+
+    def test_detach_flags_match_the_platform(self, monkeypatch: Any) -> None:
+        """Openers detach everywhere, by the mechanism each platform has.
+
+        POSIX gets start_new_session (passed separately, not here), Windows the
+        creation flags, and the flags must stay 0 elsewhere: a stray non-zero
+        value makes Popen raise ValueError on every other platform.
+        """
+        import recoverage.cli as cli
+
+        assert cli._windows_detach_flags() == 0
+        new_group = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", None)
+        detached = getattr(subprocess, "DETACHED_PROCESS", None)
+        if new_group is None or detached is None:
+            pytest.skip("Windows creation flags are not defined on this platform")
+        monkeypatch.setattr(cli.os, "name", "nt")
+        assert cli._windows_detach_flags() == new_group | detached
 
     @pytest.mark.skipif(not POSIX, reason="uses POSIX /proc and true")
     def test_exiting_child_is_reaped_no_zombie(self) -> None:

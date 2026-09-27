@@ -837,7 +837,7 @@ class TestPotatoQuery:
         assert "<RCCANARY" not in text, f"{field}: raw markup delimiter"
         assert ">RCCANARY" not in text, f"{field}: raw markup delimiter"
 
-    @pytest.mark.parametrize("field", ("search", "status"))
+    @pytest.mark.parametrize("field", ["search", "status"])
     def test_no_result_message_is_escaped(self, field: str) -> None:
         """The functions view escapes with ``potato._esc``, not the template.
 
@@ -938,7 +938,7 @@ class TestRepoFileRoute:
 
     @pytest.mark.parametrize(
         ("segment", "expected"),
-        (
+        [
             # Decoded once, these leave the root, so the containment check
             # answers 403 with its stub.
             ("../../../etc/passwd", 403),
@@ -950,7 +950,7 @@ class TestRepoFileRoute:
             # server.path_param exists to prevent.
             ("..%252f..%252fetc%252fpasswd", 404),
             ("%2e%2e%252f", 404),
-        ),
+        ],
     )
     def test_outside_the_root_is_never_served(self, segment: str, expected: int) -> None:
         """Pair assertion across the containment boundary: a path that leaves
@@ -964,7 +964,7 @@ class TestRepoFileRoute:
             else:
                 assert b"Traceback" not in body, f"{prefix}{segment}: {status} leaked a traceback"
 
-    @pytest.mark.parametrize("segment", ("%00", "main.c%00.png", "..%2f%00", "%00%00"))
+    @pytest.mark.parametrize("segment", ["%00", "main.c%00.png", "..%2f%00", "%00%00"])
     def test_nul_segment_is_a_404(self, segment: str) -> None:
         """os.realpath raises ValueError on an embedded NUL, so a request
         carrying one must be refused before the containment check runs."""

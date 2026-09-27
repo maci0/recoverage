@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -164,8 +165,14 @@ class TestExportCommand:
         """
         result = runner.invoke(app, ["export", "--format", "csv"])
         assert result.exit_code == 0
-        assert "\r" not in result.output
         assert "\n" in result.output
+        if os.linesep == "\n":
+            assert "\r" not in result.output
+        else:
+            # The captured stream is text mode with universal newlines, so the
+            # bare \n is translated once on the way out.  Two translations
+            # (the default "\r\n" terminator plus that one) show as "\r\r\n".
+            assert "\r\r\n" not in result.output
 
 
 # ── Stats command ─────────────────────────────────────────────────

@@ -166,10 +166,10 @@ _REBUILD_HINT = "(run 'rebrew catalog && rebrew build-db' to rebuild it)"
 def _use_utf8_stdout() -> None:
     """Make stdout encode UTF-8, whatever the environment's locale says.
 
-    `export` and `check` write target ids and section names straight from the
-    database, and those come out of PE images: any byte is possible.  stdout
-    carries the locale's codec, so under LC_ALL=C (with locale coercion off)
-    or a Windows code page the write raises UnicodeEncodeError part-way
+    `export`, `check` and `stats` write target ids and section names straight
+    from the database, and those come out of PE images: any byte is possible.
+    stdout carries the locale's codec, so under LC_ALL=C (with locale coercion
+    off) or a Windows code page the write raises UnicodeEncodeError part-way
     through the output and leaves a truncated file behind a `>` redirect.
     """
     encoding = (getattr(sys.stdout, "encoding", None) or "").lower().replace("-", "")
@@ -367,6 +367,20 @@ def _run_regen(root: Path) -> None:
 _BROWSER_OPEN_TIMEOUT = 10
 
 
+def _windows_detach_flags() -> int:
+    """Creation flags that detach an opener from this console on Windows.
+
+    Windows has no start_new_session, so the POSIX guarantees the opener path
+    relies on need their own flags: CREATE_NEW_PROCESS_GROUP keeps a console
+    Ctrl+C meant for `serve` from reaching the opener (which can die before
+    the browser has been handed off), and DETACHED_PROCESS keeps it off the
+    parent's console.  Zero everywhere else, where start_new_session applies.
+    """
+    if os.name != "nt":
+        return 0
+    return subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+
+
 def _kill_and_reap(proc: subprocess.Popen[bytes]) -> None:
     """Kill *proc* — on POSIX its whole session — and always reap it.
 
@@ -374,7 +388,8 @@ def _kill_and_reap(proc: subprocess.Popen[bytes]) -> None:
     signal never reaches it: the abandonment paths must signal the process
     GROUP, not just the direct child, or an xdg-open wrapper's grandchild
     survives.  The trailing wait() reaps the child either way (setsid does
-    not prevent zombies; only a wait does).
+    not prevent zombies; only a wait does).  Windows has no process-group
+    signal, so there only the direct child is terminated.
     """
     if os.name == "posix":
         with contextlib.suppress(ProcessLookupError, PermissionError):
@@ -387,7 +402,8 @@ def _kill_and_reap(proc: subprocess.Popen[bytes]) -> None:
 def _open_and_reap(url: str, args: list[str], shell: bool = False) -> None:
     """Launch the opener for *url* fire-and-forget and still reap it.
 
-    Detaching (setsid/shell) does NOT keep a child from becoming a zombie —
+    Detaching (setsid, or the Windows creation flags) does NOT keep a child
+    from becoming a zombie —
     only a wait() does, and nothing else ever waits on these openers.  The
     wait is bounded so a hung opener cannot stall serve startup; past the
     deadline it is killed and reaped.
@@ -406,6 +422,7 @@ def _open_and_reap(url: str, args: list[str], shell: bool = False) -> None:
             # Windows 'start' needs cmd.exe; args are internally generated
             shell=shell,
             start_new_session=(os.name == "posix"),
+            creationflags=_windows_detach_flags(),
         )
     except (OSError, subprocess.SubprocessError) as exc:
         # Expected on minimal installs (no xdg-open/open); say why before
@@ -756,6 +773,8 @@ def stats(
     json_output: bool = typer.Option(False, "--json", help="Output results as JSON"),
 ) -> None:
     """Print coverage stats as a table (or JSON with --json)."""
+    _use_utf8_stdout()
+
     from rich.console import Console
     from rich.table import Table
 
