@@ -714,6 +714,34 @@ def serve(
         raise typer.Exit(1) from None
 
 
+#: Per-section values the table, CSV and Markdown renders all print, in the
+#: order they print them.  ONE list: `stats`, `export --format csv` and
+#: `export --format md` are the same table in three spellings, and a key added
+#: to one and forgotten in another renders a header and a body that disagree.
+#: The human labels stay at each call site (the table calls near_match
+#: "Match", the exports its JSON key).
+_SECTION_COLUMNS: tuple[str, ...] = (
+    "size_bytes",
+    "total_cells",
+    "exact",
+    "reloc",
+    "near_match",
+    "stub",
+    "coverage_pct",
+)
+
+
+def _section_row(sec: dict[str, Any]) -> list[Any]:
+    """One section's :data:`_SECTION_COLUMNS` values, in that order.
+
+    ``.get(..., 0)`` for every key, not a mix: a NULL section size is
+    schema-legal (.bss carries one) and reaches the CLI as 0 from
+    ``_section_stats``, so a missing key and a zero-sized section read the
+    same in every format.
+    """
+    return [sec.get(field, 0) for field in _SECTION_COLUMNS]
+
+
 @app.command()
 def stats(
     target: str | None = typer.Option(None, "--target", "-t", help="Target ID (default: all)"),
@@ -757,16 +785,16 @@ def stats(
             table.add_column("Coverage", justify="right", style="bold")
 
             for sec_name, sec in sorted(data["sections"].items()):
-                size_str = f"{sec.get('size_bytes', 0):,} B"
+                size, cells, exact, reloc, near_match, stub, coverage_pct = _section_row(sec)
                 table.add_row(
                     sec_name,
-                    size_str,
-                    str(sec["total_cells"]),
-                    str(sec["exact"]),
-                    str(sec["reloc"]),
-                    str(sec["near_match"]),
-                    str(sec["stub"]),
-                    f"{sec['coverage_pct']:.1f}%",
+                    f"{size:,} B",
+                    str(cells),
+                    str(exact),
+                    str(reloc),
+                    str(near_match),
+                    str(stub),
+                    f"{coverage_pct:.1f}%",
                 )
 
             console.print(table)
@@ -809,33 +837,11 @@ def export(
         # Windows' text-mode stdout, corrupting every row to \r\r\n.  One \n
         # here means the platform writes its native ending exactly once.
         writer = csv.writer(sys.stdout, lineterminator="\n")
-        writer.writerow(
-            [
-                "target",
-                "section",
-                "size_bytes",
-                "total_cells",
-                "exact",
-                "reloc",
-                "near_match",
-                "stub",
-                "coverage_pct",
-            ]
-        )
+        writer.writerow(["target", "section", *_SECTION_COLUMNS])
         for data in all_data:
             for sec_name, sec in sorted(data["sections"].items()):
                 writer.writerow(
-                    [
-                        _csv_safe(data["target"]),
-                        _csv_safe(sec_name),
-                        sec.get("size_bytes", 0),
-                        sec["total_cells"],
-                        sec["exact"],
-                        sec["reloc"],
-                        sec["near_match"],
-                        sec["stub"],
-                        sec["coverage_pct"],
-                    ]
+                    [_csv_safe(data["target"]), _csv_safe(sec_name), *_section_row(sec)]
                 )
 
     elif output_format == ExportFormat.md:
@@ -856,11 +862,12 @@ def export(
             typer.echo("| Section | Size | Cells | Exact | Reloc | Near | Stub | Coverage |")
             typer.echo("|---------|------|-------|-------|-------|------|------|----------|")
             for sec_name, sec in sorted(data["sections"].items()):
+                size, cells, exact, reloc, near_match, stub, coverage_pct = _section_row(sec)
                 typer.echo(
                     f"| {_md_safe(sec_name)}"
-                    f" | {sec.get('size_bytes', 0):,} B | {sec['total_cells']}"
-                    f" | {sec['exact']} | {sec['reloc']} | {sec['near_match']}"
-                    f" | {sec['stub']} | {sec['coverage_pct']:.1f}% |"
+                    f" | {size:,} B | {cells}"
+                    f" | {exact} | {reloc} | {near_match}"
+                    f" | {stub} | {coverage_pct:.1f}% |"
                 )
 
 

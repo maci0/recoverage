@@ -65,24 +65,13 @@ from recoverage.server import (
     clear_target_cache,
     compress_payload,
     path_param,
+    query_param,
     request,
     resolve_targets,
     response,
 )
 
 _log = logging.getLogger("recoverage")
-
-
-def _query_param(name: str, default: str = "") -> str:
-    """``server.query_param`` resolved against *this* module's ``request``.
-
-    The handlers below read ``Accept-Encoding`` and ``If-None-Match`` off the
-    ``request`` bound in this namespace, so the query string has to come from
-    that same object; going through ``server.query_param`` would resolve
-    ``request`` in the server module instead, and the two only agree because
-    bottle hands every handler the one thread-local request.
-    """
-    return _server.decode_query_value(request.query.get(name, default))
 
 
 # ── Cache invalidation ─────────────────────────────────────────────
@@ -911,7 +900,7 @@ def _dumps_with_cells(data: dict[str, Any], cells_json: dict[str, str | None]) -
 @app.get("/api/targets/<target>/data")
 def handle_api_data(target: str) -> bytes | Any:
     target = path_param(target)
-    section_filter = _query_param("section").strip() or None
+    section_filter = query_param("section").strip() or None
 
     # ETag caching based on DB modification time + target + section.
     # Uses the WAL-aware snapshot (mtime_ns-precision) so two rebuilds
@@ -1037,10 +1026,10 @@ def _revalidate_headers(etag: str | None) -> dict[str, str]:
 def handle_api_functions_list(target: str) -> bytes | Any:
     """Paginated function listing with optional filters."""
     target = path_param(target)
-    status_filter = _query_param("status").strip() or None
-    _raw_search = _query_param("search").strip() or None
+    status_filter = query_param("status").strip() or None
+    search = query_param("search").strip() or None
     # Bound search length to prevent unbounded LIKE patterns (DoS).
-    if _raw_search is not None and len(_raw_search) > _MAX_SEARCH_CHARS:
+    if search is not None and len(search) > _MAX_SEARCH_CHARS:
         return _json_err(
             400,
             {
@@ -1048,16 +1037,15 @@ def handle_api_functions_list(target: str) -> bytes | Any:
                 "detail": f"max {_MAX_SEARCH_CHARS} characters",
             },
         )
-    search = _raw_search
-    sort_param = _query_param("sort", "va").strip()  # field:dir
+    sort_param = query_param("sort", "va").strip()  # field:dir
     try:
-        limit = min(max(int(_query_param("limit", "50")), 1), _MAX_BATCH_LOOKUP)
+        limit = min(max(int(query_param("limit", "50")), 1), _MAX_BATCH_LOOKUP)
     except ValueError:
         limit = 50
     try:
         # Upper bound keeps a giant ?offset= from overflowing sqlite3's
         # signed-64-bit INTEGER conversion (OverflowError -> raw 500).
-        offset = min(max(int(_query_param("offset", "0")), 0), _MAX_PAGE_OFFSET)
+        offset = min(max(int(query_param("offset", "0")), 0), _MAX_PAGE_OFFSET)
     except ValueError:
         offset = 0
 
@@ -1371,10 +1359,10 @@ def handle_api_asm(target: str) -> bytes | Any:
             },
         )
 
-    va_str = _query_param("va")
-    size_str = _query_param("size")
-    section = _query_param("section", ".text")
-    fmt = _query_param("format", "text").strip().lower() or "text"
+    va_str = query_param("va")
+    size_str = query_param("size")
+    section = query_param("section", ".text")
+    fmt = query_param("format", "text").strip().lower() or "text"
     # An unrecognised ?format= used to fall through to the text
     # representation silently, so a client's typo (?format=JSOM, ?format=json5)
     # answered 200 with a body shape it cannot parse.  Reject the unknown
@@ -1385,7 +1373,7 @@ def handle_api_asm(target: str) -> bytes | Any:
             400,
             {
                 "error": "invalid format",
-                "detail": f"format {_query_param('format')!r} is not supported; "
+                "detail": f"format {query_param('format')!r} is not supported; "
                 f"expected one of {', '.join(sorted(_ASM_FORMATS))}",
             },
         )
@@ -1526,7 +1514,7 @@ def handle_api_bytes(target: str, section: str) -> bytes | Any:
     """Return raw bytes from the original binary for a given section range."""
     target = path_param(target)
     section = path_param(section)
-    raw_offset = _query_param("offset", "0")
+    raw_offset = query_param("offset", "0")
     try:
         req_offset = int(raw_offset, 0)
         if req_offset < 0:
@@ -1543,7 +1531,7 @@ def handle_api_bytes(target: str, section: str) -> bytes | Any:
                 "(decimal, or 0x-prefixed hexadecimal)",
             },
         )
-    raw_size = _query_param("size", "256")
+    raw_size = query_param("size", "256")
     req_size, size_err = _slice_size(raw_size, "invalid size")
     if size_err is not None:
         return size_err

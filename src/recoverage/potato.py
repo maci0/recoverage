@@ -1427,19 +1427,17 @@ def _build_progress(
     # already inside the "none" remainder.
     padding_bytes = sec_summ.get("paddingBytes", 0)
     if section == ".text" and total_fn > 0:
-        denominator = total_fn
-        seg_exact = exact_matches / denominator * 100
-        seg_reloc = reloc_matches / denominator * 100
-        seg_near_match = near_match_matches / denominator * 100
-        seg_stub = stub_matches / denominator * 100
+        seg_exact = exact_matches / total_fn * 100
+        seg_reloc = reloc_matches / total_fn * 100
+        seg_near_match = near_match_matches / total_fn * 100
+        seg_stub = stub_matches / total_fn * 100
         seg_padding = 0
     elif sec_size > 0:
-        denominator = sec_size
-        seg_exact = sec_summ.get("exactBytes", 0) / denominator * 100
-        seg_reloc = sec_summ.get("relocBytes", 0) / denominator * 100
-        seg_near_match = sec_summ.get("nearMatchBytes", 0) / denominator * 100
-        seg_stub = sec_summ.get("stubBytes", 0) / denominator * 100
-        seg_padding = padding_bytes / denominator * 100
+        seg_exact = sec_summ.get("exactBytes", 0) / sec_size * 100
+        seg_reloc = sec_summ.get("relocBytes", 0) / sec_size * 100
+        seg_near_match = sec_summ.get("nearMatchBytes", 0) / sec_size * 100
+        seg_stub = sec_summ.get("stubBytes", 0) / sec_size * 100
+        seg_padding = padding_bytes / sec_size * 100
     else:
         seg_exact = seg_reloc = seg_near_match = seg_stub = seg_padding = 0
 

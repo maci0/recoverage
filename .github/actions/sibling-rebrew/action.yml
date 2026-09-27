@@ -3,10 +3,14 @@ description: >-
   Materialize the rebrew checkout that [tool.uv.sources] resolves against,
   at the pin tools/ci_clone_rebrew.sh owns.
 
-# Every installing job needs ../rebrew to exist before `uv sync`, and the tag
-# and commit live in tools/ci_clone_rebrew.sh alone, which this action
-# delegates to. A job can only reference a local action, so the clone step
-# has to be shared this way rather than pasted into each job.
+# pyproject.toml pins rebrew at the relative path ../rebrew, which no runner
+# has, and actions/checkout writes only inside GITHUB_WORKSPACE. This action
+# exists for that one reason: it is the only place a job may run
+# tools/ci_clone_rebrew.sh, so the rebrew tag and commit stay in that script
+# alone. `make clone-rebrew` wraps the same script for a workstation.
+#
+# The only input is where to clone from; the ref/sha pin is NOT an input,
+# because a second place to write it is a second place to forget it.
 
 inputs:
   repository:
@@ -19,6 +23,6 @@ runs:
   steps:
     - name: Clone the sibling rebrew checkout
       shell: bash
-      run: bash tools/ci_clone_rebrew.sh "$GITHUB_WORKSPACE/../rebrew"
       env:
         REBREW_URL: ${{ inputs.repository }}
+      run: bash "$GITHUB_ACTION_PATH/../../tools/ci_clone_rebrew.sh" "$GITHUB_WORKSPACE/../rebrew"
