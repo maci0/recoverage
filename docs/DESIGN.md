@@ -27,7 +27,7 @@ The UI is built using a lightweight, dependency-free stack to ensure fast load t
    * `/api/targets/<target>/sections/<section>/bytes` endpoint serving raw hex-dumped byte slices from the original binary (`?offset=&size=`).
    * `/api/targets/<target>/asm?va=...&size=...` endpoint that dynamically disassembles binary chunks using Capstone (with LRU caching and in-memory cached binary reads).
    * `/api/events` Server-Sent Events stream that pushes a `db-updated` event whenever `coverage.db` changes on disk, so the SPA auto-refreshes without a manual reload (requires the threaded WSGI server, which gives each connection its own thread).
-   * `/api/regen` POST endpoint to run rebrew's catalog + build-db in-process (`regen.run_regen`, localhost only, rate-limited).
+   * `/api/regen` POST endpoint to run rebrew's catalog + build-db in-process (`regen.run_regen`, localhost only, rate-limited). The rebuild is convergent, so a duplicate run converges rather than corrupts; an optional `Idempotency-Key` header turns a retry of an already-completed key into a ledger lookup instead of a second pipeline run (bounded by age and count in `api.py`).
    * With `--token`, an unauthenticated request is answered by content type: browsers asking for `text/html` get a short page explaining that `?token=` must be appended (it never echoes the token), and API clients keep the `{error, code, detail}` JSON contract.
    * Proxied paths: `/src/*` → `project_dir/src/`, `/original/*` → `project_dir/original/`
 

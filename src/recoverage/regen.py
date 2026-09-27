@@ -30,6 +30,12 @@ def run_regen(root: Path) -> None:
 
     ``run_catalog`` is imported from ``rebrew.catalog.cli``. The
     ``rebrew.catalog`` package does not re-export it.
+
+    Running it twice converges: catalog rewrites its ``data_*.json`` outputs
+    and build-db rebuilds ``coverage.db`` whole, so the second run ends in the
+    state the first produced.  Callers that must not pay for a duplicate pay
+    for it themselves: the API serializes regens behind its lock and replays
+    a completed ``Idempotency-Key``; the CLI runs them one at a time.
     """
     from rebrew.build_db import build_db
     from rebrew.catalog.cli import run_catalog

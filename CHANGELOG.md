@@ -20,6 +20,16 @@ module ships in the published package. See *Breaking*.
   validated at startup: a bad port, boolean or empty value, and a misspelled
   `RECOVERAGE_*` name, each exit 2 naming the variable. The resolved settings
   are printed on startup, the token as `token=set`.
+- **`POST /api/regen` accepts an `Idempotency-Key` header.** A regen is a
+  convergent rebuild, so a duplicate ends in the same state as the first run,
+  but a client retrying the request it never saw answered (a replayed proxy
+  hop, a lost response, a double-clicked Reload) paid for a second full
+  catalog + build-db. Send a key: once the run completes the server remembers
+  it and answers a later request carrying it with `{"ok": true}` and
+  `Idempotent-Replay: true` without regenerating. A failed run is not
+  remembered, so retrying a failure retries for real. The Reload button sends
+  a fresh key per click. Keys are held for 10 minutes, 32 at a time, and a key
+  outside 1-128 characters of `[A-Za-z0-9._:-]` is a 400.
 - **`--log-level` and `RECOVERAGE_LOG_LEVEL` set the server's log threshold.**
   Previously the level was hardcoded to `INFO`, so a deployment could not turn
   the per-request chatter down or the detail up without a code change. Accepts

@@ -274,7 +274,13 @@ deployment that moved off `8001` needs no second place to configure.
 | `/api/targets/<target>/asm` | GET | Disassembly (`?format=json` for structured output) |
 | `/api/targets/<target>/sections/<section>/bytes` | GET | Raw byte slice (`?offset=&size=`) |
 | `/api/events` | GET | Server-Sent Events: `db-updated` when coverage.db changes (SPA auto-refresh) |
-| `/api/regen` | POST | Re-run catalog + build-db (localhost only, rate-limited) |
+| `/api/regen` | POST | Re-run catalog + build-db (localhost only, rate-limited; optional `Idempotency-Key` header) |
+
+A regen rebuilds `coverage.db` from scratch, so running it twice leaves the
+same state as running it once. Send an `Idempotency-Key` header with the
+request and a repeat of that key is answered with the recorded result
+(`Idempotent-Replay: true`) instead of running the pipeline again; keys are
+remembered for 10 minutes, and a failed run is not remembered.
 
 ### Error responses
 

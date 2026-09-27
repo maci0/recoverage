@@ -7,6 +7,7 @@ import json
 import logging
 import math
 import queue
+import re
 import sqlite3
 import threading
 import time
@@ -112,6 +113,57 @@ _REGEN_COOLDOWN_SECONDS = 5.0
 # very first POST as "cooling down" for the length of the cooldown window.
 _regen_last_attempt: float | None = None
 _REGEN_LOCK = threading.Lock()  # serializes regen (check + run, TOCTOU)
+
+# Idempotency-Key ledger for POST /api/regen.  A regen is a whole-pipeline
+# rebuild, so a duplicate that arrives after the first one finished answers
+# from the ledger instead of running catalog+build-db a second time: a client
+# retry (proxy replay, a lost response, a double-clicked Reload) re-sends the
+# request it never saw answered, and re-running it is minutes of duplicated
+# work plus a second write of coverage.db for an identical result.
+#
+# Key -> monotonic completion time.  Only completed runs are recorded, so a
+# run that failed retries for real, and only the outcome is stored: the
+# success body is a constant, and rebuilding it per request keeps the
+# response's Content-Encoding matched to that request's Accept-Encoding.
+# Bounded on both axes so the ledger cannot grow without limit: a key only has
+# to outlive the client's retry horizon, and the count cap keeps a client
+# that mints a fresh key per attempt from pinning memory.
+_REGEN_KEY_TTL_SECONDS = 600.0
+_REGEN_KEY_MAX = 32
+# A key is an opaque client nonce; anything outside this set is a client bug
+# or an attempt to fill the ledger with junk, and is rejected rather than
+# stored.
+_REGEN_KEY_RE = re.compile(r"[A-Za-z0-9._:-]{1,128}")
+_REGEN_COMPLETED_KEYS: dict[str, float] = {}
+_REGEN_COMPLETED_KEYS_LOCK = threading.Lock()
+
+
+def _prune_completed_keys(now: float) -> None:
+    """Drop completed keys past the retention window. Caller holds the lock."""
+    for key, done_at in list(_REGEN_COMPLETED_KEYS.items()):
+        if now - done_at >= _REGEN_KEY_TTL_SECONDS:
+            del _REGEN_COMPLETED_KEYS[key]
+
+
+def _regen_replayed(key: str) -> bool:
+    """True when *key* already completed a regen inside the retention window."""
+    now = time.monotonic()
+    with _REGEN_COMPLETED_KEYS_LOCK:
+        _prune_completed_keys(now)
+        return key in _REGEN_COMPLETED_KEYS
+
+
+def _record_completed_key(key: str) -> None:
+    """Remember that *key*'s regen completed, so its retry is answered, not re-run."""
+    now = time.monotonic()
+    with _REGEN_COMPLETED_KEYS_LOCK:
+        _prune_completed_keys(now)
+        # Re-insert (rather than refresh in place) so the eviction order stays
+        # completion order.
+        _REGEN_COMPLETED_KEYS.pop(key, None)
+        _server._evict_oldest(_REGEN_COMPLETED_KEYS, _REGEN_KEY_MAX)
+        _REGEN_COMPLETED_KEYS[key] = now
+
 
 # Memoized /api/targets/<t>/data payloads: the endpoint materializes ALL
 # cells for the target (json_group_array over the whole cells table) plus
@@ -1543,6 +1595,17 @@ def handle_api_bytes(target: str, section: str) -> bytes | Any:
 
 @app.post("/api/regen")
 def handle_regen() -> bytes | Any:
+    """Re-run rebrew catalog + build-db for the project workspace.
+
+    Duplicate execution: a rebuild is convergent, so a second run ends in the
+    same state as the first, but it is minutes of work and a second write of
+    coverage.db.  Send an ``Idempotency-Key`` header to make a retry cheap:
+    the key is remembered once the run completes (see ``_REGEN_KEY_TTL_SECONDS``
+    and ``_REGEN_KEY_MAX`` for the retention window) and a later request
+    carrying it is answered from the ledger with ``Idempotent-Replay: true``
+    instead of re-running.  A run that failed is not recorded, so retrying a
+    failure retries for real.  Without the header, every POST re-runs.
+    """
     global _regen_last_attempt
 
     # `or ""` also folds an explicit None environ value into the rejected-by-
@@ -1587,6 +1650,24 @@ def handle_regen() -> bytes | Any:
                 },
             )
 
+    # Idempotency-Key: a client that retries a regen whose response it never
+    # saw re-sends the same request.  A key that already completed is answered
+    # from the ledger here, BEFORE the cooldown below, because the retry lands
+    # seconds after the first run — inside the cooldown window, where the
+    # throttle would 429 the very request it is meant to dedup.
+    key = request.headers.get("Idempotency-Key", "").strip()
+    if key and not _REGEN_KEY_RE.fullmatch(key):
+        return _json_err(
+            400,
+            {
+                "error": "Bad request: malformed Idempotency-Key",
+                "detail": "expected 1-128 characters of [A-Za-z0-9._:-]",
+            },
+        )
+    if key and _regen_replayed(key):
+        _log.info("Regen %s already completed — answering the retry without re-running", key)
+        return _json_ok({"ok": True}, Idempotent_Replay="true")
+
     # Server-side cooldown + serialization: the cooldown check and the regen
     # run must be atomic — two concurrent POSTs could otherwise both pass the
     # check and run catalog/build-db in parallel, tearing the data_*.json /
@@ -1615,7 +1696,13 @@ def handle_regen() -> bytes | Any:
                 },
             )
         _regen_last_attempt = now
-        return _do_regen(remote)
+        result = _do_regen(remote)
+        # _do_regen answers the success body as bytes and a mapped failure as
+        # an HTTPResponse.  Only a completed run is recorded, so a client that
+        # retries a failure gets a real second attempt.
+        if key and isinstance(result, bytes):
+            _record_completed_key(key)
+        return result
     finally:
         _REGEN_LOCK.release()
 

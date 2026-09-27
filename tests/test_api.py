@@ -814,6 +814,104 @@ class TestRegenFailureMapping:
         assert data["detail"] == "ValueError: corrupt JSON"
 
 
+class TestRegenIdempotencyKey:
+    """POST /api/regen dedups a retry that carries a completed key.
+
+    A regen is convergent, so a duplicate is not corruption, but it is a
+    second full catalog+build-db run. The key is what makes a retry (proxy
+    replay, a lost response) cost a lookup instead.
+    """
+
+    def setup_method(self) -> None:
+        import recoverage.api as api
+
+        api._regen_last_attempt = 0.0
+        api._REGEN_COMPLETED_KEYS.clear()
+
+    teardown_method = setup_method
+
+    def _counting_regen(self, monkeypatch: pytest.MonkeyPatch, *, fail: bool = False) -> list[Path]:
+        import recoverage.api as api
+
+        runs: list[Path] = []
+
+        def run(root: Path) -> None:
+            runs.append(root)
+            if fail:
+                raise ValueError("corrupt JSON")
+
+        monkeypatch.setattr(api, "run_regen", run)
+        monkeypatch.setattr(api, "_project_dir", lambda: Path("/nonexistent"))
+        return runs
+
+    def _post(self, key: str | None = None) -> tuple[str, dict[str, str], bytes]:
+        headers = {"Idempotency-Key": key} if key else None
+        return wsgi_request("POST", "/api/regen", headers, remote_addr="127.0.0.1")
+
+    def test_retry_with_a_completed_key_does_not_rerun(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        runs = self._counting_regen(monkeypatch)
+
+        assert_regen_accepted(self._post("click-1"))
+        # Same key, and inside the cooldown window a second run would 429 on.
+        status, headers, body = self._post("click-1")
+
+        assert status.startswith("200")
+        assert json.loads(decode_body(body, headers)) == {"ok": True}
+        assert headers.get("Idempotent-Replay") == "true"
+        assert len(runs) == 1
+
+    def test_a_fresh_key_reruns(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import recoverage.api as api
+
+        runs = self._counting_regen(monkeypatch)
+        assert_regen_accepted(self._post("click-1"))
+        api._regen_last_attempt = 0.0
+        assert_regen_accepted(self._post("click-2"))
+
+        assert len(runs) == 2
+
+    def test_a_failed_run_is_not_recorded(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import recoverage.api as api
+
+        runs = self._counting_regen(monkeypatch, fail=True)
+        status, _, _ = self._post("click-1")
+        assert status.startswith("500")
+
+        # The retry must attempt the run again, not replay the failure.
+        api._regen_last_attempt = 0.0
+        status, _, _ = self._post("click-1")
+        assert status.startswith("500")
+        assert len(runs) == 2
+
+    def test_malformed_key_is_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        runs = self._counting_regen(monkeypatch)
+
+        status, headers, body = self._post("not a valid key")
+
+        assert status.startswith("400")
+        assert json.loads(decode_body(body, headers))["code"] == "bad_request"
+        assert runs == []
+
+    def test_ledger_is_bounded_by_age_and_count(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import recoverage.api as api
+
+        self._counting_regen(monkeypatch)
+        for i in range(api._REGEN_KEY_MAX + 5):
+            api._regen_last_attempt = 0.0
+            assert_regen_accepted(self._post(f"click-{i}"))
+        assert len(api._REGEN_COMPLETED_KEYS) <= api._REGEN_KEY_MAX
+
+        # Every key is older than the retention window, so none may answer.
+        real_now = time.monotonic()
+        monkeypatch.setattr(
+            api.time, "monotonic", lambda: real_now + api._REGEN_KEY_TTL_SECONDS + 1
+        )
+        assert not api._regen_replayed("click-0")
+        assert api._REGEN_COMPLETED_KEYS == {}
+
+
 class TestServeBindFlag:
     def test_bind_option_help(self) -> None:
         from typer.testing import CliRunner

@@ -221,7 +221,12 @@
     summaryData.val = null;
     let ok = false;
     try {
-      const { ok: regenOk } = await fetch("/api/regen", { method: "POST", cache: "no-store" });
+      // One key per click: a request the browser or a proxy replays, or a
+      // response that never arrives, re-sends the same key and is answered
+      // from the server's ledger instead of regenerating a second time.
+      // randomUUID needs a secure context, which a plain-HTTP LAN visit is not.
+      const key = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const { ok: regenOk } = await fetch("/api/regen", { method: "POST", cache: "no-store", headers: { "Idempotency-Key": key } });
       ok = regenOk;
     } catch (error) { // oxlint-disable-line @rikalabs/no-silent-catch-fallback -- regen failure is reported to the user via REGEN_UNAVAILABLE
       // oxlint-disable-next-line eslint/no-console -- keep diagnostics in the browser console

@@ -192,7 +192,7 @@ The release policy is not written down anywhere else, so it is stated here and
 | `/api/targets/<target>/asm` | GET | Disassembly (requires capstone) |
 | `/api/targets/<target>/sections/<section>/bytes` | GET | Raw byte slice |
 | `/api/events` | GET | Server-Sent Events: `db-updated` when coverage.db changes (SPA auto-refresh) |
-| `/api/regen` | POST | Re-run catalog + build-db (localhost only, rate-limited) |
+| `/api/regen` | POST | Re-run catalog + build-db (localhost only, rate-limited; optional `Idempotency-Key` header, replayed from a bounded ledger) |
 
 ## Data Pipeline
 
