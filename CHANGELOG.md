@@ -267,6 +267,13 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **An IPv6 `--bind` could never listen.** `RECOVERAGE_BIND` and `--bind`
+  deliberately keep the colons of an IPv6 address, but the listener inherited
+  wsgiref's `AF_INET` and failed in `socket.bind()` on every platform, then
+  reported "is another instance already running?" for what was an
+  address-family mismatch. The server now opens an IPv6 socket when the bind
+  address resolves to IPv6, so `recoverage serve --bind ::1` and `--bind ::`
+  work.
 - **A bind address nothing could resolve started the server anyway.**
   `RECOVERAGE_BIND` rejected an empty value but nothing else, so a trailing
   space from a unit-file quoting slip, an embedded control character, or a

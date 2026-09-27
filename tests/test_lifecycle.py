@@ -13,6 +13,7 @@ Pins:
 from __future__ import annotations
 
 import os
+import socket
 import subprocess
 import sys
 import time
@@ -25,10 +26,16 @@ import pytest
 from recoverage.cli import (
     _BROWSER_OPEN_TIMEOUT,
     _open_and_reap,
+    _server_class_for,
 )
 from recoverage.regen import run_regen
 
-POSIX = os.name == "posix"
+#: The zombie scan below reads /proc/<pid>/stat, which only Linux provides.
+#: Probed, not keyed on os.name: macOS and the BSDs are posix and ship no
+#: /proc, so a posix gate sent the scan into a directory that is not there and
+#: every macOS run of this file errored on FileNotFoundError before the
+#: assertion it exists to make.
+HAS_PROC = Path("/proc/self/stat").is_file()
 
 
 def _own_zombie_pids() -> set[int]:
@@ -262,7 +269,7 @@ class TestOpenAndReap:
         monkeypatch.setattr(cli.os, "name", "nt")
         assert cli._windows_detach_flags() == new_group | detached
 
-    @pytest.mark.skipif(not POSIX, reason="uses POSIX /proc and true")
+    @pytest.mark.skipif(not HAS_PROC, reason="the zombie scan reads /proc, which only Linux has")
     def test_exiting_child_is_reaped_no_zombie(self) -> None:
         """The fire-and-forget opener must be waited on: setsid alone leaves
         zombies behind in a long-lived server.
@@ -271,8 +278,47 @@ class TestOpenAndReap:
         bare waitpid would reap (and thereby hide) a child left by another
         test, and would report that foreign child as this test's leak.
         """
-        _open_and_reap("http://127.0.0.1:8001", ["true"])
+        # This interpreter rather than a `true` binary: the child has to exist
+        # on every platform, and /usr/bin/true is not on PATH everywhere.
+        _open_and_reap("http://127.0.0.1:8001", [sys.executable, "-c", "pass"])
         assert _own_zombie_pids() == set(), "an opener child was left unreaped (zombie)"
+
+
+class TestBindAddressFamily:
+    """``--bind`` accepts an IPv6 literal, so the listener has to be able to
+    take one.
+
+    ``config.validate_bind`` keeps the colons of an IPv6 address (it rejects
+    only a ``:`` that is a port), and ``server._peer_is_loopback`` documents a
+    dual-stack ``--bind ::`` listener reporting IPv4 peers in mapped form.
+    wsgiref's ``WSGIServer`` inherits ``http.server.HTTPServer``'s ``AF_INET``
+    and never changes it, so without the family selection below an IPv6 bind
+    dies in ``socket.bind()`` on every platform, and serve's OSError handler
+    reports "is another instance already running?" for an address-family
+    mismatch.
+    """
+
+    @pytest.mark.parametrize("host", ["127.0.0.1", "0.0.0.0", "no-such-host.invalid"])
+    def test_ipv4_and_unresolvable_bind_stay_on_af_inet(self, host: str) -> None:
+        assert _server_class_for(host).address_family is socket.AF_INET
+
+    @pytest.mark.skipif(
+        not any(
+            info[0] is socket.AF_INET6
+            for info in socket.getaddrinfo("::1", None, type=socket.SOCK_STREAM)
+        ),
+        reason="this host has no IPv6 loopback",
+    )
+    def test_an_ipv6_bind_binds_and_listens(self) -> None:
+        server_class = _server_class_for("::1")
+        assert server_class.address_family is socket.AF_INET6
+        # The whole point: the class the selector returns has to survive a real
+        # bind, which AF_INET cannot do for a v6 address on any platform.
+        server = server_class(("::1", 0), None)
+        try:
+            assert server.socket.family is socket.AF_INET6
+        finally:
+            server.server_close()
 
 
 class TestClientConnectionDeadline:

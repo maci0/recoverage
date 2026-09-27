@@ -9,6 +9,10 @@ const { a, aside, button, div, h1, h2, h3, header, input, main, p, pre, section,
 const enc = encodeURIComponent;
 const encPath = (path) => String(path).split("/").map((seg) => enc(seg)).join("/");
 
+// How long a "nothing to select" notice stays on screen before the live stats
+// it shares a row with come back.
+const NAV_NOTICE_MS = 4000;
+
 // paths.sourceRoot and paths.originalDll are values the coverage.db hands us,
 // and a database built from a hostile binary — or imported wholesale from
 // somewhere else — can hold any string in them.  Spliced into an href or a
@@ -21,9 +25,6 @@ const encPath = (path) => String(path).split("/").map((seg) => enc(seg)).join("/
 // to the server-proxied default.  The colon test is positional: after the
 // first "/" a colon is an ordinary character in a path segment, before it a
 // colon starts a scheme.
-// How long a "nothing to select" notice stays on screen before the live stats
-// it shares a row with come back.
-const NAV_NOTICE_MS = 4000;
 
 const PATH_CONTROL_MAX = 0x1F;
 const PATH_DELETE = 0x7F;

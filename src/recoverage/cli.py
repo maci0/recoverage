@@ -10,6 +10,7 @@ import logging
 import os
 import platform
 import signal
+import socket
 import sqlite3
 import subprocess
 import sys
@@ -84,6 +85,42 @@ class _ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
     """
 
     daemon_threads = True
+
+
+class _ThreadingWSGIServer6(_ThreadingWSGIServer):
+    """The same server on an IPv6 socket.
+
+    ``wsgiref``'s ``WSGIServer`` inherits ``http.server.HTTPServer``'s
+    ``AF_INET`` and never changes it, so an IPv6 bind address that
+    ``config.validate_bind`` deliberately accepts (``::1``, ``::``) dies in
+    ``socket.bind()`` with EADDRNOTAVAIL on every platform, and the OSError
+    handler below then reports "is another instance already running?" for what
+    is an address-family mismatch.  On Linux an ``AF_INET6`` socket bound to
+    ``::`` also accepts IPv4-mapped peers, which is the case
+    ``server._peer_is_loopback`` documents.
+    """
+
+    address_family = socket.AF_INET6
+
+
+def _server_class_for(bind: str) -> type[_ThreadingWSGIServer]:
+    """The threaded server class whose address family *bind* needs.
+
+    Probed through ``getaddrinfo`` rather than sniffed off the spelling, so a
+    hostname that resolves to IPv6 only is covered as well as a literal, and a
+    name that offers both keeps ``AF_INET`` (the historical default, and the
+    one a dual-stack host's own loopback answer points at).  A name that
+    resolves to neither keeps ``AF_INET`` and fails in ``bind()`` with the
+    resolver's own error, as it always has.
+    """
+    try:
+        infos = socket.getaddrinfo(bind, None, type=socket.SOCK_STREAM)
+    except socket.gaierror:
+        return _ThreadingWSGIServer
+    families = {info[0] for info in infos}
+    if families == {socket.AF_INET6}:
+        return _ThreadingWSGIServer6
+    return _ThreadingWSGIServer
 
 
 # Hard deadline for every socket operation on a client connection (the request
@@ -986,7 +1023,7 @@ def serve(
             port=port,
             quiet=True,
             server="wsgiref",
-            server_class=_ThreadingWSGIServer,
+            server_class=_server_class_for(bind),
             handler_class=_KeepAliveRequestHandler,
         )
     except KeyboardInterrupt:

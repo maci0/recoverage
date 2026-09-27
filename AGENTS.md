@@ -456,6 +456,15 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   is counted there as an exact match. Tests in `test_potato.py`
   (`TestCellStateVocabularyCoverage`) and `test_server.py` (`TestSpaStateVocabulary`)
   fail on a gap; extend all of them together when rebrew adds a state.
+- The listener's socket family comes from the bind address, not from a
+  fixed class: `wsgiref`'s `WSGIServer` inherits `http.server.HTTPServer`'s
+  `AF_INET` and never changes it, so an IPv6 address `config.validate_bind`
+  accepts (`--bind ::1`, `::`) fails in `socket.bind()` on every platform and
+  the `serve` OSError handler blames another instance for it. `cli.
+  _server_class_for` probes the address with `getaddrinfo` and returns
+  `_ThreadingWSGIServer6` when it resolves to IPv6 only, so a hostname that is
+  v6-only is covered alongside the literal; a name offering both keeps
+  `AF_INET`. Pinned by `tests/test_lifecycle.py` (`TestBindAddressFamily`).
 - Every `RECOVERAGE_*` value is converted and validated at startup, and the
   one with no format to convert still has a floor: `config.validate_bind`
   rejects an address carrying whitespace or a control character, and a colon
