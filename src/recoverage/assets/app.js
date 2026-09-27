@@ -48,6 +48,7 @@ const FN_URL = (t, va) => `/api/targets/${enc(t)}/functions/${enc(va)}`;
 
 const MSG = {
   LOADING: "Loading…",
+  ASM_LOADING: "Loading assembly…",
   ERROR_PREFIX: "Error: ",
   SELECT_FUNCTION: "(select a function)",
   NO_C_SOURCE: "(no C implementation for this function yet)",
@@ -60,7 +61,7 @@ const MSG = {
   BYTES_BSS: "(uninitialized data - no raw bytes)",
   BYTES_LOAD_FAILED: "(original binary not found: expected it at /original/ in the project directory)",
   GLOBAL_VAR: "Global variable",
-  REGEN_USING_CACHE: (r) => `Using cached data. Regen available in ${r}s...`,
+  REGEN_USING_CACHE: (r) => `Using cached data. Regen available in ${r}s…`,
   REGEN_IN_PROGRESS: "Regenerating…",
   REGEN_UNAVAILABLE: "Regen unavailable",
   NA: "(n/a)",
@@ -125,6 +126,13 @@ const gridId = (secName) => `grid-${secName.replaceAll('.', '')}`;
 const LEGEND = [["none", "undocumented"], ["exact", "exact match"], ["reloc", "reloc match"],
   ["near_match", "near-match"], ["stub", "stub"], ["padding", "padding"],
   ["proven", "proven"], ["compile_error", "problem"]];
+
+// The filters the toolbar offers, in the order it shows them.  A filter that
+// is not in this list cannot be dimmed to: FILTER_KEY (detail.js) maps a
+// packed state to the key that survives a filter, so a state the grid can
+// paint but no button can isolate is unreachable by filter, and a deep link
+// carrying anything else would dim the whole map with no control to undo it.
+const FILTER_KEYS = ["exact", "reloc", "near_match", "stub", "padding", "proven", "problem"];
 
 // Sections in PE load order (ascending VA), which puts .text first instead of
 // leaving the section that carries all the work at the end of an alphabetical
@@ -472,6 +480,15 @@ const App = () => {
   // restore state and links are shareable.  replaceState (not pushState) so
   // the URL tracks state without spamming history.
   const URL_PARAMS = new URLSearchParams(window.location.search);
+  // ?filter= names the status filters, comma-separated and sorted, which is
+  // what Potato Mode writes and the SPA previously dropped: a filtered view
+  // could not be reloaded, shared, or reached with the browser's back button.
+  // Unknown names are ignored rather than applied, because a filter no button
+  // offers dims every painted cell and leaves the map looking broken.
+  {
+    const wanted = (URL_PARAMS.get("filter") || "").split(",").map((f) => f.trim());
+    activeFilters.val = new Set(wanted.filter((f) => FILTER_KEYS.includes(f)));
+  }
   const syncUrl = () => {
     const params = new URLSearchParams();
     if (activeTarget.val) params.set("target", activeTarget.val);
@@ -480,6 +497,7 @@ const App = () => {
     }
     if (activeSection.val) params.set("section", activeSection.val);
     if (searchQuery.val) params.set("q", searchQuery.val);
+    if (activeFilters.val.size > 0) params.set("filter", [...activeFilters.val].toSorted().join(","));
     const qs = params.toString();
     history.replaceState(null, "", qs ? `?${qs}` : window.location.pathname);
   };
@@ -665,10 +683,10 @@ const App = () => {
     const { signal } = currentAbortController;
 
     if (activeSection.val === ".text") {
-      currentFn.val = { name: "Loading..." };
-      cSourceText.val = "Loading...";
-      docText.val = "Loading...";
-      asmText.val = "Loading assembly...";
+      currentFn.val = { name: MSG.LOADING };
+      cSourceText.val = MSG.LOADING;
+      docText.val = MSG.LOADING;
+      asmText.val = MSG.ASM_LOADING;
 
       try {
         const res = await fetch(FN_URL(activeTarget.val, id), { signal });
@@ -794,7 +812,7 @@ const App = () => {
 
           if (activeSection.val === ".text") {
             // Fetch ASM for undocumented block in .text
-            asmText.val = "Loading assembly...";
+            asmText.val = MSG.ASM_LOADING;
             window.RC.loadAsm?.({
               url: `${ASM_URL(activeTarget.val)}?va=${enc(sec.va + cell.start)}&size=${size}&section=${enc(activeSection.val)}`,
               set: (text) => { asmText.val = text; },
@@ -842,6 +860,7 @@ const App = () => {
       newFilters.add(filter);
     }
     activeFilters.val = newFilters;
+    syncUrl();
   };
 
   const jumpToAddress = (targetVa) => {
@@ -911,7 +930,7 @@ const App = () => {
       if (isLoading.val) {
         return div({ class: "progress-container" },
           div({ class: "progress-stats" },
-            span({ class: "stat-item" }, "Loading...")
+            span({ class: "stat-item" }, MSG.LOADING)
           )
         );
       }
@@ -1072,6 +1091,9 @@ const App = () => {
       || text === MSG.DATA_SECTION_NO_ASM || text === MSG.BYTES_FAILED || text === MSG.BYTES_BSS
       || text === MSG.BYTES_LOAD_FAILED || text === MSG.GLOBAL_VAR || text === MSG.NO_DECL
       || text === MSG.NA || text === MSG.LOADING || text === MSG.DETAIL_UNAVAILABLE
+      // The assembly pane spends its fetch on its own placeholder, which
+      // used to leave Copy enabled: clicking it copied "Loading assembly…".
+      || text === MSG.ASM_LOADING
       // oxlint-disable-next-line anti-slop/no-runtime-typeof -- pane text is string|derived-state; guard before .startsWith, not a type contract
       || (typeof text === "string" && (text.startsWith(MSG.ERROR_PREFIX) || text.startsWith("(failed to load:")));
     const CodeSection = (logo, color, heading, lang, text) => div({ class: "section" },
@@ -1121,7 +1143,7 @@ const App = () => {
     }
 
     return aside({ class: "panel", id: "panel", style: "position: relative;" },
-      () => isLoading.val ? div({ class: "loading-overlay", role: "status", "aria-live": "polite" }, "Loading...") : null,
+      () => isLoading.val ? div({ class: "loading-overlay", role: "status", "aria-live": "polite" }, MSG.LOADING) : null,
       div({ class: "panel-head" },
         h2({ class: "panel-title" }, title),
         div({ class: "panel-actions" },
@@ -1256,7 +1278,12 @@ const App = () => {
           FilterButton("reloc", "R", "Filter reloc", "Reloc match"),
           FilterButton("near_match", "M", "Filter near-match", "Near-match"),
           FilterButton("stub", "S", "Filter stub", "Stub"),
-          FilterButton("padding", "P", "Filter padding", "Padding")
+          FilterButton("padding", "P", "Filter padding", "Padding"),
+          // The legend names eight states; without these two, the cells a
+          // failed build or an unverified section painted were visible but
+          // unreachable: every filter dimmed them and none isolated them.
+          FilterButton("proven", "V", "Filter proven", "Proven (verified equivalent)"),
+          FilterButton("problem", "X", "Filter problem", "Problem (build or classification failure)")
         ),
         div({ class: "actions" },
           () => {

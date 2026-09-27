@@ -126,6 +126,49 @@ ACCENT_BYTES = "#10b981"
 SANS_FONT = "system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif"
 MONO_FONT = "SFMono-Regular, Consolas, Liberation Mono, Courier New, monospace"
 
+# The keys a ?filter= may name, and the cell states each one stands for.  A
+# filter is a key, not a state name, so the states that share a row (and a
+# colour) with another one stay reachable from the same pill: without this,
+# an older database spelling a cell VERIFIED, NEAR_MATCHING or SIZE_MISMATCH
+# dimmed out under the exact and near-match filters while the SPA, which
+# packs those onto the same cell state, kept them lit.  The two renderers
+# disagreed about what a filter shows.
+FILTER_STATES: dict[str, frozenset[str]] = {
+    "exact": frozenset({"exact", "verified"}),
+    "reloc": frozenset({"reloc"}),
+    "near_match": frozenset({"near_match", "near_matching", "size_mismatch"}),
+    "stub": frozenset({"stub"}),
+    "padding": frozenset({"padding"}),
+    "proven": frozenset({"proven"}),
+    "problem": frozenset(s for s, color in COLORS.items() if color == _COLORS_PROBLEM),
+}
+# The colour each pill is drawn in, which is the colour of one of its states.
+FILTER_COLORS: dict[str, str] = {key: COLORS[min(states)] for key, states in FILTER_STATES.items()}
+
+
+def _state_survives_filter(state: str, active_filters: set[str]) -> bool:
+    """Whether *state* is lit under *active_filters*.
+
+    An empty filter set lights everything, and an undocumented cell is never
+    dimmed by a status filter: the grid's gaps are the background the
+    statuses are read against, not one of the statuses.
+    """
+    if not active_filters or state == "none":
+        return True
+    return any(state in FILTER_STATES.get(f, ()) for f in active_filters)
+
+
+def _parse_filters(filter_str: str) -> set[str]:
+    """The filter keys named by a ``?filter=`` value, minus the ones no pill offers.
+
+    An unknown name matches no cell state, so keeping it would dim every
+    painted block and light no pill: a map that looks broken, with the "All"
+    link the reader has to find to undo it.  Dropping it leaves the view
+    unfiltered, which is what the name was worth.
+    """
+    return {f.strip() for f in filter_str.split(",") if f.strip()} & set(FILTER_STATES)
+
+
 # Struct format tuples for Data Inspector: (min_bytes, label, struct_format)
 _INT_FMTS: list[tuple[int, str, str]] = [
     (1, "int8", "<b"),
@@ -821,15 +864,15 @@ _PAGE_SRC = r"""<!DOCTYPE html>
         <tr>
         <td valign="middle" colspan="4">
           <table id="filters" border="0" cellpadding="0" cellspacing="4"><tr>
-            % for fb_href, fb_label, fb_color, fb_active, fb_key in filter_btn_data:
+            % for fb_href, fb_label, fb_color, fb_active, fb_key, fb_title in filter_btn_data:
               <td valign="middle">
               <!-- Anchor wraps the whole pill: see the section-tab note above.
                    These are the worst case — a single-letter label gave E/R/M/S/P
                    a 10px-wide hit target inside a 32px-wide pill. -->
               % if fb_active:
-                <a href="{{fb_href}}" accesskey="{{fb_label[0].lower()}}"><table border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{FILTER_ACT_L}}" width="16" height="32" border="0" alt=""></td><td background="{{FILTER_ACT_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="{{fb_color}}"><b>{{fb_label}}</b></font></td><td><img src="{{FILTER_ACT_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
+                <a href="{{fb_href}}" title="{{fb_title}}" accesskey="{{fb_label[0].lower()}}"><table border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{FILTER_ACT_L}}" width="16" height="32" border="0" alt=""></td><td background="{{FILTER_ACT_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="{{fb_color}}"><b>{{fb_label}}</b></font></td><td><img src="{{FILTER_ACT_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
               % else:
-                <a href="{{fb_href}}" accesskey="{{fb_label[0].lower()}}"><table border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{FILTER_INACT_L}}" width="16" height="32" border="0" alt=""></td><td background="{{FILTER_INACT_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="{{fb_color}}">{{fb_label}}</font></td><td><img src="{{FILTER_INACT_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
+                <a href="{{fb_href}}" title="{{fb_title}}" accesskey="{{fb_label[0].lower()}}"><table border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{FILTER_INACT_L}}" width="16" height="32" border="0" alt=""></td><td background="{{FILTER_INACT_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="{{fb_color}}">{{fb_label}}</font></td><td><img src="{{FILTER_INACT_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
               % end
               </td>
             % end
@@ -1039,7 +1082,7 @@ def render_potato(parsed_url: ParseResult) -> str:
     target = qs.get("target", [""])[0]
     section = qs.get("section", [".text"])[0]
     filter_str = ",".join(qs.get("filter", [""]))
-    active_filters = {f.strip() for f in filter_str.split(",") if f.strip()}
+    active_filters = _parse_filters(filter_str)
     idx_str = qs.get("idx", [""])[0]
     search_query = qs.get("search", [""])[0].strip()
     view = qs.get("view", [""])[0]
@@ -1553,21 +1596,31 @@ def _build_filter_data(
     section: str,
     active_filters: set[str],
     search_query: str,
-) -> list[tuple[str, str, str, bool, str]]:
+) -> list[tuple[str, str, str, bool, str, str]]:
+    # A pill is a single letter in the state's colour, so it carries the
+    # state's full name in its title: a lone V or X is a lookup the legend
+    # two hundred pixels away can answer, and a pointer answers instantly.
     filter_opts = [
-        ("exact", "E", "e"),
-        ("reloc", "R", "r"),
-        ("near_match", "M", "m"),
-        ("stub", "S", "s"),
-        ("padding", "P", "p"),
+        ("exact", "E", "e", "Exact match"),
+        ("reloc", "R", "r", "Reloc match"),
+        ("near_match", "M", "m", "Near-match"),
+        ("stub", "S", "s", "Stub"),
+        ("padding", "P", "p", "Padding"),
+        # The two states the legend names that had no pill: a proven section
+        # and a cell the build or the classifier failed on.  Both were
+        # painted and both dimmed under every pill, so the operator looking
+        # for the failures had no control to narrow the map with.
+        ("proven", "V", "v", "Proven (verified equivalent)"),
+        ("problem", "X", "x", "Problem (build or classification failure)"),
     ]
-    filter_btn_data: list[tuple[str, str, str, bool, str]] = [
+    filter_btn_data: list[tuple[str, str, str, bool, str, str]] = [
         (
             _build_url(target, section, search=search_query),
             "All",
             TEXT_COLOR if not active_filters else MUTED_COLOR,
             not active_filters,
             "0",
+            "Show all statuses",
         )
     ]
     # Symmetric difference toggles one filter on or off; an empty result is a
@@ -1576,11 +1629,12 @@ def _build_filter_data(
         (
             _build_url(target, section, active_filters ^ {f}, search=search_query),
             label,
-            COLORS[f],
+            FILTER_COLORS[f],
             f in active_filters,
             key,
+            title,
         )
-        for f, label, key in filter_opts
+        for f, label, key, title in filter_opts
     )
     return filter_btn_data
 
@@ -1914,7 +1968,7 @@ def _build_grid_html(
 
         state = cell.get("state", "none")
 
-        dimmed = (active_filters and state != "none" and state not in active_filters) or (
+        dimmed = (active_filters and not _state_survives_filter(state, active_filters)) or (
             search_query and not any(fn in search_matched_fns for fn in cell.get("functions", []))
         )
         bgcolor = BG_COLOR if dimmed else COLORS.get(state, COLORS["none"])

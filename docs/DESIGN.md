@@ -66,7 +66,7 @@ mounted by the shell once it has loaded, as each section below marks.
 * **Tabs**: Dynamic segment selectors generated from the active target's sections, ordered by ascending VA so PE load order (`.text`, `.rdata`, `.data`, `.bss`) holds and the section carrying the work leads, instead of an alphabetical row ending in `.text`.
 * **ProgressBar**: A stats row (`size · matched · coverage %`) above a slim 14px segmented bar. The stats live outside the bar as plain text so they can never clip; the bar itself is a pure segment strip. **Every segment is a share of one denominator**: `.text` divides function counts by `totalFunctions` (its `matched` stat is a function count), every other section divides cell bytes by the section size. Padding is a cell state with no function counterpart, so it is a segment only on the byte-denominated bars; on `.text` those bytes are already inside the unmatched remainder, and adding them as a byte share of a function bar pushed the total past 100%. **Each segment is a filter toggle**, reachable by keyboard and carrying `aria-pressed`; segments under 0.5% are not rendered at all, since a zero-width toggle is a focus stop with nothing to point at.
 * **Target Selector**: Dropdown to switch between targets (e.g., `SERVER`, `GOLD`, `GOLDTL`). Persists selection to URL (`?target=XXX`) and localStorage.
-* **Search & Filters**: Debounced search input and toggleable filter buttons (All, E, R, M, S, P).
+* **Search & Filters**: Debounced search input and toggleable filter buttons (All, E, R, M, S, P, V, X). V isolates `proven` cells and X the problem states, so every row the legend prints is reachable as a filter instead of only through a pixel. The set is written to the URL as `?filter=` (the parameter Potato Mode already used) on every toggle, so a filtered map survives a reload and can be shared; a name outside the set is dropped, since it would dim every painted cell and light no button.
 * **Actions**: Theme toggle (sun/moon icons) and Reload data buttons with a 5-second cooldown to prevent spam.
 
 ### 2. Grid (`.map`, mounted by `detail.js`)
@@ -310,7 +310,7 @@ Potato Mode is a pure HTML 5 alternative UI that works **without any CSS or Java
 |----------|-------------|---------|
 | `target` | Target binary | `?target=SERVER` |
 | `section` | PE section | `?section=.text` |
-| `filter` | Comma-separated filters | `?filter=exact,reloc` |
+| `filter` | Comma-separated filters; both renderers read and write it | `?filter=exact,reloc` |
 | `idx` | Cell index | `?idx=42` |
 | `search` | Search query | `?search=adler32` |
 | `view` | `functions` renders the function list instead of the grid | `?view=functions` |
@@ -324,6 +324,15 @@ Each filter link toggles that filter on/off while preserving other active filter
 - Click `R` with `E` active → shows exact + reloc
 - Click `E` again → removes exact, shows only reloc
 - `[Clear]` link removes all filters
+
+The keys are `exact`, `reloc`, `near_match`, `stub`, `padding`, `proven` and
+`problem`, and a key stands for every cell state that shares its legend row,
+not just for the state it is named after: `exact` also keeps `verified` cells
+lit, `near_match` also keeps `near_matching` and `size_mismatch`, and `problem`
+stands for all nine tooling-failure states. The SPA packs those states onto one
+cell state before painting, so the two renderers dim the same cells. An
+undocumented cell is never dimmed by a status filter; it is the ground the
+statuses are read against.
 
 ## Color Scheme & Styling (matches main UI)
 Cell states are the keys of `potato.COLORS`, spelled as `cells.state` spells them.

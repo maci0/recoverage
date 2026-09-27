@@ -729,6 +729,75 @@ class TestDeepLinking:
 # ── Token auth & security headers ──────────────────────────────────
 
 
+class TestSpaFilterControls:
+    """The SPA's status filters match what the two renderers share.
+
+    The SPA wrote target/function/section/search into the URL and left the
+    filter out, so a filtered map could not be reloaded or shared even though
+    Potato Mode has carried `?filter=` all along. It also offered no filter
+    for two states the legend names, which left those cells painted but
+    unreachable: every pill dimmed them, none isolated them.
+    """
+
+    @staticmethod
+    def _app_js() -> str:
+        import importlib.resources
+
+        from recoverage import assets
+
+        return importlib.resources.files(assets).joinpath("app.js").read_text(encoding="utf-8")
+
+    def test_filter_is_part_of_the_deep_link(self) -> None:
+        app_js = self._app_js()
+        assert 'params.set("filter"' in app_js
+        # Every toggle has to reach the URL, or the link goes stale on the
+        # first click rather than on the second.
+        toggle = app_js.split("const toggleFilter =", 1)[1].split("};", 1)[0]
+        assert "syncUrl()" in toggle
+
+    def test_filter_url_names_are_allowlisted(self) -> None:
+        """A name no button offers dims every painted cell and lights none."""
+        import re
+
+        from recoverage.potato import FILTER_STATES
+
+        app_js = self._app_js()
+        block = re.search(r"const FILTER_KEYS = \[(.*?)\];", app_js, re.DOTALL).group(1)
+        keys = set(re.findall(r'"([a-z_]+)"', block))
+        assert keys == set(FILTER_STATES)
+        assert "FILTER_KEYS.includes" in app_js
+
+    def test_every_filter_key_has_a_button(self) -> None:
+        import re
+
+        from recoverage.potato import FILTER_STATES
+
+        app_js = self._app_js()
+        buttons = set(re.findall(r'FilterButton\("([a-z_]+)"', app_js))
+        assert buttons - {"all"} == set(FILTER_STATES)
+        for key in FILTER_STATES:
+            assert f'FilterButton("{key}"' in app_js, f"no toolbar button for {key}"
+
+    def test_every_packed_state_survives_a_filter(self) -> None:
+        """FILTER_KEY is the state->key table the dimming pass reads.
+
+        A "" there means the cell is dimmed by every pill and lit by none,
+        which is the state the two missing buttons were for.
+        """
+        import importlib.resources
+        import re
+
+        from recoverage import assets
+
+        detail_js = (
+            importlib.resources.files(assets).joinpath("detail.js").read_text(encoding="utf-8")
+        )
+        raw = re.search(r"const FILTER_KEY = \[(.*?)\];", detail_js, re.DOTALL).group(1)
+        keys = [v.strip().strip('"') for v in raw.split(",") if v.strip()]
+        assert keys[6:] == ["proven", "problem"]
+        assert keys[:6] == ["", "exact", "reloc", "near_match", "stub", "padding"]
+
+
 class TestAuthTokenMatches:
     """_auth_token_matches must accept the right token only, in constant time."""
 

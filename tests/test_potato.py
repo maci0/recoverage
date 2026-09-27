@@ -2272,6 +2272,87 @@ class TestCellStateVocabularyCoverage:
         assert unnamed == [], f"DESIGN.md colour table does not name: {unnamed}"
 
 
+class TestFilterKeysCoverTheLegend:
+    """Every status the legend prints can be filtered down to.
+
+    A state the grid paints and the legend names but no filter isolates is
+    reachable only by reading pixels: the operator looking for the cells the
+    build failed on had no control to narrow the map with, and every pill
+    they pressed dimmed those cells along with everything else.
+    """
+
+    # data and thunk are excluded: the SPA greys them into the undocumented
+    # row and Potato keeps the colour, so neither renderer offers a filter
+    # for them and the two agree.  none is excluded because a status filter
+    # never dims it; it is the ground the statuses are read against.
+    UNFILTERED = frozenset({"data", "thunk", "none"})
+
+    def test_every_legend_state_survives_its_filter(self) -> None:
+        from recoverage.potato import FILTER_STATES, LEGEND_ITEMS
+
+        keys = {k for k, _ in LEGEND_ITEMS} - self.UNFILTERED
+        unreachable = sorted(
+            key for key in keys if not any(key in states for states in FILTER_STATES.values())
+        )
+        assert unreachable == [], f"legend states no filter keeps lit: {unreachable}"
+
+    def test_legacy_spellings_survive_the_filter_they_render_as(self) -> None:
+        """The SPA packs these onto the exact and near-match cell states."""
+        from recoverage.potato import _state_survives_filter
+
+        assert _state_survives_filter("verified", {"exact"})
+        assert _state_survives_filter("near_matching", {"near_match"})
+        assert _state_survives_filter("size_mismatch", {"near_match"})
+
+    def test_every_problem_state_survives_the_problem_filter(self) -> None:
+        from recoverage.potato import COLORS, _state_survives_filter
+
+        problems = [s for s, color in COLORS.items() if color == COLORS["compile_error"]]
+        assert len(problems) > 1
+        for state in problems:
+            assert _state_survives_filter(state, {"problem"}), state
+        # And they are the only thing it keeps: the point of the filter is
+        # finding the failures, not a second way to read the whole map.
+        assert not _state_survives_filter("exact", {"problem"})
+
+    def test_undocumented_cells_are_never_dimmed_by_a_status_filter(self) -> None:
+        from recoverage.potato import FILTER_STATES, _state_survives_filter
+
+        for key in FILTER_STATES:
+            assert _state_survives_filter("none", {key}), key
+
+    def test_unknown_filter_name_is_dropped(self) -> None:
+        from recoverage.potato import _parse_filters, _state_survives_filter
+
+        # It matches no cell state, so honouring it would dim every painted
+        # cell and light no pill.
+        assert _parse_filters("bogus") == set()
+        assert _parse_filters("exact,bogus") == {"exact"}
+        assert _state_survives_filter("exact", _parse_filters("bogus"))
+
+    def test_every_filter_key_has_a_pill_with_a_title(self) -> None:
+        from recoverage.potato import FILTER_STATES, _build_filter_data
+
+        pills = _build_filter_data("SERVER", ".text", set(), "")
+        assert len(pills) == len(FILTER_STATES) + 1  # plus "All"
+        keys = {key for _, _, _, _, key, _ in pills}
+        assert keys - {"0"} == set(FILTER_STATES)
+        for href, label, _color, _active, _key, title in pills:
+            assert title, f"pill {label} has no title to explain the letter"
+            assert href.startswith("?")
+
+    def test_pill_toggles_only_its_own_filter(self) -> None:
+        from recoverage.potato import _build_filter_data
+
+        pills = {
+            key: href for href, _, _, _, key, _ in _build_filter_data("S", ".text", {"reloc"}, "")
+        }
+        # Turning one on keeps the others; turning the active one off clears it.
+        assert "filter=exact%2Creloc" in pills["exact"]
+        assert "filter=reloc" in pills["reloc"]
+        assert "exact" not in pills["reloc"]
+
+
 class TestSectionAccentsMatchSpa:
     """The two renderers paint the four pane accents from separate files.
 

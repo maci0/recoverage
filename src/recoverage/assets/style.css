@@ -259,7 +259,9 @@ body {
 .search-status { display: flex; flex-wrap: wrap; gap: 2px 6px; justify-content: flex-end; color: var(--muted); font-size: 11px; text-align: right; }
 .search-count { color: var(--c); }
 .tabs:has(.tab-btn:last-child.active) { mask-image: none; }
-.filters { display: flex; gap: 6px; }
+/* Wraps rather than overflowing: eight filter buttons plus the target
+   selector and the icon buttons are more than a 360px phone has to give. */
+.filters { display: flex; flex-wrap: wrap; gap: 6px; }
 .actions { display: flex; gap: 8px; align-items: center; }
 
 .layout { display: grid; grid-template-columns: minmax(0, 1fr) 720px; gap: 14px; padding: 14px; }

@@ -385,7 +385,7 @@
     selectChunk, packSection, gridId, cellLoadError, retrySectionCells, setGridFocus,
   }) => {
     const PALETTE_VARS = ["--none", "--exact-bg", "--reloc-bg", "--near-match-bg", "--stub-bg", "--padding-bg", "--proven-bg", "--other-bg"];
-    const FILTER_KEY = ["", "exact", "reloc", "near_match", "stub", "padding", "", ""];
+    const FILTER_KEY = ["", "exact", "reloc", "near_match", "stub", "padding", "proven", "problem"];
     const grids = {};
     let ro = null;
 
@@ -659,7 +659,7 @@
       };
       if (isLoading.val) {
         dropGrids();
-        van.add(container, div({ class: "loading-overlay", role: "status", "aria-live": "polite" }, "Loading coverage data..."));
+        van.add(container, div({ class: "loading-overlay", role: "status", "aria-live": "polite" }, "Loading coverage data…"));
         return;
       }
       if (emptyState.val || !data.val || !data.val.sections) {
@@ -682,7 +682,7 @@
             p(`Could not load the ${secName} map: ${failed.detail}`),
             button({ class: "btn", onclick: () => retrySectionCells(secName) }, "Retry")));
         } else {
-          van.add(container, div({ class: "loading-overlay", role: "status", "aria-live": "polite" }, `Loading ${secName}...`));
+          van.add(container, div({ class: "loading-overlay", role: "status", "aria-live": "polite" }, `Loading ${secName}…`));
         }
         return;
       }
