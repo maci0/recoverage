@@ -206,6 +206,26 @@ class TestApiHealth:
         _, headers, _ = wsgi_get("/api/health")
         assert "application/json" in headers.get("Content-Type", "")
 
+    def test_health_targets_count_excludes_schema_row(self) -> None:
+        """targets_count counts built targets, never the reserved schema row.
+
+        The reserved schema metadata target carries the db_version stamp, not
+        a build, so counting it would report more targets than the dropdown
+        lists.
+        """
+        import contextlib
+
+        import recoverage.server as server_mod
+
+        status, headers, body = wsgi_get("/api/health")
+        assert status.startswith("200")
+        data = json.loads(decode_body(body, headers))
+        with contextlib.closing(server_mod._open_db(server_mod._db_path())) as conn:
+            ids = server_mod.db_target_ids(conn.cursor())
+        assert ids, "fixture database has no built target"
+        assert server_mod.SCHEMA_TARGET not in ids
+        assert data["targets_count"] == len(ids)
+
     def test_health_degraded_when_db_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A missing coverage.db must be reported as degraded (with
         exists=false), not crash the endpoint or claim healthy."""

@@ -632,12 +632,9 @@ def handle_api_health() -> bytes:
     try:
         with contextlib.closing(_open_db(db)) as conn:
             c = conn.cursor()
-            # Exclude the reserved schema-version row from the target count.
-            c.execute(
-                "SELECT COUNT(DISTINCT target) FROM metadata WHERE target != ?",
-                (_server.SCHEMA_TARGET,),
-            )
-            target_count = c.fetchone()[0]
+            # Counted from the same read the target list uses, so the health
+            # number and the dropdown can never disagree on the schema row.
+            target_count = len(_server.db_target_ids(c))
     except sqlite3.Error as exc:
         _log.warning("Failed to query target count from database: %s", exc)
         status = "degraded"

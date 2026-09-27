@@ -590,6 +590,25 @@ def _target_filename(tid: str, t_info: Any) -> str:
     return filename or tid
 
 
+#: Every built target id, excluding the reserved schema-version row.  ONE
+#: definition: the SPA dropdown, /api/health's target count, and the CLI's
+#: ``--target`` validation all read the same set from the same place, and
+#: ``metadata`` is the only table that carries it.  Sorted so every consumer
+#: gets a deterministic list (SQLite's DISTINCT order is arbitrary).
+_DB_TARGETS_SQL = "SELECT DISTINCT target FROM metadata WHERE target != ? ORDER BY target"
+
+
+def db_target_ids(c: sqlite3.Cursor) -> list[str]:
+    """Target ids with build data in *c*, schema row excluded, sorted.
+
+    The read-only counterpart to :func:`resolve_targets`: the ids the database
+    alone knows about, before the project config contributes any target that has
+    never been built.
+    """
+    c.execute(_DB_TARGETS_SQL, (SCHEMA_TARGET,))
+    return [row[0] for row in c.fetchall()]
+
+
 def resolve_targets(c: sqlite3.Cursor) -> list[dict[str, str]]:
     """Resolve available targets from DB + config (thread-safe, cached via RLock).
 
@@ -601,8 +620,7 @@ def resolve_targets(c: sqlite3.Cursor) -> list[dict[str, str]]:
         if _RESOLVED_TARGETS_CACHE is not None:
             return _RESOLVED_TARGETS_CACHE
 
-        c.execute("SELECT DISTINCT target FROM metadata WHERE target != ?", (SCHEMA_TARGET,))
-        target_ids = [row[0] for row in c.fetchall()]
+        target_ids = db_target_ids(c)
         targets_info = _get_targets_config()
 
         # Config-declared targets come first and are always addressable, even

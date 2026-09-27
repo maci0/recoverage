@@ -74,6 +74,20 @@ class TestExportCommand:
         for row in data_rows:
             assert row.count("|") == expected, f"ragged Markdown row: {row}"
 
+    def test_export_md_table_columns_line_up(self) -> None:
+        """Header, separator, and body rows must carry the same cell count.
+
+        The md export once emitted 8 header cells, a 9-cell separator, and 11
+        body values (Exact/Reloc/Near duplicated), so no renderer could line the
+        table up.
+        """
+        result = runner.invoke(app, ["export", "--format", "md"])
+        assert result.exit_code == 0
+        table_rows = [ln.strip() for ln in result.output.splitlines() if ln.strip().startswith("|")]
+        assert table_rows, "no markdown table rows in md export"
+        widths = {len(ln.strip("|").split("|")) for ln in table_rows}
+        assert len(widths) == 1, f"ragged markdown table: column counts {sorted(widths)}"
+
     def test_export_csv_roundtrip(self) -> None:
         """CSV output should parse back correctly with Python's csv module."""
         result = runner.invoke(app, ["export", "--format", "csv"])

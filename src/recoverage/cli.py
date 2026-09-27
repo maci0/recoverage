@@ -175,14 +175,9 @@ def _open_db_or_exit(*, missing_exit_code: int = 1) -> sqlite3.Connection:
 
 
 def _list_targets(conn: sqlite3.Connection) -> list[str]:
-    c = conn.cursor()
-    from recoverage.server import SCHEMA_TARGET
+    from recoverage.server import db_target_ids
 
-    c.execute(
-        "SELECT DISTINCT target FROM metadata WHERE target != ? ORDER BY target",
-        (SCHEMA_TARGET,),
-    )
-    return [row[0] for row in c.fetchall()]
+    return db_target_ids(conn.cursor())
 
 
 def _select_targets(conn: sqlite3.Connection, target: str | None) -> list[str]:
@@ -666,8 +661,12 @@ def export(
 
         for data in all_data:
             typer.echo(f"\n## {_md_safe(data['target'])}\n")
-            typer.echo("| Section | Size | Cells | Exact | Reloc | Match | Stub | Coverage |")
-            typer.echo("|---------|------|-------|-------|-------|-------|------|----------|")
+            # Same columns as the CSV export, minus the per-target key the
+            # "## <target>" heading above already carries.  Header,
+            # separator, and body must agree on the count or the table
+            # renders ragged.
+            typer.echo("| Section | Size | Cells | Exact | Reloc | Near | Stub | Coverage |")
+            typer.echo("|---------|------|-------|-------|-------|------|------|----------|")
             for sec_name, sec in sorted(data["sections"].items()):
                 typer.echo(
                     f"| {_md_safe(sec_name)}"
