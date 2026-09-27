@@ -13,10 +13,10 @@ Lightweight summary endpoint returning only coverage stats (percentages, byte co
 Paginated function listing with optional filters (`?status=&search=&sort=&limit=&offset=`).
 
 ### `GET /api/targets/<target>/diff/<va>`
-Return a structural diff between the compiled output and the original bytes for `MATCHING` and `STUB` functions. Wraps the existing `rebrew match --diff-only` logic. The frontend could render this inline instead of requiring the user to run CLI commands.
+Return a structural diff between the compiled output and the original bytes for `MATCHING` and `STUB` functions. Wraps the existing `rebrew match --diff-only` logic. The frontend could render this inline instead of requiring the user to run CLI commands. Tracked as **Diff View** in [DESIGN.md](DESIGN.md#future-ideas--todos), which is the canonical list.
 
 ### `GET /api/targets/<target>/xrefs/<va>`
-Cross-reference lookup — which functions call this VA, and which VAs does this function call. Requires building a call graph from the disassembly (Capstone) or from annotation metadata (`// CALLERS:`, `// CALLEES:`).
+Cross-reference lookup — which functions call this VA, and which VAs does this function call. Requires building a call graph from the disassembly (Capstone) or from annotation metadata (`// CALLERS:`, `// CALLEES:`). Tracked as **XREFs** in [DESIGN.md](DESIGN.md#future-ideas--todos), which is the canonical list.
 
 ### ~~`GET /api/targets/<target>/sections/<section>/bytes`~~ ✅ Implemented
 Raw byte slice endpoint with `?offset=N&size=M` params.

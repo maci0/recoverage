@@ -11,6 +11,7 @@ from wsgiref.util import setup_testing_defaults
 
 import pytest
 
+from recoverage.api import _clear_derived_caches
 from recoverage.webapp import app
 
 
@@ -25,6 +26,20 @@ def _clean_recovery_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     for name in [n for n in os.environ if n.startswith("RECOVERAGE_")]:
         monkeypatch.delenv(name)
+
+
+@pytest.fixture(autouse=True)
+def _clean_derived_caches() -> None:
+    """Drop every coverage.db-derived cache before each test.
+
+    Those caches are process globals keyed on nothing DB-specific, so a test
+    that re-points `_db_path` at its own fixture database (the Potato Mode
+    NULL-va cases do) leaves its rows behind for the next test: the resolved
+    target list memoized the fixture's single target, and the next test's
+    `/api/targets/<id>/...` came back 404 against a target the memo no longer
+    listed.  The suite only runs green when file order happens to hide it.
+    """
+    _clear_derived_caches()
 
 
 # -- Synthetic coverage.db -------------------------------------------------
