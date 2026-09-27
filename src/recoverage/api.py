@@ -1435,39 +1435,47 @@ def handle_api_functions_batch(target: str) -> bytes | Any:
 
         placeholders = ",".join("?" * len(unique_vas))
 
-        # SAFETY: placeholders is only "?,?,..." built from the length of the
-        # validated VA list; every value reaches the statement parameterized.
-        # Functions first (parity with GET /functions/<va>), then globals.
-        fn_by_va: dict[int, dict[str, Any]] = {}
-        c.execute(
-            f"SELECT {_fn_json_sql(c.connection)} FROM functions "
-            f"WHERE target = ? AND va IN ({placeholders})",
-            [target, *unique_vas],
-        )
-        for row in c.fetchall():
-            fn = json.loads(row[0])
-            fn_by_va[fn["va"]] = fn
-
-        if fn_by_va:
+        # Three statements over three tables make one answer, so they share one
+        # pinned read snapshot (see server.read_snapshot): Python's sqlite3
+        # opens a deferred transaction per statement, and a `rebrew build-db`
+        # committing between them attached a build's verify_results rows to the
+        # next build's function rows — a `last_verify` describing a size and a
+        # diff the function payload beside it does not carry.  Same contract as
+        # /data, /stats and the function list.
+        with _server.read_snapshot(c):
+            # SAFETY: placeholders is only "?,?,..." built from the length of the
+            # validated VA list; every value reaches the statement parameterized.
+            # Functions first (parity with GET /functions/<va>), then globals.
+            fn_by_va: dict[int, dict[str, Any]] = {}
             c.execute(
-                f"{_verify_select(c.connection)} FROM verify_results"
-                f" WHERE target = ? AND va IN ({placeholders})",
+                f"SELECT {_fn_json_sql(c.connection)} FROM functions "
+                f"WHERE target = ? AND va IN ({placeholders})",
                 [target, *unique_vas],
             )
-            for vr in c.fetchall():
-                fn = fn_by_va.get(vr["va"])
-                if fn is not None:
-                    fn["last_verify"] = _last_verify_payload(vr)
+            for row in c.fetchall():
+                fn = json.loads(row[0])
+                fn_by_va[fn["va"]] = fn
 
-        c.execute(
-            f"SELECT {_global_json_sql(c.connection)} FROM globals "
-            f"WHERE target = ? AND va IN ({placeholders})",
-            [target, *unique_vas],
-        )
-        globals_by_va: dict[int, dict[str, Any]] = {}
-        for row in c.fetchall():
-            gl = json.loads(row[0])
-            globals_by_va[gl["va"]] = gl
+            if fn_by_va:
+                c.execute(
+                    f"{_verify_select(c.connection)} FROM verify_results"
+                    f" WHERE target = ? AND va IN ({placeholders})",
+                    [target, *unique_vas],
+                )
+                for vr in c.fetchall():
+                    fn = fn_by_va.get(vr["va"])
+                    if fn is not None:
+                        fn["last_verify"] = _last_verify_payload(vr)
+
+            c.execute(
+                f"SELECT {_global_json_sql(c.connection)} FROM globals "
+                f"WHERE target = ? AND va IN ({placeholders})",
+                [target, *unique_vas],
+            )
+            globals_by_va: dict[int, dict[str, Any]] = {}
+            for row in c.fetchall():
+                gl = json.loads(row[0])
+                globals_by_va[gl["va"]] = gl
 
         for va in unique_vas:
             if va in fn_by_va:
@@ -1483,34 +1491,42 @@ def handle_api_function(target: str, va: str) -> bytes | Any:
     target = path_param(target)
     va = path_param(va)
     with _target_cursor(target) as c:
-        # One shared resolution order (server._lookup_by_va_or_name): VA
-        # candidates first, then the exact name for a name-form lookup.  The
-        # stripped spelling is used for both, so "?va=%20Foo" resolves the same
-        # way the value is spelled in the database.
-        value = va.strip()
+        # The resolution below is up to seven statements (VA candidates, exact
+        # name, folded name — for functions, then for globals) plus the
+        # verify_results read, so the whole answer is pinned to ONE read
+        # snapshot (see server.read_snapshot).  Unpinned, a `rebrew build-db`
+        # committing midway pairs one build's function row with the next
+        # build's `last_verify`, which reports a size and a diff for a payload
+        # that no longer carries them.
+        with _server.read_snapshot(c):
+            # One shared resolution order (server._lookup_by_va_or_name): VA
+            # candidates first, then the exact name for a name-form lookup.  The
+            # stripped spelling is used for both, so "?va=%20Foo" resolves the same
+            # way the value is spelled in the database.
+            value = va.strip()
 
-        # Functions win over globals (parity with the batch endpoint).
-        row = _server._lookup_by_va_or_name(
-            c, "functions", _fn_json_sql(c.connection), target, value
-        )
-        if row:
-            fn_json = json.loads(row[0])
-            # Attach the last `rebrew verify -o` record for this function.
-            c.execute(
-                f"{_verify_one_select(c.connection)} FROM verify_results "
-                f"WHERE target = ? AND va = ?",
-                (target, fn_json["va"]),
+            # Functions win over globals (parity with the batch endpoint).
+            row = _server._lookup_by_va_or_name(
+                c, "functions", _fn_json_sql(c.connection), target, value
             )
-            vr = c.fetchone()
-            if vr:
-                fn_json["last_verify"] = _last_verify_payload(vr)
-            return _json_ok(json.dumps(fn_json).encode("utf-8"), Cache_Control=CACHE_NO_STORE)
+            if row:
+                fn_json = json.loads(row[0])
+                # Attach the last `rebrew verify -o` record for this function.
+                c.execute(
+                    f"{_verify_one_select(c.connection)} FROM verify_results "
+                    f"WHERE target = ? AND va = ?",
+                    (target, fn_json["va"]),
+                )
+                vr = c.fetchone()
+                if vr:
+                    fn_json["last_verify"] = _last_verify_payload(vr)
+                return _json_ok(json.dumps(fn_json).encode("utf-8"), Cache_Control=CACHE_NO_STORE)
 
-        row = _server._lookup_by_va_or_name(
-            c, "globals", _global_json_sql(c.connection), target, value
-        )
-        if row:
-            return _json_ok(row[0].encode("utf-8"), Cache_Control=CACHE_NO_STORE)
+            row = _server._lookup_by_va_or_name(
+                c, "globals", _global_json_sql(c.connection), target, value
+            )
+            if row:
+                return _json_ok(row[0].encode("utf-8"), Cache_Control=CACHE_NO_STORE)
 
         return _json_err(
             404,

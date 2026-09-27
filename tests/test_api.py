@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import json
 import os
@@ -4343,3 +4344,108 @@ class TestSearchCaseFolding:
         assert status.startswith("200")
         assert b"Searching:" in body
         assert b"no matches" not in body
+
+
+class _TransactionProbe:
+    """Cursor proxy recording ``connection.in_transaction`` per statement.
+
+    The function lookup routes answer from several statements, and python's
+    sqlite3 opens a deferred transaction per statement, so "did this handler
+    pin one read snapshot" is invisible from the response.  This wraps the
+    handler's cursor and records the connection's transaction state as each
+    statement is issued, which is what ``server.read_snapshot`` turns True for.
+    """
+
+    def __init__(self, cursor: sqlite3.Cursor, seen: list[bool]) -> None:
+        self._cursor = cursor
+        self._seen = seen
+
+    @property
+    def connection(self) -> sqlite3.Connection:
+        return self._cursor.connection
+
+    def execute(self, sql: str, *args: Any) -> Any:
+        self._seen.append(self._cursor.connection.in_transaction)
+        return self._cursor.execute(sql, *args)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._cursor, name)
+
+
+def _first_function_va() -> int | None:
+    """Lowest VA of the first target's functions, or None when there are none."""
+    try:
+        conn = api._db()
+    except sqlite3.Error:
+        return None
+    try:
+        row = conn.execute(
+            "SELECT va FROM functions WHERE markerType IS NULL OR markerType NOT IN"
+            " ('GLOBAL', 'DATA', 'VTABLE', 'STRING') ORDER BY va LIMIT 1"
+        ).fetchone()
+    except sqlite3.Error:
+        return None
+    finally:
+        conn.close()
+    return row[0] if row else None
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+class TestLookupSnapshotsArePinned:
+    """The function lookup routes read several tables to build one answer.
+
+    ``/functions/<va>`` runs the VA candidates, the exact name and the folded
+    name for functions, then the same three for globals, then
+    ``verify_results`` for the winner; the batch POST runs three statements
+    over three tables.  A ``rebrew build-db`` committing between them pairs
+    one build's function row with the next build's ``last_verify``, which
+    reports a size and a diff for a payload that no longer carries them.
+    Both pin one read snapshot, the contract /data, /stats and the paginated
+    list already follow.
+    """
+
+    @staticmethod
+    def _probed_cursor(monkeypatch: Any, seen: list[bool]) -> Any:
+        real_cursor = api._target_cursor
+
+        @contextlib.contextmanager
+        def _probed(target: str) -> Any:
+            with real_cursor(target) as real:
+                yield _TransactionProbe(real, seen)
+
+        monkeypatch.setattr(api, "_target_cursor", _probed)
+
+    def test_single_lookup_runs_inside_one_transaction(self, monkeypatch: Any) -> None:
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        va = _first_function_va()
+        if va is None:
+            pytest.skip("No functions in DB")
+
+        seen: list[bool] = []
+        self._probed_cursor(monkeypatch, seen)
+        status, _headers, _body = wsgi_get(f"/api/targets/{target}/functions/{va}")
+        assert status.startswith("200")
+        assert seen, "the handler issued no statement through the probe"
+        assert all(seen), "a statement ran outside the pinned read transaction"
+
+    def test_batch_lookup_runs_inside_one_transaction(self, monkeypatch: Any) -> None:
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        va = _first_function_va()
+        if va is None:
+            pytest.skip("No functions in DB")
+
+        seen: list[bool] = []
+        self._probed_cursor(monkeypatch, seen)
+        status, headers, body = wsgi_post(
+            f"/api/targets/{target}/functions",
+            headers={"Content-Type": "application/json"},
+            body=json.dumps({"vas": [f"0x{va:x}"]}).encode(),
+        )
+        assert status.startswith("200")
+        assert json.loads(decode_body(body, headers)), "the batch lookup found nothing"
+        assert len(seen) >= 3, "the handler stopped issuing one statement per table"
+        assert all(seen), "a statement ran outside the pinned read transaction"

@@ -1409,21 +1409,25 @@ def _lookup_by_va_or_name(
     cannot disagree about what a value names.  *table* and *json_sql* are
     literals from the call sites; target and the value are parameterized.
 
-    The name is first compared byte for byte, which is what
-    ``idx_functions_name``/``idx_globals_name`` serve.  Only a miss falls
-    through to the folded comparison through :data:`FOLD_SQL`, the same NFC +
-    case fold every search uses: the exact spelling is a prefix of nothing
-    but itself, so a row the database spells one way is found by that index,
-    and the fold runs once, on the way a user spelled something else.  Byte
-    equality alone made a symbol the user could find through
-    /functions?search= unresolvable by name: the NFD spelling macOS puts on
-    the clipboard (``e`` + U+0301 COMBINING ACUTE) is a different byte string
-    from the NFC one rebrew stores, so the row the search highlighted 404'd
-    when it was opened.  Folding in SQL rather than in Python keeps the
-    stored name untouched, so a database predating this lookup needs no
-    migration.  The fallback cannot use the name index, so it scans the
-    target's rows; a VA-shaped value, which is what nearly every cell carries,
-    never reaches it.
+    The name is first compared byte for byte, then only a miss falls through to
+    the folded comparison through :data:`FOLD_SQL`, the same NFC + case fold
+    every search uses.  Byte equality alone made a symbol the user could find
+    through /functions?search= unresolvable by name: the NFD spelling macOS puts
+    on the clipboard (``e`` + U+0301 COMBINING ACUTE) is a different byte string
+    from the NFC one rebrew stores, so the row the search highlighted 404'd when
+    it was opened.  Folding in SQL rather than in Python keeps the stored name
+    untouched, so a database predating this lookup needs no migration.
+
+    Neither name arm is served by an index.  rebrew's ``build_db`` drops
+    ``idx_functions_name`` and ``idx_globals_name`` on every rebuild (a
+    b-tree cannot serve the leading-wildcard ``LIKE`` that is the only other
+    name predicate either table gets, so they were pure per-row write cost),
+    and the byte-equality arm here is a separate query shape it does not
+    cover.  Both name arms therefore scan the target's partition, which is
+    acceptable only because the VA arms run first and nearly every cell
+    carries a VA: a name-form lookup is a user click, not a request-rate
+    path.  Adding ``(target, name)`` to rebrew's build is what would make
+    them seeks, and it is rebrew's schema, not this reader's.
 
     SAFETY: the interpolated parts are the table name, the projection and the
     registered function name, all supplied by this module or the caller as

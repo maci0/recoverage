@@ -431,6 +431,23 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   DB-derived memos key on `_snapshot_db_mtime`, and the potato ones re-check
   the watermark before publishing, so a payload read through a pinned
   `read_snapshot` is never filed under a newer fingerprint.
+- One response, one read snapshot. Any handler that builds its answer from
+  more than one statement wraps them in `server.read_snapshot`, which `BEGIN`s
+  a deferred read transaction and rolls it back: python's sqlite3 opens a
+  transaction per statement, so an unpinned multi-statement read pairs one
+  build's rows with the next build's. The pinned call sites are
+  `server._section_stats` (`/stats`, `recoverage stats`), `api._build_data_raw`
+  (`/data`), the paginated function list (`total` beside the page it paginates),
+  the two function lookup routes (`/functions/<va>` and the batch POST, where
+  the resolution runs several statements before the `verify_results` read that
+  becomes `last_verify`), and the whole `potato.render_potato` render, the
+  widest window in the package. A new multi-statement reader either names
+  `read_snapshot` or explains why its statements cannot straddle a rebuild; a
+  WAL reader blocks no writer, so the pin is free. Pinned at
+  `tests/test_api.py` (`TestLookupSnapshotsArePinned`) and
+  `tests/test_potato.py` (`TestRenderIsPinnedToOneSnapshot`), which record
+  `connection.in_transaction` at every statement, so dropping the pin fails
+  rather than silently reopening the window.
 - HTML/CSS/JS in `assets/` — no build step, VanJS for reactivity
 - The cell-state vocabulary is owned by rebrew (`rebrew.build_db._KNOWN_CELL_STATES`)
   and must be covered on the rendering side: `potato.COLORS` + `LEGEND_ITEMS`,

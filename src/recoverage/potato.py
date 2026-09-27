@@ -57,6 +57,7 @@ from recoverage.server import (
     folded_like_clause,
     like_match,
     mtime_ns_to_utc,
+    read_snapshot,
     request,
     resolve_targets,
     response,
@@ -1111,18 +1112,28 @@ def render_potato(parsed_url: ParseResult) -> str:
 
     with contextlib.closing(conn):
         c = conn.cursor()
-        return _render_potato_inner(
-            c,
-            target,
-            section,
-            active_filters=active_filters,
-            idx_str=idx_str,
-            search_query=search_query,
-            view=view,
-            sort_key=sort_key,
-            status_filter=status_filter,
-            page_str=page_str,
-        )
+        # One pinned read snapshot for the whole render.  A Potato page reads
+        # metadata, sections, cells, section_cell_stats, functions, globals and
+        # (for the detail panels) verify_results, in that order, and takes long
+        # enough doing it — the grid is the most expensive render in the
+        # package — that a `rebrew build-db` committing midway is a real
+        # window.  Unpinned, the page pairs one build's section rows with the
+        # next build's cells, which is a grid whose coverage legend disagrees
+        # with its own bytes.  Same contract as /stats, /data and the function
+        # list; a WAL reader blocks no writer, so the pin costs nothing.
+        with read_snapshot(c):
+            return _render_potato_inner(
+                c,
+                target,
+                section,
+                active_filters=active_filters,
+                idx_str=idx_str,
+                search_query=search_query,
+                view=view,
+                sort_key=sort_key,
+                status_filter=status_filter,
+                page_str=page_str,
+            )
 
 
 # ── HTTP surface ───────────────────────────────────────────────────

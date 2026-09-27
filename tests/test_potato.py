@@ -2401,3 +2401,62 @@ class TestSectionAccentsMatchSpa:
         }
         # ACCENT_COLOR is the phosphor accent, not a pane accent.
         assert declared - {"ACCENT_COLOR"} == pane_accents
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+class TestRenderIsPinnedToOneSnapshot:
+    """A Potato page is built from many statements across many tables.
+
+    ``_render_potato_inner`` reads metadata, sections, cells,
+    section_cell_stats, functions, globals and (for the detail panels)
+    verify_results, and the grid is the most expensive render in the package,
+    so a ``rebrew build-db`` committing midway is a real window.  Unpinned the
+    page pairs one build's section rows with the next build's cells, which is
+    a grid whose coverage legend disagrees with its own bytes.  The render runs
+    inside one pinned read snapshot, the contract /data, /stats and the
+    function list already follow.
+    """
+
+    def test_every_render_statement_is_inside_the_pinned_transaction(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from recoverage import potato
+
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+
+        seen: list[bool] = []
+        real_open_db = potato._open_db
+
+        class _ProbedConnection:
+            def __init__(self, conn: sqlite3.Connection) -> None:
+                self._conn = conn
+
+            def cursor(self) -> sqlite3.Cursor:
+                return _ProbedCursor(self._conn.cursor(), seen)
+
+            def __getattr__(self, name: str) -> object:
+                return getattr(self._conn, name)
+
+        class _ProbedCursor:
+            def __init__(self, cursor: sqlite3.Cursor, seen: list[bool]) -> None:
+                self._cursor = cursor
+                self._seen = seen
+
+            @property
+            def connection(self) -> sqlite3.Connection:
+                return self._cursor.connection
+
+            def execute(self, sql: str, *args: object) -> sqlite3.Cursor:
+                self._seen.append(self._cursor.connection.in_transaction)
+                return self._cursor.execute(sql, *args)
+
+            def __getattr__(self, name: str) -> object:
+                return getattr(self._cursor, name)
+
+        monkeypatch.setattr(potato, "_open_db", lambda p: _ProbedConnection(real_open_db(p)))
+        html = render_potato_url(f"/potato?target={target}&section=.text")
+        assert html
+        assert len(seen) > 1, "the render stopped issuing more than one statement"
+        assert all(seen), "a render statement ran outside the pinned read transaction"
