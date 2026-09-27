@@ -38,6 +38,21 @@ def _plain(text: str) -> str:
     return _ANSI_RE.sub("", text)
 
 
+def assert_regen_accepted(result: tuple[str, dict[str, str], bytes]) -> None:
+    """Assert an accepted /api/regen POST really reached the stubbed
+    ``_do_regen``.
+
+    A bare ``not status.startswith("403")`` also passes on a 404, a 405, a
+    500 from an unrelated regression, or the 429 cooldown another test left
+    behind, so it cannot tell "the guard let it through" from "the endpoint
+    broke".  Every caller stubs ``_do_regen`` to answer ``{"ok": true}``, so
+    that payload is the accepted response.
+    """
+    status, headers, body = result
+    assert status.startswith("200"), status
+    assert json.loads(decode_body(body, headers)) == {"ok": True}
+
+
 # ── Regen origin validation (actual endpoint) ─────────────────────
 
 
@@ -51,6 +66,10 @@ class TestRegenOriginValidation:
         import recoverage.api as api
 
         monkeypatch.setattr(api, "_do_regen", lambda remote: api._json_ok({"ok": True}))
+        # The cooldown timestamp is a module global stamped by every accepted
+        # POST, so without this the second accepted test in the file answers
+        # 429 and the accepted-path assertion below fails on the shared state.
+        monkeypatch.setattr(api, "_regen_last_attempt", 0.0)
 
     def test_remote_addr_external_rejected(self) -> None:
         """Non-localhost REMOTE_ADDR should be rejected with 403."""
@@ -60,10 +79,8 @@ class TestRegenOriginValidation:
         assert data["error"] == "Forbidden: localhost only"
 
     def test_remote_addr_localhost_accepted(self) -> None:
-        """Localhost REMOTE_ADDR should pass the remote check (may fail later for other reasons)."""
-        status, _, _ = wsgi_request("POST", "/api/regen", remote_addr="127.0.0.1")
-        # Should NOT be 403 for remote_addr — may be 500 if rebrew not available, that's fine
-        assert not status.startswith("403")
+        """Localhost REMOTE_ADDR passes the remote check and runs the regen."""
+        assert_regen_accepted(wsgi_request("POST", "/api/regen", remote_addr="127.0.0.1"))
 
     def test_cross_origin_rejected(self) -> None:
         """Cross-origin request should be rejected with 403."""
@@ -78,14 +95,15 @@ class TestRegenOriginValidation:
         assert data["error"] == "Forbidden: cross-origin"
 
     def test_localhost_origin_accepted(self) -> None:
-        """localhost Origin should pass origin check."""
-        status, _, _ = wsgi_request(
-            "POST",
-            "/api/regen",
-            headers={"Origin": "http://localhost:8001"},
-            remote_addr="127.0.0.1",
+        """localhost Origin passes the origin check and runs the regen."""
+        assert_regen_accepted(
+            wsgi_request(
+                "POST",
+                "/api/regen",
+                headers={"Origin": "http://localhost:8001"},
+                remote_addr="127.0.0.1",
+            )
         )
-        assert not status.startswith("403")
 
     def test_evil_subdomain_rejected(self) -> None:
         """Origin like 127.0.0.1.evil.com must be rejected."""
@@ -117,18 +135,18 @@ class TestRegenOriginValidation:
     @pytest.mark.parametrize("site", ["same-origin", "same-site", "none"])
     def test_same_site_fetch_metadata_accepted(self, site: str) -> None:
         """Non-cross-site Sec-Fetch-Site values pass (SPA reload button)."""
-        status, _, _ = wsgi_request(
-            "POST",
-            "/api/regen",
-            headers={"Sec-Fetch-Site": site},
-            remote_addr="127.0.0.1",
+        assert_regen_accepted(
+            wsgi_request(
+                "POST",
+                "/api/regen",
+                headers={"Sec-Fetch-Site": site},
+                remote_addr="127.0.0.1",
+            )
         )
-        assert not status.startswith("403")
 
     def test_ipv6_loopback_remote_addr(self) -> None:
-        """::1 REMOTE_ADDR should be accepted."""
-        status, _, _ = wsgi_request("POST", "/api/regen", remote_addr="::1")
-        assert not status.startswith("403")
+        """::1 REMOTE_ADDR is accepted and runs the regen."""
+        assert_regen_accepted(wsgi_request("POST", "/api/regen", remote_addr="::1"))
 
     def test_ipv4_mapped_loopback_remote_addr_accepted(self) -> None:
         """::ffff:127.0.0.1 REMOTE_ADDR must pass the localhost-only guard.
@@ -137,8 +155,7 @@ class TestRegenOriginValidation:
         v6 socket) report IPv4 peers through the mapped spelling; a plain
         string comparison would 403 the operator's own browser on reload.
         """
-        status, _, _ = wsgi_request("POST", "/api/regen", remote_addr="::ffff:127.0.0.1")
-        assert not status.startswith("403")
+        assert_regen_accepted(wsgi_request("POST", "/api/regen", remote_addr="::ffff:127.0.0.1"))
 
     @pytest.mark.parametrize(
         "remote_addr",
@@ -657,8 +674,7 @@ class TestRegenRateLimit:
         api._regen_last_attempt = 0.0
         # First call passes the cooldown gate (the patched _do_regen answers
         # 200 — the timestamp is stamped before it runs).
-        status1, _, _ = wsgi_request("POST", "/api/regen", remote_addr="127.0.0.1")
-        assert not status1.startswith("429")
+        assert_regen_accepted(wsgi_request("POST", "/api/regen", remote_addr="127.0.0.1"))
 
         # Immediate second call within the cooldown window → 429.
         status2, headers2, body2 = wsgi_request("POST", "/api/regen", remote_addr="127.0.0.1")
@@ -679,8 +695,7 @@ class TestRegenRateLimit:
             "_regen_last_attempt",
             api.time.monotonic() - api._REGEN_COOLDOWN_SECONDS - 1,
         )
-        status, _, _ = wsgi_request("POST", "/api/regen", remote_addr="127.0.0.1")
-        assert not status.startswith("429")
+        assert_regen_accepted(wsgi_request("POST", "/api/regen", remote_addr="127.0.0.1"))
 
 
 class TestRegenFailureMapping:
@@ -743,8 +758,14 @@ class TestServeBindFlag:
         assert "127.0.0.1" in help_text
 
 
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
 class TestLastVerify:
-    """/functions/<va> attaches the last `rebrew verify -o` record."""
+    """/functions/<va> attaches the last `rebrew verify -o` record.
+
+    Guarded like every other DB-backed class here: the assertions name
+    synthetic-fixture addresses (0x10001000), so inside a real rebrew
+    workspace they would be checked against unrelated project data.
+    """
 
     def test_function_detail_includes_last_verify(self) -> None:
         target = get_first_target()
@@ -1838,16 +1859,22 @@ def _make_schema_gate_db(tmp_path: Path, cells: list[tuple[str, int, int, str]] 
 def _point_app_at_db(monkeypatch: pytest.MonkeyPatch, db: Any) -> Any:
     """Point the app at a synthetic DB and return the mock request."""
     import recoverage.api as api
+    import recoverage.server as server_mod
+
+    # The request path reaches the database through server._db(), whose body
+    # resolves _open_db in server's module globals, so that is the binding a
+    # monkeypatch has to replace; patching api._open_db is inert. The wrapper
+    # delegates to the real opener so the connection still takes the
+    # coverage_db_lock a production read holds.
+    real_open_db = server_mod._open_db
 
     def _open_like(p: Any) -> Any:
-        conn = sqlite3.connect(sqlite_ro_uri(p), uri=True)
-        conn.row_factory = sqlite3.Row
-        return conn
+        return real_open_db(p)
 
     req = type("R", (), {"headers": {}, "query": {}})()
     monkeypatch.setattr(api, "_db_path", lambda: db)
     monkeypatch.setattr("recoverage.server._db_path", lambda: db)
-    monkeypatch.setattr(api, "_open_db", _open_like)
+    monkeypatch.setattr(server_mod, "_open_db", _open_like)
     monkeypatch.setattr(api, "_require_target", lambda c, t: None)
     monkeypatch.setattr(api, "request", req)
     return req
@@ -1880,10 +1907,17 @@ class TestDataPayloadMemo:
         resp1 = api.handle_api_data("GAME")
         assert isinstance(resp1, bytes)
         assert len(api._DATA_CACHE) == 1
+        key = next(iter(api._DATA_CACHE))
+        entry_before = dict(api._DATA_CACHE[key])
 
-        # Second request: cache hit (payload identical, no query re-run).
+        # Second request: a memo hit serves the stored body verbatim, so the
+        # bytes must be identical and the entry must survive the call. Checking
+        # the key the first request actually wrote proves the hit came from
+        # the memo rather than from a rebuild under a fresh key.
         resp2 = api.handle_api_data("GAME")
-        assert isinstance(resp2, bytes)
+        assert resp2 == resp1
+        assert api._DATA_CACHE.get(key) == entry_before
+        assert set(api._DATA_CACHE) == {key}
 
         # Rebuild invalidation path.
         api._clear_data_cache()
@@ -2082,19 +2116,23 @@ class TestDataPayloadMemo:
         t = threading.Thread(target=follower)
         t.start()
         try:
-            t.join(timeout=1.0)
-            assert t.is_alive(), "follower did not wait for the in-flight build"
-            assert open_calls == [], "follower opened the DB despite an in-flight build"
-            api._DATA_CACHE[key] = {"raw": b'{"memoized": true}'}
+            try:
+                t.join(timeout=1.0)
+                assert t.is_alive(), "follower did not wait for the in-flight build"
+                assert open_calls == [], "follower opened the DB despite an in-flight build"
+                api._DATA_CACHE[key] = {"raw": b'{"memoized": true}'}
+            finally:
+                built.set()
+            t.join(timeout=15)
+            assert not t.is_alive(), "follower never woke"
+            assert outcome == [b'{"memoized": true}']
+            assert open_calls == []
         finally:
-            built.set()
-        t.join(timeout=15)
-        assert not t.is_alive(), "follower never woke"
-        assert outcome == [b'{"memoized": true}']
-        assert open_calls == []
-        # The follower owns nothing: the manually registered event is left
-        # for its owner, so pop it the way an owner's finally would.
-        api._DATA_CACHE_BUILDING.pop(key, None)
+            # Both maps are process-global: drop the hand-inserted entry and
+            # the manually registered event the way an owner's finally would,
+            # so neither leaks into a later test as a real payload.
+            api._DATA_CACHE.pop(key, None)
+            api._DATA_CACHE_BUILDING.pop(key, None)
 
     def test_follower_survives_leader_404(self, tmp_path: Any, monkeypatch: Any) -> None:
         """A follower parked on an in-flight build whose owner short-circuits
@@ -2338,6 +2376,11 @@ class TestMaterializedCellsCache:
         """Fill section_cells_json the way build_db does, via the shared codec."""
         conn = sqlite3.connect(db)
         c = conn.cursor()
+        # The copy of the fixture DB may already carry the table (a genuine
+        # rebrew build-db output does), and a bare CREATE TABLE would abort
+        # on it. Drop first so the test owns the exact schema and rows it
+        # compares against, whatever the source DB held.
+        c.execute(f"DROP TABLE IF EXISTS {SECTION_CELLS_TABLE}")
         c.execute(
             f"CREATE TABLE {SECTION_CELLS_TABLE} ("
             " target TEXT NOT NULL, section_name TEXT NOT NULL,"
@@ -2390,6 +2433,10 @@ class TestMaterializedCellsCache:
 
         conn = sqlite3.connect(db)
         c = conn.cursor()
+        # Drop first: a source DB that already has the table (a real
+        # build-db output does) would make the bare CREATE fail, and the
+        # legacy-codec table must replace the current-codec one anyway.
+        c.execute(f"DROP TABLE IF EXISTS {SECTION_CELLS_TABLE}")
         c.execute(
             f"CREATE TABLE {SECTION_CELLS_TABLE} ("
             " target TEXT NOT NULL, section_name TEXT NOT NULL,"
@@ -2684,22 +2731,34 @@ class TestSectionStatsMemo:
 
     def test_memo_hit_skips_the_queries(self, tmp_path: Any, monkeypatch: Any) -> None:
         import recoverage.api as api
+        import recoverage.server as server_mod
 
         db = self._make_db(tmp_path, [(".text", 0, 16, "exact"), (".text", 16, 32, "none")])
         self._patch(tmp_path, monkeypatch, db)
 
+        # Count connections at the binding the request path consults:
+        # server._db() resolves _open_db in server's module globals, so
+        # counting api._open_db would never see a call. The real opener is
+        # kept underneath, so the counter sees production connections only.
+        real_open_db = server_mod._open_db
+        opens: list[Any] = []
+
+        def counting_open(p: Any) -> Any:
+            opens.append(p)
+            return real_open_db(p)
+
+        monkeypatch.setattr(server_mod, "_open_db", counting_open)
+
         first = api.handle_api_stats("GAME")
         assert isinstance(first, bytes)
-        assert len(api._STATS_CACHE) == 1
+        assert opens, "the miss did not open the database; the counter is not wired"
+        opens_after_miss = len(opens)
 
-        # A second request must not touch the database at all: an _open_db
-        # whose connections explode proves the answer came from the memo.
-        def _boom_open(p: Any) -> Any:
-            raise AssertionError("memo hit re-opened the database")
-
-        monkeypatch.setattr(api, "_open_db", _boom_open)
+        # The second request must not touch the database at all: the open
+        # count is the proof, since the memo answer required no connection.
         second = api.handle_api_stats("GAME")
         assert second == first
+        assert len(opens) == opens_after_miss, "memo hit re-opened the database"
 
         api._clear_stats_cache()
         assert len(api._STATS_CACHE) == 0

@@ -530,8 +530,10 @@ def test_multi_function_cell(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     import recoverage.server as _server
 
     target = get_first_target()
+    synthetic = False
     idx = _find_cell_idx(target, ".text", lambda funcs: len(funcs) > 1)
     if idx is None:
+        synthetic = True
         db = tmp_path / "coverage.db"
         conn = sqlite3.connect(db)
         conn.execute(
@@ -600,7 +602,15 @@ def test_multi_function_cell(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _server.clear_target_cache()
         target, idx = t, 0
     html = render_potato_url(f"/potato?target={target}&section=.text&idx={idx}")
-    assert "Block Details" in html
+    # A cell carrying two function names is not an empty cell, so the panel
+    # must not take the "No functions in this block." branch.
+    assert "No functions in this block." not in html
+    if synthetic:
+        # The synthetic DB seeds no functions/globals rows, so the cell's
+        # primary function (_a, first of the two) lands in the Unknown branch.
+        assert "Unknown: _a" in html
+    else:
+        assert "Function Details" in html
 
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
@@ -621,9 +631,16 @@ def test_function_list_sort():
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
 def test_function_list_status_filter():
+    # The synthetic DB seeds _func_a EXACT, _func_b RELOC, _func_c STUB.  An
+    # ignored ?status= would still list all three, so the filtered-out names
+    # have to be absent for the filter to be proven.
     target = get_first_target()
-    html = render_potato_url(f"/potato?target={target}&section=.text&view=functions&status=stub")
-    assert ("STUB" in html) or ("No functions found." in html)
+    html = render_potato_url(f"/potato?target={target}&section=.text&view=functions&status=STUB")
+    assert "_func_c" in html
+    assert "_func_a" not in html
+    assert "_func_b" not in html
+    assert "No functions found." not in html
+    assert "(1 results)" in html
 
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
@@ -661,6 +678,11 @@ def test_clickable_asm_addresses(monkeypatch: pytest.MonkeyPatch) -> None:
     idx = _find_cell_idx(target, ".text", lambda funcs: len(funcs) > 0)
     if idx is None:
         pytest.skip("No .text function cell found")
+    # Production renders the ASM block under `if HAS_CAPSTONE`, so a plain
+    # HAS_DB gate fails on installs without the optional capstone extra.  Faking
+    # the probe (as tests/test_api.py does for the /asm endpoint) keeps the
+    # assertion running on every install shape.
+    monkeypatch.setattr(_potato, "HAS_CAPSTONE", True)
     monkeypatch.setattr(
         _potato, "get_disassembly", lambda *a, **k: "0x10001000  mov eax, 0x10001010"
     )
@@ -728,13 +750,14 @@ class TestDbUpdatedLabel:
 
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
-def test_th_scope_row():
+def test_detail_panel_label_value_rows():
+    # The detail panel renders label/value rows as <td> pairs, not <th>:
+    # potato.py's panel template has no header cells at all.
     target = get_first_target()
     idx = _find_cell_idx(target, ".text", lambda funcs: len(funcs) > 0)
     if idx is None:
         pytest.skip("No function cell found")
     html = render_potato_url(f"/potato?target={target}&section=.text&idx={idx}")
-    # The detail panel renders label/value rows as <td> pairs (Range:, State:).
     assert "<b>Range:</b>" in html
     assert "<b>State:</b>" in html
 
@@ -1242,7 +1265,11 @@ class TestSearchLimit:
             assert len(results) == 0
             # Search with a single common letter — should be bounded
             results = _search_functions(c, target, "a")
-            assert len(results) <= 1000  # 500 from functions + 500 from globals
+            # The 1000-entry bound (500 functions + 500 globals) is pinned by
+            # the cap tests below against >500-row fixtures; against this
+            # 3-function DB the only thing left to show is that a non-empty
+            # query matches and stays inside the bound.
+            assert 0 < len(results) <= 1000
         finally:
             conn.close()
 
@@ -1256,6 +1283,37 @@ class TestSearchLimit:
         result = _search_functions(c, "TEST", "")
         assert result == set()
         conn.close()
+
+    def test_functions_cap_is_deterministic(self):
+        """The functions half of the 1000-entry bound: with >500 matches the
+        cap must keep exactly the first 500 by ORDER BY name, vaStart.  A cap
+        without the ORDER BY follows scan order and keeps the wrong half."""
+        from recoverage.potato import _search_functions
+
+        conn = sqlite3.connect(":memory:")
+        c = conn.cursor()
+        c.execute(
+            "CREATE TABLE functions (target TEXT, name TEXT, vaStart TEXT DEFAULT '',"
+            " symbol TEXT DEFAULT '')"
+        )
+        c.execute(
+            "CREATE TABLE globals (target TEXT, va INTEGER, name TEXT,"
+            " decl TEXT DEFAULT '', files TEXT DEFAULT '[]',"
+            " module TEXT DEFAULT '', size INTEGER DEFAULT 4)"
+        )
+        names = [f"func_{i:04d}" for i in range(600)]
+        # Insert in REVERSE name order, with no vaStart, so the result is the
+        # capped name set alone (each matching row contributes one entry).
+        c.executemany(
+            "INSERT INTO functions (target, name) VALUES ('T', ?)",
+            [(n,) for n in reversed(names)],
+        )
+        try:
+            result = _search_functions(c, "T", "func_")
+            assert len(result) == 500
+            assert result == set(sorted(names)[:500])
+        finally:
+            conn.close()
 
     def test_globals_cap_is_deterministic(self):
         """With >500 matches, which globals enter the dimming set must be

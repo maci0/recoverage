@@ -28,6 +28,24 @@ from recoverage.regen import run_regen
 POSIX = os.name == "posix"
 
 
+def _own_zombie_pids() -> set[int]:
+    """PIDs of this process's children currently in the zombie state."""
+    zombies: set[int] = set()
+    me = os.getpid()
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            stat = (entry / "stat").read_text()
+            fields = stat[stat.rindex(")") + 1 :].split()
+            state, ppid = fields[0], int(fields[1])
+        except (OSError, ValueError, IndexError):
+            continue
+        if ppid == me and state == "Z":
+            zombies.add(int(entry.name))
+    return zombies
+
+
 def _install_fake_rebrew(
     monkeypatch: pytest.MonkeyPatch,
     *,
@@ -169,24 +187,27 @@ class TestOpenAndReap:
         wait, then kill + reap (which also prevents the zombie)."""
         import recoverage.cli as cli
 
+        # The wait bound the opener actually sees is the module global read at
+        # call time, so shortening it here is what shrinks the wall clock.
         monkeypatch.setattr(cli, "_BROWSER_OPEN_TIMEOUT", 0.3)
         start = time.monotonic()
         _open_and_reap("http://127.0.0.1:8001", ["sleep", "60"])
         elapsed = time.monotonic() - start
+        assert _BROWSER_OPEN_TIMEOUT > 0, "production opener wait must stay bounded"
+        assert elapsed >= 0.3, f"waited {elapsed:.2f}s: the bound was not applied"
         assert elapsed < 5, f"hung opener blocked {elapsed:.1f}s (unbounded wait)"
-        assert _BROWSER_OPEN_TIMEOUT == 10  # module default untouched for prod
 
-    @pytest.mark.skipif(not POSIX, reason="uses POSIX true")
+    @pytest.mark.skipif(not POSIX, reason="uses POSIX /proc and true")
     def test_exiting_child_is_reaped_no_zombie(self) -> None:
         """The fire-and-forget opener must be waited on: setsid alone leaves
-        zombies behind in a long-lived server."""
+        zombies behind in a long-lived server.
+
+        Scans this process's own children instead of ``waitpid(-1)``: a
+        bare waitpid would reap (and thereby hide) a child left by another
+        test, and would report that foreign child as this test's leak.
+        """
         _open_and_reap("http://127.0.0.1:8001", ["true"])
-        try:
-            pid, status = os.waitpid(-1, os.WNOHANG)
-        except ChildProcessError:
-            return  # no children at all — nothing leaked
-        assert pid == 0, "an opener child was left unreaped (zombie)"
-        del status
+        assert _own_zombie_pids() == set(), "an opener child was left unreaped (zombie)"
 
 
 class TestClientConnectionDeadline:
@@ -201,26 +222,32 @@ class TestClientConnectionDeadline:
     socket.timeout so the thread exits and the connection is released.
     """
 
-    def test_silent_peer_releases_handler_thread(self) -> None:
+    def test_production_handler_carries_a_finite_deadline(self) -> None:
+        """wsgiref's stock handler has ``timeout = None`` (unbounded).  The
+        deadline is the whole guarantee, so pin it on the class serve() runs.
+        """
+        import recoverage.cli as cli
+        from recoverage.api import _SSE_HEARTBEAT_SECONDS
+
+        timeout = cli._QuietTimeoutRequestHandler.timeout
+        assert isinstance(timeout, (int, float)), "no socket deadline on the handler"
+        assert 0 < timeout <= _SSE_HEARTBEAT_SECONDS * 10, (
+            f"deadline {timeout}s must be bounded and well clear of the SSE heartbeat"
+        )
+
+    def test_silent_peer_releases_handler_thread(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import socket
         import threading
-        from wsgiref.simple_server import WSGIRequestHandler
 
-        from recoverage.cli import _ThreadingWSGIServer
+        import recoverage.cli as cli
 
-        class _ShortDeadlineHandler(WSGIRequestHandler):
-            timeout = 0.5
+        # Drive the PRODUCTION handler, shortened only in the deadline the
+        # test would otherwise have to wait 120 s for.  A private stub
+        # handler would pass here even with the deadline removed from serve.
+        monkeypatch.setattr(cli._QuietTimeoutRequestHandler, "timeout", 0.5)
+        monkeypatch.setattr(cli._QuietTimeoutRequestHandler, "log_message", lambda *a, **k: None)
 
-            def address_string(self) -> str:
-                return self.client_address[0]
-
-            def log_request(self, code: int | str = "-", size: int | str = "-") -> None:
-                pass
-
-            def log_message(self, *args: Any, **kwargs: Any) -> None:
-                pass  # keep "Request timed out" noise out of the test output
-
-        server = _ThreadingWSGIServer(("127.0.0.1", 0), _ShortDeadlineHandler)
+        server = cli._ThreadingWSGIServer(("127.0.0.1", 0), cli._QuietTimeoutRequestHandler)
         # block_on_close=False keeps a regressed (wedged) handler from turning
         # teardown into a hang; daemon threads die with the test process.
         server.block_on_close = False

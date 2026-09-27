@@ -252,8 +252,20 @@ class TestCheckCommand:
         assert result.exit_code == 2
 
     def test_check_nonexistent_section(self) -> None:
-        result = runner.invoke(app, ["check", "--min-coverage", "50", "--section", "NONEXISTENT"])
+        """A --section matching nothing is an error, not a gate failure: exit 1
+        alone would also accept a genuine coverage failure, so the message and
+        the empty verdict list are what this test pins."""
+        result = runner.invoke(
+            app, ["check", "--min-coverage", "50", "--section", "NONEXISTENT", "--json"]
+        )
         assert result.exit_code == 1
+        lines = result.output.splitlines()
+        assert any("has no section NONEXISTENT" in line for line in lines)
+        # The per-target SKIP note shares the stream with the JSON error object,
+        # so the payload is the last line, not the whole output.
+        payload = json.loads(lines[-1])
+        assert payload["error"] == "no sections matched — nothing was checked"
+        assert "results" not in payload
 
     def test_check_skips_untracked_sections(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -362,6 +374,7 @@ class TestExportCsvFormulaInjection:
         assert rows[1][sec_col] == ".text"
 
 
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
 class TestCheckFailureExit:
     def test_below_threshold_exits_1(self) -> None:
         """A tracked section under the threshold must exit 1 (the CI gate's
@@ -376,6 +389,7 @@ class TestCheckFailureExit:
         assert any(r["status"] == "FAIL" for r in payload["results"])
 
 
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
 class TestStatsJson:
     def test_stats_json_output(self) -> None:
         """stats --json must emit a parseable list of per-target stat dicts."""

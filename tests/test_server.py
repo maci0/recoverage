@@ -714,17 +714,28 @@ class TestTokenAuthEndpoint:
 class TestAuthFailureLimiter:
     """Unit behavior of the failure window."""
 
+    # Far above what the in-process burst below needs, low enough that a wedged
+    # worker fails the test instead of stalling the run.
+    _WORKER_TIMEOUT_SECONDS = 30.0
+
     def test_success_clears_failures(self, monkeypatch: Any) -> None:
+        """A request carrying the right token empties a FULL window.  Only
+        _require_auth calls _clear_auth_failures, so the assertion is made
+        after a real WSGI request: calling the helper here instead would stay
+        green with the production call deleted."""
+        from conftest import wsgi_get
+
         import recoverage.server as srv
 
         monkeypatch.setattr(srv, "_AUTH_TOKEN", "tok")
         try:
-            for _ in range(srv._AUTH_FAIL_MAX - 1):
+            for _ in range(srv._AUTH_FAIL_MAX):
                 srv._auth_throttle(time.monotonic(), reserve_slot=True)
-            assert not srv._auth_throttle(time.monotonic(), reserve_slot=False)
-            # A successful match wipes the slate.
-            assert srv._auth_token_matches("tok")
-            srv._clear_auth_failures()
+            # The window is full, so the next failure is a 429 ...
+            assert srv._auth_throttle(time.monotonic(), reserve_slot=False)
+            status, _, _ = wsgi_get("/api/health?token=tok")
+            assert status.startswith("200")
+            # ... and the verified request wiped the slate.
             assert not srv._auth_throttle(time.monotonic(), reserve_slot=False)
         finally:
             srv._clear_auth_failures()
@@ -744,30 +755,40 @@ class TestAuthFailureLimiter:
         """A burst of simultaneous bad-token requests must not slip past the
         cap: the cap check and the slot append share one critical section
         (_auth_throttle), so exactly _AUTH_FAIL_MAX reservations succeed no
-        matter how many threads race the window."""
+        matter how many threads race the window.
+
+        A wedged worker must FAIL the test, never hang the run: the barrier
+        bounds how long the workers wait for one another and the join bounds
+        how long this test waits for them.  Each worker flags its own Event
+        after recording, so a worker that died without recording is caught
+        too (Thread.ident cannot detect that: start() sets it permanently).
+        """
         import recoverage.server as srv
 
         workers = srv._AUTH_FAIL_MAX * 6
         barrier = threading.Barrier(workers)
         reserved: list[bool] = []
         lock = threading.Lock()
+        done = [threading.Event() for _ in range(workers)]
 
-        def worker() -> None:
-            barrier.wait()
+        def worker(finished: threading.Event) -> None:
+            barrier.wait(timeout=self._WORKER_TIMEOUT_SECONDS)
             got = srv._auth_throttle(time.monotonic(), reserve_slot=True)
             with lock:
                 reserved.append(got)
+            finished.set()
 
-        threads = [threading.Thread(target=worker) for _ in range(workers)]
+        threads = [threading.Thread(target=worker, args=(ev,)) for ev in done]
         try:
             for t in threads:
                 t.start()
             for t in threads:
-                t.join(timeout=30)
+                t.join(timeout=self._WORKER_TIMEOUT_SECONDS)
         finally:
             srv._clear_auth_failures()
 
-        assert all(t.ident is not None for t in threads)
+        assert [t for t in threads if t.is_alive()] == [], "worker thread wedged"
+        assert all(ev.is_set() for ev in done)
         assert len(reserved) == workers
         assert reserved.count(False) == srv._AUTH_FAIL_MAX
         assert reserved.count(True) == workers - srv._AUTH_FAIL_MAX
