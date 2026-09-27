@@ -65,7 +65,8 @@ module ships in the published package. See *Breaking*.
   compress at maximum effort instead of the per-request settings. The shell
   drops from 17,568 to 14,537 bytes, which puts it back inside the initial
   congestion window (14,600) and saves a second round trip before the first
-  paint on any zstd-capable browser; `hljs.min.js` drops 45,575 to 37,714 and
+  paint on any zstd-capable browser (and to 14,090 once the metadata grid below
+  moved out of it); `hljs.min.js` drops 45,575 to 37,714 and
   `detail.js` 10,468 to 8,583. The shell also gained a strong `ETag` and
   answers `If-None-Match` with a 304, so a repeat visit re-downloads none of
   it: it was the one response still served `no-store`, so every reload pulled
@@ -108,20 +109,6 @@ module ships in the published package. See *Breaking*.
   `tools/flatten-rikalabs-strict.py` refuses to regenerate the preset if a
   bump changes that license.
 
-- **`make shell-lint` and `make yaml-lint` check the tree's non-Python
-  sources.** The `tools/*.sh` scripts ran under `bash` with no shellcheck and
-  the `.github/` definitions were read by no linter at all; both now run in
-  the `lint` CI job, alongside the ruff targets in `make all`. The yamllint
-  settings live in `.yamllint.yaml`. ruff additionally selects the `PTH`
-  and `RUF` groups, both clean on this tree.
-- **The `/potato` route lives in `recoverage.potato`, next to the renderer it
-  serves.** `ui.handle_potato` imported the renderer inside the handler body
-  and reached back for a private helper; the route now sits with
-  `render_potato` and `webapp` imports `potato` alongside `api` and `ui`.
-  Same responses, same headers, same 503 and 500 bodies.
-- **`_db_path` is imported from `recoverage._paths`, not re-exported through
-  `recoverage.server`.** `api`, `potato` and `cli` now name the same module as
-  the helper's owner.
 - **The design docs describe the code as it is.** `USER_STORIES.md` and
   `DESIGN.md` still described a DOM grid of per-cell nodes, CSS-class
   filtering, a bare `recoverage` command that serves on its own, and an

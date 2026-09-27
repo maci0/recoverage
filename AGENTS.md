@@ -153,11 +153,11 @@ test fails the job instead of holding a runner for six hours.
 
 `rebrew` is an editable path dependency at `../rebrew` (see
 `[tool.uv.sources]`), which no runner has, so every job that runs
-`uv sync --frozen --extra dev` first uses the composite action
-`.github/actions/sibling-rebrew`, whose only step is the same
-`tools/ci_clone_rebrew.sh` `make clone-rebrew` wraps. The action exists only
-because a workflow step cannot write outside `GITHUB_WORKSPACE`; it takes the
-clone URL and nothing else, so the pin stays in the script. The script's
+`uv sync --frozen --extra dev` first runs `tools/ci_clone_rebrew.sh
+"$GITHUB_WORKSPACE/../rebrew"`, the same script `make clone-rebrew` wraps. It
+is the only mechanism that fetches the sibling: a second one (an inline
+`git clone`, or an action carrying its own ref) would decide from an unchecked
+pin which rebrew the suite tested. The script's
 `REBREW_REF`/`REBREW_SHA` defaults are the whole pin: the clone fails unless the
 tag still resolves to the commit, so a moved tag cannot change the dependency
 silently. Those defaults must keep matching `uv.lock` (checked by

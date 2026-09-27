@@ -28,7 +28,7 @@ The UI is built using a lightweight, dependency-free stack to ensure fast load t
    * `/api/targets/<target>/asm?va=...&size=...` endpoint that dynamically disassembles binary chunks using Capstone (with LRU caching and in-memory cached binary reads).
    * `/api/events` Server-Sent Events stream that pushes a `db-updated` event whenever `coverage.db` changes on disk, so the SPA auto-refreshes without a manual reload (requires the threaded WSGI server, which gives each connection its own thread).
    * `/api/regen` POST endpoint to run rebrew's catalog + build-db in-process (`regen.run_regen`, localhost only, rate-limited). The rebuild is convergent, so a duplicate run converges rather than corrupts; an optional `Idempotency-Key` header turns a retry of an already-completed key into a ledger lookup instead of a second pipeline run (bounded by age and count in `api.py`).
-   * With `--token`, an unauthenticated request is answered by content type: browsers asking for `text/html` get a short page explaining that `?token=` must be appended (it never echoes the token), and API clients keep the `{error, code, detail}` JSON contract.
+   * With `--token`, an unauthenticated request is answered by content type: browsers asking for `text/html` get a short page explaining that `?token=` must be appended (it never echoes the token), and API clients keep the `{error, code, detail}` JSON contract. A run of failed tokens inside `_AUTH_FAIL_WINDOW_SECONDS` is throttled to `429` with `Retry-After`, which bounds online guessing on a network bind.
    * Proxied paths: `/src/*` → `project_dir/src/`, `/original/*` → `project_dir/original/`
 
 ## State Management (VanJS)
@@ -56,7 +56,10 @@ The application state is managed using VanJS reactive primitives (`van.state`):
 Each call therefore takes a generation number and an `AbortController`.  Only the call whose generation is still current may write `data`, `summaryData`, `activeSection`, the error panel, or `isLoading`; a superseded call writes nothing and lets the call that replaced it report the outcome.  `selectFunction` uses the same rule through its controller's `signal.aborted`.  Every state write made after an `await` belongs behind one of these two checks.
 
 ## Components
-The UI is broken down into functional VanJS components in `app.js`:
+The UI is broken down into functional VanJS components. `app.js` builds the
+shell (topbar, progress bar, and the containers for the grid and the panel);
+the grid, the panel's body, and the modal are defined in `detail.js` and
+mounted by the shell once it has loaded, as each section below marks.
 
 ### 1. Topbar (`header.topbar`)
 * **Logo & Title**: Retro-futuristic "R" logo with CRT scanline effects.
@@ -66,7 +69,7 @@ The UI is broken down into functional VanJS components in `app.js`:
 * **Search & Filters**: Debounced search input and toggleable filter buttons (All, E, R, M, S, P).
 * **Actions**: Theme toggle (sun/moon icons) and Reload data buttons with a 5-second cooldown to prevent spam.
 
-### 2. Grid (`.map`)
+### 2. Grid (`.map`, mounted by `detail.js`)
 * A canvas map that always renders every declared column: the section's `columns` value is stored on the element as `data-cols` and drives the lattice, the row height, and the arrow-key row step. Narrow screens shrink the cells (floor 6px desktop, 12px phone) instead of re-wrapping them onto extra rows, which left a blank band under short sections. Reading the column count from one place is what keeps the track count, row height, and keyboard step from drifting.
 * Cells are colored based on their status:
   * **Exact** (green) — byte-for-byte match
@@ -87,7 +90,7 @@ The UI is broken down into functional VanJS components in `app.js`:
 * **Canvas-Based Filtering**: Filter and search dimming are a second alpha pass (`globalAlpha = 0.15`) over the same rectangles, not CSS class toggling and not a per-cell DOM walk.
 * **Keyboard & semantics**: the grid is a `listbox` of `option` cells with a roving tabindex, so exactly one cell is in the tab order no matter how many thousands the section holds. Arrow keys move focus (left/right by one, up/down by a full row), Home/End jump to the ends, Enter/Space selects, and `aria-selected` tracks the selected block.
 
-### 3. Side Panel (`.panel`)
+### 3. Side Panel (`.panel`, metadata grid and code panes mounted by `detail.js`)
 * **Sticky Header**: The panel header stays visible while scrolling through long code blocks, on an opaque panel background (no backdrop blur: it is sticky, so a blur would repaint on every scroll frame over a grid of thousands of cells).  It sticks at `top: var(--topbar-h)`, a custom property app.js keeps in sync with the measured topbar height, and `.panel` uses `overflow: clip` rather than `hidden` so the sticky offset resolves against the viewport instead of a box that never scrolls.
 * **Metadata Grid**: Displays key-value pairs in an auto-filling grid with tightened vertical spacing for a cohesive look:
   * VA (Clickable link that jumps to the corresponding address in the grid)
@@ -154,7 +157,7 @@ The UI is broken down into functional VanJS components in `app.js`:
 * **Request Cancellation**: The UI uses `AbortController` to cancel in-flight network requests if the user clicks through multiple cells rapidly, saving bandwidth and preventing race conditions.
 * **Deferred Highlight.js**: The heavy `highlight.js` library and its CSS are not loaded initially. They are fetched from this origin (`/hljs.min.js`, `/hljs-c.min.js`, `/hljs-x86asm.min.js`) the first time a user clicks a code block.  A chunk that fails to load clears the in-flight memo, so the next code pane opened retries, and the pane says `(syntax highlighting unavailable — the code below is unhighlighted)` rather than leaving plain text with no explanation; the disassembly itself is untouched.
 * **Deferred failure is visible, not silent**: `detailFailed` is set when `/detail.js` cannot be fetched.  The panes it owns say so, and every control that delegates to it (Copy, Open, Copy VA, Copy Symbol, Reload) goes `disabled` with the same message as its tooltip.  Optional chaining alone made each deferral crash-safe but user-hostile: the buttons looked enabled and did nothing.
-* **Deferred detail rendering**: `detail.js` carries the hex dump, the data inspector, the selected function's metadata grid, the C annotation extractor, the custom hex highlight language, the live-reload subscription, the regen/reload handler, the clipboard helper, and the code-viewer modal with its focus and `inert` handling: everything that is not needed to paint the first frame.  app.js keeps the modal's four states so the panel's Open buttons can set them; `window.RC.mountModal` attaches the dialog once detail.js lands. It is preloaded by the shell (`<link rel="preload" as="script">` in `index.html`, 79 brotli bytes) and requested by app.js on its last line, so the fetch overlaps the shell's own download instead of starting a round trip after it; that keeps the inlined shell inside the congestion window without a visible delay. app.js publishes `window.RC` for it to read and write; until it lands, the panes it owns show a loading message and resolve reactively when it arrives.
+* **Deferred detail rendering**: `detail.js` carries the grid (per-section canvas, layout walk, hit-map and painting), the hex dump, the data inspector, the selected function's metadata grid, the C annotation extractor, the custom hex highlight language, the live-reload subscription, the regen/reload handler, the clipboard helper, and the code-viewer modal with its focus and `inert` handling: everything that is not needed to paint the first frame.  app.js keeps the modal's four states so the panel's Open buttons can set them; `window.RC.mountModal` attaches the dialog once detail.js lands. It is preloaded by the shell (`<link rel="preload" as="script">` in `index.html`, 79 brotli bytes) and requested by app.js on its last line, so the fetch overlaps the shell's own download instead of starting a round trip after it; that keeps the inlined shell inside the congestion window without a visible delay. app.js publishes `window.RC` for it to read and write; until it lands, the panes it owns show a loading message and resolve reactively when it arrives.
 * **On-Demand Data Fetching**: The `/api/targets/<target>/data` endpoint only returns lightweight grid layouts and metadata. Detailed function information is fetched on-demand via `/api/targets/<target>/functions/<va>` when a user clicks a cell, drastically reducing memory usage and initial load times.
 * **One Click Listener Per Section**: The grid is a canvas, so the click handler hit-tests a packed row/column map instead of attaching 2,500+ individual listeners.
 * **Grid Caching & Canvas Repaint**: To handle sections with 6,000+ chunks (like `.bss`), the per-section layout is computed once and cached. Filtering, search, selection and focus changes only repaint from those cached rectangles.
@@ -387,7 +390,7 @@ Templates use `% for`/`% if`/`% end` control flow and `{{!expr}}` for raw HTML o
 ## Testing
 Run the test harness to verify all rendering paths:
 ```bash
-pytest tests/test_potato.py -v
+uv run --frozen python -m pytest tests/test_potato.py -v
 ```
 
 This suite covers:
@@ -400,5 +403,5 @@ HTML validation is a separate gate: `bun run lint:html` (`tools/lint-html.py`) v
 
 Playwright comparison tests verify visual and behavioral parity with the main UI:
 ```bash
-pytest tests/test_playwright.py
+uv run --frozen python -m pytest tests/test_playwright.py
 ```

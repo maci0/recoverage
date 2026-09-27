@@ -57,6 +57,8 @@ graph TD
 - Grid cells colored by match status: Exact (green), Reloc (blue), Near-match (yellow), Proven (cyan), Size mismatch (yellow), Stub (red), Padding (silver), Problem (violet), None (gray); data and thunk cells render as undocumented (gray)
 - Grid cells stay square: a `ResizeObserver` triggers a relayout that resizes cells (floor 6px desktop, 12px under 700px), and the section's declared column count is never reduced
 - Section tabs (`.text`, `.rdata`, `.data`, `.bss`) switch views instantly (cached layouts)
+- A section's cells are fetched on first visit; the map area says the cells are loading, and a failed fetch says what went wrong and offers a Retry
+- Hovering a cell names its address range, match state, and function
 - Grids painted to a per-section canvas; layout cached, only the active section repaints
 
 ```mermaid
@@ -157,6 +159,9 @@ graph TD
 - Search matches against function name, VA (hex), and symbol (case-insensitive)
 - Search is debounced (250ms) to avoid excessive re-renders
 - Non-matching cells are dimmed, matching cells highlighted
+- The search row reports the live match count, names the query, and says what
+  to do when nothing matched; a Clear button empties the input and the filter
+- Enter jumps to the first match, Escape clears the search
 - Clearing the search restores all cells to normal
 
 ```mermaid
@@ -339,6 +344,7 @@ graph TD
 - Reload button in the topbar with a 5-second cooldown to prevent spam
 - The server enforces its own 5-second cooldown and serializes regen behind a lock, so a second caller gets `429` rather than a second build
 - `POST /api/regen` runs rebrew's catalog + build-db in-process
+- The Reload button sends a fresh `Idempotency-Key` per click; a key whose run already completed is replayed from a bounded ledger (`{"ok": true}`, `Idempotent-Replay: true`) instead of rebuilding, and a failed run is not remembered
 - Only accessible from localhost (security gate)
 - Dashboard reloads data after regeneration completes
 - ETag-based caching: if DB unchanged, API returns `304 Not Modified`
@@ -497,7 +503,7 @@ graph TD
 - HTML, CSS, JS, and VanJS library inlined into a single response
 - Minified with `rjsmin`/`rcssmin` and compressed with Brotli/Zstd/gzip
 - Total payload 14,090 B brotli, against a 14,600-byte budget (the TCP initial congestion window), so 510 bytes of headroom remain; `ui._check_payload_budget` warns with the exact overage if it grows past that
-- Everything deferrable (asm, hex, data inspector, live reload) lives in `detail.js`, which the shell preloads, so a new byte comes out of `detail.js` rather than out of the window
+- Everything deferrable (the grid, asm, hex, data inspector, live reload) lives in `detail.js`, which the shell preloads, so a new byte comes out of `detail.js` rather than out of the window
 - Compression algorithm auto-selected from `Accept-Encoding` header
 - Deferred Highlight.js loading: fetched from this origin (vendored in `assets/`) only on first code block click
 - `AbortController` cancels in-flight requests when clicking rapidly between cells
@@ -523,6 +529,35 @@ graph TD
     style A fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
     style J fill:#d1fae5,stroke:#059669,color:#065f46
     style E fill:#fef3c7,stroke:#d97706,color:#92400e
+```
+
+---
+
+## 17. Serving Beyond the Loopback Interface
+
+> **As a Project Lead**, I want the dashboard to refuse unauthenticated access when I expose it beyond my own machine, so that a shared network cannot read the decompilation data.
+
+### Acceptance Criteria
+- `serve` binds `127.0.0.1` by default; a non-loopback `--bind` requires the explicit `--allow-remote` acknowledgment or the server refuses to start
+- `serve --token <secret>` requires every request to carry the secret as `Authorization: Bearer`, as `?token=`, or as the `recoverage_token` cookie the index route sets when the browser opens `/?token=<secret>` once
+- An unauthenticated browser gets a 401 HTML page saying to append `?token=`, and it never echoes the token; an unauthenticated API client gets the normal `{error, code, detail}` JSON envelope, and a run of failed tokens is throttled to `429` with `Retry-After`
+- `--cors` is allowlist-only through repeatable `--cors-origin` flags; the wildcard is never emitted
+- Each of `RECOVERAGE_BIND`, `RECOVERAGE_ALLOW_REMOTE`, `RECOVERAGE_CORS`, `RECOVERAGE_CORS_ORIGIN` and `RECOVERAGE_TOKEN` supplies the default for its flag, and the flag still wins; a malformed value exits 2 naming the variable
+
+```mermaid
+graph TD
+    A["serve --bind 0.0.0.0 --token SECRET"] --> B{"--allow-remote given?"}
+    B -->|No| C["Refuse to start"]
+    B -->|Yes| D["Serve on every interface"]
+    D --> E{"Request carries<br/>the token?"}
+    E -->|Bearer / ?token= / cookie| F["Served"]
+    E -->|No, browser asks HTML| G["401 page:<br/>append ?token="]
+    E -->|No, API client| H["401 JSON envelope<br/>(429 once throttled)"]
+
+    style C fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    style F fill:#d1fae5,stroke:#059669,color:#065f46
+    style A fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    style B fill:#fef3c7,stroke:#d97706,color:#92400e
 ```
 
 ---

@@ -2299,13 +2299,16 @@ class TestDataPayloadMemo:
         on *release* — freezing the payload build mid-flight so the test can
         observe what concurrent requests do while a build is in progress.
 
-        Also installs thread-independent request/response stand-ins in both
-        ``api`` and ``server``: worker threads have no bottle request context
-        (thread-local), and each module resolves those names from its own
-        namespace.  *query* rides on those stand-ins, and the query dict is
-        returned so a test can assert on it.  ``api._query_param`` reads
-        ``request`` in the api namespace, so patching only the server side
-        leaves a ``?section=`` filter unread and the memo key wrong."""
+        Also installs thread-independent request/response stand-ins for both
+        the ``server`` and ``api`` namespaces: worker threads have no bottle
+        request context (thread-local), and the compression/ETag helpers
+        resolve those names from server's while ``api._query_param`` resolves
+        its own.  Both modules import the one thread-local proxy, so under a
+        real request the two names always agree; the stand-ins are separate
+        objects, so a test that exercises a ``?section=`` (or any other)
+        parameter has to install them in both or the handler would build the
+        unfiltered payload.  *query* rides on the stand-in, and the stand-in's
+        ``query`` dict is returned so a test can assert on it."""
         import recoverage.api as api
         import recoverage.server as server_mod
 

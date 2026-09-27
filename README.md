@@ -450,13 +450,12 @@ matrix is the same set on every runner.
 ### The sibling rebrew checkout
 
 `uv sync` resolves rebrew from `../rebrew`, which no GitHub runner has, so
-each job that installs the environment first uses the composite action
-`.github/actions/sibling-rebrew`, whose only step runs
+each job that installs the environment first runs
 `tools/ci_clone_rebrew.sh` (the same script `make clone-rebrew` wraps): it
 clones the tag in `REBREW_REF` into the workspace parent and fails unless the
 tag still resolves to the commit in `REBREW_SHA`, so a moved tag cannot
 silently change the path dependency. Those defaults are the one place the pin
-lives, and `tests/test_supply_chain.py` fails when a job or the action
+lives, and `tests/test_supply_chain.py` fails when a job
 grows a second way to fetch the sibling. The commit has to keep
 matching `uv.lock`. When rebrew's own dependencies change, `uv sync --frozen`
 fails with a lock mismatch, and the fix is to re-lock in a tree laid out with
