@@ -353,11 +353,24 @@
       return { cols, gap, pad, cell };
     };
 
+    // A run of dots is drawn inside ONE row, so its usable length is bounded
+    // by the column count, and a run never occupies less than one dot.  Both
+    // ends matter: a span wider than the row wrote its hit-map entries off the
+    // end of that row and into the next (Int32Array drops the overflow, so the
+    // tail was unpaintable and unclickable), and pack.spans is a Uint16Array,
+    // so a span of 65536 stored as 0 there — cellW then computed 0 * cell +
+    // (0 - 1) * gap, a negative-width rect that claimed no column at all.
+    const spanAt = (pack, i, cols) => {
+      const s = pack.spans[i];
+      if (s < 1) return 1;
+      return s > cols ? cols : s;
+    };
+
     const walk = (pack, cols, fn) => {
       let col = 0;
       let row = 0;
       for (let i = 0; i < pack.n; i += 1) {
-        const s = pack.spans[i];
+        const s = spanAt(pack, i, cols);
         if (col + s > cols && col > 0) { row += 1; col = 0; }
         fn(i, col, row, s);
         col += s;
@@ -393,7 +406,7 @@
       {
         let col = 0;
         for (let i = 0; i < pack.n; i += 1) {
-          const s = pack.spans[i];
+          const s = spanAt(pack, i, cols);
           if (col + s > cols && col > 0) { rows += 1; col = 0; }
           col += s;
           if (col >= cols) { col = 0; rows += 1; }

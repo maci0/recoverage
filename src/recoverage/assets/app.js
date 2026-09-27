@@ -879,12 +879,20 @@ const App = () => {
         coveredBytes = s.coveredBytes || 0;
       }
 
-      const total = secName === ".text" ? (totalItems || 1) : (sec.size || 1);
-      const exactPct = ((secName === ".text" ? exactCount : exactBytes) / total) * 100;
-      const relocPct = ((secName === ".text" ? relocCount : relocBytes) / total) * 100;
-      const nearMatchPct = ((secName === ".text" ? nearMatchCount : nearMatchBytes) / total) * 100;
-      const stubPct = ((secName === ".text" ? stubCount : stubBytes) / total) * 100;
-      const paddingPct = (secName === ".text" && sec.size > 0 ? paddingBytes / sec.size : paddingBytes / total) * 100;
+      // ONE denominator per bar: .text's tracks FUNCTIONS (its "matched" stat
+      // is a function count), every other section's tracks BYTES.  Padding is
+      // a cell state with no function counterpart, so it joins only the
+      // byte-denominated bar; on .text its bytes are already inside the
+      // remainder.  It used to be paddingBytes/sec.size even on the
+      // function-denominated .text bar, where the segments summed past 100%
+      // and flex-shrink then squeezed every band to fit.
+      const isText = secName === ".text";
+      const total = isText ? (totalItems || 1) : (sec.size || 1);
+      const exactPct = ((isText ? exactCount : exactBytes) / total) * 100;
+      const relocPct = ((isText ? relocCount : relocBytes) / total) * 100;
+      const nearMatchPct = ((isText ? nearMatchCount : nearMatchBytes) / total) * 100;
+      const stubPct = ((isText ? stubCount : stubBytes) / total) * 100;
+      const paddingPct = isText ? 0 : (paddingBytes / total) * 100;
 
       const coveragePct = sec.size > 0 ? (coveredBytes / sec.size * 100) : 0;
 

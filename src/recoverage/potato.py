@@ -187,33 +187,51 @@ DOT_PNGS = {state: _dot_uri(color) for state, color in COLORS.items()}
 # ── Progress bar SVG ────────────────────────────────────────
 
 
+#: Width of the progress bar's lattice, in viewBox units.  Percentages are
+#: scaled against it, and it is the hard right edge: no segment list may draw
+#: past it (see _progress_svg).
+TRACK_UNITS = 700
+
+#: Height of the bar, in viewBox units.  Only the corner radius's half
+#: depends on it.
+TRACK_HEIGHT = 32
+
+
 def _progress_svg(segments: tuple[tuple[str, float], ...]) -> str:
     """SVG (data URI) with one colored segment per (state, pct), rounded corners.
 
     viewBox-only (no fixed width/height): the <td> renders it at 100% width
     via width="100%", so the bar fills any viewport — a fixed 700px lattice
     overflowed phones and clipped the stats text mid-word.  Segment geometry
-    is in 0..700 viewBox units; the browser scales it to the cell width.
+    is in 0..TRACK_UNITS viewBox units; the browser scales it to the cell width.
 
     Deliberately uncached: the segment list is rebuilt per render, and a memo
     keyed on the float percentages would pin entries without ever hitting."""
     svg = [
         (
-            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 32" preserveAspectRatio="none">'
-            '<defs><clipPath id="rc"><rect width="700" height="32" rx="10" ry="10"/></clipPath></defs>'
-            f'<rect width="700" height="32" fill="{TRACK_COLOR}" rx="10" ry="10"/>'
+            f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {TRACK_UNITS} {TRACK_HEIGHT}"'
+            ' preserveAspectRatio="none">'
+            f'<defs><clipPath id="rc"><rect width="{TRACK_UNITS}" height="{TRACK_HEIGHT}"'
+            ' rx="10" ry="10"/></clipPath></defs>'
+            f'<rect width="{TRACK_UNITS}" height="{TRACK_HEIGHT}" fill="{TRACK_COLOR}" rx="10" ry="10"/>'
             '<g clip-path="url(#rc)">'
         )
     ]
 
+    # A segment list summing past 100% would otherwise run off the right end
+    # of the track, where the rounded-corner clipPath silently eats it: the
+    # last band lost its tail instead of the bar growing.  Clamp to the width
+    # still free, so the track is the hard bound no input list can pass.
     current_x = 0.0
     for status, pct in segments:
+        seg_w = min(TRACK_UNITS * pct / 100.0, TRACK_UNITS - current_x)
+        if seg_w <= 0:
+            continue
         hex_color = COLORS.get(status, TRACK_COLOR)
-        seg_w = 700 * pct / 100.0
-        if seg_w > 0:
-            svg.append(
-                f'<rect x="{current_x:.2f}" y="0" width="{seg_w:.2f}" height="32" fill="{hex_color}"/>'
-            )
+        svg.append(
+            f'<rect x="{current_x:.2f}" y="0" width="{seg_w:.2f}"'
+            f' height="{TRACK_HEIGHT}" fill="{hex_color}"/>'
+        )
         current_x += seg_w
 
     svg.append("</g></svg>")
@@ -1396,21 +1414,39 @@ def _build_progress(
     stub_matches = sec_summ.get("stubCount", 0)
     matched_fn = exact_matches + reloc_matches  # NEAR_MATCHING/STUB are not matched
 
-    if section == ".text" and total_fn > 0:
-        seg_exact = exact_matches / total_fn * 100
-        seg_reloc = reloc_matches / total_fn * 100
-        seg_near_match = near_match_matches / total_fn * 100
-        seg_stub = stub_matches / total_fn * 100
-    elif sec_size > 0:
-        seg_exact = sec_summ.get("exactBytes", 0) / sec_size * 100
-        seg_reloc = sec_summ.get("relocBytes", 0) / sec_size * 100
-        seg_near_match = sec_summ.get("nearMatchBytes", 0) / sec_size * 100
-        seg_stub = sec_summ.get("stubBytes", 0) / sec_size * 100
-    else:
-        seg_exact = seg_reloc = seg_near_match = seg_stub = 0
-
+    # ONE denominator for the whole bar.  .text's bar tracks FUNCTIONS (the
+    # "matched" stat beside it is a function count), every other section's
+    # tracks BYTES.  The two are different partitions of the section, so a
+    # segment computed against the other one is not a share of this bar: the
+    # padding band used to be bytes/sec_size even on the function-denominated
+    # .text bar, where 500+200+100+100 matched of 1000 functions plus a 20 KB
+    # padding run in a 100 KB section summed to 110%.  That clamped seg_none to
+    # 0, so the unmatched functions were painted no grey at all, and
+    # _progress_svg drew the trailing segments past the 700-unit track, which
+    # clipped them.  Padding is a cell state with no function counterpart, so
+    # it belongs only to the byte-denominated bar; on .text those bytes are
+    # already inside the "none" remainder.
     padding_bytes = sec_summ.get("paddingBytes", 0)
-    seg_padding = (padding_bytes / sec_size * 100) if sec_size > 0 else 0
+    if section == ".text" and total_fn > 0:
+        denominator = total_fn
+        seg_exact = exact_matches / denominator * 100
+        seg_reloc = reloc_matches / denominator * 100
+        seg_near_match = near_match_matches / denominator * 100
+        seg_stub = stub_matches / denominator * 100
+        seg_padding = 0
+    elif sec_size > 0:
+        denominator = sec_size
+        seg_exact = sec_summ.get("exactBytes", 0) / denominator * 100
+        seg_reloc = sec_summ.get("relocBytes", 0) / denominator * 100
+        seg_near_match = sec_summ.get("nearMatchBytes", 0) / denominator * 100
+        seg_stub = sec_summ.get("stubBytes", 0) / denominator * 100
+        seg_padding = padding_bytes / denominator * 100
+    else:
+        seg_exact = seg_reloc = seg_near_match = seg_stub = seg_padding = 0
+
+    # max(0, ...) still guards a summary whose state counts exceed its own
+    # total (a foreign or hand-edited DB); it is not what keeps a mixed
+    # denominator inside the track.
     seg_none = max(0, 100 - seg_exact - seg_reloc - seg_near_match - seg_stub - seg_padding)
     return {
         "sec_size": sec_size,

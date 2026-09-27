@@ -238,7 +238,7 @@ graph TD
 > **As a Project Lead**, I want an at-a-glance progress bar showing coverage percentages by status so that I can track decompilation progress without counting cells.
 
 ### Acceptance Criteria
-- Segmented progress bar with Exact (green), Reloc (blue), Near-match (yellow), Stub (red), Padding (silver)
+- Segmented progress bar with Exact (green), Reloc (blue), Near-match (yellow), Stub (red), Padding (silver). All segments of a bar share one denominator: `.text` counts functions, every other section counts bytes, and Padding (a cell state) is a segment only on the byte-counted bars
 - Coverage stats rendered as a text row above the bar (never inside it): total section bytes, matched cells, coverage %
 - "Matched" counts exact + reloc cells only: a near-match is a miss and a stub is a stand-in
 - Each segment is clickable to filter the grid by that status, and reachable by keyboard with `aria-pressed`

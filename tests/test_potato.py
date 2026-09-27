@@ -1,3 +1,4 @@
+import base64
 import functools
 import json
 import os
@@ -13,6 +14,7 @@ from conftest import HAS_DB, get_first_target, wsgi_get
 from rebrew.workspace import sqlite_ro_uri
 
 from recoverage.potato import (
+    TRACK_UNITS,
     _build_progress,
     _build_url,
     _cell_file_offset,
@@ -25,6 +27,7 @@ from recoverage.potato import (
     _format_va,
     _load_grid_cells,
     _panel_fn_source_text,
+    _progress_svg,
     _render_original_bytes,
     _wrap_text,
     render_potato,
@@ -159,6 +162,74 @@ def test_section_stats_pct_null_size_is_zero():
     progress = _build_progress(".bss", sec, {"summary": {}}, {".bss": {}})
     assert progress["coverage_pct"] == 0
     conn.close()
+
+
+def test_progress_bar_segments_share_one_denominator():
+    """Every segment of a progress bar is a share of ONE denominator.
+
+    The .text bar is function-denominated (its "matched" stat is a function
+    count); every other section's is byte-denominated.  Padding is a cell
+    state with no function counterpart, so it belongs to the byte bar alone.
+    It used to be added as paddingBytes/sec_size on the .text bar as well:
+    500+200+100+100 matched of 1000 functions plus a 20 KB padding run in a
+    100 KB section summed to 110%, which clamped the "none" remainder to 0
+    (the 100 unmatched functions were painted no grey at all) and pushed
+    _progress_svg's trailing segments past the 700-unit track, which clips
+    them.
+    """
+    text_summary = {
+        "totalFunctions": 1000,
+        "exactMatches": 500,
+        "relocMatches": 200,
+        "nearMatchCount": 100,
+        "stubCount": 100,
+        "paddingBytes": 20000,
+        "coveredBytes": 90000,
+    }
+    text_sec = {"name": ".text", "va": 4096, "size": 100000}
+    data = {"summary": {".text": text_summary}}
+    progress = _build_progress(".text", text_sec, data, {".text": text_sec})
+    segments = dict(progress["segments"])
+    assert segments["exact"] == 50.0
+    assert segments["reloc"] == 20.0
+    assert segments["near_match"] == 10.0
+    assert segments["stub"] == 10.0
+    assert segments["padding"] == 0
+    assert segments["none"] == 10.0
+    assert sum(pct for _, pct in progress["segments"]) == 100.0
+
+    # A byte-denominated section keeps its padding band, against the same
+    # denominator as its siblings.
+    data_summary = {
+        "totalFunctions": 0,
+        "exactBytes": 4000,
+        "relocBytes": 1000,
+        "nearMatchBytes": 500,
+        "stubBytes": 500,
+        "paddingBytes": 2000,
+        "coveredBytes": 6000,
+    }
+    data_sec = {"name": ".data", "va": 8192, "size": 10000}
+    data = {"summary": {".data": data_summary}}
+    progress = _build_progress(".data", data_sec, data, {".data": data_sec})
+    segments = dict(progress["segments"])
+    assert segments["exact"] == 40.0
+    assert segments["padding"] == 20.0
+    assert segments["none"] == 20.0
+
+
+def test_progress_svg_segments_stay_inside_the_track():
+    """A segment list summing past 100% is drawn off the end of the 700-unit
+    track and clipped away by the rounded-corner clipPath: the last band
+    silently loses its right-hand end."""
+    uri = _progress_svg((("exact", 60.0), ("reloc", 40.0), ("padding", 20.0), ("none", 0.0)))
+    svg = base64.b64decode(uri.partition("base64,")[2]).decode("utf-8")
+    rects = [
+        (float(x), float(w))
+        for x, w in re.findall(r'<rect x="([\d.]+)" y="0" width="([\d.]+)"', svg)
+    ]
+    assert rects
+    assert max(x + w for x, w in rects) <= TRACK_UNITS
 
 
 def test_null_va_section_renders_grid_and_panel(

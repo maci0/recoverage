@@ -160,6 +160,23 @@ module ships in the published package. See *Breaking*.
   into a 500 plus a traceback in the log, on any route. Every header read now
   goes through `server._header`, and a value that is not decodable text reads
   as absent, which is what the field-value grammar already implies.
+- **The `.text` progress bar no longer mixes two denominators.** Its Exact,
+  Reloc, Near-match and Stub segments are shares of `totalFunctions` (the
+  `matched` stat beside them is a function count), but Padding was added as
+  `paddingBytes / section size`, so a section with 900 of 1000 functions
+  matched and a 20 KB padding run in 100 KB summed to 110%. The remainder
+  clamped to zero, painting the 100 unmatched functions no grey at all, and
+  Potato Mode's bar drew the trailing bands past the end of its track, where
+  the rounded-corner clip cut them off. Every segment of a bar now shares one
+  denominator, and Padding (a cell state with no function counterpart) is a
+  segment only on the byte-counted bars. Potato Mode's bar additionally clamps
+  to its own track, so no segment list can draw past it.
+- **A grid cell wider than one row no longer overruns it in the SPA.** The hit
+  map wrote the run's columns from the cell's position, spilling into the next
+  row (where the typed array dropped them, leaving the tail unpaintable and
+  unclickable), and a run of 65536 stored as 0 in the `Uint16Array` span column
+  drew a negative-width rect. A run is now capped to the column count, which
+  is all a single row can show, and floors at one column.
 - **The SPA grid is re-laid out when a rebuild re-spans a section.** Layout
   was memoized on `(column count, cell count)`, and a rebuild that moved a
   cell's start without changing how many there are left the key matching: the
