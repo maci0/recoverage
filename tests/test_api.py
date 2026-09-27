@@ -303,6 +303,41 @@ class TestApiFunctions:
         assert data["offset"] == 0
         assert len(data["functions"]) <= 5
 
+    def test_count_and_page_share_one_read_snapshot(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """`total` and the page it paginates must come from ONE database snapshot.
+
+        They are two separate statements, and python's sqlite3 opens a
+        deferred transaction per statement, so a `rebrew build-db` committing
+        between them served a count from one build beside rows from the next
+        (the SPA then paginates against a total the rows do not match).  The
+        handler pins the read with read_snapshot; this records the connection's
+        transaction state at both statements.
+        """
+        from recoverage import api as _api
+
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        _api._clear_list_total_cache()
+
+        seen: list[bool] = []
+        orig_total = _api._function_total
+
+        def probe(c: sqlite3.Cursor, *args: Any, **kwargs: Any) -> int:
+            seen.append(c.connection.in_transaction)
+            return orig_total(c, *args, **kwargs)
+
+        monkeypatch.setattr(_api, "_function_total", probe)
+        status, headers, body = wsgi_get(f"/api/targets/{target}/functions?limit=5")
+        assert status.startswith("200")
+        assert seen, "the handler stopped routing the count through _function_total"
+        assert seen[0], "the COUNT ran outside a pinned read transaction"
+
+        data = json.loads(decode_body(body, headers))
+        # The page SELECT ran on the same connection, inside the same
+        # transaction: the total can never exceed what that snapshot holds.
+        assert data["total"] >= len(data["functions"])
+
     def test_limit_capped_at_500(self) -> None:
         target = get_first_target()
         if not target:

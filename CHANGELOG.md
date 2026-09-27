@@ -99,6 +99,19 @@ module ships in the published package. See *Breaking*.
   fetch, so identity is exactly "the cells changed". A section that declares
   a different column count after a rebuild also re-wraps, which a
   `getComputedStyle` read of the old width could not catch.
+- **The function list's `total` and its page come from one version of the
+  database.** The endpoint runs the `COUNT(*)` and the page `SELECT` as two
+  separate statements, and Python's sqlite3 opens a deferred transaction per
+  statement, so a `rebrew build-db` committing between them answered with one
+  build's row count beside the next build's rows: the SPA then paginated
+  against a total the rows did not match. Both now run inside a pinned
+  snapshot, the same read the `/data` and `/stats` endpoints use.
+- **Clicking a cell no longer lets a slower earlier selection win.** Selecting
+  a cell with no function started a `/asm` request that was never tied to the
+  selection, so a response landing after the user had already clicked
+  elsewhere overwrote the assembly pane with the previous block's
+  disassembly. Every cell selection now supersedes the one before it, and the
+  undocumented-block request is aborted along with the rest.
 - **Functions with an unknown `markerType` are listed again.** The
   GLOBAL/DATA/VTABLE/STRING exclusion read `markerType NOT IN (...)`, and
   SQLite evaluates `NULL NOT IN (...)` to NULL, which `WHERE` rejects: on a

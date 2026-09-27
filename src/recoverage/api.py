@@ -1028,19 +1028,28 @@ def handle_api_functions_list(target: str) -> bytes | Any:
         # SAFETY: where_sql is constructed from whitelisted column names + parameterized values.
         # sort_field is constrained to allowed_sort set, sort_dir to "ASC"/"DESC" literals.
         # No user-supplied strings reach the SQL statement unparameterized.
-        total = _function_total(
-            c, target, where_sql, params, _snapshot_db_mtime(), status_filter, search
-        )
+        #
+        # One pinned read snapshot for the COUNT and the page: they are two
+        # separate statements, and Python's sqlite3 opens a deferred
+        # transaction per statement, so a `rebrew build-db` committing between
+        # them served `total` from one build beside a page from the next (the
+        # SPA then paginates against a count the rows do not match).  The
+        # snapshot is stat'ed BEFORE the BEGIN, so the pinned read is never
+        # older than the memo key it is filed under.
+        snap = _snapshot_db_mtime()
+        with _server.read_snapshot(c):
+            total = _function_total(c, target, where_sql, params, snap, status_filter, search)
 
-        c.execute(
-            f"SELECT va, name, vaStart, size, status, module, symbol, markerType "
-            f"FROM functions WHERE {where_sql} "
-            f"ORDER BY {sort_field} {sort_dir} LIMIT ? OFFSET ?",
-            [*params, limit, offset],
-        )
-        # SELECT enumerates exactly the response fields; dict(row) carries the
-        # same keys, in the same order, as an explicit per-field dict would.
-        items: list[dict[str, Any]] = [dict(row) for row in c.fetchall()]
+            c.execute(
+                f"SELECT va, name, vaStart, size, status, module, symbol, markerType "
+                f"FROM functions WHERE {where_sql} "
+                f"ORDER BY {sort_field} {sort_dir} LIMIT ? OFFSET ?",
+                [*params, limit, offset],
+            )
+            # SELECT enumerates exactly the response fields; dict(row) carries
+            # the same keys, in the same order, as an explicit per-field dict
+            # would.
+            items: list[dict[str, Any]] = [dict(row) for row in c.fetchall()]
 
         return _json_ok(
             {

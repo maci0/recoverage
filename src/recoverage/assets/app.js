@@ -649,6 +649,16 @@ const App = () => {
 
   const selectChunk = (i) => {
     currentCellIndex.val = i;
+    // Selecting a cell supersedes whatever selection was still in flight.
+    // Both the function fetch and the undocumented-block /asm request resume
+    // after an await and write their panes unconditionally on resume, so
+    // without this the previous selection lands on top of this one whenever
+    // the user clicks faster than the network answers.  selectFunction
+    // installs its own controller for the function branch; the controller
+    // here is the one that guards the branch below.
+    currentAbortController?.abort();
+    currentAbortController = new AbortController();
+    const { signal } = currentAbortController;
     ensureOriginalDll();
     if (!data.val || !data.val.sections) return;
     const sec = data.val.sections[activeSection.val];
@@ -689,6 +699,7 @@ const App = () => {
             window.RC.loadAsm?.({
               url: `${ASM_URL(activeTarget.val)}?va=${sec.va + cell.start}&size=${size}&section=${activeSection.val}`,
               set: (text) => { asmText.val = text; },
+              signal,
             });
           } else {
             asmText.val = MSG.DATA_SECTION_NO_ASM;
