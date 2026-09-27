@@ -1,5 +1,5 @@
 .PHONY: help setup clean test test-one fuzz lint format format-check web-lint smoke smoke-fail \
-	shell-lint yaml-lint all ensure-uv ensure-rebrew warn-uv-version clone-rebrew
+	shell-lint yaml-lint all ensure-uv ensure-rebrew warn-uv-version clone-rebrew ensure-lint-tools
 
 # Force POSIX sh for recipes (ignore a caller-exported SHELL=bash).  Version
 # compares use ``sort -t. -k…n`` (POSIX), not GNU ``sort -V``.
@@ -16,6 +16,15 @@ SET_STRICT = set -eu; if (set -o pipefail) 2>/dev/null; then set -o pipefail; fi
 # Lockfile-pinned deps, exactly as every CI job installs them.  Override with
 # `make setup UV_SYNC_FLAGS=` to add an extra (e.g. `--extra capstone`).
 UV_SYNC_FLAGS ?= --frozen --extra dev
+
+# Every recipe that runs a tool out of the project environment.  `--extra dev`
+# is what makes the edit-test loop work on a clean clone without `make setup`
+# first: `uv run` syncs the environment from uv.lock either way, and without
+# the extra it installs the 30 runtime packages and leaves pytest and ruff
+# missing, so `make test` dies on "No module named pytest" instead of running.
+# Same install as `make setup` and every CI job, so a local pass and a CI pass
+# still mean the same thing.
+UV_RUN := uv run --frozen --extra dev
 
 # uv floor the local toolchain is checked against; warn (do not fail) when the
 # installed one is older, matching the sibling rebrew checkout's policy.  CI
@@ -118,16 +127,15 @@ setup: ensure-rebrew warn-uv-version
 	uv sync $(UV_SYNC_FLAGS)
 
 # Match CI's invocation so a local pass and a CI pass mean the same thing.
-# `python -m`, never the bare tool name: the dev extra is an optional
-# dependency, so a `uv run` without `--extra dev` does not install pytest or
-# ruff and falls back to whatever `pytest` / `ruff` happens to be on the
-# contributor's PATH, testing the tree against an unpinned global. The module
-# form uses the locked interpreter or fails with "No module named pytest".
+# `python -m`, never the bare tool name: with the dev extra installed a bare
+# `uv run pytest` would still fall back to whatever `pytest` happens to be on
+# the contributor's PATH, testing the tree against an unpinned global. The
+# module form runs the locked interpreter or fails loudly.
 test: ensure-uv
-	uv run --frozen python -m pytest tests/ -v --ignore=tests/test_playwright.py
+	$(UV_RUN) python -m pytest tests/ -v --ignore=tests/test_playwright.py
 
 test-one: ensure-uv
-	uv run --frozen python -m pytest $(T) $(FLAGS) -v --tb=short
+	$(UV_RUN) python -m pytest $(T) $(FLAGS) -v --tb=short
 
 # A wider campaign over the same seeded harnesses `make test` already runs;
 # the seed and iteration count come from the environment so no file changes.
@@ -136,16 +144,16 @@ ITERATIONS ?= 20000
 
 fuzz: ensure-uv
 	RECOVERAGE_FUZZ_SEED=$(SEED) RECOVERAGE_FUZZ_ITERATIONS=$(ITERATIONS) \
-		uv run --frozen python -m pytest tests/test_fuzz.py -v --tb=short
+		$(UV_RUN) python -m pytest tests/test_fuzz.py -v --tb=short
 
 lint: ensure-uv
-	uv run --frozen python -m ruff check src/ tests/ tools/
+	$(UV_RUN) python -m ruff check src/ tests/ tools/
 
 format: ensure-uv
-	uv run --frozen python -m ruff format src/ tests/ tools/
+	$(UV_RUN) python -m ruff format src/ tests/ tools/
 
 format-check: ensure-uv
-	uv run --frozen python -m ruff format --check src/ tests/ tools/
+	$(UV_RUN) python -m ruff format --check src/ tests/ tools/
 
 # shellcheck and yamllint cover the tree's non-Python sources: the CI clone
 # script and the Actions definitions. Both ship on the ubuntu runner image CI
@@ -188,10 +196,10 @@ web-lint:
 	bun run lint
 
 smoke: ensure-uv
-	uv run --frozen python tools/smoke.py
+	$(UV_RUN) python tools/smoke.py
 
 smoke-fail: ensure-uv
-	uv run --frozen python tools/smoke.py --expect-failure
+	$(UV_RUN) python tools/smoke.py --expect-failure
 
 # Everything CI checks, in one local command, so nothing fails only after push.
 all: format-check lint shell-lint yaml-lint test web-lint smoke smoke-fail

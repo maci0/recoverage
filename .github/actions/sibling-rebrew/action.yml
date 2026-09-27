@@ -1,0 +1,24 @@
+name: sibling-rebrew
+description: >-
+  Materialize the rebrew checkout that [tool.uv.sources] resolves against,
+  at the pin tools/ci_clone_rebrew.sh owns.
+
+# Every installing job needs ../rebrew to exist before `uv sync`, and the tag
+# and commit live in tools/ci_clone_rebrew.sh alone, which this action
+# delegates to. A job can only reference a local action, so the clone step
+# has to be shared this way rather than pasted into each job.
+
+inputs:
+  repository:
+    description: Git URL to clone rebrew from.
+    required: false
+    default: https://github.com/maci0/rebrew.git
+
+runs:
+  using: composite
+  steps:
+    - name: Clone the sibling rebrew checkout
+      shell: bash
+      run: bash tools/ci_clone_rebrew.sh "$GITHUB_WORKSPACE/../rebrew"
+      env:
+        REBREW_URL: ${{ inputs.repository }}

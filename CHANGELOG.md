@@ -158,6 +158,18 @@ module ships in the published package. See *Breaking*.
 
 ### Fixed
 
+- **`make test` and the other `uv run` targets work on a clean clone without
+  `make setup` first.** They now pass `--extra dev` the way `make setup` does,
+  so a contributor who runs the loop before the bootstrap gets the tests
+  instead of `No module named pytest`.
+- **The composite action CI clones the sibling rebrew through is back.** Every
+  installing job referenced `.github/actions/sibling-rebrew` while the file
+  did not exist, so each job would have stopped at that step; the four inline
+  copies of the clone step, the second mechanism the pin test rejects, are
+  gone.
+- **The payload-memo concurrency tests install the request stand-in where
+  `api._query_param` reads it**, so a `?section=` filter is no longer dropped
+  and the follower's memo key matches the one under test.
 - **A request header carrying a non-UTF-8 byte no longer answers 500.** A WSGI
   server hands header bytes over as latin-1, so a peer can send a byte above
   `0x7f`; reading it raised `UnicodeDecodeError`, which turned one junk header

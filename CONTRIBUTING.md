@@ -33,12 +33,17 @@ catalog/build-db for regen, so `uv sync` cannot resolve without it. Without
 `make clone-rebrew` a bare `uv sync` fails with `Distribution not found at
 file://…/rebrew`; `make setup` names the missing checkout instead.
 
-To use a rebrew checkout that is not the pinned commit (a sibling you are
-developing against, say), point the preflight at it:
+In a git worktree the checkout is not beside the tree, so `../rebrew` resolves
+to something that is not rebrew. Symlink the sibling path at a rebrew
+checkout:
 
 ```bash
-make setup REBREW_DIR=/path/to/rebrew
+ln -s /path/to/rebrew ../rebrew   # from the worktree root
 ```
+
+`make setup REBREW_DIR=<path>` only moves the preflight check; uv still reads
+the path out of `pyproject.toml`, so a check that passes there and a sync that
+resolves elsewhere would be worse than none.
 
 Web lint additionally needs [bun](https://bun.sh) (`packageManager` pins
 1.4.2) and a JDK 17+ on `PATH`, since `vnu-jar` validates the HTML and CSS
@@ -54,18 +59,18 @@ is missing. They cover the two non-Python source sets ruff does not see: the
 ```bash
 make test                              # full suite
 make test-one T=tests/test_api.py      # one file
-make test-one T=tests/test_api.py::TestServer  # one test
+make test-one T=tests/test_api.py::TestApiFunctions  # one class
 make test-one T=tests/test_api.py FLAGS="-k functions"
 ```
 
 Run tools through `uv run` (which the Makefile does) rather than a globally
 installed copy: the suite's assertions and the ruff rules are pinned in
 `uv.lock`, and an older global ruff formats and lints differently. That is why
-the Makefile calls `uv run python -m pytest` / `uv run python -m ruff` instead
-of `uv run pytest` / `uv run ruff`: pytest and ruff live in the `dev` extra, so
-a bare `uv run` without `--extra dev` does not install them and falls back to
-the first `pytest` / `ruff` on `PATH`. The module form runs the locked
-interpreter or fails with `No module named pytest`.
+the Makefile calls `uv run --frozen --extra dev python -m pytest` /
+`... -m ruff` instead of `uv run pytest` / `uv run ruff`: the module form runs
+the locked interpreter, and `--extra dev` is what installs pytest and ruff
+when a target is the first command you run on a clean clone, so `make test-one`
+works without `make setup` ahead of it.
 
 The suite is hermetic. It builds its own synthetic `coverage.db` (see
 `tests/conftest.py`) and needs no project workspace, compiler toolchain, or
