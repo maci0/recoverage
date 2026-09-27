@@ -202,6 +202,53 @@ def _normalize_origin(origin: str) -> str:
         return ""
 
 
+def _authority_of(value: str) -> str:
+    """Normalized ``host[:port]`` of a Host/Origin value, or "" when unparsable.
+
+    Scheme-independent on purpose: a dashboard behind a TLS-terminating proxy
+    is reached as ``Origin: https://box`` with ``Host: box``, and the question
+    this answers is which service the page came from, not which scheme it used
+    to get here.  A default port collapses away on both sides so
+    ``http://box:80`` and ``box`` name one authority.
+    """
+    if _hostname_of(value) == "":
+        return ""
+    try:
+        parsed = urlsplit(value if "://" in value else f"//{value}")
+        host = (parsed.hostname or "").lower()
+        port = parsed.port
+    except ValueError:
+        return ""
+    if port in (None, 80, 443):
+        port = None
+    host_part = f"[{host}]" if ":" in host else host
+    return f"{host_part}:{port}" if port else host_part
+
+
+def origin_is_this_dashboard(origin: str, host: str) -> bool:
+    """Whether *origin* is the same service the request was addressed to.
+
+    The authority allowed to drive a privileged operation is the page the
+    operator is looking at, so this is a same-origin test against the request's
+    own ``Host``, not a membership test against LOOPBACK_HOSTS.  Every other
+    loopback port is a different origin with its own operator, and on a
+    loopback bind that neighbour is exactly what the gate exists to exclude:
+    a dev server, another local app, or anything an attacker can get a browser
+    to load from one.  A page there passes a hostname check while being unable
+    to read the response, so the request is both forged and silent.
+
+    A request with no ``Host`` header (HTTP/1.0, some WSGI harnesses) cannot be
+    compared, and browsers never send one, so the loopback-hostname rule
+    stands in for it rather than refusing every such client.
+    """
+    if _hostname_of(origin) == "":
+        return False
+    request_host = _authority_of(host)
+    if not request_host:
+        return _hostname_of(origin) in LOOPBACK_HOSTS
+    return _authority_of(origin) == request_host
+
+
 def _safe_etag(*parts: object) -> str:
     """Deterministic ETag from arbitrary parts.
 

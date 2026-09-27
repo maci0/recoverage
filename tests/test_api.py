@@ -130,12 +130,17 @@ class TestRegenOriginValidation:
         assert data["error"] == "Forbidden: cross-origin"
 
     def test_localhost_origin_accepted(self) -> None:
-        """localhost Origin passes the origin check and runs the regen."""
+        """The dashboard's own localhost page passes and runs the regen.
+
+        The Host header travels with it: the WSGI harness defaults it to
+        127.0.0.1, so a localhost:8001 Origin addressed at that Host is a
+        cross-origin request, and is refused by the sibling test below.
+        """
         assert_regen_accepted(
             wsgi_request(
                 "POST",
                 "/api/regen",
-                headers={"Origin": "http://localhost:8001"},
+                headers={"Origin": "http://localhost:8001", "Host": "localhost:8001"},
                 remote_addr="127.0.0.1",
             )
         )
@@ -146,6 +151,64 @@ class TestRegenOriginValidation:
             "POST",
             "/api/regen",
             headers={"Origin": "http://127.0.0.1.evil.com"},
+            remote_addr="127.0.0.1",
+        )
+        assert status.startswith("403")
+
+    @pytest.mark.parametrize(
+        "origin",
+        [
+            "http://localhost:3000",
+            "http://127.0.0.1:5173",
+            "http://localhost",
+        ],
+    )
+    def test_other_loopback_origin_rejected(self, origin: str) -> None:
+        """A page on another loopback port is a different origin, not the dashboard.
+
+        It passes a hostname-is-loopback check and the browser cannot read the
+        reply, so it would start a minutes-long rebuild the operator never
+        asked for and never sees.
+        """
+        status, headers, body = wsgi_request(
+            "POST",
+            "/api/regen",
+            headers={"Origin": origin, "Host": "localhost:8001"},
+            remote_addr="127.0.0.1",
+        )
+        assert status.startswith("403")
+        assert json.loads(decode_body(body, headers))["error"] == "Forbidden: cross-origin"
+
+    @pytest.mark.parametrize(
+        ("origin", "host"),
+        [
+            ("http://localhost:8001", "localhost:8001"),
+            ("http://127.0.0.1:8001", "127.0.0.1:8001"),
+            # The harness default: a page on 127.0.0.1 is the dashboard.
+            ("http://127.0.0.1", "127.0.0.1"),
+            # A default port is the same authority spelled two ways.
+            ("http://box", "box:80"),
+            # A TLS-terminating proxy changes the scheme, not the service.
+            ("https://localhost:8001", "localhost:8001"),
+        ],
+    )
+    def test_same_origin_accepted(self, origin: str, host: str) -> None:
+        """The dashboard's own page drives the regen however the URL is spelled."""
+        assert_regen_accepted(
+            wsgi_request(
+                "POST",
+                "/api/regen",
+                headers={"Origin": origin, "Host": host},
+                remote_addr="127.0.0.1",
+            )
+        )
+
+    def test_userinfo_origin_rejected(self) -> None:
+        """An unparsable Origin is refused rather than normalized into a match."""
+        status, _, _ = wsgi_request(
+            "POST",
+            "/api/regen",
+            headers={"Origin": "http://localhost:8001@evil.com", "Host": "localhost:8001"},
             remote_addr="127.0.0.1",
         )
         assert status.startswith("403")

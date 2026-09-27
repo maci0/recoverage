@@ -950,6 +950,90 @@ class TestPeerAddressClassification:
             assert not _peer_is_loopback(addr), f"{addr!r} accepted as loopback"
 
 
+class TestRegenOriginSameOrigin:
+    """``Origin`` + ``Host`` → ``server.origin_is_this_dashboard``, the
+    same-origin half of the POST /api/regen gate.
+
+    A wrong answer is a forged privileged request, so the oracle is
+    independent of the implementation: urlsplit decides, here, whether the
+    origin and the request's own Host name one host on one port.  Anything the
+    endpoint admits must be exactly that, and no spelling of a lookalike gets
+    through.
+    """
+
+    @staticmethod
+    def _oracle(origin: str, host: str) -> bool:
+        def authority(value: str) -> tuple[str, int | None] | None:
+            try:
+                parsed = urlsplit(value if "://" in value else f"//{value}")
+                hostname = (parsed.hostname or "").lower()
+                port = parsed.port
+            except ValueError:
+                return None
+            if not hostname:
+                return None
+            return (hostname, None if port in (None, 80, 443) else port)
+
+        origin_auth = authority(origin)
+        host_auth = authority(host)
+        if origin_auth is None or host_auth is None:
+            return False
+        return origin_auth == host_auth
+
+    def test_only_the_dashboards_own_origin_is_admitted(self) -> None:
+        import recoverage.api as api
+
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(api, "_do_regen", lambda remote: api._json_ok({"ok": True}))
+            patch.setattr(api, "_regen_last_attempt", None)
+
+            def check(data: bytes) -> None:
+                origin = data.decode("latin-1")
+                host = "localhost:8001"
+                status, _, _ = wsgi_request(
+                    "POST",
+                    "/api/regen",
+                    headers={"Origin": origin, "Host": host},
+                    remote_addr="127.0.0.1",
+                )
+                code = int(status.split()[0])
+                assert code in (200, 400, 403, 429), f"{origin!r}: {status}"
+                if code == 200:
+                    assert self._oracle(origin, host), (
+                        f"{origin!r} was admitted against Host {host!r} but is not the same origin"
+                    )
+
+            _fuzz(
+                ORIGIN_SEEDS,
+                check,
+                iterations=200,
+                struct_tokens=ORIGIN_SEEDS,
+                num_tokens=ORIGIN_SEEDS,
+            )
+
+    def test_a_neighbouring_loopback_origin_is_refused(self) -> None:
+        """The neighbours a loopback bind actually has, each refused."""
+        import recoverage.api as api
+
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(api, "_do_regen", lambda remote: api._json_ok({"ok": True}))
+            patch.setattr(api, "_regen_last_attempt", None)
+
+            for origin in (
+                "http://localhost:3000",
+                "http://127.0.0.1:5173",
+                "http://[::1]:9999",
+                "http://localhost",
+            ):
+                status, _, _ = wsgi_request(
+                    "POST",
+                    "/api/regen",
+                    headers={"Origin": origin, "Host": "localhost:8001"},
+                    remote_addr="127.0.0.1",
+                )
+                assert status.startswith("403"), f"{origin!r} was served: {status}"
+
+
 class TestRequestIdAndIdempotencyKey:
     """``X-Request-ID`` → ``_log_safe`` and ``Idempotency-Key`` → the ledger's
     regex.  One log-forging surface and one memory-bound surface, both reached

@@ -492,6 +492,22 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   the credential past the first click; a page route that skips it renders once
   and answers the 401 page on every link the reader follows. The cookie's name
   is `server.AUTH_COOKIE_NAME`, which `_require_auth` reads it back under.
+- The authorization model is two principals and no per-object ACL, so a new
+  handler does not repeat a check: `server._require_auth` is a `before_request`
+  hook, so every route (pages, `/api/*`, `/potato`, static, the `/src` and
+  `/original` file trees) is behind the bearer token, and a target/section/VA
+  in the path has no owner to authorize against. `POST /api/regen` is the only
+  privileged operation, and its gate is local to the handler: the peer must be
+  loopback (`_peer_is_loopback`) and, when an `Origin` is present, the origin
+  must be *this* dashboard (`server.origin_is_this_dashboard` compares the
+  origin's host and port against the request's own `Host`, falling back to
+  loopback membership only when the request carries no `Host`). A hostname
+  membership test is not the same check: a page served from any other loopback
+  port passes it, and the browser refuses to hand that page the reply, so the
+  rebuild it starts is one the operator neither asked for nor sees. A new
+  privileged operation copies that gate rather than trusting a loopback peer,
+  and the fuzz campaign in `tests/test_fuzz.py` (`TestRegenOriginSameOrigin`)
+  judges it against `urlsplit` rather than against the helper.
 - Byte counts in the query string (`?size=` on `/asm` and `/bytes`, `?offset=`
   on `/bytes`) go through `api._parse_byte_count`: decimal, or hexadecimal with
   a `0x`/`0X` prefix, and nothing else. `int(x, 0)` was wrong in both

@@ -34,6 +34,7 @@ from recoverage.server import (
     _project_dir,
     clear_target_cache,
     compress_payload,
+    origin_is_this_dashboard,
 )
 
 # ── Advisory-lock probe ────────────────────────────────────────────
@@ -2384,6 +2385,53 @@ class TestClockSeam:
         status, _, _ = wsgi_request("GET", "/api/health")
         assert status.startswith("200"), status
         assert metrics.REQUESTS.snapshot()["slow"] == before["slow"] + 1
+
+
+class TestOriginIsThisDashboard:
+    """The privileged-regen origin gate is a same-origin test, not a
+    hostname-is-loopback one.
+
+    Every other loopback port is a different origin with its own operator, and
+    a page there passes the loopback membership check while the browser refuses
+    to hand it the reply, so the rebuild it starts is one the operator neither
+    asked for nor sees.
+    """
+
+    @pytest.mark.parametrize(
+        ("origin", "host"),
+        [
+            ("http://localhost:8001", "localhost:8001"),
+            ("http://LOCALHOST:8001", "localhost:8001"),
+            ("http://box:8001", "box:8001"),
+            ("https://box:8443", "box:8443"),
+            ("http://box", "box:80"),
+        ],
+    )
+    def test_same_authority_accepted(self, origin: str, host: str) -> None:
+        assert origin_is_this_dashboard(origin, host)
+
+    @pytest.mark.parametrize(
+        ("origin", "host"),
+        [
+            ("http://localhost:3000", "localhost:8001"),
+            ("http://127.0.0.1:8001", "localhost:8001"),
+            ("http://box:8001", "localhost:8001"),
+            ("http://localhost:8001@evil.com", "localhost:8001"),
+            ("http://127.0.0.1.evil.com:8001", "localhost:8001"),
+            ("", "localhost:8001"),
+        ],
+    )
+    def test_other_authority_rejected(self, origin: str, host: str) -> None:
+        assert not origin_is_this_dashboard(origin, host)
+
+    def test_loopback_fallback_without_a_host_header(self) -> None:
+        """No Host header (HTTP/1.0, WSGI harness): fall back to loopback.
+
+        A browser always sends Host, so the fallback only ever admits a
+        non-browser client, which cannot have been driven by another page.
+        """
+        assert origin_is_this_dashboard("http://localhost:8001", "")
+        assert not origin_is_this_dashboard("http://evil.com:8001", "")
 
 
 class TestConfigDerivedMemosFollowTheConfigStat:

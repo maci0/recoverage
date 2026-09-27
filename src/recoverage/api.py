@@ -35,7 +35,6 @@ from recoverage.server import (
     DLL_DATA,
     DLL_LOCK,
     HAS_PYGMENTS,
-    LOOPBACK_HOSTS,
     NOT_DATA_MARKER_SQL,
     _best_encoding,
     _cell_bucket_row,
@@ -48,7 +47,6 @@ from recoverage.server import (
     _get_targets_config,
     _global_json_sql,
     _header,
-    _hostname_of,
     _json_err,
     _json_ok,
     _json_ok_precompressed,
@@ -66,6 +64,7 @@ from recoverage.server import (
     compress_payload,
     folded_like_clause,
     like_match,
+    origin_is_this_dashboard,
     path_param,
     query_param,
     request,
@@ -1802,15 +1801,17 @@ def handle_regen() -> bytes | Any:
 
     origin = _header("Origin", "")
     if origin:
-        # Same hardened parser as the Host allowlist: userinfo-bearing or
-        # otherwise non-plain values parse as "" and are rejected.
-        origin_host = _hostname_of(origin)
-        if origin_host not in LOOPBACK_HOSTS:
+        # Same-origin against the request's own Host, not "the origin's
+        # hostname is loopback": a page served from any OTHER loopback port is
+        # a different origin whose operator this gate is meant to exclude, it
+        # passes a hostname check, and a browser cannot read the reply, so the
+        # rebuild it starts is invisible to the operator who started it.
+        if not origin_is_this_dashboard(origin, _header("Host", "")):
             return _json_err(
                 403,
                 {
                     "error": "Forbidden: cross-origin",
-                    "detail": f"origin host {origin_host!r} is not loopback",
+                    "detail": f"origin {origin!r} is not this dashboard",
                 },
             )
     else:

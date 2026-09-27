@@ -23,7 +23,7 @@ case (`--allow-remote`).
 | 4 | No transport security. The token travels as `?token=` in a URL and in a cookie, in cleartext on any non-loopback bind | `ui.py:193-199`, `server.py:1993-2030` | `Referrer-Policy: no-referrer` (`server.py:2198`), `HttpOnly; SameSite=Strict` cookie, constant-time compare (`server.py:1827-1834`) |
 | 5 | `rebrew-project.toml` is trusted input: it decides which DB is read, which binaries are disassembled, and which directories `/src` and `/original` serve from | `_paths.py:37-62`, `server.py:680-707`, `ui.py:259-262` | None beyond TOML parsing; the file is assumed to come from the operator's own checkout |
 | 6 | Thread exhaustion: `wsgiref` runs one daemon thread per connection with no connection cap, so a flood of ordinary requests spawns unbounded threads | `cli.py:73`, `cli.py:767` | A 120 s per-socket deadline on every read and write (`cli.py:93`, `cli.py:105`); only `/api/events` is capped (`api.py:469`, `api.py:663-696`) |
-| 7 | Any local process can trigger a full re-catalog and DB rebuild (disk and CPU), repeatedly within the cooldown | `api.py:1667-1700` | Loopback peer check, loopback-`Origin` and `Sec-Fetch-Site: cross-site` rejection, single-flight lock, `_REGEN_COOLDOWN_SECONDS`, and an `Idempotency-Key` ledger (`api.py:116-181`) |
+| 7 | Any local process can trigger a full re-catalog and DB rebuild (disk and CPU), repeatedly within the cooldown | `api.py:1667-1700` | Loopback peer check, same-origin (`server.origin_is_this_dashboard`) and `Sec-Fetch-Site: cross-site` rejection, single-flight lock, `_REGEN_COOLDOWN_SECONDS`, and an `Idempotency-Key` ledger (`api.py:116-181`) |
 | 8 | Response `detail` fields carry raw exception and request text (filesystem paths, sqlite messages, echoed user input) to the client | `server.py:2056-2084`, `server.py:2080`, `api.py:1690` | Tracebacks never reach a response body (`server.py:2086-2113`); only the one-line exception class and message do |
 | 9 | Untrusted native binary is parsed in-process by capstone and by the DLL reader, and the size cap is enforced only *after* an unbounded `read_bytes()` | `server.py:842-915`, `api.py:1421-1582` | `_MAX_DLL_SIZE` (512 MiB, `server.py:632`) checked on `stat()` and again post-read (`server.py:878`, `server.py:888-896`); a file that grows inside that window is fully read into RAM first |
 | 10 | No per-client identity: every action is attributable only to a shared token, and only to the socket peer | `server.py:1993-2030` | Rejected-token and rejected-Host events are logged with the peer address (`server.py:2028-2032`, `server.py:2140-2145`); regen start and completion are logged (`api.py:1796`, `api.py:1825`) |
@@ -183,9 +183,11 @@ served in full, so a `.env` or a key committed under `src/` is published to
 every client.
 
 **App to local process.** A local, unauthenticated process can trigger regen.
-Origin and `Sec-Fetch-Site` checks stop the browser-shaped version; they do not
-stop a local binary, and the `Sec-Fetch-Site` check is skipped entirely when an
-`Origin` is sent that passes the loopback test (`api.py:1692-1721`). Regen runs
+The `Origin` and `Sec-Fetch-Site` checks stop the browser-shaped version; they do
+not stop a local binary, and the `Sec-Fetch-Site` check is skipped entirely when
+an `Origin` is sent that the same-origin test accepts
+(`server.origin_is_this_dashboard`: the origin's host and port against the
+request's own `Host`, so a page on another loopback port is refused). Regen runs
 with no timeout by design (`regen.py:12-16`).
 
 **Config to runtime.** A `rebrew-project.toml` from a cloned or shared project,
@@ -203,7 +205,7 @@ memoized path just recomputes (`_paths.py:56-62`).
 | Host header allowlist on loopback binds | `server.py:104`, `server.py:156`, `server.py:2140-2145` | DNS rebinding |
 | Remote-bind acknowledgement, hard exit 1 without `--allow-remote` | `cli.py:618-627` | Accidental LAN exposure |
 | Startup validation of every `RECOVERAGE_*`, unknown name rejected | `config.py:225-240`, `config.py:127-211`, `cli.py:239`, `cli.py:253` | Misconfigured deployment, misspelled env var |
-| `Sec-Fetch-Site: cross-site` and loopback-`Origin` gate on regen | `api.py:1692-1721` | Cross-site POST |
+| `Sec-Fetch-Site: cross-site` and same-origin `Origin` gate on regen | `api.py:1692-1721` | Cross-site POST |
 | Single-flight lock + cooldown on regen | `api.py:122`, `api.py:1748-1783` | Concurrent torn rebuilds, regen flood |
 | `Idempotency-Key` ledger: charset-validated, 600 s TTL, 128-slot eviction, replay answered before the cooldown | `api.py:138-181`, `api.py:1736-1741` | Duplicated pipeline runs from retries, double-clicks, proxy replay |
 | CSP, `nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` | `server.py:2165`, `server.py:2193-2198` | Injection, framing, token leak via Referer |
