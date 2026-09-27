@@ -33,10 +33,12 @@ dependencies = [
     # and the shared rebrew-project.toml + coverage.db resolution
     # (rebrew.workspace, stdlib only), so recoverage does not carry its own
     # copy.  Resolved from the sibling checkout by [tool.uv.sources] below.
-    # 2.4.0 is the floor, not a formality: server.py imports
-    # rebrew.workspace.CELLS_JSON_OBJECT_SQL at module scope, and that symbol
-    # ships with 2.4.0's schema v7.
-    "rebrew>=2.4.0",
+    # 2.10.0 is the floor. Regen imports rebrew.catalog.cli.run_catalog
+    # (rebrew.catalog stopped re-exporting it in 2.7.0). Readers take
+    # coverage_db_lock shared around open_sqlite_ro, and 2.10.0 is the
+    # first release that ships that lock. The schema stamp since 2.7.0
+    # is "10".
+    "rebrew>=2.10.0",
     "rich>=15.0.0",
     "rjsmin>=1.2",
     "typer>=0.27.2",

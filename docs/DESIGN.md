@@ -191,7 +191,7 @@ On function/global selection:
 
 ## Database Schema
 
-The database uses a v4 schema (see [DB_FORMAT.md](../../rebrew/docs/DB_FORMAT.md) for the canonical reference).
+The database is rebrew's `coverage.db` (see [DB_FORMAT.md](../../rebrew/docs/DB_FORMAT.md)). This server reads schema v3 through v10. v10 is the stamp current rebrew writes.
 
 ### Schema Compatibility
 
@@ -201,9 +201,12 @@ The database uses a v4 schema (see [DB_FORMAT.md](../../rebrew/docs/DB_FORMAT.md
 | v4 | Fully supported |
 | v5 | Fully supported — `verify_results` gained `reg_delta` and `effective_match` |
 | v6 | Fully supported — `functions` gained `updated_by`/`updated_at`, `globals` gained `status`, `history` gained `updated_by` |
-| v7 | Fully supported (current) — `section_cell_stats` became a table and `section_cells_json` was added, both materialized by `build-db` |
+| v7 | Fully supported. `section_cell_stats` became a table and `section_cells_json` was added, both materialized by `build-db` |
+| v8 | Fully supported. `functions.status` is CHECK-constrained to the known status set. No new columns |
+| v9 | Fully supported. `cells.state` is CHECK-constrained, and `metadata` gained `idx_metadata_key`. No new columns |
+| v10 | Fully supported (current). The cell-state CHECK set follows `KNOWN_STATUSES`, so `extract_error` and `invalid_va` are stored as themselves. No new columns |
 
-Recoverage performs a soft version check on every database open and logs a warning if the stored `db_version` is not one of the known-compatible versions (`3`, `4`, `5`, `6`, `7`). It never aborts on an unexpected version — `/data` carries the accepted set as `known_schema` so the SPA can tell a stale server from an empty database.
+Recoverage performs a soft version check on every database open and logs a warning if the stored `db_version` is not one of the known-compatible versions (`3` through `10`). It never aborts on an unexpected version. `/data` carries the accepted set as `known_schema` so the SPA can tell a stale server from an empty database.
 
 ### Tables
 * `metadata`: Key-value pairs per target — coverage summaries, paths, `db_version` stamp

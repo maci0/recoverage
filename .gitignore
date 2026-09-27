@@ -30,3 +30,4 @@ node_modules/
 coverage.db
 coverage.db-shm
 coverage.db-wal
+coverage.db.lock

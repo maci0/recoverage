@@ -19,7 +19,7 @@ import pytest
 import zstandard
 from conftest import HAS_DB, decode_body, get_first_target, wsgi_get, wsgi_post, wsgi_request
 from rebrew.workspace import (
-    CELLS_JSON_OBJECT_SQL,
+    SECTION_CELLS_AGG_SQL,
     SECTION_CELLS_COLUMN,
     SECTION_CELLS_TABLE,
     sqlite_ro_uri,
@@ -2260,8 +2260,8 @@ class TestKnownSchemaContract:
         assert seen and "id" not in seen
         # The spine every consumer reads is always present.  The remaining
         # fields (functions/label/parent_function) are OMITTED when they carry
-        # no information — see CELLS_JSON_OBJECT_SQL, which drops null and empty
-        # values — so they cannot be asserted unconditionally here.
+        # no information. CELLS_JSON_OBJECT_SQL drops null and empty
+        # values, so they cannot be asserted unconditionally here.
         assert {"start", "end", "span", "state"} <= seen
 
 
@@ -2274,11 +2274,10 @@ class TestMaterializedCellsCache:
     interchangeable, so this pins them to byte-identical payloads — a
     divergence here silently changes what every grid renders.
 
-    The cache is encoded here with zstd directly rather than through a shared
-    helper: the codec deliberately does NOT live in ``rebrew.workspace`` (that
-    module is stdlib-only), so the only thing linking producer and consumer is
-    the column name.  A test that went through rebrew's own encoder could pass
-    while the reader's decoder disagreed.
+    The cache is encoded here with zstd directly rather than through
+    ``encode_section_cells``. Going through rebrew's encoder would hide a
+    decoder that cannot read a frame this server might be handed. The column
+    name is still what selects the codec.
     """
 
     @staticmethod
@@ -2316,7 +2315,7 @@ class TestMaterializedCellsCache:
             [
                 (tgt, sec, self._encode(cells_json))
                 for tgt, sec, cells_json in c.execute(
-                    f"SELECT target, section_name, json_group_array({CELLS_JSON_OBJECT_SQL})"
+                    f"SELECT target, section_name, {SECTION_CELLS_AGG_SQL}"
                     " FROM cells GROUP BY target, section_name"
                 ).fetchall()
             ],
@@ -2368,7 +2367,7 @@ class TestMaterializedCellsCache:
             [
                 (tgt, sec, zlib.compress(cells_json.encode("utf-8")))
                 for tgt, sec, cells_json in c.execute(
-                    f"SELECT target, section_name, json_group_array({CELLS_JSON_OBJECT_SQL})"
+                    f"SELECT target, section_name, {SECTION_CELLS_AGG_SQL}"
                     " FROM cells GROUP BY target, section_name"
                 ).fetchall()
             ],

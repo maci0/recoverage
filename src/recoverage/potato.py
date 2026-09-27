@@ -27,7 +27,7 @@ from urllib.parse import ParseResult, parse_qs
 from urllib.parse import quote as _url_quote
 
 from bottle import HTTPResponse, SimpleTemplate  # type: ignore[import-untyped]
-from rebrew.workspace import parse_va_candidates, sqlite_ro_uri
+from rebrew.workspace import parse_va_candidates
 
 from recoverage import __version__
 from recoverage.server import (
@@ -41,6 +41,7 @@ from recoverage.server import (
     _global_json_sql,
     _load_dll,
     _load_metadata,
+    _open_db,
     _snapshot_db_mtime,
     get_disassembly,
     resolve_targets,
@@ -946,8 +947,7 @@ def render_potato(parsed_url: ParseResult) -> str:
 
     db_path = _db_path()
     try:
-        conn = sqlite3.connect(sqlite_ro_uri(db_path), uri=True)
-        conn.row_factory = sqlite3.Row
+        conn = _open_db(db_path)
     except sqlite3.Error:
         _log.warning("Potato mode: database unavailable at %s", db_path)
         # Signal failure, not a 200 page: monitoring and scripts must see the
@@ -1576,7 +1576,7 @@ def _render_function_list(
     # Base filter: GLOBAL/DATA marker rows live in the functions table but are
     # data markers, not functions — same exclusion as the API list endpoint
     # and _section_stats, so both surfaces list the same rows.
-    where = ["target = ?", "markerType NOT IN ('GLOBAL','DATA')"]
+    where = ["target = ?", "markerType NOT IN ('GLOBAL','DATA','VTABLE','STRING')"]
     params: list[Any] = [target]
     if status_filter:
         where.append("status = ?")

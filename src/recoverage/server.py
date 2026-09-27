@@ -36,11 +36,12 @@ import zstandard as zstd
 # target and must never appear in target enumeration, stats, or the dashboard
 # dropdown.
 from rebrew.workspace import (
-    CELLS_JSON_OBJECT_SQL,
     CONFIG_NAME,
     SCHEMA_TARGET,
+    SECTION_CELLS_AGG_SQL,
     SECTION_CELLS_COLUMN,
     SECTION_CELLS_TABLE,
+    coverage_db_lock,
     decode_section_cells,
     read_config,
     sqlite_ro_uri,
@@ -452,7 +453,8 @@ def _section_stats(c: sqlite3.Cursor, target: str) -> dict[str, Any]:
     by_status: dict[str, int] = {}
     c.execute(
         "SELECT status, COUNT(*) as cnt FROM functions"
-        " WHERE target = ? AND markerType NOT IN ('GLOBAL','DATA') GROUP BY status",
+        " WHERE target = ? AND markerType NOT IN"
+        " ('GLOBAL','DATA','VTABLE','STRING') GROUP BY status",
         (target,),
     )
     for row in c.fetchall():
@@ -881,15 +883,13 @@ _GLOBAL_JSON_SQL = (
     ")"
 )
 
-# Cell shape contract for BOTH consumers (SPA /data and Potato grid): the
-# json_object keys here are what app.js and potato.py render.  The projection
-# comes from rebrew.workspace — the SAME constant build_db materializes into
-# section_cells_json — so the cache path and this live fallback cannot drift
-# into serving different cell shapes.  See CELLS_JSON_OBJECT_SQL for why `id`
-# is not part of it.
-_CELLS_JSON_SQL = (
-    f"SELECT section_name, json_group_array({CELLS_JSON_OBJECT_SQL}) FROM cells WHERE target = ?"
-)
+# Cell shape for the SPA /data payload and the Potato grid. SECTION_CELLS_AGG_SQL
+# is the ordered aggregate build_db writes into section_cells_json (the
+# CELLS_JSON_OBJECT_SQL projection, json_group_array ... ORDER BY start). The
+# live fallback uses that same expression so a database without the cache cannot
+# drift into a different cell shape or into planner row order. `id` is omitted
+# from the projection: no consumer reads it.
+_CELLS_JSON_SQL = f"SELECT section_name, {SECTION_CELLS_AGG_SQL} FROM cells WHERE target = ?"
 
 
 def _has_materialized_cells(c: sqlite3.Cursor) -> bool:
@@ -1009,7 +1009,10 @@ def _load_metadata(c: sqlite3.Cursor, target: str) -> dict[str, Any]:
     return data
 
 
-KNOWN_SCHEMA_VERSIONS: frozenset[str] = frozenset({"3", "4", "5", "6", "7"})
+# v8 CHECK-constrains functions.status, v9 CHECK-constrains cells.state and
+# adds idx_metadata_key, v10 widens the cell-state set (extract_error,
+# invalid_va). None of those add or remove a column this server queries.
+KNOWN_SCHEMA_VERSIONS: frozenset[str] = frozenset({"3", "4", "5", "6", "7", "8", "9", "10"})
 
 # Schema check memoized per DB (mtime_ns, size): the check is two queries
 # (metadata + full sqlite_master scan) that would otherwise run on every
@@ -1021,9 +1024,9 @@ _SCHEMA_VERSION_CACHE: tuple[tuple[int, int], str] | None = None
 def _check_schema_version(conn: sqlite3.Connection) -> str:
     """Read the stored db_version metadata; warn if it is not a known-compatible version.
 
-    Known-compatible versions: 3 through 7.  Version 3 is still readable
+    Known-compatible versions: 3 through 10.  Version 3 is still readable
     because none of the v4 constraints affect reads of existing data.  Any other
-    version is logged as a warning — recoverage does not abort.
+    version is logged as a warning. recoverage does not abort.
 
     The version stamp alone is not proof of shape: a DB stamped "4" can be
     missing required objects (e.g. the ``history`` table) and pass this gate,
@@ -1166,14 +1169,15 @@ def _check_schema_version_uncached(conn: sqlite3.Connection) -> str:
                 "section_cell_stats",
             }
             missing = required - present
-            if not missing and version in ("4", "5", "6", "7"):
-                # Object names present — verify the query-critical columns.
-                # A DB stamped "4" whose functions table lacks textOffset /
-                # similarity (or whose view is stale) 500s at query time.
-                # v6 additions (updated_by/updated_at, globals.status,
-                # verify reg_delta/effective_match) are read tolerantly by
-                # the endpoints, so absence degrades rather than 503s —
-                # but the shape gate still reports them for visibility.
+            if not missing and version != "3":
+                # Object names present. Verify the query-critical columns.
+                # v3 predates that column set. v4 through v10 share it:
+                # v8 through v10 add CHECK constraints and an index, not
+                # columns these queries name. v6 additions (updated_by /
+                # updated_at, globals.status, verify reg_delta /
+                # effective_match) are read when present and omitted when
+                # absent, so a missing one degrades rather than 503s. The
+                # shape gate still reports a missing required column.
                 missing |= _missing_required_columns(conn)
             if missing:
                 _log.warning(
@@ -1195,8 +1199,63 @@ def _check_schema_version_uncached(conn: sqlite3.Connection) -> str:
         return "<unknown>"
 
 
+# Same busy wait as rebrew.workspace.open_sqlite_ro. A reader blocked on
+# build-db's write lock should wait out a short transaction, not the
+# sqlite default of 5s.
+_SQLITE_RO_TIMEOUT_SECONDS = 30.0
+
+
+class _LockedReadConnection(sqlite3.Connection):
+    """Read-only connection that releases the shared coverage lock on close.
+
+    ``sqlite3.Connection.close`` cannot be replaced on an instance, and the
+    stock connection cannot be weak-referenced, so the lock lives on this
+    subclass. ``contextlib.closing`` calls ``close``. There is no ``__del__``:
+    sqlite forbids ``close`` from a thread other than the one that opened
+    the connection, and a failed ``connect`` still finalizes the subclass.
+    Dropping the connection without ``close`` drops the lock object, and
+    that generator's cleanup unlocks the file. ``build-db --force`` waits
+    on the lock before unlinking the file.
+    """
+
+    _coverage_lock: Any = None
+
+    def close(self) -> None:
+        lock = getattr(self, "_coverage_lock", None)
+        self._coverage_lock = None
+        try:
+            super().close()
+        finally:
+            if lock is not None:
+                lock.__exit__(None, None, None)
+
+
 def _open_db(db_path: Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(sqlite_ro_uri(db_path), uri=True)
+    """Open *db_path* read-only, holding ``coverage_db_lock`` until close.
+
+    Same reader setup as ``rebrew.workspace.open_sqlite_ro`` (``mode=ro``
+    URI, ``query_only``, 30s busy timeout). The connection is a
+    :class:`_LockedReadConnection` so the shared lock survives for the open.
+    """
+    lock = coverage_db_lock(db_path, shared=True)
+    lock.__enter__()
+    try:
+        conn = sqlite3.connect(
+            sqlite_ro_uri(db_path),
+            uri=True,
+            timeout=_SQLITE_RO_TIMEOUT_SECONDS,
+            factory=_LockedReadConnection,
+        )
+        try:
+            conn.execute("PRAGMA query_only=ON")
+        except BaseException:
+            # The lock is not attached yet, so close() does not release it.
+            conn.close()
+            raise
+    except BaseException:
+        lock.__exit__(None, None, None)
+        raise
+    conn._coverage_lock = lock
     conn.row_factory = sqlite3.Row
     return conn
 

@@ -20,7 +20,6 @@ from typing import Any, NoReturn
 from wsgiref.simple_server import WSGIRequestHandler, WSGIServer
 
 import typer
-from rebrew.workspace import sqlite_ro_uri
 
 from recoverage._paths import _db_path
 
@@ -157,13 +156,14 @@ def _open_db_or_exit(*, missing_exit_code: int = 1) -> sqlite3.Connection:
     infrastructure error, distinct from "coverage below threshold" = 1);
     sibling commands keep their historical exit 1.
     """
+    from recoverage.server import _open_db
+
     p = _db_path()
     if not p.exists():
         typer.secho(f"Error: database not found at {p}", fg=typer.colors.RED, err=True)
         raise typer.Exit(missing_exit_code)
     try:
-        conn = sqlite3.connect(sqlite_ro_uri(p), uri=True)
-        conn.row_factory = sqlite3.Row
+        conn = _open_db(p)
     except sqlite3.Error as exc:
         typer.secho(
             f"Error: cannot open database {p}: {exc} {_REBUILD_HINT}",

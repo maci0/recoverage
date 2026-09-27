@@ -845,8 +845,9 @@ def handle_api_functions_list(target: str) -> bytes | Any:
         sort_field = sort_param
 
     with _target_cursor(target) as c:
-        # Base filter: GLOBAL/DATA marker rows are data, not functions.
-        where = ["target = ? AND markerType NOT IN ('GLOBAL','DATA')"]
+        # Base filter: GLOBAL/DATA/VTABLE/STRING marker rows are data, not
+        # functions (rebrew ADR 023 widened the legal marker set).
+        where = ["target = ? AND markerType NOT IN ('GLOBAL','DATA','VTABLE','STRING')"]
         params: list[Any] = [target]
 
         if status_filter:

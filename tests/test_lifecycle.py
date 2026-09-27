@@ -41,13 +41,16 @@ def _install_fake_rebrew(
     config = types.ModuleType("rebrew.config")
     config.load_config = load_config  # type: ignore[attr-defined]
     catalog = types.ModuleType("rebrew.catalog")
-    catalog.run_catalog = run_catalog  # type: ignore[attr-defined]
+    catalog.__path__ = []  # type: ignore[attr-defined]
+    catalog_cli = types.ModuleType("rebrew.catalog.cli")
+    catalog_cli.run_catalog = run_catalog  # type: ignore[attr-defined]
     build = types.ModuleType("rebrew.build_db")
     build.build_db = build_db  # type: ignore[attr-defined]
     for name, module in (
         ("rebrew", package),
         ("rebrew.config", config),
         ("rebrew.catalog", catalog),
+        ("rebrew.catalog.cli", catalog_cli),
         ("rebrew.build_db", build),
     ):
         monkeypatch.setitem(sys.modules, name, module)
@@ -93,7 +96,12 @@ class TestRunRegen:
         # broken install: run_regen lets it propagate and the callers map it to
         # their exit-1 / HTTP-500 contract.
         monkeypatch.setitem(sys.modules, "rebrew", None)
-        for name in ("rebrew.config", "rebrew.catalog", "rebrew.build_db"):
+        for name in (
+            "rebrew.config",
+            "rebrew.catalog",
+            "rebrew.catalog.cli",
+            "rebrew.build_db",
+        ):
             monkeypatch.delitem(sys.modules, name, raising=False)
 
         with pytest.raises(ImportError):
@@ -116,6 +124,32 @@ class TestRunRegen:
 
         with pytest.raises(ValueError, match="corrupt"):
             run_regen(tmp_path)
+
+
+class TestRebrewSurface:
+    """Pins the rebrew call shape run_regen depends on.
+
+    rebrew 2.7 stopped re-exporting ``run_catalog`` from ``rebrew.catalog``.
+    A later required argument on any of the three calls would raise TypeError
+    inside regen instead of failing this import check.
+    """
+
+    def test_regen_entrypoints_match_run_regen(self) -> None:
+        import inspect
+
+        from rebrew.build_db import build_db
+        from rebrew.catalog.cli import run_catalog
+        from rebrew.config import load_config
+
+        catalog_required = [
+            name
+            for name, param in inspect.signature(run_catalog).parameters.items()
+            if param.default is inspect.Parameter.empty
+        ]
+        assert catalog_required == ["cfg"]
+        assert list(inspect.signature(load_config).parameters)[:1] == ["root"]
+        project_root = inspect.signature(build_db).parameters["project_root"]
+        assert project_root.default is None
 
 
 class TestOpenAndReap:

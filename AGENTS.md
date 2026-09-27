@@ -10,7 +10,8 @@ a retro "Potato Mode" that renders entirely in server-side HTML tables.
 This package is a **consumer** of data produced by `rebrew`, which it depends
 on as a library: `rebrew.workspace` provides the shared `rebrew-project.toml` +
 `coverage.db` resolution (stdlib only), and the regen commands call rebrew's
-`run_catalog`/`build_db` in-process; see `src/recoverage/regen.py`.  Serving a
+`run_catalog` (`rebrew.catalog.cli`) and `build_db` in-process; see
+`src/recoverage/regen.py`.  Serving a
 dashboard needs no project workspace or compiler toolchain, only a valid
 `coverage.db` file.
 
@@ -124,12 +125,14 @@ bun run lint:html           # vnu only: static assets + served pages (SPA shell,
      v6, a table from v7) and `section_cells_json` (per-section cell JSON, zstd).
      Both are derived from `cells` and rebuilt whole on every build.
      `server._cells_json_rows` prefers the cache and falls back to the live
-     `json_group_array` query when a DB predates it — that fallback is what keeps
-     pre-v7 databases serving, so keep it when editing that path.  The cache's
-     codec is identified by its column name (`cells_zstd`), not by `db_version`,
-     so a table written in an older codec is declined rather than mis-decoded.
-   - The cell JSON projection is `rebrew.workspace.CELLS_JSON_OBJECT_SQL`,
-     shared with the producer so the cached and live shapes cannot drift
+     `SECTION_CELLS_AGG_SQL` query when a DB predates it. That fallback is what
+     keeps pre-v7 databases serving, so keep it when editing that path.  The
+     cache's codec is identified by its column name (`cells_zstd`), not by
+     `db_version`, so a table written in an older codec is declined rather
+     than mis-decoded.
+   - The cell JSON projection is `rebrew.workspace.CELLS_JSON_OBJECT_SQL`, and
+     the ordered aggregate is `SECTION_CELLS_AGG_SQL`. Both are shared with the
+     producer so the cached and live results cannot drift.
 3. `recoverage` → serves the DB as a web dashboard
    - Cell detail panel shows parent function as a clickable navigation link
 
@@ -139,7 +142,7 @@ Required:
 - `bottle>=0.13` (web server)
 - `brotli>=1.1` (Brotli compression)
 - `rcssmin>=1.1` (CSS minification)
-- `rebrew` (sibling path dep pinned in `[tool.uv.sources]`): `rebrew.workspace` for shared `rebrew-project.toml` + coverage.db resolution, plus rebrew's catalog/build-db for in-process regen
+- `rebrew>=2.10.0` (sibling path dep pinned in `[tool.uv.sources]`): `rebrew.workspace` for shared `rebrew-project.toml` + coverage.db resolution, plus rebrew's catalog/build-db for in-process regen
 - `rich>=13.0` (terminal tables)
 - `rjsmin>=1.2` (JS minification)
 - `typer>=0.9` (CLI framework)

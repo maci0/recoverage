@@ -372,11 +372,13 @@ class TestLikeEscape:
         assert result == "%\\\\\\_%"
 
 
-def _create_v4_db(db: Path, functions_columns: str) -> None:
-    """Create a minimal v4-shaped DB stamped db_version="4".
+def _create_v4_db(db: Path, functions_columns: str, *, version: str = "4") -> None:
+    """Create a minimal v4-shaped DB stamped with *version*.
 
     *functions_columns* is the tail of the functions table's column list, so
     tests can omit query-critical columns to exercise the column gate.
+    The column set is what v4 through v10 share; *version* only changes the
+    stamp.
     """
     conn = sqlite3.connect(db)
     try:
@@ -422,8 +424,8 @@ def _create_v4_db(db: Path, functions_columns: str) -> None:
             """
         )
         c.execute(
-            "INSERT INTO metadata VALUES (?, 'db_version', '\"4\"')",
-            (SCHEMA_TARGET,),
+            "INSERT INTO metadata VALUES (?, 'db_version', ?)",
+            (SCHEMA_TARGET, f'"{version}"'),
         )
         conn.commit()
     finally:
@@ -492,6 +494,73 @@ class TestSchemaColumnGate:
 
         with contextlib.closing(sqlite3.connect(db)) as conn2:
             assert srv._check_schema_version_uncached(conn2) == "<incomplete>"
+
+
+class TestCurrentRebrewSchema:
+    """The installed rebrew's stamp must be a version this server accepts."""
+
+    def test_stamp_is_known_and_column_gated(self, tmp_path: Any) -> None:
+        import sqlite3
+
+        from rebrew.build_db import _CURRENT_DB_VERSION
+
+        from recoverage import server as srv
+
+        assert _CURRENT_DB_VERSION in srv.KNOWN_SCHEMA_VERSIONS
+        db = tmp_path / "coverage.db"
+        _create_v4_db(db, _FN_COLUMNS_FULL, version=_CURRENT_DB_VERSION)
+        with contextlib.closing(sqlite3.connect(db)) as conn:
+            assert srv._check_schema_version_uncached(conn) == _CURRENT_DB_VERSION
+
+        incomplete = tmp_path / "incomplete.db"
+        _create_v4_db(incomplete, _FN_COLUMNS_NO_TEXT_OFFSET, version=_CURRENT_DB_VERSION)
+        with contextlib.closing(sqlite3.connect(incomplete)) as conn:
+            assert srv._check_schema_version_uncached(conn) == "<incomplete>"
+
+
+class TestReadOnlyOpen:
+    def test_open_db_rejects_writes(self, tmp_path: Path) -> None:
+        import sqlite3
+
+        from recoverage import server as srv
+
+        db = tmp_path / "coverage.db"
+        sqlite3.connect(db).close()
+        conn = srv._open_db(db)
+        try:
+            with pytest.raises(sqlite3.OperationalError):
+                conn.execute("CREATE TABLE blocked (id INTEGER)")
+        finally:
+            conn.close()
+
+    def test_shared_lock_drops_when_the_connection_is_collected(self, tmp_path: Path) -> None:
+        import fcntl
+        import gc
+        import sqlite3
+
+        from recoverage import server as srv
+
+        db = tmp_path / "coverage.db"
+        sqlite3.connect(db).close()
+        conn = srv._open_db(db)
+        lock_path = db.with_name(db.name + ".lock")
+        held = lock_path.open("a", encoding="utf-8")
+        try:
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        finally:
+            held.close()
+
+        conn.close()
+        del conn
+        gc.collect()
+
+        held = lock_path.open("a", encoding="utf-8")
+        try:
+            fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(held, fcntl.LOCK_UN)
+        finally:
+            held.close()
 
 
 class TestDeepLinking:

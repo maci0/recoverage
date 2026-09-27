@@ -3,6 +3,33 @@
 All notable user-visible changes to Recoverage are recorded here.  The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.6.0] - 2026-09-27
+
+Requires `rebrew>=2.10.0`.
+
+### Fixed
+
+- **Regen imports `run_catalog` from `rebrew.catalog.cli`.** Since rebrew 2.7
+  the `rebrew.catalog` package does not re-export it, so `recoverage regen`,
+  `serve --regen`, and `POST /api/regen` raised `ImportError` against current
+  rebrew.
+- **The function list skips `VTABLE` and `STRING` rows.** Potato and the
+  stats query already treated those markers as data. `/api/targets/<target>/functions`
+  only excluded `GLOBAL` and `DATA`, so vtable and string rows were listed
+  as functions.
+- **Schema v8, v9, and v10 are accepted.** Current rebrew stamps `db_version`
+  `"10"`. v8 CHECK-constrains `functions.status`, v9 CHECK-constrains
+  `cells.state` and adds `idx_metadata_key`, and v10 stores `extract_error`
+  and `invalid_va` as cell states. None of those add or remove a column this
+  server queries. The column gate applies to every known version except v3.
+- **The live cell-JSON fallback uses `SECTION_CELLS_AGG_SQL`.** That is the
+  ordered aggregate `build-db` writes into `section_cells_json`
+  (`json_group_array` of the shared projection, `ORDER BY start`).
+- **Database reads use the same read-only setup as `open_sqlite_ro` and
+  hold `coverage_db_lock` shared until `close`.** `mode=ro` and `query_only`
+  reject writes. `build-db --force` waits for the shared lock before
+  unlinking the file.
+
 ## [1.5.0] - 2026-09-17
 
 Requires `rebrew>=2.4.0`: the cell projection, the `cells_zstd` codec and the

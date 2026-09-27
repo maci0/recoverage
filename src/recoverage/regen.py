@@ -27,9 +27,12 @@ def run_regen(root: Path) -> None:
     Loads rebrew-project.toml once, then runs both pipeline steps in this
     process.  Failures propagate: rebrew raises ordinary exceptions, and its
     ``error_exit`` raises ``typer.Exit`` after reporting the problem itself.
+
+    ``run_catalog`` is imported from ``rebrew.catalog.cli``. The
+    ``rebrew.catalog`` package does not re-export it.
     """
     from rebrew.build_db import build_db
-    from rebrew.catalog import run_catalog
+    from rebrew.catalog.cli import run_catalog
     from rebrew.config import load_config
 
     cfg = load_config(root)
