@@ -161,7 +161,15 @@ def handle_potato() -> bytes | Any:
             qs = "&".join(p for p in qs.split("&") if not p.startswith("token="))
         etag = _etag_or_304(_snapshot_db_mtime(), qs)
         body = render_potato(urlparse(request.url)).encode("utf-8")
-        resp_body = _compressed(body, "text/html; charset=utf-8")
+        # Every other DB-derived response carries an explicit cache policy;
+        # /potato was the one surface sent with none, which leaves the browser
+        # free to apply heuristic freshness and a shared cache free to store
+        # and replay a page that may have been rendered for a token-bearing
+        # client.  CACHE_REVALIDATE keeps the ETag's cheap 304s while forcing
+        # revalidation before every reuse.
+        resp_body = _compressed(
+            body, "text/html; charset=utf-8", Cache_Control=CACHE_REVALIDATE
+        )
 
         if etag:
             response.set_header("ETag", etag)
@@ -180,6 +188,7 @@ def handle_potato() -> bytes | Any:
         return HTTPResponse(
             status=500,
             body="<html><body>Internal server error</body></html>",
+            headers={"Cache-Control": CACHE_NO_STORE},
         )
 
 

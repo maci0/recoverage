@@ -3,6 +3,22 @@
 All notable user-visible changes to Recoverage are recorded here.  The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- **Potato Mode responses carry a cache directive.** `/potato` was the one
+  DB-derived response sent with no `Cache-Control` at all, leaving
+  heuristic freshness to the browser and leaving a shared cache free to
+  store and replay a page rendered for a token-bearing client. It now
+  sends `no-cache, must-revalidate`, keeping the ETag's cheap 304s.
+  The Potato 500 page and the HTML 401 token challenge now say `no-store`
+  like every other error response.
+- **Target ids are escaped in the DLL loader's warnings.** `target` is
+  routable request data and originates in analyzed binary names, so a
+  control character in it could forge a log line; the loader's warnings
+  now route it through `_log_safe` like the rest of the request log.
+
 ## [1.6.0] - 2026-09-27
 
 Requires `rebrew>=2.10.0`.

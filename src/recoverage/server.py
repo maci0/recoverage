@@ -622,8 +622,8 @@ def _load_dll(target: str) -> bytes | None:
                 return DLL_DATA[target]
             _log.warning(
                 "No [targets.%s].binary configured — cannot load DLL for target %s",
-                target,
-                target,
+                _log_safe(target),
+                _log_safe(target),
             )
             DLL_DATA[target] = None
         return None
@@ -657,8 +657,8 @@ def _load_dll(target: str) -> bytes | None:
     except OSError as exc:
         _log.warning(
             "Failed to load DLL for target %s at %s: %s: %s",
-            target,
-            dll_path,
+            _log_safe(target),
+            _log_safe(str(dll_path)),
             type(exc).__name__,
             exc,
         )
@@ -1491,6 +1491,10 @@ def _require_auth() -> None:
             status=401,
             body=_UNAUTHORIZED_HTML,
             content_type="text/html; charset=utf-8",
+            # The JSON error contract already sets no-store (_json_err); this
+            # page is the one 401 that did not, so a shared cache could store
+            # and replay a pre-auth body.
+            headers={"Cache-Control": "no-store"},
         )
     raise _json_err(
         401,

@@ -17,11 +17,14 @@ import pytest
 import zstandard as zstd
 
 from recoverage.server import (
+    DLL_DATA,
+    DLL_LOCK,
     SCHEMA_TARGET,
     _best_encoding,
     _db_path,
     _escape_like,
     _find_dll_path,
+    _load_dll,
     _project_dir,
     clear_target_cache,
     compress_payload,
@@ -680,6 +683,7 @@ class TestTokenAuthEndpoint:
         status, headers, body = wsgi_get("/", headers={"Accept": "text/html"})
         assert status.startswith("401")
         assert "text/html" in headers.get("Content-Type", "")
+        assert headers.get("Cache-Control") == "no-store"
         assert b"Access token required" in body
 
     def test_api_route_stays_json_401_despite_html_accept(self) -> None:
@@ -892,6 +896,17 @@ class TestSecurityHeaders:
         assert "'unsafe-inline'" in csp
         assert "connect-src 'self'" in csp
 
+    def test_potato_page_forces_revalidation(self) -> None:
+        """Potato Mode is the one DB-derived response that used to carry no
+        cache directive at all, leaving heuristic freshness to the browser and
+        storage-plus-replay to any shared cache in front of the dashboard."""
+        from conftest import wsgi_get
+
+        _, headers, _ = wsgi_get("/potato")
+        assert headers.get("Cache-Control") == "no-cache, must-revalidate"
+        # bottle normalizes header names to Title-Case ("Etag").
+        assert headers.get("Etag")
+
 
 class TestLogInjection:
     """Request-derived log fields cannot forge multi-line entries: the path
@@ -912,6 +927,22 @@ class TestLogInjection:
         msgs = [r.getMessage() for r in caplog.records if r.name == "recoverage"]
         assert any("X-Forged" in m for m in msgs), "request was not logged at all"
         assert all("\n" not in m and "\r" not in m for m in msgs)
+
+    def test_target_id_cannot_forge_a_dll_log_line(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Target ids are routable request data and originate in analyzed
+        binary names, so the DLL loader's warnings carry them through
+        _log_safe like every other request-derived log field does."""
+        with caplog.at_level(logging.WARNING, logger="recoverage"):
+            with DLL_LOCK:
+                DLL_DATA.clear()
+            assert _load_dll("evil\nX-Forged: yes") is None
+        msgs = [r.getMessage() for r in caplog.records if r.name == "recoverage"]
+        assert any("X-Forged" in m for m in msgs), "failure was not logged at all"
+        assert all("\n" not in m and "\r" not in m for m in msgs)
+        with DLL_LOCK:
+            DLL_DATA.clear()
 
 
 class TestLoadDllTransientFailure:
