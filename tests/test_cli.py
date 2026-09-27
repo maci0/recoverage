@@ -345,6 +345,65 @@ class TestExportCsvFormulaInjection:
         assert rows[1][sec_col] == ".text"
 
 
+class TestExportCsvStdoutEncoding:
+    """The export must write UTF-8 whatever stdout's locale encoding is.
+
+    Section and target names come from analyzed PE binaries, so a non-ASCII
+    one is ordinary input.  Under a locale that names a legacy 8-bit charset
+    (LANG=en_US.ISO-8859-1) sys.stdout encodes with that codec, and the raw
+    csv write raises UnicodeEncodeError part-way through the file, leaving
+    the user's spreadsheet truncated mid-row.  Python coerces a bare
+    ``LC_ALL=C`` to UTF-8, so the test forces the encoding instead.
+    """
+
+    def _export_to_ascii_stdout(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, section: str
+    ) -> bytes:
+        """Export a one-section DB with an ASCII stdout; return the raw bytes."""
+        from recoverage.cli import ExportFormat, export
+
+        db = tmp_path / "cov.db"
+        _make_section_db(db, [section], [(section, 0, 100, "exact")])
+        monkeypatch.setattr("recoverage.cli._db_path", lambda: db)
+
+        sink = io.BytesIO()
+        real_stdout = sys.stdout
+        monkeypatch.setattr(
+            sys, "stdout", io.TextIOWrapper(sink, encoding="ascii", errors="strict")
+        )
+        try:
+            export(output_format=ExportFormat.csv, target=None)
+        finally:
+            monkeypatch.setattr(sys, "stdout", real_stdout)
+        return sink.getvalue()
+
+    def test_non_ascii_section_survives_ascii_stdout(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        section = ".données_café"
+        raw = self._export_to_ascii_stdout(tmp_path, monkeypatch, section)
+        rows = list(csv.reader(io.StringIO(raw.decode("utf-8"))))
+        assert rows[0].index("section") >= 0
+        assert rows[1][rows[0].index("section")] == section
+
+    def test_utf8_stream_is_a_passthrough_for_utf8_stdout(self) -> None:
+        from recoverage.cli import _utf8_stream
+
+        stdout = io.TextIOWrapper(io.BytesIO(), encoding="utf-8")
+        assert _utf8_stream(stdout) is stdout
+
+    def test_utf8_stream_reencodes_an_ascii_stdout(self) -> None:
+        from recoverage.cli import _utf8_stream
+
+        sink = io.BytesIO()
+        stdout = io.TextIOWrapper(sink, encoding="ascii", errors="strict")
+        pinned = _utf8_stream(stdout)
+        assert pinned is not stdout
+        pinned.write("café")
+        pinned.flush()
+        assert sink.getvalue() == "café".encode()
+
+
 class TestCheckFailureExit:
     def test_below_threshold_exits_1(self) -> None:
         """A tracked section under the threshold must exit 1 (the CI gate's

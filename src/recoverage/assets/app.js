@@ -415,16 +415,47 @@ const App = () => {
   // competing with first paint.
   van.derive(() => { if (detailReady.val) window.RC.connectEvents(() => loadData()); });
 
+  // Search comparison runs in two tiers.
+  //
+  // Tier 1 is NFC + toLowerCase.  A macOS input method sends NFD, so the
+  // "café" typed there is "cafe" + U+0301 and misses the NFC name rebrew
+  // wrote; composing both sides fixes that.
+  //
+  // Tier 2 is a collation scan, which is what simple case folding does not
+  // reach: the root collation is primary-equal on "ß" and "ss", so
+  // "STRASSE" finds "FunktionStraße", and "cafe" finds "café".  Intl has
+  // no string-producing fold, so the tier compares every window of the
+  // haystack.  It only runs on a tier-1 miss, and function names are short
+  // enough for that to stay well under a keystroke's budget.
+  const searchCollator = new Intl.Collator(undefined, { sensitivity: "base" });
+
+  const containsCollated = (text, needle) => {
+    for (let i = 0; i + needle.length <= text.length; i += 1) {
+      if (searchCollator.compare(text.slice(i, i + needle.length), needle) === 0) return true;
+    }
+    return false;
+  };
+
+  const foldQuery = (query) => ({
+    raw: query,
+    folded: query.normalize("NFC").toLowerCase(),
+  });
+
+  const matchesQuery = (text, needle) => (
+    text.normalize("NFC").toLowerCase().includes(needle.folded)
+    || containsCollated(text, needle.raw)
+  );
+
   const matchesSearch = (name, query) => {
     if (!query) return true;
-    const q = query.toLowerCase();
-    if (name.toLowerCase().includes(q)) return true;
+    const needle = foldQuery(query);
+    if (matchesQuery(name, needle)) return true;
 
     // Check search index if available
     if (data.val && data.val.search_index && data.val.search_index[name]) {
       const info = data.val.search_index[name];
-      if (info.va && info.va.toLowerCase().includes(q)) return true;
-      if (info.symbol && info.symbol.toLowerCase().includes(q)) return true;
+      if (info.va && matchesQuery(info.va, needle)) return true;
+      if (info.symbol && matchesQuery(info.symbol, needle)) return true;
     }
     return false;
   };

@@ -110,6 +110,14 @@ bun run lint:html           # vnu only: static assets + served pages (SPA shell,
 | `/api/events` | GET | Server-Sent Events: `db-updated` when coverage.db changes (SPA auto-refresh) |
 | `/api/regen` | POST | Re-run catalog + build-db (localhost only, rate-limited) |
 
+Search folding is split by layer, deliberately: the SPA folds both sides in JS
+(NFC composition, then a root-collation scan for `ß`/`ss` and accents, see
+`matchesSearch` in `assets/app.js`), while every server-side `?search=` matches
+through `server._escape_like`, where SQLite's LIKE folds ASCII and nothing
+else. A non-ASCII query therefore highlights grid cells but returns no rows
+from `/functions`. Closing that server-side needs a folded column, which is a
+schema change, not a query change.
+
 ## Data Pipeline
 
 1. `rebrew catalog` (or `--data-json`) → writes `db/data_*.json` in the project

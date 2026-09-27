@@ -18,6 +18,20 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   routable request data and originates in analyzed binary names, so a
   control character in it could forge a log line; the loader's warnings
   now route it through `_log_safe` like the rest of the request log.
+- **`export --format csv` survives a non-ASCII section name.** Target and
+  section names come from analyzed PE binaries, and the CSV writer wrote
+  through `sys.stdout` with whatever codec the locale names, so a name with
+  one accented character raised `UnicodeEncodeError` part-way through the
+  export and left the redirected file truncated mid-row. The writer is now
+  pinned to UTF-8, keeping the bare-`\n` line terminator contract.
+- **The function source panel survives an undecodable byte.** A C source
+  with a single Windows-1252 byte in a comment (0x92 is the common one)
+  failed the whole UTF-8 read and the panel rendered empty. The byte now
+  decodes to U+FFFD in place and the rest of the file stays readable.
+- **SPA search matches non-ASCII spellings.** The grid search compared with
+  `toLowerCase()`, so an NFD query from a macOS input method missed the NFC
+  name in the database, and `STRASSE` never found `Straße`. Both sides are
+  now composed to NFC and compared through a root-collation scan.
 
 ### Changed
 
