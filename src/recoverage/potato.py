@@ -50,6 +50,8 @@ from recoverage.server import (
     _snapshot_db_mtime,
     _verify_one_select,
     app,
+    folded_like_clause,
+    like_match,
     request,
     resolve_targets,
     response,
@@ -1312,12 +1314,18 @@ def _search_functions(c: sqlite3.Cursor, target: str, search_query: str) -> set[
     if not search_query:
         return search_matched_fns
 
+    # A non-ASCII term gets a second, folded disjunct over the name columns:
+    # SQLite's LIKE folds case for ASCII only, so "CAFÉ" would otherwise miss
+    # "Café_Render" and an NFD spelling would miss its NFC twin.  The VA
+    # columns are ASCII hex, so LIKE already folds them correctly.
+    fn_folded_sql, fn_folded_params = folded_like_clause(["name", "symbol"], search_query)
     like_pat = _escape_like(search_query)
+    fn_chain, fn_arity = like_match(["name", "vaStart", "symbol"])
     c.execute(
-        "SELECT name, vaStart FROM functions WHERE target = ? AND ("
-        "name LIKE ? ESCAPE '\\' OR vaStart LIKE ? ESCAPE '\\' "
-        "OR symbol LIKE ? ESCAPE '\\') ORDER BY name, vaStart LIMIT ?",
-        (target, like_pat, like_pat, like_pat, _SEARCH_ROW_LIMIT),
+        f"SELECT name, vaStart FROM functions WHERE target = ? AND {fn_chain}"
+        + (f" OR {fn_folded_sql}" if fn_folded_sql else "")
+        + " ORDER BY name, vaStart LIMIT ?",
+        (target, *([like_pat] * fn_arity), *fn_folded_params, _SEARCH_ROW_LIMIT),
     )
     for name, va_start in c.fetchall():
         search_matched_fns.add(name)
@@ -1331,13 +1339,15 @@ def _search_functions(c: sqlite3.Cursor, target: str, search_query: str) -> set[
     # Potato table matches when pasted into the search box.  printf('0x%x', va)
     # has no prefix and could never match either.
     # The row cap applies to rows selected, not to the returned set.
+    g_folded_sql, g_folded_params = folded_like_clause(["name"], search_query)
+    g_chain, g_arity = like_match(
+        ["name", "'0x' || printf('%08x', va)", "'0x' || printf('%x', va)"]
+    )
     c.execute(
-        "SELECT name FROM globals WHERE target = ? AND ("
-        "name LIKE ? ESCAPE '\\' "
-        "OR ('0x' || printf('%08x', va)) LIKE ? ESCAPE '\\' "
-        "OR ('0x' || printf('%x', va)) LIKE ? ESCAPE '\\') "
-        "ORDER BY name LIMIT ?",
-        (target, like_pat, like_pat, like_pat, _SEARCH_ROW_LIMIT),
+        f"SELECT name FROM globals WHERE target = ? AND {g_chain}"
+        + (f" OR {g_folded_sql}" if g_folded_sql else "")
+        + " ORDER BY name LIMIT ?",
+        (target, *([like_pat] * g_arity), *g_folded_params, _SEARCH_ROW_LIMIT),
     )
     search_matched_fns.update(row[0] for row in c.fetchall())
     return search_matched_fns

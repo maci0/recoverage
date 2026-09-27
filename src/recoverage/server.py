@@ -21,6 +21,7 @@ import logging
 import sqlite3
 import threading
 import time
+import unicodedata
 from collections import deque
 from collections.abc import Iterator, Sequence
 from pathlib import Path
@@ -1030,6 +1031,70 @@ def _escape_like(search: str) -> str:
     return "%" + search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
 
 
+def fold_text(text: str | None) -> str | None:
+    """NFC + full case folding: the one form a name is searched in.
+
+    ``LIKE`` folds case for ASCII only, so ``name LIKE '%CAFÉ%'`` does not
+    match ``Café_Render`` and a search that a user can see in the symbol table
+    returns nothing.  NFC first, so the NFD spelling of the same name (what a
+    macOS-side tool writes) matches the NFC one.  ``casefold``, not ``lower``:
+    it is the folding operators for caseless matching, and it maps ß to ss
+    the way a reader expects.  Compatibility folding is deliberately not
+    applied: NFKC would make a superscript or a circled digit compare equal to
+    a plain letter, which is not what a substring search should claim.
+
+    NULL passes through: this is registered as a SQL function and a nullable
+    column (``functions.symbol``) reaches it as NULL, which a ``str`` call
+    would raise on, failing the whole query.
+    """
+    if text is None:
+        return None
+    return unicodedata.normalize("NFC", text).casefold()
+
+
+#: SQL name of :func:`fold_text`, registered on every read connection by
+#: :func:`_open_db`.  One name for the one folding, so the SPA, the API list
+#: and Potato Mode cannot drift onto different definitions.
+FOLD_SQL = "rc_fold"
+
+
+def like_match(columns: Sequence[str]) -> tuple[str, int]:
+    """``(sql, param_count)`` for an OR chain of LIKE tests over *columns*.
+
+    Every column goes through ``COALESCE(col, '')`` and that is load-bearing,
+    not defensive: ``functions.symbol`` is nullable, and SQL's three-valued
+    logic turns one NULL in an ``OR`` chain into a NULL predicate.  ANDed
+    against another match (``AND (a OR NULL) AND (folded match)``), the row is
+    dropped even though its name matched — a row with no symbol was invisible
+    to every search.
+
+    A NULL therefore compares as the empty string, which no non-empty search
+    term can match: :func:`_escape_like` always wraps the term in ``%``.
+    """
+    disjunct = " OR ".join(f"COALESCE({col}, '') LIKE ? ESCAPE '\\'" for col in columns)
+    return f"({disjunct})", len(columns)
+
+
+def folded_like_clause(columns: Sequence[str], search: str) -> tuple[str, list[str]]:
+    """``(sql, params)`` for a Unicode-correct disjunct over *columns*.
+
+    ``LIKE`` already folds ASCII correctly, so a pure-ASCII term needs
+    nothing extra and the common path keeps its single predicate.  A term
+    carrying any non-ASCII character is one SQLite's folding cannot judge, so
+    the caller adds this disjunct alongside its ``LIKE``: the columns and the
+    pattern both go through :data:`FOLD_SQL` before the comparison.
+
+    Returns ``("", [])`` for an ASCII term or no columns, so callers can test
+    the clause rather than the term.  The pattern is escaped after folding, so
+    a wildcard character the fold produced cannot act as one.
+    """
+    if not columns or search.isascii():
+        return "", []
+    folded = _escape_like(cast(str, fold_text(search)))
+    disjunct = " OR ".join(f"COALESCE({FOLD_SQL}({col}), '') LIKE ? ESCAPE '\\'" for col in columns)
+    return f"({disjunct})", [folded] * len(columns)
+
+
 # ── SQL fragments ──────────────────────────────────────────────────
 
 #: Optional v6 columns, probed per connection: older DBs (v5 and below)
@@ -1481,6 +1546,10 @@ def _open_db(db_path: Path) -> sqlite3.Connection:
     Same reader setup as ``rebrew.workspace.open_sqlite_ro`` (``mode=ro``
     URI, ``query_only``, 30s busy timeout). The connection is a
     :class:`_LockedReadConnection` so the shared lock survives for the open.
+
+    :data:`FOLD_SQL` is registered here so every surface searching through
+    this connection folds names the same way; a clause naming it against a
+    connection that lacks it would fail the whole query.
     """
     lock = coverage_db_lock(db_path, shared=True)
     lock.__enter__()
@@ -1493,6 +1562,7 @@ def _open_db(db_path: Path) -> sqlite3.Connection:
         )
         try:
             conn.execute("PRAGMA query_only=ON")
+            conn.create_function(FOLD_SQL, 1, fold_text, deterministic=True)
         except BaseException:
             # The lock is not attached yet, so close() does not release it.
             conn.close()

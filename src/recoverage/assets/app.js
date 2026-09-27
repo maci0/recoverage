@@ -462,16 +462,22 @@ const App = () => {
     closeEvents = window.RC.connectEvents(() => loadData());
   });
 
+  // NFC before the case fold, on both sides: toLowerCase alone leaves the two
+  // spellings of a name with a combining accent (e + U+0301 vs e + U+00E9)
+  // as different strings, so an NFD symbol from a macOS-side tool never
+  // matches its NFC twin.  Same rule as the server's fold_text.
+  const foldForSearch = (s) => String(s).normalize("NFC").toLowerCase();
+
   const matchesSearch = (name, query) => {
     if (!query) return true;
-    const q = query.toLowerCase();
-    if (name.toLowerCase().includes(q)) return true;
+    const q = foldForSearch(query);
+    if (foldForSearch(name).includes(q)) return true;
 
     // Check search index if available
     if (data.val && data.val.search_index && data.val.search_index[name]) {
       const info = data.val.search_index[name];
-      if (info.va && info.va.toLowerCase().includes(q)) return true;
-      if (info.symbol && info.symbol.toLowerCase().includes(q)) return true;
+      if (info.va && foldForSearch(info.va).includes(q)) return true;
+      if (info.symbol && foldForSearch(info.symbol).includes(q)) return true;
     }
     return false;
   };

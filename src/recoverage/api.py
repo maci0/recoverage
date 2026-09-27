@@ -64,6 +64,8 @@ from recoverage.server import (
     app,
     clear_target_cache,
     compress_payload,
+    folded_like_clause,
+    like_match,
     path_param,
     query_param,
     request,
@@ -1085,13 +1087,19 @@ def handle_api_functions_list(target: str) -> bytes | Any:
             # vaStart (hex text) search keeps parity with Potato Mode, which
             # matches hex addresses; CAST(va AS TEXT) alone only matches
             # decimal spellings.
-            where.append(
-                "(name LIKE ? ESCAPE '\\' OR symbol LIKE ? ESCAPE '\\'"
-                " OR CAST(va AS TEXT) LIKE ? ESCAPE '\\'"
-                " OR vaStart LIKE ? ESCAPE '\\')"
-            )
+            chain, arity = like_match(["name", "symbol", "CAST(va AS TEXT)", "vaStart"])
             like = _escape_like(search)
-            params.extend([like, like, like, like])
+            # The folded disjunct covers the two name columns only (the VA
+            # columns hold ASCII hex, which LIKE folds correctly) and joins
+            # the same OR group, because it is an alternative the ASCII LIKE
+            # cannot judge, not a further requirement: ANDed, it would only
+            # narrow the result.  Without it a term like "CAFÉ" silently
+            # misses "Café_Render" (SQLite folds case for ASCII only) and an
+            # NFD spelling misses its NFC twin.
+            folded_sql, folded_params = folded_like_clause(["name", "symbol"], search)
+            where.append(f"{chain} OR {folded_sql}" if folded_sql else chain)
+            params.extend([like] * arity)
+            params.extend(folded_params)
 
         where_sql = " AND ".join(where)
 

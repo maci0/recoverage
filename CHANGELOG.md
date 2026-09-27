@@ -166,6 +166,13 @@ module ships in the published package. See *Breaking*.
 - **The payload-memo concurrency tests install the request stand-in where
   `api._query_param` reads it**, so a `?section=` filter is no longer dropped
   and the follower's memo key matches the one under test.
+- **Search finds a name whatever its accents and spelling.** The search box
+  (Potato Mode and the SPA) matched through SQL `LIKE`, which folds case for
+  ASCII only, so `CAFÉ` returned nothing for `Café_Render` and the NFD spelling
+  a macOS-side tool writes never matched its NFC twin. A term carrying a
+  non-ASCII character now also compares NFC + case-folded, and a function with
+  no `symbol` is no longer invisible to every search (a NULL in the `OR` chain
+  made the whole predicate NULL, so `AND` dropped the row).
 - **A request header carrying a non-UTF-8 byte no longer answers 500.** A WSGI
   server hands header bytes over as latin-1, so a peer can send a byte above
   `0x7f`; reading it raised `UnicodeDecodeError`, which turned one junk header

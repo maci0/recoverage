@@ -3526,3 +3526,96 @@ class TestUnicodeUrlComponents:
         assert status.startswith("200")
         assert "café".encode() in body
         assert self.SECTION.encode("utf-8") in body
+
+
+# ── Search folding ──────────────────────────────────────────────────
+
+#: NFC, and the NFD spelling of the same name (e + U+0301).
+NFC_NAME = "caf\u00e9_render"
+NFD_NAME = "cafe\u0301_render"
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+class TestSearchCaseFolding:
+    """A name the operator can read must be findable by typing it.
+
+    SQLite's ``LIKE`` folds case for ASCII only, so ``CAFÉ`` missed
+    ``Café_Render`` and an NFD spelling missed its NFC twin: the search box
+    reported "no matches" for a symbol sitting in the table beside it.  Both
+    search surfaces now add a folded disjunct (server.fold_text = NFC +
+    casefold) whenever the term carries a non-ASCII character.
+    """
+
+    TARGET = "FOLDDBL"
+    SECTION = ".text"
+
+    @pytest.fixture(autouse=True)
+    def _fold_db(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        db = tmp_path / "coverage.db"
+        shutil.copy(get_db_path(), db)
+        conn = sqlite3.connect(db)
+        t = self.TARGET
+        conn.executemany(
+            "INSERT INTO metadata VALUES (?,?,?)",
+            [(t, "db_version", '"4"'), (t, "summary", '{"totalFunctions": 3}')],
+        )
+        conn.execute(
+            "INSERT INTO sections VALUES (?, ?, 0x10003000, 0x100, 0x300, 16, 8)", (t, self.SECTION)
+        )
+        conn.executemany(
+            "INSERT INTO cells (target, section_name, start, end, span, state)"
+            " VALUES (?,?,?,?,?,?)",
+            [(t, self.SECTION, i * 16, (i + 1) * 16, 1, "exact") for i in range(3)],
+        )
+        # name, vaStart.  The NFD row is what a macOS-side tool writes; the
+        # user pastes the NFC spelling they see in a symbol table.
+        conn.executemany(
+            "INSERT INTO functions (target, va, name, vaStart, size, status, markerType)"
+            " VALUES (?, ?, ?, ?, 16, 'EXACT', 'FUNCTION')",
+            [
+                (t, 0x10003000, NFC_NAME, "0x10003000"),
+                (t, 0x10003010, NFD_NAME, "0x10003010"),
+                (t, 0x10003020, "_plain_ascii", "0x10003020"),
+            ],
+        )
+        conn.commit()
+        conn.close()
+        monkeypatch.setattr("recoverage.server._db_path", lambda: db)
+        monkeypatch.setattr("recoverage.api._db_path", lambda: db)
+        monkeypatch.setattr("recoverage.potato._db_path", lambda: db)
+        monkeypatch.setattr("recoverage._paths._db_path", lambda: db)
+        from recoverage.api import _clear_derived_caches
+
+        _clear_derived_caches()
+
+    def _search(self, term: str) -> list[str]:
+        from urllib.parse import quote
+
+        status, headers, body = wsgi_get(
+            f"/api/targets/{self.TARGET}/functions?search={quote(term, safe='')}"
+        )
+        assert status.startswith("200")
+        data = json.loads(decode_body(body, headers))
+        return [f["name"] for f in data["functions"]]
+
+    def test_uppercase_accent_finds_the_lowercase_name(self) -> None:
+        # Both spellings are the same name, so both rows are a correct answer.
+        assert set(self._search("CAF\u00c9")) == {NFC_NAME, NFD_NAME}
+
+    def test_nfd_term_finds_the_nfc_row(self) -> None:
+        assert set(self._search(NFD_NAME)) == {NFC_NAME, NFD_NAME}
+
+    def test_ascii_term_keeps_the_plain_path(self) -> None:
+        assert self._search("_PLAIN") == ["_plain_ascii"]
+
+    def test_potato_finds_the_accented_name(self) -> None:
+        """Potato Mode's own search box, same DB, same term as above."""
+        from urllib.parse import quote
+
+        status, _, body = wsgi_get(
+            f"/potato?target={self.TARGET}&section={quote(self.SECTION, safe='')}"
+            f"&search={quote('CAF\u00c9', safe='')}"
+        )
+        assert status.startswith("200")
+        assert b"Searching:" in body
+        assert b"no matches" not in body

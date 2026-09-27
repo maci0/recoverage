@@ -280,6 +280,13 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   `app.js`/`detail.js` are wrapped in IIFEs and share state via `window.RC`.
   Rationale-bearing `oxlint-disable` comments are the sanctioned escape hatch
   for UI error boundaries and VanJS idioms (see `oxlint.config.ts`).
+- Search compares names through `server.like_match`, never a hand-written
+  `OR` chain: SQLite's `LIKE` folds case for ASCII only, so a term carrying a
+  non-ASCII character needs `server.folded_like_clause` (NFC + casefold via the
+  `rc_fold` function `_open_db` registers) ORed into the same group, and every
+  column goes through `COALESCE(col, '')` because one NULL makes the predicate
+  NULL and a row with no `symbol` then matches nothing. The SPA folds the same
+  way in `app.js` (`foldForSearch`).
 - The untrusted-input surfaces (query parameters, the batch POST body, request
   headers) are fuzzed by `tests/test_fuzz.py`: a seeded mutation engine over a
   hand-written corpus, driven by `RECOVERAGE_FUZZ_SEED` / `RECOVERAGE_FUZZ_ITERATIONS`
