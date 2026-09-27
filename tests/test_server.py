@@ -1412,10 +1412,10 @@ class TestGetDisassemblyNoNegativeCache:
         holder: dict[str, Path] = {"p": tmp_path / "missing.dll"}
         monkeypatch.setattr(srv, "_find_dll_path", lambda target: holder["p"])
 
-        calls: list[tuple[int, int, int, str, int]] = []
+        calls: list[tuple[int, int, int, str]] = []
 
-        def fake_impl(va: int, size: int, file_offset: int, target: str, generation: int) -> str:
-            calls.append((va, size, file_offset, target, generation))
+        def fake_impl(va: int, size: int, file_offset: int, target: str) -> str:
+            calls.append((va, size, file_offset, target))
             return f"disasm:{va:#x}"
 
         monkeypatch.setattr(disasm, "_disassemble_loaded", fake_impl)
@@ -1446,6 +1446,7 @@ class TestGetDisassemblyNoNegativeCache:
         The generation counter in get_disassembly is what catches that, and it
         has to catch it for the whole in-flight herd, not one request.
         """
+        import recoverage.disasm as disasm
         import recoverage.server as srv
 
         key = "__disasm_midbuild_target__"
@@ -1455,23 +1456,23 @@ class TestGetDisassemblyNoNegativeCache:
 
         built: list[str] = []
 
-        @srv.functools.lru_cache(maxsize=16)
+        @disasm.functools.lru_cache(maxsize=16)
         def fake_impl(va: int, size: int, file_offset: int, target: str) -> str:
             built.append(f"{va:#x}")
             if len(built) == 1:
                 # The rebuild's invalidation lands while this build runs: the
                 # bytes behind the answer are the ones it is meant to drop.
-                srv.clear_disassembly_cache()
+                disasm.clear_disassembly_cache()
             return f"disasm-build-{len(built)}"
 
-        monkeypatch.setattr(srv, "_disassemble_loaded", fake_impl)
+        monkeypatch.setattr(disasm, "_disassemble_loaded", fake_impl)
         try:
             # Served answer is the post-rebuild one, not the raced build.
-            assert srv.get_disassembly(0x3000, 1, 0, key) == "disasm-build-2"
+            assert disasm.get_disassembly(0x3000, 1, 0, key) == "disasm-build-2"
             assert len(built) == 2
             # And the raced build left nothing behind: the repeat is a memo
             # hit on the fresh entry, still without a third build.
-            assert srv.get_disassembly(0x3000, 1, 0, key) == "disasm-build-2"
+            assert disasm.get_disassembly(0x3000, 1, 0, key) == "disasm-build-2"
             assert len(built) == 2
         finally:
             with srv.DLL_LOCK:
@@ -1508,60 +1509,6 @@ class TestGetDisassemblyNoNegativeCache:
             with srv.DLL_LOCK:
                 srv.DLL_DATA.pop(key, None)
         _prime.cache_clear()
-
-    def test_build_landing_after_the_clear_is_never_served(
-        self, tmp_path: Path, monkeypatch: Any
-    ) -> None:
-        """A disassembly build that finishes AFTER the rebuild broadcast must
-        not be servable.
-
-        cache_clear() cannot retract a build already inside the memoized
-        function: it writes its pre-rebuild text on the way out, and nothing
-        clears the memo again until the next rebuild.  The memo key therefore
-        carries the DLL generation, so that text is filed under a generation
-        no request can ask for any more.
-        """
-        import recoverage.api
-        import recoverage.server as srv
-
-        key = "__disasm_race_target__"
-        holder: dict[str, Path] = {"p": tmp_path / "missing.dll"}
-        monkeypatch.setattr(srv, "_find_dll_path", lambda target: holder["p"])
-        real = tmp_path / "real.dll"
-        real.write_bytes(b"MZ-fake-binary")
-
-        store: dict[tuple[Any, ...], str] = {}
-        builds: list[tuple[Any, ...]] = []
-
-        def fake_impl(va: int, size: int, file_offset: int, target: str, generation: int) -> str:
-            memo_key = (va, size, file_offset, target, generation)
-            if memo_key not in store:
-                if not builds:
-                    # The rebuild broadcast lands while THIS build is in
-                    # flight, before it publishes.
-                    recoverage.api._clear_derived_caches()
-                builds.append(memo_key)
-                store[memo_key] = f"gen{generation}"
-            return store[memo_key]
-
-        # The broadcast entry point calls cache_clear() on the memo; this
-        # stand-in needs only the generation bump, which is what the race
-        # turns on.
-        fake_impl.cache_clear = lambda: None
-        monkeypatch.setattr(srv, "_disassemble_loaded", fake_impl)
-        try:
-            holder["p"] = real
-            first = srv.get_disassembly(0x3000, 4, 0, key)
-            assert first.startswith("gen")
-            # Same slice again: the post-broadcast generation is a new key, so
-            # the in-flight pre-rebuild text is never replayed.
-            second = srv.get_disassembly(0x3000, 4, 0, key)
-            assert second != first
-            assert len(builds) == 2
-            assert builds[0][-1] != builds[1][-1]
-        finally:
-            with srv.DLL_LOCK:
-                srv.DLL_DATA.pop(key, None)
 
 
 class TestBucketReconciliation:
@@ -2262,7 +2209,7 @@ class TestSpaStateVocabulary:
         """
         import re
 
-        app_js, _ = self._assets()
+        app_js, _ = _spa_sources()
         legend = re.search(r"const LEGEND = \[(.*?)\];", app_js, re.DOTALL)
         assert legend is not None, "app.js has no LEGEND table"
         rows = re.findall(r'\["(\w+)",\s*"[^"]*"\]', legend.group(1))

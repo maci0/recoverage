@@ -110,6 +110,16 @@ def get_capstone_md() -> Any:
     return md
 
 
+#: Bumped by every :func:`clear_disassembly_cache`.  An lru_cache cannot retract
+#: an entry that lands after ``cache_clear()``, so a build that read the binary
+#: before a rebuild and stores its result after the clear leaves a stale entry
+#: nothing will invalidate again.  The counter is that build's check: a build
+#: whose generation changed by the time it returns drops what it just stored.
+#: Plain global read/write — the value is a single int, and _paths._DB_PATH_CACHE
+#: relies on the same atomicity.
+_DISASSEMBLY_GENERATION = 0
+
+
 def get_disassembly(va: int, size: int, file_offset: int, target: str) -> str:
     """Disassemble *size* bytes of *target* at *va*, memoized per slice.
 
@@ -120,6 +130,17 @@ def get_disassembly(va: int, size: int, file_offset: int, target: str) -> str:
     """
     if _load_dll(target) is None:
         return ""
+    generation = _DISASSEMBLY_GENERATION
+    text = _disassemble_loaded(va, size, file_offset, target)
+    if generation == _DISASSEMBLY_GENERATION:
+        return text
+    # A rebuild's invalidation overtook this build: the bytes just memoized
+    # came from the binary the clear was meant to drop, and lru_cache has no
+    # way to retract them. Clear again and rebuild from the current binary, so
+    # the answer served is the one the post-rebuild client expects. Every
+    # build in flight at the invalidation takes this path, so the window
+    # closes for the whole herd rather than per request.
+    clear_disassembly_cache()
     return _disassemble_loaded(va, size, file_offset, target)
 
 
@@ -162,5 +183,12 @@ def _disassemble_loaded(va: int, size: int, file_offset: int, target: str) -> st
 
 
 def clear_disassembly_cache() -> None:
-    """Drop memoized disassembly (called when the original binary changes)."""
+    """Drop memoized disassembly (called when the original binary changes).
+
+    Bumps :data:`_DISASSEMBLY_GENERATION` first: a build already in flight
+    cannot be stopped, so it has to learn that what it is about to store is
+    stale (see :func:`get_disassembly`).
+    """
+    global _DISASSEMBLY_GENERATION
+    _DISASSEMBLY_GENERATION += 1
     _disassemble_loaded.cache_clear()

@@ -1061,11 +1061,8 @@ def export(
                 writer.writerow(
                     [_csv_safe(data["target"]), _csv_safe(sec_name), *_section_row(sec)]
                 )
-        # The pinned wrapper buffers, and its destructor would close the
-        # buffer it wraps, which is stdout's.  detach() flushes and then
-        # hands the buffer back, so the bytes land and stdout stays open for
-        # whatever prints next.
-        if stream is not sys.stdout:
+        stream.flush()
+        if isinstance(stream, io.TextIOWrapper) and stream is not sys.stdout:
             stream.detach()
 
     elif output_format == ExportFormat.md:

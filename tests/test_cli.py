@@ -608,12 +608,12 @@ class TestExportCsvStdoutEncoding:
 
         sink = io.BytesIO()
         real_stdout = sys.stdout
-        monkeypatch.setattr(
-            sys, "stdout", io.TextIOWrapper(sink, encoding="ascii", errors="strict")
-        )
+        wrapper = io.TextIOWrapper(sink, encoding="ascii", errors="strict")
+        monkeypatch.setattr(sys, "stdout", wrapper)
         try:
             export(output_format=ExportFormat.csv, target=None)
         finally:
+            wrapper.flush()
             monkeypatch.setattr(sys, "stdout", real_stdout)
         return sink.getvalue()
 
