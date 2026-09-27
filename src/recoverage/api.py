@@ -1182,7 +1182,11 @@ def handle_api_functions_list(target: str) -> bytes | Any:
 def _last_verify_payload(vr: sqlite3.Row) -> dict[str, Any]:
     """Shape a verify_results row as the ``last_verify`` object attached to
     function details — ONE definition shared by the single-VA and batch
-    endpoints so the two response shapes cannot drift apart."""
+    endpoints so the two response shapes cannot drift apart.
+
+    ``similarity`` is passed through as the 0-1 fraction the column stores
+    (its CHECK constrains the unit interval), like ``functions.similarity``;
+    the percent scaling belongs to the renderers."""
     keys = vr.keys()
     return {
         "verified_at": vr["verified_at"],

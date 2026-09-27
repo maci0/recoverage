@@ -207,6 +207,15 @@ module ships in the published package. See *Breaking*.
 
 ### Fixed
 
+- **The verified code-similarity reads 100x low.** `verify_results.similarity`
+  is stored as a 0-1 fraction (the column CHECKs the unit interval, and
+  rebrew's verify import divides its percent scale by 100), but the SPA and
+  Potato Mode printed it unscaled: an 87.3% match showed as `0.9%`. Both now
+  scale by 100, like the `functions.similarity` field beside it.
+- **A section at file offset 0 lost its Original Bytes.** Potato Mode treated
+  a `fileOffset` of 0 as "not file-backed" and dropped the byte dump and data
+  inspector for every cell in such a section, while `/api/.../bytes` serves
+  the same section happily. Only a NULL `fileOffset` means unbacked now.
 - **The supply-chain pin test reads the mechanism CI actually uses.** CI
   fetches the sibling rebrew through the `sibling-rebrew` composite action,
   which is the one place a job may run `tools/ci_clone_rebrew.sh`. The test

@@ -429,7 +429,10 @@ int foo(void) { return 0; }
 
 def test_cell_file_offset():
     assert _cell_file_offset({"start": 100}, {"fileOffset": 4096}) == 4196
-    assert _cell_file_offset({"start": 100}, {"fileOffset": 0}) is None
+    # 0 is a file offset, not "no file backing" (api.py serves those bytes);
+    # only a NULL fileOffset means the section is not file-backed.
+    assert _cell_file_offset({"start": 100}, {"fileOffset": 0}) == 100
+    assert _cell_file_offset({"start": 100}, {"fileOffset": None}) is None
     assert _cell_file_offset({"start": 100}, None) is None
     assert _cell_file_offset({}, {"fileOffset": 4096}) == 4096
 
@@ -949,7 +952,8 @@ def test_function_detail_shows_verify_similarity():
     delta, diff-line count, and the code-similarity score."""
     target = get_first_target()
     # The synthetic DB seeds a verify_results row for 0x10001000 (_func_a) with
-    # similarity 87.3.  The render's per-cell `idx` is the grid position (not the
+    # similarity 0.873 — the unit-interval fraction the column stores, rendered
+    # as 87.3%.  The render's per-cell `idx` is the grid position (not the
     # cells.id), so scan render indices for the one that reaches _func_a's detail
     # rows and carries the verify similarity.
     for idx in range(32):

@@ -664,13 +664,20 @@ def _format_data_inspector(raw_bytes: bytes | None) -> str:
 
 
 def _cell_file_offset(cell: dict[str, Any], sec_data: dict[str, Any] | None) -> int | None:
-    """Calculate file offset for a cell from its section metadata."""
+    """Calculate file offset for a cell from its section metadata.
+
+    None means "no file backing", which is a NULL fileOffset — the .bss shape
+    the api.py /asm and /bytes endpoints answer 422 for.  A fileOffset of 0 is
+    a real offset (a section at the head of the file) and is served as one by
+    those endpoints, so it must not be lumped in with NULL here either; a falsy
+    test dropped the whole Original Bytes block for such a section.
+    """
     if not sec_data:
         return None
     sec_file_offset = sec_data.get("fileOffset")
-    if not sec_file_offset:
+    if sec_file_offset is None:
         return None
-    return int(sec_file_offset) + cell.get("start", 0)
+    return int(sec_file_offset) + (cell.get("start") or 0)
 
 
 def _format_va(val: int | str) -> str:
@@ -2275,7 +2282,11 @@ def _panel_fn_attach_verify(c: sqlite3.Cursor, target: str, fn_data: dict[str, A
     if vr[2] is not None:
         fn_data["last_verify_diff_lines"] = vr[2]
     if vr[3] is not None:
-        fn_data["last_verify_similarity"] = f"{vr[3]:.1f}%"
+        # verify_results.similarity is a 0-1 fraction (the column CHECKs the
+        # unit interval and rebrew's verify import divides its percent scale by
+        # 100), same unit as functions.similarity below.  Rendered unscaled it
+        # read 100x low: a 87.3% match showed as "0.9%".
+        fn_data["last_verify_similarity"] = f"{vr[3] * 100:.1f}%"
     keys = vr.keys()
     if "reg_delta" in keys and vr["reg_delta"] is not None:
         fn_data["last_verify_reg_delta"] = vr["reg_delta"]

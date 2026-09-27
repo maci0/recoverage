@@ -299,7 +299,9 @@
       fn.list_name && fn.list_name !== fn.name ? MetaItem("Func List", fn.list_name) : null,
       fn.size_reason ? MetaItem("Size Source", fn.size_reason) : null,
       fn.last_verify ? MetaItem("Verified", `${fn.last_verify.verified_at}${fn.last_verify.byte_delta == null ? "" : ` (Δ${fn.last_verify.byte_delta}B)`}`) : null,
-      fn.last_verify && fn.last_verify.similarity != null ? MetaItem("Code Sim", `${fn.last_verify.similarity.toFixed(1)}%`) : null,
+      // verify_results.similarity is a 0-1 fraction, like functions.similarity
+      // below it; rendered unscaled it read 100x low (87.3% as "0.9%").
+      fn.last_verify && fn.last_verify.similarity != null ? MetaItem("Code Sim", `${(fn.last_verify.similarity * 100).toFixed(1)}%`) : null,
       fn.last_verify && fn.last_verify.reg_delta != null ? MetaItem("Reg Delta", `${fn.last_verify.reg_delta}`) : null,
       fn.last_verify && fn.last_verify.effective_match ? MetaItem("Effective", "register-only delta — prove candidate") : null,
       fn.updated_by ? MetaItem("Updated By", `${fn.updated_by}${fn.updated_at ? ` (${fn.updated_at})` : ""}`) : null,

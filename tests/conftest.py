@@ -237,7 +237,9 @@ def _build_synthetic_db(db_file: Path) -> None:
             "INSERT INTO verify_results "
             "(target, va, verified_at, byte_delta, diff_lines, similarity)"
             " VALUES (?, ?, ?, ?, ?, ?)",
-            (target, 0x10001000, "2026-01-01T00:00:00+00:00", 0, 0, 87.3),
+            # 0.873, the unit-interval fraction rebrew's verify import stores
+            # (its schema CHECKs 0..1); 87.3 would be 8730%.
+            (target, 0x10001000, "2026-01-01T00:00:00+00:00", 0, 0, 0.873),
         )
         # history + all required objects must exist: the schema-shape check
         # (round-4) verifies the full object set, not just the version stamp.
