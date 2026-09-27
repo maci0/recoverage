@@ -106,6 +106,13 @@ module ships in the published package. See *Breaking*.
 
 ### Changed
 
+- **Potato Mode's detail panel resolves a cell's parent without walking the
+  section.** Opening a block whose cell names a parent function searched every
+  cell of the section for that name on each request, which on a large `.text`
+  cost more than the render that asked for it (4.7 ms against a ~4 ms page on
+  40k cells). The name-to-cell index is now derived once per decoded section,
+  under the same snapshot key as the grid it reads, and rebuilt only when
+  coverage.db changes. Blocks without a parent never build it.
 - **The dashboard loads measurably less on every visit.** The inlined shell
   and the packaged assets are now served as the *smallest* representation the
   browser accepts, rather than under a fixed `zstd`-first preference, and both

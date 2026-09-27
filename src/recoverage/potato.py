@@ -1170,10 +1170,13 @@ def _db_updated_label() -> str:
 # contract as /data's memo.  Entries are read-only after publication (grid,
 # pager, and panel only read them), so sharing across requests/threads is
 # safe; each retained entry costs roughly what one render already allocated
-# transiently, and _GRID_CACHE_MAX bounds retention across rebuilds.
+# transiently, and _GRID_CACHE_MAX bounds retention across rebuilds.  The key is
+# carried in the value so a derived memo can adopt the exact one this payload
+# was filed under instead of re-deriving it from a fresh stat.
+_GridKey = tuple[int, int, str, str, int]
 _GRID_CACHE: dict[
-    tuple[int, int, str, str, int],
-    tuple[list[dict[str, Any]], list[dict[str, Any]]],
+    _GridKey,
+    tuple[list[dict[str, Any]], list[dict[str, Any]], _GridKey],
 ] = {}
 _GRID_CACHE_LOCK = threading.Lock()
 _GRID_CACHE_MAX = 4
@@ -1183,18 +1186,27 @@ def clear_cells_cache() -> None:
     """Clear the memoized potato grid payloads (called on DB rebuild)."""
     with _GRID_CACHE_LOCK:
         _GRID_CACHE.clear()
+    with _PARENT_INDEX_LOCK:
+        _PARENT_INDEX.clear()
     with _POTATO_STATS_CACHE_LOCK:
         _POTATO_STATS_CACHE.clear()
 
 
 def _load_grid_cells(
     c: sqlite3.Cursor, target: str, section: str, grid_columns: int
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Return ``(cells, merged_cells)`` for *section*, memoized per DB snapshot.
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], _GridKey | None]:
+    """Return ``(cells, merged_cells, key)`` for *section*, memoized per DB snapshot.
 
     Only the requested section's JSON is fetched and decoded — sibling
     sections never render cells, so materializing their multi-MB payloads
     was pure waste.
+
+    *key* is the memo key the pair was filed under (None when the DB snapshot
+    is unreadable and nothing was memoized).  It travels with the cells so a
+    caller deriving anything else from them — the panel's parent index, see
+    :func:`_parent_index` — files its own memo under the SAME key rather than
+    re-deriving one from a fresh stat, which a rebuild landing in between would
+    let disagree with the payload it describes.
     """
     snap = _snapshot_db_mtime()
     key = (*snap, target, section, int(grid_columns)) if snap is not None else None
@@ -1202,15 +1214,13 @@ def _load_grid_cells(
         with _GRID_CACHE_LOCK:
             cached = _GRID_CACHE.get(key)
         if cached is not None:
-            return cached
+            return cached[0], cached[1], cached[2]
 
     rows = _cells_json_rows(c, target, section)
     # An unknown or cell-less section decodes to no cells: _cells_json_rows
     # returns no rows and the grid renders empty.
     cells: list[dict[str, Any]] = json.loads(rows[0][1]) if rows else []
     merged = _merge_cells(cells, grid_columns)
-    entry = (cells, merged)
-
     # The cursor's read snapshot is older than `snap` whenever a rebuild
     # committed after render_potato's first query.  Caching that stale payload
     # under the NEW fingerprint poisons the memo: a broadcast that cleared the
@@ -1219,8 +1229,46 @@ def _load_grid_cells(
     if key is not None and _snapshot_db_mtime() == snap:
         with _GRID_CACHE_LOCK:
             _evict_oldest(_GRID_CACHE, _GRID_CACHE_MAX)
-            _GRID_CACHE[key] = entry
-    return entry
+            _GRID_CACHE[key] = (cells, merged, key)
+    return cells, merged, key
+
+
+#: Function name -> index of the first cell listing it, for the panel's Parent
+#: link.  The grid memo already decoded the section's cells, so this is a
+#: derived index over those, keyed by the SAME grid key: it is built once per
+#: grid entry instead of re-walking the whole section on every ``?idx=`` render
+#: that opens a panel on a cell with a parent (measured 16 ms against a ~4 ms
+#: render on a 40k-cell .text).  Built on first use, not with the grid: a
+#: page with no parent link never pays for it.
+_PARENT_INDEX: dict[_GridKey, dict[str, int]] = {}
+_PARENT_INDEX_LOCK = threading.Lock()
+_PARENT_INDEX_MAX = 4
+
+
+def _parent_index(key: _GridKey | None, cells: list[dict[str, Any]]) -> dict[str, int]:
+    """``function name -> first cell index`` for *cells*, memoized per grid key.
+
+    FIRST occurrence, matching the linear walk this replaced: a name listed by
+    several cells links to the earliest one.
+    """
+    if key is None:
+        index: dict[str, int] = {}
+        for i, cell in enumerate(cells):
+            for name in cell.get("functions") or ():
+                index.setdefault(name, i)
+        return index
+    with _PARENT_INDEX_LOCK:
+        cached = _PARENT_INDEX.get(key)
+    if cached is not None:
+        return cached
+    index = {}
+    for i, cell in enumerate(cells):
+        for name in cell.get("functions") or ():
+            index.setdefault(name, i)
+    with _PARENT_INDEX_LOCK:
+        _evict_oldest(_PARENT_INDEX, _PARENT_INDEX_MAX)
+        _PARENT_INDEX[key] = index
+    return index
 
 
 # Per-section bucket stats for the map header (see _section_stats_cached).
@@ -1943,7 +1991,7 @@ def _render_grid_view(
     if grid_columns <= 0:
         grid_columns = 64
     grid_columns = min(grid_columns, _MAX_GRID_COLUMNS)
-    cells, merged_cells = _load_grid_cells(c, target, section, grid_columns)
+    cells, merged_cells, grid_key = _load_grid_cells(c, target, section, grid_columns)
     per_section_stats = _section_stats_cached(c, target, sections, data)
     block_count = len(merged_cells)
 
@@ -1979,6 +2027,7 @@ def _render_grid_view(
         sec_data=sec_data,
         active_filters=active_filters,
         search_query=search_query,
+        grid_key=grid_key,
     )
     return grid_html, block_count, panel_html, sec_stats
 
@@ -2380,6 +2429,7 @@ def _parent_url(
     section: str,
     active_filters: set[str] | None,
     search_query: str,
+    index: dict[str, int] | None = None,
 ) -> str:
     """Where the panel's Parent link goes: the parent's own block, selected.
 
@@ -2388,12 +2438,26 @@ def _parent_url(
     parent with no cell in this section (it lives elsewhere, or the section
     holds no cells) falls back to searching for it, which still gets the user
     to the function.
+
+    *index* is the ``name -> first cell index`` map from :func:`_parent_index`,
+    which replaces a walk of every cell in the section.  Callers with no memo
+    to hand (and the fallback below) pass None and pay the walk.
     """
     if not parent_function:
         return ""
-    for i, candidate in enumerate(cells):
-        if parent_function in (candidate.get("functions") or []):
-            return _build_url(target, section, active_filters, idx=i, search=search_query) + "#sel"
+    if index is not None:
+        i = index.get(parent_function)
+    else:
+        i = next(
+            (
+                pos
+                for pos, candidate in enumerate(cells)
+                if parent_function in (candidate.get("functions") or [])
+            ),
+            None,
+        )
+    if i is not None:
+        return _build_url(target, section, active_filters, idx=i, search=search_query) + "#sel"
     return _build_url(target, section, active_filters, search=parent_function)
 
 
@@ -2407,8 +2471,15 @@ def _render_panel(
     sec_data: dict[str, Any] | None = None,
     active_filters: set[str] | None = None,
     search_query: str = "",
+    grid_key: _GridKey | None = None,
 ) -> str:
-    """Render the detail panel HTML (the block below the map)."""
+    """Render the detail panel HTML (the block below the map).
+
+    *grid_key* is the memo key *cells* was filed under; it keys the parent-name
+    index built for the Parent link (see :func:`_parent_index`).  The index is
+    derived only when the selected cell actually names a parent, so a panel
+    without one never builds it.
+    """
     ctx = _panel_base_ctx()
 
     if not idx_str:
@@ -2425,6 +2496,7 @@ def _render_panel(
     cell = cells[idx]
     state = cell.get("state", "none")
     funcs = cell.get("functions", [])
+    parent_function = cell.get("parent_function", "")
     # NULL va (file-unbacked .bss) falls back to 0: same guard as the grid
     # builder, so the panel's range row renders relative offsets instead of
     # raising TypeError on None + int.
@@ -2451,14 +2523,15 @@ def _render_panel(
             "state_color": COLORS.get(state, TEXT_COLOR),
             "funcs": funcs,
             "cell_label": cell.get("label", ""),
-            "parent_function": cell.get("parent_function", ""),
+            "parent_function": parent_function,
             "parent_url": _parent_url(
-                cell.get("parent_function", ""),
+                parent_function,
                 cells,
                 target,
                 section,
                 active_filters,
                 search_query,
+                _parent_index(grid_key, cells) if parent_function else None,
             ),
             "prev_url": prev_url,
             "next_url": next_url,

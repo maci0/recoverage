@@ -819,14 +819,17 @@ def _build_search_index(c: sqlite3.Cursor, target: str) -> dict[str, Any]:
         "SELECT name, vaStart, symbol FROM functions WHERE target = ?",
         (target,),
     )
-    for row in c.fetchall():
+    # Iterate the cursor rather than fetchall(): this walks every function of
+    # the target (tens of thousands of rows), and fetchall would hold the whole
+    # rowset as a list on top of the index being built from it.
+    for row in c:
         index.setdefault(row["name"], {"va": row["vaStart"], "symbol": row["symbol"]})
     # Globals get their own cursor: one cursor per query keeps the functions
     # rowset above from being clobbered by the second execute.
     c2 = c.connection.cursor()
     try:
         c2.execute("SELECT name, va FROM globals WHERE target = ?", (target,))
-        for row in c2.fetchall():
+        for row in c2:
             va = row["va"]
             index.setdefault(row["name"], {"va": hex(va) if va is not None else "", "symbol": ""})
     finally:

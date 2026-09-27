@@ -756,6 +756,39 @@ def test_parent_url_selects_the_parents_own_block():
     assert "search={{parent_function}}" not in _PANEL_SRC
 
 
+def test_parent_url_index_matches_the_linear_walk():
+    """The memoized name->cell index answers exactly what the walk answered.
+
+    The walk walked every cell in the section on each panel render; the index
+    is derived from the same cells under the grid's own memo key.  First
+    occurrence, no-parent, and the absent-parent fallback must all agree.
+    """
+    from recoverage.potato import _parent_index, _parent_url
+
+    cells = [
+        {"start": 0, "end": 16, "functions": None},
+        {"start": 16, "end": 32, "functions": ["dup"]},
+        {"start": 32, "end": 48, "functions": []},
+        {"start": 48, "end": 64, "functions": ["dup", "parent_fn"]},
+    ]
+    key = ("fp", "T", ".text", 64)
+    index = _parent_index(key, cells)  # type: ignore[arg-type]
+    for name in ("parent_fn", "dup", "absent", ""):
+        assert _parent_url(name, cells, "t", ".text", None, "", index) == _parent_url(
+            name, cells, "t", ".text", None, ""
+        ), name
+    # First occurrence wins, exactly as the walk's first match did.
+    assert index["dup"] == 1
+
+    import recoverage.potato as potato
+
+    # A second call reuses the memo rather than re-walking, and a rebuild
+    # drops it with the rest of the grid-derived state.
+    assert _parent_index(key, cells) is index  # type: ignore[arg-type]
+    potato.clear_cells_cache()
+    assert not potato._PARENT_INDEX
+
+
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
 def test_function_list_sort():
     target = get_first_target()
@@ -1822,7 +1855,7 @@ class TestCellsCacheInvalidation:
         potato.clear_cells_cache()
         c = self._cells_cursor()
         try:
-            cells, _merged = _load_grid_cells(c, "T", ".text", 64)
+            cells, _merged, _key = _load_grid_cells(c, "T", ".text", 64)
             assert cells  # this request still gets its payload
             assert not potato._GRID_CACHE  # filed under no fingerprint
         finally:
@@ -1832,7 +1865,8 @@ class TestCellsCacheInvalidation:
     def test_clear_cells_cache_drops_entries(self) -> None:
         import recoverage.potato as potato
 
-        potato._GRID_CACHE[("fp", "T", ".text", 64)] = ([], [])  # type: ignore[assignment]
+        k = ("fp", "T", ".text", 64)
+        potato._GRID_CACHE[k] = ([], [], k)  # type: ignore[assignment]
         potato.clear_cells_cache()
         assert not potato._GRID_CACHE
 
@@ -1842,7 +1876,7 @@ class TestCellsCacheInvalidation:
         potato.clear_cells_cache()
         c = self._cells_cursor()
         try:
-            cells, merged = _load_grid_cells(c, "T", ".missing", 64)
+            cells, merged, _key = _load_grid_cells(c, "T", ".missing", 64)
             assert cells == []
             assert merged == []
         finally:
