@@ -3,8 +3,8 @@
 Module map (dependencies point one way, left to right):
 
 - ``_paths``      — coverage.db path resolution (no in-package deps)
-- ``regen``       — rebrew regen subprocess lifecycle: session-scoped children,
-  group kill on timeout/interrupt, always reap (no in-package deps)
+- ``regen``       — in-process rebrew regen: imports rebrew's catalog/build-db
+  lazily and runs both under one call (no in-package deps)
 - ``server``      — Bottle app, hooks/auth, shared helpers (DB open, schema
   check, compression, stats SQL, DLL cache); defines ``app`` plus its
   cross-cutting wiring (auth/log/security-header hooks, 500 handler,

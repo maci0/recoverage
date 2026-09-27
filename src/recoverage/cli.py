@@ -36,7 +36,7 @@ app = typer.Typer(
         "  recoverage check --min-coverage 50 [dim]— CI gate[/dim]\n\n"
         "  recoverage regen [dim]— re-run catalog + build-db[/dim]\n\n"
         "[bold]Prerequisites:[/bold]\n\n"
-        "  Run [dim]rebrew catalog --json && rebrew build-db[/dim] first to create "
+        "  Run [dim]rebrew catalog && rebrew build-db[/dim] first to create "
         "db/coverage.db.\n\n"
         "[dim]Reads db/coverage.db (SQLite). Serves SPA at http://localhost:8001.[/dim]"
     ),
@@ -130,7 +130,7 @@ _CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
 
 # ONE spelling of the operator-facing rebuild advice so it cannot drift
 # between the commands that embed it in their database-error messages.
-_REBUILD_HINT = "(run 'rebrew catalog --json && rebrew build-db' to rebuild it)"
+_REBUILD_HINT = "(run 'rebrew catalog && rebrew build-db' to rebuild it)"
 
 
 def _csv_safe(value: Any) -> Any:
@@ -588,7 +588,13 @@ def export(
     ),
     target: str | None = typer.Option(None, "--target", "-t", help="Target ID (default: all)"),
 ) -> None:
-    """Export coverage data to stdout."""
+    """Export coverage data to stdout.
+
+    JSON verbatim; CSV cells starting with a spreadsheet formula/control
+    character are prefixed with an apostrophe; Markdown cells escape pipes and
+    newlines.  CSV uses "\n" line endings so Windows stdout does not double
+    them.
+    """
     with contextlib.closing(_open_db_or_exit()) as conn:
         targets = _select_targets(conn, target)
 
@@ -653,7 +659,6 @@ def export(
                 )
                 typer.echo(
                     row + f" | {sec['exact']} | {sec['reloc']} | {sec['near_match']} "
-                    f"| {sec['exact']} | {sec['reloc']} | {sec['near_match']} "
                     f"| {sec['stub']} | {sec['coverage_pct']:.1f}% |"
                 )
 
@@ -690,9 +695,7 @@ def _section_verdict(
             {"reason": "no tracked cells — coverage not recorded"},
             "has no tracked cells — coverage not recorded",
         )
-    # Compare exact, display rounded (see docstring): a gate failing on raw
-    # 99.4937% prints "99.49% < 99.50%", and a threshold the true ratio did
-    # not reach can never be crossed by display rounding.
+    # Compare the unrounded ratio, print it rounded to 2dp (see docstring).
     if pct < min_coverage:
         return (
             "FAIL",
@@ -772,12 +775,11 @@ def check(
                 untracked = covered <= 0
                 if not untracked:
                     compared += 1
-                # Gate on the UNROUNDED byte ratio (see _section_verdict):
-                # sec["coverage_pct"] is pre-rounded to 2dp for display.
-                # total_bytes == 0 implies covered == 0 (cell spans are
-                # non-negative, so covered <= total), i.e. an untracked
-                # section whose verdict never reads pct, so no fallback
-                # value can ever reach a comparison here.
+                # Gate on the unrounded byte ratio; sec["coverage_pct"] is
+                # display-rounded to 2dp (see _section_verdict).  total_bytes
+                # == 0 implies covered == 0 (cell spans are non-negative, so
+                # covered <= total), i.e. an untracked section whose verdict
+                # never reads pct, so no fallback value can reach a comparison.
                 total_bytes = sec.get("total_bytes") or 0
                 pct = covered / total_bytes * 100 if total_bytes else 0.0
                 status, extra, human = _section_verdict(pct, untracked, bool(section), min_coverage)

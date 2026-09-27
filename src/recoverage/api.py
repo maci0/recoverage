@@ -193,7 +193,7 @@ def _cache_data_insert(
 
 # Memoized /stats results, keyed by the WAL-aware DB snapshot + target.
 # handle_api_stats re-runs the full-cells-table SECTION_STATS_SQL aggregation
-# plus three more queries on every request; a polling consumer must not re-pay
+# plus four more queries on every request; a polling consumer must not re-pay
 # that scan while the DB is unchanged.  Same self-invalidation contract as the
 # /data payload memo: a rebuild changes the snapshot, so stale entries miss.
 # Lives HERE, not in server._section_stats, because only this module knows
@@ -330,7 +330,7 @@ def _file_backed_section(
 # and streams frames.  When no client is connected the watcher keeps polling
 # (cheap), and client disconnects are handled by removing the queue when the
 # stream generator is closed (wsgiref closes the iterator on abrupt socket
-# teardown, which propagates GeneratorExit into the generator's finally).
+# teardown, which propagates GeneratorExit into the generator's ``finally``).
 
 _SSE_POLL_INTERVAL_SECONDS = 2.0
 _SSE_HEARTBEAT_SECONDS = 15.0
@@ -522,6 +522,11 @@ def handle_api_events() -> Any:
 
 @app.get("/api/health")
 def handle_api_health() -> bytes:
+    """Liveness and environment report: status, version, DB stat, extras, targets.
+
+    status is "degraded" (not an error) when coverage.db cannot be stat'ed or
+    queried; db.path is the basename only, never the absolute path.
+    """
     db = _db_path()
     db_info: dict[str, Any] = {"path": db.name, "exists": False}
     status = "healthy"
@@ -616,17 +621,14 @@ def _build_search_index(c: sqlite3.Cursor, target: str) -> dict[str, Any]:
     colliding global's VA.
     """
     index: dict[str, Any] = {}
-    # Use fetchall() to snapshot rows before reusing the cursor for the
-    # globals query — iterating the cursor directly while re-executing on
-    # the same cursor is fragile if the caller holds an open iteration.
     c.execute(
         "SELECT name, vaStart, symbol FROM functions WHERE target = ?",
         (target,),
     )
     for row in c.fetchall():
         index.setdefault(row["name"], {"va": row["vaStart"], "symbol": row["symbol"]})
-    # Separate cursor for globals so the functions iteration above cannot
-    # be clobbered by cursor reuse.
+    # Globals get their own cursor: one cursor per query keeps the functions
+    # rowset above from being clobbered by the second execute.
     c2 = c.connection.cursor()
     try:
         c2.execute("SELECT name, va FROM globals WHERE target = ?", (target,))
@@ -721,9 +723,10 @@ def _dumps_with_cells(data: dict[str, Any], cells_json: dict[str, str | None]) -
         first = False
         sec_json = json.dumps(sec, separators=(",", ":"))
         cells = cells_json.get(name, "[]")
-        # ponytail: string splice, not a JSON encoder — cells is already a
-        # json_group_array array.  Rebuild as one object if we grow a binary
-        # cells encoding.
+        # String splice, not a JSON encoder: cells is already a JSON array
+        # (json_group_array) and re-parsing it through Python dominated the
+        # cold /data build.  A non-JSON cells encoding would need a real
+        # encoder here.
         if cells is None:
             spliced = "{}" if sec_json == "{}" else sec_json
         elif sec_json == "{}":
@@ -840,7 +843,8 @@ def handle_api_functions_list(target: str) -> bytes | Any:
                 sort_dir = "DESC"
             elif sd.lower() != "asc" and sd != "":
                 sort_dir = "ASC"
-        # unknown sort_field → ignore entire sort_param (don't apply tainted sort_dir)
+        # An unknown sort_field ignores the whole sort_param rather than applying its
+        # (possibly tainted) sort_dir.
     elif sort_param in allowed_sort:
         sort_field = sort_param
 
@@ -922,6 +926,10 @@ def _batch_request_vas() -> tuple[list[int], Any | None]:
     with a non-empty "vas" array capped at _MAX_BATCH_LOOKUP, and entries
     that are integers or hex strings (base-16 with or without 0x prefix,
     matching rebrew's parse_va — bare hex like "10001000" is valid here).
+
+    This is the only base-16-only spelling: GET /functions/<va> and /asm run
+    rebrew's parse_va_candidates, which reads an all-digit string as decimal
+    first, so the same digits name different VAs in the two endpoints.
     """
     try:
         raw = request.body.read(_MAX_BATCH_BODY_BYTES + 1)
@@ -983,9 +991,8 @@ def _batch_request_vas() -> tuple[list[int], Any | None]:
         elif isinstance(entry, str):
             try:
                 s = entry.strip()
-                # Strip optional 0x/0X prefix before base-16 parse so both
-                # "0x1000" and bare "10001000" are accepted (auditor: int(...,16) with
-                # 0x prefix is implementation-defined; be explicit).
+                # Strip an optional 0x/0X prefix before the base-16 parse, so
+                # "0x1000" and bare "10001000" both land on the same int.
                 if s.lower().startswith("0x"):
                     s = s[2:]
                 if not s:
@@ -1025,6 +1032,8 @@ def handle_api_functions_batch(target: str) -> bytes | Any:
 
         placeholders = ",".join("?" * len(unique_vas))
 
+        # SAFETY: placeholders is only "?,?,..." built from the length of the
+        # validated VA list; every value reaches the statement parameterized.
         # Functions first (parity with GET /functions/<va>), then globals.
         fn_by_va: dict[int, dict[str, Any]] = {}
         c.execute(
@@ -1075,7 +1084,11 @@ def handle_api_function(target: str, va: str) -> bytes | Any:
         is_numeric = bool(va_candidates)
 
         def _lookup(table: str, json_sql: str) -> Any | None:
-            """First matching row in *table* by VA candidates (numeric) or exact name."""
+            """First matching row in *table* by VA candidates (numeric) or exact name.
+
+            SAFETY: table and json_sql are literals from the two call sites
+            below; target and the VA/name value are parameterized.
+            """
             if is_numeric:
                 for va_int in va_candidates:
                     c.execute(

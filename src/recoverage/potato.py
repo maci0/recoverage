@@ -99,7 +99,7 @@ def _svg_uri(svg: str) -> str:
     return "data:image/svg+xml;base64," + base64.b64encode(svg.encode("utf-8")).decode("utf-8")
 
 
-# Topbar gradient
+# Stretched behind the topbar table as its background image.
 def _make_topbar_svg() -> str:
     """Generate a 1x80 vertical gradient SVG data URI for the topbar."""
     svg = (
@@ -293,7 +293,7 @@ def _detail_rows(
     hex_fields: set[str],
     val_fn: Callable[[str, Any, str], str] | None = None,
 ) -> str:
-    """Generate <tr> rows for a key-value detail table."""
+    """Generate <tr> rows for a key-value detail table, skipping absent values."""
     rows: list[str] = []
     for k, v in data_dict.items():
         if k in skip_fields:
@@ -346,12 +346,12 @@ def _highlight_tokens(tokens: Iterable[tuple[Any, str]], color_map: dict[Any, st
 def _pygments() -> tuple[Any, dict[Any, str], Any, dict[Any, str]] | None:
     """(CLexer, c_colors, NasmLexer, asm_colors), or None when unavailable.
 
-    ONE lazy loader for the optional pygments stack: the old five maxsize=1
-    singletons (availability probe, two lexers, two near-identical color
-    maps) shared one import gate and one lifetime, so they share one cache.
+    ONE lazy loader for the optional pygments stack: the availability probe,
+    both lexers, and both color maps share one import gate and one lifetime,
+    so they share one cache.
     """
     # find_spec imports only the parent package; a missing pygments raises
-    # ModuleNotFoundError (an ImportError) exactly like the old probe import.
+    # ModuleNotFoundError, an ImportError, which the guard below catches.
     try:
         if importlib.util.find_spec("pygments.lexers") is None:
             return None
@@ -619,7 +619,7 @@ def _build_url(
     search: str | None = None,
     page: int | None = None,
 ) -> str:
-    """Build a potato URL with the given parameters."""
+    """Build the relative "?target=...&section=..." URL; falsy options are omitted."""
     url = "?target=" + _url_quote(target) + "&section=" + _url_quote(section)
     if filters:
         url += "&filter=" + _url_quote(",".join(sorted(filters)))
@@ -923,7 +923,7 @@ def _db_unavailable_page() -> HTTPResponse:
             '<table width="100%" height="90%" border="0"><tr><td align="center" valign="middle">'
             "<h1>Database unavailable</h1>"
             f'<p><font color="{MUTED_COLOR}">Run '
-            "'rebrew catalog --json &amp;&amp; rebrew build-db' to create or rebuild it,"
+            "'rebrew catalog &amp;&amp; rebrew build-db' to create or rebuild it,"
             ' then <a href="/potato">retry Potato Mode</a> or '
             '<a href="/">open the SPA</a>.</font></p>'
             "</td></tr></table></font></body></html>"
@@ -933,6 +933,12 @@ def _db_unavailable_page() -> HTTPResponse:
 
 
 def render_potato(parsed_url: ParseResult) -> str:
+    """Render the Potato Mode page for *parsed_url*'s query string.
+
+    Raises the 503 page from :func:`_db_unavailable_page` when coverage.db
+    cannot be opened; ``ui.handle_potato`` does not catch it, so it leaves the
+    route as a response rather than a render error.
+    """
     qs = parse_qs(parsed_url.query, keep_blank_values=True)
     target = qs.get("target", [""])[0]
     section = qs.get("section", [".text"])[0]
@@ -1070,8 +1076,8 @@ def _load_grid_cells(
             return cached
 
     rows = _cells_json_rows(c, target, section)
-    # An unknown or cell-less section decodes to no cells (same empty shape
-    # the unfiltered loader produced by absence).
+    # An unknown or cell-less section decodes to no cells: _cells_json_rows
+    # returns no rows and the grid renders empty.
     cells: list[dict[str, Any]] = json.loads(rows[0][1]) if rows else []
     merged = _merge_cells(cells, grid_columns)
     entry = (cells, merged)
@@ -1151,7 +1157,8 @@ def _compute_section_stats(
         # `or 0`, not .get("size", 0): a NULL size is schema-legal (.bss-style
         # sections carry NULL columns like va/fileOffset) and dict.get returns
         # the stored None — which then raises TypeError on `> 0` below and
-        # 500s the whole page.  Same guard as the va/columns fallbacks above.
+        # 500s the whole page.  Same "or" guard as the va/columns fallbacks in
+        # _build_grid_html and _render_grid_view.
         s_sec_size = sections.get(sec_name_r, {}).get("size") or 0
         # Same rounding as server._section_stats (round to 2dp): int() floor
         # made the map header read "87% covered" beside the topbar's "88.0%"
@@ -1471,10 +1478,9 @@ def _build_grid_html(
         raise ValueError(f"grid_columns must be positive, got {grid_columns}")
     grid_columns = min(grid_columns, 256)
     # Fixed 12px lattice: at 64 columns that is ~770px, which overflowed a
-    # 390px phone and pushed the detail panel off-screen (the layout is a
-    # fixed 75/25 split with no CSS to stack it).  12px keeps blocks legible
-    # and tappable on desktop; narrow sections render the same size, so every
-    # section shares one predictable block size.
+    # 390px phone.  12px keeps blocks legible and tappable on desktop; narrow
+    # sections render the same size, so every section shares one predictable
+    # block size.
     cell_w = 12
     cell_h = 12
     sizing_tds = "".join(
@@ -1705,9 +1711,7 @@ def _render_grid_view(
     per_section_stats = _section_stats_cached(c, target, sections, data)
     block_count = len(merged_cells)
 
-    # Paginate: a real .text section is ~25k cells, which is ~7 MB of table
-    # markup and ~74k DOM nodes — punishing on exactly the weak clients this
-    # mode exists for.  One page is _GRID_PAGE_ROWS rows of the grid.
+    # Paginate: one page is _GRID_PAGE_ROWS rows of the grid.
     page_cells = _GRID_PAGE_ROWS * grid_columns
     page_count = max(1, -(-block_count // page_cells))
     page = _grid_page(page_str, idx_str, merged_cells, page_cells, page_count)
@@ -2150,7 +2154,7 @@ def _render_panel(
     active_filters: set[str] | None = None,
     search_query: str = "",
 ) -> str:
-    """Render the right-hand detail panel HTML."""
+    """Render the detail panel HTML (the block below the map)."""
     ctx = _panel_base_ctx()
 
     if not idx_str:

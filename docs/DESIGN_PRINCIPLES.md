@@ -14,11 +14,11 @@ Recoverage is a pure data consumer. Its serving path never links the `rebrew` ma
 ## 4. Shift Computation to the Backend & Database
 The frontend should be as "dumb" as possible regarding data processing. Coverage statistics, cell matching states, and JSON grouping must be pre-calculated by the database (`SQLite json_group_array`) or the backend before transmission. This ensures the UI remains fluid even when rendering binaries with tens of thousands of functions.
 
-## 5. Aggressive DOM Optimization
-Rendering grids with thousands of cells (e.g., `.text` or `.bss` sections) requires strict DOM management:
-- **String Injection**: Grids are built via massive HTML string injection (`innerHTML`) rather than appending individual DOM nodes.
-- **Event Delegation**: Use a single click listener on the parent container instead of thousands of individual listeners.
-- **CSS Filtering**: Search and status filtering (dimming cells) apply CSS classes to the parent container. The browser's optimized CSS engine handles the visual update instantly, avoiding slow JavaScript loops over DOM nodes.
+## 5. Aggressive Render Optimization
+Rendering grids with thousands of cells (e.g., `.text` or `.bss` sections) requires strict render management:
+- **Canvas Painting**: Each section's grid is one `<canvas>` painted from precomputed per-cell rectangles, one batched path per state, rather than thousands of DOM nodes.
+- **Cached Layout**: The cell walk, row packing and hit-map are computed once per section and reused by every repaint; only the active section is painted.
+- **Filter Repaint**: Search and status dimming are a second alpha pass over the cached rectangles, so a filter change costs a repaint rather than a DOM walk.
 
 ## 6. On-Demand Hydration & Lazy Loading
 Memory and bandwidth are preserved by fetching heavy assets only when explicitly needed:

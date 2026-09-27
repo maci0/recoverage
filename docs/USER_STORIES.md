@@ -23,7 +23,7 @@ User stories for the **recoverage** coverage dashboard, organized by persona and
 - `recoverage` serves a local web dashboard on port 8001
 - Dashboard auto-opens in the default browser
 - Server resolves `coverage.db` from the current working directory: `[project] db_dir` in `rebrew-project.toml` when set, falling back to `db/coverage.db`
-- `--regen` flag runs `rebrew catalog --json` + `rebrew build-db` before starting
+- `--regen` flag runs `rebrew catalog` + `rebrew build-db` before starting
 - `--no-open` flag suppresses the browser auto-open
 
 ```mermaid
@@ -31,7 +31,7 @@ graph TD
     A["Project directory<br/>with rebrew-project.toml"] --> B{"db/coverage.db<br/>exists?"}
     B -->|Yes| C["recoverage serve --port 8001"]
     B -->|No| D["recoverage serve --regen"]
-    D --> E["rebrew catalog --json"]
+    D --> E["rebrew catalog"]
     E --> F["rebrew build-db"]
     F --> G["db/coverage.db created"]
     G --> C
@@ -50,9 +50,9 @@ graph TD
 
 ### Acceptance Criteria
 - Grid cells colored by match status: Exact (green), Reloc (blue), Near-match (yellow), Stub (red), Padding (silver), None (gray); data and thunk cells render as undocumented (gray)
-- Grid is square and responsive (cells stay square via `ResizeObserver`)
-- Section tabs (`.text`, `.rdata`, `.data`, `.bss`) switch views instantly (cached grids)
-- Grids built via fast HTML string injection; tab switching toggles `display: none`
+- Grid cells stay square: a `ResizeObserver` triggers a relayout that resizes cells (floor 6px desktop, 12px under 700px), and the section's declared column count is never reduced
+- Section tabs (`.text`, `.rdata`, `.data`, `.bss`) switch views instantly (cached layouts)
+- Grids painted to a per-section canvas; layout cached, only the active section repaints
 
 ```mermaid
 graph TD
@@ -65,8 +65,8 @@ graph TD
     F --> G["Toggle display:none<br/>on cached grids"]
     G --> H["Instant tab switch<br/>(no re-render)"]
 
-    E --> I["ResizeObserver fires"]
-    I --> J["Recalculate column count<br/>to keep cells square"]
+    E --> I["Container resize"]
+    I --> J["Relayout: shrink cell size<br/>(declared column count is fixed)"]
 
     style A fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
     style H fill:#d1fae5,stroke:#059669,color:#065f46
@@ -120,7 +120,7 @@ sequenceDiagram
 - Filter buttons: All, E (Exact), R (Reloc), M (Near-match), S (Stub), P (Padding)
 - Filters are set-based toggles (multiple can be active simultaneously)
 - Non-matching cells are dimmed (opacity 0.15), not hidden, preserving spatial layout
-- Filtering handled entirely by CSS classes on the parent container (no JS loops)
+- Filtering is a repaint pass over precomputed cell rects (no per-cell DOM)
 - Progress bar segments are clickable to quick-filter by status
 
 ```mermaid
@@ -329,7 +329,7 @@ graph TD
 
 ### Acceptance Criteria
 - Reload button in the topbar with a 5-second cooldown to prevent spam
-- `POST /api/regen` triggers `rebrew catalog --json` + `rebrew build-db`
+- `POST /api/regen` triggers `rebrew catalog` + `rebrew build-db`
 - Only accessible from localhost (security gate)
 - Dashboard reloads data after regeneration completes
 - ETag-based caching: if DB unchanged, API returns `304 Not Modified`
@@ -346,7 +346,7 @@ sequenceDiagram
     UI->>Server: POST /api/regen
     Server->>Server: Verify localhost origin
 
-    Server->>Rebrew: rebrew catalog --json
+    Server->>Rebrew: rebrew catalog
     Rebrew-->>Server: db/data_*.json updated
     Server->>Rebrew: rebrew build-db
     Rebrew-->>Server: db/coverage.db updated
@@ -440,7 +440,7 @@ graph TD
     A["Browser viewport"] --> B{"Width ≥ 1300px?"}
     B -->|Yes| C["Two-column layout<br/>Grid | Panel"]
     B -->|No| D["Single-column layout<br/>Grid above Panel"]
-    C --> E["ResizeObserver<br/>adjusts cell count"]
+    C --> E["ResizeObserver<br/>relayouts cell size"]
     D --> E
 
     style A fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f

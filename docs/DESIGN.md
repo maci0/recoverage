@@ -11,7 +11,7 @@ The UI is built using a lightweight, dependency-free stack to ensure fast load t
 * **Syntax Highlighting**: Highlight.js (C, x86 ASM, custom Hex language), vendored in `assets/` and served from this origin so the dashboard works air-gapped.
 
 ## Data Pipeline
-1. `rebrew catalog --json` parses the target binary (`target.dll`) and C source annotations (`// FUNCTION:`, `// GLOBAL:`).
+1. `rebrew catalog` parses the target binary (`target.dll`) and C source annotations (`// FUNCTION:`, `// GLOBAL:`).
 2. `rebrew build-db` converts the resulting JSON into a structured SQLite database with tables for metadata, functions, globals, sections, and cells. It also pre-calculates coverage statistics for all sections to save frontend processing time.
 3. The Bottle app (`webapp.py` wires `server.py` + `api.py` + `ui.py` into the fully routed application; importing `recoverage.server` alone yields a routeless app) serves:
    * Static files (index.html, app.js, style.css, van.min.js) which are **inlined and compressed** into a single response for the root `/` path to achieve a "first draw in the first TCP packet".
@@ -22,7 +22,7 @@ The UI is built using a lightweight, dependency-free stack to ensure fast load t
    * `/api/targets/<target>/sections/<section>/bytes` endpoint serving raw hex-dumped byte slices from the original binary (`?offset=&size=`).
    * `/api/targets/<target>/asm?va=...&size=...` endpoint that dynamically disassembles binary chunks using Capstone (with LRU caching and in-memory cached binary reads).
    * `/api/events` Server-Sent Events stream that pushes a `db-updated` event whenever `coverage.db` changes on disk, so the SPA auto-refreshes without a manual reload (requires the threaded WSGI server, which gives each connection its own thread).
-   * `/api/regen` POST endpoint to trigger `rebrew catalog --json` + `rebrew build-db` regeneration.
+   * `/api/regen` POST endpoint to trigger `rebrew catalog` + `rebrew build-db` regeneration.
    * With `--token`, an unauthenticated request is answered by content type: browsers asking for `text/html` get a short page explaining that `?token=` must be appended (it never echoes the token), and API clients keep the `{error, code, detail}` JSON contract.
    * Proxied paths: `/src/*` → `project_dir/src/`, `/original/*` → `project_dir/original/`
 
@@ -74,9 +74,9 @@ The UI is broken down into functional VanJS components in `app.js`:
   * **None** (gray) — undocumented block
 
   Data and thunk cells keep their DB states but render with the undocumented gray here: their dedicated purple/orange tints were removed together with the data/thunk filters. Potato Mode still colors those states.
-* **Grid Caching**: Each section's grid is built once and cached in the DOM. Switching tabs simply toggles `display: none` vs `display: grid`, making tab switching instantaneous even for sections with 6,000+ chunks.
-* **Fast HTML Building**: Grids are constructed using a single massive HTML string injection (`innerHTML`) rather than creating thousands of individual DOM nodes, drastically reducing initial render time.
-* **CSS-Based Filtering**: Filtering and search dimming are handled by applying classes to the parent grid container (e.g., `.has-filters.show-exact`), allowing the browser's highly optimized CSS engine to instantly update thousands of cells without JavaScript loops.
+* **Grid Caching**: Each section's layout (cell walk, row packing, hit-map, canvas size) is computed once and cached, and only the active section is painted, making tab switching instantaneous even for sections with 6,000+ chunks.
+* **Canvas Painting**: Each section's grid is a single `<canvas>` painted from precomputed per-cell rectangles, one batched path per state (~12 ms to ~2.6 ms at 39k cells), rather than thousands of individual DOM nodes.
+* **Canvas-Based Filtering**: Filter and search dimming are a second alpha pass (`globalAlpha = 0.15`) over the same rectangles, not CSS class toggling and not a per-cell DOM walk.
 * **Keyboard & semantics**: the grid is a `listbox` of `option` cells with a roving tabindex, so exactly one cell is in the tab order no matter how many thousands the section holds. Arrow keys move focus (left/right by one, up/down by a full row), Home/End jump to the ends, Enter/Space selects, and `aria-selected` tracks the selected block.
 
 ### 3. Side Panel (`.panel`)
@@ -139,12 +139,12 @@ The UI is broken down into functional VanJS components in `app.js`:
 * **ETag Caching**: The heavy `/api/targets/<target>/data` endpoint calculates an `ETag` from a WAL-aware snapshot of `coverage.db` (`mtime_ns` + size, folding in `-wal` so a rebuild that only committed to the WAL still invalidates; raw `st_mtime` served stale 304s). If the database hasn't changed, the server responds with a `304 Not Modified` (0 bytes), making page reloads instantaneous.
 * **Request Cancellation**: The UI uses `AbortController` to cancel in-flight network requests if the user clicks through multiple cells rapidly, saving bandwidth and preventing race conditions.
 * **Deferred Highlight.js**: The heavy `highlight.js` library and its CSS are not loaded initially. They are fetched from this origin (`/hljs.min.js`, `/hljs-c.min.js`, `/hljs-x86asm.min.js`) the first time a user clicks a code block.
-* **Deferred failure is visible, not silent**: `detailFailed` is set when `/detail.js` cannot be fetched.  The panes it owns say so, and every control that delegates to it (Copy, Open, Copy VA, Copy Symbol, Reload) goes `disabled` with the same message as its tooltip.  Optional chaining alone made each deferral crash-safe but user-hostile: the buttons looked enabled and did nothing.
+* **Deferred failure is visible, not silent**: `detailFailed` is set when `/detail.js` cannot be fetched.  The panes it owns say so, and every control that delegates to it (Copy, Open, Copy VA, Copy Symbol) goes `disabled` with the same message as its tooltip.  Reload gates on `detailFailed` only, so a click in the window before `detail.js` lands is a silent no-op.  Optional chaining alone made each deferral crash-safe but user-hostile: the buttons looked enabled and did nothing.
 * **Deferred detail rendering**: `detail.js` carries the hex dump, the data inspector, the C annotation extractor, the custom hex highlight language, the live-reload subscription, the regen/reload handler, the clipboard helper, and the code-viewer modal with its focus and `inert` handling: everything that is not needed to paint the first frame.  app.js keeps the modal's four states so the panel's Open buttons can set them; `window.RC.mountModal` attaches the dialog once detail.js lands. It is fetched immediately after first paint, which keeps the inlined shell inside the congestion window without a visible delay. app.js publishes `window.RC` for it to read and write; until it lands, the panes it owns show a loading message and resolve reactively when it arrives.
 * **On-Demand Data Fetching**: The `/api/targets/<target>/data` endpoint only returns lightweight grid layouts and metadata. Detailed function information is fetched on-demand via `/api/targets/<target>/functions/<va>` when a user clicks a cell, drastically reducing memory usage and initial load times.
-* **DOM Optimizations**: The grid uses **Event Delegation** (a single click listener on the parent container instead of 2,500+ individual listeners), **CSS Containment** (`contain: strict` on cells to prevent global layout recalculations), and **Content Visibility** (`content-visibility: auto` on the grid container to skip rendering it while off-screen).
-* **Grid Caching & CSS Filtering**: To handle sections with 6,000+ chunks (like `.bss`), grids are built once via fast HTML string injection and cached. Tab switching toggles `display: none`. Filtering and search dimming are handled entirely by CSS classes on the parent container, avoiding slow JavaScript loops over thousands of DOM nodes. CSS transitions on cells were removed to eliminate GPU overhead during mass state changes.
-* **Precomputed Cell Properties**: Cell CSS classes and states are precomputed immediately after the JSON payload is fetched, preventing the UI from recalculating these strings thousands of times during the render loop.
+* **One Click Listener Per Section**: The grid is a canvas, so the click handler hit-tests a packed row/column map instead of attaching 2,500+ individual listeners.
+* **Grid Caching & Canvas Repaint**: To handle sections with 6,000+ chunks (like `.bss`), the per-section layout is computed once and cached. Filtering, search, selection and focus changes only repaint from those cached rectangles.
+* **Precomputed Cell Geometry**: Per-cell x/y/width and the row hit-map are computed once per layout and reused by every repaint, so the UI never recomputes geometry during a state change.
 * **SQL-Side Cell Grouping**: Cells leave SQLite as one `json_group_array` string per section (`json_object` shapes each cell), not one row per cell, so a 25k-cell section crosses into Python as a handful of strings instead of tens of thousands of rows.  The projection deliberately omits `cells.id`: no consumer reads it, and as the only high-entropy column per row it cost 4.3x on the wire (the 39k-cell `.text` payload compressed 322 KB with it and 74 KB without).  The projection lives in `rebrew.workspace.CELLS_JSON_OBJECT_SQL`, shared by `build-db` and this server so the two cannot drift.
 * **Precomputed Cell JSON and Section Stats**: `rebrew build-db` materializes the per-section cell JSON (`section_cells_json`, zstd level 3) and the coverage buckets (`section_cell_stats`, a view through schema v6 and a build-time table from v7).  Reading them costs ~0.3 ms where re-running the group-by cost 10.7 ms and re-aggregating the stats view cost 17.3 ms — together 92% of a cold `/data` build.  Measured cold `/data`: 24.8 ms → 3.4 ms for one section and 38.9 ms → 6.8 ms for all sections, with payloads identical apart from the `db_version` stamp.  Both are derived from `cells` and rebuilt whole on every build, so they cannot go stale between builds; recoverage prefers them and falls back to the live queries when a database predates them, so a pre-v7 database stays readable even though `build-db` itself requires `--force` to migrate it.
 * **SQLite WAL Mode**: The database uses Write-Ahead Logging (`PRAGMA journal_mode=WAL`) and read-only connections (`?mode=ro`), allowing the dev server to serve data concurrently without locking while the database is being regenerated in the background.
@@ -353,12 +353,13 @@ Run the test harness to verify all rendering paths:
 pytest tests/test_potato.py -v
 ```
 
-This tests over 190 different rendering paths and assertions including:
+This is 86 test functions covering 172 assertions across:
 - All sections (`.text`, `.data`, `.rdata`, `.bss`)
 - Single and multi-filter combinations
 - Cell selection at various indices
 - Invalid/unknown parameters (graceful fallbacks)
-- W3C Nu HTML validation for all generated pages
+
+HTML validation is a separate gate: `bun run lint:html` (`tools/lint-html.py`) validates the static assets plus the served SPA shell and Potato Mode page.
 
 Playwright comparison tests verify visual and behavioral parity with the main UI:
 ```bash

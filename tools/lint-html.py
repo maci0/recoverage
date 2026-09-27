@@ -22,7 +22,8 @@ Potato Mode deliberately renders HTML4-era markup (``<font>``, ``bgcolor``,
 family is filtered for that document as the documented retro contract, while
 every other message stays fatal — the SPA shell is checked strictly.
 
-The gate fails on any vnu message of any severity — nothing is skipped.
+The gate fails on any vnu message of any severity — nothing is skipped beyond
+the documented Potato Mode obsolete-element filter above.
 
 Requires: uv (project venv), java on PATH, and ``bun install`` already run
 (for vnu-jar).

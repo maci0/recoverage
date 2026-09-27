@@ -35,6 +35,7 @@ recoverage/
 │   ├── test_paths.py         # DB path resolution tests
 │   ├── test_server.py        # Compression, encoding, path helper tests
 │   ├── test_potato.py        # Potato Mode unit tests
+│   ├── test_perf.py         # Deterministic perf regression gates (work counters, not wall clock)
 │   └── test_playwright.py    # Browser integration tests
 └── src/recoverage/
     ├── __init__.py
@@ -59,7 +60,7 @@ recoverage/
         └── hljs.css         # Highlight.js theme (custom hex language)
 ```
 
-Frontend lint tooling lives at the repo root: `package.json` (oxlint, `@oxlint/plugins`, `@rikalabs/oxlint-standards`, vnu-jar), `oxlint.config.ts` (JS/TS lint config), `tools/lint-html.py` (vnu check of both the static HTML/CSS assets and the documents the server actually serves: the SPA shell with injected CSS/JS and Potato Mode), `tools/smoke.py` (end-to-end server smoke run by the CI `smoke` job), and `tools/oxlint/`:
+Frontend lint tooling lives at the repo root: `package.json` (oxlint, `@oxlint/plugins`, `@rikalabs/oxlint-standards`, vnu-jar), `oxlint.config.ts` (JS/TS lint config), `tools/lint-html.py` (vnu check of both the static HTML/CSS assets and the documents the server actually serves: the SPA shell with injected CSS/JS and Potato Mode), `tools/smoke.py` (end-to-end server smoke run by the CI `smoke` job), `tools/_serve_harness.py` (shared by both: builds the synthetic DB via `tests/conftest`, starts `recoverage serve` on a free port, and probes the documents over HTTP), and `tools/oxlint/`:
 
 - `tools/oxlint/anti-slop/` — vendored copy of dmmulroy/anti-slop (keep in sync with upstream).
 - `tools/oxlint/rikalabs-strict.json` — flattened copy of the `strict` preset from `@rikalabs/oxlint-standards`, regenerated with `tools/flatten-rikalabs-strict.py` (bump the package, re-run the script, re-run `bun run lint:js`). It is flattened because the published presets reference rules oxlint 1.83.0 does not implement. The script prints every rule it drops and fails when `MISSING_IN_OXLINT` holds a rule the preset no longer needs, so a bump cannot weaken the preset silently. `oxlint.config.ts` documents the platform exceptions (browser-only SPA: `env.browser`, `typeAware: false`, style off-list with rationale).

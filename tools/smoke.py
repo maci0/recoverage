@@ -1,9 +1,9 @@
 """smoke.py — boot the dashboard against a real coverage.db and probe it.
 
-End-to-end server smoke for CI: builds a synthetic ``db/coverage.db`` (the
-exact rebrew build-db schema v4, shared with the test suite via
-``tests/conftest._build_synthetic_db``), starts ``recoverage serve`` on a
-random port, and probes the surfaces a browser hits: the SPA shell, the
+End-to-end server smoke for CI: builds a minimal ``db/coverage.db`` matching
+rebrew build-db's schema v4 (``tests/conftest._build_synthetic_db``, reached
+through ``tools/_serve_harness.build_sample_db``), starts ``recoverage serve``
+on a random port, and probes the surfaces a browser hits: the SPA shell, the
 health endpoint, a target's data API, and Potato Mode.  Exits non-zero on
 any failed probe.
 

@@ -98,7 +98,7 @@ Install an extra to enable its feature: `pip install 'recoverage[<extra>]'`
 
 ```bash
 # 1. Generate the coverage database (from your project directory)
-uv run rebrew catalog --json
+uv run rebrew catalog
 # Analyzes the target binary, parses your annotations, and dumps raw match data to db/data_*.json
 
 uv run rebrew build-db
@@ -216,12 +216,12 @@ recoverage open --port 8001
 **recoverage** is designed as a standalone **consumer** of the data that [rebrew](../rebrew) produces — the two packages are intentionally decoupled.
 
 ```text
-rebrew catalog --json          rebrew build-db           recoverage (Bottle + SQLite)
+rebrew catalog                 rebrew build-db           recoverage (Bottle + SQLite)
        │                             │                       │
   db/data_*.json  ──────────▶  db/coverage.db  ──────────▶  VanJS Dashboard
 ```
 
-1. **`rebrew catalog --json`**: Scans your project's source annotations and writes intermediate `db/data_*.json` files containing coverage metrics. Jump table / switch data bytes are absorbed into their parent function's size. Use `--export-ghidra-labels` to generate `ghidra_data_labels.json` for round-trip Ghidra sync.
+1. **`rebrew catalog`**: Scans your project's source annotations and writes intermediate `db/data_*.json` files containing coverage metrics. Jump table / switch data bytes are absorbed into their parent function's size. Use `--export-ghidra-labels` to generate `ghidra_data_labels.json` for round-trip Ghidra sync.
 2. **`rebrew build-db`**: Consumes those JSON files and builds a structured `db/coverage.db` (SQLite, `db_version` `"10"`) database, storing per-function metadata (`detected_by`, `size_by_tool`, `textOffset`), per-global metadata (`module`, `size`), per-cell metadata (`label`, `parent_function`), and stamping `db_version` for schema detection.  It also materializes the two objects the dashboard reads instead of re-deriving them on every request: the per-section coverage buckets (`section_cell_stats`) and the per-section cell JSON (`section_cells_json`, zstd, cells ordered by `start`).  Both are derived from `cells` and rebuilt on every build, so a database produced by an older rebrew is still *served*. The server falls back to the equivalent live queries. `rebrew build-db` requires `--force` to migrate a database whose stamp is not `"10"`. See [DB_FORMAT.md](../rebrew/docs/DB_FORMAT.md) for the full schema.
 3. **`recoverage`**: Starts a **Bottle** web server. The backend serves API endpoints querying the SQLite database, while the frontend is a zero-build Single Page Application (SPA) powered by **VanJS**, rendering the interactive defrag grid.
 
@@ -248,6 +248,7 @@ recoverage/
 │   ├── test_paths.py         # DB path resolution tests
 │   ├── test_server.py        # Compression, encoding tests
 │   ├── test_potato.py        # Potato Mode rendering tests
+│   ├── test_perf.py         # Deterministic perf regression gates (work counters, not wall clock)
 │   └── test_playwright.py    # Browser integration tests
 └── src/recoverage/
     ├── __init__.py

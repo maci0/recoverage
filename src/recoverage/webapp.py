@@ -8,8 +8,8 @@ stays one-directional:
 
     _paths ← server ← {potato, ui, api} ← webapp ← cli
 
-(api and cli additionally import regen — a subprocess-lifecycle module with
-no in-package dependencies.)
+(api and cli additionally import regen — an in-process rebrew catalog/build-db
+wrapper with no in-package dependencies.)
 
 Import this module (or run the CLI) whenever you need an app with every
 route registered; importing bare ``recoverage.server`` yields a routeless app.

@@ -74,8 +74,9 @@ async function fetchArrayBufferSafe(url) {
   return await res.arrayBuffer();
 }
 
-// Section name -> grid element id.  Every dot goes, so `.rsrc.1` and `.rsrc1`
-// cannot collide the way replacing only the first one allowed.
+// Section name -> grid element id.  Every dot goes so the id is a valid CSS
+// selector.  Names that differ only in their dots (`.rsrc.1` vs `.rsrc1`)
+// still normalize to the same id.
 const gridId = (secName) => `grid-${secName.replaceAll('.', '')}`;
 
 // Legend rows: cell state -> the words used for it in the UI.
@@ -662,10 +663,12 @@ const App = () => {
     }
   };
 
-  // Copy, Open, and Reload all delegate to detail.js.  If that file never
-  // arrives they would look enabled and do nothing at all, so they go disabled
-  // and say why — the panes it owns already report the same failure.  Same
-  // while it is still loading: copyToClipboard is a no-op until it lands.
+  // Copy, Open, Copy VA and Copy Symbol all delegate to detail.js.  If that
+  // file never arrives they would look enabled and do nothing at all, so they
+  // go disabled and say why — the panes it owns already report the same
+  // failure.  Same while it is still loading: copyToClipboard is a no-op until
+  // it lands.  Reload is the exception: it gates on detailFailed only, so a
+  // click in the window before detail.js lands is a silent no-op.
   const detailTitle = () => {
     if (detailFailed.val) return MSG.DETAIL_UNAVAILABLE;
     if (detailReady.val) return "";

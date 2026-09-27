@@ -61,6 +61,23 @@ class TestExportCommand:
         assert "| Section |" in result.output
         assert "|------" in result.output
 
+    def test_export_md_column_counts_match_header(self) -> None:
+        """Every Markdown data row must have as many cells as the header."""
+        result = runner.invoke(app, ["export", "--format", "md"])
+        assert result.exit_code == 0
+        header = next(
+            line for line in result.output.splitlines() if line.startswith("| Section |")
+        )
+        expected = header.count("|")
+        data_rows = [
+            line
+            for line in result.output.splitlines()
+            if line.startswith("|") and " B |" in line
+        ]
+        assert data_rows, "Markdown export produced no section rows"
+        for row in data_rows:
+            assert row.count("|") == expected, f"ragged Markdown row: {row}"
+
     def test_export_csv_roundtrip(self) -> None:
         """CSV output should parse back correctly with Python's csv module."""
         result = runner.invoke(app, ["export", "--format", "csv"])

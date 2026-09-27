@@ -35,7 +35,7 @@ Write-back annotations to source files. Accept a JSON body with annotation key-v
 The `/data` endpoint supports `?section=.text` to load one section at a time.
 
 ### ~~`/api/targets/<target>/functions/<va>` — Batch Mode~~ ✅ Implemented
-Batch function lookups via `POST /api/targets/<target>/functions` with a JSON array of VAs:
+Batch function lookups via `POST /api/targets/<target>/functions` with a JSON object carrying a `vas` array:
 ```json
 { "vas": ["0x10001000", "0x10001050", "0x10001100"] }
 ```
@@ -67,7 +67,7 @@ CI-oriented: exits non-zero if coverage drops below a threshold.
 Open the browser to an existing running server (useful when `--no-open` was used at startup).
 
 ### ~~`recoverage regen` Subcommand~~ ✅ Implemented
-Re-run `rebrew catalog --json` + `rebrew build-db` from the terminal without starting the web server (same in-process pipeline and error handling as `serve --regen`).
+Re-run `rebrew catalog` + `rebrew build-db` from the terminal without starting the web server (same in-process pipeline and error handling as `serve --regen`).
 
 ---
 

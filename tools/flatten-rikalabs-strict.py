@@ -7,8 +7,9 @@ published oxlint (1.83.0) does not implement, and oxlint rejects a config
 that mentions an unknown rule even when set to "off" — so the preset chain
 cannot be consumed via `extends` until those rules land in oxlint. This
 script flattens the `strict` preset chain into a single checked-in JSON that
-drops the missing rules (remapping oxc/no-new-buffer to its oxlint
-equivalent, unicorn/no-new-buffer, which the consuming config enables).
+drops the missing rules. The one whose intent survives, oxc/no-new-buffer, is
+dropped here and re-enabled by hand as unicorn/no-new-buffer in
+`oxlint.config.ts`.
 
 A drop is unenforced strictness, so every dropped rule is printed and a
 MISSING_IN_OXLINT entry that the preset no longer needs fails the run; a

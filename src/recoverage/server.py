@@ -276,13 +276,12 @@ def _etag_or_304(snap: tuple[int, int] | None, *parts: object) -> str | None:
 
 
 # Byte-based per-section stats query shared by /api/targets/<target>/stats and
-# the `recoverage stats` CLI.  ONE definition: these two queries already
-# drifted apart once (cell-count vs byte-based coverage) and were fixed in
-# lockstep twice — a single constant makes the next divergence impossible.
+# the `recoverage stats` CLI.  ONE definition, so the two callers cannot drift
+# apart (see _section_stats for what the copies used to get wrong).
 #
-# Only the three values that need `cells` are computed here.  The other nine
+# Only the three values that need `cells` are computed here.  The other ten
 # buckets come from section_cell_stats, which rebrew materializes per section
-# (~0.01 ms); adding all thirteen SUM(CASE ...) expressions to this scan cost
+# (~0.01 ms); adding all ten SUM(CASE ...) expressions to this scan cost
 # ~15 ms on a 64k-cell target against ~6 ms for these three.  The one bucket
 # that differs between the two sources is exact_count — the materialized table
 # folds state 'verified' into it for the grid legend, this endpoint counts only
@@ -295,7 +294,7 @@ SECTION_STATS_SQL = """
     FROM cells WHERE target = ? GROUP BY section_name
 """
 
-# The other nine buckets, per section, already aggregated by rebrew.
+# The other ten buckets, per section, already aggregated by rebrew.
 _SECTION_BUCKETS_SQL = "SELECT * FROM section_cell_stats WHERE target = ?"
 
 # Every bucket computed from `cells` in one pass.  Used ONLY when
@@ -327,8 +326,8 @@ def _per_section_buckets(
 ) -> Iterator[tuple[str, dict[str, Any], int, int]]:
     """Yield ``(section_name, buckets, covered_bytes, total_bytes)`` per section.
 
-    Prefers rebrew's materialized ``section_cell_stats`` for the nine buckets it
-    already aggregates (~0.01 ms) and takes the byte sums plus ``exact_count``
+    Prefers rebrew's materialized ``section_cell_stats`` for the ten non-exact
+    buckets it already aggregates and takes the byte sums plus ``exact_count``
     from *cell_side*, which was computed from `cells`.  When that table is absent
     or empty, every bucket comes from `cells` instead — the single-query path
     this endpoint used before the split.
@@ -366,7 +365,7 @@ def _per_section_buckets(
 
 def _cell_bucket_row(row: sqlite3.Row) -> dict[str, Any]:
     """Map a per-section stats row (SECTION_STATS_SQL, or the
-    section_cell_stats table for the nine buckets it supplies) to the
+    section_cell_stats table for the ten non-exact buckets it supplies) to the
     short-key bucket dict served by /stats and /data.  ONE definition so the
     two response shapes cannot drift."""
     return {
@@ -393,7 +392,7 @@ def _section_stats(c: sqlite3.Cursor, target: str) -> dict[str, Any]:
     both (and drifted twice — cell-count vs byte-based, covered_bytes presence,
     key names); this is the single source of truth.
     """
-    # Pre-computed summary from metadata
+    # Pre-computed summary, read from the target's own metadata row
     summary: dict[str, Any] = {}
     c.execute("SELECT value FROM metadata WHERE target = ? AND key = 'summary'", (target,))
     row = c.fetchone()
@@ -425,8 +424,9 @@ def _section_stats(c: sqlite3.Cursor, target: str) -> dict[str, Any]:
 
     sections: dict[str, Any] = {}
     for name, buckets, covered, total in _per_section_buckets(c, target, cell_side):
-        # PROVEN is a semantic-equivalence promotion and counts as matched
-        # (consistent with the catalog grid's matchedFunctions).
+        # PROVEN is a semantic-equivalence promotion, so it counts as matched
+        # HERE only; rebrew's catalog grid counts byte-identical EXACT/RELOC
+        # alone, so this number is not the grid's matchedFunctions.
         matched = buckets["exact"] + buckets["reloc"] + buckets["proven"]
         sections[name] = {
             **buckets,
@@ -436,7 +436,7 @@ def _section_stats(c: sqlite3.Cursor, target: str) -> dict[str, Any]:
             "coverage_pct": round(covered / total * 100, 2) if total else 0.0,
         }
 
-    # Section byte sizes
+    # Section byte sizes, which the schema allows to be NULL
     c.execute("SELECT name, size FROM sections WHERE target = ?", (target,))
     for row in c.fetchall():
         name = row["name"]
@@ -448,8 +448,8 @@ def _section_stats(c: sqlite3.Cursor, target: str) -> dict[str, Any]:
             # total_bytes/covered_bytes above.
             sections[name]["size_bytes"] = row["size"] or 0
 
-    # Function counts by status.  GLOBAL/DATA marker rows live in the
-    # functions table but are data markers, not functions — exclude them.
+    # Function counts by status.  GLOBAL/DATA/VTABLE/STRING marker rows live in
+    # the functions table but are data markers, not functions — exclude them.
     by_status: dict[str, int] = {}
     c.execute(
         "SELECT status, COUNT(*) as cnt FROM functions"
@@ -552,8 +552,9 @@ def _target_filename(tid: str, t_info: Any) -> str:
     """Binary filename configured for target *tid* (*tid* when unset).
 
     ONE definition of the defensive shape check used for display names —
-    the config loader stores the raw ``binary`` value ("" when absent), and
-    both target-list builders fall back to the id here.
+    the config loader stores the binary path already resolved against the
+    project root ("" when the target configures none), and both target-list
+    builders fall back to the id here.
     """
     filename = t_info.get("filename", tid) if isinstance(t_info, dict) else tid
     return filename or tid
@@ -709,8 +710,11 @@ def _disassemble_loaded(va: int, size: int, file_offset: int, target: str) -> st
     """Cached disassembly; :func:`get_disassembly` verified the DLL loads."""
     target_data = _load_dll(target)
     if target_data is None:
-        # Raced a rebuild's DLL_DATA.clear() between the two loads; the same
-        # broadcast clears this cache, so the "" can never be served twice.
+        # Raced a rebuild's DLL_DATA.clear() between the two loads, so this
+        # slice is unresolvable rather than empty.  The "" lands in the memo
+        # behind the broadcast's clear_disassembly_cache(), so it survives
+        # until the next rebuild; the client refetches after the db-updated
+        # frame.
         return ""
 
     code_bytes = target_data[file_offset : file_offset + size]
@@ -1372,9 +1376,10 @@ def _json_err(status: int, data: dict[str, Any], **headers: str) -> Any:
 # ── Token auth ─────────────────────────────────────────────────────
 
 # Optional token auth for the dashboard (--token): when set, every request
-# must present it via Authorization: Bearer <token>, ?token=, or the
-# HttpOnly cookie the index route sets for the SPA.  Loopback stays
-# unauthenticated when no token is configured.
+# from every peer must present it via Authorization: Bearer <token>, ?token=,
+# or the HttpOnly cookie the index route sets for the SPA.  There is no
+# loopback exemption, which is why --allow-remote pairs with --token rather
+# than replacing it.
 _AUTH_TOKEN: str = ""
 
 
@@ -1448,6 +1453,13 @@ def _clear_auth_failures() -> None:
 
 
 def _require_auth() -> None:
+    """Enforce the configured bearer token, or pass when none is set.
+
+    Credentials, in order: ``Authorization: Bearer``, ``?token=``, the
+    ``recoverage_token`` cookie.  A page request (Accept: text/html, non-/api
+    path) gets the 401 HTML page; every other client gets the JSON 401
+    contract, or the 429 once the fail window is full.
+    """
     if not _AUTH_TOKEN:
         return
 
@@ -1527,7 +1539,7 @@ def _db_unavailable_err(exc: sqlite3.Error) -> Any:
         {
             "error": "Database unavailable",
             "detail": f"{type(exc).__name__}: {exc} — "
-            "run 'rebrew catalog --json && rebrew build-db' to create or rebuild it",
+            "run 'rebrew catalog && rebrew build-db' to create or rebuild it",
         },
     )
 

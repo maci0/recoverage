@@ -44,6 +44,15 @@ Requires `rebrew>=2.10.0`.
 
 ### Fixed
 
+- **`rebrew catalog --json` no longer appears in the documented pipeline.**
+  That flag suppresses the data-JSON write: it only prints a summary. The
+  quickstart, the pipeline diagram, the design docs, the user stories, and
+  the CLI's own rebuild hint all named the summary-only form. Every one now
+  shows the bare `rebrew catalog`, which is what `regen` actually runs.
+- **`export --format md` emitted a malformed table.** Each section row wrote
+  eleven cells (the exact/reloc/near-match triple twice) under an
+  eight-column header. The duplicate triple is gone; a test asserts every
+  data row has the header's cell count.
 - **Regen imports `run_catalog` from `rebrew.catalog.cli`.** Since rebrew 2.7
   the `rebrew.catalog` package does not re-export it, so `recoverage regen`,
   `serve --regen`, and `POST /api/regen` raised `ImportError` against current
