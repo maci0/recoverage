@@ -77,6 +77,15 @@ That is the local mirror of CI, and each target is the command CI runs:
 
 CI also builds an SBOM from `uv.lock` (`uv export`); it needs no local step.
 
+Every target is a wrapper around the third column, and every one of those
+commands runs on the whole test matrix (Linux, macOS, Windows). `make` itself
+is not: it is not preinstalled on Windows or in a bare Git for Windows shell,
+so run the command from the table directly there. The same applies to
+`make clone-rebrew`, whose two moves are `git clone --depth 1 --branch v2.13.1
+https://github.com/maci0/rebrew.git ../rebrew` and `git -C ../rebrew checkout
+--detach d2d67c870df79214320f16b1cba1b0f6086605a7`; `tools/ci_clone_rebrew.sh`
+is the same script CI runs and takes the destination as its first argument.
+
 ## Adding to the tree
 
 - Backend modules live in `src/recoverage/`; `webapp.py` is the composition

@@ -31,7 +31,11 @@ jobs:
           python-version: "3.13"
       # rebrew resolves from ../rebrew ([tool.uv.sources]); actions/checkout
       # cannot write outside the workspace, so clone it where uv looks.
+      # shell: bash, not the runner default: windows-latest defaults to pwsh,
+      # where "$GITHUB_WORKSPACE" is an undefined variable that expands to
+      # nothing, and the script would clone into "/../rebrew".
       - run: bash tools/ci_clone_rebrew.sh "$GITHUB_WORKSPACE/../rebrew"
+        shell: bash
       - run: uv sync --frozen --extra dev
       - run: uv run ruff format --check src/ tests/ tools/
       - run: uv run ruff check src/ tests/ tools/
@@ -54,7 +58,11 @@ jobs:
           python-version: "3.13"
       # rebrew resolves from ../rebrew ([tool.uv.sources]); actions/checkout
       # cannot write outside the workspace, so clone it where uv looks.
+      # shell: bash, not the runner default: windows-latest defaults to pwsh,
+      # where "$GITHUB_WORKSPACE" is an undefined variable that expands to
+      # nothing, and the script would clone into "/../rebrew".
       - run: bash tools/ci_clone_rebrew.sh "$GITHUB_WORKSPACE/../rebrew"
+        shell: bash
       - run: uv sync --frozen --extra dev
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
@@ -107,7 +115,11 @@ jobs:
           python-version: ${{ matrix.python-version }}
       # rebrew resolves from ../rebrew ([tool.uv.sources]); actions/checkout
       # cannot write outside the workspace, so clone it where uv looks.
+      # shell: bash, not the runner default: windows-latest defaults to pwsh,
+      # where "$GITHUB_WORKSPACE" is an undefined variable that expands to
+      # nothing, and the script would clone into "/../rebrew".
       - run: bash tools/ci_clone_rebrew.sh "$GITHUB_WORKSPACE/../rebrew"
+        shell: bash
       - run: uv sync --frozen --extra dev
       - run: uv run pytest tests/ -v --ignore=tests/test_playwright.py
 
@@ -125,7 +137,11 @@ jobs:
           python-version: "3.13"
       # rebrew resolves from ../rebrew ([tool.uv.sources]); actions/checkout
       # cannot write outside the workspace, so clone it where uv looks.
+      # shell: bash, not the runner default: windows-latest defaults to pwsh,
+      # where "$GITHUB_WORKSPACE" is an undefined variable that expands to
+      # nothing, and the script would clone into "/../rebrew".
       - run: bash tools/ci_clone_rebrew.sh "$GITHUB_WORKSPACE/../rebrew"
+        shell: bash
       - run: uv sync --frozen --extra dev
       - name: Boot dashboard against a sample coverage.db and probe it
         run: uv run python tools/smoke.py
