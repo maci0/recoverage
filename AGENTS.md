@@ -402,6 +402,15 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   is counted there as an exact match. Tests in `test_potato.py`
   (`TestCellStateVocabularyCoverage`) and `test_server.py` (`TestSpaStateVocabulary`)
   fail on a gap; extend all of them together when rebrew adds a state.
+- Every `RECOVERAGE_*` value is converted and validated at startup, and the
+  one with no format to convert still has a floor: `config.validate_bind`
+  rejects an address carrying whitespace or a control character, and a colon
+  outside an IPv6 literal, because those survive the banner and fail later as
+  a `getaddrinfo` error raised once the DB watcher, the cache warmup and the
+  browser opener are already running. The CLI's `--bind` calls the same
+  function with `--bind` as the name in the error, because the flag and the
+  variable are one setting with one floor. A new string-valued setting takes
+  the same treatment: validated in `config.py`, reached by both sources.
 - JS is linted with oxlint under the `@rikalabs/oxlint-standards` strict preset
   plus the vendored anti-slop rules; the webui is a classic-script SPA, so
   `app.js`/`detail.js` are wrapped in IIFEs and share state via `window.RC`.

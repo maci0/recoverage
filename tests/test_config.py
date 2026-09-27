@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 
 import pytest
@@ -125,6 +126,65 @@ class TestRejectsBadValues:
         reader = config.bind if name == "RECOVERAGE_BIND" else config.db_override
         with pytest.raises(config.ConfigError, match=name):
             reader()
+
+
+class TestBindValidation:
+    """The one binding setting with no conversion still has a floor."""
+
+    @pytest.mark.parametrize("raw", ["0.0.0.0", "127.0.0.1", "::", "::1", "localhost", "host.lan"])
+    def test_addresses_the_resolver_could_answer_pass(
+        self, monkeypatch: pytest.MonkeyPatch, raw: str
+    ) -> None:
+        monkeypatch.setenv("RECOVERAGE_BIND", raw)
+        assert config.bind() == raw
+
+    @pytest.mark.parametrize(
+        "raw,reason",
+        [
+            (" 127.0.0.1", "whitespace"),
+            ("127.0.0.1\n", "control character"),
+            ("local host", "whitespace"),
+            ("0.0.0.0\x7f", "control character"),
+            ("127.0.0.1:8001", "drop the port"),
+            ("host.lan:80", "drop the port"),
+        ],
+    )
+    def test_unanswerable_address_is_a_startup_error(
+        self, monkeypatch: pytest.MonkeyPatch, raw: str, reason: str
+    ) -> None:
+        """These reach socket.getaddrinfo as gaierror after the banner, the
+        DB watcher and the browser opener have already started."""
+        monkeypatch.setenv("RECOVERAGE_BIND", raw)
+        with pytest.raises(config.ConfigError, match=reason):
+            config.bind()
+
+    def test_validate_bind_rejects_empty(self) -> None:
+        with pytest.raises(config.ConfigError, match="set but empty"):
+            config.validate_bind("")
+
+    def test_validate_bind_is_what_the_flag_path_uses(self) -> None:
+        """--bind and RECOVERAGE_BIND are one setting; the flag skips bind()
+        and must not skip its floor.  Its error names the flag, the way
+        _checked_port names --port."""
+        with pytest.raises(config.ConfigError, match=re.escape("--bind: '127.0.0.1 '")):
+            config.validate_bind("127.0.0.1 ", "--bind")
+
+
+class TestHelpTextRendersTheConstants:
+    def test_serve_help_advertises_the_current_defaults(self) -> None:
+        from typer.testing import CliRunner
+
+        from recoverage.cli import app
+
+        result = CliRunner().invoke(app, ["serve", "--help"])
+        assert result.exit_code == 0, result.output
+        # Rich wraps at word boundaries, so each rendered default is one token.
+        for token in (
+            str(config.DEFAULT_PORT),
+            config.DEFAULT_BIND,
+            logging.getLevelName(config.DEFAULT_LOG_LEVEL),
+        ):
+            assert token in result.output, f"{token} missing from serve --help"
 
     def test_error_message_never_carries_the_token(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("RECOVERAGE_TOKEN", "s3cret-value")
@@ -257,6 +317,15 @@ class TestServeResolution:
             _resolve_serve_config(port=99999)
         assert excinfo.value.exit_code == 2
 
+    def test_unanswerable_flag_bind_exits_2(self) -> None:
+        import typer
+
+        from recoverage.cli import _resolve_serve_config
+
+        with pytest.raises(typer.Exit) as excinfo:
+            _resolve_serve_config(bind="0.0.0.0 ")
+        assert excinfo.value.exit_code == 2
+
     def test_bad_environment_value_exits_2(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import typer
 
@@ -367,6 +436,23 @@ class TestConfigCommand:
             "log_level": "INFO",
             "token": "unset",
         }
+
+    def test_allowlist_is_reported_normalized(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The checked value is the value the server matches: a default port
+        dropped and the host lowercased, or an operator reads an allowlist
+        that differs from the installed one by spelling alone."""
+        from typer.testing import CliRunner
+
+        from recoverage.cli import app
+
+        monkeypatch.setenv("RECOVERAGE_CORS", "1")
+        monkeypatch.setenv("RECOVERAGE_CORS_ORIGIN", "http://LocalHost:80, http://user@host.test")
+        result = CliRunner().invoke(app, ["config"])
+        assert result.exit_code == 0
+        assert "cors_origin=http://localhost" in result.output
+        # The userinfo-bearing entry cannot be stored and is named instead.
+        assert "user@host.test" in result.output
+        assert "cors_origin=http://localhost,http://user@host.test" not in result.output
 
     def test_bad_value_exits_2_without_a_traceback(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from typer.testing import CliRunner

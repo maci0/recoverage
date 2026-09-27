@@ -357,7 +357,9 @@ def _resolve_serve_config(
         config.check_unknown_vars()
         resolved = _ServeConfig(
             port=config.port() if port is None else _checked_port(port),
-            bind=config.bind() if bind is None else bind,
+            # validate_bind, not the raw flag: one setting, two sources, and
+            # the floor the environment gets is the flag's too.
+            bind=config.bind() if bind is None else config.validate_bind(bind, "--bind"),
             allow_remote=config.allow_remote() if allow_remote is None else allow_remote,
             cors=config.cors() if cors is None else cors,
             cors_origins=list(cors_origin) if cors_origin is not None else config.cors_origins(),
@@ -662,6 +664,31 @@ def open_browser(url: str) -> None:
 # ── Commands ───────────────────────────────────────────────────────
 
 
+def _allowed_origins(cors: bool, requested: list[str]) -> list[str]:
+    """The allowlist `serve` installs, from the origins the operator asked for.
+
+    ONE resolution for the banner and for ``recoverage config``, so the value
+    an operator checks is the value the server matches against: a default port
+    is dropped, the host is lowercased, and an entry that cannot normalize is
+    reported rather than stored.  A stored "" would match every unparsable
+    request Origin and echo it back as Access-Control-Allow-Origin.
+    """
+    from recoverage.server import _normalize_origin
+
+    allowed: list[str] = []
+    if cors:
+        for origin_url in requested:
+            normalized = _normalize_origin(origin_url)
+            if normalized:
+                allowed.append(normalized)
+            else:
+                _secho(
+                    f"warning: ignoring unparseable --cors-origin {origin_url!r}",
+                    fg=typer.colors.YELLOW,
+                )
+    return allowed
+
+
 @app.command()
 def serve(
     # Every option defaults to None so "not passed on the command line" stays
@@ -679,7 +706,8 @@ def serve(
     bind: str | None = typer.Option(
         None,
         "--bind",
-        help="Interface to bind to (default: 127.0.0.1; use 0.0.0.0 for LAN; env: RECOVERAGE_BIND)",
+        help=f"Interface to bind to (default: {config.DEFAULT_BIND}; use 0.0.0.0 for LAN; "
+        "env: RECOVERAGE_BIND)",
     ),
     allow_remote: bool | None = typer.Option(
         None,
@@ -712,8 +740,8 @@ def serve(
     log_level: str | None = typer.Option(
         None,
         "--log-level",
-        help="Log threshold (default: INFO; any name or number logging knows, "
-        "e.g. DEBUG, INFO, WARN, WARNING, ERROR, CRITICAL; "
+        help=f"Log threshold (default: {logging.getLevelName(config.DEFAULT_LOG_LEVEL)}; any name "
+        "or number logging knows, e.g. DEBUG, INFO, WARN, WARNING, ERROR, CRITICAL; "
         "env: RECOVERAGE_LOG_LEVEL)",
     ),
 ) -> None:
@@ -818,20 +846,7 @@ def serve(
     )
     logging.basicConfig(handlers=[handler], level=resolved.log_level)
 
-    allowed_origins: list[str] = []
-    if cors:
-        # An origin that fails to normalize must be dropped loudly: a stored
-        # "" would match every unparsable request Origin and echo it back as
-        # Access-Control-Allow-Origin.
-        for origin_url in cors_origin or ():
-            normalized = _server._normalize_origin(origin_url)
-            if normalized:
-                allowed_origins.append(normalized)
-            else:
-                _secho(
-                    f"warning: ignoring unparseable --cors-origin {origin_url!r}",
-                    fg=typer.colors.YELLOW,
-                )
+    allowed_origins = _allowed_origins(cors, cors_origin)
     if token:
         _secho(
             f"token auth enabled — requests need Authorization: Bearer <token> "
@@ -1307,7 +1322,7 @@ def config_cmd(
         bind=resolved.bind,
         allow_remote=resolved.allow_remote,
         cors=resolved.cors,
-        cors_origin=resolved.cors_origins,
+        cors_origin=_allowed_origins(resolved.cors, resolved.cors_origins),
         token=resolved.token,
         db=resolved.db,
         log_level=resolved.log_level,

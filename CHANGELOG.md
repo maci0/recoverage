@@ -28,7 +28,10 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **`recoverage config` prints the configuration `serve` would start with.**
   Same merge, same validation, no listener bound, so a deployment can confirm
   its environment (or diff two of them) before anything listens. `--json`
-  emits the same object for a script. The token is reported as `set`/`unset`.
+  emits the same object for a script. The token is reported as `set`/`unset`,
+  and the CORS allowlist is reported as installed (default port dropped, host
+  lowercased) rather than as typed, so the checked value is the value the
+  server matches against.
 - **Every command validates the `RECOVERAGE_*` environment, not just
   `serve`.** `stats`, `export`, `check`, `open` and `regen` read it too, and a
   misspelled variable there was a silent no-op: the command ran with a
@@ -242,6 +245,14 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **A bind address nothing could resolve started the server anyway.**
+  `RECOVERAGE_BIND` rejected an empty value but nothing else, so a trailing
+  space from a unit-file quoting slip, an embedded control character, or a
+  `host:port` spelling passed validation and printed in the startup banner.
+  The failure arrived from the resolver inside the listener, after the DB
+  watcher, the cache warmup and the browser opener had started, as an
+  "is another instance already running?" message. Both sources are validated
+  at startup now and exit 2 with the variable named.
 - **A partially populated cache dropped whole sections.** The dashboard
   prefers `section_cell_stats` and `section_cells_json` over re-deriving them
   from `cells`, and it decided which to use by asking whether they exist. A

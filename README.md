@@ -172,7 +172,7 @@ always wins over the environment.
 | Variable | Default | Accepts |
 |----------|---------|---------|
 | `RECOVERAGE_PORT` | `8001` | integer `0`-`65535` |
-| `RECOVERAGE_BIND` | `127.0.0.1` | any interface address |
+| `RECOVERAGE_BIND` | `127.0.0.1` | an interface address or hostname; no whitespace, no `host:port` (the port belongs to `RECOVERAGE_PORT`) |
 | `RECOVERAGE_ALLOW_REMOTE` | `false` | `1`/`0`, `true`/`false`, `yes`/`no`, `on`/`off` |
 | `RECOVERAGE_CORS` | `false` | same booleans |
 | `RECOVERAGE_CORS_ORIGIN` | none | comma-separated origin URLs |
@@ -194,7 +194,8 @@ recoverage serve --no-open
 it exits 1, whether the address came from the flag or the environment.
 
 Every value is validated at startup. An out-of-range port, a non-boolean flag,
-an unknown log level, an empty value where one is required, or a misspelled
+an unknown log level, an empty value where one is required, a bind address no
+resolver can answer (`0.0.0.0 `, `host:8001`), or a misspelled
 `RECOVERAGE_*` name (`RECOVERAGE_PRT`) exits 2 with the variable named,
 instead of starting with a default you did not ask for. The same check runs
 for every command that reads the environment (`stats`, `export`, `check`,

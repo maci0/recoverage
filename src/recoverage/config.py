@@ -10,7 +10,8 @@ Two rules make a misconfigured deployment loud instead of surprising:
 
 * every value is validated (and converted) at startup, before the listener
   binds, so a typo is a clear error rather than a socket or auth failure
-  minutes later;
+  minutes later.  :func:`validate_bind` is the shared floor the CLI's ``--bind``
+  calls too, because the flag and the variable are one setting;
 * an unrecognised ``RECOVERAGE_*`` name is an error too, because a misspelled
   variable is otherwise indistinguishable from an unset one and silently
   leaves a default in place.
@@ -26,6 +27,7 @@ import logging
 import os
 import re
 from collections.abc import Mapping, Sequence
+from ipaddress import IPv6Address
 from pathlib import Path
 from typing import Final
 
@@ -56,9 +58,9 @@ KNOWN_VARS: Final[frozenset[str]] = frozenset(
 )
 
 # Command-line defaults, the single definition the environment defaults and
-# the CLI epilog share.  The --port help string reads DEFAULT_PORT from here;
-# the --bind and --log-level ones spell their default out in text, so a change
-# to those two constants needs those strings updated alongside it.
+# the CLI --help strings share: each of those renders its default from the
+# constant rather than restating it, so a change here cannot leave the help
+# text advertising a default the server no longer uses.
 DEFAULT_PORT: Final = 8001
 DEFAULT_BIND: Final = "127.0.0.1"
 
@@ -156,9 +158,43 @@ def port() -> int:
     return value
 
 
+def validate_bind(value: str, name: str = "RECOVERAGE_BIND") -> str:
+    """Return *value* when it is an address the resolver can answer, else raise.
+
+    The one binding setting with no format to convert still has a floor: an
+    address carrying whitespace or a control character, or one written as
+    ``host:port``, resolves to nothing.  Without this the mistake survives
+    validation and the startup banner, and surfaces from
+    ``socket.getaddrinfo`` inside the listener, after the DB watcher, the
+    cache warmup and the browser opener have already started, with a message
+    that blames a port already in use.
+
+    An IPv6 literal keeps its colons; only a ``:`` outside one is a port the
+    caller should have passed to ``--port``/``RECOVERAGE_PORT`` instead.
+    *name* is the spelling the error quotes, so the flag path names the flag
+    and the environment path names the variable.
+    """
+    if not value:
+        raise ConfigError(f"{name}: set but empty (unset it, or give it an address)")
+    if any(ch.isspace() or ord(ch) < 32 or 127 <= ord(ch) <= 159 for ch in value):
+        raise ConfigError(
+            f"{name}: {value!r} is not an interface address "
+            "(it carries whitespace or a control character; quote it in the unit file)"
+        )
+    if ":" in value:
+        try:
+            IPv6Address(value)
+        except ValueError:
+            raise ConfigError(
+                f"{name}: {value!r} is not an interface address "
+                "(drop the port; it belongs to RECOVERAGE_PORT/--port)"
+            ) from None
+    return value
+
+
 def bind() -> str:
     """Interface to bind to."""
-    return _str_var("RECOVERAGE_BIND", DEFAULT_BIND)
+    return validate_bind(_str_var("RECOVERAGE_BIND", DEFAULT_BIND))
 
 
 def allow_remote() -> bool:

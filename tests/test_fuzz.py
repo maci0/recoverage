@@ -1152,6 +1152,38 @@ class TestConfigEnvParsers:
             num_tokens=ENV_VALUE_SEEDS,
         )
 
+    def test_fuzzed_bind_is_an_answerable_address_or_loud(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Whatever survives bind() must be a value socket.getaddrinfo could
+        answer: no whitespace, no control byte, and a colon only inside an
+        IPv6 literal.  Everything else is a ConfigError at startup, never a
+        gaierror from the listener after the banner has printed."""
+
+        def check(data: bytes) -> None:
+            raw = data.decode("latin-1")
+            if not _set_env(monkeypatch, "RECOVERAGE_BIND", raw):
+                return
+            try:
+                value = config.bind()
+            except config.ConfigError:
+                return
+            assert value, f"{data!r}: empty bind address"
+            assert not _has_control(value), f"{data!r}: control byte in {value!r}"
+            assert not any(ch.isspace() for ch in value), f"{data!r}: whitespace in {value!r}"
+            if ":" in value:
+                # A surviving colon is IPv6 syntax, never a host:port pair.
+                # A ValueError here is the fuzz failure, not the test's.
+                ipaddress.IPv6Address(value)
+
+        _fuzz(
+            ENV_VALUE_SEEDS,
+            check,
+            iterations=300,
+            struct_tokens=ENV_VALUE_SEEDS,
+            num_tokens=ENV_VALUE_SEEDS,
+        )
+
     def test_fuzzed_cors_origin_yields_only_plain_items(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
