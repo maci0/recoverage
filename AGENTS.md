@@ -317,6 +317,18 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   `tests/test_metrics.py` drives the per-request duration window the same
   way, so the slow-request threshold is crossed on the clock rather than on
   a sleep.
+- The memos derived from `rebrew-project.toml` all key on the file's stat
+  (`server._config_stat_fingerprint`), one token for all of them:
+  `_get_targets_config`, `resolve_targets` (keyed on that stat AND the
+  WAL-aware DB snapshot, its other input), and the `DLL_DATA` byte cache.
+  Editing the config is a write that reaches no server code and moves no DB
+  file, so the stat is the only invalidation signal there is, and the rebuild
+  broadcast watches `coverage.db` alone. A new config-derived memo names
+  `_config_stat_fingerprint` in its key or it will disagree with the other two
+  (`tests/test_server.py`, `TestConfigDerivedMemosFollowTheConfigStat`).
+  DB-derived memos key on `_snapshot_db_mtime`, and the potato ones re-check
+  the watermark before publishing, so a payload read through a pinned
+  `read_snapshot` is never filed under a newer fingerprint.
 - HTML/CSS/JS in `assets/` — no build step, VanJS for reactivity
 - The cell-state vocabulary is owned by rebrew (`rebrew.build_db._KNOWN_CELL_STATES`)
   and must be covered on the rendering side: `potato.COLORS` + `LEGEND_ITEMS`,

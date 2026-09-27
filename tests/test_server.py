@@ -1925,3 +1925,75 @@ class TestClockSeam:
         status, _, _ = wsgi_request("GET", "/api/health")
         assert status.startswith("200"), status
         assert metrics.REQUESTS.snapshot()["slow"] == before["slow"] + 1
+
+
+class TestConfigDerivedMemosFollowTheConfigStat:
+    """Editing rebrew-project.toml reaches no server code, so the stat of that
+    file is the only invalidation signal its memos get.
+
+    _get_targets_config has always keyed on that stat.  The resolved target
+    list and the DLL byte cache did not, and both are invalidated only by the
+    rebuild broadcast, which watches coverage.db — a config edit produces no DB
+    change.  So a target added to the file, or a binary re-pointed in it,
+    while the server ran kept the pre-edit answer until the next build-db.
+    """
+
+    @pytest.fixture
+    def project(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
+        import recoverage.server as srv
+
+        monkeypatch.setattr(srv, "_project_dir", lambda: tmp_path)
+        clear_target_cache()
+        with srv.DLL_LOCK:
+            srv.DLL_DATA.clear()
+            monkeypatch.setattr(srv, "_DLL_CONFIG_MTIME", None)
+        yield tmp_path
+        clear_target_cache()
+        with srv.DLL_LOCK:
+            srv.DLL_DATA.clear()
+
+    def test_resolved_targets_pick_up_a_config_only_target(self, project: Path) -> None:
+        import recoverage.server as srv
+
+        conn = sqlite3.connect(":memory:")
+        conn.execute("CREATE TABLE metadata (target TEXT)")
+        conn.execute("INSERT INTO metadata VALUES ('FROMDB')")
+        c = conn.cursor()
+        try:
+            assert [t["id"] for t in srv.resolve_targets(c)] == ["FROMDB"]
+
+            (project / "rebrew-project.toml").write_text(
+                '[targets.NEWONE]\nbinary = "bin/new.dll"\n', encoding="utf-8"
+            )
+            ids = [t["id"] for t in srv.resolve_targets(c)]
+            assert "NEWONE" in ids, (
+                "a target declared in rebrew-project.toml after the server "
+                "started stayed out of the dropdown, /api/targets and Potato "
+                "Mode until the next coverage.db rebuild"
+            )
+        finally:
+            conn.close()
+
+    def test_dll_bytes_follow_a_re_pointed_binary(self, project: Path) -> None:
+        import recoverage.server as srv
+
+        target = "REPOINT"
+        # No config yet: the negative verdict is cached, and the edit below is
+        # what has to undo it.
+        assert srv._load_dll(target) is None
+
+        (project / "first.bin").write_bytes(b"FIRST-BINARY")
+        (project / "rebrew-project.toml").write_text(
+            f'[targets.{target}]\nbinary = "first.bin"\n', encoding="utf-8"
+        )
+        assert srv._load_dll(target) == b"FIRST-BINARY"
+
+        # A DIFFERENT-SIZED path, so the config's stat fingerprint moves even
+        # on a filesystem whose mtime granularity is a whole second.
+        (project / "second-and-longer.bin").write_bytes(b"SECOND-BINARY")
+        (project / "rebrew-project.toml").write_text(
+            f'[targets.{target}]\nbinary = "second-and-longer.bin"\n', encoding="utf-8"
+        )
+        assert srv._load_dll(target) == b"SECOND-BINARY", (
+            "/asm and /bytes kept serving the binary the config edit replaced"
+        )

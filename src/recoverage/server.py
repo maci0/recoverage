@@ -623,11 +623,22 @@ def _project_dir() -> Path:
 
 DLL_DATA: dict[str, bytes | None] = {}
 DLL_LOCK = threading.Lock()
+#: Config stat the current DLL_DATA was filled under, or None before the
+#: first load (and for a project with no rebrew-project.toml, which is also a
+#: state entries get cached under).  The rebuild broadcast empties DLL_DATA
+#: under the same lock and deliberately leaves this alone: the config did not
+#: change, so the next request reloads under a fingerprint that still matches.
+_DLL_CONFIG_MTIME: tuple[int, int] | None = None
 _MAX_DLL_SIZE = 512 * 1024 * 1024  # 512 MiB — reject unreasonably large binaries
 
 
 _TOML_CONFIG_CACHE: dict[str, Any] | None = None
-_RESOLVED_TARGETS_CACHE: list[dict[str, str]] | None = None
+#: Key for :data:`_RESOLVED_TARGETS_CACHE`: the config stat and the WAL-aware
+#: DB snapshot, the two inputs of the merge, so the memo self-invalidates on
+#: either.  The DB half the rebuild broadcast already covered; the config half
+#: nothing did (see :func:`resolve_targets`).
+_ResolvedTargetsKey = tuple[tuple[int, int] | None, tuple[int, int] | None]
+_RESOLVED_TARGETS_CACHE: tuple[_ResolvedTargetsKey, list[dict[str, str]]] | None = None
 _RESOLVED_TARGETS_CACHE_LOCK = threading.RLock()
 
 
@@ -648,6 +659,24 @@ def _log_safe(value: str) -> str:
 _TOML_CACHE_MTIME: tuple[int, int] | None = None
 
 
+def _config_stat_fingerprint(root: Path) -> tuple[int, int] | None:
+    """``(mtime_ns, size)`` of the project config under *root*, None when absent.
+
+    The one definition of the change token every config-derived memo keys on:
+    the parsed config (:func:`_get_targets_config`), the resolved target list
+    (:func:`resolve_targets`), and the DLL byte cache (:func:`_load_dll`).
+    Editing ``rebrew-project.toml`` is a write that reaches no server code, so
+    a stat is the only invalidation signal available; naming the same one in
+    every key is what keeps those memos from disagreeing about whether the
+    config changed.
+    """
+    try:
+        st = (root / CONFIG_NAME).stat()
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size)
+
+
 def _get_targets_config() -> dict[str, Any]:
     """Load target configuration from rebrew-project.toml (thread-safe, cached).
 
@@ -658,11 +687,7 @@ def _get_targets_config() -> dict[str, Any]:
     global _TOML_CONFIG_CACHE, _TOML_CACHE_MTIME
     root = _project_dir()
     toml_path = root / CONFIG_NAME
-    try:
-        st = toml_path.stat()
-        current = (st.st_mtime_ns, st.st_size)
-    except OSError:
-        current = None
+    current = _config_stat_fingerprint(root)
     with _RESOLVED_TARGETS_CACHE_LOCK:
         if _TOML_CONFIG_CACHE is not None and current == _TOML_CACHE_MTIME:
             return _TOML_CONFIG_CACHE
@@ -730,11 +755,27 @@ def resolve_targets(c: sqlite3.Cursor) -> list[dict[str, str]]:
 
     Config-declared targets first, then any DB-only target, so the SPA
     dropdown and Potato Mode render and default to the same first entry.
+
+    Memoized per (config stat, WAL-aware DB snapshot) — both inputs to the
+    merge, the same contract every other DB-derived memo follows.  Keying on
+    the config alone would have been the obvious half: the parsed config
+    self-invalidates on its stat, so without the config half in this key the
+    two disagreed.  Adding a target to ``rebrew-project.toml`` while the
+    server ran left ``_get_targets_config`` reporting it (and
+    ``_require_target`` accepting it) while the dropdown, ``/api/targets`` and
+    Potato Mode's list omitted it until the next coverage.db rebuild cleared
+    the memo.  The DB half is what the rebuild broadcast already covered; both
+    are named here so neither depends on an event that may never fire.
     """
     global _RESOLVED_TARGETS_CACHE
+    key: _ResolvedTargetsKey = (
+        _config_stat_fingerprint(_project_dir()),
+        _snapshot_db_mtime(),
+    )
     with _RESOLVED_TARGETS_CACHE_LOCK:
-        if _RESOLVED_TARGETS_CACHE is not None:
-            return _RESOLVED_TARGETS_CACHE
+        cached = _RESOLVED_TARGETS_CACHE
+        if cached is not None and cached[0] == key:
+            return cached[1]
 
         target_ids = db_target_ids(c)
         targets_info = _get_targets_config()
@@ -748,7 +789,7 @@ def resolve_targets(c: sqlite3.Cursor) -> list[dict[str, str]]:
         ]
         targets_list += [{"id": tid, "name": tid} for tid in target_ids if tid not in targets_info]
 
-        _RESOLVED_TARGETS_CACHE = targets_list
+        _RESOLVED_TARGETS_CACHE = (key, targets_list)
         return targets_list
 
 
@@ -771,20 +812,26 @@ def _find_dll_path(target: str) -> Path | None:
     return _project_dir() / filename
 
 
-def _cache_dll_unavailable(target: str, warning: str, *args: object) -> bytes | None:
+def _cache_dll_unavailable(
+    target: str, config_fp: tuple[int, int] | None, warning: str, *args: object
+) -> bytes | None:
     """Record *target*'s DLL as unloadable, logging *warning* once.
 
-    The failure paths that are permanent for the process (no configured
-    binary, an oversize read) end here so the double-checked insert lives in
-    one place instead of once per path: another thread may
-    have loaded the binary while this thread was doing the work that failed,
-    and that successful load wins.  A read that raises OSError is the
-    exception: it is not cached, so a transient failure costs a retry rather
-    than pinning the target to no DLL for the process lifetime.
-    String arguments are control-char escaped
+    The failure paths that are permanent for as long as the config is
+    unchanged (no configured binary, an oversize read) end here so the
+    double-checked insert lives in one place instead of once per path: another
+    thread may have loaded the binary while this thread was doing the work
+    that failed, and that successful load wins.  A read that raises OSError is
+    the exception: it is not cached, so a transient failure costs a retry
+    rather than pinning the target to no DLL for the config's lifetime.
+    Nothing is recorded once *config_fp* has moved on: the verdict describes
+    the config this load resolved against, and recording it would pin it past
+    the edit that fixes it.  String arguments are control-char escaped
     on the way to the log; numbers are passed through for %d.
     """
     with DLL_LOCK:
+        if config_fp != _DLL_CONFIG_MTIME:
+            return None
         if target in DLL_DATA:
             return DLL_DATA[target]
         _log.warning(warning, *(_log_safe(a) if isinstance(a, str) else a for a in args))
@@ -798,14 +845,30 @@ def _load_dll(target: str) -> bytes | None:
     Why no outer check: reading DLL_DATA[target] outside the lock races with
     dict resize triggered by __setitem__ in another thread.  The GIL protects
     individual bytecodes but not multi-step dict operations during resize.
+
+    DLL_DATA is keyed by target alone, so a config edit that re-points
+    ``[targets.X].binary`` — or gives a target one it had none of — left the
+    old bytes (or the ``None`` of a not-yet-configured target) served to /asm
+    and /bytes until the next coverage.db rebuild.  Re-pointing a binary is an
+    operator edit to rebrew-project.toml: it reaches no server code, and the
+    rebuild broadcast that clears this dict fires on the DB alone.  The memo
+    therefore carries the same config stat its path resolution keys on
+    (:func:`_config_stat_fingerprint`) and drops every entry when that moves,
+    the contract :func:`_get_targets_config` already follows.
     """
+    global _DLL_CONFIG_MTIME
+    config_fp = _config_stat_fingerprint(_project_dir())
     with DLL_LOCK:
-        if target in DLL_DATA:
+        if config_fp != _DLL_CONFIG_MTIME:
+            _DLL_CONFIG_MTIME = config_fp
+            DLL_DATA.clear()
+        elif target in DLL_DATA:
             return DLL_DATA[target]
     dll_path = _find_dll_path(target)
     if dll_path is None:
         return _cache_dll_unavailable(
             target,
+            config_fp,
             "No [targets.%s].binary configured — cannot load DLL for target %s",
             target,
             target,
@@ -815,6 +878,7 @@ def _load_dll(target: str) -> bytes | None:
         if file_size > _MAX_DLL_SIZE:
             return _cache_dll_unavailable(
                 target,
+                config_fp,
                 "DLL %s (%d MiB) exceeds %d MiB limit, skipping",
                 str(dll_path),
                 file_size >> 20,
@@ -824,6 +888,7 @@ def _load_dll(target: str) -> bytes | None:
         if len(data) > _MAX_DLL_SIZE:
             return _cache_dll_unavailable(
                 target,
+                config_fp,
                 "DLL %s (%d MiB) exceeds %d MiB limit after read, skipping",
                 str(dll_path),
                 len(data) >> 20,
@@ -839,6 +904,11 @@ def _load_dll(target: str) -> bytes | None:
         )
         return None
     with DLL_LOCK:
+        # A config edit landing during the read resolves this load against a
+        # path that is no longer current; caching its bytes would serve the
+        # binary the edit just replaced.  Hand them back uncached instead.
+        if config_fp != _DLL_CONFIG_MTIME:
+            return data
         if target in DLL_DATA:
             return DLL_DATA[target]
         DLL_DATA[target] = data
