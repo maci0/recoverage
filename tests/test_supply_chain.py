@@ -28,6 +28,7 @@ _SIBLING_ACTION = _ROOT / ".github" / "actions" / "sibling-rebrew" / "action.yml
 _MAKEFILE = _ROOT / "Makefile"
 _README = _ROOT / "README.md"
 _PACKAGE_JSON = _ROOT / "package.json"
+_BUN_LOCK = _ROOT / "bun.lock"
 _MANIFEST = _ROOT / "pyproject.toml"
 _PYTHON_VERSION = _ROOT / ".python-version"
 _FLATTEN = _ROOT / "tools" / "flatten-rikalabs-strict.py"
@@ -52,6 +53,18 @@ _ACTION_USE_RE = re.compile(r"\.github/actions/sibling-rebrew|tools/ci_clone_reb
 _PINS = {"REBREW_REF": "v2.13.1", "REBREW_SHA": "d2d67c870df79214320f16b1cba1b0f6086605a7"}
 # How a job names the composite action that fetches the sibling checkout.
 _SIBLING_ACTION_STEP = "uses: ./.github/actions/sibling-rebrew"
+
+
+def _bun_lock() -> dict:
+    """bun.lock parsed, which is JSONC rather than the JSON bun.lock claims to be.
+
+    Every entry block ends with a trailing comma, so `json.loads` rejects the
+    file outright. Only the commas before a closing brace or bracket are
+    removed; nothing else is rewritten, so a syntax bun ever adds beyond that
+    fails these tests loudly instead of being skipped.
+    """
+    text = re.sub(r",(\s*[}\]])", r"\1", _BUN_LOCK.read_text(encoding="utf-8"))
+    return json.loads(text)
 
 
 def _jobs() -> dict[str, str]:
@@ -265,6 +278,57 @@ class TestToolchainPins:
         assert tested == claimed, (
             f"the matrix tests {sorted(tested)}, pyproject.toml claims {sorted(claimed)}"
         )
+
+
+class TestNpmLockfile:
+    """bun.lock is the JavaScript half of what the sbom job inventories.
+
+    The Python tree is hashed end to end: uv.lock carries a digest per
+    artifact and the sbom job re-exports one with `--hashes`. The npm side had
+    nothing asserting its two properties, so a range, a stale lock entry, or a
+    package resolved without an integrity hash would reach a lint run in
+    silence.
+    """
+
+    def test_every_dev_dependency_is_pinned_exactly(self) -> None:
+        """No range in devDependencies: the lint gate is the same on every run."""
+        dev = json.loads(_PACKAGE_JSON.read_text(encoding="utf-8"))["devDependencies"]
+        floating = {
+            name: version
+            for name, version in dev.items()
+            if not re.fullmatch(r"\d+\.\d+\.\d+", version)
+        }
+        assert not floating, f"devDependency versions must be exact: {floating}"
+
+    def test_the_lockfile_resolves_exactly_what_the_manifest_declares(self) -> None:
+        """bun.lock and package.json name the same version of the same packages.
+
+        A lockfile that still resolves an older version is a range the pin in
+        package.json no longer describes, and `bun install --frozen-lockfile`
+        (what `make web-lint` runs) installs the lock's answer, not the
+        manifest's.
+        """
+        declared = json.loads(_PACKAGE_JSON.read_text(encoding="utf-8"))["devDependencies"]
+        lock = _bun_lock()
+        assert lock["workspaces"][""]["devDependencies"] == declared, (
+            "bun.lock's devDependencies differ from package.json; re-lock with `bun install`"
+        )
+        for name, version in declared.items():
+            resolved = lock["packages"][name][0]
+            assert resolved == f"{name}@{version}", (
+                f"bun.lock resolves {name} to {resolved}, package.json declares {version}"
+            )
+
+    def test_every_locked_package_carries_an_integrity_hash(self) -> None:
+        """Each entry ends in a digest, so a swapped tarball fails the install."""
+        packages = _bun_lock()["packages"]
+        assert packages, "bun.lock records no packages"
+        unhashed = {
+            name: entry[0]
+            for name, entry in packages.items()
+            if not (isinstance(entry[-1], str) and re.fullmatch(r"sha\d{3}-.+", entry[-1]))
+        }
+        assert not unhashed, f"bun.lock entries without an integrity hash: {sorted(unhashed)}"
 
 
 class TestCheckedInLintPreset:

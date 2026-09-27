@@ -258,6 +258,13 @@ def _build_synthetic_db(db_file: Path) -> None:
 # a real project has a rebrew-project.toml and its own coverage.db, which the
 # DB-gated tests must never read (assertions would depend on unrelated project
 # data, and building a synthetic DB here could clobber the real one).
+#
+# Everywhere else the file is rebuilt on every session, not only when it is
+# missing: db/coverage.db is gitignored, so a copy left by an older checkout
+# survives a rebase with the old schema and the old column units (a
+# verify_results.similarity on the 0-100 scale, which the current renderer
+# scales by 100 again).  Reusing it made a DB-gated test fail on data this
+# tree no longer produces, and CI, which never has the file, stayed green.
 _IN_REAL_PROJECT = (Path.cwd() / "rebrew-project.toml").exists()
 
 if not _IN_REAL_PROJECT:

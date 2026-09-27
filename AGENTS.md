@@ -53,9 +53,10 @@ recoverage/
 │   ├── test_perf.py          # Deterministic perf gates (work counters, not wall clock)
 │   ├── test_metrics.py       # Request id, RED counters, slow-request log line
 │   ├── test_release.py       # Release contract: version, changelog, declared floors
-│   ├── test_supply_chain.py  # Pins: rebrew ref/sha, declared-vs-imported deps, bundled-asset grants
+│   ├── test_supply_chain.py  # Pin contracts: rebrew tag/SHA, one clone mechanism, preset
+│   │                         #   license, declared-vs-imported deps, npm lock pin + integrity,
+│   │                         #   bundled-asset grants
 │   ├── test_fuzz.py          # Seeded mutation campaigns over the untrusted-input surfaces
-│   ├── test_supply_chain.py  # Pin contracts: rebrew tag/SHA, one clone mechanism, preset license
 │   └── test_playwright.py    # Browser integration tests
 └── src/recoverage/
     ├── __init__.py

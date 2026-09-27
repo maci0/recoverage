@@ -241,6 +241,13 @@ module ships in the published package. See *Breaking*.
   symbol name turned the record into a `--- Logging error ---` traceback that
   said nothing about the request. Unencodable characters are now written as
   escapes, the same treatment stdout already had.
+- **A `db/coverage.db` left by an older checkout no longer fails the suite.**
+  The synthetic database the DB-gated tests read is gitignored, so a copy
+  written before a schema change survived with the old column units (a
+  `verify_results.similarity` on the 0-100 scale) and the tests then asserted
+  against data this tree no longer produces, while CI, which never has the
+  file, stayed green. Outside a real rebrew project the file is now rebuilt
+  every session.
 - **The verified code-similarity reads 100x low.** `verify_results.similarity`
   is stored as a 0-1 fraction (the column CHECKs the unit interval, and
   rebrew's verify import divides its percent scale by 100), but the SPA and
