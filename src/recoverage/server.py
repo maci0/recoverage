@@ -1337,6 +1337,14 @@ def _escape_like(search: str) -> str:
 
     Backslash itself must be escaped first, since it is the ESCAPE character
     and would otherwise consume the next character as a literal.
+
+    Case folding stops at ASCII: SQLite's LIKE (and its lower()) match "A"
+    against "a" and nothing else, so a server-side search for "STRASSE"
+    misses "Straße" and an NFD query misses the NFC name stored in the row.
+    The SPA's own grid search folds properly in JS (see app.js), so the two
+    halves of the search box differ for non-ASCII queries.  Closing that on
+    this side needs a folded column, which means a schema migration, not a
+    query change.
     """
     return "%" + search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
 

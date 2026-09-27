@@ -1743,6 +1743,25 @@ class TestPathTraversalGuard:
         (tmp_path / "src").mkdir()
         assert self._read(tmp_path, monkeypatch, "nope.c") is None
 
+    def test_undecodable_byte_does_not_blank_the_panel(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A source file with one latin-1 byte must still render.
+
+        Decompiled projects carry Windows-1252 bytes in comments; a strict
+        UTF-8 decode used to raise and drop the whole file, so one 0x92
+        emptied the panel.  The undecodable byte becomes U+FFFD in place.
+        """
+        src = tmp_path / "src"
+        src.mkdir()
+        # 0x92 is a Windows-1252 right single quote, not valid UTF-8.
+        (src / "main.c").write_bytes(b"int main(void) { /* don\x92t */ return 0; }")
+        result = self._read(tmp_path, monkeypatch, "main.c")
+        assert result is not None
+        assert "\ufffd" in result
+        assert "int main(void) { /* don" in result
+        assert "return 0; }" in result
+
     def test_no_files_returns_none(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.chdir(tmp_path)
         data: dict = {"paths": {"sourceRoot": "src"}}

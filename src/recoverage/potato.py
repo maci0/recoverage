@@ -2512,10 +2512,17 @@ def _panel_fn_source_text(data: dict[str, Any], target: str, fn_data: dict[str, 
     if not c_path.is_relative_to(base):
         return None
     try:
-        with c_path.open(encoding="utf-8") as f:
+        # errors="replace": a decompiled project's C sources carry
+        # Windows-1252 bytes in comments often enough that a strict decode
+        # blanks the whole panel over one 0x92.  The undecodable byte
+        # renders as U+FFFD in place and the rest of the file stays readable.
+        with c_path.open(encoding="utf-8", errors="replace") as f:
             return f.read()
-    except (OSError, UnicodeDecodeError):
-        _log.debug("Source file not found: %s", c_path)
+    except (OSError, UnicodeError):
+        # UnicodeError covers a path the filesystem encoding cannot encode
+        # (a lone surrogate out of a foreign DB), which open() raises before
+        # it ever reaches the read.
+        _log.debug("Source file unreadable: %s", c_path)
         return None
 
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import enum
+import io
 import json
 import logging
 import os
@@ -17,7 +18,7 @@ import threading
 import webbrowser
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, NamedTuple, NoReturn
+from typing import IO, Any, NamedTuple, NoReturn
 
 import typer
 
@@ -194,6 +195,30 @@ def _use_utf8_stdout() -> None:
         return
     with contextlib.suppress(ValueError, OSError):
         reconfigure(encoding="utf-8")
+
+
+def _utf8_stream(stream: IO[str]) -> IO[str]:
+    """Return *stream* pinned to UTF-8, or *stream* itself when it already is.
+
+    Exported target and section names come from analyzed PE binaries, so a
+    non-ASCII one reaches the writer.  ``sys.stdout`` encodes with the
+    locale's preferred codec, a legacy 8-bit one under a LANG such as
+    ``en_US.ISO-8859-1`` (Python's C-locale coercion covers plain
+    ``LC_ALL=C``, not a locale that names a real charset): the raw write
+    then raises UnicodeEncodeError part-way through the export and the file
+    the user is redirecting into a spreadsheet ends up truncated.
+    Re-decoding the existing buffer keeps one destination and the ``\\n``
+    line terminator's "written once, natively" contract; ``errors="replace"``
+    keeps a lone surrogate from the database out of the crash path.  The
+    caller must detach the result, since a wrapper's destructor closes the
+    buffer it wraps.
+    """
+    if "utf" in (getattr(stream, "encoding", None) or "").lower():
+        return stream
+    buffer = getattr(stream, "buffer", None)
+    if buffer is None:
+        return stream
+    return io.TextIOWrapper(buffer, encoding="utf-8", errors="replace", newline="")
 
 
 def _csv_safe(value: Any) -> Any:
@@ -1028,13 +1053,20 @@ def export(
         # lineterminator="\n": the default "\r\n" would be translated again by
         # Windows' text-mode stdout, corrupting every row to \r\r\n.  One \n
         # here means the platform writes its native ending exactly once.
-        writer = csv.writer(sys.stdout, lineterminator="\n")
+        stream = _utf8_stream(sys.stdout)
+        writer = csv.writer(stream, lineterminator="\n")
         writer.writerow(["target", "section", *_SECTION_COLUMNS])
         for data in all_data:
             for sec_name, sec in sorted(data["sections"].items()):
                 writer.writerow(
                     [_csv_safe(data["target"]), _csv_safe(sec_name), *_section_row(sec)]
                 )
+        # The pinned wrapper buffers, and its destructor would close the
+        # buffer it wraps, which is stdout's.  detach() flushes and then
+        # hands the buffer back, so the bytes land and stdout stays open for
+        # whatever prints next.
+        if stream is not sys.stdout:
+            stream.detach()
 
     elif output_format == ExportFormat.md:
 
