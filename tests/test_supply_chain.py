@@ -247,6 +247,75 @@ class TestRbrewPin:
             ), "ci.yml installs a different uv than the Makefile's UV_VERSION"
 
 
+class TestActionsArePinned:
+    """Every third-party action is a commit, not a tag, and says which tag.
+
+    A mutable `@v7` resolves to whatever the publisher's release branch points
+    at, so a run of one commit can execute different code than the run before
+    it, and a compromised tag is indistinguishable from a normal bump. The
+    workflows already pin by SHA; nothing read them to keep it that way, so
+    the pinning held only as long as every author remembered it.
+
+    The trailing `# vX.Y.Z` comment is part of the contract, not decoration:
+    a bare SHA is unreviewable, and dependabot rewrites the ref while leaving
+    the comment, so a bump that stops naming the tag it came from is caught
+    here instead of in a diff nobody can check.
+    """
+
+    _USE_RE = re.compile(
+        r"^\s*-?\s*uses:\s*(?P<action>[^@\s]+)@(?P<ref>[^\s#]+)"
+        r"(?:\s*#\s*(?P<comment>.*))?$",
+        re.MULTILINE,
+    )
+    _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+    _TAG_COMMENT_RE = re.compile(r"^v\d+(\.\d+)*(-[\w.]+)?$")
+
+    def _action_files(self) -> list[Path]:
+        workflows = sorted((_ROOT / ".github" / "workflows").glob("*.y*ml"))
+        actions = sorted((_ROOT / ".github" / "actions").glob("*/action.y*ml"))
+        assert workflows, "no workflow to check"
+        return [*workflows, *actions]
+
+    def test_every_action_resolves_to_a_commit(self) -> None:
+        for path in self._action_files():
+            for match in self._USE_RE.finditer(path.read_text(encoding="utf-8")):
+                action, ref = match["action"], match["ref"]
+                if action.startswith("./"):
+                    continue
+                where = f"{path.relative_to(_ROOT)}: {action}"
+                assert self._SHA_RE.match(ref), f"{where} uses {ref!r}, not a 40-hex commit"
+                comment = (match["comment"] or "").strip()
+                assert self._TAG_COMMENT_RE.match(comment), (
+                    f"{where} pins {ref[:12]} without naming the tag it came from"
+                )
+
+    def test_the_checkout_token_does_not_outlive_the_checkout(self) -> None:
+        """`persist-credentials: false` on every checkout, in every workflow.
+
+        checkout otherwise leaves the job's GITHUB_TOKEN in `.git/config`, and
+        every step in this pipeline runs project code (pytest, tools/smoke.py,
+        bun) that could read it off disk. No job pushes, so nothing needs it
+        after the tree lands.
+        """
+        for path in self._action_files():
+            lines = path.read_text(encoding="utf-8").splitlines()
+            for index, line in enumerate(lines):
+                if not re.match(r"^\s*-?\s*uses:\s*actions/checkout@\S", line):
+                    continue
+                # The `with:` mapping is the lines indented past the step, so a
+                # checkout with no mapping at all is an empty window rather
+                # than a skipped step: dropping the key must fail here too.
+                indent = len(line) - len(line.lstrip())
+                block = [line]
+                for follower in lines[index + 1 :]:
+                    if not follower.strip() or len(follower) - len(follower.lstrip()) <= indent:
+                        break
+                    block.append(follower)
+                assert any("persist-credentials: false" in b for b in block), (
+                    f"{path.relative_to(_ROOT)}: a checkout keeps the job token in .git/config"
+                )
+
+
 class TestEnvironmentInstalls:
     """Every environment is installed from uv.lock, and the lock is checked.
 

@@ -204,6 +204,16 @@ comes back. The test matrix adds 3.14, and its `include` entries name 3.13
 because make is not part of the Windows runner's toolchain, so that job spells
 out the pytest command instead of calling `make test`.
 
+Every third-party action is a 40-hex commit with a trailing `# vX.Y.Z` naming
+the tag it came from, and `tests/test_supply_chain.py`
+(`TestActionsArePinned`) fails a mutable `@v7` or a bare SHA: a tag is a moving
+target, so two runs of one commit could execute different code. Dependabot
+rewrites the ref and leaves the comment, so it is what makes a bump reviewable.
+The same class requires `persist-credentials: false` on every
+`actions/checkout`, because checkout otherwise leaves the job's token in
+`.git/config` and every step in these workflows runs project code, and no job
+pushes.
+
 ## Releases
 
 The release policy is not written down anywhere else, so it is stated here and
