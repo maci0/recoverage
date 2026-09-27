@@ -192,7 +192,10 @@
   // state lives here because this is the only thing that touches it.
   const REGEN_COOLDOWN_MS = 5000;
   const REGEN_NOTICE_MS = 4000;
-  let lastRegenTime = 0;
+  // null, not 0: performance.now() counts from page load, so a first Reload
+  // clicked within the cooldown of loading the page would read as a click
+  // inside the window and silently skip the regen.
+  let lastRegenTime = null;
   let noticeTimer = null;
   // A message set while a good map is on screen replaces the stats row, so it
   // has to time itself out; the "Regenerating…" state does not, because
@@ -207,7 +210,7 @@
     // manual change) between clicks would make the Date.now() delta negative
     // and lock regen out until real time caught back up.
     const now = performance.now();
-    const since = now - lastRegenTime;
+    const since = lastRegenTime === null ? Infinity : now - lastRegenTime;
     if (since < REGEN_COOLDOWN_MS) {
       showNotice(loadingMsg, messages.REGEN_USING_CACHE(Math.ceil((REGEN_COOLDOWN_MS - since) / 1000)), messages);
       await loadData();

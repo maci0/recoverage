@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import math
 import queue
 import sqlite3
 import threading
@@ -103,7 +104,11 @@ def _clear_derived_caches() -> None:
 # Server-side regen cooldown (seconds): the UI throttles Reload clicks, but
 # direct API calls must not be able to trigger repeated rebrew catalog runs.
 _REGEN_COOLDOWN_SECONDS = 5.0
-_regen_last_attempt = 0.0  # time.monotonic() of the last accepted regen POST
+# time.monotonic() of the last accepted regen POST, or None before the first
+# one.  None, never 0.0: on Linux the monotonic clock counts from boot, so a
+# process started seconds after a reboot would read now < 5.0 and reject the
+# very first POST as "cooling down" for the length of the cooldown window.
+_regen_last_attempt: float | None = None
 _REGEN_LOCK = threading.Lock()  # serializes regen (check + run, TOCTOU)
 
 # Memoized /api/targets/<t>/data payloads: the endpoint materializes ALL
@@ -1587,8 +1592,9 @@ def handle_regen() -> bytes | Any:
         )
     try:
         now = time.monotonic()
-        if now - _regen_last_attempt < _REGEN_COOLDOWN_SECONDS:
-            remaining = max(0, _REGEN_COOLDOWN_SECONDS - (now - _regen_last_attempt))
+        since = math.inf if _regen_last_attempt is None else now - _regen_last_attempt
+        if since < _REGEN_COOLDOWN_SECONDS:
+            remaining = max(0, _REGEN_COOLDOWN_SECONDS - since)
             return _json_err(
                 429,
                 {

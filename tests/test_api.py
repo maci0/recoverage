@@ -69,7 +69,7 @@ class TestRegenOriginValidation:
         # The cooldown timestamp is a module global stamped by every accepted
         # POST, so without this the second accepted test in the file answers
         # 429 and the accepted-path assertion below fails on the shared state.
-        monkeypatch.setattr(api, "_regen_last_attempt", 0.0)
+        monkeypatch.setattr(api, "_regen_last_attempt", None)
 
     def test_remote_addr_external_rejected(self) -> None:
         """Non-localhost REMOTE_ADDR should be rejected with 403."""
@@ -715,7 +715,7 @@ class TestRegenRateLimit:
 
         # Accepted POSTs stamp the module-global cooldown; reset so later
         # tests (and re-runs) start from a neutral state.
-        api._regen_last_attempt = 0.0
+        api._regen_last_attempt = None
 
     def _no_real_regen(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import recoverage.api as api
@@ -726,7 +726,7 @@ class TestRegenRateLimit:
         self._no_real_regen(monkeypatch)
         import recoverage.api as api
 
-        api._regen_last_attempt = 0.0
+        api._regen_last_attempt = None
         # First call passes the cooldown gate (the patched _do_regen answers
         # 200 — the timestamp is stamped before it runs).
         assert_regen_accepted(wsgi_request("POST", "/api/regen", remote_addr="127.0.0.1"))
@@ -752,6 +752,20 @@ class TestRegenRateLimit:
         )
         assert_regen_accepted(wsgi_request("POST", "/api/regen", remote_addr="127.0.0.1"))
 
+    def test_first_call_after_boot_not_rate_limited(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The first POST is accepted even when the monotonic clock is young.
+
+        time.monotonic() counts from boot on Linux, so on a host that came up
+        seconds ago the first regen would read as "inside the cooldown" if the
+        never-attempted state were 0.0 instead of None.
+        """
+        import recoverage.api as api
+
+        self._no_real_regen(monkeypatch)
+        monkeypatch.setattr(api, "_regen_last_attempt", None)
+        monkeypatch.setattr(api.time, "monotonic", lambda: 1.0)
+        assert_regen_accepted(wsgi_request("POST", "/api/regen", remote_addr="127.0.0.1"))
+
 
 class TestRegenFailureMapping:
     """_do_regen maps in-process rebrew failures to the JSON 500 contract.
@@ -763,7 +777,7 @@ class TestRegenFailureMapping:
     def teardown_method(self) -> None:
         import recoverage.api as api
 
-        api._regen_last_attempt = 0.0
+        api._regen_last_attempt = None
 
     def _post_regen(self, monkeypatch: pytest.MonkeyPatch, exc: BaseException) -> Any:
         import recoverage.api as api
@@ -775,7 +789,7 @@ class TestRegenFailureMapping:
         # touches the real workspace.
         monkeypatch.setattr(api, "run_regen", boom)
         monkeypatch.setattr(api, "_project_dir", lambda: Path("/nonexistent"))
-        api._regen_last_attempt = 0.0
+        api._regen_last_attempt = None
         return wsgi_request("POST", "/api/regen", remote_addr="127.0.0.1")
 
     def test_rebrew_error_exit_is_500_not_504(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1441,7 +1455,7 @@ class TestErrorResponseShape:
         # The 429 test stamps the module-global regen cooldown; reset so
         # later tests POSTing /api/regen start from a neutral state instead
         # of inheriting this test's rate-limit window.
-        api._regen_last_attempt = 0.0
+        api._regen_last_attempt = None
 
     def _check(
         self, status: str, headers: dict[str, str], body: bytes, expected_code: str
@@ -1480,7 +1494,7 @@ class TestErrorResponseShape:
         # The first POST must pass the cooldown gate without running a real
         # regen (rebrew would rebuild the developer's coverage.db).
         monkeypatch.setattr(api, "_do_regen", lambda remote: api._json_ok({"ok": True}))
-        api._regen_last_attempt = 0.0
+        api._regen_last_attempt = None
         wsgi_request("POST", "/api/regen", remote_addr="127.0.0.1")
         status, headers, body = wsgi_request("POST", "/api/regen", remote_addr="127.0.0.1")
         data = self._check(status, headers, body, "rate_limited")

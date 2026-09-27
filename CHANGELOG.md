@@ -112,6 +112,14 @@ module ships in the published package. See *Breaking*.
   elsewhere overwrote the assembly pane with the previous block's
   disassembly. Every cell selection now supersedes the one before it, and the
   undocumented-block request is aborted along with the rest.
+- **The first Reload click after opening the dashboard regenerates.** The
+  client-side cooldown stored the previous click as `0` and compared it
+  against `performance.now()`, which counts from page load: a click in the
+  first five seconds of a page read as a click inside the window, so the
+  regen was skipped and the UI reported the cooldown instead. The server
+  had the same shape for `/api/regen`'s cooldown, which counts from boot:
+  a process started seconds after a reboot rejected its first POST as rate
+  limited. Both now keep "never clicked" as a distinct state.
 - **Functions with an unknown `markerType` are listed again.** The
   GLOBAL/DATA/VTABLE/STRING exclusion read `markerType NOT IN (...)`, and
   SQLite evaluates `NULL NOT IN (...)` to NULL, which `WHERE` rejects: on a
