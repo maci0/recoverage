@@ -34,8 +34,8 @@ UNBOUNDED_ROUTES: Final = frozenset({"/api/events"})
 #: :func:`route_label` falls back to the first path segment for a request that
 #: matched nothing, and that segment is caller-chosen.  The cap is what makes
 #: the bounded-cardinality claim hold for the unrouted case too; the oldest
-#: label goes when the map is full, so a route the server really serves (one
-#: recorded on its first request) is never among the evicted.
+#: label goes when the map is full, so the map size is the only bound and a
+#: real route's counters can be evicted under a flood of distinct segments.
 ROUTE_LABEL_MAX: Final = 64
 
 

@@ -18,8 +18,8 @@ Module map (dependencies point one way, left to right):
 - ``disasm``      — Capstone disassembly: availability probe, thread-local Cs,
   per-slice memo (imports server; a capability module, so it imports no route)
 - ``api``         — /api/* routes (imports server+regen+disasm; lazily potato)
-- ``webapp``      — composition root: imports api+ui so ``app`` has every
-  route; import this when you need a fully wired app
+- ``webapp``      — composition root: imports api+ui+potato so ``app`` has
+  every route; import this when you need a fully wired app
 - ``cli``         — Typer entry point (serves ``webapp.app``; imports
   server+regen for config and stats helpers)
 

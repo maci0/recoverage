@@ -295,9 +295,9 @@ def serve_repo_file(filepath: str) -> Any:
 #
 # static_file served these raw: detail.js, which the shell preloads beside
 # itself (index.html) and app.js requests without blocking first paint, is
-# ~34 KB, and hljs.min.js — fetched when a function's asm pane opens — is
+# ~41 KB, and hljs.min.js — fetched when a function's asm pane opens — is
 # 127 KB.  Both brotli down to roughly a third of that, and the whole set is
-# ~276 KB raw.
+# ~280 KB raw.
 #
 # Each entry carries a strong ETag next to the body.  CACHE_REVALIDATE alone
 # ("no-cache") forces the browser back on every load, and with no validator to

@@ -88,8 +88,8 @@ function toVa(v) {
 }
 
 // The hex dump and data inspector live in detail.js, which the shell preloads
-// (see index.html) and which app.js requests on the next line, so the fetch
-// overlaps the shell's own download instead of starting a round trip later.
+// (see index.html) and which app.js requests on its last line, so the fetch
+// starts only after the shell has been parsed and applied.
 // The inlined shell stays inside the initial congestion window.  Until it
 // lands, panes that need it show MSG.LOADING.
 const detailReady = van.state(false);

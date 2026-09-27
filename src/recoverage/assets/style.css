@@ -484,8 +484,8 @@ body.light-mode::after { display: none; }
 
 /* Coarse pointers (touch): interactive targets need ≥ 44px hit area (WCAG
  * 2.5.5). Desktop fine-pointer keeps the compact 32px control height.  The
- * bar stays slim: its segments are display-only and the filter buttons below
- * are the touch targets. */
+ * bar stays slim: its segments are not sized up for touch, so a coarse
+ * pointer reaches the filter buttons below rather than the bar. */
 @media (pointer: coarse) {
   .btn, .input-el, .target-select { height: 44px; min-height: 44px; }
   .btn.icon-btn { width: 44px; }

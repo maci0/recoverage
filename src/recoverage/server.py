@@ -658,7 +658,7 @@ def _cell_bucket_row(row: sqlite3.Row) -> dict[str, Any]:
     same columns computed live from `cells` (``_SECTION_STATS_FULL_SQL``); the
     two must select an identical column set, since the mapping below subscripts
     every one of them by name.  It is never a ``SECTION_STATS_SQL`` row, which
-    carries only the two byte sums and the exact count.
+    carries only the two byte sums.
 
     ``other`` is the producer's catch-all (rebrew counts compile_error,
     extract_error, invalid_va, missing_file, missing_size, skip, unknown and
@@ -699,7 +699,7 @@ def _section_stats(c: sqlite3.Cursor, target: str) -> dict[str, Any]:
     both (and drifted twice — cell-count vs byte-based, covered_bytes presence,
     key names); this is the single source of truth.
     """
-    # Five statements across four tables: without a pinned snapshot a rebuild
+    # Five statements across five tables: without a pinned snapshot a rebuild
     # committing between them yields stats that describe no build at all.
     with read_snapshot(c):
         return _read_section_stats(c, target)

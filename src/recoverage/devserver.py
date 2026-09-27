@@ -14,7 +14,9 @@ than on the adapter around them.
 
 from __future__ import annotations
 
+from http.client import HTTPMessage
 from socketserver import ThreadingMixIn
+from typing import IO, Any, cast
 from wsgiref.simple_server import ServerHandler, WSGIRequestHandler, WSGIServer
 
 
@@ -123,10 +125,16 @@ class _KeepAliveRequestHandler(_QuietTimeoutRequestHandler):
 
     def _run_wsgi(self) -> None:
         handler = _KeepAliveServerHandler(
-            self.rfile, self.wfile, self.get_stderr(), self.get_environ(), multithread=True
+            self.rfile,
+            cast("IO[bytes]", self.wfile),
+            self.get_stderr(),
+            self.get_environ(),
+            multithread=True,
         )
         handler.request_handler = self  # backpointer for logging
-        handler.run(self.server.get_app())
+        app = cast(WSGIServer, self.server).get_app()
+        assert app is not None  # WSGIServer.set_app ran before serve_forever
+        handler.run(app)
 
 
 class _KeepAliveServerHandler(ServerHandler):
@@ -145,6 +153,14 @@ class _KeepAliveServerHandler(ServerHandler):
     """
 
     http_version = "1.1"
+
+    # wsgiref assigns the first three in BaseHandler.__init__/start_response
+    # and the last one is the backpointer _run_wsgi sets before run(); the
+    # stubs describe none of them, so they are declared here.
+    environ: dict[str, Any]
+    headers: HTTPMessage
+    status: str
+    request_handler: WSGIRequestHandler
 
     def send_headers(self) -> None:
         if not self._response_is_framed():

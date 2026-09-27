@@ -2358,7 +2358,8 @@ def _render_original_bytes(raw_bytes: bytes, file_offset: int) -> str:
 
     Capped at _format_hex_dump's default 256 bytes: a cell or a function larger
     than that renders 256 bytes and a ``... (N more bytes)`` line, which the
-    panel renders as it stands.  Pass max_bytes=None to dump a whole slice.
+    panel renders as it stands.  _format_hex_dump's max_bytes=None is what
+    dumps a whole slice; nothing here needs one.
     """
     hex_dump = _format_hex_dump(raw_bytes, file_offset)
     return _code_block_raw(_highlight_hex(hex_dump))

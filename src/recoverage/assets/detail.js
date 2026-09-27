@@ -329,9 +329,9 @@
   // different logo, language, and body: title row, Copy, Open-in-modal.
   // Copy/Open go disabled while the pane holds an empty-state message —
   // copying "(select a function)" or opening a modal of it is never what
-  // the user wants; the tooltip says what to do instead.  detailReady and
-  // detailFailed are not consulted: this body only renders once this file has
-  // loaded, so both are known-false at every call site.
+  // the user wants; the tooltip says what to do instead.  detailFailed is
+  // never true here: this body only renders once this file has loaded, which
+  // is also why app.js gates the call on detailReady.
   const isEmptyMessage = (text) => text === MSG.SELECT_FUNCTION || text === MSG.ASM_PLACEHOLDER
     || text === MSG.NO_C_SOURCE || text === MSG.NO_C_FOR_BLOCK || text === MSG.UNDOCUMENTED_BLOCK
     || text === MSG.DATA_SECTION_NO_ASM || text === MSG.BYTES_FAILED || text === MSG.BYTES_BSS

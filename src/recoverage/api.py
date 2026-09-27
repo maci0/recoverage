@@ -112,12 +112,12 @@ def _clear_derived_caches() -> None:
 def _clear_derived_caches_logged(where: str) -> None:
     """:func:`_clear_derived_caches`, reporting rather than propagating.
 
-    Every caller runs on an error path (the SSE broadcast and the regen tail
-    both run while something has already gone wrong).  A failed invalidation
-    is the worst outcome here: clients are told the database changed and the
-    server keeps serving payloads derived from the old one, and an exception
-    raised out of a ``finally`` would replace the regen failure the operator
-    needed to see with a cache error they cannot act on.
+    Callers are the ``db-updated`` broadcast and the two ends of a regen, the
+    last of which may run inside a ``finally``.  A failed invalidation is the
+    worst outcome here: clients are told the database changed and the server
+    keeps serving payloads derived from the old one, and an exception raised
+    out of a ``finally`` would replace the regen failure the operator needed
+    to see with a cache error they cannot act on.
     """
     try:
         _clear_derived_caches()
@@ -194,9 +194,10 @@ def _record_completed_key(key: str) -> None:
         _REGEN_COMPLETED_KEYS[key] = now
 
 
-# Memoized /api/targets/<t>/data payloads: the endpoint materializes ALL
-# cells for the target (json_group_array over the whole cells table) plus
-# every function/global for the search index on each cache-missing request.
+# Memoized /api/targets/<t>/data payloads: the endpoint materializes every
+# cell for the target (the cached section_cells_json payload, re-aggregated
+# from `cells` where that object is missing) plus every function/global for
+# the search index on each cache-missing request.
 # The ETag gives 304s to repeat clients, but N fresh clients each rebuilt
 # the multi-MB payload.  Keyed by the WAL-aware db snapshot + target +
 # section so a rebuild (which the SSE watcher detects and funnels through
@@ -721,8 +722,8 @@ def handle_api_events() -> Any:
             )
         client_queue: queue.Queue[bytes] = queue.Queue(maxsize=_SSE_QUEUE_MAX)
         _SSE_CLIENTS.add(client_queue)
-    # Start the poller only once a client is actually registered; rejected
-    # connections must not leave background work behind.  A failed start
+    # Start the poller on the first registered client; ``serve`` already
+    # started it at startup, so this is the idempotent call.  A failed start
     # (e.g. RuntimeError under thread exhaustion) must not leave the queue
     # registered: every leaked slot permanently shrinks the _SSE_MAX_CLIENTS
     # cap toward a standing 503 for /api/events.
@@ -860,9 +861,10 @@ def handle_api_health() -> bytes:
 def _stream_stats() -> dict[str, Any]:
     """SSE saturation and poller liveness for /api/health.
 
-    ``watcher_alive`` is None before the first client connects: the poller
-    starts lazily, so "not started yet" is not a fault and must not read as
-    one.
+    ``watcher_alive`` is None before the watcher thread exists: ``serve``
+    starts it at startup, but it can be absent in a process that never
+    reached that call, so "not started yet" is not a fault and must not read
+    as one.
     """
     with _SSE_CLIENTS_LOCK:
         clients = len(_SSE_CLIENTS)
@@ -976,9 +978,9 @@ def _build_data_raw(c: sqlite3.Cursor, target: str, section_filter: str | None) 
     Raises the shared JSON 404 for an unknown *section_filter*.  Pure DB
     work — caching/compression stays in the endpoint.
     """
-    # Sections, cells, the search index, and the per-section buckets are four
-    # statements over four tables; a rebuild committing between them would
-    # pair one build's section rows with the next build's cells.
+    # The metadata, section, cell, search-index and per-section bucket reads
+    # are several statements over several tables; a rebuild committing between
+    # them would pair one build's section rows with the next build's cells.
     with _server.read_snapshot(c):
         return _read_data_raw(c, target, section_filter)
 

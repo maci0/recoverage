@@ -25,6 +25,7 @@ import hashlib
 import json
 import sys
 from pathlib import Path
+from typing import TypedDict
 
 REPO_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 TOOLS_DIR = REPO_ROOT / "tools"
@@ -50,7 +51,17 @@ def is_excluded(rel: str) -> bool:
     return any(fnmatch.fnmatch(rel, pattern) for pattern in EXCLUDED)
 
 
-def build_manifest() -> dict[str, object]:
+class Manifest(TypedDict):
+    """The shape of anti-slop.manifest.json."""
+
+    upstream: str
+    license: str
+    tree: str
+    excluded: dict[str, str]
+    files: dict[str, str]
+
+
+def build_manifest() -> Manifest:
     """The manifest body for the tree as it stands on disk."""
     files = {
         path.relative_to(TREE).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
