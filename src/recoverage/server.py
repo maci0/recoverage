@@ -1242,23 +1242,64 @@ def compress_static_variants(body: bytes, accept_encoding: str) -> tuple[bytes, 
 
     Returns (body, "") when the client accepts none of the supported
     encodings, so the caller sets Content-Encoding only on a truthy name.
+
+    One body, one accepted set.  A caller serving the same bytes under several
+    sets compresses once with :func:`compress_static_bodies` and selects per set
+    with :func:`select_static_variant`, rather than calling this per set.
     """
     accepted = accepted_encodings(accept_encoding)
     if not accepted:
         return body, ""
+    return select_static_variant(
+        {name: compress_static_body(body, name) for name in accepted}, accept_encoding, body
+    )
+
+
+def compress_static_body(body: bytes, encoding: str) -> bytes:
+    """Compress *body* once, at static effort, in *encoding*."""
+    if encoding == "zstd":
+        return zstd.ZstdCompressor(level=ZSTD_STATIC_LEVEL).compress(body)
+    if encoding == "br":
+        return brotli.compress(body, quality=BROTLI_STATIC_QUALITY)
+    return gzip.compress(body, compresslevel=GZIP_STATIC_LEVEL)
+
+
+def compress_static_bodies(body: bytes) -> dict[str, bytes]:
+    """Compress *body* once per supported encoding, at static effort.
+
+    One body is served under every accepted-encoding set the shell and the
+    static assets are keyed on, and the answer for a set is always one of these
+    three bodies: a set selects among them and never needs a fourth
+    compression.  A caller that wants many sets at once therefore pays three
+    compressions rather than one per set, and the expensive one runs once —
+    brotli at :data:`BROTLI_STATIC_QUALITY` is milliseconds per call on the
+    shell, and zstd allocates a fresh :data:`ZSTD_STATIC_LEVEL` context on
+    every call.
+    """
+    return {name: compress_static_body(body, name) for name in SUPPORTED_ENCODINGS}
+
+
+def select_static_variant(
+    candidates: dict[str, bytes], accept_encoding: str, identity: bytes
+) -> tuple[bytes, str]:
+    """Smallest of *candidates* the client accepts, and its encoding.
+
+    *identity* is the uncompressed body, returned with an empty encoding when
+    the client accepts none of the supported encodings, so the caller can set
+    Content-Encoding only on a truthy name.  A tie goes to the earlier name in
+    :data:`SUPPORTED_ENCODINGS`, so bytes that compress to the same length two
+    ways are always served under the same encoding.
+    """
+    accepted = accepted_encodings(accept_encoding)
     best: tuple[bytes, str] | None = None
     for name in SUPPORTED_ENCODINGS:
         if name not in accepted:
             continue
-        if name == "zstd":
-            candidate = zstd.ZstdCompressor(level=ZSTD_STATIC_LEVEL).compress(body)
-        elif name == "br":
-            candidate = brotli.compress(body, quality=BROTLI_STATIC_QUALITY)
-        else:
-            candidate = gzip.compress(body, compresslevel=GZIP_STATIC_LEVEL)
+        candidate = candidates[name]
         if best is None or len(candidate) < len(best[0]):
             best = (candidate, name)
-    assert best is not None  # accepted is non-empty and drawn from SUPPORTED_ENCODINGS
+    if best is None:
+        return identity, ""
     return best
 
 

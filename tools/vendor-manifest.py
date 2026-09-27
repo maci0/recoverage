@@ -77,8 +77,8 @@ def build_manifest() -> Manifest:
     }
 
 
-def render() -> str:
-    return json.dumps(build_manifest(), indent=2) + "\n"
+def render(manifest: Manifest | None = None) -> str:
+    return json.dumps(manifest if manifest is not None else build_manifest(), indent=2) + "\n"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -97,7 +97,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{TREE / 'LICENSE'} is missing; the grant has to travel with the code")
         return 1
 
-    body = render()
+    manifest = build_manifest()
+    body = render(manifest)
     if args.check:
         current = MANIFEST.read_text(encoding="utf-8") if MANIFEST.is_file() else ""
         if current != body:
@@ -107,7 +108,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     MANIFEST.write_text(body, encoding="utf-8")
-    print(f"{MANIFEST.relative_to(REPO_ROOT)}: {len(build_manifest()['files'])} files recorded")
+    print(f"{MANIFEST.relative_to(REPO_ROOT)}: {len(manifest['files'])} files recorded")
     return 0
 
 

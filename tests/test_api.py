@@ -1767,6 +1767,33 @@ class TestBatchFunctionLookup:
         assert data[0]["last_verify"]["byte_delta"] == 0
         assert "last_verify" not in data[1]
 
+    def test_batch_array_is_the_concatenated_row_objects(self) -> None:
+        """The response is a hand-joined array of the rows' own JSON text, not
+        a re-encode of decoded rows.  Concatenating is only sound if the joined
+        document is what the handler used to produce, so pin the decoded
+        document itself: every requested VA in input order, each function
+        carrying its full field set, and last_verify attached exactly where a
+        verify row exists.  A row dropped, reordered, or silently missing a
+        field still parses as JSON, so asserting on the parsed array is the
+        only thing that catches it."""
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        vas = ["0x10001010", "0x10001000"]  # reverse order: output follows input
+        status, headers, body = self._post(target, json.dumps({"vas": vas}))
+        assert status.startswith("200")
+        data = json.loads(decode_body(body, headers))
+        assert [fn["va"] for fn in data] == [0x10001010, 0x10001000]
+        assert [fn["name"] for fn in data] == ["_func_b", "_func_a"]
+        # The one with a verify row is the one that gained a key.
+        assert "last_verify" not in data[0]
+        assert data[1]["last_verify"]["byte_delta"] == 0
+        # Fields SQLite wrote into the object survive the passthrough: the
+        # projection is the same text either way, so a shortened projection
+        # would show up here as a missing key rather than as a parse error.
+        for fn in data:
+            assert {"va", "name", "size", "fileOffset", "status", "module"} <= set(fn)
+
     def test_batch_rejects_non_json_content_type(self) -> None:
         """A declared non-JSON media type is a 415, not a body that parses
         by accident: the client set the header wrongly and 'Body must be a

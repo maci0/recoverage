@@ -1547,7 +1547,7 @@ def handle_api_functions_batch(target: str) -> bytes | HTTPResponse:
         return err
 
     with _target_cursor(target) as c:
-        results: list[dict[str, Any]] = []
+        results: list[str] = []
 
         placeholders = ",".join("?" * len(unique_vas))
 
@@ -1562,44 +1562,56 @@ def handle_api_functions_batch(target: str) -> bytes | HTTPResponse:
             # SAFETY: placeholders is only "?,?,..." built from the length of the
             # validated VA list; every value reaches the statement parameterized.
             # Functions first (parity with GET /functions/<va>), then globals.
-            fn_by_va: dict[int, dict[str, Any]] = {}
+            #
+            # Both projections are already one JSON object per row, so a row's
+            # text IS the object the response array carries.  Decoding it into a
+            # dict here and re-encoding it into the array costs about 2 ms over a
+            # full _MAX_BATCH_LOOKUP batch, against the ~0.5 ms the statement
+            # itself takes, to produce what the statement already wrote.  So the
+            # text is carried through untouched and only a row that actually
+            # gains a key is decoded, which is the `last_verify` attachment
+            # below and nothing else.  The `va` column is selected beside the
+            # object for the key, so nothing has to be parsed to index the map.
+            fn_json_by_va: dict[int, str] = {}
             c.execute(
-                f"SELECT {_fn_json_sql(c.connection)} FROM functions "
+                f"SELECT va, {_fn_json_sql(c.connection)} FROM functions "
                 f"WHERE target = ? AND va IN ({placeholders})",
                 [target, *unique_vas],
             )
             for row in c.fetchall():
-                fn = json.loads(row[0])
-                fn_by_va[fn["va"]] = fn
+                fn_json_by_va[row["va"]] = row[1]
 
-            if fn_by_va:
+            if fn_json_by_va:
                 c.execute(
                     f"{_verify_select(c.connection)} FROM verify_results"
                     f" WHERE target = ? AND va IN ({placeholders})",
                     [target, *unique_vas],
                 )
                 for vr in c.fetchall():
-                    fn = fn_by_va.get(vr["va"])
-                    if fn is not None:
+                    encoded = fn_json_by_va.get(vr["va"])
+                    if encoded is not None:
+                        fn = json.loads(encoded)
                         fn["last_verify"] = _last_verify_payload(vr)
+                        fn_json_by_va[fn["va"]] = json.dumps(fn)
 
             c.execute(
-                f"SELECT {_global_json_sql(c.connection)} FROM globals "
+                f"SELECT va, {_global_json_sql(c.connection)} FROM globals "
                 f"WHERE target = ? AND va IN ({placeholders})",
                 [target, *unique_vas],
             )
-            globals_by_va: dict[int, dict[str, Any]] = {}
-            for row in c.fetchall():
-                gl = json.loads(row[0])
-                globals_by_va[gl["va"]] = gl
+            globals_json_by_va: dict[int, str] = {row["va"]: row[1] for row in c.fetchall()}
 
+        # A globals row never gains a key (last_verify is functions-only), so
+        # both maps hold response text from here on.
         for va in unique_vas:
-            if va in fn_by_va:
-                results.append(fn_by_va[va])
-            elif va in globals_by_va:
-                results.append(globals_by_va[va])
+            if va in fn_json_by_va:
+                results.append(fn_json_by_va[va])
+            elif va in globals_json_by_va:
+                results.append(globals_json_by_va[va])
 
-        return _json_ok(results, Cache_Control=CACHE_NO_STORE)
+        # Concatenated rather than json.dumps'd: the elements are already
+        # JSON, and a joined array is the same document without the encode.
+        return _json_ok(f"[{','.join(results)}]".encode(), Cache_Control=CACHE_NO_STORE)
 
 
 @app.get("/api/targets/<target>/functions/<va>")

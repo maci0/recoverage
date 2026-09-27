@@ -30,9 +30,11 @@ from recoverage.server import (
     _project_dir,
     _safe_etag,
     app,
+    compress_static_bodies,
     compress_static_variants,
     request,
     response,
+    select_static_variant,
     static_variant_key,
 )
 
@@ -165,15 +167,20 @@ def warm_index_cache() -> None:
         payload = _build_index_payload()
         # One key per non-empty subset of the supported encodings, plus "" for
         # the identity response, so a cold first hit from any client is a
-        # lookup rather than three full compressions.  Each subset compresses
-        # to its own smallest body; that is 8 variants, built once at startup.
+        # lookup rather than three full compressions.
         keys = [""]
         for mask in range(1, 8):
             subset = [name for i, name in enumerate(SUPPORTED_ENCODINGS) if mask & (1 << i)]
             keys.append(", ".join(subset))
+        # Every key picks the smallest of the same three bodies, so the shell is
+        # compressed three times for all eight keys rather than once per key
+        # (twelve), and brotli at BROTLI_STATIC_QUALITY — the most expensive
+        # compression in the package, and the one every warm-up used to run
+        # four times over — runs once.
+        bodies = compress_static_bodies(payload)
         variants: dict[str, _Variant] = {}
         for key in keys:
-            body, encoding = compress_static_variants(payload, key)
+            body, encoding = select_static_variant(bodies, key, payload)
             variants[key] = _Variant(body, encoding, _index_etag(payload, encoding))
         with INDEX_LOCK:
             if CACHED_INDEX_PAYLOAD is None:

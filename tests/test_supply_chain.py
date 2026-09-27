@@ -573,22 +573,65 @@ def _python_sources() -> list[Path]:
     ]
 
 
+def _is_type_checking(test: ast.expr) -> bool:
+    """Whether an `if` is the `TYPE_CHECKING` guard.
+
+    Spelled `if TYPE_CHECKING:` (a Name) or `if typing.TYPE_CHECKING:` (an
+    Attribute), and under `from __future__ import annotations` the negative
+    form reads the same two ways.
+    """
+    if isinstance(test, ast.Name):
+        return test.id == "TYPE_CHECKING"
+    return isinstance(test, ast.Attribute) and test.attr == "TYPE_CHECKING"
+
+
+def _type_checking_guarded(tree: ast.AST) -> set[ast.AST]:
+    """The import nodes that sit inside a `TYPE_CHECKING` guard's body.
+
+    The `else` branch is runtime code and its imports count; only the guarded
+    side is typing-only.  Nested guards are found by the tree walk itself.
+    """
+    guarded: set[ast.AST] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.If) or not _is_type_checking(node.test):
+            continue
+        for statement in node.body:
+            guarded.update(ast.walk(statement))
+    return guarded
+
+
+def _imported_modules_from(tree: ast.AST) -> set[str]:
+    """The runtime top-level import names in one parsed module."""
+    names: set[str] = set()
+    guarded = _type_checking_guarded(tree)
+    for node in ast.walk(tree):
+        if node in guarded:
+            continue
+        if isinstance(node, ast.Import):
+            names.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and not node.level:
+            assert node.module, "relative or empty from-import"
+            names.add(node.module.split(".")[0])
+    return names
+
+
 def _imported_modules() -> set[str]:
-    """Top-level names of the absolute imports across those files.
+    """Top-level names of the runtime imports across those files.
 
     `ast` rather than a pattern, so a name inside a string or a comment is not
     a dependency and a relative import is not read as a third-party one.
+    Imports under `if TYPE_CHECKING:` are excluded: nothing imports them at
+    runtime, so requiring a distribution to declare one would force a real
+    dependency on a name that only the type checker ever resolves (`_typeshed`
+    ships with mypy, not with CPython).
     """
-    names: set[str] = set()
-    for path in _python_sources():
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                names.update(alias.name.split(".")[0] for alias in node.names)
-            elif isinstance(node, ast.ImportFrom) and not node.level:
-                assert node.module, f"{path}: relative or empty from-import"
-                names.add(node.module.split(".")[0])
-    return names
+    return {
+        name
+        for path in _python_sources()
+        for name in _imported_modules_from(
+            ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        )
+    }
 
 
 def _probed_modules() -> set[str]:
@@ -624,6 +667,37 @@ def _declared_distributions() -> dict[str, str]:
 
 
 class TestDeclaredDependencies:
+    def test_type_checking_only_imports_are_not_runtime_dependencies(self) -> None:
+        """A guarded import never executes, so it needs no distribution.
+
+        The scanner is what decides the answer for every other import in the
+        tree, so it has to be right about the one shape that is not an import
+        at runtime.  `devserver` annotates against `_typeshed.wsgi`, which
+        ships with mypy and has no PyPI distribution at all: counting it as a
+        runtime import demands a dependency that cannot be declared, and
+        dropping the exemption wholesale would let a real unguarded import of
+        a typing-only name through.
+        """
+        source = """
+from __future__ import annotations
+import json
+import typing
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from _typeshed.wsgi import InputStream
+if typing.TYPE_CHECKING:
+    import only_guarded
+if not TYPE_CHECKING:
+    import in_the_else_branch
+"""
+        tree = ast.parse(source)
+        assert _imported_modules_from(tree) == {
+            "__future__",
+            "json",
+            "typing",
+            "in_the_else_branch",
+        }, "a guarded import counted as runtime, or the else branch missed"
+
     def test_every_declared_distribution_is_reachable(self) -> None:
         """No declared dependency is dead weight.
 

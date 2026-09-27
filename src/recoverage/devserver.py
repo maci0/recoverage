@@ -16,9 +16,15 @@ from __future__ import annotations
 
 from http.client import HTTPMessage
 from socketserver import ThreadingMixIn
-from typing import IO, Any, cast
+from typing import IO, TYPE_CHECKING, Any, cast
 from wsgiref.simple_server import ServerHandler, WSGIRequestHandler, WSGIServer
 from wsgiref.types import InputStream
+
+if TYPE_CHECKING:
+    # _typeshed ships with mypy, not with CPython: the annotations below are
+    # strings (from __future__ import annotations) and the casts are string
+    # literals, so nothing here is evaluated at runtime.
+    from _typeshed.wsgi import InputStream, WSGIApplication
 
 
 class _ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
@@ -30,6 +36,21 @@ class _ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
     """
 
     daemon_threads = True
+
+    def app(self) -> WSGIApplication:
+        """The WSGI app, or a loud failure if none was installed.
+
+        ``wsgiref.simple_server.make_server`` calls ``set_app`` before the
+        listener binds, so a request cannot arrive without one; the typeshed
+        stub types ``get_app`` as possibly-None, and every request path here
+        needs the application rather than a check.  Naming the failure beats
+        passing ``None`` into ``BaseHandler.run``, which would raise from
+        inside wsgiref with no reference to this server.
+        """
+        application = self.get_app()
+        if application is None:
+            raise RuntimeError("no WSGI application installed on the server")
+        return application
 
 
 # Hard deadline for every socket operation on a client connection (the request
