@@ -36,6 +36,7 @@ from recoverage.potato import (
     render_potato,
 )
 from recoverage.server import _db_path as get_db_path
+from recoverage.server import _snapshot_db_mtime
 
 
 def render_potato_url(url: str) -> str:
@@ -2058,11 +2059,11 @@ class TestCellsCacheInvalidation:
         potato.clear_cells_cache()
         c = self._cells_cursor()
         try:
-            _load_grid_cells(c, "T", ".text", 64)
+            _load_grid_cells(c, "T", ".text", 64, snap=srv._snapshot_db_mtime())
             assert len(potato._GRID_CACHE) == 1
             # Simulate a rebuild that commits only to -wal: main file untouched.
             wal.write_bytes(b"y" * 64)
-            _load_grid_cells(c, "T", ".text", 64)
+            _load_grid_cells(c, "T", ".text", 64, snap=srv._snapshot_db_mtime())
             # Two keys prove fingerprint sensitivity: the WAL change produced
             # a cache miss (fresh query), not a stale hit.
             assert len(potato._GRID_CACHE) == 2
@@ -2073,30 +2074,58 @@ class TestCellsCacheInvalidation:
     def test_rebuild_mid_read_is_not_cached(self, tmp_path, monkeypatch) -> None:
         """A rebuild between the read and the publish must not be memoized.
 
-        The cursor's read snapshot can predate the fingerprint taken at the
-        top of _load_grid_cells.  Filing that payload under the NEW
-        fingerprint poisons the memo: the broadcast that cleared it can be
-        overtaken by this insert, and nothing invalidates it afterwards.
+        *snap* is the token the render pinned BEFORE its read snapshot, so a
+        fingerprint that has moved by the time the rows are read means a rebuild
+        committed mid-render.  Filing that payload under the NEW fingerprint
+        poisons the memo: the broadcast that cleared it can be overtaken by this
+        insert, and nothing invalidates it afterwards.
+        """
+        import recoverage.potato as potato
+
+        # The publish re-check: the render's token still reads (1, 64)...
+        monkeypatch.setattr(potato, "_snapshot_db_mtime", lambda: (2, 64))
+
+        potato.clear_cells_cache()
+        c = self._cells_cursor()
+        try:
+            cells, _merged, _key = _load_grid_cells(c, "T", ".text", 64, snap=(1, 64))
+            assert cells  # this request still gets its payload
+            assert not potato._GRID_CACHE  # filed under no fingerprint
+        finally:
+            potato.clear_cells_cache()
+            c.connection.close()
+
+    def test_snapshot_taken_inside_the_read_is_not_the_key(self, tmp_path, monkeypatch) -> None:
+        """The key must come from the caller's token, never from a fresh stat.
+
+        Deriving it here would read the post-rebuild value on both sides of the
+        publish comparison, so a render whose rows predate a rebuild caches them
+        under the fingerprint that supersedes them and every later request is
+        served stale cells.
         """
         import recoverage.potato as potato
 
         db = tmp_path / "coverage.db"
         db.write_bytes(b"x" * 64)
-        # First call is the key's watermark, second is the publish re-check.
-        snapshots = iter([(1, 64), (2, 64)])
-        monkeypatch.setattr(potato, "_snapshot_db_mtime", lambda: next(snapshots))
+        # A stat inside the memo would report the newer fingerprint; the caller's
+        # token says the render pinned its read snapshot before the rebuild.
+        monkeypatch.setattr(potato, "_snapshot_db_mtime", lambda: (2, 64))
 
         potato.clear_cells_cache()
         c = self._cells_cursor()
         try:
-            cells, _merged, _key = _load_grid_cells(c, "T", ".text", 64)
+            cells, _merged, key = _load_grid_cells(c, "T", ".text", 64, snap=(1, 64))
+            assert key is not None
+            # Keyed on the caller's token, never on the value a stat inside the
+            # memo would have read.
+            assert key[:2] == (1, 64)
             # The fixture seeds one .text cell (start 0, state exact), so
             # "this request still gets its payload" is that row, not a
             # truthy list: a payload of the wrong cells passes `assert cells`.
             assert len(cells) == 1
             assert cells[0]["start"] == 0
             assert cells[0]["state"] == "exact"
-            assert not potato._GRID_CACHE  # filed under no fingerprint
+            assert not potato._GRID_CACHE  # the re-check failed, so nothing filed
         finally:
             potato.clear_cells_cache()
             c.connection.close()
@@ -2115,7 +2144,9 @@ class TestCellsCacheInvalidation:
         potato.clear_cells_cache()
         c = self._cells_cursor()
         try:
-            cells, merged, _key = _load_grid_cells(c, "T", ".missing", 64)
+            cells, merged, _key = _load_grid_cells(
+                c, "T", ".missing", 64, snap=_snapshot_db_mtime()
+            )
             assert cells == []
             assert merged == []
         finally:
@@ -2214,7 +2245,9 @@ class TestDefaultTargetMatchesSpa:
         # target="": render must fall back to the default.  _load_section_data
         # returns no data, so the render short-circuits on its "no data" page
         # right after the choice this test is about.
-        potato_mod._render_potato_inner(None, "", ".text", set(), "", "", "", "", "", "1")
+        potato_mod._render_potato_inner(
+            None, "", ".text", set(), "", "", "", "", "", "1", snap=None
+        )
 
         # /api/targets serves `targets`, and the SPA picks entry [0] from it.
         assert chosen == [targets[0]["id"]]
@@ -2471,3 +2504,36 @@ class TestRenderIsPinnedToOneSnapshot:
         assert html
         assert len(seen) > 1, "the render stopped issuing more than one statement"
         assert all(seen), "a render statement ran outside the pinned read transaction"
+
+    def test_rebuild_after_the_token_is_taken_is_not_memoized(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A rebuild committing after the render pinned its token caches nothing.
+
+        The token is stat'ed BEFORE the connection opens, so the first read is
+        the one the render pinned against and every later read sees the
+        post-rebuild fingerprint.  A mem that took its own stat would read that
+        same post-rebuild value on both sides of its publish comparison, match,
+        and file cells from the previous build under the fingerprint that
+        supersedes them — a grid every later request is served stale from, with
+        no rebuild left to invalidate it.
+        """
+        from recoverage import potato
+
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+
+        # Call 1: the render's token, before it opens the connection.  Every
+        # call after it sees a `rebrew build-db` that committed mid-render.
+        tokens = iter([(1, 64), *[(2, 64)] * 64])
+        monkeypatch.setattr(potato, "_snapshot_db_mtime", lambda: next(tokens))
+
+        potato.clear_cells_cache()
+        try:
+            html = render_potato_url(f"/potato?target={target}&section=.text")
+            assert html  # this request still gets its page
+            assert not potato._GRID_CACHE, "cells from before the rebuild were memoized"
+            assert not potato._POTATO_STATS_CACHE, "stats from before the rebuild were memoized"
+        finally:
+            potato.clear_cells_cache()

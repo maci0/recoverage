@@ -479,7 +479,15 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   (`tests/test_server.py`, `TestConfigDerivedMemosFollowTheConfigStat`).
   DB-derived memos key on `_snapshot_db_mtime`, and the potato ones re-check
   the watermark before publishing, so a payload read through a pinned
-  `read_snapshot` is never filed under a newer fingerprint.
+  `read_snapshot` is never filed under a newer fingerprint. That token is
+  stat'ed BEFORE the read snapshot is pinned (`render_potato` takes it before
+  `_open_db`, and hands it to `_load_grid_cells` / `_section_stats_cached`),
+  because a stat taken inside the pinned snapshot reads the post-rebuild value
+  on both sides of the publish comparison and matches, filing the previous
+  build's rows under the fingerprint that supersedes them. `api.handle_api_data`
+  and `api.handle_api_stats` stat before their cursor opens for the same
+  reason; a new DB-derived memo takes its token the same way or states why its
+  read cannot straddle a rebuild.
 - One response, one read snapshot. Any handler that builds its answer from
   more than one statement wraps them in `server.read_snapshot`, which `BEGIN`s
   a deferred read transaction and rolls it back: python's sqlite3 opens a

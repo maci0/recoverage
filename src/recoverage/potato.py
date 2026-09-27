@@ -1092,6 +1092,16 @@ def render_potato(parsed_url: ParseResult) -> str:
     page_str = qs.get("page", [""])[0]
 
     db_path = _db_path()
+    # The render's change token, taken BEFORE the connection opens and
+    # therefore before read_snapshot pins the read view.  Every memo this
+    # render publishes is keyed on it, and a payload may only be filed under a
+    # fingerprint that is not newer than the rows it was read through.  A stat
+    # taken INSIDE the pinned snapshot cannot say that: a rebuild committing
+    # between the BEGIN and the first query leaves both the key and the
+    # re-check reporting the new fingerprint while the rows are the old build's,
+    # so the stale payload is cached under the new key and served until the next
+    # rebuild.  Same order api.handle_api_stats and api.handle_api_data use.
+    snap = _snapshot_db_mtime()
     try:
         conn = _open_db(db_path)
     except sqlite3.Error as exc:
@@ -1125,6 +1135,7 @@ def render_potato(parsed_url: ParseResult) -> str:
                 c,
                 target,
                 section,
+                snap=snap,
                 active_filters=active_filters,
                 idx_str=idx_str,
                 search_query=search_query,
@@ -1278,13 +1289,27 @@ def clear_cells_cache() -> None:
 
 
 def _load_grid_cells(
-    c: sqlite3.Cursor, target: str, section: str, grid_columns: int
+    c: sqlite3.Cursor,
+    target: str,
+    section: str,
+    grid_columns: int,
+    *,
+    snap: tuple[int, int] | None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], _GridKey | None]:
     """Return ``(cells, merged_cells, key)`` for *section*, memoized per DB snapshot.
 
     Only the requested section's JSON is fetched and decoded — sibling
     sections never render cells, so materializing their multi-MB payloads
     was pure waste.
+
+    *snap* is the caller's WAL-aware change token, stat'ed BEFORE the read
+    snapshot this cursor reads through was pinned (:func:`render_potato`).
+    It is the key's fingerprint, and the publish below re-checks it, which is
+    what keeps a payload read through an older snapshot from being filed under
+    a newer fingerprint: a rebuild that commits mid-render moves the token, the
+    re-check fails, and nothing is memoized.  Deriving the fingerprint here
+    instead would read the post-rebuild value on both sides of that comparison
+    and cache the stale rows under the key that supersedes them.
 
     *key* is the memo key the pair was filed under (None when the DB snapshot
     is unreadable and nothing was memoized).  It travels with the cells so a
@@ -1293,7 +1318,6 @@ def _load_grid_cells(
     re-deriving one from a fresh stat, which a rebuild landing in between would
     let disagree with the payload it describes.
     """
-    snap = _snapshot_db_mtime()
     key = (*snap, target, section, int(grid_columns)) if snap is not None else None
     if key is not None:
         with _GRID_CACHE_LOCK:
@@ -1309,11 +1333,10 @@ def _load_grid_cells(
     # returns no rows and the grid renders empty.
     cells: list[dict[str, Any]] = json.loads(rows[0][1]) if rows else []
     merged = _merge_cells(cells, grid_columns)
-    # The cursor's read snapshot is older than `snap` whenever a rebuild
-    # committed after render_potato's first query.  Caching that stale payload
-    # under the NEW fingerprint poisons the memo: a broadcast that cleared the
-    # cache can be overtaken by this insert, and nothing invalidates it until
-    # the next rebuild.  Only publish when the watermark still holds.
+    # The watermark re-check: *snap* predates this cursor's read snapshot, so
+    # equality here means no rebuild committed while these rows were read.  A
+    # broadcast that cleared the cache can then still be overtaken by this
+    # insert only under a key no later request will ask for.
     if key is not None and _snapshot_db_mtime() == snap:
         with _GRID_CACHE_LOCK:
             _evict_oldest(_GRID_CACHE, _GRID_CACHE_MAX)
@@ -1370,16 +1393,19 @@ def _section_stats_cached(
     target: str,
     sections: dict[str, dict[str, Any]],
     data: dict[str, Any],
+    *,
+    snap: tuple[int, int] | None,
 ) -> dict[str, dict[str, Any]]:
     """:func:`_compute_section_stats`, memoized per WAL-aware snapshot + target.
 
     Costs a query per call, yet the result changes only when the DB does, and
     every pager/filter click used to re-pay it.  All three inputs derive from
     the same DB state, so the snapshot alone keys the memo (same
-    self-invalidating contract as _GRID_CACHE).  Entries are small — one dict
-    per section — so the cap is generous.
+    self-invalidating contract as _GRID_CACHE), and *snap* is the render's own
+    token for the reason :func:`_load_grid_cells` documents.
+
+    Entries are small — one dict per section — so the cap is generous.
     """
-    snap = _snapshot_db_mtime()
     key = (*snap, target) if snap is not None else None
     if key is not None:
         with _POTATO_STATS_CACHE_LOCK:
@@ -1387,9 +1413,9 @@ def _section_stats_cached(
         if cached is not None:
             return cached
     stats = _compute_section_stats(c, target, sections, data)
-    # Same watermark re-check as _load_grid_cells: stats read through a cursor
-    # whose snapshot predates a rebuild must not be filed under the new
-    # fingerprint.
+    # Same watermark re-check as _load_grid_cells, over the same token: a
+    # rebuild that committed after this render pinned its read snapshot must
+    # not leave its rows filed under the new fingerprint.
     if key is not None and _snapshot_db_mtime() == snap:
         with _POTATO_STATS_CACHE_LOCK:
             _evict_oldest(_POTATO_STATS_CACHE, _POTATO_STATS_CACHE_MAX)
@@ -2110,12 +2136,14 @@ def _render_grid_view(
     search_query: str,
     search_matched_fns: set[str],
     page_str: str,
+    snap: tuple[int, int] | None,
 ) -> tuple[str, int, str, dict[str, Any]]:
     """Assemble the map view: (grid_html, block_count, panel_html, sec_stats).
 
     Linear pipeline over the section's cells — fetch, merge, paginate, render
     grid + detail panel.  Only the grid view calls this, so the functions view
-    never pays any cells work (fetch, decode, or merge).
+    never pays any cells work (fetch, decode, or merge).  *snap* is the
+    render's DB change token, carried straight into the two memos below.
     """
     # A NULL columns value (schema-legal, like the NULL va/fileOffset a .bss
     # section carries) must fall back to 64, not TypeError on None <= 0 —
@@ -2124,8 +2152,8 @@ def _render_grid_view(
     if grid_columns <= 0:
         grid_columns = 64
     grid_columns = min(grid_columns, _MAX_GRID_COLUMNS)
-    cells, merged_cells, grid_key = _load_grid_cells(c, target, section, grid_columns)
-    per_section_stats = _section_stats_cached(c, target, sections, data)
+    cells, merged_cells, grid_key = _load_grid_cells(c, target, section, grid_columns, snap=snap)
+    per_section_stats = _section_stats_cached(c, target, sections, data, snap=snap)
     block_count = len(merged_cells)
 
     # Paginate: one page is _GRID_PAGE_ROWS rows of the grid.
@@ -2176,6 +2204,8 @@ def _render_potato_inner(
     sort_key: str,
     status_filter: str,
     page_str: str,
+    *,
+    snap: tuple[int, int] | None,
 ) -> str:
     targets = resolve_targets(c)
     if not target and targets:
@@ -2240,6 +2270,7 @@ def _render_potato_inner(
             search_query=search_query,
             search_matched_fns=search_matched_fns,
             page_str=page_str,
+            snap=snap,
         )
 
     clear_search_url = _build_url(target, section, active_filters or None)

@@ -308,6 +308,14 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (`?size=`, `?offset=`, `?limit=`, the batch VA list, and Potato Mode's
   `?page=` and `?idx=`), matching the rule every `RECOVERAGE_*` integer
   already followed; anything else is the 400 or the default it always was.
+- **Potato Mode could cache a grid from before a rebuild under the fingerprint
+  that superseded it.** The grid and per-section-stats memos took their change
+  token from inside the render's pinned read snapshot, so a `rebrew build-db`
+  committing midway was read as the new fingerprint on both sides of the
+  publish check, matched, and filed the previous build's cells where every
+  later request looked for the new ones. The grid then showed pre-rebuild
+  coverage with no rebuild left to invalidate it. The render now takes its
+  token before the connection opens, as the API surfaces already did.
 - **A Potato Mode filter pill reported the wrong state.** Each pill's row
   identity was its accesskey letter rather than the filter key, so the
   "every filter key has a pill" and "a pill toggles only its own filter"
