@@ -10,6 +10,14 @@ module ships in the published package. See *Breaking*.
 
 ### Added
 
+- **`/api/health` reports the rebuild pipeline and live-reload saturation.**
+  `regen` carries runs, failures, refusals, in-flight count, and the last run's
+  duration: a regen takes minutes, so the per-request counters could show one
+  request in flight without saying it was a rebuild, or how long the last one
+  took. `streams` carries connected event-stream clients against the cap that
+  answers 503 to the next one, plus whether the poller thread is alive; a
+  connected client with no poller now answers `degraded` instead of a healthy
+  200, because every page still renders and none of them will refresh again.
 - **Shell completion.** `recoverage --install-completion` installs completion
   for bash, zsh, fish or PowerShell, and `--show-completion` prints the script
   for a shell the installer does not cover. Command and flag names now

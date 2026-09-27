@@ -178,6 +178,78 @@ class RequestStats:
 REQUESTS = RequestStats()
 
 
+class RegenStats:
+    """Outcome and duration counters for the catalog/build-db pipeline.
+
+    A regen is the one request that runs for minutes, so the per-request
+    latency numbers say little about it: one sample, and none at all while it
+    is still running.  A hung regen is the failure an operator most needs to
+    see and the one the request counters cannot show, so the run's state is
+    tracked on its own: ``in_flight`` says a run is going, ``last_duration_ms``
+    says how long the previous one took, and ``failures`` separates a pipeline
+    that will not run from one nobody asked to run.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._runs = 0
+        self._failures = 0
+        self._rejected = 0
+        self._in_flight = 0
+        self._last_ms = 0.0
+        self._last_ok: bool | None = None
+
+    def start(self) -> None:
+        with self._lock:
+            self._in_flight += 1
+            self._runs += 1
+
+    def finish(self, ok: bool, duration_ms: float) -> None:
+        """Record one finished run. *duration_ms* comes from ``clock.monotonic``."""
+        with self._lock:
+            self._in_flight -= 1
+            if not ok:
+                self._failures += 1
+            self._last_ms = duration_ms
+            self._last_ok = ok
+
+    def reject(self) -> None:
+        """Record a POST refused by the lock or the cooldown, not by a failure.
+
+        A dashboard whose Reload button is being double-clicked reports runs
+        and no failures; the refused attempts are the whole story, and without
+        this counter they are indistinguishable from a pipeline that nobody
+        triggered.
+        """
+        with self._lock:
+            self._rejected += 1
+
+    def snapshot(self) -> dict[str, Any]:
+        """A JSON-ready copy. ``last_ok`` is None until the first run finishes."""
+        with self._lock:
+            return {
+                "runs": self._runs,
+                "failures": self._failures,
+                "rejected": self._rejected,
+                "in_flight": self._in_flight,
+                "last_duration_ms": round(self._last_ms, 3),
+                "last_ok": self._last_ok,
+            }
+
+    def reset(self) -> None:
+        with self._lock:
+            self._runs = 0
+            self._failures = 0
+            self._rejected = 0
+            self._in_flight = 0
+            self._last_ms = 0.0
+            self._last_ok = None
+
+
+#: The regen registry ``/api/regen`` updates and /api/health reads.
+REGEN = RegenStats()
+
+
 def route_label(path: str, rule: str | None) -> str:
     """A bounded label for *path*: its route *rule*, else its first segment."""
     if rule:

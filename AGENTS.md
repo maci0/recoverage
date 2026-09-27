@@ -64,7 +64,7 @@ recoverage/
     ├── _paths.py            # DB path resolution (RECOVERAGE_DB, rebrew-project.toml db_dir)
     ├── config.py            # RECOVERAGE_* env: flag defaults, validation, startup banner
     ├── clock.py             # The one time source (monotonic / wall-clock) the request path reads
-    ├── metrics.py           # In-process RED counters (metrics.REQUESTS), read by /api/health
+    ├── metrics.py           # In-process counters: RED requests (REQUESTS) + regen (REGEN), read by /api/health
     ├── cli.py               # Typer CLI entry point (serve, stats, export, check, regen, open)
     ├── server.py            # Bottle app, shared helpers & compression
     ├── disasm.py            # Capstone disassembly (optional extra): probe, thread-local Cs, memo
@@ -222,7 +222,7 @@ The release policy is not written down anywhere else, so it is stated here and
 |------|--------|-------------|
 | `/` | GET | Main SPA dashboard |
 | `/potato` | GET | Potato Mode (pure-HTML fallback) |
-| `/api/health` | GET | Server version, DB info, installed extras, request counters |
+| `/api/health` | GET | Server version, DB info, installed extras, request/regen/stream counters |
 | `/api/targets` | GET | List available targets |
 | `/api/targets/<target>/stats` | GET | Per-section coverage stats (ETag-revalidating) |
 | `/api/targets/<target>/data` | GET | Full section + cell data |
@@ -315,6 +315,21 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   filed the request as a 200) must call `server._reclassify_request`, or the
   error rate silently reads zero; `test_metrics.py` pins that. The design
   rationale is in `docs/DESIGN.md` (*Request Observability*).
+- The regen pipeline is counted in `metrics.REGEN`, not in `REQUESTS`: a regen
+  runs for minutes, so the per-request numbers are one sample and none at all
+  while it is in flight, and nothing in them says the in-flight request is a
+  rebuild. Every `_do_regen` outcome closes the counters through
+  `api._regen_failed` (or the success tail), so the elapsed time in the log
+  line and the one in `/api/health`'s `regen` block are the same read. A POST
+  refused by `_REGEN_LOCK` or the cooldown counts under `rejected`, never
+  `failures`: the SPA throttles Reload clicks, so counting them as failures
+  reports a broken pipeline for a double-clicked button.
+- Saturation that answers 503 is a log line and a health field, not a bare
+  status code: `/api/events` refuses past `_SSE_MAX_CLIENTS` and logs the count
+  that caused it, and `/api/health` reports `streams` (clients, max, whether
+  the watcher is alive). `watcher_alive` is `None` before the first client,
+  since the poller starts lazily, and a connected client with a dead watcher
+  answers `degraded` because every page still renders and none will refresh.
 - Every time read under `src/recoverage/` goes through `clock`: `monotonic()`
   for elapsed-time arithmetic (cooldowns, retention windows, throttles,
   heartbeats) and `wall_time()` only for a stamp a human reads. A direct

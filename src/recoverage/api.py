@@ -661,6 +661,15 @@ def handle_api_events() -> Any:
     # a victim visits — no-cors, loopback) could otherwise exhaust threads.
     with _SSE_CLIENTS_LOCK:
         if len(_SSE_CLIENTS) >= _SSE_MAX_CLIENTS:
+            # Refusals reach /api/health's error count, but a health snapshot
+            # says "the cap is full", not "the cap has been full since 10:04
+            # and every SPA tab since then is stale".  One line per refusal is
+            # bounded by the refusal rate, which is the interesting signal.
+            _log.warning(
+                "Refusing /api/events: %d/%d streams already connected",
+                len(_SSE_CLIENTS),
+                _SSE_MAX_CLIENTS,
+            )
             return _json_err(
                 503,
                 {
@@ -734,6 +743,11 @@ def handle_api_health() -> bytes:
     except sqlite3.Error as exc:
         _log.warning("Failed to query target count from database: %s", exc)
         status = "degraded"
+    streams = _stream_stats()
+    if streams["watcher_alive"] is False and streams["clients"] > 0:
+        # Connected clients with no poller means live reload is dead while
+        # every page still renders: healthy-looking, silently stale.
+        status = "degraded"
     return _json_ok(
         {
             "status": status,
@@ -749,9 +763,39 @@ def handle_api_health() -> bytes:
             # latency extremes, so the operator can tell "one slow request"
             # from "the dashboard got slow" without a metrics backend.
             "requests": _metrics.REQUESTS.snapshot(),
+            # The regen pipeline runs for minutes, so its outcome and duration
+            # need counters of their own; the request snapshot cannot show a
+            # run that has not finished.
+            "regen": _metrics.REGEN.snapshot(),
+            # Live-reload saturation: every connected stream pins a server
+            # thread for its whole life, and the cap answers 503 to the next
+            # one.  clients vs max is the distance to that refusal.
+            "streams": streams,
         },
         Cache_Control=CACHE_NO_STORE,
     )
+
+
+def _stream_stats() -> dict[str, Any]:
+    """SSE saturation and poller liveness for /api/health.
+
+    ``watcher_alive`` is None before the first client connects: the poller
+    starts lazily, so "not started yet" is not a fault and must not read as
+    one.
+    """
+    with _SSE_CLIENTS_LOCK:
+        clients = len(_SSE_CLIENTS)
+    watcher = _DB_WATCHER_THREAD
+    if watcher is None:
+        alive: bool | None = None
+    else:
+        alive = watcher.is_alive()
+    return {
+        "clients": clients,
+        "max_clients": _SSE_MAX_CLIENTS,
+        "queue_max": _SSE_QUEUE_MAX,
+        "watcher_alive": alive,
+    }
 
 
 @app.get("/api/targets")
@@ -1749,6 +1793,7 @@ def handle_regen() -> bytes | Any:
     # runs gets an immediate 429 instead of blocking on the lock for the whole
     # run.
     if not _REGEN_LOCK.acquire(blocking=False):
+        _metrics.REGEN.reject()
         return _json_err(
             429,
             {
@@ -1763,6 +1808,7 @@ def handle_regen() -> bytes | Any:
         since = math.inf if _regen_last_attempt is None else now - _regen_last_attempt
         if since < _REGEN_COOLDOWN_SECONDS:
             remaining = _REGEN_COOLDOWN_SECONDS - since
+            _metrics.REGEN.reject()
             return _json_err(
                 429,
                 {
@@ -1797,13 +1843,15 @@ def _do_regen(remote: str) -> bytes | Any:
 
     root = _project_dir()
     _log.info("Regen started from %s", remote)
+    started_at = clock.monotonic()
+    _metrics.REGEN.start()
     try:
         run_regen(root)
     except typer.Exit as e:
         # rebrew's error_exit reports the failure itself and raises
         # typer.Exit — click's Exit, a RuntimeError, not SystemExit.  Map it
         # to the JSON 500 contract instead of letting it escape as a traceback.
-        _log.error("Regen failed: rebrew exited with status %s", e.exit_code)
+        _regen_failed(started_at, "rebrew exited with status %s", e.exit_code)
         return _json_err(
             500,
             {
@@ -1816,7 +1864,7 @@ def _do_regen(remote: str) -> bytes | Any:
         # JSON error contract instead of an HTML 500.  The class name reaches
         # the body and the message does not — a rebrew or OSError message
         # quotes absolute paths from the project tree.
-        _log.error("Regen failed: %s: %s", type(e).__name__, e)
+        _regen_failed(started_at, "%s: %s", type(e).__name__, e)
         return _json_err(
             500,
             {
@@ -1825,5 +1873,24 @@ def _do_regen(remote: str) -> bytes | Any:
             },
         )
     _clear_derived_caches()
-    _log.info("Regen completed successfully")
+    elapsed = _elapsed_s(started_at)
+    _metrics.REGEN.finish(True, elapsed * 1000.0)
+    _log.info("Regen completed successfully in %.1fs", elapsed)
     return _json_ok({"ok": True})
+
+
+def _elapsed_s(started_at: float) -> float:
+    """Seconds since *started_at* on the injectable clock."""
+    return clock.monotonic() - started_at
+
+
+def _regen_failed(started_at: float, reason: str, *args: object) -> None:
+    """Log a failed run with its duration and close out its counters.
+
+    Every failure path runs this, so the elapsed time is read once and lands
+    in the same place on each: a rebuild that dies after two seconds and one
+    that dies after two hundred are told apart by the line, not by the clock.
+    """
+    elapsed = _elapsed_s(started_at)
+    _log.error("Regen failed after %.1fs: " + reason, elapsed, *args)
+    _metrics.REGEN.finish(False, elapsed * 1000.0)

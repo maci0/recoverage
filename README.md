@@ -295,7 +295,7 @@ deployment that moved off `8001` needs no second place to configure.
 |------|--------|-------------|
 | `/` | GET | Main SPA dashboard |
 | `/potato` | GET | Potato Mode (pure-HTML fallback) |
-| `/api/health` | GET | Server version, DB info, installed extras, request counters |
+| `/api/health` | GET | Server version, DB info, installed extras, request/regen/stream counters |
 | `/api/targets` | GET | List available targets |
 | `/api/targets/<target>/stats` | GET | Per-section coverage stats with percentages |
 | `/api/targets/<target>/data` | GET | Section + cell data (`?section=.text` for partial) |
@@ -334,6 +334,13 @@ duration; a request slower than a second is one `WARNING` line at any level.
     "slow_threshold_ms": 1000.0, "mean_ms": 4.812, "max_ms": 91.204,
     "by_status": {"2xx": 409, "4xx": 2, "5xx": 1},
     "by_route": {"/api/targets/<target>/data": {"requests": 12, "errors": 0, "max_ms": 91.2}}
+  },
+  "regen": {
+    "runs": 3, "failures": 0, "rejected": 1, "in_flight": 0,
+    "last_duration_ms": 84210.4, "last_ok": true
+  },
+  "streams": {
+    "clients": 1, "max_clients": 32, "queue_max": 32, "watcher_alive": true
   }
 }
 ```
@@ -342,6 +349,18 @@ Routes are counted by their rule, never by the raw path, so the map stays
 bounded whatever a caller asks for. The snapshot is taken before the reading
 request is filed, so it describes everything up to it. There is no metrics
 backend to configure: these numbers live in the process and reset with it.
+
+`regen` covers the rebuild pipeline, which is the one request that runs for
+minutes: the request counters can say a request is in flight but not that it
+is a rebuild, how long the last one took, or whether failures are climbing.
+`rejected` counts POSTs the cooldown or the run lock refused, which is a
+double-clicked Reload button rather than a broken pipeline, so it is kept off
+`failures`. `streams` reports live-reload saturation: each connected SSE
+stream pins a server thread for its whole life, so `clients` against
+`max_clients` is the distance to the 503 the next tab gets.
+`watcher_alive` is `null` until the first client connects, since the poller
+starts lazily. A connected client with a dead poller answers `degraded`: every
+page still renders, none of them will ever refresh again.
 
 ### Error responses
 

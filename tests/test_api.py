@@ -2723,6 +2723,208 @@ class TestApiEtagContract:
         assert payload.get("code") == "not_found"
 
 
+class TestRegenMetrics:
+    """/api/health reports the regen pipeline's own state.
+
+    A regen is the one request that runs for minutes: the RED counters can say
+    one request is still in flight but not that it is a rebuild, how long the
+    last one took, or whether failures are climbing.  A dashboard whose
+    Reload button does nothing must be distinguishable from one whose pipeline
+    is broken, and both from one nobody asked to rebuild.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _reset(self) -> None:
+        import recoverage.api as api
+        from recoverage import metrics
+
+        api._regen_last_attempt = None
+        api._REGEN_COMPLETED_KEYS.clear()
+        metrics.REGEN.reset()
+        yield
+        metrics.REGEN.reset()
+
+    def _health_regen(self) -> dict:
+        status, headers, body = wsgi_get("/api/health")
+        assert status.startswith("200"), status
+        return json.loads(decode_body(body, headers))["regen"]
+
+    def _post(self) -> tuple[str, dict[str, str], bytes]:
+        return wsgi_request("POST", "/api/regen", remote_addr="127.0.0.1")
+
+    def test_successful_run_is_counted_with_its_duration(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import recoverage.api as api
+
+        monkeypatch.setattr(api, "run_regen", lambda root: None)
+        monkeypatch.setattr(api, "_project_dir", lambda: Path("/nonexistent"))
+        assert_regen_accepted(self._post())
+        regen = self._health_regen()
+        assert regen["runs"] == 1
+        assert regen["failures"] == 0
+        assert regen["in_flight"] == 0
+        assert regen["last_ok"] is True
+        assert regen["last_duration_ms"] >= 0.0
+
+    def test_failed_run_counts_a_failure_and_reports_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import recoverage.api as api
+
+        def boom(root: Path) -> None:
+            raise ValueError("corrupt JSON")
+
+        monkeypatch.setattr(api, "run_regen", boom)
+        monkeypatch.setattr(api, "_project_dir", lambda: Path("/nonexistent"))
+        status, _headers, _body = self._post()
+        assert status.startswith("500")
+        regen = self._health_regen()
+        assert regen["runs"] == 1
+        assert regen["failures"] == 1
+        assert regen["last_ok"] is False
+        assert regen["in_flight"] == 0
+
+    def test_cooldown_rejection_is_counted_separately_from_a_failure(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A refused POST is not a failed run.
+
+        The SPA throttles Reload clicks, so refusals are routine; counting them
+        as failures would report a broken pipeline for a double-clicked button.
+        """
+        import recoverage.api as api
+
+        monkeypatch.setattr(api, "run_regen", lambda root: None)
+        monkeypatch.setattr(api, "_project_dir", lambda: Path("/nonexistent"))
+        assert_regen_accepted(self._post())
+        status, _headers, _body = self._post()
+        assert status.startswith("429")
+        regen = self._health_regen()
+        assert regen["rejected"] == 1
+        assert regen["failures"] == 0
+        assert regen["runs"] == 1
+
+    def test_duration_comes_from_the_injected_clock(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The recorded duration is a multiple of the fake step, so a real
+        wall-clock read could not have produced it, and the log line names it."""
+        import logging as _logging
+
+        import recoverage.api as api
+
+        reads = [0]
+
+        def _fake_monotonic() -> float:
+            reads[0] += 1
+            return 1.0 + 3.0 * reads[0]
+
+        monkeypatch.setattr(api.clock, "monotonic", _fake_monotonic)
+        monkeypatch.setattr(api, "run_regen", lambda root: None)
+        monkeypatch.setattr(api, "_project_dir", lambda: Path("/nonexistent"))
+        with caplog.at_level(_logging.INFO, logger="recoverage"):
+            assert_regen_accepted(self._post())
+        regen = self._health_regen()
+        assert regen["last_duration_ms"] % 3000.0 == 0.0
+        assert any("Regen completed successfully in" in r.getMessage() for r in caplog.records)
+
+    def test_in_flight_is_visible_while_the_run_holds_the_lock(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A hung rebuild is the failure the request counters cannot show:
+        /api/regen sits in flight forever with no request row to explain it."""
+        import recoverage.api as api
+
+        release = threading.Event()
+        entered = threading.Event()
+
+        def slow(root: Path) -> None:
+            entered.set()
+            release.wait(5.0)
+
+        monkeypatch.setattr(api, "run_regen", slow)
+        monkeypatch.setattr(api, "_project_dir", lambda: Path("/nonexistent"))
+        worker = threading.Thread(
+            target=lambda: wsgi_request("POST", "/api/regen", remote_addr="127.0.0.1"),
+            daemon=True,
+        )
+        worker.start()
+        try:
+            assert entered.wait(5.0), "the regen never started"
+            assert self._health_regen()["in_flight"] == 1
+        finally:
+            release.set()
+            worker.join(5.0)
+        assert self._health_regen()["in_flight"] == 0
+
+
+class TestHealthStreams:
+    """/api/health reports SSE saturation and whether the poller is alive.
+
+    Every connected stream pins a server thread, and the cap answers 503 to the
+    one after it: an operator looking at a dashboard that stopped live-updating
+    needs the connection count, not a healthy-looking 200.
+    """
+
+    def test_streams_reported_before_any_client_connects(self) -> None:
+        import recoverage.api as api
+
+        api._stop_db_watcher()
+        status, headers, body = wsgi_get("/api/health")
+        assert status.startswith("200"), status
+        streams = json.loads(decode_body(body, headers))["streams"]
+        assert streams["clients"] == 0
+        assert streams["max_clients"] == api._SSE_MAX_CLIENTS
+        # Not started yet is not a fault, so it must not read as one.
+        assert streams["watcher_alive"] is None
+
+    def test_client_count_tracks_the_connected_streams(self) -> None:
+        import recoverage.api as api
+
+        api._stop_db_watcher()
+        try:
+            _, _, _, result = wsgi_stream("/api/events", max_chunks=1)
+            try:
+                status, headers, body = wsgi_get("/api/health")
+                assert status.startswith("200"), status
+                streams = json.loads(decode_body(body, headers))["streams"]
+                assert streams["clients"] == 1
+                assert streams["watcher_alive"] is True
+            finally:
+                if result is not None:
+                    result.close()
+        finally:
+            api._stop_db_watcher()
+
+    def test_health_degrades_when_a_connected_client_has_no_poller(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A registered client with a dead poller is stale data served as a
+        healthy 200: every page renders, none of them ever refreshes."""
+        import recoverage.api as api
+
+        with api._SSE_CLIENTS_LOCK:
+            api._SSE_CLIENTS.add(queue.Queue(maxsize=api._SSE_QUEUE_MAX))
+        try:
+            monkeypatch.setattr(api, "_DB_WATCHER_THREAD", _DeadThread(), raising=False)
+            status, headers, body = wsgi_get("/api/health")
+            assert status.startswith("200"), status
+            data = json.loads(decode_body(body, headers))
+            assert data["status"] == "degraded"
+            assert data["streams"]["watcher_alive"] is False
+        finally:
+            with api._SSE_CLIENTS_LOCK:
+                api._SSE_CLIENTS.clear()
+
+
+class _DeadThread:
+    """Stands in for a watcher thread that has stopped without unregistering."""
+
+    def is_alive(self) -> bool:
+        return False
+
+
 class TestSseClientCap:
     def test_excess_clients_get_503(self) -> None:
         """More concurrent /api/events clients than the cap must be rejected
