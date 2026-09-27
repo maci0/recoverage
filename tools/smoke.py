@@ -20,10 +20,9 @@ from __future__ import annotations
 
 import argparse
 import sys
-import tempfile
 from pathlib import Path
 
-from _serve_harness import build_sample_db, get, running_server, wait_for
+from _serve_harness import build_sample_db, get, running_server, scratch_project_dir, wait_for
 
 
 def smoke(project_dir: Path, *, expect_failure: bool = False) -> int:
@@ -84,9 +83,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    with tempfile.TemporaryDirectory() as td:
-        project_dir = Path(td) / "proj"
-        project_dir.mkdir()
+    with scratch_project_dir() as project_dir:
         return smoke(project_dir, expect_failure=args.expect_failure)
 
 

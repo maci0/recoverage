@@ -14,11 +14,29 @@ import os
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+SCRATCH_DIR = REPO_ROOT / ".scratch"
+
+
+@contextlib.contextmanager
+def scratch_project_dir() -> Iterator[Path]:
+    """Yield an empty throwaway project dir, removed on exit.
+
+    Under the repo's gitignored ``.scratch/``, not the system temp dir: the
+    system temp is RAM-backed, so a SQLite database and the served HTML tree
+    would eat memory and vanish on reboot, and the build is easier to inspect
+    when it lands next to the tree it came from.
+    """
+    SCRATCH_DIR.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=SCRATCH_DIR) as td:
+        project_dir = Path(td) / "proj"
+        project_dir.mkdir()
+        yield project_dir
 
 
 def build_sample_db(project_dir: Path) -> Path:

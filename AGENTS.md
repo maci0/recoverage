@@ -26,7 +26,9 @@ recoverage/
 ├── LICENSE                  # MIT
 ├── package.json            # bun scripts: lint, lint:js, lint:html
 ├── oxlint.config.ts        # JS/TS lint config (see the tooling notes below)
-├── .github/workflows/ci.yml # lint, web-lint, test, smoke, sbom jobs
+├── .github/
+│   ├── workflows/ci.yml     # lint, web-lint, test matrix, smoke, sbom
+│   └── actions/sibling-rebrew/  # clones the ../rebrew path dep at a pinned commit
 ├── docs/                   # Screenshots & design doc
 │   ├── DESIGN.md           # Architecture and design decisions
 │   ├── DESIGN_PRINCIPLES.md  # Core operational philosophies
@@ -81,6 +83,7 @@ CI runs; `make all` is the local mirror of the whole pipeline.
 # Bootstrap (clean clone; rebrew is a ../rebrew path dependency)
 make clone-rebrew           # clone rebrew v2.13.1 into ../rebrew
 make setup                  # uv sync --frozen --extra dev
+uv sync --extra playwright   # browser tests: playwright, pytest-playwright
 
 # Checks
 make test                   # uv run pytest tests/ -v --ignore=tests/test_playwright.py
@@ -118,6 +121,22 @@ uv run pytest tests/test_playwright.py
 `tools/ci_clone_rebrew.sh` backs `make clone-rebrew` and the CI jobs: it pins
 rebrew to the tag and commit in the script's defaults, and fails when the tag
 does not resolve to that commit.
+
+## CI
+
+`.github/workflows/ci.yml` runs on pushes to `main` and pull requests
+against it, with a `concurrency` group that cancels superseded PR-branch runs
+but never a `main` run, and a per-job `timeout-minutes` so a wedged server
+test fails the job instead of holding a runner for six hours.
+
+`rebrew` is an editable path dependency at `../rebrew` (see
+`[tool.uv.sources]`), which no runner has, so every job that runs
+`uv sync --frozen --extra dev` first calls the `sibling-rebrew` composite
+action, whose `ref` default pins the rebrew commit. That single default is
+the whole pin, and it must keep matching `uv.lock`: when rebrew's
+dependencies change, re-lock in a tree with the sibling present and bump
+`.github/actions/sibling-rebrew/action.yml`. The `sbom` job deliberately has
+no such step, because `uv export --frozen` reads the lock alone.
 
 ## API Endpoints
 

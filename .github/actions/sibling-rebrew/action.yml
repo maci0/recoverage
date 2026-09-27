@@ -1,0 +1,33 @@
+name: sibling-rebrew
+description: >-
+  Materialize the sibling rebrew checkout that [tool.uv.sources] resolves
+  recoverage's rebrew dependency to. recoverage depends on rebrew as an
+  editable path dependency at ../rebrew (pyproject.toml), so `uv sync` fails
+  on a clean runner with "Distribution not found at ../rebrew" until that
+  directory exists. A bare clone or a git worktree has no sibling, so every
+  job that installs the environment needs this step.
+
+inputs:
+  ref:
+    description: >-
+      rebrew git ref to check out. Must be a commit whose dependency metadata
+      still matches uv.lock, or `uv sync --frozen` fails on the lock check.
+      This default is the single place the pin lives: when rebrew's
+      dependencies change, re-lock and bump it here, not in the jobs.
+    required: false
+    default: 69096db029a8837579975863cedbed837b8ea776 # rebrew main
+  repository:
+    description: rebrew git clone URL.
+    required: false
+    default: https://github.com/maci0/rebrew.git
+
+runs:
+  using: composite
+  steps:
+    - name: Clone rebrew into the workspace parent
+      shell: bash
+      run: |
+        git clone --filter=blob:none "${{ inputs.repository }}" ../rebrew
+        git -C ../rebrew checkout --detach "$REF"
+      env:
+        REF: ${{ inputs.ref }}

@@ -169,9 +169,7 @@ def handle_potato() -> bytes | Any:
         # and replay a page that may have been rendered for a token-bearing
         # client.  CACHE_REVALIDATE keeps the ETag's cheap 304s while forcing
         # revalidation before every reuse.
-        resp_body = _compressed(
-            body, "text/html; charset=utf-8", Cache_Control=CACHE_REVALIDATE
-        )
+        resp_body = _compressed(body, "text/html; charset=utf-8", Cache_Control=CACHE_REVALIDATE)
 
         if etag:
             response.set_header("ETag", etag)

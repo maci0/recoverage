@@ -12,7 +12,8 @@
   <a href="#installation">Install</a> ·
   <a href="#quick-start">Quick Start</a> ·
   <a href="#screenshots">Screenshots</a> ·
-  <a href="#potato-mode">Potato Mode</a>
+  <a href="#potato-mode">Potato Mode</a> ·
+  <a href="#continuous-integration">CI</a>
 </p>
 
 ---
@@ -82,7 +83,17 @@ a sibling rebrew checkout, so the bootstrap is two commands:
 make clone-rebrew   # rebrew v2.13.1 into ../rebrew
 make setup          # uv sync --frozen --extra dev
 make test           # or: make test-one T=tests/test_api.py
+uv run recoverage serve
 ```
+
+> [!IMPORTANT]
+> `rebrew` is a path dependency resolved to `../rebrew`
+> (`[tool.uv.sources]` in `pyproject.toml`), so recoverage must sit beside a
+> rebrew checkout. `git clone` recoverage on its own, or any git worktree of
+> it, leaves `uv sync` failing with
+> `Distribution not found at file:///.../rebrew`. Put the two side by side
+> (or point that source at a rebrew you already have) before running
+> anything.
 
 ### Optional runtime extras
 
@@ -277,6 +288,39 @@ recoverage/
         ├── hljs-x86asm.min.js # Highlight.js x86 asm grammar (hex lang is in detail.js)
         └── hljs.css          # Highlight.js theme
 ```
+
+---
+
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on every push to `main` and every pull
+request against `main`. A new push to a PR branch cancels the run in flight
+on that branch; runs on `main` are never cancelled, so no commit loses a
+check.
+
+| Job | Runner | What it enforces |
+|-----|--------|------------------|
+| `lint` | ubuntu, Python 3.13 | `ruff format --check` and `ruff check` over `src/`, `tests/`, `tools/` |
+| `web-lint` | ubuntu, Python 3.13, bun 1.4.2, temurin 17 | oxlint (Rika-Labs strict + anti-slop) over the SPA sources, then the Nu Html Checker over every static and served HTML/CSS asset |
+| `test` | ubuntu 3.13 + 3.14, macos 3.13, windows 3.13 | `pytest tests/`, warnings-as-errors. Browser tests (`tests/test_playwright.py`) stay out of the default run and are not run in CI |
+| `smoke` | ubuntu, Python 3.13 | boots `recoverage serve` against a synthetic `coverage.db` and probes the SPA shell, health, target data/stats/functions and Potato Mode, then repeats with a corrupt database to prove it reports `degraded` instead of healthy |
+| `sbom` | ubuntu | `uv export --frozen --all-extras --hashes` as a build artifact: the exact resolved tree behind a given build |
+
+Every job installs with `uv sync --frozen --extra dev`, so `uv.lock` is
+never rewritten by a run; a stale lock fails the build instead of drifting.
+Playwright and the `capstone`/`pygments` extras are never installed, so the
+matrix is the same set on every runner.
+
+### The sibling rebrew checkout
+
+`uv sync` resolves rebrew from `../rebrew`, which no GitHub runner has, so
+each job that installs the environment first runs
+`.github/actions/sibling-rebrew`: it clones rebrew into the workspace parent
+and checks out the commit pinned in that action's `ref` default. That commit
+has to keep matching `uv.lock`. When rebrew's own dependencies change, `uv
+sync --frozen` fails with a lock mismatch, and the fix is to re-lock in a tree
+laid out with the sibling and bump the one `ref` default in
+`.github/actions/sibling-rebrew/action.yml`.
 
 ---
 

@@ -65,14 +65,10 @@ class TestExportCommand:
         """Every Markdown data row must have as many cells as the header."""
         result = runner.invoke(app, ["export", "--format", "md"])
         assert result.exit_code == 0
-        header = next(
-            line for line in result.output.splitlines() if line.startswith("| Section |")
-        )
+        header = next(line for line in result.output.splitlines() if line.startswith("| Section |"))
         expected = header.count("|")
         data_rows = [
-            line
-            for line in result.output.splitlines()
-            if line.startswith("|") and " B |" in line
+            line for line in result.output.splitlines() if line.startswith("|") and " B |" in line
         ]
         assert data_rows, "Markdown export produced no section rows"
         for row in data_rows:

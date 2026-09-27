@@ -1024,9 +1024,7 @@ class TestLogInjection:
         assert any("X-Forged" in m for m in msgs), "request was not logged at all"
         assert all("\n" not in m and "\r" not in m for m in msgs)
 
-    def test_target_id_cannot_forge_a_dll_log_line(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_target_id_cannot_forge_a_dll_log_line(self, caplog: pytest.LogCaptureFixture) -> None:
         """Target ids are routable request data and originate in analyzed
         binary names, so the DLL loader's warnings carry them through
         _log_safe like every other request-derived log field does."""

@@ -33,10 +33,9 @@ from __future__ import annotations
 
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
-from _serve_harness import build_sample_db, get, running_server, wait_for
+from _serve_harness import build_sample_db, get, running_server, scratch_project_dir, wait_for
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 VNU_JAR = REPO_ROOT / "node_modules" / "vnu-jar" / "build" / "dist" / "vnu.jar"
@@ -74,9 +73,7 @@ def main() -> int:
         print("static-asset lint failed")
         return rc
 
-    with tempfile.TemporaryDirectory() as td:
-        project_dir = Path(td) / "proj"
-        project_dir.mkdir()
+    with scratch_project_dir() as project_dir:
         if not build_sample_db(project_dir).is_file():
             print("sample coverage.db not built")
             return 1
