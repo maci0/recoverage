@@ -29,6 +29,7 @@ from rebrew.workspace import (
     sqlite_ro_uri,
 )
 
+from recoverage import api
 from recoverage.server import _db_path as get_db_path
 
 # Typer 0.27 help paints option names with ANSI even under CliRunner
@@ -3837,6 +3838,49 @@ class TestSliceValidationDetail:
         data = json.loads(decode_body(body, headers))
         assert data["error"] == "offset beyond section bounds"
         assert ".text" in data["detail"]
+
+    def test_leading_zero_byte_counts_are_decimal(self) -> None:
+        """A zero-padded count is decimal, not a base-0 literal.
+
+        int(x, 0) rejects "064" outright, so a client that zero-pads a byte
+        count got a 400 for a number the endpoint documents as valid.
+        """
+        assert api._parse_byte_count("064") == 64
+        assert api._parse_byte_count("8") == 8
+        status, _headers, _ = wsgi_get(
+            "/api/targets/FAKEDLL/sections/.text/bytes?offset=0&size=016"
+        )
+        assert status.startswith("200")
+
+    def test_byte_counts_reject_non_documented_bases(self) -> None:
+        """Binary and octal spellings are not a documented byte count.
+
+        int(x, 0) accepted both, so ?size=0b1000 silently served 8 bytes to a
+        client that meant to send something this endpoint never promised.
+        """
+        for value in ("0b1000", "0o17"):
+            with pytest.raises(ValueError, match="invalid literal"):
+                api._parse_byte_count(value)
+        status, headers, body = wsgi_get(
+            "/api/targets/FAKEDLL/sections/.text/bytes?offset=0&size=0b1000"
+        )
+        assert status.startswith("400")
+        assert json.loads(decode_body(body, headers))["error"] == "invalid size"
+
+    def test_hex_prefixed_byte_counts_still_parse(self) -> None:
+        assert api._parse_byte_count("0x40") == 64
+        assert api._parse_byte_count(" 0X40 ") == 64
+        status, _headers, _ = wsgi_get(
+            "/api/targets/FAKEDLL/sections/.text/bytes?offset=0&size=0x10"
+        )
+        assert status.startswith("200")
+
+    def test_negative_offset_is_still_rejected(self) -> None:
+        status, headers, body = wsgi_get(
+            "/api/targets/FAKEDLL/sections/.text/bytes?offset=-1&size=4"
+        )
+        assert status.startswith("400")
+        assert json.loads(decode_body(body, headers))["error"] == "invalid offset"
 
 
 # ── URL component decoding ─────────────────────────────────────────

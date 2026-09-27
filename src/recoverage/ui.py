@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import gzip
 import hashlib
 import logging
@@ -188,16 +187,10 @@ def handle_index() -> bytes:
     # http://host:port/?token=<TOKEN> sets an HttpOnly SameSite cookie so
     # the SPA's own fetch/EventSource calls authenticate without any
     # frontend change.  API clients can use Authorization: Bearer instead.
+    # server.set_auth_cookie owns the spelling; Potato Mode calls it too.
+    _server.set_auth_cookie()
+
     global CACHED_INDEX_PAYLOAD
-
-    if _server._AUTH_TOKEN and _server._auth_token_matches(_server.query_param("token")):
-        # Header failure must not break the page.
-        with contextlib.suppress(Exception):
-            response.set_header(
-                "Set-Cookie",
-                f"recoverage_token={_server._AUTH_TOKEN}; Path=/; HttpOnly; SameSite=Strict",
-            )
-
     accept_encoding = _header("Accept-Encoding", "")
     key = static_variant_key(accept_encoding)
 

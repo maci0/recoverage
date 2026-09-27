@@ -225,6 +225,16 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   their grid rendered as a section of entirely `none` bytes. Every read now
   takes the union of the cache and the sections it should have covered, filling
   only the gap and only from `cells`.
+- **Potato Mode lost the `--token` credential on the first click.** The
+  share link (`?token=`) set the browser cookie on `/` only, and every link
+  Potato Mode renders is relative, so a reader who arrived at
+  `/potato?token=...` got the page once and the 401 page on every link
+  afterwards. Both page routes now set the cookie, from one shared helper.
+- **A byte count was read with the wrong base.** `?size=` and `?offset=` went
+  through `int(value, 0)`, which rejects a zero-padded decimal (`size=064`)
+  and accepts the `0b`/`0o` spellings these endpoints never documented. Both
+  now take a decimal count or a `0x`-prefixed hex one, as the query-parameter
+  rules say.
 - **A drive-relative `files[0]` read the wrong file on Windows.** Potato
   Mode's C-source loader rejected absolute paths and `..`, but a
   drive-relative name (`C:foo.c`) is neither, and joining it onto the

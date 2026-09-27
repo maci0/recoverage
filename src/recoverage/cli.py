@@ -693,8 +693,9 @@ def serve(
         None,
         "--token",
         help="Require this bearer token for every request (Authorization: Bearer <token>, "
-        "?token=, or open the dashboard as /?token=<token> to set the SPA cookie; "
-        "env: RECOVERAGE_TOKEN, which keeps the token out of the process listing)",
+        "?token=, or open the dashboard as /?token=<token> (or /potato?token=<token>) "
+        "to set the browser cookie; env: RECOVERAGE_TOKEN, which keeps the token out "
+        "of the process listing)",
     ),
     log_level: str | None = typer.Option(
         None,

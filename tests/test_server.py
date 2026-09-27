@@ -849,6 +849,35 @@ class TestTokenAuthEndpoint:
         assert "recoverage_token=" in cookie
         assert "HttpOnly" in cookie
 
+    def test_valid_token_on_potato_sets_httponly_cookie(self) -> None:
+        """Potato Mode links are relative, so the share-link token has to
+        survive the first click — the page itself must set the same cookie the
+        SPA shell does.  Without it /potato?token=... rendered once and every
+        link on it answered the 401 page."""
+        from conftest import wsgi_get
+
+        status, headers, _ = wsgi_get("/potato?target=FAKEDLL&token=unit-test-token")
+        assert status.startswith("200")
+        cookie = headers.get("Set-Cookie", "")
+        assert "recoverage_token=" in cookie
+        assert "HttpOnly" in cookie
+
+    def test_potato_without_a_token_sets_no_cookie(self) -> None:
+        """Cookie-setting is a no-op on an unauthenticated request, so a
+        browser that visits /potato with no --token in play never gets one."""
+        from conftest import wsgi_get
+
+        import recoverage.server as srv
+
+        original = srv._AUTH_TOKEN
+        srv._AUTH_TOKEN = ""
+        try:
+            status, headers, _ = wsgi_get("/potato?target=FAKEDLL&token=anything")
+            assert status.startswith("200")
+            assert "Set-Cookie" not in headers
+        finally:
+            srv._AUTH_TOKEN = original
+
 
 class TestAuthFailureLimiter:
     """Unit behavior of the failure window."""

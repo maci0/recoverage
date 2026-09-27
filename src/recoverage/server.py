@@ -1913,9 +1913,11 @@ def _json_err(status: int, data: dict[str, Any], **headers: str) -> Any:
 
 # Optional token auth for the dashboard (--token): when set, every request
 # from every peer must present it via Authorization: Bearer <token>, ?token=,
-# or the HttpOnly cookie the index route sets for the SPA.  There is no
-# loopback exemption, which is why --allow-remote pairs with --token rather
-# than replacing it.
+# or the HttpOnly cookie :func:`set_auth_cookie` writes for the page routes
+# (both / and /potato; every link on either page is relative, so the cookie is
+# what carries the credential past the first click).  There is no loopback
+# exemption, which is why --allow-remote pairs with --token rather than
+# replacing it.
 _AUTH_TOKEN: str = ""
 
 
@@ -1947,6 +1949,38 @@ def _auth_token_matches(provided: str) -> bool:
     return bool(_AUTH_TOKEN) and hmac.compare_digest(
         provided.encode("utf-8"), _AUTH_TOKEN.encode("utf-8")
     )
+
+
+#: Name of the HttpOnly cookie the ``?token=`` share-link flow sets, and the one
+#: :func:`_require_auth` reads it back under.  ONE name, so the surface that
+#: sets it and the gate that consumes it cannot drift apart.
+AUTH_COOKIE_NAME = "recoverage_token"
+
+
+def set_auth_cookie() -> None:
+    """Set the auth cookie when this request carried ``?token=<token>``.
+
+    The share link (``http://host:port/?token=TOKEN``) is the only way a
+    browser hands the SPA a credential, and the cookie is what makes every
+    later ``fetch``/``EventSource`` call and every relative link
+    (``?target=...``, ``?idx=...``) authenticate without the query string
+    riding along.  EVERY page surface that a share link can land on must set
+    it: /potato renders only relative URLs, so a reader who arrived there with
+    the token in the query lost it on the first click and got the 401 page
+    back.
+
+    No-op when no token is configured, when the request carries no ``?token=``,
+    or when the value does not match; the 401 itself is :func:`_require_auth`'s
+    job, which runs first.
+    """
+    if not _AUTH_TOKEN or not _auth_token_matches(query_param("token")):
+        return
+    # A header the peer will not accept must not break the page it rides on.
+    with contextlib.suppress(Exception):
+        response.set_header(
+            "Set-Cookie",
+            f"{AUTH_COOKIE_NAME}={_AUTH_TOKEN}; Path=/; HttpOnly; SameSite=Strict",
+        )
 
 
 # -- Request instrumentation ------------------------------------------------
@@ -2121,7 +2155,7 @@ def _require_auth() -> None:
     else:
         provided = query_param("token")
         if not provided:
-            provided = request.get_cookie("recoverage_token", default="")
+            provided = request.get_cookie(AUTH_COOKIE_NAME, default="")
     if _auth_token_matches(provided):
         _clear_auth_failures()
         return

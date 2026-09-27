@@ -393,6 +393,17 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   and every viewer that breaks on `\n` breaks on them). It deliberately leaves
   bidi controls alone: those reorder a line rather than split it, which is
   the log-injection question `sec-review` owns.
+- `server.set_auth_cookie` is the one place the `?token=` share-link cookie is
+  written, and every page route a share link can land on calls it: `/` and
+  `/potato`. Both pages link with relative URLs, so the cookie is what carries
+  the credential past the first click; a page route that skips it renders once
+  and answers the 401 page on every link the reader follows. The cookie's name
+  is `server.AUTH_COOKIE_NAME`, which `_require_auth` reads it back under.
+- Byte counts in the query string (`?size=` on `/asm` and `/bytes`, `?offset=`
+  on `/bytes`) go through `api._parse_byte_count`: decimal, or hexadecimal with
+  a `0x`/`0X` prefix, and nothing else. `int(x, 0)` was wrong in both
+  directions, rejecting a zero-padded decimal and accepting the `0b`/`0o`
+  spellings these endpoints never documented.
 - The untrusted-input surfaces (query parameters, the batch POST body, request
   headers, the `/potato` query string, the `/src` and `/original` path
   segments, the access-gating headers, the `RECOVERAGE_*` readers) are fuzzed

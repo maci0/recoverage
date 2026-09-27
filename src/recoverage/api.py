@@ -1071,14 +1071,34 @@ _JSON_SUFFIX = "+json"
 _ASM_FORMATS = frozenset({"text", "json"})
 
 
+def _parse_byte_count(raw: str) -> int:
+    """Parse a byte count from the query string: decimal, or 0x-prefixed hex.
+
+    ONE parse for ``?size=`` on /asm and /bytes and ``?offset=`` on /bytes, so
+    the three cannot read the same spelling three ways.
+
+    NOT ``int(raw, 0)``.  Base 0 was wrong in both directions: it rejects a
+    leading-zero decimal ("064" is a byte count, answered 400), and it accepts
+    spellings these endpoints never documented — ``0b1010`` and ``0o17`` both
+    parsed, so a client sending a binary count got a slice it never asked for.
+    A sign is still honoured, because the callers clamp or reject a negative
+    value with their own message.
+    """
+    text = raw.strip()
+    sign = -1 if text.startswith("-") else 1
+    if text[:1] in ("+", "-"):
+        text = text[1:]
+    return sign * int(text, 16 if text[:2].lower() == "0x" else 10)
+
+
 def _slice_size(raw_size: str, parse_error: str) -> tuple[int, Any | None]:
     """Clamp a binary-slice ``?size=`` to 1.._MAX_SLICE_SIZE.
 
     ONE parse for /asm and /bytes, so the same query string cannot mean two
     different windows on the two endpoints: surrounding whitespace is stripped
-    here (only /asm used to), the value is decimal (base-0, so a 0x-prefixed
-    count is still read as one), and an empty slice is a rejected query rather
-    than a valid empty dump.
+    here (only /asm used to), the value is a decimal count or a 0x-prefixed hex
+    one (see :func:`_parse_byte_count`), and an empty slice is a rejected query
+    rather than a valid empty dump.
 
     *parse_error* is the caller's ``error`` label for an unparseable value
     ("invalid va or size" on /asm, "invalid size" on /bytes); the rejected
@@ -1088,13 +1108,14 @@ def _slice_size(raw_size: str, parse_error: str) -> tuple[int, Any | None]:
     is unparseable or clamps to zero.
     """
     try:
-        size = min(max(int(raw_size.strip(), 0), 0), _MAX_SLICE_SIZE)
+        size = min(max(_parse_byte_count(raw_size), 0), _MAX_SLICE_SIZE)
     except ValueError:
         return 0, _json_err(
             400,
             {
                 "error": parse_error,
-                "detail": f"size {raw_size!r} is not a decimal byte count (1..{_MAX_SLICE_SIZE})",
+                "detail": f"size {raw_size!r} is not a byte count "
+                f"(decimal, or 0x-prefixed hex; 1..{_MAX_SLICE_SIZE})",
             },
         )
     if size == 0:
@@ -1635,7 +1656,7 @@ def handle_api_bytes(target: str, section: str) -> bytes | Any:
     section = path_param(section)
     raw_offset = query_param("offset", "0")
     try:
-        req_offset = int(raw_offset, 0)
+        req_offset = _parse_byte_count(raw_offset)
         if req_offset < 0:
             return _json_err(
                 400,

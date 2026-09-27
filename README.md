@@ -155,7 +155,7 @@ Start the dashboard web server.
 | `--port` | `8001` | HTTP port to serve on |
 | `--bind` | `127.0.0.1` | Interface to bind to (use `0.0.0.0` for LAN access) |
 | `--allow-remote` | off | Required with a non-loopback `--bind`: acknowledge the API is reachable on the network |
-| `--token` | off | Require this token for every request (`Authorization: Bearer`, `?token=`, or open `/?token=<token>` to set the SPA cookie) |
+| `--token` | off | Require this token for every request (`Authorization: Bearer`, `?token=`, or open `/?token=<token>` or `/potato?token=<token>` to set the browser cookie) |
 | `--no-open` | off | Don't auto-open the browser |
 | `--regen` | off | Run `rebrew catalog` + `rebrew build-db` before starting |
 | `--cors` | off | Enable CORS processing (allowlisted origins only; the wildcard is never emitted) |

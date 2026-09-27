@@ -59,6 +59,7 @@ from recoverage.server import (
     request,
     resolve_targets,
     response,
+    set_auth_cookie,
 )
 
 _log = logging.getLogger("recoverage")
@@ -1078,6 +1079,11 @@ def render_potato(parsed_url: ParseResult) -> str:
 
 @app.get("/potato")
 def handle_potato() -> bytes | Any:
+    # Before the ETag check, which raises a bare 304: the cookie rides on the
+    # 200 the first visit gets, and a repeat already has it.  Every href on the
+    # page is relative, so without this a reader who arrived at
+    # /potato?token=... lost the credential on their first click.
+    set_auth_cookie()
     try:
         # WAL-aware snapshot (see _snapshot_db_mtime), not raw st_mtime: a
         # rebuild that commits only to -wal must still mint a new ETag or
