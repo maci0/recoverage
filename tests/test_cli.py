@@ -219,20 +219,27 @@ class TestExportCommand:
         assert result.exit_code == 0
         data = json.loads(result.output)
         assert isinstance(data, list)
-        assert len(data) > 0
+        # `len(data) > 0` is satisfied by an export that dropped every target
+        # but one. The synthetic DB has exactly one, with two sections.
+        assert len(data) == 1
         assert "target" in data[0]
         assert "sections" in data[0]
+        assert set(data[0]["sections"]) == {".text", ".data"}
+        assert data[0]["sections"][".text"]["total_cells"] == 8
 
     def test_export_csv_format(self) -> None:
         result = runner.invoke(app, ["export", "--format", "csv"])
         assert result.exit_code == 0
         reader = csv.reader(io.StringIO(result.output))
         rows = list(reader)
-        assert len(rows) >= 2  # header + at least one data row
+        # header + one row per section: the fixture has two, so `>= 2` is
+        # satisfied by an export that emitted a single section.
+        assert len(rows) == 3
         header = rows[0]
         assert "target" in header
         assert "section" in header
         assert "coverage_pct" in header
+        assert {r[header.index("section")] for r in rows[1:]} == {".text", ".data"}
 
     def test_export_md_format(self) -> None:
         result = runner.invoke(app, ["export", "--format", "md"])
@@ -304,8 +311,16 @@ class TestExportCommand:
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
 class TestStatsCommand:
     def test_stats_runs(self) -> None:
+        """The table is the deliverable, so read it: exit code 0 says only
+        that nothing raised. The synthetic DB seeds FAKEDLL with 3 functions
+        and two sections, and `.text` is 3 of 8 cells matched (87.5%)."""
         result = runner.invoke(app, ["stats"])
         assert result.exit_code == 0
+        out = result.output
+        assert "FAKEDLL" in out
+        assert "Functions: 0/3 matched" in out
+        assert ".text" in out and ".data" in out
+        assert "87.5%" in out
 
     def test_stats_with_nonexistent_target(self) -> None:
         result = runner.invoke(app, ["stats", "--target", "NONEXISTENT_TARGET_XYZ"])
@@ -852,8 +867,13 @@ class TestServePortRange:
         assert "not in the range" in result.output
 
     def test_open_port_range_validated(self) -> None:
+        """`open` resolves the port through the same range check `serve`
+        does, so an out-of-range value is a clean validation error naming the
+        range. Exit code alone is satisfied by a typo'd flag or a missing DB."""
         result = runner.invoke(app, ["open", "--port", "70000"])
         assert result.exit_code != 0
+        assert "Traceback" not in result.output
+        assert "not in the range" in result.output
 
 
 class TestOpenPort:

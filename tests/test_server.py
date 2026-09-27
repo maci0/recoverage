@@ -1113,14 +1113,19 @@ class TestStaticAssetRevalidation:
         assert status == "304 Not Modified"
 
     def test_stale_etag_gets_the_full_body(self) -> None:
-        from conftest import wsgi_get
+        """A validator that does not match re-sends the asset, and the fresh
+        response carries the CURRENT tag, not the stale one the client sent.
+        `assert body` alone is satisfied by a 200 that echoed the stale tag."""
+        from conftest import decode_body, wsgi_get
 
-        status, _, body = wsgi_get(
+        _, current_headers, _ = wsgi_get("/detail.js", headers={"Accept-Encoding": "gzip"})
+        status, headers, body = wsgi_get(
             "/detail.js",
             headers={"Accept-Encoding": "gzip", "If-None-Match": '"not-the-tag"'},
         )
         assert status == "200 OK"
-        assert body
+        assert headers["Etag"] == current_headers["Etag"]
+        assert decode_body(body, headers)
 
     def test_etag_differs_per_encoding(self) -> None:
         """br and zstd are different representations of the same file: a

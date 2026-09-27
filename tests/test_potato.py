@@ -511,7 +511,9 @@ def test_esc():
 
 def test_wrap_text():
     assert _wrap_text("hello", 10) == "hello"
-    assert "\n" in _wrap_text("a" * 100, 45)
+    # The wrap width is the contract; `"\n" in ...` is satisfied by a single
+    # stray break in a 100-character run.
+    assert _wrap_text("a" * 100, 45) == "\n".join(["a" * 45, "a" * 45, "a" * 10])
     assert _wrap_text("line1\nline2", 45) == "line1\nline2"
 
 
@@ -619,41 +621,65 @@ def test_grid_structure():
         conn.close()
 
 
-# List of URLs to test
+# List of URLs to test, with what each render must actually say. A
+# well-formed document is the floor, not the claim: the case NAME is a claim
+# about behaviour ("search no results", "XSS in search"), and without the
+# markers below a renderer that dropped the filter, ignored ?search= or
+# echoed the payload unescaped satisfied all of them.
 URLS = [
-    ("/potato", "default"),
-    ("/potato?section=.text", "section .text"),
-    ("/potato?section=.data", "section .data"),
-    ("/potato?section=.rdata", "section .rdata"),
-    ("/potato?section=.bss", "section .bss"),
-    ("/potato?filter=exact", "filter exact"),
-    ("/potato?filter=reloc,near_match", "filter reloc+near_match"),
-    ("/potato?section=.text&filter=exact", "text + exact"),
-    ("/potato?section=.text&idx=0", "cell 0"),
-    ("/potato?section=.text&idx=100", "cell 100"),
-    ("/potato?section=.data&idx=0", "cell on .data"),
-    ("/potato?section=.bss&idx=0", "cell on .bss"),
-    ("/potato?search=alloc", "search alloc"),
-    ("/potato?search=0x1000", "search VA prefix"),
-    ("/potato?search=g_ServerConfig", "global search"),
-    ("/potato?search=nonexistent_xyz", "search no results"),
+    ("/potato", "default", (), ()),
+    ("/potato?section=.text", "section .text", (), ()),
+    ("/potato?section=.data", "section .data", (), ()),
+    ("/potato?section=.rdata", "section .rdata", (), ()),
+    ("/potato?section=.bss", "section .bss", (), ()),
+    ("/potato?filter=exact", "filter exact", (), ()),
+    ("/potato?filter=reloc,near_match", "filter reloc+near_match", (), ()),
+    ("/potato?section=.text&filter=exact", "text + exact", (), ()),
+    ("/potato?section=.text&idx=0", "cell 0", (), ()),
+    ("/potato?section=.text&idx=100", "cell 100", (), ()),
+    ("/potato?section=.data&idx=0", "cell on .data", (), ()),
+    ("/potato?section=.bss&idx=0", "cell on .bss", (), ()),
+    # The synthetic DB matches no function name against "alloc", but the
+    # banner is the contract: a term that finds nothing says so, and says
+    # how to fix the spelling.
+    ("/potato?search=alloc", "search alloc", ("Searching: ", "(0 matches)", "no matches"), ()),
+    ("/potato?search=0x1000", "search VA prefix", ("Searching: ",), ()),
+    ("/potato?search=g_ServerConfig", "global search", ("Searching: ",), ()),
+    ("/potato?search=nonexistent_xyz", "search no results", ("(0 matches)", "no matches"), ()),
     (
         "/potato?target=SERVER&section=.text&filter=exact,reloc&idx=0&search=alloc",
         "all params combined",
+        # SERVER is not in the DB, so the target check answers before the
+        # search, section and cell parameters are ever read. A render that
+        # drew a grid here would be inventing data for a target that has none.
+        ("no data for SERVER",),
+        ('id="grid"',),
     ),
-    ("/potato?section=.text&idx=-1", "invalid cell (negative)"),
-    ("/potato?section=.text&idx=999999", "invalid cell (too large)"),
-    ("/potato?section=nonexistent", "nonexistent section"),
-    ("/potato?target=NONEXISTENT", "nonexistent target"),
-    ("/potato?search=<script>alert(1)</script>", "XSS in search"),
-    ("/potato?search=%22%3E%3Cimg%20onerror%3Dalert(1)%3E", "XSS URL-encoded"),
-    ("/potato?view=functions", "view functions"),
+    ("/potato?section=.text&idx=-1", "invalid cell (negative)", (), ()),
+    ("/potato?section=.text&idx=999999", "invalid cell (too large)", (), ()),
+    ("/potato?section=nonexistent", "nonexistent section", (), ()),
+    # An unknown target has no grid to draw, and the page title says which
+    # target it found nothing for.
+    ("/potato?target=NONEXISTENT", "nonexistent target", ("no data for NONEXISTENT",), ()),
+    (
+        "/potato?search=<script>alert(1)</script>",
+        "XSS in search",
+        ("Searching: ", "&lt;script&gt;alert(1)&lt;/script&gt;"),
+        ("<script>alert(1)</script>",),
+    ),
+    (
+        "/potato?search=%22%3E%3Cimg%20onerror%3Dalert(1)%3E",
+        "XSS URL-encoded",
+        ("&quot;&gt;&lt;img onerror=alert(1)&gt;"),
+        ('"><img onerror=',),
+    ),
+    ("/potato?view=functions", "view functions", (), ()),
 ]
 
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
-@pytest.mark.parametrize("url,name", URLS)
-def test_rendering_paths(url, name):
+@pytest.mark.parametrize("url,name,must_contain,must_not_contain", URLS)
+def test_rendering_paths(url, name, must_contain, must_not_contain):
     html = render_potato_url(url)
     assert html, "render returned empty"
     assert "<html" in html and "<body" in html, "missing HTML structure"
@@ -663,6 +689,10 @@ def test_rendering_paths(url, name):
     assert "style=" not in html
     assert "<script" not in html.lower()
     assert "onclick=" not in html.lower()
+    for marker in must_contain:
+        assert marker in html, f"{name}: render is missing {marker!r}"
+    for marker in must_not_contain:
+        assert marker not in html, f"{name}: render leaked unescaped {marker!r}"
 
 
 def _find_cell_idx(target: str, section: str, predicate) -> int | None:
@@ -881,10 +911,24 @@ def test_parent_url_index_matches_the_linear_walk():
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
 def test_function_list_sort():
+    """?sort= orders the function rows.
+
+    `html_name != html_size` is satisfied by any per-request difference, so
+    the row order itself is read. The synthetic .text seeds _func_a (48),
+    _func_c (32) and _func_b (16): by name reads a, b, c; by size reads
+    b, c, a, so a renderer that ignored ?sort= could not satisfy both.
+    """
     target = get_first_target()
-    html_name = render_potato_url(f"/potato?target={target}&section=.text&view=functions&sort=name")
-    html_size = render_potato_url(f"/potato?target={target}&section=.text&view=functions&sort=size")
-    assert html_name != html_size
+
+    def _first_index(html: str, name: str) -> int:
+        return html.index(name)
+
+    by_name = render_potato_url(f"/potato?target={target}&section=.text&view=functions&sort=name")
+    by_size = render_potato_url(f"/potato?target={target}&section=.text&view=functions&sort=size")
+    order_name = sorted(("_func_a", "_func_b", "_func_c"), key=lambda n: _first_index(by_name, n))
+    order_size = sorted(("_func_a", "_func_b", "_func_c"), key=lambda n: _first_index(by_size, n))
+    assert order_name == ["_func_a", "_func_b", "_func_c"]
+    assert order_size == ["_func_b", "_func_c", "_func_a"]
 
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
@@ -2046,7 +2090,12 @@ class TestCellsCacheInvalidation:
         c = self._cells_cursor()
         try:
             cells, _merged, _key = _load_grid_cells(c, "T", ".text", 64)
-            assert cells  # this request still gets its payload
+            # The fixture seeds one .text cell (start 0, state exact), so
+            # "this request still gets its payload" is that row, not a
+            # truthy list: a payload of the wrong cells passes `assert cells`.
+            assert len(cells) == 1
+            assert cells[0]["start"] == 0
+            assert cells[0]["state"] == "exact"
             assert not potato._GRID_CACHE  # filed under no fingerprint
         finally:
             potato.clear_cells_cache()

@@ -451,11 +451,22 @@ class TestApiFunctions:
         assert "total" in data
 
     def test_valid_sort_field(self) -> None:
+        """A whitelisted sort field orders the payload it returns.
+
+        The 200 alone proves nothing: an implementation that accepted
+        `name:desc` and then ignored it answered identically. The synthetic
+        DB seeds _func_a/_func_b/_func_c, so the descending order is exact.
+        """
         target = get_first_target()
         if not target:
             pytest.skip("No targets in DB")
-        status, _, _ = wsgi_get(f"/api/targets/{target}/functions?sort=name:desc")
+        status, headers, body = wsgi_get(f"/api/targets/{target}/functions?sort=name:desc&limit=50")
         assert status.startswith("200")
+        data = json.loads(decode_body(body, headers))
+        names = [f["name"] for f in data["functions"]]
+        assert names == ["_func_c", "_func_b", "_func_a"]
+        assert names == sorted(names, reverse=True)
+        assert data["total"] == 3
 
     def test_invalid_sort_field_falls_back(self) -> None:
         """SQL injection in sort field should be rejected by whitelist."""
@@ -909,9 +920,15 @@ class TestApiBytes:
         assert data["code"] == "bad_request"
 
     def test_oversized_size_is_clamped_not_fatal(self) -> None:
+        """An over-long ?size= clamps, it does not truncate to whatever a
+        smaller cap would give: `<= 4096` is satisfied by a clamp to 0, so
+        the exact window is the contract. `.text` starts at fileOffset 0x200
+        in a 2048-byte fake binary, so 1536 bytes are the most that exist
+        even though the request and the cap both ask for more."""
         status, _, body = self._get("offset=0&size=999999")
         assert status.startswith("200")
         data = json.loads(decode_body(body, {}))
+        assert data["size"] == self.DLL_SIZE - 0x200
         assert data["size"] <= 4096
         assert len(data["raw"]) == data["size"]
 
@@ -2036,7 +2053,7 @@ class TestErrorResponseShape:
         wsgi_request("POST", "/api/regen", remote_addr="127.0.0.1")
         status, headers, body = wsgi_request("POST", "/api/regen", remote_addr="127.0.0.1")
         data = self._check(status, headers, body, "rate_limited")
-        assert data["retry_after"] >= 0
+        assert data["retry_after"] >= 1, f"a zero wait is not a wait: {data['retry_after']}"
         assert data["detail"]
         # The auth throttle answers its 429 with the same header, so a client
         # has one place to read the wait from regardless of which limit hit.
@@ -4276,10 +4293,19 @@ class TestSliceValidationDetail:
     @pytest.fixture(autouse=True)
     def _capstone(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import recoverage.api as api
+        import recoverage.server as server
 
         monkeypatch.setattr(api, "capstone_unavailable_reason", lambda: None)
         self.dll = bytes((i % 251) for i in range(2048))
         monkeypatch.setattr(api, "_load_dll", lambda target: self.dll)
+        # api's own _load_dll is only half the path: the text representation
+        # renders through disasm.get_disassembly, which reads server's. Every
+        # test in this class asserted a 400 raised BEFORE the load, so the
+        # missing half went unnoticed and a request that got past validation
+        # answered 422. Seed the shared cache both namespaces read (the
+        # autouse _clean_derived_caches fixture empties it after each test).
+        with server.DLL_LOCK:
+            server.DLL_DATA["FAKEDLL"] = self.dll
 
     def test_asm_missing_param_names_which(self) -> None:
         target = get_first_target()
@@ -4318,22 +4344,29 @@ class TestSliceValidationDetail:
 
     def test_asm_format_is_case_insensitive(self) -> None:
         """The representation name is normalized, so ?format=TEXT is the
-        same request as ?format=text rather than a rejected one."""
+        same request as ?format=text rather than a rejected one.
+
+        `not 400` is a claim any 5xx satisfies, so the two spellings must
+        answer 200 with the same disassembly, byte for byte.
+        """
         target = get_first_target()
         if not target:
             pytest.skip("No targets in DB")
         lower = wsgi_get(f"/api/targets/{target}/asm?va=0x10001000&size=16&format=text")
         upper = wsgi_get(f"/api/targets/{target}/asm?va=0x10001000&size=16&format=TEXT")
-        assert lower[0] == upper[0]
-        assert not lower[0].startswith("400")
-        assert not upper[0].startswith("400")
+        assert lower[0].startswith("200"), lower[0]
+        assert upper[0].startswith("200"), upper[0]
+        assert decode_body(upper[2], upper[1]) == decode_body(lower[2], lower[1])
 
     def test_asm_empty_format_is_the_default(self) -> None:
         target = get_first_target()
         if not target:
             pytest.skip("No targets in DB")
-        status, _headers, _ = wsgi_get(f"/api/targets/{target}/asm?va=0x10001000&size=16&format=")
-        assert not status.startswith("400")
+        query = f"/api/targets/{target}/asm?va=0x10001000&size=16"
+        default = wsgi_get(query)
+        empty = wsgi_get(f"{query}&format=")
+        assert empty[0].startswith("200"), empty[0]
+        assert decode_body(empty[2], empty[1]) == decode_body(default[2], default[1])
 
     def test_bytes_bad_size_quotes_the_value(self) -> None:
         status, headers, body = wsgi_get(
