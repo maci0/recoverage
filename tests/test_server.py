@@ -10,7 +10,7 @@ import sqlite3
 import threading
 import time
 from pathlib import Path
-from typing import IO, Any
+from typing import IO, Any, ClassVar
 
 import brotli
 import pytest
@@ -179,7 +179,7 @@ class TestCompressPayload:
     def test_binary_payload(self) -> None:
         """Full byte range should compress and decompress correctly."""
         data = bytes(range(256)) * 10
-        compressed, encoding = compress_payload(data, "gzip")
+        compressed, _encoding = compress_payload(data, "gzip")
         assert gzip.decompress(compressed) == data
 
     def test_unknown_encoding_passes_through(self) -> None:
@@ -310,7 +310,7 @@ class TestDbEtag:
         etag = srv._etag_or_304(srv._snapshot_db_mtime(), "T")
 
         class _Req:
-            headers = {"If-None-Match": etag}
+            headers: ClassVar[dict[str, str]] = {"If-None-Match": etag}
 
         monkeypatch.setattr(srv, "request", _Req())
         with pytest.raises(srv.HTTPResponse) as excinfo:
@@ -989,7 +989,7 @@ class TestHostnameOf:
 class TestSecurityHeaders:
     """Every response carries the hardening header set."""
 
-    EXPECTED = {
+    EXPECTED: ClassVar[dict[str, str]] = {
         "X-Content-Type-Options": "nosniff",
         "X-Frame-Options": "DENY",
         "Referrer-Policy": "no-referrer",

@@ -198,7 +198,7 @@ class TestApiHealth:
         assert "extras" in data
 
     def test_health_has_security_headers(self) -> None:
-        status, headers, _ = wsgi_get("/api/health")
+        _status, headers, _ = wsgi_get("/api/health")
         assert headers.get("X-Content-Type-Options") == "nosniff"
         assert headers.get("X-Frame-Options") == "DENY"
 
@@ -286,7 +286,7 @@ class TestApiFunctions:
         # The fallback must actually apply: results come back va-ascending,
         # identical to the default sort (a whitelist regression that passed
         # raw SQL through would 500 or reorder here).
-        default_status, _, default_body = wsgi_get(f"/api/targets/{target}/functions")
+        _default_status, _, default_body = wsgi_get(f"/api/targets/{target}/functions")
         assert [fn["va"] for fn in data["functions"]] == [
             fn["va"] for fn in json.loads(decode_body(default_body, headers))["functions"]
         ]
@@ -1258,7 +1258,7 @@ class TestBatchFunctionLookup:
         target = get_first_target()
         if not target:
             pytest.skip("No targets in DB")
-        status, _, body = wsgi_post(
+        status, _, _body = wsgi_post(
             f"/api/targets/{target}/functions",
             body=b'{"vas": ["0x10001000"]' + b" " * 70_000 + b"}",
         )
@@ -2574,7 +2574,7 @@ class TestRepoFileServing:
         src = tmp_path / "src"
         src.mkdir()
         (src / "main.c").write_text("int main(void) { return 0; }", encoding="utf-8")
-        status, headers, body = wsgi_get("/src/main.c")
+        status, _headers, body = wsgi_get("/src/main.c")
         assert status.startswith("200")
         assert b"int main" in body
 
@@ -3003,7 +3003,7 @@ class TestSliceValidationDetail:
         target = get_first_target()
         if not target:
             pytest.skip("No targets in DB")
-        status, headers, _ = wsgi_get(f"/api/targets/{target}/asm?va=0x10001000&size=16&format=")
+        status, _headers, _ = wsgi_get(f"/api/targets/{target}/asm?va=0x10001000&size=16&format=")
         assert not status.startswith("400")
 
     def test_bytes_bad_size_quotes_the_value(self) -> None:

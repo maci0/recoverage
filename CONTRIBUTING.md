@@ -32,6 +32,11 @@ Web lint additionally needs [bun](https://bun.sh) (`packageManager` pins
 1.4.2) and a JDK 17+ on `PATH`, since `vnu-jar` validates the HTML and CSS
 under `java`. `make web-lint` names whichever is missing.
 
+`make shell-lint` and `make yaml-lint` need `shellcheck` and `yamllint` on
+`PATH`; both ship on the CI runner image, and each target names the one that
+is missing. They cover the two non-Python source sets ruff does not see: the
+`tools/*.sh` scripts and the `.github/` Actions definitions.
+
 ## The edit-test loop
 
 ```bash
@@ -63,6 +68,8 @@ That is the local mirror of CI, and each target is the command CI runs:
 |--------|--------|---------|
 | `make format-check` | lint | `ruff format --check src/ tests/ tools/` |
 | `make lint` | lint | `ruff check src/ tests/ tools/` |
+| `make shell-lint` | lint | `shellcheck -x tools/*.sh` |
+| `make yaml-lint` | lint | `yamllint -c .yamllint.yaml .github/` |
 | `make test` | test | `pytest tests/ -v --ignore=tests/test_playwright.py` |
 | `make web-lint` | web-lint | `bun install --frozen-lockfile && bun run lint` |
 | `make smoke` | smoke | `python tools/smoke.py` |

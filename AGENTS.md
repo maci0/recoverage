@@ -25,6 +25,7 @@ recoverage/
 ├── Makefile                # Contributor targets (`make help`); wraps the CI commands
 ├── LICENSE                  # MIT
 ├── package.json            # bun scripts: lint, lint:js, lint:html
+├── .yamllint.yaml          # yamllint config for .github/ (document-start, 100 cols)
 ├── oxlint.config.ts        # JS/TS lint config (see the tooling notes below)
 ├── .github/
 │   ├── workflows/ci.yml     # lint, web-lint, test matrix, smoke, sbom
@@ -95,6 +96,8 @@ make test-one T=tests/test_api.py  # one file or pytest node id (FLAGS="-k name"
 make lint                   # uv run ruff check src/ tests/ tools/
 make format-check           # uv run ruff format --check src/ tests/ tools/
 make format                 # uv run ruff format (writes)
+make shell-lint             # shellcheck -x tools/*.sh (needs shellcheck on PATH)
+make yaml-lint              # yamllint -c .yamllint.yaml .github/ (needs yamllint on PATH)
 make web-lint               # bun install --frozen-lockfile && bun run lint
 make smoke                  # uv run python tools/smoke.py
 make all                    # every check CI runs, one command

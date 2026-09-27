@@ -35,6 +35,10 @@ jobs:
       - run: uv sync --frozen --extra dev
       - run: uv run ruff format --check src/ tests/ tools/
       - run: uv run ruff check src/ tests/ tools/
+      # shellcheck and yamllint ship on the runner image; they cover the two
+      # non-Python source sets ruff does not see (tools/*.sh, .github/*.yml).
+      - run: make shell-lint
+      - run: make yaml-lint
 
   web-lint:
     runs-on: ubuntu-latest
@@ -141,7 +145,9 @@ jobs:
       # given build was made from. The npm devDependencies never ship with
       # the package, so they are not part of this inventory.
       - name: Export hashed dependency inventory
-        run: uv export --frozen --all-extras --format requirements-txt --hashes --output-file recoverage-python-sbom.txt
+        run: >-
+          uv export --frozen --all-extras --format requirements-txt --hashes
+          --output-file recoverage-python-sbom.txt
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: recoverage-python-sbom

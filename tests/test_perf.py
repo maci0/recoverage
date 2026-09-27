@@ -10,7 +10,7 @@ from recoverage import potato as _potato
 
 def test_data_memo_skips_rebuild():
     _api._DATA_CACHE.clear()
-    s, _, b = wsgi_get("/api/targets/FAKEDLL/data")
+    s, _, _b = wsgi_get("/api/targets/FAKEDLL/data")
     assert s.startswith("200"), s
     calls = 0
     orig = _api._build_data_raw

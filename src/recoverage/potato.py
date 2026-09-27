@@ -2119,7 +2119,7 @@ def _panel_fn_source_text(data: dict[str, Any], target: str, fn_data: dict[str, 
     if not c_path.is_relative_to(base):
         return None
     try:
-        with open(c_path, encoding="utf-8") as f:
+        with c_path.open(encoding="utf-8") as f:
             return f.read()
     except (OSError, UnicodeDecodeError):
         _log.debug("Source file not found: %s", c_path)

@@ -22,18 +22,12 @@ To bump: `bun add -d @rikalabs/oxlint-standards`, then run
 from __future__ import annotations
 
 import json
-import os
 import sys
+from pathlib import Path
 
-PRESET_DIR = os.path.join(
-    os.path.dirname(__file__),
-    "..",
-    "node_modules",
-    "@rikalabs",
-    "oxlint-standards",
-    "presets",
-)
-OUT = os.path.join(os.path.dirname(__file__), "oxlint", "rikalabs-strict.json")
+TOOLS_DIR = Path(__file__).resolve().parent
+PRESET_DIR = TOOLS_DIR.parent / "node_modules" / "@rikalabs" / "oxlint-standards" / "presets"
+OUT = TOOLS_DIR / "oxlint" / "rikalabs-strict.json"
 # Reported next to every dropped rule so a reader can see which oxlint the
 # checked-in preset was flattened against.
 OXLINT_VERSION = "1.83.0"
@@ -54,13 +48,13 @@ MISSING_IN_OXLINT = {
 REMAP = {"oxc/no-new-buffer": "unicorn/no-new-buffer"}
 
 
-def load(path: str) -> dict:
-    with open(path, encoding="utf-8") as fh:
+def load(path: Path) -> dict:
+    with path.open(encoding="utf-8") as fh:
         return json.load(fh)
 
 
 def main() -> int:
-    if not os.path.isdir(PRESET_DIR):
+    if not PRESET_DIR.is_dir():
         print(f"error: {PRESET_DIR} not found; run `bun install` first", file=sys.stderr)
         return 1
 
@@ -72,7 +66,7 @@ def main() -> int:
         if name in visited:
             return
         visited.add(name)
-        for key, val in load(os.path.join(PRESET_DIR, name)).items():
+        for key, val in load(PRESET_DIR / name).items():
             if key == "extends":
                 for child in val:
                     walk(child)
@@ -119,7 +113,7 @@ def main() -> int:
         "rules": merged["rules"],
         "overrides": merged["overrides"],
     }
-    with open(OUT, "w", encoding="utf-8") as fh:
+    with OUT.open("w", encoding="utf-8") as fh:
         json.dump(out, fh, indent=2)
         fh.write("\n")
     print(f"wrote {OUT}: {len(out['rules'])} rules, {len(out['plugins'])} plugins")

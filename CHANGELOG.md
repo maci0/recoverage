@@ -23,6 +23,12 @@ module ships in the published package. See *Breaking*.
 
 ### Changed
 
+- **`make shell-lint` and `make yaml-lint` check the tree's non-Python
+  sources.** The `tools/*.sh` scripts ran under `bash` with no shellcheck and
+  the `.github/` definitions were read by no linter at all; both now run in
+  the `lint` CI job, alongside the ruff targets in `make all`. The yamllint
+  settings live in `.yamllint.yaml`. ruff additionally selects the `PTH`
+  and `RUF` groups, both clean on this tree.
 - **The `/potato` route lives in `recoverage.potato`, next to the renderer it
   serves.** `ui.handle_potato` imported the renderer inside the handler body
   and reached back for a private helper; the route now sits with

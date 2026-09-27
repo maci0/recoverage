@@ -980,7 +980,7 @@ def handle_api_functions_list(target: str) -> bytes | Any:
             f"SELECT va, name, vaStart, size, status, module, symbol, markerType "
             f"FROM functions WHERE {where_sql} "
             f"ORDER BY {sort_field} {sort_dir} LIMIT ? OFFSET ?",
-            params + [limit, offset],
+            [*params, limit, offset],
         )
         # SELECT enumerates exactly the response fields; dict(row) carries the
         # same keys, in the same order, as an explicit per-field dict would.

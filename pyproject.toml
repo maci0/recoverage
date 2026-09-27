@@ -98,15 +98,20 @@ target-version = "py313"
 line-length = 100
 
 [tool.ruff.lint]
+# RUF001-RUF003 flag every confusable in prose; the multiplication sign is
+# deliberate typography in the coverage arithmetic, not a homoglyph typo.
+allowed-confusables = ["×"]
 # Core groups (E/F/W/I/UP/B/SIM) plus correctness-oriented groups proven clean
 # on this tree:
 #   A      — shadowing builtins; ASYNC — blocking calls in async code;
 #   DTZ    — naive datetime; G — logging format-string misuse;
 #   N      — naming conventions; PGH — bans blanket noqa / type: ignore;
 #   TID    — import hygiene; YTT — yield-in-try/finally traps;
+#   RUF    — unused unpacked bindings, mutable class attributes, slicing;
 #   RUF100 — flags stale or unscoped `noqa` directives (suppression hygiene);
 #   T10    — debugger/breakpoint calls must never be committed;
 #   FLY    — str.join over += loops; ICN — import conventions;
+#   PTH    — os.path over pathlib (Path is already the tree's idiom);
 #   PLE    — pylint errors (real-defect class); INT — gettext format misuse;
 #   C4     — comprehensions; RET/RSE — return/raise shape;
 #   PERF   — performance anti-patterns; PIE — misc correctness nits;
@@ -119,8 +124,8 @@ line-length = 100
 select = [
     "E", "F", "W", "I", "UP", "B", "SIM",
     "A", "ASYNC", "DTZ", "G", "N", "PGH", "TID", "YTT", "RUF100",
-    "T10", "FLY", "ICN",
-    "PLE", "INT", "C4", "RET", "RSE", "PERF", "PIE", "ISC", "FURB",
+    "T10", "FLY", "ICN", "PTH",
+    "PLE", "INT", "C4", "RET", "RSE", "PERF", "PIE", "ISC", "FURB", "RUF",
     "T20", "ERA", "LOG", "FA", "Q", "TD",
 ]
 ignore = []

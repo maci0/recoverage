@@ -1,5 +1,5 @@
 .PHONY: help setup clean test test-one lint format format-check web-lint smoke smoke-fail \
-	all ensure-uv ensure-rebrew warn-uv-version clone-rebrew
+	shell-lint yaml-lint all ensure-uv ensure-rebrew warn-uv-version clone-rebrew
 
 # Force POSIX sh for recipes (ignore a caller-exported SHELL=bash).  Version
 # compares use ``sort -t. -k…n`` (POSIX), not GNU ``sort -V``.
@@ -44,6 +44,8 @@ help:
 		'  make format             # ruff format (writes)' \
 		'  make format-check       # ruff format --check src/ tests/ tools/ (CI lint job)' \
 		'  make web-lint           # oxlint + Nu Html Checker (CI web-lint job)' \
+		'  make shell-lint         # shellcheck over tools/*.sh (CI lint job)' \
+		'  make yaml-lint          # yamllint over .github/ (CI lint job)' \
 		'  make smoke              # boot the dashboard against a sample db and probe it' \
 		'  make all                # every check CI runs, in one command' \
 		'  make clean              # remove caches and build artifacts' \
@@ -124,6 +126,29 @@ format: ensure-uv
 format-check: ensure-uv
 	uv run --frozen ruff format --check src/ tests/ tools/
 
+# shellcheck and yamllint cover the tree's non-Python sources: the CI clone
+# script and the Actions definitions. Both ship on the ubuntu runner image CI
+# uses; name the missing one rather than letting the recipe fail on a bare
+# "not found".
+ensure-lint-tools:
+	@set -eu; \
+	if ! command -v shellcheck >/dev/null 2>&1; then \
+	  echo "ERROR: shellcheck not on PATH (required by 'make shell-lint')."; \
+	  echo "Install it (Debian/Ubuntu: apt install shellcheck, brew install shellcheck)."; \
+	  exit 1; \
+	fi; \
+	if ! command -v yamllint >/dev/null 2>&1; then \
+	  echo "ERROR: yamllint not on PATH (required by 'make yaml-lint')."; \
+	  echo "Install it (pipx install yamllint, brew install yamllint)."; \
+	  exit 1; \
+	fi
+
+shell-lint: ensure-lint-tools
+	shellcheck -x tools/*.sh
+
+yaml-lint: ensure-lint-tools
+	yamllint -c .yamllint.yaml --list-files .github/
+
 # CI installs bun + a JDK before this; name both rather than failing inside
 # oxlint or vnu with a stack trace.
 web-lint:
@@ -148,7 +173,7 @@ smoke-fail: ensure-uv
 	uv run --frozen python tools/smoke.py --expect-failure
 
 # Everything CI checks, in one local command, so nothing fails only after push.
-all: format-check lint test web-lint smoke smoke-fail
+all: format-check lint shell-lint yaml-lint test web-lint smoke smoke-fail
 	@printf '%s\n' 'all checks passed (CI: lint, web-lint, test, smoke)'
 
 clean:
