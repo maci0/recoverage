@@ -11,9 +11,8 @@ This package is a **consumer** of data produced by `rebrew`, which it depends
 on as a library: `rebrew.workspace` provides the shared `rebrew-project.toml` +
 `coverage.db` resolution (stdlib only), and the regen commands call rebrew's
 `run_catalog` (`rebrew.catalog.cli`) and `build_db` in-process; see
-`src/recoverage/regen.py`.  Serving a
-dashboard needs no project workspace or compiler toolchain, only a valid
-`coverage.db` file.
+`src/recoverage/regen.py`. Serving a dashboard needs no project workspace
+or compiler toolchain, only a valid `coverage.db` file.
 
 ## Project Structure
 
@@ -21,12 +20,18 @@ dashboard needs no project workspace or compiler toolchain, only a valid
 recoverage/
 ├── pyproject.toml          # Package config, entry point: recoverage
 ├── README.md               # User-facing docs
+├── CHANGELOG.md            # Release history
 ├── LICENSE                  # MIT
+├── package.json            # bun scripts: lint, lint:js, lint:html
+├── oxlint.config.ts        # JS/TS lint config (see the tooling notes below)
+├── .github/workflows/ci.yml # lint, web-lint, test, smoke, sbom jobs
 ├── docs/                   # Screenshots & design doc
 │   ├── DESIGN.md           # Architecture and design decisions
 │   ├── DESIGN_PRINCIPLES.md  # Core operational philosophies
 │   ├── USER_STORIES.md     # User stories with acceptance criteria
-│   └── ideas.md            # Future improvement ideas
+│   ├── ideas.md            # Future improvement ideas
+│   └── *.png               # Screenshots for the README
+├── tools/                  # lint-html.py, smoke.py, _serve_harness.py, oxlint/
 ├── tests/
 │   ├── conftest.py           # Shared fixtures (synthetic coverage.db)
 │   ├── test_api.py           # API validation, security, SQL injection tests
@@ -79,14 +84,20 @@ recoverage serve --port 9000 # custom port
 recoverage serve --regen     # re-run rebrew catalog + build-db first
 recoverage serve --no-open   # don't auto-open browser
 recoverage serve --cors      # enable CORS processing (allowlist origins with --cors-origin)
+recoverage regen             # re-run rebrew catalog + build-db, no server
+recoverage open              # open the dashboard in a browser
 recoverage stats             # print coverage stats
 recoverage export --format csv  # export coverage data
 recoverage check --min-coverage 60  # CI gate
 
+# Python lint (what the CI `lint` job runs; both must be clean)
+uv run ruff format --check src/ tests/ tools/
+uv run ruff check src/ tests/ tools/
+
 # Tests
 uv run pytest tests/ -v
 
-# Frontend linting (requires node + java on PATH)
+# Frontend linting (requires bun and java on PATH)
 bun install                 # one-time: oxlint, @oxlint/plugins, @rikalabs/oxlint-standards, vnu-jar
 bun run lint                # oxlint (Rika-Labs strict preset + vendored anti-slop) + vnu HTML/CSS
 bun run lint:js             # oxlint only
@@ -121,26 +132,19 @@ bun run lint:html           # vnu only: static assets + served pages (SPA shell,
    - `rebrew catalog --export-ghidra-labels` → generates `ghidra_data_labels.json` for round-trip Ghidra sync
 2. `rebrew build-db` → reads JSON, builds `db/coverage.db` (SQLite)
    - Cells table includes `label` (Ghidra data label) and `parent_function` columns
-   - Also materializes the two objects the server reads rather than re-deriving:
-     `section_cell_stats` (coverage buckets per section; a view through schema
-     v6, a table from v7) and `section_cells_json` (per-section cell JSON, zstd).
-     Both are derived from `cells` and rebuilt whole on every build.
-     `server._cells_json_rows` prefers the cache and falls back to the live
-     `SECTION_CELLS_AGG_SQL` query when a DB predates it. That fallback is what
-     keeps pre-v7 databases serving, so keep it when editing that path.  The
-     cache's codec is identified by its column name (`cells_zstd`), not by
-     `db_version`, so a table written in an older codec is declined rather
-     than mis-decoded.
-   - The cell JSON projection is `rebrew.workspace.CELLS_JSON_OBJECT_SQL`, and
-     the ordered aggregate is `SECTION_CELLS_AGG_SQL`. Both are shared with the
-     producer so the cached and live results cannot drift.
-   - `section_cell_stats` carries an `other_count` catch-all so `total_cells`
-     reconciles with the sum of the buckets. `server._cell_bucket_row` serves it
-     as `other`, and `_SECTION_STATS_FULL_SQL` (the fallback used when the table
-     is absent) computes the same catch-all, so both sources report one total.
-     A table written before that column serves `other: 0`; the key is never
-     dropped, because a consumer summing the buckets must not read the residual
-     as zero-sized.
+   - Also materializes `section_cell_stats` (coverage buckets per section) and
+     `section_cells_json` (per-section cell JSON, zstd), which the server reads
+     in preference to re-deriving them. Both are derived from `cells` and
+     rebuilt whole on every build. Every read has a live-SQL fallback for a DB
+     that predates the cached object; keep those fallbacks, they are what keeps
+     older databases serving. The producer and the server share rebrew's
+     `CELLS_JSON_OBJECT_SQL` and `SECTION_CELLS_AGG_SQL`, so the cached and
+     live rows cannot drift.
+   - The buckets come from a table, a view, or a full aggregate depending on the
+     DB, and `other_count` is what makes the buckets reconcile with
+     `total_cells` in all three. `server._cell_bucket_row` always emits the
+     `other` key, reporting 0 when the source predates the column, so a
+     consumer summing the buckets never reads the residual as zero-sized.
 3. `recoverage` → serves the DB as a web dashboard
    - Cell detail panel shows parent function as a clickable navigation link
 
