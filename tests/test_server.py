@@ -1068,6 +1068,21 @@ class TestStaticAssetRevalidation:
         assert 'href="/detail.js"' in html
         assert 'as="script"' in html
 
+    def test_index_preloads_the_target_list(self) -> None:
+        """The target list is on the first-paint path and cannot be discovered
+        until app.js runs, so the shell advertises it as a fetch preload; the
+        plain same-origin fetch() in app.js then reuses it rather than
+        issuing a second request."""
+        from conftest import decode_body, wsgi_get
+
+        _, headers, body = wsgi_get("/", headers={"Accept-Encoding": "gzip"})
+        html = decode_body(body, headers).decode("utf-8")
+        assert '<link rel="preload" href="/api/targets" as="fetch">' in html
+        # Preload reuse needs the same mode and credentials the fetch uses:
+        # a crossorigin attribute here would put the two in different caches
+        # and the browser would download the list twice.
+        assert '<link rel="preload" href="/api/targets" as="fetch" crossorigin' not in html
+
 
 class TestHostnameOf:
     """_hostname_of is the parser behind BOTH the DNS-rebinding Host
