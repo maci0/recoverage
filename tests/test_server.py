@@ -10,7 +10,7 @@ import sqlite3
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import IO, Any
 
 import brotli
 import pytest
@@ -29,6 +29,35 @@ from recoverage.server import (
     clear_target_cache,
     compress_payload,
 )
+
+# ── Advisory-lock probe ────────────────────────────────────────────
+
+
+def _probe_free_lock(fh: IO[bytes]) -> None:
+    """Raise BlockingIOError unless *fh*'s advisory lock is free.
+
+    Mirrors the split the production lock makes (rebrew's
+    ``file_handle_lock``: ``fcntl`` on POSIX, ``msvcrt`` elsewhere), so the
+    caller probes the same mechanism the server takes on this platform —
+    importing fcntl unconditionally would fail the run on the Windows
+    CI runner.
+    """
+    try:
+        import fcntl
+    except ImportError:  # Windows
+        import msvcrt
+
+        fh.seek(0)
+        try:
+            msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+        except OSError as exc:
+            raise BlockingIOError(str(exc)) from exc
+        fh.seek(0)
+        msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+        return
+    fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    fcntl.flock(fh, fcntl.LOCK_UN)
+
 
 # ── _best_encoding ─────────────────────────────────────────────────
 
@@ -537,7 +566,6 @@ class TestReadOnlyOpen:
             conn.close()
 
     def test_shared_lock_drops_when_the_connection_is_collected(self, tmp_path: Path) -> None:
-        import fcntl
         import gc
         import sqlite3
 
@@ -547,10 +575,12 @@ class TestReadOnlyOpen:
         sqlite3.connect(db).close()
         conn = srv._open_db(db)
         lock_path = db.with_name(db.name + ".lock")
-        held = lock_path.open("a", encoding="utf-8")
+        # Binary handles: msvcrt.locking needs a fileno it can lock a byte
+        # range on, and fcntl behaves the same on one.
+        held = lock_path.open("ab")
         try:
             with pytest.raises(BlockingIOError):
-                fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                _probe_free_lock(held)
         finally:
             held.close()
 
@@ -558,10 +588,9 @@ class TestReadOnlyOpen:
         del conn
         gc.collect()
 
-        held = lock_path.open("a", encoding="utf-8")
+        held = lock_path.open("ab")
         try:
-            fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            fcntl.flock(held, fcntl.LOCK_UN)
+            _probe_free_lock(held)
         finally:
             held.close()
 

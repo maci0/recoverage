@@ -181,17 +181,23 @@ class TestOpenAndReap:
         _open_and_reap("http://127.0.0.1:8001", [str(tmp_path / "no-such-binary")])
         assert opened == ["http://127.0.0.1:8001"]
 
-    @pytest.mark.skipif(not POSIX, reason="uses POSIX sleep/kill")
     def test_hung_opener_is_killed_within_bound(self, monkeypatch: Any) -> None:
         """A wedged opener must not stall serve startup forever: bounded
-        wait, then kill + reap (which also prevents the zombie)."""
+        wait, then kill + reap (which also prevents the zombie).
+
+        The wedged child is this interpreter rather than a `sleep` binary, so
+        the bound is exercised on every platform instead of only where a
+        POSIX sleep(1) exists.
+        """
         import recoverage.cli as cli
 
         # The wait bound the opener actually sees is the module global read at
         # call time, so shortening it here is what shrinks the wall clock.
         monkeypatch.setattr(cli, "_BROWSER_OPEN_TIMEOUT", 0.3)
         start = time.monotonic()
-        _open_and_reap("http://127.0.0.1:8001", ["sleep", "60"])
+        _open_and_reap(
+            "http://127.0.0.1:8001", [sys.executable, "-c", "import time; time.sleep(60)"]
+        )
         elapsed = time.monotonic() - start
         assert _BROWSER_OPEN_TIMEOUT > 0, "production opener wait must stay bounded"
         assert elapsed >= 0.3, f"waited {elapsed:.2f}s: the bound was not applied"
