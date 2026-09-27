@@ -172,7 +172,17 @@
   // Reload button: regenerate the DB (rate-limited) then refetch.  The cooldown
   // state lives here because this is the only thing that touches it.
   const REGEN_COOLDOWN_MS = 5000;
+  const REGEN_NOTICE_MS = 4000;
   let lastRegenTime = 0;
+  let noticeTimer = null;
+  // A message set while a good map is on screen replaces the stats row, so it
+  // has to time itself out; the "Regenerating…" state does not, because
+  // summaryData is null for its whole duration and the map is loading anyway.
+  const showNotice = (loadingMsg, message, MSG_MESSAGES) => {
+    loadingMsg.val = message;
+    clearTimeout(noticeTimer);
+    noticeTimer = setTimeout(() => { loadingMsg.val = MSG_MESSAGES.LOADING; }, REGEN_NOTICE_MS);
+  };
   const reloadData = async ({ loadingMsg, summaryData, loadData, MSG: messages }) => {
     // performance.now() is monotonic: a wall-clock step (NTP correction,
     // manual change) between clicks would make the Date.now() delta negative
@@ -180,7 +190,7 @@
     const now = performance.now();
     const since = now - lastRegenTime;
     if (since < REGEN_COOLDOWN_MS) {
-      loadingMsg.val = messages.REGEN_USING_CACHE(Math.ceil((REGEN_COOLDOWN_MS - since) / 1000));
+      showNotice(loadingMsg, messages.REGEN_USING_CACHE(Math.ceil((REGEN_COOLDOWN_MS - since) / 1000)), messages);
       await loadData();
       return;
     }
@@ -195,7 +205,12 @@
       // oxlint-disable-next-line eslint/no-console -- keep diagnostics in the browser console
       console.error("Regen failed:", error);
     }
-    if (!ok) loadingMsg.val = messages.REGEN_UNAVAILABLE;
+    if (ok) {
+      clearTimeout(noticeTimer);
+      loadingMsg.val = messages.LOADING;
+    } else {
+      showNotice(loadingMsg, messages.REGEN_UNAVAILABLE, messages);
+    }
     await loadData();
   };
 

@@ -218,6 +218,12 @@ body {
 .topbar-left { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; flex: 1; min-width: 300px; }
 .topbar-right { display: flex; align-items: center; gap: 12px; justify-content: flex-end; flex-wrap: wrap; }
 .tabs { display: flex; gap: 6px; overflow-x: auto; max-width: 100%; min-width: 0; flex: 1 1 auto; scrollbar-width: thin; mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent); }
+.search { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.search-row { display: flex; gap: 6px; align-items: center; }
+.search .input-el { flex: 0 1 220px; min-width: 150px; }
+.search-clear { height: 24px; padding: 0 8px; font-size: 11px; }
+.search-status { display: flex; flex-wrap: wrap; gap: 2px 6px; justify-content: flex-end; color: var(--muted); font-size: 11px; text-align: right; }
+.search-count { color: var(--c); }
 .tabs:has(.tab-btn:last-child.active) { mask-image: none; }
 .filters { display: flex; gap: 6px; }
 .actions { display: flex; gap: 8px; align-items: center; }
@@ -412,6 +418,7 @@ body.light-mode::after { background: linear-gradient(rgba(18, 16, 16, 0) 50%, rg
 @media (pointer: coarse) {
   .btn, .input-el, .target-select { height: 44px; min-height: 44px; }
   .btn.icon-btn { width: 44px; }
+  .search-clear { height: 44px; min-height: 44px; }
 }
 
 /* Phone widths: the topbar wraps to ~190px of controls.  Sticky there would

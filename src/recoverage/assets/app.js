@@ -329,12 +329,43 @@ const App = () => {
   const reloadData = () => window.RC.reloadData?.({ loadingMsg, summaryData, loadData, MSG });
 
   let searchTimeout = null;
+  const applySearch = (value) => {
+    clearTimeout(searchTimeout);
+    searchQuery.val = value;
+    syncUrl();
+  };
   const onSearchInput = (e) => {
     clearTimeout(searchTimeout);
     searchTimeout = setTimeout(() => {
       searchQuery.val = e.target.value;
       syncUrl();
     }, 250);
+  };
+  // Clearing has to reach the input element too: it is uncontrolled, so the
+  // state alone would leave the typed text sitting in the box while the map
+  // stops filtering.
+  const clearSearch = (inputEl) => {
+    applySearch("");
+    if (inputEl) inputEl.value = "";
+  };
+  // Enter jumps to the first match.  Dimming alone leaves the user hunting
+  // for a lit cell that may be in a section that is not on screen; the
+  // `?q=` deep link and localStorage restore both land the user in the same
+  // spot without typing, so typing should go there too.
+  const onSearchKeydown = (e) => {
+    if (e.key === "Escape" && searchQuery.val) {
+      e.preventDefault();
+      clearSearch(e.target);
+      return;
+    }
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    applySearch(e.target.value);
+    const first = firstMatchName.val;
+    if (!first) return;
+    const va = data.val?.search_index?.[first]?.va;
+    if (va) jumpToAddress(toVa(va));
+    selectFunction(first);
   };
 
   // Deep-linking: keep target/function/section/search in the URL so reloads
@@ -378,20 +409,39 @@ const App = () => {
     return false;
   };
 
-  const filteredFnNames = van.derive(() => {
+  // Names only, in index order: the search status line reports the count and
+  // Enter jumps to the first entry, so this cannot carry the VA spellings the
+  // dimming set below needs.
+  const matchedFnNames = van.derive(() => {
     if (!data.val || !data.val.search_index) return new Set();
     const query = searchQuery.val;
-    if (!query) return new Set(); // Empty set means "no filter"
+    if (!query) return new Set();
 
     const matched = new Set();
     for (const [name, info] of Object.entries(data.val.search_index)) {
       if (matchesSearch(name, query) || (info && matchesSearch(info.va || "", query))) {
         matched.add(name);
-        // Grid .text cells store the function's vaStart string (not the
-        // name) in cell.functions / pack.fns — the dimming test compares
-        // against this set, so VA spellings must be included too.
-        if (info && info.va) matched.add(info.va);
       }
+    }
+    return matched;
+  });
+
+  // The first hit, or "" when nothing matches.  Read by onSearchKeydown.
+  const firstMatchName = van.derive(() => {
+    for (const name of matchedFnNames.val) return name;
+    return "";
+  });
+
+  const filteredFnNames = van.derive(() => {
+    const names = matchedFnNames.val;
+    if (names.size === 0) return new Set(); // Empty set means "no filter"
+    // Grid .text cells store the function's vaStart string (not the
+    // name) in cell.functions / pack.fns — the dimming test compares
+    // against this set, so VA spellings must be included too.
+    const matched = new Set(names);
+    for (const name of names) {
+      const va = data.val?.search_index?.[name]?.va;
+      if (va) matched.add(va);
     }
     return matched;
   });
@@ -674,7 +724,11 @@ const App = () => {
         );
       }
 
-      if (!data.val || !data.val.sections || !summaryData.val) {
+      // A message set while the map is already on screen (the regen cooldown
+      // notice) used to be dropped here: the old test only covered the
+      // no-data case, so clicking Reload again in quick succession looked
+      // like nothing happened.
+      if (!data.val || !data.val.sections || !summaryData.val || loadingMsg.val !== MSG.LOADING) {
         return div({ class: "progress-container" },
           div({ class: "progress-stats" },
             span({ class: "stat-item" }, loadingMsg.val)
@@ -1017,12 +1071,33 @@ const App = () => {
       ),
       div({ class: "topbar-right" },
         div({ class: "search" },
-          input({
-            type: "search", class: "input-el",
-            placeholder: "Search function name or VA...",
-            "aria-label": "Search functions",
-            oninput: onSearchInput
-          })
+          div({ class: "search-row" },
+            input({
+              type: "search", class: "input-el",
+              placeholder: "Search function name or VA...",
+              "aria-label": "Search functions",
+              oninput: onSearchInput,
+              onkeydown: onSearchKeydown
+            }),
+            () => searchQuery.val
+              ? button({
+                  class: "btn search-clear", "aria-label": "Clear search", title: "Clear search",
+                  onclick: (e) => { clearSearch(document.querySelector(".search input")); e.currentTarget.blur(); }
+                }, "Clear")
+              : div()
+          ),
+          // Potato Mode prints the query, the hit count, and a clear link
+          // above its grid.  The SPA dimmed cells and said nothing, so a
+          // query that matched nothing looked like a broken map.
+          () => searchQuery.val
+            ? div({ class: "search-status", role: "status", "aria-live": "polite" },
+                span(`Searching: "${searchQuery.val}"`),
+                span({ class: "search-count" },
+                  `(${matchedFnNames.val.size} ${matchedFnNames.val.size === 1 ? "match" : "matches"})`),
+                matchedFnNames.val.size === 0
+                  ? span(" - no matches. Check the spelling, or search by VA.")
+                  : span(" - press Enter to jump to the first one."))
+            : div()
         ),
         div({ class: "filters" },
           // aria-pressed, not just an `active` class: the pressed state is
@@ -1056,6 +1131,11 @@ const App = () => {
                   // loadData treat this as a first paint (overlay + errors),
                   // not a background refresh of the same map.
                   data.val = null;
+                  // A query belongs to the binary it was typed for.  Keeping
+                  // it would dim the whole new map against a name that does
+                  // not exist there, and the status line would report it as a
+                  // live, empty result.
+                  clearSearch(document.querySelector(".search input"));
                   currentFn.val = null;
                   currentCellIndex.val = null;
                   cSourceText.val = MSG.SELECT_FUNCTION;
@@ -1094,7 +1174,9 @@ const App = () => {
               h2(emptyState.val.title), p(emptyState.val.detail))
           : div(),
         Grid(),
-        () => emptyState.val ? div() : div({ class: "hint" }, "Click a block to view function details. Use filters to show specific statuses.")
+        () => emptyState.val ? div() : searchQuery.val
+          ? div({ class: "hint" }, "Click a highlighted block to view its details, or press Enter in the search box to jump to the first match.")
+          : div({ class: "hint" }, "Click a block to view function details. Use filters to show specific statuses.")
       ),
       () => Panel()
     ),
