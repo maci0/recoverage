@@ -171,8 +171,13 @@ deliberately has no such step, because `uv export --frozen` reads the lock
 alone.
 
 The interpreter is pinned in `.python-version` (3.13), which is what uv builds
-the local venv from and what the lint, web-lint and smoke jobs run; the test
-matrix adds 3.14.
+the local venv from and what the lint, web-lint and smoke jobs run: their
+`setup-python` steps take `python-version-file: .python-version`, and `bun`
+comes from `package.json`'s `packageManager` through `bun-version-file`. No
+job restates either version; `tests/test_supply_chain.py` fails if a literal
+comes back. The test matrix adds 3.14, and its `include` entries name 3.13
+because make is not part of the Windows runner's toolchain, so that job spells
+out the pytest command instead of calling `make test`.
 
 ## Releases
 

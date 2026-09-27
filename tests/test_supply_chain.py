@@ -5,8 +5,9 @@ rebrew is a path dependency, so the checkout that satisfies
 registry. Nothing in the package code runs at test time to check that fetch,
 so these pin the invariants a pin can break without any code changing: two
 mechanisms that disagree about which rebrew is the dependency, a Makefile
-whose pin has drifted from the script CI runs, and a checked-in copy of a
-third-party preset whose license and origin are no longer recorded.
+whose pin has drifted from the script CI runs, a runner toolchain version
+that has drifted from the manifest that declares it, and a checked-in copy
+of a third-party preset whose license and origin are no longer recorded.
 """
 
 from __future__ import annotations
@@ -25,6 +26,8 @@ _CLONE_SCRIPT = _ROOT / "tools" / "ci_clone_rebrew.sh"
 _MAKEFILE = _ROOT / "Makefile"
 _README = _ROOT / "README.md"
 _PACKAGE_JSON = _ROOT / "package.json"
+_MANIFEST = _ROOT / "pyproject.toml"
+_PYTHON_VERSION = _ROOT / ".python-version"
 _FLATTEN = _ROOT / "tools" / "flatten-rikalabs-strict.py"
 _DERIVED_PRESET = _ROOT / "tools" / "oxlint" / "rikalabs-strict.json"
 
@@ -108,6 +111,78 @@ class TestRbrewPin:
         """A ref that is not a full object id cannot be checked for a moved tag."""
         sha = _default(_CLONE_SCRIPT.read_text(encoding="utf-8"), "REBREW_SHA")
         assert re.fullmatch(r"[0-9a-f]{40}", sha), f"REBREW_SHA {sha!r} is not a full commit id"
+
+
+class TestToolchainPins:
+    """The runner toolchain CI installs is read from the file that owns it.
+
+    Both actions resolve their version from the tree (`.python-version`,
+    package.json's packageManager) instead of a copy written into the
+    workflow, the same one-pin rule the rebrew clone follows. A test fails
+    when a literal version comes back, because a second pin is what a bump
+    would have to touch and nobody would remember to.
+    """
+
+    def test_ci_bun_version_comes_from_package_json(self) -> None:
+        """setup-bun reads the bun package.json declares, not a copy of it."""
+        declared = json.loads(_PACKAGE_JSON.read_text(encoding="utf-8"))["packageManager"]
+        assert re.fullmatch(r"bun@\S+", declared), f"unreadable packageManager: {declared!r}"
+        ci = _CI_YML.read_text(encoding="utf-8")
+        assert "bun-version-file: package.json" in ci, (
+            "the web-lint job does not take its bun version from package.json"
+        )
+        assert not re.search(r'^\s+bun-version:\s*"', ci, re.MULTILINE), (
+            "ci.yml carries a second bun pin; package.json owns it"
+        )
+
+    def test_ci_python_version_comes_from_the_version_file(self) -> None:
+        """setup-python reads .python-version, the interpreter uv builds from.
+
+        The one exception is the test job, whose version comes from the matrix
+        so the matrix can vary it; that step names no interpreter of its own.
+        """
+        ci = _CI_YML.read_text(encoding="utf-8")
+        setups = ci.count("uses: actions/setup-python@")
+        assert setups, "no job sets up Python"
+        resolved = ci.count("python-version-file: .python-version") + len(
+            re.findall(r"python-version:\s*\$\{\{", ci)
+        )
+        assert resolved == setups, (
+            "a setup-python step names an interpreter instead of reading .python-version"
+        )
+
+    def test_matrix_floor_is_the_pinned_interpreter(self) -> None:
+        """A literal in the matrix names the floor, so it must match the pin.
+
+        The matrix expression itself is exempt: it varies by design. The
+        literals under `include` are the non-Linux runners, which test the
+        floor, so a bump that missed them would run them on an interpreter
+        the project no longer claims.
+        """
+        pinned = _PYTHON_VERSION.read_text(encoding="utf-8").strip()
+        literals = set(
+            re.findall(r'python-version:\s*"([^"]+)"', _CI_YML.read_text(encoding="utf-8"))
+        )
+        assert literals, "the matrix pins no interpreter by hand"
+        assert literals == {pinned}, (
+            f"ci.yml names {sorted(literals)}, .python-version pins {pinned}"
+        )
+
+    def test_test_matrix_matches_the_python_classifiers(self) -> None:
+        """The versions CI tests are the versions the manifest advertises."""
+        project = tomllib.loads(_MANIFEST.read_text(encoding="utf-8"))["project"]
+        claimed = {
+            line.rsplit(" ", 1)[1]
+            for line in project["classifiers"]
+            if line.startswith("Programming Language :: Python :: 3.")
+        }
+        assert claimed, "pyproject.toml claims no 3.x Python classifier"
+        matrix = re.search(r"python-version:\s*\[([^\]]+)\]", _CI_YML.read_text(encoding="utf-8"))
+        assert matrix, "the test job has no python-version matrix"
+        tested = set(re.findall(r'"([^"]+)"', matrix[1]))
+        assert tested == claimed, (
+            f"the matrix tests {sorted(tested)}, pyproject.toml claims {sorted(claimed)}"
+        )
 
 
 class TestCheckedInLintPreset:

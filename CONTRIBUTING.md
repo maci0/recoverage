@@ -91,7 +91,7 @@ That is the local mirror of CI, and each target is the command CI runs:
 | `make format-check` | lint | `ruff format --check src/ tests/ tools/` |
 | `make lint` | lint | `ruff check src/ tests/ tools/` |
 | `make shell-lint` | lint | `shellcheck -x tools/*.sh` |
-| `make yaml-lint` | lint | `yamllint -c .yamllint.yaml .github/` |
+| `make yaml-lint` | lint | `yamllint -c .yamllint.yaml --list-files .github/` |
 | `make test` | test | `pytest tests/ -v --ignore=tests/test_playwright.py` |
 | `make web-lint` | web-lint | `bun install --frozen-lockfile && bun run lint` |
 | `make smoke` | smoke | `python tools/smoke.py` |

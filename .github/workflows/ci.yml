@@ -27,7 +27,8 @@ jobs:
           enable-cache: true
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.13"
+          # The single interpreter pin, the same file uv builds the venv from.
+          python-version-file: .python-version
       # The sibling rebrew checkout that [tool.uv.sources] resolves, fetched
       # at the pin tools/ci_clone_rebrew.sh owns. This script is the one
       # mechanism: `make clone-rebrew` wraps the same call for a workstation,
@@ -35,11 +36,14 @@ jobs:
       - name: Clone the sibling rebrew checkout
         run: bash "$GITHUB_WORKSPACE/tools/ci_clone_rebrew.sh" "$GITHUB_WORKSPACE/../rebrew"
       - run: uv sync --frozen --extra dev
-      # --frozen on every uv run, matching the Makefile: a bare `uv run`
-      # re-resolves and may write a new lockfile, so a job could install a
-      # tree the committed uv.lock does not describe.
-      - run: uv run --frozen --extra dev python -m ruff format --check src/ tests/ tools/
-      - run: uv run --frozen --extra dev python -m ruff check src/ tests/ tools/
+      # The Makefile owns these commands, so the jobs call the targets rather
+      # than restating them: `make all` is the local mirror of the pipeline, and
+      # a copy of a recipe in two files is a recipe that drifts. UV_RUN is
+      # `uv run --frozen --extra dev`; --frozen on every uv run, because a bare
+      # `uv run` re-resolves and may write a new lockfile, so a job could
+      # install a tree the committed uv.lock does not describe.
+      - run: make format-check
+      - run: make lint
       # shellcheck and yamllint ship on the runner image; they cover the two
       # non-Python source sets ruff does not see (tools/*.sh, .github/*.yml).
       - run: make shell-lint
@@ -55,7 +59,8 @@ jobs:
           enable-cache: true
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.13"
+          # The single interpreter pin, the same file uv builds the venv from.
+          python-version-file: .python-version
       # The sibling rebrew checkout that [tool.uv.sources] resolves, fetched
       # at the pin tools/ci_clone_rebrew.sh owns. This script is the one
       # mechanism: `make clone-rebrew` wraps the same call for a workstation,
@@ -65,26 +70,31 @@ jobs:
       - run: uv sync --frozen --extra dev
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: "1.4.2"
+          # package.json's packageManager field is the bun pin, so CI installs
+          # the version a contributor's bun install would resolve to.
+          bun-version-file: package.json
       # oxlint and the vnu jar are downloaded, not built, so node_modules is
       # fully reproducible from bun.lock. Caching it on the lockfile hash turns
       # every re-run of this job into a cache hit and keeps the java setup off
       # the critical path. The cache key never hits on a lockfile change, so a
-      # dependency bump still installs from the registry.
+      # dependency bump still installs from the registry; package.json is
+      # hashed with it, because a tree installed by another bun is not the tree
+      # bun.lock describes.
       - name: Restore node_modules
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: node_modules
-          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock', 'package.json') }}
       - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           distribution: temurin
           java-version: "17"
-      - run: bun install --frozen-lockfile
-      - name: "Lint JS/TS (oxlint: Rika-Labs strict + anti-slop)"
-        run: bun run lint:js
-      - name: Lint HTML/CSS (Nu Html Checker)
-        run: bun run lint:html
+      - name: "Lint JS/TS (oxlint: Rika-Labs strict + anti-slop) and HTML/CSS (Nu Html Checker)"
+        # make web-lint owns the install, the bun/java preflight and both
+        # linters, so this job and `make all` run the same commands. lint:html
+        # runs tools/lint-html.py through the env synced above, which is why
+        # this job needs uv at all.
+        run: make web-lint
 
   test:
     runs-on: ${{ matrix.os }}
@@ -93,7 +103,8 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest]
-        # Keep in sync with the Python classifiers in pyproject.toml.
+        # Keep in sync with the Python classifiers in pyproject.toml;
+        # tests/test_supply_chain.py fails when they drift apart.
         python-version: ["3.13", "3.14"]
         # The README claims recoverage "runs independently on any machine",
         # and pip users run it on all three OSes; exercise that claim on at
@@ -119,6 +130,10 @@ jobs:
         run: bash "$GITHUB_WORKSPACE/tools/ci_clone_rebrew.sh" "$GITHUB_WORKSPACE/../rebrew"
       - run: uv sync --frozen --extra dev
       - name: Run the suite
+        # The same command as `make test`, spelled out rather than delegated:
+        # this matrix runs on the Windows runner, where make is not part of the
+        # image's guaranteed toolchain, and a missing make would fail a job
+        # before it ran a test.
         run: >-
           uv run --frozen --extra dev python -m pytest tests/ -v
           --ignore=tests/test_playwright.py
@@ -133,7 +148,8 @@ jobs:
           enable-cache: true
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.13"
+          # The single interpreter pin, the same file uv builds the venv from.
+          python-version-file: .python-version
       # The sibling rebrew checkout that [tool.uv.sources] resolves, fetched
       # at the pin tools/ci_clone_rebrew.sh owns. This script is the one
       # mechanism: `make clone-rebrew` wraps the same call for a workstation,
@@ -142,9 +158,9 @@ jobs:
         run: bash "$GITHUB_WORKSPACE/tools/ci_clone_rebrew.sh" "$GITHUB_WORKSPACE/../rebrew"
       - run: uv sync --frozen --extra dev
       - name: Boot dashboard against a sample coverage.db and probe it
-        run: uv run --frozen --extra dev python tools/smoke.py
+        run: make smoke
       - name: Negative smoke (corrupt DB must degrade, not lie)
-        run: uv run --frozen --extra dev python tools/smoke.py --expect-failure
+        run: make smoke-fail
 
   sbom:
     runs-on: ubuntu-latest
