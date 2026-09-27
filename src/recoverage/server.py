@@ -485,7 +485,7 @@ _MAX_DLL_SIZE = 512 * 1024 * 1024  # 512 MiB — reject unreasonably large binar
 
 
 _TOML_CONFIG_CACHE: dict[str, Any] | None = None
-_RESOLVED_TARGETS_CACHE: dict[str, Any] | None = None
+_RESOLVED_TARGETS_CACHE: list[dict[str, str]] | None = None
 _RESOLVED_TARGETS_CACHE_LOCK = threading.RLock()
 
 
@@ -559,12 +559,16 @@ def _target_filename(tid: str, t_info: Any) -> str:
     return filename or tid
 
 
-def resolve_targets(c: sqlite3.Cursor) -> tuple[list[str], list[dict[str, str]]]:
-    """Resolve available targets from DB + config (thread-safe, cached via RLock)."""
+def resolve_targets(c: sqlite3.Cursor) -> list[dict[str, str]]:
+    """Resolve available targets from DB + config (thread-safe, cached via RLock).
+
+    Config-declared targets first, then any DB-only target, so the SPA
+    dropdown and Potato Mode render and default to the same first entry.
+    """
     global _RESOLVED_TARGETS_CACHE
     with _RESOLVED_TARGETS_CACHE_LOCK:
         if _RESOLVED_TARGETS_CACHE is not None:
-            return _RESOLVED_TARGETS_CACHE["target_ids"], _RESOLVED_TARGETS_CACHE["targets_list"]
+            return _RESOLVED_TARGETS_CACHE
 
         c.execute("SELECT DISTINCT target FROM metadata WHERE target != ?", (SCHEMA_TARGET,))
         target_ids = [row[0] for row in c.fetchall()]
@@ -579,11 +583,8 @@ def resolve_targets(c: sqlite3.Cursor) -> tuple[list[str], list[dict[str, str]]]
         ]
         targets_list += [{"id": tid, "name": tid} for tid in target_ids if tid not in targets_info]
 
-        _RESOLVED_TARGETS_CACHE = {
-            "target_ids": target_ids,
-            "targets_list": targets_list,
-        }
-        return target_ids, targets_list
+        _RESOLVED_TARGETS_CACHE = targets_list
+        return targets_list
 
 
 def _find_dll_path(target: str) -> Path | None:
@@ -1330,7 +1331,6 @@ _STATUS_ERROR_CODES: dict[int, str] = {
     500: "internal",
     501: "not_implemented",
     503: "db_unavailable",
-    504: "gateway_timeout",
 }
 
 

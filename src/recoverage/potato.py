@@ -1747,15 +1747,10 @@ def _render_potato_inner(
     status_filter: str,
     page_str: str,
 ) -> str:
-    _, targets = resolve_targets(c)
+    targets = resolve_targets(c)
     if not target and targets:
-        # Default from `targets`, NOT `target_ids`: resolve_targets returns two
-        # different orderings — target_ids is raw DB order, targets is
-        # config-declared-first.  Potato rendered its dropdown from `targets`
-        # but defaulted from `target_ids[0]`, so on a project whose config
-        # order differs from its metadata order the two surfaces opened on
-        # different targets (SPA defaults to /api/targets[0], which is this
-        # same list) and the dropdown's first entry was not the selected one.
+        # The SPA defaults to /api/targets[0]; the dropdown below renders the
+        # same list, so both surfaces open on the same target.
         target = targets[0]["id"]
 
     sections, data = _load_section_data(c, target)
@@ -1838,7 +1833,6 @@ def _render_potato_inner(
         TOPBAR_PNG=TOPBAR_SVG,
         PANEL_HDR_PNG=PANEL_HDR_PNG,
         R_LOGO_SVG=R_LOGO_SVG,
-        TRANSPARENT_GIF=TRANSPARENT_GIF,
         DOT_PNGS=DOT_PNGS,
         LEGEND_ITEMS=LEGEND_ITEMS,
         # Data

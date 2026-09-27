@@ -254,7 +254,7 @@ def _require_target(c: sqlite3.Cursor, target: str) -> Any | None:
     config (a configured-but-not-yet-built target is still addressable).
     """
     try:
-        _, targets_list = resolve_targets(c)
+        targets_list = resolve_targets(c)
     except sqlite3.OperationalError as exc:
         # Transient SQLITE_BUSY / locked — must surface as 503, not be
         # swallowed as "unknown target" or silent success.
@@ -567,7 +567,7 @@ def handle_api_targets() -> bytes:
     try:
         with contextlib.closing(_db()) as conn:
             c = conn.cursor()
-            _, targets_list = resolve_targets(c)
+            targets_list = resolve_targets(c)
     except sqlite3.Error:
         _log.warning("Database unavailable, falling back to config-only target list")
         targets_list = [

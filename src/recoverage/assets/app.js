@@ -329,9 +329,9 @@ const App = () => {
   const reloadData = () => window.RC.reloadData?.({ loadingMsg, summaryData, loadData, MSG });
 
   let searchTimeout = null;
-  const applySearch = (value) => {
+  const applySearch = (text) => {
     clearTimeout(searchTimeout);
-    searchQuery.val = value;
+    searchQuery.val = text;
     syncUrl();
   };
   const onSearchInput = (e) => {
@@ -427,10 +427,7 @@ const App = () => {
   });
 
   // The first hit, or "" when nothing matches.  Read by onSearchKeydown.
-  const firstMatchName = van.derive(() => {
-    for (const name of matchedFnNames.val) return name;
-    return "";
-  });
+  const firstMatchName = van.derive(() => matchedFnNames.values().next().value ?? "");
 
   const filteredFnNames = van.derive(() => {
     const names = matchedFnNames.val;
@@ -634,12 +631,11 @@ const App = () => {
     if (detailReady.val) return "";
     return MSG.LOADING;
   };
-  const detailBound = () => ({
-    disabled: () => !detailReady.val || detailFailed.val,
-    title: detailTitle,
-  });
-
   const copyToClipboard = (text, e) => window.RC.copyToClipboard?.(text, e);
+
+  const SearchHint = () => (searchQuery.val
+    ? div({ class: "hint" }, "Click a highlighted block to view its details, or press Enter in the search box to jump to the first match.")
+    : div({ class: "hint" }, "Click a block to view function details. Use filters to show specific statuses."));
 
   const toggleFilter = (filter) => {
     const newFilters = new Set(activeFilters.val);
@@ -937,9 +933,9 @@ const App = () => {
       div({ class: "section-title" },
         HexLogo(logo, color, heading),
         div({ class: "section-actions" },
-          button({ class: "btn copy-btn", "aria-label": `Copy ${heading}`, ...detailBound(), disabled: () => !detailReady.val || detailFailed.val || isEmptyMessage(text), title: () => isEmptyMessage(text) ? "Select a block first" : detailTitle(), onclick: (e) => copyToClipboard(text, e) }, "Copy"),
+          button({ class: "btn copy-btn", "aria-label": `Copy ${heading}`, disabled: () => !detailReady.val || detailFailed.val || isEmptyMessage(text), title: () => isEmptyMessage(text) ? "Select a block first" : detailTitle(), onclick: (e) => copyToClipboard(text, e) }, "Copy"),
           button({
-            class: "btn copy-btn", "aria-label": `Open ${heading} in a larger view`, ...detailBound(), disabled: () => !detailReady.val || detailFailed.val || isEmptyMessage(text), title: () => isEmptyMessage(text) ? "Select a block first" : detailTitle(),
+            class: "btn copy-btn", "aria-label": `Open ${heading} in a larger view`, disabled: () => !detailReady.val || detailFailed.val || isEmptyMessage(text), title: () => isEmptyMessage(text) ? "Select a block first" : detailTitle(),
             onclick: () => {
               // cellIdx is null when nothing is selected, which used to render
               // as the literal "Block null".
@@ -1174,9 +1170,7 @@ const App = () => {
               h2(emptyState.val.title), p(emptyState.val.detail))
           : div(),
         Grid(),
-        () => emptyState.val ? div() : searchQuery.val
-          ? div({ class: "hint" }, "Click a highlighted block to view its details, or press Enter in the search box to jump to the first match.")
-          : div({ class: "hint" }, "Click a block to view function details. Use filters to show specific statuses.")
+        () => emptyState.val ? div() : SearchHint()
       ),
       () => Panel()
     ),

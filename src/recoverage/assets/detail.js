@@ -336,11 +336,6 @@
         col += s;
         if (col >= cols) { col = 0; row += 1; }
       }
-      // A row filled exactly (col == 0 here) is already counted by the
-      // in-loop row += 1; only a partial trailing row needs one more.  The
-      // old `row + 1` counted a phantom second row for an 8-cell section at
-      // 8 columns — one row of cells over ~250px of blank grid background.
-      return row + (col > 0 ? 1 : 0);
     };
 
     // Layout (walk, rows, hit-map, canvas size) is cached per section and
@@ -357,8 +352,8 @@
       g.cols = lay.cols;
       const { cols, gap, pad, cell } = lay;
       // Row count first: walk is cheap, and sizing the map needs it upfront.
-      // Same exact-fill rule as walk() above: a trailing row filled exactly
-      // is already counted, so an empty section (n == 0) is 0 rows, not 1.
+      // A trailing row filled exactly is already counted, so an empty
+      // section (n == 0) is 0 rows, not 1.
       let rows = 0;
       {
         let col = 0;

@@ -19,6 +19,25 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   control character in it could forge a log line; the loader's warnings
   now route it through `_log_safe` like the rest of the request log.
 
+### Changed
+
+- `server.resolve_targets` returns the one ordered target list instead of a
+  `(target_ids, targets_list)` pair. Every caller discarded the first element,
+  which left a second ordering alive that the SPA and Potato Mode must agree
+  not to use.
+
+### Removed
+
+- `app.js` `detailBound()` and its two spread sites: both `disabled` and
+  `title` were overwritten in the same object literal, so it contributed
+  nothing.
+- `detail.js` `walk()`'s return value, never read; the row count is derived in
+  `layout()` where the map is sized.
+- `potato.py`'s `TRANSPARENT_GIF=TRANSPARENT_GIF` render kwarg: the variable
+  appears in no template, so bottle discarded it.
+- `server.py`'s `_STATUS_ERROR_CODES[504]`: no code path returns 504.
+- The `--cell-border` custom property in both `style.css` themes: never read.
+
 ## [1.6.0] - 2026-09-27
 
 Requires `rebrew>=2.10.0`.

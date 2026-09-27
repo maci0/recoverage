@@ -1389,21 +1389,16 @@ class TestDbUnavailableContract:
 class TestDefaultTargetMatchesSpa:
     """Potato and the SPA must open on the same target.
 
-    resolve_targets returns TWO orderings: target_ids (raw DB order) and
-    targets (config-declared first).  Potato built its dropdown from the
-    second but defaulted from the first, so on a project whose config order
-    differs from its metadata order the two surfaces disagreed and Potato's
-    selected target was not its dropdown's first entry.
+    Both render the list resolve_targets returns and default to its first
+    entry; a project whose config order differs from its metadata order must
+    not open the two surfaces on different targets.
     """
 
     def test_potato_defaults_to_first_listed_target(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import recoverage.potato as potato_mod
 
-        # The orderings deliberately disagree, as they do whenever a project
-        # config declares targets in a different order than metadata rows.
-        target_ids = ["FROM_DB_FIRST", "CONFIG_FIRST"]
         targets = [{"id": "CONFIG_FIRST", "name": "a"}, {"id": "FROM_DB_FIRST", "name": "b"}]
-        monkeypatch.setattr(potato_mod, "resolve_targets", lambda _c: (target_ids, targets))
+        monkeypatch.setattr(potato_mod, "resolve_targets", lambda _c: targets)
 
         chosen: list[str] = []
 
