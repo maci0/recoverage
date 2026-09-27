@@ -5,9 +5,6 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-Tag this **2.0.0**: `server.resolve_targets` changed its return shape and the
-module ships in the published package. See *Breaking*.
-
 ### Added
 
 - **`/api/health` reports the rebuild pipeline and live-reload saturation.**
@@ -643,7 +640,11 @@ v7 schema objects all ship from `rebrew.workspace`, and `server.py` imports
   25 KB to 9 KB on the first-paint path and the asm-pane set from 153 KB to
   45 KB.  Requests without a supported `Accept-Encoding` still fall through to
   `static_file`, so Range and `If-Modified-Since` behave as before.
-- **Cell JSON no longer carries `cells.id`.**  No consumer read it, and as the
+- **Cell JSON no longer carries `cells.id`.**  The served cell object lost the
+  `id` key, so a consumer reading `cell["id"]` fails from this release on;
+  anchor on `start`, which is stable per cell.  A removed response field is a
+  major under the release policy, and this one shipped in a minor.  No consumer
+  read the key, and as the
   only high-entropy column per row it was defeating compression: the 39k-cell
   `.text` payload goes from 322 KB to 74 KB on the wire (a 39k-cell section's
   full-target payload from 518 KB to 124 KB).  The projection is now the shared

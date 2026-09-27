@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 import tomllib
+from itertools import pairwise
 from pathlib import Path
 
 from recoverage import __version__
@@ -52,9 +53,43 @@ def _changelog() -> str:
     return _CHANGELOG.read_text(encoding="utf-8")
 
 
+def _release_sections() -> list[tuple[str, str]]:
+    """Every shipped section as `(version, body)`, newest first.
+
+    The body starts at the end of the heading line, so `## [` in an entry's
+    prose cannot end one section early, and it excludes the next heading.
+    """
+    text = _changelog()
+    matches = list(_SECTION_RE.finditer(text))
+    sections = []
+    for index, match in enumerate(matches):
+        if match["version"] == "Unreleased":
+            continue
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        sections.append((match["version"], text[match.end() : end]))
+    return sections
+
+
 def _version_key(value: str) -> tuple[int, ...]:
     """Comparable form of a release segment, so 2.10.0 sorts above 2.9.0."""
     return tuple(int(part) for part in re.findall(r"\d+", value)) or (0,)
+
+
+def _major(value: str) -> int:
+    """The SemVer major of a release section heading."""
+    return _version_key(value)[0]
+
+
+def _breaking_in_non_major(sections: list[tuple[str, str]]) -> list[str]:
+    """Shipped versions whose `Breaking` group did not come with a major bump.
+
+    The oldest section has no predecessor to bump from, so it is not compared.
+    """
+    return [
+        version
+        for (version, body), (previous, _) in pairwise(sections)
+        if "### Breaking" in body and _major(version) <= _major(previous)
+    ]
 
 
 class TestChangelogTracksVersion:
@@ -88,6 +123,38 @@ class TestChangelogTracksVersion:
             if m["version"] != "Unreleased" and not m["date"]
         ]
         assert undated == []
+
+
+class TestBreakingEntriesMatchTheVersionBump:
+    """A `Breaking` group and the version that ships it cannot disagree.
+
+    The group is the only record a consumer gets that an upgrade needs
+    migration, and the version is what they pin against. A `Breaking` entry
+    shipped in a minor or patch tells them a release is safe to take when it
+    is not: `server.resolve_targets` losing an element of its return tuple
+    raises `ValueError` at import time in the consumer, not a warning.
+
+    The policy this enforces is in `AGENTS.md` (Releases): a change to a
+    public HTTP response field, a CLI flag, or a function another module
+    imports needs a major. 1.5.0 shipped a dropped response field
+    (`cells.id`) under `Changed`, and this class would not have seen it,
+    because the mislabel is invisible here; what it does pin is the
+    invariant from then on.
+    """
+
+    def test_a_breaking_entry_lands_in_a_major_bump(self) -> None:
+        offenders = _breaking_in_non_major(_release_sections())
+        assert offenders == [], f"Breaking entries in a non-major bump: {offenders}"
+
+    def test_the_gate_fires_on_a_minor_that_ships_a_breaking_entry(self) -> None:
+        """A guard nothing has seen fail is not known to work."""
+        breaking = "\n\n### Breaking\n\n- a response field went.\n"
+        fixed = "\n\n### Fixed\n\n- a fix.\n"
+        # A minor and a patch carrying a Breaking group, and a major carrying one.
+        assert _breaking_in_non_major([("1.7.0", breaking), ("1.6.0", fixed)]) == ["1.7.0"]
+        assert _breaking_in_non_major([("1.6.1", breaking), ("1.6.0", fixed)]) == ["1.6.1"]
+        assert _breaking_in_non_major([("2.0.0", breaking), ("1.6.0", fixed)]) == []
+        assert _breaking_in_non_major([("1.7.0", fixed), ("1.6.0", fixed)]) == []
 
 
 class TestDeclaredFloorsAreRecorded:

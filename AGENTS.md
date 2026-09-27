@@ -212,7 +212,16 @@ The release policy is not written down anywhere else, so it is stated here and
   for whoever is still on the old one.
 - SemVer on a 1.x line: a change to a public HTTP response field, a CLI flag,
   or a function another module imports is breaking and needs a major. A new
-  section or endpoint is a minor. Anything else is a patch.
+  section or endpoint is a minor. Anything else is a patch. The `### Breaking`
+  group is the marker a major is gated on, and
+  `tests/test_release.py::TestBreakingEntriesMatchTheVersionBump` fails when a
+  shipped section carries that group without the bump (a self-test in the same
+  class drives the gate from a synthetic minor, so a guard that cannot fail is
+  not one). It reads the changelog, so it cannot see a breaking change filed
+  under another group: 1.5.0 dropped the `id` key from the served cell objects
+  under `Changed`, and the entry there says so now. Nothing in the Unreleased
+  section is release bookkeeping; it is published verbatim under the version,
+  so a "tag this as 2.0.0" note would ship to the reader.
 - The release commit is `chore: release X.Y.Z` and the tag is `vX.Y.Z`;
   both land together, and neither is re-cut.
 
