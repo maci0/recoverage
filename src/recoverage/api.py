@@ -11,7 +11,6 @@ import re
 import sqlite3
 import threading
 from collections.abc import Generator
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -711,7 +710,9 @@ def handle_api_health() -> bytes:
     status is "degraded" (not an error) when coverage.db cannot be stat'ed or
     queried; db.path is the basename only, never the absolute path.  db.mtime
     is epoch seconds and db.mtime_utc the same instant as an ISO-8601 instant
-    (``+00:00``); both are absent when the DB cannot be stat'ed.
+    (``+00:00``), both read off one conversion of the file's mtime
+    (``server.mtime_ns_to_utc``) so they cannot disagree; both are absent when
+    the DB cannot be stat'ed.
     """
     db = _db_path()
     db_info: dict[str, Any] = {"path": db.name, "exists": False}
@@ -731,8 +732,12 @@ def handle_api_health() -> bytes:
     if mtime_ns is not None:
         # Seconds since the epoch (UTC) plus the same instant spelled out with
         # an explicit zone, so a client never has to assume the host's TZ.
-        db_info["mtime"] = mtime_ns / 1e9
-        db_info["mtime_utc"] = datetime.fromtimestamp(mtime_ns / 1e9, tz=UTC).isoformat()
+        # Both come from ONE conversion: a float second cannot hold the
+        # nanosecond mtime, so deriving the two independently let the ISO
+        # stamp sit up to half a second off the epoch field beside it.
+        stamp = _server.mtime_ns_to_utc(mtime_ns)
+        db_info["mtime"] = stamp.timestamp()
+        db_info["mtime_utc"] = stamp.isoformat()
     target_count = 0
     try:
         with contextlib.closing(_open_db(db)) as conn:

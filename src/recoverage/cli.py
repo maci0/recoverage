@@ -112,6 +112,18 @@ _BODYLESS_STATUS_CODES = frozenset(("204", "304"))
 #: Headers that frame a body without ending the connection (RFC 9112 6).
 _SELF_DELIMITING_HEADERS = frozenset(("content-length", "transfer-encoding"))
 
+#: Log line layout, and the stamp it carries.  The date and numeric offset are
+#: load-bearing, not decoration: a bare "%H:%M:%S" cannot place a line on a
+#: timeline, so 23:59 and 00:01 read as the same moment and a log spanning a
+#: fall-back transition prints its repeated hour twice with nothing to tell the
+#: two apart.  %z also means a reader never has to assume the host's zone.  The
+#: stamp is local time on purpose — an operator comparing it against their own
+#: wall clock needs to see their own clock, and the offset is what makes that
+#: comparison unambiguous across a DST change.  Elapsed times never come from
+#: it; those read `recoverage.clock.monotonic()`.
+LOG_FORMAT = "%(asctime)s %(levelname)s [%(name)s] [rid=%(request_id)s] %(message)s"
+LOG_DATEFMT = "%Y-%m-%d %H:%M:%S%z"
+
 
 class _QuietTimeoutRequestHandler(WSGIRequestHandler):
     """wsgiref request handler with the per-connection deadline above.
@@ -802,11 +814,7 @@ def serve(
     with contextlib.suppress(AttributeError, ValueError, OSError):
         handler.stream.reconfigure(errors="backslashreplace")
     handler.setFormatter(
-        logging.Formatter(
-            "%(asctime)s %(levelname)s [%(name)s] [rid=%(request_id)s] %(message)s",
-            datefmt="%H:%M:%S",
-            defaults={"request_id": "-"},
-        )
+        logging.Formatter(LOG_FORMAT, datefmt=LOG_DATEFMT, defaults={"request_id": "-"})
     )
     logging.basicConfig(handlers=[handler], level=resolved.log_level)
 

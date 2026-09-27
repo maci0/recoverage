@@ -348,7 +348,16 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   throttle and the `db-updated` stamp from one patched clock, and
   `tests/test_metrics.py` drives the per-request duration window the same
   way, so the slow-request threshold is crossed on the clock rather than on
-  a sleep.
+  a sleep. A `st_mtime_ns` becomes an instant through
+  `server.mtime_ns_to_utc`, never `fromtimestamp(ns / 1e9)`: a float second
+  cannot hold a nanosecond, so that conversion rounds and reports a rebuild
+  up to half a second (and Potato's footer a whole minute) before it
+  happened. Both freshness surfaces render through the one helper, and
+  `tests/test_api.py` (`TestHealthDbMtime`) plus `tests/test_potato.py`
+  (`TestDbUpdatedLabel`) pin the truncation. An instant published to a client
+  is UTC with the offset spelled out, never a fixed offset or a zone guessed
+  from the locale; a log stamp is local time with `%z` attached, because the
+  operator comparing it against their own clock needs to see their own clock.
 - The memos derived from `rebrew-project.toml` all key on the file's stat
   (`server._config_stat_fingerprint`), one token for all of them:
   `_get_targets_config`, `resolve_targets` (keyed on that stat AND the

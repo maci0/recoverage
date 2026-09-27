@@ -7,6 +7,7 @@ import io
 import json
 import os
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -135,6 +136,75 @@ class TestVersionFlag:
         result = runner.invoke(app, ["--version"])
         assert result.exit_code == 0
         assert "recoverage" in result.output
+
+
+class TestLogStamp:
+    """The log line's time stamp must place a record on a timeline.
+
+    A bare "%H:%M:%S" cannot: 23:59 and 00:01 read as the same moment, and a
+    log spanning a fall-back transition prints its repeated hour twice with
+    nothing to tell the two apart.  The offset matters for the same reason —
+    a reader must not have to assume the host's zone to place a line.
+
+    The stamp is local time with the offset attached, so the expected strings
+    below only hold under a known zone: the fixture pins TZ=UTC and the third
+    test reads the offset off the line instead of assuming one.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _utc(self, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+        import time
+
+        if not hasattr(time, "tzset"):
+            pytest.skip("no time.tzset() on this platform")
+        previous = os.environ.get("TZ")
+        monkeypatch.setenv("TZ", "UTC")
+        time.tzset()
+        yield
+        # Restore before tzset(), or the process keeps the C library reading
+        # the fixture's zone for every later test in the session.
+        if previous is None:
+            monkeypatch.delenv("TZ", raising=False)
+        else:
+            monkeypatch.setenv("TZ", previous)
+        time.tzset()
+
+    def _formatted(self, when: float) -> str:
+        import logging
+
+        formatter = logging.Formatter(
+            cli.LOG_FORMAT, datefmt=cli.LOG_DATEFMT, defaults={"request_id": "-"}
+        )
+        record = logging.LogRecord("recoverage", logging.INFO, __file__, 1, "hello", (), None)
+        record.created = when
+        return formatter.format(record)
+
+    def test_stamp_carries_date_and_offset(self) -> None:
+        # 2023-11-14T22:13:20Z, an ordinary instant, read in UTC.
+        assert self._formatted(1_700_000_000.0).startswith("2023-11-14 22:13:20+0000 ")
+
+    def test_stamp_distinguishes_two_instants_a_day_apart(self) -> None:
+        day_one = self._formatted(1_700_000_000.0)
+        day_two = self._formatted(1_700_000_000.0 + 86_400)
+        assert day_one != day_two
+        assert day_two.startswith("2023-11-15 22:13:20+0000 ")
+
+    def test_offset_moves_with_the_host_zone(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The stamp is local, and says which local: the same instant reads
+        differently under two zones, and the offset tells the reader which."""
+        import time
+
+        if not hasattr(time, "tzset"):
+            pytest.skip("no time.tzset() on this platform")
+        stamp = self._formatted(1_700_000_000.0)
+        monkeypatch.setenv("TZ", "Asia/Tokyo")
+        time.tzset()
+        try:
+            tokyo = self._formatted(1_700_000_000.0)
+        finally:
+            time.tzset()
+        assert stamp != tokyo
+        assert tokyo.startswith("2023-11-15 07:13:20+0900 ")
 
 
 # ── Export command (actual CLI) ───────────────────────────────────

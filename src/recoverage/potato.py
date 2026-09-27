@@ -19,7 +19,6 @@ import struct
 import textwrap
 import threading
 from collections.abc import Callable, Iterable
-from datetime import UTC, datetime
 from html import escape as _html_escape
 from pathlib import Path, PurePath
 from typing import Any
@@ -56,6 +55,7 @@ from recoverage.server import (
     app,
     folded_like_clause,
     like_match,
+    mtime_ns_to_utc,
     request,
     resolve_targets,
     response,
@@ -1168,11 +1168,17 @@ def _db_updated_mtime_ns() -> int | None:
 
 
 def _db_updated_label() -> str:
-    """Render _db_updated_mtime_ns() as "YYYY-MM-DD HH:MM UTC" ("" when no DB)."""
+    """Render _db_updated_mtime_ns() as "YYYY-MM-DD HH:MM UTC" ("" when no DB).
+
+    Truncating to the minute, and the conversion truncating rather than
+    rounding (see server.mtime_ns_to_utc), together mean the stamp never runs
+    ahead of the served data: a rebuild landing in the last microsecond of a
+    minute reads as the minute it started in, not the one it has not reached.
+    """
     mtime_ns = _db_updated_mtime_ns()
     if mtime_ns is None:
         return ""
-    return datetime.fromtimestamp(mtime_ns / 1e9, tz=UTC).strftime("%Y-%m-%d %H:%M UTC")
+    return mtime_ns_to_utc(mtime_ns).strftime("%Y-%m-%d %H:%M UTC")
 
 
 # Potato mode re-derived the grid input on EVERY page render: json.loads of

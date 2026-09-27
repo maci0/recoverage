@@ -251,6 +251,20 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   a second format to special-case. Both now answer the same
   `{"error", "code", "detail"}` envelope every other failure uses, with
   `Cache-Control: no-store`.
+- **The DB freshness stamp could report a rebuild before it happened.** The
+  stamp is the database file's mtime, converted with `mtime_ns / 1e9`, and a
+  float second cannot hold a nanosecond: the conversion rounded to the nearest
+  whole second, so a file written at `12:34:59.999999999` was reported as
+  `12:35:00`, and Potato Mode's `HH:MM` footer carried that into the displayed
+  minute. Both surfaces now convert with integer arithmetic, which truncates,
+  the only direction a freshness stamp may err in. `/api/health`'s `mtime` and
+  `mtime_utc` also come off that one conversion, so the two fields in the same
+  object can no longer disagree by a rounding step.
+- **Log lines carried a time of day and nothing else.** `23:59` and `00:01`
+  read alike, and a log spanning a fall-back transition printed its repeated
+  hour twice with nothing to tell the two apart. The stamp is now
+  `YYYY-MM-DD HH:MM:SS+ZZZZ`, so a line can be placed on a timeline and the
+  local zone is on the line rather than assumed.
 - **A drive-relative `files[0]` read the wrong file on Windows.** Potato
   Mode's C-source loader rejected absolute paths and `..`, but a
   drive-relative name (`C:foo.c`) is neither, and joining it onto the

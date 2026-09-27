@@ -24,6 +24,7 @@ import unicodedata
 import uuid
 from collections import deque
 from collections.abc import Iterator, Sequence
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 from urllib.parse import unquote, urlsplit
@@ -304,6 +305,32 @@ def _snapshot_db_mtime() -> tuple[int, int] | None:
     except OSError:
         pass
     return acc, st.st_size
+
+
+#: Nanoseconds in a second, and in a microsecond: the two constants the
+#: file-mtime conversion below is written in.
+_NS_PER_SECOND = 1_000_000_000
+_NS_PER_MICROSECOND = 1_000
+
+
+def mtime_ns_to_utc(mtime_ns: int) -> datetime:
+    """The instant *mtime_ns* names, as an aware UTC datetime.
+
+    One definition of the file-mtime rendering both freshness surfaces use
+    (``/api/health``'s ``mtime_utc`` and Potato Mode's footer stamp), and
+    integer arithmetic all the way through: ``mtime_ns / 1e9`` is a float
+    second, which cannot hold a nanosecond, so ``fromtimestamp`` rounds to
+    the nearest one and reports a stamp up to half a second LATE.  Potato
+    renders that rounded value to the minute, so a file written at
+    12:34:59.999999999 is stamped "12:35 UTC" for a rebuild that has not
+    happened yet.  Splitting into whole seconds plus a microsecond remainder
+    truncates instead, which is the only direction a freshness stamp may
+    err in: the served data never lags the stamp.
+    """
+    seconds, nanoseconds = divmod(mtime_ns, _NS_PER_SECOND)
+    return datetime.fromtimestamp(seconds, tz=UTC) + timedelta(
+        microseconds=nanoseconds // _NS_PER_MICROSECOND
+    )
 
 
 def _newest_mtime_ns(db: Path) -> int | None:

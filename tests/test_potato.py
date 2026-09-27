@@ -1037,6 +1037,22 @@ class TestDbUpdatedLabel:
         expected = datetime.fromtimestamp(ns / 1e9, tz=UTC).strftime("%Y-%m-%d %H:%M UTC")
         assert _db_updated_label() == expected
 
+    def test_label_truncates_rather_than_rounds_the_minute(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A rebuild in the last microsecond of a minute is stamped with the
+        minute it landed in, not the one it has not reached.  A float-second
+        conversion rounds 12:34:59.999999999 up to 12:35, and a footer that
+        reads ahead of the data it describes is worse than one that lags by a
+        fraction of a second."""
+        db = tmp_path / "coverage.db"
+        db.write_bytes(b"SQLite format 3\x00")
+        # 2023-11-14T22:13:59.999999999Z: rounds up through a float second.
+        ns = 1_700_000_039_999_999_999
+        os.utime(db, ns=(ns, ns))
+        self._patch_db(monkeypatch, db)
+        assert _db_updated_label() == "2023-11-14 22:13 UTC"
+
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
 def test_detail_panel_label_value_rows():

@@ -331,6 +331,33 @@ class TestHealthDbMtime:
         assert data["mtime_utc"].endswith("+00:00")
         assert data["mtime_utc"] == datetime.fromtimestamp(data["mtime"], tz=UTC).isoformat()
 
+    def test_mtime_and_mtime_utc_agree_to_the_microsecond(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The epoch float and the ISO stamp beside it are one instant.
+
+        A float second cannot hold a nanosecond mtime, so converting the two
+        fields independently let `mtime_utc` sit up to half a second off
+        `mtime`; and fromtimestamp rounds, so a file stamped in the last
+        microsecond of a second reported the next one — a rebuild announced
+        before it happened.  Both fields now come from one truncating
+        conversion, so a client that derives one from the other always agrees.
+        """
+        import recoverage.api as api
+
+        db = tmp_path / "coverage.db"
+        db.write_bytes(b"SQLite format 3\x00")
+        # 2023-11-14T22:13:59.999999999Z, the last nanosecond of a second.
+        ns = 1_700_000_039_999_999_999
+        os.utime(db, ns=(ns, ns))
+        monkeypatch.setattr(api, "_db_path", lambda: db)
+
+        status, headers, body = wsgi_get("/api/health")
+        assert status.startswith("200")
+        data = json.loads(decode_body(body, headers))["db"]
+        assert data["mtime_utc"] == "2023-11-14T22:13:59.999999+00:00"
+        assert data["mtime_utc"] == datetime.fromtimestamp(data["mtime"], tz=UTC).isoformat()
+
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
 class TestApiTargets:
