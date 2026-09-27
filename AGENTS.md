@@ -50,6 +50,7 @@ recoverage/
 │   ├── test_serve_harness.py # Shared serve harness (builds the sample db, boots the server)
 │   ├── test_potato.py        # Potato Mode unit tests
 │   ├── test_perf.py          # Deterministic perf gates (work counters, not wall clock)
+│   ├── test_metrics.py       # Request id, RED counters, slow-request log line
 │   ├── test_release.py       # Release contract: version, changelog, declared floors
 │   ├── test_supply_chain.py  # Pins: rebrew ref/sha, declared-vs-imported deps, bundled-asset grants
 │   ├── test_fuzz.py          # Seeded mutation campaigns over the untrusted-input surfaces
@@ -60,6 +61,7 @@ recoverage/
     ├── __main__.py          # python -m recoverage
     ├── _paths.py            # DB path resolution (RECOVERAGE_DB, rebrew-project.toml db_dir)
     ├── config.py            # RECOVERAGE_* env: flag defaults, validation, startup banner
+    ├── metrics.py           # In-process RED counters (metrics.REQUESTS), read by /api/health
     ├── cli.py               # Typer CLI entry point (serve, stats, export, check, regen, open)
     ├── server.py            # Bottle app, shared helpers & compression
     ├── disasm.py            # Capstone disassembly (optional extra): probe, thread-local Cs, memo
@@ -202,7 +204,7 @@ The release policy is not written down anywhere else, so it is stated here and
 |------|--------|-------------|
 | `/` | GET | Main SPA dashboard |
 | `/potato` | GET | Potato Mode (pure-HTML fallback) |
-| `/api/health` | GET | Server version, DB info, installed extras |
+| `/api/health` | GET | Server version, DB info, installed extras, request counters |
 | `/api/targets` | GET | List available targets |
 | `/api/targets/<target>/stats` | GET | Per-section coverage stats |
 | `/api/targets/<target>/data` | GET | Full section + cell data |
@@ -273,6 +275,14 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   prefix, and the two ignores (PT006, PT018) each carry their reason next to
   them in `[tool.ruff.lint]` in pyproject.toml; that comment is the record of
   what the tree is expected to pass
+- Every request carries an id (`server._REQUEST_TLS`, echoed as
+  `X-Request-ID`, stamped on every log record by `server._RequestIdFilter`),
+  and every request is counted in `metrics.REQUESTS` under its route rule.
+  A new failure path that answers 4xx/5xx from outside a handler (bottle
+  turns an escaped exception into a 500 only *after* `after_request` has
+  filed the request as a 200) must call `server._reclassify_request`, or the
+  error rate silently reads zero; `test_metrics.py` pins that. The design
+  rationale is in `docs/DESIGN.md` (*Request Observability*).
 - HTML/CSS/JS in `assets/` — no build step, VanJS for reactivity
 - The cell-state vocabulary is owned by rebrew (`rebrew.build_db._KNOWN_CELL_STATES`)
   and must be covered on the rendering side: `potato.COLORS` + `LEGEND_ITEMS`,

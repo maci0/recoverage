@@ -22,6 +22,7 @@ import sqlite3
 import threading
 import time
 import unicodedata
+import uuid
 from collections import deque
 from collections.abc import Iterator, Sequence
 from pathlib import Path
@@ -51,6 +52,7 @@ from rebrew.workspace import (
     targets_table,
 )
 
+from recoverage import metrics
 from recoverage._paths import _db_path
 
 # Thread-local compressor — python-zstandard gives ZstdCompressor instances NO
@@ -1769,6 +1771,122 @@ def _auth_token_matches(provided: str) -> bool:
     )
 
 
+# -- Request instrumentation ------------------------------------------------
+# One correlation id per request, carried on the log line, the response
+# header, and the RED counters.  Without it a report of "the export was slow"
+# can only be matched against a wall of undated, unlabelled lines, because
+# the request log records neither the status nor how long anything took.
+
+_REQUEST_ID_HEADER = "X-Request-ID"
+_REQUEST_ID_MAX_LEN = 64
+#: Per-thread so concurrent requests do not overwrite each other's id; the
+#: serving threads are per-request, and a background thread (the SSE poller)
+#: simply has none.
+_REQUEST_TLS = threading.local()
+
+
+def _new_request_id() -> str:
+    """Reuse the caller's correlation id, or mint one."""
+    provided = _header(_REQUEST_ID_HEADER, "")
+    if provided:
+        # Untrusted: capped and control-char escaped so a crafted header
+        # cannot forge log lines (same rule as _log_safe) or bloat the log.
+        return _log_safe(provided)[:_REQUEST_ID_MAX_LEN]
+    return uuid.uuid4().hex[:12]
+
+
+class _RequestIdFilter(logging.Filter):
+    """Stamp the current request id onto every record the app logs.
+
+    Records from other loggers (bottle, rebrew) never pass this filter, so
+    the formatter supplies the same field's default for them.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.request_id = getattr(_REQUEST_TLS, "request_id", "-")
+        return True
+
+
+_log.addFilter(_RequestIdFilter())
+
+
+@app.hook("before_request")
+def _start_request() -> None:
+    """Open the request's timing window and correlation id.
+
+    Registered before the auth hook so a rejected request is still counted
+    and still carries an id in its 401 line.  The id is left on the
+    thread-local afterwards: the error handler runs after ``after_request``
+    and its traceback line must carry the same id.
+    """
+    _REQUEST_TLS.request_id = _new_request_id()
+    _REQUEST_TLS.started_at = time.perf_counter()
+    metrics.REQUESTS.start()
+
+
+@app.hook("after_request")
+def _finish_request() -> None:
+    """Record status and duration, and surface the id on the response.
+
+    The counters answer "did it succeed, how long did it take"; a request
+    past SLOW_REQUEST_MS is one line at WARNING instead of a number in a
+    snapshot, because that is the only one an operator watching the log can
+    act on.
+    """
+    request_id = getattr(_REQUEST_TLS, "request_id", None)
+    started_at = getattr(_REQUEST_TLS, "started_at", None)
+    _REQUEST_TLS.started_at = None
+    _REQUEST_TLS.counted = None
+    status = response.status_code
+    # bottle raises from request.route when no route matched (a request
+    # rejected in a before_request hook never reaches the router), so the
+    # environ copy is the one that answers with None instead.
+    matched = request.environ.get("bottle.route")
+    rule = getattr(matched, "rule", None) if matched else None
+    route = metrics.route_label(request.path, rule)
+    if request_id:
+        response.set_header(_REQUEST_ID_HEADER, request_id)
+    if started_at is None:
+        # before_request never ran (an error raised ahead of it, or a request
+        # the WSGI harness issued without the hook): nothing to time.
+        return
+    duration_ms = (time.perf_counter() - started_at) * 1000.0
+    timed = route not in metrics.UNBOUNDED_ROUTES
+    metrics.REQUESTS.finish(route, status, duration_ms, timed=timed)
+    _REQUEST_TLS.counted = (route, status)
+    if timed and duration_ms >= metrics.SLOW_REQUEST_MS:
+        _log.warning(
+            "Slow request: %s %s -> %d in %.0fms",
+            _log_safe(request.method),
+            _log_safe(request.path),
+            status,
+            duration_ms,
+        )
+    else:
+        _log.debug(
+            "%s %s -> %d in %.0fms",
+            _log_safe(request.method),
+            _log_safe(request.path),
+            status,
+            duration_ms,
+        )
+
+
+def _reclassify_request(status: int) -> None:
+    """Correct the counted status of a request that failed after the hook.
+
+    ``after_request`` runs before bottle hands an escaped exception to the
+    error handler, so it counted the request as the 200 it was still
+    carrying.  Without this, every 500 and 503 (a corrupt or rebuilding
+    coverage.db, the failure the operator most needs to see) would land in
+    the 2xx bucket and the error rate would read zero.
+    """
+    counted = getattr(_REQUEST_TLS, "counted", None)
+    if counted is not None:
+        metrics.REQUESTS.reclassify(counted[0], counted[1], status)
+        _REQUEST_TLS.counted = None
+
+
 # Failed-token-attempt throttle: without it, a network-reachable server
 # (--allow-remote + --token) accepts unlimited online guesses at the bearer
 # token.  Global (per-process), not per-source-IP — behind NAT every client
@@ -1920,6 +2038,7 @@ def _handle_unexpected_error(error: Any) -> Any:
     """
     exc = getattr(error, "exception", None)
     if isinstance(exc, sqlite3.Error):
+        _reclassify_request(503)
         return _db_unavailable_err(exc)
     # Returning the HTTPError itself would make _cast re-enter the error
     # handler (recursion until the wsgi catch-all); returning None would emit
@@ -1927,6 +2046,7 @@ def _handle_unexpected_error(error: Any) -> Any:
     # on arbitrary unhandled exceptions, so they get the same control-char
     # escaping as every other request log (%0A in the path would otherwise
     # forge multi-line entries exactly when the operator reads the traceback).
+    _reclassify_request(500)
     _log.error(
         "Unhandled error serving %s %s",
         _log_safe(request.method),
@@ -1940,14 +2060,18 @@ def _handle_unexpected_error(error: Any) -> Any:
 
 @app.hook("before_request")
 def _log_request() -> None:
-    """Log incoming requests at DEBUG level for operational visibility."""
+    """Reject requests carrying a Host this bind does not answer for.
+
+    (The method/path line for every request, with its status and duration,
+    is emitted once by the after_request hook.)
+    """
     # Method/path are attacker-controlled (the path is percent-decoded), so
     # control characters are escaped to keep the log line-per-request.
-    _log.debug("%s %s", _log_safe(request.method), _log_safe(request.path))
-    # DNS-rebinding guard for loopback installs: the Host header must name a
-    # loopback host.  Requests without a Host header (non-HTTP/1.1 clients,
-    # WSGI test harnesses) are left to the server's own address handling.
     if ALLOWED_HOSTS is not None:
+        # DNS-rebinding guard for loopback installs: the Host header must name
+        # a loopback host.  Requests without a Host header (non-HTTP/1.1
+        # clients, WSGI test harnesses) are left to the server's own address
+        # handling.
         host = _header("Host", "")
         if host and _hostname_of(host) not in ALLOWED_HOSTS:
             # Audit trail: a rejected Host on a loopback bind is a

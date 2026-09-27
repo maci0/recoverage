@@ -264,7 +264,7 @@ deployment that moved off `8001` needs no second place to configure.
 |------|--------|-------------|
 | `/` | GET | Main SPA dashboard |
 | `/potato` | GET | Potato Mode (pure-HTML fallback) |
-| `/api/health` | GET | Server version, DB info, installed extras |
+| `/api/health` | GET | Server version, DB info, installed extras, request counters |
 | `/api/targets` | GET | List available targets |
 | `/api/targets/<target>/stats` | GET | Per-section coverage stats with percentages |
 | `/api/targets/<target>/data` | GET | Section + cell data (`?section=.text` for partial) |
@@ -283,6 +283,34 @@ request and a repeat of that key is answered with the recorded result
 remembered for 10 minutes (the ledger holds more slots than the rate limit
 admits in that window, so a key is only ever dropped by its own age), and a
 failed run is not remembered.
+
+### Observing a running server
+
+Every response carries an `X-Request-ID` header, and every log line for that
+request repeats it as `[rid=...]`, including the traceback of a failed one.
+Send your own `X-Request-ID` and the server uses it instead of minting one,
+so a report from a client can be matched to the server log. Raise the detail
+with `--log-level DEBUG` to get one line per request with its status and
+duration; a request slower than a second is one `WARNING` line at any level.
+
+`/api/health` carries the counters for the process:
+
+```json
+{
+  "status": "healthy",
+  "requests": {
+    "total": 412, "errors": 1, "slow": 0, "in_flight": 1,
+    "slow_threshold_ms": 1000.0, "mean_ms": 4.812, "max_ms": 91.204,
+    "by_status": {"2xx": 409, "4xx": 2, "5xx": 1},
+    "by_route": {"/api/targets/<target>/data": {"requests": 12, "errors": 0, "max_ms": 91.2}}
+  }
+}
+```
+
+Routes are counted by their rule, never by the raw path, so the map stays
+bounded whatever a caller asks for. The snapshot is taken before the reading
+request is filed, so it describes everything up to it. There is no metrics
+backend to configure: these numbers live in the process and reset with it.
 
 ### Error responses
 

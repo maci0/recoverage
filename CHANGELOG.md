@@ -10,6 +10,21 @@ module ships in the published package. See *Breaking*.
 
 ### Added
 
+- **Every response carries a request id, and the log repeats it.** The server
+  logged the method and path on the way in but never the status, the duration,
+  or which client asked, so a report of "the export was slow" could not be
+  matched to anything in the log. Each response now carries `X-Request-ID`
+  (minted per request, or taken from the caller's own `X-Request-ID` when one
+  is sent), and every log line for the request repeats it as `[rid=...]`,
+  including the traceback of an unhandled error. `--log-level DEBUG` gives one
+  line per request with its status and duration; a request over a second is
+  one `WARNING` line at any level. The per-request line that used to be
+  emitted on the way in is not repeated on the way out.
+- **`/api/health` reports the request counters for the process.** `total`,
+  `errors` (5xx), `slow`, `in_flight`, the latency extremes, and a breakdown
+  by status class and by route rule, so the error rate and the slowest
+  endpoint are readable without attaching a debugger. Routes are counted by
+  their rule rather than the raw path, keeping the breakdown bounded.
 - **`recoverage serve` reads its configuration from the environment.**
   `RECOVERAGE_PORT`, `RECOVERAGE_BIND`, `RECOVERAGE_ALLOW_REMOTE`,
   `RECOVERAGE_CORS`, `RECOVERAGE_CORS_ORIGIN`, `RECOVERAGE_TOKEN` and

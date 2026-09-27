@@ -582,11 +582,19 @@ def serve(
     # Configure logging at the resolved level, so a service can turn the
     # per-request chatter down (WARNING) or the detail up (DEBUG) without a
     # code change; the level it runs at is reported in the banner below.
-    logging.basicConfig(
-        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
-        datefmt="%H:%M:%S",
-        level=resolved.log_level,
+    # The request id is the pivot between a log line and the client that
+    # reported it: it is echoed on the X-Request-ID response header, and
+    # carried into the traceback line of a failed request.  `defaults` fills
+    # it in for records from loggers the app does not own (bottle, rebrew).
+    handler = logging.StreamHandler()
+    handler.setFormatter(
+        logging.Formatter(
+            "%(asctime)s %(levelname)s [%(name)s] [rid=%(request_id)s] %(message)s",
+            datefmt="%H:%M:%S",
+            defaults={"request_id": "-"},
+        )
     )
+    logging.basicConfig(handlers=[handler], level=resolved.log_level)
 
     allowed_origins: list[str] = []
     if cors:

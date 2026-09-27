@@ -20,6 +20,7 @@ import typer
 from rebrew.workspace import VA_MAX, parse_va_candidates
 
 from recoverage import __version__
+from recoverage import metrics as _metrics
 from recoverage import server as _server
 from recoverage._paths import _db_path
 from recoverage.disasm import (
@@ -741,6 +742,10 @@ def handle_api_health() -> bytes:
             },
             "targets_count": target_count,
             "cors": _server.CORS_ENABLED,
+            # RED counters for this process: request rate, error rate, and
+            # latency extremes, so the operator can tell "one slow request"
+            # from "the dashboard got slow" without a metrics backend.
+            "requests": _metrics.REQUESTS.snapshot(),
         },
         Cache_Control=CACHE_NO_STORE,
     )
