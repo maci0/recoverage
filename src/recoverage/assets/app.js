@@ -16,8 +16,11 @@ const FN_URL = (t, va) => `/api/targets/${enc(t)}/functions/${enc(va)}`;
 // ============================================================================
 // Constants
 // ============================================================================
+// One ellipsis style across the UI: these strings and the "Loading..." in the
+// overlays and pane states render on the same screen, and the mix of "..." and
+// "…" read as two different tools.
 const MSG = {
-  LOADING: "Loading…",
+  LOADING: "Loading...",
   ERROR_PREFIX: "Error: ",
   SELECT_FUNCTION: "(select a function)",
   NO_C_SOURCE: "(no C implementation for this function yet)",
@@ -30,9 +33,9 @@ const MSG = {
   BYTES_BSS: "(uninitialized data - no raw bytes)",
   BYTES_LOAD_FAILED: "(original binary not found: expected it at /original/ in the project directory)",
   GLOBAL_VAR: "Global variable",
-  REGEN_USING_CACHE: (r) => `Using cached data. Regen available in ${r}s...`,
-  REGEN_IN_PROGRESS: "Regenerating…",
-  REGEN_UNAVAILABLE: "Regen unavailable",
+  REGEN_USING_CACHE: (r) => `Using cached data. Regeneration available in ${r}s...`,
+  REGEN_IN_PROGRESS: "Regenerating...",
+  REGEN_UNAVAILABLE: "Regeneration unavailable",
   NA: "(n/a)",
   FETCH_FAILED: (url) => `(failed to load: ${url})`,
   NO_DECL: "(no declaration found)",
@@ -66,7 +69,7 @@ function loadDetail() {
   window.RC = { van, MetaItem, MSG, hex, STATE_LABEL, enc, encPath, onReady: () => { detailReady.val = true; } };
   const el = document.createElement("script");
   el.src = "/detail.js";
-  // Without this the panes it owns would sit on "Loading…" forever.
+  // Without this the panes it owns would sit on "Loading..." forever.
   el.addEventListener("error", () => { detailFailed.val = true; });
   document.head.append(el);
 }
@@ -90,10 +93,15 @@ async function fetchArrayBufferSafe(url) {
 // still normalize to the same id.
 const gridId = (secName) => `grid-${secName.replaceAll('.', '')}`;
 
-// Legend rows: cell state -> the words used for it in the UI.
+// Legend rows: cell state -> the words used for it in the UI.  One row per
+// colour STATE_ID can paint.  `proven` was missing: the grid
+// painted it (slot 6) and the hover tooltip named it, but the legend had no
+// row for it, so a verified-semantic block was a colour the reader could not
+// look up.  Potato Mode already carries the row.  The swatch class is
+// `swatch-<key>`, so each key needs a rule in style.css.
 const LEGEND = [["none", "undocumented"], ["exact", "exact match"], ["reloc", "reloc match"],
-  ["near_match", "near-match"], ["stub", "stub"], ["padding", "padding"],
-  ["compile_error", "problem"]];
+  ["near_match", "near-match"], ["stub", "stub"], ["proven", "proven"],
+  ["padding", "padding"], ["compile_error", "problem"]];
 
 // Sections in PE load order (ascending VA), which puts .text first instead of
 // leaving the section that carries all the work at the end of an alphabetical
@@ -380,9 +388,32 @@ const App = () => {
     }
   };
 
-  // The regen handler lives in detail.js: it only runs on a Reload click, long
+  // The regen handler lives in detail.js: it only runs on a Regenerate click, long
   // after that file lands.  It gets the two states it writes plus the reloader.
-  const reloadData = () => window.RC.reloadData?.({ loadingMsg, summaryData, loadData, MSG });
+  //
+  // A regen re-runs rebrew catalog + build-db in-process, so it is long enough
+  // that the only acknowledgement (a 12px line in the topbar stats row, a row
+  // away from the button) reads as a dropped click, and a second click during
+  // it only printed the cooldown notice.  The busy flag both acknowledges the
+  // click at the button and makes a repeat click a no-op.
+  const isRegenerating = van.state(false);
+  const reloadData = async () => {
+    if (isRegenerating.val) return;
+    isRegenerating.val = true;
+    try {
+      await window.RC.reloadData?.({ loadingMsg, summaryData, loadData, MSG });
+    } finally {
+      isRegenerating.val = false;
+    }
+  };
+
+  // The Regenerate button's own tooltip and label: a failed detail pane
+  // outranks the busy state, and both outrank the resting label.
+  const regenTitle = () => {
+    if (detailFailed.val) return MSG.DETAIL_UNAVAILABLE;
+    if (isRegenerating.val) return MSG.REGEN_IN_PROGRESS;
+    return "Regenerate coverage data";
+  };
 
   let searchTimeout = null;
   const applySearch = (text) => {
@@ -390,12 +421,12 @@ const App = () => {
     searchQuery.val = text;
     syncUrl();
   };
+  // Typing goes through applySearch, so the debounced path mirrors the Enter
+  // path and the URL keeps the query: a reload or a shared link otherwise
+  // dropped a search the status line still reported as live.
   const onSearchInput = (e) => {
     clearTimeout(searchTimeout);
-    searchTimeout = setTimeout(() => {
-      searchQuery.val = e.target.value;
-      syncUrl();
-    }, 250);
+    searchTimeout = setTimeout(() => applySearch(e.target.value), 250);
   };
   // Clearing has to reach the input element too: it is uncontrolled, so the
   // state alone would leave the typed text sitting in the box while the map
@@ -1243,7 +1274,7 @@ const App = () => {
             return span({ style: "display: none;" });
           },
           button({ class: "btn icon-btn", "aria-label": () => isLightMode.val ? "Switch to Dark Mode" : "Switch to Light Mode", title: () => isLightMode.val ? "Switch to Dark Mode" : "Switch to Light Mode", onclick: () => { isLightMode.val = !isLightMode.val; localStorage.setItem('recoverage_theme', isLightMode.val ? 'light' : 'dark'); } }, () => isLightMode.val ? MoonIcon() : SunIcon()),
-          button({ class: "btn icon-btn", "aria-label": "Reload data", disabled: () => detailFailed.val, title: () => detailFailed.val ? MSG.DETAIL_UNAVAILABLE : "Reload", onclick: reloadData }, ReloadIcon())
+          button({ class: "btn icon-btn", "aria-label": regenTitle, disabled: () => detailFailed.val || isRegenerating.val, title: regenTitle, onclick: reloadData }, ReloadIcon())
         )
       )
     ),

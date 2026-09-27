@@ -36,7 +36,7 @@ def _health() -> dict:
 
 
 @pytest.fixture
-def replace_route() -> Iterator[Swap]:
+def replace_route() -> Swap:
     """Temporarily swap a route's callback, as a context manager."""
 
     @contextlib.contextmanager
@@ -57,7 +57,7 @@ def replace_route() -> Iterator[Swap]:
             return
         raise AssertionError(f"no GET route for {rule}")
 
-    yield _apply
+    return _apply
 
 
 def _boom(original: Callable) -> object:

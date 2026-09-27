@@ -341,10 +341,11 @@ graph TD
 > **As an AI Operator**, I want to trigger a data rebuild from the dashboard so that after an overnight batch run I can refresh coverage without restarting the server.
 
 ### Acceptance Criteria
-- Reload button in the topbar with a 5-second cooldown to prevent spam
+- Regenerate button in the topbar with a 5-second cooldown to prevent spam
+- The button reads *Regenerating...* and is disabled for the duration of the run, so the click is acknowledged where it was made and a repeat click is a no-op
 - The server enforces its own 5-second cooldown and serializes regen behind a lock, so a second caller gets `429` rather than a second build
 - `POST /api/regen` runs rebrew's catalog + build-db in-process
-- The Reload button sends a fresh `Idempotency-Key` per click; a key whose run already completed is replayed from a bounded ledger (`{"ok": true}`, `Idempotent-Replay: true`) instead of rebuilding, and a failed run is not remembered
+- The Regenerate button sends a fresh `Idempotency-Key` per click; a key whose run already completed is replayed from a bounded ledger (`{"ok": true}`, `Idempotent-Replay: true`) instead of rebuilding, and a failed run is not remembered
 - Only accessible from localhost (security gate)
 - Dashboard reloads data after regeneration completes
 - ETag-based caching: if DB unchanged, API returns `304 Not Modified`
@@ -356,8 +357,8 @@ sequenceDiagram
     participant Server as recoverage server
     participant Rebrew as rebrew (in-process)
 
-    U->>UI: Click Reload button
-    UI->>UI: Start 5s cooldown
+    U->>UI: Click Regenerate button
+    UI->>UI: Disable button, show Regenerating...
     UI->>Server: POST /api/regen
     Server->>Server: Verify localhost origin
 

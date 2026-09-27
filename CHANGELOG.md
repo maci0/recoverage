@@ -190,6 +190,26 @@ module ships in the published package. See *Breaking*.
 
 ### Fixed
 
+- **The map legend names every colour the grid paints.** `proven` (a function
+  promoted to a match after verification) was painted in its own cyan and
+  named in the block tooltip, but had no legend row, so a reader had no way
+  to look that colour up. Potato Mode already carried the row. The SPA legend
+  now names all eight painted states, and a test fails if a state paints
+  without a row (or a row renders a swatch the stylesheet does not define).
+- **The Regenerate button acknowledges the click.** A regen re-runs
+  `rebrew catalog` + `build-db` in-process, so it can take a while, and the
+  only signal was a small line in the topbar stats row, a row away from the
+  button. Clicking it again during the rebuild only printed a cooldown
+  notice. The button now reads *Regenerating...* and is disabled until the
+  rebuild settles, and the notices it prints say *Regenerate* rather than the
+  internal *regen* the rest of the code calls it.
+- **A typed search query lands in the URL.** The debounced input handler set
+  the query state without syncing the URL, so reloading the page or sharing
+  the link dropped a search the status line still reported as live. Typing
+  now takes the same path as pressing Enter.
+- **"Loading" is spelled one way across the UI.** The loading panes and
+  overlays read `Loading...` while the shared message table read `Loading…`;
+  both could render on the same screen.
 - **`/src/<path>` and `/original/<path>` answer 404 instead of 500 for a path
   holding a NUL.** `os.realpath` raises `ValueError` on an embedded NUL, and
   the containment check resolves the candidate before serving it, so
