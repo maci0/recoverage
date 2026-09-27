@@ -1543,3 +1543,13 @@ class TestCellStateVocabularyCoverage:
         assert "compile_error" in keys
         # No legend row may point at a colour the map cannot paint.
         assert set(keys) <= set(COLORS)
+
+    def test_design_doc_names_every_state_it_lists(self) -> None:
+        """The DESIGN.md colour table copies COLORS; keep it from going short."""
+        from recoverage.potato import COLORS
+
+        root = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
+        design = (root / "docs" / "DESIGN.md").read_text(encoding="utf-8")
+        table = design.split("## Color Scheme & Styling")[1].split("\n## ")[0]
+        unnamed = sorted(state for state in COLORS if state not in table)
+        assert unnamed == [], f"DESIGN.md colour table does not name: {unnamed}"

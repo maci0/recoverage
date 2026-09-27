@@ -131,6 +131,15 @@ module ships in the published package. See *Breaking*.
 
 ### Changed
 
+- **The design docs describe the code as it is.** `USER_STORIES.md` and
+  `DESIGN.md` still described a DOM grid of per-cell nodes, CSS-class
+  filtering, a bare `recoverage` command that serves on its own, and an
+  inlined shell of 14.55 KB; the SPA paints one canvas per section, filters
+  with a second alpha pass over cached rects, is launched as
+  `recoverage serve`, and the shell compresses to 14.1 KB. The cell-state
+  colour list, Potato Mode's colour table, the Potato test counts and the
+  payload budget now match the code, and a test fails when a cell state
+  drops out of the documented table.
 - **Static assets revalidate instead of re-downloading.** The ten
   compressed assets sent `Cache-Control: no-cache` with no validator, so a
   repeat visit re-sent 55 KB and every asm-pane opening re-sent

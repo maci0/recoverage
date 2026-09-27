@@ -2,6 +2,11 @@
 
 User stories for the **recoverage** coverage dashboard, organized by persona and workflow.
 
+What the dashboard must do, one story per workflow, each with acceptance criteria
+that the shipped code satisfies. How it is built is [DESIGN.md](DESIGN.md); the
+attack surface is [THREAT_MODEL.md](THREAT_MODEL.md). Last verified against the
+code: 2026-09-27.
+
 ---
 
 ## Personas
@@ -20,10 +25,10 @@ User stories for the **recoverage** coverage dashboard, organized by persona and
 > **As an RE Dev**, I want to start the coverage dashboard from my project directory so that I can visually inspect progress without reading raw JSON or SQL.
 
 ### Acceptance Criteria
-- `recoverage` serves a local web dashboard on port 8001
-- Dashboard auto-opens in the default browser
+- `recoverage serve` serves a local web dashboard on port 8001
+- Dashboard auto-opens in the default browser (`recoverage serve --no-open` suppresses it)
 - Server resolves `coverage.db` from the current working directory: `[project] db_dir` in `rebrew-project.toml` when set, falling back to `db/coverage.db`
-- `--regen` flag runs `rebrew catalog` + `rebrew build-db` before starting
+- `--regen` flag runs rebrew's catalog + build-db (in-process, via `rebrew.catalog` / `rebrew.build_db`) before starting
 - `--no-open` flag suppresses the browser auto-open
 
 ```mermaid
@@ -49,7 +54,7 @@ graph TD
 > **As an RE Dev**, I want to see a defrag-style grid where each cell represents a chunk of the binary so that I can instantly spot which areas are matched, partially matched, or still stubs.
 
 ### Acceptance Criteria
-- Grid cells colored by match status: Exact (green), Reloc (blue), Near-match (yellow), Stub (red), Padding (silver), None (gray); data and thunk cells render as undocumented (gray)
+- Grid cells colored by match status: Exact (green), Reloc (blue), Near-match (yellow), Proven (cyan), Size mismatch (yellow), Stub (red), Padding (silver), Problem (violet), None (gray); data and thunk cells render as undocumented (gray)
 - Grid cells stay square: a `ResizeObserver` triggers a relayout that resizes cells (floor 6px desktop, 12px under 700px), and the section's declared column count is never reduced
 - Section tabs (`.text`, `.rdata`, `.data`, `.bss`) switch views instantly (cached layouts)
 - Grids painted to a per-section canvas; layout cached, only the active section repaints
@@ -58,12 +63,12 @@ graph TD
 graph TD
     A["Dashboard loaded"] --> B["Fetch /api/targets/<target>/data"]
     B --> C["Parse sections<br/>.text, .rdata, .data, .bss"]
-    C --> D["Build grid per section<br/>(innerHTML injection)"]
-    D --> E["Cache all grids in DOM"]
+    C --> D["Build per-section layout<br/>(cell rects + hit-map, cached)"]
+    D --> E["Paint the active section<br/>onto its canvas"]
 
     E --> F["Click section tab"]
-    F --> G["Toggle display:none<br/>on cached grids"]
-    G --> H["Instant tab switch<br/>(no re-render)"]
+    F --> G["Paint the cached layout<br/>of the new section"]
+    G --> H["Instant tab switch<br/>(no re-layout, no per-cell DOM)"]
 
     E --> I["Container resize"]
     I --> J["Relayout: shrink cell size<br/>(declared column count is fixed)"]
@@ -90,10 +95,10 @@ graph TD
 ```mermaid
 sequenceDiagram
     participant U as User
-    participant Grid as Grid (Event Delegation)
+    participant Grid as Grid (canvas hit-test)
     participant Panel as Side Panel
     participant API as /api/targets/{target}/functions/{va}
-    participant ASM as /api/asm
+    participant ASM as /api/targets/{target}/asm
 
     U->>Grid: Click cell
     Grid->>API: GET /api/targets/{target}/functions/{va}
@@ -120,14 +125,13 @@ sequenceDiagram
 - Filter buttons: All, E (Exact), R (Reloc), M (Near-match), S (Stub), P (Padding)
 - Filters are set-based toggles (multiple can be active simultaneously)
 - Non-matching cells are dimmed (opacity 0.15), not hidden, preserving spatial layout
-- Filtering is a repaint pass over precomputed cell rects (no per-cell DOM)
-- Progress bar segments are clickable to quick-filter by status
+- Filtering is a second alpha pass over precomputed cell rects (no per-cell DOM, no CSS class toggling)
+- Progress bar segments are clickable to quick-filter by status; a segment below 0.5% is not rendered
 
 ```mermaid
 graph TD
     A["Click filter button<br/>or progress bar segment"] --> B["Toggle status in<br/>activeFilters Set"]
-    B --> C["Update CSS classes on<br/>grid container"]
-    C --> D["Browser CSS engine<br/>instantly dims/shows cells"]
+    B --> C["Repaint from cached cell rects<br/>with globalAlpha 0.15"]
 
     E["Click 'All' button"] --> F["Clear all filters"]
     F --> C
@@ -135,7 +139,7 @@ graph TD
     G["Click progress bar<br/>'Stub' segment"] --> H["Set filter = {Stub}"]
     H --> C
 
-    D --> I["Grid preserves spatial<br/>layout (dimmed, not removed)"]
+    C --> I["Grid preserves spatial<br/>layout (dimmed, not removed)"]
 
     style A fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
     style E fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
@@ -235,9 +239,10 @@ graph TD
 
 ### Acceptance Criteria
 - Segmented progress bar with Exact (green), Reloc (blue), Near-match (yellow), Stub (red), Padding (silver)
-- Coverage stats overlaid: total bytes, matched bytes, percentage
-- Each segment is clickable to filter the grid by that status
-- Stats are precomputed in the DB and served via API
+- Coverage stats rendered as a text row above the bar (never inside it): total section bytes, matched cells, coverage %
+- "Matched" counts exact + reloc cells only: a near-match is a miss and a stub is a stand-in
+- Each segment is clickable to filter the grid by that status, and reachable by keyboard with `aria-pressed`
+- Coverage stats are precomputed in the DB (`section_cell_stats`) and served via API
 
 ```mermaid
 graph LR
@@ -258,6 +263,8 @@ graph LR
     style M fill:#ffc800,stroke:#d97706,color:#000
     style S fill:#ff0000,stroke:#dc2626,color:#fff
 ```
+
+> Padding is also a segment and filter button; it is left out of the diagram above only because the example percentages show the four dominant states.
 
 ---
 
@@ -299,7 +306,9 @@ graph TD
 ### Acceptance Criteria
 - Accessible at `/potato`
 - No CSS, no JavaScript — all styling via HTML attributes (`bgcolor`, `border`, etc.)
-- Full feature parity: grid, filters, search, section tabs, detail panel
+- Same surface as the SPA: grid, filters, search, section tabs, detail panel, data inspector, hex dump, assembly, globals, target selector
+- The grid is paginated (32 rows per page, `?page=N`); a real `.text` section is ~25k cells, which unpaginated is ~7.7 MB of table markup
+- `?view=functions` renders the function list (`?sort=name|va|size|status`, `?status=`) instead of the grid
 - Multi-select filters via URL parameters
 - W3C Nu HTML Validator compliant
 - Syntax highlighting via Pygments (server-side `<font>` tags)
@@ -329,7 +338,8 @@ graph TD
 
 ### Acceptance Criteria
 - Reload button in the topbar with a 5-second cooldown to prevent spam
-- `POST /api/regen` triggers `rebrew catalog` + `rebrew build-db`
+- The server enforces its own 5-second cooldown and serializes regen behind a lock, so a second caller gets `429` rather than a second build
+- `POST /api/regen` runs rebrew's catalog + build-db in-process
 - Only accessible from localhost (security gate)
 - Dashboard reloads data after regeneration completes
 - ETag-based caching: if DB unchanged, API returns `304 Not Modified`
@@ -339,16 +349,16 @@ sequenceDiagram
     participant U as User
     participant UI as Dashboard
     participant Server as recoverage server
-    participant Rebrew as rebrew CLI
+    participant Rebrew as rebrew (in-process)
 
     U->>UI: Click Reload button
     UI->>UI: Start 5s cooldown
     UI->>Server: POST /api/regen
     Server->>Server: Verify localhost origin
 
-    Server->>Rebrew: rebrew catalog
+    Server->>Rebrew: run_catalog
     Rebrew-->>Server: db/data_*.json updated
-    Server->>Rebrew: rebrew build-db
+    Server->>Rebrew: build_db
     Rebrew-->>Server: db/coverage.db updated
 
     Server-->>UI: 200 OK
@@ -456,9 +466,10 @@ graph TD
 > **As an RE Dev**, I want to click source links in the detail panel to view the original `.c` files so that I can cross-reference the dashboard with the actual decompiled code.
 
 ### Acceptance Criteria
-- Source links in the panel point to `/src/<target>/<file>.c`
+- Source links in the panel point at `paths.sourceRoot` from the DB, falling back to `/src/<target>/<file>.c`
 - Server proxies `/src/*` and `/original/*` from the project directory (path-traversal safe)
-- Original DLL bytes fetched via `/original/<target>.dll` as ArrayBuffer
+- Original DLL bytes are fetched from `paths.originalDll`, falling back to `/original/<target>.dll`, as an ArrayBuffer cached in `data.originalDll`
+- A section with no file backing (or a `.bss` cell) has no bytes to slice, and the hex pane says so rather than showing unrelated bytes
 - File offset calculated from VA using section metadata
 
 ```mermaid
@@ -486,7 +497,8 @@ graph TD
 ### Acceptance Criteria
 - HTML, CSS, JS, and VanJS library inlined into a single response
 - Minified with `rjsmin`/`rcssmin` and compressed with Brotli/Zstd/gzip
-- Total payload ~14.5 KB (fits in TCP initial congestion window)
+- Total payload ~14.1 KB brotli, against a 14,600-byte budget (the TCP initial congestion window); `ui._check_payload_budget` warns with the exact overage if it grows past that
+- Everything deferrable (asm, hex, data inspector, live reload) lives in `detail.js`, which the shell preloads, so a new byte comes out of `detail.js` rather than out of the window
 - Compression algorithm auto-selected from `Accept-Encoding` header
 - Deferred Highlight.js loading: fetched from this origin (vendored in `assets/`) only on first code block click
 - `AbortController` cancels in-flight requests when clicking rapidly between cells
@@ -501,7 +513,7 @@ graph TD
     E -->|zstd| F["Zstandard compress"]
     E -->|br| G["Brotli compress"]
     E -->|gzip| H["Gzip compress"]
-    F --> I["~14.5 KB response"]
+    F --> I["~14.1 KB response<br/>(brotli is the smallest)"]
     G --> I
     H --> I
     I --> J["Browser parses + renders<br/>UI shell in first paint"]
@@ -529,13 +541,13 @@ Planned work (Minimap, data-segment XREFs, Diff View) is tracked in [DESIGN.md](
 ```mermaid
 graph LR
     subgraph "Phase 1: Data Generation"
-        A["rebrew catalog<br/>--json"] --> B["db/data_*.json"]
+        A["rebrew catalog"] --> B["db/data_*.json"]
         B --> C["rebrew build-db"]
         C --> D["db/coverage.db"]
     end
 
     subgraph "Phase 2: Dashboard Launch"
-        D --> E["recoverage"]
+        D --> E["recoverage serve"]
         E --> F["SPA dashboard<br/>or /potato"]
     end
 

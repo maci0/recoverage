@@ -1,5 +1,10 @@
 # ReCoverage UI Design Document
 
+How the dashboard is built. The requirements it implements are
+[USER_STORIES.md](USER_STORIES.md), the operating philosophies are
+[DESIGN_PRINCIPLES.md](DESIGN_PRINCIPLES.md), and the attack surface is
+[THREAT_MODEL.md](THREAT_MODEL.md). Last verified against the code: 2026-09-27.
+
 ## Overview
 ReCoverage is a reactive, high-performance web dashboard for visualizing binary reverse-engineering progress. It maps compiled C functions and data segments (`.text`, `.rdata`, `.data`, `.bss`) to their original binary offsets, providing a visual "defrag" style grid of the decompilation status.
 
@@ -22,7 +27,7 @@ The UI is built using a lightweight, dependency-free stack to ensure fast load t
    * `/api/targets/<target>/sections/<section>/bytes` endpoint serving raw hex-dumped byte slices from the original binary (`?offset=&size=`).
    * `/api/targets/<target>/asm?va=...&size=...` endpoint that dynamically disassembles binary chunks using Capstone (with LRU caching and in-memory cached binary reads).
    * `/api/events` Server-Sent Events stream that pushes a `db-updated` event whenever `coverage.db` changes on disk, so the SPA auto-refreshes without a manual reload (requires the threaded WSGI server, which gives each connection its own thread).
-   * `/api/regen` POST endpoint to trigger `rebrew catalog` + `rebrew build-db` regeneration.
+   * `/api/regen` POST endpoint to run rebrew's catalog + build-db in-process (`regen.run_regen`, localhost only, rate-limited).
    * With `--token`, an unauthenticated request is answered by content type: browsers asking for `text/html` get a short page explaining that `?token=` must be appended (it never echoes the token), and API clients keep the `{error, code, detail}` JSON contract.
    * Proxied paths: `/src/*` → `project_dir/src/`, `/original/*` → `project_dir/original/`
 
@@ -121,9 +126,11 @@ The UI is broken down into functional VanJS components in `app.js`:
   * **Exact**: Green (`rgba(16, 185, 129, 0.75)`)
   * **Reloc**: Blue/Teal (`rgba(2, 132, 199, 0.65)`)
   * **Near-match**: Yellow/Amber (`rgba(255, 200, 0, 0.65)`)
+  * **Size mismatch**: Yellow/Amber, the same hue as near-match (the SPA's `STATE_ID` packs both to slot 3)
   * **Proven**: Bold Cyan (`rgba(6, 182, 212, 0.8)`)
   * **Stub**: Red (`rgba(255, 0, 0, 0.65)`)
   * **Padding**: Silver (`rgba(200, 200, 220, 0.55)`)
+  * **Problem**: Violet (`--other-bg`, `rgba(168, 85, 247, 0.55)`, the same `#a855f7` Potato Mode uses)
 * **One palette, not two**: every other color is drawn from the same source. Status badges tint their fill with the state hue at 0.2 alpha (border 0.4) and take their text from the same hue, lightened where 4.5:1 needs it. Links use the cyan family (`--link`), not a stock blue. The highlight.js theme in `assets/hljs.css` reuses the app tokens — text, stub red for keywords, near-match amber for strings, exact green for names, `--link` for attributes, the accent for section markers — so a code pane reads as part of the dashboard instead of a pasted-in theme. Potato Mode derives its own colors from its module constants (`BG_COLOR`, `PANEL_COLOR`, `TRACK_COLOR`, `BORDER_COLOR`); no hex literal in `potato.py` is a stock framework neutral.
 * **Transitions**: Smooth `0.3s ease` transitions on background colors, borders, and opacities ensure fluid theme switching and filter toggling.
 * **Scrollbars**: Custom WebKit scrollbars styled to match the active theme, with `scrollbar-gutter: stable` applied to code blocks to prevent layout shifts.
@@ -137,7 +144,7 @@ The UI is broken down into functional VanJS components in `app.js`:
 ## Key Implementation Details
 
 ### Performance Optimizations
-* **First Draw in First TCP Packet**: `ui.py` intercepts requests to `/` and inlines `index.html`, `style.css`, `app.js`, and `van.min.js` into a single response. This response is minified (using `rjsmin` and `rcssmin`) and compressed using **Brotli (`br`)** or **Zstandard (`zstd`)** (falling back to `gzip`) to about 14.55 KB, inside the initial congestion window (10 x 1460-byte MSS), so the browser parses and renders the UI shell without any render-blocking network request.  The headroom is deliberately thin: `app.js` builds the whole UI (`index.html` carries no static markup), so a new byte has to come out of `detail.js` rather than out of the window, and `ui._check_payload_budget` prints the exact overage if the shell does outgrow it.
+* **First Draw in First TCP Packet**: `ui.py` intercepts requests to `/` and inlines `index.html`, `style.css`, `app.js`, and `van.min.js` into a single response. This response is minified (using `rjsmin` and `rcssmin`) and compressed using **Brotli (`br`)** or **Zstandard (`zstd`)** (falling back to `gzip`) to about 14.1 KB brotli, inside the initial congestion window (10 x 1460-byte MSS), so the browser parses and renders the UI shell without any render-blocking network request.  The headroom is deliberately thin: `app.js` builds the whole UI (`index.html` carries no static markup), so a new byte has to come out of `detail.js` rather than out of the window, and `ui._check_payload_budget` prints the exact overage if the shell does outgrow it.
 * **Advanced Compression**: The server picks the best algorithm the client accepts, preferring `zstd`, then `br`, then `gzip`.  Dynamic responses compress brotli at quality 5, not the default 11: measured on a 5.6 MB coverage payload, q=11 costs 5.9 s of CPU for 334 KB while q=5 costs 68 ms for 444 KB, and that cost is paid per request because API responses are not cached compressed.  Clients without zstd (Safari) would otherwise stall about six seconds on every load and every live reload.  The inlined index keeps q=11: it is compressed once per encoding, cached, and has a hard byte budget.
 * **HTTP/1.0, Threaded Connections**: The server is wsgiref, which speaks HTTP/1.0 and closes the connection after each response (no keep-alive). It runs on a `ThreadingMixIn` server class so each connection gets its own daemon thread — without that, the long-lived `/api/events` SSE stream would stall every other request.
 * **ETag Caching**: The heavy `/api/targets/<target>/data` endpoint calculates an `ETag` from a WAL-aware snapshot of `coverage.db` (`mtime_ns` + size, folding in `-wal` so a rebuild that only committed to the WAL still invalidates; raw `st_mtime` served stale 304s). If the database hasn't changed, the server responds with a `304 Not Modified` (0 bytes), making page reloads instantaneous.
@@ -224,7 +231,7 @@ Recoverage performs a soft version check on every database open and logs a warni
 * `functions`: All reversed functions — va (INTEGER), name, vaStart, size, fileOffset, status, module, cflags, symbol, markerType, files JSON, `detected_by` JSON, `size_by_tool` JSON, `textOffset`, ghidra_name, list_name, is_thunk, is_export, sha256, blocker, blockerDelta, size_reason, similarity
 * `globals`: Global variables — va (INTEGER), name, decl, files JSON, `module`, `size`
 * `sections`: PE sections — name, va, size, fileOffset, unitBytes, columns
-* `cells`: Grid cells per section — section_name, start, end, state (none/exact/reloc/near_match/stub/padding/data/thunk/proven/size_mismatch; legacy DBs may spell near_match as near_matching), functions JSON, label, parent_function
+* `cells`: Grid cells per section — section_name, start, end, state (none/exact/verified/reloc/near_match/stub/padding/data/thunk/proven/size_mismatch/drift/unchecked plus the tooling-failure group compile_error/extract_error/invalid_va/missing_file/missing_size/skip/unknown; legacy DBs may spell near_match as near_matching), functions JSON, label, parent_function
 * `history`: Status change log (persistent, never dropped) — target, va, old_status, new_status, changed_at
 * `verify_results`: Verification results (persistent, never dropped) — target, va, verified_at, byte_delta, diff_lines, similarity
 * `section_cell_stats`: Coverage buckets per target+section — total_cells, exact_count, reloc_count, near_match_count, stub_count, padding_count, data_count, thunk_count, none_count, proven_count, size_mismatch_count, other_count.  `other_count` is the producer's catch-all for the states no named bucket claims (tooling failures, unclassified annotations, the data drift/unchecked verdicts), so `total_cells` equals the sum of the buckets; `/stats` and `/data` serve it as `other` and compute the same catch-all on the live-query fallback, which is why the two paths report the same total.  A `section_cell_stats` written before that column reports `other: 0` rather than omitting the key.
@@ -295,18 +302,28 @@ Each filter link toggles that filter on/off while preserving other active filter
 - `[Clear]` link removes all filters
 
 ## Color Scheme & Styling (matches main UI)
-| Status | Color | Hex |
-|---------|-------|-----|
-| Exact | Green | `#10b981` |
-| Reloc | Blue | `#0ea5e9` |
-| Near-match | Yellow | `#f59e0b` |
-| Stub | Red | `#ef4444` |
-| None | Dark Gray | `#3F4958` |
+Cell states are the keys of `potato.COLORS`, spelled as `cells.state` spells them.
+
+| Cell state | Color | Hex |
+|------------|-------|-----|
+| `exact`, `verified` | Green | `#10b981` |
+| `reloc` | Blue | `#0ea5e9` |
+| `near_match`, `near_matching`, `size_mismatch` | Yellow | `#f59e0b` |
+| `proven` | Cyan | `#06b6d4` |
+| `stub` | Red | `#ef4444` |
+| `padding` | Silver | `#C0C0D4` |
+| `data` | Purple | `#8b5cf6` |
+| `thunk` | Orange | `#f97316` |
+| `drift`, `unchecked`, `compile_error`, `extract_error`, `invalid_va`, `missing_file`, `missing_size`, `skip`, `unknown` | Violet | `#a855f7` |
+| `none` | Dark Gray | `#3F4958` |
 | Background | Dark | `#0f1216` |
 | Panel | Slate | `#151a21` |
+| Progress track | Dark Slate | `#22272e` |
 | Code Block | Darker | `#0a0d14` |
 | Border | Cyan-tinted | `#1c2a38` |
 | Accent | Cyan | `#06b6d4` |
+
+The status rows are `potato.COLORS`, one row per colour. A state `build_db` can write that this table does not name is a bug: the legend beside the grid would be short a row, and `tests/test_potato.py` fails on it.
 
 ### Typography
 - **Body text**: `system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif` — proportional font for labels, headings, and UI chrome, matching the normal UI's body font stack.
@@ -359,7 +376,7 @@ Run the test harness to verify all rendering paths:
 pytest tests/test_potato.py -v
 ```
 
-This is 86 test functions covering 172 assertions across:
+This is 93 test functions, 132 collected cases, covering 189 assertions across:
 - All sections (`.text`, `.data`, `.rdata`, `.bss`)
 - Single and multi-filter combinations
 - Cell selection at various indices
