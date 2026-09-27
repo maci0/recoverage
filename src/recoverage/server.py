@@ -20,7 +20,6 @@ import json
 import logging
 import sqlite3
 import threading
-import time
 import unicodedata
 import uuid
 from collections import deque
@@ -1820,7 +1819,7 @@ def _start_request() -> None:
     and its traceback line must carry the same id.
     """
     _REQUEST_TLS.request_id = _new_request_id()
-    _REQUEST_TLS.started_at = time.perf_counter()
+    _REQUEST_TLS.started_at = clock.monotonic()
     metrics.REQUESTS.start()
 
 
@@ -1850,7 +1849,7 @@ def _finish_request() -> None:
         # before_request never ran (an error raised ahead of it, or a request
         # the WSGI harness issued without the hook): nothing to time.
         return
-    duration_ms = (time.perf_counter() - started_at) * 1000.0
+    duration_ms = (clock.monotonic() - started_at) * 1000.0
     timed = route not in metrics.UNBOUNDED_ROUTES
     metrics.REQUESTS.finish(route, status, duration_ms, timed=timed)
     _REQUEST_TLS.counted = (route, status)

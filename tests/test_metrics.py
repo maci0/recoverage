@@ -6,7 +6,6 @@ import contextlib
 import json
 import logging
 import sqlite3
-import time
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager as ContextManager
 
@@ -14,7 +13,7 @@ import pytest
 from conftest import wsgi_get
 
 from recoverage import api as _api
-from recoverage import metrics, server
+from recoverage import clock, metrics, server
 
 
 @pytest.fixture(autouse=True)
@@ -52,7 +51,6 @@ def _swap_route(rule: str, wrapper: Callable[[Callable], object]) -> Iterator[No
     finally:
         route.callback = original
         route.reset()
-
 
 
 @pytest.fixture
@@ -152,27 +150,34 @@ class TestRedCounters:
         assert "/api/does-not-exist-one" not in body["requests"]["by_route"]
         assert body["requests"]["by_route"]
 
-    def test_slow_request_is_logged_as_a_warning(
+    def test_duration_comes_from_the_patched_clock(
         self,
-        replace_route: Swap,
         monkeypatch: pytest.MonkeyPatch,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        def _slow(original: Callable) -> object:
-            def _handler() -> object:
-                time.sleep(0.02)
-                return original()
+        """A request crosses the threshold on the clock, not on real time.
 
-            return _handler
+        The handler runs in microseconds; the request is slow because the
+        clock read at the two ends of it are two seconds apart.  The recorded
+        duration is therefore a whole multiple of the fake step, which a real
+        wall-clock read could not produce, and nothing here sleeps, so the same
+        numbers come out on a loaded machine as on an idle one.
+        """
+        step = 2.0
+        reads = [0]
 
-        monkeypatch.setattr(metrics, "SLOW_REQUEST_MS", 1.0)
-        with (
-            replace_route("/api/health", _slow),
-            caplog.at_level(logging.WARNING, logger="recoverage"),
-        ):
+        def _fake_monotonic() -> float:
+            reads[0] += 1
+            return 1.0 + step * reads[0]
+
+        monkeypatch.setattr(clock, "monotonic", _fake_monotonic)
+        with caplog.at_level(logging.WARNING, logger="recoverage"):
             wsgi_get("/api/health")
         assert any("Slow request" in r.getMessage() for r in caplog.records)
-        assert _health()["requests"]["slow"] >= 1
+        requests = _health()["requests"]
+        assert requests["slow"] >= 1
+        max_ms = max(float(row["max_ms"]) for row in requests["by_route"].values())
+        assert max_ms % (step * 1000.0) == 0.0
 
 
 class TestStats:

@@ -1797,12 +1797,13 @@ class TestClockSeam:
     """Every window in the request path reads ``recoverage.clock``.
 
     The regen cooldown, the idempotency-key retention window, the
-    failed-token throttle and the ``db-updated`` stamp are the only clock
-    reads the request path makes, and all four go through one module.  One
-    patched clock therefore drives all of them: each window is minutes wide,
-    so a test that slept through one would be a test nobody runs, and a test
-    that backdated each module global by hand would stay green with the
-    production read of the clock deleted.
+    failed-token throttle, the ``db-updated`` stamp and the per-request
+    duration window are the only clock reads the request path makes, and all
+    five go through one module (the duration window in ``test_metrics.py``,
+    which drives it the same way).  One patched clock therefore drives all of
+    them: each window is minutes wide, so a test that slept through one would
+    be a test nobody runs, and a test that backdated each module global by
+    hand would stay green with the production read of the clock deleted.
     """
 
     def test_windows_expire_on_the_patched_clock(self, monkeypatch: Any) -> None:

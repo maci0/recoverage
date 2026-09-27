@@ -305,7 +305,10 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   `time.monotonic()` in a request path is a window minutes wide that no test
   can drive and no run can replay; `tests/test_server.py` (`TestClockSeam`)
   drives the regen cooldown, the idempotency-key TTL, the failed-token
-  throttle and the `db-updated` stamp from one patched clock.
+  throttle and the `db-updated` stamp from one patched clock, and
+  `tests/test_metrics.py` drives the per-request duration window the same
+  way, so the slow-request threshold is crossed on the clock rather than on
+  a sleep.
 - HTML/CSS/JS in `assets/` — no build step, VanJS for reactivity
 - The cell-state vocabulary is owned by rebrew (`rebrew.build_db._KNOWN_CELL_STATES`)
   and must be covered on the rendering side: `potato.COLORS` + `LEGEND_ITEMS`,
