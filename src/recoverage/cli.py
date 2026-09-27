@@ -37,6 +37,7 @@ app = typer.Typer(
         "  recoverage check --min-coverage 50 [dim]# CI gate[/dim]\n\n"
         "  recoverage regen [dim]# re-run catalog + build-db[/dim]\n\n"
         "  recoverage open [dim]# open a running dashboard in a browser[/dim]\n\n"
+        "  recoverage config [dim]# show the settings serve would start with[/dim]\n\n"
         "[bold]Prerequisites:[/bold]\n\n"
         "  Run [dim]rebrew catalog && rebrew build-db[/dim] first to create "
         "db/coverage.db.\n\n"
@@ -280,6 +281,23 @@ def _fail(
     raise typer.Exit(exit_code)
 
 
+def _check_env_or_exit() -> None:
+    """Validate the RECOVERAGE_* environment, exiting 2 on the first bad value.
+
+    `serve` runs the full merge through :func:`_resolve_serve_config`; the
+    other commands read the environment directly (through `_db_path`), where
+    a misspelled name is a silent no-op and an empty ``RECOVERAGE_DB`` escapes
+    as a raw ConfigError traceback.  Both are the same fail-fast contract,
+    so every command applies it before it consumes a setting.
+    """
+    try:
+        config.check_unknown_vars()
+        config.db_override()
+    except config.ConfigError as exc:
+        typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(2) from None
+
+
 def _open_db_or_exit(
     *, missing_exit_code: int = 1, json_output: bool = False
 ) -> sqlite3.Connection:
@@ -293,6 +311,7 @@ def _open_db_or_exit(
     """
     from recoverage.server import _open_db
 
+    _check_env_or_exit()
     p = _db_path()
     if not p.exists():
         _fail(
@@ -512,7 +531,7 @@ def serve(
         None,
         "--port",
         "-p",
-        help="Port to serve on, 0-65535 (default: 8001; env: RECOVERAGE_PORT)",
+        help=f"Port to serve on, 0-65535 (default: {config.DEFAULT_PORT}; env: RECOVERAGE_PORT)",
     ),
     bind: str | None = typer.Option(
         None,
@@ -1116,6 +1135,7 @@ def regen() -> None:
     """Re-run rebrew catalog + build-db to regenerate coverage.db."""
     from recoverage.server import _project_dir
 
+    _check_env_or_exit()
     _run_regen(_project_dir())
     _secho("Done — coverage.db regenerated.", fg=typer.colors.GREEN)
 
@@ -1126,7 +1146,7 @@ def open_cmd(
         None,
         "--port",
         "-p",
-        help="Port of the running server (default: 8001; env: RECOVERAGE_PORT)",
+        help=f"Port of the running server (default: {config.DEFAULT_PORT}; env: RECOVERAGE_PORT)",
     ),
 ) -> None:
     """Open the dashboard in a browser.
@@ -1135,6 +1155,7 @@ def open_cmd(
     uses, so a deployment that moved the server off 8001 does not need every
     operator to remember the new port as well.
     """
+    _check_env_or_exit()
     try:
         resolved_port = config.port() if port is None else _checked_port(port)
     except config.ConfigError as exc:
@@ -1143,6 +1164,36 @@ def open_cmd(
     url = f"http://127.0.0.1:{resolved_port}"
     typer.echo(f"Opening {url}")
     open_browser(url)
+
+
+@app.command("config")
+def config_cmd(
+    as_json: bool = typer.Option(
+        False, "--json", help="Emit the resolved settings as a JSON object"
+    ),
+) -> None:
+    """Print the configuration `serve` would start with, without binding a port.
+
+    The values come from the same merge and validation `serve` runs, so a
+    deployment can confirm its environment before the listener opens.  The
+    token is reported as `set` or `unset`; its value is never printed.
+    """
+    resolved = _resolve_serve_config()
+    settings = config.active_config(
+        port=resolved.port,
+        bind=resolved.bind,
+        allow_remote=resolved.allow_remote,
+        cors=resolved.cors,
+        cors_origin=resolved.cors_origins,
+        token=resolved.token,
+        db=resolved.db,
+        log_level=resolved.log_level,
+    )
+    if as_json:
+        typer.echo(json.dumps(settings, indent=2))
+        return
+    for key, value in settings.items():
+        typer.echo(f"{key}={value}")
 
 
 def main() -> None:

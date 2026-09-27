@@ -34,6 +34,11 @@ ENV_PREFIX: Final = "RECOVERAGE_"
 
 #: Every variable this module reads.  Anything else under the prefix is a
 #: misspelling and is rejected by :func:`check_unknown_vars`.
+#:
+#: The two fuzz knobs are listed because they carry the prefix but belong to
+#: the test suite (``tests/test_fuzz.py``, the ``fuzz`` make target), not to
+#: the server: without them an operator who exported them once to drive a
+#: campaign could not run any command until the shell was cleaned up.
 KNOWN_VARS: Final[frozenset[str]] = frozenset(
     {
         "RECOVERAGE_ALLOW_REMOTE",
@@ -41,6 +46,8 @@ KNOWN_VARS: Final[frozenset[str]] = frozenset(
         "RECOVERAGE_CORS",
         "RECOVERAGE_CORS_ORIGIN",
         "RECOVERAGE_DB",
+        "RECOVERAGE_FUZZ_ITERATIONS",
+        "RECOVERAGE_FUZZ_SEED",
         "RECOVERAGE_LOG_LEVEL",
         "RECOVERAGE_PORT",
         "RECOVERAGE_TOKEN",

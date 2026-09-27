@@ -133,6 +133,7 @@ uv run recoverage serve --port 9000 # custom port
 uv run recoverage serve --regen     # re-run rebrew catalog + build-db first
 uv run recoverage serve --no-open   # don't auto-open browser
 uv run recoverage serve --cors      # enable CORS processing (allowlist origins with --cors-origin)
+uv run recoverage config            # print the RECOVERAGE_* settings serve resolves, no listener
 uv run recoverage regen             # re-run rebrew catalog + build-db, no server
 uv run recoverage open              # open the dashboard in a browser
 uv run recoverage stats             # print coverage stats

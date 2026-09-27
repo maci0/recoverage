@@ -35,29 +35,29 @@ def _health() -> dict:
     return json.loads(body)
 
 
-@pytest.fixture
-def replace_route() -> Iterator[Swap]:
-    """Temporarily swap a route's callback, as a context manager."""
-
-    @contextlib.contextmanager
-    def _apply(rule: str, wrapper: Callable[[Callable], object]) -> Iterator[None]:
-        for route in server.app.routes:
-            if route.rule != rule or "GET" not in route.method:
-                continue
-            original = route.callback
-            route.callback = wrapper(original)  # type: ignore[method-assign]
-            # bottle caches the plugin-wrapped callback on the route, so
-            # swapping self.callback alone would keep serving the old one.
-            route.reset()
-            try:
-                yield
-            finally:
-                route.callback = original
-                route.reset()
-            return
+@contextlib.contextmanager
+def _swap_route(rule: str, wrapper: Callable[[Callable], object]) -> Iterator[None]:
+    for route in server.app.routes:
+        if route.rule == rule and "GET" in route.method:
+            break
+    else:
         raise AssertionError(f"no GET route for {rule}")
+    original = route.callback
+    route.callback = wrapper(original)  # type: ignore[method-assign]
+    # bottle caches the plugin-wrapped callback on the route, so swapping
+    # self.callback alone would keep serving the old one.
+    route.reset()
+    try:
+        yield
+    finally:
+        route.callback = original
+        route.reset()
 
-    return _apply
+
+@pytest.fixture
+def replace_route() -> Swap:
+    """Temporarily swap a route's callback, as a context manager."""
+    return _swap_route
 
 
 def _boom(original: Callable) -> object:

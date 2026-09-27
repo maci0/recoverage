@@ -305,3 +305,110 @@ class TestServeStartup:
         result = CliRunner().invoke(app, ["serve", "--no-open"])
         assert result.exit_code == 2
         assert "RECOVERAGE_PORT" in result.output
+
+
+class TestConfigCommand:
+    """`recoverage config` reports what `serve` would resolve, without binding."""
+
+    def test_reports_environment_values(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from typer.testing import CliRunner
+
+        from recoverage.cli import app
+
+        monkeypatch.setenv("RECOVERAGE_PORT", "9000")
+        monkeypatch.setenv("RECOVERAGE_LOG_LEVEL", "WARNING")
+        result = CliRunner().invoke(app, ["config"])
+        assert result.exit_code == 0
+        assert "port=9000" in result.output
+        assert "log_level=WARNING" in result.output
+
+    def test_defaults_when_the_environment_is_empty(self) -> None:
+        from typer.testing import CliRunner
+
+        from recoverage.cli import app
+
+        result = CliRunner().invoke(app, ["config"])
+        assert result.exit_code == 0
+        assert f"port={config.DEFAULT_PORT}" in result.output
+        assert "db=auto" in result.output
+
+    def test_token_is_reported_without_its_value(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from typer.testing import CliRunner
+
+        from recoverage.cli import app
+
+        monkeypatch.setenv("RECOVERAGE_TOKEN", "s3cret-value")
+        result = CliRunner().invoke(app, ["config"])
+        assert result.exit_code == 0
+        assert "token=set" in result.output
+        assert "s3cret-value" not in result.output
+
+    def test_json_output_is_the_same_object(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import json
+
+        from typer.testing import CliRunner
+
+        from recoverage.cli import app
+
+        monkeypatch.setenv("RECOVERAGE_CORS", "1")
+        monkeypatch.setenv("RECOVERAGE_CORS_ORIGIN", "http://localhost:5173")
+        result = CliRunner().invoke(app, ["config", "--json"])
+        assert result.exit_code == 0
+        assert json.loads(result.output) == config.active_config(
+            port=config.DEFAULT_PORT,
+            bind=config.DEFAULT_BIND,
+            allow_remote=False,
+            cors=True,
+            cors_origin=["http://localhost:5173"],
+            token=None,
+            db=None,
+            log_level=config.DEFAULT_LOG_LEVEL,
+        )
+
+    def test_bad_value_exits_2_without_a_traceback(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from typer.testing import CliRunner
+
+        from recoverage.cli import app
+
+        monkeypatch.setenv("RECOVERAGE_PORT", "eighty")
+        result = CliRunner().invoke(app, ["config"])
+        assert result.exit_code == 2
+        assert "RECOVERAGE_PORT" in result.output
+        assert "Traceback" not in result.output
+
+
+class TestEnvValidatedByEveryCommand:
+    """`serve` is not the only consumer of the environment."""
+
+    @pytest.mark.parametrize(
+        "argv",
+        [
+            ["stats"],
+            ["export"],
+            ["check", "--min-coverage", "0"],
+            ["open"],
+            ["regen"],
+        ],
+    )
+    def test_misspelled_var_exits_2(self, monkeypatch: pytest.MonkeyPatch, argv: list[str]) -> None:
+        from typer.testing import CliRunner
+
+        from recoverage.cli import app
+
+        monkeypatch.setenv("RECOVERAGE_DB_PATH", "/tmp/other.db")
+        result = CliRunner().invoke(app, argv)
+        assert result.exit_code == 2
+        assert "RECOVERAGE_DB_PATH" in result.output
+
+    def test_empty_db_override_exits_2_not_a_traceback(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from typer.testing import CliRunner
+
+        from recoverage.cli import app
+
+        monkeypatch.setenv("RECOVERAGE_DB", "")
+        result = CliRunner().invoke(app, ["stats"])
+        assert result.exit_code == 2
+        assert "RECOVERAGE_DB" in result.output
+        assert "Traceback" not in result.output

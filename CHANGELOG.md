@@ -10,6 +10,16 @@ module ships in the published package. See *Breaking*.
 
 ### Added
 
+- **`recoverage config` prints the configuration `serve` would start with.**
+  Same merge, same validation, no listener bound, so a deployment can confirm
+  its environment (or diff two of them) before anything listens. `--json`
+  emits the same object for a script. The token is reported as `set`/`unset`.
+- **Every command validates the `RECOVERAGE_*` environment, not just
+  `serve`.** `stats`, `export`, `check`, `open` and `regen` read it too, and a
+  misspelled variable there was a silent no-op: the command ran with a
+  default the operator did not ask for. They now exit 2 with the variable
+  named, the same contract `serve` already had, and an empty `RECOVERAGE_DB`
+  is a one-line error instead of a traceback.
 - **Every response carries a request id, and the log repeats it.** The server
   logged the method and path on the way in but never the status, the duration,
   or which client asked, so a report of "the export was slow" could not be

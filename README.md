@@ -193,9 +193,32 @@ it exits 1, whether the address came from the flag or the environment.
 Every value is validated at startup. An out-of-range port, a non-boolean flag,
 an unknown log level, an empty value where one is required, or a misspelled
 `RECOVERAGE_*` name (`RECOVERAGE_PRT`) exits 2 with the variable named,
-instead of starting with a default you did not ask for. `recoverage serve`
-prints the settings it resolved on startup, with the token reported as
-`token=set`.
+instead of starting with a default you did not ask for. The same check runs
+for every command that reads the environment (`stats`, `export`, `check`,
+`open`, `regen`), so a typo cannot quietly leave those on their defaults.
+`recoverage serve` prints the settings it resolved on startup, with the token
+reported as `token=set`.
+
+### `recoverage config`
+
+Print the configuration `serve` would start with, without binding a port.
+Useful for confirming a service's environment, or for diffing two of them.
+
+```bash
+recoverage config                     # key=value, token as set/unset
+recoverage config --json              # the same settings as a JSON object
+```
+
+```
+bind=0.0.0.0
+port=8001
+allow_remote=true
+cors=false
+cors_origin=none
+db=auto
+log_level=INFO
+token=set
+```
 
 ### `recoverage stats`
 
