@@ -75,10 +75,13 @@ glance without loading the full SPA.
 pip install recoverage
 ```
 
-For development:
+For development, see [CONTRIBUTING.md](CONTRIBUTING.md) — recoverage depends on
+a sibling rebrew checkout, so the bootstrap is two commands:
 
 ```bash
-uv pip install -e .
+make clone-rebrew   # rebrew v2.13.1 into ../rebrew
+make setup          # uv sync --frozen --extra dev
+make test           # or: make test-one T=tests/test_api.py
 ```
 
 ### Optional runtime extras

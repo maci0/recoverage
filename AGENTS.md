@@ -21,6 +21,8 @@ recoverage/
 ├── pyproject.toml          # Package config, entry point: recoverage
 ├── README.md               # User-facing docs
 ├── CHANGELOG.md            # Release history
+├── CONTRIBUTING.md         # Bootstrap, edit-test loop, local/CI parity table
+├── Makefile                # Contributor targets (`make help`); wraps the CI commands
 ├── LICENSE                  # MIT
 ├── package.json            # bun scripts: lint, lint:js, lint:html
 ├── oxlint.config.ts        # JS/TS lint config (see the tooling notes below)
@@ -72,37 +74,50 @@ Frontend lint tooling lives at the repo root: `package.json` (oxlint, `@oxlint/p
 
 ## Commands
 
+`make help` lists the contributor targets. Every one wraps the exact command
+CI runs; `make all` is the local mirror of the whole pipeline.
+
 ```bash
-# Install
-uv pip install -e .            # runtime deps only
-uv pip install -e .[dev]       # + pytest, ruff (CI runs uv sync --frozen --extra dev)
-uv pip install -e .[playwright]  # browser tests: playwright, pytest-playwright
+# Bootstrap (clean clone; rebrew is a ../rebrew path dependency)
+make clone-rebrew           # clone rebrew v2.13.1 into ../rebrew
+make setup                  # uv sync --frozen --extra dev
 
-# Run
-recoverage serve             # start dashboard on :8001
-recoverage serve --port 9000 # custom port
-recoverage serve --regen     # re-run rebrew catalog + build-db first
-recoverage serve --no-open   # don't auto-open browser
-recoverage serve --cors      # enable CORS processing (allowlist origins with --cors-origin)
-recoverage regen             # re-run rebrew catalog + build-db, no server
-recoverage open              # open the dashboard in a browser
-recoverage stats             # print coverage stats
-recoverage export --format csv  # export coverage data
-recoverage check --min-coverage 60  # CI gate
+# Checks
+make test                   # uv run pytest tests/ -v --ignore=tests/test_playwright.py
+make test-one T=tests/test_api.py  # one file or pytest node id (FLAGS="-k name" narrows it)
+make lint                   # uv run ruff check src/ tests/ tools/
+make format-check           # uv run ruff format --check src/ tests/ tools/
+make format                 # uv run ruff format (writes)
+make web-lint               # bun install --frozen-lockfile && bun run lint
+make smoke                  # uv run python tools/smoke.py
+make all                    # every check CI runs, one command
 
-# Python lint (what the CI `lint` job runs; both must be clean)
-uv run ruff format --check src/ tests/ tools/
-uv run ruff check src/ tests/ tools/
-
-# Tests
-uv run pytest tests/ -v
-
-# Frontend linting (requires bun and java on PATH)
-bun install                 # one-time: oxlint, @oxlint/plugins, @rikalabs/oxlint-standards, vnu-jar
+# Frontend lint detail (requires bun and java on PATH)
 bun run lint                # oxlint (Rika-Labs strict preset + vendored anti-slop) + vnu HTML/CSS
 bun run lint:js             # oxlint only
 bun run lint:html           # vnu only: static assets + served pages (SPA shell, Potato Mode)
+
+# Runtime (inside the synced env)
+uv sync --extra dev --extra capstone
+uv run recoverage serve             # start dashboard on :8001
+uv run recoverage serve --port 9000 # custom port
+uv run recoverage serve --regen     # re-run rebrew catalog + build-db first
+uv run recoverage serve --no-open   # don't auto-open browser
+uv run recoverage serve --cors      # enable CORS processing (allowlist origins with --cors-origin)
+uv run recoverage regen             # re-run rebrew catalog + build-db, no server
+uv run recoverage open              # open the dashboard in a browser
+uv run recoverage stats             # print coverage stats
+uv run recoverage export --format csv  # export coverage data
+uv run recoverage check --min-coverage 60  # CI gate
+
+# Browser tests
+uv sync --extra playwright && uv run playwright install chromium
+uv run pytest tests/test_playwright.py
 ```
+
+`tools/ci_clone_rebrew.sh` backs `make clone-rebrew` and the CI jobs: it pins
+rebrew to the tag and commit in the script's defaults, and fails when the tag
+does not resolve to that commit.
 
 ## API Endpoints
 
@@ -170,9 +185,10 @@ Dev extra (`.[dev]`, what CI installs): `pytest>=9.1.1`, `ruff>=0.16.7`.
 `rebrew` is a *runtime* import, not a regen-only one: `src/recoverage/_paths.py`
 resolves every `coverage.db` lookup through `rebrew.workspace`, so the path source
 in `[tool.uv.sources]` must resolve for `uv sync` to work at all. That source is
-a relative `../rebrew`, which only holds in a sibling checkout; a bare `git
-clone` of recoverage, or any git worktree, must be given the sibling layout (or
-`rebrew` published to an index) before `uv run` works.
+a relative `../rebrew`, which only holds in a sibling checkout. `make clone-rebrew`
+(populated from `tools/ci_clone_rebrew.sh`, the same script every CI job runs
+before `uv sync`) creates it; a git worktree needs `make setup
+REBREW_DIR=<path>` instead, since its parent is not the sibling directory.
 
 ## Code Style
 

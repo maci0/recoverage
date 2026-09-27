@@ -20,6 +20,9 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
+      # rebrew resolves from ../rebrew ([tool.uv.sources]); actions/checkout
+      # cannot write outside the workspace, so clone it where uv looks.
+      - run: bash tools/ci_clone_rebrew.sh "$GITHUB_WORKSPACE/../rebrew"
       - run: uv sync --frozen --extra dev
       - run: uv run ruff format --check src/ tests/ tools/
       - run: uv run ruff check src/ tests/ tools/
@@ -34,6 +37,9 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
+      # rebrew resolves from ../rebrew ([tool.uv.sources]); actions/checkout
+      # cannot write outside the workspace, so clone it where uv looks.
+      - run: bash tools/ci_clone_rebrew.sh "$GITHUB_WORKSPACE/../rebrew"
       - run: uv sync --frozen --extra dev
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
@@ -72,6 +78,9 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python-version }}
+      # rebrew resolves from ../rebrew ([tool.uv.sources]); actions/checkout
+      # cannot write outside the workspace, so clone it where uv looks.
+      - run: bash tools/ci_clone_rebrew.sh "$GITHUB_WORKSPACE/../rebrew"
       - run: uv sync --frozen --extra dev
       - run: uv run pytest tests/ -v --ignore=tests/test_playwright.py
 
@@ -85,6 +94,9 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
+      # rebrew resolves from ../rebrew ([tool.uv.sources]); actions/checkout
+      # cannot write outside the workspace, so clone it where uv looks.
+      - run: bash tools/ci_clone_rebrew.sh "$GITHUB_WORKSPACE/../rebrew"
       - run: uv sync --frozen --extra dev
       - name: Boot dashboard against a sample coverage.db and probe it
         run: uv run python tools/smoke.py
