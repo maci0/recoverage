@@ -267,6 +267,12 @@ def serve_repo_file(filepath: str) -> Any:
     # the containment check below, which then sees the real path — the
     # reverse order would decode after the check had passed.
     filepath = _server.path_param(filepath)
+    # A NUL cannot appear in a filename, and os.realpath rejects one with
+    # ValueError, so the containment check below would raise and answer a 500
+    # with a traceback for a path no filesystem holds.  404 is the honest
+    # answer: there is no such file.
+    if "\x00" in filepath:
+        return HTTPResponse(status=404, body=b"not found")
     # Defense-in-depth: bottle's static_file string-prefix check does NOT
     # resolve symlinks — a symlink inside src/ pointing outside the tree
     # would pass the root check and serve the target.  Resolve and verify

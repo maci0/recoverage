@@ -146,7 +146,14 @@ _NUM_TOKENS = (
 )
 
 
-def _mutate(data: bytes, rng: random.Random, corpus: list[bytes]) -> bytes:
+def _mutate(
+    data: bytes,
+    rng: random.Random,
+    corpus: list[bytes],
+    *,
+    struct_tokens: tuple[bytes, ...] = _JSON_TOKENS,
+    num_tokens: tuple[bytes, ...] = _NUM_TOKENS,
+) -> bytes:
     op = rng.randrange(8)
     if op == 0:
         return _flip_byte(data, rng)
@@ -157,13 +164,13 @@ def _mutate(data: bytes, rng: random.Random, corpus: list[bytes]) -> bytes:
     if op == 3:
         return _splice(data, rng, corpus)
     if op == 4:
-        return rng.choice(_JSON_TOKENS)
+        return rng.choice(struct_tokens)
     if op == 5:
-        return rng.choice(_NUM_TOKENS)
+        return rng.choice(num_tokens)
     if op == 6:
         pos = rng.randrange(len(data) + 1)
-        return data[:pos] + rng.choice(_JSON_TOKENS) + data[pos:]
-    return data * 2 + rng.choice(_NUM_TOKENS)
+        return data[:pos] + rng.choice(struct_tokens) + data[pos:]
+    return data * 2 + rng.choice(num_tokens)
 
 
 def _fuzz(
@@ -172,6 +179,8 @@ def _fuzz(
     *,
     iterations: int = FUZZ_ITERATIONS,
     seed: int = FUZZ_SEED,
+    struct_tokens: tuple[bytes, ...] = _JSON_TOKENS,
+    num_tokens: tuple[bytes, ...] = _NUM_TOKENS,
 ) -> None:
     """Mutate *seeds* for *iterations* rounds, calling *check* on each input.
 
@@ -181,13 +190,21 @@ def _fuzz(
     """
     rng = random.Random(seed)
     for _ in range(iterations):
-        data = _mutate(rng.choice(seeds), rng, seeds)
+        data = _mutate(
+            rng.choice(seeds), rng, seeds, struct_tokens=struct_tokens, num_tokens=num_tokens
+        )
         try:
             check(data)
         except AssertionError:
             chain = [data]
             for _ in range(6):
-                smaller = _mutate(rng.choice(seeds), rng, seeds)
+                smaller = _mutate(
+                    rng.choice(seeds),
+                    rng,
+                    seeds,
+                    struct_tokens=struct_tokens,
+                    num_tokens=num_tokens,
+                )
                 try:
                     check(smaller)
                 except AssertionError:
@@ -650,3 +667,308 @@ class TestJunkHeaders:
                 assert isinstance(payload, dict) and "version" in payload
 
         _fuzz(JUNK_HEADER_SEEDS, check, iterations=80)
+
+
+# ── Potato Mode ────────────────────────────────────────────────────
+#
+# /potato is the one surface that builds an HTML *document* out of nine
+# attacker-chosen query parameters: every value crosses parse_qs, an int()
+# for the pager and the grid index, a LIKE for the search, and finally the
+# SimpleTemplate that interpolates the survivors into the page.  A crash
+# there takes out the fallback renderer, and an unescaped value there is
+# script injection into a page the server itself links to.
+
+
+POTATO_FIELDS = (
+    "target",
+    "section",
+    "filter",
+    "idx",
+    "search",
+    "view",
+    "sort",
+    "status",
+    "page",
+    "token",
+)
+
+#: Spellings the page's own links emit, plus the shapes each field's parser
+#: branches on.  ``idx``/``page`` reach ``int()``, ``search`` reaches a LIKE
+#: pattern, ``sort`` is matched against a whitelist dict, and ``view`` selects
+#: a whole render path, so each needs a seed that exercises its own parser.
+POTATO_QUERY_SEEDS: list[bytes] = [
+    b"target=" + (get_first_target().encode() or b"demo") + b"&section=.text&view=functions",
+    b"target=demo&section=.text&view=functions&status=EXACT&sort=name:ASC&page=2",
+    b"target=demo&section=.data&view=functions&search=func",
+    b"target=demo&section=.text&filter=E,M&view=functions",
+    b"target=demo&section=.bss&idx=0",
+    b"target=demo&section=.text&view=functions&page=1&search=0x10001000",
+    b"",
+    b"target=",
+    b"search=",
+]
+
+#: Grammar tokens for the query-string parser, the way _JSON_TOKENS are for
+#: the JSON one.  Byte mutation alone never produces ``%3C/script%3E`` or a
+#: 20-digit ``page``, which is where the renderer's interesting branches are.
+POTATO_QUERY_TOKENS: tuple[bytes, ...] = (
+    b"",
+    b"=",
+    b"&&",
+    b"idx",
+    b"page",
+    b"idx=",
+    b"idx=0",
+    b"idx=-1",
+    b"idx=abc",
+    b"idx=0x10",
+    b"idx=1e3",
+    b"idx=99999999999999999999",
+    b"idx=-99999999999999999999",
+    b"page=0",
+    b"page=1",
+    b"page=abc",
+    b"page=1e9",
+    b"page=99999999999999999999",
+    b"view=",
+    b"view=functions",
+    b"view=grid",
+    b"view=" + b"a" * 400,
+    b"search=",
+    b"search=%25" * 40,
+    b"search=%27%20OR%201%3D1--",
+    b"search=%22%3E%3C%2Fscript%3E",
+    b"search=_",
+    b"search=%00",
+    b"target=",
+    b"target=%2e%2e%2f%2e%2e%2fetc%2fpasswd",
+    b"target=" + b"A" * 600,
+    b"section=",
+    b"section=.text",
+    b"section=%27%3B--",
+    b"section=" + b"A" * 600,
+    b"filter=",
+    b"filter=E",
+    b"filter=E,M,S,P,R",
+    b"filter=" + ",".join(["E"] * 200).encode(),
+    b"sort=",
+    b"sort=va:desc",
+    b"sort=" + b"A" * 400,
+    b"status=",
+    b"status=EXACT",
+    b"status=" + b"A" * 400,
+    b"token=abc",
+    b"idx=%2D1",
+    b"search=%zz",
+)
+
+#: Markers that mean an unhandled exception reached the page.  The detail
+#: panel does print repository file paths, so the traceback-only spellings
+#: are used here rather than the API set's ``rebrew/`` and ``sqlite3.``.
+_POTATO_LEAK_MARKERS = (
+    "Traceback (most recent call last)",
+    'File "/',
+    "bottle.py",
+    "sqlite3.",
+)
+
+#: The route's own failure page: a caught exception must render exactly this,
+#: so a 500 carrying anything else (a half-built document, a stack trace) is
+#: a finding even though the status is deliberate.
+_POTATO_500_BODY = "<html><body>Internal server error</body></html>"
+
+#: Query fields whose value the page echoes back into markup, so an escaping
+#: regression is observable from the response alone.
+_POTATO_REFLECTED = ("search", "target", "filter")
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+class TestPotatoQuery:
+    """GET /potato — nine query parameters parsed and re-rendered as HTML."""
+
+    def test_query_never_crashes(self) -> None:
+        def check(data: bytes) -> None:
+            query = data.decode("latin-1")
+            status, headers, body = wsgi_request("GET", f"/potato?{query}")
+            code = int(status.split()[0])
+            assert code in _ALLOWED_STATUSES, f"/potato?{data!r}: unexpected status {status}"
+            assert headers.get("Content-Encoding", "") in _SUPPORTED_ENCODINGS, (
+                f"/potato?{data!r}: {headers.get('Content-Encoding')!r}"
+            )
+            text = decode_body(body, headers).decode("utf-8")
+            for marker in _POTATO_LEAK_MARKERS:
+                assert marker not in text, f"/potato?{data!r}: page leaks {marker!r}"
+            if code >= 500:
+                # The handler catches OSError/ValueError/KeyError/sqlite3.Error
+                # and answers with its sanitized stub, so a 5xx is allowed —
+                # but only as that stub.
+                assert text.strip() == _POTATO_500_BODY, f"/potato?{data!r}: {text[:200]!r}"
+                return
+            assert text.startswith("<!DOCTYPE html>"), f"/potato?{data!r}: not a full page"
+            assert text.rstrip().endswith("</html>"), f"/potato?{data!r}: page cut short"
+            assert headers.get("Content-Type", "").startswith("text/html"), (
+                f"/potato?{data!r}: {headers.get('Content-Type')!r}"
+            )
+
+        _fuzz(
+            POTATO_QUERY_SEEDS,
+            check,
+            iterations=300,
+            struct_tokens=POTATO_QUERY_TOKENS,
+            num_tokens=POTATO_QUERY_TOKENS,
+        )
+
+    @pytest.mark.parametrize("field", _POTATO_REFLECTED)
+    def test_reflected_value_is_escaped(self, field: str) -> None:
+        """Pair assertion across the render boundary.
+
+        The canary carries every character that can break out of the attribute
+        or text node it lands in.  A value that reaches the page unescaped
+        (``<``, ``>``, ``"``, ``&``) is script injection on a server-rendered
+        page, and it is invisible to a status-code or crash check.
+        """
+        canary = "RCCANARY<>&\"'=`"
+        encoded = _pct(canary)
+        _status, headers, body = wsgi_request("GET", f"/potato?{field}={encoded}")
+        text = decode_body(body, headers).decode("utf-8")
+        assert canary not in text, f"{field}: unescaped {canary!r} in the page"
+        assert "RCCANARY" in text, f"{field}: value was dropped, so escaping is untested"
+        # Everything the canary could terminate has to appear as an entity.
+        assert "<RCCANARY" not in text, f"{field}: raw markup delimiter"
+        assert ">RCCANARY" not in text, f"{field}: raw markup delimiter"
+
+    @pytest.mark.parametrize("field", ("search", "status"))
+    def test_no_result_message_is_escaped(self, field: str) -> None:
+        """The functions view escapes with ``potato._esc``, not the template.
+
+        An empty result set is what puts a query value into a plain Python
+        f-string ("No functions match ... "), and that path escapes only if
+        ``_esc`` still does.  The canary matches nothing by construction, so
+        the branch is always taken.
+        """
+        canary = "RCCANARY<>&\"'=`"
+        _status, headers, body = wsgi_request(
+            "GET", f"/potato?view=functions&{field}={_pct(canary)}"
+        )
+        text = decode_body(body, headers).decode("utf-8")
+        assert "No functions" in text, f"{field}: empty-result branch not reached, canary untested"
+        assert canary not in text, f"{field}: unescaped {canary!r} in the no-result message"
+
+    def test_html_escaping_matches_the_canary(self) -> None:
+        """The whole canary class, one field at a time, as entities only.
+
+        A bare ``<`` or ``>`` is not a canary: the page's own markup is full
+        of them, so the substring test can only judge values that a raw
+        interpolation would put on the page as a unit.
+        """
+        for value in ("<script>", "a<b", "x&y", 'q"q', "it's", "<<b", "a&b<c", "--><img"):
+            for view in ("", "view=functions&"):
+                _status, headers, body = wsgi_request("GET", f"/potato?{view}search={_pct(value)}")
+                text = decode_body(body, headers).decode("utf-8")
+                assert value not in text, f"search={value!r} reflected verbatim ({view or 'grid'})"
+
+
+# ── repo file serving ──────────────────────────────────────────────
+
+REPO_FILE_SEEDS: list[bytes] = [
+    b"",
+    b"main.c",
+    b"a/b/c.c",
+    b"..",
+    b"../..",
+    b"../../../etc/passwd",
+    b"....//....//etc/passwd",
+    b"..%2f..%2fetc%2fpasswd",
+    b"..%252f..%252fetc%252fpasswd",
+    b"%00",
+    b"main.c%00.png",
+    b"..%2f%00",
+    b"/etc/passwd",
+    b"%ff%fe",
+    b"a" * 400,
+    b"sp ace.c",
+]
+
+REPO_FILE_TOKENS: tuple[bytes, ...] = (
+    b"",
+    b"..",
+    b"../",
+    b"../..",
+    b"..%2f",
+    b"%2e%2e%2f",
+    b"%00",
+    b"/",
+    b"\\",
+    b"main.c",
+    b".c",
+    b"//",
+    b"~",
+    b"/etc/passwd",
+    b"%ff",
+)
+
+
+class TestRepoFileRoute:
+    """``GET /src/<filepath>`` and ``/original/<filepath>`` feed an
+    attacker-decoded path segment straight into the filesystem: the handler
+    resolves it and hands it to bottle's ``static_file``.  A byte the resolver
+    or the directory walk rejects (NUL, an over-long segment) has to answer
+    4xx, not raise out of the route into a traceback-bearing 500."""
+
+    PREFIXES = ("/src/", "/original/")
+
+    def test_path_never_crashes(self) -> None:
+        def check(data: bytes) -> None:
+            segment = data.decode("latin-1")
+            for prefix in self.PREFIXES:
+                path = f"{prefix}{segment}"
+                status, _headers, body = wsgi_request("GET", path)
+                code = int(status.split()[0])
+                assert code < 500, f"{path}: handler crashed with {status}: {body[:200]!r}"
+                assert code in (200, 403, 404), f"{path}: unexpected status {status}"
+                assert b"Traceback" not in body, f"{path}: {status} leaked a traceback"
+
+        _fuzz(
+            REPO_FILE_SEEDS,
+            check,
+            iterations=200,
+            struct_tokens=REPO_FILE_TOKENS,
+            num_tokens=REPO_FILE_TOKENS,
+        )
+
+    @pytest.mark.parametrize(
+        ("segment", "expected"),
+        (
+            # Decoded once, these leave the root, so the containment check
+            # answers 403 with its stub.
+            ("../../../etc/passwd", 403),
+            ("..%2f..%2fetc%2fpasswd", 403),
+            ("%2e%2e%2f", 403),
+            # A double-encoded separator decodes to the literal text "%2f",
+            # which is a filename and not a traversal: no file, so 404.  The
+            # double-decode that would turn it into "../" is the thing
+            # server.path_param exists to prevent.
+            ("..%252f..%252fetc%252fpasswd", 404),
+            ("%2e%2e%252f", 404),
+        ),
+    )
+    def test_outside_the_root_is_never_served(self, segment: str, expected: int) -> None:
+        """Pair assertion across the containment boundary: a path that leaves
+        the root is refused with the handler's own stub, never with a file's
+        bytes — whatever the surrounding root happens to hold."""
+        for prefix in self.PREFIXES:
+            status, _headers, body = wsgi_request("GET", f"{prefix}{segment}")
+            assert int(status.split()[0]) == expected, f"{prefix}{segment}: {status}"
+            if expected == 403:
+                assert body == b"forbidden", f"{prefix}{segment}: served {body[:200]!r}"
+            else:
+                assert b"Traceback" not in body, f"{prefix}{segment}: {status} leaked a traceback"
+
+    @pytest.mark.parametrize("segment", ("%00", "main.c%00.png", "..%2f%00", "%00%00"))
+    def test_nul_segment_is_a_404(self, segment: str) -> None:
+        """os.realpath raises ValueError on an embedded NUL, so a request
+        carrying one must be refused before the containment check runs."""
+        for prefix in self.PREFIXES:
+            status, _headers, body = wsgi_request("GET", f"{prefix}{segment}")
+            assert int(status.split()[0]) == 404, f"{prefix}{segment}: {status}"
+            assert b"Traceback" not in body

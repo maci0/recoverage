@@ -153,6 +153,12 @@ module ships in the published package. See *Breaking*.
 
 ### Fixed
 
+- **`/src/<path>` and `/original/<path>` answer 404 instead of 500 for a path
+  holding a NUL.** `os.realpath` raises `ValueError` on an embedded NUL, and
+  the containment check resolves the candidate before serving it, so
+  `GET /src/%00` raised out of the route and returned bottle's 500 page with a
+  traceback. No filename holds a NUL, so the request is now refused before the
+  filesystem is touched.
 - **`make test` and the other `uv run` targets work on a clean clone without
   `make setup` first.** They now pass `--extra dev` the way `make setup` does,
   so a contributor who runs the loop before the bootstrap gets the tests

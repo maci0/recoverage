@@ -288,11 +288,18 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   NULL and a row with no `symbol` then matches nothing. The SPA folds the same
   way in `app.js` (`foldForSearch`).
 - The untrusted-input surfaces (query parameters, the batch POST body, request
-  headers) are fuzzed by `tests/test_fuzz.py`: a seeded mutation engine over a
+  headers, the `/potato` query string, the `/src` and `/original` path
+  segments) are fuzzed by `tests/test_fuzz.py`: a seeded mutation engine over a
   hand-written corpus, driven by `RECOVERAGE_FUZZ_SEED` / `RECOVERAGE_FUZZ_ITERATIONS`
   so a failure replays. Each round asserts an invariant, not just a lack of crash: no 5xx,
   the JSON error envelope on a 4xx, no traceback in a body, and the contract the
   query asked for (a page within `limit`, a slice within `size`, only requested
-  VAs back). No coverage-guided fuzzer is a project dependency, so the corpus
-  lives in that file; a new surface gets a corpus entry there, not a new
-  dependency.
+  VAs back). The `/potato` and repo-file campaigns pass their own grammar tokens
+  to `_fuzz(struct_tokens=..., num_tokens=...)`, because byte mutation alone
+  never produces `idx=99999999999999999999` or `%2e%2e%2f`; a new surface with
+  its own grammar needs its token tuple the same way. HTML-escaping assertions
+  come in pairs: the grid view escapes through SimpleTemplate, the functions
+  view's empty-result message through `potato._esc`, and a regression in either
+  one has to be visible from the response alone. No coverage-guided fuzzer is a
+  project dependency, so the corpus lives in that file; a new surface gets a
+  corpus entry there, not a new dependency.
