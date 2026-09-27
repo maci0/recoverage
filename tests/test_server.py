@@ -1186,6 +1186,26 @@ class TestBucketReconciliation:
     materialized table was present.
     """
 
+    # Every short key _cell_bucket_row emits except total_cells, which is the
+    # sum they must reconcile with.
+    BUCKET_KEYS = (
+        "exact",
+        "reloc",
+        "near_match",
+        "stub",
+        "padding",
+        "data",
+        "thunk",
+        "none",
+        "proven",
+        "size_mismatch",
+        "other",
+    )
+
+    @staticmethod
+    def _reconciles(sec: dict[str, Any]) -> None:
+        assert sum(sec[k] for k in TestBucketReconciliation.BUCKET_KEYS) == sec["total_cells"]
+
     @staticmethod
     def _cells_db() -> sqlite3.Connection:
         conn = sqlite3.connect(":memory:")
@@ -1232,23 +1252,7 @@ class TestBucketReconciliation:
             conn.close()
         sec = stats["sections"][".text"]
         assert sec["other"] == 3
-        counted = sum(
-            sec[k]
-            for k in (
-                "exact",
-                "reloc",
-                "near_match",
-                "stub",
-                "padding",
-                "data",
-                "thunk",
-                "none",
-                "proven",
-                "size_mismatch",
-                "other",
-            )
-        )
-        assert counted == sec["total_cells"]
+        self._reconciles(sec)
 
     def test_materialized_path_reconciles(self) -> None:
         import recoverage.server as srv
@@ -1282,23 +1286,7 @@ class TestBucketReconciliation:
             conn.close()
         sec = stats["sections"][".text"]
         assert sec["other"] == 3
-        counted = sum(
-            sec[k]
-            for k in (
-                "exact",
-                "reloc",
-                "near_match",
-                "stub",
-                "padding",
-                "data",
-                "thunk",
-                "none",
-                "proven",
-                "size_mismatch",
-                "other",
-            )
-        )
-        assert counted == sec["total_cells"]
+        self._reconciles(sec)
 
     def test_absent_other_count_column_reports_zero(self) -> None:
         """A pre-catch-all section_cell_stats keeps the key, at 0."""

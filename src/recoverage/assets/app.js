@@ -262,8 +262,9 @@ const App = () => {
     if (!activeTarget.val) { isLoading.val = false; return; }
     loadController?.abort();
     loadController = new AbortController();
-    const signal = loadController.signal;
-    const generation = ++loadGeneration;
+    const { signal } = loadController;
+    loadGeneration += 1;
+    const generation = loadGeneration;
     const superseded = () => generation !== loadGeneration;
     // Background refresh (SSE db-updated, regen) keeps the old map on
     // screen and swaps when new data lands.  Full-overlay loading is only
@@ -540,6 +541,22 @@ const App = () => {
 
   let currentAbortController = null;
 
+  // Every pane a failed selection filled must be cleared, or the pane keeps
+  // showing the previously selected entry next to the error, "Loading
+  // assembly..." never resolves, and Copy/Open hand out that literal.
+  const failSelection = (error, signal, asmFallback) => {
+    // A superseded selection owns no state: fetchTextSafe is not
+    // signal-bound, so a stale request can still fail after a newer
+    // selection has rendered, and clearing here would wipe it.
+    if (error.name === 'AbortError' || signal.aborted) return;
+    currentFn.val = null;
+    currentBuf.val = null;
+    cSourceText.val = MSG.ERROR_PREFIX + error.message;
+    showBytesMessage(bytesMissMessage());
+    docText.val = MSG.NO_DOCS;
+    asmText.val = asmFallback;
+  };
+
   const selectFunction = async (id) => {
     ensureOriginalDll();
     if (currentAbortController) {
@@ -592,20 +609,7 @@ const App = () => {
         cSourceText.val = newCSource;
         docText.val = newDocs || MSG.NO_DOCS;
       } catch (error) { // oxlint-disable-line @rikalabs/no-silent-catch-fallback -- AbortError is a cancellation; other failures become error text
-        // A superseded selection owns no state: fetchTextSafe is not
-        // signal-bound, so a stale request can still fail after a newer
-        // selection has rendered, and clearing here would wipe it.
-        if (error.name === 'AbortError' || signal.aborted) return;
-        currentFn.val = null;
-        currentBuf.val = null;
-        cSourceText.val = MSG.ERROR_PREFIX + error.message;
-        // The three loading placeholders set above must be cleared too, or a
-        // failed lookup (a cell naming a function the DB does not carry) left
-        // the Assembly pane reading "Loading assembly..." forever and left
-        // Copy/Open enabled, copying that literal.
-        showBytesMessage(bytesMissMessage());
-        docText.val = MSG.NO_DOCS;
-        asmText.val = MSG.ASM_PLACEHOLDER;
+        failSelection(error, signal, MSG.ASM_PLACEHOLDER);
       }
 
     } else {
@@ -627,15 +631,7 @@ const App = () => {
         docText.val = MSG.GLOBAL_VAR;
         asmText.val = MSG.DATA_SECTION_NO_ASM;
       } catch (error) { // oxlint-disable-line @rikalabs/no-silent-catch-fallback -- AbortError is a cancellation; other failures become error text
-        if (error.name === 'AbortError' || signal.aborted) return;
-        currentFn.val = null;
-        currentBuf.val = null;
-        cSourceText.val = MSG.ERROR_PREFIX + error.message;
-        // Same reset as the .text branch: without it the panes keep showing
-        // the previously selected entry next to the error.
-        showBytesMessage(bytesMissMessage());
-        docText.val = MSG.NO_DOCS;
-        asmText.val = MSG.DATA_SECTION_NO_ASM;
+        failSelection(error, signal, MSG.DATA_SECTION_NO_ASM);
       }
     }
   };
