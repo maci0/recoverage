@@ -8,7 +8,7 @@ older versions receive no backports.
 
 | Version | Supported |
 |---------|-----------|
-| 1.6.x (current, `src/recoverage/__init__.py:29`) | yes |
+| 1.6.x (current, `src/recoverage/__init__.py:31`) | yes |
 | 2.0.0 (unreleased, `CHANGELOG.md`) | once tagged |
 | < 1.6.0 | no |
 
@@ -31,7 +31,8 @@ this document does not fill them with a guess.
 `--allow-remote` without `--token` every host that can reach the port reads the
 whole project: sources under `<project>/src`, original binaries, raw byte
 slices and disassembly. That is the deployment's assumption, not a defect, and
-it is the first entry in the ranked risk table below.
+it is the first entry in the risk-ranked table in
+[`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md).
 
 ## Threat model
 
