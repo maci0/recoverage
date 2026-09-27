@@ -351,18 +351,27 @@ def _resolve_serve_config(
     takes the environment value, and the environment itself falls back to the
     documented default.  Every environment value is validated HERE, at
     startup, so a deployment typo exits 2 with the variable name instead of
-    reaching socket.bind() or the auth layer.
+    reaching socket.bind() or the auth layer.  The CORS allowlist is returned
+    already normalized, so the banner, ``recoverage config`` and the value the
+    request path matches against are one list.
     """
     try:
         config.check_unknown_vars()
+        # Read first: whether CORS is on decides whether the allowlist is
+        # installed at all, and a refused origin is a startup error (see
+        # _allowed_origins), so it has to be resolved with the same cors value
+        # the server will run with rather than in a second pass beside it.
+        resolved_cors = config.cors() if cors is None else cors
         resolved = _ServeConfig(
             port=config.port() if port is None else _checked_port(port),
             # validate_bind, not the raw flag: one setting, two sources, and
             # the floor the environment gets is the flag's too.
             bind=config.bind() if bind is None else config.validate_bind(bind, "--bind"),
             allow_remote=config.allow_remote() if allow_remote is None else allow_remote,
-            cors=config.cors() if cors is None else cors,
-            cors_origins=list(cors_origin) if cors_origin is not None else config.cors_origins(),
+            cors=resolved_cors,
+            cors_origins=_allowed_origins(
+                resolved_cors, config.cors_origins() if cors_origin is None else cors_origin
+            ),
             token=(config.token() or None) if token is None else token,
             # Read for validation only; _db_path() resolves the value again.
             db=config.db_override(),
@@ -670,22 +679,31 @@ def _allowed_origins(cors: bool, requested: list[str]) -> list[str]:
     ONE resolution for the banner and for ``recoverage config``, so the value
     an operator checks is the value the server matches against: a default port
     is dropped, the host is lowercased, and an entry that cannot normalize is
-    reported rather than stored.  A stored "" would match every unparsable
+    refused rather than stored.  A stored "" would match every unparsable
     request Origin and echo it back as Access-Control-Allow-Origin.
+
+    A refused entry is a startup error, not a warning, and the same way for
+    the flag and the variable: the operator wrote an origin that no browser
+    can send, so the server would come up with an allowlist one entry short of
+    what was asked for and refuse exactly the reads that entry was meant to
+    allow.  The refusal happens while CORS is on, because that is the only
+    case where the entry would have been installed; with CORS off the
+    allowlist is unused and ``serve`` already says the origins do nothing.
     """
     from recoverage.server import _normalize_origin
 
+    if not cors:
+        return []
+
     allowed: list[str] = []
-    if cors:
-        for origin_url in requested:
-            normalized = _normalize_origin(origin_url)
-            if normalized:
-                allowed.append(normalized)
-            else:
-                _secho(
-                    f"warning: ignoring unparseable --cors-origin {origin_url!r}",
-                    fg=typer.colors.YELLOW,
-                )
+    for origin_url in requested:
+        normalized = _normalize_origin(origin_url)
+        if not normalized:
+            raise config.ConfigError(
+                f"origin {origin_url!r} is not a URL the browser could send: "
+                "expected scheme://host[:port], with no userinfo, path or whitespace"
+            )
+        allowed.append(normalized)
     return allowed
 
 
@@ -758,7 +776,8 @@ def serve(
 
     A flag always wins over the environment; an unrecognised RECOVERAGE_*
     name is a startup error, and so is a value that is not a valid port,
-    boolean, log level or non-empty string.
+    boolean, log level, non-empty string, or a CORS origin a browser could
+    send.
     """
     import recoverage.server as _server
     from recoverage.server import (
@@ -802,13 +821,18 @@ def serve(
             "warning: serving unauthenticated binary data on the network — "
             "restrict access at the firewall.",
             fg=typer.colors.YELLOW,
+            err=True,
         )
     if cors and not cors_origin:
+        # Every warning in this block goes to stderr, so a deployment that
+        # captures stdout for the banner (tools/smoke.py, the harness) still
+        # sees the half of the configuration that will not work.
         _secho(
             "warning: --cors without --cors-origin allows no cross-origin reads "
             "(Access-Control-Allow-Origin: * is no longer emitted). "
             "Add --cors-origin URL for each origin you want to allow.",
             fg=typer.colors.YELLOW,
+            err=True,
         )
     if cors_origin and not cors:
         # cors_origin alone has no effect (CORS processing stays off): a
@@ -846,7 +870,7 @@ def serve(
     )
     logging.basicConfig(handlers=[handler], level=resolved.log_level)
 
-    allowed_origins = _allowed_origins(cors, cors_origin)
+    allowed_origins = cors_origin
     if token:
         _secho(
             f"token auth enabled — requests need Authorization: Bearer <token> "
@@ -1322,7 +1346,7 @@ def config_cmd(
         bind=resolved.bind,
         allow_remote=resolved.allow_remote,
         cors=resolved.cors,
-        cors_origin=_allowed_origins(resolved.cors, resolved.cors_origins),
+        cors_origin=resolved.cors_origins,
         token=resolved.token,
         db=resolved.db,
         log_level=resolved.log_level,

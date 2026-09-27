@@ -121,6 +121,20 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   genuine coverage failure, so a CI job could not tell a mistyped flag from a
   build that dropped below the gate. The `--json` error object reports
   `"exit_code": 2` with it. A gate failure still exits 1.
+- **A CORS origin no browser could send is refused at startup, not dropped
+  with a warning.** `--cors-origin http://user@host.test` (or the same entry
+  in `RECOVERAGE_CORS_ORIGIN`) used to print a warning and start with an
+  allowlist one entry short of what was written, so the server refused
+  exactly the cross-origin reads that entry was there to allow and the only
+  clue was a browser console. It now exits 2 with the offending origin named,
+  for the flag and the variable alike. An origin is still only checked while
+  CORS is on, because that is the only case where it would have been
+  installed; a normalizable origin is stored normalized, as before.
+- **`RECOVERAGE_CORS_ORIGIN` set to an empty value is a startup error.** A
+  unit file, a container environment and a CI job all spell "not configured"
+  as an empty value, and it used to start a server with CORS on and an
+  allowlist of nothing. Unset it instead. Every other `RECOVERAGE_*` string
+  setting already drew this line.
 
 ### Changed
 

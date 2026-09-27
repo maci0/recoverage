@@ -446,13 +446,74 @@ class TestConfigCommand:
         from recoverage.cli import app
 
         monkeypatch.setenv("RECOVERAGE_CORS", "1")
-        monkeypatch.setenv("RECOVERAGE_CORS_ORIGIN", "http://LocalHost:80, http://user@host.test")
+        monkeypatch.setenv("RECOVERAGE_CORS_ORIGIN", "http://LocalHost:80,http://app.test:5173")
         result = CliRunner().invoke(app, ["config"])
         assert result.exit_code == 0
-        assert "cors_origin=http://localhost" in result.output
-        # The userinfo-bearing entry cannot be stored and is named instead.
+        assert "cors_origin=http://localhost,http://app.test:5173" in result.output
+
+    def test_unusable_origin_exits_2_rather_than_dropping_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A refused entry is not a shorter allowlist, it is a deployment that
+        refuses exactly the reads the entry was written for.  Same for the
+        variable and the flag, so the exit code does not depend on the source."""
+        from typer.testing import CliRunner
+
+        from recoverage.cli import app
+
+        monkeypatch.setenv("RECOVERAGE_CORS", "1")
+        monkeypatch.setenv("RECOVERAGE_CORS_ORIGIN", "http://user@host.test")
+        result = CliRunner().invoke(app, ["config"])
+        assert result.exit_code == 2
         assert "user@host.test" in result.output
-        assert "cors_origin=http://localhost,http://user@host.test" not in result.output
+        assert "Traceback" not in result.output
+
+    def test_bad_flag_origin_exits_2_too(self) -> None:
+        from typer.testing import CliRunner
+
+        from recoverage.cli import app
+
+        result = CliRunner().invoke(app, ["serve", "--cors", "--cors-origin", "http://a b"])
+        assert result.exit_code == 2
+        assert "http://a b" in result.output
+
+    def test_origin_is_ignored_while_cors_is_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """With CORS off the allowlist is never installed, so an entry that
+        could not be installed is not a mistake the operator has to hear
+        about; serve already reports that the origins do nothing."""
+        from typer.testing import CliRunner
+
+        from recoverage.cli import app
+
+        monkeypatch.setenv("RECOVERAGE_CORS_ORIGIN", "http://user@host.test")
+        result = CliRunner().invoke(app, ["config"])
+        assert result.exit_code == 0
+        assert "cors=false" in result.output
+
+    def test_empty_cors_origin_exits_2(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A unit file, a container env and a CI job all spell "not
+        configured" as an empty value.  Taken as an empty allowlist it starts
+        a server whose every cross-origin read is refused."""
+        from typer.testing import CliRunner
+
+        from recoverage.cli import app
+
+        monkeypatch.setenv("RECOVERAGE_CORS_ORIGIN", "")
+        result = CliRunner().invoke(app, ["config"])
+        assert result.exit_code == 2
+        assert "RECOVERAGE_CORS_ORIGIN" in result.output
+        assert "Traceback" not in result.output
+
+    def test_unset_cors_origin_is_not_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Unset stays unset: the error is about the value, not the absence."""
+        from typer.testing import CliRunner
+
+        from recoverage.cli import app
+
+        monkeypatch.delenv("RECOVERAGE_CORS_ORIGIN", raising=False)
+        result = CliRunner().invoke(app, ["config"])
+        assert result.exit_code == 0
+        assert "cors_origin=none" in result.output
 
     def test_bad_value_exits_2_without_a_traceback(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from typer.testing import CliRunner

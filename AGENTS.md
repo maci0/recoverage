@@ -432,6 +432,20 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   function with `--bind` as the name in the error, because the flag and the
   variable are one setting with one floor. A new string-valued setting takes
   the same treatment: validated in `config.py`, reached by both sources.
+- A setting whose value is only meaningful in a narrower form is REJECTED
+  there, never dropped: `cli._allowed_origins` refuses a CORS origin the
+  normalizer cannot store, and the refusal is a `ConfigError` from inside
+  `_resolve_serve_config`, so `serve` and `recoverage config` exit 2 on it and
+  the banner, `recoverage config` and the request-path allowlist are one list.
+  A dropped entry is the worst outcome available: the server comes up an entry
+  short and refuses precisely the reads the entry was written for. The same
+  holds for a value that is SET but EMPTY, which is how a unit file, a
+  container env and a CI job all spell "not configured" — an empty
+  `RECOVERAGE_CORS_ORIGIN` starts a server with CORS on and an allowlist of
+  nothing. `RECOVERAGE_TOKEN` is the one deliberate exception, and
+  `tests/test_config.py` pins it: empty means auth off, on purpose, because
+  the same spellings would otherwise leave a token-guarded deployment
+  unauthenticated in exactly the way the empty allowlist does.
 - JS is linted with oxlint under the `@rikalabs/oxlint-standards` strict preset
   plus the vendored anti-slop rules; the webui is a classic-script SPA, so
   `app.js`/`detail.js` are wrapped in IIFEs and share state via `window.RC`.

@@ -225,10 +225,21 @@ def cors_origins() -> list[str]:
     An item carrying a control character is an error, not an entry: it can
     never equal a browser's Origin, so storing it would leave --cors on with
     an allowlist one item short of what the operator wrote.
+
+    A variable that is set but empty is an error for the same reason
+    (:func:`db_override` and :func:`_str_var` draw the line there): the unit
+    file, the container env and the CI job all spell "not configured" as an
+    empty value, and this is the one that would otherwise start a server with
+    CORS on and an allowlist of nothing, so every cross-origin read is refused
+    and the only clue is a browser console the operator may not open.
     """
     raw = _raw("RECOVERAGE_CORS_ORIGIN")
     if raw is None:
         return []
+    if not raw:
+        raise ConfigError(
+            "RECOVERAGE_CORS_ORIGIN: set but empty (unset it, or name at least one origin)"
+        )
     origins: list[str] = []
     for item in (part.strip() for part in raw.split(",")):
         if not item:
