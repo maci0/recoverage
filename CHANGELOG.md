@@ -30,6 +30,37 @@ module ships in the published package. See *Breaking*.
   `serve` read the environment, so a deployment off the default port had to be
   repeated in every `open` invocation. The flag still wins.
 
+### Changed
+
+- **The dashboard loads measurably less on every visit.** The inlined shell
+  and the packaged assets are now served as the *smallest* representation the
+  browser accepts, rather than under a fixed `zstd`-first preference, and both
+  compress at maximum effort instead of the per-request settings. The shell
+  drops from 17,568 to 14,537 bytes, which puts it back inside the initial
+  congestion window (14,600) and saves a second round trip before the first
+  paint on any zstd-capable browser; `hljs.min.js` drops 45,575 to 37,714 and
+  `detail.js` 10,468 to 8,583. The shell also gained a strong `ETag` and
+  answers `If-None-Match` with a 304, so a repeat visit re-downloads none of
+  it: it was the one response still served `no-store`, so every reload pulled
+  the full document while the assets beneath it revalidated to nothing.
+  Dynamic API responses are unchanged: they keep the fixed preference order and
+  the cheap settings, because there the extra compression passes are paid per
+  request.
+- **`make shell-lint` and `make yaml-lint` check the tree's non-Python
+  sources.** The `tools/*.sh` scripts ran under `bash` with no shellcheck and
+  the `.github/` definitions were read by no linter at all; both now run in
+  the `lint` CI job, alongside the ruff targets in `make all`. The yamllint
+  settings live in `.yamllint.yaml`. ruff additionally selects the `PTH`
+  and `RUF` groups, both clean on this tree.
+- **The `/potato` route lives in `recoverage.potato`, next to the renderer it
+  serves.** `ui.handle_potato` imported the renderer inside the handler body
+  and reached back for a private helper; the route now sits with
+  `render_potato` and `webapp` imports `potato` alongside `api` and `ui`.
+  Same responses, same headers, same 503 and 500 bodies.
+- **`_db_path` is imported from `recoverage._paths`, not re-exported through
+  `recoverage.server`.** `api`, `potato` and `cli` now name the same module as
+  the helper's owner.
+
 ### Breaking
 
 - **`server.resolve_targets` returns the one ordered target list, not a

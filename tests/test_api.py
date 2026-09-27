@@ -2962,10 +2962,63 @@ class TestIndexWarmup:
 
         assert ui.CACHED_INDEX_PAYLOAD
         assert b"<html" in ui.CACHED_INDEX_PAYLOAD.lower()
-        # Every encoding _best_encoding can return is prebuilt, including
-        # identity; the identity variant is the payload itself.
-        assert set(ui.CACHED_INDEX_COMPRESSED) == {"zstd", "br", "gzip", ""}
-        assert ui.CACHED_INDEX_COMPRESSED[""] == ui.CACHED_INDEX_PAYLOAD
+        # One prebuilt variant per non-empty subset of the supported encodings,
+        # plus the identity one, so a cold first hit from any client is a
+        # lookup.  Keys name the accepted SET, because the shell is served as
+        # the smallest body that set can decode rather than a fixed preference.
+        assert set(ui.CACHED_INDEX_COMPRESSED) == {
+            "",
+            "zstd",
+            "br",
+            "gzip",
+            "zstd, br",
+            "zstd, gzip",
+            "br, gzip",
+            "zstd, br, gzip",
+        }
+        # The identity variant is the payload itself, sent uncompressed.
+        body, encoding, _etag = ui.CACHED_INDEX_COMPRESSED[""]
+        assert (body, encoding) == (ui.CACHED_INDEX_PAYLOAD, "")
+
+    def test_shell_variant_is_the_smallest_body_the_client_accepts(self) -> None:
+        """The precompressed shell must not hand a zstd-capable browser the
+        larger zstd frame when brotli is smaller.
+
+        Measured on the shipped shell, brotli q11 beats zstd at every level
+        (14,537 bytes against 15,652 at zstd 19), and the zstd size sits above
+        the initial congestion window.  A fixed zstd-first preference put every
+        modern browser over that window and cost a second round trip before
+        the first paint, for no decoding-speed gain on a one-off document.
+        """
+        import recoverage.ui as ui
+
+        ui.warm_index_cache()
+
+        all_three = ui.CACHED_INDEX_COMPRESSED["zstd, br, gzip"]
+        br_only = ui.CACHED_INDEX_COMPRESSED["br"]
+        assert all_three[1] == br_only[1]
+        assert all_three[0] == br_only[0]
+        assert len(all_three[0]) <= ui._TCP_CWND_BUDGET
+
+    def test_the_cwnd_budget_holds_for_any_client_that_accepts_brotli(self) -> None:
+        """The ratchet in _check_payload_budget must hold for the body a real
+        browser receives, which is the smallest of the encodings it accepts.
+
+        Scoped to clients that accept brotli, because brotli is what buys the
+        budget here: on this shell zstd is 15,652 B and gzip 16,182 B, both
+        past the 14,600 B window, and no preference order can change that.  A
+        client with neither needs a second round trip whatever the server does,
+        and shrinking the shell enough to prevent it would mean cutting the UI.
+        Every browser with zstd also has brotli, so this is the set that ships.
+        """
+        import recoverage.ui as ui
+
+        ui.warm_index_cache()
+
+        for key, (body, _encoding, _etag) in ui.CACHED_INDEX_COMPRESSED.items():
+            if "br" not in key:
+                continue
+            assert len(body) <= ui._TCP_CWND_BUDGET, f"{key} is {len(body)} bytes"
 
     def test_warm_is_idempotent(self, monkeypatch: Any) -> None:
         import recoverage.ui as ui

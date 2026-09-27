@@ -894,15 +894,26 @@ def clear_disassembly_cache() -> None:
 # ── Compression ────────────────────────────────────────────────────
 
 
-def _best_encoding(accept_encoding: str) -> str:
-    """Return the best available compression encoding name, or empty string.
+#: Every encoding this server can produce, most preferred first.  ONE list:
+#: :func:`_best_encoding` walks it in order, and the precompressed static path
+#: (:func:`static_variant_key`, :func:`compress_static_variants`) reads the same
+#: order for its cache key, so a client cannot be offered a representation the
+#: dynamic path would refuse or vice versa.
+SUPPORTED_ENCODINGS: tuple[str, ...] = ("zstd", "br", "gzip")
 
-    Parses comma-separated tokens from Accept-Encoding to avoid false substring
-    matches (e.g. 'not-zstd' should not match 'zstd').  Honours q-values as an
-    exclusion gate only — ``gzip;q=0`` means "not acceptable" (RFC 9110) and
-    must not be chosen — then applies a fixed preference order among the
-    remaining supported encodings (zstd, then br, then gzip), regardless of
-    the tokens' relative q-values.
+
+def accepted_encodings(accept_encoding: str) -> frozenset[str]:
+    """Which of :data:`SUPPORTED_ENCODINGS` the client will accept.
+
+    Parses comma-separated tokens to avoid false substring matches (e.g.
+    'not-zstd' must not match 'zstd'), and honours q-values as an exclusion
+    gate only — ``gzip;q=0`` means "not acceptable" (RFC 9110).  A bare ``*``
+    matches nothing here: it names no specific encoding, and answering it with
+    a guess is the dynamic path's job to make explicitly.
+
+    Relative q-values are NOT ranked.  Every modern browser sends
+    ``gzip, deflate, br, zstd`` with flat q-values, so ordering by q would pick
+    by header order, not by merit.
     """
     candidates: dict[str, float] = {}
     for t in accept_encoding.split(","):
@@ -919,8 +930,22 @@ def _best_encoding(accept_encoding: str) -> str:
                     q = 0.0
         if q > 0:
             candidates[name] = max(candidates.get(name, 0.0), q)
-    for name in ("zstd", "br", "gzip"):
-        if name in candidates:
+    return frozenset(name for name in SUPPORTED_ENCODINGS if candidates.get(name, 0.0) > 0)
+
+
+def _best_encoding(accept_encoding: str) -> str:
+    """Return the best available compression encoding name, or empty string.
+
+    Applies a fixed preference order (:data:`SUPPORTED_ENCODINGS`) to the
+    encodings the client accepts.  This is the DYNAMIC policy, for payloads
+    built per request: a fixed order keeps one compressor hot instead of
+    compressing the same request body two or three ways.
+
+    The precompressed path cannot use it — see :func:`static_variant_key`.
+    """
+    accepted = accepted_encodings(accept_encoding)
+    for name in SUPPORTED_ENCODINGS:
+        if name in accepted:
             return name
     return ""
 
@@ -935,6 +960,88 @@ BROTLI_DYNAMIC_QUALITY = 5
 # The inlined index is compressed once and cached per encoding, and it has a
 # hard byte budget (the initial congestion window), so it keeps maximum effort.
 BROTLI_STATIC_QUALITY = 11
+
+# zstd effort for the same precompressed surfaces.  The dynamic compressor
+# above is level 3 because a multi-megabyte /data payload pays that cost on
+# every request; the shell and the static assets are compressed once per
+# encoding and then served from a dict, so they take the same "pay once, keep
+# the effort" trade BROTLI_STATIC_QUALITY already makes.  Measured on the
+# shipped assets: hljs.min.js 45,575 -> 39,773 bytes and detail.js
+# 10,468 -> 9,555 (both zstd), for ~20 ms paid once instead of 6 ms per
+# request.  Level 19 is where zstd stops returning a smaller frame on these
+# bodies (level 22 matches it exactly), so this is the knee, not a guess.
+ZSTD_STATIC_LEVEL = 19
+
+# gzip's own maximum.  gzip is the fallback a scripted client lands on
+# (python-requests advertises only gzip), and there it is the ONLY
+# representation on the wire, so it is worth the highest level gzip offers.
+# It still loses to both modern encodings on every payload measured here.
+GZIP_STATIC_LEVEL = 9
+
+
+def static_variant_key(accept_encoding: str) -> str:
+    """Cache key naming the encodings a precompressed body may be chosen from.
+
+    A precompressed response picks the SMALLEST representation the client can
+    decode rather than a fixed preference, so its body is a function of the
+    client's whole accepted set — not of any one token.  This key names that
+    set, which is what makes the cache (and the ``Vary: Accept-Encoding``
+    contract) sound: two clients with the same key get byte-identical
+    responses, and a client can never be handed a body it did not ask for.
+
+    The key is drawn from :data:`SUPPORTED_ENCODINGS` in that fixed order, so
+    it is at most 2**3 spellings no matter what the client sends.  It is
+    itself a valid ``Accept-Encoding`` value naming exactly that subset, which
+    is what lets a cache pre-build a key without a client header to hand.
+    """
+    accepted = accepted_encodings(accept_encoding)
+    return ", ".join(name for name in SUPPORTED_ENCODINGS if name in accepted)
+
+
+def compress_static_variants(
+    body: bytes, accept_encoding: str, brotli_quality: int = BROTLI_STATIC_QUALITY
+) -> tuple[bytes, str]:
+    """Compress *body* to the smallest representation the client accepts.
+
+    The precompressed counterpart of :func:`compress_payload`, for bytes built
+    once and served many times (the SPA shell, the static assets).  Two
+    differences from the dynamic path, both of which only make sense off the
+    per-request path:
+
+    * EVERY accepted encoding is produced and the smallest body wins, at
+      maximum effort.  Compressing the same static bytes two or three ways
+      costs nothing per request and guarantees the winner is the real minimum.
+      The dynamic path cannot afford that, and must not: it keeps a fixed
+      order and compresses once.
+    * zstd runs at :data:`ZSTD_STATIC_LEVEL` rather than the dynamic level 3.
+
+    Measured on the SPA shell: brotli q11 gives 14,537 bytes against zstd's
+    17,568 at the dynamic level and 15,652 even at level 19.  zstd wins on
+    throughput, not on this payload, and a fixed zstd-first preference handed
+    every zstd-capable browser 3 KB more than necessary and pushed the shell
+    past the initial congestion window (14,600), costing a second round trip
+    before the first paint.  Choosing by size puts it back inside the window.
+
+    Returns (body, "") when the client accepts none of the supported
+    encodings, so the caller sets Content-Encoding only on a truthy name.
+    """
+    accepted = accepted_encodings(accept_encoding)
+    if not accepted:
+        return body, ""
+    best: tuple[bytes, str] | None = None
+    for name in SUPPORTED_ENCODINGS:
+        if name not in accepted:
+            continue
+        if name == "zstd":
+            candidate = zstd.ZstdCompressor(level=ZSTD_STATIC_LEVEL).compress(body)
+        elif name == "br":
+            candidate = brotli.compress(body, quality=brotli_quality)
+        else:
+            candidate = gzip.compress(body, compresslevel=GZIP_STATIC_LEVEL)
+        if best is None or len(candidate) < len(best[0]):
+            best = (candidate, name)
+    assert best is not None  # accepted is non-empty and drawn from SUPPORTED_ENCODINGS
+    return best
 
 
 def compress_payload(

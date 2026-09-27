@@ -18,27 +18,47 @@ import zstandard as zstd
 import recoverage.server as _server
 from recoverage.server import (
     BROTLI_STATIC_QUALITY,
-    CACHE_NO_STORE,
     CACHE_REVALIDATE,
+    GZIP_STATIC_LEVEL,
+    SUPPORTED_ENCODINGS,
+    ZSTD_STATIC_LEVEL,
     HTTPResponse,
     _assets_dir,
-    _best_encoding,
     _finalized,
     _if_none_match_matches,
     _project_dir,
     _safe_etag,
     app,
-    compress_payload,
+    compress_static_variants,
     request,
     response,
     static_file,
+    static_variant_key,
 )
 
 # ── Index caching ──────────────────────────────────────────────────
 
+#: Keyed by :func:`static_variant_key` (the set of encodings the client
+#: accepts), NOT by a single chosen encoding: the shell is served as the
+#: smallest body the client can decode, so the accepted set is what determines
+#: the response.  Values are ``(body, encoding, etag)`` — the encoding has to
+#: travel with the bytes because Content-Encoding names the representation
+#: actually sent, and the ETag is that representation's validator.
 CACHED_INDEX_PAYLOAD: bytes | None = None
-CACHED_INDEX_COMPRESSED: dict[str, bytes] = {}
+CACHED_INDEX_COMPRESSED: dict[str, tuple[bytes, str, str]] = {}
 INDEX_LOCK = threading.Lock()
+
+
+def _index_etag(payload: bytes, encoding: str) -> str:
+    """Strong validator for the SPA shell, from its source bytes and encoding.
+
+    Derived from the uncompressed payload, not the served body, so the same
+    validator holds for every representation of it; the encoding is folded in
+    alongside for the same reason :func:`_asset_etag` folds it in — one shell
+    compressed as brotli and as zstd is two bodies, and a strong validator must
+    not match across them.
+    """
+    return _safe_etag("index", encoding, hashlib.sha256(payload).hexdigest())
 
 
 def _build_index_payload() -> bytes:
@@ -82,7 +102,11 @@ _log = logging.getLogger("recoverage")
 def _check_payload_budget(payload: bytes) -> None:
     """Warn if the inlined index payload exceeds the TCP cwnd budget.
 
-    Tries every available compression method and reports the best result.
+    Measured on the body a modern browser actually receives: the server sends
+    the smallest representation the client accepts, and every current browser
+    accepts all three, so the served size is the minimum over the three.  That
+    is the number that decides whether the shell fits the initial congestion
+    window, so it is the number checked here.
 
     The budget is the initial congestion window (10 x 1460-byte MSS), so the
     payload should arrive in one round trip.  It currently fits with little to
@@ -92,9 +116,9 @@ def _check_payload_budget(payload: bytes) -> None:
     warning is the ratchet that says so, naming the exact overage.
     """
     results: list[tuple[str, int]] = [
-        ("gzip", len(gzip.compress(payload))),
-        ("br", len(brotli.compress(payload))),
-        ("zstd", len(zstd.ZstdCompressor(level=3).compress(payload))),
+        ("gzip", len(gzip.compress(payload, compresslevel=GZIP_STATIC_LEVEL))),
+        ("br", len(brotli.compress(payload, quality=BROTLI_STATIC_QUALITY))),
+        ("zstd", len(zstd.ZstdCompressor(level=ZSTD_STATIC_LEVEL).compress(payload))),
     ]
 
     best_name, best_size = min(results, key=lambda r: r[1])
@@ -124,15 +148,23 @@ def warm_index_cache() -> None:
     global CACHED_INDEX_PAYLOAD
     try:
         payload = _build_index_payload()
-        compressed_variants: dict[str, bytes] = {}
-        for encoding in ("zstd", "br", "gzip", ""):
-            c, _ = compress_payload(payload, encoding, brotli_quality=BROTLI_STATIC_QUALITY)
-            compressed_variants[encoding] = c
+        # One key per non-empty subset of the supported encodings, plus "" for
+        # the identity response, so a cold first hit from any client is a
+        # lookup rather than three full compressions.  Each subset compresses
+        # to its own smallest body; that is 8 variants, built once at startup.
+        keys = [""]
+        for mask in range(1, 8):
+            subset = [name for i, name in enumerate(SUPPORTED_ENCODINGS) if mask & (1 << i)]
+            keys.append(", ".join(subset))
+        variants: dict[str, tuple[bytes, str, str]] = {}
+        for key in keys:
+            body, encoding = compress_static_variants(payload, key)
+            variants[key] = (body, encoding, _index_etag(payload, encoding))
         with INDEX_LOCK:
             if CACHED_INDEX_PAYLOAD is None:
                 CACHED_INDEX_PAYLOAD = payload
-            for enc, comp in compressed_variants.items():
-                CACHED_INDEX_COMPRESSED.setdefault(enc, comp)
+            for key, variant in variants.items():
+                CACHED_INDEX_COMPRESSED.setdefault(key, variant)
     except Exception:
         _log.warning(
             "SPA shell cache warm-up failed — first index request will build it instead",
@@ -164,31 +196,59 @@ def handle_index() -> bytes:
             )
 
     accept_encoding = request.headers.get("Accept-Encoding", "")
-    encoding = _best_encoding(accept_encoding)
+    key = static_variant_key(accept_encoding)
 
     with INDEX_LOCK:
-        if CACHED_INDEX_PAYLOAD is not None and encoding in CACHED_INDEX_COMPRESSED:
-            body = CACHED_INDEX_COMPRESSED[encoding]
-            return _finalized(
-                body, "text/html; charset=utf-8", encoding, Cache_Control=CACHE_NO_STORE
-            )
+        cached = CACHED_INDEX_COMPRESSED.get(key)
+        if CACHED_INDEX_PAYLOAD is not None and cached is not None:
+            return _finalized_shell(*cached)
         # Build the payload only on a true cold miss; otherwise compress the
-        # cached payload for this (previously unseen) encoding.
+        # cached payload for this (previously unseen) key.
         payload_local = CACHED_INDEX_PAYLOAD
         build = payload_local is None
     if build:
         payload_local = _build_index_payload()
     assert payload_local is not None
-    compressed, _ = compress_payload(
+    body, encoding = compress_static_variants(
         payload_local, accept_encoding, brotli_quality=BROTLI_STATIC_QUALITY
     )
+    etag = _index_etag(payload_local, encoding)
     with INDEX_LOCK:
         if CACHED_INDEX_PAYLOAD is None:
             CACHED_INDEX_PAYLOAD = payload_local
-        CACHED_INDEX_COMPRESSED.setdefault(encoding, compressed)
-        body = CACHED_INDEX_COMPRESSED[encoding]
+        CACHED_INDEX_COMPRESSED.setdefault(key, (body, encoding, etag))
+        variant = CACHED_INDEX_COMPRESSED[key]
 
-    return _finalized(body, "text/html; charset=utf-8", encoding, Cache_Control=CACHE_NO_STORE)
+    return _finalized_shell(*variant)
+
+
+def _finalized_shell(body: bytes, encoding: str, etag: str) -> bytes:
+    """Answer a SPA-shell request: 304 when the client's copy is current.
+
+    The shell is built once from the package's own assets and cannot change
+    under a running server, so it belongs to the same class as the static
+    assets below — but it was served ``no-store`` with no validator, which made
+    it the one response in the set that a repeat visit could never skip.  Every
+    reload re-downloaded the whole shell while detail.js and the rest answered
+    304.  Revalidate instead: the unchanged case now costs a header round trip
+    and no body.
+
+    max-age stays off for the reason the static assets document: the URL is not
+    content-hashed, so a package upgrade changes the bytes under the same name
+    and a long freshness lifetime would pin the browser to an old shell.
+    """
+    if _if_none_match_matches(request.headers.get("If-None-Match", ""), etag):
+        raise HTTPResponse(
+            status=304,
+            headers={
+                "ETag": etag,
+                "Vary": "Accept-Encoding",
+                "Cache-Control": CACHE_REVALIDATE,
+            },
+        )
+    return _finalized(
+        body, "text/html; charset=utf-8", encoding, ETag=etag, Cache_Control=CACHE_REVALIDATE
+    )
 
 
 # ── Static file serving ────────────────────────────────────────────
@@ -218,12 +278,13 @@ def serve_repo_file(filepath: str) -> Any:
     return static_file(filepath, root=str(root))
 
 
-# Compressed static assets, memoized per (filename, encoding).  These files
-# ship with the package and cannot change under a running server, so the
-# compression is paid once per encoding and every later hit is a dict lookup —
-# which is why this uses BROTLI_STATIC_QUALITY like the index, not the dynamic
-# quality (measured on hljs.min.js: q=11 is 37.7 KB vs q=5's 41.4 KB, and its
-# 101 ms runs once instead of per request).
+# Compressed static assets, memoized per (filename, accepted-encoding set).
+# These files ship with the package and cannot change under a running server,
+# so the compression is paid once per set and every later hit is a dict lookup
+# — which is why this uses the precompressed path (maximum effort on every
+# accepted encoding, smallest body wins) rather than the dynamic one.  Measured
+# on hljs.min.js: brotli q=11 is 37.7 KB vs q=5's 41.4 KB, and its 101 ms runs
+# once instead of per request.
 #
 # static_file served these raw: detail.js is on the first-paint critical path
 # at 27 KB, and hljs.min.js — fetched when a function's asm pane opens — is
@@ -240,7 +301,11 @@ def serve_repo_file(filepath: str) -> Any:
 # package upgrade changes the bytes under the same name and a long-lived
 # freshness lifetime would pin the browser to old JS.  Revalidate cheaply
 # instead of guessing.
-_STATIC_CACHE: dict[tuple[str, str], tuple[str, bytes]] = {}
+#: ``(filename, accepted-encoding set)`` -> ``(etag, body, encoding)``.  The
+#: encoding rides with the entry because the choice is made per accepted set,
+#: not once per file: it is what Content-Encoding must name, and the cache hit
+#: path needs it just as much as the build path.
+_STATIC_CACHE: dict[tuple[str, str], tuple[str, bytes, str]] = {}
 _STATIC_LOCK = threading.Lock()
 
 _STATIC_TYPES = {
@@ -277,13 +342,13 @@ def _client_has_asset(etag: str) -> bool:
 )
 def serve_static_asset(filename: str) -> Any:
     accept_encoding = request.headers.get("Accept-Encoding", "")
-    encoding = _best_encoding(accept_encoding)
-    if not encoding:
+    variant_key = static_variant_key(accept_encoding)
+    if not variant_key:
         # No shared encoding: hand off to bottle, which still does Range and
         # If-Modified-Since on the raw file.
         return static_file(filename, root=str(_assets_dir()))
 
-    key = (filename, encoding)
+    key = (filename, variant_key)
     with _STATIC_LOCK:
         entry = _STATIC_CACHE.get(key)
     if entry is None:
@@ -293,15 +358,17 @@ def serve_static_asset(filename: str) -> Any:
         except OSError:
             # Missing/unreadable asset: let bottle produce the 404, don't 500.
             return static_file(filename, root=str(_assets_dir()))
-        body, encoding = compress_payload(
+        body, encoding = compress_static_variants(
             raw, accept_encoding, brotli_quality=BROTLI_STATIC_QUALITY
         )
         # A racing thread may already have filled this key; keep whichever
         # landed first so every client sees one body under one ETag.
         with _STATIC_LOCK:
-            entry = _STATIC_CACHE.setdefault(key, (_asset_etag(filename, encoding, raw), body))
+            entry = _STATIC_CACHE.setdefault(
+                key, (_asset_etag(filename, encoding, raw), body, encoding)
+            )
 
-    etag, body = entry
+    etag, body, encoding = entry
     if _client_has_asset(etag):
         return HTTPResponse(
             status=304,

@@ -1004,6 +1004,37 @@ class TestStaticAssetRevalidation:
         _, zstd_headers, _ = wsgi_get("/detail.js", headers={"Accept-Encoding": "zstd"})
         assert br_headers["Etag"] != zstd_headers["Etag"]
 
+    def test_index_revalidates_instead_of_resending(self) -> None:
+        """The shell is static, so a repeat visit must answer 304.
+
+        It used to be the one response served no-store with no validator, so
+        every reload re-downloaded the whole document while every subordinate
+        asset answered 304.
+        """
+        from conftest import wsgi_get
+
+        status, headers, _ = wsgi_get("/", headers={"Accept-Encoding": "gzip"})
+        assert status == "200 OK"
+        assert headers["Cache-Control"] == "no-cache, must-revalidate"
+        etag = headers["Etag"]
+
+        status_304, headers_304, body_304 = wsgi_get(
+            "/", headers={"Accept-Encoding": "gzip", "If-None-Match": etag}
+        )
+        assert status_304 == "304 Not Modified"
+        assert body_304 == b""
+        assert headers_304["Etag"] == etag
+        assert headers_304["Vary"] == "Accept-Encoding"
+
+    def test_index_etag_differs_per_encoding(self) -> None:
+        """Same rule as the static assets: a strong validator must not match
+        across representations."""
+        from conftest import wsgi_get
+
+        _, br_headers, _ = wsgi_get("/", headers={"Accept-Encoding": "br"})
+        _, zstd_headers, _ = wsgi_get("/", headers={"Accept-Encoding": "zstd"})
+        assert br_headers["Etag"] != zstd_headers["Etag"]
+
     def test_index_preloads_detail_js(self) -> None:
         """detail.js is requested by the inlined app.js, so the shell
         advertises it during the preload scan instead of a round trip later."""
