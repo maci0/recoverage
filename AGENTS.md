@@ -36,7 +36,8 @@ recoverage/
 │   ├── THREAT_MODEL.md     # Attack surface, trust boundaries, risk ranking
 │   ├── ideas.md            # Future improvement ideas
 │   └── *.png               # Screenshots for the README
-├── tools/                  # lint-html.py, smoke.py, _serve_harness.py, oxlint/
+├── tools/                  # lint-html.py, smoke.py, _serve_harness.py, oxlint/,
+│                           # ci_clone_rebrew.sh, flatten-rikalabs-strict.py
 ├── tests/
 │   ├── conftest.py           # Shared fixtures (synthetic coverage.db)
 │   ├── test_api.py           # API validation, security, SQL injection tests
@@ -45,8 +46,9 @@ recoverage/
 │   ├── test_paths.py         # DB path resolution tests
 │   ├── test_config.py        # RECOVERAGE_* env: parsing, precedence, fail-fast
 │   ├── test_server.py        # Compression, encoding, path helper tests
+│   ├── test_serve_harness.py # Shared serve harness (builds the sample db, boots the server)
 │   ├── test_potato.py        # Potato Mode unit tests
-│   ├── test_perf.py         # Deterministic perf regression gates (work counters, not wall clock)
+│   ├── test_perf.py          # Deterministic perf gates (work counters, not wall clock)
 │   ├── test_release.py       # Release contract: version, changelog, declared floors
 │   ├── test_fuzz.py          # Seeded mutation campaigns over the untrusted-input surfaces
 │   ├── test_serve_harness.py # The smoke + lint-html harness contract
@@ -75,10 +77,13 @@ recoverage/
         └── hljs.css         # Highlight.js theme (custom hex language)
 ```
 
-Frontend lint tooling lives at the repo root: `package.json` (oxlint, `@oxlint/plugins`, `@rikalabs/oxlint-standards`, vnu-jar), `oxlint.config.ts` (JS/TS lint config), `tools/lint-html.py` (vnu check of both the static HTML/CSS assets and the documents the server actually serves: the SPA shell with injected CSS/JS and Potato Mode), `tools/smoke.py` (end-to-end server smoke run by the CI `smoke` job), `tools/_serve_harness.py` (shared by both: builds the synthetic DB via `tests/conftest`, starts `recoverage serve` on a free port, and probes the documents over HTTP), and `tools/oxlint/`:
-
-- `tools/oxlint/anti-slop/` — vendored copy of dmmulroy/anti-slop (keep in sync with upstream).
-- `tools/oxlint/rikalabs-strict.json` — flattened copy of the `strict` preset from `@rikalabs/oxlint-standards`, regenerated with `tools/flatten-rikalabs-strict.py` (bump the package, re-run the script, re-run `bun run lint:js`). It is flattened because the published presets reference rules oxlint 1.83.0 does not implement. The script prints every rule it drops and fails when `MISSING_IN_OXLINT` holds a rule the preset no longer needs, so a bump cannot weaken the preset silently. `oxlint.config.ts` documents the platform exceptions (browser-only SPA: `env.browser`, `typeAware: false`, style off-list with rationale).
+Frontend lint (bun + a JDK; see `bun run lint:js|html`): `oxlint.config.ts` is
+the JS/TS config, `tools/lint-html.py` runs vnu over both the static assets and
+the documents the server actually serves, and `tools/oxlint/anti-slop/` is a
+vendored upstream copy to keep in sync. `tools/oxlint/rikalabs-strict.json` is
+generated: never hand-edit it, bump `@rikalabs/oxlint-standards` then re-run
+`tools/flatten-rikalabs-strict.py`. The script's docstring and
+`oxlint.config.ts` own the why behind that preset.
 
 ## Commands
 
@@ -91,17 +96,20 @@ make clone-rebrew           # clone rebrew v2.13.1 into ../rebrew
 make setup                  # uv sync --frozen --extra dev
 uv sync --extra playwright   # browser tests: playwright, pytest-playwright
 
-# Checks
-make test                   # uv run pytest tests/ -v --ignore=tests/test_playwright.py
+# Checks. Every recipe runs the tool as a module of the locked interpreter
+# (`uv run --frozen python -m <tool>`), never the bare name: the dev extra is
+# optional, so a bare `uv run ruff` falls back to whatever is on PATH.
+make test                   # uv run --frozen python -m pytest tests/ -v --ignore=tests/test_playwright.py
 make test-one T=tests/test_api.py  # one file or pytest node id (FLAGS="-k name" narrows it)
 make fuzz                  # wider seeded campaign (SEED=, ITERATIONS= override)
-make lint                   # uv run ruff check src/ tests/ tools/
-make format-check           # uv run ruff format --check src/ tests/ tools/
-make format                 # uv run ruff format (writes)
+make lint                   # uv run --frozen python -m ruff check src/ tests/ tools/
+make format-check           # uv run --frozen python -m ruff format --check src/ tests/ tools/
+make format                 # uv run --frozen python -m ruff format (writes)
 make shell-lint             # shellcheck -x tools/*.sh (needs shellcheck on PATH)
-make yaml-lint              # yamllint -c .yamllint.yaml .github/ (needs yamllint on PATH)
+make yaml-lint              # yamllint -c .yamllint.yaml --list-files .github/ (needs yamllint on PATH)
 make web-lint               # bun install --frozen-lockfile && bun run lint
-make smoke                  # uv run python tools/smoke.py
+make smoke                  # uv run --frozen python tools/smoke.py
+make smoke-fail             # same, against a deliberately corrupt db
 make all                    # every check CI runs, one command
 
 # Frontend lint detail (requires bun and java on PATH)
@@ -209,17 +217,14 @@ The release policy is not written down anywhere else, so it is stated here and
    - Cells table includes `label` (Ghidra data label) and `parent_function` columns
    - Also materializes `section_cell_stats` (coverage buckets per section) and
      `section_cells_json` (per-section cell JSON, zstd), which the server reads
-     in preference to re-deriving them. Both are derived from `cells` and
-     rebuilt whole on every build. Every read has a live-SQL fallback for a DB
-     that predates the cached object; keep those fallbacks, they are what keeps
-     older databases serving. The producer and the server share rebrew's
-     `CELLS_JSON_OBJECT_SQL` and `SECTION_CELLS_AGG_SQL`, so the cached and
-     live rows cannot drift.
-   - The buckets come from a table, a view, or a full aggregate depending on the
-     DB, and `other_count` is what makes the buckets reconcile with
-     `total_cells` in all three. `server._cell_bucket_row` always emits the
-     `other` key, reporting 0 when the source predates the column, so a
-     consumer summing the buckets never reads the residual as zero-sized.
+     in preference to re-deriving them. **Keep the live-SQL fallback on every
+     read**: a database predating the cached object still has to serve, and the
+     fallback is what makes that true. Producer and server share rebrew's
+     `CELLS_JSON_OBJECT_SQL` and `SECTION_CELLS_AGG_SQL`, so cached and live
+     rows cannot drift. Schema, bucket columns, and the reconciliation that
+     makes `other_count` sum to `total_cells` are documented in `docs/DESIGN.md`
+     (database schema section); `server._cell_bucket_row` always emits the
+     `other` key, 0 when the source predates the column.
 3. `recoverage` → serves the DB as a web dashboard
    - Cell detail panel shows parent function as a clickable navigation link
 
@@ -247,8 +252,10 @@ resolves every `coverage.db` lookup through `rebrew.workspace`, so the path sour
 in `[tool.uv.sources]` must resolve for `uv sync` to work at all. That source is
 a relative `../rebrew`, which only holds in a sibling checkout. `make clone-rebrew`
 (populated from `tools/ci_clone_rebrew.sh`, the same script every CI job runs
-before `uv sync`) creates it; a git worktree needs `make setup
-REBREW_DIR=<path>` instead, since its parent is not the sibling directory.
+before `uv sync`) creates it. A git worktree sits elsewhere, so give it the
+sibling path itself: symlink `../rebrew` to a rebrew checkout, or point
+`[tool.uv.sources]` at one. `make setup REBREW_DIR=<path>` only moves the
+Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
 
 ## Code Style
 

@@ -2231,7 +2231,7 @@ class TestDataPayloadMemo:
 
     def _gated_open(
         self, tmp_path: Any, monkeypatch: Any, release: threading.Event
-    ) -> tuple[Any, list[int]]:
+    ) -> tuple[Any, list[int], dict[str, str]]:
         """Patch ``_open_db`` to record every call and park the FIRST caller
         on *release* — freezing the payload build mid-flight so the test can
         observe what concurrent requests do while a build is in progress.
@@ -2239,7 +2239,9 @@ class TestDataPayloadMemo:
         Also installs thread-independent request/response stand-ins for the
         ``server`` module: worker threads have no bottle request context
         (thread-local), and the compression/ETag helpers resolve those names
-        from server's namespace."""
+        from server's namespace.  The server request's ``query`` dict is
+        returned so a test can set ``?section=`` on the stand-in the handlers
+        read it from: ``api.request`` only supplies Accept-Encoding."""
         import recoverage.api as api
         import recoverage.server as server_mod
 
@@ -2261,13 +2263,14 @@ class TestDataPayloadMemo:
 
         monkeypatch.setattr(server_mod, "_open_db", counting_open)
 
-        fake_req: Any = type("R", (), {"headers": {}, "query": {}, "environ": {}})()
+        query: dict[str, str] = {}
+        fake_req: Any = type("R", (), {"headers": {}, "query": query, "environ": {}})()
         fake_resp: Any = type(
             "R", (), {"content_type": None, "set_header": lambda self, k, v: None}
         )()
         monkeypatch.setattr(server_mod, "request", fake_req)
         monkeypatch.setattr(server_mod, "response", fake_resp)
-        return api, open_calls
+        return api, open_calls, query
 
     def test_concurrent_cold_misses_single_flight(self, tmp_path: Any, monkeypatch: Any) -> None:
         """Simultaneous cold misses share ONE payload build.
@@ -2280,7 +2283,7 @@ class TestDataPayloadMemo:
         import recoverage.api as api
 
         release = threading.Event()
-        _, open_calls = self._gated_open(tmp_path, monkeypatch, release)
+        _, open_calls, _ = self._gated_open(tmp_path, monkeypatch, release)
 
         workers = 4
         barrier = threading.Barrier(workers + 1)
@@ -2327,7 +2330,7 @@ class TestDataPayloadMemo:
         import recoverage.api as api
 
         never = threading.Event()
-        _, open_calls = self._gated_open(tmp_path, monkeypatch, never)
+        _, open_calls, _ = self._gated_open(tmp_path, monkeypatch, never)
         snap = api._snapshot_db_mtime()
         assert snap is not None
         key: tuple[tuple[int, int], str, None] = (snap, "GAME", None)
@@ -2367,8 +2370,9 @@ class TestDataPayloadMemo:
         import recoverage.api as api
 
         release = threading.Event()
-        _, open_calls = self._gated_open(tmp_path, monkeypatch, release)
-        req = type("R", (), {"headers": {}, "query": {"section": "nope"}})()
+        _, open_calls, query = self._gated_open(tmp_path, monkeypatch, release)
+        query["section"] = "nope"
+        req = type("R", (), {"headers": {}, "query": {}})()
         monkeypatch.setattr(api, "request", req)
         api._clear_data_cache()
 
