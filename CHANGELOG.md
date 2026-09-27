@@ -34,6 +34,24 @@ module ships in the published package. See *Breaking*.
 
 ### Fixed
 
+- **`--no-color`, `NO_COLOR`, and `TERM=dumb` are honored.** Colorized errors,
+  warnings, and `check` verdicts carried ANSI escapes on a terminal even with
+  `NO_COLOR` set, because click only strips escapes from a non-TTY stream. The
+  global `--no-color` flag is the explicit opt-out; the environment variables
+  are the convention. The opt-outs only ever force color off, so a piped run
+  stays plain as before.
+- **`check` keeps one report on one stream.** A section skipped for not
+  existing was written to stderr while the PASS/FAIL verdicts went to stdout,
+  so `check 2>/dev/null` silently dropped the sections it declined to gate.
+  The skip note now follows the output mode: stdout with the other verdicts,
+  stderr under `--json`, where stdout carries the payload alone.
+- **`export --format md` no longer starts with a blank line.** The first
+  target's heading was preceded by the separator newline that separates
+  targets, so `recoverage export --format md > coverage.md` produced a file
+  opening on an empty line.
+- **`export --help` renders as prose.** The docstring's line-ending note was
+  read as a line break by the rich help renderer, splitting the sentence
+  about CSV row endings and leaving a stray quote in the help text.
 - **Coverage buckets reconcile with `total_cells`.** `/stats` and `/data`
   section objects carry an `other` bucket matching rebrew's catch-all
   (`compile_error`, `extract_error`, `invalid_va`, `missing_file`,

@@ -132,6 +132,17 @@ uv run recoverage serve
 
 ## CLI Commands
 
+### Global flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--version` | | Print the version and exit |
+| `--no-color` | off | Disable colored output; also disabled by `NO_COLOR` or `TERM=dumb` |
+
+Errors, warnings, and gate verdicts are colored on a terminal and plain
+everywhere else (a pipe, a file, `NO_COLOR`, `TERM=dumb`). Under `--json`,
+stdout carries the machine payload only and every human note goes to stderr.
+
 ### `recoverage serve`
 
 Start the dashboard web server.

@@ -30,12 +30,13 @@ app = typer.Typer(
     rich_markup_mode="rich",
     epilog=(
         "[bold]Examples:[/bold]\n\n"
-        "  recoverage serve [dim]— start the dashboard (port 8001)[/dim]\n\n"
-        "  recoverage serve --port 3000 [dim]— custom port[/dim]\n\n"
-        "  recoverage stats [dim]— print coverage statistics[/dim]\n\n"
-        "  recoverage export --format csv [dim]— export as CSV[/dim]\n\n"
-        "  recoverage check --min-coverage 50 [dim]— CI gate[/dim]\n\n"
-        "  recoverage regen [dim]— re-run catalog + build-db[/dim]\n\n"
+        "  recoverage serve [dim]# start the dashboard (port 8001)[/dim]\n\n"
+        "  recoverage serve --port 3000 [dim]# custom port[/dim]\n\n"
+        "  recoverage stats --json [dim]# machine-readable statistics[/dim]\n\n"
+        "  recoverage export --format csv > coverage.csv [dim]# export as CSV[/dim]\n\n"
+        "  recoverage check --min-coverage 50 [dim]# CI gate[/dim]\n\n"
+        "  recoverage regen [dim]# re-run catalog + build-db[/dim]\n\n"
+        "  recoverage open [dim]# open a running dashboard in a browser[/dim]\n\n"
         "[bold]Prerequisites:[/bold]\n\n"
         "  Run [dim]rebrew catalog && rebrew build-db[/dim] first to create "
         "db/coverage.db.\n\n"
@@ -44,6 +45,27 @@ app = typer.Typer(
 )
 
 _log = logging.getLogger("recoverage")
+
+
+# Color is emitted through _secho, never bare typer.secho, so the opt-outs are
+# honored on a terminal too.  Click only strips ANSI when the stream is not a
+# TTY, so a piped run already loses color, but NO_COLOR (https://no-color.org)
+# and a dumb terminal are terminal conditions, and a user who sets either
+# expects no escape codes.  The opt-outs only ever force color OFF: passing
+# color=True would make click keep the codes even when stdout is a pipe.
+_color_disabled = False
+
+
+def _color_off() -> bool:
+    if _color_disabled:
+        return True
+    if os.environ.get("NO_COLOR"):
+        return True
+    return os.environ.get("TERM") == "dumb"
+
+
+def _secho(message: str, **styles: Any) -> None:
+    typer.secho(message, color=False if _color_off() else None, **styles)
 
 
 class _ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
@@ -97,6 +119,11 @@ def _version_callback(value: bool) -> None:
 
 @app.callback()
 def _app_callback(
+    no_color: bool = typer.Option(
+        False,
+        "--no-color",
+        help="Disable colored output (overrides NO_COLOR and TERM=dumb).",
+    ),
     version: bool = typer.Option(
         False,
         "--version",
@@ -106,7 +133,8 @@ def _app_callback(
         is_eager=True,
     ),
 ) -> None:
-    pass
+    global _color_disabled
+    _color_disabled = no_color
 
 
 # ── Helpers ────────────────────────────────────────────────────────
@@ -217,12 +245,12 @@ def _open_db_or_exit(*, missing_exit_code: int = 1) -> sqlite3.Connection:
 
     p = _db_path()
     if not p.exists():
-        typer.secho(f"Error: database not found at {p}", fg=typer.colors.RED, err=True)
+        _secho(f"Error: database not found at {p}", fg=typer.colors.RED, err=True)
         raise typer.Exit(missing_exit_code)
     try:
         conn = _open_db(p)
     except sqlite3.Error as exc:
-        typer.secho(
+        _secho(
             f"Error: cannot open database {p}: {exc} {_REBUILD_HINT}",
             fg=typer.colors.RED,
             err=True,
@@ -251,7 +279,7 @@ def _select_targets(conn: sqlite3.Connection, target: str | None) -> list[str]:
         if target is not None:
             known = _list_targets(conn)
             if target not in known:
-                typer.secho(
+                _secho(
                     f"Error: target {target!r} not found in database "
                     f"(have: {', '.join(known) or 'none'}).",
                     fg=typer.colors.RED,
@@ -261,7 +289,7 @@ def _select_targets(conn: sqlite3.Connection, target: str | None) -> list[str]:
             return [target]
         return _list_targets(conn)
     except sqlite3.Error as exc:
-        typer.secho(
+        _secho(
             f"Error: cannot query coverage database: {exc} {_REBUILD_HINT}",
             fg=typer.colors.RED,
             err=True,
@@ -279,7 +307,7 @@ def _get_stats(conn: sqlite3.Connection, target: str) -> dict[str, Any]:
         # A DB that lists targets but cannot answer the stats queries
         # (schema-less / partially rebuilt) must not surface as a traceback —
         # same clean-exit contract as _select_targets.
-        typer.secho(
+        _secho(
             f"Error: cannot read coverage statistics for target {target!r}: {exc} {_REBUILD_HINT}",
             fg=typer.colors.RED,
             err=True,
@@ -301,7 +329,7 @@ def _run_regen(root: Path) -> None:
         raise typer.Exit(1) from None
     except Exception as e:
         # Same clean exit-1 contract for any other in-process failure.
-        typer.secho(
+        _secho(
             f"Error: rebrew regen failed: {type(e).__name__}: {e}",
             fg=typer.colors.RED,
             err=True,
@@ -479,7 +507,7 @@ def serve(
     # unauthenticated API without the --allow-remote acknowledgment.
     is_remote = bind not in LOOPBACK_HOSTS
     if is_remote and not allow_remote:
-        typer.secho(
+        _secho(
             f"--bind {bind} exposes the unauthenticated recoverage API (including raw "
             "binary bytes and disassembly) to every reachable host on the network. "
             "Pass --allow-remote to confirm you want this.",
@@ -488,13 +516,13 @@ def serve(
         )
         raise typer.Exit(1)
     if is_remote:
-        typer.secho(
+        _secho(
             "warning: serving unauthenticated binary data on the network — "
             "restrict access at the firewall.",
             fg=typer.colors.YELLOW,
         )
     if cors and not cors_origin:
-        typer.secho(
+        _secho(
             "warning: --cors without --cors-origin allows no cross-origin reads "
             "(Access-Control-Allow-Origin: * is no longer emitted). "
             "Add --cors-origin URL for each origin you want to allow.",
@@ -506,7 +534,7 @@ def serve(
     if cors_origin and not cors:
         # cors_origin alone has no effect (CORS processing stays off): a
         # user who passed it must not discover that from silent behavior.
-        typer.secho(
+        _secho(
             "warning: --cors-origin has no effect without --cors — "
             "CORS processing is disabled. Pass --cors to enable it.",
             fg=typer.colors.YELLOW,
@@ -529,12 +557,12 @@ def serve(
             if normalized:
                 allowed_origins.append(normalized)
             else:
-                typer.secho(
+                _secho(
                     f"warning: ignoring unparseable --cors-origin {origin_url!r}",
                     fg=typer.colors.YELLOW,
                 )
     if token:
-        typer.secho(
+        _secho(
             f"token auth enabled — requests need Authorization: Bearer <token> "
             f"(SPA: open as http://{display_host}:{port}/?token=<token>)",
             fg=typer.colors.GREEN,
@@ -635,7 +663,7 @@ def serve(
         # second instance or another dev server on the same port.
         if browser_timer is not None:
             browser_timer.cancel()
-        typer.secho(
+        _secho(
             f"Failed to start server on {listen_url}: {e.strerror or e} "
             "(is another instance already running?)",
             fg=typer.colors.RED,
@@ -657,7 +685,7 @@ def stats(
         targets = _select_targets(conn, target)
 
         if not targets:
-            typer.secho("No targets found in database.", fg=typer.colors.YELLOW, err=True)
+            _secho("No targets found in database.", fg=typer.colors.YELLOW, err=True)
             raise typer.Exit(1)
 
         if json_output:
@@ -705,22 +733,25 @@ def stats(
 @app.command()
 def export(
     output_format: ExportFormat = typer.Option(
-        ExportFormat.json, "--format", "-f", help="Output format"
+        ExportFormat.json,
+        "--format",
+        "-f",
+        help="Output format (choose json, csv, or md)",
     ),
     target: str | None = typer.Option(None, "--target", "-t", help="Target ID (default: all)"),
 ) -> None:
     """Export coverage data to stdout.
 
-    JSON verbatim; CSV cells starting with a spreadsheet formula/control
-    character are prefixed with an apostrophe; Markdown cells escape pipes and
-    newlines.  CSV uses "\n" line endings so Windows stdout does not double
-    them.
+    JSON verbatim. CSV cells that start with a spreadsheet formula or control
+    character are prefixed with an apostrophe, and rows end with a single
+    newline so Windows stdout does not double it. Markdown cells escape pipes
+    and newlines.
     """
     with contextlib.closing(_open_db_or_exit()) as conn:
         targets = _select_targets(conn, target)
 
         if not targets:
-            typer.secho("No targets found in database.", fg=typer.colors.YELLOW, err=True)
+            _secho("No targets found in database.", fg=typer.colors.YELLOW, err=True)
             raise typer.Exit(1)
 
         all_data = [_get_stats(conn, tid) for tid in targets]
@@ -769,8 +800,12 @@ def export(
         def _md_safe(s: str) -> str:
             return s.replace("|", "\\|").replace("\n", " ").replace("\r", "")
 
-        for data in all_data:
-            typer.echo(f"\n## {_md_safe(data['target'])}\n")
+        for index, data in enumerate(all_data):
+            # Blank line between targets, never before the first one: a
+            # redirected file must not start with an empty line.
+            if index:
+                typer.echo()
+            typer.echo(f"## {_md_safe(data['target'])}\n")
             # Same columns as the CSV export, minus the per-target key the
             # "## <target>" heading above already carries.  Header,
             # separator, and body must agree on the count or the table
@@ -843,7 +878,7 @@ def _gate_error(
     if json_output:
         typer.echo(json.dumps(payload))
     else:
-        typer.secho(human, fg=fg, err=True)
+        _secho(human, fg=fg, err=True)
     raise typer.Exit(1)
 
 
@@ -884,10 +919,14 @@ def check(
             sections_to_check = data["sections"]
             if section:
                 if section not in sections_to_check:
-                    typer.secho(
+                    # A per-section verdict, so it belongs on stdout with the
+                    # PASS/FAIL lines: `check 2>/dev/null` must not drop the
+                    # sections it declined to gate.  Under --json, stdout is
+                    # the machine channel, so the note moves to stderr.
+                    _secho(
                         f"SKIP: {tid} has no section {section}",
                         fg=typer.colors.YELLOW,
-                        err=True,
+                        err=json_output,
                     )
                     continue
                 sections_to_check = {section: sections_to_check[section]}
@@ -910,7 +949,7 @@ def check(
                     failed = True
                 verdicts.append({"target": tid, "section": sec_name, "status": status, **extra})
                 if not json_output:
-                    typer.secho(f"{status}: {tid} {sec_name} {human}", fg=_VERDICT_COLORS[status])
+                    _secho(f"{status}: {tid} {sec_name} {human}", fg=_VERDICT_COLORS[status])
 
     if checked == 0:
         _gate_error(
@@ -950,7 +989,7 @@ def regen() -> None:
     from recoverage.server import _project_dir
 
     _run_regen(_project_dir())
-    typer.secho("Done — coverage.db regenerated.", fg=typer.colors.GREEN)
+    _secho("Done — coverage.db regenerated.", fg=typer.colors.GREEN)
 
 
 @app.command("open")

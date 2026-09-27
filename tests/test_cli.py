@@ -21,6 +21,60 @@ runner = CliRunner()
 # ── Version command ───────────────────────────────────────────────
 
 
+class TestColorOptOut:
+    """`--no-color`, NO_COLOR, and TERM=dumb must all silence the escapes.
+
+    Click only strips ANSI when the stream is not a TTY, so on a terminal
+    these three conditions were previously ignored and every error, warning,
+    and check verdict carried escape codes into a color_forced log.  Every
+    invocation passes color=True, which is what makes the escapes visible at
+    all, and clears NO_COLOR/TERM unless the test is about one of them.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _colored_terminal(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("NO_COLOR", raising=False)
+        monkeypatch.setenv("TERM", "xterm-256color")
+
+    def test_color_enabled_by_default(self) -> None:
+        result = runner.invoke(app, ["check", "--min-coverage", "0"], color=True)
+        assert result.exit_code == 0
+        assert "\x1b[" in result.output
+
+    def test_no_color_flag(self) -> None:
+        result = runner.invoke(app, ["--no-color", "check", "--min-coverage", "0"], color=True)
+        assert result.exit_code == 0
+        assert "\x1b[" not in result.output
+
+    def test_no_color_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("NO_COLOR", "1")
+        result = runner.invoke(app, ["check", "--min-coverage", "0"], color=True)
+        assert result.exit_code == 0
+        assert "\x1b[" not in result.output
+
+    def test_dumb_terminal(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("TERM", "dumb")
+        result = runner.invoke(app, ["check", "--min-coverage", "0"], color=True)
+        assert result.exit_code == 0
+        assert "\x1b[" not in result.output
+
+    def test_opt_out_does_not_leak_into_the_next_run(self) -> None:
+        """The global flag is per invocation, not sticky process state."""
+        assert runner.invoke(app, ["--no-color", "check", "--min-coverage", "0"], color=True)
+        result = runner.invoke(app, ["check", "--min-coverage", "0"], color=True)
+        assert "\x1b[" in result.output
+
+    def test_errors_honor_the_opt_out(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The stderr error path takes the same route as the verdicts."""
+        monkeypatch.setenv("NO_COLOR", "1")
+        result = runner.invoke(app, ["check", "--min-coverage", "200"], color=True)
+        assert result.exit_code == 1
+        assert "\x1b[" not in result.stderr
+
+
+# ── Version command ───────────────────────────────────────────────
+
+
 class TestVersionFlag:
     def test_version_prints_version(self) -> None:
         result = runner.invoke(app, ["--version"])
