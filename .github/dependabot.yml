@@ -14,6 +14,13 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    # rebrew is a path dependency in pyproject.toml, so Dependabot cannot
+    # retrieve it and aborts the whole uv job with "The following path based
+    # dependencies could not be retrieved: \"rebrew\" at /pyproject.toml".
+    # It is not an index package, so there is nothing for the updater to do
+    # with it either way.
+    ignore:
+      - dependency-name: "rebrew"
     groups:
       uv-minor-and-patch:
         update-types:
