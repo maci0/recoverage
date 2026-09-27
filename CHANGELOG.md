@@ -235,6 +235,22 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   and accepts the `0b`/`0o` spellings these endpoints never documented. Both
   now take a decimal count or a `0x`-prefixed hex one, as the query-parameter
   rules say.
+- **`/asm` reported a missing original binary as a 422 in its text form.**
+  The text representation and `format=json` disagreed for the same request:
+  against a target with no binary configured, `format=json` answered 404
+  `DLL not found` (as `/sections/<section>/bytes` does) and the default text
+  form answered 422 "not enough bytes in DLL". That reads as an address past
+  the end of the section and sends the caller looking in the wrong place. The
+  binary is now resolved once, before the format branch, so both forms answer
+  the same 404 with the `[targets.<id>].binary` hint, and the 422 is left to
+  mean what it says: the window really did run past the loaded binary's end.
+- **A refused `/src/` or `/original/` path answered a bare word under
+  `text/html`, with no `Cache-Control`.** The traversal and NUL refusals wrote
+  `b"forbidden"` / `b"not found"` directly, so a shared cache was free to store
+  and replay the refusal, and a client parsing the server's error contract had
+  a second format to special-case. Both now answer the same
+  `{"error", "code", "detail"}` envelope every other failure uses, with
+  `Cache-Control: no-store`.
 - **A drive-relative `files[0]` read the wrong file on Windows.** Potato
   Mode's C-source loader rejected absolute paths and `..`, but a
   drive-relative name (`C:foo.c`) is neither, and joining it onto the

@@ -403,6 +403,11 @@ Query-parameter rules, the same on every endpoint:
 - `/sections/<section>/bytes` takes `offset` (default 0) and `size` (default
   256, clamped to 4096); both are decimal unless 0x-prefixed. A slice that
   would run past the section end is a 400 naming the section's size.
+- Both of those read the original binary, and a target whose binary is
+  missing or has no `[targets.<id>].binary` in `rebrew-project.toml` is a 404
+  (`DLL not found`, detail naming the key to add) whichever `format` you ask
+  for. A 422 means the binary loaded and the requested window ran past its
+  end.
 - `/functions` (list) takes `limit` (1..500, default 50) and `offset` (>= 0,
   default 0). An unparseable or out-of-range value is clamped, and the
   response echoes the `limit` and `offset` actually used.

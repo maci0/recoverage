@@ -1607,10 +1607,15 @@ def handle_api_asm(target: str) -> bytes | Any:
         # Both response shapes carry the same validator headers; build them once.
         headers_asm = _revalidate_headers(asm_etag)
 
+        # ONE missing-binary verdict for both representations: an absent or
+        # unconfigured original binary is the same 404 (/bytes answers the
+        # same way), so the format= path must not turn it into a 422 the
+        # client reads as "your address is past the end of the section".
+        target_data = _load_dll(target)
+        if target_data is None:
+            return _dll_not_found(target)
+
         if fmt == "json":
-            target_data = _load_dll(target)
-            if target_data is None:
-                return _dll_not_found(target)
             code_bytes = target_data[file_offset : file_offset + size]
             if len(code_bytes) < size:
                 return _json_err(

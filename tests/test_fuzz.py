@@ -1503,15 +1503,15 @@ class TestRepoFileRoute:
     )
     def test_outside_the_root_is_never_served(self, segment: str, expected: int) -> None:
         """Pair assertion across the containment boundary: a path that leaves
-        the root is refused with the handler's own stub, never with a file's
-        bytes — whatever the surrounding root happens to hold."""
+        the root is refused with the handler's own error envelope, never with
+        a file's bytes — whatever the surrounding root happens to hold."""
         for prefix in self.PREFIXES:
-            status, _headers, body = wsgi_request("GET", f"{prefix}{segment}")
+            status, headers, body = wsgi_request("GET", f"{prefix}{segment}")
             assert int(status.split()[0]) == expected, f"{prefix}{segment}: {status}"
             if expected == 403:
-                assert body == b"forbidden", f"{prefix}{segment}: served {body[:200]!r}"
-            else:
-                assert b"Traceback" not in body, f"{prefix}{segment}: {status} leaked a traceback"
+                data = json.loads(decode_body(body, headers))
+                assert data["code"] == "forbidden", f"{prefix}{segment}: {data}"
+            assert b"Traceback" not in body, f"{prefix}{segment}: {status} leaked a traceback"
 
     @pytest.mark.parametrize("segment", ["%00", "main.c%00.png", "..%2f%00", "%00%00"])
     def test_nul_segment_is_a_404(self, segment: str) -> None:

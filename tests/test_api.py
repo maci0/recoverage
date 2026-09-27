@@ -570,15 +570,15 @@ class TestApiAsmVaBoundaries:
 
     def test_last_valid_va_passes_boundary_guard(self) -> None:
         """va = section end - 1 must NOT trip either boundary check; the
-        request proceeds far enough to fail later on the missing DLL (422),
+        request proceeds far enough to fail later on the missing DLL (404),
         which proves the guard accepted the final in-bounds address."""
         target = get_first_target()
         if not target:
             pytest.skip("No targets in DB")
         status, headers, body = self._asm(target, "va=0x10001FFF&size=1")
-        assert status.startswith("422")
+        assert status.startswith("404")
         data = json.loads(decode_body(body, headers))
-        assert data["error"] == "not enough bytes in DLL"
+        assert data["error"] == "DLL not found"
 
     def test_zero_size_still_rejected_at_boundary_class(self) -> None:
         """size clamps/validates before the VA checks: size=0 is its own 400."""
@@ -600,9 +600,9 @@ class TestApiAsmVaBoundaries:
             pytest.skip("No targets in DB")
         status, headers, body = self._asm(target, "va=268439648&size=16")
         # Past the boundary guards and far enough to fail on the missing DLL.
-        assert status.startswith("422")
+        assert status.startswith("404")
         data = json.loads(decode_body(body, headers))
-        assert data["error"] == "not enough bytes in DLL"
+        assert data["error"] == "DLL not found"
 
     def test_decimal_and_hex_spellings_agree(self) -> None:
         target = get_first_target()
@@ -619,7 +619,7 @@ class TestApiAsmVaBoundaries:
         if not target:
             pytest.skip("No targets in DB")
         status, _, _ = self._asm(target, "va=10001060&size=16")
-        assert status.startswith("422")
+        assert status.startswith("404")
 
     def test_unparseable_va_rejected(self) -> None:
         target = get_first_target()
@@ -659,6 +659,33 @@ class TestApiAsm:
         assert status.startswith("400")
         data = json.loads(decode_body(body, headers))
         assert data["error"] == "size must be positive"
+
+    def test_missing_binary_is_404_in_both_representations(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """?format= is a representation switch, not a different resource.
+
+        A target with no configured original binary answers 404 for the text
+        and the json form alike (and the same as /bytes).  The text form used
+        to answer 422 "not enough bytes in DLL", which reads as "your address
+        is past the end of the section" and sends the caller hunting in the
+        wrong place when the operator simply has no binary configured.
+        """
+        import recoverage.api as api
+
+        monkeypatch.setattr(api, "_load_dll", lambda target: None)
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        for fmt in ("text", "json"):
+            status, headers, body = wsgi_get(
+                f"/api/targets/{target}/asm?va=0x10001000&size=16&format={fmt}"
+            )
+            assert status.startswith("404"), fmt
+            data = json.loads(decode_body(body, headers))
+            assert data["code"] == "not_found", fmt
+            assert data["error"] == "DLL not found", fmt
+            assert f"[targets.{target}].binary" in data["detail"], fmt
 
 
 # ── Raw byte slices (/sections/<section>/bytes) ────────────────────
@@ -3316,6 +3343,28 @@ class TestRepoFileServing:
         status, _, body = wsgi_get("/src/escape/passwd")
         assert status.startswith("403")
         assert b"root:x" not in body
+
+    def test_rejections_answer_the_json_error_envelope(
+        self, tmp_path: Path, monkeypatch: Any
+    ) -> None:
+        """A refused path is a JSON error, like every other failure.
+
+        The traversal and NUL rejections used to answer a bare ``b"forbidden"``
+        / ``b"not found"`` under ``text/html`` with no ``Cache-Control``, so a
+        shared cache was free to store and replay the refusal, and a client
+        parsing the server's error contract had a second format to special-case.
+        """
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "src").mkdir()
+        (tmp_path / "secret.txt").write_text("top secret", encoding="utf-8")
+        for path, want in (("/src/../secret.txt", 403), ("/src/%00evil", 404)):
+            status, headers, body = wsgi_get(path)
+            assert status.startswith(str(want)), path
+            assert headers["Content-Type"].startswith("application/json"), path
+            assert headers["Cache-Control"] == "no-store", path
+            data = json.loads(decode_body(body, headers))
+            assert set(data) >= {"error", "code", "detail"}, path
+            assert b"top secret" not in body, path
 
     def test_encoded_filename_is_decoded_once(self, tmp_path: Path, monkeypatch: Any) -> None:
         """A source file whose name holds a space or a non-ASCII character.

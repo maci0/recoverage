@@ -1823,10 +1823,10 @@ def _db() -> sqlite3.Connection:
 
 # The two cache policies for DB-derived responses.  NO_STORE: payloads with
 # no validator the client can cheaply re-check — /api/health, /api/targets,
-# /api/targets/<t>/stats, the function list/detail routes and /api/events —
-# which must never survive a rebuild.  REVALIDATE: the larger ETag-bearing
-# payloads (the SPA shell, /data, /asm, /bytes, /potato) that a browser may
-# keep but must re-verify with If-None-Match every time.
+# the function list/detail routes and /api/events — which must never survive a
+# rebuild.  REVALIDATE: the ETag-bearing payloads (the SPA shell, /stats,
+# /data, /asm, /bytes, /potato) that a browser may keep but must re-verify with
+# If-None-Match every time.
 CACHE_NO_STORE = "no-cache, no-store, must-revalidate"
 CACHE_REVALIDATE = "no-cache, must-revalidate"
 

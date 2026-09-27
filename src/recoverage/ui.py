@@ -262,16 +262,25 @@ def serve_repo_file(filepath: str) -> Any:
     # with a traceback for a path no filesystem holds.  404 is the honest
     # answer: there is no such file.
     if "\x00" in filepath:
-        return HTTPResponse(status=404, body=b"not found")
+        return _server._json_err(
+            404,
+            {
+                "error": "Not found",
+                "detail": "no such file: the path holds a NUL byte",
+            },
+        )
     # Defense-in-depth: bottle's static_file string-prefix check does NOT
     # resolve symlinks — a symlink inside src/ pointing outside the tree
     # would pass the root check and serve the target.  Resolve and verify
     # containment ourselves.
     candidate = (root / filepath).resolve()
     if not candidate.is_relative_to(root):
-        return HTTPResponse(
-            status=403,
-            body=b"forbidden",
+        return _server._json_err(
+            403,
+            {
+                "error": "Forbidden",
+                "detail": "path escapes the project tree",
+            },
         )
     return static_file(filepath, root=str(root))
 
