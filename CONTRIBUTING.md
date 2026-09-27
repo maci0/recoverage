@@ -61,7 +61,16 @@ make test                              # full suite
 make test-one T=tests/test_api.py      # one file
 make test-one T=tests/test_api.py::TestApiFunctions  # one class
 make test-one T=tests/test_api.py FLAGS="-k functions"
+make build                            # wheel + sdist into dist/
 ```
+
+`make build` is the only way to produce the distribution. It stamps the
+artifacts with the commit's own date and a fixed locale and timezone, and
+normalizes the sdist, so building twice gives two identical hashes. A bare
+`uv build` does not: setuptools stamps the wheel from `SOURCE_DATE_EPOCH` but
+leaves the sdist carrying your mtimes, your uid and the clock. Override the
+stamp with `make build SOURCE_DATE_EPOCH=<unix seconds>` when rebuilding an
+artifact from a tree with no git.
 
 Run tools through `uv run` (which the Makefile does) rather than a globally
 installed copy: the suite's assertions and the ruff rules are pinned in

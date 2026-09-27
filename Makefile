@@ -1,4 +1,4 @@
-.PHONY: help setup clean test test-one test-browser fuzz lint format format-check web-lint smoke smoke-fail \
+.PHONY: help setup clean build test test-one test-browser fuzz lint format format-check web-lint smoke smoke-fail \
 	shell-lint yaml-lint all ensure-uv ensure-rebrew warn-uv-version clone-rebrew ensure-lint-tools
 
 # Force POSIX sh for recipes (ignore a caller-exported SHELL=bash).  Version
@@ -45,6 +45,15 @@ REBREW_DIR := $(abspath $(CURDIR)/../rebrew)
 # rebrew.catalog.cli.run_catalog and the coverage.db shared lock.
 REBREW_FLOOR ?= 2.10.0
 
+# Timestamp the built artifacts are stamped with, so two builds of one commit
+# agree byte for byte. The commit's own date, which is what a release wants and
+# what setuptools bdist_wheel and tools/normalize_sdist.py both read; override
+# it to rebuild a published artifact from a tree with no git (an sdist
+# unpacked on a build machine, say). FALLBACK_… is fixed, never the clock, so
+# a tree without git still produces the same bytes on every run.
+FALLBACK_SOURCE_DATE_EPOCH = 315532800
+SOURCE_DATE_EPOCH ?= $(shell git log -1 --format=%ct 2>/dev/null || echo $(FALLBACK_SOURCE_DATE_EPOCH))
+
 # Single-file / nodeid override for the edit-test loop:
 #   make test-one T=tests/test_api.py
 #   make test-one T=tests/test_api.py::TestX
@@ -56,6 +65,7 @@ help:
 	@printf '%s\n' \
 		'Contributor targets:' \
 		'  make setup              # uv sync (frozen, dev extra): the one bootstrap command' \
+		'  make build              # build the wheel + sdist reproducibly into dist/' \
 		'  make clone-rebrew       # clone the sibling rebrew pin into ../rebrew' \
 		'  make test               # full pytest suite (CI test job, minus the matrix)' \
 		'  make test-one T=<node>  # one file or nodeid, e.g. T=tests/test_api.py::TestX' \
@@ -128,6 +138,18 @@ clone-rebrew:
 
 setup: ensure-rebrew warn-uv-version
 	uv sync $(UV_SYNC_FLAGS)
+
+# The shipped artifact. SOURCE_DATE_EPOCH reaches setuptools (which stamps
+# the wheel from it) and the sdist normalizer, LC_ALL and TZ keep a locale or
+# a timezone out of the build, and the normalizer does what setuptools' sdist
+# does not: pin the mtimes, owner, permissions, entry order and gzip header a
+# rebuild would otherwise differ on. Run it twice and `sha256sum dist/*` to
+# see both artifacts hold their hash.
+build: ensure-uv
+	@$(SET_STRICT) \
+	export SOURCE_DATE_EPOCH="$(SOURCE_DATE_EPOCH)" LC_ALL=C TZ=UTC; \
+	uv build --out-dir dist; \
+	$(UV_RUN) python tools/normalize_sdist.py dist
 
 # Match CI's invocation so a local pass and a CI pass mean the same thing.
 # `python -m`, never the bare tool name: with the dev extra installed a bare

@@ -7,6 +7,12 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **`make build` builds the wheel and sdist reproducibly.** The distribution
+  is stamped with the commit's own date and a fixed locale and timezone, and
+  the sdist is normalized (mtimes, owner, permissions, entry order, gzip
+  header), so two builds of one commit produce identical artifacts. Build
+  through the target rather than a bare `uv build`; `make build
+  SOURCE_DATE_EPOCH=<unix seconds>` overrides the stamp.
 - **`/api/health` reports the rebuild pipeline and live-reload saturation.**
   `regen` carries runs, failures, refusals, in-flight count, and the last run's
   duration: a regen takes minutes, so the per-request counters could show one

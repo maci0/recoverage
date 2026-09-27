@@ -39,9 +39,11 @@ recoverage/
 │   ├── ideas.md            # Future improvement ideas
 │   └── *.png               # Screenshots for the README
 ├── tools/                  # lint-html.py, smoke.py, _serve_harness.py, oxlint/,
-│                           # ci_clone_rebrew.sh, flatten-rikalabs-strict.py
+│                           # ci_clone_rebrew.sh, flatten-rikalabs-strict.py,
+│                           # normalize_sdist.py
 ├── tests/
 │   ├── conftest.py           # Shared fixtures (synthetic coverage.db)
+│   ├── test_build.py          # Artifact build: shipped files, reproducible bytes
 │   ├── test_api.py           # API validation, security, SQL injection tests
 │   ├── test_cli.py           # CSV export, formatting, edge case tests
 │   ├── test_lifecycle.py     # Lifecycle: regen ordering, browser-opener reaping
@@ -102,6 +104,7 @@ CI runs; `make all` is the local mirror of the whole pipeline.
 # Bootstrap (clean clone; rebrew is a ../rebrew path dependency)
 make clone-rebrew           # clone rebrew v2.13.1 into ../rebrew
 make setup                  # uv sync --frozen --extra dev
+make build                  # wheel + sdist into dist/, reproducibly
 uv sync --extra playwright   # browser tests: playwright, pytest-playwright
 
 # Checks. Every recipe runs the tool as a module of the locked interpreter
@@ -302,6 +305,18 @@ sibling path itself: symlink `../rebrew` to a rebrew checkout, or point
 Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
 
 ## Code Style
+
+- `make build` is the one command that produces the distribution, and it is
+  reproducible: `SOURCE_DATE_EPOCH` (the commit's own date, `FALLBACK_SOURCE_DATE_EPOCH`
+  when there is no git) plus `LC_ALL=C` and `TZ=UTC` around `uv build`, then
+  `tools/normalize_sdist.py`. setuptools stamps the *wheel* from
+  `SOURCE_DATE_EPOCH` but not the *sdist*, which keeps the working tree's
+  mtimes, the building user, the archive order and the gzip header's wall
+  clock; the normalizer pins those four so two builds of one commit hash the
+  same. Build it through the target, not a bare `uv build`, and
+  `tests/test_build.py` (`TestReproducibleBuild`) fails when the recipe stops
+  exporting the stamp, when the default is the clock instead of the commit, or
+  when a rebuild's bytes move.
 
 - Python 3.13+, ruff for linting, 100-char line length. The selected rule
   groups, the bandit/pylint codes that are named individually instead of by
