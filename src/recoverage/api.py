@@ -30,7 +30,6 @@ from recoverage.disasm import (
 )
 from recoverage.regen import run_regen
 from recoverage.server import (
-    _SECTION_BUCKETS_SQL,
     CACHE_NO_STORE,
     CACHE_REVALIDATE,
     DLL_DATA,
@@ -1025,16 +1024,23 @@ def _read_data_raw(c: sqlite3.Cursor, target: str, section_filter: str | None) -
     # rebrew advances the schema.
     data["known_schema"] = sorted(_server.KNOWN_SCHEMA_VERSIONS)
 
-    # Per-section cell stats from the materialized table.  _cell_bucket_row reads the whole
-    # row, so the projection is the shared one server._per_section_buckets
-    # uses: a hand-listed column set here can silently drop a bucket rebrew
-    # adds, and the served key set would then differ from /stats.
+    # Per-section cell stats, through the same reader /stats and the Potato map
+    # header use: prefer the materialized table, re-aggregate a section it omits
+    # from `cells`, and treat an absent table as an empty one.  A private SELECT
+    # here honoured only the first rule, so a cache covering some of the
+    # sections served buckets for those and none for the rest, and a database
+    # predating the table raised `no such table` where /stats still answered.
+    # `*` is the whole row, which is what _cell_bucket_row reads: a hand-listed
+    # column set here can silently drop a bucket rebrew adds, and the served key
+    # set would then differ from /stats.
     data["section_cell_stats"] = {}
-    stats_clause = " AND section_name = ?" if section_filter else ""
-    stats_params: list[Any] = [target] + ([section_filter] if section_filter else [])
-    c.execute(_SECTION_BUCKETS_SQL + stats_clause, stats_params)
-    for row in c.fetchall():
-        data["section_cell_stats"][row["section_name"]] = _cell_bucket_row(row)
+    # ?section= narrows the cells, not the section set, so the unfiltered
+    # payload is keyed by every section the database has; the filtered one
+    # carries the single section it was asked for.
+    wanted = {section_filter} if section_filter else set(data["sections"])
+    for row in _server.section_bucket_rows(c, target, expected=wanted):
+        if row["section_name"] in wanted:
+            data["section_cell_stats"][row["section_name"]] = _cell_bucket_row(row)
 
     return _dumps_with_cells(data, cells_json)
 

@@ -293,6 +293,13 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **`/api/targets/<target>/data` lost per-section stats to a partial cache.**
+  The endpoint read the materialized `section_cell_stats` table with a query
+  of its own instead of the shared reader every other surface uses, so a cache
+  covering only some of a target's sections served buckets for those and none
+  for the rest, and a database predating the table failed with `no such table`
+  where `/api/targets/<target>/stats` still answered. Both now fall back to the
+  live `cells` aggregation, as `/stats` and Potato Mode already did.
 - **A Potato Mode filter pill reported the wrong state.** Each pill's row
   identity was its accesskey letter rather than the filter key, so the
   "every filter key has a pill" and "a pill toggles only its own filter"

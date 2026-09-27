@@ -301,7 +301,8 @@ The release policy is not written down anywhere else, so it is stated here and
      gap from `cells` rather than dropping the section
      (`server._cells_json_rows`'s `expected_sections`, `server.section_bucket_rows`,
      which every `section_cell_stats` reader goes through: `/stats` via
-     `_per_section_buckets` and the Potato map header via `_compute_section_stats`,
+     `_per_section_buckets`, the Potato map header via `_compute_section_stats`,
+     and the `/data` payload via `_read_data_raw`,
      each passing the section set it already holds). A dropped section reports no
      coverage at all, and a dropped cell payload paints a whole section as `none`
      bytes.

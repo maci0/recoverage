@@ -476,9 +476,6 @@ SECTION_STATS_SQL = """
     FROM cells WHERE target = ? GROUP BY section_name
 """
 
-# The per-section cell counts, already aggregated by rebrew.
-_SECTION_BUCKETS_SQL = "SELECT * FROM section_cell_stats WHERE target = ?"
-
 # Every bucket computed from `cells` in one pass.  Used ONLY when
 # section_cell_stats is absent or empty — a hand-made or partial database (the
 # CLI's own fixtures build exactly that), which the pre-split single-query
@@ -619,7 +616,8 @@ def _cell_bucket_row(row: sqlite3.Row) -> dict[str, Any]:
     """Map a per-section bucket row to the short-key dict served by /stats, /data
     and Potato Mode.  ONE definition so the response shapes cannot drift.
 
-    *row* is a ``section_cell_stats`` row (``_SECTION_BUCKETS_SQL``) or the
+    *row* is a ``section_cell_stats`` row (the ``*`` projection
+    :func:`section_bucket_rows` reads) or the
     same columns computed live from `cells` (``_SECTION_STATS_FULL_SQL``); the
     two must select an identical column set, since the mapping below subscripts
     every one of them by name.  It is never a ``SECTION_STATS_SQL`` row, which

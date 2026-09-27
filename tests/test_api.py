@@ -18,7 +18,7 @@ import zlib
 from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 from wsgiref.util import setup_testing_defaults
 
 import pytest
@@ -2582,6 +2582,121 @@ class TestDataMarkerFilter:
         _point_app_at_db(monkeypatch, self._db(tmp_path))
         body = json.loads(api.handle_api_stats("GAME"))
         assert body["functions_by_status"] == {"exact": 2}
+
+
+def _drop_section_row(conn: sqlite3.Connection) -> None:
+    """Leave the materialized cache covering only .text.
+
+    The fixture's section_cell_stats is a view over cells, so a partial
+    cache is staged as the table a hand-made or half-rebuilt database
+    carries: same columns, fewer sections.
+    """
+    conn.execute("DROP VIEW section_cell_stats")
+    conn.execute(
+        "CREATE TABLE section_cell_stats (target TEXT, section_name TEXT, "
+        "total_cells INTEGER, exact_count INTEGER, reloc_count INTEGER, "
+        "near_match_count INTEGER, stub_count INTEGER, padding_count INTEGER, "
+        "data_count INTEGER, thunk_count INTEGER, none_count INTEGER, "
+        "proven_count INTEGER, size_mismatch_count INTEGER)"
+    )
+    conn.execute(
+        "INSERT INTO section_cell_stats VALUES ('GAME', '.text', 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0)"
+    )
+
+
+class TestDataSectionBuckets:
+    """/data reads the per-section buckets through the shared reader.
+
+    ``server.section_bucket_rows`` carries the cache-first policy every
+    section_cell_stats consumer owes: prefer the materialized cache,
+    re-aggregate a section it omits from `cells`, and treat an absent table
+    as an empty one.  /data ran its own SELECT, so a cache covering only
+    some of the target's sections left the rest with no buckets at all,
+    which is the one case a presence check misses.
+    """
+
+    #: (section, start, end, state) cells, two sections so a partial cache
+    #: leaves a visible gap.
+    CELLS: ClassVar[list[tuple[str, int, int, str]]] = [
+        (".text", 0x1000, 0x1004, "exact"),
+        (".data", 0x2000, 0x2002, "none"),
+    ]
+
+    def _db(self, tmp_path: Any) -> Any:
+        db = _make_schema_gate_db(tmp_path, cells=self.CELLS)
+        conn = sqlite3.connect(db)
+        c = conn.cursor()
+        c.executemany(
+            "INSERT INTO sections (target, name, va, size) VALUES ('GAME', ?, ?, 2)",
+            [(".text", 0x1000), (".data", 0x2000)],
+        )
+        conn.commit()
+        conn.close()
+        return db
+
+    def _buckets(self, db: Any, monkeypatch: Any) -> dict[str, Any]:
+        import recoverage.api as api
+
+        _point_app_at_db(monkeypatch, db)
+        body = json.loads(api.handle_api_data("GAME"))
+        return body["section_cell_stats"]
+
+    def test_partial_cache_fills_the_gap(self, tmp_path: Any, monkeypatch: Any) -> None:
+        db = self._db(tmp_path)
+        conn = sqlite3.connect(db)
+        _drop_section_row(conn)
+        conn.commit()
+        conn.close()
+
+        buckets = self._buckets(db, monkeypatch)
+        assert set(buckets) == {".text", ".data"}
+        assert buckets[".text"]["total_cells"] == 1
+        assert buckets[".data"]["none"] == 1
+
+    def test_section_filtered_payload_gaps_too(self, tmp_path: Any, monkeypatch: Any) -> None:
+        """``?section=`` narrows the cells, not the section set: the one
+        section it names is exactly the one a partial cache can be missing."""
+        import recoverage.api as api
+
+        db = self._db(tmp_path)
+        conn = sqlite3.connect(db)
+        _drop_section_row(conn)
+        conn.commit()
+        conn.close()
+
+        _point_app_at_db(monkeypatch, db)
+        req = _fake_request({"section": ".data"})
+        monkeypatch.setattr(api, "request", req)
+        import recoverage.server as server_mod
+
+        monkeypatch.setattr(server_mod, "request", req)
+        body = json.loads(api.handle_api_data("GAME"))
+        assert body["section_cell_stats"][".data"]["none"] == 1
+
+    def test_absent_table_degrades_to_cells(self, tmp_path: Any) -> None:
+        """A database without the materialized table still has to serve.
+
+        The schema gate refuses such a file to every endpoint, so this
+        drives the payload builder directly: the reader answers from `cells`
+        rather than raising `no such table`, which is the same degrade the
+        other surfaces make.
+        """
+        import recoverage.api as api
+
+        db = self._db(tmp_path)
+        conn = sqlite3.connect(db)
+        conn.execute("DROP VIEW section_cell_stats")
+        conn.commit()
+        conn.close()
+
+        conn = sqlite3.connect(sqlite_ro_uri(db), uri=True)
+        conn.row_factory = sqlite3.Row
+        try:
+            payload = json.loads(api._read_data_raw(conn.cursor(), "GAME", None))
+        finally:
+            conn.close()
+        assert set(payload["section_cell_stats"]) == {".text", ".data"}
+        assert payload["section_cell_stats"][".text"]["total_cells"] == 1
 
 
 class TestDataPayloadMemo:
