@@ -39,7 +39,7 @@ Review the following:
    - Every "Mitigation in code" cell names a mechanism that exists: the named
      constant, the guard, the header, the cache eviction. Open the cited code.
    - Every mitigation present in the code for a ranked risk appears in its row.
-     A security control added since the last pass (`rg -n 'Sec-Fetch-Site' -l
+     A security control added since the last pass (`rg -l 'Sec-Fetch-Site'
      src/recoverage/` and the route decorators in `src/recoverage/api.py`) with
      no row is a missing row, not a missing control.
    - The ranking is a judgement, so only flag a rank that is falsified: a risk
@@ -127,7 +127,9 @@ Instructions:
   the intent, and then correct the spec's wording in the same pass.
 - Keep edits small and local: correct the row, the sentence, or the citation.
   Never restructure a spec, never renumber the risk table, and never delete a
-  risk row to make a review shorter.
+  risk row to make a review shorter. A document that would need more than ten
+  local edits to match the code is not this pass's work: list the remaining
+  stale lines in the output format and leave the rest untouched.
 - If available, use: `rg` for every symbol, constant, and reference lookup,
   `ast-grep` for structural checks over the Python sources, and the project's
   own gates (`make test`, `make lint`) to confirm a behaviour a
