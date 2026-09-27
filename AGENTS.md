@@ -266,7 +266,11 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
 
 ## Code Style
 
-- Python 3.13+, ruff for linting, 100-char line length
+- Python 3.13+, ruff for linting, 100-char line length. The selected rule
+  groups, the bandit/pylint codes that are named individually instead of by
+  prefix, and the two ignores (PT006, PT018) each carry their reason next to
+  them in `[tool.ruff.lint]` in pyproject.toml; that comment is the record of
+  what the tree is expected to pass
 - HTML/CSS/JS in `assets/` — no build step, VanJS for reactivity
 - The cell-state vocabulary is owned by rebrew (`rebrew.build_db._KNOWN_CELL_STATES`)
   and must be covered on the rendering side: `potato.COLORS` + `LEGEND_ITEMS`,

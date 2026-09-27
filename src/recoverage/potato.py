@@ -508,7 +508,8 @@ def _highlight_asm(text: str, target: str) -> str:
 
     pg = _pygments()
     if pg is None:
-        _render_code = lambda code: _link_hex_refs(_html_escape(code))  # noqa: E731
+        # Same body as _plain_line, bound late so the else branch can rebind it.
+        _render_code = lambda code: _link_hex_refs(_html_escape(code))  # noqa: E731 — late bind
     else:
         _, _, lexer, colors = pg
 
