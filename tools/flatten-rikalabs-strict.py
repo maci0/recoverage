@@ -10,6 +10,10 @@ script flattens the `strict` preset chain into a single checked-in JSON that
 drops the missing rules (remapping oxc/no-new-buffer to its oxlint
 equivalent, unicorn/no-new-buffer, which the consuming config enables).
 
+A drop is unenforced strictness, so every dropped rule is printed and a
+MISSING_IN_OXLINT entry that the preset no longer needs fails the run; a
+preset cannot lose rules silently on a bump.
+
 To bump: `bun add -d @rikalabs/oxlint-standards`, then run
 `uv run python tools/flatten-rikalabs-strict.py` and re-run `bun run lint:js`.
 """
@@ -29,6 +33,9 @@ PRESET_DIR = os.path.join(
     "presets",
 )
 OUT = os.path.join(os.path.dirname(__file__), "oxlint", "rikalabs-strict.json")
+# Reported next to every dropped rule so a reader can see which oxlint the
+# checked-in preset was flattened against.
+OXLINT_VERSION = "1.83.0"
 
 # Rules referenced by the Rika-Labs presets that do not exist in the
 # currently published oxlint. Drop them here; do not try to set them "off" —
@@ -58,6 +65,7 @@ def main() -> int:
 
     merged: dict = {"plugins": set(), "categories": {}, "rules": {}, "overrides": []}
     visited: set[str] = set()
+    dropped: set[str] = set()
 
     def walk(name: str) -> None:
         if name in visited:
@@ -74,12 +82,30 @@ def main() -> int:
             elif key == "rules":
                 for rule, sev in val.items():
                     if rule in MISSING_IN_OXLINT:
+                        dropped.add(rule)
                         continue
                     merged["rules"][REMAP.get(rule, rule)] = sev
             elif key == "overrides":
                 merged["overrides"].extend(val)
 
     walk("strict.json")
+
+    # A dropped rule is unenforced strictness, so MISSING_IN_OXLINT must not
+    # outlive the gap it records: once oxlint or the preset implements a rule,
+    # the entry goes stale and would keep that rule unenforced. Fail rather
+    # than write a silently weaker preset. (The other direction needs no
+    # check: a rule kept in the output that oxlint cannot parse is rejected
+    # by oxlint itself when the config loads.)
+    stale = MISSING_IN_OXLINT - dropped
+    if stale:
+        print(
+            f"error: MISSING_IN_OXLINT entries no longer dropped by the preset: "
+            f"{sorted(stale)}; remove them",
+            file=sys.stderr,
+        )
+        return 1
+    for rule in sorted(dropped):
+        print(f"dropped (not in oxlint {OXLINT_VERSION}): {rule}", file=sys.stderr)
 
     tsgolint = [r for r in merged["rules"] if "tsgolint" in r]
     if tsgolint:

@@ -111,13 +111,17 @@ line-length = 100
 #   C4     — comprehensions; RET/RSE — return/raise shape;
 #   PERF   — performance anti-patterns; PIE — misc correctness nits;
 #   ISC    — implicit string concatenation (missing-comma bug class);
-#   FURB   — clearer stdlib idioms.
+#   FURB   — clearer stdlib idioms;
+#   ERA    — commented-out code left behind (dead-logic class);
+#   LOG    — logging call misuse (stdlib logging, not the `logging` plugin);
+#   FA     — future-annotation hygiene; Q — quote consistency;
+#   TD     — TODO/FIXME/XXX markers.
 select = [
     "E", "F", "W", "I", "UP", "B", "SIM",
     "A", "ASYNC", "DTZ", "G", "N", "PGH", "TID", "YTT", "RUF100",
     "T10", "FLY", "ICN",
     "PLE", "INT", "C4", "RET", "RSE", "PERF", "PIE", "ISC", "FURB",
-    "T20",
+    "T20", "ERA", "LOG", "FA", "Q", "TD",
 ]
 ignore = []
 # typer's idiom is `param = typer.Option(...)` in signature defaults; without
