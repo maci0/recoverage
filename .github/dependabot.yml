@@ -7,26 +7,13 @@
 # "This project has a `bun.lock` file but no `package-lock.json`, `yarn.lock`
 # or `pnpm-lock.yaml`". Renovate's npm manager reads bun.lock, so
 # renovate.json owns those packages.
+# The Python manifest resolves rebrew through [tool.uv.sources] as a sibling
+# checkout (`path = "../rebrew"`), and Dependabot aborts the whole uv job with
+# "The following path based dependencies could not be retrieved". Renovate
+# reads uv sources, so renovate.json owns the Python packages too.
 version: 2
 
 updates:
-  - package-ecosystem: "uv"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-    # rebrew is a path dependency in pyproject.toml, so Dependabot cannot
-    # retrieve it and aborts the whole uv job with "The following path based
-    # dependencies could not be retrieved: \"rebrew\" at /pyproject.toml".
-    # It is not an index package, so there is nothing for the updater to do
-    # with it either way.
-    ignore:
-      - dependency-name: "rebrew"
-    groups:
-      uv-minor-and-patch:
-        update-types:
-          - "minor"
-          - "patch"
-
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
