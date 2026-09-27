@@ -44,6 +44,7 @@ from rebrew.workspace import (
     SECTION_CELLS_TABLE,
     coverage_db_lock,
     decode_section_cells,
+    parse_va_candidates,
     read_config,
     sqlite_ro_uri,
     target_binary,
@@ -1005,6 +1006,31 @@ _GLOBAL_JSON_SQL = (
 # drift into a different cell shape or into planner row order. `id` is omitted
 # from the projection: no consumer reads it.
 _CELLS_JSON_SQL = f"SELECT section_name, {SECTION_CELLS_AGG_SQL} FROM cells WHERE target = ?"
+
+
+def _lookup_by_va_or_name(
+    c: sqlite3.Cursor, table: str, json_sql: str, target: str, value: str
+) -> sqlite3.Row | None:
+    """First row of *table* matching *value* as a VA, else as an exact name.
+
+    ONE resolution order for the /functions/<va> route and both Potato Mode
+    detail panels: callers name a function by VA ("0x10001000") or, for
+    legacy cells, by the symbol outright.  A VA-shaped entry that matches no
+    row still falls through to the name lookup, so the route and the panels
+    cannot disagree about what a value names.  *table* and *json_sql* are
+    literals from the call sites; target and the value are parameterized.
+
+    SAFETY: the interpolated parts are the table name and the projection,
+    both supplied by the caller as literals.
+    """
+    prefix = f"SELECT {json_sql} FROM {table} WHERE target=? AND "
+    for candidate in parse_va_candidates(value):
+        c.execute(prefix + "va=?", (target, candidate))
+        row = c.fetchone()
+        if row:
+            return row
+    c.execute(prefix + "name=?", (target, value))
+    return c.fetchone()
 
 
 def _has_materialized_cells(c: sqlite3.Cursor) -> bool:

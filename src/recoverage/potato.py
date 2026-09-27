@@ -27,7 +27,6 @@ from urllib.parse import ParseResult, parse_qs, urlparse
 from urllib.parse import quote as _url_quote
 
 from bottle import HTTPResponse, SimpleTemplate  # type: ignore[import-untyped]
-from rebrew.workspace import parse_va_candidates
 
 from recoverage import __version__
 from recoverage._paths import _db_path
@@ -46,6 +45,7 @@ from recoverage.server import (
     _global_json_sql,
     _load_dll,
     _load_metadata,
+    _lookup_by_va_or_name,
     _open_db,
     _snapshot_db_mtime,
     _verify_one_select,
@@ -555,6 +555,11 @@ def _esc(text: object) -> str:
 
 
 _MAX_RAW_READ = 1 << 20  # 1 MiB — more than any plausible function or data cell
+
+# Sort key standing in for a section row with no VA, so sections without one
+# land after every real address. Above the 64-bit VA ceiling, and an int so the
+# key list stays one comparable type.
+_SECTION_VA_MAX = 1 << 64
 
 
 def _get_raw_bytes(file_offset: int, size: int, target: str) -> bytes | None:
@@ -1082,11 +1087,12 @@ def _load_section_data(
         sections[sec["name"]] = sec
     # PE load order (ascending VA), matching the SPA's sectionNames sort: the
     # section carrying the work (.text) leads instead of trailing an
-    # alphabetical row.  Sections without a VA sort last.
+    # alphabetical row.  Sections without a VA sort last, behind every real
+    # address.
     sections = dict(
         sorted(
             sections.items(),
-            key=lambda kv: kv[1].get("va") if kv[1].get("va") is not None else 1e18,
+            key=lambda kv: (_SECTION_VA_MAX if kv[1]["va"] is None else int(kv[1]["va"]),),
         )
     )
 
@@ -1473,7 +1479,10 @@ def _merge_cells(cells: list[dict[str, Any]], grid_columns: int) -> list[dict[st
         acc_fns = fns
         acc_span = span
         acc_end = cell.get("end")
-        acc_col = span if acc_col >= grid_columns else acc_col + span
+        # A run that would overflow the row starts over from this cell alone;
+        # span is CHECK (span > 0) in the schema, so a pending run sitting on
+        # the last column always overflows on the next cell.
+        acc_col += span
         if acc_col > grid_columns:
             acc_col = span
 
@@ -2141,27 +2150,6 @@ def _panel_fn_source_text(data: dict[str, Any], target: str, fn_data: dict[str, 
         return None
 
 
-def _lookup_by_va_or_name(
-    c: sqlite3.Cursor, table: str, json_sql: str, target: str, value: str
-) -> sqlite3.Row | None:
-    """First row of *table* matching *value* as a VA, else as an exact name.
-
-    ONE resolution order for both the functions and the globals detail panel,
-    and the same order GET /functions/<va> uses: cell entries are VA strings
-    ("0x10001000"), while legacy cells name the symbol outright.  A
-    VA-shaped entry that matches no row still falls through to the name
-    lookup, so the two tables cannot disagree about what a cell names.
-    """
-    prefix = f"SELECT {json_sql} FROM {table} WHERE target=? AND "
-    for cand in parse_va_candidates(value):
-        c.execute(prefix + "va=?", (target, cand))
-        row = c.fetchone()
-        if row:
-            return row
-    c.execute(prefix + "name=?", (target, value))
-    return c.fetchone()
-
-
 def _panel_function_detail(
     ctx: dict[str, Any],
     c: sqlite3.Cursor,
@@ -2178,7 +2166,7 @@ def _panel_function_detail(
     # Cell function entries are VA strings ("0x10001000"), matching the SPA's
     # /functions/<va> route; the shared lookup resolves them and falls back to
     # the name for legacy/name-form cells.
-    fn_row = _lookup_by_va_or_name(c, "functions", _fn_json_sql(c), target, fn_name)
+    fn_row = _lookup_by_va_or_name(c, "functions", _fn_json_sql(c.connection), target, fn_name)
     if not fn_row:
         return False
 
@@ -2339,7 +2327,9 @@ def _render_panel(
         # GET /functions/<va>: cell entries may name a global by its VA string,
         # so VA candidates first, then the exact name for legacy name-form
         # cells.
-        gl_row = _lookup_by_va_or_name(c, "globals", _global_json_sql(c), target, fn_name)
+        gl_row = _lookup_by_va_or_name(
+            c, "globals", _global_json_sql(c.connection), target, fn_name
+        )
         if gl_row:
             gl_data = json.loads(gl_row[0])
             ctx["gl_data"] = gl_data

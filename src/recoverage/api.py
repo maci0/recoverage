@@ -912,6 +912,52 @@ _MAX_SEARCH_CHARS = 500
 _ASM_FORMATS = frozenset({"text", "json"})
 
 
+def _slice_size(raw_size: str, parse_error: str) -> tuple[int, Any | None]:
+    """Clamp a binary-slice ``?size=`` to 1.._MAX_SLICE_SIZE.
+
+    ONE parse for /asm and /bytes, so the same query string cannot mean two
+    different windows on the two endpoints: surrounding whitespace is stripped
+    here (only /asm used to), the value is decimal (base-0, so a 0x-prefixed
+    count is still read as one), and an empty slice is a rejected query rather
+    than a valid empty dump.
+
+    *parse_error* is the caller's ``error`` label for an unparseable value
+    ("invalid va or size" on /asm, "invalid size" on /bytes); the rejected
+    value itself goes in the detail either way.
+
+    Returns ``(size, None)`` on success, ``(0, error_response)`` when the value
+    is unparseable or clamps to zero.
+    """
+    try:
+        size = min(max(int(raw_size.strip(), 0), 0), _MAX_SLICE_SIZE)
+    except ValueError:
+        return 0, _json_err(
+            400,
+            {
+                "error": parse_error,
+                "detail": f"size {raw_size!r} is not a decimal byte count (1..{_MAX_SLICE_SIZE})",
+            },
+        )
+    if size == 0:
+        return 0, _json_err(
+            400,
+            {
+                "error": "size must be positive",
+                "detail": f"size {raw_size!r} requests an empty slice; "
+                f"expected 1..{_MAX_SLICE_SIZE}",
+            },
+        )
+    return size, None
+
+
+def _revalidate_headers(etag: str | None) -> dict[str, str]:
+    """Cache headers for a revalidating binary-slice response."""
+    headers = {"Cache_Control": CACHE_REVALIDATE}
+    if etag is not None:
+        headers["ETag"] = etag
+    return headers
+
+
 @app.get("/api/targets/<target>/functions")
 def handle_api_functions_list(target: str) -> bytes | Any:
     """Paginated function listing with optional filters."""
@@ -1146,7 +1192,8 @@ def handle_api_functions_batch(target: str) -> bytes | Any:
         # Functions first (parity with GET /functions/<va>), then globals.
         fn_by_va: dict[int, dict[str, Any]] = {}
         c.execute(
-            f"SELECT {_fn_json_sql(c)} FROM functions WHERE target = ? AND va IN ({placeholders})",
+            f"SELECT {_fn_json_sql(c.connection)} FROM functions "
+            f"WHERE target = ? AND va IN ({placeholders})",
             [target, *unique_vas],
         )
         for row in c.fetchall():
@@ -1155,7 +1202,7 @@ def handle_api_functions_batch(target: str) -> bytes | Any:
 
         if fn_by_va:
             c.execute(
-                f"{_verify_select(c)} FROM verify_results"
+                f"{_verify_select(c.connection)} FROM verify_results"
                 f" WHERE target = ? AND va IN ({placeholders})",
                 [target, *unique_vas],
             )
@@ -1165,7 +1212,7 @@ def handle_api_functions_batch(target: str) -> bytes | Any:
                     fn["last_verify"] = _last_verify_payload(vr)
 
         c.execute(
-            f"SELECT {_global_json_sql(c)} FROM globals "
+            f"SELECT {_global_json_sql(c.connection)} FROM globals "
             f"WHERE target = ? AND va IN ({placeholders})",
             [target, *unique_vas],
         )
@@ -1186,41 +1233,22 @@ def handle_api_functions_batch(target: str) -> bytes | Any:
 @app.get("/api/targets/<target>/functions/<va>")
 def handle_api_function(target: str, va: str) -> bytes | Any:
     with _target_cursor(target) as c:
-        # Parse va into candidate lookup ints (shared spelling parser:
-        # rebrew.workspace.parse_va_candidates); anything unparseable falls
-        # through to the exact-name lookup below.
-        va_candidates = parse_va_candidates(va.strip())
-        is_numeric = bool(va_candidates)
-
-        def _lookup(table: str, json_sql: str) -> Any | None:
-            """First matching row in *table* by VA candidates (numeric) or exact name.
-
-            SAFETY: table and json_sql are literals from the two call sites
-            below; target and the VA/name value are parameterized.
-            """
-            if is_numeric:
-                for va_int in va_candidates:
-                    c.execute(
-                        f"SELECT {json_sql} FROM {table} WHERE target = ? AND va = ?",
-                        (target, va_int),
-                    )
-                    row = c.fetchone()
-                    if row:
-                        return row
-                return None
-            c.execute(
-                f"SELECT {json_sql} FROM {table} WHERE target = ? AND name = ?",
-                (target, va),
-            )
-            return c.fetchone()
+        # One shared resolution order (server._lookup_by_va_or_name): VA
+        # candidates first, then the exact name for a name-form lookup.  The
+        # stripped spelling is used for both, so "?va=%20Foo" resolves the same
+        # way the value is spelled in the database.
+        value = va.strip()
 
         # Functions win over globals (parity with the batch endpoint).
-        row = _lookup("functions", _fn_json_sql(c))
+        row = _server._lookup_by_va_or_name(
+            c, "functions", _fn_json_sql(c.connection), target, value
+        )
         if row:
             fn_json = json.loads(row[0])
             # Attach the last `rebrew verify -o` record for this function.
             c.execute(
-                f"{_verify_one_select(c)} FROM verify_results WHERE target = ? AND va = ?",
+                f"{_verify_one_select(c.connection)} FROM verify_results "
+                f"WHERE target = ? AND va = ?",
                 (target, fn_json["va"]),
             )
             vr = c.fetchone()
@@ -1228,7 +1256,9 @@ def handle_api_function(target: str, va: str) -> bytes | Any:
                 fn_json["last_verify"] = _last_verify_payload(vr)
             return _json_ok(json.dumps(fn_json).encode("utf-8"), Cache_Control=CACHE_NO_STORE)
 
-        row = _lookup("globals", _global_json_sql(c))
+        row = _server._lookup_by_va_or_name(
+            c, "globals", _global_json_sql(c.connection), target, value
+        )
         if row:
             return _json_ok(row[0].encode("utf-8"), Cache_Control=CACHE_NO_STORE)
 
@@ -1284,31 +1314,9 @@ def handle_api_asm(target: str) -> bytes | Any:
         )
 
     raw_va = va_str.strip()
-    try:
-        # Base-0 size, the same parse /bytes uses for offset and size: the two
-        # endpoints must not interpret the same ?size= differently.  Base 0
-        # accepts a 0x/0o/0b prefix, so "0x40" is 64 here exactly as it is on
-        # /bytes, and the error message below says so.
-        size = min(max(int(size_str.strip(), 0), 0), _MAX_SLICE_SIZE)
-    except ValueError:
-        return _json_err(
-            400,
-            {
-                "error": "invalid va or size",
-                "detail": f"size {size_str!r} is not a byte count "
-                "(decimal, or 0x-prefixed hexadecimal)",
-            },
-        )
-
-    if size == 0:
-        return _json_err(
-            400,
-            {
-                "error": "size must be positive",
-                "detail": f"size {size_str!r} requests an empty slice; "
-                f"expected 1..{_MAX_SLICE_SIZE}",
-            },
-        )
+    size, size_err = _slice_size(size_str, "invalid va or size")
+    if size_err is not None:
+        return size_err
 
     # Parse va into candidate ints via the shared spelling parser (same
     # convention as GET /functions/<va>).  The SPA builds asm URLs by
@@ -1381,9 +1389,7 @@ def handle_api_asm(target: str) -> bytes | Any:
             )
 
         # Both response shapes carry the same validator headers; build them once.
-        headers_asm: dict[str, str] = {"Cache_Control": CACHE_REVALIDATE}
-        if asm_etag is not None:
-            headers_asm["ETag"] = asm_etag
+        headers_asm = _revalidate_headers(asm_etag)
 
         if fmt == "json":
             # Structured JSON output
@@ -1450,27 +1456,9 @@ def handle_api_bytes(target: str, section: str) -> bytes | Any:
             },
         )
     raw_size = request.query.get("size", "256")
-    try:
-        req_size = min(max(int(raw_size, 0), 0), _MAX_SLICE_SIZE)
-    except (ValueError, TypeError):
-        return _json_err(
-            400,
-            {
-                "error": "invalid size",
-                "detail": f"size {raw_size!r} is not a byte count (decimal, 1..{_MAX_SLICE_SIZE})",
-            },
-        )
-    # Same positivity contract as /asm: an empty slice is a rejected query,
-    # not a valid empty dump.
-    if req_size == 0:
-        return _json_err(
-            400,
-            {
-                "error": "size must be positive",
-                "detail": f"size {raw_size!r} requests an empty slice; "
-                f"expected 1..{_MAX_SLICE_SIZE}",
-            },
-        )
+    req_size, size_err = _slice_size(raw_size, "invalid size")
+    if size_err is not None:
+        return size_err
 
     # ETag bound to the WAL-aware DB snapshot + request identity so /bytes
     # revalidates after a rebuild instead of serving year-immutable stale
@@ -1513,9 +1501,6 @@ def handle_api_bytes(target: str, section: str) -> bytes | Any:
             return _json_err(400, {"error": "offset beyond section bounds"})
         chunk = target_data[file_start : file_start + req_size]
 
-        headers_bytes: dict[str, str] = {"Cache_Control": CACHE_REVALIDATE}
-        if bytes_etag is not None:
-            headers_bytes["ETag"] = bytes_etag
         return _json_ok(
             {
                 "target": target,
@@ -1527,7 +1512,7 @@ def handle_api_bytes(target: str, section: str) -> bytes | Any:
                 "hex": _format_hex_dump(chunk, base_offset=req_offset, max_bytes=None),
                 "raw": list(chunk),
             },
-            **headers_bytes,
+            **_revalidate_headers(bytes_etag),
         )
 
 
