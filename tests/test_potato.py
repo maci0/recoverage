@@ -1690,6 +1690,70 @@ class TestSearchAddressSpelling:
             conn.close()
 
 
+class TestFunctionListSearchFolding:
+    """The Functions view must fold a non-ASCII term the way the grid does.
+
+    SQLite's LIKE folds case for ASCII only, so a bare ``name LIKE ?`` chain
+    returns nothing for "CAFÉ" against a "Café_Render" row, and an NFD spelling
+    misses its NFC twin.  _search_functions (grid) ORs a folded disjunct in;
+    the function list used a hand-written chain without it, so the same query
+    matched in one view and not the other.
+    """
+
+    @staticmethod
+    def _cursor() -> tuple[sqlite3.Connection, sqlite3.Cursor]:
+        from recoverage.server import FOLD_SQL, fold_text
+
+        conn = sqlite3.connect(":memory:")
+        # _open_db registers the folding function on every read connection;
+        # a bare connect() has to do the same or the folded clause cannot run.
+        conn.create_function(FOLD_SQL, 1, fold_text, deterministic=True)
+        c = conn.cursor()
+        c.execute(
+            "CREATE TABLE functions (target TEXT, name TEXT, va INTEGER,"
+            " vaStart TEXT DEFAULT '', symbol TEXT DEFAULT '', size INTEGER DEFAULT 4,"
+            " status TEXT DEFAULT 'exact', module TEXT DEFAULT '',"
+            " markerType TEXT DEFAULT 'FUNCTION')"
+        )
+        c.execute(
+            "CREATE TABLE globals (target TEXT, va INTEGER, name TEXT,"
+            " decl TEXT DEFAULT '', files TEXT DEFAULT '[]',"
+            " module TEXT DEFAULT '', size INTEGER DEFAULT 4)"
+        )
+        c.execute(
+            "INSERT INTO functions (target, name, va) VALUES ('T', 'Café_Render', ?)",
+            (0x401000,),
+        )
+        return conn, c
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "CAFÉ",  # uppercase
+            "CAFE\u0301",  # NFD spelling: same term, decomposed
+            "café",  # lowercase
+        ],
+    )
+    def test_case_folded_term_matches(self, query: str) -> None:
+        from recoverage.potato import _render_function_list
+
+        conn, c = self._cursor()
+        try:
+            assert "Café_Render" in _render_function_list(c, "T", ".text", query, "va", "")
+        finally:
+            conn.close()
+
+    def test_grid_and_list_agree_on_the_same_term(self) -> None:
+        from recoverage.potato import _render_function_list, _search_functions
+
+        conn, c = self._cursor()
+        try:
+            assert _search_functions(c, "T", "CAFÉ") == {"Café_Render"}
+            assert "Café_Render" in _render_function_list(c, "T", ".text", "CAFÉ", "va", "")
+        finally:
+            conn.close()
+
+
 class TestCellsCacheInvalidation:
     """The grid memo must invalidate on a WAL-committed rebuild.
 

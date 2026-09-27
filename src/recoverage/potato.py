@@ -1791,15 +1791,18 @@ def _render_function_list(
     if search_query:
         like = _escape_like(search_query)
         # The VA column below is printed by _format_va, which pads to eight
-        # digits, so both that spelling and the bare one are matched: an
-        # address copied out of this very table matches when pasted into the
-        # search box.  printf('0x%x', va) has no prefix and could never match.
-        where.append(
-            "(name LIKE ? ESCAPE '\\' OR symbol LIKE ? ESCAPE '\\'"
-            " OR ('0x' || printf('%08x', va)) LIKE ? ESCAPE '\\'"
-            " OR ('0x' || printf('%x', va)) LIKE ? ESCAPE '\\')"
+        # digits, so both that spellings are matched: an address copied out of
+        # this very table matches when pasted into the search box.
+        # printf('0x%x', va) has no prefix and could never match.  Same chain
+        # shape and folded disjunct as _search_functions, so this list and the
+        # grid it sits beside return the same rows for one term.
+        chain, arity = like_match(
+            ["name", "symbol", "'0x' || printf('%08x', va)", "'0x' || printf('%x', va)"]
         )
-        params.extend([like, like, like, like])
+        folded_sql, folded_params = folded_like_clause(["name", "symbol"], search_query)
+        where.append(f"{chain} OR {folded_sql}" if folded_sql else chain)
+        params.extend([like] * arity)
+        params.extend(folded_params)
 
     where_sql = " AND ".join(where)
     # Cap the rendered list (same bound as the search above) so a large
