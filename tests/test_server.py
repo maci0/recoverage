@@ -1375,3 +1375,54 @@ class TestSpaStateVocabulary:
         css = importlib.resources.files(assets).joinpath("style.css").read_text(encoding="utf-8")
         assert "--other-bg:" in css
         assert ".swatch-compile_error" in css
+
+
+class TestSpaGridLayoutMemo:
+    """The grid layout memo must key on the packed cells, not on a count.
+
+    ``layout`` caches the walk, the hit-map, and the per-cell rect geometry
+    for a section.  A rebuild re-spans cells without necessarily changing how
+    many there are, so a (columns, cell-count) key matches while the spans
+    differ: the map then hands a click the wrong cell and the rects have the
+    wrong widths.  packSection returns a fresh object per section version and
+    after a lazy cells fetch, so the pack identity is the exact change token.
+    """
+
+    @staticmethod
+    def _detail_js() -> str:
+        import importlib.resources
+
+        from recoverage import assets
+
+        return importlib.resources.files(assets).joinpath("detail.js").read_text(encoding="utf-8")
+
+    def test_layout_keys_on_the_pack_object(self) -> None:
+        detail_js = self._detail_js()
+        assert "g.layPack === pack" in detail_js
+        assert "g.layPack = pack" in detail_js
+        assert "pack.n}" not in detail_js, (
+            "layout keyed on a cell count: a re-span that keeps the count serves stale geometry"
+        )
+
+    def test_rebuild_resyncs_the_declared_column_count(self) -> None:
+        """A changed section width lives in the DOM, so paint must refresh it.
+
+        layout reads the column count back off ``wrap.dataset.cols``, which was
+        written when the grid was first created.  Without the resync a rebuild
+        that changes a section's column count keeps wrapping at the old one.
+        """
+        detail_js = self._detail_js()
+        assert "g.wrap.dataset.cols !== declared" in detail_js
+        assert "g.wrap.dataset.cols = declared" in detail_js
+        assert "const declared = String(sec.columns || 64);" in detail_js
+
+    def test_pack_is_invalidated_when_lazy_cells_land(self) -> None:
+        """The lazy cells fetch must drop the memoized pack, or the layout
+        memo keys on a pack built from an empty section forever."""
+        import importlib.resources
+
+        from recoverage import assets
+
+        app_js = importlib.resources.files(assets).joinpath("app.js").read_text(encoding="utf-8")
+        assert "delete sec._pack;" in app_js
+        assert "sec._pack = " in app_js

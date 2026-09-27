@@ -358,16 +358,24 @@
     };
 
     // Layout (walk, rows, hit-map, canvas size) is cached per section and
-    // recomputed only when cols/pack change; filter/search/active/focus
-    // changes just redraw rects.  getComputedStyle reads are cached too —
-    // the palette only changes on theme toggle.
+    // recomputed only when the packed cells or the column count change;
+    // filter/search/active/focus changes just redraw rects.  getComputedStyle
+    // reads are cached too — the palette only changes on theme toggle.
+    //
+    // The memo keys on the pack OBJECT, not on (cols, cell count).  A rebuild
+    // re-spans cells without necessarily changing how many there are, and that
+    // pair would then match while the spans differ: the stale hit-map and rect
+    // geometry would mis-paint the section and hand a click the wrong cell.
+    // packSection returns a fresh object per section version and after a lazy
+    // cells fetch (it deletes sec._pack), so identity is exactly "the cells
+    // changed" — a superset of what the old key caught, and it drops the
+    // per-paint string build.
     const layout = (secName, pack, force) => {
       const g = grids[secName];
+      if (!force && g.layPack === pack) return g;
       const lay = layoutOf(g.wrap);
-      const key = `${lay.cols}x${pack.n}`;
-      if (!force && g.layKey === key) return g;
       g.lay = lay;
-      g.layKey = key;
+      g.layPack = pack;
       g.cols = lay.cols;
       const { cols, gap, pad, cell } = lay;
       // Row count first: walk is cheap, and sizing the map needs it upfront.
@@ -435,9 +443,18 @@
       const sec = data.val?.sections?.[secName];
       if (!g || !sec) return;
       if (sec.cells == null) return;
+      // A rebuild can change a section's declared column count.  The wrap was
+      // built with the old value and layout reads it back off the DOM, so a
+      // background refresh would otherwise keep wrapping at the old width.
+      const declared = String(sec.columns || 64);
+      let { relayout } = opts;
+      if (g.wrap.dataset.cols !== declared) {
+        g.wrap.dataset.cols = declared;
+        relayout = true;
+      }
       // oxlint-disable-next-line @rikalabs/no-pass-through-intermediate-vars -- pack feeds layout + the draw below, not a single passthrough
       const pack = packSection(sec);
-      layout(secName, pack, opts.relayout);
+      layout(secName, pack, relayout);
       palette(secName, opts.retheme);
       const { cell } = g.lay;
       const { ctx, pal, accent, cellX, cellY, cellW } = g;
@@ -597,7 +614,7 @@
       // oxlint-disable-next-line @rikalabs/no-pass-through-intermediate-vars -- canvas is stored and appended; ctx is a second use, not an alias
       const mapCanvas = canvas({ class: "grid-canvas" });
       wrap.append(mapCanvas);
-      grids[secName] = { wrap, canvas: mapCanvas, ctx: mapCanvas.getContext("2d"), cols: Number(wrap.dataset.cols) || 64, lay: null, focus: 0 };
+      grids[secName] = { wrap, canvas: mapCanvas, ctx: mapCanvas.getContext("2d"), cols: Number(wrap.dataset.cols) || 64, lay: null, layPack: null, focus: 0 };
       container.append(wrap);
       ro.observe(wrap);
       requestAnimationFrame(() => paint(secName));
