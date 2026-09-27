@@ -2863,3 +2863,169 @@ class TestIndexWarmup:
 
         assert ui.CACHED_INDEX_PAYLOAD is None
         assert any("warm-up failed" in r.getMessage() for r in caplog.records)
+
+
+# ── Routing error contract (/api/* stays JSON) ─────────────────────
+
+
+class TestApiRoutingErrors:
+    """The catch-all route must keep the 404/405 distinction.
+
+    A catch-all that answers every miss with 404 also swallows the verb: a
+    client that PATCHes a read-only resource, or GETs the POST-only
+    /api/regen, is told the resource does not exist.  The error envelope is
+    already right; the status code is what misleads.
+    """
+
+    def test_unknown_api_path_returns_json_404(self) -> None:
+        status, headers, body = wsgi_get("/api/does-not-exist")
+        assert status.startswith("404")
+        assert headers["Content-Type"].startswith("application/json")
+        data = json.loads(decode_body(body, headers))
+        assert data["code"] == "not_found"
+        assert "/api/does-not-exist" in data["detail"]
+
+    def test_unknown_nested_api_path_returns_json_404(self) -> None:
+        status, headers, body = wsgi_get("/api/targets/NOPE/functions/notaroute")
+        assert status.startswith("404")
+        data = json.loads(decode_body(body, headers))
+        assert data["code"] == "not_found"
+
+    def test_wrong_method_returns_json_405_with_allow(self) -> None:
+        status, headers, body = wsgi_post("/api/health")
+        assert status.startswith("405")
+        data = json.loads(decode_body(body, headers))
+        assert data["code"] == "method_not_allowed"
+        # RFC 9110 15.5.6: a 405 must say what is allowed, and Bottle's
+        # router omits the header, so the catch-all supplies it.
+        allow = {m.strip() for m in headers["Allow"].split(",")}
+        assert {"GET", "HEAD"} <= allow
+
+    def test_allow_on_a_path_with_several_methods(self) -> None:
+        status, headers, body = wsgi_request("DELETE", "/api/targets/NOPE/functions")
+        assert status.startswith("405")
+        allow = {m.strip() for m in headers["Allow"].split(",")}
+        assert {"GET", "POST", "HEAD"} <= allow
+        data = json.loads(decode_body(body, headers))
+        assert "DELETE" in data["detail"]
+
+    def test_get_on_the_post_only_regen_is_405(self) -> None:
+        status, headers, _ = wsgi_get("/api/regen")
+        assert status.startswith("405")
+        allow = {m.strip() for m in headers["Allow"].split(",")}
+        assert allow == {"POST"}
+
+    def test_api_error_bodies_are_never_cached(self) -> None:
+        status, headers, _ = wsgi_get("/api/does-not-exist")
+        assert status.startswith("404")
+        assert headers["Cache-Control"] == "no-store"
+
+    def test_405_details_escape_control_characters(self) -> None:
+        """The Allow/405 path reflects the request method, which is
+        attacker-controlled; a raw control character would forge log lines
+        and header content."""
+        status, headers, body = wsgi_request("GET\nX", "/api/health")
+        assert status.startswith("405")
+        assert "\n" not in headers["Allow"]
+        data = json.loads(decode_body(body, headers))
+        assert "\n" not in data["detail"]
+
+
+# ── /asm and /bytes validation detail ─────────────────────────────
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+class TestSliceValidationDetail:
+    """Every 400 from the two binary-slice endpoints names the offending
+    parameter and its accepted range.
+
+    `error` alone ("invalid va or size", "invalid size") tells an API client
+    which request failed but not which field to fix; `detail` carries the
+    value that was rejected and the constraint it broke.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _capstone(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import recoverage.api as api
+
+        monkeypatch.setattr(api, "HAS_CAPSTONE", True)
+        self.dll = bytes((i % 251) for i in range(2048))
+        monkeypatch.setattr(api, "_load_dll", lambda target: self.dll)
+
+    def test_asm_missing_param_names_which(self) -> None:
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, headers, body = wsgi_get(f"/api/targets/{target}/asm?va=0x10001000")
+        assert status.startswith("400")
+        data = json.loads(decode_body(body, headers))
+        assert data["error"] == "missing va or size"
+        assert "size" in data["detail"]
+        assert "va" not in data["detail"].split("size")[0]
+
+    def test_asm_bad_size_quotes_the_value(self) -> None:
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, headers, body = wsgi_get(f"/api/targets/{target}/asm?va=0x10001000&size=abc")
+        assert status.startswith("400")
+        data = json.loads(decode_body(body, headers))
+        assert data["error"] == "invalid va or size"
+        assert "abc" in data["detail"]
+
+    def test_asm_unknown_format_rejected(self) -> None:
+        """A typo'd representation must not silently return the text form."""
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, headers, body = wsgi_get(
+            f"/api/targets/{target}/asm?va=0x10001000&size=16&format=jsom"
+        )
+        assert status.startswith("400")
+        data = json.loads(decode_body(body, headers))
+        assert data["code"] == "bad_request"
+        assert "jsom" in data["detail"]
+        assert "json" in data["detail"]
+
+    def test_asm_format_is_case_insensitive(self) -> None:
+        """The representation name is normalized, so ?format=TEXT is the
+        same request as ?format=text rather than a rejected one."""
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        lower = wsgi_get(f"/api/targets/{target}/asm?va=0x10001000&size=16&format=text")
+        upper = wsgi_get(f"/api/targets/{target}/asm?va=0x10001000&size=16&format=TEXT")
+        assert lower[0] == upper[0]
+        assert not lower[0].startswith("400")
+        assert not upper[0].startswith("400")
+
+    def test_asm_empty_format_is_the_default(self) -> None:
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, headers, _ = wsgi_get(f"/api/targets/{target}/asm?va=0x10001000&size=16&format=")
+        assert not status.startswith("400")
+
+    def test_bytes_bad_size_quotes_the_value(self) -> None:
+        status, headers, body = wsgi_get(
+            "/api/targets/FAKEDLL/sections/.text/bytes?offset=0&size=abc"
+        )
+        assert status.startswith("400")
+        data = json.loads(decode_body(body, headers))
+        assert data["error"] == "invalid size"
+        assert "abc" in data["detail"]
+        assert "4096" in data["detail"]
+
+    def test_bytes_out_of_bounds_names_the_section_range(self) -> None:
+        status, headers, body = wsgi_get(
+            "/api/targets/FAKEDLL/sections/.text/bytes?offset=0&size=999999"
+        )
+        # Clamped to _MAX_SLICE_SIZE, which is inside the 0x1000 section.
+        assert status.startswith("200")
+        status, headers, body = wsgi_get(
+            "/api/targets/FAKEDLL/sections/.text/bytes?offset=4096&size=4"
+        )
+        assert status.startswith("400")
+        data = json.loads(decode_body(body, headers))
+        assert data["error"] == "offset beyond section bounds"
+        assert ".text" in data["detail"]

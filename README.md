@@ -270,6 +270,44 @@ recoverage open --port 8001
 | `/api/events` | GET | Server-Sent Events: `db-updated` when coverage.db changes (SPA auto-refresh) |
 | `/api/regen` | POST | Re-run catalog + build-db (localhost only, rate-limited) |
 
+### Error responses
+
+Every `/api/*` failure answers the same JSON envelope, and every error body
+is sent with `Cache-Control: no-store`:
+
+```json
+{
+  "error": "Method not allowed",
+  "code": "method_not_allowed",
+  "detail": "POST is not allowed on /api/health; allowed: GET, HEAD"
+}
+```
+
+`code` is the stable machine-readable key: `bad_request`, `unauthorized`,
+`forbidden`, `not_found`, `method_not_allowed`, `payload_too_large`,
+`unprocessable_entity`, `rate_limited`, `internal`, `not_implemented`,
+`db_unavailable`. `detail` names the parameter or constraint at fault, and
+some errors add one more key (`retry_after` on a 429).
+
+A wrong verb on a real path answers **405 with an `Allow` header**; a path no
+route matches answers **404**. A `405` never means "not found" here.
+
+Query-parameter rules, the same on every endpoint:
+
+- `/asm` requires `va` and `size`, and accepts `format=text` (default) or
+  `format=json`. An unrecognized `format` is a 400, not a silent fall back to
+  text. `size` is a decimal byte count, clamped to 4096.
+- `/sections/<section>/bytes` takes `offset` (default 0) and `size` (default
+  256, clamped to 4096); both are decimal unless 0x-prefixed. A slice that
+  would run past the section end is a 400 naming the section's size.
+- `/functions` (list) takes `limit` (1..500, default 50) and `offset` (>= 0,
+  default 0). An unparseable or out-of-range value is clamped, and the
+  response echoes the `limit` and `offset` actually used.
+- `/functions` (POST) takes `{"vas": [...]}`, at most 500 entries, each a hex
+  string (with or without `0x`) or an integer. The body must be under 64 KiB
+  (413) and the list non-empty (400). VAs with no match are omitted from the
+  response rather than reported as an error.
+
 ---
 
 ## Architecture & How it works

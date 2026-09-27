@@ -897,6 +897,10 @@ _MAX_SLICE_SIZE = 4096
 # request finite.
 _MAX_SEARCH_CHARS = 500
 
+# Representations GET /api/targets/<t>/asm can produce.  Anything else is
+# rejected rather than silently answered with the text form.
+_ASM_FORMATS = frozenset({"text", "json"})
+
 
 @app.get("/api/targets/<target>/functions")
 def handle_api_functions_list(target: str) -> bytes | Any:
@@ -1242,10 +1246,32 @@ def handle_api_asm(target: str) -> bytes | Any:
     va_str = request.query.get("va")
     size_str = request.query.get("size")
     section = request.query.get("section", ".text")
-    fmt = request.query.get("format", "text").strip()
+    fmt = request.query.get("format", "text").strip().lower() or "text"
+    # An unrecognised ?format= used to fall through to the text
+    # representation silently, so a client's typo (?format=JSOM, ?format=json5)
+    # answered 200 with a body shape it cannot parse.  Reject the unknown
+    # value and name the accepted ones: the caller asked for a representation
+    # the server does not have.
+    if fmt not in _ASM_FORMATS:
+        return _json_err(
+            400,
+            {
+                "error": "invalid format",
+                "detail": f"format {request.query.get('format', '')!r} is not supported; "
+                f"expected one of {', '.join(sorted(_ASM_FORMATS))}",
+            },
+        )
 
     if not va_str or not size_str:
-        return _json_err(400, {"error": "missing va or size"})
+        missing = [name for name, value in (("va", va_str), ("size", size_str)) if not value]
+        return _json_err(
+            400,
+            {
+                "error": "missing va or size",
+                "detail": f"required query parameter(s) absent: {', '.join(missing)} "
+                "(e.g. ?va=0x10001000&size=64)",
+            },
+        )
 
     raw_va = va_str.strip()
     try:
@@ -1253,10 +1279,23 @@ def handle_api_asm(target: str) -> bytes | Any:
         # endpoints must not interpret the same ?size= differently.
         size = min(max(int(size_str.strip(), 0), 0), _MAX_SLICE_SIZE)
     except ValueError:
-        return _json_err(400, {"error": "invalid va or size"})
+        return _json_err(
+            400,
+            {
+                "error": "invalid va or size",
+                "detail": f"size {size_str!r} is not a decimal byte count (1..{_MAX_SLICE_SIZE})",
+            },
+        )
 
     if size == 0:
-        return _json_err(400, {"error": "size must be positive"})
+        return _json_err(
+            400,
+            {
+                "error": "size must be positive",
+                "detail": f"size {size_str!r} requests an empty slice; "
+                f"expected 1..{_MAX_SLICE_SIZE}",
+            },
+        )
 
     # Parse va into candidate ints via the shared spelling parser (same
     # convention as GET /functions/<va>).  The SPA builds asm URLs by
@@ -1266,7 +1305,14 @@ def handle_api_asm(target: str) -> bytes | Any:
     # undocumented-block disassembly with "beyond section end".
     va_candidates = parse_va_candidates(raw_va)
     if not va_candidates:
-        return _json_err(400, {"error": "invalid va or size"})
+        return _json_err(
+            400,
+            {
+                "error": "invalid va or size",
+                "detail": f"va {raw_va!r} is not a hexadecimal address "
+                "(with or without 0x, or a decimal address)",
+            },
+        )
 
     # ETag bound to the WAL-aware DB snapshot + request identity (see
     # _etag_or_304): disassembly reflects the binary + section layout, which
@@ -1292,14 +1338,34 @@ def handle_api_asm(target: str) -> bytes | Any:
         )
         if va is None:
             if va_candidates[0] < sec_va:
-                return _json_err(400, {"error": "va is before section start"})
-            return _json_err(400, {"error": "va is beyond section end"})
+                return _json_err(
+                    400,
+                    {
+                        "error": "va is before section start",
+                        "detail": f"section {section!r} starts at va 0x{sec_va:x}",
+                    },
+                )
+            return _json_err(
+                400,
+                {
+                    "error": "va is beyond section end",
+                    "detail": f"section {section!r} spans va 0x{sec_va:x}"
+                    f"..0x{sec_va + sec['size'] - 1:x}",
+                },
+            )
         file_offset = sec["fileOffset"] + va - sec_va
         if file_offset < 0:
             # Unreachable for a schema-valid sections row (fileOffset carries a
             # CHECK >= 0 and va >= sec_va here) — kept so a foreign DB without
             # that constraint cannot read bytes from before the file.
-            return _json_err(400, {"error": "va is before section start"})
+            return _json_err(
+                400,
+                {
+                    "error": "va is before section start",
+                    "detail": f"section {section!r} maps va 0x{va:x} to file offset "
+                    f"{file_offset}, before the start of the file",
+                },
+            )
 
         # Both response shapes carry the same validator headers; build them once.
         headers_asm: dict[str, str] = {"Cache_Control": CACHE_REVALIDATE}
@@ -1353,20 +1419,45 @@ def handle_api_asm(target: str) -> bytes | Any:
 @app.get("/api/targets/<target>/sections/<section>/bytes")
 def handle_api_bytes(target: str, section: str) -> bytes | Any:
     """Return raw bytes from the original binary for a given section range."""
+    raw_offset = request.query.get("offset", "0")
     try:
-        req_offset = int(request.query.get("offset", "0"), 0)
+        req_offset = int(raw_offset, 0)
         if req_offset < 0:
-            return _json_err(400, {"error": "invalid offset"})
+            return _json_err(
+                400,
+                {"error": "invalid offset", "detail": f"offset {raw_offset!r} is negative"},
+            )
     except (ValueError, TypeError):
-        return _json_err(400, {"error": "invalid offset"})
+        return _json_err(
+            400,
+            {
+                "error": "invalid offset",
+                "detail": f"offset {raw_offset!r} is not a byte offset "
+                "(decimal, or 0x-prefixed hexadecimal)",
+            },
+        )
+    raw_size = request.query.get("size", "256")
     try:
-        req_size = min(max(int(request.query.get("size", "256"), 0), 0), _MAX_SLICE_SIZE)
+        req_size = min(max(int(raw_size, 0), 0), _MAX_SLICE_SIZE)
     except (ValueError, TypeError):
-        return _json_err(400, {"error": "invalid size"})
+        return _json_err(
+            400,
+            {
+                "error": "invalid size",
+                "detail": f"size {raw_size!r} is not a byte count (decimal, 1..{_MAX_SLICE_SIZE})",
+            },
+        )
     # Same positivity contract as /asm: an empty slice is a rejected query,
     # not a valid empty dump.
     if req_size == 0:
-        return _json_err(400, {"error": "size must be positive"})
+        return _json_err(
+            400,
+            {
+                "error": "size must be positive",
+                "detail": f"size {raw_size!r} requests an empty slice; "
+                f"expected 1..{_MAX_SLICE_SIZE}",
+            },
+        )
 
     # ETag bound to the WAL-aware DB snapshot + request identity so /bytes
     # revalidates after a rebuild instead of serving year-immutable stale
@@ -1376,11 +1467,26 @@ def handle_api_bytes(target: str, section: str) -> bytes | Any:
     with _target_cursor(target) as c:
         sec = _file_backed_section(c, target, section, "fileOffset", "size")
         if req_offset >= sec["size"]:
-            return _json_err(400, {"error": "offset beyond section bounds"})
+            return _json_err(
+                400,
+                {
+                    "error": "offset beyond section bounds",
+                    "detail": f"offset {req_offset} is past the end of section "
+                    f"{section!r} (size {sec['size']})",
+                },
+            )
         # Overflow guard: req_offset + req_size exceeding section size would
         # slice past the section's file range.
         if req_offset + req_size > sec["size"]:
-            return _json_err(400, {"error": "offset+size beyond section bounds"})
+            return _json_err(
+                400,
+                {
+                    "error": "offset+size beyond section bounds",
+                    "detail": f"offset {req_offset} + size {req_size} exceeds section "
+                    f"{section!r} (size {sec['size']}); largest size here is "
+                    f"{sec['size'] - req_offset}",
+                },
+            )
         target_data = _load_dll(target)
         if target_data is None:
             return _dll_not_found(target)

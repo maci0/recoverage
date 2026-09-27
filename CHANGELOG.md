@@ -52,6 +52,26 @@ module ships in the published package. See *Breaking*.
 - **`export --help` renders as prose.** The docstring's line-ending note was
   read as a line break by the rich help renderer, splitting the sentence
   about CSV row endings and leaving a stray quote in the help text.
+- **A wrong HTTP verb on a real endpoint answers 405, not 404.** The
+  path-agnostic catch-all that keeps unknown URLs from answering 405 also
+  swallowed the distinction: `POST /api/health` and `GET /api/regen` both
+  described resources that exist, and a client branching on 404 (stop, drop
+  the resource) against 405 (try another verb) was mis-told either way. They
+  now answer `405` with the `Allow` header, in the same JSON envelope as every
+  other failure. A verb outside the catch-all's list is rejected before any
+  handler runs and used to land on bottle's HTML error page; `/api/*` now gets
+  the JSON envelope there too.
+- **`?format=` on `/asm` rejects an unknown representation.** `format=jsom`
+  answered 200 with the text body, so a client's typo read as a successful
+  request carrying a shape it cannot parse. It is a 400 naming the accepted
+  values, the value is matched case-insensitively, and an empty `format=` is
+  still the default.
+- **A rejected query parameter says which one and why.** The `400`s from
+  `/asm` and `/sections/<section>/bytes` carried a fixed `error` string
+  (`invalid va or size`, `invalid size`, `size must be positive`, `offset
+  beyond section bounds`) with an empty `detail`, so a client could tell the
+  request failed but not which field to fix. `detail` now carries the
+  rejected value and the range it has to satisfy.
 - **Coverage buckets reconcile with `total_cells`.** `/stats` and `/data`
   section objects carry an `other` bucket matching rebrew's catch-all
   (`compile_error`, `extract_error`, `invalid_va`, `missing_file`,

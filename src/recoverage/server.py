@@ -1403,6 +1403,7 @@ _STATUS_ERROR_CODES: dict[int, str] = {
     401: "unauthorized",
     403: "forbidden",
     404: "not_found",
+    405: "method_not_allowed",
     413: "payload_too_large",
     422: "unprocessable_entity",
     429: "rate_limited",
