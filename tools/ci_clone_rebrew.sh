@@ -10,6 +10,7 @@
 # against; override either in the environment to pin a different rebrew.
 # The clone fails unless REBREW_REF resolves to REBREW_SHA: tags are mutable,
 # so a moved tag must not silently change the path dependency.
+# REBREW_FORCE=1 overwrites a destination checkout that has uncommitted work.
 set -euo pipefail
 
 REBREW_REF="${REBREW_REF:-v2.13.1}"
@@ -40,6 +41,20 @@ git_safe=(
   -c filter.lfs.process=
   -c filter.lfs.required=false
 )
+
+# The loop below removes the destination before every attempt, which is what
+# makes a retry start from a clean tree.  On a workstation that directory is
+# often a real rebrew checkout someone is working in, so stop rather than
+# throw that work away.  A CI runner never gets here: the destination is
+# outside the workspace and does not exist yet.  The status probe runs under
+# git_safe so a repository's own core.fsmonitor cannot execute on checkout.
+if [ -e "${dest}/.git" ] && [ -n "$(git "${git_safe[@]}" -C "${dest}" status --porcelain)" ]; then
+  if [ "${REBREW_FORCE:-0}" != "1" ]; then
+    echo "refusing to overwrite ${dest}: the checkout has uncommitted changes." >&2
+    echo "Commit, stash or move them, or re-run with REBREW_FORCE=1." >&2
+    exit 1
+  fi
+fi
 
 for attempt in 1 2 3; do
   rm -rf -- "${dest}"

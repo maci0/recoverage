@@ -414,23 +414,25 @@ check.
 | `web-lint` | ubuntu, Python 3.13, bun 1.4.2, temurin 17 | oxlint (Rika-Labs strict + anti-slop) over the SPA sources, then the Nu Html Checker over every static and served HTML/CSS asset |
 | `test` | ubuntu 3.13 + 3.14, macos 3.13, windows 3.13 | `pytest tests/`, warnings-as-errors. Browser tests (`tests/test_playwright.py`) stay out of the default run and are not run in CI |
 | `smoke` | ubuntu, Python 3.13 | boots `recoverage serve` against a synthetic `coverage.db` and probes the SPA shell, health, target data/stats/functions and Potato Mode, then repeats with a corrupt database to prove it reports `degraded` instead of healthy |
-| `sbom` | ubuntu | `uv export --frozen --all-extras --hashes` as a build artifact: the exact resolved tree behind a given build |
+| `sbom` | ubuntu | `uv export --frozen --all-extras --hashes` as a build artifact: the exact resolved tree behind a given build, plus the rebrew tag and commit the path dependency was pinned at |
 
-Every job installs with `uv sync --frozen --extra dev`, so `uv.lock` is
-never rewritten by a run; a stale lock fails the build instead of drifting.
-Playwright and the `capstone`/`pygments` extras are never installed, so the
+Every job installs with `uv sync --frozen --extra dev` and then runs tools
+through `uv run --frozen`, so `uv.lock` is never rewritten by a run; a stale
+lock fails the build instead of drifting. Playwright and the
+`capstone`/`pygments` extras are never installed, so the
 matrix is the same set on every runner.
 
 ### The sibling rebrew checkout
 
 `uv sync` resolves rebrew from `../rebrew`, which no GitHub runner has, so
-each job that installs the environment first runs
+Each job that installs the environment first runs
 `.github/actions/sibling-rebrew`: it clones rebrew into the workspace parent
-and checks out the commit pinned in that action's `ref` default. That commit
-has to keep matching `uv.lock`. When rebrew's own dependencies change, `uv
-sync --frozen` fails with a lock mismatch, and the fix is to re-lock in a tree
-laid out with the sibling and bump the one `ref` default in
-`.github/actions/sibling-rebrew/action.yml`.
+at the tag and commit pinned in `tools/ci_clone_rebrew.sh`, and fails if the
+tag no longer resolves to that commit. That pin has to keep matching
+`uv.lock`. When rebrew's own dependencies change, `uv sync --frozen` fails with
+a lock mismatch, and the fix is to re-lock in a tree laid out with the sibling
+and bump `REBREW_REF` / `REBREW_SHA` in `tools/ci_clone_rebrew.sh`, the one
+place the pin lives.
 
 ---
 

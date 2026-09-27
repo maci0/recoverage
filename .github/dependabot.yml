@@ -29,3 +29,11 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    groups:
+      # Ungrouped, every minor action bump opened its own PR, which the policy
+      # above says should not happen: one PR per ecosystem for minor/patch,
+      # majors left on their own so a breaking runner change is reviewable.
+      github-actions-minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"

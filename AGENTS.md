@@ -127,7 +127,8 @@ uv run python -m pytest tests/test_playwright.py
 
 `tools/ci_clone_rebrew.sh` backs `make clone-rebrew` and the CI jobs: it pins
 rebrew to the tag and commit in the script's defaults, and fails when the tag
-does not resolve to that commit.
+does not resolve to that commit. It refuses to remove a destination checkout
+that has uncommitted changes unless `REBREW_FORCE=1` is set.
 
 ## CI
 

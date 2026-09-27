@@ -21,6 +21,10 @@ the rebrew pin: `make clone-rebrew` and every CI job read them from there, so a
 tag that moves, or a pin that disagrees with `uv.lock`, fails the clone rather
 than silently changing the path dependency.
 
+The script removes `../rebrew` before cloning. When that directory is a rebrew
+checkout with uncommitted changes it stops instead of discarding the work; run
+`REBREW_FORCE=1 make clone-rebrew` to overwrite it knowingly.
+
 The sibling checkout is not optional. `pyproject.toml` pins rebrew to
 `path = "../rebrew"`, and recoverage imports `rebrew.workspace` for
 `rebrew-project.toml` / `coverage.db` resolution plus rebrew's
