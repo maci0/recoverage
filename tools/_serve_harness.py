@@ -42,21 +42,40 @@ def scratch_project_dir() -> Iterator[Path]:
 def build_sample_db(project_dir: Path) -> Path:
     """Build db/coverage.db using the shared synthetic schema builder.
 
-    conftest binds its DB path at import time (``cwd/db/coverage.db``), so
-    the chdir must happen before the import.
+    Re-runnable: any number of calls, in any order, against the same or a
+    different *project_dir*, in one process or across processes, all end
+    with the same database.  Two things used to break that, and both are
+    fixed here:
+
+    - ``import conftest`` is a no-op once the module is in ``sys.modules``,
+      and conftest's import-time side effect binds its own output path to
+      the cwd at ITS first import, so a second call built nothing.  The
+      builder is now called directly with the target path.
+    - The ``tests`` entry added to ``sys.path`` for that import was never
+      removed, so each call left another copy behind.
+
+    The chdir still happens, because conftest's own import-time side effect
+    creates ``db/coverage.db`` under the cwd: confining it to *project_dir*
+    keeps it out of whatever directory the tool was launched from.  Touching
+    the target first makes that side effect skip, so the database is written
+    exactly once, by the call below.
     """
     db_dir = project_dir / "db"
     db_dir.mkdir(parents=True, exist_ok=True)
+    db_file = db_dir / "coverage.db"
+    db_file.touch()
+    tests_dir = str(REPO_ROOT / "tests")
     old_cwd = Path.cwd()
+    sys.path.insert(0, tests_dir)
     try:
         os.chdir(project_dir)
-        sys.path.insert(0, str(REPO_ROOT / "tests"))
-        # Importing conftest builds the synthetic DB as a module side effect
-        # (guarded by cwd/db/coverage.db + no rebrew-project.toml).
-        import conftest  # noqa: F401  # type: ignore[import-not-found]
+        import conftest  # type: ignore[import-not-found]
     finally:
         os.chdir(old_cwd)
-    return db_dir / "coverage.db"
+        with contextlib.suppress(ValueError):
+            sys.path.remove(tests_dir)
+    conftest._build_synthetic_db(db_file)  # type: ignore[attr-defined]
+    return db_file
 
 
 def free_port() -> int:

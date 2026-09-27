@@ -19,10 +19,18 @@ from recoverage.webapp import app
 _DB_FILE = Path.cwd() / "db" / "coverage.db"
 
 
-def _build_synthetic_db() -> None:
-    """Create a minimal coverage.db (rebrew build-db schema v4)."""
-    _DB_FILE.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(_DB_FILE)
+def _build_synthetic_db(db_file: Path) -> None:
+    """Create a minimal coverage.db (rebrew build-db schema v4) at *db_file*.
+
+    Rebuilds unconditionally: an existing file is removed first, so a
+    second run over the same directory produces the same database as the
+    first instead of failing on the CREATE TABLE statements.  The path is
+    a parameter rather than the module-level ``_DB_FILE`` so a caller that
+    imports this module once can still build a database somewhere else.
+    """
+    db_file.parent.mkdir(parents=True, exist_ok=True)
+    db_file.unlink(missing_ok=True)
+    conn = sqlite3.connect(db_file)
     try:
         c = conn.cursor()
         c.execute(
@@ -219,7 +227,7 @@ def _build_synthetic_db() -> None:
 _IN_REAL_PROJECT = (Path.cwd() / "rebrew-project.toml").exists()
 
 if not _DB_FILE.exists() and not _IN_REAL_PROJECT:
-    _build_synthetic_db()
+    _build_synthetic_db(_DB_FILE)
 
 HAS_DB = _DB_FILE.exists() and not _IN_REAL_PROJECT
 
