@@ -1076,7 +1076,12 @@ def _load_grid_cells(
     merged = _merge_cells(cells, grid_columns)
     entry = (cells, merged)
 
-    if key is not None:
+    # The cursor's read snapshot is older than `snap` whenever a rebuild
+    # committed after render_potato's first query.  Caching that stale payload
+    # under the NEW fingerprint poisons the memo: a broadcast that cleared the
+    # cache can be overtaken by this insert, and nothing invalidates it until
+    # the next rebuild.  Only publish when the watermark still holds.
+    if key is not None and _snapshot_db_mtime() == snap:
         with _GRID_CACHE_LOCK:
             _evict_oldest(_GRID_CACHE, _GRID_CACHE_MAX)
             _GRID_CACHE[key] = entry
@@ -1111,7 +1116,10 @@ def _section_stats_cached(
         if cached is not None:
             return cached
     stats = _compute_section_stats(c, target, sections, data)
-    if key is not None:
+    # Same watermark re-check as _load_grid_cells: stats read through a cursor
+    # whose snapshot predates a rebuild must not be filed under the new
+    # fingerprint.
+    if key is not None and _snapshot_db_mtime() == snap:
         with _POTATO_STATS_CACHE_LOCK:
             _evict_oldest(_POTATO_STATS_CACHE, _POTATO_STATS_CACHE_MAX)
             _POTATO_STATS_CACHE[key] = stats

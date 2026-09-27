@@ -1338,6 +1338,32 @@ class TestCellsCacheInvalidation:
             potato.clear_cells_cache()
             c.connection.close()
 
+    def test_rebuild_mid_read_is_not_cached(self, tmp_path, monkeypatch) -> None:
+        """A rebuild between the read and the publish must not be memoized.
+
+        The cursor's read snapshot can predate the fingerprint taken at the
+        top of _load_grid_cells.  Filing that payload under the NEW
+        fingerprint poisons the memo: the broadcast that cleared it can be
+        overtaken by this insert, and nothing invalidates it afterwards.
+        """
+        import recoverage.potato as potato
+
+        db = tmp_path / "coverage.db"
+        db.write_bytes(b"x" * 64)
+        # First call is the key's watermark, second is the publish re-check.
+        snapshots = iter([(1, 64), (2, 64)])
+        monkeypatch.setattr(potato, "_snapshot_db_mtime", lambda: next(snapshots))
+
+        potato.clear_cells_cache()
+        c = self._cells_cursor()
+        try:
+            cells, _merged = _load_grid_cells(c, "T", ".text", 64)
+            assert cells  # this request still gets its payload
+            assert not potato._GRID_CACHE  # filed under no fingerprint
+        finally:
+            potato.clear_cells_cache()
+            c.connection.close()
+
     def test_clear_cells_cache_drops_entries(self) -> None:
         import recoverage.potato as potato
 

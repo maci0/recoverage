@@ -29,7 +29,7 @@ The UI is built using a lightweight, dependency-free stack to ensure fast load t
 ## State Management (VanJS)
 The application state is managed using VanJS reactive primitives (`van.state`):
 * `data`: Holds the fetched SQLite data (sections, globals, functions, summary).
-* `originalDll`: Raw ArrayBuffer of the original DLL for byte slicing.  Fetched from `paths.originalDll` when the DB carries that metadata, otherwise from `/original/<target>.dll`, which the server proxies anyway; when neither exists the hex pane says so instead of failing silently.
+* `originalDll`: The original DLL's raw ArrayBuffer for byte slicing, stored as `{path, buf}` so a target switch mid-download cannot install the previous target's bytes.  Fetched from `paths.originalDll` when the DB carries that metadata, otherwise from `/original/<target>.dll`, which the server proxies anyway; when neither exists the hex pane says so instead of failing silently.
 * `activeSection`: Tracks the currently selected PE section (`.text`, `.rdata`, `.data`, `.bss`).
 * `activeFilters`: A `Set` tracking which match statuses are currently visible (exact, reloc, near_match, stub, padding).
 * `searchQuery`: The current text in the search input (debounced 250ms).
@@ -43,6 +43,12 @@ The application state is managed using VanJS reactive primitives (`van.state`):
 * `emptyState`: `{title, detail}` when there is no map to draw — no database, no sections, an unreadable schema version, or a failed fetch.  The map area renders it in place of the grid and suppresses the legend, hint, and progress bar, all of which describe a grid that is not there.  Every load path clears `isLoading`, including the early return when no target is selected: leaving it set was what produced a spinner that never stopped on first run.
 
   Note for future bindings: these render an empty `div()` rather than `null` when they have nothing to show.  A VanJS binding whose first result is `null` never renders again — van keeps no node to replace, so later updates are dropped.
+
+### Async writes are generation-guarded
+
+`loadData` has four independent triggers (first paint, target switch, SSE `db-updated`, regen) and fetches a multi-MB payload, so two calls routinely overlap.  The browser does not resolve them in issue order, so without a guard a slow response for the previous target lands after the new one and the map shows one target's data under another's name.
+
+Each call therefore takes a generation number and an `AbortController`.  Only the call whose generation is still current may write `data`, `summaryData`, `activeSection`, the error panel, or `isLoading`; a superseded call writes nothing and lets the call that replaced it report the outcome.  `selectFunction` uses the same rule through its controller's `signal.aborted`.  Every state write made after an `await` belongs behind one of these two checks.
 
 ## Components
 The UI is broken down into functional VanJS components in `app.js`:

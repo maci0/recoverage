@@ -141,7 +141,7 @@ const HexLogo = (label, color, titleText) => div({ class: "section-title-left" }
 
 const App = () => {
   const data = van.state(null);
-  const originalDll = van.state(null);
+  const originalDll = van.state(null); // {path, buf} | null — see loadedDll()
   const activeFilters = van.state(new Set());
   const activeSection = van.state(".text");
   const searchQuery = van.state("");
@@ -232,10 +232,25 @@ const App = () => {
     }
   };
 
+  // loadData is triggered from four independent places (first paint, target
+  // switch, SSE db-updated, regen) and its payload is multi-MB, so two calls
+  // routinely overlap.  The later-resolving response wins by default, which
+  // paints the previous target's map under the newly selected target.  One
+  // generation counter decides which call still owns the state: a superseded
+  // call writes nothing, and the in-flight fetch is aborted so it stops
+  // occupying the connection.
+  let loadGeneration = 0;
+  let loadController = null;
+
   const loadData = async () => {
     // Without this the initial isLoading=true would never be cleared and the
     // map would spin forever with nothing to load.
     if (!activeTarget.val) { isLoading.val = false; return; }
+    loadController?.abort();
+    loadController = new AbortController();
+    const signal = loadController.signal;
+    const generation = ++loadGeneration;
+    const superseded = () => generation !== loadGeneration;
     // Background refresh (SSE db-updated, regen) keeps the old map on
     // screen and swaps when new data lands.  Full-overlay loading is only
     // for first paint — flashing the whole map on every rebuild is jank.
@@ -251,10 +266,11 @@ const App = () => {
       // First paint only needs the visible section's cells.  Sibling tabs
       // still get their metadata; cells arrive on switchTab / jumpToAddress.
       const wanted = URL_PARAMS.get("section") || activeSection.val || ".text";
-      let res = await fetch(DATA_URL(activeTarget.val, wanted), { cache: "no-cache" });
-      if (!res.ok) res = await fetch(DATA_URL(activeTarget.val), { cache: "no-cache" });
+      let res = await fetch(DATA_URL(activeTarget.val, wanted), { cache: "no-cache", signal });
+      if (!res.ok) res = await fetch(DATA_URL(activeTarget.val), { cache: "no-cache", signal });
       if (!res.ok) throw new Error(`failed to load data`);
       const d = await res.json();
+      if (superseded()) return;
       data.val = d;
 
       const secNames = sectionNames(d.sections || {});
@@ -299,16 +315,20 @@ const App = () => {
 
       // Restore last visited function — URL ?fn= wins over localStorage.
       setTimeout(() => {
+        if (superseded()) return;
         const lastFn = URL_PARAMS.get("fn") || localStorage.getItem(`recoverage_last_fn_${activeTarget.val}`);
         if (lastFn && data.val?.search_index?.[lastFn]) {
           const info = data.val.search_index[lastFn];
           jumpToAddress(toVa(info.va));
-          setTimeout(() => selectFunction(lastFn), 50);
+          setTimeout(() => { if (!superseded()) selectFunction(lastFn); }, 50);
         } else if (lastFn) {
           selectFunction(lastFn);
         }
       }, 50);
     } catch (error) { // oxlint-disable-line @rikalabs/no-silent-catch-fallback -- failure is shown to the user as an error panel
+      // A superseded call (or the abort that superseded it) owns no state:
+      // the call that replaced it reports its own outcome.
+      if (superseded() || error.name === "AbortError") return;
       // Background refresh must not replace a good map with an error panel
       // on a transient failure — log it and keep the stale map.
       if (firstPaint) {
@@ -320,7 +340,7 @@ const App = () => {
         console.error("Background refresh failed:", error);
       }
     } finally {
-      isLoading.val = false;
+      if (!superseded()) isLoading.val = false;
     }
   };
 
@@ -446,30 +466,46 @@ const App = () => {
   // Start the original-binary download once, on first need.  When it lands,
   // re-slice the active selection if its bytes pane is still waiting — the
   // null-DLL branches below show LOADING until then, LOAD_FAILED on error.
-  const ensureOriginalDll = () => {
-    if (originalDll.val || ensureOriginalDll.inflight) return;
+  // The buffer is stored against the path it came from: a target switch while
+  // a multi-MB download is in flight would otherwise install the previous
+  // target's bytes, and every later slice would read the wrong binary at the
+  // current target's offsets.
+  const currentDllPath = () => {
     const d = data.val;
-    const dllPath =
-      (d && d.paths && d.paths.originalDll) || `/original/${activeTarget.val.toLowerCase()}.dll`;
-    ensureOriginalDll.inflight = fetchArrayBufferSafe(dllPath).then((buf) => {
-      ensureOriginalDll.inflight = null;
-      originalDll.val = buf;
-      if (currentCellIndex.val == null || currentBuf.val != null) return;
-      if (buf) selectChunk(currentCellIndex.val);
-      else showBytesMessage(MSG.BYTES_LOAD_FAILED);
-    });
+    return (d && d.paths && d.paths.originalDll) || `/original/${activeTarget.val.toLowerCase()}.dll`;
+  };
+  // The loaded buffer, but only while it belongs to the target on screen.
+  const loadedDll = () => (originalDll.val?.path === currentDllPath() ? originalDll.val.buf : null);
+
+  const ensureOriginalDll = () => {
+    const dllPath = currentDllPath();
+    if (originalDll.val?.path === dllPath || ensureOriginalDll.inflight) return;
+    ensureOriginalDll.inflight = fetchArrayBufferSafe(dllPath)
+      // A rejected fetch never reaches .then, which would strand the inflight
+      // slot and leave the bytes pane reading LOADING for the rest of the
+      // session.  Release the slot and let the next selection retry.
+      .catch(() => null)
+      .then((buf) => {
+        ensureOriginalDll.inflight = null;
+        if (dllPath !== currentDllPath()) return; // superseded by a target switch
+        originalDll.val = buf ? { path: dllPath, buf } : null;
+        if (currentCellIndex.val == null || currentBuf.val != null) return;
+        if (buf) selectChunk(currentCellIndex.val);
+        else showBytesMessage(MSG.BYTES_LOAD_FAILED);
+      });
   };
 
   // Bytes pane message when slicing failed: out-of-range vs binary
   // missing.  A missing binary still downloading reads as LOADING.
   const bytesMissMessage = () => {
-    if (originalDll.val) return MSG.BYTES_FAILED;
+    if (loadedDll()) return MSG.BYTES_FAILED;
     if (ensureOriginalDll.inflight) return MSG.LOADING;
     return MSG.BYTES_LOAD_FAILED;
   };
 
   const sliceOriginalBytes = (cell) => {
-    if (!originalDll.val || !data.val?.sections) return null;
+    const buf = loadedDll();
+    if (!buf || !data.val?.sections) return null;
     const sec = data.val.sections[activeSection.val];
     if (!sec || activeSection.val === ".bss") return null;
 
@@ -477,8 +513,8 @@ const App = () => {
     const start = activeSection.val === ".text" ? cell.fileOffset : sec.fileOffset + (va - sec.va);
     const size = activeSection.val === ".text" ? cell.size : 16;
 
-    if (start < 0 || start + size > originalDll.val.byteLength) return null;
-    return originalDll.val.slice(start, start + size);
+    if (start < 0 || start + size > buf.byteLength) return null;
+    return buf.slice(start, start + size);
   };
 
   let currentAbortController = null;
@@ -535,7 +571,10 @@ const App = () => {
         cSourceText.val = newCSource;
         docText.val = newDocs || MSG.NO_DOCS;
       } catch (error) { // oxlint-disable-line @rikalabs/no-silent-catch-fallback -- AbortError is a cancellation; other failures become error text
-        if (error.name === 'AbortError') return;
+        // A superseded selection owns no state: fetchTextSafe is not
+        // signal-bound, so a stale request can still fail after a newer
+        // selection has rendered, and clearing here would wipe it.
+        if (error.name === 'AbortError' || signal.aborted) return;
         currentFn.val = null;
         cSourceText.val = MSG.ERROR_PREFIX + error.message;
       }
@@ -559,7 +598,7 @@ const App = () => {
         docText.val = MSG.GLOBAL_VAR;
         asmText.val = MSG.DATA_SECTION_NO_ASM;
       } catch (error) { // oxlint-disable-line @rikalabs/no-silent-catch-fallback -- AbortError is a cancellation; other failures become error text
-        if (error.name === 'AbortError') return;
+        if (error.name === 'AbortError' || signal.aborted) return;
         currentFn.val = null;
         cSourceText.val = MSG.ERROR_PREFIX + error.message;
       }
@@ -588,16 +627,17 @@ const App = () => {
       docText.val = MSG.UNDOCUMENTED_BLOCK;
       asmText.val = MSG.ASM_PLACEHOLDER;
 
+      const dll = activeSection.val === ".bss" ? null : loadedDll();
       if (activeSection.val === ".bss") {
         currentBuf.val = null;
         showBytesMessage(MSG.BYTES_BSS);
         asmText.val = MSG.DATA_SECTION_NO_ASM;
-      } else if (originalDll.val) {
+      } else if (dll) {
         const start = sec.fileOffset + cell.start;
         const size = cell.end - cell.start;
         const end = start + size;
-        if (start >= 0 && end <= originalDll.val.byteLength) {
-          const buf = originalDll.val.slice(start, end);
+        if (start >= 0 && end <= dll.byteLength) {
+          const buf = dll.slice(start, end);
           currentBuf.val = buf;
           showBytes(buf, sec.va + cell.start);
 
