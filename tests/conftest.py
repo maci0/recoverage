@@ -3,12 +3,29 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from io import BytesIO
 from pathlib import Path
 from wsgiref.util import setup_testing_defaults
 
+import pytest
+
 from recoverage.webapp import app
+
+
+@pytest.fixture(autouse=True)
+def _clean_recovery_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Drop every RECOVERAGE_* variable before each test.
+
+    `serve` reads its defaults from the environment, so an ambient
+    RECOVERAGE_DB (or a leftover token) would silently redirect a test's
+    database path.  The suite must depend on the code, not the shell it runs
+    from.
+    """
+    for name in [n for n in os.environ if n.startswith("RECOVERAGE_")]:
+        monkeypatch.delenv(name)
+
 
 # -- Synthetic coverage.db -------------------------------------------------
 # The DB-gated tests below skip when no coverage.db is in cwd, and CI has no

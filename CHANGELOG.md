@@ -8,6 +8,19 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Tag this **2.0.0**: `server.resolve_targets` changed its return shape and the
 module ships in the published package. See *Breaking*.
 
+### Added
+
+- **`recoverage serve` reads its configuration from the environment.**
+  `RECOVERAGE_PORT`, `RECOVERAGE_BIND`, `RECOVERAGE_ALLOW_REMOTE`,
+  `RECOVERAGE_CORS`, `RECOVERAGE_CORS_ORIGIN`, `RECOVERAGE_TOKEN` and
+  `RECOVERAGE_DB` supply the default for the matching flag; the flag still
+  wins. `RECOVERAGE_TOKEN` keeps the bearer token out of the process listing
+  that `--token` exposes it to, and `RECOVERAGE_DB` serves a
+  `coverage.db` the process was not started from the root of. Values are
+  validated at startup: a bad port, boolean or empty value, and a misspelled
+  `RECOVERAGE_*` name, each exit 2 naming the variable. The resolved settings
+  are printed on startup, the token as `token=set`.
+
 ### Breaking
 
 - **`server.resolve_targets` returns the one ordered target list, not a

@@ -43,6 +43,7 @@ recoverage/
 │   ├── test_cli.py           # CSV export, formatting, edge case tests
 │   ├── test_lifecycle.py     # Lifecycle: regen ordering, browser-opener reaping
 │   ├── test_paths.py         # DB path resolution tests
+│   ├── test_config.py        # RECOVERAGE_* env: parsing, precedence, fail-fast
 │   ├── test_server.py        # Compression, encoding, path helper tests
 │   ├── test_potato.py        # Potato Mode unit tests
 │   ├── test_perf.py         # Deterministic perf regression gates (work counters, not wall clock)
@@ -51,7 +52,8 @@ recoverage/
 └── src/recoverage/
     ├── __init__.py
     ├── __main__.py          # python -m recoverage
-    ├── _paths.py            # DB path resolution (rebrew-project.toml db_dir)
+    ├── _paths.py            # DB path resolution (RECOVERAGE_DB, rebrew-project.toml db_dir)
+    ├── config.py            # RECOVERAGE_* env: flag defaults, validation, startup banner
     ├── cli.py               # Typer CLI entry point (serve, stats, export, check, regen, open)
     ├── server.py            # Bottle app, shared helpers & compression
     ├── regen.py             # In-process rebrew regen (calls rebrew as a library)

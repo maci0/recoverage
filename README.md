@@ -147,6 +147,42 @@ Start the dashboard web server.
 | `--cors` | off | Enable CORS processing (allowlisted origins only; the wildcard is never emitted) |
 | `--cors-origin` | none | Origin URL allowed to read the API cross-origin (repeatable; without it `--cors` allows no cross-origin reads) |
 
+#### Environment
+
+Every flag above also reads a `RECOVERAGE_*` variable, used as its default, so
+a service can be configured without putting anything in its argv (and, for the
+token, without exposing it in the process listing). A flag on the command line
+always wins over the environment.
+
+| Variable | Default | Accepts |
+|----------|---------|---------|
+| `RECOVERAGE_PORT` | `8001` | integer `0`-`65535` |
+| `RECOVERAGE_BIND` | `127.0.0.1` | any interface address |
+| `RECOVERAGE_ALLOW_REMOTE` | `false` | `1`/`0`, `true`/`false`, `yes`/`no`, `on`/`off` |
+| `RECOVERAGE_CORS` | `false` | same booleans |
+| `RECOVERAGE_CORS_ORIGIN` | none | comma-separated origin URLs |
+| `RECOVERAGE_TOKEN` | none | the bearer token; set it empty to run unauthenticated |
+| `RECOVERAGE_DB` | resolved from the working directory | path to `coverage.db` |
+
+```bash
+# A service that is not run from the project root, on a LAN interface,
+# with a token that never reaches the process listing:
+export RECOVERAGE_DB=/srv/project/db/coverage.db
+export RECOVERAGE_BIND=0.0.0.0
+export RECOVERAGE_ALLOW_REMOTE=1
+export RECOVERAGE_TOKEN="$(cat /run/secrets/recoverage_token)"
+recoverage serve --no-open
+```
+
+`RECOVERAGE_ALLOW_REMOTE` is still yours to set: a non-loopback bind without
+it exits 1, whether the address came from the flag or the environment.
+
+Every value is validated at startup. An out-of-range port, a non-boolean flag,
+an empty value where one is required, or a misspelled `RECOVERAGE_*` name
+(`RECOVERAGE_PRT`) exits 2 with the variable named, instead of starting with a
+default you did not ask for. `recoverage serve` prints the settings it resolved
+on startup, with the token reported as `token=set`.
+
 ### `recoverage stats`
 
 Print per-section coverage stats as a Rich table, or as JSON with `--json`.

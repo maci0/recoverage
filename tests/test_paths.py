@@ -159,3 +159,18 @@ class TestDbPathMemoInvalidation:
         assert _db_path() == tmp_path.resolve() / "one" / "coverage.db"
         monkeypatch.chdir(other)
         assert _db_path() == other.resolve() / "db" / "coverage.db"
+
+    def test_env_override_beats_project_config(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """RECOVERAGE_DB lets a service run from outside the project root."""
+        monkeypatch.delenv("RECOVERAGE_DB", raising=False)
+        (tmp_path / "rebrew-project.toml").write_text(
+            '[project]\ndb_dir = "one"\n', encoding="utf-8"
+        )
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("RECOVERAGE_DB", str(tmp_path / "elsewhere" / "coverage.db"))
+        assert _db_path() == tmp_path / "elsewhere" / "coverage.db"
+        # Unset again: the project resolution returns, with no stale memo.
+        monkeypatch.delenv("RECOVERAGE_DB")
+        assert _db_path() == tmp_path.resolve() / "one" / "coverage.db"

@@ -16,11 +16,12 @@ import threading
 import webbrowser
 from pathlib import Path
 from socketserver import ThreadingMixIn
-from typing import Any, NoReturn
+from typing import Any, NamedTuple, NoReturn
 from wsgiref.simple_server import WSGIRequestHandler, WSGIServer
 
 import typer
 
+from recoverage import config
 from recoverage._paths import _db_path
 
 app = typer.Typer(
@@ -145,6 +146,62 @@ def _csv_safe(value: Any) -> Any:
     if isinstance(value, str) and value.startswith(_CSV_FORMULA_PREFIXES):
         return f"'{value}"
     return value
+
+
+def _checked_port(value: int) -> int:
+    """Return *value* if it can be bound, else raise config.ConfigError."""
+    if not config.MIN_PORT <= value <= config.MAX_PORT:
+        raise config.ConfigError(
+            f"--port: {value} is not in the range {config.MIN_PORT}-{config.MAX_PORT}"
+        )
+    return value
+
+
+class _ServeConfig(NamedTuple):
+    """The settings `serve` starts with, after flags and environment merge."""
+
+    port: int
+    bind: str
+    allow_remote: bool
+    cors: bool
+    cors_origins: list[str]
+    token: str | None
+    db: Path | None
+
+
+def _resolve_serve_config(
+    *,
+    port: int | None = None,
+    bind: str | None = None,
+    allow_remote: bool | None = None,
+    cors: bool | None = None,
+    cors_origin: list[str] | None = None,
+    token: str | None = None,
+) -> _ServeConfig:
+    """Merge `serve`'s flags over the RECOVERAGE_* environment.
+
+    A flag that was passed wins over the environment; a flag left at None
+    takes the environment value, and the environment itself falls back to the
+    documented default.  Every environment value is validated HERE, at
+    startup, so a deployment typo exits 2 with the variable name instead of
+    reaching socket.bind() or the auth layer.
+    """
+    try:
+        config.check_unknown_vars()
+        resolved = _ServeConfig(
+            port=config.port() if port is None else _checked_port(port),
+            bind=config.bind() if bind is None else bind,
+            allow_remote=config.allow_remote() if allow_remote is None else allow_remote,
+            cors=config.cors() if cors is None else cors,
+            cors_origins=list(cors_origin) if cors_origin is not None else config.cors_origins(),
+            token=(config.token() or None) if token is None else token,
+            # Read for validation only; _db_path() resolves the value again.
+            db=config.db_override(),
+        )
+    except config.ConfigError as exc:
+        typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(2) from None
+    return resolved
 
 
 def _open_db_or_exit(*, missing_exit_code: int = 1) -> sqlite3.Connection:
@@ -342,38 +399,58 @@ def open_browser(url: str) -> None:
 
 @app.command()
 def serve(
-    # min/max keep an out-of-range --port from reaching socket.bind(), which
-    # would otherwise surface as a raw OverflowError traceback after the
-    # startup banner has already printed.
-    port: int = typer.Option(8001, "--port", "-p", min=0, max=65535, help="Port to serve on"),
-    bind: str = typer.Option(
-        "127.0.0.1", "--bind", help="Interface to bind to (default: 127.0.0.1; use 0.0.0.0 for LAN)"
+    # Every option defaults to None so "not passed on the command line" stays
+    # distinguishable from a passed value, and the RECOVERAGE_* environment
+    # supplies the default for it.  A flag always wins over the environment.
+    # (min/max moved into the config module: the range check has to run for
+    # an env-provided port too, or an out-of-range value reaches socket.bind()
+    # and surfaces as a raw OverflowError after the banner has printed.)
+    port: int | None = typer.Option(
+        None, "--port", "-p", help="Port to serve on (env: RECOVERAGE_PORT)"
     ),
-    allow_remote: bool = typer.Option(
-        False,
+    bind: str | None = typer.Option(
+        None,
+        "--bind",
+        help="Interface to bind to (default: 127.0.0.1; use 0.0.0.0 for LAN; env: RECOVERAGE_BIND)",
+    ),
+    allow_remote: bool | None = typer.Option(
+        None,
         "--allow-remote",
         help="Required with --bind 0.0.0.0: acknowledge that the unauthenticated "
-        "API (including raw binary bytes) is exposed on the network",
+        "API (including raw binary bytes) is exposed on the network "
+        "(env: RECOVERAGE_ALLOW_REMOTE)",
     ),
     no_open: bool = typer.Option(False, "--no-open", help="Don't open browser automatically"),
     regen: bool = typer.Option(False, "--regen", help="Regenerate DB before starting"),
-    cors: bool = typer.Option(
-        False, "--cors", help="Enable CORS processing (allowlisted origins only)"
+    cors: bool | None = typer.Option(
+        None,
+        "--cors",
+        help="Enable CORS processing (allowlisted origins only; env: RECOVERAGE_CORS)",
     ),
     cors_origin: list[str] | None = typer.Option(
         None,
         "--cors-origin",
         help="Origin URL allowed to read the API cross-origin (repeatable, "
-        "e.g. http://localhost:5173)",
+        "e.g. http://localhost:5173; env: RECOVERAGE_CORS_ORIGIN, comma-separated)",
     ),
     token: str | None = typer.Option(
         None,
         "--token",
         help="Require this bearer token for every request (Authorization: Bearer <token>, "
-        "?token=, or open the dashboard as /?token=<token> to set the SPA cookie)",
+        "?token=, or open the dashboard as /?token=<token> to set the SPA cookie; "
+        "env: RECOVERAGE_TOKEN, which keeps the token out of the process listing)",
     ),
 ) -> None:
-    """Start the recoverage dashboard server."""
+    """Start the recoverage dashboard server.
+
+    Every flag also reads a RECOVERAGE_* environment variable, used as its
+    default: RECOVERAGE_PORT, RECOVERAGE_BIND, RECOVERAGE_ALLOW_REMOTE,
+    RECOVERAGE_CORS, RECOVERAGE_CORS_ORIGIN, RECOVERAGE_TOKEN and
+    RECOVERAGE_DB (an explicit coverage.db path, instead of resolving
+    rebrew-project.toml from the working directory). A flag always wins over
+    the environment; an unrecognised RECOVERAGE_* name is a startup error, and
+    so is a value that is not a valid port, boolean or non-empty string.
+    """
     import recoverage.server as _server
     from recoverage.server import (
         LOOPBACK_HOSTS,
@@ -381,6 +458,21 @@ def serve(
         _project_dir,
     )
     from recoverage.webapp import app as bottle_app
+
+    resolved = _resolve_serve_config(
+        port=port,
+        bind=bind,
+        allow_remote=allow_remote,
+        cors=cors,
+        cors_origin=cors_origin,
+        token=token,
+    )
+    port = resolved.port
+    bind = resolved.bind
+    allow_remote = resolved.allow_remote
+    cors = resolved.cors
+    cors_origin = list(resolved.cors_origins)
+    token = resolved.token
 
     # NOTE: "::" is the IPv6 wildcard (binds every interface) — it must NOT
     # be treated as loopback, or --bind :: would silently expose the
@@ -474,6 +566,24 @@ def serve(
     typer.echo(f"  Listening on: {listen_url}")
     typer.echo(f"  Assets: {assets}")
     typer.echo(f"  DB: {_db_path()}")
+    # The full active configuration, resolved from flags and the environment,
+    # so an operator can confirm what the process is actually running with.
+    # The token is reported as set/unset, never by value.
+    typer.echo(
+        "  Config: "
+        + " ".join(
+            f"{key}={value}"
+            for key, value in config.active_config(
+                port=port,
+                bind=bind,
+                allow_remote=allow_remote,
+                cors=cors,
+                cors_origin=allowed_origins,
+                token=token,
+                db=resolved.db,
+            ).items()
+        )
+    )
     if cors:
         typer.echo("  CORS: enabled")
     typer.echo("  Regen: POST /api/regen or click Reload in UI")
