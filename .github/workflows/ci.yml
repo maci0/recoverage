@@ -59,6 +59,9 @@ jobs:
       # describe. --locked refuses that instead of installing it.
       - run: make format-check
       - run: make lint
+      # mypy runs strict over src/ and tools/; the three checks it cannot
+      # pass yet are named with their reason in pyproject.toml [tool.mypy].
+      - run: make type-check
       # shellcheck and yamllint ship on the runner image; they cover the two
       # non-Python source sets ruff does not see (tools/*.sh, .github/*.yml).
       - run: make shell-lint

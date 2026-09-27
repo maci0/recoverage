@@ -55,7 +55,9 @@ class RequestStats:
         self._sum_ms = 0.0
         self._timed = 0
         self._in_flight = 0
-        self._by_route: dict[str, dict[str, int]] = {}
+        # int | float: the counters are ints, "max_ms" a float, and every read
+        # below copies through float() where the width matters.
+        self._by_route: dict[str, dict[str, int | float]] = {}
         self._by_status: dict[str, int] = {}
 
     def start(self) -> None:

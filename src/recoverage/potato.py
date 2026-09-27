@@ -564,7 +564,8 @@ def _highlight_asm(text: str, target: str) -> str:
     pg = _pygments()
     if pg is None:
         # Same body as _plain_line, bound late so the else branch can rebind it.
-        _render_code = lambda code: _link_hex_refs(_html_escape(code))  # noqa: E731 — late bind
+        def _render_code(code: str) -> str:
+            return _link_hex_refs(_html_escape(code))
     else:
         _, _, lexer, colors = pg
 
@@ -1431,7 +1432,7 @@ def _compute_section_stats(
             raise
         rows = []
     if rows:
-        buckets_iter = (
+        buckets_iter = [
             (
                 row["section_name"],
                 row["total_cells"],
@@ -1442,7 +1443,7 @@ def _compute_section_stats(
                 row["padding_count"],
             )
             for row in rows
-        )
+        ]
     else:
         # A cells table too narrow for the live queries (a hand-made fixture,
         # a foreign DB) has no buckets to report: leave the map header's

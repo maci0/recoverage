@@ -118,6 +118,7 @@ That is the local mirror of CI, and each target is the command CI runs:
 |--------|--------|---------|
 | `make format-check` | lint | `ruff format --check src/ tests/ tools/` |
 | `make lint` | lint | `ruff check src/ tests/ tools/` |
+| `make type-check` | lint | `mypy` (paths and settings in `pyproject.toml [tool.mypy]`) |
 | `make shell-lint` | lint | `shellcheck -x tools/*.sh` |
 | `make yaml-lint` | lint | `yamllint -c .yamllint.yaml .github/` |
 | `make test` | test | `pytest tests/ -v --ignore=tests/test_playwright.py` |

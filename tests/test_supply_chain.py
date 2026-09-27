@@ -39,6 +39,7 @@ _SIBLING_ACTION = _ROOT / ".github" / "actions" / "sibling-rebrew" / "action.yml
 # statement, and the mechanism that runs them instead. Every entry needs a
 # reason: an unexplained one is how a genuinely stale declaration survives.
 _CLI_ONLY = {
+    "mypy": "the type gate invokes it as `python -m mypy`, never imports it",
     "ruff": "the lint gate invokes it as `python -m ruff`, never imports it",
     "pytest-playwright": "a pytest plugin, loaded by entry point, that only supplies fixtures",
 }
@@ -207,6 +208,7 @@ class TestRbrewPin:
             ".venv",
             ".pytest_cache",
             ".ruff_cache",
+            ".mypy_cache",
             ".pytest-tmp",
             ".scratch",
             ".gauntlet",

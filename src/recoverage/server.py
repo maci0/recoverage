@@ -29,9 +29,9 @@ from pathlib import Path
 from typing import Any, cast
 from urllib.parse import unquote, urlsplit
 
-import bottle  # type: ignore[import-untyped]
 import brotli  # type: ignore[import-untyped]
 import zstandard as zstd
+from bottle import Bottle, HTTPResponse, request, response  # type: ignore[import-untyped]
 
 # SCHEMA_TARGET is the reserved metadata target holding the schema-level
 # db_version stamp (written by rebrew build-db).  It is NOT a real project
@@ -70,12 +70,6 @@ def _get_zstd_compressor() -> Any:
         compressor = _ZSTD_COMPRESSOR_TLS.compressor = zstd.ZstdCompressor(level=3)
     return compressor
 
-
-Bottle = cast(Any, bottle.Bottle)
-request = cast(Any, bottle.request)
-response = cast(Any, bottle.response)
-static_file = cast(Any, bottle.static_file)
-HTTPResponse = cast(Any, bottle.HTTPResponse)
 
 # The shared Bottle application.  Defined up front — above the helpers and
 # the auth/hooks section below — so a first top-down read of this module

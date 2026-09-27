@@ -1,5 +1,5 @@
 .PHONY: help setup clean build test test-one test-browser fuzz lint format format-check web-lint smoke smoke-fail \
-	shell-lint yaml-lint all ensure-uv ensure-rebrew warn-uv-version clone-rebrew ensure-lint-tools
+	shell-lint yaml-lint type-check all ensure-uv ensure-rebrew warn-uv-version clone-rebrew ensure-lint-tools
 
 # Force POSIX sh for recipes (ignore a caller-exported SHELL=bash).  Version
 # compares use ``sort -t. -k…n`` (POSIX), not GNU ``sort -V``.
@@ -81,6 +81,7 @@ help:
 		'  make test-browser       # browser tests: installs playwright + chromium, then runs them' \
 		'  make fuzz              # longer seeded campaign over the untrusted-input surfaces' \
 		'  make lint               # ruff check src/ tests/ tools/ (CI lint job)' \
+		'  make type-check         # mypy over src/ and tools/ (CI lint job)' \
 		'  make format             # ruff format (writes)' \
 		'  make format-check       # ruff format --check src/ tests/ tools/ (CI lint job)' \
 		'  make web-lint           # oxlint + Nu Html Checker (CI web-lint job)' \
@@ -200,6 +201,12 @@ format: ensure-uv
 format-check: ensure-uv
 	$(UV_RUN) python -m ruff format --check src/ tests/ tools/
 
+# The type gate.  The paths are the gate's [tool.mypy] files list, not
+# a restatement of it: tests/ joins that list when its fixtures are
+# annotated, and a second copy of the list here is one that drifts.
+type-check: ensure-uv
+	$(UV_RUN) python -m mypy
+
 # shellcheck and yamllint cover the tree's non-Python sources: the CI clone
 # script and the Actions definitions. Both ship on the ubuntu runner image CI
 # uses; name the missing one rather than letting the recipe fail on a bare
@@ -249,10 +256,10 @@ smoke-fail: ensure-uv
 	$(UV_RUN) python tools/smoke.py --expect-failure
 
 # Everything CI checks, in one local command, so nothing fails only after push.
-all: format-check lint shell-lint yaml-lint test web-lint smoke smoke-fail
+all: format-check lint type-check shell-lint yaml-lint test web-lint smoke smoke-fail
 	@printf '%s\n' 'all checks passed (CI: lint, web-lint, test, smoke)'
 
 clean:
-	rm -rf .pytest_cache .pytest-tmp .ruff_cache .scratch build dist \
+	rm -rf .pytest_cache .pytest-tmp .ruff_cache .mypy_cache .scratch build dist \
 		src/recoverage.egg-info recoverage.egg-info
 	find src tests tools -type d -name __pycache__ -prune -exec rm -rf {} +

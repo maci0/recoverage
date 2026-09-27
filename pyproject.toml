@@ -54,6 +54,7 @@ Repository = "https://github.com/relumea/recoverage"
 
 [project.optional-dependencies]
 dev = [
+    "mypy>=1.14",
     "pytest>=9.1.1",
     "ruff>=0.16.7",
 ]
@@ -105,6 +106,38 @@ filterwarnings = ["error"]
 [tool.ruff]
 target-version = "py313"
 line-length = 100
+
+[tool.mypy]
+# The gate covers src/ and tools/ only. tests/ stays out until its fixtures
+# carry the annotations; make test-one is the loop that grows them.
+files = ["src/recoverage", "tools"]
+python_version = "3.13"
+# Strict, minus the three checks this tree does not pass yet and one that
+# contradicts the layout:
+#   disallow_untyped_decorators — every route handler carries @app.route /
+#   @app.get, and bottle is untyped, so the decorator erases the signature.
+#   warn_return_any — the JSON builders reach sqlite3.Row values, which are
+#   Any by construction; the row shape is pinned by the SQL, not the checker.
+#   no_implicit_reexport — api.py, ui.py and potato.py import the shared
+#   server names (request, response, HTTPResponse) from recoverage.server on
+#   purpose, so every route module imports the same objects from one module.
+# Everything else --strict turns on passes today; a new module inherits it.
+strict = true
+disallow_untyped_decorators = false
+warn_return_any = false
+no_implicit_reexport = false
+# The runtime deps (bottle, brotli, rcssmin, rjsmin) ship no py.typed, so
+# every import of them is an error mypy cannot see past. Each carries its own
+# `# type: ignore[import-untyped]`, which this setting would then report as
+# unused: silencing the imports silences the annotation of the silence.
+ignore_missing_imports = true
+warn_unused_ignores = false
+# tools/ scripts are one-off build helpers: their mains take argv from the
+# caller and are annotated as the work grows, so the signature check is off
+# there only.
+[[tool.mypy.overrides]]
+module = "tools.*"
+disallow_untyped_defs = false
 
 [tool.ruff.lint]
 # RUF001-RUF003 flag every confusable in prose; the multiplication sign is

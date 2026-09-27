@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import email.message
 import enum
 import json
 import logging
@@ -17,8 +18,9 @@ import webbrowser
 from collections.abc import Iterator
 from pathlib import Path
 from socketserver import ThreadingMixIn
-from typing import Any, NamedTuple, NoReturn
+from typing import IO, Any, NamedTuple, NoReturn, cast
 from wsgiref.simple_server import ServerHandler, WSGIRequestHandler, WSGIServer
+from wsgiref.types import InputStream, WSGIApplication
 
 import typer
 
@@ -168,6 +170,10 @@ class _KeepAliveRequestHandler(_QuietTimeoutRequestHandler):
 
     protocol_version = "HTTP/1.1"
 
+    # wsgiref assigns this in HTTPServer.__init__; the stub types it as the
+    # BaseServer base, which has no get_app().
+    server: WSGIServer
+
     def handle(self) -> None:
         self.raw_requestline = self.rfile.readline(65537)
         while self.raw_requestline:
@@ -189,11 +195,20 @@ class _KeepAliveRequestHandler(_QuietTimeoutRequestHandler):
             self.raw_requestline = self.rfile.readline(65537)
 
     def _run_wsgi(self) -> None:
+        # rfile/wfile/get_stderr are binary streams at runtime, which is what
+        # ServerHandler wants; the stubs name their concrete socket classes,
+        # which do not spell the wsgiref ErrorStream protocols structurally.
         handler = _KeepAliveServerHandler(
-            self.rfile, self.wfile, self.get_stderr(), self.get_environ(), multithread=True
+            cast("InputStream", self.rfile),
+            cast("IO[bytes]", self.wfile),
+            self.get_stderr(),
+            self.get_environ(),
+            multithread=True,
         )
         handler.request_handler = self  # backpointer for logging
-        handler.run(self.server.get_app())
+        # WSGIServer.application is optional in the stubs; the instance is
+        # built with the app below, so it is never None here.
+        handler.run(cast("WSGIApplication", self.server.application))
 
 
 class _KeepAliveServerHandler(ServerHandler):
@@ -212,6 +227,14 @@ class _KeepAliveServerHandler(ServerHandler):
     """
 
     http_version = "1.1"
+
+    # wsgiref's BaseHandler.run()/parse_request() populate all four; the stubs
+    # declare none of them, so the framing checks below would read them as
+    # attributes the class does not have.
+    request_handler: _KeepAliveRequestHandler
+    headers: email.message.Message
+    environ: dict[str, str]
+    status: str
 
     def send_headers(self) -> None:
         if not self._response_is_framed():
@@ -266,7 +289,7 @@ class ExportFormat(enum.StrEnum):
 
 
 # Verdict colors for `check` output — one emit site colors every verdict.
-_VERDICT_COLORS: dict[str, int] = {
+_VERDICT_COLORS: dict[str, str] = {
     "PASS": typer.colors.GREEN,
     "SKIP": typer.colors.YELLOW,
     "FAIL": typer.colors.RED,
@@ -295,8 +318,11 @@ def _use_utf8_stdout() -> None:
         return
     # A stream that cannot be reconfigured (an in-memory test double, a pipe
     # wrapper) keeps its own codec; nothing here is worth failing.
-    with contextlib.suppress(AttributeError, ValueError, OSError):
-        sys.stdout.reconfigure(encoding="utf-8")
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if reconfigure is None:
+        return
+    with contextlib.suppress(ValueError, OSError):
+        reconfigure(encoding="utf-8")
 
 
 def _csv_safe(value: Any) -> Any:
@@ -390,7 +416,7 @@ def _fail(
     error: str,
     exit_code: int,
     json_output: bool,
-    fg: int = typer.colors.RED,
+    fg: str = typer.colors.RED,
 ) -> NoReturn:
     """Report a failure in the caller's output mode, then exit.
 
@@ -585,7 +611,7 @@ def _windows_detach_flags() -> int:
     """
     if os.name != "nt":
         return 0
-    return subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+    return subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS  # type: ignore[attr-defined]
 
 
 def _kill_and_reap(proc: subprocess.Popen[bytes]) -> None:
@@ -863,8 +889,10 @@ def serve(
     # backslashreplace keeps the record readable in whatever the stream is.
     # A stream that cannot be reconfigured (an in-memory test double) keeps
     # its own codec, as in _use_utf8_stdout.
-    with contextlib.suppress(AttributeError, ValueError, OSError):
-        handler.stream.reconfigure(errors="backslashreplace")
+    reconfigure = getattr(handler.stream, "reconfigure", None)
+    if reconfigure is not None:
+        with contextlib.suppress(ValueError, OSError):
+            reconfigure(errors="backslashreplace")
     handler.setFormatter(
         logging.Formatter(LOG_FORMAT, datefmt=LOG_DATEFMT, defaults={"request_id": "-"})
     )

@@ -122,6 +122,7 @@ make test                   # uv run --locked --extra dev python -m pytest tests
 make test-one T=tests/test_api.py  # one file or pytest node id (FLAGS="-k name" narrows it)
 make fuzz                  # wider seeded campaign (SEED=, ITERATIONS= override)
 make lint                   # uv run --locked --extra dev python -m ruff check src/ tests/ tools/
+make type-check             # uv run --locked --extra dev python -m mypy (src/ + tools/, strict)
 make format-check           # uv run --locked --extra dev python -m ruff format --check src/ tests/ tools/
 make format                 # uv run --locked --extra dev python -m ruff format (writes)
 make shell-lint             # shellcheck -x tools/*.sh (needs shellcheck on PATH)
@@ -322,7 +323,7 @@ Optional extras:
 - `pygments>=2.21.0` (Potato Mode syntax highlighting)
 - `playwright` (browser tests: `playwright>=1.62`, `pytest-playwright>=0.9.0`; `tests/test_playwright.py` is excluded from the default `addopts`)
 
-Dev extra (`.[dev]`, what CI installs): `pytest>=9.1.1`, `ruff>=0.16.7`.
+Dev extra (`.[dev]`, what CI installs): `mypy>=1.14`, `pytest>=9.1.1`, `ruff>=0.16.7`.
 
 `rebrew` is a *runtime* import, not a regen-only one: `src/recoverage/_paths.py`
 resolves every `coverage.db` lookup through `rebrew.workspace`, so the path source
@@ -348,7 +349,22 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   exporting the stamp, when the default is the clock instead of the commit, or
   when a rebuild's bytes move.
 
-- Python 3.13+, ruff for linting, 100-char line length. The selected rule
+- Python 3.13+, ruff for linting, mypy for types, 100-char line length.
+  The type gate is `strict = true` over `src/recoverage` and `tools/`, with
+  three checks off and the reason next to them in `[tool.mypy]`:
+  `disallow_untyped_decorators` (every route handler wears a `@app.route`,
+  and bottle is untyped, so the decorator erases the signature),
+  `warn_return_any` (the JSON builders read `sqlite3.Row`, which is `Any` by
+  construction; the row shape is pinned by the SQL, not the checker), and
+  `no_implicit_reexport` (api.py, ui.py and potato.py import the shared
+  `request`/`response`/`HTTPResponse` from `recoverage.server` on purpose).
+  `warn_unused_ignores` is off because `ignore_missing_imports` makes every
+  `# type: ignore[import-untyped]` redundant, and the annotations were
+  written when those imports did error. `tests/` is outside the gate until
+  its fixtures carry annotations; a suppression added there belongs with
+  the first mypy run that covers it, and the existing
+  `# type: ignore[...]` comments there are still the record of what needed
+  silencing. The selected rule
   groups, the bandit/pylint codes that are named individually instead of by
   prefix, the two ignores (PT006, PT018) and each per-file-ignore set all
   carry their reason next to them in `[tool.ruff.lint]` and

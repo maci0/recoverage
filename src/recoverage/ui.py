@@ -13,6 +13,7 @@ import brotli  # type: ignore[import-untyped]
 import rcssmin  # type: ignore[import-untyped]
 import rjsmin  # type: ignore[import-untyped]
 import zstandard as zstd
+from bottle import static_file  # type: ignore[import-untyped]
 
 import recoverage.server as _server
 from recoverage.server import (
@@ -32,7 +33,6 @@ from recoverage.server import (
     compress_static_variants,
     request,
     response,
-    static_file,
     static_variant_key,
 )
 

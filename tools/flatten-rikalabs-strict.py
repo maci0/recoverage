@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 REPO_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 TOOLS_DIR = REPO_ROOT / "tools"
@@ -56,7 +57,7 @@ MISSING_IN_OXLINT = {
 REMAP = {"oxc/no-new-buffer": "unicorn/no-new-buffer"}
 
 
-def load(path: Path) -> dict:
+def load(path: Path) -> dict[str, Any]:
     with path.open(encoding="utf-8") as fh:
         return json.load(fh)
 
@@ -82,7 +83,7 @@ def main() -> int:
         )
         return 1
 
-    merged: dict = {"plugins": set(), "categories": {}, "rules": {}, "overrides": []}
+    merged: dict[str, Any] = {"plugins": set(), "categories": {}, "rules": {}, "overrides": []}
     visited: set[str] = set()
     dropped: set[str] = set()
 

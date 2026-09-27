@@ -7,6 +7,14 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **The type checker runs in CI.** `mypy` is a dev dependency and
+  `make type-check` gates `src/` and `tools/` at `strict`, three checks off
+  with their reason in `pyproject.toml`. The annotations were already there
+  and nothing checked them; wiring the gate also fixed what it found, from a
+  metrics route row typed `dict[str, int]` that stores a float to a
+  `HTTPResponse = cast(Any, bottle.HTTPResponse)` alias that made the
+  response helper uncheckable.
+
 - **`make build` builds the wheel and sdist reproducibly.** The distribution
   is stamped with the commit's own date and a fixed locale and timezone, and
   the sdist is normalized (mtimes, owner, permissions, entry order, gzip
