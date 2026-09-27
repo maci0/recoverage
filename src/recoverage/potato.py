@@ -1041,12 +1041,13 @@ def _db_updated_mtime_ns() -> int | None:
     as _snapshot_db_mtime, rendered as wall-clock time instead of folded into
     an opaque change token).
     """
+    db = _db_path()
     try:
-        newest = _db_path().stat().st_mtime_ns
+        newest = db.stat().st_mtime_ns
     except OSError:
         return None
     with contextlib.suppress(OSError):
-        newest = max(newest, Path(f"{_db_path()}-wal").stat().st_mtime_ns)
+        newest = max(newest, Path(f"{db}-wal").stat().st_mtime_ns)
     return newest
 
 

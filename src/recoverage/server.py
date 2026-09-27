@@ -227,17 +227,18 @@ def _snapshot_db_mtime() -> tuple[int, int] | None:
     raw ``st_mtime`` — raw mtimes served stale 304s after rebuilds that only
     touched the WAL.
     """
+    db = _db_path()
     try:
-        st = _db_path().stat()
-        acc = (st.st_mtime_ns << 32) ^ (st.st_size & 0xFFFFFFFF)
-        try:
-            w = Path(f"{_db_path()}-wal").stat()
-            acc ^= (w.st_mtime_ns << 32) ^ (w.st_size & 0xFFFFFFFF)
-        except OSError:
-            pass
-        return acc, st.st_size
+        st = db.stat()
     except OSError:
         return None
+    acc = (st.st_mtime_ns << 32) ^ (st.st_size & 0xFFFFFFFF)
+    try:
+        w = Path(f"{db}-wal").stat()
+        acc ^= (w.st_mtime_ns << 32) ^ (w.st_size & 0xFFFFFFFF)
+    except OSError:
+        pass
+    return acc, st.st_size
 
 
 def _etag_or_304(snap: tuple[int, int] | None, *parts: object) -> str | None:
@@ -545,7 +546,8 @@ def _get_targets_config() -> dict[str, Any]:
     root = _project_dir()
     toml_path = root / CONFIG_NAME
     try:
-        current = (toml_path.stat().st_mtime_ns, toml_path.stat().st_size)
+        st = toml_path.stat()
+        current = (st.st_mtime_ns, st.st_size)
     except OSError:
         current = None
     with _RESOLVED_TARGETS_CACHE_LOCK:
@@ -733,7 +735,20 @@ def get_disassembly(va: int, size: int, file_offset: int, target: str) -> str:
     return _disassemble_loaded(va, size, file_offset, target)
 
 
-@functools.lru_cache(maxsize=2048)
+#: Memo entries for :func:`_disassemble_loaded`, sized by the memo's own
+#: worst-case RETAINED BYTES rather than by a plausible row count: one entry is
+#: the rendered text of a ``?size=`` slice, and the SPA asks for a whole cell's
+#: worth (app.js sends ``size=cell.size``, up to the endpoint's 4096-byte
+#: clamp).  Measured: 4096 bytes of x86 renders to 72 KB of text (~1900
+#: lines), so a 2048-entry memo retains up to ~148 MB for a cache whose hits
+#: are rare — the ETag answers the browser's repeat clicks with a 304 before
+#: the memo is consulted, so only non-browser repeats reach it.  128 entries
+#: bounds the worst case near 9 MB and still covers a work session that
+#: revisits the same slices.
+_DISASSEMBLY_MEMO_MAX = 128
+
+
+@functools.lru_cache(maxsize=_DISASSEMBLY_MEMO_MAX)
 def _disassemble_loaded(va: int, size: int, file_offset: int, target: str) -> str:
     """Cached disassembly; :func:`get_disassembly` verified the DLL loads."""
     target_data = _load_dll(target)
