@@ -180,6 +180,94 @@ jobs:
           uv run --locked --extra dev python -m pytest tests/ -v
           --ignore=tests/test_playwright.py
 
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # checkout leaves the job's GITHUB_TOKEN in .git/config for every
+          # later step, and every step in this workflow runs project code
+          # (pytest, tools/smoke.py, bun) that could read it off disk.  No job
+          # pushes, so there is nothing for it to authenticate: drop it as soon
+          # as the tree is on disk.
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          # uv runs every install, lint and test in this workflow, so an
+          # unpinned installer means two runs of one commit can resolve and
+          # cache differently. setup-uv has no version-file input; the literal
+          # is checked against the Makefile's UV_VERSION by test_supply_chain.
+          version: "0.12.14"
+          enable-cache: true
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          # The single interpreter pin, the same file uv builds the venv from.
+          python-version-file: .python-version
+      # The sibling rebrew checkout that [tool.uv.sources] resolves, fetched
+      # at the pin the clone script owns. The composite action is the one
+      # mechanism a job may use: it wraps that script and carries no pin of
+      # its own, `make clone-rebrew` runs the same script for a workstation,
+      # and no job may fetch the sibling any other way.
+      - uses: ./.github/actions/sibling-rebrew
+      - run: uv sync --locked --extra dev
+      # Nothing else in this workflow builds the artifact, so a wheel missing
+      # a vendored asset, a backend that stopped stamping from
+      # SOURCE_DATE_EPOCH, or a normalizer that stopped removing the sdist's
+      # uid and mtimes would ship unnoticed. Build twice and diff the hashes:
+      # the second build runs in a copy of the tree under a different path,
+      # with a different locale and timezone, which is what a path- or
+      # host-dependent artifact shows up as.
+      - name: Build the distribution twice and compare
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/rebuild"
+          mkdir -p "$RUNNER_TEMP/first" "$work"
+          # The second tree carries the tracked files only: dist/ is what the
+          # second build produces, and .git would make the copy as large as
+          # the checkout. SOURCE_DATE_EPOCH below replaces the one thing the
+          # recipe would otherwise read out of .git.
+          git ls-files -z | tar --null -T - -cf - | tar -xf - -C "$work"
+          # pyproject.toml resolves rebrew from ../rebrew, and `make build`
+          # ends in a `uv run` that syncs the environment, so the copy needs
+          # the sibling checkout the composite action just made. A symlink is
+          # enough: only the path has to resolve from the copied tree.
+          ln -s "$GITHUB_WORKSPACE/../rebrew" "$RUNNER_TEMP/rebrew"
+
+          make build
+          cp dist/*.whl dist/*.tar.gz "$RUNNER_TEMP/first/"
+
+          # A different path, locale and timezone: an artifact carrying a
+          # build-host absolute path or an unstamped mtime shows up here.
+          cd "$work"
+          LC_ALL=C.UTF-8 TZ=Asia/Tokyo make build
+          # diffoscope names the field that moved when two archives disagree;
+          # a bare `cmp` would only report that they differ.
+          for artifact in dist/*.whl dist/*.tar.gz; do
+            name="$(basename "$artifact")"
+            if ! cmp -s "$artifact" "$RUNNER_TEMP/first/$name"; then
+              echo "::error::$name is not reproducible across path, locale and timezone"
+              diffoscope "$RUNNER_TEMP/first/$name" "$artifact" || true
+              exit 1
+            fi
+            echo "$name reproducible: $(sha256sum "$artifact" | cut -d' ' -f1)"
+          done
+        env:
+          # The stamp is pinned to a constant rather than the commit's own date
+          # (which the Makefile defaults to), so the two builds cannot disagree
+          # over anything but the tree. LC_ALL/TZ for the first build come from
+          # the recipe; the second build overrides them on the command line.
+          SOURCE_DATE_EPOCH: "1700000000"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: recoverage-dist
+          path: dist/*
+          # A build that produced nothing is a broken build, not a warning:
+          # upload-artifact defaults to `warn` and the job would go green with
+          # no artifact attached.
+          if-no-files-found: error
+          retention-days: 30
+
   smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 10

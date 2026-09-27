@@ -28,6 +28,7 @@ _SCRATCH = _ROOT / ".scratch"
 #: can compare across runs: 2001-09-09T01:46:40Z.
 EPOCH = 1_000_000_000
 _ROOT_NAME = "recoverage-1.6.0"
+_BUILD_CONSTRAINTS = _ROOT / "build-constraints.txt"
 _ENTRIES = (
     # (name, mode, body); the third entry is executable, the second is not.
     (_ROOT_NAME, 0o700, None),
@@ -93,10 +94,55 @@ class TestReproducibleBuild:
     def test_the_build_recipe_pins_time_locale_and_timezone(self) -> None:
         """Without all three the artifact carries the build host's clock,
         locale and timezone, and two builds of one commit disagree."""
-        recipe = _MAKEFILE.split("\nbuild: ensure-uv\n", 1)[1].split("\n\n", 1)[0]
+        recipe = _MAKEFILE.split("\nbuild:", 1)[1].split("\n\n", 1)[0]
         for var in ("SOURCE_DATE_EPOCH", "LC_ALL=C", "TZ=UTC"):
             assert var in recipe, f"the build recipe does not export {var}"
         assert "normalize_sdist.py" in recipe, "the sdist is not normalized after the build"
+
+    def test_the_build_recipe_pins_the_backend_and_clears_stale_artifacts(self) -> None:
+        """`uv build` resolves PEP 517 build requirements outside uv.lock, so
+        an unconstrained `setuptools>=` is a floor, not a pin: the artifact
+        bytes follow whatever PyPI served that day. Without --clear a wheel
+        from an earlier version stays in dist/ beside the new one."""
+        recipe = _MAKEFILE.split("\nbuild:", 1)[1].split("\n\n", 1)[0]
+        assert "--build-constraints build-constraints.txt" in recipe, (
+            "the build recipe does not pin the PEP 517 backend"
+        )
+        assert "--clear" in recipe, "the build recipe keeps artifacts from an earlier version"
+
+    def test_the_build_constraints_file_pins_every_backend_exactly(self) -> None:
+        """An exact `==` per backend is what makes the constraint a pin; a
+        floor here reproduces the float the file exists to stop."""
+        pins = [
+            line.strip()
+            for line in _BUILD_CONSTRAINTS.read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        ]
+        assert pins, "build-constraints.txt names no backend, so it pins nothing"
+        for pin in pins:
+            assert "==" in pin, f"not an exact pin: {pin}"
+
+    def test_the_build_constraints_satisfy_the_declared_floor(self) -> None:
+        """The constraints file is a second source of truth for the backend
+        version, so it can contradict the floor in pyproject.toml. setuptools
+        77 is the first release implementing PEP 639, which the SPDX license
+        field needs; validating against an older backend fails the build."""
+        manifest = tomllib.loads((_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        floor = next(
+            req.removeprefix("setuptools>=")
+            for req in manifest["build-system"]["requires"]
+            if req.startswith("setuptools")
+        )
+        pins = {
+            line.strip().removeprefix("setuptools==")
+            for line in _BUILD_CONSTRAINTS.read_text(encoding="utf-8").splitlines()
+            if line.strip().startswith("setuptools==")
+        }
+        assert pins, "build-constraints.txt does not pin setuptools"
+        for pin in pins:
+            assert tuple(int(p) for p in pin.split(".")) >= tuple(
+                int(p) for p in floor.split(".")
+            ), f"setuptools=={pin} is below the >= {floor} floor in pyproject.toml"
 
     def test_source_date_epoch_defaults_to_the_commit_not_the_clock(self) -> None:
         assert "git log -1 --format=%ct" in _MAKEFILE

@@ -19,6 +19,7 @@ or compiler toolchain, only a valid `coverage.db` file.
 ```
 recoverage/
 ├── pyproject.toml          # Package config, entry point: recoverage
+├── build-constraints.txt   # Exact pin for the PEP 517 backend (uv.lock does not cover it)
 ├── README.md               # User-facing docs
 ├── CHANGELOG.md            # Release history
 ├── CONTRIBUTING.md         # Bootstrap, edit-test loop, local/CI parity table
@@ -30,7 +31,7 @@ recoverage/
 ├── oxlint.config.ts        # JS/TS lint config (see the tooling notes below)
 ├── .github/
 │   ├── actions/sibling-rebrew/action.yml  # composite step: runs tools/ci_clone_rebrew.sh
-│   └── workflows/ci.yml     # lint, web-lint, test matrix, smoke, sbom
+│   └── workflows/ci.yml     # lint, web-lint, test matrix, build, smoke, sbom
 ├── docs/                   # Screenshots & design doc
 │   ├── DESIGN.md           # Architecture and design decisions
 │   ├── DESIGN_PRINCIPLES.md  # Core operational philosophies
@@ -360,6 +361,28 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   `tests/test_build.py` (`TestReproducibleBuild`) fails when the recipe stops
   exporting the stamp, when the default is the clock instead of the commit, or
   when a rebuild's bytes move.
+
+  The recipe also passes `--build-constraints build-constraints.txt` and
+  `--clear`. The first because `uv.lock` does not describe the PEP 517 build
+  environment: uv resolves `build-system.requires` in an isolated env of its
+  own, so `setuptools>=84.0.0` is a floor and the artifact bytes would follow
+  whatever the index served that day. `build-constraints.txt` is that file, one
+  exact `==` per backend, and `tests/test_build.py` fails when a pin stops
+  being exact or drops below the floor in `pyproject.toml`. The second because
+  `uv build` writes into `dist/` without clearing it: a wheel left by the
+  previous version sits beside the new one and both get published. `make build`
+  also depends on `ensure-rebrew`, because its last step is a `uv run` that
+  syncs the environment, and that environment cannot resolve the rebrew path
+  dependency without the sibling checkout.
+
+  The `build` job in `.github/workflows/ci.yml` is the only CI job that
+  produces the artifact, and it is what makes reproducibility tested rather
+  than asserted: it builds twice, the second time from a copy of the tracked
+  tree under a different path with `LC_ALL=C.UTF-8` and `TZ=Asia/Tokyo`, and
+  fails when the two archives differ, naming the field through `diffoscope`.
+  The copy gets `../rebrew` as a symlink for the same reason the preflight
+  exists, and `SOURCE_DATE_EPOCH` is pinned to a constant in that job so the
+  two builds cannot disagree over anything but the tree.
 
 - Python 3.13+, ruff for linting, mypy for types, 100-char line length.
   The type gate is `strict = true` over `src/recoverage` and `tools/`, with

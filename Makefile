@@ -157,10 +157,23 @@ setup: ensure-rebrew warn-uv-version
 # does not: pin the mtimes, owner, permissions, entry order and gzip header a
 # rebuild would otherwise differ on. Run it twice and `sha256sum dist/*` to
 # see both artifacts hold their hash.
-build: ensure-uv
+#
+# ensure-rebrew, not just ensure-uv: the recipe ends in a `uv run`, which syncs
+# the project environment, and that environment cannot resolve the rebrew path
+# dependency without the sibling checkout. Without the preflight the build dies
+# on "Distribution not found at file://.../rebrew", which names neither the
+# cause nor the fix.
+#
+# --build-constraints pins the build backend. setuptools is not in uv.lock (uv
+# resolves PEP 517 build requirements in an isolated env of its own), so
+# without it `uv build` installs whatever setuptools PyPI serves that day, and a
+# backend release can change the artifact bytes under a fixed
+# SOURCE_DATE_EPOCH. --clear drops artifacts from an earlier version, which
+# would otherwise sit in dist/ beside the new ones and be published together.
+build: ensure-rebrew ensure-uv
 	@$(SET_STRICT) \
 	export SOURCE_DATE_EPOCH="$(SOURCE_DATE_EPOCH)" LC_ALL=C TZ=UTC; \
-	uv build --out-dir dist; \
+	uv build --out-dir dist --build-constraints build-constraints.txt --clear; \
 	$(UV_RUN) python tools/normalize_sdist.py dist
 
 # Match CI's invocation so a local pass and a CI pass mean the same thing.

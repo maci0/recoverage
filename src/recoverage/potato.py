@@ -1551,6 +1551,9 @@ def _build_filter_data(
     ]
     # Symmetric difference toggles one filter on or off; an empty result is a
     # falsy set, which _build_url omits exactly like the "All" link does.
+    # The fifth slot is the filter key, not the pill's letter: it is what
+    # names the filter the href toggles, and the template reads it as
+    # fb_key. A letter there cannot be matched back to a FILTER_STATES key.
     filter_btn_data.extend(
         (
             _build_url(target, section, active_filters ^ {f}, search=search_query),

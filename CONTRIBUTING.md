@@ -65,11 +65,14 @@ make build                            # wheel + sdist into dist/
 ```
 
 `make build` is the only way to produce the distribution. It stamps the
-artifacts with the commit's own date and a fixed locale and timezone, and
+artifacts with the commit's own date and a fixed locale and timezone, pins the
+build backend through `build-constraints.txt`, clears `dist/` first, and
 normalizes the sdist, so building twice gives two identical hashes. A bare
 `uv build` does not: setuptools stamps the wheel from `SOURCE_DATE_EPOCH` but
-leaves the sdist carrying your mtimes, your uid and the clock. Override the
-stamp with `make build SOURCE_DATE_EPOCH=<unix seconds>` when rebuilding an
+leaves the sdist carrying your mtimes, your uid and the clock, and it takes
+whatever setuptools the index serves, which `uv.lock` does not cover because
+uv resolves PEP 517 build requirements in an environment of its own. Override
+the stamp with `make build SOURCE_DATE_EPOCH=<unix seconds>` when rebuilding an
 artifact from a tree with no git.
 
 Run tools through `uv run` (which the Makefile does) rather than a globally
@@ -127,6 +130,12 @@ That is the local mirror of CI, and each target is the command CI runs:
 | `make smoke-fail` | smoke | `python tools/smoke.py --expect-failure` |
 
 CI also builds an SBOM from `uv.lock` (`uv export`); it needs no local step.
+
+The `build` job is the only CI job that produces the artifact. It builds twice,
+the second time in a copy of the tree under a different path with a different
+locale and timezone, and fails when the two disagree, naming the field that
+moved through `diffoscope`. That is what makes the reproducibility claim
+tested rather than asserted, and it uploads the artifacts it built.
 
 Every target is a wrapper around the third column. Only the `test` row runs on
 the whole matrix (Linux, macOS, Windows); every other job is Linux-only. `make` itself

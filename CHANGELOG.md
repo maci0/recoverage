@@ -20,7 +20,10 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the sdist is normalized (mtimes, owner, permissions, entry order, gzip
   header), so two builds of one commit produce identical artifacts. Build
   through the target rather than a bare `uv build`; `make build
-  SOURCE_DATE_EPOCH=<unix seconds>` overrides the stamp.
+  SOURCE_DATE_EPOCH=<unix seconds>` overrides the stamp. The build backend is
+  pinned in `build-constraints.txt`, `dist/` is cleared first so an artifact
+  from an earlier version cannot ship beside a new one, and CI builds the
+  distribution twice and diffs it.
 - **`/api/health` reports the rebuild pipeline and live-reload saturation.**
   `regen` carries runs, failures, refusals, in-flight count, and the last run's
   duration: a regen takes minutes, so the per-request counters could show one

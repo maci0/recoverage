@@ -1,0 +1,12 @@
+# The PEP 517 build backend, pinned.
+#
+# uv resolves build-system.requires in an isolated environment that uv.lock
+# does not describe, so `setuptools>=84.0.0` in pyproject.toml is a floor, not
+# a pin: without this file `uv build` installs whatever setuptools PyPI serves
+# that day, and a backend release can change the sdist and wheel bytes under a
+# fixed SOURCE_DATE_EPOCH. `make build` passes this file to `uv build
+# --build-constraints`; bump it in the same change as a deliberate backend bump.
+#
+# The version must stay at or above the floor pyproject.toml states: 77 is the
+# first release implementing PEP 639, which the `license = "MIT"` field needs.
+setuptools==84.0.0
