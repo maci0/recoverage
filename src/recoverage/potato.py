@@ -1520,18 +1520,20 @@ def _build_filter_data(
     # A pill is a single letter in the state's colour, so it carries the
     # state's full name in its title: a lone V or X is a lookup the legend
     # two hundred pixels away can answer, and a pointer answers instantly.
+    # The key is the filter name a ?filter= spells, not the letter; the
+    # letter is what the label shows and the accesskey is read off it.
     filter_opts = [
-        ("exact", "E", "e", "Exact match"),
-        ("reloc", "R", "r", "Reloc match"),
-        ("near_match", "M", "m", "Near-match"),
-        ("stub", "S", "s", "Stub"),
-        ("padding", "P", "p", "Padding"),
+        ("exact", "E", "Exact match"),
+        ("reloc", "R", "Reloc match"),
+        ("near_match", "M", "Near-match"),
+        ("stub", "S", "Stub"),
+        ("padding", "P", "Padding"),
         # The two states the legend names that had no pill: a proven section
         # and a cell the build or the classifier failed on.  Both were
         # painted and both dimmed under every pill, so the operator looking
         # for the failures had no control to narrow the map with.
-        ("proven", "V", "v", "Proven (verified equivalent)"),
-        ("problem", "X", "x", "Problem (build or classification failure)"),
+        ("proven", "V", "Proven (verified equivalent)"),
+        ("problem", "X", "Problem (build or classification failure)"),
     ]
     filter_btn_data: list[tuple[str, str, str, bool, str, str]] = [
         (
@@ -1551,10 +1553,10 @@ def _build_filter_data(
             label,
             FILTER_COLORS[f],
             f in active_filters,
-            key,
+            f,
             title,
         )
-        for f, label, key, title in filter_opts
+        for f, label, title in filter_opts
     )
     return filter_btn_data
 

@@ -1445,8 +1445,10 @@ _POTATO_LEAK_MARKERS = (
 _POTATO_500_BODY = "<html><body>Internal server error</body></html>"
 
 #: Query fields whose value the page echoes back into markup, so an escaping
-#: regression is observable from the response alone.
-_POTATO_REFLECTED = ("search", "target", "filter")
+#: regression is observable from the response alone.  ``filter`` is not one:
+#: ``potato._parse_filters`` drops every name no pill offers, so an
+#: unknown-only value reaches nothing to escape.  Its own case below.
+_POTATO_REFLECTED = ("search", "target")
 
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
@@ -1503,6 +1505,20 @@ class TestPotatoQuery:
         # Everything the canary could terminate has to appear as an entity.
         assert "<RCCANARY" not in text, f"{field}: raw markup delimiter"
         assert ">RCCANARY" not in text, f"{field}: raw markup delimiter"
+
+    def test_filter_reflects_only_the_names_a_pill_offers(self) -> None:
+        """The filter path is quoted, and an unnamed filter is never rendered.
+
+        ``_parse_filters`` keeps only the names in ``FILTER_STATES``, so the
+        canary is dropped before rendering and the value that does reach the
+        markup is the surviving name, carried into every pill href by
+        ``_build_url``'s percent-quoting.
+        """
+        canary = "RCCANARY<>&\"'=`"
+        _status, headers, body = wsgi_request("GET", f"/potato?filter={_pct('exact,' + canary)}")
+        text = decode_body(body, headers).decode("utf-8")
+        assert "RCCANARY" not in text, "a filter name no pill offers reached the page"
+        assert "filter=exact%2C" in text, "the active filter is missing from the pill hrefs"
 
     @pytest.mark.parametrize("field", ["search", "status"])
     def test_no_result_message_is_escaped(self, field: str) -> None:

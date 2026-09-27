@@ -13,12 +13,14 @@ of a third-party preset whose license and origin are no longer recorded.
 from __future__ import annotations
 
 import ast
+import importlib.util
 import json
 import re
 import sys
 import tomllib
 from itertools import pairwise
 from pathlib import Path
+from types import ModuleType
 
 _ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 _CI_YML = _ROOT / ".github" / "workflows" / "ci.yml"
@@ -31,6 +33,9 @@ _MANIFEST = _ROOT / "pyproject.toml"
 _PYTHON_VERSION = _ROOT / ".python-version"
 _FLATTEN = _ROOT / "tools" / "flatten-rikalabs-strict.py"
 _DERIVED_PRESET = _ROOT / "tools" / "oxlint" / "rikalabs-strict.json"
+# Third-party code copied into the repo, and the record of what that copy is.
+_VENDOR_TREE = _ROOT / "tools" / "oxlint" / "anti-slop"
+_VENDOR_MANIFEST = _ROOT / "tools" / "oxlint" / "anti-slop.manifest.json"
 # The one place a CI job may fetch the sibling. A job may not clone rebrew
 # itself, and the action may not carry a pin: tools/ci_clone_rebrew.sh owns it.
 _SIBLING_ACTION = _ROOT / ".github" / "actions" / "sibling-rebrew" / "action.yml"
@@ -71,6 +76,19 @@ def _jobs() -> dict[str, str]:
     text = _CI_YML.read_text(encoding="utf-8")
     starts = [(m.group("name"), m.start()) for m in _JOB_RE.finditer(text)]
     return {name: text[start:end] for (name, start), (_, end) in pairwise(starts)}
+
+
+def _vendor_manifest_module() -> ModuleType:
+    """`tools/vendor-manifest.py`, imported so the tree has one definition of
+    what it records.  The file is a script with a dash in its name, so the
+    loader is the only way in.
+    """
+    path = _ROOT / "tools" / "vendor-manifest.py"
+    spec = importlib.util.spec_from_file_location("vendor_manifest", path)
+    assert spec and spec.loader, "tools/vendor-manifest.py is not importable"
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _default(text: str, var: str) -> str:
@@ -681,3 +699,67 @@ class TestBundledThirdPartyAssets:
             assert entry, f"NOTICE does not credit {rel}, which ships in the wheel"
             assert "License:" in entry.group(0), f"NOTICE names {rel} without its license"
             assert "Upstream:" in entry.group(0), f"NOTICE names {rel} without its source"
+
+
+class TestVendoredLintPlugin:
+    """`tools/oxlint/anti-slop/` is third-party code that lives in the repo.
+
+    No manifest covers it: package.json pins the npm packages, uv.lock the
+    Python ones, and neither reaches a directory copied into the tree.  So the
+    manifest is the only record of what the copy contains and where it came
+    from, and these fail the suite when the tree and that record disagree.
+    """
+
+    @staticmethod
+    def _manifest() -> dict:
+        manifest = _VENDOR_MANIFEST
+        assert manifest.is_file(), (
+            f"{manifest.name} is missing; run tools/vendor-manifest.py to record the vendored tree"
+        )
+        return json.loads(manifest.read_text(encoding="utf-8"))
+
+    def test_the_manifest_names_the_upstream_and_its_grant(self) -> None:
+        """A vendored copy whose origin is unrecorded cannot be audited."""
+        manifest = self._manifest()
+        assert manifest["upstream"].startswith("https://"), "the manifest names no upstream"
+        assert manifest["license"] == "MIT", "the upstream grant is not the MIT the LICENSE is"
+        assert (_VENDOR_TREE / "LICENSE").is_file(), "the vendored tree ships without its LICENSE"
+        for pattern, reason in manifest["excluded"].items():
+            assert reason.strip(), f"excluded {pattern} has no reason, so it is not a decision"
+
+    def test_the_manifest_is_the_tree_as_it_stands(self) -> None:
+        """An edit, a deletion, or an unrecorded addition fails here.
+
+        The digests are the whole point: an upstream re-vendor and a local
+        change look identical in a diff of rule files, and only one of them
+        was reviewed against upstream.  A file the manifest does not list is
+        an addition nobody checked; a listed file whose bytes moved is a
+        change nobody re-vendored.
+
+        The expectation is what `tools/vendor-manifest.py` builds, imported
+        rather than restated here, so the two cannot disagree about which
+        paths an exclusion covers.
+        """
+        script = _vendor_manifest_module()
+        recorded = self._manifest()
+        expected = script.build_manifest()
+        assert recorded["files"] == expected["files"], (
+            "the vendored tree and its manifest disagree; run tools/vendor-manifest.py "
+            "after a re-vendor, and review what changed against upstream"
+        )
+        assert set(recorded["files"]) == {rel for rel, _ in expected["files"].items()}
+        excluded = [
+            path.relative_to(_VENDOR_TREE).as_posix()
+            for path in _VENDOR_TREE.rglob("*")
+            if path.is_file() and script.is_excluded(path.relative_to(_VENDOR_TREE).as_posix())
+        ]
+        assert not excluded, f"paths the manifest excludes are in the tree: {excluded}"
+
+    def test_readme_and_notice_point_at_the_manifest(self) -> None:
+        """The record has to be findable from where a reader starts."""
+        notice = (_ROOT / "NOTICE").read_text(encoding="utf-8")
+        for doc in (_README.read_text(encoding="utf-8"), notice):
+            assert _VENDOR_MANIFEST.name in doc, (
+                f"no reference to {_VENDOR_MANIFEST.name}, so the record of the vendored copy "
+                f"is unreachable from the documentation"
+            )

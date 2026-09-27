@@ -40,7 +40,7 @@ recoverage/
 │   └── *.png               # Screenshots for the README
 ├── tools/                  # lint-html.py, smoke.py, _serve_harness.py, oxlint/,
 │                           # ci_clone_rebrew.sh, flatten-rikalabs-strict.py,
-│                           # normalize_sdist.py
+│                           # normalize_sdist.py, vendor-manifest.py
 ├── tests/
 │   ├── conftest.py           # Shared fixtures (synthetic coverage.db)
 │   ├── test_build.py          # Artifact build: shipped files, reproducible bytes
@@ -94,7 +94,13 @@ the documents the server actually serves, and `tools/oxlint/anti-slop/` is a
 vendored upstream copy to keep in sync. `tools/oxlint/rikalabs-strict.json` is
 generated: never hand-edit it, bump `@rikalabs/oxlint-standards` then re-run
 `tools/flatten-rikalabs-strict.py`. The script's docstring and
-`oxlint.config.ts` own the why behind that preset.
+`oxlint.config.ts` own the why behind that preset. The vendored plugin is
+inventoried the same way, because no registry manifest reaches a directory
+copied into the repo: `tools/vendor-manifest.py` writes
+`tools/oxlint/anti-slop.manifest.json` (upstream, license, every file with its
+sha256, the excluded paths), and `tests/test_supply_chain.py` fails when the
+tree and that record disagree. Re-vendor by replacing the directory, running
+the script, then `bun run lint:js`.
 
 ## Commands
 

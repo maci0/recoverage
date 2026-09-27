@@ -36,7 +36,9 @@ The npm packages listed in package.json (oxlint, @oxlint/plugins,
 @rikalabs/oxlint-standards, vnu-jar) are development tools. They are not
 vendored into this distribution and are not shipped with it. The copy of
 dmmulroy/anti-slop under tools/oxlint/anti-slop/ is not shipped either; it
-carries its own LICENSE and is recorded in README.md.
+carries its own LICENSE, is recorded in README.md, and is inventoried file
+by file with a sha256 in tools/oxlint/anti-slop.manifest.json, which
+tools/vendor-manifest.py writes from the tree.
 
 Full dependency inventory per release: the `recoverage-python-sbom` artifact
 produced by the sbom job in .github/workflows/ci.yml.

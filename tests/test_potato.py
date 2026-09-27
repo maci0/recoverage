@@ -2347,10 +2347,11 @@ class TestFilterKeysCoverTheLegend:
         pills = {
             key: href for href, _, _, _, key, _ in _build_filter_data("S", ".text", {"reloc"}, "")
         }
-        # Turning one on keeps the others; turning the active one off clears it.
+        # Turning one on keeps the others; turning the active one off clears it,
+        # which leaves no filter= at all rather than an empty one.
         assert "filter=exact%2Creloc" in pills["exact"]
-        assert "filter=reloc" in pills["reloc"]
-        assert "exact" not in pills["reloc"]
+        assert "filter=" not in pills["reloc"]
+        assert pills["reloc"] == "?target=S&section=.text"
 
 
 class TestSectionAccentsMatchSpa:
