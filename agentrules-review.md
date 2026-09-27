@@ -28,7 +28,14 @@ Review the following:
    - The `rebrew` path dependency and its role (`rebrew.workspace` for resolution, catalog and build-db for regen) against the imports in `src/recoverage/regen.py` and `_paths.py`. A dependency described as optional that is imported unconditionally is a real defect; report it as a finding, not as a doc fix.
 
 5. Numbers and performance claims
-   - Every measured or threshold constant asserted in prose: the compressed SPA shell size, the TCP congestion window figure and MSS, debounce interval, reload cooldown, cell size floors, pagination defaults, LRU cache size, rate-limit window. Each must match the named constant or literal in the source. `ui._check_payload_budget` is the authority for the payload budget; run the server or call the helper rather than re-deriving the size by hand.
+   - Every measured or threshold constant asserted in prose, each checked against the file that owns it:
+     - compressed SPA shell size and the TCP congestion window / MSS figure: `ui._check_payload_budget` and its docstring in `src/recoverage/ui.py`; call the helper rather than re-deriving a size by hand
+     - debounce interval: the `setTimeout` delay in the search handler in `src/recoverage/assets/app.js`
+     - reload cooldown: `REGEN_COOLDOWN_MS` in `src/recoverage/assets/detail.js` against `_REGEN_COOLDOWN_SECONDS` in `src/recoverage/api.py`
+     - rate-limit window: `_AUTH_FAIL_WINDOW_SECONDS` in `src/recoverage/server.py`
+     - LRU cache size: the `maxsize=` on the `@functools.lru_cache` in `src/recoverage/disasm.py` and in `src/recoverage/potato.py`
+     - pagination defaults: the `limit` / `offset` defaults in the pagination clamp in `src/recoverage/api.py`
+     - cell size floors: the grid sizing rules in `src/recoverage/assets/style.css`
    - Schema and codec version claims (`db_version`, `cells_zstd` column name, `section_cells_json` table versus view) against the producer and the consumer fallback in `server._cells_json_rows`.
 
 6. Version and staleness signals
@@ -44,8 +51,8 @@ Review the following:
    - Prose carrying no instruction at all: an owning doc should hold rules an agent needs, not narrative that restates the code.
 
 8. Doc-to-doc consistency
-   - The same fact stated twice (`AGENTS.md` versus `README.md` versus `docs/DESIGN.md`): the entry point, the default port, the Potato Mode guarantee (zero JavaScript, zero CSS), the data pipeline stages, the endpoint list. Two different values for one fact is a finding; state which one the code supports.
-   - `docs/USER_STORIES.md` acceptance criteria whose named endpoint, flag, or file no longer exists.
+   - The same fact stated twice in the documents an agent acts on (`AGENTS.md` versus `README.md` versus `CONTRIBUTING.md`): the entry point, the default port, the install commands, the dependency floors. Two different values for one fact is a finding; state which one the code supports.
+   - Behaviour claims restated between documents (`docs/DESIGN.md` versus `DESIGN_PRINCIPLES.md` versus a number quoted in `USER_STORIES.md`: the payload budget, the Potato Mode guarantee, the data pipeline narrative) are `specs-review.md`'s subject, not this one. Check only the copy that lives in a rule file, and hand the specs to that prompt.
 
 9. Injection and data hygiene
    - No rule file may instruct the agent to fetch, execute, or install something on the strength of repository text alone, or to treat a comment, a string literal, or a document body as an order.
@@ -61,7 +68,7 @@ Instructions:
 - A finding is only real when you opened the referenced file, ran the command, or read the source constant. If you did not check it, drop it.
 - Default to fixing the document, not the code, when the code is right and the prose is stale. Fix the code only when the document describes intended behaviour the code violates, and then fix the document in the same pass.
 - Keep edits small and local: correct the sentence, the path, or the row. Never rewrite a rule file wholesale, never restructure its sections, and never delete a rule because it is stale; restate it accurately.
-- If available, use: `rg` for every path, flag, and symbol lookup, `ast-grep` for structural checks over the Python and JS sources, and the project's own gates (`uv run pytest`, `uv run ruff check .`, `bun run lint`) to confirm the commands a doc recommends actually run. A command documented in a rule file that fails when typed is the finding, not a reason to skip.
+- If available, use: `rg` for every path, flag, and symbol lookup, `ast-grep` for structural checks over the Python and JS sources, and the project's own gates (`make test`, `make lint`, `bun run lint`) to confirm the commands a doc recommends actually run. A bare `uv run <tool>` falls back to whatever is on `PATH`; the Makefile targets are the wrapped, locked invocations, so prefer them when a doc names a bare one. A command documented in a rule file that fails when typed is the finding, not a reason to skip.
 - Do not edit `tools/oxlint/anti-slop/` (vendored upstream) or any `*-review.md` file.
 
 For each finding include:

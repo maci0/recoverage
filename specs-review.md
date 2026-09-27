@@ -52,7 +52,7 @@ Review the following:
 3. Design descriptions versus the code
    - Every mechanism `docs/DESIGN.md` attributes to a module is in that module
      (`run_regen` in `regen.py`, the LRU cache in the `/asm` handler, the
-     `db-updated` SSE event in `server.py`). A mechanism the code dropped is a
+     `db-updated` SSE event in `api.py`). A mechanism the code dropped is a
      finding even when the feature survives under another name; restate the
      mechanism the code actually has.
    - Every hard number in prose (compressed shell size, headroom bytes,
@@ -75,9 +75,11 @@ Review the following:
 
 5. User stories
    - Each acceptance criterion is either checkable against the code or says it
-     is a plan. A criterion naming an endpoint, flag, or env var that does not
-     exist belongs to `agentrules-review.md`; a criterion describing behaviour
-     that no code path implements is this prompt's finding.
+     is a plan, and it is this prompt's finding either way: a criterion naming
+     an endpoint, flag, or env var that does not exist, and a criterion
+     describing behaviour that no code path implements. A criterion that quotes
+     a command or path an agent would type is still a promise about behaviour,
+     so fix it here rather than deferring it.
    - Criteria that contradict each other or contradict `DESIGN.md` (the same
      endpoint with two different response shapes, two different defaults for
      the same setting) are a finding even when both are individually plausible.
@@ -128,9 +130,11 @@ Instructions:
   risk row to make a review shorter.
 - If available, use: `rg` for every symbol, constant, and reference lookup,
   `ast-grep` for structural checks over the Python sources, and the project's
-  own gates (`uv run pytest`, `uv run ruff check .`) to confirm a behaviour a
-  spec claims. A behaviour only asserted by a passing test is behaviour the
-  spec may cite; a behaviour with neither is a finding.
+  own gates (`make test`, `make lint`) to confirm a behaviour a
+  spec claims. A bare `uv run <tool>` falls back to whatever is on `PATH`; the
+  Makefile targets are the wrapped, locked invocations, so prefer them when a
+  spec names a bare one. A behaviour only asserted by a passing test is
+  behaviour the spec may cite; a behaviour with neither is a finding.
 - Do not edit any `*-review.md` file, and do not edit `tools/oxlint/anti-slop/`
   (vendored upstream).
 
