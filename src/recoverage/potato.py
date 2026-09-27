@@ -35,6 +35,7 @@ from recoverage.server import (
     CACHE_NO_STORE,
     CACHE_REVALIDATE,
     NOT_DATA_MARKER_SQL,
+    SECTION_STATS_SQL,
     _cells_json_rows,
     _compressed,
     _escape_like,
@@ -48,6 +49,7 @@ from recoverage.server import (
     _lookup_by_va_or_name,
     _newest_mtime_ns,
     _open_db,
+    _per_section_buckets,
     _snapshot_db_mtime,
     _verify_one_select,
     app,
@@ -1315,6 +1317,16 @@ def _section_stats_cached(
     return stats
 
 
+#: The six buckets the Potato map header renders, read from rebrew's
+#: materialized `section_cell_stats`.  A database without that table (or with a
+#: view carrying different column names) falls back to live SQL over `cells`
+#: in :func:`_compute_section_stats`, the same fallback /stats and /data use.
+_POTATO_BUCKETS_SQL = (
+    "SELECT section_name, total_cells, exact_count, reloc_count, "
+    "near_match_count, stub_count, padding_count FROM section_cell_stats WHERE target = ?"
+)
+
+
 def _compute_section_stats(
     c: sqlite3.Cursor,
     target: str,
@@ -1328,13 +1340,71 @@ def _compute_section_stats(
     if not isinstance(summary, dict):
         summary = {}
     per_section_stats: dict[str, dict[str, Any]] = {}
-    c.execute(
-        "SELECT section_name, total_cells, exact_count, reloc_count, "
-        "near_match_count, stub_count, padding_count FROM section_cell_stats WHERE target = ?",
-        (target,),
-    )
-    for row in c.fetchall():
-        sec_name_r, s_total, s_exact, s_reloc, s_near_match, s_stub, s_padding = row
+    # The materialized buckets Potato renders, and the live fallback for a
+    # database that has no section_cell_stats at all.  The fallback is the
+    # point: /stats and /data serve such a database (server._per_section_buckets
+    # computes from `cells` when the table is absent), and /potato answering
+    # the same database with the 503 page was a compatibility promise the API
+    # kept and this one surface did not.  Only the six buckets rendered below
+    # are read, so this stays narrower than the server's full row rather than
+    # re-declaring the other seven.
+    try:
+        c.execute(_POTATO_BUCKETS_SQL, (target,))
+        rows = c.fetchall()
+    except sqlite3.Error:
+        # No section_cell_stats at all (the case the fallback below is for),
+        # or a view whose columns do not match.  Either way the buckets are
+        # derived from `cells` below.
+        rows = []
+    if rows:
+        buckets_iter = (
+            (
+                row["section_name"],
+                row["total_cells"],
+                row["exact_count"],
+                row["reloc_count"],
+                row["near_match_count"],
+                row["stub_count"],
+                row["padding_count"],
+            )
+            for row in rows
+        )
+    else:
+        # A cells table too narrow for the live queries (a hand-made fixture,
+        # a foreign DB) has no buckets to report: leave the map header's
+        # per-section stats empty rather than turning the whole page into a
+        # 503, which is what a missing section_cell_stats used to do.
+        try:
+            cell_side: dict[str, sqlite3.Row] = {}
+            c.execute(SECTION_STATS_SQL, (target,))
+            for row in c.fetchall():
+                cell_side[row["section_name"]] = row
+            buckets_iter = [
+                (
+                    name,
+                    buckets["total_cells"],
+                    buckets["exact"],
+                    buckets["reloc"],
+                    buckets["near_match"],
+                    buckets["stub"],
+                    buckets["padding"],
+                )
+                for name, buckets, _covered_bytes, _total_bytes in _per_section_buckets(
+                    c, target, cell_side
+                )
+            ]
+        except sqlite3.Error:
+            buckets_iter = []
+
+    for (
+        sec_name_r,
+        s_total,
+        s_exact,
+        s_reloc,
+        s_near_match,
+        s_stub,
+        s_padding,
+    ) in buckets_iter:
         sec_summary_entry = summary.get(sec_name_r, summary)
         s_covered_bytes = sec_summary_entry.get("coveredBytes", 0)
         # `or 0`, not .get("size", 0): a NULL size is schema-legal (.bss-style

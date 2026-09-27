@@ -79,6 +79,32 @@ def _test_tidy(html: str) -> tuple[bool | None, str]:
     return True, ""
 
 
+def test_section_stats_fall_back_to_cells_without_materialized_table():
+    """A database with no section_cell_stats still reports per-section stats.
+
+    /stats and /data compute the buckets live from `cells` for such a
+    database; /potato read the materialized table and nothing else, so the
+    same database answered the API and 503'd the page.
+    """
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute(
+        "CREATE TABLE cells (target TEXT, section_name TEXT,"
+        " start INTEGER, end INTEGER, state TEXT)"
+    )
+    c.executemany(
+        "INSERT INTO cells (target, section_name, start, end, state)"
+        " VALUES ('T', '.text', ?, ?, ?)",
+        [(0x1000, 0x1001, "exact"), (0x1001, 0x1002, "none"), (0x1002, 0x1003, "stub")],
+    )
+    stats = _compute_section_stats(c, "T", {".text": {"size": 3}}, {})
+    assert stats[".text"]["total"] == 3
+    assert stats[".text"]["exact"] == 1
+    assert stats[".text"]["stub"] == 1
+    conn.close()
+
+
 def test_format_va():
     assert _format_va(268439552) == "0x10001000"
     assert _format_va(0) == "0x00000000"

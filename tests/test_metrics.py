@@ -241,3 +241,15 @@ class TestStats:
         assert metrics.route_label("/api/x", "/api/targets/<target>/data") == (
             "/api/targets/<target>/data"
         )
+
+    def test_by_route_is_capped(self) -> None:
+        # The unrouted fallback labels a request by its first path segment,
+        # which the caller chose, so the map needs a cap of its own.
+        for i in range(metrics.ROUTE_LABEL_MAX + 20):
+            metrics.REQUESTS.finish(f"/seg{i}", 404, 1.0)
+        snap = metrics.REQUESTS.snapshot()
+        assert len(snap["by_route"]) == metrics.ROUTE_LABEL_MAX
+        assert "/seg0" not in snap["by_route"]
+        assert f"/seg{metrics.ROUTE_LABEL_MAX + 19}" in snap["by_route"]
+        assert snap["total"] == metrics.ROUTE_LABEL_MAX + 20
+        assert snap["by_status"]["4xx"] == metrics.ROUTE_LABEL_MAX + 20

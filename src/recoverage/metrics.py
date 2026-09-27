@@ -9,7 +9,8 @@ tell "one slow request" from "every request got slower".
 Cardinality is bounded on purpose.  Routes are bucketed by their Bottle rule
 (``/api/targets/<target>/data``), never by the raw path, so a caller cannot
 grow the map by inventing target names; anything that reaches a handler
-without a rule falls back to its first path segment.
+without a rule falls back to its first path segment, and
+:data:`ROUTE_LABEL_MAX` caps that map for the rest.
 """
 
 from __future__ import annotations
@@ -27,6 +28,15 @@ SLOW_REQUEST_MS: Final = 1_000.0
 #: lifetime, not service time.  Counting them would poison every latency
 #: number in the snapshot.
 UNBOUNDED_ROUTES: Final = frozenset({"/api/events"})
+
+#: Most route labels :class:`RequestStats` keeps.  A label comes from the
+#: matched Bottle rule, so it is one of the server's own few dozen rules, but
+#: :func:`route_label` falls back to the first path segment for a request that
+#: matched nothing, and that segment is caller-chosen.  The cap is what makes
+#: the bounded-cardinality claim hold for the unrouted case too; the oldest
+#: label goes when the map is full, so a route the server really serves (one
+#: recorded on its first request) is never among the evicted.
+ROUTE_LABEL_MAX: Final = 64
 
 
 class RequestStats:
@@ -74,9 +84,12 @@ class RequestStats:
                 self._max_ms = max(self._max_ms, duration_ms)
             bucket = f"{status // 100}xx"
             self._by_status[bucket] = self._by_status.get(bucket, 0) + 1
-            route_row = self._by_route.setdefault(
-                route, {"requests": 0, "errors": 0, "max_ms": 0.0}
-            )
+            if route in self._by_route:
+                route_row = self._by_route[route]
+            else:
+                while len(self._by_route) >= ROUTE_LABEL_MAX:
+                    del self._by_route[next(iter(self._by_route))]
+                route_row = self._by_route[route] = {"requests": 0, "errors": 0, "max_ms": 0.0}
             route_row["requests"] += 1
             if status >= 500:
                 route_row["errors"] += 1

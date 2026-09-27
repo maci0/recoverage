@@ -41,6 +41,12 @@
   --near-match-bg: rgba(255, 200, 0, 0.65);
   --stub-bg: rgba(255, 0, 0, 0.65);
   --padding-bg: rgba(200, 200, 220, 0.55);
+  /* Post-verify semantic promotion: a section rebrew proved equivalent, which
+   * is not the same claim as a byte-identical match.  detail.js reads slot 6
+   * through this token, so it has to exist in both themes: an undefined custom
+   * property resolves to the empty string, and an empty fillStyle is a no-op
+   * assignment, which left every PROVEN cell unpainted. */
+  --proven-bg: rgba(6, 182, 212, 0.65);
   /* Tooling-failure and unclassified-annotation states (compile_error,
    * extract_error, invalid_va, missing_file, missing_size, skip, unknown,
    * drift, unchecked).  Distinct from --none so a cell the pipeline could not
@@ -127,6 +133,7 @@
   --bar-border: rgba(0, 0, 0, 0.2);
 
   --padding-bg: rgba(60, 60, 90, 0.55);
+  --proven-bg: rgba(6, 182, 212, 0.65);
 
   /* Accent tokens — light-mode overrides.  Text-bearing accents are tuned
    * to clear 4.5:1 against the surface they sit on (--panel for badges and
@@ -415,6 +422,7 @@ body.light-mode::after { background: linear-gradient(rgba(18, 16, 16, 0) 50%, rg
 .swatch-near_match { background: var(--near-match-bg); }
 .swatch-stub { background: var(--stub-bg); }
 .swatch-padding { background: var(--padding-bg); }
+.swatch-proven { background: var(--proven-bg); }
 .swatch-compile_error { background: var(--other-bg); }
 
 .skip-link {

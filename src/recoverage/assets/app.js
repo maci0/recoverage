@@ -90,7 +90,7 @@ const gridId = (secName) => `grid-${secName.replaceAll('.', '')}`;
 // Legend rows: cell state -> the words used for it in the UI.
 const LEGEND = [["none", "undocumented"], ["exact", "exact match"], ["reloc", "reloc match"],
   ["near_match", "near-match"], ["stub", "stub"], ["padding", "padding"],
-  ["compile_error", "problem"]];
+  ["proven", "proven"], ["compile_error", "problem"]];
 
 // Sections in PE load order (ascending VA), which puts .text first instead of
 // leaving the section that carries all the work at the end of an alphabetical
