@@ -10,6 +10,10 @@ module ships in the published package. See *Breaking*.
 
 ### Added
 
+- **Shell completion.** `recoverage --install-completion` installs completion
+  for bash, zsh, fish or PowerShell, and `--show-completion` prints the script
+  for a shell the installer does not cover. Command and flag names now
+  complete; they did not before.
 - **`recoverage config` prints the configuration `serve` would start with.**
   Same merge, same validation, no listener bound, so a deployment can confirm
   its environment (or diff two of them) before anything listens. `--json`
@@ -216,6 +220,13 @@ module ships in the published package. See *Breaking*.
   a `fileOffset` of 0 as "not file-backed" and dropped the byte dump and data
   inspector for every cell in such a section, while `/api/.../bytes` serves
   the same section happily. Only a NULL `fileOffset` means unbacked now.
+- **`--no-color`, `NO_COLOR` and `TERM=dumb` silence every colored path.** The
+  exit-2 configuration errors (a bad `--port`, a bad `RECOVERAGE_*` value) went
+  out through `typer.secho` instead of the `_secho` wrapper that applies the
+  opt-outs, so a red escape was written into a log that had asked for no color.
+  The `stats` table is the other half: Rich detects `NO_COLOR` and
+  `TERM=dumb` itself but cannot see the `--no-color` flag, so the flag now
+  reaches its `Console` as well.
 - **The supply-chain pin test reads the mechanism CI actually uses.** CI
   fetches the sibling rebrew through the `sibling-rebrew` composite action,
   which is the one place a job may run `tools/ci_clone_rebrew.sh`. The test

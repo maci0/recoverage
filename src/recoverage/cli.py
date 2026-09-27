@@ -26,7 +26,7 @@ from recoverage._paths import _db_path
 
 app = typer.Typer(
     help="Coverage dashboard for binary-matching decompilation projects.",
-    add_completion=False,
+    add_completion=True,
     rich_markup_mode="rich",
     epilog=(
         "[bold]Examples:[/bold]\n\n"
@@ -54,7 +54,9 @@ _log = logging.getLogger("recoverage")
 # TTY, so a piped run already loses color, but NO_COLOR (https://no-color.org)
 # and a dumb terminal are terminal conditions, and a user who sets either
 # expects no escape codes.  The opt-outs only ever force color OFF: passing
-# color=True would make click keep the codes even when stdout is a pipe.
+# color=True would make click keep the codes even when stdout is a pipe.  Rich
+# has its own detection for the two environment conditions and none for the
+# flag, so the `stats` table is handed the resolved opt-out separately.
 _color_disabled = False
 
 
@@ -252,7 +254,7 @@ def _resolve_serve_config(
             ),
         )
     except config.ConfigError as exc:
-        typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
+        _secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(2) from None
     return resolved
 
@@ -294,7 +296,7 @@ def _check_env_or_exit() -> None:
         config.check_unknown_vars()
         config.db_override()
     except config.ConfigError as exc:
-        typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
+        _secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(2) from None
 
 
@@ -851,7 +853,12 @@ def stats(
             )
             return
 
-        console = Console()
+        # Rich detects NO_COLOR and TERM=dumb on its own, but not the
+        # --no-color flag (a process-wide setting it cannot see), so the
+        # resolved opt-out is passed through: a table is the widest colored
+        # surface the CLI has, and it must honor the same three opt-outs
+        # every _secho caller does.
+        console = Console(no_color=True if _color_off() else None)
         for index, tid in enumerate(targets):
             data = _get_stats(conn, tid)
             # Blank line between targets, never before the first one: the
@@ -1160,7 +1167,7 @@ def open_cmd(
     try:
         resolved_port = config.port() if port is None else _checked_port(port)
     except config.ConfigError as exc:
-        typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
+        _secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(2) from None
     url = f"http://127.0.0.1:{resolved_port}"
     typer.echo(f"Opening {url}")

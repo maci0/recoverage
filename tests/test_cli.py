@@ -19,6 +19,11 @@ from recoverage.cli import app
 
 runner = CliRunner()
 
+#: The SGR sequence Rich paints the bold cyan target heading of `stats` with.
+#: Named because the color opt-out test asserts on the color part of that
+#: sequence, and Rich keeps the bold attribute when color is dropped.
+CYAN_HEADING = "\x1b[1;36m"
+
 
 # ── Version command ───────────────────────────────────────────────
 
@@ -72,6 +77,51 @@ class TestColorOptOut:
         result = runner.invoke(app, ["check", "--min-coverage", "200"], color=True)
         assert result.exit_code == 2
         assert "\x1b[" not in result.stderr
+
+    @pytest.mark.parametrize(
+        ("argv", "env"),
+        [
+            (["open", "--port", "99999"], {}),
+            (["serve", "--port", "99999"], {}),
+            # `stats` validates the environment through _check_env_or_exit;
+            # an empty RECOVERAGE_DB is the one setting every command reads.
+            (["stats"], {"RECOVERAGE_DB": ""}),
+        ],
+        ids=["open-port", "serve-config", "bad-environment"],
+    )
+    def test_config_error_paths_honor_the_opt_out(
+        self, argv: list[str], env: dict[str, str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Every exit-2 configuration error colors through _secho, not
+        typer.secho: a bare secho ignored all three opt-outs and still wrote
+        red escapes into a color_forced log.  `serve` and `open` exit before
+        they do any work, so neither starts a listener."""
+        monkeypatch.setenv("NO_COLOR", "1")
+        for name, value in env.items():
+            monkeypatch.setenv(name, value)
+        result = runner.invoke(app, argv, color=True)
+        assert result.exit_code == 2, result.output
+        assert "\x1b[" not in result.stderr
+
+    @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+    def test_stats_table_honors_the_opt_out(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """`stats` renders through Rich, which detects NO_COLOR and TERM=dumb
+        itself but cannot see the --no-color flag; the table is the widest
+        colored surface the CLI has, so the flag has to reach the Console.
+
+        FORCE_COLOR is what makes Rich emit color into a pipe, the state a
+        redirected run is in, and the bold cyan target heading is the color
+        surface it paints.  Rich's no_color drops color and keeps text
+        attributes, so the bold that remains is not the assertion.
+        """
+        monkeypatch.setenv("FORCE_COLOR", "1")
+        colored = runner.invoke(app, ["stats"], color=True)
+        assert colored.exit_code == 0, colored.output
+        assert CYAN_HEADING in colored.stdout
+
+        plain = runner.invoke(app, ["--no-color", "stats"], color=True)
+        assert plain.exit_code == 0, plain.output
+        assert CYAN_HEADING not in plain.stdout
 
 
 # ── Version command ───────────────────────────────────────────────

@@ -136,6 +136,7 @@ uv run recoverage serve --cors      # enable CORS processing (allowlist origins 
 uv run recoverage config            # print the RECOVERAGE_* settings serve resolves, no listener
 uv run recoverage regen             # re-run rebrew catalog + build-db, no server
 uv run recoverage open              # open the dashboard in a browser
+uv run recoverage --install-completion  # shell completion for the CLI
 uv run recoverage stats             # print coverage stats
 uv run recoverage export --format csv  # export coverage data
 uv run recoverage check --min-coverage 60  # CI gate

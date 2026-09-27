@@ -138,10 +138,13 @@ uv run recoverage serve
 |------|---------|-------------|
 | `--version` | | Print the version and exit |
 | `--no-color` | off | Disable colored output; also disabled by `NO_COLOR` or `TERM=dumb` |
+| `--install-completion` | | Install shell completion for bash, zsh, fish or PowerShell |
+| `--show-completion` | | Print the completion script instead of installing it |
 
 Errors, warnings, and gate verdicts are colored on a terminal and plain
-everywhere else (a pipe, a file, `NO_COLOR`, `TERM=dumb`). Under `--json`,
-stdout carries the machine payload only and every human note goes to stderr.
+everywhere else (a pipe, a file, `NO_COLOR`, `TERM=dumb`), the `stats` table
+included. Under `--json`, stdout carries the machine payload only and every
+human note goes to stderr.
 
 ### `recoverage serve`
 
