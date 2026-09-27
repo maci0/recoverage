@@ -102,9 +102,9 @@ COLORS = {
 }
 BG_COLOR = "#0f1216"
 PANEL_COLOR = "#151a21"
-# Empty progress-bar track: --none (white 0.05) composited over PANEL_COLOR.
+# Empty progress-bar track: approximates --none (white 0.05) over PANEL_COLOR.
 TRACK_COLOR = "#22272e"
-CODE_BG_COLOR = "#0a0d14"  # darker than panel, matches --code-bg rgba(0,0,0,0.26) on #0f1216
+CODE_BG_COLOR = "#0a0d14"  # darker than panel; approximates --code-bg rgba(0,0,0,0.26) on #0f1216
 BORDER_COLOR = "#1c2a38"  # subtle cyan-tinted dark, matches rgba(6,182,212,0.15) on dark bg
 TEXT_COLOR = "#e7edf4"
 MUTED_COLOR = "#8b949e"
@@ -194,8 +194,9 @@ DOT_PNGS = {state: _dot_uri(color) for state, color in COLORS.items()}
 #: past it (see _progress_svg).
 TRACK_UNITS = 700
 
-#: Height of the bar, in viewBox units.  Only the corner radius's half
-#: depends on it.
+#: Height of the bar, in viewBox units: the track rect and its clipPath draw
+#: at it, and the template's fixed height scales that.  The rounded ends
+#: (rx/ry 10) are independent of it.
 TRACK_HEIGHT = 32
 
 
@@ -857,8 +858,8 @@ _PAGE_SRC = r"""<!DOCTYPE html>
         % end
         </td></tr>
         <tr><td bgcolor="{{PANEL_COLOR}}" cellpadding="8">
-          <!-- Two keys per row in a fixed 2-column lattice: nine keys as a
-               single row need ~900px, which overflowed the map cell on phones
+          <!-- Two keys per row in a fixed 2-column lattice: ten keys as a
+               single row need ~1000px, which overflowed the map cell on phones
                and wrapped mid-key ("near- / match") once it could wrap.
                One key per row fixed the wrap but cost ~200px of vertical
                space for a legend.  Fixed pairs fit a 390px phone (each pair
@@ -1657,9 +1658,9 @@ def _build_grid_html(
 ) -> str:
     """Render the coverage grid as an HTML table.
 
-    grid_columns controls the number of cells per row. A sizing row of
-    transparent cells is emitted first so the browser allocates uniform
-    column widths regardless of colspan usage in data rows.
+    grid_columns controls the number of cells per row. A sizing row of empty
+    cells painted in the grid background is emitted first so the browser
+    allocates uniform column widths regardless of colspan usage in data rows.
 
     *page_offset* is the index of this page's first row within the whole merged
     list, needed only to reconstruct ``orig_idx`` for rows that carry none:
@@ -1992,8 +1993,10 @@ def _render_potato_inner(
 ) -> str:
     targets = resolve_targets(c)
     if not target and targets:
-        # The SPA defaults to /api/targets[0]; the dropdown below renders the
-        # same list, so both surfaces open on the same target.
+        # The SPA prefers ?target=, then a localStorage choice, then
+        # /api/targets[0]. Potato Mode honours ?target= and otherwise takes
+        # the first target, so the two surfaces agree on the first target
+        # unless localStorage names a different one.
         target = targets[0]["id"]
 
     sections, data = _load_section_data(c, target)

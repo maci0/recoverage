@@ -32,6 +32,9 @@ _MANIFEST = _ROOT / "pyproject.toml"
 _PYTHON_VERSION = _ROOT / ".python-version"
 _FLATTEN = _ROOT / "tools" / "flatten-rikalabs-strict.py"
 _DERIVED_PRESET = _ROOT / "tools" / "oxlint" / "rikalabs-strict.json"
+# The one place a CI job may fetch the sibling. A job may not clone rebrew
+# itself, and the action may not carry a pin: tools/ci_clone_rebrew.sh owns it.
+_SIBLING_ACTION = _ROOT / ".github" / "actions" / "sibling-rebrew" / "action.yml"
 
 # Declared distributions that are correct without ever appearing in an import
 # statement, and the mechanism that runs them instead. Every entry needs a
@@ -72,12 +75,13 @@ class TestRbrewPin:
     def test_ci_populates_the_sibling_only_through_the_pinned_script(self) -> None:
         """Every installing job materializes the sibling rebrew, one way only.
 
-        A second mechanism (an inline `git clone`, or a step carrying its own
-        ref) fetches the same path dependency from a pin nothing else checks,
-        and whichever runs last silently decides which rebrew the suite
-        tested. The script is that single mechanism: it holds the tag and
-        commit, `make clone-rebrew` runs it, and CI reaches it through the
-        `.github/actions/sibling-rebrew` composite action, which takes the
+        A second mechanism (an inline `git clone`, or a step or action
+        carrying its own ref) fetches the same path dependency from a pin
+        nothing else checks, and whichever runs last silently decides which
+        rebrew the suite tested. The script is that single mechanism: it holds
+        the tag and commit, `make clone-rebrew` runs it, and every job reaches
+        it through the `.github/actions/sibling-rebrew` composite action, which
+        exists to be the one place a job may run the script and takes the
         clone URL but not the ref and sha. The chain is one link long.
         """
         installing = {n: b for n, b in _jobs().items() if "uv sync" in b}

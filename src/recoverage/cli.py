@@ -196,7 +196,7 @@ def _csv_safe(value: Any) -> Any:
 
 
 def _checked_port(value: int) -> int:
-    """Return *value* if it can be bound, else raise config.ConfigError."""
+    """Return *value* if it is in the port range, else raise config.ConfigError."""
     if not config.MIN_PORT <= value <= config.MAX_PORT:
         raise config.ConfigError(
             f"--port: {value} is not in the range {config.MIN_PORT}-{config.MAX_PORT}"
@@ -515,7 +515,8 @@ def serve(
     log_level: str | None = typer.Option(
         None,
         "--log-level",
-        help="Log threshold (default: INFO; DEBUG, INFO, WARNING, ERROR, CRITICAL; "
+        help="Log threshold (default: INFO; any name or number logging knows, "
+        "e.g. DEBUG, INFO, WARN, WARNING, ERROR, CRITICAL; "
         "env: RECOVERAGE_LOG_LEVEL)",
     ),
 ) -> None:
@@ -977,8 +978,9 @@ def check(
     """Check coverage against a threshold (CI gate).
 
     Exits 0 when every compared section meets the threshold, 1 when one does
-    not, and 2 for a bad --min-coverage or an unreadable database.  Sections
-    the grid never records matches for are reported SKIP, not FAIL.
+    not, and 2 for a bad --min-coverage or an unreadable database.  A section
+    the grid never records matches for is reported SKIP, unless --section
+    named it, which FAILs.
     """
     _use_utf8_stdout()
     if not 0.0 <= min_coverage <= 100.0:

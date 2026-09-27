@@ -36,7 +36,7 @@ closely your C code matches the original compiled output.
 
 | What | How |
 |---|---|
-| Defrag-style grid | One cell per chunk, colored by state: Exact (green), Reloc (cyan), Near-match (yellow), Stub (red), None (gray) |
+| Defrag-style grid | One cell per chunk, colored by state: Exact (green), Reloc (blue), Near-match (yellow), Proven (cyan), Stub (red), None (gray) |
 | Function detail panel | Click any cell for metadata, C source, disassembly, and hex dump side by side |
 | Light and dark themes | Retro CRT dark mode by default, clean light mode one click away |
 | Clickable cross-references | Hex addresses in the disassembly are live links that jump to that chunk |

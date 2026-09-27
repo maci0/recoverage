@@ -190,6 +190,13 @@ module ships in the published package. See *Breaking*.
 
 ### Fixed
 
+- **The supply-chain pin test reads the mechanism CI actually uses.** CI
+  fetches the sibling rebrew through the `sibling-rebrew` composite action,
+  which is the one place a job may run `tools/ci_clone_rebrew.sh`. The test
+  still looked for the script path in each job body and asserted that no local
+  action existed, so it failed on the correct CI configuration. It now checks
+  that every installing job uses the action, that the action runs the pinned
+  script, and that neither the job nor the action carries a pin of its own.
 - **`/src/<path>` and `/original/<path>` answer 404 instead of 500 for a path
   holding a NUL.** `os.realpath` raises `ValueError` on an embedded NUL, and
   the containment check resolves the candidate before serving it, so

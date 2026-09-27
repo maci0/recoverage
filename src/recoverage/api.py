@@ -885,7 +885,7 @@ def _read_data_raw(c: sqlite3.Cursor, target: str, section_filter: str | None) -
     # rebrew advances the schema.
     data["known_schema"] = sorted(_server.KNOWN_SCHEMA_VERSIONS)
 
-    # Per-section cell stats from SQL view.  _cell_bucket_row reads the whole
+    # Per-section cell stats from the materialized table.  _cell_bucket_row reads the whole
     # row, so the projection is the shared one server._per_section_buckets
     # uses: a hand-listed column set here can silently drop a bucket rebrew
     # adds, and the served key set would then differ from /stats.
@@ -1198,9 +1198,9 @@ def _batch_request_vas() -> tuple[list[int], Any | None]:
     """Read + validate the POST /functions body into deduped VA ints.
 
     Returns ``(unique_vas, None)`` on success, ``([], error_response)`` when
-    the body violates the contract: a bounded read (this endpoint is
-    unauthenticated and, with --allow-remote, reachable off-loopback — the
-    payload is fully parsed before the 500-VA cap applies), a JSON object
+    the body violates the contract: a bounded read (the whole body is parsed
+    before the 500-VA cap applies, and with --allow-remote the endpoint is
+    reachable off-loopback), a JSON object
     with a non-empty "vas" array capped at _MAX_BATCH_LOOKUP, and entries
     that are integers or hex strings (base-16 with or without 0x prefix,
     matching rebrew's parse_va — bare hex like "10001000" is valid here).

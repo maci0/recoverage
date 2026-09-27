@@ -143,7 +143,7 @@ def configure_security(
 
     ONE public entry point for the process-wide globals defined above.  The
     CLI configures them through this function instead of assigning server
-    module attributes by name (two of which are private), so this module owns
+    module attributes by name (one of which is private), so this module owns
     both the storage and when/how it may change.  Call it once at startup,
     BEFORE the WSGI server starts accepting requests — request worker threads
     read these values without a lock.
@@ -219,7 +219,7 @@ def path_param(value: str) -> str:
     Bottle routes on ``PATH_INFO`` as the WSGI server hands it over, which
     per PEP 3333 is the *raw* request target: a browser's ``%C3%A9`` and
     ``%20`` arrive still encoded.  Every route capture (``target``,
-    ``section``, ``filepath``) is therefore percent-encoded text, and a
+    ``va``, ``section``, ``filepath``) is therefore percent-encoded text, and a
     target id or filename holding a space, ``#``, ``?`` or a non-ASCII
     character never matches the database row, the section, or the file.
     Potato Mode already emits ``urllib.parse.quote``-escaped links, so the
@@ -775,10 +775,14 @@ def _find_dll_path(target: str) -> Path | None:
 def _cache_dll_unavailable(target: str, warning: str, *args: object) -> bytes | None:
     """Record *target*'s DLL as unloadable, logging *warning* once.
 
-    Every failure path in :func:`_load_dll` ends here so the double-checked
-    insert lives in one place instead of once per path: another thread may
+    The failure paths that are permanent for the process (no configured
+    binary, an oversize read) end here so the double-checked insert lives in
+    one place instead of once per path: another thread may
     have loaded the binary while this thread was doing the work that failed,
-    and that successful load wins.  String arguments are control-char escaped
+    and that successful load wins.  A read that raises OSError is the
+    exception: it is not cached, so a transient failure costs a retry rather
+    than pinning the target to no DLL for the process lifetime.
+    String arguments are control-char escaped
     on the way to the log; numbers are passed through for %d.
     """
     with DLL_LOCK:
@@ -1639,11 +1643,11 @@ def _db() -> sqlite3.Connection:
 # ── Response helpers ───────────────────────────────────────────────
 
 # The two cache policies for DB-derived responses.  NO_STORE: payloads with
-# no validator the client can cheaply re-check — the SPA shell, /api/health,
-# /api/targets, /api/targets/<t>/stats, the function list/detail routes and
-# /api/events — which must never survive a rebuild.  REVALIDATE: the larger
-# ETag-bearing payloads (/data, /asm, /bytes, /potato) that a browser may keep
-# but must re-verify with If-None-Match every time.
+# no validator the client can cheaply re-check — /api/health, /api/targets,
+# /api/targets/<t>/stats, the function list/detail routes and /api/events —
+# which must never survive a rebuild.  REVALIDATE: the larger ETag-bearing
+# payloads (the SPA shell, /data, /asm, /bytes, /potato) that a browser may
+# keep but must re-verify with If-None-Match every time.
 CACHE_NO_STORE = "no-cache, no-store, must-revalidate"
 CACHE_REVALIDATE = "no-cache, must-revalidate"
 

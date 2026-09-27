@@ -465,7 +465,9 @@ const App = () => {
   // NFC before the case fold, on both sides: toLowerCase alone leaves the two
   // spellings of a name with a combining accent (e + U+0301 vs e + U+00E9)
   // as different strings, so an NFD symbol from a macOS-side tool never
-  // matches its NFC twin.  Same rule as the server's fold_text.
+  // matches its NFC twin.  Same NFC-then-fold order as the server's
+  // fold_text, which casefolds rather than lowercases, so an expansion such
+  // as ß → ss matches through the API and not here.
   const foldForSearch = (s) => String(s).normalize("NFC").toLowerCase();
 
   const matchesSearch = (name, query) => {

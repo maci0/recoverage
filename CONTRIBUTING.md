@@ -104,8 +104,9 @@ the whole matrix (Linux, macOS, Windows); every other job is Linux-only. `make` 
 is not: it is not preinstalled on Windows or in a bare Git for Windows shell,
 so run the command from the table directly there. The same applies to
 `make clone-rebrew`, whose two moves are `git clone --depth 1 --branch v2.13.1
-https://github.com/maci0/rebrew.git ../rebrew` and `git -C ../rebrew checkout
---detach d2d67c870df79214320f16b1cba1b0f6086605a7`; `tools/ci_clone_rebrew.sh`
+https://github.com/maci0/rebrew.git ../rebrew` and `git -C ../rebrew rev-parse
+HEAD`, which fails unless it prints
+`d2d67c870df79214320f16b1cba1b0f6086605a7`; `tools/ci_clone_rebrew.sh`
 is the same script CI runs and takes the destination as its first argument.
 
 ## Adding to the tree

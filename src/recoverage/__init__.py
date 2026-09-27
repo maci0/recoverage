@@ -2,7 +2,9 @@
 
 Module map (dependencies point one way, left to right):
 
-- ``_paths``      — coverage.db path resolution (no in-package deps)
+- ``config``      — RECOVERAGE_* parsing, validation, startup banner (no
+  in-package deps)
+- ``_paths``      — coverage.db path resolution (imports config)
 - ``regen``       — in-process rebrew regen: imports rebrew's catalog/build-db
   lazily and runs both under one call (no in-package deps)
 - ``server``      — Bottle app, hooks/auth, shared helpers (DB open, schema
@@ -11,8 +13,11 @@ Module map (dependencies point one way, left to right):
   OPTIONS preflight catch-all) but no content routes; configured at
   startup via ``configure_security()``
 - ``potato``      — server-side HTML renderer (imports server)
-- ``ui``          — SPA/static routes (imports server; lazily potato)
-- ``api``         — /api/* routes (imports server+regen; lazily potato)
+- ``ui``          — SPA/static routes (imports server; /potato is mounted by
+  potato)
+- ``disasm``      — Capstone disassembly: availability probe, thread-local Cs,
+  per-slice memo (imports server)
+- ``api``         — /api/* routes (imports server+regen+disasm; lazily potato)
 - ``webapp``      — composition root: imports api+ui so ``app`` has every
   route; import this when you need a fully wired app
 - ``cli``         — Typer entry point (serves ``webapp.app``; imports

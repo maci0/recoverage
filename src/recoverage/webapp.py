@@ -6,7 +6,7 @@ handlers, and the CORS preflight catch-all); ``recoverage.api``,
 time.  Those three imports live HERE, not at the bottom of server.py, so the
 dependency graph stays one-directional:
 
-    _paths ← server ← {potato, ui, api} ← webapp ← cli
+    config ← _paths ← server ← {potato, ui, api, disasm} ← webapp ← cli
 
 (api and cli additionally import regen — an in-process rebrew catalog/build-db
 wrapper with no in-package dependencies; rebrew's heavy imports stay off the

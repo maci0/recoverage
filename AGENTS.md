@@ -55,7 +55,7 @@ recoverage/
 │   ├── test_release.py       # Release contract: version, changelog, declared floors
 │   ├── test_supply_chain.py  # Pins: rebrew ref/sha, declared-vs-imported deps, bundled-asset grants
 │   ├── test_fuzz.py          # Seeded mutation campaigns over the untrusted-input surfaces
-│   ├── test_serve_harness.py # The smoke + lint-html harness contract
+│   ├── test_supply_chain.py  # Pin contracts: rebrew tag/SHA, one clone mechanism, preset license
 │   └── test_playwright.py    # Browser integration tests
 └── src/recoverage/
     ├── __init__.py
@@ -104,18 +104,20 @@ make setup                  # uv sync --frozen --extra dev
 uv sync --extra playwright   # browser tests: playwright, pytest-playwright
 
 # Checks. Every recipe runs the tool as a module of the locked interpreter
-# (`uv run --frozen python -m <tool>`), never the bare name: the dev extra is
-# optional, so a bare `uv run ruff` falls back to whatever is on PATH.
-make test                   # uv run --frozen python -m pytest tests/ -v --ignore=tests/test_playwright.py
+# with the dev extra synced (`uv run --frozen --extra dev python -m <tool>`),
+# never the bare name: without the extra, `uv run` installs the runtime
+# packages only and `python -m pytest` dies with "No module named pytest",
+# while a bare `uv run ruff` falls back to whatever is on PATH.
+make test                   # uv run --frozen --extra dev python -m pytest tests/ -v --ignore=tests/test_playwright.py
 make test-one T=tests/test_api.py  # one file or pytest node id (FLAGS="-k name" narrows it)
 make fuzz                  # wider seeded campaign (SEED=, ITERATIONS= override)
-make lint                   # uv run --frozen python -m ruff check src/ tests/ tools/
-make format-check           # uv run --frozen python -m ruff format --check src/ tests/ tools/
-make format                 # uv run --frozen python -m ruff format (writes)
+make lint                   # uv run --frozen --extra dev python -m ruff check src/ tests/ tools/
+make format-check           # uv run --frozen --extra dev python -m ruff format --check src/ tests/ tools/
+make format                 # uv run --frozen --extra dev python -m ruff format (writes)
 make shell-lint             # shellcheck -x tools/*.sh (needs shellcheck on PATH)
 make yaml-lint              # yamllint -c .yamllint.yaml --list-files .github/ (needs yamllint on PATH)
 make web-lint               # bun install --frozen-lockfile && bun run lint
-make smoke                  # uv run --frozen python tools/smoke.py
+make smoke                  # uv run --frozen --extra dev python tools/smoke.py
 make smoke-fail             # same, against a deliberately corrupt db
 make all                    # every check CI runs, one command
 
@@ -160,17 +162,21 @@ test fails the job instead of holding a runner for six hours.
 `rebrew` is an editable path dependency at `../rebrew` (see
 `[tool.uv.sources]`), which no runner has, so every job that runs
 `uv sync --frozen --extra dev` first uses the `sibling-rebrew` composite action
-(`.github/actions/sibling-rebrew`), whose only job is to run
-`tools/ci_clone_rebrew.sh "$GITHUB_WORKSPACE/../rebrew"`, the same script
-`make clone-rebrew` wraps. The action exists because every job needs the step
-and a job body cannot name a sibling path; it takes the clone URL as an input
-and deliberately not the ref or the sha, so the pin stays in one place. The
+(`.github/actions/sibling-rebrew`), the one place a job may run
+`tools/ci_clone_rebrew.sh "$GITHUB_WORKSPACE/../rebrew"`. It is the same script
+`make clone-rebrew` wraps, and the only mechanism that fetches the sibling: a
+second one (an inline `git clone`, or a job or action carrying its own ref)
+would decide from an unchecked pin which rebrew the suite tested. The action
+exists to hold that rule in one place, because every job needs the step and a
+job body cannot name a sibling path, and it takes the clone URL as its only
+input: a ref or sha input would be a second place to write the pin. The
 script's `REBREW_REF`/`REBREW_SHA` defaults are the whole pin: the clone fails
 unless the tag still resolves to the commit, so a moved tag cannot change the
 dependency silently. Those defaults must keep matching `uv.lock` (checked by
-`tests/test_supply_chain.py`, which also fails if a job grows its own clone or
-a second local action appears): when rebrew's dependencies change, re-lock in a
-tree with the sibling present and bump the script alone. The `sbom` job
+`tests/test_supply_chain.py`, which also asserts that no job or the action
+carries a pin of its own, and that no second local action appears): when
+rebrew's dependencies change, re-lock in a tree with the sibling present and
+bump the script alone. The `sbom` job
 deliberately has no such step, because `uv export --frozen` reads the lock
 alone.
 
@@ -318,7 +324,9 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   `rc_fold` function `_open_db` registers) ORed into the same group, and every
   column goes through `COALESCE(col, '')` because one NULL makes the predicate
   NULL and a row with no `symbol` then matches nothing. The SPA folds the same
-  way in `app.js` (`foldForSearch`).
+  way in `app.js` (`foldForSearch`), except that it uses `toLowerCase` where
+  the server uses `casefold`, so a case-fold expansion such as `ß` → `ss`
+  matches through the API and not in the SPA.
 - The untrusted-input surfaces (query parameters, the batch POST body, request
   headers, the `/potato` query string, the `/src` and `/original` path
   segments) are fuzzed by `tests/test_fuzz.py`: a seeded mutation engine over a

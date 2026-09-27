@@ -111,11 +111,12 @@ def _check_payload_budget(payload: bytes) -> None:
 
     The budget is the initial congestion window (10 x 1460-byte MSS), so the
     payload should arrive in one round trip.  The shipped shell measures
-    14,754 bytes under brotli q11, the highest quality the library offers, so
-    it is just over: everything deferrable (the asm fetch, its formatting, the
-    canvas coverage map, and the highlight.js load among it) lives in
-    ``detail.js``, and further gains have to come from there.  The warning is
-    the ratchet that says so, naming the exact overage.
+    ~14.1 KB under brotli q11, the highest quality the library offers, which
+    fits; the margin is thin, and everything deferrable (the asm fetch, its
+    formatting, the canvas coverage map, and the highlight.js load among it)
+    lives in ``detail.js``, so further gains have to come from there.  The
+    warning is the ratchet that says when the shell has crossed, naming the
+    exact overage.
     """
     results: list[tuple[str, int]] = [
         ("gzip", len(gzip.compress(payload, compresslevel=GZIP_STATIC_LEVEL))),
@@ -294,10 +295,11 @@ def serve_repo_file(filepath: str) -> Any:
 # on hljs.min.js: brotli q=11 is 37.7 KB vs q=5's 41.4 KB, and its 101 ms runs
 # once instead of per request.
 #
-# static_file served these raw: detail.js is on the first-paint critical path
-# at 27 KB, and hljs.min.js — fetched when a function's asm pane opens — is
+# static_file served these raw: detail.js, which the shell preloads beside
+# itself (index.html) and app.js requests without blocking first paint, is
+# ~34 KB, and hljs.min.js — fetched when a function's asm pane opens — is
 # 127 KB.  Both brotli down to roughly a third of that, and the whole set is
-# ~150 KB raw.
+# ~276 KB raw.
 #
 # Each entry carries a strong ETag next to the body.  CACHE_REVALIDATE alone
 # ("no-cache") forces the browser back on every load, and with no validator to
