@@ -502,7 +502,7 @@ graph TD
 ### Acceptance Criteria
 - HTML, CSS, JS, and VanJS library inlined into a single response
 - Minified with `rjsmin`/`rcssmin` and compressed with Brotli/Zstd/gzip
-- Total payload 14,090 B brotli, against a 14,600-byte budget (the TCP initial congestion window), so 510 bytes of headroom remain; `ui._check_payload_budget` warns with the exact overage if it grows past that
+- Total payload 14,239 B brotli, against a 14,600-byte budget (the TCP initial congestion window), so 361 bytes of headroom remain; `ui._check_payload_budget` warns with the exact overage if it grows past that
 - Everything deferrable (the grid, asm, hex, data inspector, live reload) lives in `detail.js`, which the shell preloads, so a new byte comes out of `detail.js` rather than out of the window
 - Compression algorithm auto-selected from `Accept-Encoding` header
 - Deferred Highlight.js loading: fetched from this origin (vendored in `assets/`) only on first code block click
@@ -518,7 +518,7 @@ graph TD
     E -->|zstd| F["Zstandard compress"]
     E -->|br| G["Brotli compress"]
     E -->|gzip| H["Gzip compress"]
-    F --> I["14,090 B response<br/>(brotli is the smallest)"]
+    F --> I["14,239 B response<br/>(brotli is the smallest)"]
     G --> I
     H --> I
     I --> J["Browser parses + renders<br/>UI shell in first paint"]
