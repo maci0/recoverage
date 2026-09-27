@@ -223,6 +223,24 @@ module ships in the published package. See *Breaking*.
   The mean divided by every finished request anyway, so a browser tab left on
   the dashboard for an hour dragged the reported average down to a fraction of
   the real service time. It now averages the timed requests only.
+- **A function the search box finds can be opened by name.** The name form of
+  `GET /api/targets/<target>/functions/<va>` compared the symbol byte for byte,
+  so a name spelled the way the user has it failed: the NFD spelling a macOS
+  clipboard hands over (`e` + U+0301 against the stored `é`), a different case,
+  or the ASCII spelling of a name whose `ß` casefolds to `ss`. The row the
+  search highlighted 404'd on open. The lookup now compares through the same
+  NFC + case fold every search uses, so all three resolve, and the stored name
+  is still what comes back.
+- **A crafted request could add a line to the log without a newline.** The
+  escaping of control characters in request-derived log fields covered C0 and
+  DEL but not the C1 controls or U+2028/U+2029, which a header value carries
+  literally. A `X-Request-ID` ending in U+2028 followed by a forged line read
+  as two log entries in most viewers.
+- **A non-ASCII request no longer costs the log line under `LC_ALL=C`.** The
+  log stream carried the locale's codec, so a CJK target id or an accented
+  symbol name turned the record into a `--- Logging error ---` traceback that
+  said nothing about the request. Unencodable characters are now written as
+  escapes, the same treatment stdout already had.
 - **The verified code-similarity reads 100x low.** `verify_results.similarity`
   is stored as a 0-1 fraction (the column CHECKs the unit interval, and
   rebrew's verify import divides its percent scale by 100), but the SPA and

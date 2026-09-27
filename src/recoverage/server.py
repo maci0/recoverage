@@ -644,15 +644,25 @@ _RESOLVED_TARGETS_CACHE_LOCK = threading.RLock()
 
 _log = logging.getLogger("recoverage")
 
-# Control characters (C0 + DEL), which would otherwise let a crafted URL
-# forge multi-line entries in the request log (%0A in the path percent-
-# decodes to a raw newline).  Each is replaced by its \xNN escape so the
-# offending request stays identifiable while remaining one log line.
-_LOG_CONTROL_CHARS = {c: f"\\x{c:02x}" for c in range(32)} | {127: "\\x7f"}
+# Control characters (C0, DEL, C1) and the two Unicode line terminators,
+# which would otherwise let a crafted URL or header forge multi-line entries
+# in the request log (%0A in the path percent-decodes to a raw newline).  Each
+# is replaced by its \xNN escape so the offending request stays identifiable
+# while remaining one log line.  C1 and U+2028/U+2029 are in the table for the
+# same reason as C0: every consumer that breaks a log on \n breaks on them
+# too, and a percent-escaped %C2%85 (NEL) or %E2%80%A8 reaches _log_safe
+# decoded.  Bidi controls stay out: they reorder a line rather than split it,
+# which is the log-injection question sec-review owns.
+_LOG_CONTROL_CHARS = (
+    {c: f"\\x{c:02x}" for c in range(32)}
+    | {127: "\\x7f"}
+    | {c: f"\\x{c:02x}" for c in range(0x80, 0xA0)}
+    | {0x2028: "\\x2028", 0x2029: "\\x2029"}
+)
 
 
 def _log_safe(value: str) -> str:
-    """Escape control characters in untrusted text destined for the log."""
+    """Escape line-breaking control characters in untrusted text for the log."""
     return value.translate(_LOG_CONTROL_CHARS)
 
 
@@ -1263,7 +1273,7 @@ _CELLS_JSON_SQL = f"SELECT section_name, {SECTION_CELLS_AGG_SQL} FROM cells WHER
 def _lookup_by_va_or_name(
     c: sqlite3.Cursor, table: str, json_sql: str, target: str, value: str
 ) -> sqlite3.Row | None:
-    """First row of *table* matching *value* as a VA, else as an exact name.
+    """First row of *table* matching *value* as a VA, else as a folded name.
 
     ONE resolution order for the /functions/<va> route and both Potato Mode
     detail panels: callers name a function by VA ("0x10001000") or, for
@@ -1272,8 +1282,25 @@ def _lookup_by_va_or_name(
     cannot disagree about what a value names.  *table* and *json_sql* are
     literals from the call sites; target and the value are parameterized.
 
-    SAFETY: the interpolated parts are the table name and the projection,
-    both supplied by the caller as literals.
+    The name is first compared byte for byte, which is what
+    ``idx_functions_name``/``idx_globals_name`` serve.  Only a miss falls
+    through to the folded comparison through :data:`FOLD_SQL`, the same NFC +
+    case fold every search uses: the exact spelling is a prefix of nothing
+    but itself, so a row the database spells one way is found by that index,
+    and the fold runs once, on the way a user spelled something else.  Byte
+    equality alone made a symbol the user could find through
+    /functions?search= unresolvable by name: the NFD spelling macOS puts on
+    the clipboard (``e`` + U+0301 COMBINING ACUTE) is a different byte string
+    from the NFC one rebrew stores, so the row the search highlighted 404'd
+    when it was opened.  Folding in SQL rather than in Python keeps the
+    stored name untouched, so a database predating this lookup needs no
+    migration.  The fallback cannot use the name index, so it scans the
+    target's rows; a VA-shaped value, which is what nearly every cell carries,
+    never reaches it.
+
+    SAFETY: the interpolated parts are the table name, the projection and the
+    registered function name, all supplied by this module or the caller as
+    literals.
     """
     prefix = f"SELECT {json_sql} FROM {table} WHERE target=? AND "
     for candidate in parse_va_candidates(value):
@@ -1282,6 +1309,10 @@ def _lookup_by_va_or_name(
         if row:
             return row
     c.execute(prefix + "name=?", (target, value))
+    row = c.fetchone()
+    if row is not None:
+        return row
+    c.execute(prefix + f"{FOLD_SQL}(name)={FOLD_SQL}(?)", (target, fold_text(value)))
     return c.fetchone()
 
 

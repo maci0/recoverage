@@ -10,6 +10,7 @@ import shutil
 import sqlite3
 import threading
 import time
+import unicodedata
 import zlib
 from datetime import UTC, datetime
 from io import BytesIO
@@ -3722,6 +3723,11 @@ class TestUnicodeUrlComponents:
 # ── Search folding ──────────────────────────────────────────────────
 
 #: NFC, and the NFD spelling of the same name (e + U+0301).
+#: NFC_ONLY has no NFD twin in the table, so a folded lookup that resolves it
+#: has exactly one row it could have matched; SHARP_S_NAME is a global whose
+#: name casefolds to an ASCII spelling.
+NFC_ONLY = "naïve_render"
+SHARP_S_NAME = "g_straße"
 NFC_NAME = "caf\u00e9_render"
 NFD_NAME = "cafe\u0301_render"
 
@@ -3767,7 +3773,13 @@ class TestSearchCaseFolding:
                 (t, 0x10003000, NFC_NAME, "0x10003000"),
                 (t, 0x10003010, NFD_NAME, "0x10003010"),
                 (t, 0x10003020, "_plain_ascii", "0x10003020"),
+                (t, 0x10003030, NFC_ONLY, "0x10003030"),
             ],
+        )
+        conn.execute(
+            "INSERT INTO globals (target, va, name, decl, files, module, size)"
+            " VALUES (?, ?, ?, ?, '[]', 'T', 4)",
+            (t, 0x10004000, SHARP_S_NAME, "int g_strasse"),
         )
         conn.commit()
         conn.close()
@@ -3788,6 +3800,42 @@ class TestSearchCaseFolding:
         assert status.startswith("200")
         data = json.loads(decode_body(body, headers))
         return [f["name"] for f in data["functions"]]
+
+    def _lookup(self, name: str) -> tuple[str, dict[str, Any]]:
+        """GET /functions/<name> for a name typed by a user, percent-encoded."""
+        from urllib.parse import quote
+
+        status, headers, body = wsgi_get(
+            f"/api/targets/{self.TARGET}/functions/{quote(name, safe='')}"
+        )
+        return status, json.loads(decode_body(body, headers))
+
+    def test_nfd_name_opens_the_row_search_found(self) -> None:
+        """The row the search box highlighted must open when named the way the
+        user spells it.  The name-form lookup compared bytes, so the NFD
+        spelling macOS puts on the clipboard 404'd a row stored in NFC."""
+        status, data = self._lookup(unicodedata.normalize("NFD", NFC_ONLY))
+        assert status.startswith("200"), data
+        assert data["va"] == 0x10003030
+        # The stored spelling comes back untouched: the fold is a comparison
+        # detail, not a rewrite of the name.
+        assert data["name"] == NFC_ONLY
+
+    def test_name_lookup_folds_case_like_the_search_does(self) -> None:
+        status, data = self._lookup("_PLAIN_ASCII")
+        assert status.startswith("200"), data
+        assert data["name"] == "_plain_ascii"
+
+    def test_global_lookup_folds_the_sharp_s_expansion(self) -> None:
+        """casefold maps ß to ss, so the ASCII spelling resolves the row too."""
+        status, data = self._lookup("g_strasse")
+        assert status.startswith("200"), data
+        assert data["name"] == SHARP_S_NAME
+
+    def test_unrelated_name_still_404s(self) -> None:
+        """The fold must not widen the lookup into matching anything."""
+        status, _ = self._lookup("nai_ve_render")
+        assert status.startswith("404")
 
     def test_uppercase_accent_finds_the_lowercase_name(self) -> None:
         # Both spellings are the same name, so both rows are a correct answer.

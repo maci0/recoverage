@@ -763,6 +763,16 @@ def serve(
     # carried into the traceback line of a failed request.  `defaults` fills
     # it in for records from loggers the app does not own (bottle, rebrew).
     handler = logging.StreamHandler()
+    # The log carries the same untrusted text as stdout (target ids, request
+    # paths, the X-Request-ID value), and stderr carries the locale's codec:
+    # under LC_ALL=C, or on a Windows code page, encoding a non-ASCII record
+    # raises inside logging and the record is replaced by a
+    # "--- Logging error ---" traceback that says nothing about the request.
+    # backslashreplace keeps the record readable in whatever the stream is.
+    # A stream that cannot be reconfigured (an in-memory test double) keeps
+    # its own codec, as in _use_utf8_stdout.
+    with contextlib.suppress(AttributeError, ValueError, OSError):
+        handler.stream.reconfigure(errors="backslashreplace")
     handler.setFormatter(
         logging.Formatter(
             "%(asctime)s %(levelname)s [%(name)s] [rid=%(request_id)s] %(message)s",

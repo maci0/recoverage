@@ -351,7 +351,17 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   NULL and a row with no `symbol` then matches nothing. The SPA folds the same
   way in `app.js` (`foldForSearch`), except that it uses `toLowerCase` where
   the server uses `casefold`, so a case-fold expansion such as `ß` → `ss`
-  matches through the API and not in the SPA.
+  matches through the API and not in the SPA. Name resolution folds the same
+  way: `server._lookup_by_va_or_name` tries the indexed byte equality first
+  and falls through to `rc_fold(name) = rc_fold(?)` on a miss, so the NFD
+  spelling a user pastes opens the row the search matched. A lookup added
+  beside it (globals, labels, anything compared for identity) must fold too;
+  byte equality there is the bug this paragraph exists to stop.
+- `_log_safe` escapes the characters that end a log line, which is C0, DEL,
+  the C1 controls, and U+2028/U+2029 (a header value carries those literally,
+  and every viewer that breaks on `\n` breaks on them). It deliberately leaves
+  bidi controls alone: those reorder a line rather than split it, which is
+  the log-injection question `sec-review` owns.
 - The untrusted-input surfaces (query parameters, the batch POST body, request
   headers, the `/potato` query string, the `/src` and `/original` path
   segments) are fuzzed by `tests/test_fuzz.py`: a seeded mutation engine over a

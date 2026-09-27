@@ -1197,6 +1197,37 @@ class TestLogInjection:
         assert _log_safe("normal/path?q=1") == "normal/path?q=1"
         assert _log_safe("a\nb\rc\x00d\x7f") == "a\\x0ab\\x0dc\\x00d\\x7f"
 
+    def test_log_safe_escapes_every_line_terminator(self) -> None:
+        """C1 controls and U+2028/U+2029 break a log line the same way \\n does.
+
+        A header value is not percent-encoded on the wire, so %C2%85 (NEL)
+        and %E2%80%A8 (LINE SEPARATOR) reach _log_safe as themselves; every
+        consumer that splits a log on \\n splits on these too.  chr(), not a
+        literal: the separators are invisible in a diff.
+        """
+        from recoverage.server import _log_safe
+
+        value = "a" + chr(0x85) + "b" + chr(0x2028) + "c" + chr(0x2029) + "d" + chr(0x9F)
+        assert _log_safe(value) == "a\\x85b\\x2028c\\x2029d\\x9f"
+
+    def test_log_safe_keeps_ordinary_non_ascii(self) -> None:
+        """Escaping is for line breaks, not for text: a CJK target id or an
+        accented symbol name must stay readable in the log."""
+        from recoverage.server import _log_safe
+
+        line = "/api/targets/日本語/functions/café"
+        assert _log_safe(line) == line
+
+    def test_request_id_cannot_carry_a_line_separator(self, monkeypatch: Any) -> None:
+        """The echoed X-Request-ID is the request's identity in the log."""
+        import recoverage.server as srv
+
+        class _Req:
+            headers: ClassVar[dict[str, str]] = {"X-Request-ID": "abc" + chr(0x2028) + "forged"}
+
+        monkeypatch.setattr(srv, "request", _Req())
+        assert srv._new_request_id() == "abc\\x2028forged"
+
     def test_newline_in_path_stays_one_log_line(self, caplog: pytest.LogCaptureFixture) -> None:
         from conftest import wsgi_get
 
