@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 
@@ -245,7 +245,12 @@ class TestActiveConfig:
             cors=False,
             cors_origin=["http://a.test"],
             token="s3cret-value",
-            db=Path("/tmp/x.db"),
+            # A PURE posix path on purpose: the banner renders whatever path
+            # object it is handed, and str() of an absolute path is not
+            # portable — str(PureWindowsPath("/tmp/x.db")) is "\tmp\x.db", so
+            # Path("/tmp/x.db") renders differently on Windows. The value
+            # asserted below is the string this object carries.
+            db=PurePosixPath("/tmp/x.db"),
             log_level=logging.WARNING,
         )
         assert rendered["log_level"] == "WARNING"
