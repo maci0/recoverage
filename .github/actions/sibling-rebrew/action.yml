@@ -18,15 +18,22 @@ description: >-
 
 inputs:
   clone-url:
-    description: Git URL to clone the sibling checkout from.
+    description: >-
+      Git URL to clone the sibling checkout from, for a caller pointing at a
+      fork or a mirror.  Empty by default: the URL lives in
+      tools/ci_clone_rebrew.sh, and a default here would be a second copy of
+      it that a move of the repository could leave disagreeing with the one
+      `make clone-rebrew` uses.
     required: false
-    default: https://github.com/maci0/rebrew.git
+    default: ""
 
 runs:
   using: composite
   steps:
     - name: Clone the sibling rebrew checkout
       shell: bash
+      # An empty clone-url reaches the script as REBREW_URL="", and the
+      # script's own ${REBREW_URL:-...} default is what supplies the URL then.
       env:
         REBREW_URL: ${{ inputs.clone-url }}
       run: bash "$GITHUB_WORKSPACE/tools/ci_clone_rebrew.sh" "$GITHUB_WORKSPACE/../rebrew"

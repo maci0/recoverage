@@ -80,8 +80,8 @@ For development, see [CONTRIBUTING.md](CONTRIBUTING.md) — recoverage depends o
 a sibling rebrew checkout, so the bootstrap is two commands:
 
 ```bash
-make clone-rebrew   # rebrew v2.13.1 into ../rebrew
-make setup          # uv sync --frozen --extra dev
+make clone-rebrew   # the sibling rebrew into ../rebrew, at the pin in tools/ci_clone_rebrew.sh
+make setup          # uv sync --locked --extra dev
 make test           # or: make test-one T=tests/test_api.py
 uv run recoverage serve
 ```
@@ -543,10 +543,13 @@ check.
 | `smoke` | ubuntu, Python 3.13 | boots `recoverage serve` against a synthetic `coverage.db` and probes the SPA shell, health, target data/stats/functions and Potato Mode, then repeats with a corrupt database to prove it reports `degraded` instead of healthy |
 | `sbom` | ubuntu | `uv export --frozen --all-extras --hashes` as a build artifact: the exact resolved tree behind a given build, plus the rebrew tag and commit the path dependency was pinned at |
 
-Every job but `sbom` installs with `uv sync --frozen --extra dev` and then runs
-tools through `uv run --frozen`, so `uv.lock` is never rewritten by a run; a
-stale lock fails the build instead of drifting. `sbom` skips the sync because
-`uv export --frozen` reads the lock alone. Playwright and the
+Every job but `sbom` installs with `uv sync --locked --extra dev` and then runs
+tools through `uv run --locked`. `--locked` never rewrites `uv.lock` and also
+refuses to install one that no longer matches `pyproject.toml`, so a dependency
+edit that skipped `uv lock` fails the run instead of testing a tree the manifest
+does not describe. `sbom` skips the sync, and its one `uv export --frozen` stays
+frozen, because it is the job with no sibling `../rebrew` to resolve and reads
+the lock alone. Playwright and the
 `capstone`/`pygments` extras are never installed, so the
 matrix is the same set on every runner.
 
@@ -560,7 +563,7 @@ tag still resolves to the commit in `REBREW_SHA`, so a moved tag cannot
 silently change the path dependency. Those defaults are the one place the pin
 lives, and `tests/test_supply_chain.py` fails when a job
 grows a second way to fetch the sibling. The commit has to keep
-matching `uv.lock`. When rebrew's own dependencies change, `uv sync --frozen`
+matching `uv.lock`. When rebrew's own dependencies change, `uv sync --locked`
 fails with a lock mismatch, and the fix is to re-lock in a tree laid out with
 the sibling and bump `REBREW_REF`/`REBREW_SHA` in the script.
 

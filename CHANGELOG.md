@@ -121,6 +121,26 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **A stale `uv.lock` now fails the run instead of installing anyway.** Every
+  `uv sync` and `uv run` in the Makefile, in `package.json` and in CI moved
+  from `--frozen` to `--locked`. Both refuse to rewrite the lockfile, but
+  `--frozen` installs it even when `pyproject.toml` no longer matches, so a
+  dependency edit that skipped `uv lock` passed CI while testing the previous
+  tree. Run `uv lock` after changing a dependency, and bump
+  `REBREW_REF`/`REBREW_SHA` in `tools/ci_clone_rebrew.sh` if rebrew moved. The
+  `sbom` job keeps `--frozen`: it is the one job with no sibling `../rebrew` to
+  resolve the path dependency against.
+- **The rebrew tag, commit and clone URL are written in one file.** The
+  composite action's `clone-url` input had a URL default duplicating
+  `tools/ci_clone_rebrew.sh`, and `README.md`, `CONTRIBUTING.md` and
+  `AGENTS.md` each restated the pinned tag and commit in prose. The input stays
+  for a fork or a mirror, with an empty default; the documents now name the
+  script that holds the pin. `CONTRIBUTING.md` no longer tells a contributor to
+  reassemble the clone by hand, which is how the uncommitted-work guard and the
+  tag-moved check get skipped.
+- **The SBOM upload fails when the export is missing or empty.**
+  `upload-artifact` defaults to warning and would have left a green job with no
+  inventory attached.
 - **Potato Mode's detail panel resolves a cell's parent without walking the
   section.** Opening a block whose cell names a parent function searched every
   cell of the section for that name on each request, which on a large `.text`

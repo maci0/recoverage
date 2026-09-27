@@ -15,7 +15,12 @@ SET_STRICT = set -eu; if (set -o pipefail) 2>/dev/null; then set -o pipefail; fi
 
 # Lockfile-pinned deps, exactly as every CI job installs them.  Override with
 # `make setup UV_SYNC_FLAGS=` to add an extra (e.g. `--extra capstone`).
-UV_SYNC_FLAGS ?= --frozen --extra dev
+# --locked, not --frozen: both refuse to write a new lockfile, but --frozen
+# installs uv.lock even when pyproject.toml no longer matches it, so a
+# dependency edit that skipped `uv lock` would test a tree the manifest does
+# not describe.  --locked fails the run instead, which is what "a stale lock
+# fails the build" means.
+UV_SYNC_FLAGS ?= --locked --extra dev
 
 # Every recipe that runs a tool out of the project environment.  `--extra dev`
 # is what makes the edit-test loop work on a clean clone without `make setup`
@@ -24,7 +29,7 @@ UV_SYNC_FLAGS ?= --frozen --extra dev
 # missing, so `make test` dies on "No module named pytest" instead of running.
 # Same install as `make setup` and every CI job, so a local pass and a CI pass
 # still mean the same thing.
-UV_RUN := uv run --frozen --extra dev
+UV_RUN := uv run --locked --extra dev
 
 # uv floor the local toolchain is checked against; warn (do not fail) when the
 # installed one is older, matching the sibling rebrew checkout's policy.  CI
@@ -33,12 +38,16 @@ UV_RUN := uv run --frozen --extra dev
 # disagree.  Bump both together.
 UV_VERSION ?= 0.12.14
 
+# The interpreter pin, read from the file that owns it rather than restated
+# here, so `make help` cannot name a version .python-version no longer has.
+PYTHON_VERSION := $(shell cat .python-version)
+
 # The rebrew tag/commit pin lives in tools/ci_clone_rebrew.sh and nowhere
 # else, so the Makefile does not restate it: `make clone-rebrew
 # REBREW_REF=<tag> REBREW_SHA=<commit>` reaches the script as environment
 # variables, which the command-line assignment already exports.  The commit
 # must be one whose dependency metadata still matches uv.lock, or
-# `uv sync --frozen` fails on the lock check.
+# `uv sync --locked` fails on the lock check.
 REBREW_DIR := $(abspath $(CURDIR)/../rebrew)
 
 # The floor in pyproject.toml [project].dependencies; rebrew below it lacks
@@ -64,7 +73,7 @@ FLAGS ?=
 help:
 	@printf '%s\n' \
 		'Contributor targets:' \
-		'  make setup              # uv sync (frozen, dev extra): the one bootstrap command' \
+		'  make setup              # uv sync (locked, dev extra): the one bootstrap command' \
 		'  make build              # build the wheel + sdist reproducibly into dist/' \
 		'  make clone-rebrew       # clone the sibling rebrew pin into ../rebrew' \
 		'  make test               # full pytest suite (CI test job, minus the matrix)' \
@@ -82,7 +91,7 @@ help:
 		'  make clean              # remove caches and build artifacts' \
 		'' \
 		'Bootstrap (clean clone):' \
-		'  1. Install uv $(UV_VERSION)+ (https://docs.astral.sh/uv/); Python 3.13 is pinned in .python-version' \
+		'  1. Install uv $(UV_VERSION)+ (https://docs.astral.sh/uv/); Python $(PYTHON_VERSION) is pinned in .python-version' \
 		'  2. make clone-rebrew    # ../rebrew must exist: pyproject.toml [tool.uv.sources]' \
 		'  3. make setup && make test-one T=tests/test_api.py' \
 		'  Before a PR: make all' \
@@ -221,13 +230,13 @@ yaml-lint: ensure-lint-tools
 web-lint:
 	@$(SET_STRICT) \
 	if ! command -v bun >/dev/null 2>&1; then \
-	  echo "ERROR: bun not on PATH (package.json pins bun 1.4.2 via packageManager)."; \
-	  echo "Install bun (https://bun.sh), then re-run 'make web-lint'."; \
+	  echo "ERROR: bun not on PATH (package.json's packageManager field pins the version)."; \
+	  echo "Install that bun (https://bun.sh), then re-run 'make web-lint'."; \
 	  exit 1; \
 	fi; \
 	if ! command -v java >/dev/null 2>&1; then \
-	  echo "ERROR: java not on PATH (vnu-jar runs the Nu Html Checker; CI installs temurin 17)."; \
-	  echo "Install a JDK 17+, then re-run 'make web-lint'."; \
+	  echo "ERROR: java not on PATH (vnu-jar runs the Nu Html Checker under java)."; \
+	  echo "Install a JDK, then re-run 'make web-lint'."; \
 	  exit 1; \
 	fi; \
 	bun install --frozen-lockfile
@@ -244,5 +253,6 @@ all: format-check lint shell-lint yaml-lint test web-lint smoke smoke-fail
 	@printf '%s\n' 'all checks passed (CI: lint, web-lint, test, smoke)'
 
 clean:
-	rm -rf .pytest_cache .pytest-tmp .ruff_cache build dist src/recoverage.egg-info recoverage.egg-info
+	rm -rf .pytest_cache .pytest-tmp .ruff_cache .scratch build dist \
+		src/recoverage.egg-info recoverage.egg-info
 	find src tests tools -type d -name __pycache__ -prune -exec rm -rf {} +

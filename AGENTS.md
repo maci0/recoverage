@@ -102,26 +102,32 @@ CI runs; `make all` is the local mirror of the whole pipeline.
 
 ```bash
 # Bootstrap (clean clone; rebrew is a ../rebrew path dependency)
-make clone-rebrew           # clone rebrew v2.13.1 into ../rebrew
-make setup                  # uv sync --frozen --extra dev
+make clone-rebrew           # clone the pinned rebrew into ../rebrew (pin: tools/ci_clone_rebrew.sh)
+make setup                  # uv sync --locked --extra dev
 make build                  # wheel + sdist into dist/, reproducibly
 uv sync --extra playwright   # browser tests: playwright, pytest-playwright
 
 # Checks. Every recipe runs the tool as a module of the locked interpreter
-# with the dev extra synced (`uv run --frozen --extra dev python -m <tool>`),
+# with the dev extra synced (`uv run --locked --extra dev python -m <tool>`),
 # never the bare name: without the extra, `uv run` installs the runtime
 # packages only and `python -m pytest` dies with "No module named pytest",
-# while a bare `uv run ruff` falls back to whatever is on PATH.
-make test                   # uv run --frozen --extra dev python -m pytest tests/ -v --ignore=tests/test_playwright.py
+# while a bare `uv run ruff` falls back to whatever is on PATH. `--locked`,
+# not `--frozen`: both refuse to rewrite uv.lock, but `--frozen` installs the
+# committed lock even when pyproject.toml no longer matches it, so a dependency
+# edit that skipped `uv lock` would test a tree the manifest does not
+# describe. `tests/test_supply_chain.py` pins the flag in the Makefile and in
+# every ci.yml job, and `uv export --frozen` is the one exception: the `sbom`
+# job has no sibling ../rebrew to resolve the path dependency against.
+make test                   # uv run --locked --extra dev python -m pytest tests/ -v --ignore=tests/test_playwright.py
 make test-one T=tests/test_api.py  # one file or pytest node id (FLAGS="-k name" narrows it)
 make fuzz                  # wider seeded campaign (SEED=, ITERATIONS= override)
-make lint                   # uv run --frozen --extra dev python -m ruff check src/ tests/ tools/
-make format-check           # uv run --frozen --extra dev python -m ruff format --check src/ tests/ tools/
-make format                 # uv run --frozen --extra dev python -m ruff format (writes)
+make lint                   # uv run --locked --extra dev python -m ruff check src/ tests/ tools/
+make format-check           # uv run --locked --extra dev python -m ruff format --check src/ tests/ tools/
+make format                 # uv run --locked --extra dev python -m ruff format (writes)
 make shell-lint             # shellcheck -x tools/*.sh (needs shellcheck on PATH)
 make yaml-lint              # yamllint -c .yamllint.yaml .github/ (needs yamllint on PATH)
 make web-lint               # bun install --frozen-lockfile && bun run lint
-make smoke                  # uv run --frozen --extra dev python tools/smoke.py
+make smoke                  # uv run --locked --extra dev python tools/smoke.py
 make smoke-fail             # same, against a deliberately corrupt db
 make all                    # every check CI runs, one command
 
@@ -167,7 +173,7 @@ test fails the job instead of holding a runner for six hours.
 
 `rebrew` is an editable path dependency at `../rebrew` (see
 `[tool.uv.sources]`), which no runner has, so every job that runs
-`uv sync --frozen --extra dev` first uses the `sibling-rebrew` composite action
+`uv sync --locked --extra dev` first uses the `sibling-rebrew` composite action
 (`.github/actions/sibling-rebrew`), the one place a job may run
 `tools/ci_clone_rebrew.sh "$GITHUB_WORKSPACE/../rebrew"`. It is the same script
 `make clone-rebrew` wraps, and the only mechanism that fetches the sibling: a
@@ -175,7 +181,10 @@ second one (an inline `git clone`, or a job or action carrying its own ref)
 would decide from an unchecked pin which rebrew the suite tested. The action
 exists to hold that rule in one place, because every job needs the step and a
 job body cannot name a sibling path, and it takes the clone URL as its only
-input: a ref or sha input would be a second place to write the pin. The
+input: a ref or sha input would be a second place to write the pin. That
+input's default is empty, because the URL is a copy of a value the script
+already owns and a moved repository would leave the two disagreeing; the
+script's `REBREW_URL` default supplies it. The
 script's `REBREW_REF`/`REBREW_SHA` defaults are the whole pin: the clone fails
 unless the tag still resolves to the commit, so a moved tag cannot change the
 dependency silently. Those defaults must keep matching `uv.lock` (checked by

@@ -14,7 +14,7 @@ web-lint and smoke jobs run); uv downloads it if the host has no 3.13, and
 
 ```bash
 make clone-rebrew   # rebrew at the pin in tools/ci_clone_rebrew.sh into ../rebrew
-make setup          # uv sync --frozen --extra dev
+make setup          # uv sync --locked --extra dev
 ```
 
 `REBREW_REF` / `REBREW_SHA` in `tools/ci_clone_rebrew.sh` are the only copy of
@@ -75,11 +75,17 @@ artifact from a tree with no git.
 Run tools through `uv run` (which the Makefile does) rather than a globally
 installed copy: the suite's assertions and the ruff rules are pinned in
 `uv.lock`, and an older global ruff formats and lints differently. That is why
-the Makefile calls `uv run --frozen --extra dev python -m pytest` /
+the Makefile calls `uv run --locked --extra dev python -m pytest` /
 `... -m ruff` instead of `uv run pytest` / `uv run ruff`: the module form runs
 the locked interpreter, and `--extra dev` is what installs pytest and ruff
 when a target is the first command you run on a clean clone, so `make test-one`
 works without `make setup` ahead of it.
+
+`--locked`, not `--frozen`: both refuse to rewrite `uv.lock`, but `--frozen`
+installs the committed lock even when `pyproject.toml` no longer matches it, so
+editing a dependency without running `uv lock` would test the old tree and pass.
+After changing a dependency, run `uv lock` (and bump `REBREW_REF`/`REBREW_SHA`
+in `tools/ci_clone_rebrew.sh` if rebrew moved) before the next `make`.
 
 The suite is hermetic. It builds its own synthetic `coverage.db` (see
 `tests/conftest.py`) and needs no project workspace, compiler toolchain, or
@@ -124,12 +130,19 @@ CI also builds an SBOM from `uv.lock` (`uv export`); it needs no local step.
 Every target is a wrapper around the third column. Only the `test` row runs on
 the whole matrix (Linux, macOS, Windows); every other job is Linux-only. `make` itself
 is not: it is not preinstalled on Windows or in a bare Git for Windows shell,
-so run the command from the table directly there. The same applies to
-`make clone-rebrew`, whose two moves are `git clone --depth 1 --branch v2.13.1
-https://github.com/maci0/rebrew.git ../rebrew` and `git -C ../rebrew rev-parse
-HEAD`, which fails unless it prints
-`d2d67c870df79214320f16b1cba1b0f6086605a7`; `tools/ci_clone_rebrew.sh`
-is the same script CI runs and takes the destination as its first argument.
+so run the command from the table directly there.
+
+The same applies to `make clone-rebrew`: on a shell without `make`, run
+`bash tools/ci_clone_rebrew.sh ../rebrew` instead. That is the whole of it, and
+it is what CI runs through `.github/actions/sibling-rebrew`, so do not
+reassemble the clone by hand from its two `git` moves. The script carries the
+moves that matter (read its header) and two of them are load-bearing: it
+removes the destination first, so it refuses to run against a checkout with
+uncommitted changes unless `REBREW_FORCE=1`, and it fails when the tag it
+cloned no longer resolves to the commit the pin names. A hand-run
+`git clone --branch <tag>` gets neither. The tag, the commit, and the clone URL
+are written once, in that script; read them there rather than copying them
+here.
 
 ## Adding to the tree
 

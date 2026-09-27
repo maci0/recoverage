@@ -407,7 +407,7 @@ Templates use `% for`/`% if`/`% end` control flow and `{{!expr}}` for raw HTML o
 ## Testing
 Run the test harness to verify all rendering paths:
 ```bash
-uv run --frozen python -m pytest tests/test_potato.py -v
+uv run --locked python -m pytest tests/test_potato.py -v
 ```
 
 This suite covers:
@@ -420,5 +420,5 @@ HTML validation is a separate gate: `bun run lint:html` (`tools/lint-html.py`) v
 
 Playwright comparison tests verify visual and behavioral parity with the main UI:
 ```bash
-uv run --frozen python -m pytest tests/test_playwright.py
+uv run --locked python -m pytest tests/test_playwright.py
 ```

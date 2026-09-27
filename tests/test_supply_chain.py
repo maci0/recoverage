@@ -22,9 +22,7 @@ from pathlib import Path
 
 _ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 _CI_YML = _ROOT / ".github" / "workflows" / "ci.yml"
-_SIBLING_ACTION = _ROOT / ".github" / "actions" / "sibling-rebrew" / "action.yml"
 _CLONE_SCRIPT = _ROOT / "tools" / "ci_clone_rebrew.sh"
-_SIBLING_ACTION = _ROOT / ".github" / "actions" / "sibling-rebrew" / "action.yml"
 _MAKEFILE = _ROOT / "Makefile"
 _README = _ROOT / "README.md"
 _PACKAGE_JSON = _ROOT / "package.json"
@@ -171,6 +169,62 @@ class TestRbrewPin:
         sha = _default(_CLONE_SCRIPT.read_text(encoding="utf-8"), "REBREW_SHA")
         assert re.fullmatch(r"[0-9a-f]{40}", sha), f"REBREW_SHA {sha!r} is not a full commit id"
 
+    def test_the_clone_url_is_written_once(self) -> None:
+        """The script owns the URL, the way it owns the tag and the commit.
+
+        The action used to carry the same URL as a default, which is a copy a
+        moved repository leaves disagreeing: `make clone-rebrew` and CI would
+        then fetch two different rebrews, and only the lock check would notice.
+        The input stays, because a fork or a mirror is a legitimate thing to
+        point elsewhere at; its default stays empty so the script's is the one
+        that applies.
+        """
+        url = _default(_CLONE_SCRIPT.read_text(encoding="utf-8"), "REBREW_URL")
+        assert url == "https://github.com/maci0/rebrew.git", f"the clone URL moved to {url!r}"
+        inputs = _SIBLING_ACTION.read_text(encoding="utf-8").split("inputs:", 1)[1]
+        default = re.search(r"^\s+default:\s*(\S+)\s*$", inputs.split("runs:", 1)[0], re.MULTILINE)
+        assert default and default.group(1) in ('""', "''"), (
+            "the clone-url input grew a default; the URL belongs to the script"
+        )
+
+    def test_no_other_file_restates_the_pin(self) -> None:
+        """One place writes the tag, the commit and the URL, and it is the script.
+
+        Every other copy is a value the bump would have to reach: the composite
+        action's input default, a Makefile line, or a sentence in a document
+        telling a contributor which rebrew to clone. A copy that is missed
+        sends CI and a workstation to two different rebrews, or sends a reader
+        to a commit the script no longer accepts. A document says where the
+        pin lives instead.
+        """
+        script = _CLONE_SCRIPT.read_text(encoding="utf-8")
+        pins = {name: _default(script, name) for name in (*_PINS, "REBREW_URL")}
+        for name, value in pins.items():
+            assert value in script, f"tools/ci_clone_rebrew.sh no longer holds {name}"
+        skipped = {
+            ".git",
+            "node_modules",
+            ".venv",
+            ".pytest_cache",
+            ".ruff_cache",
+            ".pytest-tmp",
+            ".scratch",
+            ".gauntlet",
+        }
+        for path in sorted(_ROOT.rglob("*")):
+            if not path.is_file() or set(path.relative_to(_ROOT).parts) & skipped:
+                continue
+            if path in (_CLONE_SCRIPT, Path(__file__).resolve(), _BUN_LOCK, _ROOT / "uv.lock"):
+                continue
+            if path.suffix in {".png", ".ico", ".db", ".pyc"}:
+                continue
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (UnicodeDecodeError, OSError):
+                continue
+            for name, value in pins.items():
+                assert value not in text, f"{path.relative_to(_ROOT)} restates {name} ({value})"
+
     def test_ci_uv_version_matches_the_makefile(self) -> None:
         """uv runs every install, lint and test, so the runner pins it too.
 
@@ -191,6 +245,60 @@ class TestRbrewPin:
             assert pinned.group(1) == _default(
                 _MAKEFILE.read_text(encoding="utf-8"), "UV_VERSION"
             ), "ci.yml installs a different uv than the Makefile's UV_VERSION"
+
+
+class TestEnvironmentInstalls:
+    """Every environment is installed from uv.lock, and the lock is checked.
+
+    `--frozen` and `--locked` both refuse to write a new lockfile, which is
+    the property the pipeline was built around. Only `--locked` also refuses
+    to install a lockfile that no longer matches pyproject.toml: under
+    `--frozen` a dependency edit that skipped `uv lock` installs the old tree
+    and the run is green, so the suite tests a package the manifest does not
+    describe. The one job that may not use it is `sbom`, which is the one job
+    with no sibling checkout to resolve the path dependency against. These
+    read the files rather than running uv, so the check on whether uv.lock is
+    current stays where the hermetic suite does not reach: the pipeline.
+    """
+
+    def test_ci_installs_with_locked_not_frozen(self) -> None:
+        commands = [
+            line
+            for line in _CI_YML.read_text(encoding="utf-8").splitlines()
+            if not line.lstrip().startswith("#") and re.search(r"\buv (sync|run|export)\b", line)
+        ]
+        assert commands, "ci.yml runs no uv command; this check would pass vacuously"
+        for line in commands:
+            flags = " ".join(line.split())
+            if "uv export" in flags:
+                continue
+            assert "--locked" in flags, f"ci.yml installs without --locked: {flags}"
+            assert "--frozen" not in flags, f"ci.yml installs with --frozen: {flags}"
+
+    def test_the_sbom_export_stays_frozen(self) -> None:
+        """`--locked` re-resolves, and `sbom` is the job without a sibling.
+
+        Reading the lock alone is the point of that job: the path dependency
+        `../rebrew` does not exist on the runner that runs it, so the one
+        invocation that has to stay `--frozen` is pinned here rather than
+        left to a reader to work out.
+        """
+        exports = [
+            " ".join(line.split())
+            for line in _CI_YML.read_text(encoding="utf-8").splitlines()
+            if "uv export" in line and not line.lstrip().startswith("#")
+        ]
+        assert len(exports) == 1, f"expected one uv export, found {exports}"
+        assert "--frozen" in exports[0] and "--locked" not in exports[0], exports[0]
+
+    def test_the_makefile_installs_the_same_way(self) -> None:
+        """`make all` is the local mirror of CI, down to the uv flag."""
+        makefile = _MAKEFILE.read_text(encoding="utf-8")
+        for line in ("UV_SYNC_FLAGS ?=", "UV_RUN :="):
+            declaration = re.search(rf"^{re.escape(line)}.*$", makefile, re.MULTILINE)
+            assert declaration, f"Makefile no longer defines {line}"
+            assert "--locked" in declaration.group(0), declaration.group(0)
+            assert "--frozen" not in declaration.group(0), declaration.group(0)
 
 
 class TestToolchainPins:
