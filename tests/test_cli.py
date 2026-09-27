@@ -832,9 +832,67 @@ class TestServeServerWiring:
         assert result.exit_code == 0
         assert captured["server_class"] is cli._ThreadingWSGIServer
         assert captured["server_class"].daemon_threads is True
-        assert captured["handler_class"] is cli._QuietTimeoutRequestHandler
+        assert captured["handler_class"] is cli._KeepAliveRequestHandler
         handler = captured["handler_class"]
+        assert issubclass(handler, cli._QuietTimeoutRequestHandler)
         assert handler.timeout == cli._CLIENT_SOCKET_TIMEOUT_SECONDS > 0
+
+    def test_served_over_http_1_1_so_the_browser_reuses_the_connection(self) -> None:
+        """The handler must speak HTTP/1.1.
+
+        wsgiref is HTTP/1.0 and answers one request per connection, so
+        loading the dashboard paid a TCP handshake for the shell, detail.js,
+        the targets list and the data payload.  Keep-alive only exists under
+        1.1, and the preamble comes from the ServerHandler subclass, not the
+        request handler, so both are pinned here.
+        """
+        import recoverage.cli as cli
+
+        assert cli._KeepAliveRequestHandler.protocol_version == "HTTP/1.1"
+        assert cli._KeepAliveServerHandler.http_version == "1.1"
+
+
+class TestResponseFraming:
+    """Which responses may leave the connection open after them.
+
+    A response with neither Content-Length nor Transfer-Encoding ends only
+    when the socket does.  Under HTTP/1.1 the client would read straight into
+    the next response, so the streamed /api/events has to close the
+    connection it finishes on.
+    """
+
+    @staticmethod
+    def _framed(headers: dict[str, str], status: str = "200 OK", method: str = "GET") -> bool:
+        from wsgiref.headers import Headers
+
+        import recoverage.cli as cli
+
+        handler = cli._KeepAliveServerHandler.__new__(cli._KeepAliveServerHandler)
+        handler.headers = Headers()
+        for name, value in headers.items():
+            handler.headers[name] = value
+        handler.status = status
+        handler.environ = {"REQUEST_METHOD": method}
+        return handler._response_is_framed()
+
+    def test_content_length_keeps_the_connection(self) -> None:
+        assert self._framed({"Content-Length": "12"})
+
+    def test_chunked_keeps_the_connection(self) -> None:
+        assert self._framed({"Transfer-Encoding": "chunked"})
+
+    def test_header_name_case_does_not_decide(self) -> None:
+        assert self._framed({"content-length": "12"})
+
+    def test_unframed_body_closes_the_connection(self) -> None:
+        assert not self._framed({"Content-Type": "text/event-stream"})
+
+    def test_bodyless_status_needs_no_length(self) -> None:
+        assert self._framed({}, status="304 Not Modified")
+        assert self._framed({}, status="204 No Content")
+
+    def test_head_response_needs_no_length(self) -> None:
+        assert self._framed({}, method="HEAD")
 
 
 class TestServeBindFailure:

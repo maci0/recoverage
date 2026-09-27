@@ -17,7 +17,7 @@ import webbrowser
 from pathlib import Path
 from socketserver import ThreadingMixIn
 from typing import Any, NamedTuple, NoReturn
-from wsgiref.simple_server import WSGIRequestHandler, WSGIServer
+from wsgiref.simple_server import ServerHandler, WSGIRequestHandler, WSGIServer
 
 import typer
 
@@ -94,6 +94,23 @@ class _ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
 # stalled peer can trip it — healthy streams write far more often.
 _CLIENT_SOCKET_TIMEOUT_SECONDS = 120
 
+#: How long an idle keep-alive connection waits for its next request before the
+#: handler thread gives up and the socket closes.  The per-connection deadline
+#: above covers a request in flight; a browser holding a connection open
+#: between loads must not pin a thread for that whole deadline, and
+#: ThreadingMixIn starts a thread per connection.  15 s is longer than any
+#: real page load's asset burst, so a connection survives a slow load and dies
+#: soon after the tab goes quiet.
+_KEEPALIVE_IDLE_SECONDS = 15
+
+#: Status codes whose response carries no body by definition (RFC 9110 15), so a
+#: missing Content-Length on one is correct and the connection stays usable.
+#: Strings, because the wire status line is the only place they are read.
+_BODYLESS_STATUS_CODES = frozenset(("204", "304"))
+
+#: Headers that frame a body without ending the connection (RFC 9112 6).
+_SELF_DELIMITING_HEADERS = frozenset(("content-length", "transfer-encoding"))
+
 
 class _QuietTimeoutRequestHandler(WSGIRequestHandler):
     """wsgiref request handler with the per-connection deadline above.
@@ -111,6 +128,91 @@ class _QuietTimeoutRequestHandler(WSGIRequestHandler):
 
     def log_request(self, code: int | str = "-", size: int | str = "-") -> None:
         pass
+
+
+class _KeepAliveRequestHandler(_QuietTimeoutRequestHandler):
+    """Handler that serves every request on a connection, not just the first.
+
+    wsgiref's stock handler is HTTP/1.0 and its ``handle`` reads one request
+    line and returns, so the connection closed after every response: loading
+    the dashboard opened a fresh TCP connection for the shell, ``detail.js``,
+    ``/api/targets`` and the data payload, and paid a handshake for each.  The
+    loop below is stock ``BaseHTTPRequestHandler.handle`` behaviour that
+    wsgiref narrowed to a single request; restoring it is what makes
+    ``protocol_version = "HTTP/1.1"`` mean anything.
+
+    Two framing rules keep HTTP/1.1 honest:
+
+    * A response that names no length and no transfer encoding (the streamed
+      ``/api/events``, whose body ends when the stream does) is sent with
+      ``Connection: close``.  Under HTTP/1.1 a client would otherwise read
+      until the connection dropped, and every response after it on that
+      socket would be misframed.
+    * A connection left idle between requests falls back to the short idle
+      deadline rather than the full per-request one, so an open browser tab
+      does not hold a handler thread for two minutes.
+    """
+
+    protocol_version = "HTTP/1.1"
+
+    def handle(self) -> None:
+        self.raw_requestline = self.rfile.readline(65537)
+        while self.raw_requestline:
+            if len(self.raw_requestline) > 65536:
+                self.requestline = ""
+                self.request_version = ""
+                self.command = ""
+                self.send_error(414)
+                return
+            if not self.parse_request():
+                return
+            # The request is in flight now, so the full per-connection
+            # deadline applies to its reads and writes again.
+            self.connection.settimeout(_CLIENT_SOCKET_TIMEOUT_SECONDS)
+            self._run_wsgi()
+            if self.close_connection:
+                return
+            self.connection.settimeout(_KEEPALIVE_IDLE_SECONDS)
+            self.raw_requestline = self.rfile.readline(65537)
+
+    def _run_wsgi(self) -> None:
+        handler = _KeepAliveServerHandler(
+            self.rfile, self.wfile, self.get_stderr(), self.get_environ(), multithread=True
+        )
+        handler.request_handler = self  # backpointer for logging
+        handler.run(self.server.get_app())
+
+
+class _KeepAliveServerHandler(ServerHandler):
+    """The HTTP/1.1 half of keep-alive: the status line and the framing rule.
+
+    wsgiref writes the preamble itself (``HTTP/`` + :attr:`http_version`), not
+    through the request handler, so announcing 1.1 belongs here.
+
+    A response that carries neither Content-Length nor Transfer-Encoding ends
+    only when the connection does (RFC 9112 6.3), which under HTTP/1.1 would
+    leave the client reading into whatever the next response put on the
+    socket.  The streamed ``/api/events`` is exactly that response, and
+    nothing else here is: bottle sets Content-Length for every body it
+    returns.  So an unframed response gets ``Connection: close``, which is
+    what a client has to do with it either way.
+    """
+
+    http_version = "1.1"
+
+    def send_headers(self) -> None:
+        if not self._response_is_framed():
+            self.request_handler.close_connection = True
+            self.headers["Connection"] = "close"
+        super().send_headers()
+
+    def _response_is_framed(self) -> bool:
+        # wsgiref's Headers.__contains__ is case-insensitive; iterating it is not.
+        if any(name in self.headers for name in _SELF_DELIMITING_HEADERS):
+            return True
+        if self.environ.get("REQUEST_METHOD") == "HEAD":
+            return True
+        return self.status[:3] in _BODYLESS_STATUS_CODES
 
 
 def _version_callback(value: bool) -> None:
@@ -772,7 +874,7 @@ def serve(
             quiet=True,
             server="wsgiref",
             server_class=_ThreadingWSGIServer,
-            handler_class=_QuietTimeoutRequestHandler,
+            handler_class=_KeepAliveRequestHandler,
         )
     except KeyboardInterrupt:
         # Ctrl+C is the documented way to stop the dashboard; wsgiref's
