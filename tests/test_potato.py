@@ -622,6 +622,68 @@ def test_function_list_view():
 
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+def test_function_list_no_match_says_what_to_do():
+    """An empty list must name the query that emptied it and offer a way out.
+
+    The grid view prints the active query and a clear link; the function list
+    used to print neither, so a user who searched from the grid and switched
+    views saw "No functions found." with no sign the search was the cause.
+    """
+    target = get_first_target()
+    html = render_potato_url(
+        f"/potato?target={target}&section=.text&view=functions&search=zzz_no_such_function"
+    )
+    assert "No functions match" in html
+    assert "zzz_no_such_function" in html
+    assert "[Clear search]" in html
+    # The clear link keeps the view and the status filter, and drops the query.
+    assert f'href="?target={quote(target)}&section=.text&view=functions"' in html
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+def test_function_list_no_match_status_filter_offers_a_way_back():
+    target = get_first_target()
+    html = render_potato_url(
+        f"/potato?target={target}&section=.text&view=functions&status=NO_SUCH_STATUS"
+    )
+    assert "No functions with status" in html
+    assert "[Clear filter]" in html
+
+
+def test_search_status_line_explains_an_empty_result():
+    """The SPA's search line spells out what to try; Potato's must match."""
+    from recoverage.potato import _PAGE_SRC
+
+    assert "no matches. Check the spelling, or search by VA." in _PAGE_SRC
+
+
+def test_parent_url_selects_the_parents_own_block():
+    """Parent navigates to the parent, not to a search for it.
+
+    A hand-written href put the raw function name into the query string, so a
+    mangled name carrying & or ? truncated or split the URL.
+    """
+    from recoverage.potato import _PANEL_SRC, _parent_url
+
+    cells = [
+        {"start": 0, "end": 16, "functions": ["_other"]},
+        {"start": 16, "end": 32, "functions": ["parent_fn"]},
+    ]
+    url = _parent_url("parent_fn", cells, "tgt", ".text", {"exact"}, "")
+    assert url == "?target=tgt&section=.text&filter=exact&idx=1#sel"
+
+    # A parent with no cell here still has to lead somewhere: search for it,
+    # quoted, so the URL survives a name with & in it.
+    fallback = _parent_url("a&b", cells, "tgt", ".data", None, "")
+    assert fallback == "?target=tgt&section=.data&search=a%26b"
+    assert _parent_url("", cells, "tgt", ".text", None, "") == ""
+
+    # The template renders the built URL; it does not hand-write one.
+    assert 'href="{{parent_url}}"' in _PANEL_SRC
+    assert "search={{parent_function}}" not in _PANEL_SRC
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
 def test_function_list_sort():
     target = get_first_target()
     html_name = render_potato_url(f"/potato?target={target}&section=.text&view=functions&sort=name")

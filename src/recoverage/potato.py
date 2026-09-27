@@ -798,7 +798,11 @@ _PAGE_SRC = r"""<!DOCTYPE html>
         </td>
         </tr>
         % if search_query:
-        <tr><td colspan="4" valign="middle" nowrap><font size="1" color="{{ACCENT_COLOR}}">Searching: &quot;{{search_query}}&quot; ({{search_match_count}} matches)</font> <a href="{{clear_search_url}}"><font size="1" color="{{MUTED_COLOR}}">[Clear search]</font></a></td></tr>
+        <tr><td colspan="4" valign="middle" nowrap><font size="1" color="{{ACCENT_COLOR}}">Searching: &quot;{{search_query}}&quot; ({{search_match_count}} matches)</font>
+        % if search_match_count == 0:
+        <font size="1" color="{{MUTED_COLOR}}"> - no matches. Check the spelling, or search by VA.</font>
+        % end
+        <a href="{{clear_search_url}}"><font size="1" color="{{MUTED_COLOR}}">[Clear search]</font></a></td></tr>
         % end
         </table>
     </td>
@@ -898,7 +902,7 @@ _PANEL_SRC = r"""
 <tr><td bgcolor="{{PANEL_COLOR}}"><font size="1" color="{{MUTED_COLOR}}"><b>Label:</b></font></td><td bgcolor="{{PANEL_COLOR}}"><font face="Courier New, monospace" size="1">{{cell_label}}</font></td></tr>
 % end
 % if parent_function:
-<tr><td bgcolor="{{PANEL_COLOR}}"><font size="1" color="{{MUTED_COLOR}}"><b>Parent:</b></font></td><td bgcolor="{{PANEL_COLOR}}"><font face="Courier New, monospace" size="1"><a href="?target={{target}}&section={{section}}&search={{parent_function}}"><font color="{{ACCENT_COLOR}}">{{parent_function}}</font></a></font></td></tr>
+<tr><td bgcolor="{{PANEL_COLOR}}"><font size="1" color="{{MUTED_COLOR}}"><b>Parent:</b></font></td><td bgcolor="{{PANEL_COLOR}}"><font face="Courier New, monospace" size="1"><a href="{{parent_url}}"><font color="{{ACCENT_COLOR}}">{{parent_function}}</font></a></font></td></tr>
 % end
 </table>
   % if not funcs:
@@ -1771,10 +1775,33 @@ def _render_function_list(
         ),
     ]
 
+    # The same view, minus whichever criterion emptied it.  A bare "No
+    # functions found." does not say the query caused it, and this list has no
+    # other sign of the active search: the user is left hunting the form at the
+    # top of the page for the box they just typed in.
+    without_search = f"?target={_url_quote(target)}&section={_url_quote(section)}&view=functions"
+    if status_filter:
+        without_search += f"&status={_url_quote(status_filter)}"
+
     if not rows:
-        parts.append(
-            f'<tr><td colspan="5"><font color="{MUTED_COLOR}">No functions found.</font></td></tr>'
-        )
+        if search_query:
+            parts.append(
+                f'<tr><td colspan="5"><font color="{MUTED_COLOR}">No functions match '
+                f"&quot;{_esc(search_query)}&quot;. "
+                f'<a href="{without_search}"><font color="{ACCENT_COLOR}">[Clear search]</font></a>'
+                "</font></td></tr>"
+            )
+        elif status_filter:
+            parts.append(
+                f'<tr><td colspan="5"><font color="{MUTED_COLOR}">No functions with status '
+                f"{_esc(status_filter)}. "
+                f'<a href="{without_search}"><font color="{ACCENT_COLOR}">[Clear filter]</font></a>'
+                "</font></td></tr>"
+            )
+        else:
+            parts.append(
+                f'<tr><td colspan="5"><font color="{MUTED_COLOR}">No functions found.</font></td></tr>'
+            )
     else:
         for name, va, _, size, status, module in rows:
             st = status or "none"
@@ -2040,6 +2067,7 @@ def _panel_base_ctx() -> dict[str, Any]:
         "gl_detail_rows": "",
         "cell_label": "",
         "parent_function": "",
+        "parent_url": "",
         "prev_url": "",
         "next_url": "",
         "target": "",
@@ -2260,6 +2288,30 @@ def _panel_function_detail(
     return True
 
 
+def _parent_url(
+    parent_function: str,
+    cells: list[dict[str, Any]],
+    target: str,
+    section: str,
+    active_filters: set[str] | None,
+    search_query: str,
+) -> str:
+    """Where the panel's Parent link goes: the parent's own block, selected.
+
+    The name goes through _build_url, so a C++-mangled name (&, ?, #, spaces)
+    cannot truncate the query string the way a hand-written href could.  A
+    parent with no cell in this section (it lives elsewhere, or the section
+    holds no cells) falls back to searching for it, which still gets the user
+    to the function.
+    """
+    if not parent_function:
+        return ""
+    for i, candidate in enumerate(cells):
+        if parent_function in (candidate.get("functions") or []):
+            return _build_url(target, section, active_filters, idx=i, search=search_query) + "#sel"
+    return _build_url(target, section, active_filters, search=parent_function)
+
+
 def _render_panel(
     c: sqlite3.Cursor,
     cells: list[dict[str, Any]],
@@ -2316,6 +2368,14 @@ def _render_panel(
             "funcs": funcs,
             "cell_label": cell.get("label", ""),
             "parent_function": cell.get("parent_function", ""),
+            "parent_url": _parent_url(
+                cell.get("parent_function", ""),
+                cells,
+                target,
+                section,
+                active_filters,
+                search_query,
+            ),
             "prev_url": prev_url,
             "next_url": next_url,
             "target": target,

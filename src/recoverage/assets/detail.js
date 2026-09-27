@@ -3,7 +3,7 @@
 // what this file needs on window.RC and reads the results back from it.
 (() => {
   const { MetaItem, MSG, hex } = window.RC;
-  const { canvas, div } = van.tags;
+  const { canvas, div, button, p } = van.tags;
 
   const formatBytes = (buf, baseOffset = 0) => {
     const bytes = new Uint8Array(buf);
@@ -314,7 +314,7 @@
   const mountGrid = ({
     container, data, isLoading, emptyState, activeSection, activeFilters,
     searchQuery, filteredFnNames, currentCellIndex, activeFnName, isLightMode,
-    selectChunk, packSection, gridId, setGridFocus,
+    selectChunk, packSection, gridId, cellLoadError, retrySectionCells, setGridFocus,
   }) => {
     const PALETTE_VARS = ["--none", "--exact-bg", "--reloc-bg", "--near-match-bg", "--stub-bg", "--padding-bg", "--proven-bg", "--other-bg"];
     const FILTER_KEY = ["", "exact", "reloc", "near_match", "stub", "padding", "", ""];
@@ -573,7 +573,22 @@
       const sec = data.val.sections[secName];
       const overlay = container.querySelector(".loading-overlay");
       if (overlay) overlay.remove();
-      if (!sec || sec.cells == null) return;
+      container.querySelector(".grid-error")?.remove();
+      if (!sec) return;
+      // Sibling tabs fetch their cells on switch, so a tab can be in flight or
+      // have failed.  Either way there is no lattice to draw: say which, rather
+      // than leaving an empty frame the user cannot act on.
+      if (sec.cells == null) {
+        const failed = cellLoadError.val?.section === secName ? cellLoadError.val : null;
+        if (failed) {
+          van.add(container, div({ class: "grid-error", role: "status" },
+            p(`Could not load the ${secName} map: ${failed.detail}`),
+            button({ class: "btn", onclick: () => retrySectionCells(secName) }, "Retry")));
+        } else {
+          van.add(container, div({ class: "loading-overlay", role: "status", "aria-live": "polite" }, `Loading ${secName}...`));
+        }
+        return;
+      }
       for (const [name, g] of Object.entries(grids)) {
         g.wrap.style.display = name === secName ? "block" : "none";
       }
@@ -598,7 +613,10 @@
           wrap.style.cursor = "pointer";
           const pack = packSection(sec);
           const secVa = sec.va || 0;
-          wrap.title = `${idx}  ${hex(secVa + pack.starts[idx], 8)}..${hex(secVa + pack.ends[idx], 8)}  ${pack.fns[idx] ? 1 : 0} fn`;
+          const label = window.RC.STATE_LABEL[pack.states[idx]];
+          wrap.title = [`Block ${idx}`,
+            `${hex(secVa + pack.starts[idx], 8)}..${hex(secVa + pack.ends[idx], 8)}`,
+            label, pack.fns[idx] || "no function"].filter(Boolean).join("  ");
         },
         onkeydown: (e) => {
           if (e.ctrlKey || e.metaKey || e.altKey) return;

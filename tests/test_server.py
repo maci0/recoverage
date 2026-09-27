@@ -1440,14 +1440,32 @@ class TestSpaStateVocabulary:
 
         A short array makes pal[st] undefined (silently --none) and
         FILTER_KEY[st] undefined (a filter mismatch on every such cell).
+        The tooltip's word list is a third such table: a short one shows
+        "undefined" in the hover title, which is worse than showing nothing.
         """
         import re
 
-        _, detail_js = self._assets()
+        app_js, detail_js = self._assets()
         palette = re.search(r"const PALETTE_VARS = \[(.*?)\];", detail_js).group(1)
         filters = re.search(r"const FILTER_KEY = \[(.*?)\];", detail_js).group(1)
         assert palette.count('"--') == 8
         assert len([v for v in filters.split(",") if v.strip()]) == 8
+        labels = re.search(r"const STATE_LABEL = \[(.*?)\];", app_js, re.DOTALL).group(1)
+        assert len([v for v in labels.split(",") if v.strip()]) == 8
+        assert "STATE_LABEL" in detail_js
+        assert "window.RC = { van, MetaItem, MSG, hex, STATE_LABEL" in app_js, (
+            "not published on window.RC, so the tooltip reads undefined"
+        )
+
+    def test_cell_tooltip_names_the_state_and_function(self) -> None:
+        """The hover title must say what the cell is, not print a 0/1 flag.
+
+        It used to end in `${fn ? 1 : 0} fn`, which told a user nothing about
+        the cell they were pointing at.
+        """
+        _, detail_js = self._assets()
+        assert "0} fn" not in detail_js
+        assert "wrap.title = [`Block ${idx}`" in detail_js
 
     def test_other_bg_token_is_defined(self) -> None:
         import importlib.resources
@@ -1551,3 +1569,51 @@ class TestSpaResourceTeardown:
         derive = after.split("van.derive(() => {", 1)[1].split("});", 1)[0]
         assert "connectEvents" in derive
         assert "!detailReady.val || closeEvents" in derive
+
+
+class TestSpaSectionCellsFeedback:
+    """A sibling tab fetches its cells on switch, so it can be slow or fail.
+
+    Without a frame of its own the map area went blank for the fetch and stayed
+    blank after a failure, with nothing to click and nothing said: the tab was
+    a dead end.  The grid renders a loading overlay while the cells are in
+    flight and a retryable notice when the fetch fails.
+    """
+
+    @staticmethod
+    def _assets() -> tuple[str, str]:
+        import importlib.resources
+
+        from recoverage import assets
+
+        base = importlib.resources.files(assets)
+        return (
+            base.joinpath("app.js").read_text(encoding="utf-8"),
+            base.joinpath("detail.js").read_text(encoding="utf-8"),
+        )
+
+    def test_grid_frames_a_section_whose_cells_have_not_arrived(self) -> None:
+        _, detail_js = self._assets()
+        branch = detail_js.split("if (sec.cells == null) {", 1)[1].split("return;", 1)[0]
+        assert "loading-overlay" in branch
+        assert "grid-error" in branch
+        assert "Retry" in branch
+        assert "retrySectionCells(secName)" in branch
+
+    def test_a_failed_cells_fetch_is_reported_and_retryable(self) -> None:
+        app_js, _ = self._assets()
+        fetch = app_js.split("const ensureSectionCells = async (name) => {", 1)[1]
+        catch = fetch.split("} catch (error)", 1)[1].split("} finally", 1)[0]
+        assert "cellLoadError.val = { section: name, detail: error.message }" in catch
+        # The grid reads the state, so it has to be handed to mountGrid.
+        mount = app_js.split("window.RC.mountGrid({", 1)[1].split("});", 1)[0]
+        assert "cellLoadError" in mount
+        assert "retrySectionCells" in mount
+
+    def test_error_frame_is_styled(self) -> None:
+        import importlib.resources
+
+        from recoverage import assets
+
+        css = importlib.resources.files(assets).joinpath("style.css").read_text(encoding="utf-8")
+        assert ".grid-error {" in css

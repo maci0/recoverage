@@ -264,6 +264,16 @@ body {
   user-select: none; animation: fadeInGrid 0.3s ease; position: relative; min-height: 120px; overflow: auto;
 }
 .grid-canvas { display: block; }
+/* Shown in place of the lattice when a lazily fetched section's cells failed.
+   Reads as the grid it replaces (dashed frame, same background) so the layout
+   does not jump when a retry brings the map back. */
+.grid-error {
+  display: grid; place-content: center; justify-items: center; gap: 12px;
+  min-height: 120px; padding: 24px; text-align: center;
+  border: 1px dashed var(--border); border-radius: 12px; background: var(--grid-bg);
+  color: var(--muted); font-size: 13px; line-height: 1.5;
+}
+.grid-error p { margin: 0; max-width: 48ch; }
 @keyframes fadeInGrid { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 
 .modal {

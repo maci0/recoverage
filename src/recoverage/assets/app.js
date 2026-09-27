@@ -63,7 +63,7 @@ const detailReady = van.state(false);
 const detailFailed = van.state(false);
 
 function loadDetail() {
-  window.RC = { van, MetaItem, MSG, hex, enc, encPath, onReady: () => { detailReady.val = true; } };
+  window.RC = { van, MetaItem, MSG, hex, enc, encPath, STATE_LABEL, onReady: () => { detailReady.val = true; } };
   const el = document.createElement("script");
   el.src = "/detail.js";
   // Without this the panes it owns would sit on "Loading…" forever.
@@ -119,6 +119,12 @@ const STATE_ID = {
   missing_file: 7, missing_size: 7, skip: 7, unknown: 7,
   drift: 7, unchecked: 7,
 };
+
+// The words for each packed state id, in the same slot order detail.js reads
+// its palette in.  The grid tooltip shows one, so hovering a cell says what
+// the cell is instead of a raw index.
+const STATE_LABEL = ["undocumented", "exact match", "reloc match", "near-match",
+  "stub", "padding", "proven", "problem"];
 
 function packSection(sec) {
   if (sec._pack) return sec._pack;
@@ -219,6 +225,12 @@ const App = () => {
   const emptyState = van.state(null); // {title, detail} | null
   const stopLoading = (state) => { emptyState.val = state; isLoading.val = false; };
 
+  // A section's cells arrive lazily (first paint fetches only the visible
+  // one), so switching to a sibling tab can fail on its own.  {section, detail}
+  // | null, read by the grid, which would otherwise sit on an empty frame with
+  // no way back: the tab is unusable and nothing says why.
+  const cellLoadError = van.state(null);
+
   const loadTargets = async () => {
     try {
       const res = await fetch("/api/targets");
@@ -295,6 +307,7 @@ const App = () => {
       const d = await res.json();
       if (superseded()) return;
       data.val = d;
+      cellLoadError.val = null;
 
       const secNames = sectionNames(d.sections || {});
       if (secNames.length === 0) {
@@ -933,7 +946,7 @@ const App = () => {
       window.RC.mountGrid({
         container, data, isLoading, emptyState, activeSection, activeFilters,
         searchQuery, filteredFnNames, currentCellIndex, activeFnName, isLightMode,
-        selectChunk, packSection, gridId,
+        selectChunk, packSection, gridId, cellLoadError, retrySectionCells,
         setGridFocus: (fn) => { gridFocus = fn; },
       });
     });
@@ -1129,11 +1142,19 @@ const App = () => {
     })();
     try {
       await sec._cellsInflight;
-    } catch (error) { // oxlint-disable-line @rikalabs/no-silent-catch-fallback -- next switch retries; log so a dead tab is diagnosable
+      if (cellLoadError.val?.section === name) cellLoadError.val = null;
+    } catch (error) { // oxlint-disable-line @rikalabs/no-silent-catch-fallback -- the failure is reported on the tab itself, with a retry, and logged so a dead tab is diagnosable
       // oxlint-disable-next-line eslint/no-console -- keep diagnostics in the browser console
       console.error("Failed to load section cells:", name, error);
+      if (data.val?.sections?.[name] === sec) {
+        cellLoadError.val = { section: name, detail: error.message };
+      }
     } finally { delete sec._cellsInflight; }
   };
+
+  // Retry from the grid's failure notice.  A settled failed fetch has already
+  // cleared its inflight slot, so this starts a fresh request.
+  const retrySectionCells = (name) => { void ensureSectionCells(name); };
 
   const switchTab = (name) => {
     activeSection.val = name;

@@ -135,6 +135,24 @@ module ships in the published package. See *Breaking*.
   stdout codec the write raised `UnicodeEncodeError` part-way through and
   left a truncated file behind the `> coverage.csv` redirect the help text
   documents.
+- **Switching to a section tab in the SPA says what is happening.** A sibling
+  tab fetches its own cells on the first visit, and until they land the map
+  area was an empty frame; a failed fetch left it empty for good, with nothing
+  to click and nothing said. The map now shows a loading line while the cells
+  are in flight and, when the fetch fails, what went wrong plus a Retry button.
+- **The SPA's cell hover title says what the cell is.** It ended in a `1 fn` /
+  `0 fn` flag that told the reader nothing; it now carries the state name and
+  the function, in the same wording as the legend and as Potato Mode's tooltip.
+- **Potato Mode's function list explains an empty result.** It printed "No
+  functions found." whatever emptied it, with no sign the active search or
+  status filter was the cause; it now names the query and links to the same
+  list without it. The grid's search line also gained the SPA's "no matches.
+  Check the spelling, or search by VA." guidance.
+- **Potato Mode's Parent link opens the parent's block.** It went to a search
+  for the parent instead, and the raw name went into the query string, so a
+  mangled name carrying `&` or `?` split the URL. It now selects the parent's
+  own block, URL-quoted, falling back to a search when the parent has no block
+  in that section.
 - **Functions with an unknown `markerType` are listed again.** The
   GLOBAL/DATA/VTABLE/STRING exclusion read `markerType NOT IN (...)`, and
   SQLite evaluates `NULL NOT IN (...)` to NULL, which `WHERE` rejects: on a
