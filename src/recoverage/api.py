@@ -1239,7 +1239,7 @@ def _batch_request_vas() -> tuple[list[int], Any | None]:
             413,
             {
                 "error": "Request body too large",
-                "detail": "expected a JSON body under 64 KiB",
+                "detail": f"expected a JSON body under {_MAX_BATCH_BODY_BYTES // 1024} KiB",
             },
         )
     try:
@@ -1732,7 +1732,7 @@ def handle_regen() -> bytes | Any:
             400,
             {
                 "error": "Bad request: malformed Idempotency-Key",
-                "detail": "expected 1-128 characters of [A-Za-z0-9._:-]",
+                "detail": f"expected 1-{_REGEN_KEY_MAX} characters of [A-Za-z0-9._:-]",
             },
         )
     if key and _regen_replayed(key):

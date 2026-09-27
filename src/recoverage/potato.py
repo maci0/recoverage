@@ -1652,6 +1652,8 @@ def _grid_page(
         except ValueError:
             return 1
     if idx_str:
+        # An unparseable idx has no block to pull into view, so it pages to 1
+        # like an unparseable page does.
         try:
             idx = int(idx_str)
         except ValueError:
@@ -1791,21 +1793,21 @@ def _build_grid_html(
         # links announced as "none" with no way to tell them apart (WCAG 2.4.4).
         escaped_title = _esc(title)
         w = cell_w * span
+        # One image for both cells: the selection is a 1px inset of the same
+        # link, and building the markup twice is how the alt text and the
+        # title drift apart between the two.
+        inset = 2 if selected else 0
         img = (
             f'<a href="{link}" title="{escaped_title}">'
-            f'<img src="{TRANSPARENT_GIF}" width="{w}" height="{cell_h}" border="0" alt="{escaped_title}"></a>'
+            f'<img src="{TRANSPARENT_GIF}" width="{w - inset}" height="{cell_h - inset}" '
+            f'border="0" alt="{escaped_title}"></a>'
         )
 
         if selected:
-            sel_img = (
-                f'<a href="{link}" title="{escaped_title}">'
-                f'<img src="{TRANSPARENT_GIF}" width="{w - 2}" height="{cell_h - 2}" border="0" alt="{escaped_title}">'
-                f"</a>"
-            )
             grid_html_parts.append(
                 f'<td id="sel" bgcolor="{BG_COLOR}" width="{w}" height="{cell_h}" colspan="{span}">'
                 f'<table border="1" cellpadding="0" cellspacing="0" bordercolor="{ACCENT_COLOR}" width="100%">'
-                f'<tr><td bgcolor="{bgcolor}">{sel_img}</td></tr></table></td>'
+                f'<tr><td bgcolor="{bgcolor}">{img}</td></tr></table></td>'
             )
         else:
             grid_html_parts.append(
@@ -2493,15 +2495,15 @@ def _render_panel(
     """
     ctx = _panel_base_ctx()
 
-    if not idx_str:
-        return _PANEL_TPL.render(**ctx)
-
+    # An absent, non-numeric or out-of-range idx all render the same empty
+    # panel, so they leave through one guard: int("") and the whitespace-only
+    # spellings raise, and a non-negative range is the only index that has a
+    # cell behind it.
     try:
         idx = int(idx_str)
     except ValueError:
-        return _PANEL_TPL.render(**ctx)
-
-    if idx < 0 or idx >= len(cells):
+        idx = -1
+    if not 0 <= idx < len(cells):
         return _PANEL_TPL.render(**ctx)
 
     cell = cells[idx]

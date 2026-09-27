@@ -638,9 +638,6 @@ def serve(
             "Add --cors-origin URL for each origin you want to allow.",
             fg=typer.colors.YELLOW,
         )
-    # IPv6 hosts need brackets in any URL spelling (::1 bare is parsed as
-    # host "" port ::8001).
-    display_host = f"[{bind}]" if ":" in bind else bind
     if cors_origin and not cors:
         # cors_origin alone has no effect (CORS processing stays off): a
         # user who passed it must not discover that from silent behavior.
@@ -648,7 +645,11 @@ def serve(
             "warning: --cors-origin has no effect without --cors — "
             "CORS processing is disabled. Pass --cors to enable it.",
             fg=typer.colors.YELLOW,
+            err=True,
         )
+    # IPv6 hosts need brackets in any URL spelling (::1 bare is parsed as
+    # host "" port ::8001).
+    display_host = f"[{bind}]" if ":" in bind else bind
 
     # Configure logging at the resolved level, so a service can turn the
     # per-request chatter down (WARNING) or the detail up (DEBUG) without a

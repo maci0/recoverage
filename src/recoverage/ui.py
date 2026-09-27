@@ -307,7 +307,9 @@ def serve_repo_file(filepath: str) -> Any:
 # package upgrade changes the bytes under the same name and a long-lived
 # freshness lifetime would pin the browser to old JS.  Revalidate cheaply
 # instead of guessing.
-#: ``(filename, accepted-encoding set)`` -> ``(etag, body, encoding)``.  The
+#: ``(filename, accepted-encoding key)`` -> ``(etag, body, encoding)``.  The
+#: key is the whole accepted set, not one token, so the map is bounded by
+#: (route-matched filename) x (server.static_variant_key spellings).  The
 #: encoding rides with the entry because the choice is made per accepted set,
 #: not once per file: it is what Content-Encoding must name, and the cache hit
 #: path needs it just as much as the build path.

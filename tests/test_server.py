@@ -1904,3 +1904,24 @@ class TestClockSeam:
         finally:
             frames.close()
         assert client not in api._SSE_CLIENTS
+
+    def test_request_duration_reads_the_patched_clock(self, monkeypatch: Any) -> None:
+        """The timing window is a clock read too, so a request is slow when
+        the CLOCK says so and not when it happened to take that long."""
+        from conftest import wsgi_request
+
+        import recoverage.metrics as metrics
+
+        reads = [0]
+
+        def fake() -> float:
+            # before_request opens the window; every later read is a second
+            # past SLOW_REQUEST_MS, so a real request body never waits.
+            reads[0] += 1
+            return 0.0 if reads[0] == 1 else metrics.SLOW_REQUEST_MS / 1000.0 + 1.0
+
+        monkeypatch.setattr(clock, "monotonic", fake)
+        before = metrics.REQUESTS.snapshot()
+        status, _, _ = wsgi_request("GET", "/api/health")
+        assert status.startswith("200"), status
+        assert metrics.REQUESTS.snapshot()["slow"] == before["slow"] + 1
