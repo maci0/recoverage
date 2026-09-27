@@ -28,9 +28,9 @@ closely your C code matches the original compiled output.
 
 ### Features
 
-- **Byte-Perfect Confidence**: Stop guessing if your C code produced the correct assembly. See exact byte comparisons visually.
-- **Fast Iteration**: Quickly identify which parts of a function are matching and which parts have diverged (e.g. register allocation differences, instruction reordering).
-- **Interactive Triage**: Click any block in the grid to view the corresponding C source and hex diff, plus the disassembled binary once you install the `capstone` extra.
+- **Byte comparison**: See where your C matches the original compiled output, byte for byte, and where it drifts.
+- **Divergence triage**: Find the part of a function that stopped matching, whether that is register allocation, instruction reordering, or padding.
+- **Source next to output**: Click any block to read its C, its disassembly, and the raw bytes side by side.
 
 ### Details
 

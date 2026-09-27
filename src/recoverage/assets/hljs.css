@@ -18,16 +18,19 @@
   --hljs-deletion-color: #fecaca;
   --hljs-deletion-bg: #45161a;
 }
+/* The light block tracks style.css's light theme, so the code pane sits on
+ * the same neutral family as the frame around it rather than on a stock
+ * blue-gray.  Each value clears 4.5:1 on the light --code-bg. */
 .light-mode {
-  --hljs-color: #0f172a;
+  --hljs-color: #0c1417;
   --hljs-keyword: #991b1b;
   --hljs-title: #6d28d9;
   --hljs-attr: #075985;
   --hljs-string: #854d0e;
   --hljs-symbol: #0f766e;
-  --hljs-comment: #475569;
+  --hljs-comment: #3c4f57;
   --hljs-name: #14532d;
-  --hljs-section: #155e75;
+  --hljs-section: #12566c;
   --hljs-bullet: #854d0e;
   --hljs-addition-color: #14532d;
   --hljs-addition-bg: #e8f8ef;

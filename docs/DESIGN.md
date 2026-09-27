@@ -123,8 +123,8 @@ mounted by the shell once it has loaded, as each section below marks.
 ## Styling & Theming
 * **CSS Variables**: Core colors are defined in `:root` (e.g., `--bg`, `--panel`, `--text`, `--border`).
 * **Dark Mode (Default)**: Cool slate/cyan/blue hacker aesthetic (`#0f1216` background) with subtle CRT glow effects (text-shadows and box-shadows using cyan `rgba(6, 182, 212, 0.3)`).
-* **Light Mode**: Triggered by the `.light-mode` class on the `body`. Overrides CSS variables to softer grays (`#cbd5e1` background, `#e2e8f0` panels) to reduce eye strain while maintaining contrast.
-* **CRT Scanlines**: A global scanline overlay (`body::after`) using a repeating linear gradient. It is kept very faint (`0.05` opacity in dark mode, `0.02` in light mode via `body.light-mode::after`) to add texture without overpowering the UI.
+* **Light Mode**: Triggered by the `.light-mode` class on the `body`. It re-grounds the same neutral family a shade short of the accent (`#c3ccd0` background, `#dbe3e5` panels) rather than inverting the dark theme: a stock blue-gray ground put a second hue between the surface and a cyan accent, and the two renderers disagreed about what color a border is. Light mode also drops the two phosphor effects rather than fading them, a cyan text bloom behind every glyph and a diffuse box-shadow halo, and replaces the latter with a tight tinted ring: a hover mark wants an edge, and bloom on a light ground reads as blur.
+* **CRT Scanlines**: A global scanline overlay (`body::after`) using a repeating linear gradient. It is dark-mode only, at `0.05` opacity: the line is the dark ground's texture, and over a light one it reads as dirt on the screen. `body.light-mode::after` removes it.
 * **Match Status Colors**:
   * **Exact**: Green (`rgba(16, 185, 129, 0.75)`)
   * **Reloc**: Blue/Teal (`rgba(2, 132, 199, 0.65)`)
