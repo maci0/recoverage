@@ -47,7 +47,7 @@ from conftest import HAS_DB, decode_body, get_first_target, wsgi_request
 
 from recoverage import config
 from recoverage import server as srv
-from recoverage.api import _REGEN_KEY_MAX, _REGEN_KEY_RE
+from recoverage.api import _REGEN_KEY_MAX_CHARS, _REGEN_KEY_RE
 from recoverage.server import _best_encoding, _hostname_of, _normalize_origin, _peer_is_loopback
 
 # The three codecs the server can actually produce, in preference order.  A
@@ -1072,7 +1072,9 @@ class TestRequestIdAndIdempotencyKey:
             matched = _REGEN_KEY_RE.fullmatch(key) is not None
             if not matched:
                 return
-            assert 1 <= len(key) <= _REGEN_KEY_MAX, f"{data!r}: accepted a {len(key)}-character key"
+            assert 1 <= len(key) <= _REGEN_KEY_MAX_CHARS, (
+                f"{data!r}: accepted a {len(key)}-character key"
+            )
             for ch in key:
                 assert ch in _KEY_ALPHABET, f"{data!r}: accepted {ch!r}"
                 assert not _has_control(ch), f"{data!r}: accepted a control byte"
@@ -1087,7 +1089,7 @@ class TestRequestIdAndIdempotencyKey:
 
     def test_ledger_never_exceeds_its_cap(self) -> None:
         """Pair assertion across the ledger's memory boundary: however many
-        distinct keys a client records, the dict holds at most _REGEN_KEY_MAX
+        distinct keys a client records, the dict holds at most _REGEN_LEDGER_MAX_ENTRIES
         of them, and the most recent ones are the survivors."""
         from recoverage import api
 
@@ -1095,15 +1097,15 @@ class TestRequestIdAndIdempotencyKey:
         original = api._REGEN_COMPLETED_KEYS
         api._REGEN_COMPLETED_KEYS = {}
         try:
-            for i in range(api._REGEN_KEY_MAX * 3):
+            for i in range(api._REGEN_LEDGER_MAX_ENTRIES * 3):
                 key = f"key-{i}"
                 api._record_completed_key(key)
                 recorded.append(key)
-                assert len(api._REGEN_COMPLETED_KEYS) <= api._REGEN_KEY_MAX, (
+                assert len(api._REGEN_COMPLETED_KEYS) <= api._REGEN_LEDGER_MAX_ENTRIES, (
                     f"ledger holds {len(api._REGEN_COMPLETED_KEYS)} keys after {i + 1}"
                 )
                 assert api._regen_replayed(key), f"{key!r} was not replayable right after recording"
-            for key in recorded[-api._REGEN_KEY_MAX :]:
+            for key in recorded[-api._REGEN_LEDGER_MAX_ENTRIES :]:
                 assert api._regen_replayed(key), f"{key!r} was evicted inside the retention window"
         finally:
             api._REGEN_COMPLETED_KEYS = original

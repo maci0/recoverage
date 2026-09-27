@@ -561,11 +561,12 @@ def _highlight_asm(text: str, target: str) -> str:
     def _plain_line(line: str) -> str:
         return _link_hex_refs(_html_escape(line))
 
+    _render_code: Callable[[str], str]
     pg = _pygments()
     if pg is None:
-        # Same body as _plain_line, bound late so the else branch can rebind it.
-        def _render_code(code: str) -> str:
-            return _link_hex_refs(_html_escape(code))
+        # Without pygments the code half renders exactly like an address-only
+        # line, so it is the same function rather than a copy of its body.
+        _render_code = _plain_line
     else:
         _, _, lexer, colors = pg
 
@@ -593,24 +594,24 @@ def _highlight_hex(text: str) -> str:
             offset = line[:8]
             rest = line[8:]
             pipe_start = rest.rfind("  |")
-            if pipe_start >= 0:
-                hex_part = rest[: pipe_start + 2]
-                ascii_part = rest[pipe_start + 2 :]
-                out = f'<font color="#858585">{_html_escape(offset)}</font>'
-                out += f'<font color="#4ec9b0">{_html_escape(hex_part)}</font>'
-                out += '<font color="#858585">|</font>'
-                inner = ascii_part[1:-1] if len(ascii_part) >= 2 else ascii_part
-                ascii_pieces: list[str] = []
-                for ch in inner:
-                    if ch == ".":
-                        ascii_pieces.append('<font color="#858585">.</font>')
-                    else:
-                        ascii_pieces.append(f'<font color="#6a9955">{_html_escape(ch)}</font>')
-                out += "".join(ascii_pieces)
-                out += '<font color="#858585">|</font>'
-                result_lines.append(out)
-            else:
+            if pipe_start < 0:
                 result_lines.append(_html_escape(line))
+                continue
+            hex_part = rest[: pipe_start + 2]
+            ascii_part = rest[pipe_start + 2 :]
+            out = f'<font color="#858585">{_html_escape(offset)}</font>'
+            out += f'<font color="#4ec9b0">{_html_escape(hex_part)}</font>'
+            out += '<font color="#858585">|</font>'
+            inner = ascii_part[1:-1] if len(ascii_part) >= 2 else ascii_part
+            ascii_pieces: list[str] = []
+            for ch in inner:
+                if ch == ".":
+                    ascii_pieces.append('<font color="#858585">.</font>')
+                else:
+                    ascii_pieces.append(f'<font color="#6a9955">{_html_escape(ch)}</font>')
+            out += "".join(ascii_pieces)
+            out += '<font color="#858585">|</font>'
+            result_lines.append(out)
         elif line.startswith("... ("):
             result_lines.append(f'<font color="#858585">{_html_escape(line)}</font>')
         else:
@@ -1847,6 +1848,9 @@ def _pager_html(
 #: column, so the cap is a response-size bound, applied wherever the count is
 #: resolved.
 _MAX_GRID_COLUMNS = 256
+#: Column count used when a sections row declares none (NULL or not a positive
+#: int), which is schema-legal the way a NULL va in a .bss cell is.
+_DEFAULT_GRID_COLUMNS = 64
 
 
 def _build_grid_html(
@@ -2090,7 +2094,7 @@ def _render_function_list(
                 "<tr>"
                 f'<td><a href="{name_link}"><font color="{ACCENT_COLOR}">{_esc(name)}</font></a></td>'
                 f'<td><font face="Courier New, monospace" size="2">{_esc(_format_va(va))}</font></td>'
-                f'<td><font face="Courier New, monospace" size="2">{_esc(size)}</font></td>'
+                f'<td><font face="Courier New, monospace" size="2">{_esc(size or "")}</font></td>'
                 f'<td><font color="{color}" face="Courier New, monospace" size="2"><b>{_esc(st.upper())}</b></font></td>'
                 f'<td><font face="Courier New, monospace" size="2">{_esc(module or "")}</font></td>'
                 "</tr>"
@@ -2146,11 +2150,11 @@ def _render_grid_view(
     render's DB change token, carried straight into the two memos below.
     """
     # A NULL columns value (schema-legal, like the NULL va/fileOffset a .bss
-    # section carries) must fall back to 64, not TypeError on None <= 0 —
-    # which escapes handle_potato's except tuple as a raw HTML 500.
-    grid_columns = sec_data.get("columns") or 64
+    # section carries) must fall back to the default, not TypeError on
+    # None <= 0 — which escapes handle_potato's except tuple as a raw HTML 500.
+    grid_columns = sec_data.get("columns") or _DEFAULT_GRID_COLUMNS
     if grid_columns <= 0:
-        grid_columns = 64
+        grid_columns = _DEFAULT_GRID_COLUMNS
     grid_columns = min(grid_columns, _MAX_GRID_COLUMNS)
     cells, merged_cells, grid_key = _load_grid_cells(c, target, section, grid_columns, snap=snap)
     per_section_stats = _section_stats_cached(c, target, sections, data, snap=snap)

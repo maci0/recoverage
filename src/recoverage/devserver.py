@@ -18,6 +18,7 @@ from http.client import HTTPMessage
 from socketserver import ThreadingMixIn
 from typing import IO, Any, cast
 from wsgiref.simple_server import ServerHandler, WSGIRequestHandler, WSGIServer
+from wsgiref.types import InputStream
 
 
 class _ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
@@ -103,6 +104,11 @@ class _KeepAliveRequestHandler(_QuietTimeoutRequestHandler):
 
     protocol_version = "HTTP/1.1"
 
+    #: ``cli.serve`` always builds the listener through
+    #: ``server_class=_server_class_for(bind)``, which returns a subclass of
+    #: this one, so the WSGI app is reachable without narrowing.
+    server: _ThreadingWSGIServer
+
     def handle(self) -> None:
         self.raw_requestline = self.rfile.readline(65537)
         while self.raw_requestline:
@@ -124,16 +130,21 @@ class _KeepAliveRequestHandler(_QuietTimeoutRequestHandler):
             self.raw_requestline = self.rfile.readline(65537)
 
     def _run_wsgi(self) -> None:
+        # The two casts are typeshed gaps, not laundered evidence:
+        # http.server types ``rfile``/``wfile`` as the raw buffered socket
+        # objects, while wsgiref's constructor takes the PEP 3333 InputStream
+        # and IO[bytes] protocols.  Both objects satisfy them at runtime
+        # (wsgiref's own WSGIRequestHandler.handle passes the same two).
         handler = _KeepAliveServerHandler(
-            self.rfile,
-            cast("IO[bytes]", self.wfile),
+            cast(InputStream, self.rfile),
+            cast(IO[bytes], self.wfile),
             self.get_stderr(),
             self.get_environ(),
             multithread=True,
         )
         handler.request_handler = self  # backpointer for logging
         app = cast(WSGIServer, self.server).get_app()
-        assert app is not None  # WSGIServer.set_app ran before serve_forever
+        assert app is not None, "cli.serve builds the server with the bottle app"
         handler.run(app)
 
 
@@ -156,7 +167,9 @@ class _KeepAliveServerHandler(ServerHandler):
 
     # wsgiref assigns the first three in BaseHandler.__init__/start_response
     # and the last one is the backpointer _run_wsgi sets before run(); the
-    # stubs describe none of them, so they are declared here.
+    # stubs describe none of them, so they are declared here.  By send_headers
+    # the first three are all set, which is the only point this class reads
+    # them at.
     environ: dict[str, Any]
     headers: HTTPMessage
     status: str

@@ -64,7 +64,7 @@ from recoverage._paths import _db_path
 _ZSTD_COMPRESSOR_TLS = threading.local()
 
 
-def _get_zstd_compressor() -> Any:
+def _get_zstd_compressor() -> zstd.ZstdCompressor:
     compressor = getattr(_ZSTD_COMPRESSOR_TLS, "compressor", None)
     if compressor is None:
         compressor = _ZSTD_COMPRESSOR_TLS.compressor = zstd.ZstdCompressor(level=3)
@@ -1900,7 +1900,7 @@ class _LockedReadConnection(sqlite3.Connection):
     on the lock before unlinking the file.
     """
 
-    _coverage_lock: Any = None
+    _coverage_lock: contextlib.AbstractContextManager[None] | None = None
 
     def close(self) -> None:
         lock = getattr(self, "_coverage_lock", None)
@@ -2052,7 +2052,7 @@ _STATUS_ERROR_CODES: dict[int, str] = {
 }
 
 
-def _json_err(status: int, data: dict[str, Any], **headers: str) -> Any:
+def _json_err(status: int, data: dict[str, Any], **headers: str) -> HTTPResponse:
     """Return a JSON error response.
 
     Body is always ``{"error": <human message>, "code": <machine code>,
@@ -2384,7 +2384,7 @@ def _require_auth() -> None:
 app.add_hook("before_request", _require_auth)
 
 
-def _db_unavailable_err(exc: sqlite3.Error) -> Any:
+def _db_unavailable_err(exc: sqlite3.Error) -> HTTPResponse:
     """JSON 503 for an unreadable coverage.db, logged so the failure is visible.
 
     ONE tail for every DB-open failure path (the shared target cursor and the
@@ -2416,7 +2416,7 @@ def _db_unavailable_err(exc: sqlite3.Error) -> Any:
 
 
 @app.error(500)
-def _handle_unexpected_error(error: Any) -> Any:
+def _handle_unexpected_error(error: Any) -> HTTPResponse:
     """Keep every surface's error contract when a handler raises unexpectedly.
 
     ``_db()`` open failures already return 503 JSON, but every query after

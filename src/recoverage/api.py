@@ -36,6 +36,7 @@ from recoverage.server import (
     DLL_LOCK,
     HAS_PYGMENTS,
     NOT_DATA_MARKER_SQL,
+    HTTPResponse,
     _best_encoding,
     _cell_bucket_row,
     _cells_json_rows,
@@ -152,17 +153,21 @@ _REGEN_LOCK = threading.Lock()  # serializes regen (check + run, TOCTOU)
 # to outlive the client's retry horizon, and the count cap keeps a client
 # that mints a fresh key per attempt from pinning memory.
 _REGEN_KEY_TTL_SECONDS = 600.0
-# The count cap is a memory backstop, never the binding retention rule: the
-# cooldown admits at most _REGEN_KEY_TTL_SECONDS / _REGEN_COOLDOWN_SECONDS + 1
-# = 121 completions inside any single retention window, so 128 slots always fit
-# them all.  A tighter cap silently shortened the documented window below: a
-# client regenerating more often than the cap held slots lost an unexpired key
-# and paid a second pipeline run for a retry the ledger was meant to absorb.
-_REGEN_KEY_MAX = 128
+#: The entry cap is a memory backstop, never the binding retention rule: the
+#: cooldown admits at most _REGEN_KEY_TTL_SECONDS / _REGEN_COOLDOWN_SECONDS + 1
+#: = 121 completions inside any single retention window, so 128 slots always fit
+#: them all.  A tighter cap silently shortened the documented window below: a
+#: client regenerating more often than the cap held slots lost an unexpired key
+#: and paid a second pipeline run for a retry the ledger was meant to absorb.
+_REGEN_LEDGER_MAX_ENTRIES = 128
+#: Longest Idempotency-Key this server accepts, in characters.  Separate from
+#: the entry cap above: both happen to be 128, and one name for both had the
+#: count cap quoted in the client's "expected 1-128 characters" error.
+_REGEN_KEY_MAX_CHARS = 128
 # A key is an opaque client nonce; anything outside this set is a client bug
 # or an attempt to fill the ledger with junk, and is rejected rather than
 # stored.
-_REGEN_KEY_RE = re.compile(rf"[A-Za-z0-9._:-]{{1,{_REGEN_KEY_MAX}}}")
+_REGEN_KEY_RE = re.compile(rf"[A-Za-z0-9._:-]{{1,{_REGEN_KEY_MAX_CHARS}}}")
 _REGEN_COMPLETED_KEYS: dict[str, float] = {}
 _REGEN_COMPLETED_KEYS_LOCK = threading.Lock()
 
@@ -190,7 +195,7 @@ def _record_completed_key(key: str) -> None:
         # Re-insert (rather than refresh in place) so the eviction order stays
         # completion order.
         _REGEN_COMPLETED_KEYS.pop(key, None)
-        _server._evict_oldest(_REGEN_COMPLETED_KEYS, _REGEN_KEY_MAX)
+        _server._evict_oldest(_REGEN_COMPLETED_KEYS, _REGEN_LEDGER_MAX_ENTRIES)
         _REGEN_COMPLETED_KEYS[key] = now
 
 
@@ -359,7 +364,7 @@ def _function_total(
     return total
 
 
-def _target_not_found(target: str) -> Any:
+def _target_not_found(target: str) -> HTTPResponse:
     """JSON 404 for a target-scoped endpoint referencing an unknown target."""
     return _json_err(
         404,
@@ -370,7 +375,7 @@ def _target_not_found(target: str) -> Any:
     )
 
 
-def _dll_not_found(target: str) -> Any:
+def _dll_not_found(target: str) -> HTTPResponse:
     """JSON 404 for a target whose original binary is missing or unconfigured."""
     hint = (
         f" add [targets.{target}].binary to rebrew-project.toml"
@@ -386,7 +391,7 @@ def _dll_not_found(target: str) -> Any:
     )
 
 
-def _section_not_found(target: str, section: str) -> Any:
+def _section_not_found(target: str, section: str) -> HTTPResponse:
     """JSON 404 for a target-scoped endpoint referencing an unknown section."""
     return _json_err(
         404,
@@ -397,7 +402,7 @@ def _section_not_found(target: str, section: str) -> Any:
     )
 
 
-def _require_target(c: sqlite3.Cursor, target: str) -> Any | None:
+def _require_target(c: sqlite3.Cursor, target: str) -> HTTPResponse | None:
     """Return a 404 response if *target* is unknown, else None.
 
     *target* is valid when it has DB rows or is declared in the project
@@ -909,7 +914,7 @@ def handle_api_targets() -> bytes:
 
 
 @app.get("/api/targets/<target>/stats")
-def handle_api_stats(target: str) -> bytes | Any:
+def handle_api_stats(target: str) -> bytes | HTTPResponse:
     target = path_param(target)
     snap = _snapshot_db_mtime()
     # Same validator contract as /data, /asm and /bytes: the payload is a pure
@@ -1084,7 +1089,7 @@ def _dumps_with_cells(data: dict[str, Any], cells_json: dict[str, str | None]) -
 
 
 @app.get("/api/targets/<target>/data")
-def handle_api_data(target: str) -> bytes | Any:
+def handle_api_data(target: str) -> bytes | HTTPResponse:
     target = path_param(target)
     section_filter = query_param("section").strip() or None
 
@@ -1099,9 +1104,7 @@ def handle_api_data(target: str) -> bytes | Any:
     snap = _snapshot_db_mtime()
     fingerprint: tuple[tuple[int, int] | None, str, str | None] = (snap, target, section_filter)
     etag = _etag_or_304(snap, target, section_filter)
-    headers: dict[str, str] = {"Cache_Control": CACHE_REVALIDATE}
-    if etag:
-        headers["ETag"] = etag
+    headers = _revalidate_headers(etag)
 
     # Serve a memoized payload for an unchanged DB instead of re-running the
     # full-table queries, re-serialization, and recompression on every
@@ -1209,7 +1212,7 @@ def _page_int(raw: str) -> int:
     return _server.parse_ascii_int(raw.strip(), 10)
 
 
-def _slice_size(raw_size: str, parse_error: str) -> tuple[int, Any | None]:
+def _slice_size(raw_size: str, parse_error: str) -> tuple[int, HTTPResponse | None]:
     """Clamp a binary-slice ``?size=`` to 1.._MAX_SLICE_SIZE.
 
     ONE parse for /asm and /bytes, so the same query string cannot mean two
@@ -1257,7 +1260,7 @@ def _revalidate_headers(etag: str | None) -> dict[str, str]:
 
 
 @app.get("/api/targets/<target>/functions")
-def handle_api_functions_list(target: str) -> bytes | Any:
+def handle_api_functions_list(target: str) -> bytes | HTTPResponse:
     """Paginated function listing with optional filters."""
     target = path_param(target)
     status_filter = query_param("status").strip() or None
@@ -1400,7 +1403,7 @@ def _last_verify_payload(vr: sqlite3.Row) -> dict[str, Any]:
     }
 
 
-def _batch_request_vas() -> tuple[list[int], Any | None]:
+def _batch_request_vas() -> tuple[list[int], HTTPResponse | None]:
     """Read + validate the POST /functions body into deduped VA ints.
 
     Returns ``(unique_vas, None)`` on success, ``([], error_response)`` when
@@ -1490,7 +1493,7 @@ def _batch_request_vas() -> tuple[list[int], Any | None]:
             },
         )
 
-    def invalid_va(entry: Any, detail: str) -> Any:
+    def invalid_va(entry: Any, detail: str) -> HTTPResponse:
         return _json_err(400, {"error": f"invalid VA: {entry!r}", "detail": detail})
 
     va_ints: list[int] = []
@@ -1530,7 +1533,7 @@ def _batch_request_vas() -> tuple[list[int], Any | None]:
 
 
 @app.post("/api/targets/<target>/functions")
-def handle_api_functions_batch(target: str) -> bytes | Any:
+def handle_api_functions_batch(target: str) -> bytes | HTTPResponse:
     """Batch function/global lookup by VA list.
 
     Body: ``{"vas": ["0x10001000", ...]}`` (hex strings or integers).  Returns
@@ -1600,7 +1603,7 @@ def handle_api_functions_batch(target: str) -> bytes | Any:
 
 
 @app.get("/api/targets/<target>/functions/<va>")
-def handle_api_function(target: str, va: str) -> bytes | Any:
+def handle_api_function(target: str, va: str) -> bytes | HTTPResponse:
     target = path_param(target)
     va = path_param(va)
     with _target_cursor(target) as c:
@@ -1652,7 +1655,7 @@ def handle_api_function(target: str, va: str) -> bytes | Any:
 
 
 @app.get("/api/targets/<target>/asm")
-def handle_api_asm(target: str) -> bytes | Any:
+def handle_api_asm(target: str) -> bytes | HTTPResponse:
     target = path_param(target)
     reason = capstone_unavailable_reason()
     if reason is not None:
@@ -1821,7 +1824,7 @@ def handle_api_asm(target: str) -> bytes | Any:
 
 
 @app.get("/api/targets/<target>/sections/<section>/bytes")
-def handle_api_bytes(target: str, section: str) -> bytes | Any:
+def handle_api_bytes(target: str, section: str) -> bytes | HTTPResponse:
     """Return raw bytes from the original binary for a given section range."""
     target = path_param(target)
     section = path_param(section)
@@ -1833,7 +1836,7 @@ def handle_api_bytes(target: str, section: str) -> bytes | Any:
                 400,
                 {"error": "invalid offset", "detail": f"offset {raw_offset!r} is negative"},
             )
-    except (ValueError, TypeError):
+    except ValueError:
         return _json_err(
             400,
             {
@@ -1904,15 +1907,15 @@ def handle_api_bytes(target: str, section: str) -> bytes | Any:
 
 
 @app.post("/api/regen")
-def handle_regen() -> bytes | Any:
+def handle_regen() -> bytes | HTTPResponse:
     """Re-run rebrew catalog + build-db for the project workspace.
 
     Duplicate execution: a rebuild is convergent, so a second run ends in the
     same state as the first, but it is minutes of work and a second write of
     coverage.db.  Send an ``Idempotency-Key`` header to make a retry cheap:
     the key is remembered once the run completes (see ``_REGEN_KEY_TTL_SECONDS``
-    for the retention window and ``_REGEN_KEY_MAX`` for the ledger's cap) and a
-    later request
+    for the retention window and ``_REGEN_LEDGER_MAX_ENTRIES`` for the ledger's
+    cap) and a later request
     carrying it is answered from the ledger with ``Idempotent-Replay: true``
     instead of re-running.  A run that failed is not recorded, so retrying a
     failure retries for real.  Without the header, every POST re-runs.
@@ -1968,13 +1971,13 @@ def handle_regen() -> bytes | Any:
     # from the ledger here, BEFORE the cooldown below, because the retry lands
     # seconds after the first run — inside the cooldown window, where the
     # throttle would 429 the very request it is meant to dedup.
-    key = request.headers.get("Idempotency-Key", "").strip()
+    key = _header("Idempotency-Key", "").strip()
     if key and not _REGEN_KEY_RE.fullmatch(key):
         return _json_err(
             400,
             {
                 "error": "Bad request: malformed Idempotency-Key",
-                "detail": f"expected 1-{_REGEN_KEY_MAX} characters of [A-Za-z0-9._:-]",
+                "detail": f"expected 1-{_REGEN_KEY_MAX_CHARS} characters of [A-Za-z0-9._:-]",
             },
         )
     if key and _regen_replayed(key):
@@ -2027,7 +2030,7 @@ def handle_regen() -> bytes | Any:
         _REGEN_LOCK.release()
 
 
-def _do_regen(remote: str) -> bytes | Any:
+def _do_regen(remote: str) -> bytes | HTTPResponse:
     """Run catalog + build-db in-process. Caller holds _REGEN_LOCK."""
     # Clear derived caches before AND after: the pre-run clears matter while
     # the regen runs; the resolved-target / index caches get repopulated from

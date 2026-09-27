@@ -52,7 +52,7 @@ def is_excluded(rel: str) -> bool:
 
 
 class Manifest(TypedDict):
-    """The shape of anti-slop.manifest.json."""
+    """The shape of anti-slop.manifest.json, and of :func:`build_manifest`."""
 
     upstream: str
     license: str

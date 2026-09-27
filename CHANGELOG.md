@@ -316,6 +316,19 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   later request looked for the new ones. The grid then showed pre-rebuild
   coverage with no rebuild left to invalidate it. The render now takes its
   token before the connection opens, as the API surfaces already did.
+- **`POST /api/regen` no longer 500s on a non-UTF-8 `Idempotency-Key`.** Every
+  other request header goes through the guarded reader, which answers absent
+  for a value the WSGI layer cannot decode; this one read the environ entry
+  directly, so a client sending a latin-1 byte in the header got a traceback in
+  the log and an HTML 500 instead of the documented 400.
+- **Potato Mode's function list renders an empty Size cell for a row with no
+  size** instead of the literal text `None`; the Module column beside it
+  already did.
+- **The type gate is green.** `make type-check` failed on the tree it was
+  introduced with: the serving stack's handler and server classes read four
+  attributes wsgiref assigns without declaring them, and the vendored-plugin
+  manifest tool read a count out of a `dict[str, object]`. Both now name what
+  they rely on.
 - **A Potato Mode filter pill reported the wrong state.** Each pill's row
   identity was its accesskey letter rather than the filter key, so the
   "every filter key has a pill" and "a pill toggles only its own filter"

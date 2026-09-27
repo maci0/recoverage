@@ -7,7 +7,7 @@ import hashlib
 import logging
 import threading
 from pathlib import PurePosixPath
-from typing import Any
+from typing import NamedTuple
 
 import brotli  # type: ignore[import-untyped]
 import rcssmin  # type: ignore[import-untyped]
@@ -38,14 +38,27 @@ from recoverage.server import (
 
 # ── Index caching ──────────────────────────────────────────────────
 
+
+class _Variant(NamedTuple):
+    """One compressed representation and the headers that name it.
+
+    Both response caches in this module store this, and both are unpacked
+    positionally, so the field order is a contract: a bytes and two str slots
+    in a bare tuple let a swap compile and serve a body under another
+    representation's ETag.
+    """
+
+    body: bytes
+    encoding: str
+    etag: str
+
+
 #: Keyed by :func:`static_variant_key` (the set of encodings the client
 #: accepts), NOT by a single chosen encoding: the shell is served as the
 #: smallest body the client can decode, so the accepted set is what determines
-#: the response.  Values are ``(body, encoding, etag)`` — the encoding has to
-#: travel with the bytes because Content-Encoding names the representation
-#: actually sent, and the ETag is that representation's validator.
+#: the response.
 CACHED_INDEX_PAYLOAD: bytes | None = None
-CACHED_INDEX_COMPRESSED: dict[str, tuple[bytes, str, str]] = {}
+CACHED_INDEX_COMPRESSED: dict[str, _Variant] = {}
 INDEX_LOCK = threading.Lock()
 
 
@@ -158,10 +171,10 @@ def warm_index_cache() -> None:
         for mask in range(1, 8):
             subset = [name for i, name in enumerate(SUPPORTED_ENCODINGS) if mask & (1 << i)]
             keys.append(", ".join(subset))
-        variants: dict[str, tuple[bytes, str, str]] = {}
+        variants: dict[str, _Variant] = {}
         for key in keys:
             body, encoding = compress_static_variants(payload, key)
-            variants[key] = (body, encoding, _index_etag(payload, encoding))
+            variants[key] = _Variant(body, encoding, _index_etag(payload, encoding))
         with INDEX_LOCK:
             if CACHED_INDEX_PAYLOAD is None:
                 CACHED_INDEX_PAYLOAD = payload
@@ -197,26 +210,24 @@ def handle_index() -> bytes:
     with INDEX_LOCK:
         cached = CACHED_INDEX_COMPRESSED.get(key)
         if CACHED_INDEX_PAYLOAD is not None and cached is not None:
-            return _finalized_shell(*cached)
+            return _finalized_shell(cached)
         # Build the payload only on a true cold miss; otherwise compress the
         # cached payload for this (previously unseen) key.
         payload_local = CACHED_INDEX_PAYLOAD
-        build = payload_local is None
-    if build:
+    if payload_local is None:
         payload_local = _build_index_payload()
-    assert payload_local is not None
     body, encoding = compress_static_variants(payload_local, accept_encoding)
     etag = _index_etag(payload_local, encoding)
     with INDEX_LOCK:
         if CACHED_INDEX_PAYLOAD is None:
             CACHED_INDEX_PAYLOAD = payload_local
-        CACHED_INDEX_COMPRESSED.setdefault(key, (body, encoding, etag))
+        CACHED_INDEX_COMPRESSED.setdefault(key, _Variant(body, encoding, etag))
         variant = CACHED_INDEX_COMPRESSED[key]
 
-    return _finalized_shell(*variant)
+    return _finalized_shell(variant)
 
 
-def _finalized_shell(body: bytes, encoding: str, etag: str) -> bytes:
+def _finalized_shell(variant: _Variant) -> bytes:
     """Answer a SPA-shell request: 304 when the client's copy is current.
 
     The shell is built once from the package's own assets and cannot change
@@ -231,6 +242,7 @@ def _finalized_shell(body: bytes, encoding: str, etag: str) -> bytes:
     content-hashed, so a package upgrade changes the bytes under the same name
     and a long freshness lifetime would pin the browser to an old shell.
     """
+    body, encoding, etag = variant
     if _if_none_match_matches(request.headers.get("If-None-Match", ""), etag):
         raise _not_modified(etag)
     return _finalized(
@@ -248,7 +260,7 @@ def _finalized_shell(body: bytes, encoding: str, etag: str) -> bytes:
 
 @app.get("/src/<filepath:path>")
 @app.get("/original/<filepath:path>")
-def serve_repo_file(filepath: str) -> Any:
+def serve_repo_file(filepath: str) -> bytes | HTTPResponse:
     prefix = "src" if request.path.startswith("/src/") else "original"
     root = (_project_dir() / prefix).resolve()
     # The capture is the raw, still percent-encoded request path (PEP 3333),
@@ -315,7 +327,7 @@ def serve_repo_file(filepath: str) -> Any:
 #: encoding rides with the entry because the choice is made per accepted set,
 #: not once per file: it is what Content-Encoding must name, and the cache hit
 #: path needs it just as much as the build path.
-_STATIC_CACHE: dict[tuple[str, str], tuple[str, bytes, str]] = {}
+_STATIC_CACHE: dict[tuple[str, str], _Variant] = {}
 _STATIC_LOCK = threading.Lock()
 
 _STATIC_TYPES = {
@@ -358,7 +370,7 @@ def _not_modified(etag: str) -> HTTPResponse:
     "/<filename:re:(?:app\\.js|detail\\.js|style\\.css|print\\.css|van\\.min\\.js|favicon\\.svg"
     "|hljs\\.css|hljs\\.min\\.js|hljs-c\\.min\\.js|hljs-x86asm\\.min\\.js)>"
 )
-def serve_static_asset(filename: str) -> Any:
+def serve_static_asset(filename: str) -> bytes | HTTPResponse:
     accept_encoding = _header("Accept-Encoding", "")
     variant_key = static_variant_key(accept_encoding)
     if not variant_key:
@@ -381,10 +393,10 @@ def serve_static_asset(filename: str) -> Any:
         # landed first so every client sees one body under one ETag.
         with _STATIC_LOCK:
             entry = _STATIC_CACHE.setdefault(
-                key, (_asset_etag(filename, encoding, raw), body, encoding)
+                key, _Variant(body, encoding, _asset_etag(filename, encoding, raw))
             )
 
-    etag, body, encoding = entry
+    body, encoding, etag = entry
     if _client_has_asset(etag):
         return _not_modified(etag)
 

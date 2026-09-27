@@ -1242,10 +1242,10 @@ class TestRegenIdempotencyKey:
         import recoverage.api as api
 
         self._counting_regen(monkeypatch)
-        for i in range(api._REGEN_KEY_MAX + 5):
+        for i in range(api._REGEN_LEDGER_MAX_ENTRIES + 5):
             api._regen_last_attempt = 0.0
             assert_regen_accepted(self._post(f"click-{i}"))
-        assert len(api._REGEN_COMPLETED_KEYS) <= api._REGEN_KEY_MAX
+        assert len(api._REGEN_COMPLETED_KEYS) <= api._REGEN_LEDGER_MAX_ENTRIES
 
         # Every key is older than the retention window, so none may answer.
         real_now = time.monotonic()
@@ -1268,7 +1268,7 @@ class TestRegenIdempotencyKey:
 
         self._counting_regen(monkeypatch)
         completions = int(api._REGEN_KEY_TTL_SECONDS // api._REGEN_COOLDOWN_SECONDS) + 1
-        assert completions <= api._REGEN_KEY_MAX, (
+        assert completions <= api._REGEN_LEDGER_MAX_ENTRIES, (
             "the count cap would evict a key that is still inside its window"
         )
 
