@@ -2275,15 +2275,17 @@ class TestDataPayloadMemo:
         on *release* — freezing the payload build mid-flight so the test can
         observe what concurrent requests do while a build is in progress.
 
-        Also installs thread-independent request/response stand-ins for the
-        ``server`` module: worker threads have no bottle request context
-        (thread-local), and the compression/ETag helpers resolve those names
-        from server's namespace.  *query* rides on that stand-in, which is
-        where ``query_param`` reads the query string from, and the stand-in's
-        ``query`` dict is returned so a test can assert on it: a test that
-        exercises a ``?section=`` (or any other) parameter has to pass it here
-        rather than patching ``api.request`` alone, which only supplies
-        Accept-Encoding."""
+        Also installs thread-independent request/response stand-ins in both
+        ``api`` and ``server``: worker threads have no bottle request context
+        (thread-local), and the two modules resolve ``request`` from their own
+        namespaces — ``api._query_param`` reads the query string, the shared
+        ETag and compression helpers in ``server`` read the headers and the
+        response.  *query* rides on those stand-ins, and the stand-in's
+        ``query`` dict is returned so a test can assert on it.  Patching one
+        module alone leaves the other half on bottle's empty default environ,
+        which is how a caller-supplied section filter silently disappears and
+        the follower's cache key stops matching the build it is meant to park
+        on."""
         import recoverage.api as api
         import recoverage.server as server_mod
 
@@ -2310,6 +2312,7 @@ class TestDataPayloadMemo:
         fake_resp: Any = type(
             "R", (), {"content_type": None, "set_header": lambda self, k, v: None}
         )()
+        monkeypatch.setattr(api, "request", fake_req)
         monkeypatch.setattr(server_mod, "request", fake_req)
         monkeypatch.setattr(server_mod, "response", fake_resp)
         return api, open_calls, query
@@ -2412,11 +2415,11 @@ class TestDataPayloadMemo:
         import recoverage.api as api
 
         release = threading.Event()
-        # The section filter is read by server.query_param, which resolves
-        # `request` from the *server* module globals, so the stand-in carrying
-        # it has to be patched there; patching api.request would leave the
-        # handler building the unfiltered payload and this test would pass on
-        # the wrong path. _gated_open installs exactly that stand-in.
+        # The section filter is part of the payload cache key, so the stand-in
+        # carrying it has to reach `api`, whose `_query_param` resolves
+        # `request` from the *api* module globals; without it the follower
+        # computes an unfiltered key, finds no build registered for it, and
+        # runs its own build. _gated_open installs it in both namespaces.
         _, open_calls, _ = self._gated_open(tmp_path, monkeypatch, release, {"section": "nope"})
         api._clear_data_cache()
 

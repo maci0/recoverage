@@ -49,38 +49,29 @@ def _default(text: str, var: str) -> str:
 
 class TestRbrewPin:
     def test_ci_populates_the_sibling_only_through_the_pinned_script(self) -> None:
-        """Every installing job fetches rebrew via the composite action, and
-        the action's only mechanism is tools/ci_clone_rebrew.sh.
+        """Every installing job fetches rebrew by running tools/ci_clone_rebrew.sh.
 
-        A second mechanism (an inline `git clone`, or an action that carries
+        A second mechanism (an inline `git clone`, or a wrapper action carrying
         its own ref input) fetches the same path dependency from a pin nothing
         else checks, and whichever runs last silently decides which rebrew
-        the suite tested. The composite action adds the one thing a script
-        cannot do on a runner (write outside GITHUB_WORKSPACE) and nothing
-        else, so the tag and commit stay in the script alone.
+        the suite tested. A `run:` step can write outside GITHUB_WORKSPACE on
+        a runner, so the script needs no composite action wrapping it, and the
+        tag and commit stay in the script alone.
         """
         installing = {n: b for n, b in _jobs().items() if "uv sync" in b}
         assert installing, "no CI job runs uv sync; the check below would pass vacuously"
         for name, body in installing.items():
-            assert "uses: ./.github/actions/sibling-rebrew" in body, (
+            assert "tools/ci_clone_rebrew.sh" in body, (
                 f"job {name} never materializes the sibling checkout"
             )
             assert not re.search(r"git clone.*rebrew", body), f"job {name} clones rebrew itself"
-            assert not re.search(r"run:[^\n]*ci_clone_rebrew", body), (
-                f"job {name} runs the script directly, bypassing the one action"
+            assert "uses: ./.github/actions/" not in body, (
+                f"job {name} wraps the script in an action; the script is the one mechanism"
             )
-
-        action = (_ROOT / ".github" / "actions" / "sibling-rebrew" / "action.yml").read_text(
-            encoding="utf-8"
-        )
-        assert "tools/ci_clone_rebrew.sh" in action, "the action does not delegate to the script"
-        assert not re.search(r"run:.*git clone", action), "the action clones rebrew itself"
-        inputs = re.search(r"^inputs:\n(.*?)^runs:", action, re.MULTILINE | re.DOTALL).group(1)
-        assert re.findall(r"^  (\w+):$", inputs, re.MULTILINE) == ["repository"], (
-            "the action takes a pin as an input; the pin stays in the script"
-        )
-        for var in _PINS:
-            assert var not in action, f"{var} is a second pin, inside the action"
+            for var in _PINS:
+                assert not re.search(rf"^\s*{var}=", body, re.MULTILINE), (
+                    f"job {name} restates {var}; the script owns the pin"
+                )
 
     def test_makefile_carries_no_pin_of_its_own(self) -> None:
         """The script is the only place the rebrew tag and commit are written.

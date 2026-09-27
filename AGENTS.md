@@ -46,12 +46,12 @@ recoverage/
 │   ├── test_paths.py         # DB path resolution tests
 │   ├── test_config.py        # RECOVERAGE_* env: parsing, precedence, fail-fast
 │   ├── test_server.py        # Compression, encoding, path helper tests
-│   ├── test_serve_harness.py # Shared serve harness (builds the sample db, boots the server)
+│   ├── test_serve_harness.py # tools/ serve harness: the same sample db however often it runs
 │   ├── test_potato.py        # Potato Mode unit tests
 │   ├── test_perf.py          # Deterministic perf gates (work counters, not wall clock)
 │   ├── test_release.py       # Release contract: version, changelog, declared floors
 │   ├── test_fuzz.py          # Seeded mutation campaigns over the untrusted-input surfaces
-│   ├── test_serve_harness.py # The smoke + lint-html harness contract
+│   ├── test_supply_chain.py  # One rebrew pin, one fetch mechanism, vendored preset origin
 │   └── test_playwright.py    # Browser integration tests
 └── src/recoverage/
     ├── __init__.py
@@ -152,15 +152,14 @@ test fails the job instead of holding a runner for six hours.
 
 `rebrew` is an editable path dependency at `../rebrew` (see
 `[tool.uv.sources]`), which no runner has, so every job that runs
-`uv sync --frozen --extra dev` first uses the composite action
-`.github/actions/sibling-rebrew`, whose only step is the same
-`tools/ci_clone_rebrew.sh` `make clone-rebrew` wraps. The action exists only
-because a workflow step cannot write outside `GITHUB_WORKSPACE`; it takes the
-clone URL and nothing else, so the pin stays in the script. The script's
-`REBREW_REF`/`REBREW_SHA` defaults are the whole pin: the clone fails unless the
-tag still resolves to the commit, so a moved tag cannot change the dependency
-silently. Those defaults must keep matching `uv.lock` (checked by
-`tests/test_supply_chain.py`): when rebrew's dependencies change, re-lock in a
+`uv sync --frozen --extra dev` first runs `tools/ci_clone_rebrew.sh` in a
+`run:` step, the same script `make clone-rebrew` wraps. A `run:` step can
+write outside `GITHUB_WORKSPACE`, so nothing wraps the script: the script's
+`REBREW_REF`/`REBREW_SHA` defaults are the whole pin, the clone fails unless
+the tag still resolves to the commit, and a moved tag cannot change the
+dependency silently. Those defaults must keep matching `uv.lock` (checked by
+`tests/test_supply_chain.py`, which also fails if a job clones the sibling
+itself or restates the pin): when rebrew's dependencies change, re-lock in a
 tree with the sibling present and bump the script alone. The `sbom` job
 deliberately has no such step, because `uv export --frozen` reads the lock
 alone.

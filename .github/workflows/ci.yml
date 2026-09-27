@@ -23,8 +23,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The sibling rebrew checkout that [tool.uv.sources] resolves against
-      # does not exist on a clean runner, and actions/checkout cannot write
-      # outside GITHUB_WORKSPACE.  The pin (tag + commit) lives in
+      # does not exist on a clean runner.  The pin (tag + commit) lives in
       # tools/ci_clone_rebrew.sh, the one `make clone-rebrew` also runs, and
       # the script fails when the tag no longer resolves to the commit.
       - name: Clone the sibling rebrew checkout
@@ -36,12 +35,6 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
-      # rebrew is a path dependency at ../rebrew, which actions/checkout
-      # cannot create (it writes only inside GITHUB_WORKSPACE). The
-      # composite action delegates to tools/ci_clone_rebrew.sh, the single
-      # place the tag/commit pin lives, so this job installs the rebrew
-      # `make clone-rebrew` does.
-      - uses: ./.github/actions/sibling-rebrew
       - run: uv sync --frozen --extra dev
       # --frozen on every uv run, matching the Makefile: a bare `uv run`
       # re-resolves and may write a new lockfile, so a job could install a
@@ -67,12 +60,6 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
-      # rebrew is a path dependency at ../rebrew, which actions/checkout
-      # cannot create (it writes only inside GITHUB_WORKSPACE). The
-      # composite action delegates to tools/ci_clone_rebrew.sh, the single
-      # place the tag/commit pin lives, so this job installs the rebrew
-      # `make clone-rebrew` does.
-      - uses: ./.github/actions/sibling-rebrew
       - run: uv sync --frozen --extra dev
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
@@ -125,12 +112,6 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python-version }}
-      # rebrew is a path dependency at ../rebrew, which actions/checkout
-      # cannot create (it writes only inside GITHUB_WORKSPACE). The
-      # composite action delegates to tools/ci_clone_rebrew.sh, the single
-      # place the tag/commit pin lives, so this job installs the rebrew
-      # `make clone-rebrew` does.
-      - uses: ./.github/actions/sibling-rebrew
       - run: uv sync --frozen --extra dev
       - run: uv run --frozen python -m pytest tests/ -v --ignore=tests/test_playwright.py
 
@@ -148,12 +129,6 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
-      # rebrew is a path dependency at ../rebrew, which actions/checkout
-      # cannot create (it writes only inside GITHUB_WORKSPACE). The
-      # composite action delegates to tools/ci_clone_rebrew.sh, the single
-      # place the tag/commit pin lives, so this job installs the rebrew
-      # `make clone-rebrew` does.
-      - uses: ./.github/actions/sibling-rebrew
       - run: uv sync --frozen --extra dev
       - name: Boot dashboard against a sample coverage.db and probe it
         run: uv run --frozen python tools/smoke.py
