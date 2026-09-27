@@ -459,13 +459,70 @@ def _stop_db_watcher() -> None:
                 _DB_WATCHER_THREAD = None
 
 
+class _SSEStream:
+    """The /api/events body: the frame generator plus an idempotent close().
+
+    A generator's ``finally`` runs only if the generator was STARTED, and PEP
+    3333 lets a server close the iterable it was handed without ever
+    iterating it — a peer that hangs up between the handler returning and the
+    first write is exactly that case, and ``gen.close()`` on a not-yet-started
+    generator raises GeneratorExit at the definition, skipping the body.  The
+    client queue is registered before the stream exists, so unregistering it
+    from the generator's ``finally`` alone loses a slot, a file descriptor and
+    a handler thread for the process's remaining lifetime, permanently eroding
+    the ``_SSE_MAX_CLIENTS`` cap.  Both exit paths go through
+    :meth:`_release` instead, and :meth:`close` is safe to call twice.
+    """
+
+    def __init__(self, client_queue: queue.Queue[bytes]) -> None:
+        self._queue = client_queue
+        self._gen: Generator[bytes] | None = None
+        self._released = False
+
+    def _release(self) -> None:
+        if self._released:
+            return
+        self._released = True
+        with _SSE_CLIENTS_LOCK:
+            _SSE_CLIENTS.discard(self._queue)
+
+    def __iter__(self) -> Generator[bytes]:
+        # One generator for the object's life, so a second iter()/next() sees
+        # the same stream position rather than restarting the stream.
+        if self._gen is None:
+            self._gen = self._frames()
+        return self._gen
+
+    def _frames(self) -> Generator[bytes]:
+        try:
+            yield b": connected\n\n"
+            last_heartbeat = time.monotonic()
+            while True:
+                try:
+                    frame = self._queue.get(timeout=1.0)
+                except queue.Empty:
+                    frame = None
+                if frame is not None:
+                    yield frame
+                now = time.monotonic()
+                if now - last_heartbeat >= _SSE_HEARTBEAT_SECONDS:
+                    yield b": ping\n\n"
+                    last_heartbeat = now
+        finally:
+            self._release()
+
+    def close(self) -> None:
+        self._release()
+
+
 @app.get("/api/events")
 def handle_api_events() -> Any:
     """SSE stream: emits a db-updated event when coverage.db is rewritten.
 
-    Bottle streams the returned generator.  The watcher thread broadcasts to a
-    per-client queue; this route drains it.  Disconnects are detected when the
-    generator is closed — the client queue is removed in a ``finally``.
+    Bottle streams the returned :class:`_SSEStream`.  The watcher thread
+    broadcasts to a per-client queue; this route drains it.  Disconnects are
+    detected when the stream is closed — the client queue is removed by
+    :meth:`_SSEStream.close`, which the server calls on every exit path.
     """
     # Cap concurrent SSE clients: each connection pins a server thread for
     # the life of the stream (minutes/hours), and wsgiref has no connection
@@ -495,29 +552,10 @@ def handle_api_events() -> Any:
             _SSE_CLIENTS.discard(client_queue)
         raise
 
-    def _events() -> Generator[bytes]:
-        try:
-            yield b": connected\n\n"
-            last_heartbeat = time.monotonic()
-            while True:
-                try:
-                    frame = client_queue.get(timeout=1.0)
-                except queue.Empty:
-                    frame = None
-                if frame is not None:
-                    yield frame
-                now = time.monotonic()
-                if now - last_heartbeat >= _SSE_HEARTBEAT_SECONDS:
-                    yield b": ping\n\n"
-                    last_heartbeat = now
-        finally:
-            with _SSE_CLIENTS_LOCK:
-                _SSE_CLIENTS.discard(client_queue)
-
     response.content_type = "text/event-stream"
     response.set_header("Cache-Control", CACHE_NO_STORE)
     response.set_header("X-Accel-Buffering", "no")
-    return _events()
+    return _SSEStream(client_queue)
 
 
 @app.get("/api/health")

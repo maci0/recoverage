@@ -87,3 +87,6 @@ def running_server(project_dir: Path) -> Iterator[tuple[int, subprocess.Popen[by
             proc.wait(timeout=10)
         except subprocess.TimeoutExpired:
             proc.kill()
+            # kill() signals; only a wait() reaps.  Without this the harness
+            # leaves a zombie behind on every timed-out teardown.
+            proc.wait()

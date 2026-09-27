@@ -287,6 +287,12 @@ def _open_and_reap(url: str, args: list[str], shell: bool = False) -> None:
     only a wait() does, and nothing else ever waits on these openers.  The
     wait is bounded so a hung opener cannot stall serve startup; past the
     deadline it is killed and reaped.
+
+    Once Popen has returned, the child exists and every later failure must go
+    through :func:`_kill_and_reap`: a wait() that raises anything other than
+    TimeoutExpired (a signal, an OSError) would otherwise take the same branch
+    as a failed Popen and leave the opener unreaped and possibly still
+    running.
     """
     try:
         proc = subprocess.Popen(
@@ -297,21 +303,31 @@ def _open_and_reap(url: str, args: list[str], shell: bool = False) -> None:
             shell=shell,
             start_new_session=(os.name == "posix"),
         )
-        proc.wait(timeout=_BROWSER_OPEN_TIMEOUT)
-    except subprocess.TimeoutExpired:
-        _kill_and_reap(proc)
     except (OSError, subprocess.SubprocessError) as exc:
         # Expected on minimal installs (no xdg-open/open); say why before
         # falling back — "no browser ever appeared" must be diagnosable from
         # the log alone instead of failing silently.
         _log.warning(
-            "Browser opener %s failed (%s: %s) — falling back to webbrowser",
+            "Browser opener %s failed to start (%s: %s) — falling back to webbrowser",
             args[0],
             type(exc).__name__,
             exc,
         )
         if not webbrowser.open(url):
             _log.warning("webbrowser.open(%s): no usable browser found", url)
+        return
+    try:
+        proc.wait(timeout=_BROWSER_OPEN_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        _kill_and_reap(proc)
+    except (OSError, subprocess.SubprocessError) as exc:
+        _log.warning(
+            "Browser opener %s wait failed (%s: %s) — killing and reaping it",
+            args[0],
+            type(exc).__name__,
+            exc,
+        )
+        _kill_and_reap(proc)
 
 
 def open_browser(url: str) -> None:

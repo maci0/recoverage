@@ -886,6 +886,40 @@ class TestSseEvents:
         assert len(api._SSE_CLIENTS) == 0
         api._stop_db_watcher()
 
+    def test_stream_releases_client_when_never_iterated(self) -> None:
+        """A server may close the app iterable without iterating it (the peer
+        hangs up between the handler returning and the first write).  The
+        client queue is registered before that point, so a generator-only
+        finally would skip and leak a slot, an fd and a thread for good."""
+        from io import BytesIO
+        from wsgiref.util import setup_testing_defaults
+
+        import recoverage.api as api
+        from recoverage.webapp import app
+
+        api._stop_db_watcher()
+        environ: dict[str, Any] = {}
+        setup_testing_defaults(environ)
+        environ["REQUEST_METHOD"] = "GET"
+        environ["PATH_INFO"] = "/api/events"
+        environ["QUERY_STRING"] = ""
+        environ["REMOTE_ADDR"] = "127.0.0.1"
+        environ["wsgi.input"] = BytesIO(b"")
+        environ["CONTENT_LENGTH"] = "0"
+
+        def _start_response(status: str, response_headers, exc_info=None) -> None:
+            return None
+
+        try:
+            result = app(environ, _start_response)
+            assert len(api._SSE_CLIENTS) == 1
+            result.close()
+            assert len(api._SSE_CLIENTS) == 0
+            result.close()  # idempotent: a second close must not raise
+            assert len(api._SSE_CLIENTS) == 0
+        finally:
+            api._stop_db_watcher()
+
     def test_stream_delivers_db_updated_frame(self) -> None:
         import recoverage.api as api
 
