@@ -720,6 +720,15 @@ def _get_capstone_md() -> Any:
     return md
 
 
+# Generation of the DLL bytes the disassembly memo was built from.  Bumped by
+# clear_disassembly_cache() so a build that started before a rebuild's
+# DLL_DATA.clear() files its (pre-rebuild) text under the old generation and can
+# never be served again — cache_clear() alone does not stop that build, which
+# still runs in the request thread that entered the memoized function first.
+_DISASM_GENERATION = 0
+_DISASM_GENERATION_LOCK = threading.Lock()
+
+
 def get_disassembly(va: int, size: int, file_offset: int, target: str) -> str:
     """Disassemble *size* bytes of *target* at *va*, memoized per slice.
 
@@ -730,19 +739,25 @@ def get_disassembly(va: int, size: int, file_offset: int, target: str) -> str:
     """
     if _load_dll(target) is None:
         return ""
-    return _disassemble_loaded(va, size, file_offset, target)
+    generation = _DISASM_GENERATION
+    return _disassemble_loaded(va, size, file_offset, target, generation)
 
 
 @functools.lru_cache(maxsize=2048)
-def _disassemble_loaded(va: int, size: int, file_offset: int, target: str) -> str:
-    """Cached disassembly; :func:`get_disassembly` verified the DLL loads."""
+def _disassemble_loaded(va: int, size: int, file_offset: int, target: str, generation: int) -> str:
+    """Cached disassembly; :func:`get_disassembly` verified the DLL loads.
+
+    *generation* is the DLL generation this text belongs to (see
+    :data:`_DISASM_GENERATION`); a rebuild bumps it, which retires every entry
+    written from pre-rebuild bytes even if it lands after the broadcast's
+    cache_clear().
+    """
     target_data = _load_dll(target)
     if target_data is None:
         # Raced a rebuild's DLL_DATA.clear() between the two loads, so this
         # slice is unresolvable rather than empty.  The "" lands in the memo
-        # behind the broadcast's clear_disassembly_cache(), so it survives
-        # until the next rebuild; the client refetches after the db-updated
-        # frame.
+        # under the pre-rebuild generation, so it is never served again once
+        # the client refetches after the db-updated frame.
         return ""
 
     code_bytes = target_data[file_offset : file_offset + size]
@@ -760,7 +775,10 @@ def _disassemble_loaded(va: int, size: int, file_offset: int, target: str) -> st
 
 def clear_disassembly_cache() -> None:
     """Drop memoized disassembly (called when the original binary changes)."""
-    _disassemble_loaded.cache_clear()
+    global _DISASM_GENERATION
+    with _DISASM_GENERATION_LOCK:
+        _DISASM_GENERATION += 1
+        _disassemble_loaded.cache_clear()
 
 
 # ── Compression ────────────────────────────────────────────────────
