@@ -1330,6 +1330,85 @@ class TestMergeCellsInvariant:
 
         assert _merge_cells([], 64) == []
 
+    def test_matches_the_closure_reference(self) -> None:
+        """The inlined emit must agree with the original ``flush()`` closure.
+
+        The loop emits a finished run at two sites (mid-loop and after the
+        loop) rather than through one closure, so the two spellings can drift.
+        This pins them against a transcription of the closure form over
+        randomized inputs covering both emit sites: ``none`` cells (which never
+        merge, exercising the ``out is None`` guard) and mergeable runs.
+        """
+        import random
+
+        from recoverage.potato import _merge_cells
+
+        def reference(cells: list, grid_columns: int) -> list:
+            """_merge_cells as it read with the flush() closure."""
+            if not cells:
+                return []
+            out = None
+            start_idx = acc_span = acc_col = 0
+            acc_end = acc_state = acc_fns = acc_cell = None
+
+            def flush() -> None:
+                if out is not None and acc_cell is not None:
+                    out.append(
+                        {**acc_cell, "orig_idx": start_idx, "span": acc_span, "end": acc_end}
+                    )
+
+            for i, cell in enumerate(cells):
+                state = cell.get("state")
+                fns = cell.get("functions")
+                span = int(cell.get("span", 1))
+                if (
+                    acc_cell is not None
+                    and state not in ("none", None)
+                    and state == acc_state
+                    and fns == acc_fns
+                    and acc_col + span <= grid_columns
+                ):
+                    if out is None:
+                        out = cells[:start_idx]
+                    acc_span += span
+                    acc_end = cell.get("end")
+                    acc_col += span
+                    continue
+                flush()
+                start_idx = i
+                acc_cell = cell
+                acc_state = state
+                acc_fns = fns
+                acc_span = span
+                acc_end = cell.get("end")
+                acc_col += span
+                if acc_col > grid_columns:
+                    acc_col = span
+            if out is None:
+                return cells
+            flush()
+            return out
+
+        rnd = random.Random(11)
+        states = ["none", "exact", "reloc", "stub", "padding", "data", "thunk", None]
+        for _ in range(2000):
+            cells = [
+                {
+                    "start": i,
+                    "end": i + rnd.choice([1, 2, 4]),
+                    "span": rnd.choice([1, 1, 1, 2, 4]),
+                    "state": rnd.choice(states),
+                    "functions": [
+                        f"f{rnd.randrange(6)}" for _ in range(rnd.choice([0, 0, 0, 1, 1, 2]))
+                    ],
+                }
+                for i in range(rnd.randrange(0, 40))
+            ]
+            columns = rnd.choice([1, 2, 3, 4, 8, 16, 64])
+            assert _merge_cells([dict(x) for x in cells], columns) == reference(
+                [dict(x) for x in cells], columns
+            )
+
     def test_none_state_never_merged(self) -> None:
         from recoverage.potato import _merge_cells
 

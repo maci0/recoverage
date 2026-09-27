@@ -1555,12 +1555,6 @@ def _merge_cells(cells: list[dict[str, Any]], grid_columns: int) -> list[dict[st
     acc_fns: Any = None
     acc_cell: dict[str, Any] | None = None
 
-    def flush() -> None:
-        # No-op until the first merge: everything flushed before one is an
-        # unmerged single cell, already covered by the `cells[:start_idx]` slice.
-        if out is not None and acc_cell is not None:
-            out.append({**acc_cell, "orig_idx": start_idx, "span": acc_span, "end": acc_end})
-
     for i, cell in enumerate(cells):
         state = cell.get("state")
         fns = cell.get("functions")
@@ -1579,7 +1573,12 @@ def _merge_cells(cells: list[dict[str, Any]], grid_columns: int) -> list[dict[st
             acc_end = cell.get("end")
             acc_col += span
             continue
-        flush()
+        # Emit the previous run inline.  Before the first merge `out` is None
+        # and there is nothing to emit: those rows are already covered by the
+        # `cells[:start_idx]` slice taken at the first merge below, so the
+        # no-merge path never touches the accumulator at all.
+        if out is not None and acc_cell is not None:
+            out.append({**acc_cell, "orig_idx": start_idx, "span": acc_span, "end": acc_end})
         start_idx = i
         acc_cell = cell
         acc_state = state
@@ -1595,7 +1594,8 @@ def _merge_cells(cells: list[dict[str, Any]], grid_columns: int) -> list[dict[st
 
     if out is None:
         return cells
-    flush()
+    if acc_cell is not None:
+        out.append({**acc_cell, "orig_idx": start_idx, "span": acc_span, "end": acc_end})
     return out
 
 
