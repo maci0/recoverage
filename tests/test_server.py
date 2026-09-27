@@ -1508,3 +1508,46 @@ class TestSpaGridLayoutMemo:
         app_js = importlib.resources.files(assets).joinpath("app.js").read_text(encoding="utf-8")
         assert "delete sec._pack;" in app_js
         assert "sec._pack = " in app_js
+
+
+class TestSpaResourceTeardown:
+    """The SPA must release what it registers, on every path that drops it.
+
+    A live dashboard re-renders on every coverage.db rebuild, so a
+    registration made per render and never released accumulates for the life
+    of the tab rather than for one request. The browser half of that contract
+    is not observable from Python, so it is pinned against the source, the
+    same way the SPA state vocabulary above is.
+    """
+
+    @staticmethod
+    def _assets() -> tuple[str, str]:
+        import importlib.resources
+
+        from recoverage import assets
+
+        base = importlib.resources.files(assets)
+        return (
+            base.joinpath("app.js").read_text(encoding="utf-8"),
+            base.joinpath("detail.js").read_text(encoding="utf-8"),
+        )
+
+    def test_grid_teardown_disconnects_the_resize_observer(self) -> None:
+        """Every observed grid wrapper is dropped by dropGrids, so the
+        observer that holds them must be disconnected there too. A ResizeObserver
+        keeps its targets alive until unobserved, and a dropped wrapper carries
+        its canvas context and the per-section hit-map typed arrays with it."""
+        _, detail_js = self._assets()
+        drop = detail_js.split("const dropGrids = () => {", 1)[1].split("};", 1)[0]
+        assert "ro.disconnect()" in drop
+        assert "container.innerHTML" in drop
+
+    def test_live_reload_subscribes_once(self) -> None:
+        """The SSE stream pins a bounded server-side /api/events slot until it
+        is closed, so the derive that opens it must not open a second one when
+        it re-runs."""
+        app_js, _ = self._assets()
+        after = app_js.split("let closeEvents = null;", 1)[1]
+        derive = after.split("van.derive(() => {", 1)[1].split("});", 1)[0]
+        assert "connectEvents" in derive
+        assert "!detailReady.val || closeEvents" in derive

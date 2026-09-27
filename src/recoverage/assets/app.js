@@ -427,8 +427,19 @@ const App = () => {
 
   // Live-reload: refresh the grid when coverage.db changes on disk.  The
   // subscription lives in detail.js, so it starts once that lands rather than
-  // competing with first paint.
-  van.derive(() => { if (detailReady.val) window.RC.connectEvents(() => loadData()); });
+  // competing with first paint.  connectEvents returns the disposer that closes
+  // the EventSource: the stream pins a server-side /api/events slot, a bounded
+  // resource, until it is closed.  A pagehide releases it explicitly, and the
+  // derive must not open a second stream when it re-runs.
+  let closeEvents = null;
+  window.addEventListener("pagehide", () => {
+    closeEvents?.();
+    closeEvents = null;
+  }, { once: true });
+  van.derive(() => {
+    if (!detailReady.val || closeEvents) return;
+    closeEvents = window.RC.connectEvents(() => loadData());
+  });
 
   const matchesSearch = (name, query) => {
     if (!query) return true;

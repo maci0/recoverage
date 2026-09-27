@@ -546,6 +546,14 @@
 
     van.derive(() => {
       const dropGrids = () => {
+        // A ResizeObserver holds every observed target strongly until it is
+        // unobserved or disconnected, so tearing the wrappers out of the DOM
+        // without this pins each one (canvas, 2D context, and the per-section
+        // hit-map and geometry typed arrays) for the rest of the session.
+        // Every reload drops the grids, and live reload fires on each
+        // coverage.db rebuild, so the observed set would grow without bound.
+        // New wrappers re-observe on creation, so a disconnect here is safe.
+        ro.disconnect();
         container.innerHTML = "";
         for (const k of Object.keys(grids)) delete grids[k];
       };
