@@ -138,19 +138,29 @@ bun run lint:html           # vnu only: static assets + served pages (SPA shell,
 
 ## Dependencies
 
-Required:
+Required (`[project].dependencies`, floors only; `uv.lock` pins the exact set):
 - `bottle>=0.13` (web server)
 - `brotli>=1.1` (Brotli compression)
 - `rcssmin>=1.1` (CSS minification)
 - `rebrew>=2.10.0` (sibling path dep pinned in `[tool.uv.sources]`): `rebrew.workspace` for shared `rebrew-project.toml` + coverage.db resolution, plus rebrew's catalog/build-db for in-process regen
-- `rich>=13.0` (terminal tables)
+- `rich>=15.0.0` (terminal tables)
 - `rjsmin>=1.2` (JS minification)
-- `typer>=0.9` (CLI framework)
+- `typer>=0.27.2` (CLI framework)
 - `zstandard>=0.22` (Zstandard compression)
 
-Optional:
-- `capstone` (disassembly)
-- `pygments` (Potato Mode syntax highlighting)
+Optional extras:
+- `capstone>=5.0` (disassembly)
+- `pygments>=2.21.0` (Potato Mode syntax highlighting)
+- `playwright` (browser tests: `playwright>=1.62`, `pytest-playwright>=0.9.0`; `tests/test_playwright.py` is excluded from the default `addopts`)
+
+Dev extra (`.[dev]`, what CI installs): `pytest>=9.1.1`, `ruff>=0.16.7`.
+
+`rebrew` is a *runtime* import, not a regen-only one: `src/recoverage/_paths.py`
+resolves every `coverage.db` lookup through `rebrew.workspace`, so the path source
+in `[tool.uv.sources]` must resolve for `uv sync` to work at all. That source is
+a relative `../rebrew`, which only holds in a sibling checkout; a bare `git
+clone` of recoverage, or any git worktree, must be given the sibling layout (or
+`rebrew` published to an index) before `uv run` works.
 
 ## Code Style
 
