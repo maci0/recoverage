@@ -156,7 +156,9 @@ here.
   `ResourceWarning` (unclosed socket, file, or connection) fails the build.
   Close the resource instead of filtering the warning.
 - `tools/oxlint/rikalabs-strict.json` is generated. After bumping
-  `@rikalabs/oxlint-standards`, regenerate it with
-  `python tools/flatten-rikalabs-strict.py` and re-run `make web-lint`.
+  `@rikalabs/oxlint-standards`, regenerate it with `make regen-oxlint` and
+  re-run `make web-lint`. The target runs the `bun install` the script reads
+  `node_modules` from, so it works on a checkout that has only run
+  `make setup`.
 
 Conventions, architecture, and the design rules are in `AGENTS.md`.

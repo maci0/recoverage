@@ -763,10 +763,10 @@ class TestSpaFilterControls:
         from recoverage.potato import FILTER_STATES
 
         app_js = self._app_js()
-        block = re.search(r"const FILTER_KEYS = \[(.*?)\];", app_js, re.DOTALL).group(1)
+        block = re.search(r"const FILTER_KEYS = new Set\(\[(.*?)\]\);", app_js, re.DOTALL).group(1)
         keys = set(re.findall(r'"([a-z_]+)"', block))
         assert keys == set(FILTER_STATES)
-        assert "FILTER_KEYS.includes" in app_js
+        assert "FILTER_KEYS.has" in app_js
 
     def test_every_filter_key_has_a_button(self) -> None:
         import re

@@ -128,12 +128,12 @@ const LEGEND = [["none", "undocumented"], ["exact", "exact match"], ["reloc", "r
   ["near_match", "near-match"], ["stub", "stub"], ["padding", "padding"],
   ["proven", "proven"], ["compile_error", "problem"]];
 
-// The filters the toolbar offers, in the order it shows them.  A filter that
-// is not in this list cannot be dimmed to: FILTER_KEY (detail.js) maps a
-// packed state to the key that survives a filter, so a state the grid can
-// paint but no button can isolate is unreachable by filter, and a deep link
-// carrying anything else would dim the whole map with no control to undo it.
-const FILTER_KEYS = ["exact", "reloc", "near_match", "stub", "padding", "proven", "problem"];
+// The filters the toolbar offers.  A filter that is not in this set cannot be
+// dimmed to: FILTER_KEY (detail.js) maps a packed state to the key that
+// survives a filter, so a state the grid can paint but no button can isolate
+// is unreachable by filter, and a deep link carrying anything else would dim
+// the whole map with no control to undo it.
+const FILTER_KEYS = new Set(["exact", "reloc", "near_match", "stub", "padding", "proven", "problem"]);
 
 // Sections in PE load order (ascending VA), which puts .text first instead of
 // leaving the section that carries all the work at the end of an alphabetical
@@ -483,7 +483,7 @@ const App = () => {
   // offers dims every painted cell and leaves the map looking broken.
   {
     const wanted = (URL_PARAMS.get("filter") || "").split(",").map((f) => f.trim());
-    activeFilters.val = new Set(wanted.filter((f) => FILTER_KEYS.includes(f)));
+    activeFilters.val = new Set(wanted.filter((f) => FILTER_KEYS.has(f)));
   }
   const syncUrl = () => {
     const params = new URLSearchParams();

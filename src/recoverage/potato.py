@@ -1520,8 +1520,9 @@ def _build_filter_data(
     # A pill is a single letter in the state's colour, so it carries the
     # state's full name in its title: a lone V or X is a lookup the legend
     # two hundred pixels away can answer, and a pointer answers instantly.
-    # The key is the filter name a ?filter= spells, not the letter; the
-    # letter is what the label shows and the accesskey is read off it.
+    # The key is the filter name a ?filter= spells, not the letter: it is what
+    # the pill toggles and what FILTER_STATES is keyed on.  The letter is the
+    # label's own first character, which is what the accesskey renders.
     filter_opts = [
         ("exact", "E", "Exact match"),
         ("reloc", "R", "Reloc match"),

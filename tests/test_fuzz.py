@@ -1447,7 +1447,9 @@ _POTATO_500_BODY = "<html><body>Internal server error</body></html>"
 #: Query fields whose value the page echoes back into markup, so an escaping
 #: regression is observable from the response alone.  ``filter`` is not one:
 #: ``potato._parse_filters`` drops every name no pill offers, so an
-#: unknown-only value reaches nothing to escape.  Its own case below.
+#: unknown-only value reaches nothing to escape; its own case is below.  A
+#: name that IS offered is ours to escape, not the caller's, and that is
+#: pinned by ``test_potato``'s filter-pill assertions.
 _POTATO_REFLECTED = ("search", "target")
 
 

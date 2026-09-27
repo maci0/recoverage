@@ -16,7 +16,8 @@ MISSING_IN_OXLINT entry that the preset no longer needs fails the run; a
 preset cannot lose rules silently on a bump.
 
 To bump: `bun add -d @rikalabs/oxlint-standards`, then run
-`uv run python tools/flatten-rikalabs-strict.py` and re-run `bun run lint:js`.
+`make regen-oxlint` (which installs the package this script reads and runs it
+through the locked interpreter) and re-run `make web-lint`.
 """
 
 from __future__ import annotations

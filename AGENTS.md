@@ -92,8 +92,9 @@ Frontend lint (bun + a JDK; see `bun run lint:js|html`): `oxlint.config.ts` is
 the JS/TS config, `tools/lint-html.py` runs vnu over both the static assets and
 the documents the server actually serves, and `tools/oxlint/anti-slop/` is a
 vendored upstream copy to keep in sync. `tools/oxlint/rikalabs-strict.json` is
-generated: never hand-edit it, bump `@rikalabs/oxlint-standards` then re-run
-`tools/flatten-rikalabs-strict.py`. The script's docstring and
+generated: never hand-edit it, bump `@rikalabs/oxlint-standards` then run
+`make regen-oxlint` (which wraps `tools/flatten-rikalabs-strict.py` and the
+`bun install` it reads `node_modules` from). The script's docstring and
 `oxlint.config.ts` own the why behind that preset. The vendored plugin is
 inventoried the same way, because no registry manifest reaches a directory
 copied into the repo: `tools/vendor-manifest.py` writes

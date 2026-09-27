@@ -1,5 +1,6 @@
 .PHONY: help setup clean build test test-one test-browser fuzz lint format format-check web-lint smoke smoke-fail \
-	shell-lint yaml-lint type-check all ensure-uv ensure-rebrew warn-uv-version clone-rebrew ensure-lint-tools
+	shell-lint yaml-lint type-check all ensure-uv ensure-rebrew warn-uv-version clone-rebrew ensure-lint-tools \
+	ensure-bun regen-oxlint
 
 # Force POSIX sh for recipes (ignore a caller-exported SHELL=bash).  Version
 # compares use ``sort -t. -k…n`` (POSIX), not GNU ``sort -V``.
@@ -85,6 +86,7 @@ help:
 		'  make format             # ruff format (writes)' \
 		'  make format-check       # ruff format --check src/ tests/ tools/ (CI lint job)' \
 		'  make web-lint           # oxlint + Nu Html Checker (CI web-lint job)' \
+		'  make regen-oxlint       # regenerate tools/oxlint/rikalabs-strict.json after a preset bump' \
 		'  make shell-lint         # shellcheck over tools/*.sh (CI lint job)' \
 		'  make yaml-lint          # yamllint over .github/ (CI lint job)' \
 		'  make smoke              # boot the dashboard against a sample db and probe it' \
@@ -166,10 +168,10 @@ build: ensure-uv
 # `uv run pytest` would still fall back to whatever `pytest` happens to be on
 # the contributor's PATH, testing the tree against an unpinned global. The
 # module form runs the locked interpreter or fails loudly.
-test: ensure-uv
+test: ensure-rebrew
 	$(UV_RUN) python -m pytest tests/ -v --ignore=tests/test_playwright.py
 
-test-one: ensure-uv
+test-one: ensure-rebrew
 	$(UV_RUN) python -m pytest $(T) $(FLAGS) -v --tb=short
 
 # The browser tests need the playwright extra (not in the dev extra), the
@@ -188,7 +190,7 @@ test-browser: ensure-uv
 SEED ?= 1
 ITERATIONS ?= 20000
 
-fuzz: ensure-uv
+fuzz: ensure-rebrew
 	RECOVERAGE_FUZZ_SEED=$(SEED) RECOVERAGE_FUZZ_ITERATIONS=$(ITERATIONS) \
 		$(UV_RUN) python -m pytest tests/test_fuzz.py -v --tb=short
 
@@ -234,13 +236,8 @@ yaml-lint: ensure-lint-tools
 
 # CI installs bun + a JDK before this; name both rather than failing inside
 # oxlint or vnu with a stack trace.
-web-lint:
+web-lint: ensure-bun
 	@$(SET_STRICT) \
-	if ! command -v bun >/dev/null 2>&1; then \
-	  echo "ERROR: bun not on PATH (package.json's packageManager field pins the version)."; \
-	  echo "Install that bun (https://bun.sh), then re-run 'make web-lint'."; \
-	  exit 1; \
-	fi; \
 	if ! command -v java >/dev/null 2>&1; then \
 	  echo "ERROR: java not on PATH (vnu-jar runs the Nu Html Checker under java)."; \
 	  echo "Install a JDK, then re-run 'make web-lint'."; \
@@ -249,10 +246,26 @@ web-lint:
 	bun install --frozen-lockfile
 	bun run lint
 
-smoke: ensure-uv
+ensure-bun:
+	@$(SET_STRICT) \
+	if ! command -v bun >/dev/null 2>&1; then \
+	  echo "ERROR: bun not on PATH (package.json's packageManager field pins the version)."; \
+	  echo "Install that bun (https://bun.sh), then re-run 'make web-lint'."; \
+	  exit 1; \
+	fi
+
+# tools/oxlint/rikalabs-strict.json is generated from the installed
+# @rikalabs/oxlint-standards and is review-blocking, so the install of the
+# package it reads is part of the command: the script looks under node_modules,
+# which a checkout that has only run `uv sync` does not have.
+regen-oxlint: ensure-bun
+	bun install --frozen-lockfile
+	$(UV_RUN) python tools/flatten-rikalabs-strict.py
+
+smoke: ensure-rebrew
 	$(UV_RUN) python tools/smoke.py
 
-smoke-fail: ensure-uv
+smoke-fail: ensure-rebrew
 	$(UV_RUN) python tools/smoke.py --expect-failure
 
 # Everything CI checks, in one local command, so nothing fails only after push.
