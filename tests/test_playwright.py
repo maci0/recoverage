@@ -1,18 +1,29 @@
 import os
 import re
 from typing import Any
+from urllib.parse import urlsplit
 
 import pytest
-from playwright.sync_api import expect
 
 BASE_URL = os.environ.get("BASE_URL", "http://localhost:8787")
+
+# The playwright extra is not in the dev extra `make setup` installs, so a
+# clean clone reaches this file with no playwright at all. A bare import would
+# turn that into a ModuleNotFoundError traceback, which names the missing
+# package but not the command that provides it; skip with the command instead.
+try:
+    from playwright.sync_api import expect, sync_playwright
+except ModuleNotFoundError:
+    pytest.skip(
+        "playwright is not installed — run 'uv sync --extra playwright'"
+        " (or 'make test-browser', which also installs chromium)",
+        allow_module_level=True,
+    )
 
 # Skip cleanly (not error) when the pinned playwright browser is not
 # installed — e.g. CI without `uv run playwright install chromium`, or a
 # version mismatch between the cache and the installed playwright package.
 try:
-    from playwright.sync_api import sync_playwright
-
     with sync_playwright() as _p:
         _p.chromium.launch(headless=True)
     _HAS_BROWSER = True
@@ -32,7 +43,9 @@ try:
     urllib.request.urlopen(f"{BASE_URL}/api/health", timeout=2).close()
 except Exception:
     pytest.skip(
-        f"no recoverage server at {BASE_URL} — start it with 'uv run recoverage serve'",
+        f"no recoverage server at {BASE_URL} — start one with "
+        f"'uv run recoverage serve --port {urlsplit(BASE_URL).port or 8000}'"
+        f" (serve defaults to 8001, BASE_URL to {BASE_URL}), or point BASE_URL at it",
         allow_module_level=True,
     )
 

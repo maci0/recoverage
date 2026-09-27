@@ -1,4 +1,4 @@
-.PHONY: help setup clean test test-one fuzz lint format format-check web-lint smoke smoke-fail \
+.PHONY: help setup clean test test-one test-browser fuzz lint format format-check web-lint smoke smoke-fail \
 	shell-lint yaml-lint all ensure-uv ensure-rebrew warn-uv-version clone-rebrew ensure-lint-tools
 
 # Force POSIX sh for recipes (ignore a caller-exported SHELL=bash).  Version
@@ -59,6 +59,7 @@ help:
 		'  make clone-rebrew       # clone the sibling rebrew pin into ../rebrew' \
 		'  make test               # full pytest suite (CI test job, minus the matrix)' \
 		'  make test-one T=<node>  # one file or nodeid, e.g. T=tests/test_api.py::TestX' \
+		'  make test-browser       # browser tests: installs playwright + chromium, then runs them' \
 		'  make fuzz              # longer seeded campaign over the untrusted-input surfaces' \
 		'  make lint               # ruff check src/ tests/ tools/ (CI lint job)' \
 		'  make format             # ruff format (writes)' \
@@ -138,6 +139,17 @@ test: ensure-uv
 
 test-one: ensure-uv
 	$(UV_RUN) python -m pytest $(T) $(FLAGS) -v --tb=short
+
+# The browser tests need the playwright extra (not in the dev extra), the
+# chromium build that extra pins, and a server on the port BASE_URL names.
+# `make all` and CI leave them out, so the three steps live in one target
+# rather than in prose a contributor has to reassemble.
+# `--frozen` on the uv calls: the extra is declared in pyproject.toml and
+# locked, so this installs what the lockfile says instead of re-resolving.
+test-browser: ensure-uv
+	uv sync --frozen --extra dev --extra playwright
+	$(UV_RUN) playwright install chromium
+	$(UV_RUN) python -m pytest tests/test_playwright.py -v --tb=short
 
 # A wider campaign over the same seeded harnesses `make test` already runs;
 # the seed and iteration count come from the environment so no file changes.

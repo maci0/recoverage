@@ -75,8 +75,21 @@ works without `make setup` ahead of it.
 The suite is hermetic. It builds its own synthetic `coverage.db` (see
 `tests/conftest.py`) and needs no project workspace, compiler toolchain, or
 network. `tests/test_playwright.py` is excluded by default (`addopts` in
-`pyproject.toml`); run it explicitly after `uv sync --extra playwright` and
-`playwright install`.
+`pyproject.toml`) and no CI job runs it; `make test-browser` syncs the
+`playwright` extra, installs the pinned chromium, and runs it.
+
+The browser tests also need a server to talk to. `BASE_URL` defaults to
+`http://localhost:8787`, while `recoverage serve` defaults to port 8001, so
+start the server on the port the tests ask for (or point `BASE_URL` at the one
+you started):
+
+```bash
+uv run recoverage serve --port 8787 --no-open   # in another shell
+make test-browser
+```
+
+Without either, the module skips with the command it wants rather than
+failing.
 
 ## Before you push
 
