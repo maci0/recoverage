@@ -1435,6 +1435,49 @@ class TestGetDisassemblyNoNegativeCache:
             with srv.DLL_LOCK:
                 srv.DLL_DATA.pop(key, None)
 
+    def test_invalidation_during_a_build_leaves_no_stale_memo_entry(
+        self, tmp_path: Path, monkeypatch: Any
+    ) -> None:
+        """A rebuild broadcast that lands mid-build must not be outlived by it.
+
+        lru_cache stores the result on return, so a clear that runs while the
+        build is still disassembling cannot retract it: the entry lands after
+        the invalidation and nothing clears it again until the NEXT rebuild.
+        The generation counter in get_disassembly is what catches that, and it
+        has to catch it for the whole in-flight herd, not one request.
+        """
+        import recoverage.server as srv
+
+        key = "__disasm_midbuild_target__"
+        dll = tmp_path / "real.dll"
+        dll.write_bytes(b"MZ-fake-binary")
+        monkeypatch.setattr(srv, "_find_dll_path", lambda target: dll)
+
+        built: list[str] = []
+
+        @srv.functools.lru_cache(maxsize=16)
+        def fake_impl(va: int, size: int, file_offset: int, target: str) -> str:
+            built.append(f"{va:#x}")
+            if len(built) == 1:
+                # The rebuild's invalidation lands while this build runs: the
+                # bytes behind the answer are the ones it is meant to drop.
+                srv.clear_disassembly_cache()
+            return f"disasm-build-{len(built)}"
+
+        monkeypatch.setattr(srv, "_disassemble_loaded", fake_impl)
+        try:
+            # Served answer is the post-rebuild one, not the raced build.
+            assert srv.get_disassembly(0x3000, 1, 0, key) == "disasm-build-2"
+            assert len(built) == 2
+            # And the raced build left nothing behind: the repeat is a memo
+            # hit on the fresh entry, still without a third build.
+            assert srv.get_disassembly(0x3000, 1, 0, key) == "disasm-build-2"
+            assert len(built) == 2
+        finally:
+            with srv.DLL_LOCK:
+                srv.DLL_DATA.pop(key, None)
+            fake_impl.cache_clear()
+
     def test_clear_derived_caches_clears_disassembly_memo(
         self, tmp_path: Path, monkeypatch: Any
     ) -> None:
