@@ -1,5 +1,5 @@
 (() => {
-const { a, aside, button, div, h1, h2, h3, header, input, main, p, pre, section, span, code } = van.tags;
+const { a, aside, button, div, h1, h2, header, input, main, p, pre, section, span, code } = van.tags;
 
 // Every DB-derived value spliced into a URL is percent-encoded first: a
 // target id, section name or source path holding a space, '#', '?' or a
@@ -200,11 +200,6 @@ const MetaItem = (label, valueText, extraClass = "") => div({ class: `meta-item 
   span({ class: "meta-label" }, label),
   // oxlint-disable-next-line anti-slop/no-runtime-typeof -- API values arrive string|number; shape-check when rendering
   (typeof valueText === "string" || typeof valueText === "number") ? span({ class: "meta-value" }, valueText) : valueText
-);
-
-const HexLogo = (label, color, titleText) => div({ class: "section-title-left" },
-  span({ class: "hex-logo", "aria-hidden": "true", style: `color: ${color};`, innerHTML: `<svg viewBox="0 0 100 100"><polygon points="50,5 90,27.5 90,72.5 50,95 10,72.5 10,27.5" fill="currentColor" fill-opacity="0.15" stroke="currentColor" stroke-width="6" stroke-linejoin="round"/><text x="50" y="54" dominant-baseline="middle" text-anchor="middle" fill="currentColor" font-weight="800" font-size="${label.length > 2 ? '26' : '42'}">${label}</text></svg>` }),
-  h3({ class: "section-title-text" }, titleText)
 );
 
 const App = () => {
@@ -834,17 +829,12 @@ const App = () => {
     revealPanelIfOffscreen();
   };
 
-  // Copy, Open, Copy VA and Copy Symbol all delegate to detail.js.  If that
-  // file never arrives they would look enabled and do nothing at all, so they
-  // go disabled and say why — the panes it owns already report the same
-  // failure.  Same while it is still loading: copyToClipboard is a no-op until
-  // it lands.  Reload is the exception: it gates on detailFailed only, so a
+  // Copy VA and Copy Symbol delegate to detail.js.  If that file never
+  // arrives they would look enabled and do nothing at all, so they go
+  // disabled and say why — the pane body it owns reports the same failure.
+  // Same while it is still loading: copyToClipboard is a no-op until it
+  // lands.  Reload is the exception: it gates on detailFailed only, so a
   // click in the window before detail.js lands is a silent no-op.
-  const detailTitle = () => {
-    if (detailFailed.val) return MSG.DETAIL_UNAVAILABLE;
-    if (detailReady.val) return "";
-    return MSG.LOADING;
-  };
   const copyToClipboard = (text, e) => window.RC.copyToClipboard?.(text, e);
 
   const SearchHint = () => (searchQuery.val
@@ -1082,44 +1072,6 @@ const App = () => {
       }
     }
 
-    // C Source, Assembly, and Original Bytes are the same panel section with a
-    // different logo, language, and body: title row, Copy, Open-in-modal.
-    // Copy/Open go disabled while the pane holds an empty-state message —
-    // copying "(select a function)" or opening a modal of it is never what
-    // the user wants; the tooltip says what to do instead.
-    const isEmptyMessage = (text) => text === MSG.SELECT_FUNCTION || text === MSG.ASM_PLACEHOLDER
-      || text === MSG.NO_C_SOURCE || text === MSG.NO_C_FOR_BLOCK || text === MSG.UNDOCUMENTED_BLOCK
-      || text === MSG.DATA_SECTION_NO_ASM || text === MSG.BYTES_FAILED || text === MSG.BYTES_BSS
-      || text === MSG.BYTES_LOAD_FAILED || text === MSG.GLOBAL_VAR || text === MSG.NO_DECL
-      || text === MSG.NA || text === MSG.LOADING || text === MSG.DETAIL_UNAVAILABLE
-      // The assembly pane spends its fetch on its own placeholder, which
-      // used to leave Copy enabled: clicking it copied "Loading assembly…".
-      || text === MSG.ASM_LOADING
-      // oxlint-disable-next-line anti-slop/no-runtime-typeof -- pane text is string|derived-state; guard before .startsWith, not a type contract
-      || (typeof text === "string" && (text.startsWith(MSG.ERROR_PREFIX) || text.startsWith("(failed to load:")));
-    const CodeSection = (logo, color, heading, lang, text) => div({ class: "section" },
-      div({ class: "section-title" },
-        HexLogo(logo, color, heading),
-        div({ class: "section-actions" },
-          button({ class: "btn copy-btn", "aria-label": `Copy ${heading}`, disabled: () => !detailReady.val || detailFailed.val || isEmptyMessage(text), title: () => isEmptyMessage(text) ? "Select a block first" : detailTitle(), onclick: (e) => copyToClipboard(text, e) }, "Copy"),
-          button({
-            class: "btn copy-btn", "aria-label": `Open ${heading} in a larger view`, disabled: () => !detailReady.val || detailFailed.val || isEmptyMessage(text), title: () => isEmptyMessage(text) ? "Select a block first" : detailTitle(),
-            onclick: () => {
-              // cellIdx is null when nothing is selected, which used to render
-              // as the literal "Block null".
-              const subject = cellIdx === null ? activeSection.val : `Block ${cellIdx}`;
-              const headingTarget = fn ? fn.name : subject;
-              modalTitle.val = `${heading}: ${headingTarget}`;
-              modalContent.val = text;
-              modalLang.val = lang;
-              showModal.val = true;
-            }
-          }, "Open")
-        )
-      ),
-      HighlightedCode({ lang, text })
-    );
-
     // Hint for the copy buttons when they have nothing to copy.
     const copyHint = (copied, what) => {
       if (copied == null) return `Select a ${what} first`;
@@ -1153,26 +1105,17 @@ const App = () => {
         ),
         div({ class: "panel-meta" }, metaContent)
       ),
-      div({ class: "panel-body" },
-        // Nothing is selected at first paint, so the three code sections would
-        // lay out stand-in text and copy buttons for nobody: the boot layout
-        // walks 205 objects, 61 of them these.  One muted line until there is
-        // something to show.
-        (fn || cellIdx !== null)
-          ? [
-              CodeSection("C", "var(--accent-c-source)", "C Source", "c", cSourceText.val),
-              activeSection.val === ".text"
-                ? CodeSection("ASM", "var(--accent-asm)", "Assembly", "x86asm", asmText.val)
-                : div({ class: "section" },
-                    div({ class: "section-title" }, HexLogo("{}", "var(--accent-data)", "Data Inspector")),
-                    () => detailReady.val
-                      ? window.RC.DataInspector(currentBuf.val)
-                      : div({ class: "code" }, detailFailed.val ? MSG.DETAIL_UNAVAILABLE : MSG.LOADING)
-                  ),
-              CodeSection("01", "var(--accent-bytes)", "Original Bytes", "hex", bytesText.val)
-            ]
-          : div({ class: "hint" }, MSG.SELECT_FUNCTION)
-      )
+      // The three code sections belong to detail.js (see DESIGN.md, "Deferred
+      // detail rendering"): they cannot paint before it lands, and the shell
+      // has a hard byte budget.  Until then the body says why, and says the
+      // same thing on a failed load, so a pane never reads as a live one.
+      detailReady.val
+        ? window.RC.panelBody({ fn, cellIdx, activeSection, cSourceText, asmText, bytesText, currentBuf, showModal, modalTitle, modalContent, modalLang, HighlightedCode })
+        : div({ class: "panel-body" },
+            (fn || cellIdx !== null)
+              ? div({ class: "hint" }, detailFailed.val ? MSG.DETAIL_UNAVAILABLE : MSG.LOADING)
+              : div({ class: "hint" }, MSG.SELECT_FUNCTION)
+          )
     );
   };
 

@@ -243,11 +243,18 @@ class RegenStats:
             }
 
     def reset(self) -> None:
+        """Zero the lifetime counters.
+
+        ``_in_flight`` is a gauge, not a lifetime counter, and is left alone
+        for the reason :meth:`RequestStats.reset` gives: a regen already
+        running holds its slot, and zeroing it here would let that run's
+        ``finish`` drive the gauge negative, so ``/api/health`` would answer
+        ``regen.in_flight: -1`` and every reading after it one off.
+        """
         with self._lock:
             self._runs = 0
             self._failures = 0
             self._rejected = 0
-            self._in_flight = 0
             self._last_ms = 0.0
             self._last_ok = None
 

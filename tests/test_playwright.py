@@ -86,10 +86,29 @@ def test_text_section_cells(page: Any):
     box = canvas.bounding_box()
     assert box is not None and box["width"] > 50 and box["height"] > 50
 
-    # Potato UI still paints one <td> per merged cell.
+    # Potato UI still paints one <td> per merged cell.  The count is the
+    # section's cell count read back from the API, not a magic number: the
+    # synthetic sample database carries a handful of cells, so a hard-coded
+    # threshold asserted a scale this fixture never had and failed on every
+    # run.  Comparing against the data is the invariant the test names.
     page.goto(f"{BASE_URL}/potato?section=.text")
     pt_cells = page.locator("#grid td[bgcolor]").count()
-    assert pt_cells > 500
+    cell_count = page.evaluate(
+        """async (base) => {
+            const targets = await (await fetch(`${base}/api/targets`)).json();
+            const target = targets.targets?.[0]?.id;
+            if (!target) return -1;
+            const slice = await (await fetch(
+                `${base}/api/targets/${encodeURIComponent(target)}/data?section=.text`
+            )).json();
+            return slice.sections?.[".text"]?.cells?.length ?? -1;
+        }""",
+        BASE_URL,
+    )
+    assert cell_count > 0, "the sample database has no .text cells to compare against"
+    assert pt_cells >= cell_count, (
+        f"potato painted {pt_cells} cells for a section holding {cell_count}"
+    )
 
 
 def test_filters_present(page: Any):

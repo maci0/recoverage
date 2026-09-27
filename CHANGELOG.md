@@ -274,6 +274,15 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   address-family mismatch. The server now opens an IPv6 socket when the bind
   address resolves to IPv6, so `recoverage serve --bind ::1` and `--bind ::`
   work.
+- **The inlined SPA shell had outgrown the initial congestion window.** The
+  three code sections and their hexagon logo, whose Copy/Open controls cannot
+  paint before `detail.js` loads, had stayed in `app.js`, so the shell measured
+  14,652 B brotli against the 14,600 B window: a second round trip before the
+  first paint, on every visit, and one a startup log line said nothing about.
+  They moved to `detail.js` alongside the grid and the hex dump, where the rest
+  of the deferred work already lived, bringing the shell back to 14,075 B. The
+  suite now fails on a shell that crosses the window, so it is a gate and not
+  only a warning.
 - **A bind address nothing could resolve started the server anyway.**
   `RECOVERAGE_BIND` rejected an empty value but nothing else, so a trailing
   space from a unit-file quoting slip, an embedded control character, or a

@@ -4,7 +4,7 @@
 // the results back from it.
 (() => {
   const { MetaItem, MSG, hex, encPath } = window.RC;
-  const { a, canvas, div, button, pre, p, span } = van.tags;
+  const { a, canvas, div, button, h3, pre, p, span } = van.tags;
 
   const formatBytes = (buf, baseOffset = 0) => {
     const bytes = new Uint8Array(buf);
@@ -312,6 +312,78 @@
       SourceItem(),
       docText && docText !== MSG.SELECT_FUNCTION && docText !== MSG.NO_DOCS
         ? MetaItem("Annotations", pre({ class: "meta-docs" }, docText), "full-width") : null
+    );
+  };
+
+  // The hexagon logo every code section is titled with.  It lives here, not in
+  // app.js, because its only callers are panes this file owns: keeping it in
+  // the shell spent ~450 minified bytes of a payload with a hard budget
+  // (see the header comment) on markup that cannot paint before this file
+  // lands anyway.
+  const HexLogo = (label, color, titleText) => div({ class: "section-title-left" },
+    span({ class: "hex-logo", "aria-hidden": "true", style: `color: ${color};`, innerHTML: `<svg viewBox="0 0 100 100"><polygon points="50,5 90,27.5 90,72.5 50,95 10,72.5 10,27.5" fill="currentColor" fill-opacity="0.15" stroke="currentColor" stroke-width="6" stroke-linejoin="round"/><text x="50" y="54" dominant-baseline="middle" text-anchor="middle" fill="currentColor" font-weight="800" font-size="${label.length > 2 ? '26' : '42'}">${label}</text></svg>` }),
+    h3({ class: "section-title-text" }, titleText)
+  );
+
+  // C Source, Assembly, and Original Bytes are the same panel section with a
+  // different logo, language, and body: title row, Copy, Open-in-modal.
+  // Copy/Open go disabled while the pane holds an empty-state message —
+  // copying "(select a function)" or opening a modal of it is never what
+  // the user wants; the tooltip says what to do instead.  detailReady and
+  // detailFailed are not consulted: this body only renders once this file has
+  // loaded, so both are known-false at every call site.
+  const isEmptyMessage = (text) => text === MSG.SELECT_FUNCTION || text === MSG.ASM_PLACEHOLDER
+    || text === MSG.NO_C_SOURCE || text === MSG.NO_C_FOR_BLOCK || text === MSG.UNDOCUMENTED_BLOCK
+    || text === MSG.DATA_SECTION_NO_ASM || text === MSG.BYTES_FAILED || text === MSG.BYTES_BSS
+    || text === MSG.BYTES_LOAD_FAILED || text === MSG.GLOBAL_VAR || text === MSG.NO_DECL
+    || text === MSG.NA || text === MSG.LOADING || text === MSG.DETAIL_UNAVAILABLE
+    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- pane text is string|derived-state; guard before .startsWith, not a type contract
+    || (typeof text === "string" && (text.startsWith(MSG.ERROR_PREFIX) || text.startsWith("(failed to load:")));
+
+  const CodeSection = (logo, color, heading, lang, text, openModal, HighlightedCode) => div({ class: "section" },
+    div({ class: "section-title" },
+      HexLogo(logo, color, heading),
+      div({ class: "section-actions" },
+        button({ class: "btn copy-btn", "aria-label": `Copy ${heading}`, disabled: () => isEmptyMessage(text), title: () => isEmptyMessage(text) ? "Select a block first" : "", onclick: (e) => copyToClipboard(text, e) }, "Copy"),
+        button({
+          class: "btn copy-btn", "aria-label": `Open ${heading} in a larger view`, disabled: () => isEmptyMessage(text), title: () => isEmptyMessage(text) ? "Select a block first" : "",
+          onclick: () => openModal(heading, text, lang),
+        }, "Open")
+      )
+    ),
+    HighlightedCode({ lang, text })
+  );
+
+  // The panel body, rebuilt by the shell's reactive `() => Panel()` binding.
+  // Nothing is selected at first paint, so the three code sections would lay
+  // out stand-in text and copy buttons for nobody: the boot layout walks 205
+  // objects, 61 of them these.  One muted line until there is something to
+  // show.
+  const panelBody = ({ fn, cellIdx, activeSection, cSourceText, asmText, bytesText, currentBuf, showModal, modalTitle, modalContent, modalLang, HighlightedCode }) => {
+    const openModal = (heading, text, lang) => {
+      // cellIdx is null when nothing is selected, which used to render
+      // as the literal "Block null".
+      const subject = cellIdx === null ? activeSection.val : `Block ${cellIdx}`;
+      modalTitle.val = `${heading}: ${fn ? fn.name : subject}`;
+      modalContent.val = text;
+      modalLang.val = lang;
+      showModal.val = true;
+    };
+    const section = (logo, color, heading, lang, text) =>
+      CodeSection(logo, color, heading, lang, text, openModal, HighlightedCode);
+    return div({ class: "panel-body" },
+      (fn || cellIdx !== null)
+        ? [
+            section("C", "var(--accent-c-source)", "C Source", "c", cSourceText.val),
+            activeSection.val === ".text"
+              ? section("ASM", "var(--accent-asm)", "Assembly", "x86asm", asmText.val)
+              : div({ class: "section" },
+                  div({ class: "section-title" }, HexLogo("{}", "var(--accent-data)", "Data Inspector")),
+                  DataInspector(currentBuf.val)
+                ),
+            section("01", "var(--accent-bytes)", "Original Bytes", "hex", bytesText.val)
+          ]
+        : div({ class: "hint" }, MSG.SELECT_FUNCTION)
     );
   };
 
@@ -770,6 +842,6 @@
     });
   };
 
-  Object.assign(window.RC, { formatBytes, functionMeta, DataInspector, extractDocs, initHighlighting, highlightInto, loadAsm, connectEvents, reloadData, copyToClipboard, mountModal, mountGrid });
+  Object.assign(window.RC, { formatBytes, functionMeta, DataInspector, extractDocs, initHighlighting, highlightInto, loadAsm, connectEvents, reloadData, copyToClipboard, mountModal, mountGrid, panelBody });
   window.RC.onReady();
 })();

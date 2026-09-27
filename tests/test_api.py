@@ -3822,7 +3822,7 @@ class TestIndexWarmup:
         larger zstd frame when brotli is smaller.
 
         Measured on the shipped shell, brotli q11 beats zstd at every level
-        (14,754 bytes against 15,652 at zstd 19), and the zstd size sits above
+        (14,075 bytes against 15,178 at zstd 19), and the zstd size sits above
         the initial congestion window.  A fixed zstd-first preference put every
         modern browser over that window and cost a second round trip before
         the first paint, for no decoding-speed gain on a one-off document.
@@ -3839,12 +3839,8 @@ class TestIndexWarmup:
             len(body) for _k, (body, _e, _t) in ui.CACHED_INDEX_COMPRESSED.items()
         )
 
-    def test_the_ratchet_reports_the_overage_of_the_served_body(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        """_check_payload_budget must measure the body a real browser receives,
-        which is the smallest of the encodings it accepts, and must name the
-        overage exactly when the shell no longer fits that window.
+    def test_the_shipped_shell_fits_the_congestion_window(self) -> None:
+        """The shell a browser receives must fit the initial congestion window.
 
         Scoped to clients that accept brotli, because brotli is the smallest
         encoding here: zstd 19 and gzip 9 are both larger, so no preference
@@ -3853,10 +3849,10 @@ class TestIndexWarmup:
 
         The window is a protocol constant (RFC 6928: 10 x 1460), not a
         tunable, and brotli q11 is the highest quality the library offers, so
-        the shipped shell measures 14,754 B against the 14,600 B window.  What
-        this pins is the ratchet: the smallest served body is what it measures
-        and what it reports, rather than a gate passing on a number nothing
-        reproduces.
+        the only way to hold this line is to move deferrable work into
+        detail.js.  That is a ratchet only while something fails when it is
+        crossed: _check_payload_budget WARNS (the next test), which is one log
+        line nobody reads, and a warning is not a gate.  This is the gate.
         """
         import recoverage.ui as ui
 
@@ -3868,17 +3864,57 @@ class TestIndexWarmup:
             if "br" in key
         ]
         assert brotli_bodies, "no cached shell variant carries brotli"
-        over = max(0, min(len(b) for b in brotli_bodies) - ui._TCP_CWND_BUDGET)
+        smallest = min(len(b) for b in brotli_bodies)
+        assert smallest <= ui._TCP_CWND_BUDGET, (
+            f"the inlined shell is {smallest} B, {smallest - ui._TCP_CWND_BUDGET} B over the "
+            f"{ui._TCP_CWND_BUDGET} B window; move deferrable work into detail.js "
+            "(see docs/DESIGN_PRINCIPLES.md, 'First Draw in First TCP Packet')"
+        )
+
+    def test_the_ratchet_reports_the_overage_of_the_served_body(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """_check_payload_budget must measure the body a real browser receives,
+        which is the smallest of the encodings it accepts, and must name the
+        overage exactly when the shell no longer fits that window.
+
+        The shipped shell fits (see the test above), so this pins the REPORT
+        rather than the state: measured on an inflated payload, the overage it
+        prints is the smallest served body's, and it names the budget too.  A
+        ratchet that measured something nothing reproduces would read as a
+        clean run while the shell sat over the window.
+        """
+        import recoverage.ui as ui
+        from recoverage.server import (
+            BROTLI_STATIC_QUALITY,
+            GZIP_STATIC_LEVEL,
+            ZSTD_STATIC_LEVEL,
+            brotli,
+            gzip,
+            zstd,
+        )
+
+        ui.warm_index_cache()
+
+        # An inflated payload stands in for a future shell that does not fit,
+        # measured exactly as _check_payload_budget measures the real one: the
+        # smallest of the three static encodings.  Random bytes, not a run of
+        # one character, which every codec would compress back to nothing.
+        inflated = ui.CACHED_INDEX_PAYLOAD + os.urandom(2000)
+        best = min(
+            len(gzip.compress(inflated, compresslevel=GZIP_STATIC_LEVEL)),
+            len(brotli.compress(inflated, quality=BROTLI_STATIC_QUALITY)),
+            len(zstd.ZstdCompressor(level=ZSTD_STATIC_LEVEL).compress(inflated)),
+        )
+        over = best - ui._TCP_CWND_BUDGET
+        assert over > 0, "the inflated payload still fits; inflate it by more"
 
         with caplog.at_level("WARNING", logger="recoverage"):
             caplog.clear()
-            ui._check_payload_budget(ui.CACHED_INDEX_PAYLOAD)
-        if over:
-            assert caplog.records, f"the shell is {over} bytes over the window and said nothing"
-            assert str(over) in caplog.text
-            assert str(ui._TCP_CWND_BUDGET) in caplog.text
-        else:
-            assert not caplog.records
+            ui._check_payload_budget(inflated)
+        assert caplog.records, f"the payload is {over} bytes over the window and said nothing"
+        assert str(over) in caplog.text
+        assert str(ui._TCP_CWND_BUDGET) in caplog.text
 
     def test_warm_is_idempotent(self, monkeypatch: Any) -> None:
         import recoverage.ui as ui

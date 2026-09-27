@@ -1167,8 +1167,8 @@ def compress_static_variants(body: bytes, accept_encoding: str) -> tuple[bytes, 
       order and compresses once.
     * zstd runs at :data:`ZSTD_STATIC_LEVEL` rather than the dynamic level 3.
 
-    Measured on the SPA shell: brotli q11 gives 14,090 bytes against zstd's
-    17,052 at the dynamic level and 15,145 even at level 19.  zstd wins on
+    Measured on the SPA shell: brotli q11 gives 14,075 bytes against zstd's
+    17,056 at the dynamic level and 15,178 even at level 19.  zstd wins on
     throughput, not on this payload, and a fixed zstd-first preference handed
     every zstd-capable browser 3 KB more than necessary and pushed the shell
     past the initial congestion window (14,600), costing a second round trip
