@@ -3,7 +3,7 @@
 @rikalabs/oxlint-standards package.
 
 The Rika-Labs presets reference a handful of rules that the currently
-published oxlint (1.83.0) does not implement, and oxlint rejects a config
+installed oxlint does not implement, and oxlint rejects a config
 that mentions an unknown rule even when set to "off" — so the preset chain
 cannot be consumed via `extends` until those rules land in oxlint. This
 script flattens the `strict` preset chain into a single checked-in JSON that
@@ -30,9 +30,11 @@ TOOLS_DIR = REPO_ROOT / "tools"
 PACKAGE_DIR = REPO_ROOT / "node_modules" / "@rikalabs" / "oxlint-standards"
 PRESET_DIR = PACKAGE_DIR / "presets"
 OUT = TOOLS_DIR / "oxlint" / "rikalabs-strict.json"
-# Reported next to every dropped rule so a reader can see which oxlint the
-# checked-in preset was flattened against.
-OXLINT_VERSION = "1.83.0"
+# The oxlint version is reported next to every dropped rule so a reader can see
+# which oxlint the checked-in preset was flattened against. It is read from
+# package.json rather than repeated here: a constant would keep printing a
+# confident claim about a version the tree no longer installs.
+_PACKAGE_JSON = REPO_ROOT / "package.json"
 # The preset content is copied into this repo, so its grant ships with the
 # repo. A license change on a bump is a compliance change nobody reviews by
 # reading a diff of rule names, so it has to fail the regeneration instead.
@@ -57,6 +59,11 @@ REMAP = {"oxc/no-new-buffer": "unicorn/no-new-buffer"}
 def load(path: Path) -> dict:
     with path.open(encoding="utf-8") as fh:
         return json.load(fh)
+
+
+def oxlint_version() -> str:
+    """The oxlint this tree lints with, taken from the manifest that owns it."""
+    return load(_PACKAGE_JSON)["devDependencies"]["oxlint"]
 
 
 def main() -> int:
@@ -117,7 +124,7 @@ def main() -> int:
         )
         return 1
     for rule in sorted(dropped):
-        print(f"dropped (not in oxlint {OXLINT_VERSION}): {rule}", file=sys.stderr)
+        print(f"dropped (not in oxlint {oxlint_version()}): {rule}", file=sys.stderr)
 
     tsgolint = [r for r in merged["rules"] if "tsgolint" in r]
     if tsgolint:

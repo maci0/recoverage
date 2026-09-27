@@ -115,7 +115,7 @@ make lint                   # uv run --frozen --extra dev python -m ruff check s
 make format-check           # uv run --frozen --extra dev python -m ruff format --check src/ tests/ tools/
 make format                 # uv run --frozen --extra dev python -m ruff format (writes)
 make shell-lint             # shellcheck -x tools/*.sh (needs shellcheck on PATH)
-make yaml-lint              # yamllint -c .yamllint.yaml --list-files .github/ (needs yamllint on PATH)
+make yaml-lint              # yamllint -c .yamllint.yaml .github/ (needs yamllint on PATH)
 make web-lint               # bun install --frozen-lockfile && bun run lint
 make smoke                  # uv run --frozen --extra dev python tools/smoke.py
 make smoke-fail             # same, against a deliberately corrupt db

@@ -54,6 +54,7 @@ def _swap_route(rule: str, wrapper: Callable[[Callable], object]) -> Iterator[No
         route.reset()
 
 
+
 @pytest.fixture
 def replace_route() -> Swap:
     """Temporarily swap a route's callback, as a context manager."""

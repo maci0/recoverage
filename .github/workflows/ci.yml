@@ -24,17 +24,22 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
+          # uv runs every install, lint and test in this workflow, so an
+          # unpinned installer means two runs of one commit can resolve and
+          # cache differently. setup-uv has no version-file input; the literal
+          # is checked against the Makefile's UV_VERSION by test_supply_chain.
+          version: "0.12.14"
           enable-cache: true
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           # The single interpreter pin, the same file uv builds the venv from.
           python-version-file: .python-version
       # The sibling rebrew checkout that [tool.uv.sources] resolves, fetched
-      # at the pin tools/ci_clone_rebrew.sh owns. This script is the one
-      # mechanism: `make clone-rebrew` wraps the same call for a workstation,
-      # and no job may clone the sibling any other way.
-      - name: Clone the sibling rebrew checkout
-        run: bash "$GITHUB_WORKSPACE/tools/ci_clone_rebrew.sh" "$GITHUB_WORKSPACE/../rebrew"
+      # at the pin the clone script owns. The composite action is the one
+      # mechanism a job may use: it wraps that script and carries no pin of
+      # its own, `make clone-rebrew` runs the same script for a workstation,
+      # and no job may fetch the sibling any other way.
+      - uses: ./.github/actions/sibling-rebrew
       - run: uv sync --frozen --extra dev
       # The Makefile owns these commands, so the jobs call the targets rather
       # than restating them: `make all` is the local mirror of the pipeline, and
@@ -56,17 +61,22 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
+          # uv runs every install, lint and test in this workflow, so an
+          # unpinned installer means two runs of one commit can resolve and
+          # cache differently. setup-uv has no version-file input; the literal
+          # is checked against the Makefile's UV_VERSION by test_supply_chain.
+          version: "0.12.14"
           enable-cache: true
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           # The single interpreter pin, the same file uv builds the venv from.
           python-version-file: .python-version
       # The sibling rebrew checkout that [tool.uv.sources] resolves, fetched
-      # at the pin tools/ci_clone_rebrew.sh owns. This script is the one
-      # mechanism: `make clone-rebrew` wraps the same call for a workstation,
-      # and no job may clone the sibling any other way.
-      - name: Clone the sibling rebrew checkout
-        run: bash "$GITHUB_WORKSPACE/tools/ci_clone_rebrew.sh" "$GITHUB_WORKSPACE/../rebrew"
+      # at the pin the clone script owns. The composite action is the one
+      # mechanism a job may use: it wraps that script and carries no pin of
+      # its own, `make clone-rebrew` runs the same script for a workstation,
+      # and no job may fetch the sibling any other way.
+      - uses: ./.github/actions/sibling-rebrew
       - run: uv sync --frozen --extra dev
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
@@ -118,16 +128,21 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
+          # uv runs every install, lint and test in this workflow, so an
+          # unpinned installer means two runs of one commit can resolve and
+          # cache differently. setup-uv has no version-file input; the literal
+          # is checked against the Makefile's UV_VERSION by test_supply_chain.
+          version: "0.12.14"
           enable-cache: true
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python-version }}
       # The sibling rebrew checkout that [tool.uv.sources] resolves, fetched
-      # at the pin tools/ci_clone_rebrew.sh owns. This script is the one
-      # mechanism: `make clone-rebrew` wraps the same call for a workstation,
-      # and no job may clone the sibling any other way.
-      - name: Clone the sibling rebrew checkout
-        run: bash "$GITHUB_WORKSPACE/tools/ci_clone_rebrew.sh" "$GITHUB_WORKSPACE/../rebrew"
+      # at the pin the clone script owns. The composite action is the one
+      # mechanism a job may use: it wraps that script and carries no pin of
+      # its own, `make clone-rebrew` runs the same script for a workstation,
+      # and no job may fetch the sibling any other way.
+      - uses: ./.github/actions/sibling-rebrew
       - run: uv sync --frozen --extra dev
       - name: Run the suite
         # The same command as `make test`, spelled out rather than delegated:
@@ -145,17 +160,22 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
+          # uv runs every install, lint and test in this workflow, so an
+          # unpinned installer means two runs of one commit can resolve and
+          # cache differently. setup-uv has no version-file input; the literal
+          # is checked against the Makefile's UV_VERSION by test_supply_chain.
+          version: "0.12.14"
           enable-cache: true
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           # The single interpreter pin, the same file uv builds the venv from.
           python-version-file: .python-version
       # The sibling rebrew checkout that [tool.uv.sources] resolves, fetched
-      # at the pin tools/ci_clone_rebrew.sh owns. This script is the one
-      # mechanism: `make clone-rebrew` wraps the same call for a workstation,
-      # and no job may clone the sibling any other way.
-      - name: Clone the sibling rebrew checkout
-        run: bash "$GITHUB_WORKSPACE/tools/ci_clone_rebrew.sh" "$GITHUB_WORKSPACE/../rebrew"
+      # at the pin the clone script owns. The composite action is the one
+      # mechanism a job may use: it wraps that script and carries no pin of
+      # its own, `make clone-rebrew` runs the same script for a workstation,
+      # and no job may fetch the sibling any other way.
+      - uses: ./.github/actions/sibling-rebrew
       - run: uv sync --frozen --extra dev
       - name: Boot dashboard against a sample coverage.db and probe it
         run: make smoke
@@ -169,6 +189,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
+          # uv runs every install, lint and test in this workflow, so an
+          # unpinned installer means two runs of one commit can resolve and
+          # cache differently. setup-uv has no version-file input; the literal
+          # is checked against the Makefile's UV_VERSION by test_supply_chain.
+          version: "0.12.14"
           enable-cache: true
       # Hash-pinned inventory of the full resolved tree (runtime deps plus
       # every extra) so consumers and vuln scanners can see exactly what a

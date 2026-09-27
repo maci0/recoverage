@@ -158,6 +158,27 @@ class TestRbrewPin:
         sha = _default(_CLONE_SCRIPT.read_text(encoding="utf-8"), "REBREW_SHA")
         assert re.fullmatch(r"[0-9a-f]{40}", sha), f"REBREW_SHA {sha!r} is not a full commit id"
 
+    def test_ci_uv_version_matches_the_makefile(self) -> None:
+        """uv runs every install, lint and test, so the runner pins it too.
+
+        setup-uv takes no version file, so the workflow has to name a version
+        and that literal is a second copy of the Makefile's UV_VERSION. An
+        unpinned installer is worse than the duplication: two runs of one
+        commit resolve and cache differently. This test is the tie, so a bump
+        is two edits the next run refuses to let disagree.
+        """
+        steps = re.findall(
+            r"- uses: astral-sh/setup-uv@[^\n]*\n(?P<block>(?:\s{8,}[^\n]*\n)+)",
+            _CI_YML.read_text(encoding="utf-8"),
+        )
+        assert steps, "no job sets up uv"
+        for block in steps:
+            pinned = re.search(r'^\s+version:\s*"([^"]+)"', block, re.MULTILINE)
+            assert pinned, "a setup-uv step installs an unpinned uv"
+            assert pinned.group(1) == _default(
+                _MAKEFILE.read_text(encoding="utf-8"), "UV_VERSION"
+            ), "ci.yml installs a different uv than the Makefile's UV_VERSION"
+
 
 class TestToolchainPins:
     """The runner toolchain CI installs is read from the file that owns it.
@@ -168,6 +189,21 @@ class TestToolchainPins:
     when a literal version comes back, because a second pin is what a bump
     would have to touch and nobody would remember to.
     """
+
+    def test_flatten_script_does_not_pin_an_oxlint_version(self) -> None:
+        """The preset flattener reads the oxlint version, it does not restate it.
+
+        It names the version in the note beside every dropped rule, so a
+        constant there outlives the bump it describes: the script keeps
+        reporting the preset was flattened against an oxlint the tree no
+        longer installs, which is the one claim a reader cannot check.
+        """
+        flatten = _FLATTEN.read_text(encoding="utf-8")
+        dev = json.loads(_PACKAGE_JSON.read_text(encoding="utf-8"))["devDependencies"]
+        oxlint = dev["oxlint"]
+        assert f'"{oxlint}"' not in flatten, (
+            f"tools/flatten-rikalabs-strict.py restates oxlint {oxlint}; package.json owns it"
+        )
 
     def test_ci_bun_version_comes_from_package_json(self) -> None:
         """setup-bun reads the bun package.json declares, not a copy of it."""

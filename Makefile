@@ -28,7 +28,9 @@ UV_RUN := uv run --frozen --extra dev
 
 # uv floor the local toolchain is checked against; warn (do not fail) when the
 # installed one is older, matching the sibling rebrew checkout's policy.  CI
-# installs uv unpinned (astral-sh/setup-uv with no version input).
+# installs the same version: setup-uv has no version-file input, so ci.yml
+# carries the literal and tests/test_supply_chain.py fails when the two
+# disagree.  Bump both together.
 UV_VERSION ?= 0.12.14
 
 # The rebrew tag/commit pin lives in tools/ci_clone_rebrew.sh and nowhere
@@ -175,8 +177,10 @@ ensure-lint-tools:
 shell-lint: ensure-lint-tools
 	shellcheck -x tools/*.sh
 
+# No --list-files: that flag makes yamllint print the paths and exit, so the
+# gate passed on every workflow it was pointed at and linted none of them.
 yaml-lint: ensure-lint-tools
-	yamllint -c .yamllint.yaml --list-files .github/
+	yamllint -c .yamllint.yaml .github/
 
 # CI installs bun + a JDK before this; name both rather than failing inside
 # oxlint or vnu with a stack trace.
