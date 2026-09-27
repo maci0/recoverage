@@ -2,45 +2,78 @@
 
 from __future__ import annotations
 
-import contextlib
 import gzip
+import hashlib
 import logging
-import sqlite3
 import threading
 from pathlib import PurePosixPath
-from typing import Any
-from urllib.parse import urlparse
+from typing import NamedTuple
 
 import brotli  # type: ignore[import-untyped]
 import rcssmin  # type: ignore[import-untyped]
 import rjsmin  # type: ignore[import-untyped]
 import zstandard as zstd
+from bottle import static_file  # type: ignore[import-untyped]
 
 import recoverage.server as _server
 from recoverage.server import (
     BROTLI_STATIC_QUALITY,
-    CACHE_NO_STORE,
     CACHE_REVALIDATE,
+    GZIP_STATIC_LEVEL,
+    SUPPORTED_ENCODINGS,
+    ZSTD_STATIC_LEVEL,
     HTTPResponse,
     _assets_dir,
-    _best_encoding,
-    _compressed,
-    _etag_or_304,
     _finalized,
+    _header,
+    _if_none_match_matches,
     _project_dir,
-    _snapshot_db_mtime,
+    _safe_etag,
     app,
-    compress_payload,
+    compress_static_bodies,
+    compress_static_variants,
     request,
     response,
-    static_file,
+    select_static_variant,
+    static_variant_key,
 )
 
 # ── Index caching ──────────────────────────────────────────────────
 
+
+class _Variant(NamedTuple):
+    """One compressed representation and the headers that name it.
+
+    Both response caches in this module store this, and both are unpacked
+    positionally, so the field order is a contract: a bytes and two str slots
+    in a bare tuple let a swap compile and serve a body under another
+    representation's ETag.
+    """
+
+    body: bytes
+    encoding: str
+    etag: str
+
+
+#: Keyed by :func:`static_variant_key` (the set of encodings the client
+#: accepts), NOT by a single chosen encoding: the shell is served as the
+#: smallest body the client can decode, so the accepted set is what determines
+#: the response.
 CACHED_INDEX_PAYLOAD: bytes | None = None
-CACHED_INDEX_COMPRESSED: dict[str, bytes] = {}
+CACHED_INDEX_COMPRESSED: dict[str, _Variant] = {}
 INDEX_LOCK = threading.Lock()
+
+
+def _index_etag(payload: bytes, encoding: str) -> str:
+    """Strong validator for the SPA shell, from its source bytes and encoding.
+
+    Derived from the uncompressed payload, not the served body, so the same
+    validator holds for every representation of it; the encoding is folded in
+    alongside for the same reason :func:`_asset_etag` folds it in — one shell
+    compressed as brotli and as zstd is two bodies, and a strong validator must
+    not match across them.
+    """
+    return _safe_etag("index", encoding, hashlib.sha256(payload).hexdigest())
 
 
 def _build_index_payload() -> bytes:
@@ -84,19 +117,25 @@ _log = logging.getLogger("recoverage")
 def _check_payload_budget(payload: bytes) -> None:
     """Warn if the inlined index payload exceeds the TCP cwnd budget.
 
-    Tries every available compression method and reports the best result.
+    Measured on the body a modern browser actually receives: the server sends
+    the smallest representation the client accepts, and every current browser
+    accepts all three, so the served size is the minimum over the three.  That
+    is the number that decides whether the shell fits the initial congestion
+    window, so it is the number checked here.
 
     The budget is the initial congestion window (10 x 1460-byte MSS), so the
-    payload should arrive in one round trip.  It currently fits with little to
-    spare: everything deferrable (the asm fetch, its formatting, the canvas
-    coverage map, and the highlight.js load among it) lives in ``detail.js``,
-    so a new byte has to come out of there rather than out of the window.  The
-    warning is the ratchet that says so, naming the exact overage.
+    payload should arrive in one round trip.  The shipped shell measures
+    ~14.2 KB under brotli q11, the highest quality the library offers, which
+    fits; the margin is thin, and everything deferrable (the asm fetch, its
+    formatting, the canvas coverage map, and the highlight.js load among it)
+    lives in ``detail.js``, so further gains have to come from there.  The
+    warning is the ratchet that says when the shell has crossed, naming the
+    exact overage.
     """
     results: list[tuple[str, int]] = [
-        ("gzip", len(gzip.compress(payload))),
-        ("br", len(brotli.compress(payload))),
-        ("zstd", len(zstd.ZstdCompressor(level=3).compress(payload))),
+        ("gzip", len(gzip.compress(payload, compresslevel=GZIP_STATIC_LEVEL))),
+        ("br", len(brotli.compress(payload, quality=BROTLI_STATIC_QUALITY))),
+        ("zstd", len(zstd.ZstdCompressor(level=ZSTD_STATIC_LEVEL).compress(payload))),
     ]
 
     best_name, best_size = min(results, key=lambda r: r[1])
@@ -126,15 +165,28 @@ def warm_index_cache() -> None:
     global CACHED_INDEX_PAYLOAD
     try:
         payload = _build_index_payload()
-        compressed_variants: dict[str, bytes] = {}
-        for encoding in ("zstd", "br", "gzip", ""):
-            c, _ = compress_payload(payload, encoding, brotli_quality=BROTLI_STATIC_QUALITY)
-            compressed_variants[encoding] = c
+        # One key per non-empty subset of the supported encodings, plus "" for
+        # the identity response, so a cold first hit from any client is a
+        # lookup rather than three full compressions.
+        keys = [""]
+        for mask in range(1, 8):
+            subset = [name for i, name in enumerate(SUPPORTED_ENCODINGS) if mask & (1 << i)]
+            keys.append(", ".join(subset))
+        # Every key picks the smallest of the same three bodies, so the shell is
+        # compressed three times for all eight keys rather than once per key
+        # (twelve), and brotli at BROTLI_STATIC_QUALITY — the most expensive
+        # compression in the package, and the one every warm-up used to run
+        # four times over — runs once.
+        bodies = compress_static_bodies(payload)
+        variants: dict[str, _Variant] = {}
+        for key in keys:
+            body, encoding = select_static_variant(bodies, key, payload)
+            variants[key] = _Variant(body, encoding, _index_etag(payload, encoding))
         with INDEX_LOCK:
             if CACHED_INDEX_PAYLOAD is None:
                 CACHED_INDEX_PAYLOAD = payload
-            for enc, comp in compressed_variants.items():
-                CACHED_INDEX_COMPRESSED.setdefault(enc, comp)
+            for key, variant in variants.items():
+                CACHED_INDEX_COMPRESSED.setdefault(key, variant)
     except Exception:
         _log.warning(
             "SPA shell cache warm-up failed — first index request will build it instead",
@@ -143,44 +195,9 @@ def warm_index_cache() -> None:
 
 
 # ── Routes ─────────────────────────────────────────────────────────
-
-
-@app.get("/potato")
-def handle_potato() -> bytes | Any:
-    try:
-        from recoverage.potato import _db_unavailable_page, render_potato
-
-        # WAL-aware snapshot (see _snapshot_db_mtime), not raw st_mtime: a
-        # rebuild that commits only to -wal must still mint a new ETag or
-        # browsers keep a stale 304.  Same contract as /data, /asm, /bytes.
-        qs = request.query_string
-        if isinstance(qs, bytes):
-            qs = qs.decode("utf-8", errors="replace")
-        # Redact token from ETag input so query-string ETag doesn't leak it.
-        if "token=" in qs:
-            qs = "&".join(p for p in qs.split("&") if not p.startswith("token="))
-        etag = _etag_or_304(_snapshot_db_mtime(), qs)
-        body = render_potato(urlparse(request.url)).encode("utf-8")
-        resp_body = _compressed(body, "text/html; charset=utf-8")
-
-        if etag:
-            response.set_header("ETag", etag)
-        return resp_body
-
-    except sqlite3.Error:
-        # A DB that opens but cannot answer queries is the same
-        # db_unavailable condition render_potato's connect guard reports as
-        # 503 — not an application bug.  One contract (and one page) for
-        # both surfaces.
-        _log.exception("Potato mode database query failed")
-        return _db_unavailable_page()
-    # json.JSONDecodeError needs no entry: it subclasses ValueError.
-    except (OSError, ValueError, KeyError):
-        _log.exception("Potato mode render failed")
-        return HTTPResponse(
-            status=500,
-            body="<html><body>Internal server error</body></html>",
-        )
+#
+# /potato is registered by recoverage.potato, which owns the renderer; only
+# the SPA shell and the static assets below belong to this module.
 
 
 @app.get("/")
@@ -190,42 +207,59 @@ def handle_index() -> bytes:
     # http://host:port/?token=<TOKEN> sets an HttpOnly SameSite cookie so
     # the SPA's own fetch/EventSource calls authenticate without any
     # frontend change.  API clients can use Authorization: Bearer instead.
+    # server.set_auth_cookie owns the spelling; Potato Mode calls it too.
+    _server.set_auth_cookie()
+
     global CACHED_INDEX_PAYLOAD
-
-    if _server._AUTH_TOKEN and _server._auth_token_matches(request.query.get("token", "")):
-        # Header failure must not break the page.
-        with contextlib.suppress(Exception):
-            response.set_header(
-                "Set-Cookie",
-                f"recoverage_token={_server._AUTH_TOKEN}; Path=/; HttpOnly; SameSite=Strict",
-            )
-
-    accept_encoding = request.headers.get("Accept-Encoding", "")
-    encoding = _best_encoding(accept_encoding)
+    accept_encoding = _header("Accept-Encoding", "")
+    key = static_variant_key(accept_encoding)
 
     with INDEX_LOCK:
-        if CACHED_INDEX_PAYLOAD is not None and encoding in CACHED_INDEX_COMPRESSED:
-            body = CACHED_INDEX_COMPRESSED[encoding]
-            return _finalized(
-                body, "text/html; charset=utf-8", encoding, Cache_Control=CACHE_NO_STORE
-            )
+        cached = CACHED_INDEX_COMPRESSED.get(key)
+        if CACHED_INDEX_PAYLOAD is not None and cached is not None:
+            return _finalized_shell(cached)
         # Build the payload only on a true cold miss; otherwise compress the
-        # cached payload for this (previously unseen) encoding.
+        # cached payload for this (previously unseen) key.
         payload_local = CACHED_INDEX_PAYLOAD
-        build = payload_local is None
-    if build:
+    if payload_local is None:
         payload_local = _build_index_payload()
-    assert payload_local is not None
-    compressed, _ = compress_payload(
-        payload_local, accept_encoding, brotli_quality=BROTLI_STATIC_QUALITY
-    )
+    body, encoding = compress_static_variants(payload_local, accept_encoding)
+    etag = _index_etag(payload_local, encoding)
     with INDEX_LOCK:
         if CACHED_INDEX_PAYLOAD is None:
             CACHED_INDEX_PAYLOAD = payload_local
-        CACHED_INDEX_COMPRESSED.setdefault(encoding, compressed)
-        body = CACHED_INDEX_COMPRESSED[encoding]
+        CACHED_INDEX_COMPRESSED.setdefault(key, _Variant(body, encoding, etag))
+        variant = CACHED_INDEX_COMPRESSED[key]
 
-    return _finalized(body, "text/html; charset=utf-8", encoding, Cache_Control=CACHE_NO_STORE)
+    return _finalized_shell(variant)
+
+
+def _finalized_shell(variant: _Variant) -> bytes:
+    """Answer a SPA-shell request: 304 when the client's copy is current.
+
+    The shell is built once from the package's own assets and cannot change
+    under a running server, so it belongs to the same class as the static
+    assets below — but it was served ``no-store`` with no validator, which made
+    it the one response in the set that a repeat visit could never skip.  Every
+    reload re-downloaded the whole shell while detail.js and the rest answered
+    304.  Revalidate instead: the unchanged case now costs a header round trip
+    and no body.
+
+    max-age stays off for the reason the static assets document: the URL is not
+    content-hashed, so a package upgrade changes the bytes under the same name
+    and a long freshness lifetime would pin the browser to an old shell.
+    """
+    body, encoding, etag = variant
+    if _if_none_match_matches(request.headers.get("If-None-Match", ""), etag):
+        raise _not_modified(etag)
+    return _finalized(
+        response,
+        body,
+        "text/html; charset=utf-8",
+        encoding,
+        ETag=etag,
+        Cache_Control=CACHE_REVALIDATE,
+    )
 
 
 # ── Static file serving ────────────────────────────────────────────
@@ -233,34 +267,74 @@ def handle_index() -> bytes:
 
 @app.get("/src/<filepath:path>")
 @app.get("/original/<filepath:path>")
-def serve_repo_file(filepath: str) -> Any:
+def serve_repo_file(filepath: str) -> bytes | HTTPResponse:
     prefix = "src" if request.path.startswith("/src/") else "original"
     root = (_project_dir() / prefix).resolve()
+    # The capture is the raw, still percent-encoded request path (PEP 3333),
+    # so a source file whose name holds a space or a non-ASCII character
+    # arrives as "weird%20name.c" and matches no file.  Decoded once, before
+    # the containment check below, which then sees the real path — the
+    # reverse order would decode after the check had passed.
+    filepath = _server.path_param(filepath)
+    # A NUL cannot appear in a filename, and os.realpath rejects one with
+    # ValueError, so the containment check below would raise and answer a 500
+    # with a traceback for a path no filesystem holds.  404 is the honest
+    # answer: there is no such file.
+    if "\x00" in filepath:
+        return _server._json_err(
+            404,
+            {
+                "error": "Not found",
+                "detail": "no such file: the path holds a NUL byte",
+            },
+        )
     # Defense-in-depth: bottle's static_file string-prefix check does NOT
     # resolve symlinks — a symlink inside src/ pointing outside the tree
     # would pass the root check and serve the target.  Resolve and verify
     # containment ourselves.
     candidate = (root / filepath).resolve()
     if not candidate.is_relative_to(root):
-        return HTTPResponse(
-            status=403,
-            body=b"forbidden",
+        return _server._json_err(
+            403,
+            {
+                "error": "Forbidden",
+                "detail": "path escapes the project tree",
+            },
         )
     return static_file(filepath, root=str(root))
 
 
-# Compressed static assets, memoized per (filename, encoding).  These files
-# ship with the package and cannot change under a running server, so the
-# compression is paid once per encoding and every later hit is a dict lookup —
-# which is why this uses BROTLI_STATIC_QUALITY like the index, not the dynamic
-# quality (measured on hljs.min.js: q=11 is 37.7 KB vs q=5's 41.4 KB, and its
-# 101 ms runs once instead of per request).
+# Compressed static assets, memoized per (filename, accepted-encoding set).
+# These files ship with the package and cannot change under a running server,
+# so the compression is paid once per set and every later hit is a dict lookup
+# — which is why this uses the precompressed path (maximum effort on every
+# accepted encoding, smallest body wins) rather than the dynamic one.  Measured
+# on hljs.min.js: brotli q=11 is 37.7 KB vs q=5's 41.4 KB, and its 101 ms runs
+# once instead of per request.
 #
-# static_file served these raw: detail.js is on the first-paint critical path
-# at 25 KB (9 KB zstd), and hljs.min.js — fetched when a function's asm pane
-# opens — is 127 KB raw vs 38 KB brotli.  Compressing the whole set saves
-# ~112 KB of transfer.
-_STATIC_CACHE: dict[tuple[str, str], bytes] = {}
+# static_file served these raw: detail.js, which the shell preloads beside
+# itself (index.html) and app.js requests without blocking first paint, is
+# ~41 KB, and hljs.min.js — fetched when a function's asm pane opens — is
+# 127 KB.  Both brotli down to roughly a third of that, and the whole set is
+# ~280 KB raw.
+#
+# Each entry carries a strong ETag next to the body.  CACHE_REVALIDATE alone
+# ("no-cache") forces the browser back on every load, and with no validator to
+# compare, the only answer is to re-send the whole compressed body: a repeat
+# visit to the dashboard re-downloaded detail.js and every asm pane opening
+# re-downloaded hljs.min.js plus its grammars.  With the ETag those repeat
+# visits answer 304: no body, no decompression, no parse.
+# max-age is deliberately NOT raised — the URLs are not content-hashed, so a
+# package upgrade changes the bytes under the same name and a long-lived
+# freshness lifetime would pin the browser to old JS.  Revalidate cheaply
+# instead of guessing.
+#: ``(filename, accepted-encoding key)`` -> ``(etag, body, encoding)``.  The
+#: key is the whole accepted set, not one token, so the map is bounded by
+#: (route-matched filename) x (server.static_variant_key spellings).  The
+#: encoding rides with the entry because the choice is made per accepted set,
+#: not once per file: it is what Content-Encoding must name, and the cache hit
+#: path needs it just as much as the build path.
+_STATIC_CACHE: dict[tuple[str, str], _Variant] = {}
 _STATIC_LOCK = threading.Lock()
 
 _STATIC_TYPES = {
@@ -270,34 +344,71 @@ _STATIC_TYPES = {
 }
 
 
+def _asset_etag(filename: str, encoding: str, raw: bytes) -> str:
+    """Strong validator for a static asset, from its bytes and its encoding.
+
+    The encoding is part of the tag because it is part of the representation:
+    one file compressed as brotli and as zstd is two different bodies, and a
+    strong validator must not match across them.  Vary: Accept-Encoding keeps
+    shared caches from mixing them; this keeps client caches honest too.
+    """
+    return _safe_etag("static", filename, encoding, hashlib.sha256(raw).hexdigest())
+
+
+def _client_has_asset(etag: str) -> bool:
+    """Whether the request's If-None-Match already covers *etag* (RFC 9110 13.1.2).
+
+    Weak comparison, which is what If-None-Match calls for: a browser holding
+    the asset as W/"..." still gets its 304.  The accepted spellings come from
+    the shared matcher, so static assets and DB-derived responses cannot drift.
+    """
+    return _if_none_match_matches(_header("If-None-Match", ""), etag)
+
+
+def _not_modified(etag: str) -> HTTPResponse:
+    """The 304 both revalidating surfaces answer: the shell and the static assets."""
+    return HTTPResponse(
+        status=304,
+        headers={"ETag": etag, "Vary": "Accept-Encoding", "Cache-Control": CACHE_REVALIDATE},
+    )
+
+
 @app.get(
     "/<filename:re:(?:app\\.js|detail\\.js|style\\.css|print\\.css|van\\.min\\.js|favicon\\.svg"
     "|hljs\\.css|hljs\\.min\\.js|hljs-c\\.min\\.js|hljs-x86asm\\.min\\.js)>"
 )
-def serve_static_asset(filename: str) -> Any:
-    accept_encoding = request.headers.get("Accept-Encoding", "")
-    encoding = _best_encoding(accept_encoding)
-    if not encoding:
+def serve_static_asset(filename: str) -> bytes | HTTPResponse:
+    accept_encoding = _header("Accept-Encoding", "")
+    variant_key = static_variant_key(accept_encoding)
+    if not variant_key:
         # No shared encoding: hand off to bottle, which still does Range and
         # If-Modified-Since on the raw file.
         return static_file(filename, root=str(_assets_dir()))
 
-    key = (filename, encoding)
+    key = (filename, variant_key)
     with _STATIC_LOCK:
-        body = _STATIC_CACHE.get(key)
-    if body is None:
+        entry = _STATIC_CACHE.get(key)
+    if entry is None:
         path = _assets_dir() / filename
         try:
             raw = path.read_bytes()
         except OSError:
             # Missing/unreadable asset: let bottle produce the 404, don't 500.
             return static_file(filename, root=str(_assets_dir()))
-        body, encoding = compress_payload(
-            raw, accept_encoding, brotli_quality=BROTLI_STATIC_QUALITY
-        )
+        body, encoding = compress_static_variants(raw, accept_encoding)
+        # A racing thread may already have filled this key; keep whichever
+        # landed first so every client sees one body under one ETag.
         with _STATIC_LOCK:
-            _STATIC_CACHE[key] = body
+            entry = _STATIC_CACHE.setdefault(
+                key, _Variant(body, encoding, _asset_etag(filename, encoding, raw))
+            )
+
+    body, encoding, etag = entry
+    if _client_has_asset(etag):
+        return _not_modified(etag)
 
     suffix = PurePosixPath(filename).suffix.lower()
     content_type = _STATIC_TYPES.get(suffix, "application/octet-stream")
-    return _finalized(body, content_type, encoding, Cache_Control=CACHE_REVALIDATE)
+    return _finalized(
+        response, body, content_type, encoding, ETag=etag, Cache_Control=CACHE_REVALIDATE
+    )

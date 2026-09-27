@@ -2,30 +2,36 @@
 
 from __future__ import annotations
 
+import contextlib
+import copy
 import json
+import logging
+import os
 import queue
 import re
 import shutil
 import sqlite3
 import threading
 import time
+import unicodedata
 import zlib
+from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 from wsgiref.util import setup_testing_defaults
 
 import pytest
 import zstandard
 from conftest import HAS_DB, decode_body, get_first_target, wsgi_get, wsgi_post, wsgi_request
 from rebrew.workspace import (
-    CELLS_JSON_OBJECT_SQL,
+    SECTION_CELLS_AGG_SQL,
     SECTION_CELLS_COLUMN,
     SECTION_CELLS_TABLE,
     sqlite_ro_uri,
 )
 
-from recoverage.server import HAS_CAPSTONE
+from recoverage import api, webapp
 from recoverage.server import _db_path as get_db_path
 
 # Typer 0.27 help paints option names with ANSI even under CliRunner
@@ -34,12 +40,57 @@ from recoverage.server import _db_path as get_db_path
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 _NO_COLOR_ENV = {"NO_COLOR": "1", "FORCE_COLOR": None, "CLICOLOR_FORCE": None}
 
+# time.tzset() is compiled in only where the platform has a C library
+# time-zone API, so it does not exist on Windows.  The host-zone test below
+# sets TZ and re-reads it, which is exactly what tzset does; without it there
+# is no way to move the process into another zone.
+HAS_TZSET = hasattr(time, "tzset")
+
 
 def _plain(text: str) -> str:
     return _ANSI_RE.sub("", text)
 
 
+def assert_regen_accepted(result: tuple[str, dict[str, str], bytes]) -> None:
+    """Assert an accepted /api/regen POST really reached the stubbed
+    ``_do_regen``.
+
+    A bare ``not status.startswith("403")`` also passes on a 404, a 405, a
+    500 from an unrelated regression, or the 429 cooldown another test left
+    behind, so it cannot tell "the guard let it through" from "the endpoint
+    broke".  Every caller stubs ``_do_regen`` to answer ``{"ok": true}``, so
+    that payload is the accepted response.
+    """
+    status, headers, body = result
+    assert status.startswith("200"), status
+    assert json.loads(decode_body(body, headers)) == {"ok": True}
+
+
 # ── Regen origin validation (actual endpoint) ─────────────────────
+
+
+class TestRegenErrorBodySanitized:
+    """A failed regen must not echo the exception text: a rebrew or OSError
+    message quotes absolute paths from the project tree."""
+
+    def test_exception_message_stays_in_the_log(self, monkeypatch, caplog) -> None:
+        import logging as _logging
+
+        import recoverage.api as api
+
+        def _boom(_root) -> None:
+            raise OSError("/home/someone/private/workspace/src is unreadable")
+
+        monkeypatch.setattr(api, "run_regen", _boom)
+        monkeypatch.setattr(api, "_project_dir", lambda: Path("/tmp"))
+        with caplog.at_level(_logging.ERROR, logger="recoverage"):
+            response = api._do_regen("127.0.0.1")
+        assert response.status_code == 500
+        detail = json.loads(response.body)["detail"]
+        assert "OSError" in detail
+        assert "/home/someone/private" not in detail
+        logged = [rec.getMessage() for rec in caplog.records]
+        assert any("Regen failed" in msg and "/home/someone/private" in msg for msg in logged)
 
 
 class TestRegenOriginValidation:
@@ -52,6 +103,10 @@ class TestRegenOriginValidation:
         import recoverage.api as api
 
         monkeypatch.setattr(api, "_do_regen", lambda remote: api._json_ok({"ok": True}))
+        # The cooldown timestamp is a module global stamped by every accepted
+        # POST, so without this the second accepted test in the file answers
+        # 429 and the accepted-path assertion below fails on the shared state.
+        monkeypatch.setattr(api, "_regen_last_attempt", None)
 
     def test_remote_addr_external_rejected(self) -> None:
         """Non-localhost REMOTE_ADDR should be rejected with 403."""
@@ -61,10 +116,8 @@ class TestRegenOriginValidation:
         assert data["error"] == "Forbidden: localhost only"
 
     def test_remote_addr_localhost_accepted(self) -> None:
-        """Localhost REMOTE_ADDR should pass the remote check (may fail later for other reasons)."""
-        status, _, _ = wsgi_request("POST", "/api/regen", remote_addr="127.0.0.1")
-        # Should NOT be 403 for remote_addr — may be 500 if rebrew not available, that's fine
-        assert not status.startswith("403")
+        """Localhost REMOTE_ADDR passes the remote check and runs the regen."""
+        assert_regen_accepted(wsgi_request("POST", "/api/regen", remote_addr="127.0.0.1"))
 
     def test_cross_origin_rejected(self) -> None:
         """Cross-origin request should be rejected with 403."""
@@ -79,14 +132,20 @@ class TestRegenOriginValidation:
         assert data["error"] == "Forbidden: cross-origin"
 
     def test_localhost_origin_accepted(self) -> None:
-        """localhost Origin should pass origin check."""
-        status, _, _ = wsgi_request(
-            "POST",
-            "/api/regen",
-            headers={"Origin": "http://localhost:8001"},
-            remote_addr="127.0.0.1",
+        """The dashboard's own localhost page passes and runs the regen.
+
+        The Host header travels with it: the WSGI harness defaults it to
+        127.0.0.1, so a localhost:8001 Origin addressed at that Host is a
+        cross-origin request, and is refused by the sibling test below.
+        """
+        assert_regen_accepted(
+            wsgi_request(
+                "POST",
+                "/api/regen",
+                headers={"Origin": "http://localhost:8001", "Host": "localhost:8001"},
+                remote_addr="127.0.0.1",
+            )
         )
-        assert not status.startswith("403")
 
     def test_evil_subdomain_rejected(self) -> None:
         """Origin like 127.0.0.1.evil.com must be rejected."""
@@ -94,6 +153,64 @@ class TestRegenOriginValidation:
             "POST",
             "/api/regen",
             headers={"Origin": "http://127.0.0.1.evil.com"},
+            remote_addr="127.0.0.1",
+        )
+        assert status.startswith("403")
+
+    @pytest.mark.parametrize(
+        "origin",
+        [
+            "http://localhost:3000",
+            "http://127.0.0.1:5173",
+            "http://localhost",
+        ],
+    )
+    def test_other_loopback_origin_rejected(self, origin: str) -> None:
+        """A page on another loopback port is a different origin, not the dashboard.
+
+        It passes a hostname-is-loopback check and the browser cannot read the
+        reply, so it would start a minutes-long rebuild the operator never
+        asked for and never sees.
+        """
+        status, headers, body = wsgi_request(
+            "POST",
+            "/api/regen",
+            headers={"Origin": origin, "Host": "localhost:8001"},
+            remote_addr="127.0.0.1",
+        )
+        assert status.startswith("403")
+        assert json.loads(decode_body(body, headers))["error"] == "Forbidden: cross-origin"
+
+    @pytest.mark.parametrize(
+        ("origin", "host"),
+        [
+            ("http://localhost:8001", "localhost:8001"),
+            ("http://127.0.0.1:8001", "127.0.0.1:8001"),
+            # The harness default: a page on 127.0.0.1 is the dashboard.
+            ("http://127.0.0.1", "127.0.0.1"),
+            # A default port is the same authority spelled two ways.
+            ("http://box", "box:80"),
+            # A TLS-terminating proxy changes the scheme, not the service.
+            ("https://localhost:8001", "localhost:8001"),
+        ],
+    )
+    def test_same_origin_accepted(self, origin: str, host: str) -> None:
+        """The dashboard's own page drives the regen however the URL is spelled."""
+        assert_regen_accepted(
+            wsgi_request(
+                "POST",
+                "/api/regen",
+                headers={"Origin": origin, "Host": host},
+                remote_addr="127.0.0.1",
+            )
+        )
+
+    def test_userinfo_origin_rejected(self) -> None:
+        """An unparsable Origin is refused rather than normalized into a match."""
+        status, _, _ = wsgi_request(
+            "POST",
+            "/api/regen",
+            headers={"Origin": "http://localhost:8001@evil.com", "Host": "localhost:8001"},
             remote_addr="127.0.0.1",
         )
         assert status.startswith("403")
@@ -118,18 +235,18 @@ class TestRegenOriginValidation:
     @pytest.mark.parametrize("site", ["same-origin", "same-site", "none"])
     def test_same_site_fetch_metadata_accepted(self, site: str) -> None:
         """Non-cross-site Sec-Fetch-Site values pass (SPA reload button)."""
-        status, _, _ = wsgi_request(
-            "POST",
-            "/api/regen",
-            headers={"Sec-Fetch-Site": site},
-            remote_addr="127.0.0.1",
+        assert_regen_accepted(
+            wsgi_request(
+                "POST",
+                "/api/regen",
+                headers={"Sec-Fetch-Site": site},
+                remote_addr="127.0.0.1",
+            )
         )
-        assert not status.startswith("403")
 
     def test_ipv6_loopback_remote_addr(self) -> None:
-        """::1 REMOTE_ADDR should be accepted."""
-        status, _, _ = wsgi_request("POST", "/api/regen", remote_addr="::1")
-        assert not status.startswith("403")
+        """::1 REMOTE_ADDR is accepted and runs the regen."""
+        assert_regen_accepted(wsgi_request("POST", "/api/regen", remote_addr="::1"))
 
     def test_ipv4_mapped_loopback_remote_addr_accepted(self) -> None:
         """::ffff:127.0.0.1 REMOTE_ADDR must pass the localhost-only guard.
@@ -138,8 +255,7 @@ class TestRegenOriginValidation:
         v6 socket) report IPv4 peers through the mapped spelling; a plain
         string comparison would 403 the operator's own browser on reload.
         """
-        status, _, _ = wsgi_request("POST", "/api/regen", remote_addr="::ffff:127.0.0.1")
-        assert not status.startswith("403")
+        assert_regen_accepted(wsgi_request("POST", "/api/regen", remote_addr="::ffff:127.0.0.1"))
 
     @pytest.mark.parametrize(
         "remote_addr",
@@ -182,13 +298,33 @@ class TestApiHealth:
         assert "extras" in data
 
     def test_health_has_security_headers(self) -> None:
-        status, headers, _ = wsgi_get("/api/health")
+        _status, headers, _ = wsgi_get("/api/health")
         assert headers.get("X-Content-Type-Options") == "nosniff"
         assert headers.get("X-Frame-Options") == "DENY"
 
     def test_health_content_type(self) -> None:
         _, headers, _ = wsgi_get("/api/health")
         assert "application/json" in headers.get("Content-Type", "")
+
+    def test_health_targets_count_excludes_schema_row(self) -> None:
+        """targets_count counts built targets, never the reserved schema row.
+
+        The reserved schema metadata target carries the db_version stamp, not
+        a build, so counting it would report more targets than the dropdown
+        lists.
+        """
+        import contextlib
+
+        import recoverage.server as server_mod
+
+        status, headers, body = wsgi_get("/api/health")
+        assert status.startswith("200")
+        data = json.loads(decode_body(body, headers))
+        with contextlib.closing(server_mod._open_db(server_mod._db_path())) as conn:
+            ids = server_mod.db_target_ids(conn.cursor())
+        assert ids, "fixture database has no built target"
+        assert server_mod.SCHEMA_TARGET not in ids
+        assert data["targets_count"] == len(ids)
 
     def test_health_degraded_when_db_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A missing coverage.db must be reported as degraded (with
@@ -201,6 +337,91 @@ class TestApiHealth:
         data = json.loads(decode_body(body, headers))
         assert data["status"] == "degraded"
         assert data["db"]["exists"] is False
+        assert "mtime" not in data["db"]
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+class TestHealthDbMtime:
+    """/api/health's freshness stamp is WAL-aware and zone-explicit.
+
+    A rebuild commits to coverage.db-wal without necessarily moving the main
+    file's mtime, so a main-file-only stamp reports a rebuild that already
+    happened as not yet done; and an epoch float carries no zone, so a client
+    has to assume one.  mtime_utc is the same instant with the offset spelled
+    out.
+    """
+
+    def test_mtime_follows_a_wal_only_rebuild(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import recoverage.api as api
+
+        db = tmp_path / "coverage.db"
+        wal = Path(f"{db}-wal")
+        db.write_bytes(b"SQLite format 3\x00")
+        wal.write_bytes(b"wal")
+        old_ns = 1_700_000_000_000_000_000
+        new_ns = old_ns + 90 * 1_000_000_000
+        os.utime(db, ns=(old_ns, old_ns))
+        os.utime(wal, ns=(old_ns, old_ns))
+        monkeypatch.setattr(api, "_db_path", lambda: db)
+
+        status, headers, body = wsgi_get("/api/health")
+        assert status.startswith("200")
+        data = json.loads(decode_body(body, headers))["db"]
+        assert data["mtime"] == pytest.approx(old_ns / 1e9)
+        assert data["mtime_utc"] == "2023-11-14T22:13:20+00:00"
+
+        os.utime(wal, ns=(new_ns, new_ns))
+        status, headers, body = wsgi_get("/api/health")
+        assert status.startswith("200")
+        data = json.loads(decode_body(body, headers))["db"]
+        assert data["mtime"] == pytest.approx(new_ns / 1e9)
+        assert data["mtime_utc"] == "2023-11-14T22:14:50+00:00"
+        assert data["mtime_utc"].endswith("+00:00")
+
+    @pytest.mark.skipif(not HAS_TZSET, reason="no time.tzset() on this platform")
+    def test_mtime_utc_is_utc_regardless_of_host_tz(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The same DB stamp must render identically on a host in any zone:
+        a server-local rendering would move the reported instant with TZ."""
+        monkeypatch.setenv("TZ", "Asia/Tokyo")
+        try:
+            time.tzset()
+            status, headers, body = wsgi_get("/api/health")
+        finally:
+            monkeypatch.delenv("TZ", raising=False)
+            time.tzset()
+        assert status.startswith("200")
+        data = json.loads(decode_body(body, headers))["db"]
+        assert data["mtime_utc"].endswith("+00:00")
+        assert data["mtime_utc"] == datetime.fromtimestamp(data["mtime"], tz=UTC).isoformat()
+
+    def test_mtime_and_mtime_utc_agree_to_the_microsecond(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The epoch float and the ISO stamp beside it are one instant.
+
+        A float second cannot hold a nanosecond mtime, so converting the two
+        fields independently let `mtime_utc` sit up to half a second off
+        `mtime`; and fromtimestamp rounds, so a file stamped in the last
+        microsecond of a second reported the next one — a rebuild announced
+        before it happened.  Both fields now come from one truncating
+        conversion, so a client that derives one from the other always agrees.
+        """
+        import recoverage.api as api
+
+        db = tmp_path / "coverage.db"
+        db.write_bytes(b"SQLite format 3\x00")
+        # 2023-11-14T22:13:59.999999999Z, the last nanosecond of a second.
+        ns = 1_700_000_039_999_999_999
+        os.utime(db, ns=(ns, ns))
+        monkeypatch.setattr(api, "_db_path", lambda: db)
+
+        status, headers, body = wsgi_get("/api/health")
+        assert status.startswith("200")
+        data = json.loads(decode_body(body, headers))["db"]
+        assert data["mtime_utc"] == "2023-11-14T22:13:59.999999+00:00"
+        assert data["mtime_utc"] == datetime.fromtimestamp(data["mtime"], tz=UTC).isoformat()
 
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
@@ -230,11 +451,22 @@ class TestApiFunctions:
         assert "total" in data
 
     def test_valid_sort_field(self) -> None:
+        """A whitelisted sort field orders the payload it returns.
+
+        The 200 alone proves nothing: an implementation that accepted
+        `name:desc` and then ignored it answered identically. The synthetic
+        DB seeds _func_a/_func_b/_func_c, so the descending order is exact.
+        """
         target = get_first_target()
         if not target:
             pytest.skip("No targets in DB")
-        status, _, _ = wsgi_get(f"/api/targets/{target}/functions?sort=name:desc")
+        status, headers, body = wsgi_get(f"/api/targets/{target}/functions?sort=name:desc&limit=50")
         assert status.startswith("200")
+        data = json.loads(decode_body(body, headers))
+        names = [f["name"] for f in data["functions"]]
+        assert names == ["_func_c", "_func_b", "_func_a"]
+        assert names == sorted(names, reverse=True)
+        assert data["total"] == 3
 
     def test_invalid_sort_field_falls_back(self) -> None:
         """SQL injection in sort field should be rejected by whitelist."""
@@ -250,7 +482,7 @@ class TestApiFunctions:
         # The fallback must actually apply: results come back va-ascending,
         # identical to the default sort (a whitelist regression that passed
         # raw SQL through would 500 or reorder here).
-        default_status, _, default_body = wsgi_get(f"/api/targets/{target}/functions")
+        _default_status, _, default_body = wsgi_get(f"/api/targets/{target}/functions")
         assert [fn["va"] for fn in data["functions"]] == [
             fn["va"] for fn in json.loads(decode_body(default_body, headers))["functions"]
         ]
@@ -266,6 +498,41 @@ class TestApiFunctions:
         assert data["limit"] == 5
         assert data["offset"] == 0
         assert len(data["functions"]) <= 5
+
+    def test_count_and_page_share_one_read_snapshot(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """`total` and the page it paginates must come from ONE database snapshot.
+
+        They are two separate statements, and python's sqlite3 opens a
+        deferred transaction per statement, so a `rebrew build-db` committing
+        between them served a count from one build beside rows from the next
+        (the SPA then paginates against a total the rows do not match).  The
+        handler pins the read with read_snapshot; this records the connection's
+        transaction state at both statements.
+        """
+        from recoverage import api as _api
+
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        _api._clear_list_total_cache()
+
+        seen: list[bool] = []
+        orig_total = _api._function_total
+
+        def probe(c: sqlite3.Cursor, *args: Any, **kwargs: Any) -> int:
+            seen.append(c.connection.in_transaction)
+            return orig_total(c, *args, **kwargs)
+
+        monkeypatch.setattr(_api, "_function_total", probe)
+        status, headers, body = wsgi_get(f"/api/targets/{target}/functions?limit=5")
+        assert status.startswith("200")
+        assert seen, "the handler stopped routing the count through _function_total"
+        assert seen[0], "the COUNT ran outside a pinned read transaction"
+
+        data = json.loads(decode_body(body, headers))
+        # The page SELECT ran on the same connection, inside the same
+        # transaction: the total can never exceed what that snapshot holds.
+        assert data["total"] >= len(data["functions"])
 
     def test_limit_capped_at_500(self) -> None:
         target = get_first_target()
@@ -286,6 +553,31 @@ class TestApiFunctions:
         # Synthetic DB: exactly one EXACT function (_func_a).
         assert [fn["name"] for fn in data["functions"]] == ["_func_a"]
         assert data["total"] == 1
+
+    def test_unknown_status_is_rejected(self) -> None:
+        """A status the DB cannot hold is a 400, not a silent empty page.
+
+        The filter is a closed vocabulary (rebrew owns it), so a typo used to
+        answer 200 with total 0 — indistinguishable from a target that has no
+        functions of that status.
+        """
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, headers, body = wsgi_get(f"/api/targets/{target}/functions?status=EXACTX")
+        assert status.startswith("400")
+        data = json.loads(decode_body(body, headers))
+        assert data["code"] == "bad_request"
+        assert "EXACT" in data["detail"]
+
+    def test_every_known_status_is_accepted(self) -> None:
+        """The guard rejects typos only: no status in the vocabulary 400s."""
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        for value in sorted(api._FUNCTION_STATUSES):
+            status, _, _ = wsgi_get(f"/api/targets/{target}/functions?status={value}")
+            assert status.startswith("200"), f"{value} is in the vocabulary but was refused"
 
     def test_search_matches_name_substring(self) -> None:
         target = get_first_target()
@@ -336,6 +628,21 @@ class TestApiFunctions:
         assert data["offset"] == 0
 
 
+class TestFunctionStatusVocabulary:
+    """The ?status= guard and rebrew's own vocabulary cannot drift.
+
+    api._FUNCTION_STATUSES is built from rebrew at import time, so a rebrew
+    that adds a status keeps it filterable. A rebrew that REMOVES one would
+    leave this set advertising a value nothing stores, and the endpoint would
+    accept a filter that can only ever be empty.
+    """
+
+    def test_matches_rebrew(self) -> None:
+        from rebrew.build_db import _FUNCTION_DB_STATUSES
+
+        assert api._FUNCTION_STATUSES == _FUNCTION_DB_STATUSES
+
+
 # ── VA boundary validation (/asm endpoint) ─────────────────────────
 
 
@@ -354,7 +661,7 @@ class TestApiAsmVaBoundaries:
         # gets us past the 501 short-circuit without the optional dependency.
         import recoverage.api as api
 
-        monkeypatch.setattr(api, "HAS_CAPSTONE", True)
+        monkeypatch.setattr(api, "capstone_unavailable_reason", lambda: None)
 
     def _asm(self, target: str, query: str) -> tuple[str, dict[str, str], bytes]:
         return wsgi_get(f"/api/targets/{target}/asm?{query}")
@@ -406,15 +713,15 @@ class TestApiAsmVaBoundaries:
 
     def test_last_valid_va_passes_boundary_guard(self) -> None:
         """va = section end - 1 must NOT trip either boundary check; the
-        request proceeds far enough to fail later on the missing DLL (422),
+        request proceeds far enough to fail later on the missing DLL (404),
         which proves the guard accepted the final in-bounds address."""
         target = get_first_target()
         if not target:
             pytest.skip("No targets in DB")
         status, headers, body = self._asm(target, "va=0x10001FFF&size=1")
-        assert status.startswith("422")
+        assert status.startswith("404")
         data = json.loads(decode_body(body, headers))
-        assert data["error"] == "not enough bytes in DLL"
+        assert data["error"] == "DLL not found"
 
     def test_zero_size_still_rejected_at_boundary_class(self) -> None:
         """size clamps/validates before the VA checks: size=0 is its own 400."""
@@ -436,9 +743,9 @@ class TestApiAsmVaBoundaries:
             pytest.skip("No targets in DB")
         status, headers, body = self._asm(target, "va=268439648&size=16")
         # Past the boundary guards and far enough to fail on the missing DLL.
-        assert status.startswith("422")
+        assert status.startswith("404")
         data = json.loads(decode_body(body, headers))
-        assert data["error"] == "not enough bytes in DLL"
+        assert data["error"] == "DLL not found"
 
     def test_decimal_and_hex_spellings_agree(self) -> None:
         target = get_first_target()
@@ -455,7 +762,7 @@ class TestApiAsmVaBoundaries:
         if not target:
             pytest.skip("No targets in DB")
         status, _, _ = self._asm(target, "va=10001060&size=16")
-        assert status.startswith("422")
+        assert status.startswith("404")
 
     def test_unparseable_va_rejected(self) -> None:
         target = get_first_target()
@@ -476,7 +783,7 @@ class TestApiAsm:
         # optional dependency.
         import recoverage.api as api
 
-        monkeypatch.setattr(api, "HAS_CAPSTONE", True)
+        monkeypatch.setattr(api, "capstone_unavailable_reason", lambda: None)
 
     def test_missing_params_returns_400(self) -> None:
         target = get_first_target()
@@ -495,6 +802,33 @@ class TestApiAsm:
         assert status.startswith("400")
         data = json.loads(decode_body(body, headers))
         assert data["error"] == "size must be positive"
+
+    def test_missing_binary_is_404_in_both_representations(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """?format= is a representation switch, not a different resource.
+
+        A target with no configured original binary answers 404 for the text
+        and the json form alike (and the same as /bytes).  The text form used
+        to answer 422 "not enough bytes in DLL", which reads as "your address
+        is past the end of the section" and sends the caller hunting in the
+        wrong place when the operator simply has no binary configured.
+        """
+        import recoverage.api as api
+
+        monkeypatch.setattr(api, "_load_dll", lambda target: None)
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        for fmt in ("text", "json"):
+            status, headers, body = wsgi_get(
+                f"/api/targets/{target}/asm?va=0x10001000&size=16&format={fmt}"
+            )
+            assert status.startswith("404"), fmt
+            data = json.loads(decode_body(body, headers))
+            assert data["code"] == "not_found", fmt
+            assert data["error"] == "DLL not found", fmt
+            assert f"[targets.{target}].binary" in data["detail"], fmt
 
 
 # ── Raw byte slices (/sections/<section>/bytes) ────────────────────
@@ -586,9 +920,15 @@ class TestApiBytes:
         assert data["code"] == "bad_request"
 
     def test_oversized_size_is_clamped_not_fatal(self) -> None:
+        """An over-long ?size= clamps, it does not truncate to whatever a
+        smaller cap would give: `<= 4096` is satisfied by a clamp to 0, so
+        the exact window is the contract. `.text` starts at fileOffset 0x200
+        in a 2048-byte fake binary, so 1536 bytes are the most that exist
+        even though the request and the cap both ask for more."""
         status, _, body = self._get("offset=0&size=999999")
         assert status.startswith("200")
         data = json.loads(decode_body(body, {}))
+        assert data["size"] == self.DLL_SIZE - 0x200
         assert data["size"] <= 4096
         assert len(data["raw"]) == data["size"]
 
@@ -644,7 +984,7 @@ class TestRegenRateLimit:
 
         # Accepted POSTs stamp the module-global cooldown; reset so later
         # tests (and re-runs) start from a neutral state.
-        api._regen_last_attempt = 0.0
+        api._regen_last_attempt = None
 
     def _no_real_regen(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import recoverage.api as api
@@ -655,11 +995,10 @@ class TestRegenRateLimit:
         self._no_real_regen(monkeypatch)
         import recoverage.api as api
 
-        api._regen_last_attempt = 0.0
+        api._regen_last_attempt = None
         # First call passes the cooldown gate (the patched _do_regen answers
         # 200 — the timestamp is stamped before it runs).
-        status1, _, _ = wsgi_request("POST", "/api/regen", remote_addr="127.0.0.1")
-        assert not status1.startswith("429")
+        assert_regen_accepted(wsgi_request("POST", "/api/regen", remote_addr="127.0.0.1"))
 
         # Immediate second call within the cooldown window → 429.
         status2, headers2, body2 = wsgi_request("POST", "/api/regen", remote_addr="127.0.0.1")
@@ -678,10 +1017,23 @@ class TestRegenRateLimit:
         monkeypatch.setattr(
             api,
             "_regen_last_attempt",
-            api.time.monotonic() - api._REGEN_COOLDOWN_SECONDS - 1,
+            api.clock.monotonic() - api._REGEN_COOLDOWN_SECONDS - 1,
         )
-        status, _, _ = wsgi_request("POST", "/api/regen", remote_addr="127.0.0.1")
-        assert not status.startswith("429")
+        assert_regen_accepted(wsgi_request("POST", "/api/regen", remote_addr="127.0.0.1"))
+
+    def test_first_call_after_boot_not_rate_limited(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The first POST is accepted even when the monotonic clock is young.
+
+        time.monotonic() counts from boot on Linux, so on a host that came up
+        seconds ago the first regen would read as "inside the cooldown" if the
+        never-attempted state were 0.0 instead of None.
+        """
+        import recoverage.api as api
+
+        self._no_real_regen(monkeypatch)
+        monkeypatch.setattr(api, "_regen_last_attempt", None)
+        monkeypatch.setattr(api.clock, "monotonic", lambda: 1.0)
+        assert_regen_accepted(wsgi_request("POST", "/api/regen", remote_addr="127.0.0.1"))
 
 
 class TestRegenFailureMapping:
@@ -694,7 +1046,7 @@ class TestRegenFailureMapping:
     def teardown_method(self) -> None:
         import recoverage.api as api
 
-        api._regen_last_attempt = 0.0
+        api._regen_last_attempt = None
 
     def _post_regen(self, monkeypatch: pytest.MonkeyPatch, exc: BaseException) -> Any:
         import recoverage.api as api
@@ -706,7 +1058,7 @@ class TestRegenFailureMapping:
         # touches the real workspace.
         monkeypatch.setattr(api, "run_regen", boom)
         monkeypatch.setattr(api, "_project_dir", lambda: Path("/nonexistent"))
-        api._regen_last_attempt = 0.0
+        api._regen_last_attempt = None
         return wsgi_request("POST", "/api/regen", remote_addr="127.0.0.1")
 
     def test_rebrew_error_exit_is_500_not_504(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -722,13 +1074,210 @@ class TestRegenFailureMapping:
         assert status.startswith("500")
         data = json.loads(decode_body(body, headers))
         assert "ImportError" in data["detail"]
-        assert "rebrew" in data["detail"]
+        # The message itself stays out of the body: it can name absolute paths
+        # in the project tree.  The log line keeps it.
+        assert "rebrew is required" not in data["detail"]
 
     def test_ordinary_rebrew_exception_is_500(self, monkeypatch: pytest.MonkeyPatch) -> None:
         status, headers, body = self._post_regen(monkeypatch, ValueError("corrupt JSON"))
         assert status.startswith("500")
         data = json.loads(decode_body(body, headers))
-        assert data["detail"] == "ValueError: corrupt JSON"
+        assert data["detail"].startswith("ValueError")
+        assert "corrupt JSON" not in data["detail"]
+
+    def test_failed_regen_still_invalidates_derived_caches(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """build_db can replace coverage.db and THEN fail, so the caches
+        repopulated while the run was in flight describe a file the server no
+        longer has.  The post-run invalidation must not be the success path's
+        privilege."""
+        import recoverage.api as api
+
+        cleared: list[str] = []
+        monkeypatch.setattr(
+            api, "_clear_derived_caches_logged", lambda where: cleared.append(where)
+        )
+        self._post_regen(monkeypatch, ValueError("corrupt JSON"))
+        assert "after regen" in cleared
+
+
+class TestRegenIdempotencyKey:
+    """POST /api/regen dedups a retry that carries a completed key.
+
+    A regen is convergent, so a duplicate is not corruption, but it is a
+    second full catalog+build-db run. The key is what makes a retry (proxy
+    replay, a lost response) cost a lookup instead.
+    """
+
+    def setup_method(self) -> None:
+        import recoverage.api as api
+
+        api._regen_last_attempt = 0.0
+        api._REGEN_COMPLETED_KEYS.clear()
+
+    teardown_method = setup_method
+
+    def _counting_regen(self, monkeypatch: pytest.MonkeyPatch, *, fail: bool = False) -> list[Path]:
+        import recoverage.api as api
+
+        runs: list[Path] = []
+
+        def run(root: Path) -> None:
+            runs.append(root)
+            if fail:
+                raise ValueError("corrupt JSON")
+
+        monkeypatch.setattr(api, "run_regen", run)
+        monkeypatch.setattr(api, "_project_dir", lambda: Path("/nonexistent"))
+        return runs
+
+    def _post(self, key: str | None = None) -> tuple[str, dict[str, str], bytes]:
+        headers = {"Idempotency-Key": key} if key else None
+        return wsgi_request("POST", "/api/regen", headers, remote_addr="127.0.0.1")
+
+    def test_retry_with_a_completed_key_does_not_rerun(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        runs = self._counting_regen(monkeypatch)
+
+        assert_regen_accepted(self._post("click-1"))
+        # Same key, and inside the cooldown window a second run would 429 on.
+        status, headers, body = self._post("click-1")
+
+        assert status.startswith("200")
+        assert json.loads(decode_body(body, headers)) == {"ok": True}
+        assert headers.get("Idempotent-Replay") == "true"
+        assert len(runs) == 1
+
+    def test_a_duplicate_arriving_mid_run_neither_waits_nor_reruns(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The same key arriving while its run is in flight must not start a
+        second pipeline, and must not be answered as a replay either: nothing
+        has completed, so the honest answer is the 429 the lock gives, and the
+        client's retry after the first run ends is what the ledger absorbs.
+        """
+        import recoverage.api as api
+
+        runs: list[Path] = []
+        started = threading.Event()
+        release = threading.Event()
+
+        def run(root: Path) -> None:
+            runs.append(root)
+            started.set()
+            assert release.wait(timeout=10), "test never released the regen"
+
+        monkeypatch.setattr(api, "run_regen", run)
+        monkeypatch.setattr(api, "_project_dir", lambda: Path("/nonexistent"))
+
+        first: list[Any] = []
+        worker = threading.Thread(target=lambda: first.append(self._post("click-1")))
+        worker.start()
+        assert started.wait(timeout=10), "first regen never reached run_regen"
+
+        # Backdate the cooldown so it cannot be what rejects the duplicate:
+        # a 429 here is the run lock, which is the only thing that keeps a
+        # concurrent duplicate off the pipeline.
+        monkeypatch.setattr(
+            api,
+            "_regen_last_attempt",
+            api.clock.monotonic() - api._REGEN_COOLDOWN_SECONDS - 1,
+        )
+        status, headers, body = self._post("click-1")
+        assert status.startswith("429")
+        assert json.loads(decode_body(body, headers))["code"] == "rate_limited"
+        assert len(runs) == 1
+        assert not api._regen_replayed("click-1")
+
+        release.set()
+        worker.join(timeout=10)
+        assert not worker.is_alive()
+        assert first[0][0].startswith("200")
+        assert len(runs) == 1
+
+        # The retry once the first run completed replays it.  It lands inside
+        # the cooldown window, so answering 200 at all proves the ledger was
+        # consulted before the throttle.
+        status, headers, body = self._post("click-1")
+        assert status.startswith("200")
+        assert headers.get("Idempotent-Replay") == "true"
+        assert json.loads(decode_body(body, headers)) == {"ok": True}
+        assert len(runs) == 1
+
+    def test_a_fresh_key_reruns(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import recoverage.api as api
+
+        runs = self._counting_regen(monkeypatch)
+        assert_regen_accepted(self._post("click-1"))
+        api._regen_last_attempt = 0.0
+        assert_regen_accepted(self._post("click-2"))
+
+        assert len(runs) == 2
+
+    def test_a_failed_run_is_not_recorded(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import recoverage.api as api
+
+        runs = self._counting_regen(monkeypatch, fail=True)
+        status, _, _ = self._post("click-1")
+        assert status.startswith("500")
+
+        # The retry must attempt the run again, not replay the failure.
+        api._regen_last_attempt = 0.0
+        status, _, _ = self._post("click-1")
+        assert status.startswith("500")
+        assert len(runs) == 2
+
+    def test_malformed_key_is_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        runs = self._counting_regen(monkeypatch)
+
+        status, headers, body = self._post("not a valid key")
+
+        assert status.startswith("400")
+        assert json.loads(decode_body(body, headers))["code"] == "bad_request"
+        assert runs == []
+
+    def test_ledger_is_bounded_by_age_and_count(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import recoverage.api as api
+
+        self._counting_regen(monkeypatch)
+        for i in range(api._REGEN_LEDGER_MAX_ENTRIES + 5):
+            api._regen_last_attempt = 0.0
+            assert_regen_accepted(self._post(f"click-{i}"))
+        assert len(api._REGEN_COMPLETED_KEYS) <= api._REGEN_LEDGER_MAX_ENTRIES
+
+        # Every key is older than the retention window, so none may answer.
+        real_now = time.monotonic()
+        monkeypatch.setattr(
+            api.clock, "monotonic", lambda: real_now + api._REGEN_KEY_TTL_SECONDS + 1
+        )
+        assert not api._regen_replayed("click-0")
+        assert api._REGEN_COMPLETED_KEYS == {}
+
+    def test_the_count_cap_never_shortens_the_window(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A key survives its whole window under the busiest client the cooldown allows.
+
+        The count backstop exists to bound memory, not to retire keys early:
+        if it held fewer slots than the cooldown admits completions inside one
+        retention window, a client that regenerates often enough would lose an
+        unexpired key and pay a second pipeline run for the retry the ledger
+        exists to absorb.
+        """
+        import recoverage.api as api
+
+        self._counting_regen(monkeypatch)
+        completions = int(api._REGEN_KEY_TTL_SECONDS // api._REGEN_COOLDOWN_SECONDS) + 1
+        assert completions <= api._REGEN_LEDGER_MAX_ENTRIES, (
+            "the count cap would evict a key that is still inside its window"
+        )
+
+        for i in range(completions):
+            api._regen_last_attempt = 0.0
+            assert_regen_accepted(self._post(f"click-{i}"))
+
+        assert len(api._REGEN_COMPLETED_KEYS) == completions
+        assert api._regen_replayed("click-0")
 
 
 class TestServeBindFlag:
@@ -744,8 +1293,14 @@ class TestServeBindFlag:
         assert "127.0.0.1" in help_text
 
 
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
 class TestLastVerify:
-    """/functions/<va> attaches the last `rebrew verify -o` record."""
+    """/functions/<va> attaches the last `rebrew verify -o` record.
+
+    Guarded like every other DB-backed class here: the assertions name
+    synthetic-fixture addresses (0x10001000), so inside a real rebrew
+    workspace they would be checked against unrelated project data.
+    """
 
     def test_function_detail_includes_last_verify(self) -> None:
         target = get_first_target()
@@ -886,6 +1441,40 @@ class TestSseEvents:
         assert handler.status == "200 OK"
         assert len(api._SSE_CLIENTS) == 0
         api._stop_db_watcher()
+
+    def test_stream_releases_client_when_never_iterated(self) -> None:
+        """A server may close the app iterable without iterating it (the peer
+        hangs up between the handler returning and the first write).  The
+        client queue is registered before that point, so a generator-only
+        finally would skip and leak a slot, an fd and a thread for good."""
+        from io import BytesIO
+        from wsgiref.util import setup_testing_defaults
+
+        import recoverage.api as api
+        from recoverage.webapp import app
+
+        api._stop_db_watcher()
+        environ: dict[str, Any] = {}
+        setup_testing_defaults(environ)
+        environ["REQUEST_METHOD"] = "GET"
+        environ["PATH_INFO"] = "/api/events"
+        environ["QUERY_STRING"] = ""
+        environ["REMOTE_ADDR"] = "127.0.0.1"
+        environ["wsgi.input"] = BytesIO(b"")
+        environ["CONTENT_LENGTH"] = "0"
+
+        def _start_response(status: str, response_headers, exc_info=None) -> None:
+            return None
+
+        try:
+            result = app(environ, _start_response)
+            assert len(api._SSE_CLIENTS) == 1
+            result.close()
+            assert len(api._SSE_CLIENTS) == 0
+            result.close()  # idempotent: a second close must not raise
+            assert len(api._SSE_CLIENTS) == 0
+        finally:
+            api._stop_db_watcher()
 
     def test_stream_delivers_db_updated_frame(self) -> None:
         import recoverage.api as api
@@ -1138,13 +1727,13 @@ class TestThreadingServer:
         from socketserver import ThreadingMixIn
         from wsgiref.simple_server import WSGIServer
 
-        from recoverage.cli import _ThreadingWSGIServer
+        from recoverage.devserver import _ThreadingWSGIServer
 
         assert issubclass(_ThreadingWSGIServer, ThreadingMixIn)
         assert issubclass(_ThreadingWSGIServer, WSGIServer)
 
     def test_threading_server_daemon_threads(self) -> None:
-        from recoverage.cli import _ThreadingWSGIServer
+        from recoverage.devserver import _ThreadingWSGIServer
 
         assert _ThreadingWSGIServer.daemon_threads is True
 
@@ -1178,13 +1767,88 @@ class TestBatchFunctionLookup:
         assert data[0]["last_verify"]["byte_delta"] == 0
         assert "last_verify" not in data[1]
 
+    def test_batch_array_is_the_concatenated_row_objects(self) -> None:
+        """The response is a hand-joined array of the rows' own JSON text, not
+        a re-encode of decoded rows.  Concatenating is only sound if the joined
+        document is what the handler used to produce, so pin the decoded
+        document itself: every requested VA in input order, each function
+        carrying its full field set, and last_verify attached exactly where a
+        verify row exists.  A row dropped, reordered, or silently missing a
+        field still parses as JSON, so asserting on the parsed array is the
+        only thing that catches it."""
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        vas = ["0x10001010", "0x10001000"]  # reverse order: output follows input
+        status, headers, body = self._post(target, json.dumps({"vas": vas}))
+        assert status.startswith("200")
+        data = json.loads(decode_body(body, headers))
+        assert [fn["va"] for fn in data] == [0x10001010, 0x10001000]
+        assert [fn["name"] for fn in data] == ["_func_b", "_func_a"]
+        # The one with a verify row is the one that gained a key.
+        assert "last_verify" not in data[0]
+        assert data[1]["last_verify"]["byte_delta"] == 0
+        # Fields SQLite wrote into the object survive the passthrough: the
+        # projection is the same text either way, so a shortened projection
+        # would show up here as a missing key rather than as a parse error.
+        for fn in data:
+            assert {"va", "name", "size", "fileOffset", "status", "module"} <= set(fn)
+
+    def test_batch_rejects_non_json_content_type(self) -> None:
+        """A declared non-JSON media type is a 415, not a body that parses
+        by accident: the client set the header wrongly and 'Body must be a
+        JSON object' would blame the payload instead."""
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        for content_type in ("text/plain", "application/x-www-form-urlencoded"):
+            status, headers, body = wsgi_post(
+                f"/api/targets/{target}/functions",
+                headers={"Content-Type": content_type},
+                body=json.dumps({"vas": ["0x10001000"]}),
+            )
+            assert status.startswith("415"), content_type
+            data = json.loads(decode_body(body, headers))
+            assert data["code"] == "unsupported_media_type"
+            assert content_type in data["detail"]
+
+    def test_batch_accepts_json_content_type_variants(self) -> None:
+        """A charset parameter and a +json structured suffix are both JSON;
+        the check is on the media type, not a byte-exact header match."""
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        for content_type in (
+            "application/json; charset=utf-8",
+            "application/vnd.recoverage+json",
+            "APPLICATION/JSON",
+        ):
+            status, _headers, _body = wsgi_post(
+                f"/api/targets/{target}/functions",
+                headers={"Content-Type": content_type},
+                body=json.dumps({"vas": ["0x10001000"]}),
+            )
+            assert status.startswith("200"), content_type
+
+    def test_batch_accepts_absent_content_type(self) -> None:
+        """A client that omits the header entirely is not refused; the body
+        is still parsed. Keeps curl -d and other header-less clients working."""
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, _headers, _body = wsgi_post(
+            f"/api/targets/{target}/functions",
+            body=json.dumps({"vas": ["0x10001000"]}),
+        )
+        assert status.startswith("200")
+
     def test_batch_rejects_oversized_body(self) -> None:
         """The batch endpoint is unauthenticated — an oversized body must be
         rejected with 413 before it is parsed, not read into memory."""
         target = get_first_target()
         if not target:
             pytest.skip("No targets in DB")
-        status, _, body = wsgi_post(
+        status, _, _body = wsgi_post(
             f"/api/targets/{target}/functions",
             body=b'{"vas": ["0x10001000"]' + b" " * 70_000 + b"}",
         )
@@ -1319,6 +1983,47 @@ class TestBatchFunctionLookup:
         data = json.loads(decode_body(body, headers))
         assert str(api._MAX_BATCH_LOOKUP) in data["error"]
 
+    def test_batch_read_failure_is_not_reported_as_a_malformed_body(self) -> None:
+        """A body stream that breaks is a transport failure, not bad JSON.
+
+        The read used to be answered with an empty body, so a client that hung
+        up mid-transfer was told "Body must be a JSON object" and pointed at
+        its own payload for a failure it could not see or fix.  Driven through
+        the real route: the WSGI environ carries the broken stream, and only
+        the error label may differ from a genuinely empty body.
+        """
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+
+        class _BrokenStream:
+            def read(self, _n: int = -1) -> bytes:
+                raise OSError("peer closed the connection mid-body")
+
+        environ: dict[str, Any] = {}
+        setup_testing_defaults(environ)
+        environ.update(
+            REQUEST_METHOD="POST",
+            PATH_INFO=f"/api/targets/{target}/functions",
+            QUERY_STRING="",
+            REMOTE_ADDR="127.0.0.1",
+            CONTENT_TYPE="application/json",
+            CONTENT_LENGTH="32",
+            **{"wsgi.input": _BrokenStream()},
+        )
+        captured: dict[str, str] = {}
+
+        def _start_response(status: str, headers: list[tuple[str, str]], exc: Any = None) -> Any:
+            captured["status"] = status
+            return lambda chunk: None
+
+        body = b"".join(webapp.app(environ, _start_response))
+        text = body.decode("utf-8")
+
+        assert captured["status"].startswith("400")
+        assert "Could not read request body" in text
+        assert "Body must be a JSON object" not in text
+
 
 # ── Error-response consistency ────────────────────────────────────
 
@@ -1332,7 +2037,7 @@ class TestErrorResponseShape:
         # The 429 test stamps the module-global regen cooldown; reset so
         # later tests POSTing /api/regen start from a neutral state instead
         # of inheriting this test's rate-limit window.
-        api._regen_last_attempt = 0.0
+        api._regen_last_attempt = None
 
     def _check(
         self, status: str, headers: dict[str, str], body: bytes, expected_code: str
@@ -1371,16 +2076,20 @@ class TestErrorResponseShape:
         # The first POST must pass the cooldown gate without running a real
         # regen (rebrew would rebuild the developer's coverage.db).
         monkeypatch.setattr(api, "_do_regen", lambda remote: api._json_ok({"ok": True}))
-        api._regen_last_attempt = 0.0
+        api._regen_last_attempt = None
         wsgi_request("POST", "/api/regen", remote_addr="127.0.0.1")
         status, headers, body = wsgi_request("POST", "/api/regen", remote_addr="127.0.0.1")
         data = self._check(status, headers, body, "rate_limited")
-        assert data["retry_after"] >= 0
+        assert data["retry_after"] >= 1, f"a zero wait is not a wait: {data['retry_after']}"
         assert data["detail"]
+        # The auth throttle answers its 429 with the same header, so a client
+        # has one place to read the wait from regardless of which limit hit.
+        assert int(_header(headers, "Retry-After") or 0) >= 1
 
-    def test_501_not_implemented(self) -> None:
-        if HAS_CAPSTONE:
-            pytest.skip("capstone installed — asm route serves normally")
+    def test_501_not_implemented(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import recoverage.api as api
+
+        monkeypatch.setattr(api, "capstone_unavailable_reason", lambda: "capstone is not installed")
         status, headers, body = wsgi_get("/api/targets/FAKEDLL/asm?va=0x10001000&size=16")
         data = self._check(status, headers, body, "not_implemented")
         assert "capstone" in data["error"]
@@ -1404,7 +2113,9 @@ class TestErrorResponseShape:
     ) -> None:
         """A swallowed sqlite3.Error in the shared target cursor must not make
         a missing/corrupt database invisible: the failure is logged with the
-        request context and the 503 detail carries the underlying cause."""
+        request context and the cause.  The 503 body names the exception class
+        but not its message, which quotes the absolute database path and would
+        reach any unauthenticated caller (--allow-remote)."""
         import logging as _logging
 
         import recoverage.api as api
@@ -1421,7 +2132,8 @@ class TestErrorResponseShape:
             status, headers, body = wsgi_get(f"/api/targets/{target}/stats")
         self._check(status, headers, body, "db_unavailable")
         data = json.loads(decode_body(body, headers))
-        assert "unable to open database file" in data["detail"]
+        assert "OperationalError" in data["detail"]
+        assert "unable to open database file" not in data["detail"]
         logged = [rec.getMessage() for rec in caplog.records]
         assert any(
             "Database unavailable" in msg and "unable to open database file" in msg
@@ -1543,6 +2255,24 @@ class TestCorsOriginAllowlist:
         methods = headers.get("Access-Control-Allow-Methods", "")
         assert "GET" in methods and "POST" in methods and "OPTIONS" in methods
         assert "Content-Type" in headers.get("Access-Control-Allow-Headers", "")
+
+    def test_allow_headers_cover_the_documented_auth_and_validators(self) -> None:
+        """--cors must not preflight-fail the two credentials the API documents.
+
+        Authorization carries the --token bearer check and If-None-Match
+        carries the conditional GET every ETag-bearing endpoint expects; a
+        client sending either without it in this list never gets a response.
+        """
+        self._enable(["http://localhost:5173"])
+        _status, headers, _body = wsgi_get(
+            "/api/health", headers={"Origin": "http://localhost:5173"}
+        )
+        allowed = headers.get("Access-Control-Allow-Headers", "")
+        assert "Authorization" in allowed
+        assert "If-None-Match" in allowed
+        exposed = headers.get("Access-Control-Expose-Headers", "")
+        assert "ETag" in exposed
+        assert "Retry-After" in exposed
 
     def test_preflight_unknown_origin_gets_no_acao(self) -> None:
         """Preflight for a non-allowlisted origin answers 200 but must not
@@ -1697,22 +2427,21 @@ class TestPostConnectSqliteError:
 
         real_conn = api._db()
 
-        class _BoomCursor:
-            def __init__(self) -> None:
-                pass
+        class _BoomConn:
+            # `BEGIN` succeeds so the pinned snapshot really opens; every
+            # other statement is the failure the endpoint must turn into 503.
+            in_transaction = False
 
-            def execute(self, *a, **k):
+            def execute(self, sql, *a, **k):
+                if sql == "BEGIN":
+                    return
                 raise sqlite3.OperationalError("no such table: section_cell_stats")
 
-            def fetchone(self) -> None:
-                return None
-
-            def fetchall(self) -> list:
-                return []
-
-        class _BoomConn:
             def cursor(self):
                 return _BoomCursor()
+
+            def rollback(self) -> None:
+                pass
 
             def close(self) -> None:
                 pass
@@ -1722,6 +2451,18 @@ class TestPostConnectSqliteError:
 
             def __exit__(self, *a):
                 return False
+
+        class _BoomCursor:
+            connection = _BoomConn()
+
+            def execute(self, *a, **k):
+                raise sqlite3.OperationalError("no such table: section_cell_stats")
+
+            def fetchone(self) -> None:
+                return None
+
+            def fetchall(self) -> list:
+                return []
 
         monkeypatch.setattr(api, "_db", lambda: _BoomConn())
         try:
@@ -1801,22 +2542,205 @@ def _make_schema_gate_db(tmp_path: Path, cells: list[tuple[str, int, int, str]] 
     return db
 
 
+def _fake_request(query: dict[str, str] | None = None) -> Any:
+    """A thread-independent stand-in for bottle's request local.
+
+    Handlers read ``request`` from *their own* module globals, so one
+    stand-in has to be installed in every module that touches it: ``api``
+    reads ``request.query`` for ``?section=`` while the shared ETag and
+    compression helpers in ``server`` read ``request.headers``. Patching only
+    ``api.request`` leaves the server half falling back to bottle's empty
+    default environ, which is how a caller-supplied section filter silently
+    disappears.
+    """
+    return type("R", (), {"headers": {}, "query": dict(query or {}), "environ": {}})()
+
+
 def _point_app_at_db(monkeypatch: pytest.MonkeyPatch, db: Any) -> Any:
     """Point the app at a synthetic DB and return the mock request."""
     import recoverage.api as api
+    import recoverage.server as server_mod
+
+    # The request path reaches the database through server._db(), whose body
+    # resolves _open_db in server's module globals, so that is the binding a
+    # monkeypatch has to replace; patching api._open_db is inert. The wrapper
+    # delegates to the real opener so the connection still takes the
+    # coverage_db_lock a production read holds.
+    real_open_db = server_mod._open_db
 
     def _open_like(p: Any) -> Any:
-        conn = sqlite3.connect(sqlite_ro_uri(p), uri=True)
-        conn.row_factory = sqlite3.Row
-        return conn
+        return real_open_db(p)
 
-    req = type("R", (), {"headers": {}, "query": {}})()
+    req = _fake_request()
     monkeypatch.setattr(api, "_db_path", lambda: db)
     monkeypatch.setattr("recoverage.server._db_path", lambda: db)
-    monkeypatch.setattr(api, "_open_db", _open_like)
+    monkeypatch.setattr(server_mod, "_open_db", _open_like)
     monkeypatch.setattr(api, "_require_target", lambda c, t: None)
+    # Both modules bind `request` at import time, and every header read goes
+    # through server._header, so a fake that patched only api.request left the
+    # real (empty) request answering Accept-Encoding.
     monkeypatch.setattr(api, "request", req)
+    monkeypatch.setattr(server_mod, "request", req)
     return req
+
+
+class TestDataMarkerFilter:
+    """GLOBAL/DATA/VTABLE/STRING rows are data, not functions.
+
+    The filter has to survive a database whose ``functions.markerType`` is
+    nullable: SQLite evaluates ``NULL NOT IN (...)`` to NULL, which WHERE
+    rejects, so a plain NOT IN silently drops every unmarked function from
+    the list, from the Potato table, and from the by-status counts.  An
+    unknown marker type is a function (rebrew's own column is
+    ``NOT NULL DEFAULT 'FUNCTION'``), so the row must be counted.
+    """
+
+    def _db(self, tmp_path: Any) -> Any:
+        db = _make_schema_gate_db(tmp_path)
+        conn = sqlite3.connect(db)
+        c = conn.cursor()
+        c.executemany(
+            "INSERT INTO functions (target, va, name, vaStart, size, status, markerType)"
+            " VALUES ('GAME', ?, ?, ?, 1, 'exact', ?)",
+            [
+                (0x1000, "_fn", "0x1000", "FUNCTION"),
+                (0x1010, "_unmarked", "0x1010", None),
+                (0x1020, "_gvar", "0x1020", "GLOBAL"),
+            ],
+        )
+        conn.commit()
+        conn.close()
+        return db
+
+    def test_list_keeps_unmarked_functions(self, tmp_path: Any, monkeypatch: Any) -> None:
+        import recoverage.api as api
+
+        _point_app_at_db(monkeypatch, self._db(tmp_path))
+        body = json.loads(api.handle_api_functions_list("GAME"))
+        assert {fn["name"] for fn in body["functions"]} == {"_fn", "_unmarked"}
+        assert body["total"] == 2
+
+    def test_by_status_counts_unmarked_functions(self, tmp_path: Any, monkeypatch: Any) -> None:
+        import recoverage.api as api
+
+        _point_app_at_db(monkeypatch, self._db(tmp_path))
+        body = json.loads(api.handle_api_stats("GAME"))
+        assert body["functions_by_status"] == {"exact": 2}
+
+
+def _drop_section_row(conn: sqlite3.Connection) -> None:
+    """Leave the materialized cache covering only .text.
+
+    The fixture's section_cell_stats is a view over cells, so a partial
+    cache is staged as the table a hand-made or half-rebuilt database
+    carries: same columns, fewer sections.
+    """
+    conn.execute("DROP VIEW section_cell_stats")
+    conn.execute(
+        "CREATE TABLE section_cell_stats (target TEXT, section_name TEXT, "
+        "total_cells INTEGER, exact_count INTEGER, reloc_count INTEGER, "
+        "near_match_count INTEGER, stub_count INTEGER, padding_count INTEGER, "
+        "data_count INTEGER, thunk_count INTEGER, none_count INTEGER, "
+        "proven_count INTEGER, size_mismatch_count INTEGER)"
+    )
+    conn.execute(
+        "INSERT INTO section_cell_stats VALUES ('GAME', '.text', 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0)"
+    )
+
+
+class TestDataSectionBuckets:
+    """/data reads the per-section buckets through the shared reader.
+
+    ``server.section_bucket_rows`` carries the cache-first policy every
+    section_cell_stats consumer owes: prefer the materialized cache,
+    re-aggregate a section it omits from `cells`, and treat an absent table
+    as an empty one.  /data ran its own SELECT, so a cache covering only
+    some of the target's sections left the rest with no buckets at all,
+    which is the one case a presence check misses.
+    """
+
+    #: (section, start, end, state) cells, two sections so a partial cache
+    #: leaves a visible gap.
+    CELLS: ClassVar[list[tuple[str, int, int, str]]] = [
+        (".text", 0x1000, 0x1004, "exact"),
+        (".data", 0x2000, 0x2002, "none"),
+    ]
+
+    def _db(self, tmp_path: Any) -> Any:
+        db = _make_schema_gate_db(tmp_path, cells=self.CELLS)
+        conn = sqlite3.connect(db)
+        c = conn.cursor()
+        c.executemany(
+            "INSERT INTO sections (target, name, va, size) VALUES ('GAME', ?, ?, 2)",
+            [(".text", 0x1000), (".data", 0x2000)],
+        )
+        conn.commit()
+        conn.close()
+        return db
+
+    def _buckets(self, db: Any, monkeypatch: Any) -> dict[str, Any]:
+        import recoverage.api as api
+
+        _point_app_at_db(monkeypatch, db)
+        body = json.loads(api.handle_api_data("GAME"))
+        return body["section_cell_stats"]
+
+    def test_partial_cache_fills_the_gap(self, tmp_path: Any, monkeypatch: Any) -> None:
+        db = self._db(tmp_path)
+        conn = sqlite3.connect(db)
+        _drop_section_row(conn)
+        conn.commit()
+        conn.close()
+
+        buckets = self._buckets(db, monkeypatch)
+        assert set(buckets) == {".text", ".data"}
+        assert buckets[".text"]["total_cells"] == 1
+        assert buckets[".data"]["none"] == 1
+
+    def test_section_filtered_payload_gaps_too(self, tmp_path: Any, monkeypatch: Any) -> None:
+        """``?section=`` narrows the cells, not the section set: the one
+        section it names is exactly the one a partial cache can be missing."""
+        import recoverage.api as api
+
+        db = self._db(tmp_path)
+        conn = sqlite3.connect(db)
+        _drop_section_row(conn)
+        conn.commit()
+        conn.close()
+
+        _point_app_at_db(monkeypatch, db)
+        req = _fake_request({"section": ".data"})
+        monkeypatch.setattr(api, "request", req)
+        import recoverage.server as server_mod
+
+        monkeypatch.setattr(server_mod, "request", req)
+        body = json.loads(api.handle_api_data("GAME"))
+        assert body["section_cell_stats"][".data"]["none"] == 1
+
+    def test_absent_table_degrades_to_cells(self, tmp_path: Any) -> None:
+        """A database without the materialized table still has to serve.
+
+        The schema gate refuses such a file to every endpoint, so this
+        drives the payload builder directly: the reader answers from `cells`
+        rather than raising `no such table`, which is the same degrade the
+        other surfaces make.
+        """
+        import recoverage.api as api
+
+        db = self._db(tmp_path)
+        conn = sqlite3.connect(db)
+        conn.execute("DROP VIEW section_cell_stats")
+        conn.commit()
+        conn.close()
+
+        conn = sqlite3.connect(sqlite_ro_uri(db), uri=True)
+        conn.row_factory = sqlite3.Row
+        try:
+            payload = json.loads(api._read_data_raw(conn.cursor(), "GAME", None))
+        finally:
+            conn.close()
+        assert set(payload["section_cell_stats"]) == {".text", ".data"}
+        assert payload["section_cell_stats"][".text"]["total_cells"] == 1
 
 
 class TestDataPayloadMemo:
@@ -1846,10 +2770,19 @@ class TestDataPayloadMemo:
         resp1 = api.handle_api_data("GAME")
         assert isinstance(resp1, bytes)
         assert len(api._DATA_CACHE) == 1
+        key = next(iter(api._DATA_CACHE))
+        # deepcopy, not dict(): a memo hit writes the stored body back into the
+        # entry in place, so a shallow copy would be compared against itself.
+        entry_before = copy.deepcopy(api._DATA_CACHE[key])
 
-        # Second request: cache hit (payload identical, no query re-run).
+        # Second request: a memo hit serves the stored body verbatim, so the
+        # bytes must be identical and the entry must survive the call. Checking
+        # the key the first request actually wrote proves the hit came from
+        # the memo rather than from a rebuild under a fresh key.
         resp2 = api.handle_api_data("GAME")
-        assert isinstance(resp2, bytes)
+        assert resp2 == resp1
+        assert api._DATA_CACHE.get(key) == entry_before
+        assert set(api._DATA_CACHE) == {key}
 
         # Rebuild invalidation path.
         api._clear_data_cache()
@@ -1911,6 +2844,52 @@ class TestDataPayloadMemo:
         entry = next(iter(api._DATA_CACHE.values()))
         assert set(entry) == {"raw", "", "zstd", "gzip"}
 
+    def test_memo_rejects_payload_built_under_a_moved_watermark(
+        self, tmp_path: Any, monkeypatch: Any
+    ) -> None:
+        """A build that finishes after a rebuild must not publish.
+
+        The memo key's snapshot is taken before the queries run, so a rebuild
+        committing mid-build leaves the payload pre-rebuild while the key says
+        post-rebuild.  The db-updated broadcast has already cleared the memo by
+        then, so publishing would serve the stale payload to the very refetch
+        herd the broadcast woke — until the next rebuild.  The response itself
+        is still produced; only the cache write is declined.
+        """
+        import recoverage.api as api
+
+        self._patch(tmp_path, monkeypatch)
+        monkeypatch.setattr(api, "_snapshot_db_mtime", _sequential_snapshot([(1, 1), (2, 2)]))
+
+        body = api.handle_api_data("GAME")
+        assert isinstance(body, bytes) and b'"sections"' in body
+        assert api._DATA_CACHE == {}
+
+    def test_memo_publishes_when_the_watermark_holds(self, tmp_path: Any, monkeypatch: Any) -> None:
+        """The watermark re-check must not disable the memo: an unchanged DB
+        re-stats to the same snapshot and the payload is cached as before."""
+        import recoverage.api as api
+
+        self._patch(tmp_path, monkeypatch)
+        monkeypatch.setattr(api, "_snapshot_db_mtime", _sequential_snapshot([(7, 7), (7, 7)]))
+
+        api.handle_api_data("GAME")
+        assert len(api._DATA_CACHE) == 1
+
+    def test_stats_memo_rejects_payload_built_under_a_moved_watermark(
+        self, tmp_path: Any, monkeypatch: Any
+    ) -> None:
+        """Same watermark contract for the /stats memo, which aggregates the
+        whole cells table and would otherwise pin pre-rebuild counts."""
+        import recoverage.api as api
+
+        self._patch(tmp_path, monkeypatch)
+        monkeypatch.setattr(api, "_snapshot_db_mtime", _sequential_snapshot([(1, 1), (2, 2)]))
+
+        body = api.handle_api_stats("GAME")
+        assert isinstance(body, bytes) and b'"sections"' in body
+        assert api._STATS_CACHE == {}
+
     def test_derived_cache_clear_spares_spa_shell(self, tmp_path: Any, monkeypatch: Any) -> None:
         """_clear_derived_caches (the db-updated / regen invalidation path)
         must empty every DB-derived cache but leave the SPA shell cache
@@ -1936,16 +2915,26 @@ class TestDataPayloadMemo:
         assert ui.CACHED_INDEX_COMPRESSED == {"gzip": b"shell-gz"}
 
     def _gated_open(
-        self, tmp_path: Any, monkeypatch: Any, release: threading.Event
-    ) -> tuple[Any, list[int]]:
+        self,
+        tmp_path: Any,
+        monkeypatch: Any,
+        release: threading.Event,
+        query: dict[str, str] | None = None,
+    ) -> tuple[Any, list[int], dict[str, str]]:
         """Patch ``_open_db`` to record every call and park the FIRST caller
         on *release* — freezing the payload build mid-flight so the test can
         observe what concurrent requests do while a build is in progress.
 
-        Also installs thread-independent request/response stand-ins for the
-        ``server`` module: worker threads have no bottle request context
-        (thread-local), and the compression/ETag helpers resolve those names
-        from server's namespace."""
+        Also installs thread-independent request/response stand-ins for both
+        the ``server`` and ``api`` namespaces: worker threads have no bottle
+        request context (thread-local), and the compression/ETag helpers
+        resolve those names from server's while ``api._query_param`` resolves
+        its own.  Both modules import the one thread-local proxy, so under a
+        real request the two names always agree; the stand-ins are separate
+        objects, so a test that exercises a ``?section=`` (or any other)
+        parameter has to install them in both or the handler would build the
+        unfiltered payload.  *query* rides on the stand-in, and the stand-in's
+        ``query`` dict is returned so a test can assert on it."""
         import recoverage.api as api
         import recoverage.server as server_mod
 
@@ -1967,13 +2956,28 @@ class TestDataPayloadMemo:
 
         monkeypatch.setattr(server_mod, "_open_db", counting_open)
 
-        fake_req: Any = type("R", (), {"headers": {}, "query": {}, "environ": {}})()
+        fake_req: Any = _fake_request(query)
+        query = fake_req.query
         fake_resp: Any = type(
             "R", (), {"content_type": None, "set_header": lambda self, k, v: None}
         )()
+        # The query-carrying stand-in replaces the one _point_app_at_db
+        # installed, and it has to go into BOTH namespaces: api._query_param
+        # reads request.query from api's globals, and server's header helpers
+        # read request.headers from server's. Installing it only in server left
+        # a worker thread's ?section= filter invisible to the handler, so the
+        # follower built the unfiltered payload under a different memo key and
+        # never saw the in-flight build it was supposed to wait on.
+        monkeypatch.setattr(api, "request", fake_req)
         monkeypatch.setattr(server_mod, "request", fake_req)
         monkeypatch.setattr(server_mod, "response", fake_resp)
-        return api, open_calls
+        # api._query_param resolves `request` in api's own namespace (see its
+        # docstring), so the stand-in has to be installed there too.  Patching
+        # only the server module left the handler reading bottle's empty
+        # thread-local, so a `?section=` filter never reached the memo key.
+        monkeypatch.setattr(api, "request", fake_req)
+        monkeypatch.setattr(api, "response", fake_resp)
+        return api, open_calls, query
 
     def test_concurrent_cold_misses_single_flight(self, tmp_path: Any, monkeypatch: Any) -> None:
         """Simultaneous cold misses share ONE payload build.
@@ -1986,7 +2990,7 @@ class TestDataPayloadMemo:
         import recoverage.api as api
 
         release = threading.Event()
-        _, open_calls = self._gated_open(tmp_path, monkeypatch, release)
+        _, open_calls, _ = self._gated_open(tmp_path, monkeypatch, release)
 
         workers = 4
         barrier = threading.Barrier(workers + 1)
@@ -2033,7 +3037,7 @@ class TestDataPayloadMemo:
         import recoverage.api as api
 
         never = threading.Event()
-        _, open_calls = self._gated_open(tmp_path, monkeypatch, never)
+        _, open_calls, _ = self._gated_open(tmp_path, monkeypatch, never)
         snap = api._snapshot_db_mtime()
         assert snap is not None
         key: tuple[tuple[int, int], str, None] = (snap, "GAME", None)
@@ -2048,19 +3052,23 @@ class TestDataPayloadMemo:
         t = threading.Thread(target=follower)
         t.start()
         try:
-            t.join(timeout=1.0)
-            assert t.is_alive(), "follower did not wait for the in-flight build"
-            assert open_calls == [], "follower opened the DB despite an in-flight build"
-            api._DATA_CACHE[key] = {"raw": b'{"memoized": true}'}
+            try:
+                t.join(timeout=1.0)
+                assert t.is_alive(), "follower did not wait for the in-flight build"
+                assert open_calls == [], "follower opened the DB despite an in-flight build"
+                api._DATA_CACHE[key] = {"raw": b'{"memoized": true}'}
+            finally:
+                built.set()
+            t.join(timeout=15)
+            assert not t.is_alive(), "follower never woke"
+            assert outcome == [b'{"memoized": true}']
+            assert open_calls == []
         finally:
-            built.set()
-        t.join(timeout=15)
-        assert not t.is_alive(), "follower never woke"
-        assert outcome == [b'{"memoized": true}']
-        assert open_calls == []
-        # The follower owns nothing: the manually registered event is left
-        # for its owner, so pop it the way an owner's finally would.
-        api._DATA_CACHE_BUILDING.pop(key, None)
+            # Both maps are process-global: drop the hand-inserted entry and
+            # the manually registered event the way an owner's finally would,
+            # so neither leaks into a later test as a real payload.
+            api._DATA_CACHE.pop(key, None)
+            api._DATA_CACHE_BUILDING.pop(key, None)
 
     def test_follower_survives_leader_404(self, tmp_path: Any, monkeypatch: Any) -> None:
         """A follower parked on an in-flight build whose owner short-circuits
@@ -2069,9 +3077,15 @@ class TestDataPayloadMemo:
         import recoverage.api as api
 
         release = threading.Event()
-        _, open_calls = self._gated_open(tmp_path, monkeypatch, release)
-        req = type("R", (), {"headers": {}, "query": {"section": "nope"}})()
-        monkeypatch.setattr(api, "request", req)
+        # The section filter is read by api._query_param, which resolves
+        # `request` from the *api* module globals, so the stand-in carrying
+        # it has to be patched there; a request stand-in on the server module
+        # alone would leave the handler building the unfiltered payload and
+        # this test would pass on the wrong path. The ETag/compression helpers
+        # resolve it from the server globals, so _gated_open installs the one
+        # query-carrying stand-in in both namespaces and the follower computes
+        # the same memo key this test registers.
+        _, open_calls, _ = self._gated_open(tmp_path, monkeypatch, release, {"section": "nope"})
         api._clear_data_cache()
 
         snap = api._snapshot_db_mtime()
@@ -2089,21 +3103,31 @@ class TestDataPayloadMemo:
                 outcome.append(("raised", exc))
 
         t = threading.Thread(target=follower)
-        t.start()
-        t.join(timeout=0.3)
-        assert t.is_alive(), "follower did not wait for the in-flight build"
-        built.set()
-        release.set()  # the follower's own build may now open the DB
-        t.join(timeout=15)
-        assert not t.is_alive(), "404 path deadlocked the follower"
-        kind, resp = outcome[0]
-        # The unknown-section 404 is raised by _build_data_raw (a raised
-        # HTTPResponse is what bottle renders as the response); the direct
-        # call observes the raised shape.  Either way the follower must see
-        # its own 404, never a stale/empty payload.
-        assert kind == "raised" and str(resp.status).startswith("404")
-        assert open_calls == [1]
-        api._DATA_CACHE_BUILDING.pop(key, None)
+        try:
+            t.start()
+            t.join(timeout=0.3)
+            assert t.is_alive(), "follower did not wait for the in-flight build"
+            assert open_calls == [], "follower opened the DB despite an in-flight build"
+            built.set()
+            release.set()  # the follower's own build may now open the DB
+            t.join(timeout=15)
+            assert not t.is_alive(), "404 path deadlocked the follower"
+            kind, resp = outcome[0]
+            # The unknown-section 404 is raised by _build_data_raw (a raised
+            # HTTPResponse is what bottle renders as the response); the direct
+            # call observes the raised shape.  Either way the follower must
+            # see its own 404, never a stale/empty payload.
+            assert kind == "raised" and str(resp.status).startswith("404")
+            # Exactly one build ran: the follower's own. A leader build here
+            # would mean the follower joined an in-flight payload instead.
+            assert open_calls == [1]
+            assert api._DATA_CACHE == {}
+        finally:
+            # The event is process-global state no thread owns (the leader
+            # that would have set it never ran), so a failure above must not
+            # strand it for a later test.
+            built.set()
+            api._DATA_CACHE_BUILDING.pop(key, None)
 
 
 def _header(headers: dict[str, str], name: str) -> str | None:
@@ -2116,6 +3140,35 @@ def _header(headers: dict[str, str], name: str) -> str | None:
 
 class TestApiEtagContract:
     """Hashed ETag + If-None-Match 304 round-trip on the /data route."""
+
+    def test_stats_etag_roundtrip(self) -> None:
+        """Every DB-derived read endpoint revalidates, /stats included: it is
+        a pure function of the DB snapshot and the target, so a polling
+        consumer must be able to get a 304 rather than re-run the
+        SECTION_STATS_SQL aggregation."""
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, headers, _ = wsgi_get(f"/api/targets/{target}/stats")
+        assert status.startswith("200")
+        etag = _header(headers, "ETag")
+        assert etag and etag.startswith('"') and etag.endswith('"')
+        assert "no-store" not in _header(headers, "Cache-Control")
+        status, headers, body = wsgi_get(
+            f"/api/targets/{target}/stats", headers={"If-None-Match": etag}
+        )
+        assert status == "304 Not Modified"
+        assert body == b""
+
+    def test_stats_etag_differs_from_data_etag(self) -> None:
+        """The two same-snapshot routes must not share a validator, or a
+        client that revalidated /stats could cache the /data body under it."""
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        _, stats_headers, _ = wsgi_get(f"/api/targets/{target}/stats")
+        _, data_headers, _ = wsgi_get(f"/api/targets/{target}/data")
+        assert _header(stats_headers, "ETag") != _header(data_headers, "ETag")
 
     def test_data_etag_roundtrip(self) -> None:
         target = get_first_target()
@@ -2151,6 +3204,208 @@ class TestApiEtagContract:
         assert payload.get("code") == "not_found"
 
 
+class TestRegenMetrics:
+    """/api/health reports the regen pipeline's own state.
+
+    A regen is the one request that runs for minutes: the RED counters can say
+    one request is still in flight but not that it is a rebuild, how long the
+    last one took, or whether failures are climbing.  A dashboard whose
+    Reload button does nothing must be distinguishable from one whose pipeline
+    is broken, and both from one nobody asked to rebuild.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _reset(self) -> None:
+        import recoverage.api as api
+        from recoverage import metrics
+
+        api._regen_last_attempt = None
+        api._REGEN_COMPLETED_KEYS.clear()
+        metrics.REGEN.reset()
+        yield
+        metrics.REGEN.reset()
+
+    def _health_regen(self) -> dict:
+        status, headers, body = wsgi_get("/api/health")
+        assert status.startswith("200"), status
+        return json.loads(decode_body(body, headers))["regen"]
+
+    def _post(self) -> tuple[str, dict[str, str], bytes]:
+        return wsgi_request("POST", "/api/regen", remote_addr="127.0.0.1")
+
+    def test_successful_run_is_counted_with_its_duration(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import recoverage.api as api
+
+        monkeypatch.setattr(api, "run_regen", lambda root: None)
+        monkeypatch.setattr(api, "_project_dir", lambda: Path("/nonexistent"))
+        assert_regen_accepted(self._post())
+        regen = self._health_regen()
+        assert regen["runs"] == 1
+        assert regen["failures"] == 0
+        assert regen["in_flight"] == 0
+        assert regen["last_ok"] is True
+        assert regen["last_duration_ms"] >= 0.0
+
+    def test_failed_run_counts_a_failure_and_reports_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import recoverage.api as api
+
+        def boom(root: Path) -> None:
+            raise ValueError("corrupt JSON")
+
+        monkeypatch.setattr(api, "run_regen", boom)
+        monkeypatch.setattr(api, "_project_dir", lambda: Path("/nonexistent"))
+        status, _headers, _body = self._post()
+        assert status.startswith("500")
+        regen = self._health_regen()
+        assert regen["runs"] == 1
+        assert regen["failures"] == 1
+        assert regen["last_ok"] is False
+        assert regen["in_flight"] == 0
+
+    def test_cooldown_rejection_is_counted_separately_from_a_failure(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A refused POST is not a failed run.
+
+        The SPA throttles Reload clicks, so refusals are routine; counting them
+        as failures would report a broken pipeline for a double-clicked button.
+        """
+        import recoverage.api as api
+
+        monkeypatch.setattr(api, "run_regen", lambda root: None)
+        monkeypatch.setattr(api, "_project_dir", lambda: Path("/nonexistent"))
+        assert_regen_accepted(self._post())
+        status, _headers, _body = self._post()
+        assert status.startswith("429")
+        regen = self._health_regen()
+        assert regen["rejected"] == 1
+        assert regen["failures"] == 0
+        assert regen["runs"] == 1
+
+    def test_duration_comes_from_the_injected_clock(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The recorded duration is a multiple of the fake step, so a real
+        wall-clock read could not have produced it, and the log line names it."""
+        import logging as _logging
+
+        import recoverage.api as api
+
+        reads = [0]
+
+        def _fake_monotonic() -> float:
+            reads[0] += 1
+            return 1.0 + 3.0 * reads[0]
+
+        monkeypatch.setattr(api.clock, "monotonic", _fake_monotonic)
+        monkeypatch.setattr(api, "run_regen", lambda root: None)
+        monkeypatch.setattr(api, "_project_dir", lambda: Path("/nonexistent"))
+        with caplog.at_level(_logging.INFO, logger="recoverage"):
+            assert_regen_accepted(self._post())
+        regen = self._health_regen()
+        assert regen["last_duration_ms"] % 3000.0 == 0.0
+        assert any("Regen completed successfully in" in r.getMessage() for r in caplog.records)
+
+    def test_in_flight_is_visible_while_the_run_holds_the_lock(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A hung rebuild is the failure the request counters cannot show:
+        /api/regen sits in flight forever with no request row to explain it."""
+        import recoverage.api as api
+
+        release = threading.Event()
+        entered = threading.Event()
+
+        def slow(root: Path) -> None:
+            entered.set()
+            release.wait(5.0)
+
+        monkeypatch.setattr(api, "run_regen", slow)
+        monkeypatch.setattr(api, "_project_dir", lambda: Path("/nonexistent"))
+        worker = threading.Thread(
+            target=lambda: wsgi_request("POST", "/api/regen", remote_addr="127.0.0.1"),
+            daemon=True,
+        )
+        worker.start()
+        try:
+            assert entered.wait(5.0), "the regen never started"
+            assert self._health_regen()["in_flight"] == 1
+        finally:
+            release.set()
+            worker.join(5.0)
+        assert self._health_regen()["in_flight"] == 0
+
+
+class TestHealthStreams:
+    """/api/health reports SSE saturation and whether the poller is alive.
+
+    Every connected stream pins a server thread, and the cap answers 503 to the
+    one after it: an operator looking at a dashboard that stopped live-updating
+    needs the connection count, not a healthy-looking 200.
+    """
+
+    def test_streams_reported_before_any_client_connects(self) -> None:
+        import recoverage.api as api
+
+        api._stop_db_watcher()
+        status, headers, body = wsgi_get("/api/health")
+        assert status.startswith("200"), status
+        streams = json.loads(decode_body(body, headers))["streams"]
+        assert streams["clients"] == 0
+        assert streams["max_clients"] == api._SSE_MAX_CLIENTS
+        # Not started yet is not a fault, so it must not read as one.
+        assert streams["watcher_alive"] is None
+
+    def test_client_count_tracks_the_connected_streams(self) -> None:
+        import recoverage.api as api
+
+        api._stop_db_watcher()
+        try:
+            _, _, _, result = wsgi_stream("/api/events", max_chunks=1)
+            try:
+                status, headers, body = wsgi_get("/api/health")
+                assert status.startswith("200"), status
+                streams = json.loads(decode_body(body, headers))["streams"]
+                assert streams["clients"] == 1
+                assert streams["watcher_alive"] is True
+            finally:
+                if result is not None:
+                    result.close()
+        finally:
+            api._stop_db_watcher()
+
+    def test_health_degrades_when_a_connected_client_has_no_poller(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A registered client with a dead poller is stale data served as a
+        healthy 200: every page renders, none of them ever refreshes."""
+        import recoverage.api as api
+
+        with api._SSE_CLIENTS_LOCK:
+            api._SSE_CLIENTS.add(queue.Queue(maxsize=api._SSE_QUEUE_MAX))
+        try:
+            monkeypatch.setattr(api, "_DB_WATCHER_THREAD", _DeadThread(), raising=False)
+            status, headers, body = wsgi_get("/api/health")
+            assert status.startswith("200"), status
+            data = json.loads(decode_body(body, headers))
+            assert data["status"] == "degraded"
+            assert data["streams"]["watcher_alive"] is False
+        finally:
+            with api._SSE_CLIENTS_LOCK:
+                api._SSE_CLIENTS.clear()
+
+
+class _DeadThread:
+    """Stands in for a watcher thread that has stopped without unregistering."""
+
+    def is_alive(self) -> bool:
+        return False
+
+
 class TestSseClientCap:
     def test_excess_clients_get_503(self) -> None:
         """More concurrent /api/events clients than the cap must be rejected
@@ -2166,6 +3421,24 @@ class TestSseClientCap:
         try:
             status, _, _ = wsgi_get("/api/events")
             assert status.startswith("503")
+        finally:
+            with api._SSE_CLIENTS_LOCK:
+                api._SSE_CLIENTS.clear()
+
+    def test_503_retry_after_header_matches_body(self) -> None:
+        """The header and the body must state the same wait: a client that
+        reads Retry-After (the auth throttle and /api/regen send the same
+        header) must not be told a longer or shorter retry than the JSON."""
+        import recoverage.api as api
+
+        with api._SSE_CLIENTS_LOCK:
+            for _ in range(api._SSE_MAX_CLIENTS):
+                api._SSE_CLIENTS.add(queue.Queue(maxsize=api._SSE_QUEUE_MAX))
+        try:
+            status, headers, body = wsgi_get("/api/events")
+            assert status.startswith("503")
+            payload = json.loads(decode_body(body, headers))
+            assert int(headers["Retry-After"]) == int(payload["retry_after"])
         finally:
             with api._SSE_CLIENTS_LOCK:
                 api._SSE_CLIENTS.clear()
@@ -2260,8 +3533,8 @@ class TestKnownSchemaContract:
         assert seen and "id" not in seen
         # The spine every consumer reads is always present.  The remaining
         # fields (functions/label/parent_function) are OMITTED when they carry
-        # no information — see CELLS_JSON_OBJECT_SQL, which drops null and empty
-        # values — so they cannot be asserted unconditionally here.
+        # no information. CELLS_JSON_OBJECT_SQL drops null and empty
+        # values, so they cannot be asserted unconditionally here.
         assert {"start", "end", "span", "state"} <= seen
 
 
@@ -2274,11 +3547,10 @@ class TestMaterializedCellsCache:
     interchangeable, so this pins them to byte-identical payloads — a
     divergence here silently changes what every grid renders.
 
-    The cache is encoded here with zstd directly rather than through a shared
-    helper: the codec deliberately does NOT live in ``rebrew.workspace`` (that
-    module is stdlib-only), so the only thing linking producer and consumer is
-    the column name.  A test that went through rebrew's own encoder could pass
-    while the reader's decoder disagreed.
+    The cache is encoded here with zstd directly rather than through
+    ``encode_section_cells``. Going through rebrew's encoder would hide a
+    decoder that cannot read a frame this server might be handed. The column
+    name is still what selects the codec.
     """
 
     @staticmethod
@@ -2305,6 +3577,11 @@ class TestMaterializedCellsCache:
         """Fill section_cells_json the way build_db does, via the shared codec."""
         conn = sqlite3.connect(db)
         c = conn.cursor()
+        # The copy of the fixture DB may already carry the table (a genuine
+        # rebrew build-db output does), and a bare CREATE TABLE would abort
+        # on it. Drop first so the test owns the exact schema and rows it
+        # compares against, whatever the source DB held.
+        c.execute(f"DROP TABLE IF EXISTS {SECTION_CELLS_TABLE}")
         c.execute(
             f"CREATE TABLE {SECTION_CELLS_TABLE} ("
             " target TEXT NOT NULL, section_name TEXT NOT NULL,"
@@ -2316,7 +3593,7 @@ class TestMaterializedCellsCache:
             [
                 (tgt, sec, self._encode(cells_json))
                 for tgt, sec, cells_json in c.execute(
-                    f"SELECT target, section_name, json_group_array({CELLS_JSON_OBJECT_SQL})"
+                    f"SELECT target, section_name, {SECTION_CELLS_AGG_SQL}"
                     " FROM cells GROUP BY target, section_name"
                 ).fetchall()
             ],
@@ -2357,6 +3634,10 @@ class TestMaterializedCellsCache:
 
         conn = sqlite3.connect(db)
         c = conn.cursor()
+        # Drop first: a source DB that already has the table (a real
+        # build-db output does) would make the bare CREATE fail, and the
+        # legacy-codec table must replace the current-codec one anyway.
+        c.execute(f"DROP TABLE IF EXISTS {SECTION_CELLS_TABLE}")
         c.execute(
             f"CREATE TABLE {SECTION_CELLS_TABLE} ("
             " target TEXT NOT NULL, section_name TEXT NOT NULL,"
@@ -2368,7 +3649,7 @@ class TestMaterializedCellsCache:
             [
                 (tgt, sec, zlib.compress(cells_json.encode("utf-8")))
                 for tgt, sec, cells_json in c.execute(
-                    f"SELECT target, section_name, json_group_array({CELLS_JSON_OBJECT_SQL})"
+                    f"SELECT target, section_name, {SECTION_CELLS_AGG_SQL}"
                     " FROM cells GROUP BY target, section_name"
                 ).fetchall()
             ],
@@ -2474,7 +3755,7 @@ class TestRepoFileServing:
         src = tmp_path / "src"
         src.mkdir()
         (src / "main.c").write_text("int main(void) { return 0; }", encoding="utf-8")
-        status, headers, body = wsgi_get("/src/main.c")
+        status, _headers, body = wsgi_get("/src/main.c")
         assert status.startswith("200")
         assert b"int main" in body
 
@@ -2491,9 +3772,10 @@ class TestRepoFileServing:
         monkeypatch.chdir(tmp_path)
         (tmp_path / "src").mkdir()
         (tmp_path / "secret.txt").write_text("top secret", encoding="utf-8")
-        # Bottle decodes %2E%2E%2F before routing, so this arrives as ../.
+        # The capture is the raw request path, so %2e%2e is decoded here,
+        # before the containment check, and reaches it as ../.
         status, _, body = wsgi_get("/src/%2e%2e/secret.txt")
-        assert status.startswith(("403", "404"))
+        assert status.startswith("403")
         assert b"top secret" not in body
 
     def test_symlink_escape_blocked(self, tmp_path: Path, monkeypatch: Any) -> None:
@@ -2511,6 +3793,56 @@ class TestRepoFileServing:
         status, _, body = wsgi_get("/src/escape/passwd")
         assert status.startswith("403")
         assert b"root:x" not in body
+
+    def test_rejections_answer_the_json_error_envelope(
+        self, tmp_path: Path, monkeypatch: Any
+    ) -> None:
+        """A refused path is a JSON error, like every other failure.
+
+        The traversal and NUL rejections used to answer a bare ``b"forbidden"``
+        / ``b"not found"`` under ``text/html`` with no ``Cache-Control``, so a
+        shared cache was free to store and replay the refusal, and a client
+        parsing the server's error contract had a second format to special-case.
+        """
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "src").mkdir()
+        (tmp_path / "secret.txt").write_text("top secret", encoding="utf-8")
+        for path, want in (("/src/../secret.txt", 403), ("/src/%00evil", 404)):
+            status, headers, body = wsgi_get(path)
+            assert status.startswith(str(want)), path
+            assert headers["Content-Type"].startswith("application/json"), path
+            assert headers["Cache-Control"] == "no-store", path
+            data = json.loads(decode_body(body, headers))
+            assert set(data) >= {"error", "code", "detail"}, path
+            assert b"top secret" not in body, path
+
+    def test_encoded_filename_is_decoded_once(self, tmp_path: Path, monkeypatch: Any) -> None:
+        """A source file whose name holds a space or a non-ASCII character.
+
+        The SPA links it as /src/<target>/<file> and the browser escapes it,
+        so the capture arrives percent-encoded; without decoding, no such
+        file is reachable.
+        """
+        monkeypatch.chdir(tmp_path)
+        src = tmp_path / "src"
+        (src / "données").mkdir(parents=True)
+        (src / "données" / "naïve name.c").write_text("int x;", encoding="utf-8")
+        status, _headers, body = wsgi_get("/src/donn%C3%A9es/na%C3%AFve%20name.c")
+        assert status.startswith("200")
+        assert b"int x;" in body
+
+    def test_double_encoded_traversal_blocked(self, tmp_path: Path, monkeypatch: Any) -> None:
+        """%252e%252e decodes once to the text "%2e%2e", never to "..".
+
+        Decoding twice would turn it into a parent reference after the
+        containment check had already run on the once-decoded text.
+        """
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "src").mkdir()
+        (tmp_path / "secret.txt").write_text("top secret", encoding="utf-8")
+        status, _, body = wsgi_get("/src/%252e%252e/secret.txt")
+        assert status.startswith(("403", "404"))
+        assert b"top secret" not in body
 
     def test_original_prefix_serves_original_dir(self, tmp_path: Path, monkeypatch: Any) -> None:
         monkeypatch.chdir(tmp_path)
@@ -2563,6 +3895,81 @@ class TestVaOverflowValidation:
         data = json.loads(decode_body(body, headers))
         # Clamped to the page ceiling; the resulting page is simply empty.
         assert data["functions"] == []
+
+
+class TestCapstoneCapabilityProbe:
+    """``find_spec`` says a capstone distribution is on the path; it does not
+    say it loads.  A wheel for the wrong architecture, a missing libcapstone or
+    a half-unpacked install passes the spec probe and fails on import, which
+    used to reach the operator as a bare 500 with a traceback where the 501
+    contract promises an answer, and as /api/health advertising an extra the
+    process cannot use."""
+
+    @staticmethod
+    def _broken_install(monkeypatch: Any) -> None:
+        """Present-but-unloadable: the distribution is on the path, the import
+        is what fails.  ``None`` in ``sys.modules`` is the standard way to say
+        "this module exists and cannot be loaded"."""
+        import sys
+
+        import recoverage.disasm as disasm
+
+        monkeypatch.setattr(disasm, "_CAPSTONE_INSTALLED", True)
+        monkeypatch.setattr(disasm, "_probed", False)
+        monkeypatch.setattr(disasm, "_probe_reason", None)
+        # A handle cached by an earlier test would short-circuit the probe.
+        monkeypatch.setattr(disasm._CAPSTONE_MD_TLS, "md", None, raising=False)
+        monkeypatch.setitem(sys.modules, "capstone", None)
+
+    def test_probe_names_the_failure_and_memoizes(self, monkeypatch: Any) -> None:
+        import recoverage.disasm as disasm
+
+        self._broken_install(monkeypatch)
+
+        reason = disasm.capstone_unavailable_reason()
+        assert "ModuleNotFoundError" in reason
+        assert not disasm.disassembly_available()
+        # A broken install costs one failed import per process, not one per
+        # request, and the verdict is stable for every later caller.
+        assert disasm.capstone_unavailable_reason() == reason
+
+    def test_missing_extra_is_reported_as_not_installed(self, monkeypatch: Any) -> None:
+        import recoverage.disasm as disasm
+
+        monkeypatch.setattr(disasm, "_CAPSTONE_INSTALLED", False)
+        assert disasm.capstone_unavailable_reason() == "capstone is not installed"
+        assert not disasm.disassembly_available()
+
+    def test_unloadable_capstone_raises_instead_of_tracebacking(self, monkeypatch: Any) -> None:
+        import recoverage.disasm as disasm
+
+        self._broken_install(monkeypatch)
+        with pytest.raises(disasm.CapstoneUnavailableError):
+            disasm.get_capstone_md()
+
+    def test_asm_answers_501_with_the_reason(self, monkeypatch: Any) -> None:
+        import recoverage.api as api
+
+        monkeypatch.setattr(
+            api, "capstone_unavailable_reason", lambda: "OSError: libcapstone.so.5: cannot open"
+        )
+        status, headers, body = wsgi_get("/api/targets/FAKEDLL/asm?va=0x10001000&size=16")
+        data = json.loads(decode_body(body, headers))
+        assert status.startswith("501")
+        assert data["code"] == "not_implemented"
+        assert "capstone" in data["error"]
+        # The operator gets WHICH failure, not a bare "not installed": the
+        # install hint does not help someone whose capstone is already there.
+        assert "libcapstone" in data["detail"]
+
+    def test_health_does_not_advertise_an_unusable_extra(self, monkeypatch: Any) -> None:
+        import recoverage.api as api
+
+        monkeypatch.setattr(api, "disassembly_available", lambda: False)
+        status, headers, body = wsgi_get("/api/health")
+        assert status.startswith("200")
+        data = json.loads(decode_body(body, headers))
+        assert data["extras"]["capstone"] is False
 
 
 class TestUnhandledErrorContract:
@@ -2651,22 +4058,34 @@ class TestSectionStatsMemo:
 
     def test_memo_hit_skips_the_queries(self, tmp_path: Any, monkeypatch: Any) -> None:
         import recoverage.api as api
+        import recoverage.server as server_mod
 
         db = self._make_db(tmp_path, [(".text", 0, 16, "exact"), (".text", 16, 32, "none")])
         self._patch(tmp_path, monkeypatch, db)
 
+        # Count connections at the binding the request path consults:
+        # server._db() resolves _open_db in server's module globals, so
+        # counting api._open_db would never see a call. The real opener is
+        # kept underneath, so the counter sees production connections only.
+        real_open_db = server_mod._open_db
+        opens: list[Any] = []
+
+        def counting_open(p: Any) -> Any:
+            opens.append(p)
+            return real_open_db(p)
+
+        monkeypatch.setattr(server_mod, "_open_db", counting_open)
+
         first = api.handle_api_stats("GAME")
         assert isinstance(first, bytes)
-        assert len(api._STATS_CACHE) == 1
+        assert opens, "the miss did not open the database; the counter is not wired"
+        opens_after_miss = len(opens)
 
-        # A second request must not touch the database at all: an _open_db
-        # whose connections explode proves the answer came from the memo.
-        def _boom_open(p: Any) -> Any:
-            raise AssertionError("memo hit re-opened the database")
-
-        monkeypatch.setattr(api, "_open_db", _boom_open)
+        # The second request must not touch the database at all: the open
+        # count is the proof, since the memo answer required no connection.
         second = api.handle_api_stats("GAME")
         assert second == first
+        assert len(opens) == opens_after_miss, "memo hit re-opened the database"
 
         api._clear_stats_cache()
         assert len(api._STATS_CACHE) == 0
@@ -2717,10 +4136,122 @@ class TestIndexWarmup:
 
         assert ui.CACHED_INDEX_PAYLOAD
         assert b"<html" in ui.CACHED_INDEX_PAYLOAD.lower()
-        # Every encoding _best_encoding can return is prebuilt, including
-        # identity; the identity variant is the payload itself.
-        assert set(ui.CACHED_INDEX_COMPRESSED) == {"zstd", "br", "gzip", ""}
-        assert ui.CACHED_INDEX_COMPRESSED[""] == ui.CACHED_INDEX_PAYLOAD
+        # One prebuilt variant per non-empty subset of the supported encodings,
+        # plus the identity one, so a cold first hit from any client is a
+        # lookup.  Keys name the accepted SET, because the shell is served as
+        # the smallest body that set can decode rather than a fixed preference.
+        assert set(ui.CACHED_INDEX_COMPRESSED) == {
+            "",
+            "zstd",
+            "br",
+            "gzip",
+            "zstd, br",
+            "zstd, gzip",
+            "br, gzip",
+            "zstd, br, gzip",
+        }
+        # The identity variant is the payload itself, sent uncompressed.
+        body, encoding, _etag = ui.CACHED_INDEX_COMPRESSED[""]
+        assert (body, encoding) == (ui.CACHED_INDEX_PAYLOAD, "")
+
+    def test_shell_variant_is_the_smallest_body_the_client_accepts(self) -> None:
+        """The precompressed shell must not hand a zstd-capable browser the
+        larger zstd frame when brotli is smaller.
+
+        Measured on the shipped shell, brotli q11 beats zstd at every level
+        (14,075 bytes against 15,178 at zstd 19), and the zstd size sits above
+        the initial congestion window.  A fixed zstd-first preference put every
+        modern browser over that window and cost a second round trip before
+        the first paint, for no decoding-speed gain on a one-off document.
+        """
+        import recoverage.ui as ui
+
+        ui.warm_index_cache()
+
+        all_three = ui.CACHED_INDEX_COMPRESSED["zstd, br, gzip"]
+        br_only = ui.CACHED_INDEX_COMPRESSED["br"]
+        assert all_three[1] == br_only[1]
+        assert all_three[0] == br_only[0]
+        assert len(all_three[0]) == min(
+            len(body) for _k, (body, _e, _t) in ui.CACHED_INDEX_COMPRESSED.items()
+        )
+
+    def test_the_shipped_shell_fits_the_congestion_window(self) -> None:
+        """The shell a browser receives must fit the initial congestion window.
+
+        Scoped to clients that accept brotli, because brotli is the smallest
+        encoding here: zstd 19 and gzip 9 are both larger, so no preference
+        order brings them under a budget brotli misses.  Every browser with
+        zstd also has brotli, so this is the set that ships.
+
+        The window is a protocol constant (RFC 6928: 10 x 1460), not a
+        tunable, and brotli q11 is the highest quality the library offers, so
+        the only way to hold this line is to move deferrable work into
+        detail.js.  That is a ratchet only while something fails when it is
+        crossed: _check_payload_budget WARNS (the next test), which is one log
+        line nobody reads, and a warning is not a gate.  This is the gate.
+        """
+        import recoverage.ui as ui
+
+        ui.warm_index_cache()
+
+        brotli_bodies = [
+            body
+            for key, (body, _encoding, _etag) in ui.CACHED_INDEX_COMPRESSED.items()
+            if "br" in key
+        ]
+        assert brotli_bodies, "no cached shell variant carries brotli"
+        smallest = min(len(b) for b in brotli_bodies)
+        assert smallest <= ui._TCP_CWND_BUDGET, (
+            f"the inlined shell is {smallest} B, {smallest - ui._TCP_CWND_BUDGET} B over the "
+            f"{ui._TCP_CWND_BUDGET} B window; move deferrable work into detail.js "
+            "(see docs/DESIGN_PRINCIPLES.md, 'First Draw in First TCP Packet')"
+        )
+
+    def test_the_ratchet_reports_the_overage_of_the_served_body(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """_check_payload_budget must measure the body a real browser receives,
+        which is the smallest of the encodings it accepts, and must name the
+        overage exactly when the shell no longer fits that window.
+
+        The shipped shell fits (see the test above), so this pins the REPORT
+        rather than the state: measured on an inflated payload, the overage it
+        prints is the smallest served body's, and it names the budget too.  A
+        ratchet that measured something nothing reproduces would read as a
+        clean run while the shell sat over the window.
+        """
+        import recoverage.ui as ui
+        from recoverage.server import (
+            BROTLI_STATIC_QUALITY,
+            GZIP_STATIC_LEVEL,
+            ZSTD_STATIC_LEVEL,
+            brotli,
+            gzip,
+            zstd,
+        )
+
+        ui.warm_index_cache()
+
+        # An inflated payload stands in for a future shell that does not fit,
+        # measured exactly as _check_payload_budget measures the real one: the
+        # smallest of the three static encodings.  Random bytes, not a run of
+        # one character, which every codec would compress back to nothing.
+        inflated = ui.CACHED_INDEX_PAYLOAD + os.urandom(2000)
+        best = min(
+            len(gzip.compress(inflated, compresslevel=GZIP_STATIC_LEVEL)),
+            len(brotli.compress(inflated, quality=BROTLI_STATIC_QUALITY)),
+            len(zstd.ZstdCompressor(level=ZSTD_STATIC_LEVEL).compress(inflated)),
+        )
+        over = best - ui._TCP_CWND_BUDGET
+        assert over > 0, "the inflated payload still fits; inflate it by more"
+
+        with caplog.at_level("WARNING", logger="recoverage"):
+            caplog.clear()
+            ui._check_payload_budget(inflated)
+        assert caplog.records, f"the payload is {over} bytes over the window and said nothing"
+        assert str(over) in caplog.text
+        assert str(ui._TCP_CWND_BUDGET) in caplog.text
 
     def test_warm_is_idempotent(self, monkeypatch: Any) -> None:
         import recoverage.ui as ui
@@ -2751,3 +4282,718 @@ class TestIndexWarmup:
 
         assert ui.CACHED_INDEX_PAYLOAD is None
         assert any("warm-up failed" in r.getMessage() for r in caplog.records)
+
+
+# ── Routing error contract (/api/* stays JSON) ─────────────────────
+
+
+class TestApiRoutingErrors:
+    """The catch-all route must keep the 404/405 distinction.
+
+    A catch-all that answers every miss with 404 also swallows the verb: a
+    client that PATCHes a read-only resource, or GETs the POST-only
+    /api/regen, is told the resource does not exist.  The error envelope is
+    already right; the status code is what misleads.
+    """
+
+    def test_unknown_api_path_returns_json_404(self) -> None:
+        status, headers, body = wsgi_get("/api/does-not-exist")
+        assert status.startswith("404")
+        assert headers["Content-Type"].startswith("application/json")
+        data = json.loads(decode_body(body, headers))
+        assert data["code"] == "not_found"
+        assert "/api/does-not-exist" in data["detail"]
+
+    def test_unknown_nested_api_path_returns_json_404(self) -> None:
+        status, headers, body = wsgi_get("/api/targets/NOPE/functions/notaroute")
+        assert status.startswith("404")
+        data = json.loads(decode_body(body, headers))
+        assert data["code"] == "not_found"
+
+    def test_wrong_method_returns_json_405_with_allow(self) -> None:
+        status, headers, body = wsgi_post("/api/health")
+        assert status.startswith("405")
+        data = json.loads(decode_body(body, headers))
+        assert data["code"] == "method_not_allowed"
+        # RFC 9110 15.5.6: a 405 must say what is allowed, and Bottle's
+        # router omits the header, so the catch-all supplies it.
+        allow = {m.strip() for m in headers["Allow"].split(",")}
+        assert {"GET", "HEAD"} <= allow
+
+    def test_allow_on_a_path_with_several_methods(self) -> None:
+        status, headers, body = wsgi_request("DELETE", "/api/targets/NOPE/functions")
+        assert status.startswith("405")
+        allow = {m.strip() for m in headers["Allow"].split(",")}
+        assert {"GET", "POST", "HEAD"} <= allow
+        data = json.loads(decode_body(body, headers))
+        assert "DELETE" in data["detail"]
+
+    def test_get_on_the_post_only_regen_is_405(self) -> None:
+        status, headers, _ = wsgi_get("/api/regen")
+        assert status.startswith("405")
+        allow = {m.strip() for m in headers["Allow"].split(",")}
+        assert allow == {"POST"}
+
+    def test_api_error_bodies_are_never_cached(self) -> None:
+        status, headers, _ = wsgi_get("/api/does-not-exist")
+        assert status.startswith("404")
+        assert headers["Cache-Control"] == "no-store"
+
+    def test_405_details_escape_control_characters(self) -> None:
+        """The Allow/405 path reflects the request method, which is
+        attacker-controlled; a raw control character would forge log lines
+        and header content."""
+        status, headers, body = wsgi_request("GET\nX", "/api/health")
+        assert status.startswith("405")
+        assert "\n" not in headers["Allow"]
+        data = json.loads(decode_body(body, headers))
+        assert "\n" not in data["detail"]
+
+
+# ── /asm and /bytes validation detail ─────────────────────────────
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+class TestSliceValidationDetail:
+    """Every 400 from the two binary-slice endpoints names the offending
+    parameter and its accepted range.
+
+    `error` alone ("invalid va or size", "invalid size") tells an API client
+    which request failed but not which field to fix; `detail` carries the
+    value that was rejected and the constraint it broke.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _capstone(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import recoverage.api as api
+        import recoverage.server as server
+
+        monkeypatch.setattr(api, "capstone_unavailable_reason", lambda: None)
+        self.dll = bytes((i % 251) for i in range(2048))
+        monkeypatch.setattr(api, "_load_dll", lambda target: self.dll)
+        # api's own _load_dll is only half the path: the text representation
+        # renders through disasm.get_disassembly, which reads server's. Every
+        # test in this class asserted a 400 raised BEFORE the load, so the
+        # missing half went unnoticed and a request that got past validation
+        # answered 422. Seed the shared cache both namespaces read (the
+        # autouse _clean_derived_caches fixture empties it after each test).
+        with server.DLL_LOCK:
+            server.DLL_DATA["FAKEDLL"] = self.dll
+
+    def test_asm_missing_param_names_which(self) -> None:
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, headers, body = wsgi_get(f"/api/targets/{target}/asm?va=0x10001000")
+        assert status.startswith("400")
+        data = json.loads(decode_body(body, headers))
+        assert data["error"] == "missing va or size"
+        assert "size" in data["detail"]
+        assert "va" not in data["detail"].split("size")[0]
+
+    def test_asm_bad_size_quotes_the_value(self) -> None:
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, headers, body = wsgi_get(f"/api/targets/{target}/asm?va=0x10001000&size=abc")
+        assert status.startswith("400")
+        data = json.loads(decode_body(body, headers))
+        assert data["error"] == "invalid va or size"
+        assert "abc" in data["detail"]
+
+    def test_asm_unknown_format_rejected(self) -> None:
+        """A typo'd representation must not silently return the text form."""
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, headers, body = wsgi_get(
+            f"/api/targets/{target}/asm?va=0x10001000&size=16&format=jsom"
+        )
+        assert status.startswith("400")
+        data = json.loads(decode_body(body, headers))
+        assert data["code"] == "bad_request"
+        assert "jsom" in data["detail"]
+        assert "json" in data["detail"]
+
+    def test_asm_format_is_case_insensitive(self) -> None:
+        """The representation name is normalized, so ?format=TEXT is the
+        same request as ?format=text rather than a rejected one.
+
+        `not 400` is a claim any 5xx satisfies, so the two spellings must
+        answer 200 with the same disassembly, byte for byte.
+        """
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        lower = wsgi_get(f"/api/targets/{target}/asm?va=0x10001000&size=16&format=text")
+        upper = wsgi_get(f"/api/targets/{target}/asm?va=0x10001000&size=16&format=TEXT")
+        assert lower[0].startswith("200"), lower[0]
+        assert upper[0].startswith("200"), upper[0]
+        assert decode_body(upper[2], upper[1]) == decode_body(lower[2], lower[1])
+
+    def test_asm_empty_format_is_the_default(self) -> None:
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        query = f"/api/targets/{target}/asm?va=0x10001000&size=16"
+        default = wsgi_get(query)
+        empty = wsgi_get(f"{query}&format=")
+        assert empty[0].startswith("200"), empty[0]
+        assert decode_body(empty[2], empty[1]) == decode_body(default[2], default[1])
+
+    def test_bytes_bad_size_quotes_the_value(self) -> None:
+        status, headers, body = wsgi_get(
+            "/api/targets/FAKEDLL/sections/.text/bytes?offset=0&size=abc"
+        )
+        assert status.startswith("400")
+        data = json.loads(decode_body(body, headers))
+        assert data["error"] == "invalid size"
+        assert "abc" in data["detail"]
+        assert "4096" in data["detail"]
+
+    def test_bytes_out_of_bounds_names_the_section_range(self) -> None:
+        status, headers, body = wsgi_get(
+            "/api/targets/FAKEDLL/sections/.text/bytes?offset=0&size=999999"
+        )
+        # Clamped to _MAX_SLICE_SIZE, which is inside the 0x1000 section.
+        assert status.startswith("200")
+        status, headers, body = wsgi_get(
+            "/api/targets/FAKEDLL/sections/.text/bytes?offset=4096&size=4"
+        )
+        assert status.startswith("400")
+        data = json.loads(decode_body(body, headers))
+        assert data["error"] == "offset beyond section bounds"
+        assert ".text" in data["detail"]
+
+    def test_leading_zero_byte_counts_are_decimal(self) -> None:
+        """A zero-padded count is decimal, not a base-0 literal.
+
+        int(x, 0) rejects "064" outright, so a client that zero-pads a byte
+        count got a 400 for a number the endpoint documents as valid.
+        """
+        assert api._parse_byte_count("064") == 64
+        assert api._parse_byte_count("8") == 8
+        status, _headers, _ = wsgi_get(
+            "/api/targets/FAKEDLL/sections/.text/bytes?offset=0&size=016"
+        )
+        assert status.startswith("200")
+
+    def test_byte_counts_reject_non_documented_bases(self) -> None:
+        """Binary and octal spellings are not a documented byte count.
+
+        int(x, 0) accepted both, so ?size=0b1000 silently served 8 bytes to a
+        client that meant to send something this endpoint never promised.
+        """
+        for value in ("0b1000", "0o17"):
+            with pytest.raises(ValueError, match="not an ASCII"):
+                api._parse_byte_count(value)
+        status, headers, body = wsgi_get(
+            "/api/targets/FAKEDLL/sections/.text/bytes?offset=0&size=0b1000"
+        )
+        assert status.startswith("400")
+        assert json.loads(decode_body(body, headers))["error"] == "invalid size"
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "\u0664\u0660",  # ARABIC-INDIC DIGIT FOUR, ZERO
+            "\uff11_\uff10",  # FULLWIDTH digits, which also carry an underscore
+            "\u06f1\u06f0",  # EXTENDED ARABIC-INDIC digits
+        ],
+    )
+    def test_byte_counts_reject_non_ascii_digits(self, value: str) -> None:
+        """A byte count is ASCII digits, whatever digits the client's locale has.
+
+        ``int()`` accepts every code point ``str.isdigit()`` calls a digit, so
+        a 40-byte slice answered a request that named no such size in any
+        spelling the endpoint documents.  ``config._ASCII_INT`` already holds
+        the ``RECOVERAGE_*`` side to ASCII; the query string is the same
+        number, so it gets the same rule.
+        """
+        with pytest.raises(ValueError, match="not an ASCII"):
+            api._parse_byte_count(value)
+        status, headers, body = wsgi_get(
+            f"/api/targets/FAKEDLL/sections/.text/bytes?offset=0&size={value}"
+        )
+        assert status.startswith("400")
+        assert json.loads(decode_body(body, headers))["error"] == "invalid size"
+
+    def test_page_parameters_reject_non_ascii_digits(self) -> None:
+        """?limit= and ?offset= fall back to their defaults, never to a foreign digit."""
+        assert api._page_int("50") == 50
+        for value in ("\u0665\u0660", "1_0", "+5"):
+            with pytest.raises(ValueError, match="not an ASCII"):
+                api._page_int(value)
+
+    def test_batch_vas_reject_non_ascii_hex_digits(self) -> None:
+        """A batch VA is ASCII hex; Arabic-Indic digits parsed as one before."""
+        status, headers, body = wsgi_post(
+            "/api/targets/FAKEDLL/functions",
+            body=json.dumps({"vas": ["\u0661\u0660"]}),
+        )
+        assert status.startswith("400")
+        assert json.loads(decode_body(body, headers))["code"] == "bad_request"
+
+    def test_hex_prefixed_byte_counts_still_parse(self) -> None:
+        assert api._parse_byte_count("0x40") == 64
+        assert api._parse_byte_count(" 0X40 ") == 64
+        status, _headers, _ = wsgi_get(
+            "/api/targets/FAKEDLL/sections/.text/bytes?offset=0&size=0x10"
+        )
+        assert status.startswith("200")
+
+    def test_negative_offset_is_still_rejected(self) -> None:
+        status, headers, body = wsgi_get(
+            "/api/targets/FAKEDLL/sections/.text/bytes?offset=-1&size=4"
+        )
+        assert status.startswith("400")
+        assert json.loads(decode_body(body, headers))["error"] == "invalid offset"
+
+
+# ── URL component decoding ─────────────────────────────────────────
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+class TestUnicodeUrlComponents:
+    """A target id or section name with a space or a non-ASCII character.
+
+    Bottle routes on PATH_INFO exactly as the WSGI server hands it over, so
+    a browser's percent-escapes reach the handler still encoded: the DB
+    lookup compared "caf%C3%A9" against "café" and 404'd.  Query values are
+    the mirror image, decoded as latin-1, so "section=%C3%A9" arrived as
+    "Ã©" while Potato Mode's parse_qs on the same request produced "é".
+    """
+
+    TARGET = "café & bar"
+    SECTION = ".données"
+
+    @pytest.fixture(autouse=True)
+    def _unicode_db(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        db = tmp_path / "coverage.db"
+        shutil.copy(get_db_path(), db)
+        conn = sqlite3.connect(db)
+        t = self.TARGET
+        conn.executemany(
+            "INSERT INTO metadata VALUES (?,?,?)",
+            [(t, "db_version", '"4"'), (t, "summary", '{"totalFunctions": 1}')],
+        )
+        conn.execute(
+            "INSERT INTO sections VALUES (?, ?, 0x10003000, 0x100, 0x300, 16, 8)", (t, self.SECTION)
+        )
+        conn.executemany(
+            "INSERT INTO cells (target, section_name, start, end, span, state)"
+            " VALUES (?,?,?,?,?,?)",
+            [(t, self.SECTION, 0, 16, 1, "exact"), (t, self.SECTION, 16, 32, 1, "none")],
+        )
+        conn.execute(
+            "INSERT INTO functions (target, va, name, vaStart, size, status, markerType)"
+            " VALUES (?, 0x10003000, 'func_é', '0x10003000', 16, 'EXACT', 'FUNCTION')",
+            (t,),
+        )
+        conn.commit()
+        conn.close()
+        monkeypatch.setattr("recoverage.server._db_path", lambda: db)
+        monkeypatch.setattr("recoverage.api._db_path", lambda: db)
+        monkeypatch.setattr("recoverage.potato._db_path", lambda: db)
+        monkeypatch.setattr("recoverage._paths._db_path", lambda: db)
+        from recoverage.api import _clear_derived_caches
+
+        _clear_derived_caches()
+
+    def _enc(self, value: str) -> str:
+        from urllib.parse import quote
+
+        return quote(value, safe="")
+
+    def test_stats_resolves_the_encoded_target(self) -> None:
+        status, headers, body = wsgi_get(f"/api/targets/{self._enc(self.TARGET)}/stats")
+        assert status.startswith("200")
+        data = json.loads(decode_body(body, headers))
+        assert self.SECTION in data["sections"]
+
+    def test_data_resolves_the_encoded_section(self) -> None:
+        status, headers, body = wsgi_get(
+            f"/api/targets/{self._enc(self.TARGET)}/data?section={self._enc(self.SECTION)}"
+        )
+        assert status.startswith("200")
+        data = json.loads(decode_body(body, headers))
+        assert list(data["sections"]) == [self.SECTION]
+
+    def test_function_list_search_matches_the_decoded_name(self) -> None:
+        status, headers, body = wsgi_get(
+            f"/api/targets/{self._enc(self.TARGET)}/functions?search={self._enc('é')}"
+        )
+        assert status.startswith("200")
+        data = json.loads(decode_body(body, headers))
+        assert [f["name"] for f in data["functions"]] == ["func_é"]
+
+    def test_potato_renders_the_encoded_target(self) -> None:
+        status, _, body = wsgi_get(
+            f"/potato?target={self._enc(self.TARGET)}&section={self._enc(self.SECTION)}"
+        )
+        assert status.startswith("200")
+        assert "café".encode() in body
+        assert self.SECTION.encode("utf-8") in body
+
+
+# ── Search folding ──────────────────────────────────────────────────
+
+#: NFC, and the NFD spelling of the same name (e + U+0301).
+#: NFC_ONLY has no NFD twin in the table, so a folded lookup that resolves it
+#: has exactly one row it could have matched; SHARP_S_NAME is a global whose
+#: name casefolds to an ASCII spelling.
+NFC_ONLY = "naïve_render"
+SHARP_S_NAME = "g_straße"
+NFC_NAME = "caf\u00e9_render"
+NFD_NAME = "cafe\u0301_render"
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+class TestSearchCaseFolding:
+    """A name the operator can read must be findable by typing it.
+
+    SQLite's ``LIKE`` folds case for ASCII only, so ``CAFÉ`` missed
+    ``Café_Render`` and an NFD spelling missed its NFC twin: the search box
+    reported "no matches" for a symbol sitting in the table beside it.  Both
+    search surfaces now add a folded disjunct (server.fold_text = NFC +
+    casefold) whenever the term carries a non-ASCII character.
+    """
+
+    TARGET = "FOLDDBL"
+    SECTION = ".text"
+
+    @pytest.fixture(autouse=True)
+    def _fold_db(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        db = tmp_path / "coverage.db"
+        shutil.copy(get_db_path(), db)
+        conn = sqlite3.connect(db)
+        t = self.TARGET
+        conn.executemany(
+            "INSERT INTO metadata VALUES (?,?,?)",
+            [(t, "db_version", '"4"'), (t, "summary", '{"totalFunctions": 3}')],
+        )
+        conn.execute(
+            "INSERT INTO sections VALUES (?, ?, 0x10003000, 0x100, 0x300, 16, 8)", (t, self.SECTION)
+        )
+        conn.executemany(
+            "INSERT INTO cells (target, section_name, start, end, span, state)"
+            " VALUES (?,?,?,?,?,?)",
+            [(t, self.SECTION, i * 16, (i + 1) * 16, 1, "exact") for i in range(3)],
+        )
+        # name, vaStart.  The NFD row is what a macOS-side tool writes; the
+        # user pastes the NFC spelling they see in a symbol table.
+        conn.executemany(
+            "INSERT INTO functions (target, va, name, vaStart, size, status, markerType)"
+            " VALUES (?, ?, ?, ?, 16, 'EXACT', 'FUNCTION')",
+            [
+                (t, 0x10003000, NFC_NAME, "0x10003000"),
+                (t, 0x10003010, NFD_NAME, "0x10003010"),
+                (t, 0x10003020, "_plain_ascii", "0x10003020"),
+                (t, 0x10003030, NFC_ONLY, "0x10003030"),
+            ],
+        )
+        conn.execute(
+            "INSERT INTO globals (target, va, name, decl, files, module, size)"
+            " VALUES (?, ?, ?, ?, '[]', 'T', 4)",
+            (t, 0x10004000, SHARP_S_NAME, "int g_strasse"),
+        )
+        conn.commit()
+        conn.close()
+        monkeypatch.setattr("recoverage.server._db_path", lambda: db)
+        monkeypatch.setattr("recoverage.api._db_path", lambda: db)
+        monkeypatch.setattr("recoverage.potato._db_path", lambda: db)
+        monkeypatch.setattr("recoverage._paths._db_path", lambda: db)
+        from recoverage.api import _clear_derived_caches
+
+        _clear_derived_caches()
+
+    def _search(self, term: str) -> list[str]:
+        from urllib.parse import quote
+
+        status, headers, body = wsgi_get(
+            f"/api/targets/{self.TARGET}/functions?search={quote(term, safe='')}"
+        )
+        assert status.startswith("200")
+        data = json.loads(decode_body(body, headers))
+        return [f["name"] for f in data["functions"]]
+
+    def _lookup(self, name: str) -> tuple[str, dict[str, Any]]:
+        """GET /functions/<name> for a name typed by a user, percent-encoded."""
+        from urllib.parse import quote
+
+        status, headers, body = wsgi_get(
+            f"/api/targets/{self.TARGET}/functions/{quote(name, safe='')}"
+        )
+        return status, json.loads(decode_body(body, headers))
+
+    def test_nfd_name_opens_the_row_search_found(self) -> None:
+        """The row the search box highlighted must open when named the way the
+        user spells it.  The name-form lookup compared bytes, so the NFD
+        spelling macOS puts on the clipboard 404'd a row stored in NFC."""
+        status, data = self._lookup(unicodedata.normalize("NFD", NFC_ONLY))
+        assert status.startswith("200"), data
+        assert data["va"] == 0x10003030
+        # The stored spelling comes back untouched: the fold is a comparison
+        # detail, not a rewrite of the name.
+        assert data["name"] == NFC_ONLY
+
+    def test_name_lookup_folds_case_like_the_search_does(self) -> None:
+        status, data = self._lookup("_PLAIN_ASCII")
+        assert status.startswith("200"), data
+        assert data["name"] == "_plain_ascii"
+
+    def test_global_lookup_folds_the_sharp_s_expansion(self) -> None:
+        """casefold maps ß to ss, so the ASCII spelling resolves the row too."""
+        status, data = self._lookup("g_strasse")
+        assert status.startswith("200"), data
+        assert data["name"] == SHARP_S_NAME
+
+    def test_unrelated_name_still_404s(self) -> None:
+        """The fold must not widen the lookup into matching anything."""
+        status, _ = self._lookup("nai_ve_render")
+        assert status.startswith("404")
+
+    def test_uppercase_accent_finds_the_lowercase_name(self) -> None:
+        # Both spellings are the same name, so both rows are a correct answer.
+        assert set(self._search("CAF\u00c9")) == {NFC_NAME, NFD_NAME}
+
+    def test_nfd_term_finds_the_nfc_row(self) -> None:
+        assert set(self._search(NFD_NAME)) == {NFC_NAME, NFD_NAME}
+
+    def test_ascii_term_keeps_the_plain_path(self) -> None:
+        assert self._search("_PLAIN") == ["_plain_ascii"]
+
+    def test_potato_finds_the_accented_name(self) -> None:
+        """Potato Mode's own search box, same DB, same term as above."""
+        from urllib.parse import quote
+
+        status, _, body = wsgi_get(
+            f"/potato?target={self.TARGET}&section={quote(self.SECTION, safe='')}"
+            f"&search={quote('CAF\u00c9', safe='')}"
+        )
+        assert status.startswith("200")
+        assert b"Searching:" in body
+        assert b"no matches" not in body
+
+
+class _TransactionProbe:
+    """Cursor proxy recording ``connection.in_transaction`` per statement.
+
+    The function lookup routes answer from several statements, and python's
+    sqlite3 opens a deferred transaction per statement, so "did this handler
+    pin one read snapshot" is invisible from the response.  This wraps the
+    handler's cursor and records the connection's transaction state as each
+    statement is issued, which is what ``server.read_snapshot`` turns True for.
+    """
+
+    def __init__(self, cursor: sqlite3.Cursor, seen: list[bool]) -> None:
+        self._cursor = cursor
+        self._seen = seen
+
+    @property
+    def connection(self) -> sqlite3.Connection:
+        return self._cursor.connection
+
+    def execute(self, sql: str, *args: Any) -> Any:
+        self._seen.append(self._cursor.connection.in_transaction)
+        return self._cursor.execute(sql, *args)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._cursor, name)
+
+
+def _first_function_va() -> int | None:
+    """Lowest VA of the first target's functions, or None when there are none."""
+    try:
+        conn = api._db()
+    except sqlite3.Error:
+        return None
+    try:
+        row = conn.execute(
+            "SELECT va FROM functions WHERE markerType IS NULL OR markerType NOT IN"
+            " ('GLOBAL', 'DATA', 'VTABLE', 'STRING') ORDER BY va LIMIT 1"
+        ).fetchone()
+    except sqlite3.Error:
+        return None
+    finally:
+        conn.close()
+    return row[0] if row else None
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+class TestLookupSnapshotsArePinned:
+    """The function lookup routes read several tables to build one answer.
+
+    ``/functions/<va>`` runs the VA candidates, the exact name and the folded
+    name for functions, then the same three for globals, then
+    ``verify_results`` for the winner; the batch POST runs three statements
+    over three tables.  A ``rebrew build-db`` committing between them pairs
+    one build's function row with the next build's ``last_verify``, which
+    reports a size and a diff for a payload that no longer carries them.
+    Both pin one read snapshot, the contract /data, /stats and the paginated
+    list already follow.
+    """
+
+    @staticmethod
+    def _probed_cursor(monkeypatch: Any, seen: list[bool]) -> Any:
+        real_cursor = api._target_cursor
+
+        @contextlib.contextmanager
+        def _probed(target: str) -> Any:
+            with real_cursor(target) as real:
+                yield _TransactionProbe(real, seen)
+
+        monkeypatch.setattr(api, "_target_cursor", _probed)
+
+    def test_single_lookup_runs_inside_one_transaction(self, monkeypatch: Any) -> None:
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        va = _first_function_va()
+        if va is None:
+            pytest.skip("No functions in DB")
+
+        seen: list[bool] = []
+        self._probed_cursor(monkeypatch, seen)
+        status, _headers, _body = wsgi_get(f"/api/targets/{target}/functions/{va}")
+        assert status.startswith("200")
+        assert seen, "the handler issued no statement through the probe"
+        assert all(seen), "a statement ran outside the pinned read transaction"
+
+    def test_batch_lookup_runs_inside_one_transaction(self, monkeypatch: Any) -> None:
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        va = _first_function_va()
+        if va is None:
+            pytest.skip("No functions in DB")
+
+        seen: list[bool] = []
+        self._probed_cursor(monkeypatch, seen)
+        status, headers, body = wsgi_post(
+            f"/api/targets/{target}/functions",
+            headers={"Content-Type": "application/json"},
+            body=json.dumps({"vas": [f"0x{va:x}"]}).encode(),
+        )
+        assert status.startswith("200")
+        assert json.loads(decode_body(body, headers)), "the batch lookup found nothing"
+        assert len(seen) >= 3, "the handler stopped issuing one statement per table"
+        assert all(seen), "a statement ran outside the pinned read transaction"
+
+
+class TestHealthLogging:
+    """/api/health logs a transition, not one line per probe.
+
+    A monitor pointed at the endpoint polled a broken database once a second
+    and filled the log with the same WARNING, which is what teaches an
+    operator to skip it; the entry into the state and the recovery are the
+    two lines worth keeping.
+    """
+
+    def test_repeat_probes_do_not_relog_the_degradation(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        import recoverage.api as api
+
+        monkeypatch.setattr(api, "_health_reported", None)
+        monkeypatch.setattr(api, "_db_path", lambda: Path("/nonexistent/coverage.db"))
+        with caplog.at_level(logging.WARNING, logger="recoverage"):
+            for _ in range(5):
+                status, headers, body = wsgi_get("/api/health")
+                assert status.startswith("200")
+                assert json.loads(decode_body(body, headers))["status"] == "degraded"
+        degraded = [r for r in caplog.records if r.levelno >= logging.WARNING]
+        assert len(degraded) == 1
+        assert "coverage.db not accessible" in degraded[0].getMessage()
+
+    def test_recovery_is_logged_and_ends_the_alert(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        import recoverage.api as api
+
+        real_db_path = api._db_path
+        monkeypatch.setattr(api, "_health_reported", None)
+        monkeypatch.setattr(api, "_db_path", lambda: Path("/nonexistent/coverage.db"))
+        with caplog.at_level(logging.INFO, logger="recoverage"):
+            wsgi_get("/api/health")
+            monkeypatch.setattr(api, "_db_path", real_db_path)
+            status, headers, body = wsgi_get("/api/health")
+            assert status.startswith("200")
+            assert json.loads(decode_body(body, headers))["status"] == "healthy"
+        messages = [r.getMessage() for r in caplog.records if r.levelno >= logging.INFO]
+        assert any("recovered" in m and "degraded" in m for m in messages)
+
+    def test_every_reason_is_named_in_one_line(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A missing DB and a dead watcher name both, not just the first."""
+        import recoverage.api as api
+
+        monkeypatch.setattr(api, "_health_reported", None)
+        monkeypatch.setattr(api, "_db_path", lambda: Path("/nonexistent/coverage.db"))
+        monkeypatch.setattr(
+            api, "_stream_stats", lambda: {"clients": 1, "max": 4, "watcher_alive": False}
+        )
+        with caplog.at_level(logging.WARNING, logger="recoverage"):
+            wsgi_get("/api/health")
+        line = next(r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING)
+        assert "coverage.db not accessible" in line
+        assert "DB watcher is not running" in line
+
+
+class TestDbWatcherLogging:
+    """The poller is a daemon thread nobody joins, so its death must be loud."""
+
+    def test_baseline_failure_is_logged_before_it_escapes(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The baseline snapshot sat outside the per-iteration guard.
+
+        A ``coverage.db`` path that raises on stat killed the thread with its
+        traceback going nowhere, and ``/api/health`` reported ``healthy`` with
+        no SSE client connected — live reload dead for the rest of the
+        process, and no log line naming it.
+        """
+        import recoverage.api as api
+
+        def _boom() -> tuple[int, int] | None:
+            raise OSError("cannot stat coverage.db")
+
+        monkeypatch.setattr(api, "_snapshot_db_mtime", _boom)
+        with (
+            caplog.at_level(logging.ERROR, logger="recoverage"),
+            pytest.raises(OSError, match=r"cannot stat coverage\.db"),
+        ):
+            api._db_watcher_loop(threading.Event())
+        errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+        assert any("DB watcher stopped" in m and "live reload is off" in m for m in errors)
+
+    def test_iteration_failure_keeps_polling_and_logs_each_round(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        import recoverage.api as api
+
+        state = {"n": 0}
+
+        def _flaky() -> tuple[int, int] | None:
+            state["n"] += 1
+            if state["n"] == 1:
+                return (1, 1)
+            raise sqlite3.OperationalError("database is locked")
+
+        stop = threading.Event()
+        monkeypatch.setattr(api, "_snapshot_db_mtime", _flaky)
+        monkeypatch.setattr(api, "_SSE_POLL_INTERVAL_SECONDS", 0.0)
+
+        def _stop_after_two() -> None:
+            while state["n"] < 3:
+                time.sleep(0.001)
+            stop.set()
+
+        stopper = threading.Thread(target=_stop_after_two, daemon=True)
+        stopper.start()
+        with caplog.at_level(logging.ERROR, logger="recoverage"):
+            api._db_watcher_loop(stop)
+        stopper.join(timeout=1.0)
+        assert any("continuing to poll" in r.getMessage() for r in caplog.records)
+        assert not any("DB watcher stopped" in r.getMessage() for r in caplog.records)

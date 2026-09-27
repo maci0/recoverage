@@ -1,7 +1,8 @@
 """Shared harness for booting the dashboard against a synthetic coverage.db.
 
 Used by tools/smoke.py and tools/lint-html.py: both build the synthetic
-DB via tests/conftest (imported for its side effect), start ``recoverage
+DB through ``build_sample_db`` (which calls ``tests/conftest``'s builder
+directly), start ``recoverage
 serve`` on a free local port, probe documents over HTTP, and always stop the
 server process.
 """
@@ -14,31 +15,68 @@ import os
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
+SCRATCH_DIR = REPO_ROOT / ".scratch"
+
+
+@contextlib.contextmanager
+def scratch_project_dir() -> Iterator[Path]:
+    """Yield an empty throwaway project dir, removed on exit.
+
+    Under the repo's gitignored ``.scratch/``, not the system temp dir: the
+    system temp is RAM-backed, so a SQLite database and the served HTML tree
+    would eat memory and vanish on reboot, and the build is easier to inspect
+    when it lands next to the tree it came from.
+    """
+    SCRATCH_DIR.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=SCRATCH_DIR) as td:
+        project_dir = Path(td) / "proj"
+        project_dir.mkdir()
+        yield project_dir
 
 
 def build_sample_db(project_dir: Path) -> Path:
     """Build db/coverage.db using the shared synthetic schema builder.
 
-    conftest binds its DB path at import time (``cwd/db/coverage.db``), so
-    the chdir must happen before the import.
+    Re-runnable: any number of calls, in any order, against the same or a
+    different *project_dir*, in one process or across processes, all end
+    with the same database.  Two things used to break that, and both are
+    fixed here:
+
+    - ``import conftest`` is a no-op once the module is in ``sys.modules``,
+      and conftest's import-time side effect binds its own output path to
+      the cwd at ITS first import, so a second call built nothing.  The
+      builder is now called directly with the target path.
+    - The ``tests`` entry added to ``sys.path`` for that import was never
+      removed, so each call left another copy behind.
+
+    The chdir still happens, because conftest's own import-time side effect
+    creates ``db/coverage.db`` under the cwd: confining it to *project_dir*
+    keeps it out of whatever directory the tool was launched from.  Touching
+    the target first makes that side effect skip, so the database is written
+    exactly once, by the call below.
     """
     db_dir = project_dir / "db"
     db_dir.mkdir(parents=True, exist_ok=True)
+    db_file = db_dir / "coverage.db"
+    db_file.touch()
+    tests_dir = str(REPO_ROOT / "tests")
     old_cwd = Path.cwd()
+    sys.path.insert(0, tests_dir)
     try:
         os.chdir(project_dir)
-        sys.path.insert(0, str(REPO_ROOT / "tests"))
-        # Importing conftest builds the synthetic DB as a module side effect
-        # (guarded by cwd/db/coverage.db + no rebrew-project.toml).
-        import conftest  # noqa: F401  # type: ignore[import-not-found]
+        import conftest  # type: ignore[import-not-found]
     finally:
         os.chdir(old_cwd)
-    return db_dir / "coverage.db"
+        with contextlib.suppress(ValueError):
+            sys.path.remove(tests_dir)
+    conftest._build_synthetic_db(db_file)  # type: ignore[attr-defined]
+    return db_file
 
 
 def free_port() -> int:
@@ -87,3 +125,6 @@ def running_server(project_dir: Path) -> Iterator[tuple[int, subprocess.Popen[by
             proc.wait(timeout=10)
         except subprocess.TimeoutExpired:
             proc.kill()
+            # kill() signals; only a wait() reaps.  Without this the harness
+            # leaves a zombie behind on every timed-out teardown.
+            proc.wait()

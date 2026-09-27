@@ -22,7 +22,8 @@ Potato Mode deliberately renders HTML4-era markup (``<font>``, ``bgcolor``,
 family is filtered for that document as the documented retro contract, while
 every other message stays fatal — the SPA shell is checked strictly.
 
-The gate fails on any vnu message of any severity — nothing is skipped.
+The gate fails on any vnu message of any severity — nothing is skipped beyond
+the documented Potato Mode obsolete-element filter above.
 
 Requires: uv (project venv), java on PATH, and ``bun install`` already run
 (for vnu-jar).
@@ -32,12 +33,11 @@ from __future__ import annotations
 
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
-from _serve_harness import build_sample_db, get, running_server, wait_for
+from _serve_harness import build_sample_db, get, running_server, scratch_project_dir, wait_for
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 VNU_JAR = REPO_ROOT / "node_modules" / "vnu-jar" / "build" / "dist" / "vnu.jar"
 ASSETS_DIR = REPO_ROOT / "src" / "recoverage" / "assets"
 
@@ -73,9 +73,7 @@ def main() -> int:
         print("static-asset lint failed")
         return rc
 
-    with tempfile.TemporaryDirectory() as td:
-        project_dir = Path(td) / "proj"
-        project_dir.mkdir()
+    with scratch_project_dir() as project_dir:
         if not build_sample_db(project_dir).is_file():
             print("sample coverage.db not built")
             return 1

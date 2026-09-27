@@ -6,26 +6,65 @@ import contextlib
 import gzip
 import json
 import logging
+import queue
+import shutil
 import sqlite3
+import subprocess
+import tempfile
 import threading
 import time
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
+from typing import IO, Any, ClassVar
 
 import brotli
 import pytest
 import zstandard as zstd
 
+from recoverage import clock
 from recoverage.server import (
+    DLL_DATA,
+    DLL_LOCK,
     SCHEMA_TARGET,
     _best_encoding,
     _db_path,
     _escape_like,
     _find_dll_path,
+    _load_dll,
     _project_dir,
     clear_target_cache,
     compress_payload,
+    origin_is_this_dashboard,
 )
+
+# ── Advisory-lock probe ────────────────────────────────────────────
+
+
+def _probe_free_lock(fh: IO[bytes]) -> None:
+    """Raise BlockingIOError unless *fh*'s advisory lock is free.
+
+    Mirrors the split the production lock makes (rebrew's
+    ``file_handle_lock``: ``fcntl`` on POSIX, ``msvcrt`` elsewhere), so the
+    caller probes the same mechanism the server takes on this platform —
+    importing fcntl unconditionally would fail the run on the Windows
+    CI runner.
+    """
+    try:
+        import fcntl
+    except ImportError:  # Windows
+        import msvcrt
+
+        fh.seek(0)
+        try:
+            msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+        except OSError as exc:
+            raise BlockingIOError(str(exc)) from exc
+        fh.seek(0)
+        msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+        return
+    fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    fcntl.flock(fh, fcntl.LOCK_UN)
+
 
 # ── _best_encoding ─────────────────────────────────────────────────
 
@@ -147,7 +186,7 @@ class TestCompressPayload:
     def test_binary_payload(self) -> None:
         """Full byte range should compress and decompress correctly."""
         data = bytes(range(256)) * 10
-        compressed, encoding = compress_payload(data, "gzip")
+        compressed, _encoding = compress_payload(data, "gzip")
         assert gzip.decompress(compressed) == data
 
     def test_unknown_encoding_passes_through(self) -> None:
@@ -278,7 +317,7 @@ class TestDbEtag:
         etag = srv._etag_or_304(srv._snapshot_db_mtime(), "T")
 
         class _Req:
-            headers = {"If-None-Match": etag}
+            headers: ClassVar[dict[str, str]] = {"If-None-Match": etag}
 
         monkeypatch.setattr(srv, "request", _Req())
         with pytest.raises(srv.HTTPResponse) as excinfo:
@@ -291,8 +330,30 @@ class TestDbEtag:
 
 class TestClearTargetCache:
     def test_clear_is_safe_when_empty(self) -> None:
+        """Clearing an already-empty cache is a no-op, not a KeyError.
+
+        Asserting the resulting state rather than "did not raise" also pins
+        the part that is easy to get wrong: a second clear must leave every
+        global None, not a half-reset pair.
+        """
+        import recoverage.server as srv
+
         clear_target_cache()
-        clear_target_cache()  # should not raise
+        srv._TOML_CONFIG_CACHE = {"a": 1}
+        srv._TOML_CACHE_MTIME = (1, 2)
+        srv._RESOLVED_TARGETS_CACHE = ["T"]
+        srv._SCHEMA_VERSION_CACHE = 3
+
+        clear_target_cache()
+        assert srv._TOML_CONFIG_CACHE is None
+        assert srv._TOML_CACHE_MTIME is None
+        assert srv._RESOLVED_TARGETS_CACHE is None
+        assert srv._SCHEMA_VERSION_CACHE is None
+
+        # Idempotent: a second clear over the emptied state changes nothing.
+        clear_target_cache()
+        assert srv._TOML_CONFIG_CACHE is None
+        assert srv._RESOLVED_TARGETS_CACHE is None
 
     def test_thread_safety(self) -> None:
         errors: list[Exception] = []
@@ -372,11 +433,13 @@ class TestLikeEscape:
         assert result == "%\\\\\\_%"
 
 
-def _create_v4_db(db: Path, functions_columns: str) -> None:
-    """Create a minimal v4-shaped DB stamped db_version="4".
+def _create_v4_db(db: Path, functions_columns: str, *, version: str = "4") -> None:
+    """Create a minimal v4-shaped DB stamped with *version*.
 
     *functions_columns* is the tail of the functions table's column list, so
     tests can omit query-critical columns to exercise the column gate.
+    The column set is what v4 through v10 share; *version* only changes the
+    stamp.
     """
     conn = sqlite3.connect(db)
     try:
@@ -422,8 +485,8 @@ def _create_v4_db(db: Path, functions_columns: str) -> None:
             """
         )
         c.execute(
-            "INSERT INTO metadata VALUES (?, 'db_version', '\"4\"')",
-            (SCHEMA_TARGET,),
+            "INSERT INTO metadata VALUES (?, 'db_version', ?)",
+            (SCHEMA_TARGET, f'"{version}"'),
         )
         conn.commit()
     finally:
@@ -494,6 +557,155 @@ class TestSchemaColumnGate:
             assert srv._check_schema_version_uncached(conn2) == "<incomplete>"
 
 
+class TestCurrentRebrewSchema:
+    """The installed rebrew's stamp must be a version this server accepts."""
+
+    def test_stamp_is_known_and_column_gated(self, tmp_path: Any) -> None:
+        import sqlite3
+
+        from rebrew.build_db import _CURRENT_DB_VERSION
+
+        from recoverage import server as srv
+
+        assert _CURRENT_DB_VERSION in srv.KNOWN_SCHEMA_VERSIONS
+        db = tmp_path / "coverage.db"
+        _create_v4_db(db, _FN_COLUMNS_FULL, version=_CURRENT_DB_VERSION)
+        with contextlib.closing(sqlite3.connect(db)) as conn:
+            assert srv._check_schema_version_uncached(conn) == _CURRENT_DB_VERSION
+
+        incomplete = tmp_path / "incomplete.db"
+        _create_v4_db(incomplete, _FN_COLUMNS_NO_TEXT_OFFSET, version=_CURRENT_DB_VERSION)
+        with contextlib.closing(sqlite3.connect(incomplete)) as conn:
+            assert srv._check_schema_version_uncached(conn) == "<incomplete>"
+
+
+class TestReadOnlyOpen:
+    def test_open_db_rejects_writes(self, tmp_path: Path) -> None:
+        import sqlite3
+
+        from recoverage import server as srv
+
+        db = tmp_path / "coverage.db"
+        sqlite3.connect(db).close()
+        conn = srv._open_db(db)
+        try:
+            with pytest.raises(sqlite3.OperationalError):
+                conn.execute("CREATE TABLE blocked (id INTEGER)")
+        finally:
+            conn.close()
+
+    def test_shared_lock_drops_when_the_connection_is_collected(self, tmp_path: Path) -> None:
+        import gc
+        import sqlite3
+
+        from recoverage import server as srv
+
+        db = tmp_path / "coverage.db"
+        sqlite3.connect(db).close()
+        conn = srv._open_db(db)
+        lock_path = db.with_name(db.name + ".lock")
+        # Binary handles: msvcrt.locking needs a fileno it can lock a byte
+        # range on, and fcntl behaves the same on one.
+        held = lock_path.open("ab")
+        try:
+            with pytest.raises(BlockingIOError):
+                _probe_free_lock(held)
+        finally:
+            held.close()
+
+        conn.close()
+        del conn
+        gc.collect()
+
+        held = lock_path.open("ab")
+        try:
+            _probe_free_lock(held)
+        finally:
+            held.close()
+
+
+class TestReadSnapshot:
+    """A multi-statement read must see ONE database version.
+
+    Python's sqlite3 begins a deferred transaction per statement, so a
+    rebuild committing between two reads of the same table would answer the
+    second from the new build. `read_snapshot` pins the snapshot for the
+    block instead.
+    """
+
+    @staticmethod
+    def _wal_db(tmp_path: Path) -> Path:
+        import sqlite3
+
+        db = tmp_path / "coverage.db"
+        conn = sqlite3.connect(db)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("CREATE TABLE sections (target TEXT, name TEXT, size INTEGER)")
+        conn.execute("INSERT INTO sections VALUES ('GAME', '.text', 16)")
+        conn.commit()
+        conn.close()
+        return db
+
+    def test_rebuild_mid_block_is_invisible(self, tmp_path: Path) -> None:
+        import sqlite3
+
+        from recoverage import server as srv
+
+        db = self._wal_db(tmp_path)
+        conn = srv._open_db(db)
+        try:
+            c = conn.cursor()
+            with srv.read_snapshot(c):
+                c.execute("SELECT size FROM sections WHERE target = 'GAME'")
+                before = c.fetchone()[0]
+
+                writer = sqlite3.connect(db)
+                try:
+                    writer.execute("UPDATE sections SET size = 99")
+                    writer.commit()
+                finally:
+                    writer.close()
+
+                c.execute("SELECT size FROM sections WHERE target = 'GAME'")
+                during = c.fetchone()[0]
+            # Outside the block the next statement sees the committed rebuild.
+            c.execute("SELECT size FROM sections WHERE target = 'GAME'")
+            after = c.fetchone()[0]
+        finally:
+            conn.close()
+
+        assert before == during == 16
+        assert after == 99
+
+    def test_block_closes_the_transaction(self, tmp_path: Path) -> None:
+        from recoverage import server as srv
+
+        conn = srv._open_db(self._wal_db(tmp_path))
+        try:
+            c = conn.cursor()
+            with srv.read_snapshot(c):
+                c.execute("SELECT 1 FROM sections")
+            assert not conn.in_transaction
+        finally:
+            conn.close()
+
+    def test_nested_inside_an_open_transaction_is_a_noop(self, tmp_path: Path) -> None:
+        """The CLI reuses one connection across commands; SQLite has no
+        nested BEGIN, and the outer transaction already pins the snapshot."""
+        from recoverage import server as srv
+
+        conn = srv._open_db(self._wal_db(tmp_path))
+        try:
+            c = conn.cursor()
+            conn.execute("BEGIN")
+            with srv.read_snapshot(c):
+                c.execute("SELECT 1 FROM sections")
+            assert conn.in_transaction, "read_snapshot closed the caller's transaction"
+            conn.rollback()
+        finally:
+            conn.close()
+
+
 class TestDeepLinking:
     """J9: the SPA carries URL deep-link wiring (target/fn/section/q)."""
 
@@ -516,6 +728,75 @@ class TestDeepLinking:
 
 
 # ── Token auth & security headers ──────────────────────────────────
+
+
+class TestSpaFilterControls:
+    """The SPA's status filters match what the two renderers share.
+
+    The SPA wrote target/function/section/search into the URL and left the
+    filter out, so a filtered map could not be reloaded or shared even though
+    Potato Mode has carried `?filter=` all along. It also offered no filter
+    for two states the legend names, which left those cells painted but
+    unreachable: every pill dimmed them, none isolated them.
+    """
+
+    @staticmethod
+    def _app_js() -> str:
+        import importlib.resources
+
+        from recoverage import assets
+
+        return importlib.resources.files(assets).joinpath("app.js").read_text(encoding="utf-8")
+
+    def test_filter_is_part_of_the_deep_link(self) -> None:
+        app_js = self._app_js()
+        assert 'params.set("filter"' in app_js
+        # Every toggle has to reach the URL, or the link goes stale on the
+        # first click rather than on the second.
+        toggle = app_js.split("const toggleFilter =", 1)[1].split("};", 1)[0]
+        assert "syncUrl()" in toggle
+
+    def test_filter_url_names_are_allowlisted(self) -> None:
+        """A name no button offers dims every painted cell and lights none."""
+        import re
+
+        from recoverage.potato import FILTER_STATES
+
+        app_js = self._app_js()
+        block = re.search(r"const FILTER_KEYS = new Set\(\[(.*?)\]\);", app_js, re.DOTALL).group(1)
+        keys = set(re.findall(r'"([a-z_]+)"', block))
+        assert keys == set(FILTER_STATES)
+        assert "FILTER_KEYS.has" in app_js
+
+    def test_every_filter_key_has_a_button(self) -> None:
+        import re
+
+        from recoverage.potato import FILTER_STATES
+
+        app_js = self._app_js()
+        buttons = set(re.findall(r'FilterButton\("([a-z_]+)"', app_js))
+        assert buttons - {"all"} == set(FILTER_STATES)
+        for key in FILTER_STATES:
+            assert f'FilterButton("{key}"' in app_js, f"no toolbar button for {key}"
+
+    def test_every_packed_state_survives_a_filter(self) -> None:
+        """FILTER_KEY is the state->key table the dimming pass reads.
+
+        A "" there means the cell is dimmed by every pill and lit by none,
+        which is the state the two missing buttons were for.
+        """
+        import importlib.resources
+        import re
+
+        from recoverage import assets
+
+        detail_js = (
+            importlib.resources.files(assets).joinpath("detail.js").read_text(encoding="utf-8")
+        )
+        raw = re.search(r"const FILTER_KEY = \[(.*?)\];", detail_js, re.DOTALL).group(1)
+        keys = [v.strip().strip('"') for v in raw.split(",") if v.strip()]
+        assert keys[6:] == ["proven", "problem"]
+        assert keys[:6] == ["", "exact", "reloc", "near_match", "stub", "padding"]
 
 
 class TestAuthTokenMatches:
@@ -611,6 +892,7 @@ class TestTokenAuthEndpoint:
         status, headers, body = wsgi_get("/", headers={"Accept": "text/html"})
         assert status.startswith("401")
         assert "text/html" in headers.get("Content-Type", "")
+        assert headers.get("Cache-Control") == "no-store"
         assert b"Access token required" in body
 
     def test_api_route_stays_json_401_despite_html_accept(self) -> None:
@@ -637,21 +919,61 @@ class TestTokenAuthEndpoint:
         assert "recoverage_token=" in cookie
         assert "HttpOnly" in cookie
 
+    def test_valid_token_on_potato_sets_httponly_cookie(self) -> None:
+        """Potato Mode links are relative, so the share-link token has to
+        survive the first click — the page itself must set the same cookie the
+        SPA shell does.  Without it /potato?token=... rendered once and every
+        link on it answered the 401 page."""
+        from conftest import wsgi_get
+
+        status, headers, _ = wsgi_get("/potato?target=FAKEDLL&token=unit-test-token")
+        assert status.startswith("200")
+        cookie = headers.get("Set-Cookie", "")
+        assert "recoverage_token=" in cookie
+        assert "HttpOnly" in cookie
+
+    def test_potato_without_a_token_sets_no_cookie(self) -> None:
+        """Cookie-setting is a no-op on an unauthenticated request, so a
+        browser that visits /potato with no --token in play never gets one."""
+        from conftest import wsgi_get
+
+        import recoverage.server as srv
+
+        original = srv._AUTH_TOKEN
+        srv._AUTH_TOKEN = ""
+        try:
+            status, headers, _ = wsgi_get("/potato?target=FAKEDLL&token=anything")
+            assert status.startswith("200")
+            assert "Set-Cookie" not in headers
+        finally:
+            srv._AUTH_TOKEN = original
+
 
 class TestAuthFailureLimiter:
     """Unit behavior of the failure window."""
 
+    # Far above what the in-process burst below needs, low enough that a wedged
+    # worker fails the test instead of stalling the run.
+    _WORKER_TIMEOUT_SECONDS = 30.0
+
     def test_success_clears_failures(self, monkeypatch: Any) -> None:
+        """A request carrying the right token empties a FULL window.  Only
+        _require_auth calls _clear_auth_failures, so the assertion is made
+        after a real WSGI request: calling the helper here instead would stay
+        green with the production call deleted."""
+        from conftest import wsgi_get
+
         import recoverage.server as srv
 
         monkeypatch.setattr(srv, "_AUTH_TOKEN", "tok")
         try:
-            for _ in range(srv._AUTH_FAIL_MAX - 1):
+            for _ in range(srv._AUTH_FAIL_MAX):
                 srv._auth_throttle(time.monotonic(), reserve_slot=True)
-            assert not srv._auth_throttle(time.monotonic(), reserve_slot=False)
-            # A successful match wipes the slate.
-            assert srv._auth_token_matches("tok")
-            srv._clear_auth_failures()
+            # The window is full, so the next failure is a 429 ...
+            assert srv._auth_throttle(time.monotonic(), reserve_slot=False)
+            status, _, _ = wsgi_get("/api/health?token=tok")
+            assert status.startswith("200")
+            # ... and the verified request wiped the slate.
             assert not srv._auth_throttle(time.monotonic(), reserve_slot=False)
         finally:
             srv._clear_auth_failures()
@@ -671,30 +993,40 @@ class TestAuthFailureLimiter:
         """A burst of simultaneous bad-token requests must not slip past the
         cap: the cap check and the slot append share one critical section
         (_auth_throttle), so exactly _AUTH_FAIL_MAX reservations succeed no
-        matter how many threads race the window."""
+        matter how many threads race the window.
+
+        A wedged worker must FAIL the test, never hang the run: the barrier
+        bounds how long the workers wait for one another and the join bounds
+        how long this test waits for them.  Each worker flags its own Event
+        after recording, so a worker that died without recording is caught
+        too (Thread.ident cannot detect that: start() sets it permanently).
+        """
         import recoverage.server as srv
 
         workers = srv._AUTH_FAIL_MAX * 6
         barrier = threading.Barrier(workers)
         reserved: list[bool] = []
         lock = threading.Lock()
+        done = [threading.Event() for _ in range(workers)]
 
-        def worker() -> None:
-            barrier.wait()
+        def worker(finished: threading.Event) -> None:
+            barrier.wait(timeout=self._WORKER_TIMEOUT_SECONDS)
             got = srv._auth_throttle(time.monotonic(), reserve_slot=True)
             with lock:
                 reserved.append(got)
+            finished.set()
 
-        threads = [threading.Thread(target=worker) for _ in range(workers)]
+        threads = [threading.Thread(target=worker, args=(ev,)) for ev in done]
         try:
             for t in threads:
                 t.start()
             for t in threads:
-                t.join(timeout=30)
+                t.join(timeout=self._WORKER_TIMEOUT_SECONDS)
         finally:
             srv._clear_auth_failures()
 
-        assert all(t.ident is not None for t in threads)
+        assert [t for t in threads if t.is_alive()] == [], "worker thread wedged"
+        assert all(ev.is_set() for ev in done)
         assert len(reserved) == workers
         assert reserved.count(False) == srv._AUTH_FAIL_MAX
         assert reserved.count(True) == workers - srv._AUTH_FAIL_MAX
@@ -734,6 +1066,132 @@ class TestEvictOldest:
         _evict_oldest(cache, 8)
         assert len(cache) < 8
         assert set(cache) == set(range(13, 20))  # newest kept, oldest gone
+
+
+class TestStaticAssetRevalidation:
+    """Static assets answer If-None-Match with a 304 and no body.
+
+    Cache-Control is no-cache, so the browser revalidates on every load; with
+    no validator the only answer was the full body again (45 KB of hljs.min.js
+    per asm pane, 9.5 KB of detail.js per visit). The ETag must be stable
+    across requests, distinct per encoding, and must reject a stale tag.
+
+    wsgiref title-cases header names on the way out, so the tag arrives as
+    "Etag"; HTTP field names are case-insensitive either way.
+    """
+
+    def test_asset_carries_an_etag(self) -> None:
+        from conftest import wsgi_get
+
+        status, headers, body = wsgi_get("/detail.js", headers={"Accept-Encoding": "gzip"})
+        assert status == "200 OK"
+        assert headers["Etag"]
+        assert body
+
+    def test_matching_if_none_match_returns_empty_304(self) -> None:
+        from conftest import wsgi_get
+
+        _, headers, _ = wsgi_get("/detail.js", headers={"Accept-Encoding": "gzip"})
+        etag = headers["Etag"]
+        status, headers_304, body = wsgi_get(
+            "/detail.js",
+            headers={"Accept-Encoding": "gzip", "If-None-Match": etag},
+        )
+        assert status == "304 Not Modified"
+        assert body == b""
+        assert headers_304["Etag"] == etag
+        assert headers_304["Vary"] == "Accept-Encoding"
+
+    def test_weak_validator_still_matches(self) -> None:
+        from conftest import wsgi_get
+
+        _, headers, _ = wsgi_get("/detail.js", headers={"Accept-Encoding": "gzip"})
+        weak = f"W/{headers['Etag']}"
+        status, _, _ = wsgi_get(
+            "/detail.js", headers={"Accept-Encoding": "gzip", "If-None-Match": weak}
+        )
+        assert status == "304 Not Modified"
+
+    def test_stale_etag_gets_the_full_body(self) -> None:
+        """A validator that does not match re-sends the asset, and the fresh
+        response carries the CURRENT tag, not the stale one the client sent.
+        `assert body` alone is satisfied by a 200 that echoed the stale tag."""
+        from conftest import decode_body, wsgi_get
+
+        _, current_headers, _ = wsgi_get("/detail.js", headers={"Accept-Encoding": "gzip"})
+        status, headers, body = wsgi_get(
+            "/detail.js",
+            headers={"Accept-Encoding": "gzip", "If-None-Match": '"not-the-tag"'},
+        )
+        assert status == "200 OK"
+        assert headers["Etag"] == current_headers["Etag"]
+        assert decode_body(body, headers)
+
+    def test_etag_differs_per_encoding(self) -> None:
+        """br and zstd are different representations of the same file: a
+        strong validator must not match across them."""
+        from conftest import wsgi_get
+
+        _, br_headers, _ = wsgi_get("/detail.js", headers={"Accept-Encoding": "br"})
+        _, zstd_headers, _ = wsgi_get("/detail.js", headers={"Accept-Encoding": "zstd"})
+        assert br_headers["Etag"] != zstd_headers["Etag"]
+
+    def test_index_revalidates_instead_of_resending(self) -> None:
+        """The shell is static, so a repeat visit must answer 304.
+
+        It used to be the one response served no-store with no validator, so
+        every reload re-downloaded the whole document while every subordinate
+        asset answered 304.
+        """
+        from conftest import wsgi_get
+
+        status, headers, _ = wsgi_get("/", headers={"Accept-Encoding": "gzip"})
+        assert status == "200 OK"
+        assert headers["Cache-Control"] == "no-cache, must-revalidate"
+        etag = headers["Etag"]
+
+        status_304, headers_304, body_304 = wsgi_get(
+            "/", headers={"Accept-Encoding": "gzip", "If-None-Match": etag}
+        )
+        assert status_304 == "304 Not Modified"
+        assert body_304 == b""
+        assert headers_304["Etag"] == etag
+        assert headers_304["Vary"] == "Accept-Encoding"
+
+    def test_index_etag_differs_per_encoding(self) -> None:
+        """Same rule as the static assets: a strong validator must not match
+        across representations."""
+        from conftest import wsgi_get
+
+        _, br_headers, _ = wsgi_get("/", headers={"Accept-Encoding": "br"})
+        _, zstd_headers, _ = wsgi_get("/", headers={"Accept-Encoding": "zstd"})
+        assert br_headers["Etag"] != zstd_headers["Etag"]
+
+    def test_index_preloads_detail_js(self) -> None:
+        """detail.js is requested by the inlined app.js, so the shell
+        advertises it during the preload scan instead of a round trip later."""
+        from conftest import decode_body, wsgi_get
+
+        _, headers, body = wsgi_get("/", headers={"Accept-Encoding": "gzip"})
+        html = decode_body(body, headers).decode("utf-8")
+        assert 'rel="preload"' in html
+        assert 'href="/detail.js"' in html
+        assert 'as="script"' in html
+
+    def test_index_preloads_the_target_list(self) -> None:
+        """The target list is on the first-paint path and cannot be discovered
+        until app.js runs, so the shell advertises it as a fetch preload; the
+        plain same-origin fetch() in app.js then reuses it rather than
+        issuing a second request."""
+        from conftest import decode_body, wsgi_get
+
+        _, headers, body = wsgi_get("/", headers={"Accept-Encoding": "gzip"})
+        html = decode_body(body, headers).decode("utf-8")
+        assert '<link rel="preload" href="/api/targets" as="fetch">' in html
+        # Preload reuse needs the same mode and credentials the fetch uses:
+        # a crossorigin attribute here would put the two in different caches
+        # and the browser would download the list twice.
+        assert '<link rel="preload" href="/api/targets" as="fetch" crossorigin' not in html
 
 
 class TestHostnameOf:
@@ -791,7 +1249,7 @@ class TestHostnameOf:
 class TestSecurityHeaders:
     """Every response carries the hardening header set."""
 
-    EXPECTED = {
+    EXPECTED: ClassVar[dict[str, str]] = {
         "X-Content-Type-Options": "nosniff",
         "X-Frame-Options": "DENY",
         "Referrer-Policy": "no-referrer",
@@ -823,6 +1281,17 @@ class TestSecurityHeaders:
         assert "'unsafe-inline'" in csp
         assert "connect-src 'self'" in csp
 
+    def test_potato_page_forces_revalidation(self) -> None:
+        """Potato Mode is the one DB-derived response that used to carry no
+        cache directive at all, leaving heuristic freshness to the browser and
+        storage-plus-replay to any shared cache in front of the dashboard."""
+        from conftest import wsgi_get
+
+        _, headers, _ = wsgi_get("/potato")
+        assert headers.get("Cache-Control") == "no-cache, must-revalidate"
+        # bottle normalizes header names to Title-Case ("Etag").
+        assert headers.get("Etag")
+
 
 class TestLogInjection:
     """Request-derived log fields cannot forge multi-line entries: the path
@@ -835,6 +1304,37 @@ class TestLogInjection:
         assert _log_safe("normal/path?q=1") == "normal/path?q=1"
         assert _log_safe("a\nb\rc\x00d\x7f") == "a\\x0ab\\x0dc\\x00d\\x7f"
 
+    def test_log_safe_escapes_every_line_terminator(self) -> None:
+        """C1 controls and U+2028/U+2029 break a log line the same way \\n does.
+
+        A header value is not percent-encoded on the wire, so %C2%85 (NEL)
+        and %E2%80%A8 (LINE SEPARATOR) reach _log_safe as themselves; every
+        consumer that splits a log on \\n splits on these too.  chr(), not a
+        literal: the separators are invisible in a diff.
+        """
+        from recoverage.server import _log_safe
+
+        value = "a" + chr(0x85) + "b" + chr(0x2028) + "c" + chr(0x2029) + "d" + chr(0x9F)
+        assert _log_safe(value) == "a\\x85b\\x2028c\\x2029d\\x9f"
+
+    def test_log_safe_keeps_ordinary_non_ascii(self) -> None:
+        """Escaping is for line breaks, not for text: a CJK target id or an
+        accented symbol name must stay readable in the log."""
+        from recoverage.server import _log_safe
+
+        line = "/api/targets/日本語/functions/café"
+        assert _log_safe(line) == line
+
+    def test_request_id_cannot_carry_a_line_separator(self, monkeypatch: Any) -> None:
+        """The echoed X-Request-ID is the request's identity in the log."""
+        import recoverage.server as srv
+
+        class _Req:
+            headers: ClassVar[dict[str, str]] = {"X-Request-ID": "abc" + chr(0x2028) + "forged"}
+
+        monkeypatch.setattr(srv, "request", _Req())
+        assert srv._new_request_id() == "abc\\x2028forged"
+
     def test_newline_in_path_stays_one_log_line(self, caplog: pytest.LogCaptureFixture) -> None:
         from conftest import wsgi_get
 
@@ -843,6 +1343,20 @@ class TestLogInjection:
         msgs = [r.getMessage() for r in caplog.records if r.name == "recoverage"]
         assert any("X-Forged" in m for m in msgs), "request was not logged at all"
         assert all("\n" not in m and "\r" not in m for m in msgs)
+
+    def test_target_id_cannot_forge_a_dll_log_line(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Target ids are routable request data and originate in analyzed
+        binary names, so the DLL loader's warnings carry them through
+        _log_safe like every other request-derived log field does."""
+        with caplog.at_level(logging.WARNING, logger="recoverage"):
+            with DLL_LOCK:
+                DLL_DATA.clear()
+            assert _load_dll("evil\nX-Forged: yes") is None
+        msgs = [r.getMessage() for r in caplog.records if r.name == "recoverage"]
+        assert any("X-Forged" in m for m in msgs), "failure was not logged at all"
+        assert all("\n" not in m and "\r" not in m for m in msgs)
+        with DLL_LOCK:
+            DLL_DATA.clear()
 
 
 class TestLoadDllTransientFailure:
@@ -891,6 +1405,7 @@ class TestGetDisassemblyNoNegativeCache:
     def test_load_failure_bypasses_memo_and_self_heals(
         self, tmp_path: Path, monkeypatch: Any
     ) -> None:
+        import recoverage.disasm as disasm
         import recoverage.server as srv
 
         key = "__disasm_transient_target__"
@@ -903,10 +1418,10 @@ class TestGetDisassemblyNoNegativeCache:
             calls.append((va, size, file_offset, target))
             return f"disasm:{va:#x}"
 
-        monkeypatch.setattr(srv, "_disassemble_loaded", fake_impl)
+        monkeypatch.setattr(disasm, "_disassemble_loaded", fake_impl)
         try:
             # Load fails: the caller sees "" and the memo was never consulted.
-            assert srv.get_disassembly(0x1000, 4, 0, key) == ""
+            assert disasm.get_disassembly(0x1000, 4, 0, key) == ""
             assert calls == []
 
             # The binary comes back: the same slice disassembles for real
@@ -914,11 +1429,55 @@ class TestGetDisassemblyNoNegativeCache:
             real = tmp_path / "real.dll"
             real.write_bytes(b"MZ-fake-binary")
             holder["p"] = real
-            assert srv.get_disassembly(0x1000, 4, 0, key) == "disasm:0x1000"
+            assert disasm.get_disassembly(0x1000, 4, 0, key) == "disasm:0x1000"
             assert calls == [(0x1000, 4, 0, key)]
         finally:
             with srv.DLL_LOCK:
                 srv.DLL_DATA.pop(key, None)
+
+    def test_invalidation_during_a_build_leaves_no_stale_memo_entry(
+        self, tmp_path: Path, monkeypatch: Any
+    ) -> None:
+        """A rebuild broadcast that lands mid-build must not be outlived by it.
+
+        lru_cache stores the result on return, so a clear that runs while the
+        build is still disassembling cannot retract it: the entry lands after
+        the invalidation and nothing clears it again until the NEXT rebuild.
+        The generation counter in get_disassembly is what catches that, and it
+        has to catch it for the whole in-flight herd, not one request.
+        """
+        import recoverage.disasm as disasm
+        import recoverage.server as srv
+
+        key = "__disasm_midbuild_target__"
+        dll = tmp_path / "real.dll"
+        dll.write_bytes(b"MZ-fake-binary")
+        monkeypatch.setattr(srv, "_find_dll_path", lambda target: dll)
+
+        built: list[str] = []
+
+        @disasm.functools.lru_cache(maxsize=16)
+        def fake_impl(va: int, size: int, file_offset: int, target: str) -> str:
+            built.append(f"{va:#x}")
+            if len(built) == 1:
+                # The rebuild's invalidation lands while this build runs: the
+                # bytes behind the answer are the ones it is meant to drop.
+                disasm.clear_disassembly_cache()
+            return f"disasm-build-{len(built)}"
+
+        monkeypatch.setattr(disasm, "_disassemble_loaded", fake_impl)
+        try:
+            # Served answer is the post-rebuild one, not the raced build.
+            assert disasm.get_disassembly(0x3000, 1, 0, key) == "disasm-build-2"
+            assert len(built) == 2
+            # And the raced build left nothing behind: the repeat is a memo
+            # hit on the fresh entry, still without a third build.
+            assert disasm.get_disassembly(0x3000, 1, 0, key) == "disasm-build-2"
+            assert len(built) == 2
+        finally:
+            with srv.DLL_LOCK:
+                srv.DLL_DATA.pop(key, None)
+            fake_impl.cache_clear()
 
     def test_clear_derived_caches_clears_disassembly_memo(
         self, tmp_path: Path, monkeypatch: Any
@@ -926,6 +1485,7 @@ class TestGetDisassemblyNoNegativeCache:
         """Rebuilds must evict memoized disassembly through the shared
         invalidation entry point (wiring guard for the split cache)."""
         import recoverage.api
+        import recoverage.disasm as disasm
         import recoverage.server as srv
 
         key = "__disasm_invalidation_target__"
@@ -933,15 +1493,15 @@ class TestGetDisassemblyNoNegativeCache:
         monkeypatch.setattr(srv, "_find_dll_path", lambda target: holder["p"])
         real = tmp_path / "real.dll"
 
-        @srv.functools.lru_cache(maxsize=16)
+        @disasm.functools.lru_cache(maxsize=16)
         def _prime(va: int, size: int, file_offset: int, target: str) -> str:
             return "cached"
 
-        monkeypatch.setattr(srv, "_disassemble_loaded", _prime)
+        monkeypatch.setattr(disasm, "_disassemble_loaded", _prime)
         try:
             holder["p"] = real
             real.write_bytes(b"MZ-fake-binary")
-            assert srv.get_disassembly(0x2000, 1, 0, key) == "cached"
+            assert disasm.get_disassembly(0x2000, 1, 0, key) == "cached"
             assert _prime.cache_info().currsize == 1
             recoverage.api._clear_derived_caches()
             assert _prime.cache_info().currsize == 0
@@ -949,3 +1509,1368 @@ class TestGetDisassemblyNoNegativeCache:
             with srv.DLL_LOCK:
                 srv.DLL_DATA.pop(key, None)
         _prime.cache_clear()
+
+
+class TestBucketReconciliation:
+    """total_cells must equal the sum of the counted buckets on BOTH paths.
+
+    rebrew's build_db writes an `other_count` catch-all into
+    section_cell_stats for exactly this reason: without it the residual states
+    (compile_error, extract_error, invalid_va, missing_file, missing_size,
+    skip, unknown, drift, unchecked) vanish and the buckets silently
+    undercount.  The live-query fallback carried no such catch-all, so the
+    same database answered two different totals depending on whether the
+    materialized table was present.
+    """
+
+    # Every short key _cell_bucket_row emits except total_cells, which is the
+    # sum they must reconcile with.
+    BUCKET_KEYS = (
+        "exact",
+        "reloc",
+        "near_match",
+        "stub",
+        "padding",
+        "data",
+        "thunk",
+        "none",
+        "proven",
+        "size_mismatch",
+        "other",
+    )
+
+    # One cell per named bucket, plus three the buckets leave to `other`.
+    CELL_STATES = (
+        "exact",
+        "reloc",
+        "near_match",
+        "stub",
+        "padding",
+        "data",
+        "thunk",
+        "none",
+        "proven",
+        "size_mismatch",
+        "compile_error",
+        "skip",
+        "unknown",
+    )
+
+    @staticmethod
+    def _reconciles(sec: dict[str, Any]) -> None:
+        assert sum(sec[k] for k in TestBucketReconciliation.BUCKET_KEYS) == sec["total_cells"]
+
+    @classmethod
+    def _cells_db(cls, states: Sequence[str] | None = None) -> sqlite3.Connection:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        c = conn.cursor()
+        c.execute(
+            "CREATE TABLE cells (target TEXT, section_name TEXT, start INT,"
+            " end INT, span INT, state TEXT)"
+        )
+        c.execute("CREATE TABLE metadata (target TEXT, key TEXT, value TEXT)")
+        c.execute("CREATE TABLE sections (target TEXT, name TEXT, va INT, size INT)")
+        c.execute("CREATE TABLE functions (target TEXT, va INT, status TEXT, markerType TEXT)")
+        c.executemany(
+            "INSERT INTO cells (target, section_name, start, end, span, state)"
+            " VALUES ('T', '.text', ?, ?, 1, ?)",
+            [(i, i + 1, s) for i, s in enumerate(states or cls.CELL_STATES)],
+        )
+        return conn
+
+    def test_fallback_path_reconciles(self) -> None:
+        import recoverage.server as srv
+
+        conn = self._cells_db()
+        try:
+            c = conn.cursor()
+            # No section_cell_stats: the live-query fallback answers.
+            stats = srv._section_stats(c, "T")
+        finally:
+            conn.close()
+        sec = stats["sections"][".text"]
+        assert sec["other"] == 3
+        self._reconciles(sec)
+
+    def test_materialized_path_reconciles(self) -> None:
+        import recoverage.server as srv
+
+        conn = self._cells_db()
+        try:
+            c = conn.cursor()
+            c.execute(
+                "CREATE TABLE section_cell_stats (target TEXT, section_name TEXT,"
+                " total_cells INT, exact_count INT, reloc_count INT,"
+                " near_match_count INT, stub_count INT, padding_count INT,"
+                " data_count INT, thunk_count INT, none_count INT,"
+                " proven_count INT, size_mismatch_count INT, other_count INT)"
+            )
+            # rebrew's definition: 'verified' folds into exact_count.
+            c.execute(
+                "INSERT INTO section_cell_stats SELECT target, section_name,"
+                " COUNT(*),"
+                " SUM(state IN ('exact','verified')), SUM(state='reloc'),"
+                " SUM(state IN ('near_match','near_matching')), SUM(state='stub'),"
+                " SUM(state='padding'), SUM(state='data'), SUM(state='thunk'),"
+                " SUM(state='none'), SUM(state='proven'),"
+                " SUM(state='size_mismatch'),"
+                " SUM(state NOT IN ('exact','verified','reloc','near_match',"
+                " 'near_matching','stub','padding','data','thunk','none','proven',"
+                " 'size_mismatch'))"
+                " FROM cells GROUP BY target, section_name"
+            )
+            stats = srv._section_stats(c, "T")
+        finally:
+            conn.close()
+        sec = stats["sections"][".text"]
+        assert sec["other"] == 3
+        self._reconciles(sec)
+
+    def test_absent_other_count_column_reports_zero(self) -> None:
+        """A pre-catch-all section_cell_stats keeps the key, at 0."""
+        import recoverage.server as srv
+
+        conn = self._cells_db()
+        try:
+            c = conn.cursor()
+            c.execute(
+                "CREATE TABLE section_cell_stats (target TEXT, section_name TEXT,"
+                " total_cells INT, exact_count INT, reloc_count INT,"
+                " near_match_count INT, stub_count INT, padding_count INT,"
+                " data_count INT, thunk_count INT, none_count INT,"
+                " proven_count INT, size_mismatch_count INT)"
+            )
+            c.execute(
+                "INSERT INTO section_cell_stats SELECT target, section_name,"
+                " COUNT(*), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 FROM cells"
+                " GROUP BY target, section_name"
+            )
+            stats = srv._section_stats(c, "T")
+        finally:
+            conn.close()
+        assert stats["sections"][".text"]["other"] == 0
+
+    def test_verified_cells_count_as_exact_on_both_paths(self) -> None:
+        """'verified' is a match, and the two sources must agree on that.
+
+        build_db folds VERIFIED into exact_count, the grid palette paints it in
+        the exact slot, and covered_bytes already counts its bytes.  The
+        materialized path used to overwrite that with a cells-side 'exact'-only
+        count, which dropped every VERIFIED cell from every bucket: the served
+        total no longer reconciled with the bucket sum, /stats disagreed with
+        /data and Potato Mode over the same database, and the live fallback
+        disagreed with the materialized table.
+        """
+        import recoverage.server as srv
+
+        states = ["exact", "verified", "verified", "none", "skip"]
+
+        fallback_db = self._cells_db(states)
+        try:
+            fallback = srv._section_stats(fallback_db.cursor(), "T")["sections"][".text"]
+        finally:
+            fallback_db.close()
+
+        materialized_db = self._cells_db(states)
+        try:
+            c = materialized_db.cursor()
+            c.execute(
+                "CREATE TABLE section_cell_stats (target TEXT, section_name TEXT,"
+                " total_cells INT, exact_count INT, reloc_count INT,"
+                " near_match_count INT, stub_count INT, padding_count INT,"
+                " data_count INT, thunk_count INT, none_count INT,"
+                " proven_count INT, size_mismatch_count INT, other_count INT)"
+            )
+            c.execute(
+                "INSERT INTO section_cell_stats SELECT target, section_name,"
+                " COUNT(*),"
+                " SUM(state IN ('exact','verified')), SUM(state='reloc'),"
+                " SUM(state IN ('near_match','near_matching')), SUM(state='stub'),"
+                " SUM(state='padding'), SUM(state='data'), SUM(state='thunk'),"
+                " SUM(state='none'), SUM(state='proven'),"
+                " SUM(state='size_mismatch'),"
+                " SUM(state NOT IN ('exact','verified','reloc','near_match',"
+                " 'near_matching','stub','padding','data','thunk','none','proven',"
+                " 'size_mismatch'))"
+                " FROM cells GROUP BY target, section_name"
+            )
+            materialized = srv._section_stats(c, "T")["sections"][".text"]
+        finally:
+            materialized_db.close()
+
+        assert fallback["exact"] == 3
+        assert fallback["other"] == 1
+        self._reconciles(fallback)
+        self._reconciles(materialized)
+        assert materialized == fallback
+        # A VERIFIED byte is covered, so it is a match: matched counts it too.
+        assert materialized["matched"] == 3
+
+
+class TestPartialDerivedTables:
+    """A PARTIAL derived table must not drop sections it does not cover.
+
+    rebrew's `section_cell_stats` and `section_cells_json` are caches over
+    `cells`.  Both are read in preference to a live aggregation, and a presence
+    check alone does not prove they hold every section: a scoped rebuild, or a
+    hand-made database, can carry a current-codec table that covers only some of
+    the sections `cells` has.  The omitted section then vanished from the
+    response: no stats at all, and (for the cell JSON) an empty grid that reads
+    as a whole section of `none` bytes, which is a wrong answer rather than a
+    slow one.
+    """
+
+    SECTIONS = (".text", ".data")
+    #: .text gets two exact cells, .data one exact and one none, so the two
+    #: sections' numbers differ and a dropped section cannot pass unnoticed.
+    CELLS = (
+        (".text", 0, 1, "exact"),
+        (".text", 1, 2, "exact"),
+        (".data", 0, 1, "exact"),
+        (".data", 1, 2, "none"),
+    )
+
+    @classmethod
+    def _db(cls) -> sqlite3.Connection:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        c = conn.cursor()
+        # The column set CELLS_JSON_OBJECT_SQL names, so the live fallback in
+        # the cell-JSON tests below builds the same shape the cache stores.
+        c.execute(
+            "CREATE TABLE cells (target TEXT, section_name TEXT, start INT,"
+            " end INT, span INT, state TEXT, functions TEXT, label TEXT,"
+            " parent_function TEXT)"
+        )
+        c.execute("CREATE TABLE metadata (target TEXT, key TEXT, value TEXT)")
+        c.execute("CREATE TABLE sections (target TEXT, name TEXT, va INT, size INT)")
+        c.execute("CREATE TABLE functions (target TEXT, va INT, status TEXT, markerType TEXT)")
+        c.executemany(
+            "INSERT INTO sections (target, name, va, size) VALUES ('T', ?, 0x1000, 2)",
+            [(name,) for name in cls.SECTIONS],
+        )
+        c.executemany(
+            "INSERT INTO cells (target, section_name, start, end, span, state)"
+            " VALUES ('T', ?, ?, ?, 1, ?)",
+            cls.CELLS,
+        )
+        return conn
+
+    @classmethod
+    def _partial_section_cell_stats(cls, c: sqlite3.Cursor, only: str) -> None:
+        """A materialized section_cell_stats holding *only* section *only*."""
+        c.execute(
+            "CREATE TABLE section_cell_stats (target TEXT, section_name TEXT,"
+            " total_cells INT, exact_count INT, reloc_count INT,"
+            " near_match_count INT, stub_count INT, padding_count INT,"
+            " data_count INT, thunk_count INT, none_count INT,"
+            " proven_count INT, size_mismatch_count INT, other_count INT)"
+        )
+        c.execute(
+            "INSERT INTO section_cell_stats SELECT target, section_name,"
+            " COUNT(*), SUM(state IN ('exact','verified')), SUM(state='reloc'),"
+            " SUM(state IN ('near_match','near_matching')), SUM(state='stub'),"
+            " SUM(state='padding'), SUM(state='data'), SUM(state='thunk'),"
+            " SUM(state='none'), SUM(state='proven'),"
+            " SUM(state='size_mismatch'), 0"
+            " FROM cells WHERE section_name = ? GROUP BY target, section_name",
+            (only,),
+        )
+
+    def test_partial_section_cell_stats_keeps_the_missing_section(self) -> None:
+        import recoverage.server as srv
+
+        conn = self._db()
+        try:
+            c = conn.cursor()
+            self._partial_section_cell_stats(c, ".text")
+            stats = srv._section_stats(c, "T")["sections"]
+        finally:
+            conn.close()
+
+        assert set(stats) == set(self.SECTIONS)
+        # .data comes from `cells`: one covered byte of two, and both its cells
+        # bucketed, so the section reports what the live query reports.
+        assert stats[".data"]["total_cells"] == 2
+        assert stats[".data"]["exact"] == 1
+        assert stats[".data"]["none"] == 1
+        assert stats[".data"]["covered_bytes"] == 1
+        assert stats[".data"]["total_bytes"] == 2
+        assert stats[".data"]["coverage_pct"] == 50.0
+
+    def test_partial_section_cell_stats_does_not_re_emit_covered_sections(self) -> None:
+        """The covered sections keep the materialized numbers, not a second copy."""
+        import recoverage.server as srv
+
+        conn = self._db()
+        try:
+            c = conn.cursor()
+            self._partial_section_cell_stats(c, ".text")
+            c.execute(
+                "UPDATE section_cell_stats SET total_cells = 99 WHERE section_name = ?", (".text",)
+            )
+            stats = srv._section_stats(c, "T")["sections"]
+        finally:
+            conn.close()
+
+        assert stats[".text"]["total_cells"] == 99
+        assert len(stats) == 2
+
+    def test_partial_section_cells_json_re_aggregates_the_gap(self) -> None:
+        """A materialized section_cells_json missing a section is filled from cells."""
+        from rebrew.workspace import SECTION_CELLS_COLUMN, SECTION_CELLS_TABLE, encode_section_cells
+
+        import recoverage.server as srv
+
+        cached = encode_section_cells('[{"start": 0, "end": 1, "span": 1, "state": "exact"}]')
+        conn = self._db()
+        try:
+            c = conn.cursor()
+            c.execute(
+                f"CREATE TABLE {SECTION_CELLS_TABLE} (target TEXT, section_name TEXT,"
+                f" {SECTION_CELLS_COLUMN} BLOB, PRIMARY KEY (target, section_name))"
+            )
+            c.execute(
+                f"INSERT INTO {SECTION_CELLS_TABLE} VALUES ('T', '.text', ?)",
+                (cached,),
+            )
+            rows = dict(srv._cells_json_rows(c, "T", None, set(self.SECTIONS)))
+        finally:
+            conn.close()
+
+        assert set(rows) == set(self.SECTIONS)
+        # .text still comes from the cache, verbatim; .data is aggregated live
+        # and carries the cells the cache omitted.  Without the gap fill .data
+        # would be absent, and _dumps_with_cells would splice an empty array,
+        # a whole section painted as `none`.
+        assert [cell["state"] for cell in json.loads(rows[".text"])] == ["exact"]
+        assert [cell["state"] for cell in json.loads(rows[".data"])] == ["exact", "none"]
+
+    def test_complete_section_cells_json_runs_no_live_fallback(self) -> None:
+        """A cache that covers every expected section answers alone."""
+        from rebrew.workspace import SECTION_CELLS_COLUMN, SECTION_CELLS_TABLE, encode_section_cells
+
+        import recoverage.server as srv
+
+        payload = encode_section_cells('[{"start": 0, "end": 1, "span": 1, "state": "exact"}]')
+        conn = self._db()
+        try:
+            c = conn.cursor()
+            c.execute(
+                f"CREATE TABLE {SECTION_CELLS_TABLE} (target TEXT, section_name TEXT,"
+                f" {SECTION_CELLS_COLUMN} BLOB, PRIMARY KEY (target, section_name))"
+            )
+            c.executemany(
+                f"INSERT INTO {SECTION_CELLS_TABLE} VALUES ('T', ?, ?)",
+                [(name, payload) for name in self.SECTIONS],
+            )
+            calls: list[str] = []
+            original = srv._live_cells_json_rows
+
+            def _counting(*args: Any, **kwargs: Any) -> list[tuple[str, str]]:
+                calls.append("live")
+                return original(*args, **kwargs)
+
+            srv._live_cells_json_rows = _counting  # type: ignore[assignment]
+            try:
+                rows = dict(srv._cells_json_rows(c, "T", None, set(self.SECTIONS)))
+            finally:
+                srv._live_cells_json_rows = original  # type: ignore[assignment]
+        finally:
+            conn.close()
+
+        assert set(rows) == set(self.SECTIONS)
+        assert calls == []
+
+
+class TestSectionBucketRowsIsTheOneSectionCellStatsReader:
+    """``section_bucket_rows`` carries the cache-first policy for every reader.
+
+    /stats and the Potato map header each used to restate it against their own
+    query, so a rule that changed reached one surface and not the other.  The
+    three rules: the materialized cache wins, a section it omits is
+    re-aggregated from ``cells``, and a database with no cache is read from
+    ``cells`` outright.
+    """
+
+    SECTIONS = (".text", ".data")
+
+    #: The full rebrew row: every column ``_cell_bucket_row`` subscripts.
+    FULL_CACHE_DDL = (
+        "CREATE TABLE section_cell_stats (target TEXT, section_name TEXT,"
+        " total_cells INT, exact_count INT, reloc_count INT, near_match_count INT,"
+        " stub_count INT, padding_count INT, data_count INT, thunk_count INT,"
+        " none_count INT, proven_count INT, size_mismatch_count INT,"
+        " other_count INT)"
+    )
+    #: A hand-made cache carrying only the six buckets the Potato header
+    #: renders.
+    NARROW_CACHE_DDL = (
+        "CREATE TABLE section_cell_stats (target TEXT, section_name TEXT,"
+        " total_cells INT, exact_count INT, reloc_count INT, near_match_count INT,"
+        " stub_count INT, padding_count INT)"
+    )
+    NARROW_PROJECTION = (
+        "section_name, total_cells, exact_count, reloc_count,"
+        " near_match_count, stub_count, padding_count"
+    )
+
+    def _db(self, *, cache_ddl: str, cached: tuple[str, ...]) -> sqlite3.Connection:
+        """A two-section target in `cells`, with a cache covering *cached*."""
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        c = conn.cursor()
+        c.execute(
+            "CREATE TABLE cells (target TEXT, section_name TEXT, start INT, end INT, state TEXT)"
+        )
+        c.executemany(
+            "INSERT INTO cells (target, section_name, start, end, state)"
+            " VALUES ('T', ?, 0, 1, 'exact')",
+            [(name,) for name in self.SECTIONS],
+        )
+        if cache_ddl:
+            c.execute(cache_ddl)
+            width = len(c.execute("SELECT * FROM section_cell_stats").description)
+            for name in cached:
+                row = ["T", name] + [1, 1] + [0] * (width - 4)
+                c.execute(f"INSERT INTO section_cell_stats VALUES ({','.join('?' * width)})", row)
+        return conn
+
+    def test_complete_cache_answers_from_the_cache_alone(self) -> None:
+        import recoverage.server as srv
+
+        conn = self._db(cache_ddl=self.FULL_CACHE_DDL, cached=self.SECTIONS)
+        seen: list[str] = []
+        conn.set_trace_callback(seen.append)
+        rows = {
+            r["section_name"]: r["total_cells"]
+            for r in srv.section_bucket_rows(conn.cursor(), "T", expected=self.SECTIONS)
+        }
+        conn.close()
+        assert rows == {".text": 1, ".data": 1}
+        assert [s for s in seen if "FROM cells" in s] == []
+
+    def test_partial_cache_fills_the_gap_from_cells(self) -> None:
+        import recoverage.server as srv
+
+        conn = self._db(cache_ddl=self.FULL_CACHE_DDL, cached=(".text",))
+        rows = {
+            r["section_name"]: srv._cell_bucket_row(r)
+            for r in srv.section_bucket_rows(conn.cursor(), "T", expected=self.SECTIONS)
+        }
+        conn.close()
+        assert set(rows) == set(self.SECTIONS)
+        # The gap came from `cells` and reads through the same bucket mapping,
+        # so the two sources cannot report different totals for one section.
+        assert rows[".data"]["total_cells"] == 1
+        assert rows[".data"]["exact"] == 1
+
+    def test_no_cache_answers_from_cells(self) -> None:
+        import recoverage.server as srv
+
+        conn = self._db(cache_ddl="", cached=())
+        rows = {
+            r["section_name"]: r["total_cells"]
+            for r in srv.section_bucket_rows(conn.cursor(), "T", expected=self.SECTIONS)
+        }
+        conn.close()
+        assert rows == {".text": 1, ".data": 1}
+
+    def test_projection_reads_only_the_named_columns(self) -> None:
+        """A caller that renders a subset names its columns, and only those.
+
+        The Potato map header renders six of the eleven buckets, so its
+        projection names six.  A hand-made cache carrying only those still
+        serves: the full row is not required from a reader that does not
+        render it.
+        """
+        import recoverage.server as srv
+
+        conn = self._db(cache_ddl=self.NARROW_CACHE_DDL, cached=self.SECTIONS)
+        rows = {
+            r["section_name"]: r["stub_count"]
+            for r in srv.section_bucket_rows(
+                conn.cursor(),
+                "T",
+                projection=self.NARROW_PROJECTION,
+                expected=self.SECTIONS,
+            )
+        }
+        conn.close()
+        assert rows == {".text": 0, ".data": 0}
+
+
+class TestAbsentObjectIsNotUnreadableDatabase:
+    """A "no such table" fallback must not cover an unreadable database.
+
+    Each of these readers degrades to a live query when a derived table is
+    absent, which is what keeps a pre-v7 database serving.  The degradation
+    used to catch every ``sqlite3.Error``, so a locked or corrupt
+    ``coverage.db`` took the same branch and produced a correct-looking but
+    cells-derived payload with nothing in the log and nothing in the response
+    to say the database could not be read.  ``_is_absent_object`` is the one
+    test that separates the two, and every fallback routes through it.
+    """
+
+    @staticmethod
+    def _unreadable() -> sqlite3.Cursor:
+        """A cursor whose reads all fail, the way a truncated file behaves."""
+        conn = sqlite3.connect(":memory:")
+        conn.close()
+        return conn.cursor()
+
+    def test_is_absent_object_separates_the_two_failures(self) -> None:
+        import recoverage.server as srv
+
+        assert srv._is_absent_object(sqlite3.OperationalError("no such table: cells"))
+        assert srv._is_absent_object(sqlite3.OperationalError("no such column: reg_delta"))
+        # Everything else is the database failing, not the schema being old.
+        assert not srv._is_absent_object(sqlite3.OperationalError("database is locked"))
+        assert not srv._is_absent_object(
+            sqlite3.OperationalError("database disk image is malformed")
+        )
+        assert not srv._is_absent_object(sqlite3.ProgrammingError("closed database"))
+
+    def test_section_stats_propagates_an_unreadable_database(self) -> None:
+        import recoverage.server as srv
+
+        with pytest.raises(sqlite3.Error):
+            srv._per_section_buckets(self._unreadable(), "T", {})
+
+    def test_bucket_rows_propagates_an_unreadable_database(self) -> None:
+        import recoverage.server as srv
+
+        with pytest.raises(sqlite3.Error):
+            list(srv.section_bucket_rows(self._unreadable(), "T"))
+
+    def test_table_columns_propagates_an_unreadable_database(self) -> None:
+        """The optional-column probe must not answer "no columns" for a broken DB.
+
+        Every v6 field (`updated_by`, `status`, `reg_delta`, ...) is projected
+        from this set, so a swallowed error silently shortened the function,
+        global and verify payloads instead of failing them.
+        """
+        import recoverage.server as srv
+
+        with pytest.raises(sqlite3.Error):
+            srv._table_columns(self._unreadable().connection, "functions")
+
+    def test_has_materialized_cells_propagates_an_unreadable_database(self) -> None:
+        import recoverage.server as srv
+
+        with pytest.raises(sqlite3.Error):
+            srv._has_materialized_cells(self._unreadable())
+
+    def test_table_columns_answers_a_missing_table_with_no_rows(self) -> None:
+        """The pre-v7 case the fallback exists for must keep working."""
+        import recoverage.server as srv
+
+        conn = sqlite3.connect(":memory:")
+        try:
+            assert srv._table_columns(conn, "functions") == set()
+        finally:
+            conn.close()
+
+
+def _spa_sources() -> tuple[str, str]:
+    """The SPA's two scripts, as shipped: (app.js, detail.js).
+
+    The classes below pin contracts the browser half of which Python cannot
+    observe, so they assert against the source text.
+    """
+    import importlib.resources
+
+    from recoverage import assets
+
+    base = importlib.resources.files(assets)
+    return (
+        base.joinpath("app.js").read_text(encoding="utf-8"),
+        base.joinpath("detail.js").read_text(encoding="utf-8"),
+    )
+
+
+class TestSpaStateVocabulary:
+    """The SPA's STATE_ID must cover every state rebrew can write.
+
+    An unmapped state packed to slot 0 and painted as an undocumented gap,
+    contradicting /stats (which counts 'verified' as exact and covered_bytes
+    over every state != 'none'). PALETTE_VARS and FILTER_KEY are indexed by the
+    same ids, so they must stay the same length.
+    """
+
+    def _window_rc_keys(self, app_js: str) -> set[str]:
+        """Top-level key names of the ``window.RC = { ... }`` literal in *app_js*.
+
+        detail.js reads its shared state off ``window.RC``, so the contract is
+        which names are published, not the order or spelling of the literal.
+        Splitting on commas is wrong: the object holds arrow bodies with their
+        own commas, so the scan tracks brace depth and only yields keys that
+        sit at depth 1.
+        """
+        import re
+
+        literal = re.search(r"window\.RC\s*=\s*\{", app_js)
+        assert literal is not None, "app.js never publishes window.RC"
+        body = app_js[literal.end() :]
+        keys: set[str] = set()
+        depth = 1
+        start = 0
+        for i, ch in enumerate(body):
+            if ch in "{([":
+                depth += 1
+            elif ch in "})]":
+                depth -= 1
+                if depth == 0:
+                    segment = body[start:i]
+                    key = segment.split(":", 1)[0].strip()
+                    if key:
+                        keys.add(key)
+                    return keys
+            elif ch == "," and depth == 1:
+                segment = body[start:i]
+                key = segment.split(":", 1)[0].strip()
+                if key:
+                    keys.add(key)
+                start = i + 1
+        raise AssertionError("window.RC literal is never closed")
+
+    def test_state_id_covers_every_known_cell_state(self) -> None:
+        from rebrew.build_db import _KNOWN_CELL_STATES
+
+        app_js, _ = _spa_sources()
+        block = app_js.split("const STATE_ID = {", 1)[1].split("};", 1)[0]
+        mapped = {
+            line.split(":")[0].strip()
+            for line in block.replace("\n", " ").split(",")
+            if ":" in line
+        }
+        missing = sorted(_KNOWN_CELL_STATES - mapped)
+        assert missing == [], f"cell states the SPA paints as undocumented: {missing}"
+
+    def test_verified_is_not_packed_as_none(self) -> None:
+        app_js, _ = _spa_sources()
+        block = app_js.split("const STATE_ID = {", 1)[1].split("};", 1)[0]
+        assert "verified: 1" in block
+        assert "verified: 0" not in block
+
+    def test_palette_and_filter_arrays_match_the_state_count(self) -> None:
+        """STATE_ID tops out at 7; both lookup tables must be that long.
+
+        A short array makes pal[st] undefined (silently --none) and
+        FILTER_KEY[st] undefined (a filter mismatch on every such cell).
+        The tooltip's word list is a third such table: a short one shows
+        "undefined" in the hover title, which is worse than showing nothing.
+        """
+        import re
+
+        app_js, detail_js = _spa_sources()
+        palette = re.search(r"const PALETTE_VARS = \[(.*?)\];", detail_js).group(1)
+        filters = re.search(r"const FILTER_KEY = \[(.*?)\];", detail_js).group(1)
+        assert palette.count('"--') == 8
+        assert len([v for v in filters.split(",") if v.strip()]) == 8
+        labels = re.search(r"const STATE_LABEL = \[(.*?)\];", app_js, re.DOTALL).group(1)
+        assert len([v for v in labels.split(",") if v.strip()]) == 8
+        assert "STATE_LABEL" in detail_js
+        # Membership, not a prefix: adding another shared export to the
+        # window.RC object literal must not read as STATE_LABEL being dropped
+        # (the tooltip reads it as window.RC.STATE_LABEL).
+        published = self._window_rc_keys(app_js)
+        required = {"van", "MetaItem", "MSG", "hex", "STATE_LABEL"}
+        missing = sorted(required - published)
+        assert missing == [], f"read by detail.js but not published on window.RC: {missing}"
+
+    def test_cell_tooltip_names_the_state_and_function(self) -> None:
+        """The hover title must say what the cell is, not print a 0/1 flag.
+
+        It used to end in `${fn ? 1 : 0} fn`, which told a user nothing about
+        the cell they were pointing at.
+        """
+        _, detail_js = _spa_sources()
+        assert "0} fn" not in detail_js
+        assert "wrap.title = [`Block ${idx}`" in detail_js
+
+    def test_other_bg_token_is_defined(self) -> None:
+        import importlib.resources
+
+        from recoverage import assets
+
+        css = importlib.resources.files(assets).joinpath("style.css").read_text(encoding="utf-8")
+        assert "--other-bg:" in css
+        assert ".swatch-compile_error" in css
+
+    def test_legend_names_every_painted_slot(self) -> None:
+        """Every STATE_ID slot the grid paints needs a legend row.
+
+        The grid painted ``proven`` (slot 6) and the hover tooltip called it
+        by name, but the legend had no row for it: a verified-semantic block
+        was a colour the reader had no way to look up.  A slot with no row
+        fails the same way a state missing from STATE_ID does, one layer up.
+        """
+        import re
+
+        app_js, _ = _spa_sources()
+        legend = re.search(r"const LEGEND = \[(.*?)\];", app_js, re.DOTALL)
+        assert legend is not None, "app.js has no LEGEND table"
+        rows = re.findall(r'\["(\w+)",\s*"[^"]*"\]', legend.group(1))
+        assert rows, "the legend table is empty"
+
+        state_block = re.search(r"const STATE_ID = \{(.*?)\};", app_js, re.DOTALL).group(1)
+        state_id = dict(re.findall(r"(\w+):\s*(\d+)", state_block))
+        named = {int(state_id[key]) for key in rows}
+        painted = {int(slot) for slot in state_id.values()}
+        assert named == painted, (
+            f"legend rows name slots {sorted(named)}; the grid paints {sorted(painted)}"
+        )
+
+    def test_every_legend_key_has_a_swatch(self) -> None:
+        """The legend renders `swatch-<key>`, so each key needs the rule.
+
+        A missing rule leaves an empty 12px box that reads as a gap in the key.
+        """
+        import importlib.resources
+        import re
+
+        from recoverage import assets
+
+        app_js = importlib.resources.files(assets).joinpath("app.js").read_text(encoding="utf-8")
+        css = importlib.resources.files(assets).joinpath("style.css").read_text(encoding="utf-8")
+        block = re.search(r"const LEGEND = \[(.*?)\];", app_js, re.DOTALL).group(1)
+        keys = re.findall(r'\["(\w+)",\s*"[^"]*"\]', block)
+        missing = [k for k in keys if f".swatch-{k} " not in css]
+        assert missing == [], f"legend keys with no swatch rule: {missing}"
+
+
+class TestSpaGridLayoutMemo:
+    """The grid layout memo must key on the packed cells, not on a count.
+
+    ``layout`` caches the walk, the hit-map, and the per-cell rect geometry
+    for a section.  A rebuild re-spans cells without necessarily changing how
+    many there are, so a (columns, cell-count) key matches while the spans
+    differ: the map then hands a click the wrong cell and the rects have the
+    wrong widths.  packSection returns a fresh object per section version and
+    after a lazy cells fetch, so the pack identity is the exact change token.
+    """
+
+    @staticmethod
+    def _detail_js() -> str:
+        import importlib.resources
+
+        from recoverage import assets
+
+        return importlib.resources.files(assets).joinpath("detail.js").read_text(encoding="utf-8")
+
+    def test_layout_keys_on_the_pack_object(self) -> None:
+        detail_js = self._detail_js()
+        assert "g.layPack === pack" in detail_js
+        assert "g.layPack = pack" in detail_js
+        assert "pack.n}" not in detail_js, (
+            "layout keyed on a cell count: a re-span that keeps the count serves stale geometry"
+        )
+
+    def test_rebuild_resyncs_the_declared_column_count(self) -> None:
+        """A changed section width lives in the DOM, so paint must refresh it.
+
+        layout reads the column count back off ``wrap.dataset.cols``, which was
+        written when the grid was first created.  Without the resync a rebuild
+        that changes a section's column count keeps wrapping at the old one.
+        """
+        detail_js = self._detail_js()
+        assert "g.wrap.dataset.cols !== declared" in detail_js
+        assert "g.wrap.dataset.cols = declared" in detail_js
+        assert "const declared = String(sec.columns || 64);" in detail_js
+
+    def test_pack_is_invalidated_when_lazy_cells_land(self) -> None:
+        """The lazy cells fetch must drop the memoized pack, or the layout
+        memo keys on a pack built from an empty section forever."""
+        import importlib.resources
+
+        from recoverage import assets
+
+        app_js = importlib.resources.files(assets).joinpath("app.js").read_text(encoding="utf-8")
+        assert "delete sec._pack;" in app_js
+        assert "sec._pack = " in app_js
+
+    def test_layout_also_keys_on_the_wrapper_width(self) -> None:
+        """A hidden section reports clientWidth 0, so the ResizeObserver never
+        relaid it out: a section first laid out before a window resize comes
+        back painted and hit-mapped at the old geometry."""
+        detail_js = self._detail_js()
+        assert "g.layWidth === width" in detail_js
+        assert "g.layWidth = width" in detail_js
+        assert "const width = g.wrap.clientWidth;" in detail_js
+
+    def test_pointer_position_is_measured_against_the_canvas(self) -> None:
+        """The lattice's own coordinates are canvas-relative, and the canvas
+        rect already carries the wrapper's scroll offset and excludes its 1px
+        border. Measured against the wrapper, a map scrolled sideways (every
+        narrow viewport, where the 12px minimum cell makes the lattice wider
+        than the frame) selects whichever cell sits under the same viewport
+        coordinates."""
+        detail_js = self._detail_js()
+        assert "const rect = wrap.getBoundingClientRect();" not in detail_js, (
+            "pointer hit-test measured against the scrollable wrapper"
+        )
+        assert detail_js.count("canvas.getBoundingClientRect()") >= 2
+
+    def test_a_keyboard_jump_scrolls_the_map_horizontally_too(self) -> None:
+        """Arrow keys, search Enter and asm links all end in scrollCell, and on
+        a narrow viewport the selected cell is off-screen sideways."""
+        detail_js = self._detail_js()
+        assert "g.wrap.scrollTo({ left:" in detail_js
+
+
+class TestSpaJumpFeedback:
+    """A jump to an address no block covers must say so, not do nothing.
+
+    The only signal was a console warning, which the person clicking the VA
+    link or the asm operand never sees, so the control read as dead. The
+    notice rides the hint's own slot (no layout shift) and times itself out.
+    """
+
+    @staticmethod
+    def _app_js() -> str:
+        import importlib.resources
+
+        from recoverage import assets
+
+        return importlib.resources.files(assets).joinpath("app.js").read_text(encoding="utf-8")
+
+    def test_an_uncovered_address_reports_itself(self) -> None:
+        app_js = self._app_js()
+        assert "flashNavNotice(MSG.JUMP_NO_BLOCK(" in app_js
+        assert "const navNotice = van.state(null);" in app_js
+        assert "navNoticeTimer = setTimeout" in app_js
+
+    def test_the_notice_is_rendered_with_a_live_region(self) -> None:
+        app_js = self._app_js()
+        assert 'class: "hint hint-notice", role: "status"' in app_js
+
+
+class TestSpaStackedLayoutSelection:
+    """Selecting a block must be visible wherever the panel is.
+
+    Below 1300px the panel stacks under the map, and the .text lattice runs
+    thousands of pixels tall, so a block clicked near the top of the map
+    updates a panel far outside the viewport and the click reads as dead.
+    """
+
+    @staticmethod
+    def _app_js() -> str:
+        import importlib.resources
+
+        from recoverage import assets
+
+        return importlib.resources.files(assets).joinpath("app.js").read_text(encoding="utf-8")
+
+    def test_a_selection_brings_an_offscreen_panel_into_view(self) -> None:
+        app_js = self._app_js()
+        assert "panel.getBoundingClientRect().top >= window.innerHeight" in app_js
+        assert 'panel.scrollIntoView({ behavior: "smooth", block: "start" })' in app_js
+        assert "revealPanelIfOffscreen();" in app_js
+
+    def test_it_never_scrolls_a_panel_that_is_already_visible(self) -> None:
+        """Scrolling unconditionally would yank the map out from under the
+        click on the side-by-side layout, where the panel is on screen."""
+        app_js = self._app_js()
+        body = app_js.split("const revealPanelIfOffscreen = ", 1)[1].split("};", 1)[0]
+        assert "if (" in body, "the scroll is no longer guarded by a visibility test"
+
+
+class TestSpaResourceTeardown:
+    """The SPA must release what it registers, on every path that drops it.
+
+    A live dashboard re-renders on every coverage.db rebuild, so a
+    registration made per render and never released accumulates for the life
+    of the tab rather than for one request. The browser half of that contract
+    is not observable from Python, so it is pinned against the source, the
+    same way the SPA state vocabulary above is.
+    """
+
+    def test_grid_teardown_disconnects_the_resize_observer(self) -> None:
+        """Every observed grid wrapper is dropped by dropGrids, so the
+        observer that holds them must be disconnected there too. A ResizeObserver
+        keeps its targets alive until unobserved, and a dropped wrapper carries
+        its canvas context and the per-section hit-map typed arrays with it."""
+        _, detail_js = _spa_sources()
+        drop = detail_js.split("const dropGrids = () => {", 1)[1].split("};", 1)[0]
+        assert "ro.disconnect()" in drop
+        assert "container.innerHTML" in drop
+
+    def test_live_reload_subscribes_once(self) -> None:
+        """The SSE stream pins a bounded server-side /api/events slot until it
+        is closed, so the derive that opens it must not open a second one when
+        it re-runs."""
+        app_js, _ = _spa_sources()
+        after = app_js.split("let closeEvents = null;", 1)[1]
+        derive = after.split("van.derive(() => {", 1)[1].split("});", 1)[0]
+        assert "connectEvents" in derive
+        assert "!detailReady.val || closeEvents" in derive
+
+
+class TestSpaSectionCellsFeedback:
+    """A sibling tab fetches its cells on switch, so it can be slow or fail.
+
+    Without a frame of its own the map area went blank for the fetch and stayed
+    blank after a failure, with nothing to click and nothing said: the tab was
+    a dead end.  The grid renders a loading overlay while the cells are in
+    flight and a retryable notice when the fetch fails.
+    """
+
+    def test_grid_frames_a_section_whose_cells_have_not_arrived(self) -> None:
+        _, detail_js = _spa_sources()
+        branch = detail_js.split("if (sec.cells == null) {", 1)[1].split("return;", 1)[0]
+        assert "loading-overlay" in branch
+        assert "grid-error" in branch
+        assert "Retry" in branch
+        assert "retrySectionCells(secName)" in branch
+
+    def test_a_failed_cells_fetch_is_reported_and_retryable(self) -> None:
+        app_js, _ = _spa_sources()
+        fetch = app_js.split("const ensureSectionCells = async (name) => {", 1)[1]
+        catch = fetch.split("} catch (error)", 1)[1].split("} finally", 1)[0]
+        assert "cellLoadError.val = { section: name, detail: error.message }" in catch
+        # The grid reads the state, so it has to be handed to mountGrid.
+        mount = app_js.split("window.RC.mountGrid({", 1)[1].split("});", 1)[0]
+        assert "cellLoadError" in mount
+        assert "retrySectionCells" in mount
+
+    def test_error_frame_is_styled(self) -> None:
+        import importlib.resources
+
+        from recoverage import assets
+
+        css = importlib.resources.files(assets).joinpath("style.css").read_text(encoding="utf-8")
+        assert ".grid-error {" in css
+
+
+# ── The clock seam ──────────────────────────────────────────────────────
+
+
+class TestClockSeam:
+    """Every window in the request path reads ``recoverage.clock``.
+
+    The regen cooldown, the idempotency-key retention window, the
+    failed-token throttle, the ``db-updated`` stamp and the per-request
+    duration window are the only clock reads the request path makes, and all
+    five go through one module (the duration window in ``test_metrics.py``,
+    which drives it the same way).  One patched clock therefore drives all of
+    them: each window is minutes wide, so a test that slept through one would
+    be a test nobody runs, and a test that backdated each module global by
+    hand would stay green with the production read of the clock deleted.
+    """
+
+    def test_windows_expire_on_the_patched_clock(self, monkeypatch: Any) -> None:
+        from conftest import wsgi_request
+
+        import recoverage.api as api
+        import recoverage.server as srv
+
+        now = [1_000.0]
+        monkeypatch.setattr(clock, "monotonic", lambda: now[0])
+        monkeypatch.setattr(api, "_regen_last_attempt", None)
+        monkeypatch.setattr(api, "_do_regen", lambda remote: api._json_ok({"ok": True}))
+        monkeypatch.setattr(srv, "_AUTH_TOKEN", "tok")
+        api._REGEN_COMPLETED_KEYS.clear()
+
+        def post(**extra: str) -> tuple[str, dict[str, str], bytes]:
+            headers = {"Authorization": "Bearer tok", **extra}
+            return wsgi_request("POST", "/api/regen", headers=headers, remote_addr="127.0.0.1")
+
+        try:
+            status, _, _ = post(**{"Idempotency-Key": "k1"})
+            assert status.startswith("200"), status
+            # A fresh key at the same instant is inside the cooldown window.
+            status, _, _ = post(**{"Idempotency-Key": "k2"})
+            assert status.startswith("429"), status
+            # The retry of k1 is answered from the ledger instead of re-run.
+            status, headers, _ = post(**{"Idempotency-Key": "k1"})
+            assert status.startswith("200"), status
+            assert headers.get("Idempotent-Replay") == "true"
+
+            # Past the retention window the ledger has forgotten k1 ...
+            now[0] += api._REGEN_KEY_TTL_SECONDS + 1
+            status, headers, _ = post(**{"Idempotency-Key": "k1"})
+            assert status.startswith("200"), status
+            assert "Idempotent-Replay" not in headers
+            # ... and past the cooldown k2 runs again, both read off the clock.
+            now[0] += api._REGEN_COOLDOWN_SECONDS + 1
+            status, _, _ = post(**{"Idempotency-Key": "k2"})
+            assert status.startswith("200"), status
+
+            # The failed-token window runs off the same clock: 401 while it
+            # has room, 429 once full, 401 again after it expires.
+            bad = {"Authorization": "Bearer wrong"}
+
+            def attempt() -> str:
+                return wsgi_request("GET", "/api/health", headers=bad)[0]
+
+            for _ in range(srv._AUTH_FAIL_MAX):
+                assert attempt().startswith("401")
+            assert attempt().startswith("429")
+            now[0] += srv._AUTH_FAIL_WINDOW_SECONDS + 1
+            assert attempt().startswith("401")
+        finally:
+            srv._clear_auth_failures()
+            api._REGEN_COMPLETED_KEYS.clear()
+
+    def test_db_updated_stamp_reads_the_clock(self, monkeypatch: Any) -> None:
+        import recoverage.api as api
+
+        monkeypatch.setattr(clock, "wall_time", lambda: 1_234.5)
+        client: queue.Queue[bytes] = queue.Queue()
+        api._SSE_CLIENTS.add(client)
+        try:
+            api._broadcast_db_updated(None)
+            frame = client.get_nowait().decode()
+        finally:
+            api._SSE_CLIENTS.discard(client)
+        payload = json.loads(frame.split("data: ", 1)[1])
+        assert payload["timestamp"] == 1_234.5
+
+    def test_heartbeat_follows_the_patched_clock(self, monkeypatch: Any) -> None:
+        """A stream pings when the CLOCK says the heartbeat interval elapsed.
+
+        The queue is never fed and the heartbeat interval is a second, while
+        the patched clock jumps a hundred seconds per read: the ping arrives
+        after milliseconds of real time, so it can only have come from the
+        clock.  ``_SSE_QUEUE_POLL_SECONDS`` is named, so the empty-queue wait
+        the ping is reached through is shortened to milliseconds too.
+        """
+        import recoverage.api as api
+
+        reads = [0]
+
+        def fake() -> float:
+            reads[0] += 1
+            return 100.0 * reads[0]
+
+        monkeypatch.setattr(clock, "monotonic", fake)
+        monkeypatch.setattr(api, "_SSE_HEARTBEAT_SECONDS", 1.0)
+        monkeypatch.setattr(api, "_SSE_QUEUE_POLL_SECONDS", 0.01)
+        client: queue.Queue[bytes] = queue.Queue()
+        api._SSE_CLIENTS.add(client)
+        stream = api._SSEStream(client)
+        frames = stream._frames()
+        try:
+            assert next(frames) == b": connected\n\n"
+            assert next(frames) == b": ping\n\n"
+        finally:
+            frames.close()
+        assert client not in api._SSE_CLIENTS
+
+    def test_request_duration_reads_the_patched_clock(self, monkeypatch: Any) -> None:
+        """The timing window is a clock read too, so a request is slow when
+        the CLOCK says so and not when it happened to take that long."""
+        from conftest import wsgi_request
+
+        import recoverage.metrics as metrics
+
+        reads = [0]
+
+        def fake() -> float:
+            # before_request opens the window; every later read is a second
+            # past SLOW_REQUEST_MS, so a real request body never waits.
+            reads[0] += 1
+            return 0.0 if reads[0] == 1 else metrics.SLOW_REQUEST_MS / 1000.0 + 1.0
+
+        monkeypatch.setattr(clock, "monotonic", fake)
+        before = metrics.REQUESTS.snapshot()
+        status, _, _ = wsgi_request("GET", "/api/health")
+        assert status.startswith("200"), status
+        assert metrics.REQUESTS.snapshot()["slow"] == before["slow"] + 1
+
+
+class TestOriginIsThisDashboard:
+    """The privileged-regen origin gate is a same-origin test, not a
+    hostname-is-loopback one.
+
+    Every other loopback port is a different origin with its own operator, and
+    a page there passes the loopback membership check while the browser refuses
+    to hand it the reply, so the rebuild it starts is one the operator neither
+    asked for nor sees.
+    """
+
+    @pytest.mark.parametrize(
+        ("origin", "host"),
+        [
+            ("http://localhost:8001", "localhost:8001"),
+            ("http://LOCALHOST:8001", "localhost:8001"),
+            ("http://box:8001", "box:8001"),
+            ("https://box:8443", "box:8443"),
+            ("http://box", "box:80"),
+        ],
+    )
+    def test_same_authority_accepted(self, origin: str, host: str) -> None:
+        assert origin_is_this_dashboard(origin, host)
+
+    @pytest.mark.parametrize(
+        ("origin", "host"),
+        [
+            ("http://localhost:3000", "localhost:8001"),
+            ("http://127.0.0.1:8001", "localhost:8001"),
+            ("http://box:8001", "localhost:8001"),
+            ("http://localhost:8001@evil.com", "localhost:8001"),
+            ("http://127.0.0.1.evil.com:8001", "localhost:8001"),
+            ("", "localhost:8001"),
+        ],
+    )
+    def test_other_authority_rejected(self, origin: str, host: str) -> None:
+        assert not origin_is_this_dashboard(origin, host)
+
+    def test_loopback_fallback_without_a_host_header(self) -> None:
+        """No Host header (HTTP/1.0, WSGI harness): fall back to loopback.
+
+        A browser always sends Host, so the fallback only ever admits a
+        non-browser client, which cannot have been driven by another page.
+        """
+        assert origin_is_this_dashboard("http://localhost:8001", "")
+        assert not origin_is_this_dashboard("http://evil.com:8001", "")
+
+
+class TestConfigDerivedMemosFollowTheConfigStat:
+    """Editing rebrew-project.toml reaches no server code, so the stat of that
+    file is the only invalidation signal its memos get.
+
+    _get_targets_config has always keyed on that stat.  The resolved target
+    list and the DLL byte cache did not, and both are invalidated only by the
+    rebuild broadcast, which watches coverage.db — a config edit produces no DB
+    change.  So a target added to the file, or a binary re-pointed in it,
+    while the server ran kept the pre-edit answer until the next build-db.
+    """
+
+    @pytest.fixture
+    def project(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
+        import recoverage.server as srv
+
+        monkeypatch.setattr(srv, "_project_dir", lambda: tmp_path)
+        clear_target_cache()
+        with srv.DLL_LOCK:
+            srv.DLL_DATA.clear()
+            monkeypatch.setattr(srv, "_DLL_CONFIG_MTIME", None)
+        yield tmp_path
+        clear_target_cache()
+        with srv.DLL_LOCK:
+            srv.DLL_DATA.clear()
+
+    def test_resolved_targets_pick_up_a_config_only_target(self, project: Path) -> None:
+        import recoverage.server as srv
+
+        conn = sqlite3.connect(":memory:")
+        conn.execute("CREATE TABLE metadata (target TEXT)")
+        conn.execute("INSERT INTO metadata VALUES ('FROMDB')")
+        c = conn.cursor()
+        try:
+            assert [t["id"] for t in srv.resolve_targets(c)] == ["FROMDB"]
+
+            (project / "rebrew-project.toml").write_text(
+                '[targets.NEWONE]\nbinary = "bin/new.dll"\n', encoding="utf-8"
+            )
+            ids = [t["id"] for t in srv.resolve_targets(c)]
+            assert "NEWONE" in ids, (
+                "a target declared in rebrew-project.toml after the server "
+                "started stayed out of the dropdown, /api/targets and Potato "
+                "Mode until the next coverage.db rebuild"
+            )
+        finally:
+            conn.close()
+
+    def test_dll_bytes_follow_a_re_pointed_binary(self, project: Path) -> None:
+        import recoverage.server as srv
+
+        target = "REPOINT"
+        # No config yet: the negative verdict is cached, and the edit below is
+        # what has to undo it.
+        assert srv._load_dll(target) is None
+
+        (project / "first.bin").write_bytes(b"FIRST-BINARY")
+        (project / "rebrew-project.toml").write_text(
+            f'[targets.{target}]\nbinary = "first.bin"\n', encoding="utf-8"
+        )
+        assert srv._load_dll(target) == b"FIRST-BINARY"
+
+        # A DIFFERENT-SIZED path, so the config's stat fingerprint moves even
+        # on a filesystem whose mtime granularity is a whole second.
+        (project / "second-and-longer.bin").write_bytes(b"SECOND-BINARY")
+        (project / "rebrew-project.toml").write_text(
+            f'[targets.{target}]\nbinary = "second-and-longer.bin"\n', encoding="utf-8"
+        )
+        assert srv._load_dll(target) == b"SECOND-BINARY", (
+            "/asm and /bytes kept serving the binary the config edit replaced"
+        )
+
+
+class TestSpaDbSuppliedPathsStaySameOrigin:
+    """``paths.sourceRoot`` / ``paths.originalDll`` must not steer the browser off-origin.
+
+    Both are values the coverage.db hands the SPA, and a database built from a
+    hostile binary — or imported wholesale from elsewhere — can hold any string
+    in them.  Spliced into an href or a fetch, ``//evil.example`` is a
+    protocol-relative URL and ``/\\evil.example`` is the same once a browser
+    normalizes the backslash, so either one turns the analyst's browser into a
+    beacon and the Source link into a navigation somewhere the dashboard does
+    not own.
+
+    The helper is executed rather than pattern-matched: the shipped source is
+    lifted out of app.js and run under bun, so this pins the behaviour the
+    browser sees and fails if the guard is ever edited into something weaker.
+    Skipped when bun is absent; CI installs it (see package.json packageManager).
+    """
+
+    FALLBACK = "/fallback"
+
+    # (db value, expected result). Accepted values come back unchanged; every
+    # other entry must come back as FALLBACK.
+    CASES: ClassVar[list[tuple[Any, str]]] = [
+        # Accepted: same-origin, absolute or relative.
+        ("/src/foo", "/src/foo"),
+        ("/original/target.dll", "/original/target.dll"),
+        ("src/foo", "src/foo"),
+        ("/", "/"),
+        # A colon AFTER the first slash is an ordinary path character.
+        ("/src/a:b.c", "/src/a:b.c"),
+        # Rejected: off-origin, scheme-bearing, or otherwise unparseable.
+        ("//evil.example", FALLBACK),
+        ("///evil.example", FALLBACK),
+        ("/\\evil.example", FALLBACK),
+        ("\\\\evil.example", FALLBACK),
+        ("https://evil.example", FALLBACK),
+        ("http:evil", FALLBACK),
+        ("javascript:alert(1)", FALLBACK),
+        ("data:text/html,x", FALLBACK),
+        ("", FALLBACK),
+        (None, FALLBACK),
+        (123, FALLBACK),
+        ({"a": 1}, FALLBACK),
+        ("/src/ev\nil", FALLBACK),
+        ("/src/ev\til", FALLBACK),
+        ("/src/ev\x00il", FALLBACK),
+    ]
+
+    @staticmethod
+    def _app_js() -> str:
+        import importlib.resources
+
+        from recoverage import assets
+
+        return importlib.resources.files(assets).joinpath("app.js").read_text(encoding="utf-8")
+
+    @classmethod
+    def _helper_source(cls) -> str:
+        """The guard as shipped, lifted verbatim out of app.js.
+
+        Sliced on its own boundaries rather than pasted, so the test can never
+        pass against a copy that drifted from the file the server serves.
+        """
+        app_js = cls._app_js()
+        start = app_js.find("const PATH_CONTROL_MAX")
+        end_marker = "return rawPath;\n};"
+        end = app_js.find(end_marker)
+        assert start != -1, "app.js no longer defines the same-origin path guard"
+        assert end != -1, "the same-origin path guard in app.js changed shape"
+        return app_js[start : end + len(end_marker)]
+
+    def test_guard_rejects_off_origin_and_scheme_paths(self) -> None:
+        bun = shutil.which("bun")
+        if bun is None:
+            pytest.skip("bun not on PATH")
+
+        harness = (
+            self._helper_source()
+            + "\nconst FALLBACK = "
+            + json.dumps(self.FALLBACK)
+            + ";\n"
+            + "const CASES = "
+            + json.dumps(self.CASES)
+            + ";\n"
+            + "console.log(JSON.stringify(CASES.map(([v]) => sameOriginPath(v, FALLBACK))));\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            script = Path(tmp) / "guard.mjs"
+            script.write_text(harness, encoding="utf-8")
+            proc = subprocess.run(
+                [bun, "run", str(script)],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
+            )
+        assert proc.returncode == 0, f"guard harness failed to run: {proc.stderr}"
+        actual = json.loads(proc.stdout)
+        expected = [want for _value, want in self.CASES]
+        assert actual == expected, "sameOriginPath accepted an off-origin or scheme-bearing path"
+
+    def test_both_db_path_consumers_go_through_the_guard(self) -> None:
+        """Wiring: neither consumer may read a db path without the guard.
+
+        currentDllPath() feeds fetch() with the value completely unencoded, and
+        currentSourceRoot() feeds both the C-source fetch and the href detail.js
+        builds, so a bypass on either is the vulnerability the guard exists for.
+        """
+        app_js = self._app_js()
+        for consumer in ("originalDll", "sourceRoot"):
+            at = app_js.find(f".paths.{consumer}")
+            assert at != -1, f"app.js no longer reads paths.{consumer} off the db payload"
+            window = app_js[max(0, at - 400) : at]
+            assert "sameOriginPath(" in window, (
+                f"currentDllPath/currentSourceRoot must validate paths.{consumer} "
+                "through sameOriginPath before it reaches fetch() or an href"
+            )
+
+
+class TestHljsThemeFollowsAppTokens:
+    """hljs.css must read the app's palette, not restate it.
+
+    The two stylesheets are separate files, so a colour restated as a hex
+    literal is a value that survives a palette change in style.css as an
+    orphan: the code pane keeps the old hue and nothing fails. A var()
+    reference follows. A lightened step of a status hue is legitimate and
+    stays a literal, because it is a different value on purpose.
+    """
+
+    @staticmethod
+    def _css() -> tuple[str, str]:
+        import importlib.resources
+
+        from recoverage import assets
+
+        base = importlib.resources.files(assets)
+        return (
+            base.joinpath("style.css").read_text(encoding="utf-8"),
+            base.joinpath("hljs.css").read_text(encoding="utf-8"),
+        )
+
+    @staticmethod
+    def _declarations(css: str, selector: str) -> dict[str, str]:
+        import re
+
+        body = css.split(f"{selector} {{", 1)[1].split("\n}", 1)[0]
+        return dict(re.findall(r"(--[a-z0-9-]+):\s*([^;]+);", body))
+
+    def test_every_referenced_token_is_declared(self) -> None:
+        import re
+
+        style_css, hljs_css = self._css()
+        declared = set(self._declarations(style_css, ":root"))
+        declared |= set(self._declarations(style_css, ".light-mode"))
+        for name in sorted(set(re.findall(r"var\((--[a-z0-9-]+)\)", hljs_css))):
+            if name.startswith("--hljs-"):
+                continue
+            assert name in declared, f"hljs.css reads {name}, which style.css never declares"
+
+    @pytest.mark.parametrize(("selector", "css_index"), [(":root", 0), (".light-mode", 1)])
+    def test_no_app_token_is_restated_as_a_literal(self, selector: str, css_index: int) -> None:
+        import re
+
+        style_css, hljs_css = self._css()
+        app_values = {
+            value.strip()
+            for value in self._declarations(style_css, selector).values()
+            if value.strip().startswith("#")
+        }
+        theme = hljs_css.split(f"{selector} {{", 1)[1].split("\n}", 1)[0]
+        literals = {m.group(0).lower() for m in re.finditer(r"#[0-9a-fA-F]{3,8}\b", theme)}
+        assert not (literals & app_values), (
+            f"hljs.css {selector} spells {sorted(literals & app_values)} by hand; "
+            "reference the token so the code pane follows a palette change"
+        )

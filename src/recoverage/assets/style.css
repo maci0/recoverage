@@ -21,16 +21,18 @@
   --grid-bg: rgba(0, 0, 0, 0.22);
   --meta-item-bg: rgba(255, 255, 255, 0.03);
   --meta-item-border: rgba(255, 255, 255, 0.05);
-  --topbar-bg: rgba(15, 23, 42, 0.6);
+  /* Opaque, like every other surface in this theme: the topbar was the one
+   * translucent panel left, and the blur behind it was invisible over a
+   * near-black ground while repainting on every scroll frame. */
+  --topbar-bg: var(--panel);
   --modal-header-bg: rgba(15, 18, 22, 0.5);
   --scroll-track: var(--bg);
   --scroll-thumb: var(--border);
   --scroll-thumb-hover: var(--muted);
   --scroll-border: var(--bg);
-  --overlay-bg: rgba(15, 18, 22, 0.7);
+  --overlay-bg: var(--panel);
   --modal-backdrop: rgba(0, 0, 0, 0.85);
   --inspector-bg: rgba(0, 0, 0, 0.2);
-  --cell-border: rgba(255, 255, 255, 0.04);
   --bar-border: rgba(255, 255, 255, 0.1);
 
   /* Height of the sticky topbar, measured at runtime (app.js) so the
@@ -42,80 +44,113 @@
   --near-match-bg: rgba(255, 200, 0, 0.65);
   --stub-bg: rgba(255, 0, 0, 0.65);
   --padding-bg: rgba(200, 200, 220, 0.55);
-  /* proven (post-verify semantic promotion): bold cyan per rebrew
-   * DB_FORMAT.md — the accent at exact's alpha so it reads as the
-   * strongest match state, distinct from reloc's bluer cyan. */
-  --proven-bg: rgba(6, 182, 212, 0.8);
+  /* Post-verify semantic promotion: a section rebrew proved equivalent, which
+   * is not the same claim as a byte-identical match.  detail.js reads slot 6
+   * through this token, so it has to exist in both themes: an undefined custom
+   * property resolves to the empty string, and an empty fillStyle is a no-op
+   * assignment, which left every PROVEN cell unpainted. */
+  --proven-bg: rgba(6, 182, 212, 0.65);
+  /* Tooling-failure and unclassified-annotation states (compile_error,
+   * extract_error, invalid_va, missing_file, missing_size, skip, unknown,
+   * drift, unchecked).  Distinct from --none so a cell the pipeline could not
+   * classify is not read as a byte nobody has looked at. */
+  --other-bg: rgba(168, 85, 247, 0.55);
 
-  --badge-exact-bg: rgba(46, 160, 67, 0.2);
-  --badge-exact-border: rgba(46, 160, 67, 0.4);
-  --badge-reloc-bg: rgba(2, 132, 199, 0.2);
-  --badge-reloc-border: rgba(2, 132, 199, 0.4);
-  --badge-near-bg: rgba(210, 153, 34, 0.2);
-  --badge-near-border: rgba(210, 153, 34, 0.4);
-  --badge-stub-bg: rgba(248, 81, 73, 0.2);
-  --badge-stub-border: rgba(248, 81, 73, 0.4);
+  /* Badge surfaces carry the same status hues as the grid cells, at badge
+   * alpha.  Each text token below clears 4.5:1 on its own tinted fill. */
+  --badge-exact-bg: rgba(16, 185, 129, 0.2);
+  --badge-exact-border: rgba(16, 185, 129, 0.4);
+  --badge-reloc-bg: rgba(14, 165, 233, 0.2);
+  --badge-reloc-border: rgba(14, 165, 233, 0.4);
+  --badge-near-bg: rgba(245, 158, 11, 0.2);
+  --badge-near-border: rgba(245, 158, 11, 0.4);
+  --badge-stub-bg: rgba(239, 68, 68, 0.2);
+  --badge-stub-border: rgba(239, 68, 68, 0.4);
 
   /* Accent tokens — section logos, links, badges, delta */
   --accent-c-source: #3b82f6;
   --accent-asm: #ef4444;
   --accent-data: #a855f7;
   --accent-bytes: #10b981;
-  --link: #58a6ff;
-  --link-hover: #79c0ff;
-  --link-hover-glow: rgba(88, 166, 255, 0.5);
+  --link: #7dd3fc;
+  --link-hover: #bae6fd;
+  --link-hover-glow: rgba(125, 211, 252, 0.5);
   --delta: #f59e0b;
-  --badge-exact-text: #3fb950;
-  --badge-reloc-text: #0ea5e9;
-  --badge-near-text: #e3b341;
-  --badge-stub-text: #ff7b72;
+  --badge-exact-text: #10b981;
+  --badge-reloc-text: #7dd3fc;
+  --badge-near-text: #f59e0b;
+  --badge-stub-text: #f87171;
   --asm-link-underline: rgba(255, 255, 255, 0.5);
   --asm-link-hover-bg: rgba(31, 191, 117, 0.1);
 
 
   --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-
+  /* Two faces, chosen rather than accumulated: the terminal face for every
+   * name, address, heading and disassembly, the system sans for prose and
+   * control labels.  A seven-name fallback pile is the browser picking. */
+  --font-ui: system-ui, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  /* A phosphor terminal has square corners: a rounded card reads as a web
+   * dashboard, not as the instrument.  Three steps, not a scale nobody
+   * chose: hairline (cells, links, chips), control (buttons, fields,
+   * frames), pill (progress bar, badges). */
+  --radius-hair: 2px;
+  --radius: 4px;
+  --radius-pill: 6px;
 }
 
 .light-mode {
-  --bg: #cbd5e1;
-  --panel: #e2e8f0;
-  --muted: #475569;
-  --text: #0f172a;
-  --border: rgba(0, 0, 0, 0.12);
+  /* The light ground is the same neutral family as the dark one, a shade
+   * short of the accent rather than a stock blue-gray: the dark theme's
+   * near-black and Potato Mode's BORDER_COLOR are both cyan-tinted, and a
+   * violet-leaning neutral put a third hue between the ground and a cyan
+   * accent.  Every pairing below clears 4.5:1 at the margin the raw grays
+   * had, and --muted gains headroom. */
+  --bg: #c3ccd0;
+  --panel: #dbe3e5;
+  --muted: #3c4f57;
+  --text: #0c1417;
+  /* Accent-tinted like the dark theme's border, so a hairline still reads
+   * as the same instrument in both themes. */
+  --border: rgba(9, 102, 120, 0.28);
   --none: rgba(0, 0, 0, 0.08);
   /* Cyan darkened from #0891b2 (2.99:1 on --panel): --c is focus-ring,
    * skip-link text, and loading-overlay text, so it carries a text
-   * contrast requirement, not just a non-text one.  #155e75 is 5.89:1
-   * on --panel and 4.89:1 on --bg. */
-  --c: #155e75;
+   * contrast requirement, not just a non-text one.  #12566c is 6.27:1
+   * on --panel and 5.00:1 on --bg. */
+  --c: #12566c;
   --bg-grad-1: rgba(42, 111, 219, 0.1);
   --bg-grad-2: rgba(31, 191, 117, 0.1);
-  --text-shadow: 0 0 2px rgba(8, 145, 178, 0.3), 0 0 8px rgba(8, 145, 178, 0.1);
-  --c-shadow: 0 0 8px rgba(8, 145, 178, 0.25), inset 0 0 8px rgba(8, 145, 178, 0.08);
-  --c-shadow-active: 0 0 10px rgba(8, 145, 178, 0.3);
+  /* No phosphor bloom: the glow is the dark ground's, where light has
+   * somewhere to travel.  On a light ground it is a cyan smear behind
+   * every glyph, inherited from body onto each one. */
+  --text-shadow: none;
+  /* A tight tinted ring rather than the dark theme's bloom: a diffuse
+   * cyan halo on a light ground reads as blur, and a hover mark wants an
+   * edge. */
+  --c-shadow: 0 0 0 1px rgba(9, 102, 120, 0.35);
+  --c-shadow-active: 0 0 0 1px rgba(9, 102, 120, 0.6);
   --btn-bg: var(--panel);
   --btn-bg-hover: rgba(0, 0, 0, 0.04);
   --btn-active-bg: rgba(42, 111, 219, 0.1);
   --btn-active-border: rgba(42, 111, 219, 0.3);
   --btn-active-text: #1d4ed8;
-  --code-bg: #f8fafc;
+  --code-bg: #f2f6f7;
   --grid-bg: rgba(0, 0, 0, 0.03);
   --meta-item-bg: rgba(0, 0, 0, 0.02);
-  --meta-item-border: rgba(0, 0, 0, 0.08);
+  --meta-item-border: rgba(9, 102, 120, 0.18);
   --topbar-bg: var(--panel);
   --modal-header-bg: var(--panel);
   --scroll-track: rgba(0, 0, 0, 0.05);
-  --scroll-thumb: rgba(0, 0, 0, 0.2);
-  --scroll-thumb-hover: rgba(0, 0, 0, 0.35);
-  --scroll-border: #cbd5e1;
-  --overlay-bg: rgba(226, 232, 240, 0.7);
-  --modal-backdrop: rgba(15, 23, 42, 0.6);
+  --scroll-thumb: rgba(9, 102, 120, 0.3);
+  --scroll-thumb-hover: rgba(9, 102, 120, 0.5);
+  --scroll-border: var(--bg);
+  --overlay-bg: var(--panel);
+  --modal-backdrop: rgba(12, 20, 23, 0.6);
   --inspector-bg: rgba(0, 0, 0, 0.04);
-  --cell-border: rgba(0, 0, 0, 0.12);
-  --bar-border: rgba(0, 0, 0, 0.2);
+  --bar-border: rgba(9, 102, 120, 0.35);
 
   --padding-bg: rgba(60, 60, 90, 0.55);
+  --proven-bg: rgba(6, 182, 212, 0.65);
 
   /* Accent tokens — light-mode overrides.  Text-bearing accents are tuned
    * to clear 4.5:1 against the surface they sit on (--panel for badges and
@@ -148,7 +183,7 @@ body {
   background-repeat: no-repeat;
   color: var(--text);
   text-shadow: var(--text-shadow);
-  font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, "Helvetica Neue", Arial;
+  font-family: var(--font-ui);
   overflow-x: clip;
   overflow-y: scroll;
   min-height: 100vh;
@@ -159,11 +194,13 @@ body {
 .logo-r {
   font-family: var(--mono); font-size: 20px; font-weight: 800; color: var(--c);
   text-shadow: 0 0 2px var(--c), 0 0 8px var(--c);
-  border: 2px solid var(--c); border-radius: 4px; padding: 2px 8px;
+  border: 2px solid var(--c); border-radius: var(--radius-hair); padding: 2px 8px;
   background: rgba(6, 182, 212, 0.05); box-shadow: var(--c-shadow);
   display: inline-flex; align-items: center; justify-content: center; line-height: 1;
 }
-.title { font-size: 16px; font-weight: 650; letter-spacing: 0.2px; margin: 0; }
+/* The wordmark wears the terminal face it ships in (favicon: a glowing
+   * mono R), with tracking to close the mono sidebearing. */
+.title { font-family: var(--mono); font-size: 16px; font-weight: 700; letter-spacing: 1px; margin: 0; }
 .subtitle { color: var(--muted); font-size: 13px; flex: 1; }
 
 .source-link { color: var(--link); text-decoration: none; transition: color 0.2s ease, text-shadow 0.2s ease; }
@@ -172,7 +209,7 @@ body {
 .btn {
   appearance: none; border: 1px solid var(--border); background: var(--btn-bg);
   color: var(--text); text-shadow: var(--text-shadow); height: 32px; padding: 0 12px;
-  border-radius: 8px; cursor: pointer; font-size: 13px; box-sizing: border-box;
+  border-radius: var(--radius); cursor: pointer; font-size: 13px; box-sizing: border-box;
   display: inline-flex; align-items: center; justify-content: center;
   transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, box-shadow 0.2s ease;
   font-family: inherit; font-weight: 600;
@@ -196,7 +233,7 @@ body {
 .input-el {
   appearance: none; border: 1px solid var(--border); background: var(--btn-bg);
   color: var(--text); text-shadow: var(--text-shadow); height: 32px; padding: 0 12px;
-  border-radius: 8px; box-sizing: border-box; font-size: 13px; width: 100%; outline: none;
+  border-radius: var(--radius); box-sizing: border-box; font-size: 13px; width: 100%; outline: none;
   transition: background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
 }
 .input-el:focus { border-color: rgba(42, 111, 219, 0.5); box-shadow: 0 0 0 2px rgba(42, 111, 219, 0.1); }
@@ -210,7 +247,7 @@ body {
 }
 
 .topbar {
-  background: var(--topbar-bg); backdrop-filter: blur(12px); border-bottom: 1px solid var(--border);
+  background: var(--topbar-bg); border-bottom: 1px solid var(--border);
   position: sticky; top: 0; z-index: 20; padding: 12px 14px;
   transition: background-color 0.3s ease, border-color 0.3s ease;
   display: flex; flex-wrap: wrap; gap: 14px; justify-content: space-between; align-items: center;
@@ -218,17 +255,26 @@ body {
 .topbar-left { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; flex: 1; min-width: 300px; }
 .topbar-right { display: flex; align-items: center; gap: 12px; justify-content: flex-end; flex-wrap: wrap; }
 .tabs { display: flex; gap: 6px; overflow-x: auto; max-width: 100%; min-width: 0; flex: 1 1 auto; scrollbar-width: thin; mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent); }
+.search { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.search-row { display: flex; gap: 6px; align-items: center; }
+.search .input-el { flex: 0 1 220px; min-width: 150px; }
+.search-clear { height: 24px; padding: 0 8px; font-size: 11px; }
+.search-status { display: flex; flex-wrap: wrap; gap: 2px 6px; justify-content: flex-end; color: var(--muted); font-size: 11px; text-align: right; }
+.search-count { color: var(--c); }
 .tabs:has(.tab-btn:last-child.active) { mask-image: none; }
-.filters { display: flex; gap: 6px; }
+/* Wraps rather than overflowing: eight filter buttons plus the target
+   selector and the icon buttons are more than a 360px phone has to give. */
+.filters { display: flex; flex-wrap: wrap; gap: 6px; }
 .actions { display: flex; gap: 8px; align-items: center; }
 
 .layout { display: grid; grid-template-columns: minmax(0, 1fr) 720px; gap: 14px; padding: 14px; }
 @media (max-width: 1300px) { .layout { grid-template-columns: 1fr; } .panel { min-height: 420px; } }
 
+/* No drop shadow: on a near-black ground a soft neutral shadow reads as
+ * nothing, and the phosphor motif separates surfaces with the border. */
 .map, .panel {
-  border: 1px solid var(--border); border-radius: 14px; background: var(--panel);
+  border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel);
   min-width: 0; transition: background-color 0.3s ease, border-color 0.3s ease;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.05);
 }
 .map { padding: 14px; overflow: hidden; }
 /* `clip`, not `hidden`: both round the corners, but `hidden` makes .panel a
@@ -239,7 +285,7 @@ body {
 
 .legend { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
 .key { display: inline-flex; gap: 8px; align-items: center; color: var(--muted); font-size: 12px; }
-.swatch { width: 12px; height: 12px; border-radius: 3px; border: 1px solid var(--border); }
+.swatch { width: 12px; height: 12px; border-radius: var(--radius-hair); border: 1px solid var(--border); }
 .swatch-none { background: var(--none); }
 .progress-segment.exact { background: var(--exact-bg); }
 .progress-segment.reloc { background: var(--reloc-bg); }
@@ -249,10 +295,20 @@ body {
 
 
 .grid {
-  display: block; padding: 0; border-radius: 12px; background: var(--grid-bg); border: 1px solid var(--border);
+  display: block; padding: 0; border-radius: var(--radius); background: var(--grid-bg); border: 1px solid var(--border);
   user-select: none; animation: fadeInGrid 0.3s ease; position: relative; min-height: 120px; overflow: auto;
 }
 .grid-canvas { display: block; }
+/* Shown in place of the lattice when a lazily fetched section's cells failed.
+   Reads as the grid it replaces (dashed frame, same background) so the layout
+   does not jump when a retry brings the map back. */
+.grid-error {
+  display: grid; place-content: center; justify-items: center; gap: 12px;
+  min-height: 120px; padding: 24px; text-align: center;
+  border: 1px dashed var(--border); border-radius: var(--radius); background: var(--grid-bg);
+  color: var(--muted); font-size: 13px; line-height: 1.5;
+}
+.grid-error p { margin: 0; max-width: 48ch; }
 @keyframes fadeInGrid { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 
 .modal {
@@ -262,7 +318,7 @@ body {
 }
 .modal.show { opacity: 1; visibility: visible; }
 .modal-content {
-  background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
   min-width: 60%; max-width: 90%; max-height: 90vh; display: flex; flex-direction: column;
   overflow: hidden; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
   transform: scale(0.95); opacity: 0; transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.2s ease, background-color 0.3s ease, border-color 0.3s ease;
@@ -272,21 +328,25 @@ body {
 }
 .modal.show .modal-content { transform: scale(1); opacity: 1; }
 .modal-header { display: flex; justify-content: space-between; align-items: center; padding: 14px 18px; border-bottom: 1px solid var(--border); background: var(--modal-header-bg); flex-shrink: 0; }
-.modal-title { font-weight: 650; font-size: 14px; }
+.modal-title { font-family: var(--mono); font-weight: 600; font-size: 14px; }
 .modal-actions { display: flex; gap: 8px; align-items: center; }
 .modal-body { flex: 1; padding: 18px; overflow: auto; display: flex; flex-direction: column; }
 .modal-content .code { margin: 0; max-height: none; min-height: 0; flex-shrink: 0; min-width: min-content; }
 
 .hint { color: var(--muted); font-size: 12px; margin-top: 10px; }
+/* A jump that landed nowhere: same slot and rhythm as .hint, the accent
+   colour and the status role are what separate "the map says this" from
+   "the map is still loading". */
+.hint-notice { color: var(--c); }
 
 /* Shown in the map area when there is no grid to draw: no database, no
  * sections, or a failed fetch.  Sized like the grid it replaces so the layout
  * does not jump when data arrives. */
 .empty-state {
   min-height: 400px; display: grid; place-content: center; gap: 10px; padding: 40px 24px; text-align: center;
-  border: 1px dashed var(--border); border-radius: 12px; background: var(--grid-bg);
+  border: 1px dashed var(--border); border-radius: var(--radius); background: var(--grid-bg);
 }
-.empty-state h2 { margin: 0; font-size: 16px; font-weight: 650; }
+.empty-state h2 { margin: 0; font-size: 16px; font-weight: 600; }
 .empty-state p { margin: 0; max-width: 52ch; font-size: 13px; line-height: 1.5; color: var(--muted); }
 /* No backdrop-filter here: it is sticky, so the blur would repaint on every
  * scroll frame over a grid of thousands of cells, and it sits on the panel's
@@ -294,38 +354,47 @@ body {
 .panel-head { padding: 14px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 12px; position: sticky; top: var(--topbar-h); background: var(--panel); z-index: 10; }
 /* Mangled C++ symbols have no break opportunities, and the panel clips its
  * overflow, so without this the tail of a long name silently disappears. */
-.panel-title { font-weight: 650; font-size: 14px; margin: 0; overflow-wrap: anywhere; }
+/* Function and block names are symbols, not prose: same face as the
+   * disassembly they head. */
+.panel-title { font-family: var(--mono); font-weight: 600; font-size: 14px; margin: 0; overflow-wrap: anywhere; }
 .panel-meta { margin-top: 2px; color: var(--muted); font-family: var(--mono); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
 .panel-body { padding: 14px; display: grid; gap: 14px; min-width: 0; }
 .section { min-width: 0; overflow: hidden; }
 .section-title { font-size: 12px; color: var(--muted); margin-bottom: 8px; letter-spacing: 0.2px; display: flex; justify-content: space-between; align-items: center; }
-.panel-actions { display: flex; gap: 8px; margin-bottom: 0px; }
+.panel-actions { display: flex; gap: 8px; }
 
 .code {
-  font-family: var(--mono); font-size: 12px; line-height: 1.35; padding: 10px; border-radius: 12px;
+  font-family: var(--mono); font-size: 12px; line-height: 1.35; padding: 10px; border-radius: var(--radius);
   border: 1px solid var(--border); background: var(--code-bg); overflow: auto; scrollbar-gutter: stable;
   max-height: 220px; white-space: pre; width: 100%; transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease;
 }
 .code > code { display: block; white-space: inherit; }
 .code > code.hljs { padding: 0; background: transparent; }
+/* Shown when the highlight.js chunks never arrived. The note is a pseudo-element
+   so the pane's DOM (and the disassembly text in it) is untouched; the same
+   sentence rides on the element's title, which is what assistive tech reads. */
+.code > code[data-highlight-state="unavailable"]::before {
+  content: attr(data-highlight-note); display: block; white-space: normal; margin-bottom: 8px;
+  color: var(--muted); font-style: italic;
+}
 
 .asm-link { color: inherit; text-decoration: underline; text-decoration-style: dotted; text-decoration-color: var(--asm-link-underline); cursor: pointer; transition: all 0.2s ease; }
-.asm-link:hover { color: var(--c); text-decoration-style: solid; text-decoration-color: var(--c); background: var(--asm-link-hover-bg); border-radius: 2px; }
+.asm-link:hover { color: var(--c); text-decoration-style: solid; text-decoration-color: var(--c); background: var(--asm-link-hover-bg); border-radius: var(--radius-hair); }
 
 .meta-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; margin-top: 6px; }
-.meta-item { display: flex; flex-direction: column; gap: 2px; background: var(--meta-item-bg); padding: 6px 8px; border-radius: 2px; border: 1px solid var(--meta-item-border); transition: background-color 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease; }
+.meta-item { display: flex; flex-direction: column; gap: 2px; background: var(--meta-item-bg); padding: 6px 8px; border-radius: var(--radius-hair); border: 1px solid var(--meta-item-border); transition: background-color 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease; }
 .meta-item:hover { border-color: var(--c); box-shadow: var(--c-shadow); }
 .meta-item.full-width { grid-column: 1 / -1; }
 /* Address ranges must not wrap mid-address (break-all splits hex pairs). */
 .meta-item.nowrap .meta-value { white-space: nowrap; }
-.inspector-grid { margin-top: 0; background: var(--inspector-bg); padding: 10px; border-radius: 12px; border: 1px solid var(--border); }
+.inspector-grid { margin-top: 0; background: var(--inspector-bg); padding: 10px; border-radius: var(--radius); border: 1px solid var(--border); }
 .meta-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); }
 .meta-value { font-size: 12px; font-family: var(--mono); color: var(--text); text-shadow: var(--text-shadow); word-break: break-all; }
 .meta-value.blocker-value { font-style: italic; opacity: 0.9; }
 .meta-value.delta-value { color: var(--delta); font-weight: bold; }
 .meta-docs { margin: 0; font-size: 12px; font-family: var(--mono); color: var(--text); text-shadow: var(--text-shadow); white-space: pre-wrap; }
 
-.status-badge { display: inline-block; padding: 2px 6px; border-radius: 10px; font-size: 11px; font-weight: 600; text-transform: uppercase; width: fit-content; }
+.status-badge { display: inline-block; padding: 2px 6px; border-radius: var(--radius-pill); font-size: 11px; font-weight: 600; text-transform: uppercase; width: fit-content; }
 .status-exact { background: var(--badge-exact-bg); color: var(--badge-exact-text); border: 1px solid var(--badge-exact-border); }
 .status-reloc { background: var(--badge-reloc-bg); color: var(--badge-reloc-text); border: 1px solid var(--badge-reloc-border); }
 .status-near-match { background: var(--badge-near-bg); color: var(--badge-near-text); border: 1px solid var(--badge-near-border); }
@@ -333,13 +402,13 @@ body {
 
 .section-title-left { display: flex; align-items: center; gap: 8px; }
 .hex-logo { display: flex; align-items: center; justify-content: center; filter: drop-shadow(0 0 4px currentColor); }
-.section-title-text { font-size: 12px; font-weight: 600; margin: 0; color: var(--text); text-shadow: var(--text-shadow); letter-spacing: 0.5px; }
+.section-title-text { font-family: var(--mono); font-size: 12px; font-weight: 600; margin: 0; color: var(--text); text-shadow: var(--text-shadow); letter-spacing: 0.5px; }
 .section-actions { display: flex; gap: 6px; }
 
 /* The bar gets its own full-width row below the title/tabs: sharing the row
  * left it a few dozen pixels, which clipped the coverage stats inside it. */
 .progress-container { user-select: none; display: flex; flex-direction: column; gap: 6px; width: 100%; flex: 1 1 100%; min-width: 320px; order: 10; }
-.progress-bar { position: relative; height: 14px; width: 100%; background: var(--none); border-radius: 7px; border: 1px solid var(--bar-border); overflow: hidden; }
+.progress-bar { position: relative; height: 14px; width: 100%; background: var(--none); border-radius: var(--radius-pill); border: 1px solid var(--bar-border); overflow: hidden; }
 .progress-segments { display: flex; flex-direction: row; width: 100%; height: 100%; position: absolute; top: 0; left: 0; }
 /* Loading/error states reuse the text-row typography (they render in place
  * of the stats, not over segment colours, so no scrim). */
@@ -356,12 +425,15 @@ body {
 .icon svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .hex-logo svg { width: 20px; height: 20px; font-family: inherit; }
 
-.loading-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: var(--overlay-bg); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; z-index: 50; color: var(--c); font-family: var(--mono); font-size: 32px; font-weight: 700; letter-spacing: 1px; border-radius: inherit; animation: pulse 1.5s infinite; }
+/* Opaque, and no backdrop-filter: the overlay sits over the lattice, and a
+   blur there has to re-filter every time the grid beneath it repaints.  The
+   pulse is the signal, not the frosted glass. */
+.loading-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: var(--overlay-bg); display: flex; align-items: center; justify-content: center; z-index: 50; color: var(--c); font-family: var(--mono); font-size: 32px; font-weight: 700; letter-spacing: 1px; border-radius: inherit; animation: pulse 1.5s infinite; }
 @keyframes pulse { 0% { opacity: 0.6; text-shadow: 0 0 5px var(--c); } 50% { opacity: 1; text-shadow: 0 0 15px var(--c); } 100% { opacity: 0.6; text-shadow: 0 0 5px var(--c); } }
 
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: var(--scroll-track); }
-::-webkit-scrollbar-thumb { background: var(--scroll-thumb); border-radius: 5px; border: 2px solid var(--scroll-border); }
+::-webkit-scrollbar-thumb { background: var(--scroll-thumb); border-radius: var(--radius-hair); border: 2px solid var(--scroll-border); }
 ::-webkit-scrollbar-thumb:hover { background: var(--scroll-thumb-hover); }
 ::-webkit-scrollbar-corner { background: transparent; }
 
@@ -369,13 +441,19 @@ body {
 
 body::after { content: " "; display: block; position: fixed; top: 0; left: 0; bottom: 0; right: 0; background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.05) 50%); z-index: 90; background-size: 100% 3px; pointer-events: none; }
 /* `body.light-mode`, not `.light-mode body`: the class lives on body itself,
- * so the descendant form never matched and light mode kept the dark scanline. */
-body.light-mode::after { background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.02) 50%); }
+ * so the descendant form never matched and light mode kept the dark scanline.
+ * Light mode drops the scanline rather than fading it: a CRT line is the dark
+ * ground's texture, and over a light one it reads as dirt on the screen. The
+ * README calls this theme the clean one. */
+body.light-mode::after { display: none; }
 .swatch-exact { background: var(--exact-bg); }
 .swatch-reloc { background: var(--reloc-bg); }
 .swatch-near_match { background: var(--near-match-bg); }
+.swatch-proven { background: var(--proven-bg); }
 .swatch-stub { background: var(--stub-bg); }
 .swatch-padding { background: var(--padding-bg); }
+.swatch-proven { background: var(--proven-bg); }
+.swatch-compile_error { background: var(--other-bg); }
 
 .skip-link {
   position: absolute; left: -9999px; top: auto; width: 1px; height: 1px; overflow: hidden; z-index: 999;
@@ -383,7 +461,7 @@ body.light-mode::after { background: linear-gradient(rgba(18, 16, 16, 0) 50%, rg
 .skip-link:focus {
   position: fixed; top: 4px; left: 4px; width: auto; height: auto; overflow: visible;
   padding: 8px 16px; background: var(--panel); color: var(--c); border: 2px solid var(--c);
-  border-radius: 8px; font-size: 14px; font-weight: 600; z-index: 999;
+  border-radius: var(--radius); font-size: 14px; font-weight: 600; z-index: 999;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -407,11 +485,12 @@ body.light-mode::after { background: linear-gradient(rgba(18, 16, 16, 0) 50%, rg
 
 /* Coarse pointers (touch): interactive targets need ≥ 44px hit area (WCAG
  * 2.5.5). Desktop fine-pointer keeps the compact 32px control height.  The
- * bar stays slim: its segments are display-only and the filter buttons below
- * are the touch targets. */
+ * bar stays slim: its segments are not sized up for touch, so a coarse
+ * pointer reaches the filter buttons below rather than the bar. */
 @media (pointer: coarse) {
   .btn, .input-el, .target-select { height: 44px; min-height: 44px; }
   .btn.icon-btn { width: 44px; }
+  .search-clear { height: 44px; min-height: 44px; }
 }
 
 /* Phone widths: the topbar wraps to ~190px of controls.  Sticky there would

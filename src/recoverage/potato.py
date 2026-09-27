@@ -19,41 +19,68 @@ import struct
 import textwrap
 import threading
 from collections.abc import Callable, Iterable
-from datetime import UTC, datetime
 from html import escape as _html_escape
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Any
-from urllib.parse import ParseResult, parse_qs
+from urllib.parse import ParseResult, parse_qs, urlparse
 from urllib.parse import quote as _url_quote
 
 from bottle import HTTPResponse, SimpleTemplate  # type: ignore[import-untyped]
-from rebrew.workspace import parse_va_candidates, sqlite_ro_uri
 
 from recoverage import __version__
+from recoverage._paths import _db_path
+from recoverage.disasm import disassembly_available, get_disassembly
 from recoverage.server import (
-    HAS_CAPSTONE,
+    CACHE_NO_STORE,
+    CACHE_REVALIDATE,
+    NOT_DATA_MARKER_SQL,
     _cells_json_rows,
-    _db_path,
+    _compressed,
     _escape_like,
+    _etag_or_304,
     _evict_oldest,
     _fn_json_sql,
     _format_hex_dump,
     _global_json_sql,
+    _is_absent_object,
     _load_dll,
     _load_metadata,
+    _lookup_by_va_or_name,
+    _newest_mtime_ns,
+    _open_db,
     _snapshot_db_mtime,
-    get_disassembly,
+    _verify_one_select,
+    app,
+    folded_like_clause,
+    like_match,
+    mtime_ns_to_utc,
+    parse_ascii_int,
+    read_snapshot,
+    request,
     resolve_targets,
+    response,
+    section_bucket_rows,
+    set_auth_cookie,
 )
 
 _log = logging.getLogger("recoverage")
 
 # --- UI Constants ---
+# Every state rebrew's build_db can write to cells.state needs a key here, or
+# the grid falls back to COLORS["none"] and paints the cell as an undocumented
+# gap.  That fallback is a data-fidelity bug, not a cosmetic one: build_db
+# counts 'verified' as an exact match (section_cell_stats folds it into
+# exact_count) and covered_bytes covers every state != 'none', so a VERIFIED
+# byte shown as "undocumented" contradicts the number printed beside it.  The
+# problem states (tooling failures and unclassified annotations) share one
+# colour: they are distinguishable from a gap, which is the point, without
+# spending nine legend rows on states an operator cannot act on individually.
+_COLORS_PROBLEM = "#a855f7"
 COLORS = {
     "exact": "#10b981",
     "reloc": "#0ea5e9",
     "near_match": "#f59e0b",
-    # Legacy spelling of near_match (rebrew DB_FORMAT.md); same yellow.
+    # Canonical spelling of near_match (rebrew DB_FORMAT.md); same yellow.
     "near_matching": "#f59e0b",
     # Post-verify semantic promotion — bold cyan per rebrew DB_FORMAT.md.
     "proven": "#06b6d4",
@@ -64,16 +91,83 @@ COLORS = {
     "data": "#8b5cf6",
     "thunk": "#f97316",
     "none": "#3F4958",
+    # Data-metadata verdicts.  VERIFIED is a match (build_db counts it as
+    # exact), so it takes the exact green; DRIFT and UNCHECKED are the two
+    # problem states here, and both take _COLORS_PROBLEM, the hue the SPA
+    # paints --other-bg.
+    "verified": "#10b981",
+    "drift": _COLORS_PROBLEM,
+    "unchecked": _COLORS_PROBLEM,
+    "compile_error": _COLORS_PROBLEM,
+    "extract_error": _COLORS_PROBLEM,
+    "invalid_va": _COLORS_PROBLEM,
+    "missing_file": _COLORS_PROBLEM,
+    "missing_size": _COLORS_PROBLEM,
+    "skip": _COLORS_PROBLEM,
+    "unknown": _COLORS_PROBLEM,
 }
 BG_COLOR = "#0f1216"
 PANEL_COLOR = "#151a21"
-CODE_BG_COLOR = "#0a0d14"  # darker than panel, matches --code-bg rgba(0,0,0,0.26) on #0f1216
+# Empty progress-bar track: approximates --none (white 0.05) over PANEL_COLOR.
+TRACK_COLOR = "#22272e"
+CODE_BG_COLOR = "#0a0d14"  # darker than panel; approximates --code-bg rgba(0,0,0,0.26) on #0f1216
 BORDER_COLOR = "#1c2a38"  # subtle cyan-tinted dark, matches rgba(6,182,212,0.15) on dark bg
 TEXT_COLOR = "#e7edf4"
 MUTED_COLOR = "#8b949e"
 ACCENT_COLOR = "#06b6d4"
+# The four section-heading accents, one per pane kind.  The SPA paints the
+# same four from --accent-c-source, --accent-asm, --accent-data, and
+# --accent-bytes, so the hexes live in two files; a pane that reads blue in
+# one renderer and cyan in the other is drift nobody would notice on a
+# screenshot.  TestSectionAccentsMatchSpa pins the two sets together.
+ACCENT_C_SOURCE = "#3b82f6"
+ACCENT_ASM = "#ef4444"
+ACCENT_DATA = "#a855f7"
+ACCENT_BYTES = "#10b981"
 SANS_FONT = "system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif"
 MONO_FONT = "SFMono-Regular, Consolas, Liberation Mono, Courier New, monospace"
+
+# The keys a ?filter= may name, and the cell states each one stands for.  A
+# filter is a key, not a state name, so the states the SPA packs onto one cell
+# state (its STATE_ID: VERIFIED onto exact, NEAR_MATCHING and SIZE_MISMATCH
+# onto near_match) stay reachable from the same pill here: without this, a
+# VERIFIED byte dimmed out under the exact filter in Potato Mode while the SPA
+# kept it lit.  The two renderers disagreed about what a filter shows.
+FILTER_STATES: dict[str, frozenset[str]] = {
+    "exact": frozenset({"exact", "verified"}),
+    "reloc": frozenset({"reloc"}),
+    "near_match": frozenset({"near_match", "near_matching", "size_mismatch"}),
+    "stub": frozenset({"stub"}),
+    "padding": frozenset({"padding"}),
+    "proven": frozenset({"proven"}),
+    "problem": frozenset(s for s, color in COLORS.items() if color == _COLORS_PROBLEM),
+}
+# The colour each pill is drawn in, which is the colour of one of its states.
+FILTER_COLORS: dict[str, str] = {key: COLORS[min(states)] for key, states in FILTER_STATES.items()}
+
+
+def _state_survives_filter(state: str, active_filters: set[str]) -> bool:
+    """Whether *state* is lit under *active_filters*.
+
+    An empty filter set lights everything, and an undocumented cell is never
+    dimmed by a status filter: the grid's gaps are the background the
+    statuses are read against, not one of the statuses.
+    """
+    if not active_filters or state == "none":
+        return True
+    return any(state in FILTER_STATES.get(f, ()) for f in active_filters)
+
+
+def _parse_filters(filter_str: str) -> set[str]:
+    """The filter keys named by a ``?filter=`` value, minus the ones no pill offers.
+
+    An unknown name matches no cell state, so keeping it would dim every
+    painted block and light no pill: a map that looks broken, with the "All"
+    link the reader has to find to undo it.  Dropping it leaves the view
+    unfiltered, which is what the name was worth.
+    """
+    return {f.strip() for f in filter_str.split(",") if f.strip()} & set(FILTER_STATES)
+
 
 # Struct format tuples for Data Inspector: (min_bytes, label, struct_format)
 _INT_FMTS: list[tuple[int, str, str]] = [
@@ -98,15 +192,15 @@ def _svg_uri(svg: str) -> str:
     return "data:image/svg+xml;base64," + base64.b64encode(svg.encode("utf-8")).decode("utf-8")
 
 
-# Topbar gradient
+# Stretched behind the topbar table as its background image.
 def _make_topbar_svg() -> str:
     """Generate a 1x80 vertical gradient SVG data URI for the topbar."""
     svg = (
         '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="80">'
         "<defs>"
         '<linearGradient id="grad" x1="0%" y1="0%" x2="0%" y2="100%">'
-        '<stop offset="0%" style="stop-color:#0f1723;stop-opacity:1" />'
-        '<stop offset="100%" style="stop-color:#1e293b;stop-opacity:1" />'
+        f'<stop offset="0%" style="stop-color:{BG_COLOR};stop-opacity:1" />'
+        f'<stop offset="100%" style="stop-color:{PANEL_COLOR};stop-opacity:1" />'
         "</linearGradient>"
         "</defs>"
         '<rect width="1" height="80" fill="url(#grad)" />'
@@ -143,33 +237,52 @@ DOT_PNGS = {state: _dot_uri(color) for state, color in COLORS.items()}
 # ── Progress bar SVG ────────────────────────────────────────
 
 
+#: Width of the progress bar's lattice, in viewBox units.  Percentages are
+#: scaled against it, and it is the hard right edge: no segment list may draw
+#: past it (see _progress_svg).
+TRACK_UNITS = 700
+
+#: Height of the bar, in viewBox units: the track rect and its clipPath draw
+#: at it, and the template's fixed height scales that.  The rounded ends
+#: (rx/ry 10) are independent of it.
+TRACK_HEIGHT = 32
+
+
 def _progress_svg(segments: tuple[tuple[str, float], ...]) -> str:
     """SVG (data URI) with one colored segment per (state, pct), rounded corners.
 
     viewBox-only (no fixed width/height): the <td> renders it at 100% width
     via width="100%", so the bar fills any viewport — a fixed 700px lattice
     overflowed phones and clipped the stats text mid-word.  Segment geometry
-    is in 0..700 viewBox units; the browser scales it to the cell width.
+    is in 0..TRACK_UNITS viewBox units; the browser scales it to the cell width.
 
-    Deliberately uncached: pct floats make repeat keys rare, so the memo
-    never hits and only pins entries."""
+    Deliberately uncached: the segment list is rebuilt per render, and a memo
+    keyed on the float percentages would pin entries without ever hitting."""
     svg = [
         (
-            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 32" preserveAspectRatio="none">'
-            '<defs><clipPath id="rc"><rect width="700" height="32" rx="10" ry="10"/></clipPath></defs>'
-            '<rect width="700" height="32" fill="#1f2937" rx="10" ry="10"/>'
+            f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {TRACK_UNITS} {TRACK_HEIGHT}"'
+            ' preserveAspectRatio="none">'
+            f'<defs><clipPath id="rc"><rect width="{TRACK_UNITS}" height="{TRACK_HEIGHT}"'
+            ' rx="10" ry="10"/></clipPath></defs>'
+            f'<rect width="{TRACK_UNITS}" height="{TRACK_HEIGHT}" fill="{TRACK_COLOR}" rx="10" ry="10"/>'
             '<g clip-path="url(#rc)">'
         )
     ]
 
+    # A segment list summing past 100% would otherwise run off the right end
+    # of the track, where the rounded-corner clipPath silently eats it: the
+    # last band lost its tail instead of the bar growing.  Clamp to the width
+    # still free, so the track is the hard bound no input list can pass.
     current_x = 0.0
     for status, pct in segments:
-        hex_color = COLORS.get(status, "#1f2937")
-        seg_w = 700 * pct / 100.0
-        if seg_w > 0:
-            svg.append(
-                f'<rect x="{current_x:.2f}" y="0" width="{seg_w:.2f}" height="32" fill="{hex_color}"/>'
-            )
+        seg_w = min(TRACK_UNITS * pct / 100.0, TRACK_UNITS - current_x)
+        if seg_w <= 0:
+            continue
+        hex_color = COLORS.get(status, TRACK_COLOR)
+        svg.append(
+            f'<rect x="{current_x:.2f}" y="0" width="{seg_w:.2f}"'
+            f' height="{TRACK_HEIGHT}" fill="{hex_color}"/>'
+        )
         current_x += seg_w
 
     svg.append("</g></svg>")
@@ -229,19 +342,24 @@ R_LOGO_SVG = (
     "bmNob3I9J21pZGRsZScgZmlsdGVyPSd1cmwoI2cpJz5SPC90ZXh0Pjwvc3ZnPg=="
 )
 
-# Every state the grid can paint needs a key here: data (purple) and thunk
-# (orange) cells were rendering with no legend entry, so those blocks had no
-# way to be identified.  The SPA greys them out; Potato Mode keeps the colours
-# (docs/DESIGN.md "Potato Mode still colors those states"), so it must say so.
+# One row per colour a reader has to be able to name.  data (purple) and thunk
+# (orange) cells used to render with no legend entry, so those blocks had no
+# way to be identified; the SPA greys them out, Potato Mode keeps the colours
+# (docs/DESIGN.md "Potato Mode still colors those states"), so they get rows.
+# `problem` names all nine states sharing _COLORS_PROBLEM at once, and the
+# states that share an existing row's colour (near_matching, verified) need no
+# entry of their own.  COLORS, not this list, is what must cover every state.
 LEGEND_ITEMS = [
     ("none", "undocumented"),
     ("exact", "exact"),
     ("reloc", "reloc"),
     ("near_match", "near-match"),
     ("stub", "stub"),
+    ("proven", "proven"),
     ("data", "data"),
     ("thunk", "thunk"),
     ("padding", "padding"),
+    ("compile_error", "problem"),
 ]
 
 
@@ -252,7 +370,6 @@ def _hex_logo_svg(label: str, color: str) -> str:
     """Generate a hex-shaped SVG logo as a base64 data-URI image tag."""
     font_size = 26 if len(label) > 2 else 42
     safe_label = _html_escape(label)
-    safe_alt = _html_escape(label)
     svg = (
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="20" height="20">'
         f'<polygon points="50,5 90,27.5 90,72.5 50,95 10,72.5 10,27.5"'
@@ -262,17 +379,23 @@ def _hex_logo_svg(label: str, color: str) -> str:
         f' fill="{color}" font-family="monospace" font-weight="800"'
         f' font-size="{font_size}">{safe_label}</text></svg>'
     )
-    return f'<img src="{_svg_uri(svg)}" width="20" height="20" border="0" alt="{safe_alt}">'
+    return f'<img src="{_svg_uri(svg)}" width="20" height="20" border="0" alt="{safe_label}">'
 
 
 def _section_heading(label: str, color: str, title: str) -> str:
-    """Render a section heading with a hex logo + title text."""
+    """Render a section heading with a hex logo + title text.
+
+    ``title`` is escaped here, not by the caller: the heading is built by
+    string concatenation into element content, so a caller that forgot the
+    escape would emit a DB-sourced section or file name as live markup.
+    Callers pass the raw text.
+    """
     logo = _hex_logo_svg(label, color)
     return (
         f'<table border="0" cellpadding="0" cellspacing="4"><tr>'
         f'<td valign="middle">{logo}</td>'
         f'<td valign="middle">'
-        f'<h2><font size="3">{title}</font></h2>'
+        f'<h2><font size="3">{_esc(title)}</font></h2>'
         f"</td></tr></table><br>"
     )
 
@@ -292,7 +415,7 @@ def _detail_rows(
     hex_fields: set[str],
     val_fn: Callable[[str, Any, str], str] | None = None,
 ) -> str:
-    """Generate <tr> rows for a key-value detail table."""
+    """Generate <tr> rows for a key-value detail table, skipping absent values."""
     rows: list[str] = []
     for k, v in data_dict.items():
         if k in skip_fields:
@@ -345,12 +468,12 @@ def _highlight_tokens(tokens: Iterable[tuple[Any, str]], color_map: dict[Any, st
 def _pygments() -> tuple[Any, dict[Any, str], Any, dict[Any, str]] | None:
     """(CLexer, c_colors, NasmLexer, asm_colors), or None when unavailable.
 
-    ONE lazy loader for the optional pygments stack: the old five maxsize=1
-    singletons (availability probe, two lexers, two near-identical color
-    maps) shared one import gate and one lifetime, so they share one cache.
+    ONE lazy loader for the optional pygments stack: the availability probe,
+    both lexers, and both color maps share one import gate and one lifetime,
+    so they share one cache.
     """
     # find_spec imports only the parent package; a missing pygments raises
-    # ModuleNotFoundError (an ImportError) exactly like the old probe import.
+    # ModuleNotFoundError, an ImportError, which the guard below catches.
     try:
         if importlib.util.find_spec("pygments.lexers") is None:
             return None
@@ -438,22 +561,20 @@ def _highlight_asm(text: str, target: str) -> str:
     def _plain_line(line: str) -> str:
         return _link_hex_refs(_html_escape(line))
 
-    def _addr_line(addr_part: str, highlighted_code: str) -> str:
-        return _addr_link(addr_part) + highlighted_code
-
+    _render_code: Callable[[str], str]
     pg = _pygments()
     if pg is None:
-        lines = []
-        for line in text.splitlines():
-            split = _split_asm_line(line)
-            if split is None:
-                lines.append(_plain_line(line))
-            else:
-                addr_part, code_part = split
-                lines.append(_addr_line(addr_part, _link_hex_refs(_html_escape(code_part))))
-        return "\n".join(lines)
+        # Without pygments the code half renders exactly like an address-only
+        # line, so it is the same function rather than a copy of its body.
+        _render_code = _plain_line
+    else:
+        _, _, lexer, colors = pg
 
-    _, _, lexer, colors = pg
+        def _render_code(code: str) -> str:
+            return _link_hex_refs(_highlight_tokens(lexer.get_tokens(code), colors).rstrip("\n"))
+
+    # One loop for both: only the code half's rendering differs between the
+    # pygments and no-pygments paths, and the address half is identical.
     result_lines: list[str] = []
     for line in text.splitlines():
         split = _split_asm_line(line)
@@ -461,8 +582,7 @@ def _highlight_asm(text: str, target: str) -> str:
             result_lines.append(_plain_line(line))
         else:
             addr_part, code_part = split
-            hl = _link_hex_refs(_highlight_tokens(lexer.get_tokens(code_part), colors).rstrip("\n"))
-            result_lines.append(_addr_line(addr_part, hl))
+            result_lines.append(_addr_link(addr_part) + _render_code(code_part))
     return "\n".join(result_lines)
 
 
@@ -474,24 +594,24 @@ def _highlight_hex(text: str) -> str:
             offset = line[:8]
             rest = line[8:]
             pipe_start = rest.rfind("  |")
-            if pipe_start >= 0:
-                hex_part = rest[: pipe_start + 2]
-                ascii_part = rest[pipe_start + 2 :]
-                out = f'<font color="#858585">{_html_escape(offset)}</font>'
-                out += f'<font color="#4ec9b0">{_html_escape(hex_part)}</font>'
-                out += '<font color="#858585">|</font>'
-                inner = ascii_part[1:-1] if len(ascii_part) >= 2 else ascii_part
-                ascii_pieces: list[str] = []
-                for ch in inner:
-                    if ch == ".":
-                        ascii_pieces.append('<font color="#858585">.</font>')
-                    else:
-                        ascii_pieces.append(f'<font color="#6a9955">{_html_escape(ch)}</font>')
-                out += "".join(ascii_pieces)
-                out += '<font color="#858585">|</font>'
-                result_lines.append(out)
-            else:
+            if pipe_start < 0:
                 result_lines.append(_html_escape(line))
+                continue
+            hex_part = rest[: pipe_start + 2]
+            ascii_part = rest[pipe_start + 2 :]
+            out = f'<font color="#858585">{_html_escape(offset)}</font>'
+            out += f'<font color="#4ec9b0">{_html_escape(hex_part)}</font>'
+            out += '<font color="#858585">|</font>'
+            inner = ascii_part[1:-1] if len(ascii_part) >= 2 else ascii_part
+            ascii_pieces: list[str] = []
+            for ch in inner:
+                if ch == ".":
+                    ascii_pieces.append('<font color="#858585">.</font>')
+                else:
+                    ascii_pieces.append(f'<font color="#6a9955">{_html_escape(ch)}</font>')
+            out += "".join(ascii_pieces)
+            out += '<font color="#858585">|</font>'
+            result_lines.append(out)
         elif line.startswith("... ("):
             result_lines.append(f'<font color="#858585">{_html_escape(line)}</font>')
         else:
@@ -521,6 +641,11 @@ def _esc(text: object) -> str:
 
 
 _MAX_RAW_READ = 1 << 20  # 1 MiB — more than any plausible function or data cell
+
+# Sort key standing in for a section row with no VA, so sections without one
+# land after every real address. Above the 64-bit VA ceiling, and an int so the
+# key list stays one comparable type.
+_SECTION_VA_MAX = 1 << 64
 
 
 def _get_raw_bytes(file_offset: int, size: int, target: str) -> bytes | None:
@@ -555,7 +680,7 @@ def _format_data_inspector(raw_bytes: bytes | None) -> str:
 
     parts: list[str] = []
     parts.append(
-        _section_heading("{}", "#a855f7", "Data Inspector")
+        _section_heading("{}", ACCENT_DATA, "Data Inspector")
         + f'<table width="100%" border="0" cellpadding="3" cellspacing="1"'
         f' bgcolor="{BORDER_COLOR}">'
     )
@@ -577,7 +702,7 @@ def _format_data_inspector(raw_bytes: bytes | None) -> str:
     if len(b) >= 8:
         _row("float64", f"{struct.unpack_from('<d', b)[0]:.6g}")
 
-    null_terminated = b[:64].split(b"\x00")[0] if b[:64] else b""
+    null_terminated = b[:64].split(b"\x00")[0]
     ascii_str = "".join(chr(x) if 32 <= x < 127 else "." for x in null_terminated)
     if ascii_str:
         display = ascii_str if len(ascii_str) <= 40 else ascii_str[:37] + "..."
@@ -588,13 +713,20 @@ def _format_data_inspector(raw_bytes: bytes | None) -> str:
 
 
 def _cell_file_offset(cell: dict[str, Any], sec_data: dict[str, Any] | None) -> int | None:
-    """Calculate file offset for a cell from its section metadata."""
+    """Calculate file offset for a cell from its section metadata.
+
+    None means "no file backing", which is a NULL fileOffset — the .bss shape
+    the api.py /asm and /bytes endpoints answer 422 for.  A fileOffset of 0 is
+    a real offset (a section at the head of the file) and is served as one by
+    those endpoints, so it must not be lumped in with NULL here either; a falsy
+    test dropped the whole Original Bytes block for such a section.
+    """
     if not sec_data:
         return None
     sec_file_offset = sec_data.get("fileOffset")
-    if not sec_file_offset:
+    if sec_file_offset is None:
         return None
-    return int(sec_file_offset) + cell.get("start", 0)
+    return int(sec_file_offset) + (cell.get("start") or 0)
 
 
 def _format_va(val: int | str) -> str:
@@ -606,7 +738,7 @@ def _format_va(val: int | str) -> str:
         return s
     try:
         return f"0x{int(s):08x}"
-    except (ValueError, TypeError):
+    except ValueError:
         return s
 
 
@@ -618,7 +750,13 @@ def _build_url(
     search: str | None = None,
     page: int | None = None,
 ) -> str:
-    """Build a potato URL with the given parameters."""
+    """Build the relative "?target=...&section=..." URL.
+
+    Options that are ``None``, an empty set, or an empty string are omitted.
+    ``idx`` is the exception: it is emitted whenever it is not ``None``, so
+    cell index 0 keeps its ``&idx=0`` and the reader's position survives the
+    round trip.
+    """
     url = "?target=" + _url_quote(target) + "&section=" + _url_quote(section)
     if filters:
         url += "&filter=" + _url_quote(",".join(sorted(filters)))
@@ -656,21 +794,21 @@ _PAGE_SRC = r"""<!DOCTYPE html>
       <table id="logo" border="0" cellpadding="0" cellspacing="0">
         <tr>
           <td><img src="{{R_LOGO_SVG}}" width="48" height="32" border="0" alt="R"></td>
-          <td valign="middle" nowrap><h1><a href="/"><font face="{{MONO_FONT}}" size="5" color="{{TEXT_COLOR}}">&nbsp;<b>ReCoverage</b></font></a></h1>&nbsp;<a href="/"><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">[SPA]</font></a>&nbsp;<a href="?target={{target}}&section={{section}}&view=functions"><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">[Functions]</font></a></td>
+          <td valign="middle" nowrap><h1><a href="/"><font face="{{MONO_FONT}}" size="5" color="{{TEXT_COLOR}}">&nbsp;<b>ReCoverage</b></font></a></h1>&nbsp;<a href="/"><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">[SPA]</font></a>&nbsp;<a href="{{functions_nav_url}}"><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">[Functions]</font></a></td>
         </tr>
       </table>
     </td>
     <td valign="middle" width="100%">
       <table id="section-tabs" border="0" cellpadding="0" cellspacing="4"><tr>
-      % for s_name, s_url, s_active in section_tab_data:
+      % for s_name, s_url, s_active, s_key in section_tab_data:
         <td valign="middle">
         <!-- The <a> wraps the whole pill table, not just the label.  Wrapping
              only the text made the clickable area the ~20px glyph while the
              32px pill around it looked like the button and did nothing. -->
         % if s_active:
-          <a href="{{s_url}}" accesskey="{{s_name[1]}}"><table border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{ACTIVE_L}}" width="16" height="32" border="0" alt=""></td><td background="{{ACTIVE_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="#ffffff"><b>{{s_name}}</b></font></td><td><img src="{{ACTIVE_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
+          <a href="{{s_url}}" accesskey="{{s_key}}"><table border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{ACTIVE_L}}" width="16" height="32" border="0" alt=""></td><td background="{{ACTIVE_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="#ffffff"><b>{{s_name}}</b></font></td><td><img src="{{ACTIVE_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
         % else:
-          <a href="{{s_url}}" accesskey="{{s_name[1]}}"><table border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{INACTIVE_L}}" width="16" height="32" border="0" alt=""></td><td background="{{INACTIVE_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="{{MUTED_COLOR}}">{{s_name}}</font></td><td><img src="{{INACTIVE_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
+          <a href="{{s_url}}" accesskey="{{s_key}}"><table border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{INACTIVE_L}}" width="16" height="32" border="0" alt=""></td><td background="{{INACTIVE_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="{{MUTED_COLOR}}">{{s_name}}</font></td><td><img src="{{INACTIVE_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
         % end
         </td>
       % end
@@ -698,8 +836,8 @@ _PAGE_SRC = r"""<!DOCTYPE html>
         <!-- Search and target share the first row; the filter pills take
              their own second row.  As one row the three groups need ~1000px,
              which overflowed a 390px phone and clipped the filters (E/R/M/S/P
-             half off-screen).  Two rows fit everywhere the 700px progress bar
-             above them already fits. -->
+             half off-screen).  Two rows wrap at whatever width the viewport
+             gives them. -->
         <tr>
         <td valign="middle" nowrap>
           <form id="search-form" action="/potato" method="GET"><input type="hidden" name="target" value="{{target}}"><input type="hidden" name="section" value="{{section}}">
@@ -728,15 +866,15 @@ _PAGE_SRC = r"""<!DOCTYPE html>
         <tr>
         <td valign="middle" colspan="4">
           <table id="filters" border="0" cellpadding="0" cellspacing="4"><tr>
-            % for fb_href, fb_label, fb_color, fb_active, fb_key in filter_btn_data:
+            % for fb_href, fb_label, fb_color, fb_active, fb_key, fb_title in filter_btn_data:
               <td valign="middle">
               <!-- Anchor wraps the whole pill: see the section-tab note above.
                    These are the worst case — a single-letter label gave E/R/M/S/P
                    a 10px-wide hit target inside a 32px-wide pill. -->
               % if fb_active:
-                <a href="{{fb_href}}" accesskey="{{fb_label[0].lower()}}"><table border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{FILTER_ACT_L}}" width="16" height="32" border="0" alt=""></td><td background="{{FILTER_ACT_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="{{fb_color}}"><b>{{fb_label}}</b></font></td><td><img src="{{FILTER_ACT_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
+                <a href="{{fb_href}}" title="{{fb_title}}" accesskey="{{fb_label[0].lower()}}"><table border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{FILTER_ACT_L}}" width="16" height="32" border="0" alt=""></td><td background="{{FILTER_ACT_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="{{fb_color}}"><b>{{fb_label}}</b></font></td><td><img src="{{FILTER_ACT_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
               % else:
-                <a href="{{fb_href}}" accesskey="{{fb_label[0].lower()}}"><table border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{FILTER_INACT_L}}" width="16" height="32" border="0" alt=""></td><td background="{{FILTER_INACT_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="{{fb_color}}">{{fb_label}}</font></td><td><img src="{{FILTER_INACT_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
+                <a href="{{fb_href}}" title="{{fb_title}}" accesskey="{{fb_label[0].lower()}}"><table border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{FILTER_INACT_L}}" width="16" height="32" border="0" alt=""></td><td background="{{FILTER_INACT_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="{{fb_color}}">{{fb_label}}</font></td><td><img src="{{FILTER_INACT_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
               % end
               </td>
             % end
@@ -744,7 +882,11 @@ _PAGE_SRC = r"""<!DOCTYPE html>
         </td>
         </tr>
         % if search_query:
-        <tr><td colspan="4" valign="middle" nowrap><font size="1" color="{{ACCENT_COLOR}}">Searching: &quot;{{search_query}}&quot; ({{search_match_count}} matches)</font> <a href="{{clear_search_url}}"><font size="1" color="{{MUTED_COLOR}}">[Clear search]</font></a></td></tr>
+        <tr><td colspan="4" valign="middle" nowrap><font size="1" color="{{ACCENT_COLOR}}">Searching: &quot;{{search_query}}&quot; ({{search_match_count}} matches)</font>
+        % if search_match_count == 0:
+        <font size="1" color="{{MUTED_COLOR}}"> - no matches. Check the spelling, or search by VA.</font>
+        % end
+        <a href="{{clear_search_url}}"><font size="1" color="{{MUTED_COLOR}}">[Clear search]</font></a></td></tr>
         % end
         </table>
     </td>
@@ -772,8 +914,8 @@ _PAGE_SRC = r"""<!DOCTYPE html>
         % end
         </td></tr>
         <tr><td bgcolor="{{PANEL_COLOR}}" cellpadding="8">
-          <!-- Two keys per row in a fixed 2-column lattice: nine keys as a
-               single row need ~900px, which overflowed the map cell on phones
+          <!-- Two keys per row in a fixed 2-column lattice: ten keys as a
+               single row need ~1000px, which overflowed the map cell on phones
                and wrapped mid-key ("near- / match") once it could wrap.
                One key per row fixed the wrap but cost ~200px of vertical
                space for a legend.  Fixed pairs fit a 390px phone (each pair
@@ -844,7 +986,7 @@ _PANEL_SRC = r"""
 <tr><td bgcolor="{{PANEL_COLOR}}"><font size="1" color="{{MUTED_COLOR}}"><b>Label:</b></font></td><td bgcolor="{{PANEL_COLOR}}"><font face="Courier New, monospace" size="1">{{cell_label}}</font></td></tr>
 % end
 % if parent_function:
-<tr><td bgcolor="{{PANEL_COLOR}}"><font size="1" color="{{MUTED_COLOR}}"><b>Parent:</b></font></td><td bgcolor="{{PANEL_COLOR}}"><font face="Courier New, monospace" size="1"><a href="?target={{target}}&section={{section}}&search={{parent_function}}"><font color="{{ACCENT_COLOR}}">{{parent_function}}</font></a></font></td></tr>
+<tr><td bgcolor="{{PANEL_COLOR}}"><font size="1" color="{{MUTED_COLOR}}"><b>Parent:</b></font></td><td bgcolor="{{PANEL_COLOR}}"><font face="Courier New, monospace" size="1"><a href="{{parent_url}}"><font color="{{ACCENT_COLOR}}">{{parent_function}}</font></a></font></td></tr>
 % end
 </table>
   % if not funcs:
@@ -907,9 +1049,9 @@ def _db_unavailable_page() -> HTTPResponse:
     """503 HTML page for an unreadable/unqueryable coverage.db in Potato Mode.
 
     ONE definition shared by the connect guard in :func:`render_potato` and
-    ui.handle_potato's query-failure tail so both surfaces carry the same
-    message (the two inline copies had already drifted: "to create it" vs
-    "to create or rebuild it").
+    the query-failure tail of :func:`handle_potato`, so both surfaces carry
+    the same message (the two inline copies had already drifted: "to create
+    it" vs "to create or rebuild it").
     """
     return HTTPResponse(
         status=503,
@@ -922,7 +1064,7 @@ def _db_unavailable_page() -> HTTPResponse:
             '<table width="100%" height="90%" border="0"><tr><td align="center" valign="middle">'
             "<h1>Database unavailable</h1>"
             f'<p><font color="{MUTED_COLOR}">Run '
-            "'rebrew catalog --json &amp;&amp; rebrew build-db' to create or rebuild it,"
+            "'rebrew catalog &amp;&amp; rebrew build-db' to create or rebuild it,"
             ' then <a href="/potato">retry Potato Mode</a> or '
             '<a href="/">open the SPA</a>.</font></p>'
             "</td></tr></table></font></body></html>"
@@ -932,11 +1074,17 @@ def _db_unavailable_page() -> HTTPResponse:
 
 
 def render_potato(parsed_url: ParseResult) -> str:
+    """Render the Potato Mode page for *parsed_url*'s query string.
+
+    Raises the 503 page from :func:`_db_unavailable_page` when coverage.db
+    cannot be opened; the route below does not catch it, so it leaves the
+    route as a response rather than a render error.
+    """
     qs = parse_qs(parsed_url.query, keep_blank_values=True)
     target = qs.get("target", [""])[0]
     section = qs.get("section", [".text"])[0]
     filter_str = ",".join(qs.get("filter", [""]))
-    active_filters = {f.strip() for f in filter_str.split(",") if f.strip()}
+    active_filters = _parse_filters(filter_str)
     idx_str = qs.get("idx", [""])[0]
     search_query = qs.get("search", [""])[0].strip()
     view = qs.get("view", [""])[0]
@@ -945,28 +1093,111 @@ def render_potato(parsed_url: ParseResult) -> str:
     page_str = qs.get("page", [""])[0]
 
     db_path = _db_path()
+    # The render's change token, taken BEFORE the connection opens and
+    # therefore before read_snapshot pins the read view.  Every memo this
+    # render publishes is keyed on it, and a payload may only be filed under a
+    # fingerprint that is not newer than the rows it was read through.  A stat
+    # taken INSIDE the pinned snapshot cannot say that: a rebuild committing
+    # between the BEGIN and the first query leaves both the key and the
+    # re-check reporting the new fingerprint while the rows are the old build's,
+    # so the stale payload is cached under the new key and served until the next
+    # rebuild.  Same order api.handle_api_stats and api.handle_api_data use.
+    snap = _snapshot_db_mtime()
     try:
-        conn = sqlite3.connect(sqlite_ro_uri(db_path), uri=True)
-        conn.row_factory = sqlite3.Row
-    except sqlite3.Error:
-        _log.warning("Potato mode: database unavailable at %s", db_path)
+        conn = _open_db(db_path)
+    except sqlite3.Error as exc:
+        # The cause rides on the line: a missing file, a locked one and a
+        # corrupt one all land here, and the operator cannot tell them apart
+        # from the path alone.  Mirrors server._db_unavailable_err, which logs
+        # the same pair for the API surfaces.
+        _log.warning(
+            "Potato mode: database unavailable at %s: %s: %s",
+            db_path,
+            type(exc).__name__,
+            exc,
+        )
         # Signal failure, not a 200 page: monitoring and scripts must see the
         # DB outage (same contract as the API's 503 db_unavailable).
         raise _db_unavailable_page() from None
 
     with contextlib.closing(conn):
         c = conn.cursor()
-        return _render_potato_inner(
-            c,
-            target,
-            section,
-            active_filters,
-            idx_str,
-            search_query,
-            view,
-            sort_key,
-            status_filter,
-            page_str,
+        # One pinned read snapshot for the whole render.  A Potato page reads
+        # metadata, sections, cells, section_cell_stats, functions, globals and
+        # (for the detail panels) verify_results, in that order, and takes long
+        # enough doing it — the grid is the most expensive render in the
+        # package — that a `rebrew build-db` committing midway is a real
+        # window.  Unpinned, the page pairs one build's section rows with the
+        # next build's cells, which is a grid whose coverage legend disagrees
+        # with its own bytes.  Same contract as /stats, /data and the function
+        # list; a WAL reader blocks no writer, so the pin costs nothing.
+        with read_snapshot(c):
+            return _render_potato_inner(
+                c,
+                target,
+                section,
+                snap=snap,
+                active_filters=active_filters,
+                idx_str=idx_str,
+                search_query=search_query,
+                view=view,
+                sort_key=sort_key,
+                status_filter=status_filter,
+                page_str=page_str,
+            )
+
+
+# ── HTTP surface ───────────────────────────────────────────────────
+#
+# The /potato route lives with the renderer it serves, not in recoverage.ui:
+# the handler's only job is ETag + cache policy around render_potato.
+
+
+@app.get("/potato")
+def handle_potato() -> bytes | Any:
+    # Before the ETag check, which raises a bare 304: the cookie rides on the
+    # 200 the first visit gets, and a repeat already has it.  Every href on the
+    # page is relative, so without this a reader who arrived at
+    # /potato?token=... lost the credential on their first click.
+    set_auth_cookie()
+    try:
+        # WAL-aware snapshot (see _snapshot_db_mtime), not raw st_mtime: a
+        # rebuild that commits only to -wal must still mint a new ETag or
+        # browsers keep a stale 304.  Same contract as /data, /asm, /bytes.
+        qs = request.query_string
+        if isinstance(qs, bytes):
+            qs = qs.decode("utf-8", errors="replace")
+        # Redact token from ETag input so query-string ETag doesn't leak it.
+        if "token=" in qs:
+            qs = "&".join(p for p in qs.split("&") if not p.startswith("token="))
+        etag = _etag_or_304(_snapshot_db_mtime(), qs)
+        body = render_potato(urlparse(request.url)).encode("utf-8")
+        # Every other DB-derived response carries an explicit cache policy;
+        # /potato was the one surface sent with none, which leaves the browser
+        # free to apply heuristic freshness and a shared cache free to store
+        # and replay a page that may have been rendered for a token-bearing
+        # client.  CACHE_REVALIDATE keeps the ETag's cheap 304s while forcing
+        # revalidation before every reuse.
+        resp_body = _compressed(body, "text/html; charset=utf-8", Cache_Control=CACHE_REVALIDATE)
+
+        if etag:
+            response.set_header("ETag", etag)
+        return resp_body
+
+    except sqlite3.Error:
+        # A DB that opens but cannot answer queries is the same
+        # db_unavailable condition render_potato's connect guard reports as
+        # 503 — not an application bug.  One contract (and one page) for
+        # both surfaces.
+        _log.exception("Potato mode database query failed")
+        return _db_unavailable_page()
+    # json.JSONDecodeError needs no entry: it subclasses ValueError.
+    except (OSError, ValueError, KeyError):
+        _log.exception("Potato mode render failed")
+        return HTTPResponse(
+            status=500,
+            body="<html><body>Internal server error</body></html>",
+            headers={"Cache-Control": CACHE_NO_STORE},
         )
 
 
@@ -988,11 +1219,12 @@ def _load_section_data(
         sections[sec["name"]] = sec
     # PE load order (ascending VA), matching the SPA's sectionNames sort: the
     # section carrying the work (.text) leads instead of trailing an
-    # alphabetical row.  Sections without a VA sort last.
+    # alphabetical row.  Sections without a VA sort last, behind every real
+    # address.
     sections = dict(
         sorted(
             sections.items(),
-            key=lambda kv: kv[1].get("va") if kv[1].get("va") is not None else 1e18,
+            key=lambda kv: _SECTION_VA_MAX if kv[1]["va"] is None else int(kv[1]["va"]),
         )
     )
 
@@ -1008,21 +1240,21 @@ def _db_updated_mtime_ns() -> int | None:
     as _snapshot_db_mtime, rendered as wall-clock time instead of folded into
     an opaque change token).
     """
-    try:
-        newest = _db_path().stat().st_mtime_ns
-    except OSError:
-        return None
-    with contextlib.suppress(OSError):
-        newest = max(newest, Path(f"{_db_path()}-wal").stat().st_mtime_ns)
-    return newest
+    return _newest_mtime_ns(_db_path())
 
 
 def _db_updated_label() -> str:
-    """Render _db_updated_mtime_ns() as "YYYY-MM-DD HH:MM UTC" ("" when no DB)."""
+    """Render _db_updated_mtime_ns() as "YYYY-MM-DD HH:MM UTC" ("" when no DB).
+
+    Truncating to the minute, and the conversion truncating rather than
+    rounding (see server.mtime_ns_to_utc), together mean the stamp never runs
+    ahead of the served data: a rebuild landing in the last microsecond of a
+    minute reads as the minute it started in, not the one it has not reached.
+    """
     mtime_ns = _db_updated_mtime_ns()
     if mtime_ns is None:
         return ""
-    return datetime.fromtimestamp(mtime_ns / 1e9, tz=UTC).strftime("%Y-%m-%d %H:%M UTC")
+    return mtime_ns_to_utc(mtime_ns).strftime("%Y-%m-%d %H:%M UTC")
 
 
 # Potato mode re-derived the grid input on EVERY page render: json.loads of
@@ -1035,10 +1267,13 @@ def _db_updated_label() -> str:
 # contract as /data's memo.  Entries are read-only after publication (grid,
 # pager, and panel only read them), so sharing across requests/threads is
 # safe; each retained entry costs roughly what one render already allocated
-# transiently, and _GRID_CACHE_MAX bounds retention across rebuilds.
+# transiently, and _GRID_CACHE_MAX bounds retention across rebuilds.  The key is
+# carried in the value so a derived memo can adopt the exact one this payload
+# was filed under instead of re-deriving it from a fresh stat.
+_GridKey = tuple[int, int, str, str, int]
 _GRID_CACHE: dict[
-    tuple[int, int, str, str, int],
-    tuple[list[dict[str, Any]], list[dict[str, Any]]],
+    _GridKey,
+    tuple[list[dict[str, Any]], list[dict[str, Any]], _GridKey],
 ] = {}
 _GRID_CACHE_LOCK = threading.Lock()
 _GRID_CACHE_MAX = 4
@@ -1048,39 +1283,104 @@ def clear_cells_cache() -> None:
     """Clear the memoized potato grid payloads (called on DB rebuild)."""
     with _GRID_CACHE_LOCK:
         _GRID_CACHE.clear()
+    with _PARENT_INDEX_LOCK:
+        _PARENT_INDEX.clear()
     with _POTATO_STATS_CACHE_LOCK:
         _POTATO_STATS_CACHE.clear()
 
 
 def _load_grid_cells(
-    c: sqlite3.Cursor, target: str, section: str, grid_columns: int
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Return ``(cells, merged_cells)`` for *section*, memoized per DB snapshot.
+    c: sqlite3.Cursor,
+    target: str,
+    section: str,
+    grid_columns: int,
+    *,
+    snap: tuple[int, int] | None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], _GridKey | None]:
+    """Return ``(cells, merged_cells, key)`` for *section*, memoized per DB snapshot.
 
     Only the requested section's JSON is fetched and decoded — sibling
     sections never render cells, so materializing their multi-MB payloads
     was pure waste.
+
+    *snap* is the caller's WAL-aware change token, stat'ed BEFORE the read
+    snapshot this cursor reads through was pinned (:func:`render_potato`).
+    It is the key's fingerprint, and the publish below re-checks it, which is
+    what keeps a payload read through an older snapshot from being filed under
+    a newer fingerprint: a rebuild that commits mid-render moves the token, the
+    re-check fails, and nothing is memoized.  Deriving the fingerprint here
+    instead would read the post-rebuild value on both sides of that comparison
+    and cache the stale rows under the key that supersedes them.
+
+    *key* is the memo key the pair was filed under (None when the DB snapshot
+    is unreadable and nothing was memoized).  It travels with the cells so a
+    caller deriving anything else from them — the panel's parent index, see
+    :func:`_parent_index` — files its own memo under the SAME key rather than
+    re-deriving one from a fresh stat, which a rebuild landing in between would
+    let disagree with the payload it describes.
     """
-    snap = _snapshot_db_mtime()
     key = (*snap, target, section, int(grid_columns)) if snap is not None else None
     if key is not None:
         with _GRID_CACHE_LOCK:
             cached = _GRID_CACHE.get(key)
         if cached is not None:
-            return cached
+            return cached[0], cached[1], cached[2]
 
-    rows = _cells_json_rows(c, target, section)
-    # An unknown or cell-less section decodes to no cells (same empty shape
-    # the unfiltered loader produced by absence).
+    # {section}: a materialized section_cells_json that does not cover this
+    # section is re-aggregated from `cells` rather than rendering an empty grid,
+    # which would report every byte in the section as `none`.
+    rows = _cells_json_rows(c, target, section, {section} if section is not None else None)
+    # An unknown or cell-less section decodes to no cells: _cells_json_rows
+    # returns no rows and the grid renders empty.
     cells: list[dict[str, Any]] = json.loads(rows[0][1]) if rows else []
     merged = _merge_cells(cells, grid_columns)
-    entry = (cells, merged)
-
-    if key is not None:
+    # The watermark re-check: *snap* predates this cursor's read snapshot, so
+    # equality here means no rebuild committed while these rows were read.  A
+    # broadcast that cleared the cache can then still be overtaken by this
+    # insert only under a key no later request will ask for.
+    if key is not None and _snapshot_db_mtime() == snap:
         with _GRID_CACHE_LOCK:
             _evict_oldest(_GRID_CACHE, _GRID_CACHE_MAX)
-            _GRID_CACHE[key] = entry
-    return entry
+            _GRID_CACHE[key] = (cells, merged, key)
+    return cells, merged, key
+
+
+#: Function name -> index of the first cell listing it, for the panel's Parent
+#: link.  The grid memo already decoded the section's cells, so this is a
+#: derived index over those, keyed by the SAME grid key: it is built once per
+#: grid entry instead of re-walking the whole section on every ``?idx=`` render
+#: that opens a panel on a cell with a parent (measured 16 ms against a ~4 ms
+#: render on a 40k-cell .text).  Built on first use, not with the grid: a
+#: page with no parent link never pays for it.
+_PARENT_INDEX: dict[_GridKey, dict[str, int]] = {}
+_PARENT_INDEX_LOCK = threading.Lock()
+_PARENT_INDEX_MAX = 4
+
+
+def _parent_index(key: _GridKey | None, cells: list[dict[str, Any]]) -> dict[str, int]:
+    """``function name -> first cell index`` for *cells*, memoized per grid key.
+
+    FIRST occurrence, matching the linear walk this replaced: a name listed by
+    several cells links to the earliest one.
+    """
+    if key is None:
+        index: dict[str, int] = {}
+        for i, cell in enumerate(cells):
+            for name in cell.get("functions") or ():
+                index.setdefault(name, i)
+        return index
+    with _PARENT_INDEX_LOCK:
+        cached = _PARENT_INDEX.get(key)
+    if cached is not None:
+        return cached
+    index = {}
+    for i, cell in enumerate(cells):
+        for name in cell.get("functions") or ():
+            index.setdefault(name, i)
+    with _PARENT_INDEX_LOCK:
+        _evict_oldest(_PARENT_INDEX, _PARENT_INDEX_MAX)
+        _PARENT_INDEX[key] = index
+    return index
 
 
 # Per-section bucket stats for the map header (see _section_stats_cached).
@@ -1094,16 +1394,19 @@ def _section_stats_cached(
     target: str,
     sections: dict[str, dict[str, Any]],
     data: dict[str, Any],
+    *,
+    snap: tuple[int, int] | None,
 ) -> dict[str, dict[str, Any]]:
     """:func:`_compute_section_stats`, memoized per WAL-aware snapshot + target.
 
     Costs a query per call, yet the result changes only when the DB does, and
     every pager/filter click used to re-pay it.  All three inputs derive from
     the same DB state, so the snapshot alone keys the memo (same
-    self-invalidating contract as _GRID_CACHE).  Entries are small — one dict
-    per section — so the cap is generous.
+    self-invalidating contract as _GRID_CACHE), and *snap* is the render's own
+    token for the reason :func:`_load_grid_cells` documents.
+
+    Entries are small — one dict per section — so the cap is generous.
     """
-    snap = _snapshot_db_mtime()
     key = (*snap, target) if snap is not None else None
     if key is not None:
         with _POTATO_STATS_CACHE_LOCK:
@@ -1111,11 +1414,25 @@ def _section_stats_cached(
         if cached is not None:
             return cached
     stats = _compute_section_stats(c, target, sections, data)
-    if key is not None:
+    # Same watermark re-check as _load_grid_cells, over the same token: a
+    # rebuild that committed after this render pinned its read snapshot must
+    # not leave its rows filed under the new fingerprint.
+    if key is not None and _snapshot_db_mtime() == snap:
         with _POTATO_STATS_CACHE_LOCK:
             _evict_oldest(_POTATO_STATS_CACHE, _POTATO_STATS_CACHE_MAX)
             _POTATO_STATS_CACHE[key] = stats
     return stats
+
+
+#: The six buckets the Potato map header renders.  Only these are named, so a
+#: hand-made `section_cell_stats` carrying just them still serves; which rows
+#: to read (the cache, `cells` for a section the cache omits, `cells` outright
+#: when there is no cache) is :func:`server.section_bucket_rows`, the same
+#: reader /stats and /data use.
+_POTATO_BUCKET_COLUMNS = (
+    "section_name, total_cells, exact_count, reloc_count, "
+    "near_match_count, stub_count, padding_count"
+)
 
 
 def _compute_section_stats(
@@ -1131,34 +1448,51 @@ def _compute_section_stats(
     if not isinstance(summary, dict):
         summary = {}
     per_section_stats: dict[str, dict[str, Any]] = {}
-    c.execute(
-        "SELECT section_name, total_cells, exact_count, reloc_count, "
-        "near_match_count, stub_count, padding_count FROM section_cell_stats WHERE target = ?",
-        (target,),
-    )
-    for row in c.fetchall():
-        sec_name_r, s_total, s_exact, s_reloc, s_near_match, s_stub, s_padding = row
-        sec_summary_entry = summary.get(sec_name_r, summary)
-        s_covered_bytes = sec_summary_entry.get("coveredBytes", 0)
-        # `or 0`, not .get("size", 0): a NULL size is schema-legal (.bss-style
-        # sections carry NULL columns like va/fileOffset) and dict.get returns
-        # the stored None — which then raises TypeError on `> 0` below and
-        # 500s the whole page.  Same guard as the va/columns fallbacks above.
-        s_sec_size = sections.get(sec_name_r, {}).get("size") or 0
-        # Same rounding as server._section_stats (round to 2dp): int() floor
-        # made the map header read "87% covered" beside the topbar's "88.0%"
-        # for the same section.
-        s_pct = round(s_covered_bytes / s_sec_size * 100, 2) if s_sec_size > 0 else 0
-        per_section_stats[sec_name_r] = {
-            "total": s_total,
-            "exact": s_exact,
-            "reloc": s_reloc,
-            "near_match": s_near_match,
-            "stub": s_stub,
-            "padding": s_padding,
-            "pct": s_pct,
+    # The buckets come from server.section_bucket_rows, the reader /stats and
+    # /data use: rebrew's materialized section_cell_stats where it covers the
+    # map header's sections, `cells` for the sections it omits and for a
+    # database that has no such table at all.  This surface used to restate all
+    # three rules against its own query, and a `cells` table too narrow for the
+    # live aggregation is left as an empty header rather than a 503, which is
+    # what the shared reader's absent-object guard gives here too.
+    for row in section_bucket_rows(c, target, projection=_POTATO_BUCKET_COLUMNS, expected=sections):
+        name = row["section_name"]
+        if name not in sections:
+            continue
+        per_section_stats[name] = {
+            "total": row["total_cells"],
+            "exact": row["exact_count"],
+            "reloc": row["reloc_count"],
+            "near_match": row["near_match_count"],
+            "stub": row["stub_count"],
+            "padding": row["padding_count"],
+            "pct": _section_pct(summary, sections, name),
         }
     return per_section_stats
+
+
+def _section_pct(summary: dict[str, Any], sections: dict[str, dict[str, Any]], name: str) -> float:
+    """Covered percentage for section *name*, from the summary's byte counts.
+
+    A section-level summary entry is used when the summary carries one;
+    otherwise the summary is read as the section's own entry.  ``or 0``, not
+    .get("size", 0): a NULL size is schema-legal (.bss-style sections carry
+    NULL columns like va/fileOffset) and dict.get returns the stored None,
+    which then raises TypeError on ``> 0`` and 500s the whole page.
+    """
+    sec_summary_entry = summary.get(name, summary)
+    covered = sec_summary_entry.get("coveredBytes", 0)
+    size = sections.get(name, {}).get("size") or 0
+    # Same rounding as server._section_stats (round to 2dp): int() floor made
+    # the map header read "87% covered" beside the topbar's "88.0%" for the
+    # same section.
+    return round(covered / size * 100, 2) if size > 0 else 0
+
+
+#: Rows each search query may scan.  The cap bounds the work a single search
+#: box keystroke can cause on a large project; ORDER BY keeps which rows those
+#: are deterministic, since SQLite's scan order is otherwise arbitrary.
+_SEARCH_ROW_LIMIT = 500
 
 
 def _search_functions(c: sqlite3.Cursor, target: str, search_query: str) -> set[str]:
@@ -1166,14 +1500,18 @@ def _search_functions(c: sqlite3.Cursor, target: str, search_query: str) -> set[
     if not search_query:
         return search_matched_fns
 
+    # A non-ASCII term gets a second, folded disjunct over the name columns:
+    # SQLite's LIKE folds case for ASCII only, so "CAFÉ" would otherwise miss
+    # "Café_Render" and an NFD spelling would miss its NFC twin.  The VA
+    # columns are ASCII hex, so LIKE already folds them correctly.
+    fn_folded_sql, fn_folded_params = folded_like_clause(["name", "symbol"], search_query)
     like_pat = _escape_like(search_query)
-    # ORDER BY makes the 500-row cap deterministic (SQLite scan order is
-    # otherwise arbitrary for >500 matches).
+    fn_chain, fn_arity = like_match(["name", "vaStart", "symbol"])
     c.execute(
-        "SELECT name, vaStart FROM functions WHERE target = ? AND ("
-        "name LIKE ? ESCAPE '\\' OR vaStart LIKE ? ESCAPE '\\' "
-        "OR symbol LIKE ? ESCAPE '\\') ORDER BY name, vaStart LIMIT 500",
-        (target, like_pat, like_pat, like_pat),
+        f"SELECT name, vaStart FROM functions WHERE target = ? AND {fn_chain}"
+        + (f" OR {fn_folded_sql}" if fn_folded_sql else "")
+        + " ORDER BY name, vaStart LIMIT ?",
+        (target, *([like_pat] * fn_arity), *fn_folded_params, _SEARCH_ROW_LIMIT),
     )
     for name, va_start in c.fetchall():
         search_matched_fns.add(name)
@@ -1182,11 +1520,20 @@ def _search_functions(c: sqlite3.Cursor, target: str, search_query: str) -> set[
             # name) in their `functions` field — the dimming test compares
             # cell entries against this set, so VA spellings must be included.
             search_matched_fns.add(va_start)
+    # The address column is matched in both spellings _format_va can produce
+    # (`0x%08x`, padded, and `0x%x`, unpadded) so an address copied out of a
+    # Potato table matches when pasted into the search box.  printf('0x%x', va)
+    # has no prefix and could never match either.
+    # The row cap applies to rows selected, not to the returned set.
+    g_folded_sql, g_folded_params = folded_like_clause(["name"], search_query)
+    g_chain, g_arity = like_match(
+        ["name", "'0x' || printf('%08x', va)", "'0x' || printf('%x', va)"]
+    )
     c.execute(
-        "SELECT name FROM globals WHERE target = ? AND ("
-        "name LIKE ? ESCAPE '\\' OR printf('0x%x', va) LIKE ? ESCAPE '\\') "
-        "ORDER BY name LIMIT 500",
-        (target, like_pat, like_pat),
+        f"SELECT name FROM globals WHERE target = ? AND {g_chain}"
+        + (f" OR {g_folded_sql}" if g_folded_sql else "")
+        + " ORDER BY name LIMIT ?",
+        (target, *([like_pat] * g_arity), *g_folded_params, _SEARCH_ROW_LIMIT),
     )
     search_matched_fns.update(row[0] for row in c.fetchall())
     return search_matched_fns
@@ -1197,40 +1544,54 @@ def _build_filter_data(
     section: str,
     active_filters: set[str],
     search_query: str,
-) -> list[tuple[str, str, str, bool, str]]:
+) -> list[tuple[str, str, str, bool, str, str]]:
+    # A pill is a single letter in the state's colour, so it carries the
+    # state's full name in its title: a lone V or X is a lookup the legend
+    # two hundred pixels away can answer, and a pointer answers instantly.
+    # (state, label letter, title).  The key is the filter name a ?filter=
+    # spells: it is what the pill toggles and what FILTER_STATES is keyed on,
+    # so it is the one field that says which entry a row stands for.  The
+    # accesskey is not a field: the template derives it from the label
+    # (``fb_label[0].lower()``), so a lowercase letter carried in this slot
+    # was never read by anything.
     filter_opts = [
-        ("exact", "E", "e"),
-        ("reloc", "R", "r"),
-        ("near_match", "M", "m"),
-        ("stub", "S", "s"),
-        ("padding", "P", "p"),
+        ("exact", "E", "Exact match"),
+        ("reloc", "R", "Reloc match"),
+        ("near_match", "M", "Near-match"),
+        ("stub", "S", "Stub"),
+        ("padding", "P", "Padding"),
+        # The two states the legend names that had no pill: a proven section
+        # and a cell the build or the classifier failed on.  Both were
+        # painted and both dimmed under every pill, so the operator looking
+        # for the failures had no control to narrow the map with.
+        ("proven", "V", "Proven (verified equivalent)"),
+        ("problem", "X", "Problem (build or classification failure)"),
     ]
-    toggle_links = {
-        f: _build_url(
-            target,
-            section,
-            (
-                (active_filters - {f}) or None
-                if f in active_filters
-                else (active_filters | {f}) or None
-            ),
-            search=search_query,
-        )
-        for f, _, _ in filter_opts
-    }
-    all_link = _build_url(target, section, search=search_query)
-    filter_btn_data: list[tuple[str, str, str, bool, str]] = [
+    filter_btn_data: list[tuple[str, str, str, bool, str, str]] = [
         (
-            all_link,
+            _build_url(target, section, search=search_query),
             "All",
             TEXT_COLOR if not active_filters else MUTED_COLOR,
             not active_filters,
             "0",
+            "Show all statuses",
         )
     ]
+    # Symmetric difference toggles one filter on or off; an empty result is a
+    # falsy set, which _build_url omits exactly like the "All" link does.
+    # The fifth slot is the filter key, not the pill's letter: it is what
+    # names the filter the href toggles, and the template reads it as
+    # fb_key. A letter there cannot be matched back to a FILTER_STATES key.
     filter_btn_data.extend(
-        (toggle_links[f], label, COLORS[f], f in active_filters, key)
-        for f, label, key in filter_opts
+        (
+            _build_url(target, section, active_filters ^ {f}, search=search_query),
+            label,
+            FILTER_COLORS[f],
+            f in active_filters,
+            f,
+            title,
+        )
+        for f, label, title in filter_opts
     )
     return filter_btn_data
 
@@ -1262,21 +1623,37 @@ def _build_progress(
     stub_matches = sec_summ.get("stubCount", 0)
     matched_fn = exact_matches + reloc_matches  # NEAR_MATCHING/STUB are not matched
 
+    # ONE denominator for the whole bar.  .text's bar tracks FUNCTIONS (the
+    # "matched" stat beside it is a function count), every other section's
+    # tracks BYTES.  The two are different partitions of the section, so a
+    # segment computed against the other one is not a share of this bar: the
+    # padding band used to be bytes/sec_size even on the function-denominated
+    # .text bar, where 500+200+100+100 matched of 1000 functions plus a 20 KB
+    # padding run in a 100 KB section summed to 110%.  That clamped seg_none to
+    # 0, so the unmatched functions were painted no grey at all, and
+    # _progress_svg drew the trailing segments past the 700-unit track, which
+    # clipped them.  Padding is a cell state with no function counterpart, so
+    # it belongs only to the byte-denominated bar; on .text those bytes are
+    # already inside the "none" remainder.
+    padding_bytes = sec_summ.get("paddingBytes", 0)
     if section == ".text" and total_fn > 0:
         seg_exact = exact_matches / total_fn * 100
         seg_reloc = reloc_matches / total_fn * 100
         seg_near_match = near_match_matches / total_fn * 100
         seg_stub = stub_matches / total_fn * 100
+        seg_padding = 0
     elif sec_size > 0:
         seg_exact = sec_summ.get("exactBytes", 0) / sec_size * 100
         seg_reloc = sec_summ.get("relocBytes", 0) / sec_size * 100
         seg_near_match = sec_summ.get("nearMatchBytes", 0) / sec_size * 100
         seg_stub = sec_summ.get("stubBytes", 0) / sec_size * 100
+        seg_padding = padding_bytes / sec_size * 100
     else:
-        seg_exact = seg_reloc = seg_near_match = seg_stub = 0
+        seg_exact = seg_reloc = seg_near_match = seg_stub = seg_padding = 0
 
-    padding_bytes = sec_summ.get("paddingBytes", 0)
-    seg_padding = (padding_bytes / sec_size * 100) if sec_size > 0 else 0
+    # max(0, ...) still guards a summary whose state counts exceed its own
+    # total (a foreign or hand-edited DB); it is not what keeps a mixed
+    # denominator inside the track.
     seg_none = max(0, 100 - seg_exact - seg_reloc - seg_near_match - seg_stub - seg_padding)
     return {
         "sec_size": sec_size,
@@ -1327,12 +1704,6 @@ def _merge_cells(cells: list[dict[str, Any]], grid_columns: int) -> list[dict[st
     acc_fns: Any = None
     acc_cell: dict[str, Any] | None = None
 
-    def flush() -> None:
-        # No-op until the first merge: everything flushed before one is an
-        # unmerged single cell, already covered by the `cells[:start_idx]` slice.
-        if out is not None and acc_cell is not None:
-            out.append({**acc_cell, "orig_idx": start_idx, "span": acc_span, "end": acc_end})
-
     for i, cell in enumerate(cells):
         state = cell.get("state")
         fns = cell.get("functions")
@@ -1351,20 +1722,29 @@ def _merge_cells(cells: list[dict[str, Any]], grid_columns: int) -> list[dict[st
             acc_end = cell.get("end")
             acc_col += span
             continue
-        flush()
+        # Emit the previous run inline.  Before the first merge `out` is None
+        # and there is nothing to emit: those rows are already covered by the
+        # `cells[:start_idx]` slice taken at the first merge below, so the
+        # no-merge path never touches the accumulator at all.
+        if out is not None and acc_cell is not None:
+            out.append({**acc_cell, "orig_idx": start_idx, "span": acc_span, "end": acc_end})
         start_idx = i
         acc_cell = cell
         acc_state = state
         acc_fns = fns
         acc_span = span
         acc_end = cell.get("end")
-        acc_col = span if acc_col >= grid_columns else acc_col + span
+        # A run that would overflow the row starts over from this cell alone;
+        # span is CHECK (span > 0) in the schema, so a pending run sitting on
+        # the last column always overflows on the next cell.
+        acc_col += span
         if acc_col > grid_columns:
             acc_col = span
 
     if out is None:
         return cells
-    flush()
+    if acc_cell is not None:
+        out.append({**acc_cell, "orig_idx": start_idx, "span": acc_span, "end": acc_end})
     return out
 
 
@@ -1373,6 +1753,34 @@ def _merge_cells(cells: list[dict[str, Any]], grid_columns: int) -> list[dict[st
 # cannot run the SPA, and those are the last clients that should be handed a
 # 7 MB response with 74k DOM nodes.
 _GRID_PAGE_ROWS = 32
+
+
+def _block_position(merged_cells: list[dict[str, Any]], idx: int) -> int | None:
+    """Position in *merged_cells* of original cell *idx*, or None if absent.
+
+    A merged row carries the ``orig_idx`` of the run it stands for; a row
+    _merge_cells handed back unannotated (the no-merge fast path, and the
+    prefix before the first merge) carries none, and its original index IS its
+    own position — the same default the render loop applies.  Reading that
+    sequence either way is strictly increasing, because a merge only ever
+    collapses a run and stamps the index the run started at, so the row that
+    follows it starts later.
+
+    That monotonicity is what makes the search logarithmic.  Walking the list
+    instead cost one dict lookup per cell of the whole section on every click
+    that carries an ``?idx=``: 5.8 ms against a ~4 ms render on an 80k-cell
+    .text, growing with the section.
+    """
+    lo, hi = 0, len(merged_cells)
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if merged_cells[mid].get("orig_idx", mid) < idx:
+            lo = mid + 1
+        else:
+            hi = mid
+    if lo < len(merged_cells) and merged_cells[lo].get("orig_idx", lo) == idx:
+        return lo
+    return None
 
 
 def _grid_page(
@@ -1389,20 +1797,19 @@ def _grid_page(
     """
     if page_str:
         try:
-            return max(1, min(page_count, int(page_str)))
+            return max(1, min(page_count, parse_ascii_int(page_str)))
         except ValueError:
             return 1
     if idx_str:
+        # An unparseable idx has no block to pull into view, so it pages to 1
+        # like an unparseable page does.
         try:
-            idx = int(idx_str)
+            idx = parse_ascii_int(idx_str)
         except ValueError:
             return 1
-        for pos, cell in enumerate(merged_cells):
-            # `pos` as the default matches the render loop's `i` default: when
-            # _merge_cells took its no-merge fast path the rows carry no
-            # orig_idx and the enumerate position IS the original index.
-            if cell.get("orig_idx", pos) == idx:
-                return max(1, min(page_count, pos // page_cells + 1))
+        pos = _block_position(merged_cells, idx)
+        if pos is not None:
+            return max(1, min(page_count, pos // page_cells + 1))
     return 1
 
 
@@ -1436,6 +1843,16 @@ def _pager_html(
     )
 
 
+#: Ceiling on a section's declared column count.  A sections row can claim a
+#: lattice far wider than any real PE, and the sizing row emits one <td> per
+#: column, so the cap is a response-size bound, applied wherever the count is
+#: resolved.
+_MAX_GRID_COLUMNS = 256
+#: Column count used when a sections row declares none (NULL or not a positive
+#: int), which is schema-legal the way a NULL va in a .bss cell is.
+_DEFAULT_GRID_COLUMNS = 64
+
+
 def _build_grid_html(
     merged_cells: list[dict[str, Any]],
     sec_data: dict[str, Any],
@@ -1450,9 +1867,9 @@ def _build_grid_html(
 ) -> str:
     """Render the coverage grid as an HTML table.
 
-    grid_columns controls the number of cells per row. A sizing row of
-    transparent cells is emitted first so the browser allocates uniform
-    column widths regardless of colspan usage in data rows.
+    grid_columns controls the number of cells per row. A sizing row of empty
+    cells painted in the grid background is emitted first so the browser
+    allocates uniform column widths regardless of colspan usage in data rows.
 
     *page_offset* is the index of this page's first row within the whole merged
     list, needed only to reconstruct ``orig_idx`` for rows that carry none:
@@ -1461,12 +1878,11 @@ def _build_grid_html(
     """
     if grid_columns <= 0:
         raise ValueError(f"grid_columns must be positive, got {grid_columns}")
-    grid_columns = min(grid_columns, 256)
+    grid_columns = min(grid_columns, _MAX_GRID_COLUMNS)
     # Fixed 12px lattice: at 64 columns that is ~770px, which overflowed a
-    # 390px phone and pushed the detail panel off-screen (the layout is a
-    # fixed 75/25 split with no CSS to stack it).  12px keeps blocks legible
-    # and tappable on desktop; narrow sections render the same size, so every
-    # section shares one predictable block size.
+    # 390px phone.  12px keeps blocks legible and tappable on desktop; narrow
+    # sections render the same size, so every section shares one predictable
+    # block size.
     cell_w = 12
     cell_h = 12
     sizing_tds = "".join(
@@ -1491,8 +1907,8 @@ def _build_grid_html(
     # Selection target parsed ONCE for the whole page: comparing each cell's
     # orig_idx against it replaces a per-cell int() (up to ~2k parses/render).
     try:
-        sel_idx: int | None = int(idx_str)
-    except (ValueError, OverflowError):
+        sel_idx: int | None = parse_ascii_int(idx_str)
+    except ValueError:
         sel_idx = None
 
     curr_col = 0
@@ -1512,7 +1928,7 @@ def _build_grid_html(
 
         state = cell.get("state", "none")
 
-        dimmed = (active_filters and state != "none" and state not in active_filters) or (
+        dimmed = (active_filters and not _state_survives_filter(state, active_filters)) or (
             search_query and not any(fn in search_matched_fns for fn in cell.get("functions", []))
         )
         bgcolor = BG_COLOR if dimmed else COLORS.get(state, COLORS["none"])
@@ -1529,21 +1945,21 @@ def _build_grid_html(
         # links announced as "none" with no way to tell them apart (WCAG 2.4.4).
         escaped_title = _esc(title)
         w = cell_w * span
+        # One image for both cells: the selection is a 1px inset of the same
+        # link, and building the markup twice is how the alt text and the
+        # title drift apart between the two.
+        inset = 2 if selected else 0
         img = (
             f'<a href="{link}" title="{escaped_title}">'
-            f'<img src="{TRANSPARENT_GIF}" width="{w}" height="{cell_h}" border="0" alt="{escaped_title}"></a>'
+            f'<img src="{TRANSPARENT_GIF}" width="{w - inset}" height="{cell_h - inset}" '
+            f'border="0" alt="{escaped_title}"></a>'
         )
 
         if selected:
-            sel_img = (
-                f'<a href="{link}" title="{escaped_title}">'
-                f'<img src="{TRANSPARENT_GIF}" width="{w - 2}" height="{cell_h - 2}" border="0" alt="{escaped_title}">'
-                f"</a>"
-            )
             grid_html_parts.append(
                 f'<td id="sel" bgcolor="{BG_COLOR}" width="{w}" height="{cell_h}" colspan="{span}">'
                 f'<table border="1" cellpadding="0" cellspacing="0" bordercolor="{ACCENT_COLOR}" width="100%">'
-                f'<tr><td bgcolor="{bgcolor}">{sel_img}</td></tr></table></td>'
+                f'<tr><td bgcolor="{bgcolor}">{img}</td></tr></table></td>'
             )
         else:
             grid_html_parts.append(
@@ -1551,7 +1967,7 @@ def _build_grid_html(
             )
         curr_col += span
 
-    remaining = int(grid_columns) - curr_col
+    remaining = grid_columns - curr_col
     if remaining > 0:
         grid_html_parts.append(
             f'<td bgcolor="{BG_COLOR}" width="{cell_w * remaining}"'
@@ -1569,37 +1985,47 @@ def _render_function_list(
     sort_key: str,
     status_filter: str,
 ) -> str:
-    # SAFETY: order_by is whitelisted via allowed_sort dict (no user strings reach SQL).
-    allowed_sort = {"name": "name", "size": "size", "status": "status", "va": "va"}
-    order_by = allowed_sort.get(sort_key, "va")
+    # SAFETY: order_by is whitelisted to allowed_sort (no user strings reach SQL).
+    allowed_sort = {"va", "name", "size", "status"}
+    order_by = sort_key if sort_key in allowed_sort else "va"
 
     # Base filter: GLOBAL/DATA marker rows live in the functions table but are
     # data markers, not functions — same exclusion as the API list endpoint
     # and _section_stats, so both surfaces list the same rows.
-    where = ["target = ?", "markerType NOT IN ('GLOBAL','DATA')"]
+    where = ["target = ?", NOT_DATA_MARKER_SQL]
     params: list[Any] = [target]
     if status_filter:
         where.append("status = ?")
         params.append(status_filter)
     if search_query:
         like = _escape_like(search_query)
-        where.append(
-            "(name LIKE ? ESCAPE '\\' OR symbol LIKE ? ESCAPE '\\' OR printf('0x%x', va) LIKE ? ESCAPE '\\')"
+        # The VA column below is printed by _format_va, which pads to eight
+        # digits, so both that spellings are matched: an address copied out of
+        # this very table matches when pasted into the search box.
+        # printf('0x%x', va) has no prefix and could never match.  Same chain
+        # shape and folded disjunct as _search_functions, so this list and the
+        # grid it sits beside return the same rows for one term.
+        chain, arity = like_match(
+            ["name", "symbol", "'0x' || printf('%08x', va)", "'0x' || printf('%x', va)"]
         )
-        params.extend([like, like, like])
+        folded_sql, folded_params = folded_like_clause(["name", "symbol"], search_query)
+        where.append(f"{chain} OR {folded_sql}" if folded_sql else chain)
+        params.extend([like] * arity)
+        params.extend(folded_params)
 
     where_sql = " AND ".join(where)
-    # Cap the rendered list at 500 rows (matching the API's search cap) so a
-    # large project's ?view=functions page doesn't build a multi-MB HTML
-    # document on every request.  ORDER BY keeps the cap deterministic.
+    # Cap the rendered list (same bound as the search above) so a large
+    # project's ?view=functions page doesn't build a multi-MB HTML document on
+    # every request.  ORDER BY keeps the cap deterministic.
     c.execute(
         "SELECT name, va, vaStart, size, status, module FROM functions "
-        f"WHERE {where_sql} ORDER BY {order_by}, va LIMIT 500",
-        params,
+        f"WHERE {where_sql} ORDER BY {order_by}, va LIMIT ?",
+        [*params, _SEARCH_ROW_LIMIT],
     )
     rows = c.fetchall()
 
-    base = f"?target={_url_quote(target)}&section={_url_quote(section)}&view=functions"
+    prefix = f"?target={_url_quote(target)}&section={_url_quote(section)}&view=functions"
+    base = prefix
     if search_query:
         base += f"&search={_url_quote(search_query)}"
     if status_filter:
@@ -1626,20 +2052,49 @@ def _render_function_list(
         ),
     ]
 
+    # The same view, minus whichever criterion emptied it.  A bare "No
+    # functions found." does not say the query caused it, and this list has no
+    # other sign of the active search: the user is left hunting the form at the
+    # top of the page for the box they just typed in.
+    without_search = prefix
+    if status_filter:
+        without_search += f"&status={_url_quote(status_filter)}"
+
     if not rows:
-        parts.append(
-            f'<tr><td colspan="5"><font color="{MUTED_COLOR}">No functions found.</font></td></tr>'
-        )
+        if search_query:
+            parts.append(
+                f'<tr><td colspan="5"><font color="{MUTED_COLOR}">No functions match '
+                f"&quot;{_esc(search_query)}&quot;. "
+                f'<a href="{without_search}"><font color="{ACCENT_COLOR}">[Clear search]</font></a>'
+                "</font></td></tr>"
+            )
+        elif status_filter:
+            parts.append(
+                f'<tr><td colspan="5"><font color="{MUTED_COLOR}">No functions with status '
+                f"{_esc(status_filter)}. "
+                f'<a href="{without_search}"><font color="{ACCENT_COLOR}">[Clear filter]</font></a>'
+                "</font></td></tr>"
+            )
+        else:
+            parts.append(
+                f'<tr><td colspan="5"><font color="{MUTED_COLOR}">No functions found.</font></td></tr>'
+            )
     else:
+        # One row's link differs from the next only in the quoted name; the
+        # quoted target and section are the same string 500 times, so they are
+        # built once (same hoist as _build_grid_html's link_prefix).  The
+        # section is the one this list was rendered under: a hardcoded .text
+        # here opened the panel in the wrong section for every other list.
+        link_prefix = f"?target={_url_quote(target)}&section={_url_quote(section)}&search="
         for name, va, _, size, status, module in rows:
             st = status or "none"
             color = COLORS.get(st.lower(), TEXT_COLOR)
-            name_link = f"?target={_url_quote(target)}&section=.text&search={_url_quote(name)}"
+            name_link = link_prefix + _url_quote(name)
             parts.append(
                 "<tr>"
                 f'<td><a href="{name_link}"><font color="{ACCENT_COLOR}">{_esc(name)}</font></a></td>'
                 f'<td><font face="Courier New, monospace" size="2">{_esc(_format_va(va))}</font></td>'
-                f'<td><font face="Courier New, monospace" size="2">{_esc(size)}</font></td>'
+                f'<td><font face="Courier New, monospace" size="2">{_esc(size or "")}</font></td>'
                 f'<td><font color="{color}" face="Courier New, monospace" size="2"><b>{_esc(st.upper())}</b></font></td>'
                 f'<td><font face="Courier New, monospace" size="2">{_esc(module or "")}</font></td>'
                 "</tr>"
@@ -1655,13 +2110,19 @@ def _section_tab_data(
     sections: dict[str, dict[str, Any]],
     active_filters: set[str] | None,
     search_query: str,
-) -> list[tuple[str, str, bool]]:
-    """(name, url, is_active) for the section tabs."""
+) -> list[tuple[str, str, bool, str]]:
+    """(name, url, is_active, accesskey) for the section tabs.
+
+    The accesskey is the section name's second character, falling back to the
+    first: a one-character section name would otherwise index off the end of
+    the string and 500 the whole page.
+    """
     return [
         (
             s,
             _build_url(target, s, active_filters or None, search=search_query),
             s == section,
+            s[1:2] or s[:1],
         )
         for s in sections
     ]
@@ -1679,27 +2140,27 @@ def _render_grid_view(
     search_query: str,
     search_matched_fns: set[str],
     page_str: str,
+    snap: tuple[int, int] | None,
 ) -> tuple[str, int, str, dict[str, Any]]:
     """Assemble the map view: (grid_html, block_count, panel_html, sec_stats).
 
     Linear pipeline over the section's cells — fetch, merge, paginate, render
     grid + detail panel.  Only the grid view calls this, so the functions view
-    never pays any cells work (fetch, decode, or merge).
+    never pays any cells work (fetch, decode, or merge).  *snap* is the
+    render's DB change token, carried straight into the two memos below.
     """
     # A NULL columns value (schema-legal, like the NULL va/fileOffset a .bss
-    # section carries) must fall back to 64, not TypeError on None <= 0 —
-    # which escapes ui.handle_potato's except tuple as a raw HTML 500.
-    grid_columns = sec_data.get("columns") or 64
+    # section carries) must fall back to the default, not TypeError on
+    # None <= 0 — which escapes handle_potato's except tuple as a raw HTML 500.
+    grid_columns = sec_data.get("columns") or _DEFAULT_GRID_COLUMNS
     if grid_columns <= 0:
-        grid_columns = 64
-    grid_columns = min(grid_columns, 256)
-    cells, merged_cells = _load_grid_cells(c, target, section, grid_columns)
-    per_section_stats = _section_stats_cached(c, target, sections, data)
+        grid_columns = _DEFAULT_GRID_COLUMNS
+    grid_columns = min(grid_columns, _MAX_GRID_COLUMNS)
+    cells, merged_cells, grid_key = _load_grid_cells(c, target, section, grid_columns, snap=snap)
+    per_section_stats = _section_stats_cached(c, target, sections, data, snap=snap)
     block_count = len(merged_cells)
 
-    # Paginate: a real .text section is ~25k cells, which is ~7 MB of table
-    # markup and ~74k DOM nodes — punishing on exactly the weak clients this
-    # mode exists for.  One page is _GRID_PAGE_ROWS rows of the grid.
+    # Paginate: one page is _GRID_PAGE_ROWS rows of the grid.
     page_cells = _GRID_PAGE_ROWS * grid_columns
     page_count = max(1, -(-block_count // page_cells))
     page = _grid_page(page_str, idx_str, merged_cells, page_cells, page_count)
@@ -1707,16 +2168,16 @@ def _render_grid_view(
     page_slice = merged_cells[page_offset : page_offset + page_cells]
 
     grid_html = _build_grid_html(
-        page_slice,
-        sec_data,
-        grid_columns,
-        active_filters,
-        search_query,
-        search_matched_fns,
-        idx_str,
-        target,
-        section,
-        page_offset,
+        merged_cells=page_slice,
+        sec_data=sec_data,
+        grid_columns=grid_columns,
+        active_filters=active_filters,
+        search_query=search_query,
+        search_matched_fns=search_matched_fns,
+        idx_str=idx_str,
+        target=target,
+        section=section,
+        page_offset=page_offset,
     )
     if page_count > 1:
         grid_html += _pager_html(target, section, active_filters, search_query, page, page_count)
@@ -1725,12 +2186,13 @@ def _render_grid_view(
         c,
         cells,
         idx_str,
-        target,
-        section,
-        data,
-        sec_data,
-        active_filters,
-        search_query,
+        target=target,
+        section=section,
+        data=data,
+        sec_data=sec_data,
+        active_filters=active_filters,
+        search_query=search_query,
+        grid_key=grid_key,
     )
     return grid_html, block_count, panel_html, sec_stats
 
@@ -1746,16 +2208,15 @@ def _render_potato_inner(
     sort_key: str,
     status_filter: str,
     page_str: str,
+    *,
+    snap: tuple[int, int] | None,
 ) -> str:
-    _, targets = resolve_targets(c)
+    targets = resolve_targets(c)
     if not target and targets:
-        # Default from `targets`, NOT `target_ids`: resolve_targets returns two
-        # different orderings — target_ids is raw DB order, targets is
-        # config-declared-first.  Potato rendered its dropdown from `targets`
-        # but defaulted from `target_ids[0]`, so on a project whose config
-        # order differs from its metadata order the two surfaces opened on
-        # different targets (SPA defaults to /api/targets[0], which is this
-        # same list) and the dropdown's first entry was not the selected one.
+        # The SPA prefers ?target=, then a localStorage choice, then
+        # /api/targets[0]. Potato Mode honours ?target= and otherwise takes
+        # the first target, so the two surfaces agree on the first target
+        # unless localStorage names a different one.
         target = targets[0]["id"]
 
     sections, data = _load_section_data(c, target)
@@ -1796,30 +2257,35 @@ def _render_potato_inner(
             c,
             target,
             section,
-            search_query,
-            sort_key,
-            status_filter,
+            search_query=search_query,
+            sort_key=sort_key,
+            status_filter=status_filter,
         )
     else:
         grid_html, block_count, panel_html, sec_stats = _render_grid_view(
             c,
             target,
             section,
-            sec_data,
-            sections,
-            data,
-            active_filters,
-            idx_str,
-            search_query,
-            search_matched_fns,
-            page_str,
+            sec_data=sec_data,
+            sections=sections,
+            data=data,
+            active_filters=active_filters,
+            idx_str=idx_str,
+            search_query=search_query,
+            search_matched_fns=search_matched_fns,
+            page_str=page_str,
+            snap=snap,
         )
 
     clear_search_url = _build_url(target, section, active_filters or None)
 
-    progress_bar_png_uri = ""
-    if progress:
-        progress_bar_png_uri = _progress_svg(tuple(progress["segments"]))
+    # The header's [Functions] link is built here, not from `{{target}}` /
+    # `{{section}}` in the template: those get HTML-escaped only, so a target
+    # or section holding "&" would append attacker-chosen query parameters to
+    # this one href.  Every other href in the page goes through _build_url.
+    functions_nav_url = f"?target={_url_quote(target)}&section={_url_quote(section)}&view=functions"
+
+    progress_bar_png_uri = _progress_svg(tuple(progress["segments"])) if progress else ""
 
     db_mtime_str = _db_updated_label()
 
@@ -1838,12 +2304,12 @@ def _render_potato_inner(
         TOPBAR_PNG=TOPBAR_SVG,
         PANEL_HDR_PNG=PANEL_HDR_PNG,
         R_LOGO_SVG=R_LOGO_SVG,
-        TRANSPARENT_GIF=TRANSPARENT_GIF,
         DOT_PNGS=DOT_PNGS,
         LEGEND_ITEMS=LEGEND_ITEMS,
         # Data
         target=target,
         section=section,
+        functions_nav_url=functions_nav_url,
         view=view,
         active_filters=active_filters,
         search_query=search_query,
@@ -1903,6 +2369,7 @@ def _panel_base_ctx() -> dict[str, Any]:
         "gl_detail_rows": "",
         "cell_label": "",
         "parent_function": "",
+        "parent_url": "",
         "prev_url": "",
         "next_url": "",
         "target": "",
@@ -1923,6 +2390,11 @@ def _render_original_bytes(raw_bytes: bytes, file_offset: int) -> str:
     16-byte lines (~78 chars), and _wrap_text(…, 72) split each one mid-row,
     orphaning the |ascii| column on its own line and defeating
     _highlight_hex's line-shape detection (offset/hex/ASCII colouring).
+
+    Capped at _format_hex_dump's default 256 bytes: a cell or a function larger
+    than that renders 256 bytes and a ``... (N more bytes)`` line, which the
+    panel renders as it stands.  _format_hex_dump's max_bytes=None is what
+    dumps a whole slice; nothing here needs one.
     """
     hex_dump = _format_hex_dump(raw_bytes, file_offset)
     return _code_block_raw(_highlight_hex(hex_dump))
@@ -1942,7 +2414,7 @@ def _panel_empty_cell_bytes(
     raw_bytes = _get_raw_bytes(cell_file_offset, cell_size, target)
     if not raw_bytes:
         return
-    ctx["hex_heading"] = _section_heading("01", "#10b981", "Original Bytes")
+    ctx["hex_heading"] = _section_heading("01", ACCENT_BYTES, "Original Bytes")
     ctx["hex_dump_html"] = _render_original_bytes(raw_bytes, cell_file_offset)
     inspector = _format_data_inspector(raw_bytes)
     if inspector:
@@ -1959,17 +2431,23 @@ def _panel_fn_attach_verify(c: sqlite3.Cursor, target: str, fn_data: dict[str, A
     if fn_va_resolved is None:
         return
     try:
-        cols = {r[1] for r in c.execute("PRAGMA table_info(verify_results)").fetchall()}
-        extra = "".join(f", {col}" for col in ("reg_delta", "effective_match") if col in cols)
+        # Shared projection: the optional v6 columns are probed in ONE place,
+        # so the panel's column set cannot drift from the API's.
         c.execute(
-            "SELECT verified_at, byte_delta, diff_lines, similarity"
-            + extra
-            + " FROM verify_results WHERE target=? AND va=?",
+            f"{_verify_one_select(c.connection)} FROM verify_results WHERE target=? AND va=?",
             (target, int(fn_va_resolved)),
         )
         vr = c.fetchone()
-    except (sqlite3.Error, ValueError, TypeError):
-        vr = None
+    except (ValueError, TypeError):
+        # A VA in a form this projection cannot bind is a panel with no verify
+        # row, not a failed request.
+        return
+    except sqlite3.OperationalError as exc:
+        # A function with no verify record omits these rows; a database that
+        # could not be read must not render as though it had none.
+        if not _is_absent_object(exc):
+            raise
+        return
     if not vr:
         return
     fn_data["last_verify_time"] = vr[0]
@@ -1978,12 +2456,29 @@ def _panel_fn_attach_verify(c: sqlite3.Cursor, target: str, fn_data: dict[str, A
     if vr[2] is not None:
         fn_data["last_verify_diff_lines"] = vr[2]
     if vr[3] is not None:
-        fn_data["last_verify_similarity"] = f"{vr[3]:.1f}%"
-    keys = vr.keys() if hasattr(vr, "keys") else set()
+        # verify_results.similarity is a 0-1 fraction (the column CHECKs the
+        # unit interval and rebrew's verify import divides its percent scale by
+        # 100), same unit as functions.similarity below.  Rendered unscaled it
+        # read 100x low: a 87.3% match showed as "0.9%".
+        fn_data["last_verify_similarity"] = f"{vr[3] * 100:.1f}%"
+    keys = vr.keys()
     if "reg_delta" in keys and vr["reg_delta"] is not None:
         fn_data["last_verify_reg_delta"] = vr["reg_delta"]
     if "effective_match" in keys and vr["effective_match"]:
         fn_data["last_verify_effective"] = True
+
+
+def _is_plain_relative(path: PurePath) -> bool:
+    """Whether *path* is a plain relative name, safe to join onto a source root.
+
+    ``anchor`` rather than ``is_absolute()``: on Windows a drive-relative
+    name (``C:foo.c``) is not absolute, and joining one onto the source root
+    silently reinterprets it as ``<drive>:/foo.c`` instead of the file the
+    database named.  An anchor covers every such form — the drive, the
+    leading separator, and a UNC share — and is empty for a plain name on
+    both path flavours.
+    """
+    return not path.anchor and ".." not in path.parts
 
 
 def _panel_fn_source_text(data: dict[str, Any], target: str, fn_data: dict[str, Any]) -> str | None:
@@ -2010,17 +2505,24 @@ def _panel_fn_source_text(data: dict[str, Any], target: str, fn_data: dict[str, 
     )
     base = (Path.cwd().resolve() / source_root.lstrip("/")).resolve()
     raw = files[0]
-    # Reject absolute paths and parent traversal before resolve
-    if Path(raw).is_absolute() or ".." in Path(raw).parts:
+    # Reject anchored paths and parent traversal before resolve
+    if not _is_plain_relative(Path(raw)):
         return None
     c_path = (base / raw).resolve()
     if not c_path.is_relative_to(base):
         return None
     try:
-        with open(c_path, encoding="utf-8") as f:
+        # errors="replace": a decompiled project's C sources carry
+        # Windows-1252 bytes in comments often enough that a strict decode
+        # blanks the whole panel over one 0x92.  The undecodable byte
+        # renders as U+FFFD in place and the rest of the file stays readable.
+        with c_path.open(encoding="utf-8", errors="replace") as f:
             return f.read()
-    except (OSError, UnicodeDecodeError):
-        _log.debug("Source file not found: %s", c_path)
+    except (OSError, UnicodeError):
+        # UnicodeError covers a path the filesystem encoding cannot encode
+        # (a lone surrogate out of a foreign DB), which open() raises before
+        # it ever reaches the read.
+        _log.debug("Source file unreadable: %s", c_path)
         return None
 
 
@@ -2038,21 +2540,9 @@ def _panel_function_detail(
     caller can try the globals table.
     """
     # Cell function entries are VA strings ("0x10001000"), matching the SPA's
-    # /functions/<va> route.  Resolve via the shared spelling parser
-    # (rebrew.workspace.parse_va_candidates: 0x-hex, bare hex, or decimal) and
-    # look up by va; fall back to name for legacy/name-form cells.
-    va_candidates = parse_va_candidates(fn_name)
-
-    fn_sql = "SELECT " + _fn_json_sql(c) + " FROM functions WHERE target=? AND "
-    fn_row = None
-    for cand in va_candidates:
-        c.execute(fn_sql + "va=?", (target, cand))
-        fn_row = c.fetchone()
-        if fn_row:
-            break
-    if fn_row is None and not va_candidates:
-        c.execute(fn_sql + "name=?", (target, fn_name))
-        fn_row = c.fetchone()
+    # /functions/<va> route; the shared lookup resolves them and falls back to
+    # the name for legacy/name-form cells.
+    fn_row = _lookup_by_va_or_name(c, "functions", _fn_json_sql(c.connection), target, fn_name)
     if not fn_row:
         return False
 
@@ -2101,7 +2591,7 @@ def _panel_function_detail(
     code_text = _panel_fn_source_text(data, target, fn_data)
     if code_text:
         ctx["annotations"] = _extract_annotations(code_text)
-        ctx["c_heading"] = _section_heading("C", "#3b82f6", f"C Source ({_esc(files[0])})")
+        ctx["c_heading"] = _section_heading("C", ACCENT_C_SOURCE, f"C Source ({files[0]})")
         ctx["code_html"] = _code_block_raw(_highlight_c(code_text))
 
     # Assembly (only meaningful for code cells)
@@ -2110,14 +2600,14 @@ def _panel_function_detail(
         asm_size = fn_data.get("size")
         asm_file_offset = fn_data.get("fileOffset")
         if (
-            HAS_CAPSTONE
+            disassembly_available()
             and asm_va is not None
             and asm_size is not None
             and asm_file_offset is not None
         ):
             asm_text = get_disassembly(asm_va, asm_size, asm_file_offset, target)
             if asm_text:
-                ctx["asm_heading"] = _section_heading("ASM", "#ef4444", "Assembly")
+                ctx["asm_heading"] = _section_heading("ASM", ACCENT_ASM, "Assembly")
                 ctx["asm_html"] = _code_block_raw(
                     _highlight_asm(_wrap_text(asm_text, 55), target=target)
                 )
@@ -2128,13 +2618,52 @@ def _panel_function_detail(
     if fn_file_offset is not None and fn_size is not None:
         raw_bytes = _get_raw_bytes(fn_file_offset, fn_size, target)
         if raw_bytes:
-            ctx["bytes_heading"] = _section_heading("01", "#10b981", "Original Bytes")
+            ctx["bytes_heading"] = _section_heading("01", ACCENT_BYTES, "Original Bytes")
             ctx["bytes_html"] = _render_original_bytes(raw_bytes, fn_file_offset)
             if section != ".text":
                 inspector = _format_data_inspector(raw_bytes)
                 if inspector:
                     ctx["inspector_html"] = inspector
     return True
+
+
+def _parent_url(
+    parent_function: str,
+    cells: list[dict[str, Any]],
+    target: str,
+    section: str,
+    active_filters: set[str] | None,
+    search_query: str,
+    index: dict[str, int] | None = None,
+) -> str:
+    """Where the panel's Parent link goes: the parent's own block, selected.
+
+    The name goes through _build_url, so a C++-mangled name (&, ?, #, spaces)
+    cannot truncate the query string the way a hand-written href could.  A
+    parent with no cell in this section (it lives elsewhere, or the section
+    holds no cells) falls back to searching for it, which still gets the user
+    to the function.
+
+    *index* is the ``name -> first cell index`` map from :func:`_parent_index`,
+    which replaces a walk of every cell in the section.  Callers with no memo
+    to hand (and the fallback below) pass None and pay the walk.
+    """
+    if not parent_function:
+        return ""
+    if index is not None:
+        i = index.get(parent_function)
+    else:
+        i = next(
+            (
+                pos
+                for pos, candidate in enumerate(cells)
+                if parent_function in (candidate.get("functions") or [])
+            ),
+            None,
+        )
+    if i is not None:
+        return _build_url(target, section, active_filters, idx=i, search=search_query) + "#sel"
+    return _build_url(target, section, active_filters, search=parent_function)
 
 
 def _render_panel(
@@ -2147,25 +2676,32 @@ def _render_panel(
     sec_data: dict[str, Any] | None = None,
     active_filters: set[str] | None = None,
     search_query: str = "",
+    grid_key: _GridKey | None = None,
 ) -> str:
-    """Render the right-hand detail panel HTML."""
+    """Render the detail panel HTML (the block below the map).
+
+    *grid_key* is the memo key *cells* was filed under; it keys the parent-name
+    index built for the Parent link (see :func:`_parent_index`).  The index is
+    derived only when the selected cell actually names a parent, so a panel
+    without one never builds it.
+    """
     ctx = _panel_base_ctx()
 
-    if not idx_str:
-        return _PANEL_TPL.render(**ctx)
-
+    # An absent, non-numeric or out-of-range idx all render the same empty
+    # panel, so they leave through one guard: int("") and the whitespace-only
+    # spellings raise, and a non-negative range is the only index that has a
+    # cell behind it.
     try:
-        idx = int(idx_str)
-    except (ValueError, OverflowError):
+        idx = parse_ascii_int(idx_str)
+    except ValueError:
+        idx = -1
+    if not 0 <= idx < len(cells):
         return _PANEL_TPL.render(**ctx)
 
-    if idx < 0 or idx >= len(cells):
-        return _PANEL_TPL.render(**ctx)
-
-    # Bounds already validated by the if-guard above
     cell = cells[idx]
     state = cell.get("state", "none")
     funcs = cell.get("functions", [])
+    parent_function = cell.get("parent_function", "")
     # NULL va (file-unbacked .bss) falls back to 0: same guard as the grid
     # builder, so the panel's range row renders relative offsets instead of
     # raising TypeError on None + int.
@@ -2192,7 +2728,16 @@ def _render_panel(
             "state_color": COLORS.get(state, TEXT_COLOR),
             "funcs": funcs,
             "cell_label": cell.get("label", ""),
-            "parent_function": cell.get("parent_function", ""),
+            "parent_function": parent_function,
+            "parent_url": _parent_url(
+                parent_function,
+                cells,
+                target,
+                section,
+                active_filters,
+                search_query,
+                _parent_index(grid_key, cells) if parent_function else None,
+            ),
             "prev_url": prev_url,
             "next_url": next_url,
             "target": target,
@@ -2201,37 +2746,22 @@ def _render_panel(
     )
 
     if not funcs:
-        # Show hex dump + data inspector for empty cells
         _panel_empty_cell_bytes(ctx, cell, sec_data, target)
         return _PANEL_TPL.render(**ctx)
 
     fn_name = funcs[0]
     ctx["fn_name"] = fn_name
     if not _panel_function_detail(ctx, c, target, section, data, fn_name):
-        # ── Try globals table ────────────────────────────────────────
-        # Same resolution order as GET /functions/<va>: cell entries may name
-        # a global by its VA string (the spelling _panel_function_detail
-        # already resolves against functions), so try VA candidates first and
-        # fall back to the exact-name lookup for legacy name-form cells.
-        gl_row = None
-        for cand in parse_va_candidates(fn_name):
-            c.execute(
-                "SELECT " + _global_json_sql(c) + " FROM globals WHERE target=? AND va=?",
-                (target, cand),
-            )
-            gl_row = c.fetchone()
-            if gl_row:
-                break
-        if gl_row is None:
-            c.execute(
-                "SELECT " + _global_json_sql(c) + " FROM globals WHERE target=? AND name=?",
-                (target, fn_name),
-            )
-            gl_row = c.fetchone()
+        # Same resolution order as the functions lookup above and as
+        # GET /functions/<va>: cell entries may name a global by its VA string,
+        # so VA candidates first, then the exact name for legacy name-form
+        # cells.
+        gl_row = _lookup_by_va_or_name(
+            c, "globals", _global_json_sql(c.connection), target, fn_name
+        )
         if gl_row:
             gl_data = json.loads(gl_row[0])
             ctx["gl_data"] = gl_data
             ctx["gl_detail_rows"] = _detail_rows(gl_data, skip_fields={"files"}, hex_fields=set())
-        # else: no function and no global → "Unknown" branch in template
 
     return _PANEL_TPL.render(**ctx)

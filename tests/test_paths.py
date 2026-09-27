@@ -11,6 +11,19 @@ from recoverage._paths import _db_path
 
 # ---------------------------------------------------------------------------
 
+# The memo key is (mtime_ns, size), so a rewrite only invalidates it when the
+# mtime actually moves.  Two writes can land in the same timestamp tick on a
+# filesystem with coarse mtime resolution, which would make the rewrite tests
+# read the stale cache.  The bump must be a whole number of seconds so it also
+# clears a 1 s or 2 s granularity tick, and larger than any plausible tick.
+_MTIME_BUMP_NS = 2_000_000_000
+
+
+def _force_distinct_mtime(path: Path) -> None:
+    """Push *path*'s mtime past the previous value on coarse-timestamp filesystems."""
+    bumped = path.stat().st_mtime_ns + _MTIME_BUMP_NS
+    os.utime(path, ns=(bumped, bumped))
+
 
 class TestResolveDbPath:
     def test_fallback_when_no_toml(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -107,6 +120,7 @@ class TestDbPathMemoInvalidation:
         toml.write_text('[project]\ndb_dir = "first"\n', encoding="utf-8")
         assert _db_path() == tmp_path.resolve() / "first" / "coverage.db"
         toml.write_text('[project]\ndb_dir = "second"\n', encoding="utf-8")
+        _force_distinct_mtime(toml)
         assert _db_path() == tmp_path.resolve() / "second" / "coverage.db"
 
     def test_same_size_rewrite_is_picked_up(
@@ -118,9 +132,7 @@ class TestDbPathMemoInvalidation:
         toml.write_text('[project]\ndb_dir = "aaaaaa"\n', encoding="utf-8")
         assert _db_path() == tmp_path.resolve() / "aaaaaa" / "coverage.db"
         toml.write_text('[project]\ndb_dir = "bbbbbb"\n', encoding="utf-8")
-        # Force a fresh mtime even on coarse-timestamp filesystems.
-        st = toml.stat()
-        os.utime(toml, ns=(st.st_mtime_ns + 1_000_000, st.st_mtime_ns + 1_000_000))
+        _force_distinct_mtime(toml)
         assert _db_path() == tmp_path.resolve() / "bbbbbb" / "coverage.db"
 
     def test_deleted_config_falls_back(
@@ -147,3 +159,18 @@ class TestDbPathMemoInvalidation:
         assert _db_path() == tmp_path.resolve() / "one" / "coverage.db"
         monkeypatch.chdir(other)
         assert _db_path() == other.resolve() / "db" / "coverage.db"
+
+    def test_env_override_beats_project_config(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """RECOVERAGE_DB lets a service run from outside the project root."""
+        monkeypatch.delenv("RECOVERAGE_DB", raising=False)
+        (tmp_path / "rebrew-project.toml").write_text(
+            '[project]\ndb_dir = "one"\n', encoding="utf-8"
+        )
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("RECOVERAGE_DB", str(tmp_path / "elsewhere" / "coverage.db"))
+        assert _db_path() == tmp_path / "elsewhere" / "coverage.db"
+        # Unset again: the project resolution returns, with no stale memo.
+        monkeypatch.delenv("RECOVERAGE_DB")
+        assert _db_path() == tmp_path.resolve() / "one" / "coverage.db"

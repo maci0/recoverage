@@ -1,0 +1,39 @@
+name: sibling-rebrew
+description: >-
+  Materialize the sibling rebrew checkout that pyproject.toml's
+  [tool.uv.sources] path dependency resolves, at the pin
+  tools/ci_clone_rebrew.sh owns.
+
+# One mechanism, one link. Every job that runs `uv sync` needs the sibling
+# checkout, a job body cannot name a sibling path reliably, and a second
+# caller (a step that clones rebrew itself, or one carrying its own pin) would
+# let the two disagree about which rebrew the suite tested. This action is the
+# one place a job may reach the script; the script holds the tag and commit
+# and fails when the tag no longer resolves to it, so the pin cannot move
+# here.
+#
+# The clone location is derived from the script's own default: `make
+# clone-rebrew` and CI must land the checkout in the same directory, or a
+# local install and a CI install stop being the same tree.
+
+inputs:
+  clone-url:
+    description: >-
+      Git URL to clone the sibling checkout from, for a caller pointing at a
+      fork or a mirror.  Empty by default: the URL lives in
+      tools/ci_clone_rebrew.sh, and a default here would be a second copy of
+      it that a move of the repository could leave disagreeing with the one
+      `make clone-rebrew` uses.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Clone the sibling rebrew checkout
+      shell: bash
+      # An empty clone-url reaches the script as REBREW_URL="", and the
+      # script's own ${REBREW_URL:-...} default is what supplies the URL then.
+      env:
+        REBREW_URL: ${{ inputs.clone-url }}
+      run: bash "$GITHUB_WORKSPACE/tools/ci_clone_rebrew.sh" "$GITHUB_WORKSPACE/../rebrew"

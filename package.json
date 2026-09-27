@@ -8,7 +8,7 @@
   "scripts": {
     "lint": "bun run lint:js && bun run lint:html",
     "lint:js": "oxlint",
-    "lint:html": "uv run python tools/lint-html.py"
+    "lint:html": "uv run --locked python tools/lint-html.py"
   },
   "devDependencies": {
     "@oxlint/plugins": "1.83.0",

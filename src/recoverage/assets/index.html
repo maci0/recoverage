@@ -6,6 +6,13 @@
     <title>ReCoverage</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="/print.css" media="print">
+    <!-- app.js cannot know the target id until /api/targets answers, so the
+         coverage map is otherwise two serialized round trips after the shell
+         lands. Preloading it as a fetch starts that request during the preload
+         scan instead; the plain same-origin fetch() in app.js then reuses the
+         preloaded response rather than issuing a second one. -->
+    <link rel="preload" href="/api/targets" as="fetch">
+    <link rel="preload" href="/detail.js" as="script">
     <!-- INJECT_CSS -->
   </head>
   <body>

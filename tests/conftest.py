@@ -3,12 +3,44 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from io import BytesIO
 from pathlib import Path
 from wsgiref.util import setup_testing_defaults
 
+import pytest
+
+from recoverage.api import _clear_derived_caches
 from recoverage.webapp import app
+
+
+@pytest.fixture(autouse=True)
+def _clean_recovery_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Drop every RECOVERAGE_* variable before each test.
+
+    `serve` reads its defaults from the environment, so an ambient
+    RECOVERAGE_DB (or a leftover token) would silently redirect a test's
+    database path.  The suite must depend on the code, not the shell it runs
+    from.
+    """
+    for name in [n for n in os.environ if n.startswith("RECOVERAGE_")]:
+        monkeypatch.delenv(name)
+
+
+@pytest.fixture(autouse=True)
+def _clean_derived_caches() -> None:
+    """Drop every coverage.db-derived cache before each test.
+
+    Those caches are process globals keyed on nothing DB-specific, so a test
+    that re-points `_db_path` at its own fixture database (the Potato Mode
+    NULL-va cases do) leaves its rows behind for the next test: the resolved
+    target list memoized the fixture's single target, and the next test's
+    `/api/targets/<id>/...` came back 404 against a target the memo no longer
+    listed.  The suite only runs green when file order happens to hide it.
+    """
+    _clear_derived_caches()
+
 
 # -- Synthetic coverage.db -------------------------------------------------
 # The DB-gated tests below skip when no coverage.db is in cwd, and CI has no
@@ -19,10 +51,18 @@ from recoverage.webapp import app
 _DB_FILE = Path.cwd() / "db" / "coverage.db"
 
 
-def _build_synthetic_db() -> None:
-    """Create a minimal coverage.db (rebrew build-db schema v4)."""
-    _DB_FILE.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(_DB_FILE)
+def _build_synthetic_db(db_file: Path) -> None:
+    """Create a minimal coverage.db (rebrew build-db schema v4) at *db_file*.
+
+    Rebuilds unconditionally: an existing file is removed first, so a
+    second run over the same directory produces the same database as the
+    first instead of failing on the CREATE TABLE statements.  The path is
+    a parameter rather than the module-level ``_DB_FILE`` so a caller that
+    imports this module once can still build a database somewhere else.
+    """
+    db_file.parent.mkdir(parents=True, exist_ok=True)
+    db_file.unlink(missing_ok=True)
+    conn = sqlite3.connect(db_file)
     try:
         c = conn.cursor()
         c.execute(
@@ -197,7 +237,9 @@ def _build_synthetic_db() -> None:
             "INSERT INTO verify_results "
             "(target, va, verified_at, byte_delta, diff_lines, similarity)"
             " VALUES (?, ?, ?, ?, ?, ?)",
-            (target, 0x10001000, "2026-01-01T00:00:00+00:00", 0, 0, 87.3),
+            # 0.873, the unit-interval fraction rebrew's verify import stores
+            # (its schema CHECKs 0..1); 87.3 would be 8730%.
+            (target, 0x10001000, "2026-01-01T00:00:00+00:00", 0, 0, 0.873),
         )
         # history + all required objects must exist: the schema-shape check
         # (round-4) verifies the full object set, not just the version stamp.
@@ -216,10 +258,17 @@ def _build_synthetic_db() -> None:
 # a real project has a rebrew-project.toml and its own coverage.db, which the
 # DB-gated tests must never read (assertions would depend on unrelated project
 # data, and building a synthetic DB here could clobber the real one).
+#
+# Everywhere else the file is rebuilt on every session, not only when it is
+# missing: db/coverage.db is gitignored, so a copy left by an older checkout
+# survives a rebase with the old schema and the old column units (a
+# verify_results.similarity on the 0-100 scale, which the current renderer
+# scales by 100 again).  Reusing it made a DB-gated test fail on data this
+# tree no longer produces, and CI, which never has the file, stayed green.
 _IN_REAL_PROJECT = (Path.cwd() / "rebrew-project.toml").exists()
 
-if not _DB_FILE.exists() and not _IN_REAL_PROJECT:
-    _build_synthetic_db()
+if not _IN_REAL_PROJECT:
+    _build_synthetic_db(_DB_FILE)
 
 HAS_DB = _DB_FILE.exists() and not _IN_REAL_PROJECT
 
@@ -245,7 +294,14 @@ def wsgi_request(
     environ["CONTENT_LENGTH"] = str(len(body))
     if headers:
         for k, v in headers.items():
-            environ[f"HTTP_{k.upper().replace('-', '_')}"] = v
+            # PEP 3333: Content-Type and Content-Length are not HTTP_*
+            # headers, they are their own environ entries. Everything else
+            # keeps the HTTP_ prefix a real WSGI server assigns.
+            key = k.upper().replace("-", "_")
+            if key in ("CONTENT_TYPE", "CONTENT_LENGTH"):
+                environ[key] = v
+            else:
+                environ[f"HTTP_{key}"] = v
 
     status_holder: dict[str, str | dict[str, str]] = {"status": "", "headers": {}}
 

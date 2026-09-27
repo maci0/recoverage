@@ -1,0 +1,44 @@
+recoverage
+
+This product is licensed under the MIT License; see the LICENSE file.
+
+The distribution bundles the third-party browser assets listed below, each
+under its own license. Those grants are separate from the MIT license above
+and apply to the named files only.
+
+VanJS (src/recoverage/assets/van.min.js)
+  Upstream: https://github.com/vanjs-org/van
+  License: MIT, https://github.com/vanjs-org/van/blob/main/LICENSE
+  The classic-script build exposing the `van` global. The upstream banner does
+  not survive minification, so this file is the record of its grant.
+
+Highlight.js (src/recoverage/assets/hljs.min.js)
+  Upstream: https://highlightjs.org
+  License: BSD-3-Clause
+  Version 11.11.1, copyright (c) 2006-2024 Josh Goebel and other contributors.
+  The banner is preserved in the file itself.
+
+Highlight.js grammar `c` (src/recoverage/assets/hljs-c.min.js)
+  Upstream: https://github.com/highlightjs/highlight.js/tree/main/src/languages/c
+  License: BSD-3-Clause
+  Compiled for Highlight.js 11.11.1.
+
+Highlight.js grammar `x86asm` (src/recoverage/assets/hljs-x86asm.min.js)
+  Upstream: https://github.com/highlightjs/highlight.js/tree/main/src/languages/x86asm
+  License: BSD-3-Clause
+  Compiled for Highlight.js 11.11.1.
+
+src/recoverage/assets/hljs.css is not upstream Highlight.js CSS: it is a
+first-party theme that reuses only color values, and is covered by the MIT
+license above.
+
+The npm packages listed in package.json (oxlint, @oxlint/plugins,
+@rikalabs/oxlint-standards, vnu-jar) are development tools. They are not
+vendored into this distribution and are not shipped with it. The copy of
+dmmulroy/anti-slop under tools/oxlint/anti-slop/ is not shipped either; it
+carries its own LICENSE, is recorded in README.md, and is inventoried file
+by file with a sha256 in tools/oxlint/anti-slop.manifest.json, which
+tools/vendor-manifest.py writes from the tree.
+
+Full dependency inventory per release: the `recoverage-python-sbom` artifact
+produced by the sbom job in .github/workflows/ci.yml.

@@ -1,0 +1,32 @@
+{
+  "upstream": "https://github.com/dmmulroy/anti-slop",
+  "license": "MIT",
+  "tree": "oxlint/anti-slop",
+  "excluded": {
+    "**/*.test.ts": "upstream rule tests; they import oxlint/plugins-dev, which no declared dependency provides, and no runner in this tree executes them"
+  },
+  "files": {
+    "LICENSE": "10ed33bf340d6d63dc0633dfc917a346b369b6aa41fe20734aefc6a3fb75ba17",
+    "effect/index.ts": "00a732685add59bb23247f04f8bbd674581c8251d1d772f828eed4d11e291822",
+    "effect/rules/no-service-constructor-imports.ts": "c397d1132329fbe82213dda80059c86acb99f0fe243e59615f615a86069c6fb1",
+    "index.ts": "d72d7e9f8c8f2c9557f7f8dec613b4235a2e15c9d7f43b8c8fc18688ae1f814f",
+    "rules/no-chained-type-assertions.ts": "72f8e981520f94adac0ffbdab8f8e84e5f2a4595f14e4a6471be917a85a20a15",
+    "rules/no-conditional-empty-object-spread.ts": "33f044030d208fcc10be73bb19c8172c275c5229df4b0ca8ec10f069bbe60062",
+    "rules/no-known-value-widening.ts": "d631f9cb6a3629d1d9227a4568c66eb2e8e2b938a57cbec34b6b25fcb31bf62e",
+    "rules/no-module-mocking.ts": "90cfc166a28e78544a934e4a000811330c1ea6d33d90cb309b1bed27e51e79f3",
+    "rules/no-object-parameters.ts": "3d750130cf7520e7541cb758ebed0dfa603a0e482061a60ac3a12fe8821a4469",
+    "rules/no-reflect-apply.ts": "f7920a332106252d6a24cdc917a2c1a433eb438792996ccceb5a25cd6e591dbb",
+    "rules/no-reflect-get.ts": "95c5aa0f8e23b10d9345b1776082e08704ec6590298176a8ede8dfdb6e7cb56f",
+    "rules/no-runtime-typeof.ts": "eed63d5667763ddbc48a6b83662e446f100c444cddefc3d066ac0015670590b8",
+    "rules/no-shape-in-symbol-names.ts": "54aebfebb25c1f8f2ce181f8f82fd05413a0a63f7cdac52e9d570ea1cd284510",
+    "rules/no-unknown-parameters.ts": "ab5cd31a9a464dd12e4e930298fcd773c1c1badfaf66619915d5435b5d57db61",
+    "rules/no-unknown-returns.ts": "fca7a61334b902ec76736b6d8ad5b95a84a0d4366dcc7ae1bc44492523052f3b",
+    "rules/no-unknown-type-aliases.ts": "59df2bcc6fdc892e67650c64662c2ac03d0396c2dcce9c272891c94ba5a4c041",
+    "rules/no-unsafe-dictionary-type.ts": "bec8e540e05a749e06474b1c7bd93879747b3330f0b9c87fd1a3ffe959ace075",
+    "rules/no-widen-then-assert.ts": "63f2c07cc42b8ad60a7e868efbd7b29e462b9ba960fbd07bbc8f590ef9e3f879",
+    "rules/require-safety-comment-for-type-assertion.ts": "78bad368fcc137f0ed9d6f21626baed5c980fe3ea6d093c93ac4ed9858b9a309",
+    "shared/dictionary-types.ts": "a57b964ab55a39396c8922f400b0912e3479cb9d28de716a4a536abcf7283966",
+    "shared/lexical-type-parameters.ts": "1ae0aa3ec245f1dc43c4bbbd8be1e2e4230e5dc389d1ca4e8de8f51b62ceff29",
+    "shared/reflect-method.ts": "318f56b17d9063134860fe4c51c2e22cb0a55e7f421a0ff4ccedb5a9e9c2b2d9"
+  }
+}

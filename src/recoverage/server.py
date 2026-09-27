@@ -10,7 +10,7 @@ Reads the coverage database from the path resolved by
 
 from __future__ import annotations
 
-import functools
+import contextlib
 import gzip
 import hashlib
 import hmac
@@ -20,56 +20,56 @@ import json
 import logging
 import sqlite3
 import threading
-import time
+import unicodedata
+import uuid
 from collections import deque
-from collections.abc import Iterator, Sequence
+from collections.abc import Collection, Iterator, Sequence
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, cast
-from urllib.parse import urlsplit
+from typing import Any, Final, cast
+from urllib.parse import unquote, urlsplit
 
-import bottle  # type: ignore[import-untyped]
 import brotli  # type: ignore[import-untyped]
 import zstandard as zstd
+from bottle import Bottle, HTTPResponse, request, response  # type: ignore[import-untyped]
 
 # SCHEMA_TARGET is the reserved metadata target holding the schema-level
 # db_version stamp (written by rebrew build-db).  It is NOT a real project
 # target and must never appear in target enumeration, stats, or the dashboard
 # dropdown.
 from rebrew.workspace import (
-    CELLS_JSON_OBJECT_SQL,
     CONFIG_NAME,
     SCHEMA_TARGET,
+    SECTION_CELLS_AGG_SQL,
     SECTION_CELLS_COLUMN,
     SECTION_CELLS_TABLE,
+    coverage_db_lock,
     decode_section_cells,
+    parse_va_candidates,
     read_config,
     sqlite_ro_uri,
     target_binary,
     targets_table,
 )
 
+from recoverage import clock, metrics
 from recoverage._paths import _db_path
 
 # Thread-local compressor — python-zstandard gives ZstdCompressor instances NO
 # thread-safety guarantees ("do not operate on the same instance from different
 # threads") and releases the GIL inside compress(), so a shared instance raced
 # on one ZSTD_CCtx and reproducibly segfaulted the server under concurrent
-# requests.  One context per request thread (same pattern as _get_capstone_md).
+# requests.  One context per request thread (same pattern as
+# disasm.get_capstone_md).
 _ZSTD_COMPRESSOR_TLS = threading.local()
 
 
-def _get_zstd_compressor() -> Any:
+def _get_zstd_compressor() -> zstd.ZstdCompressor:
     compressor = getattr(_ZSTD_COMPRESSOR_TLS, "compressor", None)
     if compressor is None:
         compressor = _ZSTD_COMPRESSOR_TLS.compressor = zstd.ZstdCompressor(level=3)
     return compressor
 
-
-Bottle = cast(Any, bottle.Bottle)
-request = cast(Any, bottle.request)
-response = cast(Any, bottle.response)
-static_file = cast(Any, bottle.static_file)
-HTTPResponse = cast(Any, bottle.HTTPResponse)
 
 # The shared Bottle application.  Defined up front — above the helpers and
 # the auth/hooks section below — so a first top-down read of this module
@@ -77,7 +77,6 @@ HTTPResponse = cast(Any, bottle.HTTPResponse)
 # it at import time; webapp.py composes both onto it.
 app = Bottle()
 
-HAS_CAPSTONE = importlib.util.find_spec("capstone") is not None
 HAS_PYGMENTS = importlib.util.find_spec("pygments") is not None
 
 # CORS — configured once at startup by the CLI before the server starts
@@ -95,8 +94,9 @@ CORS_ALLOWED_ORIGINS: list[str] = []
 ALLOWED_HOSTS: set[str] | None = None
 
 # Loopback hostnames, ONE definition shared by the CLI's --bind guard, the
-# regen endpoint's remote-addr/Origin checks, and the DNS-rebinding Host
-# allowlist above.  Membership tests only — order carries no meaning.
+# regen endpoint's peer check and its no-Host fallback (see
+# origin_is_this_dashboard), and the DNS-rebinding Host allowlist above.
+# Membership tests only — order carries no meaning.
 LOOPBACK_HOSTS: tuple[str, ...] = ("127.0.0.1", "::1", "localhost")
 
 
@@ -137,7 +137,7 @@ def configure_security(
 
     ONE public entry point for the process-wide globals defined above.  The
     CLI configures them through this function instead of assigning server
-    module attributes by name (two of which are private), so this module owns
+    module attributes by name (one of which is private), so this module owns
     both the storage and when/how it may change.  Call it once at startup,
     BEFORE the WSGI server starts accepting requests — request worker threads
     read these values without a lock.
@@ -158,10 +158,18 @@ def _hostname_of(origin: str) -> str:
     Origins carry a scheme (``http://localhost:5173``); bare Host headers
     (``localhost:8001``) get a synthetic scheme so urlsplit parses both.
     Values containing userinfo/escape characters (``evil@host``, backslash,
-    percent-encoding, control bytes) are rejected — browsers never emit them
-    in Host/Origin, so their presence means the value is not a plain header.
+    percent-encoding, control bytes, whitespace) are rejected — browsers never
+    emit them in Host/Origin, so their presence means the value is not a plain
+    header.
+
+    The control range is C0, DEL and C1, not just ``ord < 32``: urlsplit
+    carries U+0080-U+009F through into the hostname, so a value carrying one
+    parses to a "host" no browser can address, and :func:`_normalize_origin`
+    would then store and echo it as an allowlist entry.
     """
-    if any(ch in origin for ch in ("@", "\\", "%")) or any(ord(c) < 32 for c in origin):
+    if any(ch in origin for ch in ("@", "\\", "%")) or any(
+        ch.isspace() or ord(ch) < 32 or 127 <= ord(ch) <= 159 for ch in origin
+    ):
         return ""
     try:
         candidate = origin if "://" in origin else f"//{origin}"
@@ -195,6 +203,53 @@ def _normalize_origin(origin: str) -> str:
         return ""
 
 
+def _authority_of(value: str) -> str:
+    """Normalized ``host[:port]`` of a Host/Origin value, or "" when unparsable.
+
+    Scheme-independent on purpose: a dashboard behind a TLS-terminating proxy
+    is reached as ``Origin: https://box`` with ``Host: box``, and the question
+    this answers is which service the page came from, not which scheme it used
+    to get here.  A default port collapses away on both sides so
+    ``http://box:80`` and ``box`` name one authority.
+    """
+    if _hostname_of(value) == "":
+        return ""
+    try:
+        parsed = urlsplit(value if "://" in value else f"//{value}")
+        host = (parsed.hostname or "").lower()
+        port = parsed.port
+    except ValueError:
+        return ""
+    if port in (None, 80, 443):
+        port = None
+    host_part = f"[{host}]" if ":" in host else host
+    return f"{host_part}:{port}" if port else host_part
+
+
+def origin_is_this_dashboard(origin: str, host: str) -> bool:
+    """Whether *origin* is the same service the request was addressed to.
+
+    The authority allowed to drive a privileged operation is the page the
+    operator is looking at, so this is a same-origin test against the request's
+    own ``Host``, not a membership test against LOOPBACK_HOSTS.  Every other
+    loopback port is a different origin with its own operator, and on a
+    loopback bind that neighbour is exactly what the gate exists to exclude:
+    a dev server, another local app, or anything an attacker can get a browser
+    to load from one.  A page there passes a hostname check while being unable
+    to read the response, so the request is both forged and silent.
+
+    A request with no ``Host`` header (HTTP/1.0, some WSGI harnesses) cannot be
+    compared, and browsers never send one, so the loopback-hostname rule
+    stands in for it rather than refusing every such client.
+    """
+    if _hostname_of(origin) == "":
+        return False
+    request_host = _authority_of(host)
+    if not request_host:
+        return _hostname_of(origin) in LOOPBACK_HOSTS
+    return _authority_of(origin) == request_host
+
+
 def _safe_etag(*parts: object) -> str:
     """Deterministic ETag from arbitrary parts.
 
@@ -205,6 +260,97 @@ def _safe_etag(*parts: object) -> str:
     """
     digest = hashlib.sha256("|".join(str(p) for p in parts).encode("utf-8")).hexdigest()[:32]
     return f'"{digest}"'
+
+
+def path_param(value: str) -> str:
+    """Percent-decode one URL path component, as UTF-8, exactly once.
+
+    Bottle routes on ``PATH_INFO`` as the WSGI server hands it over, which
+    per PEP 3333 is the *raw* request target: a browser's ``%C3%A9`` and
+    ``%20`` arrive still encoded.  Every route capture (``target``,
+    ``va``, ``section``, ``filepath``) is therefore percent-encoded text, and a
+    target id or filename holding a space, ``#``, ``?`` or a non-ASCII
+    character never matches the database row, the section, or the file.
+    Potato Mode already emits ``urllib.parse.quote``-escaped links, so the
+    two halves disagreed.
+
+    One pass only, and never a second: the result feeds path containment
+    checks, so decoding twice would let ``%252e%252e%252f`` reach them as
+    ``../``.  A segment whose escapes are not valid UTF-8 (a legal
+    non-UTF-8 filename on Linux) is returned unchanged, which 404s honestly
+    instead of raising on a request the server could have served.
+    """
+    try:
+        return unquote(value, encoding="utf-8", errors="strict")
+    except UnicodeDecodeError:
+        return value
+
+
+def decode_query_value(raw: str) -> str:
+    """Recover the UTF-8 a client sent for one already-decoded query value.
+
+    Bottle hands query values over as latin-1 text, so ``?section=%C3%A9``
+    arrives as ``Ã©``; re-encoding recovers the ``é`` the client meant.
+    ASCII (the overwhelming majority: tokens, integers, format names) comes
+    back byte-identical.
+
+    A value that is not valid UTF-8 in latin-1, or already holds a character
+    above U+00FF (a client that sent raw UTF-8 rather than escapes), is
+    returned unchanged: it is already the text the caller meant.
+    """
+    try:
+        return raw.encode("latin-1").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return raw
+
+
+def query_param(name: str, default: str = "") -> str:
+    """One query-string value, percent-decoded as UTF-8.
+
+    Bottle decodes query values with ``encoding='latin1'`` (see its module
+    import of ``urlunquote``), so ``?section=%C3%A9`` reaches a handler as
+    ``Ã©`` and matches no section while ``parse_qs`` on the same raw
+    ``request.url`` — the path Potato Mode uses — yields ``é``.  The
+    latin-1 round trip in :func:`decode_query_value` is what recovers it.
+    """
+    return decode_query_value(request.query.get(name, default))
+
+
+#: The digits every integer a request may spell is written in.  ``int()``
+#: accepts whatever ``str.isdigit()`` calls a digit, so ``?size=٤٠٩٦`` served a
+#: 4096-byte slice and ``?page=1_0`` opened page 10: spellings no client sends
+#: and no response documents, drawn from a repertoire the operator's locale
+#: picks.  ASCII only, the same rule ``config._ASCII_INT`` holds every
+#: ``RECOVERAGE_*`` integer to, so one number means one thing at both edges.
+_ASCII_DIGITS: Final = "0123456789"
+_ASCII_HEX_DIGITS: Final = "0123456789abcdef"
+
+
+def strip_sign(text: str) -> tuple[int, str]:
+    """Split a leading ``+``/``-`` off *text*: the sign, and the rest."""
+    if text[:1] == "-":
+        return -1, text[1:]
+    if text[:1] == "+":
+        return 1, text[1:]
+    return 1, text
+
+
+def parse_ascii_int(text: str, base: int = 10) -> int:
+    """*text* as an integer written in *base* with ASCII digits, else ValueError.
+
+    The one integer parse for every request-supplied number: ``?size=``,
+    ``?offset=``, ``?limit=``, the batch VA list, and Potato Mode's ``?page=``
+    and ``?idx=``.  ``int(text, base)`` is not that check on its own: it takes
+    digits from the whole Unicode Nd/Nl/No sets plus the ``_`` separator, so a
+    request could name a byte count, a page or a VA in a spelling the endpoint
+    never documented and that no other surface accepts.  Callers already turn
+    :class:`ValueError` into their own 400 or their own default, so the reason
+    never reaches the client as one shape.
+    """
+    digits = _ASCII_HEX_DIGITS[:base] if base == 16 else _ASCII_DIGITS
+    if not text or any(c.lower() not in digits for c in text):
+        raise ValueError(f"not an ASCII base-{base} integer: {text!r}")
+    return int(text, base)
 
 
 def _snapshot_db_mtime() -> tuple[int, int] | None:
@@ -226,24 +372,88 @@ def _snapshot_db_mtime() -> tuple[int, int] | None:
     raw ``st_mtime`` — raw mtimes served stale 304s after rebuilds that only
     touched the WAL.
     """
+    db = _db_path()
     try:
-        st = _db_path().stat()
-        acc = (st.st_mtime_ns << 32) ^ (st.st_size & 0xFFFFFFFF)
-        try:
-            w = Path(f"{_db_path()}-wal").stat()
-            acc ^= (w.st_mtime_ns << 32) ^ (w.st_size & 0xFFFFFFFF)
-        except OSError:
-            pass
-        return acc, st.st_size
+        st = db.stat()
     except OSError:
         return None
+    acc = (st.st_mtime_ns << 32) ^ (st.st_size & 0xFFFFFFFF)
+    try:
+        w = Path(f"{db}-wal").stat()
+        acc ^= (w.st_mtime_ns << 32) ^ (w.st_size & 0xFFFFFFFF)
+    except OSError:
+        pass
+    return acc, st.st_size
+
+
+#: Nanoseconds in a second, and in a microsecond: the two constants the
+#: file-mtime conversion below is written in.
+_NS_PER_SECOND = 1_000_000_000
+_NS_PER_MICROSECOND = 1_000
+
+
+def mtime_ns_to_utc(mtime_ns: int) -> datetime:
+    """The instant *mtime_ns* names, as an aware UTC datetime.
+
+    One definition of the file-mtime rendering both freshness surfaces use
+    (``/api/health``'s ``mtime_utc`` and Potato Mode's footer stamp), and
+    integer arithmetic all the way through: ``mtime_ns / 1e9`` is a float
+    second, which cannot hold a nanosecond, so ``fromtimestamp`` rounds to
+    the nearest one and reports a stamp up to half a second LATE.  Potato
+    renders that rounded value to the minute, so a file written at
+    12:34:59.999999999 is stamped "12:35 UTC" for a rebuild that has not
+    happened yet.  Splitting into whole seconds plus a microsecond remainder
+    truncates instead, which is the only direction a freshness stamp may
+    err in: the served data never lags the stamp.
+    """
+    seconds, nanoseconds = divmod(mtime_ns, _NS_PER_SECOND)
+    return datetime.fromtimestamp(seconds, tz=UTC) + timedelta(
+        microseconds=nanoseconds // _NS_PER_MICROSECOND
+    )
+
+
+def _newest_mtime_ns(db: Path) -> int | None:
+    """Newest mtime_ns across *db* and its -wal sibling, or None.
+
+    The same WAL-awareness contract as :func:`_snapshot_db_mtime`, as a
+    plain instant instead of a folded token: for the surfaces that RENDER the
+    freshness time (``/api/health``, Potato Mode's footer stamp) rather than
+    key a cache on it.
+    """
+    try:
+        newest = db.stat().st_mtime_ns
+    except OSError:
+        return None
+    with contextlib.suppress(OSError):
+        newest = max(newest, Path(f"{db}-wal").stat().st_mtime_ns)
+    return newest
+
+
+def _if_none_match_matches(raw: str, etag: str) -> bool:
+    """Whether an ``If-None-Match`` header value already covers *etag*.
+
+    ONE spelling of RFC 9110's conditional-request comparison: a
+    comma-separated list, the ``*`` wildcard, and weak validators
+    (``W/"..."``) matched weakly.  Every ETag-bearing surface answers
+    revalidation through here, so the accepted spellings cannot drift.
+    """
+    for cand in raw.split(","):
+        cand = cand.strip()
+        if cand == "*":
+            return True
+        if cand == etag:
+            return True
+        # Strip the weak prefix W/ per RFC 9110.
+        if cand.startswith("W/") and cand[2:].strip() == etag:
+            return True
+    return False
 
 
 def _etag_or_304(snap: tuple[int, int] | None, *parts: object) -> str | None:
     """DB-freshness ETag over the WAL-aware snapshot *snap* + *parts*; 304 on match.
 
-    Shared tail of every cacheable DB-derived endpoint (/data, /asm, /bytes,
-    /potato): compute ``_safe_etag(snap[0], parts...)``, answer
+    Shared tail of every cacheable DB-derived endpoint (/data, /stats, /asm,
+    /bytes, /potato): compute ``_safe_etag(snap[0], parts...)``, answer
     ``If-None-Match`` with a 304, else hand the ETag back for the caller to
     attach to its response.  Callers pass their own
     :func:`_snapshot_db_mtime` result — endpoints that also key a memo on
@@ -254,60 +464,71 @@ def _etag_or_304(snap: tuple[int, int] | None, *parts: object) -> str | None:
     if snap is None:
         return None
     etag = _safe_etag(snap[0], *parts)
-    raw = request.headers.get("If-None-Match", "")
-    # Handle weak validators (W/"..."), comma-separated lists, and "*".
-    candidates = [c.strip() for c in raw.split(",")] if raw else []
-    for cand in candidates:
-        if cand == "*":
-            raise HTTPResponse(
-                status=304,
-                headers={"ETag": etag, "Cache-Control": CACHE_REVALIDATE},
-            )
-        # Strip weak prefix W/ per RFC 9110.
-        if cand.startswith("W/"):
-            cand = cand[2:].strip()
-        if cand == etag:
-            raise HTTPResponse(
-                status=304,
-                headers={"ETag": etag, "Cache-Control": CACHE_REVALIDATE},
-            )
+    if _if_none_match_matches(_header("If-None-Match", ""), etag):
+        raise HTTPResponse(
+            status=304,
+            headers={"ETag": etag, "Cache-Control": CACHE_REVALIDATE},
+        )
     return etag
 
 
+#: `functions.markerType` values that name data, not a function (rebrew ADR 023
+#: widened the set past GLOBAL/DATA).  ONE definition: the SPA function list,
+#: the Potato function list, and the by-status counts all filter on it, and
+#: three copies of the literal is three chances to disagree.
+DATA_MARKER_TYPES: tuple[str, ...] = ("GLOBAL", "DATA", "VTABLE", "STRING")
+
+#: WHERE fragment excluding data markers from a `functions` query.
+#:
+#: The `markerType IS NULL OR` arm is load-bearing.  rebrew's own column is
+#: ``NOT NULL DEFAULT 'FUNCTION'``, but a hand-made or older database can leave
+#: it nullable (the columns the server requires are checked for presence, not
+#: nullability), and SQLite evaluates ``NULL NOT IN (...)`` to NULL, which
+#: WHERE rejects: every unmarked function would vanish from the list, from the
+#: Potato table, and from the by-status counts.  An unknown marker type is a
+#: function, exactly as rebrew's default says.
+NOT_DATA_MARKER_SQL = "(markerType IS NULL OR markerType NOT IN ({types}))".format(
+    types=", ".join(f"'{t}'" for t in DATA_MARKER_TYPES)
+)
+
+
 # Byte-based per-section stats query shared by /api/targets/<target>/stats and
-# the `recoverage stats` CLI.  ONE definition: these two queries already
-# drifted apart once (cell-count vs byte-based coverage) and were fixed in
-# lockstep twice — a single constant makes the next divergence impossible.
+# the `recoverage stats` CLI.  ONE definition, so the two callers cannot drift
+# apart (see _section_stats for what the copies used to get wrong).
 #
-# Only the three values that need `cells` are computed here.  The other nine
-# buckets come from section_cell_stats, which rebrew materializes per section
-# (~0.01 ms); adding all thirteen SUM(CASE ...) expressions to this scan cost
-# ~15 ms on a 64k-cell target against ~6 ms for these three.  The one bucket
-# that differs between the two sources is exact_count — the materialized table
-# folds state 'verified' into it for the grid legend, this endpoint counts only
-# 'exact' — so exact_count stays cells-side to keep these numbers unchanged.
+# Only the two values that need `cells` are computed here.  Every cell count
+# comes from section_cell_stats, which rebrew materializes per section
+# (~0.01 ms); adding the twelve SUM(CASE ...) expressions and a COUNT(*) to
+# this scan cost ~15 ms on a 64k-cell target against ~6 ms for these two.  That
+# includes exact_count: the cells-side copy that used to sit here counted
+# 'exact' alone while every other surface (rebrew's materialized table, /data,
+# Potato Mode, and the grid's own palette, which paints 'verified' in the exact
+# slot) folds 'verified' in, so the two disagreed on the same database and the
+# buckets failed to reconcile with total_cells.  rebrew owns the definition;
+# this endpoint reads it rather than restating it.
 SECTION_STATS_SQL = """
     SELECT section_name,
       SUM(CASE WHEN state != 'none' THEN end - start ELSE 0 END) AS covered_bytes,
-      SUM(end - start) AS total_bytes,
-      SUM(CASE WHEN state = 'exact' THEN 1 ELSE 0 END) AS exact_count
+      SUM(end - start) AS total_bytes
     FROM cells WHERE target = ? GROUP BY section_name
 """
-
-# The other nine buckets, per section, already aggregated by rebrew.
-_SECTION_BUCKETS_SQL = "SELECT * FROM section_cell_stats WHERE target = ?"
 
 # Every bucket computed from `cells` in one pass.  Used ONLY when
 # section_cell_stats is absent or empty — a hand-made or partial database (the
 # CLI's own fixtures build exactly that), which the pre-split single-query
-# version handled and which must keep working.  Kept verbatim so the numbers are
-# the ones the split was verified against.
+# version handled and which must keep working.
+#
+# other_count is the same catch-all rebrew's build_db writes into
+# section_cell_stats, and the bucket definitions match it one for one
+# (including 'verified' counted as exact, not as other), so the two sources
+# cannot disagree and total_cells reconciles with the bucket sum on this path
+# exactly as it does on the materialized one.
 _SECTION_STATS_FULL_SQL = """
     SELECT section_name,
       SUM(CASE WHEN state != 'none' THEN end - start ELSE 0 END) AS covered_bytes,
       SUM(end - start) AS total_bytes,
       COUNT(*) AS total_cells,
-      SUM(CASE WHEN state = 'exact' THEN 1 ELSE 0 END) AS exact_count,
+      SUM(CASE WHEN state IN ('exact', 'verified') THEN 1 ELSE 0 END) AS exact_count,
       SUM(CASE WHEN state = 'reloc' THEN 1 ELSE 0 END) AS reloc_count,
       SUM(CASE WHEN state IN ('near_match','near_matching') THEN 1 ELSE 0 END) AS near_match_count,
       SUM(CASE WHEN state = 'stub' THEN 1 ELSE 0 END) AS stub_count,
@@ -316,9 +537,76 @@ _SECTION_STATS_FULL_SQL = """
       SUM(CASE WHEN state = 'thunk' THEN 1 ELSE 0 END) AS thunk_count,
       SUM(CASE WHEN state = 'none' THEN 1 ELSE 0 END) AS none_count,
       SUM(CASE WHEN state = 'proven' THEN 1 ELSE 0 END) AS proven_count,
-      SUM(CASE WHEN state = 'size_mismatch' THEN 1 ELSE 0 END) AS size_mismatch_count
+      SUM(CASE WHEN state = 'size_mismatch' THEN 1 ELSE 0 END) AS size_mismatch_count,
+      SUM(CASE WHEN state NOT IN (
+        'exact', 'verified', 'reloc', 'near_match', 'near_matching', 'stub',
+        'padding', 'data', 'thunk', 'none', 'proven', 'size_mismatch'
+      ) THEN 1 ELSE 0 END) AS other_count
     FROM cells WHERE target = ? GROUP BY section_name
 """
+
+
+def _rows_or_absent(c: sqlite3.Cursor, sql: str, params: tuple[Any, ...]) -> list[sqlite3.Row]:
+    """Run *sql*, treating a missing schema object as an empty result.
+
+    Every degrade-on-older-schema read goes through this, so "this database
+    predates the materialized table" stays narrower than "this database could
+    not be read": a locked or truncated file raises on to the 503 contract
+    instead of answering with cells-derived rows and no signal.
+    """
+    try:
+        c.execute(sql, params)
+        return c.fetchall()
+    except sqlite3.OperationalError as exc:
+        if not _is_absent_object(exc):
+            raise
+        return []
+
+
+def section_bucket_rows(
+    c: sqlite3.Cursor,
+    target: str,
+    *,
+    projection: str = "*",
+    expected: Collection[str] = (),
+) -> Iterator[sqlite3.Row]:
+    """Per-section bucket rows for *target*: the materialized cache where it
+    covers, `cells` for the rest.
+
+    ONE reader for every section_cell_stats consumer, because the policy is
+    three rules that had been restated per caller and drifted: prefer the
+    materialized cache, re-aggregate a section it omits from `cells`, and
+    treat an absent cache as an empty one.
+
+    *projection* is the column list a caller reads.  ``*`` is the cache's full
+    row (``_cell_bucket_row`` needs all eleven buckets); a caller that renders
+    a subset may name just those columns, so a hand-made cache carrying only
+    them still serves.  *expected* is the caller's own section set, which is
+    what "the cache omits a section" is measured against: `/stats` knows the
+    sections `cells` has, the Potato map header the sections it renders.
+
+    The extra query runs only when a section is actually missing, so the
+    complete-cache path is unchanged.
+    """
+    rows = _rows_or_absent(
+        c, f"SELECT {projection} FROM section_cell_stats WHERE target = ?", (target,)
+    )
+    if not rows:
+        return iter(_rows_or_absent(c, _SECTION_STATS_FULL_SQL, (target,)))
+    covered = {row["section_name"] for row in rows}
+    gap = {name for name in expected if name not in covered}
+    if not gap:
+        return iter(rows)
+    return iter(
+        [
+            *rows,
+            *(
+                r
+                for r in _rows_or_absent(c, _SECTION_STATS_FULL_SQL, (target,))
+                if r["section_name"] in gap
+            ),
+        ]
+    )
 
 
 def _per_section_buckets(
@@ -326,49 +614,60 @@ def _per_section_buckets(
 ) -> Iterator[tuple[str, dict[str, Any], int, int]]:
     """Yield ``(section_name, buckets, covered_bytes, total_bytes)`` per section.
 
-    Prefers rebrew's materialized ``section_cell_stats`` for the nine buckets it
-    already aggregates (~0.01 ms) and takes the byte sums plus ``exact_count``
-    from *cell_side*, which was computed from `cells`.  When that table is absent
-    or empty, every bucket comes from `cells` instead — the single-query path
-    this endpoint used before the split.
+    Every cell count comes from rebrew's materialized ``section_cell_stats``;
+    the byte sums come from *cell_side*, computed from `cells`, because no
+    materialized column carries them.  When that table is absent or empty, every
+    bucket comes from `cells` instead — the single-query path this endpoint used
+    before the split — using the definitions _SECTION_STATS_FULL_SQL keeps in
+    step with build_db's.  When it is present but covers only some of the
+    sections `cells` has, the missing ones are filled from `cells` too, so a
+    partial cache never drops a section from the response.
+
+    The two paths return the same numbers for the same database.  They did
+    not: the materialized `exact_count` (which counts 'verified' as exact, like
+    /data, Potato Mode and the grid palette) was overwritten with a cells-side
+    'exact'-only count, so a database carrying VERIFIED cells reported a total
+    its buckets could not sum to, and the same DB answered two different stats
+    depending on whether build_db had run.
+
+    Which rows to read is :func:`section_bucket_rows`, shared with the Potato
+    map header; the byte sums are this caller's own, because no materialized
+    column carries them.
     """
-    try:
-        c.execute(_SECTION_BUCKETS_SQL, (target,))
-        rows = c.fetchall()
-    except sqlite3.Error:
-        rows = []
-    if rows:
-        for row in rows:
-            name = row["section_name"]
-            side = cell_side.get(name)
-            buckets = _cell_bucket_row(row)
-            if side is not None:
-                # exact_count counts only 'exact' here; the materialized table
-                # folds 'verified' into it for the grid legend.
-                buckets["exact"] = side["exact_count"]
-            yield (
-                name,
-                buckets,
-                (side["covered_bytes"] if side is not None else 0) or 0,
-                (side["total_bytes"] if side is not None else 0) or 0,
-            )
-        return
-    c.execute(_SECTION_STATS_FULL_SQL, (target,))
-    for row in c.fetchall():
-        yield (
-            row["section_name"],
-            _cell_bucket_row(row),
-            row["covered_bytes"] or 0,
-            row["total_bytes"] or 0,
-        )
+    for row in section_bucket_rows(c, target, expected=cell_side):
+        name = row["section_name"]
+        side = cell_side.get(name)
+        # *cell_side* is the byte source on every path.  A live row carries its
+        # own byte sums too, which is what a cached section is measured against
+        # when the caller read no cells side for it.
+        source = side if side is not None else row
+        # Row membership is by value, so `.keys()` is the spelling; see
+        # _cell_bucket_row for why the bare `in` would read as absent.
+        has_bytes = "covered_bytes" in source.keys()  # noqa: SIM118
+        covered = (source["covered_bytes"] if has_bytes else 0) or 0
+        total = (source["total_bytes"] if has_bytes else 0) or 0
+        yield (name, _cell_bucket_row(row), covered, total)
 
 
 def _cell_bucket_row(row: sqlite3.Row) -> dict[str, Any]:
-    """Map a per-section stats row (SECTION_STATS_SQL, or the
-    section_cell_stats table for the nine buckets it supplies) to the
-    short-key bucket dict served by /stats and /data.  ONE definition so the
-    two response shapes cannot drift."""
-    return {
+    """Map a per-section bucket row to the short-key dict served by /stats, /data
+    and Potato Mode.  ONE definition so the response shapes cannot drift.
+
+    *row* is a ``section_cell_stats`` row (the ``*`` projection
+    :func:`section_bucket_rows` reads) or the
+    same columns computed live from `cells` (``_SECTION_STATS_FULL_SQL``); the
+    two must select an identical column set, since the mapping below subscripts
+    every one of them by name.  It is never a ``SECTION_STATS_SQL`` row, which
+    carries only the two byte sums.
+
+    ``other`` is the producer's catch-all (rebrew counts compile_error,
+    extract_error, invalid_va, missing_file, missing_size, skip, unknown and
+    the data drift/unchecked verdicts there so total_cells reconciles with the
+    bucket sum).  Both query paths compute it; a database whose
+    section_cell_stats predates the column reports 0 rather than dropping the
+    key, so the served shape is the same either way.
+    """
+    buckets: dict[str, Any] = {
         "total_cells": row["total_cells"],
         "exact": row["exact_count"],
         "reloc": row["reloc_count"],
@@ -381,6 +680,14 @@ def _cell_bucket_row(row: sqlite3.Row) -> dict[str, Any]:
         "proven": row["proven_count"],
         "size_mismatch": row["size_mismatch_count"],
     }
+    # row.keys(), not a bare subscript: a v6-era section_cell_stats (or the
+    # pre-other_count view a hand-made DB carries) has no such column, and
+    # sqlite3.Row raises IndexError on a missing name.  `in row` is NOT the
+    # spelling: sqlite3.Row.__contains__ iterates the row's VALUES, not its
+    # keys, so it answers False for a column that is present.
+    has_other = "other_count" in row.keys()  # noqa: SIM118 -- Row membership is by value
+    buckets["other"] = row["other_count"] if has_other else 0
+    return buckets
 
 
 def _section_stats(c: sqlite3.Cursor, target: str) -> dict[str, Any]:
@@ -392,7 +699,14 @@ def _section_stats(c: sqlite3.Cursor, target: str) -> dict[str, Any]:
     both (and drifted twice — cell-count vs byte-based, covered_bytes presence,
     key names); this is the single source of truth.
     """
-    # Pre-computed summary from metadata
+    # Five statements across five tables: without a pinned snapshot a rebuild
+    # committing between them yields stats that describe no build at all.
+    with read_snapshot(c):
+        return _read_section_stats(c, target)
+
+
+def _read_section_stats(c: sqlite3.Cursor, target: str) -> dict[str, Any]:
+    # Pre-computed summary, read from the target's own metadata row
     summary: dict[str, Any] = {}
     c.execute("SELECT value FROM metadata WHERE target = ? AND key = 'summary'", (target,))
     row = c.fetchone()
@@ -424,8 +738,9 @@ def _section_stats(c: sqlite3.Cursor, target: str) -> dict[str, Any]:
 
     sections: dict[str, Any] = {}
     for name, buckets, covered, total in _per_section_buckets(c, target, cell_side):
-        # PROVEN is a semantic-equivalence promotion and counts as matched
-        # (consistent with the catalog grid's matchedFunctions).
+        # PROVEN is a semantic-equivalence promotion, so it counts as matched
+        # HERE only; rebrew's catalog grid counts byte-identical EXACT/RELOC
+        # alone, so this number is not the grid's matchedFunctions.
         matched = buckets["exact"] + buckets["reloc"] + buckets["proven"]
         sections[name] = {
             **buckets,
@@ -435,7 +750,7 @@ def _section_stats(c: sqlite3.Cursor, target: str) -> dict[str, Any]:
             "coverage_pct": round(covered / total * 100, 2) if total else 0.0,
         }
 
-    # Section byte sizes
+    # Section byte sizes, which the schema allows to be NULL
     c.execute("SELECT name, size FROM sections WHERE target = ?", (target,))
     for row in c.fetchall():
         name = row["name"]
@@ -447,12 +762,12 @@ def _section_stats(c: sqlite3.Cursor, target: str) -> dict[str, Any]:
             # total_bytes/covered_bytes above.
             sections[name]["size_bytes"] = row["size"] or 0
 
-    # Function counts by status.  GLOBAL/DATA marker rows live in the
-    # functions table but are data markers, not functions — exclude them.
+    # Function counts by status.  GLOBAL/DATA/VTABLE/STRING marker rows live in
+    # the functions table but are data markers, not functions — exclude them.
     by_status: dict[str, int] = {}
     c.execute(
         "SELECT status, COUNT(*) as cnt FROM functions"
-        " WHERE target = ? AND markerType NOT IN ('GLOBAL','DATA') GROUP BY status",
+        f" WHERE target = ? AND {NOT_DATA_MARKER_SQL} GROUP BY status",
         (target,),
     )
     for row in c.fetchall():
@@ -471,37 +786,75 @@ def _assets_dir() -> Path:
 
 
 def _project_dir() -> Path:
-    """Return the project directory (cwd)."""
     return Path.cwd().resolve()
 
 
-# ── DLL loading & disassembly ──────────────────────────────────────
+# ── DLL loading ────────────────────────────────────────────────────
 
 DLL_DATA: dict[str, bytes | None] = {}
 DLL_LOCK = threading.Lock()
+#: Config stat the current DLL_DATA was filled under, or None before the
+#: first load (and for a project with no rebrew-project.toml, which is also a
+#: state entries get cached under).  The rebuild broadcast empties DLL_DATA
+#: under the same lock and deliberately leaves this alone: the config did not
+#: change, so the next request reloads under a fingerprint that still matches.
+_DLL_CONFIG_MTIME: tuple[int, int] | None = None
 _MAX_DLL_SIZE = 512 * 1024 * 1024  # 512 MiB — reject unreasonably large binaries
 
 
 _TOML_CONFIG_CACHE: dict[str, Any] | None = None
-_RESOLVED_TARGETS_CACHE: dict[str, Any] | None = None
+#: Key for :data:`_RESOLVED_TARGETS_CACHE`: the config stat and the WAL-aware
+#: DB snapshot, the two inputs of the merge, so the memo self-invalidates on
+#: either.  The DB half the rebuild broadcast already covered; the config half
+#: nothing did (see :func:`resolve_targets`).
+_ResolvedTargetsKey = tuple[tuple[int, int] | None, tuple[int, int] | None]
+_RESOLVED_TARGETS_CACHE: tuple[_ResolvedTargetsKey, list[dict[str, str]]] | None = None
 _RESOLVED_TARGETS_CACHE_LOCK = threading.RLock()
 
 
 _log = logging.getLogger("recoverage")
 
-# Control characters (C0 + DEL), which would otherwise let a crafted URL
-# forge multi-line entries in the request log (%0A in the path percent-
-# decodes to a raw newline).  Each is replaced by its \xNN escape so the
-# offending request stays identifiable while remaining one log line.
-_LOG_CONTROL_CHARS = {c: f"\\x{c:02x}" for c in range(32)} | {127: "\\x7f"}
+# Control characters (C0, DEL, C1) and the two Unicode line terminators,
+# which would otherwise let a crafted URL or header forge multi-line entries
+# in the request log (%0A in the path percent-decodes to a raw newline).  Each
+# is replaced by its \xNN escape so the offending request stays identifiable
+# while remaining one log line.  C1 and U+2028/U+2029 are in the table for the
+# same reason as C0: every consumer that breaks a log on \n breaks on them
+# too, and a percent-escaped %C2%85 (NEL) or %E2%80%A8 reaches _log_safe
+# decoded.  Bidi controls stay out: they reorder a line rather than split it,
+# so escaping them is a log-injection question, not a line-splitting one.
+_LOG_CONTROL_CHARS = (
+    {c: f"\\x{c:02x}" for c in range(32)}
+    | {127: "\\x7f"}
+    | {c: f"\\x{c:02x}" for c in range(0x80, 0xA0)}
+    | {0x2028: "\\x2028", 0x2029: "\\x2029"}
+)
 
 
 def _log_safe(value: str) -> str:
-    """Escape control characters in untrusted text destined for the log."""
+    """Escape line-breaking control characters in untrusted text for the log."""
     return value.translate(_LOG_CONTROL_CHARS)
 
 
 _TOML_CACHE_MTIME: tuple[int, int] | None = None
+
+
+def _config_stat_fingerprint(root: Path) -> tuple[int, int] | None:
+    """``(mtime_ns, size)`` of the project config under *root*, None when absent.
+
+    The one definition of the change token every config-derived memo keys on:
+    the parsed config (:func:`_get_targets_config`), the resolved target list
+    (:func:`resolve_targets`), and the DLL byte cache (:func:`_load_dll`).
+    Editing ``rebrew-project.toml`` is a write that reaches no server code, so
+    a stat is the only invalidation signal available; naming the same one in
+    every key is what keeps those memos from disagreeing about whether the
+    config changed.
+    """
+    try:
+        st = (root / CONFIG_NAME).stat()
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size)
 
 
 def _get_targets_config() -> dict[str, Any]:
@@ -514,10 +867,7 @@ def _get_targets_config() -> dict[str, Any]:
     global _TOML_CONFIG_CACHE, _TOML_CACHE_MTIME
     root = _project_dir()
     toml_path = root / CONFIG_NAME
-    try:
-        current = (toml_path.stat().st_mtime_ns, toml_path.stat().st_size)
-    except OSError:
-        current = None
+    current = _config_stat_fingerprint(root)
     with _RESOLVED_TARGETS_CACHE_LOCK:
         if _TOML_CONFIG_CACHE is not None and current == _TOML_CACHE_MTIME:
             return _TOML_CONFIG_CACHE
@@ -550,22 +900,64 @@ def _target_filename(tid: str, t_info: Any) -> str:
     """Binary filename configured for target *tid* (*tid* when unset).
 
     ONE definition of the defensive shape check used for display names —
-    the config loader stores the raw ``binary`` value ("" when absent), and
-    both target-list builders fall back to the id here.
+    the config loader stores the binary path already resolved against the
+    project root ("" when the target configures none), and both target-list
+    builders fall back to the id here.
     """
     filename = t_info.get("filename", tid) if isinstance(t_info, dict) else tid
     return filename or tid
 
 
-def resolve_targets(c: sqlite3.Cursor) -> tuple[list[str], list[dict[str, str]]]:
-    """Resolve available targets from DB + config (thread-safe, cached via RLock)."""
-    global _RESOLVED_TARGETS_CACHE
-    with _RESOLVED_TARGETS_CACHE_LOCK:
-        if _RESOLVED_TARGETS_CACHE is not None:
-            return _RESOLVED_TARGETS_CACHE["target_ids"], _RESOLVED_TARGETS_CACHE["targets_list"]
+#: Every built target id, excluding the reserved schema-version row.  ONE
+#: definition: the SPA dropdown, /api/health's target count, and the CLI's
+#: ``--target`` validation all read the same set from the same place.  Most
+#: tables carry a ``target`` column too, but ``metadata`` is the one stamped
+#: for every built target (build_db writes a per-target ``db_version`` row), so
+#: a target whose payload tables came out empty is still listed.  Sorted so
+#: every consumer gets a deterministic list (SQLite's DISTINCT order is
+#: arbitrary).
+_DB_TARGETS_SQL = "SELECT DISTINCT target FROM metadata WHERE target != ? ORDER BY target"
 
-        c.execute("SELECT DISTINCT target FROM metadata WHERE target != ?", (SCHEMA_TARGET,))
-        target_ids = [row[0] for row in c.fetchall()]
+
+def db_target_ids(c: sqlite3.Cursor) -> list[str]:
+    """Target ids with build data in *c*, schema row excluded, sorted.
+
+    The read-only counterpart to :func:`resolve_targets`: the ids the database
+    alone knows about, before the project config contributes any target that has
+    never been built.
+    """
+    c.execute(_DB_TARGETS_SQL, (SCHEMA_TARGET,))
+    return [row[0] for row in c.fetchall()]
+
+
+def resolve_targets(c: sqlite3.Cursor) -> list[dict[str, str]]:
+    """Resolve available targets from DB + config (thread-safe, cached via RLock).
+
+    Config-declared targets first, then any DB-only target, so the SPA
+    dropdown and Potato Mode render and default to the same first entry.
+
+    Memoized per (config stat, WAL-aware DB snapshot) — both inputs to the
+    merge, the same contract every other DB-derived memo follows.  Keying on
+    the config alone would have been the obvious half: the parsed config
+    self-invalidates on its stat, so without the config half in this key the
+    two disagreed.  Adding a target to ``rebrew-project.toml`` while the
+    server ran left ``_get_targets_config`` reporting it (and
+    ``_require_target`` accepting it) while the dropdown, ``/api/targets`` and
+    Potato Mode's list omitted it until the next coverage.db rebuild cleared
+    the memo.  The DB half is what the rebuild broadcast already covered; both
+    are named here so neither depends on an event that may never fire.
+    """
+    global _RESOLVED_TARGETS_CACHE
+    key: _ResolvedTargetsKey = (
+        _config_stat_fingerprint(_project_dir()),
+        _snapshot_db_mtime(),
+    )
+    with _RESOLVED_TARGETS_CACHE_LOCK:
+        cached = _RESOLVED_TARGETS_CACHE
+        if cached is not None and cached[0] == key:
+            return cached[1]
+
+        target_ids = db_target_ids(c)
         targets_info = _get_targets_config()
 
         # Config-declared targets come first and are always addressable, even
@@ -577,11 +969,8 @@ def resolve_targets(c: sqlite3.Cursor) -> tuple[list[str], list[dict[str, str]]]
         ]
         targets_list += [{"id": tid, "name": tid} for tid in target_ids if tid not in targets_info]
 
-        _RESOLVED_TARGETS_CACHE = {
-            "target_ids": target_ids,
-            "targets_list": targets_list,
-        }
-        return target_ids, targets_list
+        _RESOLVED_TARGETS_CACHE = (key, targets_list)
+        return targets_list
 
 
 def _find_dll_path(target: str) -> Path | None:
@@ -603,143 +992,148 @@ def _find_dll_path(target: str) -> Path | None:
     return _project_dir() / filename
 
 
+def _cache_dll_unavailable(
+    target: str, config_fp: tuple[int, int] | None, warning: str, *args: object
+) -> bytes | None:
+    """Record *target*'s DLL as unloadable, logging *warning* once.
+
+    The failure paths that are permanent for as long as the config is
+    unchanged (no configured binary, an oversize read) end here so the
+    double-checked insert lives in one place instead of once per path: another
+    thread may have loaded the binary while this thread was doing the work
+    that failed, and that successful load wins.  A read that raises OSError is
+    the exception: it is not cached, so a transient failure costs a retry
+    rather than pinning the target to no DLL for the config's lifetime.
+    Nothing is recorded once *config_fp* has moved on: the verdict describes
+    the config this load resolved against, and recording it would pin it past
+    the edit that fixes it.  String arguments are control-char escaped
+    on the way to the log; numbers are passed through for %d.
+    """
+    with DLL_LOCK:
+        if config_fp != _DLL_CONFIG_MTIME:
+            return None
+        if target in DLL_DATA:
+            return DLL_DATA[target]
+        _log.warning(warning, *(_log_safe(a) if isinstance(a, str) else a for a in args))
+        DLL_DATA[target] = None
+        return None
+
+
 def _load_dll(target: str) -> bytes | None:
     """Load DLL bytes for a target into DLL_DATA (thread-safe).
 
     Why no outer check: reading DLL_DATA[target] outside the lock races with
     dict resize triggered by __setitem__ in another thread.  The GIL protects
     individual bytecodes but not multi-step dict operations during resize.
+
+    DLL_DATA is keyed by target alone, so a config edit that re-points
+    ``[targets.X].binary`` — or gives a target one it had none of — left the
+    old bytes (or the ``None`` of a not-yet-configured target) served to /asm
+    and /bytes until the next coverage.db rebuild.  Re-pointing a binary is an
+    operator edit to rebrew-project.toml: it reaches no server code, and the
+    rebuild broadcast that clears this dict fires on the DB alone.  The memo
+    therefore carries the same config stat its path resolution keys on
+    (:func:`_config_stat_fingerprint`) and drops every entry when that moves,
+    the contract :func:`_get_targets_config` already follows.
     """
+    global _DLL_CONFIG_MTIME
+    config_fp = _config_stat_fingerprint(_project_dir())
     with DLL_LOCK:
-        if target in DLL_DATA:
+        if config_fp != _DLL_CONFIG_MTIME:
+            _DLL_CONFIG_MTIME = config_fp
+            DLL_DATA.clear()
+        elif target in DLL_DATA:
             return DLL_DATA[target]
     dll_path = _find_dll_path(target)
     if dll_path is None:
-        with DLL_LOCK:
-            if target in DLL_DATA:
-                return DLL_DATA[target]
-            _log.warning(
-                "No [targets.%s].binary configured — cannot load DLL for target %s",
-                target,
-                target,
-            )
-            DLL_DATA[target] = None
-        return None
+        return _cache_dll_unavailable(
+            target,
+            config_fp,
+            "No [targets.%s].binary configured — cannot load DLL for target %s",
+            target,
+            target,
+        )
     try:
         file_size = dll_path.stat().st_size
         if file_size > _MAX_DLL_SIZE:
-            with DLL_LOCK:
-                if target in DLL_DATA:
-                    return DLL_DATA[target]
-                _log.warning(
-                    "DLL %s (%d MiB) exceeds %d MiB limit, skipping",
-                    dll_path,
-                    file_size >> 20,
-                    _MAX_DLL_SIZE >> 20,
-                )
-                DLL_DATA[target] = None
-            return None
+            return _cache_dll_unavailable(
+                target,
+                config_fp,
+                "DLL %s (%d MiB) exceeds %d MiB limit, skipping",
+                str(dll_path),
+                file_size >> 20,
+                _MAX_DLL_SIZE >> 20,
+            )
         data = dll_path.read_bytes()
         if len(data) > _MAX_DLL_SIZE:
-            with DLL_LOCK:
-                if target in DLL_DATA:
-                    return DLL_DATA[target]
-                _log.warning(
-                    "DLL %s (%d MiB) exceeds %d MiB limit after read, skipping",
-                    dll_path,
-                    len(data) >> 20,
-                    _MAX_DLL_SIZE >> 20,
-                )
-                DLL_DATA[target] = None
-            return None
+            return _cache_dll_unavailable(
+                target,
+                config_fp,
+                "DLL %s (%d MiB) exceeds %d MiB limit after read, skipping",
+                str(dll_path),
+                len(data) >> 20,
+                _MAX_DLL_SIZE >> 20,
+            )
     except OSError as exc:
         _log.warning(
             "Failed to load DLL for target %s at %s: %s: %s",
-            target,
-            dll_path,
+            _log_safe(target),
+            _log_safe(str(dll_path)),
             type(exc).__name__,
             exc,
         )
         return None
     with DLL_LOCK:
+        # A config edit landing during the read resolves this load against a
+        # path that is no longer current; caching its bytes would serve the
+        # binary the edit just replaced.  Hand them back uncached instead.
+        if config_fp != _DLL_CONFIG_MTIME:
+            return data
         if target in DLL_DATA:
             return DLL_DATA[target]
         DLL_DATA[target] = data
         return data
 
 
-_CAPSTONE_MD_TLS = threading.local()
-
-
-def _get_capstone_md() -> Any:
-    """Return a thread-local Capstone disassembler.
-
-    A single shared ``Cs`` instance is NOT safe to disassemble concurrently
-    (libcapstone is not thread-safe) — with the threaded WSGI server, request
-    threads were racing on it and producing garbage/crashes.
-    """
-    md = getattr(_CAPSTONE_MD_TLS, "md", None)
-    if md is None:
-        import capstone as _capstone  # type: ignore[import-not-found]
-
-        md = _capstone.Cs(_capstone.CS_ARCH_X86, _capstone.CS_MODE_32)
-        md.detail = False
-        _CAPSTONE_MD_TLS.md = md
-    return md
-
-
-def get_disassembly(va: int, size: int, file_offset: int, target: str) -> str:
-    """Disassemble *size* bytes of *target* at *va*, memoized per slice.
-
-    The DLL-load guard deliberately stays OUTSIDE the memo cache: ``_load_dll``
-    leaves transient OS failures uncached so the next request self-heals, and
-    memoizing their "" result here would pin that outage until the next
-    rebuild broadcast happened to clear the cache.
-    """
-    if _load_dll(target) is None:
-        return ""
-    return _disassemble_loaded(va, size, file_offset, target)
-
-
-@functools.lru_cache(maxsize=2048)
-def _disassemble_loaded(va: int, size: int, file_offset: int, target: str) -> str:
-    """Cached disassembly; :func:`get_disassembly` verified the DLL loads."""
-    target_data = _load_dll(target)
-    if target_data is None:
-        # Raced a rebuild's DLL_DATA.clear() between the two loads; the same
-        # broadcast clears this cache, so the "" can never be served twice.
-        return ""
-
-    code_bytes = target_data[file_offset : file_offset + size]
-    if len(code_bytes) < size:
-        return ""
-
-    md = _get_capstone_md()
-    asm_lines = [
-        f"0x{insn.address:08x}  {insn.mnemonic:8s} {insn.op_str}"
-        for insn in md.disasm(code_bytes, va)
-    ]
-
-    return "\n".join(asm_lines) if asm_lines else "  (no instructions)"
-
-
-def clear_disassembly_cache() -> None:
-    """Drop memoized disassembly (called when the original binary changes)."""
-    _disassemble_loaded.cache_clear()
-
-
 # ── Compression ────────────────────────────────────────────────────
 
 
-def _best_encoding(accept_encoding: str) -> str:
-    """Return the best available compression encoding name, or empty string.
+def _header(name: str, default: str = "") -> str:
+    """A request header as text, or *default* when the value is not text.
 
-    Parses comma-separated tokens from Accept-Encoding to avoid false substring
-    matches (e.g. 'not-zstd' should not match 'zstd').  Honours q-values as an
-    exclusion gate only — ``gzip;q=0`` means "not acceptable" (RFC 9110) and
-    must not be chosen — then applies a fixed preference order among the
-    remaining supported encodings (zstd, then br, then gzip), regardless of
-    the tokens' relative q-values.
+    A WSGI server decodes raw header bytes as latin-1, so a peer can send a
+    byte above 0x7f.  bottle re-reads environ values as UTF-8 and raises
+    UnicodeDecodeError on one, which would turn a junk header into a 500 and a
+    traceback in the log on every request.  A header that is not decodable text
+    carries no usable value, so it reads as absent — the same answer the
+    RFC 9110 grammar gives for a value that is not a valid field value.
+    """
+    try:
+        return request.headers.get(name, default)
+    except UnicodeDecodeError:
+        return default
+
+
+#: Every encoding this server can produce, most preferred first.  ONE list:
+#: :func:`_best_encoding` walks it in order, and the precompressed static path
+#: (:func:`static_variant_key`, :func:`compress_static_variants`) reads the same
+#: order for its cache key, so a client cannot be offered a representation the
+#: dynamic path would refuse or vice versa.
+SUPPORTED_ENCODINGS: tuple[str, ...] = ("zstd", "br", "gzip")
+
+
+def accepted_encodings(accept_encoding: str) -> frozenset[str]:
+    """Which of :data:`SUPPORTED_ENCODINGS` the client will accept.
+
+    Parses comma-separated tokens to avoid false substring matches (e.g.
+    'not-zstd' must not match 'zstd'), and honours q-values as an exclusion
+    gate only — ``gzip;q=0`` means "not acceptable" (RFC 9110).  A bare ``*``
+    matches nothing here: it names no specific encoding, and answering it with
+    a guess is the dynamic path's job to make explicitly.
+
+    Relative q-values are NOT ranked.  Every modern browser sends
+    ``gzip, deflate, br, zstd`` with flat q-values, so ordering by q would pick
+    by header order, not by merit.
     """
     candidates: dict[str, float] = {}
     for t in accept_encoding.split(","):
@@ -756,8 +1150,22 @@ def _best_encoding(accept_encoding: str) -> str:
                     q = 0.0
         if q > 0:
             candidates[name] = max(candidates.get(name, 0.0), q)
-    for name in ("zstd", "br", "gzip"):
-        if name in candidates:
+    return frozenset(name for name in SUPPORTED_ENCODINGS if candidates.get(name, 0.0) > 0)
+
+
+def _best_encoding(accept_encoding: str) -> str:
+    """Return the best available compression encoding name, or empty string.
+
+    Applies a fixed preference order (:data:`SUPPORTED_ENCODINGS`) to the
+    encodings the client accepts.  This is the DYNAMIC policy, for payloads
+    built per request: a fixed order keeps one compressor hot instead of
+    compressing the same request body two or three ways.
+
+    The precompressed path cannot use it — see :func:`static_variant_key`.
+    """
+    accepted = accepted_encodings(accept_encoding)
+    for name in SUPPORTED_ENCODINGS:
+        if name in accepted:
             return name
     return ""
 
@@ -773,10 +1181,129 @@ BROTLI_DYNAMIC_QUALITY = 5
 # hard byte budget (the initial congestion window), so it keeps maximum effort.
 BROTLI_STATIC_QUALITY = 11
 
+# zstd effort for the same precompressed surfaces.  The dynamic compressor
+# above is level 3 because a multi-megabyte /data payload pays that cost on
+# every request; the shell and the static assets are compressed once per
+# encoding and then served from a dict, so they take the same "pay once, keep
+# the effort" trade BROTLI_STATIC_QUALITY already makes.  Measured on the
+# shipped assets: hljs.min.js 45,575 -> 39,773 bytes and detail.js
+# 10,468 -> 9,555 (both zstd), for ~20 ms paid once instead of 6 ms per
+# request.  Level 19 is where zstd stops returning a smaller frame on these
+# bodies (level 22 matches it exactly), so this is the knee, not a guess.
+ZSTD_STATIC_LEVEL = 19
 
-def compress_payload(
-    body: bytes, accept_encoding: str, brotli_quality: int = BROTLI_DYNAMIC_QUALITY
+# gzip's own maximum.  gzip is the fallback a scripted client lands on
+# (python-requests advertises only gzip), and there it is the ONLY
+# representation on the wire, so it is worth the highest level gzip offers.
+# It still loses to both modern encodings on every payload measured here.
+GZIP_STATIC_LEVEL = 9
+
+
+def static_variant_key(accept_encoding: str) -> str:
+    """Cache key naming the encodings a precompressed body may be chosen from.
+
+    A precompressed response picks the SMALLEST representation the client can
+    decode rather than a fixed preference, so its body is a function of the
+    client's whole accepted set — not of any one token.  This key names that
+    set, which is what makes the cache (and the ``Vary: Accept-Encoding``
+    contract) sound: two clients with the same key get byte-identical
+    responses, and a client can never be handed a body it did not ask for.
+
+    The key is drawn from :data:`SUPPORTED_ENCODINGS` in that fixed order, so
+    it is at most 2**3 spellings no matter what the client sends.  It is
+    itself a valid ``Accept-Encoding`` value naming exactly that subset, which
+    is what lets a cache pre-build a key without a client header to hand.
+    """
+    accepted = accepted_encodings(accept_encoding)
+    return ", ".join(name for name in SUPPORTED_ENCODINGS if name in accepted)
+
+
+def compress_static_variants(body: bytes, accept_encoding: str) -> tuple[bytes, str]:
+    """Compress *body* to the smallest representation the client accepts.
+
+    The precompressed counterpart of :func:`compress_payload`, for bytes built
+    once and served many times (the SPA shell, the static assets).  Two
+    differences from the dynamic path, both of which only make sense off the
+    per-request path:
+
+    * EVERY accepted encoding is produced and the smallest body wins, at
+      maximum effort.  Compressing the same static bytes two or three ways
+      costs nothing per request and guarantees the winner is the real minimum.
+      The dynamic path cannot afford that, and must not: it keeps a fixed
+      order and compresses once.
+    * zstd runs at :data:`ZSTD_STATIC_LEVEL` rather than the dynamic level 3.
+
+    Measured on the SPA shell: brotli q11 gives 14,075 bytes against zstd's
+    17,056 at the dynamic level and 15,178 even at level 19.  zstd wins on
+    throughput, not on this payload, and a fixed zstd-first preference handed
+    every zstd-capable browser 3 KB more than necessary and pushed the shell
+    past the initial congestion window (14,600), costing a second round trip
+    before the first paint.  Choosing by size puts it back inside the window.
+
+    Returns (body, "") when the client accepts none of the supported
+    encodings, so the caller sets Content-Encoding only on a truthy name.
+
+    One body, one accepted set.  A caller serving the same bytes under several
+    sets compresses once with :func:`compress_static_bodies` and selects per set
+    with :func:`select_static_variant`, rather than calling this per set.
+    """
+    accepted = accepted_encodings(accept_encoding)
+    if not accepted:
+        return body, ""
+    return select_static_variant(
+        {name: compress_static_body(body, name) for name in accepted}, accept_encoding, body
+    )
+
+
+def compress_static_body(body: bytes, encoding: str) -> bytes:
+    """Compress *body* once, at static effort, in *encoding*."""
+    if encoding == "zstd":
+        return zstd.ZstdCompressor(level=ZSTD_STATIC_LEVEL).compress(body)
+    if encoding == "br":
+        return brotli.compress(body, quality=BROTLI_STATIC_QUALITY)
+    return gzip.compress(body, compresslevel=GZIP_STATIC_LEVEL)
+
+
+def compress_static_bodies(body: bytes) -> dict[str, bytes]:
+    """Compress *body* once per supported encoding, at static effort.
+
+    One body is served under every accepted-encoding set the shell and the
+    static assets are keyed on, and the answer for a set is always one of these
+    three bodies: a set selects among them and never needs a fourth
+    compression.  A caller that wants many sets at once therefore pays three
+    compressions rather than one per set, and the expensive one runs once —
+    brotli at :data:`BROTLI_STATIC_QUALITY` is milliseconds per call on the
+    shell, and zstd allocates a fresh :data:`ZSTD_STATIC_LEVEL` context on
+    every call.
+    """
+    return {name: compress_static_body(body, name) for name in SUPPORTED_ENCODINGS}
+
+
+def select_static_variant(
+    candidates: dict[str, bytes], accept_encoding: str, identity: bytes
 ) -> tuple[bytes, str]:
+    """Smallest of *candidates* the client accepts, and its encoding.
+
+    *identity* is the uncompressed body, returned with an empty encoding when
+    the client accepts none of the supported encodings, so the caller can set
+    Content-Encoding only on a truthy name.  A tie goes to the earlier name in
+    :data:`SUPPORTED_ENCODINGS`, so bytes that compress to the same length two
+    ways are always served under the same encoding.
+    """
+    accepted = accepted_encodings(accept_encoding)
+    best: tuple[bytes, str] | None = None
+    for name in SUPPORTED_ENCODINGS:
+        if name not in accepted:
+            continue
+        candidate = candidates[name]
+        if best is None or len(candidate) < len(best[0]):
+            best = (candidate, name)
+    if best is None:
+        return identity, ""
+    return best
+
+
+def compress_payload(body: bytes, accept_encoding: str) -> tuple[bytes, str]:
     """Compress body with the best algorithm the client accepts.
 
     Returns (compressed_body, encoding_name). encoding_name is "" if no
@@ -787,7 +1314,7 @@ def compress_payload(
     if encoding == "zstd":
         return _get_zstd_compressor().compress(body), "zstd"
     if encoding == "br":
-        return brotli.compress(body, quality=brotli_quality), "br"
+        return brotli.compress(body, quality=BROTLI_DYNAMIC_QUALITY), "br"
     if encoding == "gzip":
         # Level 6, not gzip.compress's default 9: measured on a ~9 MB /data
         # payload, -9 costs 2x the CPU of -6 for ~9% fewer bytes (96 ms ->
@@ -810,11 +1337,101 @@ def _escape_like(search: str) -> str:
 
     Backslash itself must be escaped first, since it is the ESCAPE character
     and would otherwise consume the next character as a literal.
+
+    Case folding stops at ASCII: SQLite's LIKE (and its lower()) match "A"
+    against "a" and nothing else, so a server-side search for "STRASSE"
+    misses "Straße" and an NFD query misses the NFC name stored in the row.
+    The SPA's own grid search folds properly in JS (see app.js), so the two
+    halves of the search box differ for non-ASCII queries.  Closing that on
+    this side needs a folded column, which means a schema migration, not a
+    query change.
     """
     return "%" + search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
 
 
+def fold_text(text: str | None) -> str | None:
+    """NFC + full case folding: the one form a name is searched in.
+
+    ``LIKE`` folds case for ASCII only, so ``name LIKE '%CAFÉ%'`` does not
+    match ``Café_Render`` and a search that a user can see in the symbol table
+    returns nothing.  NFC first, so the NFD spelling of the same name (what a
+    macOS-side tool writes) matches the NFC one.  ``casefold``, not ``lower``:
+    it is the folding operators for caseless matching, and it maps ß to ss
+    the way a reader expects.  Compatibility folding is deliberately not
+    applied: NFKC would make a superscript or a circled digit compare equal to
+    a plain letter, which is not what a substring search should claim.
+
+    NULL passes through: this is registered as a SQL function and a nullable
+    column (``functions.symbol``) reaches it as NULL, which a ``str`` call
+    would raise on, failing the whole query.
+    """
+    if text is None:
+        return None
+    return unicodedata.normalize("NFC", text).casefold()
+
+
+#: SQL name of :func:`fold_text`, registered on every read connection by
+#: :func:`_open_db`.  One name for the one folding, so the SPA, the API list
+#: and Potato Mode cannot drift onto different definitions.
+FOLD_SQL = "rc_fold"
+
+
+def like_match(columns: Sequence[str]) -> tuple[str, int]:
+    """``(sql, param_count)`` for an OR chain of LIKE tests over *columns*.
+
+    Every column goes through ``COALESCE(col, '')`` and that is load-bearing,
+    not defensive: ``functions.symbol`` is nullable, and SQL's three-valued
+    logic turns one NULL in an ``OR`` chain into a NULL predicate.  ANDed
+    against another match (``AND (a OR NULL) AND (folded match)``), the row is
+    dropped even though its name matched — a row with no symbol was invisible
+    to every search.
+
+    A NULL therefore compares as the empty string, which no non-empty search
+    term can match: :func:`_escape_like` always wraps the term in ``%``.
+    """
+    disjunct = " OR ".join(f"COALESCE({col}, '') LIKE ? ESCAPE '\\'" for col in columns)
+    return f"({disjunct})", len(columns)
+
+
+def folded_like_clause(columns: Sequence[str], search: str) -> tuple[str, list[str]]:
+    """``(sql, params)`` for a Unicode-correct disjunct over *columns*.
+
+    ``LIKE`` already folds ASCII correctly, so a pure-ASCII term needs
+    nothing extra and the common path keeps its single predicate.  A term
+    carrying any non-ASCII character is one SQLite's folding cannot judge, so
+    the caller adds this disjunct alongside its ``LIKE``: the columns and the
+    pattern both go through :data:`FOLD_SQL` before the comparison.
+
+    Returns ``("", [])`` for an ASCII term or no columns, so callers can test
+    the clause rather than the term.  The pattern is escaped after folding, so
+    a wildcard character the fold produced cannot act as one.
+    """
+    if not columns or search.isascii():
+        return "", []
+    folded = _escape_like(cast(str, fold_text(search)))
+    disjunct = " OR ".join(f"COALESCE({FOLD_SQL}({col}), '') LIKE ? ESCAPE '\\'" for col in columns)
+    return f"({disjunct})", [folded] * len(columns)
+
+
 # ── SQL fragments ──────────────────────────────────────────────────
+
+#: SQLite's wording for a schema object the database does not carry.
+_ABSENT_OBJECT_MARKERS = ("no such table", "no such column")
+
+
+def _is_absent_object(exc: sqlite3.Error) -> bool:
+    """Whether *exc* is SQLite reporting a schema object the database lacks.
+
+    The one test every "this older or foreign database has no such table"
+    fallback routes through.  A degrade-on-older-schema path answers
+    ``no such table``/``no such column`` from ``cells`` so a pre-v7 database
+    still serves; any other ``sqlite3.Error`` means the file could not be read,
+    which propagates to the 503 ``db_unavailable`` contract rather than
+    producing a fallback payload that looks like a successful read.
+    """
+    message = str(exc).lower()
+    return any(marker in message for marker in _ABSENT_OBJECT_MARKERS)
+
 
 #: Optional v6 columns, probed per connection: older DBs (v5 and below)
 #: lack them, and the endpoints degrade instead of 500ing.
@@ -824,11 +1441,16 @@ _V6_VERIFY_COLS = ("reg_delta", "effective_match")
 
 
 def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
-    """Column names of *table*; empty set when the table is missing."""
-    try:
-        rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
-    except sqlite3.Error:
-        return set()
+    """Column names of *table*; empty set when the table is missing.
+
+    ``PRAGMA table_info`` answers a name no table carries with zero rows, not
+    an error, so a missing table needs no guard and every ``sqlite3.Error``
+    raised here is a database that could not be read.  Returning an empty set
+    for one would drop every optional v6 column from the function, global and
+    verify payloads — a silently short response, where the 503 contract says
+    the failure belongs.
+    """
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
     return {r[1] for r in rows}
 
 
@@ -881,15 +1503,63 @@ _GLOBAL_JSON_SQL = (
     ")"
 )
 
-# Cell shape contract for BOTH consumers (SPA /data and Potato grid): the
-# json_object keys here are what app.js and potato.py render.  The projection
-# comes from rebrew.workspace — the SAME constant build_db materializes into
-# section_cells_json — so the cache path and this live fallback cannot drift
-# into serving different cell shapes.  See CELLS_JSON_OBJECT_SQL for why `id`
-# is not part of it.
-_CELLS_JSON_SQL = (
-    f"SELECT section_name, json_group_array({CELLS_JSON_OBJECT_SQL}) FROM cells WHERE target = ?"
-)
+# Cell shape for the SPA /data payload and the Potato grid. SECTION_CELLS_AGG_SQL
+# is the ordered aggregate build_db writes into section_cells_json (the
+# CELLS_JSON_OBJECT_SQL projection, json_group_array ... ORDER BY start). The
+# live fallback uses that same expression so a database without the cache cannot
+# drift into a different cell shape or into planner row order. `id` is omitted
+# from the projection: no consumer reads it.
+_CELLS_JSON_SQL = f"SELECT section_name, {SECTION_CELLS_AGG_SQL} FROM cells WHERE target = ?"
+
+
+def _lookup_by_va_or_name(
+    c: sqlite3.Cursor, table: str, json_sql: str, target: str, value: str
+) -> sqlite3.Row | None:
+    """First row of *table* matching *value* as a VA, else as a folded name.
+
+    ONE resolution order for the /functions/<va> route and both Potato Mode
+    detail panels: callers name a function by VA ("0x10001000") or, for
+    legacy cells, by the symbol outright.  A VA-shaped entry that matches no
+    row still falls through to the name lookup, so the route and the panels
+    cannot disagree about what a value names.  *table* and *json_sql* are
+    literals from the call sites; target and the value are parameterized.
+
+    The name is first compared byte for byte, then only a miss falls through to
+    the folded comparison through :data:`FOLD_SQL`, the same NFC + case fold
+    every search uses.  Byte equality alone made a symbol the user could find
+    through /functions?search= unresolvable by name: the NFD spelling macOS puts
+    on the clipboard (``e`` + U+0301 COMBINING ACUTE) is a different byte string
+    from the NFC one rebrew stores, so the row the search highlighted 404'd when
+    it was opened.  Folding in SQL rather than in Python keeps the stored name
+    untouched, so a database predating this lookup needs no migration.
+
+    Neither name arm is served by an index.  rebrew's ``build_db`` drops
+    ``idx_functions_name`` and ``idx_globals_name`` on every rebuild (a
+    b-tree cannot serve the leading-wildcard ``LIKE`` that is the only other
+    name predicate either table gets, so they were pure per-row write cost),
+    and the byte-equality arm here is a separate query shape it does not
+    cover.  Both name arms therefore scan the target's partition, which is
+    acceptable only because the VA arms run first and nearly every cell
+    carries a VA: a name-form lookup is a user click, not a request-rate
+    path.  Adding ``(target, name)`` to rebrew's build is what would make
+    them seeks, and it is rebrew's schema, not this reader's.
+
+    SAFETY: the interpolated parts are the table name, the projection and the
+    registered function name, all supplied by this module or the caller as
+    literals.
+    """
+    prefix = f"SELECT {json_sql} FROM {table} WHERE target=? AND "
+    for candidate in parse_va_candidates(value):
+        c.execute(prefix + "va=?", (target, candidate))
+        row = c.fetchone()
+        if row:
+            return row
+    c.execute(prefix + "name=?", (target, value))
+    row = c.fetchone()
+    if row is not None:
+        return row
+    c.execute(prefix + f"{FOLD_SQL}(name)={FOLD_SQL}(?)", (target, fold_text(value)))
+    return c.fetchone()
 
 
 def _has_materialized_cells(c: sqlite3.Cursor) -> bool:
@@ -909,19 +1579,23 @@ def _has_materialized_cells(c: sqlite3.Cursor) -> bool:
     by querying a table that is not there.  A fingerprint-keyed memo would cost
     about as much as the query it replaces.
     """
-    try:
-        c.execute(
-            "SELECT 1 FROM pragma_table_info(?) WHERE name = ?",
-            (SECTION_CELLS_TABLE, SECTION_CELLS_COLUMN),
-        )
-        return c.fetchone() is not None
-    except sqlite3.Error:
-        # Unreadable schema: treat as absent and use the live query.
-        return False
+    # No guard for a table the database does not carry: pragma_table_info
+    # answers an unknown name with zero rows, which is the False this returns.
+    # A sqlite3.Error here is a database that could not be read, and answering
+    # "no cache, use the live query" would be a slow but plausible response
+    # where the 503 contract says the failure belongs.
+    c.execute(
+        "SELECT 1 FROM pragma_table_info(?) WHERE name = ?",
+        (SECTION_CELLS_TABLE, SECTION_CELLS_COLUMN),
+    )
+    return c.fetchone() is not None
 
 
 def _cells_json_rows(
-    c: sqlite3.Cursor, target: str, section: str | None = None
+    c: sqlite3.Cursor,
+    target: str,
+    section: str | None = None,
+    expected_sections: set[str] | None = None,
 ) -> list[tuple[str, str]]:
     """Per-section cell JSON payloads as (section_name, cells_json) rows.
 
@@ -931,19 +1605,67 @@ def _cells_json_rows(
     ``json_group_array`` over every cell (10.7 ms on a 39k-cell section).
     Falls back to the live query when the table is absent or written in an older
     codec, so a pre-v7 database keeps working and self-heals on its next build.
+
+    *expected_sections* is the section-name set the caller already read from
+    ``sections``.  When the materialized table is PARTIAL (present and current
+    codec, but missing a section, as a scoped rebuild or a hand-made database
+    leaves it), the
+    missing sections are re-aggregated from ``cells`` rather than dropped: a
+    dropped section renders as an empty grid, and every one of its bytes reads
+    as ``none`` in the SPA and Potato Mode, which is a wrong answer rather than
+    a slow one.  The caller already holds the section list inside the same
+    pinned snapshot, so the extra query only runs when a section is actually
+    missing.
     """
+    clause = " AND section_name = ?" if section else ""
+    params: list[Any] = [target, *([section] if section else [])]
     if _has_materialized_cells(c):
-        clause = " AND section_name = ?" if section else ""
-        params: list[Any] = [target] + ([section] if section else [])
         c.execute(
             f"SELECT section_name, {SECTION_CELLS_COLUMN} FROM {SECTION_CELLS_TABLE}"
             f" WHERE target = ?{clause}",
             params,
         )
-        return [(row[0], decode_section_cells(row[1])) for row in c.fetchall()]
+        rows = [(row[0], decode_section_cells(row[1])) for row in c.fetchall()]
+        missing = _uncovered_sections({name for name, _ in rows}, expected_sections)
+        if not missing:
+            return rows
+        rows += _live_cells_json_rows(c, target, missing)
+        return rows
 
-    clause = " AND section_name = ?" if section else ""
-    params = [target] + ([section] if section else [])
+    return _live_cells_json_rows(c, target, None, section)
+
+
+def _uncovered_sections(present: set[str], expected: set[str] | None) -> list[str]:
+    """Expected section names *present* does not cover, in a stable order."""
+    if not expected:
+        return []
+    return sorted(name for name in expected if name not in present)
+
+
+def _live_cells_json_rows(
+    c: sqlite3.Cursor,
+    target: str,
+    only: list[str] | None,
+    section: str | None = None,
+) -> list[tuple[str, str]]:
+    """``json_group_array`` over ``cells`` for *target*, narrowed by *section*
+    and/or *only*.
+
+    *only* names the sections to aggregate; every other section is skipped, so
+    filling the gap a partial cache left does not re-aggregate the whole target.
+    """
+    clause = ""
+    params: list[Any] = [target]
+    if section is not None:
+        clause = " AND section_name = ?"
+        params.append(section)
+    if only is not None:
+        if not only:
+            return []
+        # SAFETY: placeholders is only "?,?,...", its length comes from *only*,
+        # and every value reaches the statement parameterized.
+        clause += f" AND section_name IN ({','.join('?' * len(only))})"
+        params.extend(only)
     c.execute(_CELLS_JSON_SQL + f"{clause} GROUP BY section_name", params)
     return [(row[0], row[1]) for row in c.fetchall()]
 
@@ -951,9 +1673,11 @@ def _cells_json_rows(
 def _evict_oldest(cache: dict[Any, Any], max_size: int) -> None:
     """Drop oldest entries (dict insertion order) until *cache* holds < max_size.
 
-    ONE definition of the bounded-cache arithmetic shared by the /data
-    payload memo and Potato's cells memo — both cap multi-MB payloads so a
-    long-running server across many rebuilds cannot accumulate forever.
+    ONE definition of the bounded-cache arithmetic behind every per-DB-snapshot
+    memo in the package (/data payloads, /stats, the function list totals, and
+    Potato's cells and per-section stats).  They are keyed by a snapshot that
+    changes on every rebuild, so a long-running server would otherwise
+    accumulate an entry per snapshot forever.
     Caller holds the cache's own lock.
     """
     if len(cache) >= max_size:
@@ -968,8 +1692,10 @@ def _format_hex_dump(raw_bytes: bytes, base_offset: int = 0, max_bytes: int | No
     Potato Mode's Original Bytes block (the two inline copies had already
     drifted: a single 48-char hex column vs 8+8 byte columns).  Layout:
     8-hex-digit offset, hex bytes in two 8-byte columns, ASCII gutter —
-    matching detail.js's client-side dump.  *max_bytes* caps the dump and
-    appends a ``... (N more bytes)`` tail; ``None`` dumps everything.
+    the same layout as detail.js's client-side dump, which upper-cases the
+    hex, so the two renderings of one slice differ in case.  *max_bytes*
+    caps the dump and appends a ``... (N more bytes)`` tail; ``None`` dumps
+    everything.
     """
     data = raw_bytes if max_bytes is None else raw_bytes[:max_bytes]
     lines: list[str] = []
@@ -1009,21 +1735,25 @@ def _load_metadata(c: sqlite3.Cursor, target: str) -> dict[str, Any]:
     return data
 
 
-KNOWN_SCHEMA_VERSIONS: frozenset[str] = frozenset({"3", "4", "5", "6", "7"})
+# v8 CHECK-constrains functions.status, v9 CHECK-constrains cells.state and
+# adds idx_metadata_key, v10 widens the cell-state set (extract_error,
+# invalid_va). None of those add or remove a column this server queries.
+KNOWN_SCHEMA_VERSIONS: frozenset[str] = frozenset({"3", "4", "5", "6", "7", "8", "9", "10"})
 
-# Schema check memoized per DB (mtime_ns, size): the check is two queries
-# (metadata + full sqlite_master scan) that would otherwise run on every
-# request; the DB only changes when build-db rewrites it, which the SSE
-# watcher already detects and funnels through clear_target_cache().
+# Schema check memoized on the DB's read snapshot (see
+# _snapshot_db_mtime): the check is two queries (metadata + full sqlite_master
+# scan) that would otherwise run on every request; the DB only changes when
+# build-db rewrites it, which the SSE watcher already detects and funnels
+# through clear_target_cache().
 _SCHEMA_VERSION_CACHE: tuple[tuple[int, int], str] | None = None
 
 
 def _check_schema_version(conn: sqlite3.Connection) -> str:
     """Read the stored db_version metadata; warn if it is not a known-compatible version.
 
-    Known-compatible versions: 3 through 7.  Version 3 is still readable
+    Known-compatible versions: 3 through 10.  Version 3 is still readable
     because none of the v4 constraints affect reads of existing data.  Any other
-    version is logged as a warning — recoverage does not abort.
+    version is logged as a warning. recoverage does not abort.
 
     The version stamp alone is not proof of shape: a DB stamped "4" can be
     missing required objects (e.g. the ``history`` table) and pass this gate,
@@ -1054,8 +1784,12 @@ def _missing_required_columns(conn: sqlite3.Connection) -> set[str]:
     The name-only shape gate passes a DB stamped "4" whose ``functions``
     table lacks ``textOffset``/``similarity`` (queried by the function
     detail endpoint) or whose ``section_cell_stats`` table is missing a
-    counted bucket — those fail at query time instead of at open.  Column sets
-    mirror the schema build_db creates so drift is caught here.
+    counted bucket — those fail at query time instead of at open.  The sets
+    below are the columns recoverage itself subscripts, not a copy of
+    build_db's schema: a column build_db added after these endpoints were
+    written is not required here, and optional columns the live readers probe
+    for are left out on purpose (the v6 additions noted in
+    _check_schema_version_uncached).
     """
     required_columns: dict[str, set[str]] = {
         "metadata": {"target", "key", "value"},
@@ -1117,12 +1851,12 @@ def _missing_required_columns(conn: sqlite3.Connection) -> set[str]:
     }
     missing: set[str] = set()
     for obj, cols in required_columns.items():
-        try:
-            rows = conn.execute(f"PRAGMA table_info({obj})").fetchall()
-        except sqlite3.Error:
-            missing.add(obj)
-            continue
-        actual = {r[1] for r in rows}
+        # No guard, for the reason _table_columns gives: PRAGMA table_info
+        # answers a name no table carries with zero rows, so a table the
+        # database lacks lands in `cols - actual` and every column of it is
+        # reported missing.  A sqlite3.Error here is a database that could not
+        # be read, and it belongs to the 503 contract, not to this set.
+        actual = _table_columns(conn, obj)
         for col in cols - actual:
             missing.add(f"{obj}.{col}")
     return missing
@@ -1166,14 +1900,15 @@ def _check_schema_version_uncached(conn: sqlite3.Connection) -> str:
                 "section_cell_stats",
             }
             missing = required - present
-            if not missing and version in ("4", "5", "6", "7"):
-                # Object names present — verify the query-critical columns.
-                # A DB stamped "4" whose functions table lacks textOffset /
-                # similarity (or whose view is stale) 500s at query time.
-                # v6 additions (updated_by/updated_at, globals.status,
-                # verify reg_delta/effective_match) are read tolerantly by
-                # the endpoints, so absence degrades rather than 503s —
-                # but the shape gate still reports them for visibility.
+            if not missing and version != "3":
+                # Object names present. Verify the query-critical columns.
+                # v3 predates that column set. v4 through v10 share it:
+                # v8 through v10 add CHECK constraints and an index, not
+                # columns these queries name. v6 additions (updated_by /
+                # updated_at, globals.status, verify reg_delta /
+                # effective_match) are read when present and omitted when
+                # absent, so a missing one degrades rather than 503s. The
+                # shape gate still reports a missing required column.
                 missing |= _missing_required_columns(conn)
             if missing:
                 _log.warning(
@@ -1195,10 +1930,96 @@ def _check_schema_version_uncached(conn: sqlite3.Connection) -> str:
         return "<unknown>"
 
 
+# Same busy wait as rebrew.workspace.open_sqlite_ro. A reader blocked on
+# build-db's write lock should wait out a short transaction, not the
+# sqlite default of 5s.
+_SQLITE_RO_TIMEOUT_SECONDS = 30.0
+
+
+class _LockedReadConnection(sqlite3.Connection):
+    """Read-only connection that releases the shared coverage lock on close.
+
+    ``sqlite3.Connection.close`` cannot be replaced on an instance, and the
+    stock connection cannot be weak-referenced, so the lock lives on this
+    subclass. ``contextlib.closing`` calls ``close``. There is no ``__del__``:
+    sqlite forbids ``close`` from a thread other than the one that opened
+    the connection, and a failed ``connect`` still finalizes the subclass.
+    Dropping the connection without ``close`` drops the lock object, and
+    that generator's cleanup unlocks the file. ``build-db --force`` waits
+    on the lock before unlinking the file.
+    """
+
+    _coverage_lock: contextlib.AbstractContextManager[None] | None = None
+
+    def close(self) -> None:
+        lock = getattr(self, "_coverage_lock", None)
+        self._coverage_lock = None
+        try:
+            super().close()
+        finally:
+            if lock is not None:
+                lock.__exit__(None, None, None)
+
+
 def _open_db(db_path: Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(sqlite_ro_uri(db_path), uri=True)
+    """Open *db_path* read-only, holding ``coverage_db_lock`` until close.
+
+    Same reader setup as ``rebrew.workspace.open_sqlite_ro`` (``mode=ro``
+    URI, ``query_only``, 30s busy timeout). The connection is a
+    :class:`_LockedReadConnection` so the shared lock survives for the open.
+
+    :data:`FOLD_SQL` is registered here so every surface searching through
+    this connection folds names the same way; a clause naming it against a
+    connection that lacks it would fail the whole query.
+    """
+    lock = coverage_db_lock(db_path, shared=True)
+    lock.__enter__()
+    try:
+        conn = sqlite3.connect(
+            sqlite_ro_uri(db_path),
+            uri=True,
+            timeout=_SQLITE_RO_TIMEOUT_SECONDS,
+            factory=_LockedReadConnection,
+        )
+        try:
+            conn.execute("PRAGMA query_only=ON")
+            conn.create_function(FOLD_SQL, 1, fold_text, deterministic=True)
+        except BaseException:
+            # The lock is not attached yet, so close() does not release it.
+            conn.close()
+            raise
+    except BaseException:
+        lock.__exit__(None, None, None)
+        raise
+    conn._coverage_lock = lock
     conn.row_factory = sqlite3.Row
     return conn
+
+
+@contextlib.contextmanager
+def read_snapshot(c: sqlite3.Cursor) -> Iterator[None]:
+    """Run every statement in the block against ONE database snapshot.
+
+    Python's sqlite3 opens a deferred transaction per statement, so a
+    multi-query read (metadata + cells + sections + stats) sees a rebuild
+    that commits midway through: the payload can pair section rows from one
+    build with cells from the next.  ``BEGIN`` here pins the read snapshot
+    for the whole block, so the answer is internally consistent or the
+    request fails.
+
+    No-op when the caller is already inside a transaction (the CLI reuses
+    one connection across commands): SQLite has no nested BEGIN, and the
+    outer transaction already pins the snapshot.
+    """
+    conn = c.connection
+    if conn.in_transaction:
+        yield
+        return
+    conn.execute("BEGIN")
+    try:
+        yield
+    finally:
+        conn.rollback()
 
 
 def _db() -> sqlite3.Connection:
@@ -1220,31 +2041,35 @@ def _db() -> sqlite3.Connection:
 
 # ── Response helpers ───────────────────────────────────────────────
 
-# The two cache policies for DB-derived responses.  NO_STORE: mutable
-# payloads (target lists, grids) that must never survive a rebuild.
-# REVALIDATE: ETag-bearing payloads (/data, /asm, /bytes, /potato) that a
-# browser may keep but must re-verify with If-None-Match every time.
+# The two cache policies for DB-derived responses.  NO_STORE: payloads with
+# no validator the client can cheaply re-check — /api/health, /api/targets,
+# the function list/detail routes and /api/events — which must never survive a
+# rebuild.  REVALIDATE: the ETag-bearing payloads (the SPA shell, /stats,
+# /data, /asm, /bytes, /potato) that a browser may keep but must re-verify with
+# If-None-Match every time.
 CACHE_NO_STORE = "no-cache, no-store, must-revalidate"
 CACHE_REVALIDATE = "no-cache, must-revalidate"
 
 
-def _finalized(body: bytes, content_type: str, encoding: str, **headers: str) -> bytes:
-    """Set payload headers for an already-final *body* and return it."""
-    response.content_type = content_type
+def _finalized(
+    resp: HTTPResponse, body: bytes, content_type: str, encoding: str, **headers: str
+) -> bytes:
+    """Set payload headers on *resp* for an already-final *body* and return it."""
+    resp.content_type = content_type
     if encoding:
-        response.set_header("Content-Encoding", encoding)
-    response.set_header("Vary", "Accept-Encoding")
-    response.set_header("Content-Length", str(len(body)))
+        resp.set_header("Content-Encoding", encoding)
+    resp.set_header("Vary", "Accept-Encoding")
+    resp.set_header("Content-Length", str(len(body)))
     for k, v in headers.items():
-        response.set_header(k.replace("_", "-"), v)
+        resp.set_header(k.replace("_", "-"), v)
     return body
 
 
 def _compressed(body: bytes, content_type: str, **headers: str) -> bytes:
     """Compress body, set response headers, return final body."""
-    accept_enc = request.headers.get("Accept-Encoding", "")
+    accept_enc = _header("Accept-Encoding", "")
     body, encoding = compress_payload(body, accept_enc)
-    return _finalized(body, content_type, encoding, **headers)
+    return _finalized(response, body, content_type, encoding, **headers)
 
 
 def _json_ok(data: dict[str, Any] | list[Any] | bytes, **headers: str) -> bytes:
@@ -1255,7 +2080,7 @@ def _json_ok(data: dict[str, Any] | list[Any] | bytes, **headers: str) -> bytes:
 
 def _json_ok_precompressed(body: bytes, encoding: str, **headers: str) -> bytes:
     """Return a JSON 200 from an already-compressed body (no recompression)."""
-    return _finalized(body, "application/json", encoding, **headers)
+    return _finalized(response, body, "application/json", encoding, **headers)
 
 
 # Every JSON error response carries this trio: `error` (human message),
@@ -1265,17 +2090,18 @@ _STATUS_ERROR_CODES: dict[int, str] = {
     401: "unauthorized",
     403: "forbidden",
     404: "not_found",
+    405: "method_not_allowed",
     413: "payload_too_large",
+    415: "unsupported_media_type",
     422: "unprocessable_entity",
     429: "rate_limited",
     500: "internal",
     501: "not_implemented",
     503: "db_unavailable",
-    504: "gateway_timeout",
 }
 
 
-def _json_err(status: int, data: dict[str, Any], **headers: str) -> Any:
+def _json_err(status: int, data: dict[str, Any], **headers: str) -> HTTPResponse:
     """Return a JSON error response.
 
     Body is always ``{"error": <human message>, "code": <machine code>,
@@ -1294,28 +2120,24 @@ def _json_err(status: int, data: dict[str, Any], **headers: str) -> Any:
         if key not in body_data:
             body_data[key] = value
     body = json.dumps(body_data).encode("utf-8")
-    accept_enc = request.headers.get("Accept-Encoding", "")
+    accept_enc = _header("Accept-Encoding", "")
     body, encoding = compress_payload(body, accept_enc)
-    resp = HTTPResponse(status=status, body=body)
-    resp.content_type = "application/json"
-    if encoding:
-        resp.set_header("Content-Encoding", encoding)
-    resp.set_header("Vary", "Accept-Encoding")
-    resp.set_header("Content-Length", str(len(body)))
     # Errors must never be cached by intermediaries: a proxy could serve a
     # stale 503 after the DB recovers.
-    resp.set_header("Cache-Control", "no-store")
-    for k, v in headers.items():
-        resp.set_header(k.replace("_", "-"), v)
+    resp = HTTPResponse(status=status, body=body)
+    _finalized(resp, body, "application/json", encoding, Cache_Control="no-store", **headers)
     return resp
 
 
 # ── Token auth ─────────────────────────────────────────────────────
 
 # Optional token auth for the dashboard (--token): when set, every request
-# must present it via Authorization: Bearer <token>, ?token=, or the
-# HttpOnly cookie the index route sets for the SPA.  Loopback stays
-# unauthenticated when no token is configured.
+# from every peer must present it via Authorization: Bearer <token>, ?token=,
+# or the HttpOnly cookie :func:`set_auth_cookie` writes for the page routes
+# (both / and /potato; every link on either page is relative, so the cookie is
+# what carries the credential past the first click).  There is no loopback
+# exemption, which is why --allow-remote pairs with --token rather than
+# replacing it.
 _AUTH_TOKEN: str = ""
 
 
@@ -1347,6 +2169,166 @@ def _auth_token_matches(provided: str) -> bool:
     return bool(_AUTH_TOKEN) and hmac.compare_digest(
         provided.encode("utf-8"), _AUTH_TOKEN.encode("utf-8")
     )
+
+
+#: Name of the HttpOnly cookie the ``?token=`` share-link flow sets, and the one
+#: :func:`_require_auth` reads it back under.  ONE name, so the surface that
+#: sets it and the gate that consumes it cannot drift apart.
+AUTH_COOKIE_NAME = "recoverage_token"
+
+
+def set_auth_cookie() -> None:
+    """Set the auth cookie when this request carried ``?token=<token>``.
+
+    The share link (``http://host:port/?token=TOKEN``) is the only way a
+    browser hands the SPA a credential, and the cookie is what makes every
+    later ``fetch``/``EventSource`` call and every relative link
+    (``?target=...``, ``?idx=...``) authenticate without the query string
+    riding along.  EVERY page surface that a share link can land on must set
+    it: /potato renders only relative URLs, so a reader who arrived there with
+    the token in the query lost it on the first click and got the 401 page
+    back.
+
+    No-op when no token is configured, when the request carries no ``?token=``,
+    or when the value does not match; the 401 itself is :func:`_require_auth`'s
+    job, which runs first.
+    """
+    if not _AUTH_TOKEN or not _auth_token_matches(query_param("token")):
+        return
+    # A header the peer will not accept must not break the page it rides on —
+    # but it must not be invisible either.  A dropped Set-Cookie leaves the
+    # reader authenticated for exactly one request and 401 on every link they
+    # follow after it, which reads as a broken server and is diagnosable only
+    # from this line.  The value is the server's own token, never the request's.
+    try:
+        response.set_header(
+            "Set-Cookie",
+            f"{AUTH_COOKIE_NAME}={_AUTH_TOKEN}; Path=/; HttpOnly; SameSite=Strict",
+        )
+    except Exception:
+        _log.warning(
+            "Set-Cookie rejected for %s %s — the share link will 401 on every "
+            "follow-on request (the page itself still renders)",
+            _log_safe(request.method),
+            _log_safe(request.path),
+            exc_info=True,
+        )
+
+
+# -- Request instrumentation ------------------------------------------------
+# One correlation id per request, carried on the log line, the response
+# header, and the RED counters.  Without it a report of "the export was slow"
+# can only be matched against a wall of undated, unlabelled lines, because
+# the request log records neither the status nor how long anything took.
+
+_REQUEST_ID_HEADER = "X-Request-ID"
+_REQUEST_ID_MAX_LEN = 64
+#: Per-thread so concurrent requests do not overwrite each other's id; the
+#: serving threads are per-request, and a background thread (the SSE poller)
+#: simply has none.
+_REQUEST_TLS = threading.local()
+
+
+def _new_request_id() -> str:
+    """Reuse the caller's correlation id, or mint one."""
+    provided = _header(_REQUEST_ID_HEADER, "")
+    if provided:
+        # Untrusted: capped and control-char escaped so a crafted header
+        # cannot forge log lines (same rule as _log_safe) or bloat the log.
+        return _log_safe(provided)[:_REQUEST_ID_MAX_LEN]
+    return uuid.uuid4().hex[:12]
+
+
+class _RequestIdFilter(logging.Filter):
+    """Stamp the current request id onto every record the app logs.
+
+    Records from other loggers (bottle, rebrew) never pass this filter, so
+    the formatter supplies the same field's default for them.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.request_id = getattr(_REQUEST_TLS, "request_id", "-")
+        return True
+
+
+_log.addFilter(_RequestIdFilter())
+
+
+@app.hook("before_request")
+def _start_request() -> None:
+    """Open the request's timing window and correlation id.
+
+    Registered before the auth hook so a rejected request is still counted
+    and still carries an id in its 401 line.  The id is left on the
+    thread-local afterwards: the error handler runs after ``after_request``
+    and its traceback line must carry the same id.
+    """
+    _REQUEST_TLS.request_id = _new_request_id()
+    _REQUEST_TLS.started_at = clock.monotonic()
+    metrics.REQUESTS.start()
+
+
+@app.hook("after_request")
+def _finish_request() -> None:
+    """Record status and duration, and surface the id on the response.
+
+    The counters answer "did it succeed, how long did it take"; a request
+    past SLOW_REQUEST_MS is one line at WARNING instead of a number in a
+    snapshot, because that is the only one an operator watching the log can
+    act on.
+    """
+    request_id = getattr(_REQUEST_TLS, "request_id", None)
+    started_at = getattr(_REQUEST_TLS, "started_at", None)
+    _REQUEST_TLS.started_at = None
+    _REQUEST_TLS.counted = None
+    status = response.status_code
+    # bottle raises from request.route when no route matched (a request
+    # rejected in a before_request hook never reaches the router), so the
+    # environ copy is the one that answers with None instead.
+    matched = request.environ.get("bottle.route")
+    rule = getattr(matched, "rule", None) if matched else None
+    route = metrics.route_label(request.path, rule)
+    if request_id:
+        response.set_header(_REQUEST_ID_HEADER, request_id)
+    if started_at is None:
+        # before_request never ran (an error raised ahead of it, or a request
+        # the WSGI harness issued without the hook): nothing to time.
+        return
+    duration_ms = (clock.monotonic() - started_at) * 1000.0
+    timed = route not in metrics.UNBOUNDED_ROUTES
+    metrics.REQUESTS.finish(route, status, duration_ms, timed=timed, rule_matched=rule is not None)
+    _REQUEST_TLS.counted = (route, status)
+    if timed and duration_ms >= metrics.SLOW_REQUEST_MS:
+        _log.warning(
+            "Slow request: %s %s -> %d in %.0fms",
+            _log_safe(request.method),
+            _log_safe(request.path),
+            status,
+            duration_ms,
+        )
+    else:
+        _log.debug(
+            "%s %s -> %d in %.0fms",
+            _log_safe(request.method),
+            _log_safe(request.path),
+            status,
+            duration_ms,
+        )
+
+
+def _reclassify_request(status: int) -> None:
+    """Correct the counted status of a request that failed after the hook.
+
+    ``after_request`` runs before bottle hands an escaped exception to the
+    error handler, so it counted the request as the 200 it was still
+    carrying.  Without this, every 500 and 503 (a corrupt or rebuilding
+    coverage.db, the failure the operator most needs to see) would land in
+    the 2xx bucket and the error rate would read zero.
+    """
+    counted = getattr(_REQUEST_TLS, "counted", None)
+    if counted is not None:
+        metrics.REQUESTS.reclassify(counted[0], counted[1], status)
+        _REQUEST_TLS.counted = None
 
 
 # Failed-token-attempt throttle: without it, a network-reachable server
@@ -1389,21 +2371,28 @@ def _clear_auth_failures() -> None:
 
 
 def _require_auth() -> None:
+    """Enforce the configured bearer token, or pass when none is set.
+
+    Credentials, in order: ``Authorization: Bearer``, ``?token=``, the
+    ``recoverage_token`` cookie.  A page request (Accept: text/html, non-/api
+    path) gets the 401 HTML page; every other client gets the JSON 401
+    contract, or the 429 once the fail window is full.
+    """
     if not _AUTH_TOKEN:
         return
 
-    provided = request.headers.get("Authorization", "")
+    provided = _header("Authorization", "")
     if provided.startswith("Bearer "):
         provided = provided[len("Bearer ") :]
     else:
-        provided = request.query.get("token", "")
+        provided = query_param("token")
         if not provided:
-            provided = request.get_cookie("recoverage_token", default="")
+            provided = request.get_cookie(AUTH_COOKIE_NAME, default="")
     if _auth_token_matches(provided):
         _clear_auth_failures()
         return
 
-    now = time.monotonic()
+    now = clock.monotonic()
     if _auth_throttle(now, reserve_slot=True):
         raise _json_err(
             429,
@@ -1424,14 +2413,16 @@ def _require_auth() -> None:
     # A browser asking for a page gets a page; API clients keep the JSON
     # error contract.  Someone handed a share URL who dropped the query
     # string used to land on a raw JSON blob with no way to tell what to do.
-    wants_html = "text/html" in request.headers.get("Accept", "") and not request.path.startswith(
-        "/api/"
-    )
+    wants_html = "text/html" in _header("Accept", "") and not request.path.startswith("/api/")
     if wants_html:
         raise HTTPResponse(
             status=401,
             body=_UNAUTHORIZED_HTML,
             content_type="text/html; charset=utf-8",
+            # The JSON error contract already sets no-store (_json_err); this
+            # page is the one 401 that did not, so a shared cache could store
+            # and replay a pre-auth body.
+            headers={"Cache-Control": "no-store"},
         )
     raise _json_err(
         401,
@@ -1442,15 +2433,18 @@ def _require_auth() -> None:
 app.add_hook("before_request", _require_auth)
 
 
-def _db_unavailable_err(exc: sqlite3.Error) -> Any:
+def _db_unavailable_err(exc: sqlite3.Error) -> HTTPResponse:
     """JSON 503 for an unreadable coverage.db, logged so the failure is visible.
 
     ONE tail for every DB-open failure path (the shared target cursor and the
     unexpected-error handler): without the log line a missing or corrupt
     database is invisible in the server log — the 503 only reaches the one
-    client that happened to make the request.  The response detail carries the
-    OS/SQLite cause and the rebuild hint so an operator can act on the API
-    response alone, matching Potato Mode's 503 page.
+    client that happened to make the request.  The log line carries the full
+    OS/SQLite cause; the body carries the exception class and the rebuild hint
+    and nothing else, because every read endpoint is unauthenticated unless
+    the operator passed --token and --allow-remote puts it on a network, and
+    sqlite3 messages routinely quote the absolute database path.  Potato Mode's
+    503 page carries the same hint.
     """
     _log.warning(
         "Database unavailable serving %s %s: %s: %s",
@@ -1463,14 +2457,15 @@ def _db_unavailable_err(exc: sqlite3.Error) -> Any:
         503,
         {
             "error": "Database unavailable",
-            "detail": f"{type(exc).__name__}: {exc} — "
-            "run 'rebrew catalog --json && rebrew build-db' to create or rebuild it",
+            "detail": f"{type(exc).__name__} — "
+            "run 'rebrew catalog && rebrew build-db' to create or rebuild it; "
+            "the server log has the full cause",
         },
     )
 
 
 @app.error(500)
-def _handle_unexpected_error(error: Any) -> Any:
+def _handle_unexpected_error(error: Any) -> HTTPResponse:
     """Keep every surface's error contract when a handler raises unexpectedly.
 
     ``_db()`` open failures already return 503 JSON, but every query after
@@ -1487,6 +2482,7 @@ def _handle_unexpected_error(error: Any) -> Any:
     """
     exc = getattr(error, "exception", None)
     if isinstance(exc, sqlite3.Error):
+        _reclassify_request(503)
         return _db_unavailable_err(exc)
     # Returning the HTTPError itself would make _cast re-enter the error
     # handler (recursion until the wsgi catch-all); returning None would emit
@@ -1494,6 +2490,7 @@ def _handle_unexpected_error(error: Any) -> Any:
     # on arbitrary unhandled exceptions, so they get the same control-char
     # escaping as every other request log (%0A in the path would otherwise
     # forge multi-line entries exactly when the operator reads the traceback).
+    _reclassify_request(500)
     _log.error(
         "Unhandled error serving %s %s",
         _log_safe(request.method),
@@ -1507,15 +2504,19 @@ def _handle_unexpected_error(error: Any) -> Any:
 
 @app.hook("before_request")
 def _log_request() -> None:
-    """Log incoming requests at DEBUG level for operational visibility."""
+    """Reject requests carrying a Host this bind does not answer for.
+
+    (The method/path line for every request, with its status and duration,
+    is emitted once by the after_request hook.)
+    """
     # Method/path are attacker-controlled (the path is percent-decoded), so
     # control characters are escaped to keep the log line-per-request.
-    _log.debug("%s %s", _log_safe(request.method), _log_safe(request.path))
-    # DNS-rebinding guard for loopback installs: the Host header must name a
-    # loopback host.  Requests without a Host header (non-HTTP/1.1 clients,
-    # WSGI test harnesses) are left to the server's own address handling.
     if ALLOWED_HOSTS is not None:
-        host = request.headers.get("Host", "")
+        # DNS-rebinding guard for loopback installs: the Host header must name
+        # a loopback host.  Requests without a Host header (non-HTTP/1.1
+        # clients, WSGI test harnesses) are left to the server's own address
+        # handling.
+        host = _header("Host", "")
         if host and _hostname_of(host) not in ALLOWED_HOSTS:
             # Audit trail: a rejected Host on a loopback bind is a
             # DNS-rebinding attempt signal; without it the 400 leaves no
@@ -1555,6 +2556,18 @@ _CSP = (
 )
 
 
+def _merge_vary(origin: str) -> None:
+    """Add "Origin" to the response's Vary without dropping what is there.
+
+    Compressed responses already carry "Accept-Encoding"; a shared cache must
+    key on both, so the token is appended rather than replacing the header.
+    """
+    existing = [v.strip() for v in response.headers.get("Vary", "").split(",") if v.strip()]
+    if origin not in existing:
+        existing.append(origin)
+    response.set_header("Vary", ", ".join(existing))
+
+
 @app.hook("after_request")
 def _security_headers() -> None:
     response.set_header("X-Content-Type-Options", "nosniff")
@@ -1563,24 +2576,28 @@ def _security_headers() -> None:
     # Tokens travel in URLs (?token= share links); never let them leak to a
     # third party via Referer if the dashboard ever navigates off-host.
     response.set_header("Referrer-Policy", "no-referrer")
-    origin = request.headers.get("Origin", "")
+    origin = _header("Origin", "")
     if CORS_ENABLED and origin and _normalize_origin(origin) in CORS_ALLOWED_ORIGINS:
         response.set_header("Access-Control-Allow-Origin", origin)
-        # Append to any existing Vary (compressed responses already carry
-        # "Accept-Encoding") instead of replacing it — a shared cache must
-        # key on both.
-        existing_vary = response.headers.get("Vary", "")
-        combined = ", ".join(v for v in (existing_vary, "Origin") if v)
-        response.set_header("Vary", combined)
+        _merge_vary("Origin")
         response.set_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        response.set_header("Access-Control-Allow-Headers", "Content-Type")
+        # The two credential/validator headers the API itself documents.
+        # Without Authorization in this list a --cors frontend cannot use the
+        # --token auth the README advertises (the preflight fails, so the
+        # request is never sent), and without If-None-Match it cannot do the
+        # conditional GET that every ETag-bearing endpoint (/data, /asm,
+        # /bytes, /potato) is built around.
+        response.set_header(
+            "Access-Control-Allow-Headers", "Content-Type, Authorization, If-None-Match"
+        )
+        # ETag and Retry-After are response headers a cross-origin client
+        # cannot read unless they are exposed; without this the validator the
+        # server sends is invisible to the client that needs it.
+        response.set_header("Access-Control-Expose-Headers", "ETag, Retry-After")
         response.set_header("Access-Control-Allow-Credentials", "true")
     elif origin:
         # Ensure caches key on Origin even when not allowed.
-        existing_vary = response.headers.get("Vary", "")
-        if "Origin" not in existing_vary:
-            combined = ", ".join(v for v in (existing_vary, "Origin") if v)
-            response.set_header("Vary", combined)
+        _merge_vary("Origin")
 
 
 @app.route("<path:path>", method="OPTIONS")

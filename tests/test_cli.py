@@ -5,7 +5,9 @@ from __future__ import annotations
 import csv
 import io
 import json
+import os
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -13,9 +15,117 @@ import pytest
 from conftest import HAS_DB
 from typer.testing import CliRunner
 
+from recoverage import cli, devserver
 from recoverage.cli import app
 
 runner = CliRunner()
+
+#: The SGR sequence Rich paints the bold cyan target heading of `stats` with.
+#: Named because the color opt-out test asserts on the color part of that
+#: sequence, and Rich keeps the bold attribute when color is dropped.
+CYAN_HEADING = "\x1b[1;36m"
+
+
+# ── Version command ───────────────────────────────────────────────
+
+
+class TestColorOptOut:
+    """`--no-color`, NO_COLOR, and TERM=dumb must all silence the escapes.
+
+    Click only strips ANSI when the stream is not a TTY, so on a terminal
+    these three conditions were previously ignored and every error, warning,
+    and check verdict carried escape codes into a color_forced log.  Every
+    invocation passes color=True, which is what makes the escapes visible at
+    all, and clears NO_COLOR/TERM unless the test is about one of them.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _colored_terminal(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("NO_COLOR", raising=False)
+        monkeypatch.setenv("TERM", "xterm-256color")
+
+    def test_color_enabled_by_default(self) -> None:
+        result = runner.invoke(app, ["check", "--min-coverage", "0"], color=True)
+        assert result.exit_code == 0
+        assert "\x1b[" in result.output
+
+    def test_no_color_flag(self) -> None:
+        result = runner.invoke(app, ["--no-color", "check", "--min-coverage", "0"], color=True)
+        assert result.exit_code == 0
+        assert "\x1b[" not in result.output
+
+    def test_no_color_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("NO_COLOR", "1")
+        result = runner.invoke(app, ["check", "--min-coverage", "0"], color=True)
+        assert result.exit_code == 0
+        assert "\x1b[" not in result.output
+
+    def test_dumb_terminal(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("TERM", "dumb")
+        result = runner.invoke(app, ["check", "--min-coverage", "0"], color=True)
+        assert result.exit_code == 0
+        assert "\x1b[" not in result.output
+
+    def test_opt_out_does_not_leak_into_the_next_run(self) -> None:
+        """The global flag is per invocation, not sticky process state."""
+        first = runner.invoke(app, ["--no-color", "check", "--min-coverage", "0"], color=True)
+        assert first.exit_code == 0
+        assert "\x1b[" not in first.output, "the opt-out run must already be uncolored"
+        result = runner.invoke(app, ["check", "--min-coverage", "0"], color=True)
+        assert result.exit_code == 0
+        assert "\x1b[" in result.output
+
+    def test_errors_honor_the_opt_out(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The stderr error path takes the same route as the verdicts."""
+        monkeypatch.setenv("NO_COLOR", "1")
+        result = runner.invoke(app, ["check", "--min-coverage", "200"], color=True)
+        assert result.exit_code == 2
+        assert "\x1b[" not in result.stderr
+
+    @pytest.mark.parametrize(
+        ("argv", "env"),
+        [
+            (["open", "--port", "99999"], {}),
+            (["serve", "--port", "99999"], {}),
+            # `stats` validates the environment through _check_env_or_exit;
+            # an empty RECOVERAGE_DB is the one setting every command reads.
+            (["stats"], {"RECOVERAGE_DB": ""}),
+        ],
+        ids=["open-port", "serve-config", "bad-environment"],
+    )
+    def test_config_error_paths_honor_the_opt_out(
+        self, argv: list[str], env: dict[str, str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Every exit-2 configuration error colors through _secho, not
+        typer.secho: a bare secho ignored all three opt-outs and still wrote
+        red escapes into a color_forced log.  `serve` and `open` exit before
+        they do any work, so neither starts a listener."""
+        monkeypatch.setenv("NO_COLOR", "1")
+        for name, value in env.items():
+            monkeypatch.setenv(name, value)
+        result = runner.invoke(app, argv, color=True)
+        assert result.exit_code == 2, result.output
+        assert "\x1b[" not in result.stderr
+
+    @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+    def test_stats_table_honors_the_opt_out(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """`stats` renders through Rich, which detects NO_COLOR and TERM=dumb
+        itself but cannot see the --no-color flag; the table is the widest
+        colored surface the CLI has, so the flag has to reach the Console.
+
+        FORCE_COLOR is what makes Rich emit color into a pipe, the state a
+        redirected run is in, and the bold cyan target heading is the color
+        surface it paints.  Rich's no_color drops color and keeps text
+        attributes, so the bold that remains is not the assertion.
+        """
+        monkeypatch.setenv("FORCE_COLOR", "1")
+        colored = runner.invoke(app, ["stats"], color=True)
+        assert colored.exit_code == 0, colored.output
+        assert CYAN_HEADING in colored.stdout
+
+        plain = runner.invoke(app, ["--no-color", "stats"], color=True)
+        assert plain.exit_code == 0, plain.output
+        assert CYAN_HEADING not in plain.stdout
 
 
 # ── Version command ───────────────────────────────────────────────
@@ -26,6 +136,75 @@ class TestVersionFlag:
         result = runner.invoke(app, ["--version"])
         assert result.exit_code == 0
         assert "recoverage" in result.output
+
+
+class TestLogStamp:
+    """The log line's time stamp must place a record on a timeline.
+
+    A bare "%H:%M:%S" cannot: 23:59 and 00:01 read as the same moment, and a
+    log spanning a fall-back transition prints its repeated hour twice with
+    nothing to tell the two apart.  The offset matters for the same reason —
+    a reader must not have to assume the host's zone to place a line.
+
+    The stamp is local time with the offset attached, so the expected strings
+    below only hold under a known zone: the fixture pins TZ=UTC and the third
+    test reads the offset off the line instead of assuming one.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _utc(self, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+        import time
+
+        if not hasattr(time, "tzset"):
+            pytest.skip("no time.tzset() on this platform")
+        previous = os.environ.get("TZ")
+        monkeypatch.setenv("TZ", "UTC")
+        time.tzset()
+        yield
+        # Restore before tzset(), or the process keeps the C library reading
+        # the fixture's zone for every later test in the session.
+        if previous is None:
+            monkeypatch.delenv("TZ", raising=False)
+        else:
+            monkeypatch.setenv("TZ", previous)
+        time.tzset()
+
+    def _formatted(self, when: float) -> str:
+        import logging
+
+        formatter = logging.Formatter(
+            cli.LOG_FORMAT, datefmt=cli.LOG_DATEFMT, defaults={"request_id": "-"}
+        )
+        record = logging.LogRecord("recoverage", logging.INFO, __file__, 1, "hello", (), None)
+        record.created = when
+        return formatter.format(record)
+
+    def test_stamp_carries_date_and_offset(self) -> None:
+        # 2023-11-14T22:13:20Z, an ordinary instant, read in UTC.
+        assert self._formatted(1_700_000_000.0).startswith("2023-11-14 22:13:20+0000 ")
+
+    def test_stamp_distinguishes_two_instants_a_day_apart(self) -> None:
+        day_one = self._formatted(1_700_000_000.0)
+        day_two = self._formatted(1_700_000_000.0 + 86_400)
+        assert day_one != day_two
+        assert day_two.startswith("2023-11-15 22:13:20+0000 ")
+
+    def test_offset_moves_with_the_host_zone(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The stamp is local, and says which local: the same instant reads
+        differently under two zones, and the offset tells the reader which."""
+        import time
+
+        if not hasattr(time, "tzset"):
+            pytest.skip("no time.tzset() on this platform")
+        stamp = self._formatted(1_700_000_000.0)
+        monkeypatch.setenv("TZ", "Asia/Tokyo")
+        time.tzset()
+        try:
+            tokyo = self._formatted(1_700_000_000.0)
+        finally:
+            time.tzset()
+        assert stamp != tokyo
+        assert tokyo.startswith("2023-11-15 07:13:20+0900 ")
 
 
 # ── Export command (actual CLI) ───────────────────────────────────
@@ -40,26 +219,60 @@ class TestExportCommand:
         assert result.exit_code == 0
         data = json.loads(result.output)
         assert isinstance(data, list)
-        assert len(data) > 0
+        # `len(data) > 0` is satisfied by an export that dropped every target
+        # but one. The synthetic DB has exactly one, with two sections.
+        assert len(data) == 1
         assert "target" in data[0]
         assert "sections" in data[0]
+        assert set(data[0]["sections"]) == {".text", ".data"}
+        assert data[0]["sections"][".text"]["total_cells"] == 8
 
     def test_export_csv_format(self) -> None:
         result = runner.invoke(app, ["export", "--format", "csv"])
         assert result.exit_code == 0
         reader = csv.reader(io.StringIO(result.output))
         rows = list(reader)
-        assert len(rows) >= 2  # header + at least one data row
+        # header + one row per section: the fixture has two, so `>= 2` is
+        # satisfied by an export that emitted a single section.
+        assert len(rows) == 3
         header = rows[0]
         assert "target" in header
         assert "section" in header
         assert "coverage_pct" in header
+        assert {r[header.index("section")] for r in rows[1:]} == {".text", ".data"}
 
     def test_export_md_format(self) -> None:
         result = runner.invoke(app, ["export", "--format", "md"])
         assert result.exit_code == 0
         assert "| Section |" in result.output
         assert "|------" in result.output
+
+    def test_export_md_column_counts_match_header(self) -> None:
+        """Every Markdown data row must have as many cells as the header."""
+        result = runner.invoke(app, ["export", "--format", "md"])
+        assert result.exit_code == 0
+        header = next(line for line in result.output.splitlines() if line.startswith("| Section |"))
+        expected = header.count("|")
+        data_rows = [
+            line for line in result.output.splitlines() if line.startswith("|") and " B |" in line
+        ]
+        assert data_rows, "Markdown export produced no section rows"
+        for row in data_rows:
+            assert row.count("|") == expected, f"ragged Markdown row: {row}"
+
+    def test_export_md_table_columns_line_up(self) -> None:
+        """Header, separator, and body rows must carry the same cell count.
+
+        The md export once emitted 8 header cells, a 9-cell separator, and 11
+        body values (Exact/Reloc/Near duplicated), so no renderer could line the
+        table up.
+        """
+        result = runner.invoke(app, ["export", "--format", "md"])
+        assert result.exit_code == 0
+        table_rows = [ln.strip() for ln in result.output.splitlines() if ln.strip().startswith("|")]
+        assert table_rows, "no markdown table rows in md export"
+        widths = {len(ln.strip("|").split("|")) for ln in table_rows}
+        assert len(widths) == 1, f"ragged markdown table: column counts {sorted(widths)}"
 
     def test_export_csv_roundtrip(self) -> None:
         """CSV output should parse back correctly with Python's csv module."""
@@ -82,8 +295,14 @@ class TestExportCommand:
         """
         result = runner.invoke(app, ["export", "--format", "csv"])
         assert result.exit_code == 0
-        assert "\r" not in result.output
         assert "\n" in result.output
+        if os.linesep == "\n":
+            assert "\r" not in result.output
+        else:
+            # The captured stream is text mode with universal newlines, so the
+            # bare \n is translated once on the way out.  Two translations
+            # (the default "\r\n" terminator plus that one) show as "\r\r\n".
+            assert "\r\r\n" not in result.output
 
 
 # ── Stats command ─────────────────────────────────────────────────
@@ -92,8 +311,16 @@ class TestExportCommand:
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
 class TestStatsCommand:
     def test_stats_runs(self) -> None:
+        """The table is the deliverable, so read it: exit code 0 says only
+        that nothing raised. The synthetic DB seeds FAKEDLL with 3 functions
+        and two sections, and `.text` is 3 of 8 cells matched (87.5%)."""
         result = runner.invoke(app, ["stats"])
         assert result.exit_code == 0
+        out = result.output
+        assert "FAKEDLL" in out
+        assert "Functions: 0/3 matched" in out
+        assert ".text" in out and ".data" in out
+        assert "87.5%" in out
 
     def test_stats_with_nonexistent_target(self) -> None:
         result = runner.invoke(app, ["stats", "--target", "NONEXISTENT_TARGET_XYZ"])
@@ -212,20 +439,21 @@ class TestCheckCommand:
 
     def test_check_out_of_range_json_emits_error_object(self) -> None:
         """--json with an out-of-range threshold must still emit a parseable
-        JSON error (not the human-readable stderr path) before exiting 1."""
+        JSON error (not the human-readable stderr path) before exiting 2."""
         result = runner.invoke(app, ["check", "--min-coverage", "150", "--json"])
-        assert result.exit_code == 1
+        assert result.exit_code == 2
         payload = json.loads(result.output)
         assert payload["error"]
-        assert payload["exit_code"] == 1
+        assert payload["exit_code"] == 2
 
     def test_check_min_coverage_out_of_range(self) -> None:
         """--min-coverage outside [0, 100] must be rejected, not silently
         always-pass (negative) or always-fail (over 100)."""
         for bad in ("-5", "150"):
             result = runner.invoke(app, ["check", "--min-coverage", bad])
-            # Our explicit range validation → exit 1 with a clear message.
-            assert result.exit_code == 1
+            # Our explicit range validation → exit 2 with a clear message,
+            # the same usage-error code a non-numeric value gets.
+            assert result.exit_code == 2
             assert (
                 "min-coverage" in result.output.lower()
                 or "min-coverage" in (result.stderr_bytes or b"").decode().lower()
@@ -235,8 +463,20 @@ class TestCheckCommand:
         assert result.exit_code == 2
 
     def test_check_nonexistent_section(self) -> None:
-        result = runner.invoke(app, ["check", "--min-coverage", "50", "--section", "NONEXISTENT"])
+        """A --section matching nothing is an error, not a gate failure: exit 1
+        alone would also accept a genuine coverage failure, so the message and
+        the empty verdict list are what this test pins."""
+        result = runner.invoke(
+            app, ["check", "--min-coverage", "50", "--section", "NONEXISTENT", "--json"]
+        )
         assert result.exit_code == 1
+        lines = result.output.splitlines()
+        assert any("has no section NONEXISTENT" in line for line in lines)
+        # The per-target SKIP note shares the stream with the JSON error object,
+        # so the payload is the last line, not the whole output.
+        payload = json.loads(lines[-1])
+        assert payload["error"] == "no sections matched — nothing was checked"
+        assert "results" not in payload
 
     def test_check_skips_untracked_sections(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -345,6 +585,66 @@ class TestExportCsvFormulaInjection:
         assert rows[1][sec_col] == ".text"
 
 
+class TestExportCsvStdoutEncoding:
+    """The export must write UTF-8 whatever stdout's locale encoding is.
+
+    Section and target names come from analyzed PE binaries, so a non-ASCII
+    one is ordinary input.  Under a locale that names a legacy 8-bit charset
+    (LANG=en_US.ISO-8859-1) sys.stdout encodes with that codec, and the raw
+    csv write raises UnicodeEncodeError part-way through the file, leaving
+    the user's spreadsheet truncated mid-row.  Python coerces a bare
+    ``LC_ALL=C`` to UTF-8, so the test forces the encoding instead.
+    """
+
+    def _export_to_ascii_stdout(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, section: str
+    ) -> bytes:
+        """Export a one-section DB with an ASCII stdout; return the raw bytes."""
+        from recoverage.cli import ExportFormat, export
+
+        db = tmp_path / "cov.db"
+        _make_section_db(db, [section], [(section, 0, 100, "exact")])
+        monkeypatch.setattr("recoverage.cli._db_path", lambda: db)
+
+        sink = io.BytesIO()
+        real_stdout = sys.stdout
+        wrapper = io.TextIOWrapper(sink, encoding="ascii", errors="strict")
+        monkeypatch.setattr(sys, "stdout", wrapper)
+        try:
+            export(output_format=ExportFormat.csv, target=None)
+        finally:
+            wrapper.flush()
+            monkeypatch.setattr(sys, "stdout", real_stdout)
+        return sink.getvalue()
+
+    def test_non_ascii_section_survives_ascii_stdout(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        section = ".données_café"
+        raw = self._export_to_ascii_stdout(tmp_path, monkeypatch, section)
+        rows = list(csv.reader(io.StringIO(raw.decode("utf-8"))))
+        assert rows[0].index("section") >= 0
+        assert rows[1][rows[0].index("section")] == section
+
+    def test_utf8_stream_is_a_passthrough_for_utf8_stdout(self) -> None:
+        from recoverage.cli import _utf8_stream
+
+        stdout = io.TextIOWrapper(io.BytesIO(), encoding="utf-8")
+        assert _utf8_stream(stdout) is stdout
+
+    def test_utf8_stream_reencodes_an_ascii_stdout(self) -> None:
+        from recoverage.cli import _utf8_stream
+
+        sink = io.BytesIO()
+        stdout = io.TextIOWrapper(sink, encoding="ascii", errors="strict")
+        pinned = _utf8_stream(stdout)
+        assert pinned is not stdout
+        pinned.write("café")
+        pinned.flush()
+        assert sink.getvalue() == "café".encode()
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
 class TestCheckFailureExit:
     def test_below_threshold_exits_1(self) -> None:
         """A tracked section under the threshold must exit 1 (the CI gate's
@@ -359,6 +659,7 @@ class TestCheckFailureExit:
         assert any(r["status"] == "FAIL" for r in payload["results"])
 
 
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
 class TestStatsJson:
     def test_stats_json_output(self) -> None:
         """stats --json must emit a parseable list of per-target stat dicts."""
@@ -453,7 +754,9 @@ class TestPartialSchemaCleanExit:
         result = runner.invoke(app, ["stats"])
         assert result.exit_code == 2
         assert "rebuild" in result.output
-        assert not isinstance(result.exception, SystemExit) or result.exit_code == 2
+        # The partial schema must surface as the clean exit 2 above, not as a
+        # leaked sqlite3 error riding out through the runner.
+        assert not isinstance(result.exception, sqlite3.OperationalError)
 
 
 # ── check: exit-code and verdict contracts ────────────────────────
@@ -468,6 +771,91 @@ class TestCheckMissingDbExitCode:
         result = runner.invoke(app, ["check", "--min-coverage", "60"])
         assert result.exit_code == 2
         assert "database not found" in result.output
+
+
+class TestJsonErrorEnvelope:
+    """A machine-readable mode answers every failure in one shape.
+
+    `check --json` emitted a JSON envelope for a failed gate, a bad
+    --min-coverage and an empty result set, but a missing database and an
+    unknown --target still printed a plain stderr line, and `stats --json` /
+    `export --format json` had no envelope at all.  A script piping the JSON
+    channel into a parser therefore had to special-case which failure it was.
+    Every failure in a --json mode now answers
+    {"error": ..., "exit_code": N} on stdout, with the exit status unchanged.
+    """
+
+    MISSING = "database not found"
+
+    def test_check_json_missing_db(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        result = runner.invoke(app, ["check", "--min-coverage", "60", "--json"])
+        assert result.exit_code == 2
+        payload = json.loads(result.stdout)
+        assert self.MISSING in payload["error"]
+        assert payload["exit_code"] == 2
+
+    def test_stats_json_missing_db(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        result = runner.invoke(app, ["stats", "--json"])
+        assert result.exit_code == 1
+        payload = json.loads(result.stdout)
+        assert self.MISSING in payload["error"]
+        assert payload["exit_code"] == 1
+
+    def test_export_json_missing_db(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        result = runner.invoke(app, ["export", "--format", "json"])
+        assert result.exit_code == 1
+        payload = json.loads(result.stdout)
+        assert self.MISSING in payload["error"]
+        assert payload["exit_code"] == 1
+
+    def test_csv_export_keeps_the_human_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A non-JSON format has no machine channel to fill, so its failure
+        stays a stderr line and stdout carries nothing a parser could
+        misread as data."""
+        monkeypatch.chdir(tmp_path)
+        result = runner.invoke(app, ["export", "--format", "csv"])
+        assert result.exit_code == 1
+        assert result.stdout == ""
+        assert self.MISSING in result.stderr
+
+    @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+    def test_unknown_target_is_an_envelope(self) -> None:
+        for argv in (
+            ["stats", "--json", "--target", "no-such-target"],
+            ["check", "--min-coverage", "0", "--json", "--target", "no-such-target"],
+        ):
+            result = runner.invoke(app, argv)
+            assert result.exit_code == 1, argv
+            payload = json.loads(result.stdout)
+            assert payload == {"error": "target not found: 'no-such-target'", "exit_code": 1}
+
+
+class TestHelpMarkup:
+    """`--help` is rendered through Rich, so a reStructuredText spelling in a
+    command docstring reaches the user verbatim: double backticks around a
+    flag name print as ``` ``--no-open`` ``` rather than as emphasis."""
+
+    @pytest.mark.parametrize("command", ["serve", "open"])
+    def test_no_raw_rest_markup_in_help(self, command: str) -> None:
+        result = runner.invoke(app, [command, "--help"])
+        assert result.exit_code == 0
+        assert "``" not in result.output
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+class TestStatsOutputStart:
+    def test_first_target_heading_starts_the_output(self) -> None:
+        """The first heading carried a leading newline no later heading did,
+        so redirected output opened with an empty line.  `export --format md`
+        already refuses that leading blank; the table must agree."""
+        result = runner.invoke(app, ["stats"])
+        assert result.exit_code == 0
+        assert result.stdout.startswith("FAKEDLL")
 
 
 class TestCheckExplicitUntrackedSectionVerdict:
@@ -538,8 +926,39 @@ class TestServePortRange:
         assert "not in the range" in result.output
 
     def test_open_port_range_validated(self) -> None:
+        """`open` resolves the port through the same range check `serve`
+        does, so an out-of-range value is a clean validation error naming the
+        range. Exit code alone is satisfied by a typo'd flag or a missing DB."""
         result = runner.invoke(app, ["open", "--port", "70000"])
         assert result.exit_code != 0
+        assert "Traceback" not in result.output
+        assert "not in the range" in result.output
+
+
+class TestOpenPort:
+    """`open` targets the port `serve` would use, so the env reaches it too."""
+
+    def test_env_port_is_the_default(self, monkeypatch: Any) -> None:
+        opened: list[str] = []
+        monkeypatch.setenv("RECOVERAGE_PORT", "9100")
+        monkeypatch.setattr("recoverage.cli.open_browser", lambda url: opened.append(url))
+        result = runner.invoke(app, ["open"])
+        assert result.exit_code == 0
+        assert opened == ["http://127.0.0.1:9100"]
+
+    def test_flag_beats_env(self, monkeypatch: Any) -> None:
+        opened: list[str] = []
+        monkeypatch.setenv("RECOVERAGE_PORT", "9100")
+        monkeypatch.setattr("recoverage.cli.open_browser", lambda url: opened.append(url))
+        result = runner.invoke(app, ["open", "--port", "9200"])
+        assert result.exit_code == 0
+        assert opened == ["http://127.0.0.1:9200"]
+
+    def test_invalid_env_port_exits_2(self, monkeypatch: Any) -> None:
+        monkeypatch.setenv("RECOVERAGE_PORT", "not-a-port")
+        result = runner.invoke(app, ["open"])
+        assert result.exit_code == 2
+        assert "RECOVERAGE_PORT" in result.output
 
 
 class TestServeServerWiring:
@@ -549,7 +968,6 @@ class TestServeServerWiring:
         neither threads nor connections; without the handler's timeout, a
         silent peer (crashed laptop, dropped NAT mapping) or an SSE client
         that stops reading pins its handler thread forever."""
-        import recoverage.cli as cli
         from recoverage.server import app as server_app
 
         captured: dict[str, Any] = {}
@@ -565,11 +983,66 @@ class TestServeServerWiring:
         monkeypatch.setattr(type(server_app), "run", capture_run)
         result = runner.invoke(app, ["serve", "--no-open", "--port", "8123"])
         assert result.exit_code == 0
-        assert captured["server_class"] is cli._ThreadingWSGIServer
+        assert captured["server_class"] is devserver._ThreadingWSGIServer
         assert captured["server_class"].daemon_threads is True
-        assert captured["handler_class"] is cli._QuietTimeoutRequestHandler
+        assert captured["handler_class"] is devserver._KeepAliveRequestHandler
         handler = captured["handler_class"]
-        assert handler.timeout == cli._CLIENT_SOCKET_TIMEOUT_SECONDS > 0
+        assert issubclass(handler, devserver._QuietTimeoutRequestHandler)
+        assert handler.timeout == devserver._CLIENT_SOCKET_TIMEOUT_SECONDS > 0
+
+    def test_served_over_http_1_1_so_the_browser_reuses_the_connection(self) -> None:
+        """The handler must speak HTTP/1.1.
+
+        wsgiref is HTTP/1.0 and answers one request per connection, so
+        loading the dashboard paid a TCP handshake for the shell, detail.js,
+        the targets list and the data payload.  Keep-alive only exists under
+        1.1, and the preamble comes from the ServerHandler subclass, not the
+        request handler, so both are pinned here.
+        """
+
+        assert devserver._KeepAliveRequestHandler.protocol_version == "HTTP/1.1"
+        assert devserver._KeepAliveServerHandler.http_version == "1.1"
+
+
+class TestResponseFraming:
+    """Which responses may leave the connection open after them.
+
+    A response with neither Content-Length nor Transfer-Encoding ends only
+    when the socket does.  Under HTTP/1.1 the client would read straight into
+    the next response, so the streamed /api/events has to close the
+    connection it finishes on.
+    """
+
+    @staticmethod
+    def _framed(headers: dict[str, str], status: str = "200 OK", method: str = "GET") -> bool:
+        from wsgiref.headers import Headers
+
+        handler = devserver._KeepAliveServerHandler.__new__(devserver._KeepAliveServerHandler)
+        handler.headers = Headers()
+        for name, value in headers.items():
+            handler.headers[name] = value
+        handler.status = status
+        handler.environ = {"REQUEST_METHOD": method}
+        return handler._response_is_framed()
+
+    def test_content_length_keeps_the_connection(self) -> None:
+        assert self._framed({"Content-Length": "12"})
+
+    def test_chunked_keeps_the_connection(self) -> None:
+        assert self._framed({"Transfer-Encoding": "chunked"})
+
+    def test_header_name_case_does_not_decide(self) -> None:
+        assert self._framed({"content-length": "12"})
+
+    def test_unframed_body_closes_the_connection(self) -> None:
+        assert not self._framed({"Content-Type": "text/event-stream"})
+
+    def test_bodyless_status_needs_no_length(self) -> None:
+        assert self._framed({}, status="304 Not Modified")
+        assert self._framed({}, status="204 No Content")
+
+    def test_head_response_needs_no_length(self) -> None:
+        assert self._framed({}, method="HEAD")
 
 
 class TestServeBindFailure:
@@ -722,3 +1195,100 @@ class TestBrokenPipe:
         monkeypatch.setattr(cli, "app", boom)
         with pytest.raises(RuntimeError):
             cli.main()
+
+
+def test_export_md_rows_match_the_header() -> None:
+    """Every markdown row must have as many cells as the header.
+
+    The row builder emitted near_match twice against an 8-column header, so
+    Stub rendered under the Coverage heading and the real coverage landed in an
+    unlabeled 9th column — every markdown export read as a malformed table.
+    """
+    result = runner.invoke(app, ["export", "--format", "md"])
+    assert result.exit_code == 0
+    lines = [ln for ln in result.output.splitlines() if ln.strip()]
+    header = next(ln for ln in lines if ln.startswith("| Section |"))
+    ncols = header.count("|") - 1
+    for line in lines:
+        if not line.startswith("| ") or set(line) <= set("|- "):
+            continue
+        assert line.count("|") - 1 == ncols, f"row does not match header: {line}"
+
+
+# ── stdout encoding ───────────────────────────────────────────────
+
+
+def _unicode_db(path: Path) -> Path:
+    """A DB whose target id and section name are both non-ASCII."""
+    import sqlite3 as _sqlite3
+
+    conn = _sqlite3.connect(path)
+    try:
+        c = conn.cursor()
+        c.execute("CREATE TABLE metadata (target TEXT, key TEXT, value TEXT)")
+        c.execute(
+            "CREATE TABLE sections (target TEXT, name TEXT, va INTEGER, size INTEGER,"
+            " fileOffset INTEGER, unitBytes INTEGER, columns INTEGER)"
+        )
+        c.execute(
+            "CREATE TABLE cells (id INTEGER PRIMARY KEY AUTOINCREMENT, target TEXT,"
+            " section_name TEXT, start INTEGER, end INTEGER, span INTEGER DEFAULT 1,"
+            " state TEXT, functions TEXT DEFAULT '[]', label TEXT, parent_function TEXT)"
+        )
+        c.execute(
+            "CREATE TABLE functions (target TEXT, va INTEGER, name TEXT, status TEXT,"
+            " markerType TEXT)"
+        )
+        c.execute(
+            "INSERT INTO metadata VALUES ('café & bar','summary',?)",
+            (json.dumps({"totalFunctions": 1}),),
+        )
+        c.execute("INSERT INTO sections VALUES ('café & bar','.données',0,100,0,16,8)")
+        c.execute(
+            "INSERT INTO cells (target, section_name, start, end, state)"
+            " VALUES ('café & bar','.données',0,50,'exact')"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return path
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+class TestExportStdoutEncoding:
+    """The export must not inherit the locale's codec.
+
+    Target ids and section names come from the PE image, so a non-ASCII one
+    is ordinary input.  With stdout on an ASCII codec the CSV writer raised
+    UnicodeEncodeError part-way through, leaving a truncated file behind the
+    `> coverage.csv` redirect the help text documents.
+    """
+
+    def _ascii_stdout(self, monkeypatch: pytest.MonkeyPatch) -> io.BytesIO:
+        buffer = io.BytesIO()
+        monkeypatch.setattr(sys, "stdout", io.TextIOWrapper(buffer, encoding="ascii"))
+        return buffer
+
+    def test_csv_export_survives_an_ascii_stdout(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        db = _unicode_db(tmp_path / "unicode.db")
+        monkeypatch.setattr("recoverage.cli._db_path", lambda: db)
+        buffer = self._ascii_stdout(monkeypatch)
+        # Called directly, not through CliRunner: the runner swaps in its own
+        # UTF-8 stdout, which is exactly the codec under test.
+        cli.export(output_format=cli.ExportFormat.csv, target=None)
+        sys.stdout.flush()
+        assert ".données" in buffer.getvalue().decode("utf-8")
+
+    def test_md_export_survives_an_ascii_stdout(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        db = _unicode_db(tmp_path / "unicode.db")
+        monkeypatch.setattr("recoverage.cli._db_path", lambda: db)
+        buffer = self._ascii_stdout(monkeypatch)
+        cli.export(output_format=cli.ExportFormat.md, target=None)
+        sys.stdout.flush()
+        text = buffer.getvalue().decode("utf-8")
+        assert "## café & bar" in text
+        assert ".données" in text

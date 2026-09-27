@@ -1,0 +1,19 @@
+# yamllint configuration for the GitHub Actions definitions.
+# Run with: yamllint -c .yamllint.yaml .github/
+extends: default
+
+rules:
+  # GitHub Actions files conventionally start with the bare `name:` key; the
+  # `---` document start adds nothing for the workflow parser.
+  document-start: disable
+  # Action pins and long `run:` lines exceed the default 80 columns; the
+  # 100-column ruff cap is the same ceiling the Python tree holds itself to.
+  line-length:
+    max: 100
+  # `on:` is the workflow trigger key, not a boolean. yamllint's truthy check
+  # flags any key that parses as a YAML 1.1 boolean, which is the whole
+  # trigger vocabulary.
+  truthy:
+    check-keys: false
+  comments:
+    min-spaces-from-content: 1

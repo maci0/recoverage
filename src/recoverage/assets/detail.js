@@ -1,9 +1,10 @@
 // Deferred SPA work kept out of the inlined index payload (TCP congestion window):
-// hex dump, data inspector, and the canvas coverage map.  app.js publishes
-// what this file needs on window.RC and reads the results back from it.
+// hex dump, data inspector, the function metadata grid, and the canvas
+// coverage map.  app.js publishes what this file needs on window.RC and reads
+// the results back from it.
 (() => {
-  const { MetaItem, MSG, hex } = window.RC;
-  const { canvas, div } = van.tags;
+  const { MetaItem, MSG, hex, encPath } = window.RC;
+  const { a, canvas, div, button, h3, pre, p, span } = van.tags;
 
   const formatBytes = (buf, baseOffset = 0) => {
     const bytes = new Uint8Array(buf);
@@ -90,42 +91,61 @@
   let hljsLoaded = false;
   let hljsLoadingPromise = null;
 
-  const loadHighlightJs = () => {
-    if (hljsLoaded) return;
-    if (hljsLoadingPromise) return hljsLoadingPromise;
+  // A failed chunk must not be silent: the pane would sit on plain text with
+  // no hint that the highlighter is missing, and (before this reset) no retry
+  // either, because a resolved promise was cached as success for the session.
+  // Drop the memo on failure so the next pane opened tries again.
+  const loadHighlightJs = async () => {
+    if (hljsLoaded) return true;
+    if (!hljsLoadingPromise) {
+      if (!document.querySelector("#hljs-theme")) {
+        const link = document.createElement("link");
+        link.id = "hljs-theme";
+        link.rel = "stylesheet";
+        link.href = "/hljs.css";
+        document.head.append(link);
+      }
 
-    if (!document.querySelector("#hljs-theme")) {
-      const link = document.createElement("link");
-      link.id = "hljs-theme";
-      link.rel = "stylesheet";
-      link.href = "/hljs.css";
-      document.head.append(link);
+      // Served from this origin, not a CDN: reverse-engineering work routinely
+      // happens on air-gapped or locked-down machines, where a CDN fetch fails
+      // silently and every code pane renders unhighlighted.
+      const loadScript = (src) => new Promise((resolve, reject) => {
+        const el = document.createElement("script");
+        el.src = src;
+        el.addEventListener("load", resolve);
+        el.addEventListener("error", () => reject(new Error(`failed to load ${src}`)));
+        document.head.append(el);
+      });
+
+      hljsLoadingPromise = (async () => {
+        await loadScript("/hljs.min.js");
+        await Promise.all([loadScript("/hljs-c.min.js"), loadScript("/hljs-x86asm.min.js")]);
+        initHighlighting();
+        hljsLoaded = true;
+      })();
+      hljsLoadingPromise.catch(() => { hljsLoadingPromise = null; });
     }
-
-    // Served from this origin, not a CDN: reverse-engineering work routinely
-    // happens on air-gapped or locked-down machines, where a CDN fetch fails
-    // silently and every code pane renders unhighlighted.
-    const loadScript = (src) => new Promise((resolve) => {
-      const el = document.createElement("script");
-      el.src = src;
-      el.addEventListener("load", resolve);
-      el.addEventListener("error", resolve);
-      document.head.append(el);
-    });
-
-    hljsLoadingPromise = (async () => {
-      await loadScript("/hljs.min.js");
-      await Promise.all([loadScript("/hljs-c.min.js"), loadScript("/hljs-x86asm.min.js")]);
-      initHighlighting();
-      hljsLoaded = true;
-    })();
-
-    return hljsLoadingPromise;
+    let failed = false;
+    try {
+      await hljsLoadingPromise;
+    } catch (error) { // oxlint-disable-line @rikalabs/no-silent-catch-fallback -- "failed" is the contract, not a swallow: the caller renders MSG.HIGHLIGHT_UNAVAILABLE and the memo above is cleared so the next pane retries
+      failed = true;
+      // oxlint-disable-next-line eslint/no-console -- a chunk that never arrived is worth a console trace alongside the in-pane notice
+      console.warn("recoverage: highlight.js failed to load", error);
+    }
+    return !failed && window.hljs != null;
   };
 
   const highlightInto = async (codeEl, lang) => {
     if (!lang) return;
-    await loadHighlightJs();
+    if (!await loadHighlightJs()) {
+      // Say so instead of dropping the reader into unhighlighted text with no
+      // explanation; the disassembly itself is left intact.
+      codeEl.dataset.highlightState = "unavailable";
+      codeEl.dataset.highlightNote = MSG.HIGHLIGHT_UNAVAILABLE;
+      codeEl.title = MSG.HIGHLIGHT_UNAVAILABLE;
+      return;
+    }
     delete codeEl.dataset.highlighted;
     try {
       window.hljs.highlightElement(codeEl);
@@ -172,15 +192,28 @@
   // Reload button: regenerate the DB (rate-limited) then refetch.  The cooldown
   // state lives here because this is the only thing that touches it.
   const REGEN_COOLDOWN_MS = 5000;
-  let lastRegenTime = 0;
+  const REGEN_NOTICE_MS = 4000;
+  // null, not 0: performance.now() counts from page load, so a first Reload
+  // clicked within the cooldown of loading the page would read as a click
+  // inside the window and silently skip the regen.
+  let lastRegenTime = null;
+  let noticeTimer = null;
+  // A message set while a good map is on screen replaces the stats row, so it
+  // has to time itself out; the "Regenerating..." state does not, because
+  // summaryData is null for its whole duration and the map is loading anyway.
+  const showNotice = (loadingMsg, message, MSG_MESSAGES) => {
+    loadingMsg.val = message;
+    clearTimeout(noticeTimer);
+    noticeTimer = setTimeout(() => { loadingMsg.val = MSG_MESSAGES.LOADING; }, REGEN_NOTICE_MS);
+  };
   const reloadData = async ({ loadingMsg, summaryData, loadData, MSG: messages }) => {
     // performance.now() is monotonic: a wall-clock step (NTP correction,
     // manual change) between clicks would make the Date.now() delta negative
     // and lock regen out until real time caught back up.
     const now = performance.now();
-    const since = now - lastRegenTime;
+    const since = lastRegenTime === null ? Infinity : now - lastRegenTime;
     if (since < REGEN_COOLDOWN_MS) {
-      loadingMsg.val = messages.REGEN_USING_CACHE(Math.ceil((REGEN_COOLDOWN_MS - since) / 1000));
+      showNotice(loadingMsg, messages.REGEN_USING_CACHE(Math.ceil((REGEN_COOLDOWN_MS - since) / 1000)), messages);
       await loadData();
       return;
     }
@@ -189,13 +222,23 @@
     summaryData.val = null;
     let ok = false;
     try {
-      const { ok: regenOk } = await fetch("/api/regen", { method: "POST", cache: "no-store" });
+      // One key per click: a request the browser or a proxy replays, or a
+      // response that never arrives, re-sends the same key and is answered
+      // from the server's ledger instead of regenerating a second time.
+      // randomUUID needs a secure context, which a plain-HTTP LAN visit is not.
+      const key = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const { ok: regenOk } = await fetch("/api/regen", { method: "POST", cache: "no-store", headers: { "Idempotency-Key": key } });
       ok = regenOk;
     } catch (error) { // oxlint-disable-line @rikalabs/no-silent-catch-fallback -- regen failure is reported to the user via REGEN_UNAVAILABLE
       // oxlint-disable-next-line eslint/no-console -- keep diagnostics in the browser console
       console.error("Regen failed:", error);
     }
-    if (!ok) loadingMsg.val = messages.REGEN_UNAVAILABLE;
+    if (ok) {
+      clearTimeout(noticeTimer);
+      loadingMsg.val = messages.LOADING;
+    } else {
+      showNotice(loadingMsg, messages.REGEN_UNAVAILABLE, messages);
+    }
     await loadData();
   };
 
@@ -209,12 +252,146 @@
     navigator.clipboard.writeText(str).then(() => flash("Copied!")).catch(() => flash("Failed"));
   };
 
+  // The metadata grid under the panel title for a selected function.  Deferred
+  // with the rest of the detail pane: nothing is selected at first paint, so
+  // this grid is work the shell would have downloaded to render nothing.
+  // VAs arrive as hex strings or numbers, so they go through the same decode
+  // app.js uses rather than parseInt(v, 16), which would read a numeric VA as
+  // base-16 digits.
+  const functionMeta = ({ fn, sourceRoot, docText, jumpToAddress }) => {
+    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- the boundary contract is exactly "hex string | number"; decode here so no call site re-parses
+    const toVa = (v) => (typeof v === "string" ? Number.parseInt(v, 16) : v);
+
+    const SourceItem = () => fn.files && fn.files.length > 0
+      ? MetaItem("Source", span({ class: "meta-value" }, ...fn.files.map((file, i) =>
+          span(i > 0 ? ", " : "", a({ href: `${encPath(sourceRoot)}/${encPath(file)}`, target: "_blank", rel: "noopener noreferrer", class: "source-link" }, file)))))
+      : null;
+
+    if (fn.isGlobal) {
+      return div({ class: "meta-grid" },
+        MetaItem("VA", a({
+          href: "#",
+          class: "meta-value asm-link",
+          onclick: (e) => { e.preventDefault(); jumpToAddress(toVa(fn.va)); }
+        }, `0x${fn.va.toString(16).toUpperCase()}`)),
+        MetaItem("Type", "Global Variable"),
+        SourceItem()
+      );
+    }
+
+    const statusClass = fn.status ? `status-${fn.status.toLowerCase().replace('_', '-')}` : '';
+    return div({ class: "meta-grid" },
+      MetaItem("VA", a({
+        href: "#",
+        class: "meta-value asm-link",
+        onclick: (e) => { e.preventDefault(); jumpToAddress(toVa(fn.vaStart || fn.va)); }
+      }, fn.vaStart || fn.va)),
+      MetaItem("Size", `${fn.size} bytes`),
+      MetaItem("Offset", `0x${(fn.fileOffset || 0).toString(16).toUpperCase()}`),
+      MetaItem("Symbol", fn.symbol || MSG.NA),
+      MetaItem("Status", span({ class: `meta-value status-badge ${statusClass}` }, fn.status || "?")),
+      MetaItem("Module", fn.module || "?"),
+      MetaItem("Compiler", fn.cflags || MSG.NA),
+      MetaItem("Marker", fn.markerType || "?"),
+      fn.blocker ? MetaItem("Blocker", span({ class: "meta-value blocker-value" }, fn.blocker), "full-width") : null,
+      fn.blockerDelta == null ? null : MetaItem("Delta", span({ class: "meta-value delta-value" }, `${fn.blockerDelta} bytes`)),
+      fn.ghidra_name && fn.ghidra_name !== fn.name ? MetaItem("Ghidra", fn.ghidra_name) : null,
+      fn.list_name && fn.list_name !== fn.name ? MetaItem("Func List", fn.list_name) : null,
+      fn.size_reason ? MetaItem("Size Source", fn.size_reason) : null,
+      fn.last_verify ? MetaItem("Verified", `${fn.last_verify.verified_at}${fn.last_verify.byte_delta == null ? "" : ` (Δ${fn.last_verify.byte_delta}B)`}`) : null,
+      // verify_results.similarity is a 0-1 fraction, like functions.similarity
+      // below it; rendered unscaled it read 100x low (87.3% as "0.9%").
+      fn.last_verify && fn.last_verify.similarity != null ? MetaItem("Code Sim", `${(fn.last_verify.similarity * 100).toFixed(1)}%`) : null,
+      fn.last_verify && fn.last_verify.reg_delta != null ? MetaItem("Reg Delta", `${fn.last_verify.reg_delta}`) : null,
+      fn.last_verify && fn.last_verify.effective_match ? MetaItem("Effective", "register-only delta — prove candidate") : null,
+      fn.updated_by ? MetaItem("Updated By", `${fn.updated_by}${fn.updated_at ? ` (${fn.updated_at})` : ""}`) : null,
+      fn.similarity == null ? null : MetaItem("Similarity", `${(fn.similarity * 100).toFixed(1)}%`),
+      fn.is_thunk ? MetaItem("Type", "IAT thunk (not reversible)") : null,
+      fn.is_export ? MetaItem("Type", "Exported function") : null,
+      fn.sha256 ? MetaItem("SHA256", `${fn.sha256.slice(0, 16)}...`) : null,
+      SourceItem(),
+      docText && docText !== MSG.SELECT_FUNCTION && docText !== MSG.NO_DOCS
+        ? MetaItem("Annotations", pre({ class: "meta-docs" }, docText), "full-width") : null
+    );
+  };
+
+  // The hexagon logo every code section is titled with.  It lives here, not in
+  // app.js, because its only callers are panes this file owns: keeping it in
+  // the shell spent ~450 minified bytes of a payload with a hard budget
+  // (see the header comment) on markup that cannot paint before this file
+  // lands anyway.
+  const HexLogo = (label, color, titleText) => div({ class: "section-title-left" },
+    span({ class: "hex-logo", "aria-hidden": "true", style: `color: ${color};`, innerHTML: `<svg viewBox="0 0 100 100"><polygon points="50,5 90,27.5 90,72.5 50,95 10,72.5 10,27.5" fill="currentColor" fill-opacity="0.15" stroke="currentColor" stroke-width="6" stroke-linejoin="round"/><text x="50" y="54" dominant-baseline="middle" text-anchor="middle" fill="currentColor" font-weight="800" font-size="${label.length > 2 ? '26' : '42'}">${label}</text></svg>` }),
+    h3({ class: "section-title-text" }, titleText)
+  );
+
+  // C Source, Assembly, and Original Bytes are the same panel section with a
+  // different logo, language, and body: title row, Copy, Open-in-modal.
+  // Copy/Open go disabled while the pane holds an empty-state message —
+  // copying "(select a function)" or opening a modal of it is never what
+  // the user wants; the tooltip says what to do instead.  detailFailed is
+  // never true here: this body only renders once this file has loaded, which
+  // is also why app.js gates the call on detailReady.
+  const isEmptyMessage = (text) => text === MSG.SELECT_FUNCTION || text === MSG.ASM_PLACEHOLDER
+    || text === MSG.NO_C_SOURCE || text === MSG.NO_C_FOR_BLOCK || text === MSG.UNDOCUMENTED_BLOCK
+    || text === MSG.DATA_SECTION_NO_ASM || text === MSG.BYTES_FAILED || text === MSG.BYTES_BSS
+    || text === MSG.BYTES_LOAD_FAILED || text === MSG.GLOBAL_VAR || text === MSG.NO_DECL
+    || text === MSG.NA || text === MSG.LOADING || text === MSG.DETAIL_UNAVAILABLE
+    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- pane text is string|derived-state; guard before .startsWith, not a type contract
+    || (typeof text === "string" && (text.startsWith(MSG.ERROR_PREFIX) || text.startsWith("(failed to load:")));
+
+  const CodeSection = (logo, color, heading, lang, text, openModal, HighlightedCode) => div({ class: "section" },
+    div({ class: "section-title" },
+      HexLogo(logo, color, heading),
+      div({ class: "section-actions" },
+        button({ class: "btn copy-btn", "aria-label": `Copy ${heading}`, disabled: () => isEmptyMessage(text), title: () => isEmptyMessage(text) ? "Select a block first" : "", onclick: (e) => copyToClipboard(text, e) }, "Copy"),
+        button({
+          class: "btn copy-btn", "aria-label": `Open ${heading} in a larger view`, disabled: () => isEmptyMessage(text), title: () => isEmptyMessage(text) ? "Select a block first" : "",
+          onclick: () => openModal(heading, text, lang),
+        }, "Open")
+      )
+    ),
+    HighlightedCode({ lang, text })
+  );
+
+  // The panel body, rebuilt by the shell's reactive `() => Panel()` binding.
+  // Nothing is selected at first paint, so the three code sections would lay
+  // out stand-in text and copy buttons for nobody: the boot layout walks 205
+  // objects, 61 of them these.  One muted line until there is something to
+  // show.
+  const panelBody = ({ fn, cellIdx, activeSection, cSourceText, asmText, bytesText, currentBuf, showModal, modalTitle, modalContent, modalLang, HighlightedCode }) => {
+    const openModal = (heading, text, lang) => {
+      // cellIdx is null when nothing is selected, which used to render
+      // as the literal "Block null".
+      const subject = cellIdx === null ? activeSection.val : `Block ${cellIdx}`;
+      modalTitle.val = `${heading}: ${fn ? fn.name : subject}`;
+      modalContent.val = text;
+      modalLang.val = lang;
+      showModal.val = true;
+    };
+    const section = (logo, color, heading, lang, text) =>
+      CodeSection(logo, color, heading, lang, text, openModal, HighlightedCode);
+    return div({ class: "panel-body" },
+      (fn || cellIdx !== null)
+        ? [
+            section("C", "var(--accent-c-source)", "C Source", "c", cSourceText.val),
+            activeSection.val === ".text"
+              ? section("ASM", "var(--accent-asm)", "Assembly", "x86asm", asmText.val)
+              : div({ class: "section" },
+                  div({ class: "section-title" }, HexLogo("{}", "var(--accent-data)", "Data Inspector")),
+                  DataInspector(currentBuf.val)
+                ),
+            section("01", "var(--accent-bytes)", "Original Bytes", "hex", bytesText.val)
+          ]
+        : div({ class: "hint" }, MSG.SELECT_FUNCTION)
+    );
+  };
+
   // The expanded code viewer.  Mounted once, on first paint of detail.js, and
   // kept in the DOM afterwards so the CSS open/close transition has something
   // to animate.
   const mountModal = ({ showModal, modalTitle, modalContent, modalLang, HighlightedCode }) => {
     if (document.querySelector(".modal")) return;
-    const { button, span } = van.tags;
 
     van.add(document.body, div({
       class: () => `modal ${showModal.val ? "show" : ""}`,
@@ -277,10 +454,10 @@
   const mountGrid = ({
     container, data, isLoading, emptyState, activeSection, activeFilters,
     searchQuery, filteredFnNames, currentCellIndex, activeFnName, isLightMode,
-    selectChunk, packSection, gridId, setGridFocus,
+    selectChunk, packSection, gridId, cellLoadError, retrySectionCells, setGridFocus,
   }) => {
-    const PALETTE_VARS = ["--none", "--exact-bg", "--reloc-bg", "--near-match-bg", "--stub-bg", "--padding-bg", "--proven-bg"];
-    const FILTER_KEY = ["", "exact", "reloc", "near_match", "stub", "padding", ""];
+    const PALETTE_VARS = ["--none", "--exact-bg", "--reloc-bg", "--near-match-bg", "--stub-bg", "--padding-bg", "--proven-bg", "--other-bg"];
+    const FILTER_KEY = ["", "exact", "reloc", "near_match", "stub", "padding", "proven", "problem"];
     const grids = {};
     let ro = null;
 
@@ -311,44 +488,66 @@
       return { cols, gap, pad, cell };
     };
 
+    // A run of dots is drawn inside ONE row, so its usable length is bounded
+    // by the column count, and a run never occupies less than one dot.  Both
+    // ends matter: a span wider than the row wrote its hit-map entries off the
+    // end of that row and into the next (Int32Array drops the overflow, so the
+    // tail was unpaintable and unclickable), and pack.spans is a Uint16Array,
+    // so a span of 65536 stored as 0 there — cellW then computed 0 * cell +
+    // (0 - 1) * gap, a negative-width rect that claimed no column at all.
+    const spanAt = (pack, i, cols) => {
+      const s = pack.spans[i];
+      if (s < 1) return 1;
+      return s > cols ? cols : s;
+    };
+
     const walk = (pack, cols, fn) => {
       let col = 0;
       let row = 0;
       for (let i = 0; i < pack.n; i += 1) {
-        const s = pack.spans[i];
+        const s = spanAt(pack, i, cols);
         if (col + s > cols && col > 0) { row += 1; col = 0; }
         fn(i, col, row, s);
         col += s;
         if (col >= cols) { col = 0; row += 1; }
       }
-      // A row filled exactly (col == 0 here) is already counted by the
-      // in-loop row += 1; only a partial trailing row needs one more.  The
-      // old `row + 1` counted a phantom second row for an 8-cell section at
-      // 8 columns — one row of cells over ~250px of blank grid background.
-      return row + (col > 0 ? 1 : 0);
     };
 
     // Layout (walk, rows, hit-map, canvas size) is cached per section and
-    // recomputed only when cols/pack change; filter/search/active/focus
-    // changes just redraw rects.  getComputedStyle reads are cached too —
-    // the palette only changes on theme toggle.
+    // recomputed only when the packed cells or the column count change;
+    // filter/search/active/focus changes just redraw rects.  getComputedStyle
+    // reads are cached too — the palette only changes on theme toggle.
+    //
+    // The memo keys on the pack OBJECT, not on (cols, cell count).  A rebuild
+    // re-spans cells without necessarily changing how many there are, and that
+    // pair would then match while the spans differ: the stale hit-map and rect
+    // geometry would mis-paint the section and hand a click the wrong cell.
+    // packSection returns a fresh object per section version and after a lazy
+    // cells fetch (it deletes sec._pack), so identity is exactly "the cells
+    // changed" — a superset of what the old key caught, and it drops the
+    // per-paint string build.  The wrapper's width joins the key below.
     const layout = (secName, pack, force) => {
       const g = grids[secName];
+      // The wrapper's own width is part of the key, not just the cell count: a
+      // hidden section (`display: none`) reports clientWidth 0, so the
+      // ResizeObserver never relaid it out, and a section first laid out before
+      // a window resize came back painted (and hit-mapped) at the old geometry.
+      const width = g.wrap.clientWidth;
+      if (!force && g.layPack === pack && g.layWidth === width) return g;
       const lay = layoutOf(g.wrap);
-      const key = `${lay.cols}x${pack.n}`;
-      if (!force && g.layKey === key) return g;
       g.lay = lay;
-      g.layKey = key;
+      g.layPack = pack;
+      g.layWidth = width;
       g.cols = lay.cols;
       const { cols, gap, pad, cell } = lay;
       // Row count first: walk is cheap, and sizing the map needs it upfront.
-      // Same exact-fill rule as walk() above: a trailing row filled exactly
-      // is already counted, so an empty section (n == 0) is 0 rows, not 1.
+      // A trailing row filled exactly is already counted, so an empty
+      // section (n == 0) is 0 rows, not 1.
       let rows = 0;
       {
         let col = 0;
         for (let i = 0; i < pack.n; i += 1) {
-          const s = pack.spans[i];
+          const s = spanAt(pack, i, cols);
           if (col + s > cols && col > 0) { rows += 1; col = 0; }
           col += s;
           if (col >= cols) { col = 0; rows += 1; }
@@ -406,9 +605,18 @@
       const sec = data.val?.sections?.[secName];
       if (!g || !sec) return;
       if (sec.cells == null) return;
+      // A rebuild can change a section's declared column count.  The wrap was
+      // built with the old value and layout reads it back off the DOM, so a
+      // background refresh would otherwise keep wrapping at the old width.
+      const declared = String(sec.columns || 64);
+      let { relayout } = opts;
+      if (g.wrap.dataset.cols !== declared) {
+        g.wrap.dataset.cols = declared;
+        relayout = true;
+      }
       // oxlint-disable-next-line @rikalabs/no-pass-through-intermediate-vars -- pack feeds layout + the draw below, not a single passthrough
       const pack = packSection(sec);
-      layout(secName, pack, opts.relayout);
+      layout(secName, pack, relayout);
       palette(secName, opts.retheme);
       const { cell } = g.lay;
       const { ctx, pal, accent, cellX, cellY, cellW } = g;
@@ -483,6 +691,16 @@
       const y = pad + g.cellRow[idx] * (cell + gap);
       const top = g.wrap.getBoundingClientRect().top + window.scrollY + y;
       window.scrollTo({ top: Math.max(0, top - window.innerHeight / 3), behavior: "smooth" });
+      // Vertically the lattice is as tall as the page, so the window is the
+      // scrollport.  Horizontally it is the wrapper: on a narrow viewport the
+      // 12px minimum cell makes the lattice wider than the frame, and a jump
+      // (search Enter, an asm link, an arrow-key walk) otherwise leaves the
+      // cell it just selected off-screen.
+      const x = g.cellX[idx];
+      const right = x + g.cellW[idx];
+      if (x < g.wrap.scrollLeft || right > g.wrap.scrollLeft + g.wrap.clientWidth) {
+        g.wrap.scrollTo({ left: Math.max(0, x - g.wrap.clientWidth / 3), behavior: "smooth" });
+      }
     };
 
     setGridFocus((secName, idx) => {
@@ -500,12 +718,20 @@
 
     van.derive(() => {
       const dropGrids = () => {
+        // A ResizeObserver holds every observed target strongly until it is
+        // unobserved or disconnected, so tearing the wrappers out of the DOM
+        // without this pins each one (canvas, 2D context, and the per-section
+        // hit-map and geometry typed arrays) for the rest of the session.
+        // Every reload drops the grids, and live reload fires on each
+        // coverage.db rebuild, so the observed set would grow without bound.
+        // New wrappers re-observe on creation, so a disconnect here is safe.
+        ro.disconnect();
         container.innerHTML = "";
         for (const k of Object.keys(grids)) delete grids[k];
       };
       if (isLoading.val) {
         dropGrids();
-        van.add(container, div({ class: "loading-overlay", role: "status", "aria-live": "polite" }, "Loading coverage data..."));
+        van.add(container, div({ class: "loading-overlay", role: "status", "aria-live": "polite" }, "Loading coverage data…"));
         return;
       }
       if (emptyState.val || !data.val || !data.val.sections) {
@@ -516,7 +742,22 @@
       const sec = data.val.sections[secName];
       const overlay = container.querySelector(".loading-overlay");
       if (overlay) overlay.remove();
-      if (!sec || sec.cells == null) return;
+      container.querySelector(".grid-error")?.remove();
+      if (!sec) return;
+      // Sibling tabs fetch their cells on switch, so a tab can be in flight or
+      // have failed.  Either way there is no lattice to draw: say which, rather
+      // than leaving an empty frame the user cannot act on.
+      if (sec.cells == null) {
+        const failed = cellLoadError.val?.section === secName ? cellLoadError.val : null;
+        if (failed) {
+          van.add(container, div({ class: "grid-error", role: "status" },
+            p(`Could not load the ${secName} map: ${failed.detail}`),
+            button({ class: "btn", onclick: () => retrySectionCells(secName) }, "Retry")));
+        } else {
+          van.add(container, div({ class: "loading-overlay", role: "status", "aria-live": "polite" }, `Loading ${secName}…`));
+        }
+        return;
+      }
       for (const [name, g] of Object.entries(grids)) {
         g.wrap.style.display = name === secName ? "block" : "none";
       }
@@ -529,19 +770,29 @@
         role: "listbox",
         tabindex: "0",
         "aria-label": `${secName} coverage map`,
+        // Pointer position is resolved against the CANVAS, not the wrapper: the
+        // lattice's own coordinates are canvas-relative, and the canvas rect
+        // already carries the wrapper's scroll offset and excludes the wrapper's
+        // 1px border. Measured against the wrapper, a map scrolled sideways
+        // (every narrow viewport, where the 12px minimum cell makes the lattice
+        // wider than the frame) put the click on whichever cell happened to sit
+        // under the same viewport coordinates.
         onclick: (e) => {
-          const rect = wrap.getBoundingClientRect();
+          const rect = grids[secName].canvas.getBoundingClientRect();
           const idx = hit(secName, e.clientX - rect.left, e.clientY - rect.top);
           if (idx >= 0) { grids[secName].focus = idx; selectChunk(idx); wrap.focus(); paint(secName); }
         },
         onmousemove: (e) => {
-          const rect = wrap.getBoundingClientRect();
+          const rect = grids[secName].canvas.getBoundingClientRect();
           const idx = hit(secName, e.clientX - rect.left, e.clientY - rect.top);
           if (idx < 0) { wrap.title = ""; wrap.style.cursor = "default"; return; }
           wrap.style.cursor = "pointer";
           const pack = packSection(sec);
           const secVa = sec.va || 0;
-          wrap.title = `${idx}  ${hex(secVa + pack.starts[idx], 8)}..${hex(secVa + pack.ends[idx], 8)}  ${pack.fns[idx] ? 1 : 0} fn`;
+          const label = window.RC.STATE_LABEL[pack.states[idx]];
+          wrap.title = [`Block ${idx}`,
+            `${hex(secVa + pack.starts[idx], 8)}..${hex(secVa + pack.ends[idx], 8)}`,
+            label, pack.fns[idx] || "no function"].filter(Boolean).join("  ");
         },
         onkeydown: (e) => {
           if (e.ctrlKey || e.metaKey || e.altKey) return;
@@ -568,7 +819,7 @@
       // oxlint-disable-next-line @rikalabs/no-pass-through-intermediate-vars -- canvas is stored and appended; ctx is a second use, not an alias
       const mapCanvas = canvas({ class: "grid-canvas" });
       wrap.append(mapCanvas);
-      grids[secName] = { wrap, canvas: mapCanvas, ctx: mapCanvas.getContext("2d"), cols: Number(wrap.dataset.cols) || 64, lay: null, focus: 0 };
+      grids[secName] = { wrap, canvas: mapCanvas, ctx: mapCanvas.getContext("2d"), cols: Number(wrap.dataset.cols) || 64, lay: null, layPack: null, focus: 0 };
       container.append(wrap);
       ro.observe(wrap);
       requestAnimationFrame(() => paint(secName));
@@ -591,6 +842,6 @@
     });
   };
 
-  Object.assign(window.RC, { formatBytes, DataInspector, extractDocs, initHighlighting, highlightInto, loadAsm, connectEvents, reloadData, copyToClipboard, mountModal, mountGrid });
+  Object.assign(window.RC, { formatBytes, functionMeta, DataInspector, extractDocs, initHighlighting, highlightInto, loadAsm, connectEvents, reloadData, copyToClipboard, mountModal, mountGrid, panelBody });
   window.RC.onReady();
 })();

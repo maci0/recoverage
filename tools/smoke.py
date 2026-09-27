@@ -1,9 +1,9 @@
 """smoke.py — boot the dashboard against a real coverage.db and probe it.
 
-End-to-end server smoke for CI: builds a synthetic ``db/coverage.db`` (the
-exact rebrew build-db schema v4, shared with the test suite via
-``tests/conftest._build_synthetic_db``), starts ``recoverage serve`` on a
-random port, and probes the surfaces a browser hits: the SPA shell, the
+End-to-end server smoke for CI: builds a minimal ``db/coverage.db`` matching
+rebrew build-db's schema v4 (``tests/conftest._build_synthetic_db``, reached
+through ``tools/_serve_harness.build_sample_db``), starts ``recoverage serve``
+on a random port, and probes the surfaces a browser hits: the SPA shell, the
 health endpoint, a target's data API, and Potato Mode.  Exits non-zero on
 any failed probe.
 
@@ -20,10 +20,9 @@ from __future__ import annotations
 
 import argparse
 import sys
-import tempfile
 from pathlib import Path
 
-from _serve_harness import build_sample_db, get, running_server, wait_for
+from _serve_harness import build_sample_db, get, running_server, scratch_project_dir, wait_for
 
 
 def smoke(project_dir: Path, *, expect_failure: bool = False) -> int:
@@ -84,9 +83,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    with tempfile.TemporaryDirectory() as td:
-        project_dir = Path(td) / "proj"
-        project_dir.mkdir()
+    with scratch_project_dir() as project_dir:
         return smoke(project_dir, expect_failure=args.expect_failure)
 
 

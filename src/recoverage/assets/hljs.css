@@ -1,35 +1,46 @@
+/* First-party theme.  The tokens the app already owns are read from
+ * style.css rather than restated, so the code pane follows a palette change
+ * instead of drifting one release behind it.  The four steps below are the
+ * exceptions, for one reason: a status hue is tuned as a translucent cell
+ * fill, and at that value on a dark --code-bg it does not clear 4.5:1 as
+ * 12px text.  Each is a lightened step of the hue it stands for. */
 :root {
   --hljs-bg: transparent;
-  --hljs-color: #c9d1d9;
-  --hljs-keyword: #ff7b72;
-  --hljs-title: #d2a8ff;
-  --hljs-attr: #79c0ff;
-  --hljs-string: #a5d6ff;
-  --hljs-symbol: #ffa657;
-  --hljs-comment: #8b949e;
-  --hljs-name: #7ee787;
-  --hljs-section: #1f6feb;
-  --hljs-bullet: #f2cc60;
-  --hljs-addition-color: #aff5b4;
-  --hljs-addition-bg: #033a16;
-  --hljs-deletion-color: #ffdcd7;
-  --hljs-deletion-bg: #67060c;
+  --hljs-color: var(--text);
+  --hljs-keyword: var(--badge-stub-text);
+  /* Function and type names take the data accent's hue, lifted for text: not
+   * the cell state's own value, which is the "unclassified" slot. */
+  --hljs-title: #d8b4fe;
+  --hljs-attr: var(--link);
+  --hljs-string: #fcd34d;
+  --hljs-symbol: #5eead4;
+  --hljs-comment: var(--muted);
+  --hljs-name: #6ee7b7;
+  --hljs-section: #67e8f9;
+  --hljs-bullet: #fcd34d;
+  --hljs-addition-color: #6ee7b7;
+  --hljs-addition-bg: #0d3a26;
+  --hljs-deletion-color: #fecaca;
+  --hljs-deletion-bg: #45161a;
 }
+/* The light block tracks style.css's light theme, so the code pane sits on
+ * the same neutral family as the frame around it rather than on a stock
+ * blue-gray.  Each value clears 4.5:1 on the light --code-bg. */
 .light-mode {
-  --hljs-color: #24292e;
-  --hljs-keyword: #d73a49;
-  --hljs-title: #6f42c1;
-  --hljs-attr: #005cc5;
-  --hljs-string: #032f62;
-  --hljs-symbol: #e36209;
-  --hljs-comment: #6a737d;
-  --hljs-name: #22863a;
-  --hljs-section: #005cc5;
-  --hljs-bullet: #735c0f;
-  --hljs-addition-color: #22863a;
-  --hljs-addition-bg: #f0fff4;
-  --hljs-deletion-color: #b31d28;
-  --hljs-deletion-bg: #ffeef0;
+  --hljs-color: var(--text);
+  --hljs-keyword: var(--badge-stub-text);
+  --hljs-title: #6d28d9;
+  --hljs-attr: var(--link);
+  --hljs-string: var(--badge-near-text);
+  --hljs-symbol: #0f766e;
+  --hljs-comment: var(--muted);
+  --hljs-name: var(--badge-exact-text);
+  --hljs-section: var(--c);
+  --hljs-bullet: var(--badge-near-text);
+  --hljs-addition-color: var(--badge-exact-text);
+  --hljs-addition-bg: #e8f8ef;
+  --hljs-deletion-color: #7f1d1d;
+  --hljs-deletion-bg: #fdeaea;
 }
 .hljs { color: var(--hljs-color); background: var(--hljs-bg); }
 .hljs-doctag, .hljs-keyword, .hljs-meta .hljs-keyword, .hljs-template-tag, .hljs-template-variable, .hljs-type, .hljs-variable.language_ { color: var(--hljs-keyword); }

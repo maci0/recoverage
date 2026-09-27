@@ -8,6 +8,7 @@ __pycache__/
 
 # Testing
 .pytest_cache/
+.pytest-tmp/
 
 # Build artifacts
 dist/
@@ -30,3 +31,4 @@ node_modules/
 coverage.db
 coverage.db-shm
 coverage.db-wal
+coverage.db.lock

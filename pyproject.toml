@@ -11,7 +11,10 @@ dynamic = ["version"]
 description = "Coverage dashboard for binary-matching decompilation projects"
 requires-python = ">=3.13"
 license = "MIT"
-license-files = ["LICENSE"]
+# NOTICE carries the grants for the third-party browser blobs under
+# src/recoverage/assets, which ship inside the wheel. Without it here a wheel
+# consumer gets the MIT license and no way back to VanJS or Highlight.js.
+license-files = ["LICENSE", "NOTICE"]
 keywords = ["reverse-engineering", "decompilation", "code-coverage", "binary-matching"]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -33,10 +36,12 @@ dependencies = [
     # and the shared rebrew-project.toml + coverage.db resolution
     # (rebrew.workspace, stdlib only), so recoverage does not carry its own
     # copy.  Resolved from the sibling checkout by [tool.uv.sources] below.
-    # 2.4.0 is the floor, not a formality: server.py imports
-    # rebrew.workspace.CELLS_JSON_OBJECT_SQL at module scope, and that symbol
-    # ships with 2.4.0's schema v7.
-    "rebrew>=2.4.0",
+    # 2.10.0 is the floor. Regen imports rebrew.catalog.cli.run_catalog
+    # (rebrew.catalog stopped re-exporting it in 2.7.0). Readers take
+    # coverage_db_lock shared around open_sqlite_ro, and 2.10.0 is the
+    # first release that ships that lock. The schema stamp since 2.7.0
+    # is "10".
+    "rebrew>=2.10.0",
     "rich>=15.0.0",
     "rjsmin>=1.2",
     "typer>=0.27.2",
@@ -49,6 +54,7 @@ Repository = "https://github.com/relumea/recoverage"
 
 [project.optional-dependencies]
 dev = [
+    "mypy>=1.14",
     "pytest>=9.1.1",
     "ruff>=0.16.7",
 ]
@@ -85,7 +91,13 @@ rebrew = { path = "../rebrew", editable = true }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "--ignore=tests/test_playwright.py"
+# --basetemp keeps the run's tmp root inside the checkout. pytest shares
+# /tmp/pytest-of-$USER across every project on the host and garbage-collects
+# the numbered dirs it finds there at session end; a directory another project
+# made undeletable turns that into a PytestWarning, which filterwarnings =
+# ["error"] below turns into a failed run that has nothing to do with this
+# tree. pytest clears the basetemp itself, so the pinned path stays private.
+addopts = "--ignore=tests/test_playwright.py --basetemp=.pytest-tmp"
 # Every warning is a failure: the suite runs clean, so a new ResourceWarning
 # (unclosed socket/file/connection), deprecation, or unraisable exception
 # must break the build instead of scrolling past.
@@ -95,29 +107,116 @@ filterwarnings = ["error"]
 target-version = "py313"
 line-length = 100
 
+[tool.mypy]
+# The gate covers src/ and tools/ only. tests/ stays out until its fixtures
+# carry the annotations; make test-one is the loop that grows them.
+files = ["src/recoverage", "tools"]
+python_version = "3.13"
+# Strict, minus the three checks this tree does not pass yet and one that
+# contradicts the layout:
+#   disallow_untyped_decorators — every route handler carries @app.route /
+#   @app.get, and bottle is untyped, so the decorator erases the signature.
+#   warn_return_any — the JSON builders reach sqlite3.Row values, which are
+#   Any by construction; the row shape is pinned by the SQL, not the checker.
+#   no_implicit_reexport — api.py, ui.py and potato.py import the shared
+#   server names (request, response, HTTPResponse) from recoverage.server on
+#   purpose, so every route module imports the same objects from one module.
+# Everything else --strict turns on passes today; a new module inherits it.
+strict = true
+disallow_untyped_decorators = false
+warn_return_any = false
+no_implicit_reexport = false
+# The runtime deps (bottle, brotli, rcssmin, rjsmin) ship no py.typed, so
+# every import of them is an error mypy cannot see past. Each carries its own
+# `# type: ignore[import-untyped]`, which this setting would then report as
+# unused: silencing the imports silences the annotation of the silence.
+ignore_missing_imports = true
+warn_unused_ignores = false
+# tools/ scripts are one-off build helpers: their mains take argv from the
+# caller and are annotated as the work grows, so the signature check is off
+# there only.
+[[tool.mypy.overrides]]
+module = "tools.*"
+disallow_untyped_defs = false
+
 [tool.ruff.lint]
+# RUF001-RUF003 flag every confusable in prose; the multiplication sign is
+# deliberate typography in the coverage arithmetic, not a homoglyph typo.
+allowed-confusables = ["×"]
 # Core groups (E/F/W/I/UP/B/SIM) plus correctness-oriented groups proven clean
 # on this tree:
 #   A      — shadowing builtins; ASYNC — blocking calls in async code;
 #   DTZ    — naive datetime; G — logging format-string misuse;
 #   N      — naming conventions; PGH — bans blanket noqa / type: ignore;
 #   TID    — import hygiene; YTT — yield-in-try/finally traps;
+#   RUF    — unused unpacked bindings, mutable class attributes, slicing;
 #   RUF100 — flags stale or unscoped `noqa` directives (suppression hygiene);
 #   T10    — debugger/breakpoint calls must never be committed;
 #   FLY    — str.join over += loops; ICN — import conventions;
+#   PTH    — os.path over pathlib (Path is already the tree's idiom);
 #   PLE    — pylint errors (real-defect class); INT — gettext format misuse;
 #   C4     — comprehensions; RET/RSE — return/raise shape;
 #   PERF   — performance anti-patterns; PIE — misc correctness nits;
 #   ISC    — implicit string concatenation (missing-comma bug class);
-#   FURB   — clearer stdlib idioms.
+#   FURB   — clearer stdlib idioms;
+#   ERA    — commented-out code left behind (dead-logic class);
+#   LOG    — logging call misuse (stdlib logging, not the `logging` plugin);
+#   FA     — future-annotation hygiene; Q — quote consistency;
+#   TD     — TODO/FIXME/XXX markers; PT — pytest fixture/marker misuse.
+# The remaining bandit and pylint rules are selected one code at a time
+# instead of by group prefix, because a prefix pulls in rules this tree does
+# not yet pass and each of those needs a decision of its own:
+#   S102/S107 — exec, hardcoded password; S2/S5/S7 — Flask debug, request
+#   without timeout, assert, trojan source; S3xx — pickle/marshal/XML
+#   deserialisation; S6xx — shell and partial-path process launches;
+#   S104-S108/S310/S311 — wildcard bind, hardcoded secret, /tmp path, urlopen
+#   scheme, non-crypto rng. On for src/ and tools/; the tests/* per-file-ignore
+#   below carries the reason, since every finding they produce is a fixture
+#   that deliberately binds every interface, names a token, uses /tmp, or
+#   seeds a PRNG.
+#   PLC/PLW  — the pylint correctness rules outside PLE (unnecessary-dunder
+#   call, nan comparison, bad raise type, encoding-less open, useless
+#   else-on-loop, self-assignment, global-at-statement), plus the PLR and TRY
+#   codes listed in select that are defect classes rather than size limits.
+# S101 (assert) and S603/S607/S608 (untrusted argv, partial path, string-built
+# SQL) stay off: the suite asserts by design, and the SQL and argv fragments
+# are built from validated column names rather than request input.
 select = [
     "E", "F", "W", "I", "UP", "B", "SIM",
     "A", "ASYNC", "DTZ", "G", "N", "PGH", "TID", "YTT", "RUF100",
-    "T10", "FLY", "ICN",
-    "PLE", "INT", "C4", "RET", "RSE", "PERF", "PIE", "ISC", "FURB",
-    "T20",
+    "T10", "FLY", "ICN", "PTH",
+    "PLE", "INT", "C4", "RET", "RSE", "PERF", "PIE", "ISC", "FURB", "RUF",
+    "T20", "ERA", "LOG", "FA", "Q", "TD", "PT",
+    "S2", "S5", "S7", "S102", "S103", "S104", "S105", "S106", "S107",
+    "S108", "S310", "S311",
+    "S301", "S302", "S303", "S304", "S305", "S306", "S307", "S308",
+    "S312", "S313", "S314", "S315", "S316", "S317", "S318", "S319",
+    "S321", "S323", "S324",
+    "S601", "S602", "S604", "S605", "S606", "S609", "S610", "S611", "S612",
+    "PLC0205", "PLC0206", "PLC0208", "PLC0414", "PLC3002",
+    "PLW0120", "PLW0127", "PLW0128", "PLW0129", "PLW0131", "PLW0133",
+    "PLW0177", "PLW0211", "PLW0245", "PLW0406", "PLW0602", "PLW0604",
+    "PLW0642", "PLW0711", "PLW1501", "PLW1507", "PLW1508", "PLW1509",
+    "PLW1641", "PLW2101", "PLW3301",
+    # pylint refactor rules that are defect classes rather than size limits:
+    # comparing a value with itself, comparing two constants, a property that
+    # takes arguments, an argument rebound from a local, a bool chain that
+    # cannot short-circuit, sys.exit reachable outside the entry point, an
+    # empty comment, a dict or list index lookup whose key is known to exist.
+    "PLR0124", "PLR0133", "PLR0206", "PLR1704", "PLR1716", "PLR1722",
+    "PLR1733", "PLR1736", "PLR2044",
+    # tryceratops: vanilla-raise, type-check-without-type-error, verbose
+    # raise, useless try/except, logging the exception class instead of the
+    # instance. TRY200 (reraise without cause) is B904, already covered by the
+    # B group; TRY300 (return in try) and TRY003 (long message in raise) are
+    # the two this tree does not pass yet.
+    "TRY002", "TRY004", "TRY201", "TRY203", "TRY400", "TRY401",
 ]
-ignore = []
+# PT006 wants argnames as a tuple or list; the suite spells them the pytest
+# way, as one comma-separated string ("raw,expected"). PT018 asks for one
+# assert per line; the compact `assert a in x and b in y` form is how the
+# table-driven cases read.
+ignore = ["PT006", "PT018"]
 # typer's idiom is `param = typer.Option(...)` in signature defaults; without
 # this, B008 would demand a noqa on every CLI option (typer docs recommend it).
 [tool.ruff.lint.flake8-bugbear]
@@ -131,3 +230,11 @@ extend-immutable-calls = ["typer.Option", "typer.Argument"]
 # T201: tools/ scripts are command-line utilities whose stdout output IS their
 # interface; print is intentional there and banned everywhere else.
 "tools/*" = ["T201"]
+# S104/S105/S106/S108/S310/S311: the suite asserts on the shapes the security
+# rules exist to prevent, so its fixtures have to spell them out. A test binds
+# 0.0.0.0 to prove the server refuses a non-loopback peer, passes a token and
+# a /tmp db path through the config parser, and seeds a PRNG for the fuzz
+# campaign. None of this reaches the server: it binds 127.0.0.1, and the S1xx
+# codes are on for src/ and tools/, where a wildcard bind or a hardcoded
+# secret would be a real finding.
+"tests/*" = ["S104", "S105", "S106", "S108", "S310", "S311"]

@@ -1,4 +1,4 @@
-# 🔍 recoverage
+# recoverage
 
 <p align="center">
   <img src="docs/mascot.png" alt="recoverage mascot — a raccoon detective investigating code coverage" width="200">
@@ -12,7 +12,8 @@
   <a href="#installation">Install</a> ·
   <a href="#quick-start">Quick Start</a> ·
   <a href="#screenshots">Screenshots</a> ·
-  <a href="#potato-mode">Potato Mode</a>
+  <a href="#potato-mode">Potato Mode</a> ·
+  <a href="#continuous-integration">CI</a>
 </p>
 
 ---
@@ -25,24 +26,24 @@ decompilation project. Think of it as a **defrag map for your decomp** —
 every byte of the original binary is a cell in a grid, colored by how
 closely your C code matches the original compiled output.
 
-### 🚀 Features
+### Features
 
-- **Byte-Perfect Confidence**: Stop guessing if your C code produced the correct assembly. See exact byte comparisons visually.
-- **Fast Iteration**: Quickly identify which parts of a function are matching and which parts have diverged (e.g. register allocation differences, instruction reordering).
-- **Interactive Triage**: Click any block in the grid to immediately view the corresponding C source, disassembled binary, and hex diff.
+- **Byte comparison**: See where your C matches the original compiled output, byte for byte, and where it drifts.
+- **Divergence triage**: Find the part of a function that stopped matching, whether that is register allocation, instruction reordering, or padding.
+- **Source next to output**: Click any block to read its C, its disassembly, and the raw bytes side by side.
 
-### ✨ Highlights
+### Details
 
-| | |
+| What | How |
 |---|---|
-| 🧱 **Defrag-style grid** | One cell per chunk — Exact (green), Reloc (cyan), Matching (yellow), Stub (red), None (gray) |
-| 🔎 **Function detail panel** | Click any cell to see metadata, C source, disassembly, and hex dump side-by-side |
-| 🌗 **Light & dark themes** | Retro CRT dark mode by default, clean light mode one click away |
-| 🔗 **Clickable cross-references** | Hex addresses in disassembly are live links — click to jump to that chunk |
-| 📊 **Interactive progress bar** | Segmented by status; click a segment to filter the grid |
-| 🗜️ **First draw in first TCP packet** | HTML + CSS + JS inlined & compressed (Brotli/Zstd) to ~14.5 KB |
-| 🥔 **Potato Mode** | Zero-JS server-rendered fallback for constrained environments |
-| 🔄 **Live regen** | One-click re-catalog + rebuild without restarting the server |
+| Defrag-style grid | One cell per chunk, colored by state: Exact (green), Reloc (blue), Near-match (yellow), Proven (cyan), Stub (red), None (gray) |
+| Function detail panel | Click any cell for metadata, C source, disassembly, and hex dump side by side |
+| Light and dark themes | Retro CRT dark mode by default, clean light mode one click away |
+| Clickable cross-references | Hex addresses in the disassembly are live links that jump to that chunk |
+| Interactive progress bar | Segmented by state; click a segment to filter the grid |
+| First draw in first TCP packet | HTML, CSS, and JS inlined and compressed (Brotli/Zstd) to ~14.2 KB |
+| Potato Mode | Zero-JS server-rendered fallback for constrained environments |
+| Live regen | Re-catalog and rebuild from the browser without restarting the server |
 
 ## Screenshots
 
@@ -58,7 +59,7 @@ closely your C code matches the original compiled output.
 
 ![Dark mode with function detail panel](docs/recoverage_dark.png)
 
-### 🥔 Potato Mode
+### Potato Mode
 
 ![Potato Mode — retro pure-HTML table view](docs/recoverage_potato.png)
 
@@ -75,11 +76,24 @@ glance without loading the full SPA.
 pip install recoverage
 ```
 
-For development:
+For development, see [CONTRIBUTING.md](CONTRIBUTING.md) — recoverage depends on
+a sibling rebrew checkout, so the bootstrap is two commands:
 
 ```bash
-uv pip install -e .
+make clone-rebrew   # the sibling rebrew into ../rebrew, at the pin in tools/ci_clone_rebrew.sh
+make setup          # uv sync --locked --extra dev
+make test           # or: make test-one T=tests/test_api.py
+uv run recoverage serve
 ```
+
+> [!IMPORTANT]
+> `rebrew` is a path dependency resolved to `../rebrew`
+> (`[tool.uv.sources]` in `pyproject.toml`), so recoverage must sit beside a
+> rebrew checkout. `git clone` recoverage on its own, or any git worktree of
+> it, leaves `uv sync` failing with
+> `Distribution not found at file:///.../rebrew`. Put the two side by side
+> (or point that source at a rebrew you already have) before running
+> anything.
 
 ### Optional runtime extras
 
@@ -98,7 +112,7 @@ Install an extra to enable its feature: `pip install 'recoverage[<extra>]'`
 
 ```bash
 # 1. Generate the coverage database (from your project directory)
-uv run rebrew catalog --json
+uv run rebrew catalog
 # Analyzes the target binary, parses your annotations, and dumps raw match data to db/data_*.json
 
 uv run rebrew build-db
@@ -118,6 +132,20 @@ uv run recoverage serve
 
 ## CLI Commands
 
+### Global flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--version` | | Print the version and exit |
+| `--no-color` | off | Disable colored output; also disabled by `NO_COLOR` or `TERM=dumb` |
+| `--install-completion` | | Install shell completion for bash, zsh, fish or PowerShell |
+| `--show-completion` | | Print the completion script instead of installing it |
+
+Errors, warnings, and gate verdicts are colored on a terminal and plain
+everywhere else (a pipe, a file, `NO_COLOR`, `TERM=dumb`), the `stats` table
+included. Under `--json`, stdout carries the machine payload only and every
+human note goes to stderr.
+
 ### `recoverage serve`
 
 Start the dashboard web server.
@@ -127,11 +155,75 @@ Start the dashboard web server.
 | `--port` | `8001` | HTTP port to serve on |
 | `--bind` | `127.0.0.1` | Interface to bind to (use `0.0.0.0` for LAN access) |
 | `--allow-remote` | off | Required with a non-loopback `--bind`: acknowledge the API is reachable on the network |
-| `--token` | off | Require this token for every request (`Authorization: Bearer`, `?token=`, or open `/?token=<token>` to set the SPA cookie) |
+| `--token` | off | Require this token for every request (`Authorization: Bearer`, `?token=`, or open `/?token=<token>` or `/potato?token=<token>` to set the browser cookie) |
 | `--no-open` | off | Don't auto-open the browser |
 | `--regen` | off | Run `rebrew catalog` + `rebrew build-db` before starting |
 | `--cors` | off | Enable CORS processing (allowlisted origins only; the wildcard is never emitted) |
 | `--cors-origin` | none | Origin URL allowed to read the API cross-origin (repeatable; without it `--cors` allows no cross-origin reads) |
+| `--log-level` | `INFO` | Log threshold: `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` (case-insensitive) |
+
+#### Environment
+
+Every flag above also reads a `RECOVERAGE_*` variable, used as its default, so
+a service can be configured without putting anything in its argv (and, for the
+token, without exposing it in the process listing). A flag on the command line
+always wins over the environment.
+
+| Variable | Default | Accepts |
+|----------|---------|---------|
+| `RECOVERAGE_PORT` | `8001` | integer `0`-`65535` |
+| `RECOVERAGE_BIND` | `127.0.0.1` | an interface address or hostname; no whitespace, no `host:port` (the port belongs to `RECOVERAGE_PORT`) |
+| `RECOVERAGE_ALLOW_REMOTE` | `false` | `1`/`0`, `true`/`false`, `yes`/`no`, `on`/`off` |
+| `RECOVERAGE_CORS` | `false` | same booleans |
+| `RECOVERAGE_CORS_ORIGIN` | none | comma-separated origin URLs; each must be one a browser could send (`scheme://host[:port]`, no userinfo, path or whitespace) |
+| `RECOVERAGE_TOKEN` | none | the bearer token; set it empty to run unauthenticated |
+| `RECOVERAGE_LOG_LEVEL` | `INFO` | a `logging` level name, or its number |
+| `RECOVERAGE_DB` | resolved from the working directory | path to `coverage.db` |
+
+```bash
+# A service that is not run from the project root, on a LAN interface,
+# with a token that never reaches the process listing:
+export RECOVERAGE_DB=/srv/project/db/coverage.db
+export RECOVERAGE_BIND=0.0.0.0
+export RECOVERAGE_ALLOW_REMOTE=1
+export RECOVERAGE_TOKEN="$(cat /run/secrets/recoverage_token)"
+recoverage serve --no-open
+```
+
+`RECOVERAGE_ALLOW_REMOTE` is still yours to set: a non-loopback bind without
+it exits 1, whether the address came from the flag or the environment.
+
+Every value is validated at startup. An out-of-range port, a non-boolean flag,
+an unknown log level, an empty value where one is required, a bind address no
+resolver can answer (`0.0.0.0 `, `host:8001`), a CORS origin no browser could
+send, or a misspelled `RECOVERAGE_*` name (`RECOVERAGE_PRT`) exits 2 with the
+variable named, instead of starting with a default you did not ask for. The
+same check runs for every command that reads the environment (`stats`,
+`export`, `check`, `open`, `regen`), so a typo cannot quietly leave those on
+their defaults.
+`recoverage serve` prints the settings it resolved on startup, with the token
+reported as `token=set`.
+
+### `recoverage config`
+
+Print the configuration `serve` would start with, without binding a port.
+Useful for confirming a service's environment, or for diffing two of them.
+
+```bash
+recoverage config                     # key=value, token as set/unset
+recoverage config --json              # the same settings as a JSON object
+```
+
+```
+bind=0.0.0.0
+port=8001
+allow_remote=true
+cors=false
+cors_origin=none
+db=auto
+log_level=INFO
+token=set
+```
 
 ### `recoverage stats`
 
@@ -142,6 +234,11 @@ recoverage stats                    # all targets
 recoverage stats --target SERVER    # single target
 recoverage stats --json             # machine-readable
 ```
+
+With `--json`, a failure is reported on stdout as
+`{"error": "...", "exit_code": N}` rather than as a stderr line, so a script
+parses one shape whether the run failed or not.  `check --json` and
+`export --format json` report the same envelope.
 
 ### `recoverage export`
 
@@ -165,8 +262,8 @@ recoverage check --min-coverage 60 --target SERVER --section .text   # specific
 recoverage check --min-coverage 60 --json                       # machine-readable verdict
 ```
 
-Exit codes: 0 = gate passed, 1 = coverage below threshold (or bad input),
-2 = infrastructure error (database missing/unreadable).
+Exit codes: 0 = gate passed, 1 = coverage below threshold (or a target/section
+that matched nothing), 2 = bad `--min-coverage` value or an unreadable database.
 
 ### `recoverage regen`
 
@@ -189,6 +286,9 @@ Open the dashboard in a browser (useful when `--no-open` was used).
 recoverage open --port 8001
 ```
 
+`--port` defaults to `RECOVERAGE_PORT`, the same port `serve` uses, so a
+deployment that moved off `8001` needs no second place to configure.
+
 ---
 
 ## API Endpoints
@@ -197,17 +297,138 @@ recoverage open --port 8001
 |------|--------|-------------|
 | `/` | GET | Main SPA dashboard |
 | `/potato` | GET | Potato Mode (pure-HTML fallback) |
-| `/api/health` | GET | Server version, DB info, installed extras |
+| `/api/health` | GET | Server version, DB info, installed extras, request/regen/stream counters |
 | `/api/targets` | GET | List available targets |
 | `/api/targets/<target>/stats` | GET | Per-section coverage stats with percentages |
 | `/api/targets/<target>/data` | GET | Section + cell data (`?section=.text` for partial) |
-| `/api/targets/<target>/functions` | GET | Paginated list (`?status=&search=&sort=&limit=&offset=`) |
+| `/api/targets/<target>/functions` | GET | Paginated list (`?status=&search=&sort=&limit=&offset=`; a `status` outside rebrew's vocabulary is a 400) |
 | `/api/targets/<target>/functions` | POST | Batch lookup: `{"vas": [...]}` → function/global details in input order |
 | `/api/targets/<target>/functions/<va>` | GET | Single function/global detail |
 | `/api/targets/<target>/asm` | GET | Disassembly (`?format=json` for structured output) |
 | `/api/targets/<target>/sections/<section>/bytes` | GET | Raw byte slice (`?offset=&size=`) |
 | `/api/events` | GET | Server-Sent Events: `db-updated` when coverage.db changes (SPA auto-refresh) |
-| `/api/regen` | POST | Re-run catalog + build-db (localhost only, rate-limited) |
+| `/api/regen` | POST | Re-run catalog + build-db (loopback peer and, when present, same-origin only; rate-limited; optional `Idempotency-Key` header) |
+
+A regen rebuilds `coverage.db` from scratch, so running it twice leaves the
+same state as running it once. Send an `Idempotency-Key` header with the
+request and a repeat of that key is answered with the recorded result
+(`Idempotent-Replay: true`) instead of running the pipeline again; keys are
+remembered for 10 minutes (the ledger holds more slots than the rate limit
+admits in that window, so a key is only ever dropped by its own age), and a
+failed run is not remembered.
+
+### Observing a running server
+
+Every response carries an `X-Request-ID` header, and every log line for that
+request repeats it as `[rid=...]`, including the traceback of a failed one.
+Send your own `X-Request-ID` and the server uses it instead of minting one,
+so a report from a client can be matched to the server log. Raise the detail
+with `--log-level DEBUG` to get one line per request with its status and
+duration; a request slower than a second is one `WARNING` line at any level.
+
+`/api/health` carries the counters for the process:
+
+```json
+{
+  "status": "healthy",
+  "requests": {
+    "total": 412, "errors": 1, "slow": 0, "in_flight": 1,
+    "slow_threshold_ms": 1000.0, "mean_ms": 4.812, "max_ms": 91.204,
+    "by_status": {"2xx": 409, "4xx": 2, "5xx": 1},
+    "by_route": {"/api/targets/<target>/data": {"requests": 12, "errors": 0, "max_ms": 91.2}}
+  },
+  "regen": {
+    "runs": 3, "failures": 0, "rejected": 1, "in_flight": 0,
+    "last_duration_ms": 84210.4, "last_ok": true
+  },
+  "streams": {
+    "clients": 1, "max_clients": 32, "queue_max": 32, "watcher_alive": true
+  }
+}
+```
+
+Routes are counted by their rule, never by the raw path, so the map stays
+bounded whatever a caller asks for. The snapshot is taken before the reading
+request is filed, so it describes everything up to it. There is no metrics
+backend to configure: these numbers live in the process and reset with it.
+
+`regen` covers the rebuild pipeline, which is the one request that runs for
+minutes: the request counters can say a request is in flight but not that it
+is a rebuild, how long the last one took, or whether failures are climbing.
+`rejected` counts POSTs the cooldown or the run lock refused, which is a
+double-clicked Reload button rather than a broken pipeline, so it is kept off
+`failures`. `streams` reports live-reload saturation: each connected SSE
+stream pins a server thread for its whole life, so `clients` against
+`max_clients` is the distance to the 503 the next tab gets.
+`watcher_alive` is `null` until the first client connects, since the poller
+starts lazily. A connected client with a dead poller answers `degraded`: every
+page still renders, none of them will ever refresh again.
+
+### Error responses
+
+Every `/api/*` failure answers the same JSON envelope, and every error body
+is sent with `Cache-Control: no-store`:
+
+```json
+{
+  "error": "Method not allowed",
+  "code": "method_not_allowed",
+  "detail": "POST is not allowed on /api/health; allowed: GET, HEAD"
+}
+```
+
+`code` is the stable machine-readable key: `bad_request`, `unauthorized`,
+`forbidden`, `not_found`, `method_not_allowed`, `payload_too_large`,
+`unsupported_media_type`, `unprocessable_entity`, `rate_limited`, `internal`,
+`not_implemented`, `db_unavailable`. `detail` names the parameter or
+constraint at fault, and some errors add one more key (`retry_after` on a
+429).
+
+A wrong verb on a real path answers **405 with an `Allow` header**; a path no
+route matches answers **404**. A `405` never means "not found" here.
+
+### Caching
+
+Every DB-derived read endpoint (`/data`, `/stats`, `/asm`,
+`/sections/<section>/bytes` and `/potato`) carries an `ETag` over the
+WAL-aware freshness stamp of `coverage.db` plus the request's own identity
+(target, section, VA, offset, format), and `Cache-Control: no-cache,
+must-revalidate`. Send `If-None-Match` and an unchanged database answers
+**304** with no body. `/health` and `/targets` are `no-store` instead: they
+report the server's own state, not the database's.
+
+Query-parameter rules, the same on every endpoint:
+
+- `/asm` requires `va` and `size`, and accepts `format=text` (default) or
+  `format=json`. An unrecognized `format` is a 400, not a silent fall back to
+  text. `size` is a byte count, decimal or 0x-prefixed, clamped to 4096.
+- `/sections/<section>/bytes` takes `offset` (default 0) and `size` (default
+  256, clamped to 4096); both are decimal unless 0x-prefixed. A slice that
+  would run past the section end is a 400 naming the section's size.
+- Both of those read the original binary, and a target whose binary is
+  missing or has no `[targets.<id>].binary` in `rebrew-project.toml` is a 404
+  (`DLL not found`, detail naming the key to add) whichever `format` you ask
+  for. A 422 means the binary loaded and the requested window ran past its
+  end.
+- `/functions` (list) takes `limit` (1..500, default 50) and `offset` (>= 0,
+  default 0). An unparseable or out-of-range value is clamped, and the
+  response echoes the `limit` and `offset` actually used.
+- `/functions` (POST) takes `{"vas": [...]}`, at most 500 entries, each a hex
+  string (with or without `0x`) or an integer. The body must be under 64 KiB
+  (413) and the list non-empty (400). VAs with no match are omitted from the
+  response rather than reported as an error. A `Content-Type` header, if
+  sent, must be `application/json` (or any `application/*+json`); anything
+  else is a 415 `unsupported_media_type`. Omitting the header entirely is
+  allowed, so a `curl -d` client must add `-H 'Content-Type: application/json'`
+  to stay off that path.
+
+With `--cors`, an allowlisted origin may send `Content-Type`, `Authorization`
+(the `--token` bearer check) and `If-None-Match` (the conditional GET every
+ETag-bearing endpoint above expects); a preflight naming any other request
+header is refused. `ETag` and `Retry-After` are exposed as readable response
+headers, so a cross-origin client can revalidate and honour a 429's wait.
+Every 429 the server emits carries `Retry-After` alongside the `retry_after`
+body key.
 
 ---
 
@@ -216,16 +437,28 @@ recoverage open --port 8001
 **recoverage** is designed as a standalone **consumer** of the data that [rebrew](../rebrew) produces — the two packages are intentionally decoupled.
 
 ```text
-rebrew catalog --json          rebrew build-db           recoverage (Bottle + SQLite)
+rebrew catalog                 rebrew build-db           recoverage (Bottle + SQLite)
        │                             │                       │
   db/data_*.json  ──────────▶  db/coverage.db  ──────────▶  VanJS Dashboard
 ```
 
-1. **`rebrew catalog --json`**: Scans your project's source annotations and writes intermediate `db/data_*.json` files containing coverage metrics. Jump table / switch data bytes are absorbed into their parent function's size. Use `--export-ghidra-labels` to generate `ghidra_data_labels.json` for round-trip Ghidra sync.
-2. **`rebrew build-db`**: Consumes those JSON files and builds a structured `db/coverage.db` (SQLite, `db_version` `"7"`) database, storing per-function metadata (`detected_by`, `size_by_tool`, `textOffset`), per-global metadata (`module`, `size`), per-cell metadata (`label`, `parent_function`), and stamping `db_version` for schema detection.  It also materializes the two objects the dashboard reads instead of re-deriving them on every request: the per-section coverage buckets (`section_cell_stats`) and the per-section cell JSON (`section_cells_json`, zstd).  Both are derived from `cells` and rebuilt on every build, so a database produced by an older rebrew is still *served* — the server falls back to the equivalent live queries.  `rebrew build-db` itself requires `--force` to migrate a pre-v7 database. See [DB_FORMAT.md](../rebrew/docs/DB_FORMAT.md) for the full schema.
+1. **`rebrew catalog`**: Scans your project's source annotations and writes intermediate `db/data_*.json` files containing coverage metrics. Jump table / switch data bytes are absorbed into their parent function's size. Use `--export-ghidra-labels` to generate `ghidra_data_labels.json` for round-trip Ghidra sync.
+2. **`rebrew build-db`**: Consumes those JSON files and builds a structured `db/coverage.db` (SQLite, `db_version` `"10"`) database, storing per-function metadata (`detected_by`, `size_by_tool`, `textOffset`), per-global metadata (`module`, `size`), per-cell metadata (`label`, `parent_function`), and stamping `db_version` for schema detection.  It also materializes the two objects the dashboard reads instead of re-deriving them on every request: the per-section coverage buckets (`section_cell_stats`) and the per-section cell JSON (`section_cells_json`, zstd, cells ordered by `start`).  Both are derived from `cells` and rebuilt on every build, so a database produced by an older rebrew is still *served*. The server falls back to the equivalent live queries. `rebrew build-db` requires `--force` to migrate a database whose stamp is not `"10"`. See [DB_FORMAT.md](../rebrew/docs/DB_FORMAT.md) for the full schema.
 3. **`recoverage`**: Starts a **Bottle** web server. The backend serves API endpoints querying the SQLite database, while the frontend is a zero-build Single Page Application (SPA) powered by **VanJS**, rendering the interactive defrag grid.
 
-You can run `recoverage` independently on any machine (or even host it remotely) as long as it has access to a compiled `coverage.db`.  rebrew is a required dependency (it provides the shared workspace/config resolution and the in-process regen), but no project workspace or compiler toolchain is required to serve the dashboard.
+You can run `recoverage` independently on any machine (or even host it remotely, see the caveat below) as long as it has access to a compiled `coverage.db`.  rebrew is a required dependency (it provides the shared workspace/config resolution and the in-process regen), but no project workspace or compiler toolchain is required to serve the dashboard.
+
+### Hosting it on a network
+
+`recoverage serve` binds `127.0.0.1` and serves, unauthenticated, the project's
+`src/` tree, its `original/` binaries, raw byte slices and disassembly. That is
+fine on your own machine and is the reason the default is loopback. Serving it
+beyond that needs both `--allow-remote` (the acknowledgement the CLI requires
+for any non-loopback `--bind`) and `--token` (the bearer check every request
+then has to pass); `--cors` is for a separate local frontend origin and is never
+needed for the dashboard's own page. There is no TLS, so a token on a network
+bind travels in cleartext. The full picture, including what the code does not
+cover, is in [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md).
 
 ---
 
@@ -235,37 +468,61 @@ You can run `recoverage` independently on any machine (or even host it remotely)
 recoverage/
 ├── pyproject.toml
 ├── README.md
+├── CONTRIBUTING.md           # Bootstrap, edit-test loop, local/CI parity
+├── Makefile                 # Contributor targets (`make help`); wraps the CI commands
 ├── docs/                     # Screenshots, mascot & design doc
 │   ├── DESIGN.md             # Detailed architecture & design doc
 │   ├── DESIGN_PRINCIPLES.md  # Core operational philosophies
 │   ├── USER_STORIES.md       # User stories with acceptance criteria
+│   ├── THREAT_MODEL.md       # Attack surface, trust boundaries, risks
 │   └── ideas.md              # Future improvement ideas
+├── tools/                    # Lint and CI harness scripts
+│   ├── lint-html.py          # Nu Html Checker over the static and served assets
+│   ├── smoke.py              # End-to-end server smoke run
+│   ├── _serve_harness.py     # Shared boot-and-probe harness for the two above
+│   ├── ci_clone_rebrew.sh    # Clones the ../rebrew path dep at a pinned commit
+│   ├── normalize_sdist.py     # Pins the sdist's mtimes/order/header for a reproducible build
+│   ├── flatten-rikalabs-strict.py  # Regenerates tools/oxlint/rikalabs-strict.json (MIT) from @rikalabs/oxlint-standards 0.8.1
+│   └── oxlint/               # Vendored anti-slop rules + the flattened strict preset
 ├── tests/
 │   ├── conftest.py           # Shared fixtures (synthetic coverage.db)
 │   ├── test_api.py           # API validation & security tests
+│   ├── test_build.py         # Shipped files and reproducible build bytes
 │   ├── test_cli.py           # CSV export, formatting tests
+│   ├── test_config.py        # RECOVERAGE_* parsing, precedence, fail-fast
+│   ├── test_import_graph.py  # The import rules the modules rely on
 │   ├── test_lifecycle.py     # Lifecycle (regen ordering, opener reaping, deadlines)
 │   ├── test_paths.py         # DB path resolution tests
 │   ├── test_server.py        # Compression, encoding tests
 │   ├── test_potato.py        # Potato Mode rendering tests
+│   ├── test_perf.py          # Deterministic perf regression gates (work counters, not wall clock)
+│   ├── test_metrics.py       # Request id, RED counters, slow-request log line
+│   ├── test_release.py       # Release contract (version, changelog, declared floors)
+│   ├── test_supply_chain.py  # Pins: rebrew ref/sha, declared-vs-imported deps, vendored-asset grants
+│   ├── test_fuzz.py          # Seeded mutation campaigns over the untrusted-input surfaces
+│   ├── test_serve_harness.py # The smoke + lint-html harness contract
 │   └── test_playwright.py    # Browser integration tests
 └── src/recoverage/
     ├── __init__.py
     ├── __main__.py           # python -m recoverage
     ├── _paths.py             # DB path resolution (rebrew-project.toml db_dir)
+    ├── clock.py              # The one time source the request path reads
+    ├── config.py             # RECOVERAGE_* env: defaults, validation, startup banner
+    ├── metrics.py            # In-process RED counters, read by /api/health
     ├── cli.py                # Typer CLI entry point
     ├── server.py             # Bottle app, shared helpers & compression
+    ├── disasm.py             # Capstone disassembly (optional extra)
     ├── regen.py              # In-process rebrew regen (catalog + build-db)
     ├── api.py                # REST API routes (/api/*)
-    ├── ui.py                 # UI routes (/, /potato, static files)
-    ├── potato.py             # Potato Mode renderer
-    ├── webapp.py             # Composition root: imports api+ui so app has every route
+    ├── ui.py                 # UI routes (/, static files)
+    ├── potato.py             # Potato Mode renderer + the /potato route
+    ├── webapp.py             # Composition root: imports api+ui+potato so app has every route
     └── assets/
         ├── index.html        # SPA shell
         ├── style.css         # All styles
         ├── print.css         # Print stylesheet
         ├── app.js            # VanJS frontend
-        ├── detail.js         # Deferred panel logic (hex dump, modal, live reload)
+        ├── detail.js         # Deferred panel logic (hex dump, metadata grid, modal, live reload)
         ├── van.min.js        # VanJS library (~2 KB)
         ├── favicon.svg       # Retro "R" logo favicon
         ├── hljs.min.js       # Highlight.js core
@@ -273,6 +530,48 @@ recoverage/
         ├── hljs-x86asm.min.js # Highlight.js x86 asm grammar (hex lang is in detail.js)
         └── hljs.css          # Highlight.js theme
 ```
+
+---
+
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on every push to `main` and every pull
+request against `main`. A new push to a PR branch cancels the run in flight
+on that branch; runs on `main` are never cancelled, so no commit loses a
+check.
+
+| Job | Runner | What it enforces |
+|-----|--------|------------------|
+| `lint` | ubuntu, Python 3.13 | `ruff format --check` and `ruff check` over `src/`, `tests/`, `tools/` |
+| `web-lint` | ubuntu, Python 3.13, bun 1.4.2, temurin 17 | oxlint (Rika-Labs strict + anti-slop) over the SPA sources, then the Nu Html Checker over every static and served HTML/CSS asset |
+| `test` | ubuntu 3.13 + 3.14, macos 3.13, windows 3.13 | `pytest tests/`, warnings-as-errors. Browser tests (`tests/test_playwright.py`) stay out of the default run and are not run in CI |
+| `build` | ubuntu, Python 3.13 | `make build` twice, the second time from a copy of the tree under a different path, locale and timezone, and fails when the two archives differ. Uploads the wheel and sdist |
+| `smoke` | ubuntu, Python 3.13 | boots `recoverage serve` against a synthetic `coverage.db` and probes the SPA shell, health, target data/stats/functions and Potato Mode, then repeats with a corrupt database to prove it reports `degraded` instead of healthy |
+| `sbom` | ubuntu | `uv export --frozen --all-extras --hashes` as a build artifact: the exact resolved tree behind a given build, plus the rebrew tag and commit the path dependency was pinned at |
+
+Every job but `sbom` installs with `uv sync --locked --extra dev` and then runs
+tools through `uv run --locked`. `--locked` never rewrites `uv.lock` and also
+refuses to install one that no longer matches `pyproject.toml`, so a dependency
+edit that skipped `uv lock` fails the run instead of testing a tree the manifest
+does not describe. `sbom` skips the sync, and its one `uv export --frozen` stays
+frozen, because it is the job with no sibling `../rebrew` to resolve and reads
+the lock alone. Playwright and the
+`capstone`/`pygments` extras are never installed, so the
+matrix is the same set on every runner.
+
+### The sibling rebrew checkout
+
+`uv sync` resolves rebrew from `../rebrew`, which no GitHub runner has, so
+each job that installs the environment first runs
+`tools/ci_clone_rebrew.sh` (the same script `make clone-rebrew` wraps): it
+clones the tag in `REBREW_REF` into the workspace parent and fails unless the
+tag still resolves to the commit in `REBREW_SHA`, so a moved tag cannot
+silently change the path dependency. Those defaults are the one place the pin
+lives, and `tests/test_supply_chain.py` fails when a job
+grows a second way to fetch the sibling. The commit has to keep
+matching `uv.lock`. When rebrew's own dependencies change, `uv sync --locked`
+fails with a lock mismatch, and the fix is to re-lock in a tree laid out with
+the sibling and bump `REBREW_REF`/`REBREW_SHA` in the script.
 
 ---
 
@@ -294,8 +593,33 @@ blobs themselves carry little provenance:
 re-vendoring any of these files, keep the upstream license banner in the
 minified output so this table stays verifiable against the blobs.
 
+The npm dev dependencies (`oxlint`, `@oxlint/plugins`,
+`@rikalabs/oxlint-standards`, `vnu-jar`) are not vendored: they are declared in
+`package.json` and every one is exact-pinned with an integrity hash in
+`bun.lock`. Two pieces of lint config are checked in as copies, and their
+provenance is the other direction:
+
+| Path | Origin | License |
+|------|--------|---------|
+| `tools/oxlint/rikalabs-strict.json` | Generated by `tools/flatten-rikalabs-strict.py` from the `strict` preset of the pinned `@rikalabs/oxlint-standards` 0.8.1; regenerate, do not hand-edit | MIT (the package's `LICENSE` and `license` field); `tools/flatten-rikalabs-strict.py` fails if a bump changes it |
+| `tools/oxlint/anti-slop/` | Vendored copy of [dmmulroy/anti-slop](https://github.com/dmmulroy/anti-slop) | MIT (`LICENSE` in that directory) |
+| `tools/oxlint/anti-slop.manifest.json` | Generated by `tools/vendor-manifest.py`: the upstream, the license, every vendored file with its sha256, and the paths left out | first-party record of the row above |
+
+The anti-slop copy is the one checked-in dependency no registry manifest
+covers, so its own record is `anti-slop.manifest.json`: a re-vendor or a
+local edit that skipped it fails the suite instead of landing. The upstream
+rule tests are deliberately not copied (they import `oxlint/plugins-dev`, a
+subpath no declared dependency provides, and nothing here runs TypeScript
+tests); the manifest names them as excluded. To re-vendor, replace the
+directory from upstream, run `uv run python tools/vendor-manifest.py`, then
+`bun run lint:js` to confirm the rule set still passes.
+
 ---
 
 ## License
 
 MIT
+
+The wheel also bundles the third-party assets listed above. Their grants ship
+as [`NOTICE`](NOTICE), which `license-files` puts in the distribution metadata
+next to the MIT license.

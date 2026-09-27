@@ -1,15 +1,61 @@
 (() => {
-const { a, aside, button, div, h1, h2, h3, header, input, main, p, pre, section, span, code } = van.tags;
+const { a, aside, button, div, h1, h2, header, input, main, p, pre, section, span, code } = van.tags;
 
-const DATA_URL = (t, secName) => `/api/targets/${t}/data${secName ? `?section=${encodeURIComponent(secName)}` : ""}`;
-const ASM_URL = (t) => `/api/targets/${t}/asm`;
-const FN_URL = (t, va) => `/api/targets/${t}/functions/${va}`;
+// Every DB-derived value spliced into a URL is percent-encoded first: a
+// target id, section name or source path holding a space, '#', '?' or a
+// non-ASCII character otherwise truncates the URL, opens a new query, or
+// (once the server decodes the path) misses the row.  Path segments are
+// encoded one at a time so the '/' separators survive.
+const enc = encodeURIComponent;
+const encPath = (path) => String(path).split("/").map((seg) => enc(seg)).join("/");
+
+// How long a "nothing to select" notice stays on screen before the live stats
+// it shares a row with come back.
+const NAV_NOTICE_MS = 4000;
+
+// paths.sourceRoot and paths.originalDll are values the coverage.db hands us,
+// and a database built from a hostile binary — or imported wholesale from
+// somewhere else — can hold any string in them.  Spliced into an href or a
+// fetch, "//evil.example" is a protocol-relative URL and "/\evil.example" is
+// the same thing once a browser normalizes the backslash, so either one sends
+// the analyst's browser off-origin: a beacon for whoever chose the name, and a
+// Source link that navigates somewhere this dashboard does not own.  Only a
+// same-origin path is accepted — a leading "/", or a relative one, carrying no
+// backslash, no scheme and no control character — and anything else falls back
+// to the server-proxied default.  The colon test is positional: after the
+// first "/" a colon is an ordinary character in a path segment, before it a
+// colon starts a scheme.
+
+const PATH_CONTROL_MAX = 0x1F;
+const PATH_DELETE = 0x7F;
+const isControlChar = (ch) => {
+  const point = ch.codePointAt(0);
+  return point <= PATH_CONTROL_MAX || point === PATH_DELETE;
+};
+
+const sameOriginPath = (rawPath, fallback) => {
+  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- the boundary is exactly "string from JSON"; reject the rest rather than coerce it
+  if (typeof rawPath !== "string" || !rawPath) return fallback;
+  if (rawPath.startsWith("//") || rawPath.includes("\\")) return fallback;
+  if ([...rawPath].some((ch) => isControlChar(ch))) return fallback;
+  const colon = rawPath.indexOf(":");
+  if (colon !== -1 && (!rawPath.includes("/") || colon < rawPath.indexOf("/"))) return fallback;
+  return rawPath;
+};
+
+const DATA_URL = (t, secName) => `/api/targets/${enc(t)}/data${secName ? `?section=${enc(secName)}` : ""}`;
+const ASM_URL = (t) => `/api/targets/${enc(t)}/asm`;
+const FN_URL = (t, va) => `/api/targets/${enc(t)}/functions/${enc(va)}`;
 
 // ============================================================================
 // Constants
 // ============================================================================
+// One ellipsis style across the UI: these strings and the "Loading..." in the
+// overlays and pane states render on the same screen, and the mix of "..." and
+// "…" read as two different tools.
 const MSG = {
-  LOADING: "Loading…",
+  LOADING: "Loading...",
+  ASM_LOADING: "Loading assembly...",
   ERROR_PREFIX: "Error: ",
   SELECT_FUNCTION: "(select a function)",
   NO_C_SOURCE: "(no C implementation for this function yet)",
@@ -22,13 +68,15 @@ const MSG = {
   BYTES_BSS: "(uninitialized data - no raw bytes)",
   BYTES_LOAD_FAILED: "(original binary not found: expected it at /original/ in the project directory)",
   GLOBAL_VAR: "Global variable",
-  REGEN_USING_CACHE: (r) => `Using cached data. Regen available in ${r}s...`,
-  REGEN_IN_PROGRESS: "Regenerating…",
-  REGEN_UNAVAILABLE: "Regen unavailable",
+  REGEN_USING_CACHE: (r) => `Using cached data. Regeneration available in ${r}s...`,
+  REGEN_IN_PROGRESS: "Regenerating...",
+  REGEN_UNAVAILABLE: "Regeneration unavailable",
   NA: "(n/a)",
   FETCH_FAILED: (url) => `(failed to load: ${url})`,
   NO_DECL: "(no declaration found)",
+  JUMP_NO_BLOCK: (va) => `No block covers ${va} in this target, so there is nothing to select.`,
   DETAIL_UNAVAILABLE: "(detail view failed to load — reload the page)",
+  HIGHLIGHT_UNAVAILABLE: "(syntax highlighting unavailable — the code below is unhighlighted)",
 };
 
 function hex(n, width) {
@@ -45,17 +93,19 @@ function toVa(v) {
   return typeof v === "string" ? Number.parseInt(v, 16) : v;
 }
 
-// The hex dump and data inspector live in detail.js, which is fetched right
-// after first paint so the inlined shell stays inside the initial congestion
-// window.  Until it lands, panes that need it show MSG.LOADING.
+// The hex dump and data inspector live in detail.js, which the shell preloads
+// (see index.html) and which app.js requests on its last line, so the fetch
+// starts only after the shell has been parsed and applied.
+// The inlined shell stays inside the initial congestion window.  Until it
+// lands, panes that need it show MSG.LOADING.
 const detailReady = van.state(false);
 const detailFailed = van.state(false);
 
 function loadDetail() {
-  window.RC = { van, MetaItem, MSG, hex, onReady: () => { detailReady.val = true; } };
+  window.RC = { van, MetaItem, MSG, hex, STATE_LABEL, enc, encPath, onReady: () => { detailReady.val = true; } };
   const el = document.createElement("script");
   el.src = "/detail.js";
-  // Without this the panes it owns would sit on "Loading…" forever.
+  // Without this the panes it owns would sit on "Loading..." forever.
   el.addEventListener("error", () => { detailFailed.val = true; });
   document.head.append(el);
 }
@@ -74,13 +124,27 @@ async function fetchArrayBufferSafe(url) {
   return await res.arrayBuffer();
 }
 
-// Section name -> grid element id.  Every dot goes, so `.rsrc.1` and `.rsrc1`
-// cannot collide the way replacing only the first one allowed.
+// Section name -> grid element id.  Every dot goes so the id is a valid CSS
+// selector.  Names that differ only in their dots (`.rsrc.1` vs `.rsrc1`)
+// still normalize to the same id.
 const gridId = (secName) => `grid-${secName.replaceAll('.', '')}`;
 
-// Legend rows: cell state -> the words used for it in the UI.
+// Legend rows: cell state -> the words used for it in the UI.  One row per
+// colour STATE_ID can paint.  `proven` was missing: the grid
+// painted it (slot 6) and the hover tooltip named it, but the legend had no
+// row for it, so a verified-semantic block was a colour the reader could not
+// look up.  Potato Mode already carries the row.  The swatch class is
+// `swatch-<key>`, so each key needs a rule in style.css.
 const LEGEND = [["none", "undocumented"], ["exact", "exact match"], ["reloc", "reloc match"],
-  ["near_match", "near-match"], ["stub", "stub"], ["padding", "padding"]];
+  ["near_match", "near-match"], ["stub", "stub"], ["proven", "proven"],
+  ["padding", "padding"], ["compile_error", "problem"]];
+
+// The filters the toolbar offers.  A filter that is not in this set cannot be
+// dimmed to: FILTER_KEY (detail.js) maps a packed state to the key that
+// survives a filter, so a state the grid can paint but no button can isolate
+// is unreachable by filter, and a deep link carrying anything else would dim
+// the whole map with no control to undo it.
+const FILTER_KEYS = new Set(["exact", "reloc", "near_match", "stub", "padding", "proven", "problem"]);
 
 // Sections in PE load order (ascending VA), which puts .text first instead of
 // leaving the section that carries all the work at the end of an alphabetical
@@ -91,12 +155,27 @@ const sectionNames = (s) => Object.keys(s).toSorted((x, y) => (s[x].va ?? 1e18) 
 // AoS (array of {state, span, ...}) thrashes the cache on every paint/hit-test;
 // these columns stay hot.  Built lazily per section on first paint.
 // State ids index CSS vars at paint time so light-mode tokens still apply.
+// Packs every state rebrew can write to cells.state.  An unlisted state must
+// not fall through to 0: build_db counts 'verified' as an exact match and
+// covered_bytes covers every state != 'none', so painting it as an
+// undocumented gap contradicts the number beside it.  The tooling-failure
+// states share slot 7 ("other") — distinguishable from a gap, without
+// spending a palette entry on each.
 const STATE_ID = {
   none: 0, data: 0, thunk: 0,
-  exact: 1, reloc: 2,
+  exact: 1, verified: 1, reloc: 2,
   near_match: 3, near_matching: 3, size_mismatch: 3,
   stub: 4, padding: 5, proven: 6,
+  compile_error: 7, extract_error: 7, invalid_va: 7,
+  missing_file: 7, missing_size: 7, skip: 7, unknown: 7,
+  drift: 7, unchecked: 7,
 };
+
+// The words for each packed state id, in the same slot order detail.js reads
+// its palette in.  The grid tooltip shows one, so hovering a cell says what
+// the cell is instead of a raw index.
+const STATE_LABEL = ["undocumented", "exact match", "reloc match", "near-match",
+  "stub", "padding", "proven", "problem"];
 
 function packSection(sec) {
   if (sec._pack) return sec._pack;
@@ -134,14 +213,9 @@ const MetaItem = (label, valueText, extraClass = "") => div({ class: `meta-item 
   (typeof valueText === "string" || typeof valueText === "number") ? span({ class: "meta-value" }, valueText) : valueText
 );
 
-const HexLogo = (label, color, titleText) => div({ class: "section-title-left" },
-  span({ class: "hex-logo", "aria-hidden": "true", style: `color: ${color};`, innerHTML: `<svg viewBox="0 0 100 100"><polygon points="50,5 90,27.5 90,72.5 50,95 10,72.5 10,27.5" fill="currentColor" fill-opacity="0.15" stroke="currentColor" stroke-width="6" stroke-linejoin="round"/><text x="50" y="54" dominant-baseline="middle" text-anchor="middle" fill="currentColor" font-weight="800" font-size="${label.length > 2 ? '26' : '42'}">${label}</text></svg>` }),
-  h3({ class: "section-title-text" }, titleText)
-);
-
 const App = () => {
   const data = van.state(null);
-  const originalDll = van.state(null);
+  const originalDll = van.state(null); // {path, buf} | null — see loadedDll()
   const activeFilters = van.state(new Set());
   const activeSection = van.state(".text");
   const searchQuery = van.state("");
@@ -197,6 +271,26 @@ const App = () => {
   const emptyState = van.state(null); // {title, detail} | null
   const stopLoading = (state) => { emptyState.val = state; isLoading.val = false; };
 
+  // A section's cells arrive lazily (first paint fetches only the visible
+  // one), so switching to a sibling tab can fail on its own.  {section, detail}
+  // | null, read by the grid, which would otherwise sit on an empty frame with
+  // no way back: the tab is unusable and nothing says why.
+  const cellLoadError = van.state(null);
+
+  // A jump to an address that no block covers (an asm operand pointing into a
+  // gap between sections, a VA link for an address the target never claimed)
+  // used to be silent: the console warning is not something the person
+  // clicking the link can see, so the click read as a dead control.  The
+  // notice times itself out for the same reason the regen message does: it
+  // rides a row that is showing live stats once it expires.
+  const navNotice = van.state(null);
+  let navNoticeTimer = null;
+  const flashNavNotice = (text) => {
+    navNotice.val = text;
+    clearTimeout(navNoticeTimer);
+    navNoticeTimer = setTimeout(() => { navNotice.val = null; }, NAV_NOTICE_MS);
+  };
+
   const loadTargets = async () => {
     try {
       const res = await fetch("/api/targets");
@@ -204,7 +298,6 @@ const App = () => {
         const d = await res.json();
         availableTargets.val = d.targets || [];
 
-        // Check URL params first, then localStorage, then default
         const urlTarget = URL_PARAMS.get("target");
         const savedTarget = localStorage.getItem("recoverage_target");
 
@@ -232,10 +325,26 @@ const App = () => {
     }
   };
 
+  // loadData is triggered from four independent places (first paint, target
+  // switch, SSE db-updated, regen) and its payload is multi-MB, so two calls
+  // routinely overlap.  The later-resolving response wins by default, which
+  // paints the previous target's map under the newly selected target.  One
+  // generation counter decides which call still owns the state: a superseded
+  // call writes nothing, and the in-flight fetch is aborted so it stops
+  // occupying the connection.
+  let loadGeneration = 0;
+  let loadController = null;
+
   const loadData = async () => {
     // Without this the initial isLoading=true would never be cleared and the
     // map would spin forever with nothing to load.
     if (!activeTarget.val) { isLoading.val = false; return; }
+    loadController?.abort();
+    loadController = new AbortController();
+    const { signal } = loadController;
+    loadGeneration += 1;
+    const generation = loadGeneration;
+    const superseded = () => generation !== loadGeneration;
     // Background refresh (SSE db-updated, regen) keeps the old map on
     // screen and swaps when new data lands.  Full-overlay loading is only
     // for first paint — flashing the whole map on every rebuild is jank.
@@ -251,11 +360,13 @@ const App = () => {
       // First paint only needs the visible section's cells.  Sibling tabs
       // still get their metadata; cells arrive on switchTab / jumpToAddress.
       const wanted = URL_PARAMS.get("section") || activeSection.val || ".text";
-      let res = await fetch(DATA_URL(activeTarget.val, wanted), { cache: "no-cache" });
-      if (!res.ok) res = await fetch(DATA_URL(activeTarget.val), { cache: "no-cache" });
+      let res = await fetch(DATA_URL(activeTarget.val, wanted), { cache: "no-cache", signal });
+      if (!res.ok) res = await fetch(DATA_URL(activeTarget.val), { cache: "no-cache", signal });
       if (!res.ok) throw new Error(`failed to load data`);
       const d = await res.json();
+      if (superseded()) return;
       data.val = d;
+      cellLoadError.val = null;
 
       const secNames = sectionNames(d.sections || {});
       if (secNames.length === 0) {
@@ -299,16 +410,20 @@ const App = () => {
 
       // Restore last visited function — URL ?fn= wins over localStorage.
       setTimeout(() => {
+        if (superseded()) return;
         const lastFn = URL_PARAMS.get("fn") || localStorage.getItem(`recoverage_last_fn_${activeTarget.val}`);
         if (lastFn && data.val?.search_index?.[lastFn]) {
           const info = data.val.search_index[lastFn];
           jumpToAddress(toVa(info.va));
-          setTimeout(() => selectFunction(lastFn), 50);
+          setTimeout(() => { if (!superseded()) selectFunction(lastFn); }, 50);
         } else if (lastFn) {
           selectFunction(lastFn);
         }
       }, 50);
     } catch (error) { // oxlint-disable-line @rikalabs/no-silent-catch-fallback -- failure is shown to the user as an error panel
+      // A superseded call (or the abort that superseded it) owns no state:
+      // the call that replaced it reports its own outcome.
+      if (superseded() || error.name === "AbortError") return;
       // Background refresh must not replace a good map with an error panel
       // on a transient failure — log it and keep the stale map.
       if (firstPaint) {
@@ -320,27 +435,90 @@ const App = () => {
         console.error("Background refresh failed:", error);
       }
     } finally {
-      isLoading.val = false;
+      if (!superseded()) isLoading.val = false;
     }
   };
 
-  // The regen handler lives in detail.js: it only runs on a Reload click, long
+  // The regen handler lives in detail.js: it only runs on a Regenerate click, long
   // after that file lands.  It gets the two states it writes plus the reloader.
-  const reloadData = () => window.RC.reloadData?.({ loadingMsg, summaryData, loadData, MSG });
+  //
+  // A regen re-runs rebrew catalog + build-db in-process, so it is long enough
+  // that the only acknowledgement (a 12px line in the topbar stats row, a row
+  // away from the button) reads as a dropped click, and a second click during
+  // it only printed the cooldown notice.  The busy flag both acknowledges the
+  // click at the button and makes a repeat click a no-op.
+  const isRegenerating = van.state(false);
+  const reloadData = async () => {
+    if (isRegenerating.val) return;
+    isRegenerating.val = true;
+    try {
+      await window.RC.reloadData?.({ loadingMsg, summaryData, loadData, MSG });
+    } finally {
+      isRegenerating.val = false;
+    }
+  };
+
+  // The Regenerate button's own tooltip and label: a failed detail pane
+  // outranks the busy state, and both outrank the resting label.
+  const regenTitle = () => {
+    if (detailFailed.val) return MSG.DETAIL_UNAVAILABLE;
+    if (isRegenerating.val) return MSG.REGEN_IN_PROGRESS;
+    return "Regenerate coverage data";
+  };
 
   let searchTimeout = null;
+  const applySearch = (text) => {
+    clearTimeout(searchTimeout);
+    searchQuery.val = text;
+    syncUrl();
+  };
+  // Typing goes through applySearch, so the debounced path mirrors the Enter
+  // path and the URL keeps the query: a reload or a shared link otherwise
+  // dropped a search the status line still reported as live.
   const onSearchInput = (e) => {
     clearTimeout(searchTimeout);
-    searchTimeout = setTimeout(() => {
-      searchQuery.val = e.target.value;
-      syncUrl();
-    }, 250);
+    searchTimeout = setTimeout(() => applySearch(e.target.value), 250);
+  };
+  // Clearing has to reach the input element too: it is uncontrolled, so the
+  // state alone would leave the typed text sitting in the box while the map
+  // stops filtering.
+  const clearSearch = (inputEl) => {
+    applySearch("");
+    if (inputEl) inputEl.value = "";
+  };
+  // Enter jumps to the first match.  Dimming alone leaves the user hunting
+  // for a lit cell that may be in a section that is not on screen; the
+  // `?q=` deep link and localStorage restore both land the user in the same
+  // spot without typing, so typing should go there too.
+  const onSearchKeydown = (e) => {
+    if (e.key === "Escape" && searchQuery.val) {
+      e.preventDefault();
+      clearSearch(e.target);
+      return;
+    }
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    applySearch(e.target.value);
+    const first = firstMatchName.val;
+    if (!first) return;
+    const va = data.val?.search_index?.[first]?.va;
+    if (va) jumpToAddress(toVa(va));
+    selectFunction(first);
   };
 
   // Deep-linking: keep target/function/section/search in the URL so reloads
   // restore state and links are shareable.  replaceState (not pushState) so
   // the URL tracks state without spamming history.
   const URL_PARAMS = new URLSearchParams(window.location.search);
+  // ?filter= names the status filters, comma-separated and sorted, which is
+  // what Potato Mode writes and the SPA previously dropped: a filtered view
+  // could not be reloaded, shared, or reached with the browser's back button.
+  // Unknown names are ignored rather than applied, because a filter no button
+  // offers dims every painted cell and leaves the map looking broken.
+  {
+    const wanted = (URL_PARAMS.get("filter") || "").split(",").map((f) => f.trim());
+    activeFilters.val = new Set(wanted.filter((f) => FILTER_KEYS.has(f)));
+  }
   const syncUrl = () => {
     const params = new URLSearchParams();
     if (activeTarget.val) params.set("target", activeTarget.val);
@@ -349,6 +527,7 @@ const App = () => {
     }
     if (activeSection.val) params.set("section", activeSection.val);
     if (searchQuery.val) params.set("q", searchQuery.val);
+    if (activeFilters.val.size > 0) params.set("filter", [...activeFilters.val].toSorted().join(","));
     const qs = params.toString();
     history.replaceState(null, "", qs ? `?${qs}` : window.location.pathname);
   };
@@ -361,37 +540,96 @@ const App = () => {
 
   // Live-reload: refresh the grid when coverage.db changes on disk.  The
   // subscription lives in detail.js, so it starts once that lands rather than
-  // competing with first paint.
-  van.derive(() => { if (detailReady.val) window.RC.connectEvents(() => loadData()); });
+  // competing with first paint.  connectEvents returns the disposer that closes
+  // the EventSource: the stream pins a server-side /api/events slot, a bounded
+  // resource, until it is closed.  A pagehide releases it explicitly, and the
+  // derive must not open a second stream when it re-runs.
+  let closeEvents = null;
+  window.addEventListener("pagehide", () => {
+    closeEvents?.();
+    closeEvents = null;
+  }, { once: true });
+  van.derive(() => {
+    if (!detailReady.val || closeEvents) return;
+    closeEvents = window.RC.connectEvents(() => loadData());
+  });
 
-  const matchesSearch = (name, query) => {
-    if (!query) return true;
-    const q = query.toLowerCase();
-    if (name.toLowerCase().includes(q)) return true;
+  // NFC before the case fold, on both sides: toLowerCase alone leaves the two
+  // spellings of a name with a combining accent (e + U+0301 vs e + U+00E9)
+  // Search comparison runs in two tiers.
+  //
+  // Tier 1 is NFC + toLowerCase.  A macOS input method sends NFD, so the
+  // "café" typed there is "cafe" + U+0301 and misses the NFC name rebrew
+  // wrote; composing both sides fixes that.
+  //
+  // Tier 2 is a collation scan, which is what simple case folding does not
+  // reach: the root collation is primary-equal on "ß" and "ss", so
+  // "STRASSE" finds "FunktionStraße", and "cafe" finds "café".  Intl has
+  // no string-producing fold, so the tier compares every window of the
+  // haystack.  It only runs on a tier-1 miss, and function names are short
+  // enough for that to stay well under a keystroke's budget.
+  const searchCollator = new Intl.Collator(undefined, { sensitivity: "base" });
 
-    // Check search index if available
-    if (data.val && data.val.search_index && data.val.search_index[name]) {
-      const info = data.val.search_index[name];
-      if (info.va && info.va.toLowerCase().includes(q)) return true;
-      if (info.symbol && info.symbol.toLowerCase().includes(q)) return true;
+  const containsCollated = (text, needle) => {
+    for (let i = 0; i + needle.length <= text.length; i += 1) {
+      if (searchCollator.compare(text.slice(i, i + needle.length), needle) === 0) return true;
     }
     return false;
   };
 
-  const filteredFnNames = van.derive(() => {
+  const foldQuery = (query) => ({
+    raw: query,
+    folded: query.normalize("NFC").toLowerCase(),
+  });
+
+  const matchesQuery = (text, needle) => (
+    text.normalize("NFC").toLowerCase().includes(needle.folded)
+    || containsCollated(text, needle.raw)
+  );
+
+  const matchesSearch = (name, query) => {
+    if (!query) return true;
+    const needle = foldQuery(query);
+    if (matchesQuery(name, needle)) return true;
+
+    if (data.val && data.val.search_index && data.val.search_index[name]) {
+      const info = data.val.search_index[name];
+      if (info.va && matchesQuery(info.va, needle)) return true;
+      if (info.symbol && matchesQuery(info.symbol, needle)) return true;
+    }
+    return false;
+  };
+
+  // Names only, in index order: the search status line reports the count and
+  // Enter jumps to the first entry, so this cannot carry the VA spellings the
+  // dimming set below needs.
+  const matchedFnNames = van.derive(() => {
     if (!data.val || !data.val.search_index) return new Set();
     const query = searchQuery.val;
-    if (!query) return new Set(); // Empty set means "no filter"
+    if (!query) return new Set();
 
     const matched = new Set();
     for (const [name, info] of Object.entries(data.val.search_index)) {
       if (matchesSearch(name, query) || (info && matchesSearch(info.va || "", query))) {
         matched.add(name);
-        // Grid .text cells store the function's vaStart string (not the
-        // name) in cell.functions / pack.fns — the dimming test compares
-        // against this set, so VA spellings must be included too.
-        if (info && info.va) matched.add(info.va);
       }
+    }
+    return matched;
+  });
+
+  // The first hit, or "" when nothing matches.  Read by onSearchKeydown.
+  const firstMatchName = van.derive(() => matchedFnNames.values().next().value ?? "");
+
+  const filteredFnNames = van.derive(() => {
+    const names = matchedFnNames.val;
+    if (names.size === 0) return new Set(); // Empty set means "no filter"
+    // Grid .text cells store the function's vaStart string (not the
+    // name) in cell.functions / pack.fns — the dimming test compares
+    // against this set, so VA spellings must be included too.
+    const matched = new Set(names);
+    for (const name of names) {
+      const va = data.val?.search_index?.[name]?.va;
+      if (va) matched.add(va);
     }
     return matched;
   });
@@ -399,30 +637,62 @@ const App = () => {
   // Start the original-binary download once, on first need.  When it lands,
   // re-slice the active selection if its bytes pane is still waiting — the
   // null-DLL branches below show LOADING until then, LOAD_FAILED on error.
-  const ensureOriginalDll = () => {
-    if (originalDll.val || ensureOriginalDll.inflight) return;
+  // The buffer is stored against the path it came from: a target switch while
+  // a multi-MB download is in flight would otherwise install the previous
+  // target's bytes, and every later slice would read the wrong binary at the
+  // current target's offsets.
+  const currentDllPath = () => {
     const d = data.val;
-    const dllPath =
-      (d && d.paths && d.paths.originalDll) || `/original/${activeTarget.val.toLowerCase()}.dll`;
-    ensureOriginalDll.inflight = fetchArrayBufferSafe(dllPath).then((buf) => {
-      ensureOriginalDll.inflight = null;
-      originalDll.val = buf;
-      if (currentCellIndex.val == null || currentBuf.val != null) return;
-      if (buf) selectChunk(currentCellIndex.val);
-      else showBytesMessage(MSG.BYTES_LOAD_FAILED);
-    });
+    // DB-supplied, so it goes through sameOriginPath: this value reaches fetch()
+    // completely unencoded, and a protocol-relative one would have the analyst's
+    // browser download an attacker's file instead of the target binary.
+    return sameOriginPath(
+      d && d.paths && d.paths.originalDll,
+      `/original/${enc(activeTarget.val.toLowerCase())}.dll`,
+    );
+  };
+  // The loaded buffer, but only while it belongs to the target on screen.
+  const loadedDll = () => (originalDll.val?.path === currentDllPath() ? originalDll.val.buf : null);
+
+  // Feeds both the C-source fetch below and the Source links detail.js renders,
+  // so validating here is what keeps either of them same-origin.
+  const currentSourceRoot = () => {
+    const d = data.val;
+    return sameOriginPath(
+      d && d.paths && d.paths.sourceRoot,
+      `/src/${enc(activeTarget.val.toLowerCase())}`,
+    );
+  };
+
+  const ensureOriginalDll = () => {
+    const dllPath = currentDllPath();
+    if (originalDll.val?.path === dllPath || ensureOriginalDll.inflight) return;
+    ensureOriginalDll.inflight = fetchArrayBufferSafe(dllPath)
+      // A rejected fetch never reaches .then, which would strand the inflight
+      // slot and leave the bytes pane reading LOADING for the rest of the
+      // session.  Release the slot and let the next selection retry.
+      .catch(() => null)
+      .then((buf) => {
+        ensureOriginalDll.inflight = null;
+        if (dllPath !== currentDllPath()) return; // superseded by a target switch
+        originalDll.val = buf ? { path: dllPath, buf } : null;
+        if (currentCellIndex.val == null || currentBuf.val != null) return;
+        if (buf) selectChunk(currentCellIndex.val);
+        else showBytesMessage(MSG.BYTES_LOAD_FAILED);
+      });
   };
 
   // Bytes pane message when slicing failed: out-of-range vs binary
   // missing.  A missing binary still downloading reads as LOADING.
   const bytesMissMessage = () => {
-    if (originalDll.val) return MSG.BYTES_FAILED;
+    if (loadedDll()) return MSG.BYTES_FAILED;
     if (ensureOriginalDll.inflight) return MSG.LOADING;
     return MSG.BYTES_LOAD_FAILED;
   };
 
   const sliceOriginalBytes = (cell) => {
-    if (!originalDll.val || !data.val?.sections) return null;
+    const buf = loadedDll();
+    if (!buf || !data.val?.sections) return null;
     const sec = data.val.sections[activeSection.val];
     if (!sec || activeSection.val === ".bss") return null;
 
@@ -430,11 +700,34 @@ const App = () => {
     const start = activeSection.val === ".text" ? cell.fileOffset : sec.fileOffset + (va - sec.va);
     const size = activeSection.val === ".text" ? cell.size : 16;
 
-    if (start < 0 || start + size > originalDll.val.byteLength) return null;
-    return originalDll.val.slice(start, start + size);
+    // fileOffset/size are nullable (a section with no file backing, a
+    // function of unknown size).  `null < 0` and `null + n > len` are both
+    // false, so the arithmetic below would pass a null start straight into
+    // ArrayBuffer.slice and label the first bytes of the binary with this
+    // function's VA.  Refuse instead, exactly as the server's
+    // _file_backed_section does for sections.
+    if (!Number.isInteger(start) || !Number.isInteger(size) || size < 0) return null;
+    if (start < 0 || start + size > buf.byteLength) return null;
+    return buf.slice(start, start + size);
   };
 
   let currentAbortController = null;
+
+  // Every pane a failed selection filled must be cleared, or the pane keeps
+  // showing the previously selected entry next to the error, "Loading
+  // assembly..." never resolves, and Copy/Open hand out that literal.
+  const failSelection = (error, signal, asmFallback) => {
+    // A superseded selection owns no state: fetchTextSafe is not
+    // signal-bound, so a stale request can still fail after a newer
+    // selection has rendered, and clearing here would wipe it.
+    if (error.name === 'AbortError' || signal.aborted) return;
+    currentFn.val = null;
+    currentBuf.val = null;
+    cSourceText.val = MSG.ERROR_PREFIX + error.message;
+    showBytesMessage(bytesMissMessage());
+    docText.val = MSG.NO_DOCS;
+    asmText.val = asmFallback;
+  };
 
   const selectFunction = async (id) => {
     ensureOriginalDll();
@@ -445,11 +738,10 @@ const App = () => {
     const { signal } = currentAbortController;
 
     if (activeSection.val === ".text") {
-      // Set initial loading state synchronously
-      currentFn.val = { name: "Loading..." };
-      cSourceText.val = "Loading...";
-      docText.val = "Loading...";
-      asmText.val = "Loading assembly...";
+      currentFn.val = { name: MSG.LOADING };
+      cSourceText.val = MSG.LOADING;
+      docText.val = MSG.LOADING;
+      asmText.val = MSG.ASM_LOADING;
 
       try {
         const res = await fetch(FN_URL(activeTarget.val, id), { signal });
@@ -466,8 +758,8 @@ const App = () => {
         if (buf) showBytes(buf, toVa(fn.vaStart || fn.va));
         else showBytesMessage(bytesMissMessage());
 
-        const sourceRoot = (data.val && data.val.paths && data.val.paths.sourceRoot) ? data.val.paths.sourceRoot : `/src/${activeTarget.val.toLowerCase()}`;
-        const cPath = (fn.files && fn.files[0]) ? `${sourceRoot}/${fn.files[0]}` : null;
+        const sourceRoot = currentSourceRoot();
+        const cPath = (fn.files && fn.files[0]) ? `${encPath(sourceRoot)}/${encPath(fn.files[0])}` : null;
         const va = fn.vaStart || fn.va;
         const { size } = fn;
 
@@ -475,7 +767,7 @@ const App = () => {
         // owns the /asm formatting (and is not in the inlined shell).
         const newCSource = cPath ? await fetchTextSafe(cPath) : MSG.NO_C_SOURCE;
         window.RC.loadAsm?.({
-          url: `${ASM_URL(activeTarget.val)}?va=${va}&size=${size}&section=${activeSection.val}`,
+          url: `${ASM_URL(activeTarget.val)}?va=${enc(va)}&size=${size}&section=${enc(activeSection.val)}`,
           set: (text) => { asmText.val = text; },
           signal,
         });
@@ -484,17 +776,14 @@ const App = () => {
 
         const newDocs = window.RC.extractDocs ? window.RC.extractDocs(newCSource) : null;
 
-        // Update all state synchronously to trigger a single re-render
+        // One synchronous write for both panes, so the re-render is single.
         cSourceText.val = newCSource;
         docText.val = newDocs || MSG.NO_DOCS;
       } catch (error) { // oxlint-disable-line @rikalabs/no-silent-catch-fallback -- AbortError is a cancellation; other failures become error text
-        if (error.name === 'AbortError') return;
-        currentFn.val = null;
-        cSourceText.val = MSG.ERROR_PREFIX + error.message;
+        failSelection(error, signal, MSG.ASM_PLACEHOLDER);
       }
 
     } else {
-      // Global variable
       try {
         const res = await fetch(FN_URL(activeTarget.val, id), { signal });
         if (!res.ok) throw new Error("Not found");
@@ -512,15 +801,36 @@ const App = () => {
         docText.val = MSG.GLOBAL_VAR;
         asmText.val = MSG.DATA_SECTION_NO_ASM;
       } catch (error) { // oxlint-disable-line @rikalabs/no-silent-catch-fallback -- AbortError is a cancellation; other failures become error text
-        if (error.name === 'AbortError') return;
-        currentFn.val = null;
-        cSourceText.val = MSG.ERROR_PREFIX + error.message;
+        failSelection(error, signal, MSG.DATA_SECTION_NO_ASM);
       }
+    }
+  };
+
+  // Below 1300px the panel stacks under the map, and the .text lattice runs
+  // thousands of pixels tall: a block clicked near the top of it updates a
+  // panel that is nowhere near the viewport, so the click reads as dead. The
+  // panel is brought in only when it is actually off-screen, which leaves the
+  // side-by-side layout and a short section exactly as they were.
+  const revealPanelIfOffscreen = () => {
+    const panel = document.querySelector("#panel");
+    if (!panel) return;
+    if (panel.getBoundingClientRect().top >= window.innerHeight) {
+      panel.scrollIntoView({ behavior: "smooth", block: "start" });
     }
   };
 
   const selectChunk = (i) => {
     currentCellIndex.val = i;
+    // Selecting a cell supersedes whatever selection was still in flight.
+    // Both the function fetch and the undocumented-block /asm request resume
+    // after an await and write their panes unconditionally on resume, so
+    // without this the previous selection lands on top of this one whenever
+    // the user clicks faster than the network answers.  selectFunction
+    // installs its own controller for the function branch; the controller
+    // here is the one that guards the branch below.
+    currentAbortController?.abort();
+    currentAbortController = new AbortController();
+    const { signal } = currentAbortController;
     ensureOriginalDll();
     if (!data.val || !data.val.sections) return;
     const sec = data.val.sections[activeSection.val];
@@ -541,25 +851,27 @@ const App = () => {
       docText.val = MSG.UNDOCUMENTED_BLOCK;
       asmText.val = MSG.ASM_PLACEHOLDER;
 
+      const dll = activeSection.val === ".bss" ? null : loadedDll();
       if (activeSection.val === ".bss") {
         currentBuf.val = null;
         showBytesMessage(MSG.BYTES_BSS);
         asmText.val = MSG.DATA_SECTION_NO_ASM;
-      } else if (originalDll.val) {
+      } else if (dll) {
         const start = sec.fileOffset + cell.start;
         const size = cell.end - cell.start;
         const end = start + size;
-        if (start >= 0 && end <= originalDll.val.byteLength) {
-          const buf = originalDll.val.slice(start, end);
+        if (start >= 0 && end <= dll.byteLength) {
+          const buf = dll.slice(start, end);
           currentBuf.val = buf;
           showBytes(buf, sec.va + cell.start);
 
           if (activeSection.val === ".text") {
             // Fetch ASM for undocumented block in .text
-            asmText.val = "Loading assembly...";
+            asmText.val = MSG.ASM_LOADING;
             window.RC.loadAsm?.({
-              url: `${ASM_URL(activeTarget.val)}?va=${sec.va + cell.start}&size=${size}&section=${activeSection.val}`,
+              url: `${ASM_URL(activeTarget.val)}?va=${enc(sec.va + cell.start)}&size=${size}&section=${enc(activeSection.val)}`,
               set: (text) => { asmText.val = text; },
+              signal,
             });
           } else {
             asmText.val = MSG.DATA_SECTION_NO_ASM;
@@ -573,23 +885,20 @@ const App = () => {
         asmText.val = MSG.DATA_SECTION_NO_ASM;
       }
     }
+    revealPanelIfOffscreen();
   };
 
-  // Copy, Open, and Reload all delegate to detail.js.  If that file never
-  // arrives they would look enabled and do nothing at all, so they go disabled
-  // and say why — the panes it owns already report the same failure.  Same
-  // while it is still loading: copyToClipboard is a no-op until it lands.
-  const detailTitle = () => {
-    if (detailFailed.val) return MSG.DETAIL_UNAVAILABLE;
-    if (detailReady.val) return "";
-    return MSG.LOADING;
-  };
-  const detailBound = () => ({
-    disabled: () => !detailReady.val || detailFailed.val,
-    title: detailTitle,
-  });
-
+  // Copy VA and Copy Symbol delegate to detail.js.  If that file never
+  // arrives they would look enabled and do nothing at all, so they go
+  // disabled and say why — the pane body it owns reports the same failure.
+  // Same while it is still loading: copyToClipboard is a no-op until it
+  // lands.  Reload is the exception: it gates on detailFailed only, so a
+  // click in the window before detail.js lands is a silent no-op.
   const copyToClipboard = (text, e) => window.RC.copyToClipboard?.(text, e);
+
+  const SearchHint = () => (searchQuery.val
+    ? div({ class: "hint" }, "Click a highlighted block to view its details, or press Enter in the search box to jump to the first match.")
+    : div({ class: "hint" }, "Click a block to view function details. Use filters to show specific statuses."));
 
   const toggleFilter = (filter) => {
     const newFilters = new Set(activeFilters.val);
@@ -601,6 +910,7 @@ const App = () => {
       newFilters.add(filter);
     }
     activeFilters.val = newFilters;
+    syncUrl();
   };
 
   const jumpToAddress = (targetVa) => {
@@ -640,6 +950,7 @@ const App = () => {
     }
     // oxlint-disable-next-line eslint/no-console -- an address outside every section deserves a console warning
     console.warn("Address not found in any section:", targetVa.toString(16));
+    flashNavNotice(MSG.JUMP_NO_BLOCK(hex(targetVa, 8)));
   };
 
   const HighlightedCode = ({ lang, text }) => {
@@ -669,12 +980,16 @@ const App = () => {
       if (isLoading.val) {
         return div({ class: "progress-container" },
           div({ class: "progress-stats" },
-            span({ class: "stat-item" }, "Loading...")
+            span({ class: "stat-item" }, MSG.LOADING)
           )
         );
       }
 
-      if (!data.val || !data.val.sections || !summaryData.val) {
+      // A message set while the map is already on screen (the regen cooldown
+      // notice) used to be dropped here: the old test only covered the
+      // no-data case, so clicking Reload again in quick succession looked
+      // like nothing happened.
+      if (!data.val || !data.val.sections || !summaryData.val || loadingMsg.val !== MSG.LOADING) {
         return div({ class: "progress-container" },
           div({ class: "progress-stats" },
             span({ class: "stat-item" }, loadingMsg.val)
@@ -686,39 +1001,36 @@ const App = () => {
       const sec = data.val.sections[secName];
       if (!sec) return div({ class: "subtitle" }, "Section not found");
 
-      let exactCount = 0;
-      let relocCount = 0;
-      let nearMatchCount = 0;
-      let stubCount = 0;
-      let exactBytes = 0;
-      let relocBytes = 0;
-      let nearMatchBytes = 0;
-      let stubBytes = 0;
-      let paddingBytes = 0;
-      let totalItems = 0;
-      let coveredBytes = 0;
-
+      // Both arms of the fallback are truthy here: the guard above returned
+      // on a missing summary, so `s` is either the section's row or the
+      // object itself.
       const s = summaryData.val[secName] || summaryData.val; // Fallback for .text if not nested
-      if (s) {
-        exactCount = s.exactMatches || 0;
-        relocCount = s.relocMatches || 0;
-        nearMatchCount = s.nearMatchCount || 0;
-        stubCount = s.stubCount || 0;
-        exactBytes = s.exactBytes || 0;
-        relocBytes = s.relocBytes || 0;
-        nearMatchBytes = s.nearMatchBytes || 0;
-        stubBytes = s.stubBytes || 0;
-        paddingBytes = s.paddingBytes || 0;
-        totalItems = s.totalFunctions || 0;
-        coveredBytes = s.coveredBytes || 0;
-      }
+      const exactCount = s.exactMatches || 0;
+      const relocCount = s.relocMatches || 0;
+      const nearMatchCount = s.nearMatchCount || 0;
+      const stubCount = s.stubCount || 0;
+      const exactBytes = s.exactBytes || 0;
+      const relocBytes = s.relocBytes || 0;
+      const nearMatchBytes = s.nearMatchBytes || 0;
+      const stubBytes = s.stubBytes || 0;
+      const paddingBytes = s.paddingBytes || 0;
+      const totalItems = s.totalFunctions || 0;
+      const coveredBytes = s.coveredBytes || 0;
 
-      const total = secName === ".text" ? (totalItems || 1) : (sec.size || 1);
-      const exactPct = ((secName === ".text" ? exactCount : exactBytes) / total) * 100;
-      const relocPct = ((secName === ".text" ? relocCount : relocBytes) / total) * 100;
-      const nearMatchPct = ((secName === ".text" ? nearMatchCount : nearMatchBytes) / total) * 100;
-      const stubPct = ((secName === ".text" ? stubCount : stubBytes) / total) * 100;
-      const paddingPct = (secName === ".text" && sec.size > 0 ? paddingBytes / sec.size : paddingBytes / total) * 100;
+      // ONE denominator per bar: .text's tracks FUNCTIONS (its "matched" stat
+      // is a function count), every other section's tracks BYTES.  Padding is
+      // a cell state with no function counterpart, so it joins only the
+      // byte-denominated bar; on .text its bytes are already inside the
+      // remainder.  It used to be paddingBytes/sec.size even on the
+      // function-denominated .text bar, where the segments summed past 100%
+      // and flex-shrink then squeezed every band to fit.
+      const isText = secName === ".text";
+      const total = isText ? (totalItems || 1) : (sec.size || 1);
+      const exactPct = ((isText ? exactCount : exactBytes) / total) * 100;
+      const relocPct = ((isText ? relocCount : relocBytes) / total) * 100;
+      const nearMatchPct = ((isText ? nearMatchCount : nearMatchBytes) / total) * 100;
+      const stubPct = ((isText ? stubCount : stubBytes) / total) * 100;
+      const paddingPct = isText ? 0 : (paddingBytes / total) * 100;
 
       const coveragePct = sec.size > 0 ? (coveredBytes / sec.size * 100) : 0;
 
@@ -780,7 +1092,7 @@ const App = () => {
       window.RC.mountGrid({
         container, data, isLoading, emptyState, activeSection, activeFilters,
         searchQuery, filteredFnNames, currentCellIndex, activeFnName, isLightMode,
-        selectChunk, packSection, gridId,
+        selectChunk, packSection, gridId, cellLoadError, retrySectionCells,
         setGridFocus: (fn) => { gridFocus = fn; },
       });
     });
@@ -796,58 +1108,10 @@ const App = () => {
 
     if (fn) {
       title = fn.name;
-      const sourceRoot = (data.val && data.val.paths && data.val.paths.sourceRoot) ? data.val.paths.sourceRoot : `/src/${activeTarget.val.toLowerCase()}`;
-
-      const SourceItem = () => fn.files && fn.files.length > 0
-        ? MetaItem("Source", span({ class: "meta-value" }, ...fn.files.map((file, i) =>
-            span(i > 0 ? ", " : "", a({ href: `${sourceRoot}/${file}`, target: "_blank", rel: "noopener noreferrer", class: "source-link" }, file)))))
-        : null;
-
-      if (fn.isGlobal) {
-        metaContent = div({ class: "meta-grid" },
-          MetaItem("VA", a({
-            href: "#",
-            class: "meta-value asm-link",
-            onclick: (e) => { e.preventDefault(); jumpToAddress(toVa(fn.va)); }
-          }, `0x${fn.va.toString(16).toUpperCase()}`)),
-          MetaItem("Type", "Global Variable"),
-          SourceItem()
-        );
-      } else {
-        const statusClass = fn.status ? `status-${fn.status.toLowerCase().replace('_', '-')}` : '';
-
-        metaContent = div({ class: "meta-grid" },
-          MetaItem("VA", a({
-            href: "#",
-            class: "meta-value asm-link",
-            onclick: (e) => { e.preventDefault(); jumpToAddress(toVa(fn.vaStart || fn.va)); }
-          }, fn.vaStart || fn.va)),
-          MetaItem("Size", `${fn.size} bytes`),
-          MetaItem("Offset", `0x${(fn.fileOffset || 0).toString(16).toUpperCase()}`),
-          MetaItem("Symbol", fn.symbol || MSG.NA),
-          MetaItem("Status", span({ class: `meta-value status-badge ${statusClass}` }, fn.status || "?")),
-          MetaItem("Module", fn.module || "?"),
-          MetaItem("Compiler", fn.cflags || MSG.NA),
-          MetaItem("Marker", fn.markerType || "?"),
-          fn.blocker ? MetaItem("Blocker", span({ class: "meta-value blocker-value" }, fn.blocker), "full-width") : null,
-          fn.blockerDelta == null ? null : MetaItem("Delta", span({ class: "meta-value delta-value" }, `${fn.blockerDelta} bytes`)),
-          fn.ghidra_name && fn.ghidra_name !== fn.name ? MetaItem("Ghidra", fn.ghidra_name) : null,
-          fn.list_name && fn.list_name !== fn.name ? MetaItem("Func List", fn.list_name) : null,
-          fn.size_reason ? MetaItem("Size Source", fn.size_reason) : null,
-          fn.last_verify ? MetaItem("Verified", `${fn.last_verify.verified_at}${fn.last_verify.byte_delta == null ? "" : ` (Δ${fn.last_verify.byte_delta}B)`}`) : null,
-          fn.last_verify && fn.last_verify.similarity != null ? MetaItem("Code Sim", `${fn.last_verify.similarity.toFixed(1)}%`) : null,
-          fn.last_verify && fn.last_verify.reg_delta != null ? MetaItem("Reg Delta", `${fn.last_verify.reg_delta}`) : null,
-          fn.last_verify && fn.last_verify.effective_match ? MetaItem("Effective", "register-only delta — prove candidate") : null,
-          fn.updated_by ? MetaItem("Updated By", `${fn.updated_by}${fn.updated_at ? ` (${fn.updated_at})` : ""}`) : null,
-          fn.similarity == null ? null : MetaItem("Similarity", `${(fn.similarity * 100).toFixed(1)}%`),
-          fn.is_thunk ? MetaItem("Type", "IAT thunk (not reversible)") : null,
-          fn.is_export ? MetaItem("Type", "Exported function") : null,
-          fn.sha256 ? MetaItem("SHA256", `${fn.sha256.slice(0, 16)}...`) : null,
-          SourceItem(),
-          docText.val && docText.val !== MSG.SELECT_FUNCTION && docText.val !== MSG.NO_DOCS
-            ? MetaItem("Annotations", pre({ class: "meta-docs" }, docText.val), "full-width") : null
-        );
-      }
+      const sourceRoot = currentSourceRoot();
+      metaContent = () => detailReady.val
+        ? window.RC.functionMeta({ fn, sourceRoot, docText: docText.val, jumpToAddress })
+        : div({ class: "code" }, detailFailed.val ? MSG.DETAIL_UNAVAILABLE : MSG.LOADING);
     } else if (cellIdx !== null && data.val && data.val.sections) {
       const sec = data.val.sections[activeSection.val];
       if (sec && sec.cells) {
@@ -866,41 +1130,6 @@ const App = () => {
         );
       }
     }
-
-    // C Source, Assembly, and Original Bytes are the same panel section with a
-    // different logo, language, and body: title row, Copy, Open-in-modal.
-    // Copy/Open go disabled while the pane holds an empty-state message —
-    // copying "(select a function)" or opening a modal of it is never what
-    // the user wants; the tooltip says what to do instead.
-    const isEmptyMessage = (text) => text === MSG.SELECT_FUNCTION || text === MSG.ASM_PLACEHOLDER
-      || text === MSG.NO_C_SOURCE || text === MSG.NO_C_FOR_BLOCK || text === MSG.UNDOCUMENTED_BLOCK
-      || text === MSG.DATA_SECTION_NO_ASM || text === MSG.BYTES_FAILED || text === MSG.BYTES_BSS
-      || text === MSG.BYTES_LOAD_FAILED || text === MSG.GLOBAL_VAR || text === MSG.NO_DECL
-      || text === MSG.NA || text === MSG.LOADING || text === MSG.DETAIL_UNAVAILABLE
-      // oxlint-disable-next-line anti-slop/no-runtime-typeof -- pane text is string|derived-state; guard before .startsWith, not a type contract
-      || (typeof text === "string" && (text.startsWith(MSG.ERROR_PREFIX) || text.startsWith("(failed to load:")));
-    const CodeSection = (logo, color, heading, lang, text) => div({ class: "section" },
-      div({ class: "section-title" },
-        HexLogo(logo, color, heading),
-        div({ class: "section-actions" },
-          button({ class: "btn copy-btn", "aria-label": `Copy ${heading}`, ...detailBound(), disabled: () => !detailReady.val || detailFailed.val || isEmptyMessage(text), title: () => isEmptyMessage(text) ? "Select a block first" : detailTitle(), onclick: (e) => copyToClipboard(text, e) }, "Copy"),
-          button({
-            class: "btn copy-btn", "aria-label": `Open ${heading} in a larger view`, ...detailBound(), disabled: () => !detailReady.val || detailFailed.val || isEmptyMessage(text), title: () => isEmptyMessage(text) ? "Select a block first" : detailTitle(),
-            onclick: () => {
-              // cellIdx is null when nothing is selected, which used to render
-              // as the literal "Block null".
-              const subject = cellIdx === null ? activeSection.val : `Block ${cellIdx}`;
-              const headingTarget = fn ? fn.name : subject;
-              modalTitle.val = `${heading}: ${headingTarget}`;
-              modalContent.val = text;
-              modalLang.val = lang;
-              showModal.val = true;
-            }
-          }, "Open")
-        )
-      ),
-      HighlightedCode({ lang, text })
-    );
 
     // Hint for the copy buttons when they have nothing to copy.
     const copyHint = (copied, what) => {
@@ -926,7 +1155,7 @@ const App = () => {
     }
 
     return aside({ class: "panel", id: "panel", style: "position: relative;" },
-      () => isLoading.val ? div({ class: "loading-overlay", role: "status", "aria-live": "polite" }, "Loading...") : null,
+      () => isLoading.val ? div({ class: "loading-overlay", role: "status", "aria-live": "polite" }, MSG.LOADING) : null,
       div({ class: "panel-head" },
         h2({ class: "panel-title" }, title),
         div({ class: "panel-actions" },
@@ -935,26 +1164,17 @@ const App = () => {
         ),
         div({ class: "panel-meta" }, metaContent)
       ),
-      div({ class: "panel-body" },
-        // Nothing is selected at first paint, so the three code sections would
-        // lay out stand-in text and copy buttons for nobody: the boot layout
-        // walks 205 objects, 61 of them these.  One muted line until there is
-        // something to show.
-        (fn || cellIdx !== null)
-          ? [
-              CodeSection("C", "var(--accent-c-source)", "C Source", "c", cSourceText.val),
-              activeSection.val === ".text"
-                ? CodeSection("ASM", "var(--accent-asm)", "Assembly", "x86asm", asmText.val)
-                : div({ class: "section" },
-                    div({ class: "section-title" }, HexLogo("{}", "var(--accent-data)", "Data Inspector")),
-                    () => detailReady.val
-                      ? window.RC.DataInspector(currentBuf.val)
-                      : div({ class: "code" }, detailFailed.val ? MSG.DETAIL_UNAVAILABLE : MSG.LOADING)
-                  ),
-              CodeSection("01", "var(--accent-bytes)", "Original Bytes", "hex", bytesText.val)
-            ]
-          : div({ class: "hint" }, MSG.SELECT_FUNCTION)
-      )
+      // The three code sections belong to detail.js (see DESIGN.md, "Deferred
+      // detail rendering"): they cannot paint before it lands, and the shell
+      // has a hard byte budget.  Until then the body says why, and says the
+      // same thing on a failed load, so a pane never reads as a live one.
+      detailReady.val
+        ? window.RC.panelBody({ fn, cellIdx, activeSection, cSourceText, asmText, bytesText, currentBuf, showModal, modalTitle, modalContent, modalLang, HighlightedCode })
+        : div({ class: "panel-body" },
+            (fn || cellIdx !== null)
+              ? div({ class: "hint" }, detailFailed.val ? MSG.DETAIL_UNAVAILABLE : MSG.LOADING)
+              : div({ class: "hint" }, MSG.SELECT_FUNCTION)
+          )
     );
   };
 
@@ -976,11 +1196,19 @@ const App = () => {
     })();
     try {
       await sec._cellsInflight;
-    } catch (error) { // oxlint-disable-line @rikalabs/no-silent-catch-fallback -- next switch retries; log so a dead tab is diagnosable
+      if (cellLoadError.val?.section === name) cellLoadError.val = null;
+    } catch (error) { // oxlint-disable-line @rikalabs/no-silent-catch-fallback -- the failure is reported on the tab itself, with a retry, and logged so a dead tab is diagnosable
       // oxlint-disable-next-line eslint/no-console -- keep diagnostics in the browser console
       console.error("Failed to load section cells:", name, error);
+      if (data.val?.sections?.[name] === sec) {
+        cellLoadError.val = { section: name, detail: error.message };
+      }
     } finally { delete sec._cellsInflight; }
   };
+
+  // Retry from the grid's failure notice.  A settled failed fetch has already
+  // cleared its inflight slot, so this starts a fresh request.
+  const retrySectionCells = (name) => { void ensureSectionCells(name); };
 
   const switchTab = (name) => {
     activeSection.val = name;
@@ -1017,12 +1245,33 @@ const App = () => {
       ),
       div({ class: "topbar-right" },
         div({ class: "search" },
-          input({
-            type: "search", class: "input-el",
-            placeholder: "Search function name or VA...",
-            "aria-label": "Search functions",
-            oninput: onSearchInput
-          })
+          div({ class: "search-row" },
+            input({
+              type: "search", class: "input-el",
+              placeholder: "Search function name or VA...",
+              "aria-label": "Search functions",
+              oninput: onSearchInput,
+              onkeydown: onSearchKeydown
+            }),
+            () => searchQuery.val
+              ? button({
+                  class: "btn search-clear", "aria-label": "Clear search", title: "Clear search",
+                  onclick: (e) => { clearSearch(document.querySelector(".search input")); e.currentTarget.blur(); }
+                }, "Clear")
+              : div()
+          ),
+          // Potato Mode prints the query, the hit count, and a clear link
+          // above its grid.  The SPA dimmed cells and said nothing, so a
+          // query that matched nothing looked like a broken map.
+          () => searchQuery.val
+            ? div({ class: "search-status", role: "status", "aria-live": "polite" },
+                span(`Searching: "${searchQuery.val}"`),
+                span({ class: "search-count" },
+                  `(${matchedFnNames.val.size} ${matchedFnNames.val.size === 1 ? "match" : "matches"})`),
+                matchedFnNames.val.size === 0
+                  ? span(" - no matches. Check the spelling, or search by VA.")
+                  : span(" - press Enter to jump to the first one."))
+            : div()
         ),
         div({ class: "filters" },
           // aria-pressed, not just an `active` class: the pressed state is
@@ -1032,7 +1281,12 @@ const App = () => {
           FilterButton("reloc", "R", "Filter reloc", "Reloc match"),
           FilterButton("near_match", "M", "Filter near-match", "Near-match"),
           FilterButton("stub", "S", "Filter stub", "Stub"),
-          FilterButton("padding", "P", "Filter padding", "Padding")
+          FilterButton("padding", "P", "Filter padding", "Padding"),
+          // The legend names eight states; without these two, the cells a
+          // failed build or an unverified section painted were visible but
+          // unreachable: every filter dimmed them and none isolated them.
+          FilterButton("proven", "V", "Filter proven", "Proven (verified equivalent)"),
+          FilterButton("problem", "X", "Filter problem", "Problem (build or classification failure)")
         ),
         div({ class: "actions" },
           () => {
@@ -1044,18 +1298,21 @@ const App = () => {
                   const newTarget = e.target.value;
                   activeTarget.val = newTarget;
 
-                  // Update URL without reloading
                   const url = new URL(window.location);
                   url.searchParams.set("target", newTarget);
                   window.history.pushState({}, "", url);
 
-                  // Save to localStorage
                   localStorage.setItem("recoverage_target", newTarget);
 
                   // Reset UI state.  Dropping the old target's data makes
                   // loadData treat this as a first paint (overlay + errors),
                   // not a background refresh of the same map.
                   data.val = null;
+                  // A query belongs to the binary it was typed for.  Keeping
+                  // it would dim the whole new map against a name that does
+                  // not exist there, and the status line would report it as a
+                  // live, empty result.
+                  clearSearch(document.querySelector(".search input"));
                   currentFn.val = null;
                   currentCellIndex.val = null;
                   cSourceText.val = MSG.SELECT_FUNCTION;
@@ -1064,10 +1321,8 @@ const App = () => {
                   asmText.val = MSG.ASM_PLACEHOLDER;
                   currentBuf.val = null;
 
-                  // Load new data
                   loadData();
 
-                  // Remove focus to hide glow
                   e.target.blur();
                 }
               }, ...availableTargets.val.map(t =>
@@ -1077,7 +1332,7 @@ const App = () => {
             return span({ style: "display: none;" });
           },
           button({ class: "btn icon-btn", "aria-label": () => isLightMode.val ? "Switch to Dark Mode" : "Switch to Light Mode", title: () => isLightMode.val ? "Switch to Dark Mode" : "Switch to Light Mode", onclick: () => { isLightMode.val = !isLightMode.val; localStorage.setItem('recoverage_theme', isLightMode.val ? 'light' : 'dark'); } }, () => isLightMode.val ? MoonIcon() : SunIcon()),
-          button({ class: "btn icon-btn", "aria-label": "Reload data", disabled: () => detailFailed.val, title: () => detailFailed.val ? MSG.DETAIL_UNAVAILABLE : "Reload", onclick: reloadData }, ReloadIcon())
+          button({ class: "btn icon-btn", "aria-label": regenTitle, disabled: () => detailFailed.val || isRegenerating.val, title: regenTitle, onclick: reloadData }, ReloadIcon())
         )
       )
     ),
@@ -1094,7 +1349,10 @@ const App = () => {
               h2(emptyState.val.title), p(emptyState.val.detail))
           : div(),
         Grid(),
-        () => emptyState.val ? div() : div({ class: "hint" }, "Click a block to view function details. Use filters to show specific statuses.")
+        // Same slot as the hint, so a notice never moves what the user is
+        // reaching for; it replaces the hint for as long as it is up.
+        () => (emptyState.val || !navNotice.val) ? div() : div({ class: "hint hint-notice", role: "status" }, navNotice.val),
+        () => emptyState.val ? div() : SearchHint()
       ),
       () => Panel()
     ),

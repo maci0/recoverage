@@ -13,16 +13,16 @@ Lightweight summary endpoint returning only coverage stats (percentages, byte co
 Paginated function listing with optional filters (`?status=&search=&sort=&limit=&offset=`).
 
 ### `GET /api/targets/<target>/diff/<va>`
-Return a structural diff between the compiled output and the original bytes for `MATCHING` and `STUB` functions. Wraps the existing `rebrew match --diff-only` logic. The frontend could render this inline instead of requiring the user to run CLI commands.
+Return a structural diff between the compiled output and the original bytes for `MATCHING` and `STUB` functions. Wraps the existing `rebrew match --diff-only` logic. The frontend could render this inline instead of requiring the user to run CLI commands. Tracked as **Diff View** in [DESIGN.md](DESIGN.md#future-ideas--todos), which is the canonical list.
 
 ### `GET /api/targets/<target>/xrefs/<va>`
-Cross-reference lookup — which functions call this VA, and which VAs does this function call. Requires building a call graph from the disassembly (Capstone) or from annotation metadata (`// CALLERS:`, `// CALLEES:`).
+Cross-reference lookup — which functions call this VA, and which VAs does this function call. Requires building a call graph from the disassembly (Capstone) or from annotation metadata (`// CALLERS:`, `// CALLEES:`). Tracked as **XREFs** in [DESIGN.md](DESIGN.md#future-ideas--todos), which is the canonical list.
 
 ### ~~`GET /api/targets/<target>/sections/<section>/bytes`~~ ✅ Implemented
 Raw byte slice endpoint with `?offset=N&size=M` params.
 
 ### ~~`GET /api/health`~~ ✅ Implemented
-Simple health check returning server version, DB path, DB size, DB mtime, optional extras installed, and available targets count.
+Simple health check returning server version, DB path, DB size, DB mtime (WAL-aware, as epoch seconds and as an ISO-8601 UTC instant), optional extras installed, and available targets count.
 
 ### `POST /api/targets/<target>/functions/<va>/annotate`
 Write-back annotations to source files. Accept a JSON body with annotation key-value pairs (`NOTE`, `BLOCKER`, `STATUS`, etc.) and patch the corresponding `.c` file. Enables in-browser editing of annotations without leaving the dashboard.
@@ -35,7 +35,7 @@ Write-back annotations to source files. Accept a JSON body with annotation key-v
 The `/data` endpoint supports `?section=.text` to load one section at a time.
 
 ### ~~`/api/targets/<target>/functions/<va>` — Batch Mode~~ ✅ Implemented
-Batch function lookups via `POST /api/targets/<target>/functions` with a JSON array of VAs:
+Batch function lookups via `POST /api/targets/<target>/functions` with a JSON object carrying a `vas` array:
 ```json
 { "vas": ["0x10001000", "0x10001050", "0x10001100"] }
 ```
@@ -67,7 +67,7 @@ CI-oriented: exits non-zero if coverage drops below a threshold.
 Open the browser to an existing running server (useful when `--no-open` was used at startup).
 
 ### ~~`recoverage regen` Subcommand~~ ✅ Implemented
-Re-run `rebrew catalog --json` + `rebrew build-db` from the terminal without starting the web server (same in-process pipeline and error handling as `serve --regen`).
+Re-run `rebrew catalog` + `rebrew build-db` from the terminal without starting the web server (same in-process pipeline and error handling as `serve --regen`).
 
 ---
 
@@ -97,7 +97,7 @@ Replace per-request `sqlite3.connect()` calls with a thread-local connection poo
 ## Security
 
 ### ~~`--bind` Flag~~ ✅ Implemented
-`--bind <interface>` selects the listening interface (default: `127.0.0.1`). Non-loopback binds require an explicit `--allow-remote` acknowledgment, since the API is unauthenticated.
+`--bind <interface>` selects the listening interface (default: `127.0.0.1`). Non-loopback binds require an explicit `--allow-remote` acknowledgment, since the API is unauthenticated unless `serve --token` is given.
 
 ### ~~Rate Limiting on `/api/regen`~~ ✅ Implemented
 The 5-second cooldown now exists server-side too: `/api/regen` returns 429
