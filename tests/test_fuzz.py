@@ -1,0 +1,652 @@
+"""Fuzz harnesses for the untrusted-input surfaces of the HTTP API.
+
+The API is the one place a stranger controls the bytes: every query parameter
+and the batch POST body are attacker-chosen, and each crosses a parser
+(``int(..., 0)``, ``json.loads``, rebrew's ``parse_va_candidates``) before it
+reaches SQLite.  These tests drive those parsers with mutated inputs and assert
+the properties that must hold for *every* input, not just the ones the unit
+tests enumerate:
+
+* a request never answers 5xx, and never returns bottle's HTML error page
+  (an unhandled exception in a handler is a 500, and a 500 that leaks the
+  traceback is a finding in itself);
+* an /api/* error body is the JSON envelope, and it stays valid UTF-8 even
+  when the offending value was arbitrary bytes;
+* a 200 response is well-formed and honours the contract the query asked for
+  (``limit`` bounds the page, ``size`` bounds the slice, every returned VA
+  was one the caller asked for).
+
+No coverage-guided fuzzer is available offline, so the harness is a seeded
+mutation engine: a hand-written corpus of real-shaped seeds (the spellings the
+SPA and Potato Mode actually send) mutated by a fixed set of operators, driven
+by a seeded PRNG so a failure is reproducible.  The seed is a module constant,
+so CI runs the identical corpus on every build; ``RECOVERAGE_FUZZ_SEED`` and
+``RECOVERAGE_FUZZ_ITERATIONS`` widen a local run without touching the code.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import random
+from collections.abc import Callable
+from typing import Any
+
+import pytest
+from conftest import HAS_DB, decode_body, get_first_target, wsgi_request
+
+from recoverage.server import _best_encoding
+
+# The three codecs the server can actually produce, in preference order.  A
+# negotiation result outside this set means a response was labelled with an
+# encoding no client library here can decode.
+_SUPPORTED_ENCODINGS = frozenset({"", "zstd", "br", "gzip"})
+
+# Campaign size.  Small enough that `make test` grows by seconds, large enough
+# that every seed is mutated dozens of times.  RECOVERAGE_FUZZ_SEED and
+# RECOVERAGE_FUZZ_ITERATIONS widen a local campaign without a code change.
+FUZZ_SEED = int(os.environ.get("RECOVERAGE_FUZZ_SEED", "20260927"), 10)
+FUZZ_ITERATIONS = int(os.environ.get("RECOVERAGE_FUZZ_ITERATIONS", "400"))
+
+# Statuses a handler may answer for attacker-chosen input.  Everything else is
+# a crash (5xx), a routing miss (which the catch-all turns into 404), or a
+# proxy-level failure.
+_ALLOWED_STATUSES = frozenset({200, 301, 304, 400, 404, 405, 413, 415, 422, 429, 500, 503})
+
+# Substrings that mean a traceback or an internal path escaped in an error
+# body.  Their presence is a leak regardless of the status code.
+_LEAK_MARKERS = (
+    "Traceback (most recent call last)",
+    'File "/',
+    "sqlite3.",
+    "bottle.py",
+    "rebrew/",
+)
+
+
+# ── mutation engine ─────────────────────────────────────────────────
+
+
+def _flip_byte(data: bytes, rng: random.Random) -> bytes:
+    if not data:
+        return b"x"
+    idx = rng.randrange(len(data))
+    return data[:idx] + bytes([rng.randrange(256)]) + data[idx + 1 :]
+
+
+def _delete_run(data: bytes, rng: random.Random) -> bytes:
+    if len(data) < 2:
+        return data
+    start = rng.randrange(len(data))
+    return data[:start] + data[start + 1 :]
+
+
+def _insert_run(data: bytes, rng: random.Random) -> bytes:
+    pos = rng.randrange(len(data) + 1)
+    return data[:pos] + bytes(rng.randrange(256) for _ in range(rng.randint(1, 8))) + data[pos:]
+
+
+def _splice(data: bytes, rng: random.Random, corpus: list[bytes]) -> bytes:
+    other = rng.choice(corpus)
+    if not other:
+        return data
+    a = rng.randrange(len(data) + 1)
+    b = rng.randrange(len(other) + 1)
+    return data[:a] + other[b:]
+
+
+# Grammar tokens the parsers under test actually branch on.  Random bytes
+# almost never produce a "vas": [...] shape or a 0x-prefixed integer, so the
+# structured operators are what reach the interesting branches.
+_JSON_TOKENS = (
+    b'{"vas": []}',
+    b'{"vas": ["0x10001000", 268435456]}',
+    b'{"vas": [0]}',
+    b'{"vas": null}',
+    b'{"vas": {}}',
+    b'{"vas": [true, false]}',
+    b'{"vas": [[]]}',
+    b'{"vas": [{"va": 1}]}',
+    b'{"vas": [-1]}',
+    b'{"vas": [18446744073709551616]}',
+    b'{"vas": [1e309]}',
+    b'{"vas": ["0x", "0X", " 10001000 ", "10001000", "-0x1", "0b1010", "1_0"]}',
+    b'{"vas": ["' + b"A" * 4096 + b'"]}',
+    b"[]",
+    b"null",
+    b"1",
+    b'"vas"',
+    b"{",
+    b"",
+    b"\x00\xff\xfe",
+    b"\xef\xbb\xbf{}",
+    b"\xed\xa0\x80",  # lone surrogate in UTF-8
+)
+
+_NUM_TOKENS = (
+    b"0",
+    b"-0",
+    b"-1",
+    b"1",
+    b"4096",
+    b"99999999999999999999999999",
+    b"0x10",
+    b"0X10",
+    b"0b1010",
+    b"0o17",
+    b"1_0",
+    b" 12 ",
+    b"+12",
+    b"1e3",
+    b"NaN",
+    b"Infinity",
+    b"\xff",
+    b"%00",
+    b"%2e%2e",
+)
+
+
+def _mutate(data: bytes, rng: random.Random, corpus: list[bytes]) -> bytes:
+    op = rng.randrange(8)
+    if op == 0:
+        return _flip_byte(data, rng)
+    if op == 1:
+        return _delete_run(data, rng)
+    if op == 2:
+        return _insert_run(data, rng)
+    if op == 3:
+        return _splice(data, rng, corpus)
+    if op == 4:
+        return rng.choice(_JSON_TOKENS)
+    if op == 5:
+        return rng.choice(_NUM_TOKENS)
+    if op == 6:
+        pos = rng.randrange(len(data) + 1)
+        return data[:pos] + rng.choice(_JSON_TOKENS) + data[pos:]
+    return data * 2 + rng.choice(_NUM_TOKENS)
+
+
+def _fuzz(
+    seeds: list[bytes],
+    check: Callable[[bytes], None],
+    *,
+    iterations: int = FUZZ_ITERATIONS,
+    seed: int = FUZZ_SEED,
+) -> None:
+    """Mutate *seeds* for *iterations* rounds, calling *check* on each input.
+
+    A failing round re-runs the check on every intermediate input of that
+    round's mutation chain, so the assertion message names the smallest
+    corrupt input rather than the mutated blob it grew from.
+    """
+    rng = random.Random(seed)
+    for _ in range(iterations):
+        data = _mutate(rng.choice(seeds), rng, seeds)
+        try:
+            check(data)
+        except AssertionError:
+            chain = [data]
+            for _ in range(6):
+                smaller = _mutate(rng.choice(seeds), rng, seeds)
+                try:
+                    check(smaller)
+                except AssertionError:
+                    chain.append(smaller)
+            return check(min(chain, key=len))
+    return None
+
+
+# ── invariant checks ────────────────────────────────────────────────
+
+
+def _body_json(body: bytes, headers: dict[str, str], path: str) -> Any:
+    """The decoded response body as JSON, or a loud failure.
+
+    Compression is decoded first: a fuzzer that reads compressed bytes finds
+    nothing, and a body that is not valid JSON on a 2xx means the handler
+    produced a half-written response.
+    """
+    raw = decode_body(body, headers)
+    text = raw.decode("utf-8")
+    for marker in _LEAK_MARKERS:
+        assert marker not in text, f"{path}: response body leaks {marker!r}: {text[:400]!r}"
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        raise AssertionError(f"{path}: response is not JSON: {text[:400]!r}") from None
+
+
+def _assert_envelope(payload: Any, status: str, path: str) -> None:
+    """A non-2xx /api/* response carries the documented error envelope."""
+    assert isinstance(payload, dict), f"{path}: {status} body is not an object: {payload!r}"
+    assert isinstance(payload.get("error"), str) and payload["error"], f"{path}: no error label"
+    assert isinstance(payload.get("detail"), str), f"{path}: no detail string"
+
+
+def _assert_ok(status: str, headers: dict[str, str], body: bytes, path: str) -> Any:
+    code = int(status.split()[0])
+    assert code < 500, f"{path}: handler crashed with {status}: {body[:400]!r}"
+    assert code in _ALLOWED_STATUSES, f"{path}: unexpected status {status}"
+    payload = _body_json(body, headers, path)
+    if code >= 300:
+        _assert_envelope(payload, status, path)
+    return payload
+
+
+def _pct(value: str) -> str:
+    from urllib.parse import quote
+
+    return quote(value, safe="")
+
+
+# ── surfaces ────────────────────────────────────────────────────────
+
+
+BATCH_SEEDS = [
+    b'{"vas": ["0x10001000"]}',
+    b'{"vas": [0x10001000, 0x10001020, 0x10001030]}',
+    b'{"vas": ["10001000", " 10001020 ", "0X10001030"]}',
+    b'{"vas": [268435456, 268435488, 268435504]}',
+    b'{"vas": ["0x10001000", "0x10001000"]}',
+    b'{"vas": ["g_counter"]}',
+    b"{}",
+    b"[]",
+    b"",
+]
+
+QUERY_SEEDS = [
+    b"limit=50&offset=0",
+    b"limit=1&offset=2",
+    b"limit=-1",
+    b"limit=99999999999999999999999",
+    b"offset=-0x10",
+    b"sort=va:desc",
+    b"sort=name:ASC&status=EXACT",
+    b"search=func",
+    b"search=" + b"%" * 40,
+    b"status=" + b"A" * 200,
+]
+
+SLICE_SEEDS = [
+    b"va=0x10001000&size=16",
+    b"va=0x10001000&size=0",
+    b"va=0x10001000&size=-1",
+    b"va=0x10001000&size=0x100",
+    b"va=10001000&size=0b11",
+    b"va=&size=",
+    b"format=json&va=0x10001000&size=8",
+    b"format=HTML&va=0x10001000&size=8",
+    b"format=json&va=0x10001000&size=4096",
+]
+
+BYTES_SEEDS = [
+    b"offset=0&size=16",
+    b"offset=0&size=256",
+    b"offset=-1&size=16",
+    b"offset=0x10&size=0x10",
+    b"offset=99999999999999999999&size=16",
+    b"offset=&size=",
+    b"offset=0&size=0&format=hex",
+]
+
+TARGET_SEEDS = [
+    "demo",
+    "..",
+    ".",
+    "%2e%2e%2f%2e%2e",
+    "a" * 200,
+    "démo",
+    "\x00null",
+    "' OR 1=1 --",
+    "demo/../other",
+    "%ff%fe",
+]
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+class TestBatchLookupBody:
+    """POST /api/targets/<t>/functions — the only endpoint that parses a
+    whole attacker-supplied body (bounded read, JSON decode, per-entry VA
+    parse, then a parameterized query with one placeholder per entry)."""
+
+    def _path(self) -> str:
+        return f"/api/targets/{_pct(get_first_target())}/functions"
+
+    def test_body_never_crashes(self) -> None:
+        path = self._path()
+
+        def check(data: bytes) -> None:
+            status, headers, body = wsgi_request("POST", path, body=data)
+            code = int(status.split()[0])
+            payload = _assert_ok(status, headers, body, path)
+            if code >= 400:
+                _assert_envelope(payload, status, path)
+                return
+            # 200: the response is a JSON array of detail objects, and every
+            # returned VA is one the caller actually asked for.  A handler that
+            # echoed an unparsed or defaulted entry would break the pair.
+            assert isinstance(payload, list), f"{path}: 200 body is not a list: {payload!r}"
+            for entry in payload:
+                assert isinstance(entry, dict), f"{path}: non-object entry {entry!r}"
+                assert "va" in entry, f"{path}: entry without a va: {entry!r}"
+
+        _fuzz(BATCH_SEEDS, check)
+
+    def test_accepted_body_reports_only_requested_vas(self) -> None:
+        """A 200 answers exactly the deduped, order-preserving request.
+
+        Pair assertion across the request/response boundary: this is the
+        invariant the SPA's batch lookup depends on, and it is the one a
+        parser regression (dropped entry, default VA, reordered list) shows up
+        in first.
+        """
+        path = self._path()
+        for seed in BATCH_SEEDS:
+            status, headers, body = wsgi_request("POST", path, body=seed)
+            if int(status.split()[0]) != 200:
+                continue
+            payload = _assert_ok(status, headers, body, path)
+            sent = _requested_vas(seed)
+            got = [entry["va"] for entry in payload]
+            assert got == [va for va in sent if va in set(got)], f"{path}: {got} not from {sent}"
+
+
+def _requested_vas(seed: bytes) -> list[int]:
+    """The VAs a body asks for, in the order ``_batch_request_vas`` keeps."""
+    try:
+        payload = json.loads(seed.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return []
+    if not isinstance(payload, dict) or not isinstance(payload.get("vas"), list):
+        return []
+    out: list[int] = []
+    for entry in payload["vas"]:
+        if isinstance(entry, bool):
+            return []
+        if isinstance(entry, int):
+            out.append(entry)
+        elif isinstance(entry, str):
+            text = entry.strip()
+            if text.lower().startswith("0x"):
+                text = text[2:]
+            try:
+                out.append(int(text, 16))
+            except ValueError:
+                return []
+        else:
+            return []
+    return list(dict.fromkeys(out))
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+class TestListQuery:
+    """GET /functions — limit/offset go through int() and into sqlite3, where
+    a value wider than 64 bits raises OverflowError (a raw 500)."""
+
+    def test_query_never_crashes(self) -> None:
+        path = f"/api/targets/{_pct(get_first_target())}/functions"
+
+        def check(data: bytes) -> None:
+            status, headers, body = wsgi_request("GET", f"{path}?{data.decode('latin-1')}")
+            code = int(status.split()[0])
+            payload = _assert_ok(status, headers, body, f"{path}?{data!r}")
+            if code >= 400:
+                _assert_envelope(payload, status, path)
+                return
+            assert isinstance(payload, dict), f"{path}: 200 body is not an object"
+            items = payload.get("functions", [])
+            assert isinstance(items, list), f"{path}: functions is not a list"
+            limit = _limit_of(data)
+            if limit is not None and 1 <= limit <= 500:
+                assert len(items) <= limit, f"{path}: {len(items)} rows exceed limit {limit}"
+
+        _fuzz(QUERY_SEEDS, check)
+
+
+def _limit_of(query: bytes) -> int | None:
+    for pair in query.decode("latin-1").split("&"):
+        key, _, value = pair.partition("=")
+        if key == "limit":
+            try:
+                return int(value, 0)
+            except ValueError:
+                return None
+    return None
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+class TestSliceEndpoints:
+    """GET /asm and GET /sections/<section>/bytes share the ?size= clamp and
+    both feed a VA through rebrew's parse_va_candidates."""
+
+    def test_asm_query_never_crashes(self) -> None:
+        path = f"/api/targets/{_pct(get_first_target())}/asm"
+
+        def check(data: bytes) -> None:
+            status, headers, body = wsgi_request("GET", f"{path}?{data.decode('latin-1')}")
+            code = int(status.split()[0])
+            payload = _assert_ok(status, headers, body, f"{path}?{data!r}")
+            if code >= 400:
+                _assert_envelope(payload, status, path)
+                return
+            if _wants_json(data):
+                assert isinstance(payload, dict), f"{path}: json format did not return an object"
+                insns = payload.get("instructions", [])
+                assert isinstance(insns, list), f"{path}: instructions is not a list"
+                size = _size_of(data)
+                if size is not None:
+                    total = sum(i.get("size", 0) for i in insns)
+                    assert total <= size, f"{path}: {total} bytes exceed requested size {size}"
+
+        _fuzz(SLICE_SEEDS, check)
+
+    def test_bytes_query_never_crashes(self) -> None:
+        path = f"/api/targets/{_pct(get_first_target())}/sections/.text/bytes"
+
+        def check(data: bytes) -> None:
+            status, headers, body = wsgi_request("GET", f"{path}?{data.decode('latin-1')}")
+            code = int(status.split()[0])
+            payload = _assert_ok(status, headers, body, f"{path}?{data!r}")
+            if code >= 400:
+                _assert_envelope(payload, status, path)
+                return
+            size = _size_of(data)
+            if isinstance(payload, dict) and "hex" in payload and size is not None:
+                # The hex form is the canonical dump: 16 bytes per line, two
+                # bytes each, so a size clamp that leaked through would show up
+                # as a longer dump than the caller asked for.
+                lines = str(payload["hex"]).splitlines()
+                assert len(lines) <= (size + 15) // 16 + 1, f"{path}: dump longer than size {size}"
+
+        _fuzz(BYTES_SEEDS, check)
+
+    def test_section_path_never_crashes(self) -> None:
+        """The <section> path segment is attacker-controlled and reaches SQL."""
+        target = _pct(get_first_target())
+        sections = [
+            ".text",
+            ".data",
+            ".bss",
+            ".rsrc",
+            "..",
+            ".",
+            "%2e%2e",
+            "A" * 300,
+            "a' OR 1=1 --",
+        ]
+
+        def check(data: bytes) -> None:
+            section = data.decode("latin-1")
+            path = f"/api/targets/{target}/sections/{section}/bytes?offset=0&size=16"
+            status, headers, body = wsgi_request("GET", path)
+            code = int(status.split()[0])
+            payload = _assert_ok(status, headers, body, path)
+            if code >= 400:
+                _assert_envelope(payload, status, path)
+
+        _fuzz([s.encode("latin-1", "replace") for s in sections], check, iterations=120)
+
+
+def _wants_json(query: bytes) -> bool:
+    return b"format=json" in query
+
+
+def _size_of(query: bytes) -> int | None:
+    for pair in query.decode("latin-1").split("&"):
+        key, _, value = pair.partition("=")
+        if key == "size":
+            try:
+                size = int(value, 0)
+            except ValueError:
+                return None
+            return size if size > 0 else None
+    return None
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+class TestTargetSegment:
+    """Every /api/targets/<target>/ route is keyed on a path segment that
+    reaches SQL and the DLL path resolver.  Unicode, NUL, traversal and
+    quote payloads all have to come back as an envelope, not a crash."""
+
+    def test_target_never_crashes(self) -> None:
+        suffixes = ("/stats", "/data", "/functions", "/functions/0x10001000", "/asm?va=0x10001000")
+        _check_targets(suffixes)
+        _check_targets(("/functions",), iterations=150)
+
+
+def _check_targets(suffixes: tuple[str, ...], *, iterations: int = 200) -> None:
+    """Fuzz the <target> path segment across *suffixes*.
+
+    One campaign per suffix rather than one suffix per round, so a crash in
+    the /data renderer cannot be masked by the shorter /stats answers.
+    """
+    for suffix in suffixes:
+
+        def check(data: bytes, suffix: str = suffix) -> None:
+            path = f"/api/targets/{_pct(data.decode('utf-8', 'replace'))}{suffix}"
+            status, headers, body = wsgi_request("GET", path)
+            code = int(status.split()[0])
+            payload = _assert_ok(status, headers, body, path)
+            if code >= 400:
+                _assert_envelope(payload, status, path)
+            elif not isinstance(payload, dict):
+                raise AssertionError(f"{path}: 200 body is not an object: {payload!r}")
+
+        _fuzz([s.encode("utf-8") for s in TARGET_SEEDS], check, iterations=iterations)
+
+
+ACCEPT_ENCODING_SEEDS: list[bytes] = [
+    b"",
+    b"gzip",
+    b"gzip, deflate, br",
+    b"zstd, br",
+    b"gzip;q=0",
+    b"gzip;q=0, br;q=1",
+    b"gzip;q=abc",
+    b"gzip;q=1.5",
+    b"gzip;q=-1",
+    b"gzip;q=NaN",
+    b"gzip;q=inf",
+    b"gzip;q=0x1",
+    b"zstd;q=0;q=1",
+    b"not-zstd, zstd",
+    b"*",
+    b"gzip;q=0.5;q=0.9",
+    b"gzip" + b",gzip" * 40,
+    b"gzip;q=" + b"9" * 400,
+    b"gzip;" + b"x=1;" * 200,
+    b"\xff\xfe, gzip",
+]
+
+
+class TestAcceptEncoding:
+    """``Accept-Encoding`` is a raw attacker header parsed by
+    ``server._best_encoding`` on every response: a q-value parse that raises,
+    or a name that is not one of the three the compressor can produce, turns
+    into a 500 or a Content-Encoding the client cannot decode."""
+
+    def test_returns_a_supported_encoding(self) -> None:
+        def check(data: bytes) -> None:
+            encoding = _best_encoding(data.decode("latin-1"))
+            assert encoding in _SUPPORTED_ENCODINGS, f"{data!r}: unknown encoding {encoding!r}"
+
+        _fuzz(ACCEPT_ENCODING_SEEDS, check, iterations=600)
+
+    def test_q_zero_is_never_chosen(self) -> None:
+        """RFC 9110: ``token;q=0`` means "not acceptable", so a header offering
+        only refused codecs must compress nothing.  A parse that drops the q
+        parameter picks a codec the client explicitly refused."""
+        for name in sorted(_SUPPORTED_ENCODINGS - {""}):
+            assert _best_encoding(f"{name};q=0") == "", f"{name};q=0 still selected"
+            assert _best_encoding(f"{name};q=0.001") == name, f"{name};q=0.001 rejected"
+            assert _best_encoding(f"not-{name}, {name};q=0") == "", f"{name} matched as a substring"
+            # A refused token must not be revived by an unweighted duplicate.
+            assert _best_encoding(f"{name};q=0, {name}") == name, f"{name} q=0 not overridden"
+
+    def test_wildcard_offers_nothing(self) -> None:
+        """``*`` is skipped rather than expanded, so it alone selects no codec
+        and must not be expanded into the most preferred one."""
+        assert _best_encoding("*") == ""
+        assert _best_encoding("*;q=1") == ""
+        assert _best_encoding("*;q=0") == ""
+
+
+class TestResponseCompression:
+    """End-to-end: whatever the negotiator picks, the response must be
+    decodable with the Content-Encoding it advertises."""
+
+    @pytest.mark.parametrize("accept", ACCEPT_ENCODING_SEEDS)
+    def test_body_decodes_under_fuzzed_accept_encoding(self, accept: bytes) -> None:
+        status, headers, body = wsgi_request(
+            "GET", "/api/health", headers={"Accept-Encoding": accept.decode("latin-1")}
+        )
+        assert int(status.split()[0]) == 200, status
+        payload = json.loads(decode_body(body, headers).decode("utf-8"))
+        assert isinstance(payload, dict) and "version" in payload
+        assert headers.get("Content-Encoding", "") in _SUPPORTED_ENCODINGS
+
+
+JUNK_HEADER_SEEDS: list[bytes] = [
+    b"\xff",
+    b"\xff\xfe",
+    b"gzip\x80",
+    b"Bearer \xff",
+    b"\xc3\x28",
+    b'W/"\xff"',
+    b"null",
+    b"evil@host",
+    b"http://\xff/",
+    b"a" * 500,
+    b"\x00",
+]
+
+
+class TestJunkHeaders:
+    """Every header a handler reads is attacker-controlled, and a WSGI server
+    hands the raw bytes over latin-1 — so a value can carry bytes that are not
+    UTF-8 at all.  Reading one must never raise: a non-decodable value has no
+    usable text, so it reads as absent (server._header)."""
+
+    HEADERS = (
+        "Accept-Encoding",
+        "Accept",
+        "Authorization",
+        "If-None-Match",
+        "Origin",
+        "Sec-Fetch-Site",
+    )
+
+    @pytest.mark.parametrize("name", HEADERS)
+    def test_non_utf8_header_value_never_crashes(self, name: str) -> None:
+        def check(data: bytes) -> None:
+            status, headers, body = wsgi_request(
+                "GET", "/api/health", headers={name: data.decode("latin-1")}
+            )
+            code = int(status.split()[0])
+            assert code in (200, 400, 401, 403), f"{name}={data!r}: {status}"
+            if code == 200:
+                payload = json.loads(decode_body(body, headers).decode("utf-8"))
+                assert isinstance(payload, dict) and "version" in payload
+
+        _fuzz(JUNK_HEADER_SEEDS, check, iterations=80)

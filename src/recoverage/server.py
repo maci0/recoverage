@@ -323,7 +323,7 @@ def _etag_or_304(snap: tuple[int, int] | None, *parts: object) -> str | None:
     if snap is None:
         return None
     etag = _safe_etag(snap[0], *parts)
-    if _if_none_match_matches(request.headers.get("If-None-Match", ""), etag):
+    if _if_none_match_matches(_header("If-None-Match", ""), etag):
         raise HTTPResponse(
             status=304,
             headers={"ETag": etag, "Cache-Control": CACHE_REVALIDATE},
@@ -892,6 +892,22 @@ def clear_disassembly_cache() -> None:
 
 
 # ── Compression ────────────────────────────────────────────────────
+
+
+def _header(name: str, default: str = "") -> str:
+    """A request header as text, or *default* when the value is not text.
+
+    A WSGI server decodes raw header bytes as latin-1, so a peer can send a
+    byte above 0x7f.  bottle re-reads environ values as UTF-8 and raises
+    UnicodeDecodeError on one, which would turn a junk header into a 500 and a
+    traceback in the log on every request.  A header that is not decodable text
+    carries no usable value, so it reads as absent — the same answer the
+    RFC 9110 grammar gives for a value that is not a valid field value.
+    """
+    try:
+        return request.headers.get(name, default)
+    except UnicodeDecodeError:
+        return default
 
 
 #: Every encoding this server can produce, most preferred first.  ONE list:
@@ -1628,7 +1644,7 @@ def _finalized(body: bytes, content_type: str, encoding: str, **headers: str) ->
 
 def _compressed(body: bytes, content_type: str, **headers: str) -> bytes:
     """Compress body, set response headers, return final body."""
-    accept_enc = request.headers.get("Accept-Encoding", "")
+    accept_enc = _header("Accept-Encoding", "")
     body, encoding = compress_payload(body, accept_enc)
     return _finalized(body, content_type, encoding, **headers)
 
@@ -1680,7 +1696,7 @@ def _json_err(status: int, data: dict[str, Any], **headers: str) -> Any:
         if key not in body_data:
             body_data[key] = value
     body = json.dumps(body_data).encode("utf-8")
-    accept_enc = request.headers.get("Accept-Encoding", "")
+    accept_enc = _header("Accept-Encoding", "")
     body, encoding = compress_payload(body, accept_enc)
     resp = HTTPResponse(status=status, body=body)
     resp.content_type = "application/json"
@@ -1786,7 +1802,7 @@ def _require_auth() -> None:
     if not _AUTH_TOKEN:
         return
 
-    provided = request.headers.get("Authorization", "")
+    provided = _header("Authorization", "")
     if provided.startswith("Bearer "):
         provided = provided[len("Bearer ") :]
     else:
@@ -1818,9 +1834,7 @@ def _require_auth() -> None:
     # A browser asking for a page gets a page; API clients keep the JSON
     # error contract.  Someone handed a share URL who dropped the query
     # string used to land on a raw JSON blob with no way to tell what to do.
-    wants_html = "text/html" in request.headers.get("Accept", "") and not request.path.startswith(
-        "/api/"
-    )
+    wants_html = "text/html" in _header("Accept", "") and not request.path.startswith("/api/")
     if wants_html:
         raise HTTPResponse(
             status=401,
@@ -1913,7 +1927,7 @@ def _log_request() -> None:
     # loopback host.  Requests without a Host header (non-HTTP/1.1 clients,
     # WSGI test harnesses) are left to the server's own address handling.
     if ALLOWED_HOSTS is not None:
-        host = request.headers.get("Host", "")
+        host = _header("Host", "")
         if host and _hostname_of(host) not in ALLOWED_HOSTS:
             # Audit trail: a rejected Host on a loopback bind is a
             # DNS-rebinding attempt signal; without it the 400 leaves no
@@ -1973,7 +1987,7 @@ def _security_headers() -> None:
     # Tokens travel in URLs (?token= share links); never let them leak to a
     # third party via Referer if the dashboard ever navigates off-host.
     response.set_header("Referrer-Policy", "no-referrer")
-    origin = request.headers.get("Origin", "")
+    origin = _header("Origin", "")
     if CORS_ENABLED and origin and _normalize_origin(origin) in CORS_ALLOWED_ORIGINS:
         response.set_header("Access-Control-Allow-Origin", origin)
         _merge_vary("Origin")

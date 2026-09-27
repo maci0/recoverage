@@ -1,4 +1,4 @@
-.PHONY: help setup clean test test-one lint format format-check web-lint smoke smoke-fail \
+.PHONY: help setup clean test test-one fuzz lint format format-check web-lint smoke smoke-fail \
 	shell-lint yaml-lint all ensure-uv ensure-rebrew warn-uv-version clone-rebrew
 
 # Force POSIX sh for recipes (ignore a caller-exported SHELL=bash).  Version
@@ -48,6 +48,7 @@ help:
 		'  make clone-rebrew       # clone the sibling rebrew pin into ../rebrew' \
 		'  make test               # full pytest suite (CI test job, minus the matrix)' \
 		'  make test-one T=<node>  # one file or nodeid, e.g. T=tests/test_api.py::TestX' \
+		'  make fuzz              # longer seeded campaign over the untrusted-input surfaces' \
 		'  make lint               # ruff check src/ tests/ tools/ (CI lint job)' \
 		'  make format             # ruff format (writes)' \
 		'  make format-check       # ruff format --check src/ tests/ tools/ (CI lint job)' \
@@ -127,6 +128,15 @@ test: ensure-uv
 
 test-one: ensure-uv
 	uv run --frozen python -m pytest $(T) $(FLAGS) -v --tb=short
+
+# A wider campaign over the same seeded harnesses `make test` already runs;
+# the seed and iteration count come from the environment so no file changes.
+SEED ?= 1
+ITERATIONS ?= 20000
+
+fuzz: ensure-uv
+	RECOVERAGE_FUZZ_SEED=$(SEED) RECOVERAGE_FUZZ_ITERATIONS=$(ITERATIONS) \
+		uv run --frozen python -m pytest tests/test_fuzz.py -v --tb=short
 
 lint: ensure-uv
 	uv run --frozen python -m ruff check src/ tests/ tools/

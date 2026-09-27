@@ -2054,7 +2054,11 @@ def _point_app_at_db(monkeypatch: pytest.MonkeyPatch, db: Any) -> Any:
     monkeypatch.setattr("recoverage.server._db_path", lambda: db)
     monkeypatch.setattr(server_mod, "_open_db", _open_like)
     monkeypatch.setattr(api, "_require_target", lambda c, t: None)
+    # Both modules bind `request` at import time, and every header read goes
+    # through server._header, so a fake that patched only api.request left the
+    # real (empty) request answering Accept-Encoding.
     monkeypatch.setattr(api, "request", req)
+    monkeypatch.setattr(server_mod, "request", req)
     return req
 
 

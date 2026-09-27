@@ -43,6 +43,7 @@ from recoverage.server import (
     _get_capstone_md,
     _get_targets_config,
     _global_json_sql,
+    _header,
     _hostname_of,
     _json_err,
     _json_ok,
@@ -920,7 +921,7 @@ def handle_api_data(target: str) -> bytes | Any:
     # (the post-rebuild SSE refetch herd) share one build.
     entry, building = _data_cache_checkout(fingerprint)
     if entry is not None:
-        accept_enc = request.headers.get("Accept-Encoding", "")
+        accept_enc = _header("Accept-Encoding", "")
         encoding = _best_encoding(accept_enc)
         body = entry.get(encoding)
         if body is None:
@@ -935,7 +936,7 @@ def handle_api_data(target: str) -> bytes | Any:
     try:
         with _target_cursor(target) as c:
             raw_json = _build_data_raw(c, target, section_filter)
-            accept_enc = request.headers.get("Accept-Encoding", "")
+            accept_enc = _header("Accept-Encoding", "")
             body, encoding = compress_payload(raw_json, accept_enc)
             _cache_data_insert(fingerprint, raw_json, encoding, body)
             return _json_ok_precompressed(body, encoding, **headers)
@@ -1620,7 +1621,7 @@ def handle_regen() -> bytes | Any:
             },
         )
 
-    origin = request.headers.get("Origin", "")
+    origin = _header("Origin", "")
     if origin:
         # Same hardened parser as the Host allowlist: userinfo-bearing or
         # otherwise non-plain values parse as "" and are rejected.
@@ -1640,7 +1641,7 @@ def handle_regen() -> bytes | Any:
         # Origin.  Browsers attach Sec-Fetch-Site to every request they make,
         # and only they ever send "cross-site": treat that as a definitive
         # cross-origin POST and reject it.
-        fetch_site = request.headers.get("Sec-Fetch-Site", "").strip().lower()
+        fetch_site = _header("Sec-Fetch-Site", "").strip().lower()
         if fetch_site == "cross-site":
             return _json_err(
                 403,

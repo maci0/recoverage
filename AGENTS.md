@@ -48,6 +48,7 @@ recoverage/
 │   ├── test_potato.py        # Potato Mode unit tests
 │   ├── test_perf.py         # Deterministic perf regression gates (work counters, not wall clock)
 │   ├── test_release.py       # Release contract: version, changelog, declared floors
+│   ├── test_fuzz.py          # Seeded mutation campaigns over the untrusted-input surfaces
 │   └── test_playwright.py    # Browser integration tests
 └── src/recoverage/
     ├── __init__.py
@@ -92,6 +93,7 @@ uv sync --extra playwright   # browser tests: playwright, pytest-playwright
 # Checks
 make test                   # uv run pytest tests/ -v --ignore=tests/test_playwright.py
 make test-one T=tests/test_api.py  # one file or pytest node id (FLAGS="-k name" narrows it)
+make fuzz                  # wider seeded campaign (SEED=, ITERATIONS= override)
 make lint                   # uv run ruff check src/ tests/ tools/
 make format-check           # uv run ruff format --check src/ tests/ tools/
 make format                 # uv run ruff format (writes)
@@ -263,3 +265,12 @@ REBREW_DIR=<path>` instead, since its parent is not the sibling directory.
   `app.js`/`detail.js` are wrapped in IIFEs and share state via `window.RC`.
   Rationale-bearing `oxlint-disable` comments are the sanctioned escape hatch
   for UI error boundaries and VanJS idioms (see `oxlint.config.ts`).
+- The untrusted-input surfaces (query parameters, the batch POST body, request
+  headers) are fuzzed by `tests/test_fuzz.py`: a seeded mutation engine over a
+  hand-written corpus, driven by `RECOVERAGE_FUZZ_SEED` / `RECOVERAGE_FUZZ_ITERATIONS`
+  so a failure replays. Each round asserts an invariant, not just a lack of crash: no 5xx,
+  the JSON error envelope on a 4xx, no traceback in a body, and the contract the
+  query asked for (a page within `limit`, a slice within `size`, only requested
+  VAs back). No coverage-guided fuzzer is a project dependency, so the corpus
+  lives in that file; a new surface gets a corpus entry there, not a new
+  dependency.

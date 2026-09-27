@@ -154,6 +154,12 @@ module ships in the published package. See *Breaking*.
 
 ### Fixed
 
+- **A request header carrying a non-UTF-8 byte no longer answers 500.** A WSGI
+  server hands header bytes over as latin-1, so a peer can send a byte above
+  `0x7f`; reading it raised `UnicodeDecodeError`, which turned one junk header
+  into a 500 plus a traceback in the log, on any route. Every header read now
+  goes through `server._header`, and a value that is not decodable text reads
+  as absent, which is what the field-value grammar already implies.
 - **The SPA grid is re-laid out when a rebuild re-spans a section.** Layout
   was memoized on `(column count, cell count)`, and a rebuild that moved a
   cell's start without changing how many there are left the key matching: the

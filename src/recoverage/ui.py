@@ -25,6 +25,7 @@ from recoverage.server import (
     HTTPResponse,
     _assets_dir,
     _finalized,
+    _header,
     _if_none_match_matches,
     _project_dir,
     _safe_etag,
@@ -195,7 +196,7 @@ def handle_index() -> bytes:
                 f"recoverage_token={_server._AUTH_TOKEN}; Path=/; HttpOnly; SameSite=Strict",
             )
 
-    accept_encoding = request.headers.get("Accept-Encoding", "")
+    accept_encoding = _header("Accept-Encoding", "")
     key = static_variant_key(accept_encoding)
 
     with INDEX_LOCK:
@@ -333,7 +334,7 @@ def _client_has_asset(etag: str) -> bool:
     the asset as W/"..." still gets its 304.  The accepted spellings come from
     the shared matcher, so static assets and DB-derived responses cannot drift.
     """
-    return _if_none_match_matches(request.headers.get("If-None-Match", ""), etag)
+    return _if_none_match_matches(_header("If-None-Match", ""), etag)
 
 
 @app.get(
@@ -341,7 +342,7 @@ def _client_has_asset(etag: str) -> bool:
     "|hljs\\.css|hljs\\.min\\.js|hljs-c\\.min\\.js|hljs-x86asm\\.min\\.js)>"
 )
 def serve_static_asset(filename: str) -> Any:
-    accept_encoding = request.headers.get("Accept-Encoding", "")
+    accept_encoding = _header("Accept-Encoding", "")
     variant_key = static_variant_key(accept_encoding)
     if not variant_key:
         # No shared encoding: hand off to bottle, which still does Range and
