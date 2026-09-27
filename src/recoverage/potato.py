@@ -335,13 +335,19 @@ def _hex_logo_svg(label: str, color: str) -> str:
 
 
 def _section_heading(label: str, color: str, title: str) -> str:
-    """Render a section heading with a hex logo + title text."""
+    """Render a section heading with a hex logo + title text.
+
+    ``title`` is escaped here, not by the caller: the heading is built by
+    string concatenation into element content, so a caller that forgot the
+    escape would emit a DB-sourced section or file name as live markup.
+    Callers pass the raw text.
+    """
     logo = _hex_logo_svg(label, color)
     return (
         f'<table border="0" cellpadding="0" cellspacing="4"><tr>'
         f'<td valign="middle">{logo}</td>'
         f'<td valign="middle">'
-        f'<h2><font size="3">{title}</font></h2>'
+        f'<h2><font size="3">{_esc(title)}</font></h2>'
         f"</td></tr></table><br>"
     )
 
@@ -731,21 +737,21 @@ _PAGE_SRC = r"""<!DOCTYPE html>
       <table id="logo" border="0" cellpadding="0" cellspacing="0">
         <tr>
           <td><img src="{{R_LOGO_SVG}}" width="48" height="32" border="0" alt="R"></td>
-          <td valign="middle" nowrap><h1><a href="/"><font face="{{MONO_FONT}}" size="5" color="{{TEXT_COLOR}}">&nbsp;<b>ReCoverage</b></font></a></h1>&nbsp;<a href="/"><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">[SPA]</font></a>&nbsp;<a href="?target={{target}}&section={{section}}&view=functions"><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">[Functions]</font></a></td>
+          <td valign="middle" nowrap><h1><a href="/"><font face="{{MONO_FONT}}" size="5" color="{{TEXT_COLOR}}">&nbsp;<b>ReCoverage</b></font></a></h1>&nbsp;<a href="/"><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">[SPA]</font></a>&nbsp;<a href="{{functions_nav_url}}"><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">[Functions]</font></a></td>
         </tr>
       </table>
     </td>
     <td valign="middle" width="100%">
       <table id="section-tabs" border="0" cellpadding="0" cellspacing="4"><tr>
-      % for s_name, s_url, s_active in section_tab_data:
+      % for s_name, s_url, s_active, s_key in section_tab_data:
         <td valign="middle">
         <!-- The <a> wraps the whole pill table, not just the label.  Wrapping
              only the text made the clickable area the ~20px glyph while the
              32px pill around it looked like the button and did nothing. -->
         % if s_active:
-          <a href="{{s_url}}" accesskey="{{s_name[1]}}"><table border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{ACTIVE_L}}" width="16" height="32" border="0" alt=""></td><td background="{{ACTIVE_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="#ffffff"><b>{{s_name}}</b></font></td><td><img src="{{ACTIVE_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
+          <a href="{{s_url}}" accesskey="{{s_key}}"><table border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{ACTIVE_L}}" width="16" height="32" border="0" alt=""></td><td background="{{ACTIVE_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="#ffffff"><b>{{s_name}}</b></font></td><td><img src="{{ACTIVE_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
         % else:
-          <a href="{{s_url}}" accesskey="{{s_name[1]}}"><table border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{INACTIVE_L}}" width="16" height="32" border="0" alt=""></td><td background="{{INACTIVE_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="{{MUTED_COLOR}}">{{s_name}}</font></td><td><img src="{{INACTIVE_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
+          <a href="{{s_url}}" accesskey="{{s_key}}"><table border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{INACTIVE_L}}" width="16" height="32" border="0" alt=""></td><td background="{{INACTIVE_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="{{MUTED_COLOR}}">{{s_name}}</font></td><td><img src="{{INACTIVE_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
         % end
         </td>
       % end
@@ -1894,13 +1900,19 @@ def _section_tab_data(
     sections: dict[str, dict[str, Any]],
     active_filters: set[str] | None,
     search_query: str,
-) -> list[tuple[str, str, bool]]:
-    """(name, url, is_active) for the section tabs."""
+) -> list[tuple[str, str, bool, str]]:
+    """(name, url, is_active, accesskey) for the section tabs.
+
+    The accesskey is the section name's second character, falling back to the
+    first: a one-character section name would otherwise index off the end of
+    the string and 500 the whole page.
+    """
     return [
         (
             s,
             _build_url(target, s, active_filters or None, search=search_query),
             s == section,
+            s[1:2] or s[:1],
         )
         for s in sections
     ]
@@ -2049,6 +2061,12 @@ def _render_potato_inner(
 
     clear_search_url = _build_url(target, section, active_filters or None)
 
+    # The header's [Functions] link is built here, not from `{{target}}` /
+    # `{{section}}` in the template: those get HTML-escaped only, so a target
+    # or section holding "&" would append attacker-chosen query parameters to
+    # this one href.  Every other href in the page goes through _build_url.
+    functions_nav_url = f"?target={_url_quote(target)}&section={_url_quote(section)}&view=functions"
+
     progress_bar_png_uri = _progress_svg(tuple(progress["segments"])) if progress else ""
 
     db_mtime_str = _db_updated_label()
@@ -2073,6 +2091,7 @@ def _render_potato_inner(
         # Data
         target=target,
         section=section,
+        functions_nav_url=functions_nav_url,
         view=view,
         active_filters=active_filters,
         search_query=search_query,
@@ -2317,7 +2336,7 @@ def _panel_function_detail(
     code_text = _panel_fn_source_text(data, target, fn_data)
     if code_text:
         ctx["annotations"] = _extract_annotations(code_text)
-        ctx["c_heading"] = _section_heading("C", ACCENT_C_SOURCE, f"C Source ({_esc(files[0])})")
+        ctx["c_heading"] = _section_heading("C", ACCENT_C_SOURCE, f"C Source ({files[0]})")
         ctx["code_html"] = _code_block_raw(_highlight_c(code_text))
 
     # Assembly (only meaningful for code cells)

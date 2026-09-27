@@ -58,6 +58,30 @@ def assert_regen_accepted(result: tuple[str, dict[str, str], bytes]) -> None:
 # ── Regen origin validation (actual endpoint) ─────────────────────
 
 
+class TestRegenErrorBodySanitized:
+    """A failed regen must not echo the exception text: a rebrew or OSError
+    message quotes absolute paths from the project tree."""
+
+    def test_exception_message_stays_in_the_log(self, monkeypatch, caplog) -> None:
+        import logging as _logging
+
+        import recoverage.api as api
+
+        def _boom(_root) -> None:
+            raise OSError("/home/someone/private/workspace/src is unreadable")
+
+        monkeypatch.setattr(api, "run_regen", _boom)
+        monkeypatch.setattr(api, "_project_dir", lambda: Path("/tmp"))
+        with caplog.at_level(_logging.ERROR, logger="recoverage"):
+            response = api._do_regen("127.0.0.1")
+        assert response.status_code == 500
+        detail = json.loads(response.body)["detail"]
+        assert "OSError" in detail
+        assert "/home/someone/private" not in detail
+        logged = [rec.getMessage() for rec in caplog.records]
+        assert any("Regen failed" in msg and "/home/someone/private" in msg for msg in logged)
+
+
 class TestRegenOriginValidation:
     """Test origin/remote_addr checks on the actual /api/regen endpoint."""
 
@@ -864,13 +888,16 @@ class TestRegenFailureMapping:
         assert status.startswith("500")
         data = json.loads(decode_body(body, headers))
         assert "ImportError" in data["detail"]
-        assert "rebrew" in data["detail"]
+        # The message itself stays out of the body: it can name absolute paths
+        # in the project tree.  The log line keeps it.
+        assert "rebrew is required" not in data["detail"]
 
     def test_ordinary_rebrew_exception_is_500(self, monkeypatch: pytest.MonkeyPatch) -> None:
         status, headers, body = self._post_regen(monkeypatch, ValueError("corrupt JSON"))
         assert status.startswith("500")
         data = json.loads(decode_body(body, headers))
-        assert data["detail"] == "ValueError: corrupt JSON"
+        assert data["detail"].startswith("ValueError")
+        assert "corrupt JSON" not in data["detail"]
 
 
 class TestRegenIdempotencyKey:
@@ -1712,7 +1739,9 @@ class TestErrorResponseShape:
     ) -> None:
         """A swallowed sqlite3.Error in the shared target cursor must not make
         a missing/corrupt database invisible: the failure is logged with the
-        request context and the 503 detail carries the underlying cause."""
+        request context and the cause.  The 503 body names the exception class
+        but not its message, which quotes the absolute database path and would
+        reach any unauthenticated caller (--allow-remote)."""
         import logging as _logging
 
         import recoverage.api as api
@@ -1729,7 +1758,8 @@ class TestErrorResponseShape:
             status, headers, body = wsgi_get(f"/api/targets/{target}/stats")
         self._check(status, headers, body, "db_unavailable")
         data = json.loads(decode_body(body, headers))
-        assert "unable to open database file" in data["detail"]
+        assert "OperationalError" in data["detail"]
+        assert "unable to open database file" not in data["detail"]
         logged = [rec.getMessage() for rec in caplog.records]
         assert any(
             "Database unavailable" in msg and "unable to open database file" in msg

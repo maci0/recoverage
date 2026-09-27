@@ -29,6 +29,8 @@ from recoverage.potato import (
     _panel_fn_source_text,
     _progress_svg,
     _render_original_bytes,
+    _section_heading,
+    _section_tab_data,
     _wrap_text,
     render_potato,
 )
@@ -804,6 +806,16 @@ def test_accesskey_attributes():
 
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+def test_functions_nav_link_is_url_quoted():
+    # The header [Functions] href is percent-encoded, so a target or section
+    # holding "&" cannot append query parameters to it.  Every other href on
+    # the page is built by _build_url, which does the same.
+    target = get_first_target()
+    html = render_potato_url(f"/potato?target={target}&section=.text")
+    assert f'href="?target={target}&amp;section=.text&amp;view=functions"' in html
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
 def test_clickable_asm_addresses(monkeypatch: pytest.MonkeyPatch) -> None:
     from recoverage import potato as _potato
 
@@ -1147,6 +1159,40 @@ class TestHtmlEscaping:
         escaped = _esc(payload)
         assert "<" not in escaped
         assert ">" not in escaped
+
+
+class TestSectionHeadingEscapesTitle:
+    """_section_heading builds element content by concatenation, so it owns
+    the escape: a DB-sourced section or file name must not become live markup
+    because one caller forgot."""
+
+    def test_title_is_escaped(self) -> None:
+        html = _section_heading("C", "#fff", "<script>alert(1)</script>")
+        assert "<script>" not in html
+        assert "&lt;script&gt;" in html
+
+    def test_quote_in_title_cannot_break_an_attribute(self) -> None:
+        html = _section_heading("C", "#fff", '" onmouseover="alert(1)')
+        assert '" onmouseover="alert(1)' not in html
+        assert "&quot;" in html
+
+    def test_plain_title_is_unchanged(self) -> None:
+        assert "Original Bytes" in _section_heading("01", "#fff", "Original Bytes")
+
+
+class TestSectionTabAccesskey:
+    """A one-character section name indexes past the end of the string and
+    used to 500 the page; the accesskey falls back to the first character."""
+
+    def test_second_character_when_available(self) -> None:
+        assert _section_tab_data("T", ".text", {".text": {}}, None, "") == [
+            (".text", "?target=T&section=.text", True, "t")
+        ]
+
+    def test_single_character_name_falls_back_to_first(self) -> None:
+        assert _section_tab_data("T", "x", {"x": {}}, None, "") == [
+            ("x", "?target=T&section=x", True, "x")
+        ]
 
 
 # ── Index parsing (potato.py idx handling, via the real render) ────

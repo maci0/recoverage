@@ -1877,9 +1877,12 @@ def _db_unavailable_err(exc: sqlite3.Error) -> Any:
     ONE tail for every DB-open failure path (the shared target cursor and the
     unexpected-error handler): without the log line a missing or corrupt
     database is invisible in the server log — the 503 only reaches the one
-    client that happened to make the request.  The response detail carries the
-    OS/SQLite cause and the rebuild hint so an operator can act on the API
-    response alone, matching Potato Mode's 503 page.
+    client that happened to make the request.  The log line carries the full
+    OS/SQLite cause; the body carries the exception class and the rebuild hint
+    and nothing else, because every read endpoint is unauthenticated unless
+    the operator passed --token and --allow-remote puts it on a network, and
+    sqlite3 messages routinely quote the absolute database path.  Potato Mode's
+    503 page carries the same hint.
     """
     _log.warning(
         "Database unavailable serving %s %s: %s: %s",
@@ -1892,8 +1895,9 @@ def _db_unavailable_err(exc: sqlite3.Error) -> Any:
         503,
         {
             "error": "Database unavailable",
-            "detail": f"{type(exc).__name__}: {exc} — "
-            "run 'rebrew catalog && rebrew build-db' to create or rebuild it",
+            "detail": f"{type(exc).__name__} — "
+            "run 'rebrew catalog && rebrew build-db' to create or rebuild it; "
+            "the server log has the full cause",
         },
     )
 

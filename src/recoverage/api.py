@@ -1768,13 +1768,15 @@ def _do_regen(remote: str) -> bytes | Any:
         )
     except Exception as e:
         # A rebrew exception, an import error, a filesystem error: keep the
-        # JSON error contract instead of an HTML 500.
+        # JSON error contract instead of an HTML 500.  The class name reaches
+        # the body and the message does not — a rebrew or OSError message
+        # quotes absolute paths from the project tree.
         _log.error("Regen failed: %s: %s", type(e).__name__, e)
         return _json_err(
             500,
             {
                 "error": "Regen failed",
-                "detail": f"{type(e).__name__}: {e}",
+                "detail": f"{type(e).__name__} — the server log has the full cause",
             },
         )
     _clear_derived_caches()
