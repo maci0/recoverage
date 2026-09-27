@@ -2844,6 +2844,52 @@ class TestDataPayloadMemo:
         entry = next(iter(api._DATA_CACHE.values()))
         assert set(entry) == {"raw", "", "zstd", "gzip"}
 
+    def test_memo_rejects_payload_built_under_a_moved_watermark(
+        self, tmp_path: Any, monkeypatch: Any
+    ) -> None:
+        """A build that finishes after a rebuild must not publish.
+
+        The memo key's snapshot is taken before the queries run, so a rebuild
+        committing mid-build leaves the payload pre-rebuild while the key says
+        post-rebuild.  The db-updated broadcast has already cleared the memo by
+        then, so publishing would serve the stale payload to the very refetch
+        herd the broadcast woke — until the next rebuild.  The response itself
+        is still produced; only the cache write is declined.
+        """
+        import recoverage.api as api
+
+        self._patch(tmp_path, monkeypatch)
+        monkeypatch.setattr(api, "_snapshot_db_mtime", _sequential_snapshot([(1, 1), (2, 2)]))
+
+        body = api.handle_api_data("GAME")
+        assert isinstance(body, bytes) and b'"sections"' in body
+        assert api._DATA_CACHE == {}
+
+    def test_memo_publishes_when_the_watermark_holds(self, tmp_path: Any, monkeypatch: Any) -> None:
+        """The watermark re-check must not disable the memo: an unchanged DB
+        re-stats to the same snapshot and the payload is cached as before."""
+        import recoverage.api as api
+
+        self._patch(tmp_path, monkeypatch)
+        monkeypatch.setattr(api, "_snapshot_db_mtime", _sequential_snapshot([(7, 7), (7, 7)]))
+
+        api.handle_api_data("GAME")
+        assert len(api._DATA_CACHE) == 1
+
+    def test_stats_memo_rejects_payload_built_under_a_moved_watermark(
+        self, tmp_path: Any, monkeypatch: Any
+    ) -> None:
+        """Same watermark contract for the /stats memo, which aggregates the
+        whole cells table and would otherwise pin pre-rebuild counts."""
+        import recoverage.api as api
+
+        self._patch(tmp_path, monkeypatch)
+        monkeypatch.setattr(api, "_snapshot_db_mtime", _sequential_snapshot([(1, 1), (2, 2)]))
+
+        body = api.handle_api_stats("GAME")
+        assert isinstance(body, bytes) and b'"sections"' in body
+        assert api._STATS_CACHE == {}
+
     def test_derived_cache_clear_spares_spa_shell(self, tmp_path: Any, monkeypatch: Any) -> None:
         """_clear_derived_caches (the db-updated / regen invalidation path)
         must empty every DB-derived cache but leave the SPA shell cache

@@ -287,7 +287,19 @@ def _cache_data_insert(
     body: bytes,
 ) -> None:
     """Insert a memoized payload (raw + this request's encoded form), evicting
-    the oldest entries past the cap."""
+    the oldest entries past the cap.
+
+    *key*'s snapshot was taken before the queries ran, so a rebuild that
+    committed in between leaves the cursor reading the PRE-rebuild DB while
+    the key names the POST-rebuild fingerprint.  Publishing that payload
+    poisons the memo: the db-updated broadcast has already cleared the cache
+    and nothing clears it again until the next rebuild, so the refetch herd
+    behind the broadcast would be served the data it was woken to replace.
+    Re-stat the DB and drop the write when the watermark moved (same contract
+    as ``potato._load_grid_cells``).
+    """
+    if key[0] is not None and _snapshot_db_mtime() != key[0]:
+        return
     with _DATA_CACHE_LOCK:
         _server._evict_oldest(_DATA_CACHE, _DATA_CACHE_MAX)
         entry = _DATA_CACHE.setdefault(key, {})
@@ -931,7 +943,11 @@ def handle_api_stats(target: str) -> bytes | HTTPResponse:
     if stats is None:
         with _target_cursor(target) as c:
             stats = _server._section_stats(c, target)
-        if snap is not None:
+        # Same watermark re-check as _cache_data_insert: a rebuild committed
+        # between the snapshot and the aggregation would file pre-rebuild
+        # numbers under the post-rebuild fingerprint, and the broadcast's
+        # clear has already run by then.
+        if snap is not None and _snapshot_db_mtime() == snap:
             with _STATS_CACHE_LOCK:
                 _server._evict_oldest(_STATS_CACHE, _STATS_CACHE_MAX)
                 _STATS_CACHE[key] = stats
