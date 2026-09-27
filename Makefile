@@ -5,6 +5,12 @@
 # compares use ``sort -t. -k…n`` (POSIX), not GNU ``sort -V``.
 SHELL := /bin/sh
 
+# Strict mode for every multi-line recipe.  `set -eu` alone still lets a failed
+# stage of a pipeline hide behind a succeeding last one; pipefail is not POSIX,
+# so probe it once and enable it where the shell has it (bash, including
+# /bin/sh on macOS) instead of failing under dash.
+SET_STRICT = set -eu; if (set -o pipefail) 2>/dev/null; then set -o pipefail; fi;
+
 .DEFAULT_GOAL := help
 
 # Lockfile-pinned deps, exactly as every CI job installs them.  Override with
@@ -15,11 +21,13 @@ UV_SYNC_FLAGS ?= --frozen --extra dev
 # older, matching the sibling rebrew checkout's policy.
 UV_VERSION ?= 0.12.14
 
-# The rebrew tag this repository develops against, and the commit it must
-# resolve to.  Keep REBREW_SHA in step with tools/ci_clone_rebrew.sh, which CI
-# uses to populate ../rebrew before `uv sync`.
-REBREW_REF ?= v2.13.1
-REBREW_SHA ?= d2d67c870df79214320f16b1cba1b0f6086605a7
+# The rebrew tag/commit pin lives in tools/ci_clone_rebrew.sh, the one place
+# both `make clone-rebrew` and CI read it from.  Set REBREW_REF / REBREW_SHA to
+# develop against a different rebrew; the script then takes them from the
+# environment.  The commit must be one whose dependency metadata still matches
+# uv.lock, or `uv sync --frozen` fails on the lock check.
+REBREW_REF ?=
+REBREW_SHA ?=
 REBREW_DIR := $(abspath $(CURDIR)/../rebrew)
 
 # The floor in pyproject.toml [project].dependencies; rebrew below it lacks
@@ -51,7 +59,7 @@ help:
 		'  make clean              # remove caches and build artifacts' \
 		'' \
 		'Bootstrap (clean clone):' \
-		'  1. Install uv $(UV_VERSION)+ (https://docs.astral.sh/uv/) and Python 3.13+' \
+		'  1. Install uv $(UV_VERSION)+ (https://docs.astral.sh/uv/); Python 3.13 is pinned in .python-version' \
 		'  2. make clone-rebrew    # ../rebrew must exist: pyproject.toml [tool.uv.sources]' \
 		'  3. make setup && make test-one T=tests/test_api.py' \
 		'  Before a PR: make all' \
@@ -61,7 +69,7 @@ help:
 # Every recipe that shells out to ``uv run``; without this a contributor who
 # skipped `make setup` gets ``uv: not found`` and no pointer at the cause.
 ensure-uv:
-	@set -eu; \
+	@$(SET_STRICT) \
 	if ! command -v uv >/dev/null 2>&1; then \
 	  echo "ERROR: uv not on PATH (required for setup/test/lint; CI pins UV_VERSION=$(UV_VERSION))."; \
 	  echo "Install it from https://docs.astral.sh/uv/ then re-run 'make setup'."; \
@@ -73,30 +81,28 @@ ensure-uv:
 # catalog/build-db for regen.  Name the missing checkout before uv reports it
 # as "Distribution not found at file://…/rebrew".
 ensure-rebrew: ensure-uv
-	@set -eu; \
+	@$(SET_STRICT) \
 	if [ ! -e "$(REBREW_DIR)/pyproject.toml" ]; then \
 	  echo "ERROR: sibling rebrew checkout missing at $(REBREW_DIR)"; \
 	  echo "pyproject.toml [tool.uv.sources] pins rebrew to path = \"../rebrew\", so 'uv sync'"; \
 	  echo "cannot resolve the environment without it (imports rebrew.workspace and regen)."; \
-	  echo "Run 'make clone-rebrew', or clone it yourself:"; \
-	  echo "  git clone --depth 1 --branch $(REBREW_REF) https://github.com/maci0/rebrew.git $(REBREW_DIR)"; \
-	  echo "then re-run 'make setup'."; \
+	  echo "Run 'make clone-rebrew'; it checks out the tag/commit pinned in"; \
+	  echo "tools/ci_clone_rebrew.sh (REBREW_REF / REBREW_SHA), the same pin CI uses."; \
 	  exit 1; \
 	fi; \
-	ver=$$(sed -n 's/^__version__ = "\([^"]*\)"/\1/p' "$(REBREW_DIR)/src/rebrew/__init__.py" | head -n 1); \
-	lowest=$$(printf '%s\n%s\n' "$$ver" "$(REBREW_FLOOR)" | sort -t. -k1,1n -k2,2n -k3,3n | head -n 1); \
+	ver=$$(awk -F'"' '/^__version__ = "/{print $$2; exit}' "$(REBREW_DIR)/src/rebrew/__init__.py"); \
+	lowest=$$(printf '%s\n%s\n' "$$ver" "$(REBREW_FLOOR)" | sort -t. -k1,1n -k2,2n -k3,3n | sed -n '1p'); \
 	if [ "$$lowest" != "$(REBREW_FLOOR)" ]; then \
 	  echo "ERROR: $(REBREW_DIR) is rebrew $$ver, below the $(REBREW_FLOOR) floor in pyproject.toml."; \
-	  echo "Check out the pin and re-run 'make setup':"; \
-	  echo "  git -C $(REBREW_DIR) fetch --depth 1 origin $(REBREW_SHA)"; \
-	  echo "  git -C $(REBREW_DIR) checkout $(REBREW_SHA)"; \
+	  echo "Re-run 'make clone-rebrew' to check out the pinned rebrew, then 'make setup'."; \
+	  echo "To develop against a different one: make clone-rebrew REBREW_REF=<tag> REBREW_SHA=<commit>"; \
 	  exit 1; \
 	fi
 
 warn-uv-version: ensure-uv
-	@set -eu; \
+	@$(SET_STRICT) \
 	uv_ver=$$(uv --version | awk '{print $$2}'); \
-	lowest=$$(printf '%s\n%s\n' "$$uv_ver" "$(UV_VERSION)" | sort -t. -k1,1n -k2,2n -k3,3n | head -n 1); \
+	lowest=$$(printf '%s\n%s\n' "$$uv_ver" "$(UV_VERSION)" | sort -t. -k1,1n -k2,2n -k3,3n | sed -n '1p'); \
 	if [ "$$lowest" != "$(UV_VERSION)" ]; then \
 	  echo "WARNING: uv $$uv_ver is older than the CI pin UV_VERSION=$(UV_VERSION)."; \
 	  echo "Sync usually still works; upgrade when you can (https://docs.astral.sh/uv/)."; \
@@ -104,27 +110,32 @@ warn-uv-version: ensure-uv
 	fi
 
 clone-rebrew:
-	@set -eu; \
+	@$(SET_STRICT) \
 	REBREW_REF=$(REBREW_REF) REBREW_SHA=$(REBREW_SHA) bash tools/ci_clone_rebrew.sh "$(REBREW_DIR)"
 
 setup: ensure-rebrew warn-uv-version
 	uv sync $(UV_SYNC_FLAGS)
 
 # Match CI's invocation so a local pass and a CI pass mean the same thing.
+# `python -m`, never the bare tool name: the dev extra is an optional
+# dependency, so a `uv run` without `--extra dev` does not install pytest or
+# ruff and falls back to whatever `pytest` / `ruff` happens to be on the
+# contributor's PATH, testing the tree against an unpinned global. The module
+# form uses the locked interpreter or fails with "No module named pytest".
 test: ensure-uv
-	uv run --frozen pytest tests/ -v --ignore=tests/test_playwright.py
+	uv run --frozen python -m pytest tests/ -v --ignore=tests/test_playwright.py
 
 test-one: ensure-uv
-	uv run --frozen pytest $(T) $(FLAGS) -v --tb=short
+	uv run --frozen python -m pytest $(T) $(FLAGS) -v --tb=short
 
 lint: ensure-uv
-	uv run --frozen ruff check src/ tests/ tools/
+	uv run --frozen python -m ruff check src/ tests/ tools/
 
 format: ensure-uv
-	uv run --frozen ruff format src/ tests/ tools/
+	uv run --frozen python -m ruff format src/ tests/ tools/
 
 format-check: ensure-uv
-	uv run --frozen ruff format --check src/ tests/ tools/
+	uv run --frozen python -m ruff format --check src/ tests/ tools/
 
 # shellcheck and yamllint cover the tree's non-Python sources: the CI clone
 # script and the Actions definitions. Both ship on the ubuntu runner image CI
@@ -152,7 +163,7 @@ yaml-lint: ensure-lint-tools
 # CI installs bun + a JDK before this; name both rather than failing inside
 # oxlint or vnu with a stack trace.
 web-lint:
-	@set -eu; \
+	@$(SET_STRICT) \
 	if ! command -v bun >/dev/null 2>&1; then \
 	  echo "ERROR: bun not on PATH (package.json pins bun 1.4.2 via packageManager)."; \
 	  echo "Install bun (https://bun.sh), then re-run 'make web-lint'."; \
@@ -177,5 +188,5 @@ all: format-check lint shell-lint yaml-lint test web-lint smoke smoke-fail
 	@printf '%s\n' 'all checks passed (CI: lint, web-lint, test, smoke)'
 
 clean:
-	rm -rf .pytest_cache .ruff_cache build dist src/recoverage.egg-info recoverage.egg-info
+	rm -rf .pytest_cache .pytest-tmp .ruff_cache build dist src/recoverage.egg-info recoverage.egg-info
 	find src tests tools -type d -name __pycache__ -prune -exec rm -rf {} +

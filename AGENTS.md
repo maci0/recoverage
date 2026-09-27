@@ -122,7 +122,7 @@ uv run recoverage check --min-coverage 60  # CI gate
 
 # Browser tests
 uv sync --extra playwright && uv run playwright install chromium
-uv run pytest tests/test_playwright.py
+uv run python -m pytest tests/test_playwright.py
 ```
 
 `tools/ci_clone_rebrew.sh` backs `make clone-rebrew` and the CI jobs: it pins
@@ -139,11 +139,19 @@ test fails the job instead of holding a runner for six hours.
 `rebrew` is an editable path dependency at `../rebrew` (see
 `[tool.uv.sources]`), which no runner has, so every job that runs
 `uv sync --frozen --extra dev` first calls the `sibling-rebrew` composite
-action, whose `ref` default pins the rebrew commit. That single default is
-the whole pin, and it must keep matching `uv.lock`: when rebrew's
-dependencies change, re-lock in a tree with the sibling present and bump
-`.github/actions/sibling-rebrew/action.yml`. The `sbom` job deliberately has
-no such step, because `uv export --frozen` reads the lock alone.
+action, which shells out to `tools/ci_clone_rebrew.sh` and checks the result
+against the tag and commit in that script. `REBREW_REF` / `REBREW_SHA` there are
+the only copy of the pin: `make clone-rebrew` reads the same script, and the
+script fails when the tag no longer resolves to the commit, so a moved tag
+cannot change the path dependency silently. The pinned commit must keep matching
+`uv.lock`: when rebrew's dependencies change, re-lock in a tree with the
+sibling present and bump `tools/ci_clone_rebrew.sh`. The `sbom` job
+deliberately has no such step, because `uv export --frozen` reads the lock
+alone.
+
+The interpreter is pinned in `.python-version` (3.13), which is what uv builds
+the local venv from and what the lint, web-lint and smoke jobs run; the test
+matrix adds 3.14.
 
 ## Releases
 

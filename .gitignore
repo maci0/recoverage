@@ -8,6 +8,7 @@ __pycache__/
 
 # Testing
 .pytest_cache/
+.pytest-tmp/
 
 # Build artifacts
 dist/

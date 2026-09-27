@@ -8,14 +8,6 @@ description: >-
   job that installs the environment needs this step.
 
 inputs:
-  ref:
-    description: >-
-      rebrew git ref to check out. Must be a commit whose dependency metadata
-      still matches uv.lock, or `uv sync --frozen` fails on the lock check.
-      This default is the single place the pin lives: when rebrew's
-      dependencies change, re-lock and bump it here, not in the jobs.
-    required: false
-    default: 69096db029a8837579975863cedbed837b8ea776 # rebrew main
   repository:
     description: rebrew git clone URL.
     required: false
@@ -24,15 +16,19 @@ inputs:
 runs:
   using: composite
   steps:
+    # The pin (tag + commit) lives in tools/ci_clone_rebrew.sh and nowhere
+    # else, so CI installs the same rebrew `make setup` does. The script also
+    # verifies that the tag still resolves to the pinned commit; cloning
+    # directly from the ref input skipped that check and left a second pin
+    # free to drift away from uv.lock.
     - name: Clone rebrew into the workspace parent
       shell: bash
-      run: |
-        git clone --filter=blob:none "$REPOSITORY" ../rebrew
-        git -C ../rebrew checkout --detach "$REF"
+      # The input travels as an environment variable, never spliced into the
+      # script body: a ${{ }} expansion is substituted before bash parses the
+      # block, so a value carrying a quote (or `$(...)`) would break out of the
+      # argument and run as part of the step.
       env:
-        # Both inputs travel as environment variables, never spliced into the
-        # script body: a ${{ }} expansion is substituted before bash parses
-        # the block, so a value carrying a quote (or `$(...)`) would break
-        # out of the argument and run as part of the step.
-        REPOSITORY: ${{ inputs.repository }}
-        REF: ${{ inputs.ref }}
+        REBREW_URL: ${{ inputs.repository }}
+      run: |
+        set -euo pipefail
+        bash tools/ci_clone_rebrew.sh "$GITHUB_WORKSPACE/../rebrew"

@@ -87,7 +87,13 @@ rebrew = { path = "../rebrew", editable = true }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "--ignore=tests/test_playwright.py"
+# --basetemp keeps the run's tmp root inside the checkout. pytest shares
+# /tmp/pytest-of-$USER across every project on the host and garbage-collects
+# the numbered dirs it finds there at session end; a directory another project
+# made undeletable turns that into a PytestWarning, which filterwarnings =
+# ["error"] below turns into a failed run that has nothing to do with this
+# tree. pytest clears the basetemp itself, so the pinned path stays private.
+addopts = "--ignore=tests/test_playwright.py --basetemp=.pytest-tmp"
 # Every warning is a failure: the suite runs clean, so a new ResourceWarning
 # (unclosed socket/file/connection), deprecation, or unraisable exception
 # must break the build instead of scrolling past.

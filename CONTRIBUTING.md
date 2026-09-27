@@ -5,14 +5,21 @@ edit-test loop, and the one command that reproduces CI before you push.
 
 ## Bootstrap (clean clone)
 
-Needs [uv](https://docs.astral.sh/uv/) (CI resolves against 0.12.14), Python
-3.13+ (`requires-python` in `pyproject.toml`), and the sibling
-[rebrew](https://github.com/maci0/rebrew) checkout at `../rebrew`.
+Needs [uv](https://docs.astral.sh/uv/) (CI resolves against 0.12.14) and the
+sibling [rebrew](https://github.com/maci0/rebrew) checkout at `../rebrew`.
+The interpreter is pinned in `.python-version` (3.13, the version CI's lint,
+web-lint and smoke jobs run); uv downloads it if the host has no 3.13, and
+`uv run --python 3.14 …` selects the other version the test matrix covers.
 
 ```bash
-make clone-rebrew   # rebrew v2.13.1 into ../rebrew (rebrew is a path dependency)
+make clone-rebrew   # rebrew at the pin in tools/ci_clone_rebrew.sh into ../rebrew
 make setup          # uv sync --frozen --extra dev
 ```
+
+`REBREW_REF` / `REBREW_SHA` in `tools/ci_clone_rebrew.sh` are the only copy of
+the rebrew pin: `make clone-rebrew` and every CI job read them from there, so a
+tag that moves, or a pin that disagrees with `uv.lock`, fails the clone rather
+than silently changing the path dependency.
 
 The sibling checkout is not optional. `pyproject.toml` pins rebrew to
 `path = "../rebrew"`, and recoverage imports `rebrew.workspace` for
@@ -48,7 +55,12 @@ make test-one T=tests/test_api.py FLAGS="-k functions"
 
 Run tools through `uv run` (which the Makefile does) rather than a globally
 installed copy: the suite's assertions and the ruff rules are pinned in
-`uv.lock`, and an older global ruff formats and lints differently.
+`uv.lock`, and an older global ruff formats and lints differently. That is why
+the Makefile calls `uv run python -m pytest` / `uv run python -m ruff` instead
+of `uv run pytest` / `uv run ruff`: pytest and ruff live in the `dev` extra, so
+a bare `uv run` without `--extra dev` does not install them and falls back to
+the first `pytest` / `ruff` on `PATH`. The module form runs the locked
+interpreter or fails with `No module named pytest`.
 
 The suite is hermetic. It builds its own synthetic `coverage.db` (see
 `tests/conftest.py`) and needs no project workspace, compiler toolchain, or
