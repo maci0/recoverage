@@ -1367,31 +1367,25 @@ def _build_filter_data(
         ("stub", "S", "s"),
         ("padding", "P", "p"),
     ]
-    toggle_links = {
-        f: _build_url(
-            target,
-            section,
-            (
-                (active_filters - {f}) or None
-                if f in active_filters
-                else (active_filters | {f}) or None
-            ),
-            search=search_query,
-        )
-        for f, _, _ in filter_opts
-    }
-    all_link = _build_url(target, section, search=search_query)
     filter_btn_data: list[tuple[str, str, str, bool, str]] = [
         (
-            all_link,
+            _build_url(target, section, search=search_query),
             "All",
             TEXT_COLOR if not active_filters else MUTED_COLOR,
             not active_filters,
             "0",
         )
     ]
+    # Symmetric difference toggles one filter on or off; an empty result is a
+    # falsy set, which _build_url omits exactly like the "All" link does.
     filter_btn_data.extend(
-        (toggle_links[f], label, COLORS[f], f in active_filters, key)
+        (
+            _build_url(target, section, active_filters ^ {f}, search=search_query),
+            label,
+            COLORS[f],
+            f in active_filters,
+            key,
+        )
         for f, label, key in filter_opts
     )
     return filter_btn_data

@@ -22,6 +22,7 @@ from pathlib import Path
 
 _ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 _CI_YML = _ROOT / ".github" / "workflows" / "ci.yml"
+_SIBLING_ACTION = _ROOT / ".github" / "actions" / "sibling-rebrew" / "action.yml"
 _CLONE_SCRIPT = _ROOT / "tools" / "ci_clone_rebrew.sh"
 _MAKEFILE = _ROOT / "Makefile"
 _README = _ROOT / "README.md"
@@ -42,6 +43,8 @@ _CLI_ONLY = {
 # A CI job header: two spaces, a name, a colon, and nothing else on the line.
 _JOB_RE = re.compile(r"^  (?P<name>[a-z][a-z0-9-]*):$", re.MULTILINE)
 _PINS = {"REBREW_REF": "v2.13.1", "REBREW_SHA": "d2d67c870df79214320f16b1cba1b0f6086605a7"}
+# How a job names the composite action that fetches the sibling checkout.
+_SIBLING_ACTION_STEP = "uses: ./.github/actions/sibling-rebrew"
 
 
 def _jobs() -> dict[str, str]:
@@ -63,25 +66,42 @@ def _default(text: str, var: str) -> str:
 
 class TestRbrewPin:
     def test_ci_populates_the_sibling_only_through_the_pinned_script(self) -> None:
-        """Every installing job fetches rebrew by running the pinned script.
+        """Every installing job fetches rebrew through the one shared action.
 
         A second mechanism (an inline `git clone`, or an action that carries
         its own ref input) fetches the same path dependency from a pin nothing
         else checks, and whichever runs last silently decides which rebrew
-        the suite tested. The script is that single mechanism: it holds the
-        tag and commit, `make clone-rebrew` runs it, and every job runs it.
+        the suite tested. The chain is one link long: every job uses
+        `.github/actions/sibling-rebrew`, that action runs the pinned script,
+        and the script holds the tag and commit.
         """
         installing = {n: b for n, b in _jobs().items() if "uv sync" in b}
         assert installing, "no CI job runs uv sync; the check below would pass vacuously"
         for name, body in installing.items():
-            assert "tools/ci_clone_rebrew.sh" in body, (
+            assert _SIBLING_ACTION_STEP in body, (
                 f"job {name} never materializes the sibling checkout"
+            )
+            assert "tools/ci_clone_rebrew.sh" not in body, (
+                f"job {name} runs the clone script itself; the action is its only caller"
             )
             assert not re.search(r"git clone.*rebrew", body), f"job {name} clones rebrew itself"
             for var in _PINS:
                 assert var not in body, f"job {name} carries {var}; the script owns the pin"
-        assert not (_ROOT / ".github" / "actions").exists(), (
-            "a local action fetched the sibling rebrew; the script is the one mechanism"
+
+    def test_the_sibling_action_carries_no_pin(self) -> None:
+        """The action is a caller, not a second place to write the pin.
+
+        A `ref`/`sha` input on the action would restore the moving commit the
+        script's tag-and-SHA check exists to reject, so the action may only
+        pass through a clone URL.
+        """
+        action = _SIBLING_ACTION.read_text(encoding="utf-8")
+        assert "tools/ci_clone_rebrew.sh" in action, "the action no longer runs the pinned script"
+        for var in _PINS:
+            assert var not in action, f"the action carries {var}; the script owns the pin"
+        inputs = action.split("inputs:", 1)[1].split("runs:", 1)[0] if "inputs:" in action else ""
+        assert "ref" not in inputs and "sha" not in inputs.lower(), (
+            "the action takes a ref/sha input; that is a second pin"
         )
 
     def test_makefile_carries_no_pin_of_its_own(self) -> None:

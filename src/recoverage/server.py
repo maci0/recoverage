@@ -1255,9 +1255,9 @@ def _cells_json_rows(
     Falls back to the live query when the table is absent or written in an older
     codec, so a pre-v7 database keeps working and self-heals on its next build.
     """
+    clause = " AND section_name = ?" if section else ""
+    params: list[Any] = [target, *([section] if section else [])]
     if _has_materialized_cells(c):
-        clause = " AND section_name = ?" if section else ""
-        params: list[Any] = [target] + ([section] if section else [])
         c.execute(
             f"SELECT section_name, {SECTION_CELLS_COLUMN} FROM {SECTION_CELLS_TABLE}"
             f" WHERE target = ?{clause}",
@@ -1265,8 +1265,6 @@ def _cells_json_rows(
         )
         return [(row[0], decode_section_cells(row[1])) for row in c.fetchall()]
 
-    clause = " AND section_name = ?" if section else ""
-    params = [target] + ([section] if section else [])
     c.execute(_CELLS_JSON_SQL + f"{clause} GROUP BY section_name", params)
     return [(row[0], row[1]) for row in c.fetchall()]
 
