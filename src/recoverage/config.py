@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Final
@@ -79,6 +80,14 @@ MAX_PORT: Final = 65535
 _TRUE_VALUES: Final[frozenset[str]] = frozenset({"1", "true", "yes", "on"})
 _FALSE_VALUES: Final[frozenset[str]] = frozenset({"0", "false", "no", "off"})
 
+#: An integer setting is an ASCII decimal run with an optional sign, optional
+#: surrounding whitespace.  ``int()`` alone is not that test: it reads any
+#: Unicode decimal digit, so a fullwidth or Arabic-Indic one in a deployment
+#: variable resolves to a number instead of reporting the mistake.  ``int()``
+#: also accepts ``1_0``, and a run of digits past CPython's conversion limit
+#: raises ValueError from the limit rather than from the parse.
+_ASCII_INT: Final = re.compile(r"\A[+-]?[0-9]+\Z")
+
 
 class ConfigError(ValueError):
     """An unset or invalid ``RECOVERAGE_*`` value.
@@ -99,15 +108,22 @@ def _raw(name: str) -> str | None:
     return os.environ.get(name)
 
 
+def _as_int(name: str, raw: str) -> int:
+    """*raw* as an integer, or a ConfigError naming *name*."""
+    text = raw.strip()
+    if not _ASCII_INT.match(text):
+        raise ConfigError(f"{name}: {raw!r} is not an integer")
+    try:
+        return int(text)
+    except ValueError:  # more digits than CPython's int() accepts
+        raise ConfigError(f"{name}: {raw!r} is not an integer") from None
+
+
 def _int_var(name: str, default: int) -> int:
     raw = _raw(name)
     if raw is None:
         return default
-    try:
-        value = int(raw)
-    except ValueError:
-        raise ConfigError(f"{name}: {raw!r} is not an integer") from None
-    return value
+    return _as_int(name, raw)
 
 
 def _str_var(name: str, default: str) -> str:
@@ -169,27 +185,46 @@ def cors_origins() -> list[str]:
 
     Splits on commas and drops empty items so a trailing comma
     (``a,b,``) is the two origins it looks like, not a third empty one.
+
+    An item carrying a control character is an error, not an entry: it can
+    never equal a browser's Origin, so storing it would leave --cors on with
+    an allowlist one item short of what the operator wrote.
     """
     raw = _raw("RECOVERAGE_CORS_ORIGIN")
     if raw is None:
         return []
-    return [item.strip() for item in raw.split(",") if item.strip()]
+    origins: list[str] = []
+    for item in (part.strip() for part in raw.split(",")):
+        if not item:
+            continue
+        if any(ord(ch) < 32 or ord(ch) == 127 for ch in item):
+            raise ConfigError(f"RECOVERAGE_CORS_ORIGIN: {item!r} contains a control character")
+        origins.append(item)
+    return origins
 
 
 def parse_log_level(raw: str) -> int:
     """Resolve a log level *raw* to its ``logging`` level number.
 
     Accepts a level name, case-insensitively (``WARNING``, ``Warn``, ``warn``),
-    or a bare number, so a service can pass whatever ``logging`` calls a level.
-    Rejecting an unknown name matters: it would otherwise reach
+    or a bare ASCII number, so a service can pass whatever ``logging`` calls a
+    level.  Rejecting an unknown name matters: it would otherwise reach
     ``basicConfig`` and leave the logger at WARNING, quieter than the operator
     asked for, with nothing on stderr to say so.
     """
     name = raw.strip().upper()
     if name in LOG_LEVELS:
         return LOG_LEVELS[name]
-    if raw.strip().isdigit():
-        return int(raw.strip())
+    if name.isascii() and name.isdigit():
+        # _as_int, not int(): a run of digits past CPython's conversion limit
+        # fails the conversion, not the parse, and that is a bad value, not a
+        # crash.  Re-raised in this module's own wording, so the caller wraps
+        # one message rather than two.
+        try:
+            return _as_int("log level", raw)
+        except ConfigError:
+            allowed = ", ".join(sorted(LOG_LEVELS))
+            raise ConfigError(f"{raw!r} is not a log level (use one of: {allowed})") from None
     allowed = ", ".join(sorted(LOG_LEVELS))
     raise ConfigError(f"{raw!r} is not a log level (use one of: {allowed})")
 

@@ -248,6 +248,27 @@ module ships in the published package. See *Breaking*.
   against data this tree no longer produces, while CI, which never has the
   file, stayed green. Outside a real rebrew project the file is now rebuilt
   every session.
+- **A `Host` or `Origin` header carrying whitespace or a C1 control byte was
+  parsed as a hostname.** The parser behind the DNS-rebinding allowlist, the
+  CORS allowlist and the localhost-only guard on `POST /api/regen` rejected
+  userinfo, escapes and C0 control bytes, but let a space, a tab or U+0080
+  through to `urlsplit`, which carries it into the hostname. Such a value is
+  not one a browser sends, and the normalized form could be stored in the
+  allowlist and echoed back as `Access-Control-Allow-Origin`. The whole
+  control range (C0, DEL, C1) and whitespace are refused now.
+- **A `RECOVERAGE_PORT` in non-ASCII digits bound a port instead of
+  reporting the mistake.** `int()` reads every Unicode decimal digit, so a
+  fullwidth or Arabic-Indic port resolved to the number it looked like, and
+  `1_0` was accepted too. The readers now require an ASCII decimal run, which
+  is what the error message always claimed to want.
+- **`RECOVERAGE_LOG_LEVEL` could raise a bare `ValueError` instead of a
+  `ConfigError`.** A number longer than CPython's conversion limit fails the
+  conversion, not the parse, so it escaped as a traceback out of every
+  command. It is a bad value now, reported as one.
+- **`RECOVERAGE_CORS_ORIGIN` stored an origin no browser can send.** An item
+  carrying a control character can never match a request `Origin`, so `--cors`
+  came up with an allowlist one entry short of what was written, silently. It
+  is a startup error now.
 - **The verified code-similarity reads 100x low.** `verify_results.similarity`
   is stored as a 0-1 fraction (the column CHECKs the unit interval, and
   rebrew's verify import divides its percent scale by 100), but the SPA and

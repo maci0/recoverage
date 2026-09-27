@@ -14,7 +14,12 @@ tests enumerate:
   when the offending value was arbitrary bytes;
 * a 200 response is well-formed and honours the contract the query asked for
   (``limit`` bounds the page, ``size`` bounds the slice, every returned VA
-  was one the caller asked for).
+  was one the caller asked for);
+* the headers that DECIDE whether a request is served (Origin, Host,
+  REMOTE_ADDR, X-Request-ID, Idempotency-Key) and the RECOVERAGE_* readers
+  answer their security contract: a rejection stays a rejection, a match
+  means what it claims, and nothing raised escapes into a traceback. A wrong
+  answer from any of them is a bypass, which no status code can show.
 
 No coverage-guided fuzzer is available offline, so the harness is a seeded
 mutation engine: a hand-written corpus of real-shaped seeds (the spellings the
@@ -26,16 +31,22 @@ so CI runs the identical corpus on every build; ``RECOVERAGE_FUZZ_SEED`` and
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import random
+import re
 from collections.abc import Callable
 from typing import Any
+from urllib.parse import urlsplit
 
 import pytest
 from conftest import HAS_DB, decode_body, get_first_target, wsgi_request
 
-from recoverage.server import _best_encoding
+from recoverage import config
+from recoverage import server as srv
+from recoverage.api import _REGEN_KEY_MAX, _REGEN_KEY_RE
+from recoverage.server import _best_encoding, _hostname_of, _normalize_origin, _peer_is_loopback
 
 # The three codecs the server can actually produce, in preference order.  A
 # negotiation result outside this set means a response was labelled with an
@@ -667,6 +678,544 @@ class TestJunkHeaders:
                 assert isinstance(payload, dict) and "version" in payload
 
         _fuzz(JUNK_HEADER_SEEDS, check, iterations=80)
+
+
+# ── access-gating headers ──────────────────────────────────────────
+#
+# Origin, Host, REMOTE_ADDR, X-Request-ID and Idempotency-Key are the headers
+# that DECIDE whether a request is served, and none of them arrives as
+# structured data: each is a line of attacker-chosen text handed to urlsplit,
+# ipaddress, a translate table or a bounded regex.  A wrong answer from any of
+# those parsers is an auth or localhost-only bypass, which no status-code check
+# and no crash detector can see, so the properties asserted here are the
+# security ones — a match means what it claims, a rejection stays a rejection,
+# and nothing raised escapes into a traceback.
+
+ORIGIN_SEEDS: list[bytes] = [
+    b"http://localhost:5173",
+    b"https://example.com",
+    b"http://localhost:80",
+    b"https://example.com:443",
+    b"http://[::1]:8001",
+    b"http://127.0.0.1:8001",
+    b"http://LOCALHOST:5173",
+    b"HTTP://localhost:5173",
+    b"//localhost:5173",
+    b"localhost:5173",
+    b"http://localhost:5173@evil.com",
+    b"http://evil.com#localhost:5173",
+    b"http://evil.com?x=localhost:5173",
+    b"http://localhost:5173.evil.com",
+    b"http://localhost:5173%2f.evil.com",
+    b"http://local\\host:5173",
+    b"http://localhost:99999",
+    b"http://localhost:-1",
+    b"http://[::1",
+    b"http://user:pass@localhost:5173",
+    b"null",
+    b"",
+    b"://",
+    b"http://",
+    b"   ",
+    b"http://localhost:5173\x00",
+    b"http://localhost:5173\r\nX-Injected: 1",
+    b"http://xn--n3h.example:5173",
+    b"http://localhost:5173 ",
+    b"file://localhost",
+    b"http://lo\x7fcalhost",
+]
+
+ADDR_SEEDS: list[bytes] = [
+    b"127.0.0.1",
+    b"::1",
+    b"::ffff:127.0.0.1",
+    b"0:0:0:0:0:0:0:1",
+    b"localhost",
+    b"127.0.0.2",
+    b"127.1",
+    b"::2",
+    b"0.0.0.0",
+    b"10.0.0.1",
+    b"192.168.1.1",
+    b"[::1]",
+    b"::ffff:7f00:1",
+    b"017700000001",
+    b"2130706433",
+    b"0x7f000001",
+    b"127.0.0.1.",
+    b"127.0.0.1:80",
+    b" LOCALHOST ",
+    b"evil.com",
+    b"",
+    b"::ffff:127.0.0.2",
+]
+
+REQUEST_ID_SEEDS: list[bytes] = [
+    b"abc123",
+    b"a" * 200,
+    b"req\x00id",
+    b"req\nid",
+    b"req\rid",
+    b"req\x7fid",
+    b"req id",
+    b"req\x1b[2Jid",
+    b"\xff\xfe",
+    b"",
+]
+
+IDEMPOTENCY_SEEDS: list[bytes] = [
+    b"abc-123",
+    b"1",
+    b"a.b:c_d-0",
+    b"A" * 128,
+    b"A" * 129,
+    b"key with space",
+    b"key\nnewline",
+    b"key\r\nX-Injected: 1",
+    b"key\x00",
+    b"key\x7f",
+    b"",
+    "é".encode(),
+    b"a" * 500,
+    b"key%00",
+    b"..",
+    b"***",
+    b"\xff\xfe",
+]
+
+#: Characters the Idempotency-Key validator documents, as a set, so the fuzz
+#: oracle does not re-run the same regex it is judging.
+_KEY_ALPHABET = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._:-")
+
+#: The allowlist the Origin campaigns check against, and its parts, so a match
+#: can be judged against the origin it was supposed to have come from.
+_ALLOWED_ORIGIN = "http://localhost:5173"
+_ALLOWED_HOST = "localhost"
+_ALLOWED_PORT = 5173
+
+#: A normalized origin is ``scheme://host[:port]`` and nothing else: no userinfo
+#: (the ``@`` the parser rejects up front), no escape, no control byte, no
+#: whitespace.  Bottle would drop a header carrying one, which is a silent
+#: failure rather than a rejection, so the parser has to refuse the value.
+_ORIGIN_SHAPE = re.compile(r"\A[a-z][a-z0-9+.-]*://[^\s\\@%]*\Z")
+
+
+def _has_control(text: str) -> bool:
+    return any(ord(ch) < 32 or ord(ch) == 127 for ch in text)
+
+
+class TestOriginNormalization:
+    """``Origin``/``Host`` → ``server._hostname_of`` / ``_normalize_origin``.
+
+    The same parser answers three questions: the DNS-rebinding Host allowlist,
+    the CORS allowlist (whose match is echoed back as
+    ``Access-Control-Allow-Origin``), and the localhost-only guard on
+    POST /api/regen.  urlsplit raises ValueError on a malformed IPv6 literal
+    and on an out-of-range port, so "never raises" is the floor; the
+    allowlist-match property is the one that carries the consequence.
+    """
+
+    def test_never_raises_and_answers_a_plain_authority(self) -> None:
+        def check(data: bytes) -> None:
+            origin = data.decode("latin-1")
+            host = _hostname_of(origin)
+            normalized = _normalize_origin(origin)
+            assert not _has_control(host), f"{data!r}: control byte in hostname {host!r}"
+            assert "@" not in host and "\\" not in host, f"{data!r}: hostname {host!r}"
+            assert host == host.lower(), f"{data!r}: hostname {host!r} is not lowercased"
+            if not normalized:
+                return
+            assert _ORIGIN_SHAPE.match(normalized), (
+                f"{data!r}: {normalized!r} is not scheme://host[:port]"
+            )
+            assert not _has_control(normalized), f"{data!r}: control byte in {normalized!r}"
+            # Re-normalizing a normalized origin is a fixed point: the stored
+            # allowlist entries are themselves normalized, so a value that
+            # normalizes twice into something else can never match one.
+            assert _normalize_origin(normalized) == normalized, (
+                f"{data!r}: {normalized!r} normalizes to {_normalize_origin(normalized)!r}"
+            )
+
+        _fuzz(
+            ORIGIN_SEEDS, check, iterations=400, struct_tokens=ORIGIN_SEEDS, num_tokens=ORIGIN_SEEDS
+        )
+
+    def test_allowlist_match_implies_the_allowed_origin(self) -> None:
+        """Pair assertion across the allowlist boundary.
+
+        A match is what makes the server echo the caller's own Origin back as
+        ``Access-Control-Allow-Origin``, so it must mean the origin really is
+        the allowed one: same host, same port, same scheme, and a value with
+        no userinfo hiding a second authority.  The check re-derives host,
+        port and scheme from the raw value with urlsplit rather than trusting
+        the parser under test.
+        """
+
+        def check(data: bytes) -> None:
+            origin = data.decode("latin-1")
+            if _normalize_origin(origin) != _ALLOWED_ORIGIN:
+                return
+            candidate = origin if "://" in origin else f"//{origin}"
+            parts = urlsplit(candidate)
+            assert parts.username is None and parts.password is None, (
+                f"{data!r}: matched with userinfo {parts.username!r}"
+            )
+            assert (parts.hostname or "").lower() == _ALLOWED_HOST, (
+                f"{data!r}: host {parts.hostname!r}"
+            )
+            assert parts.port == _ALLOWED_PORT, f"{data!r}: port {parts.port!r}"
+            assert (parts.scheme or "http") == "http", f"{data!r}: scheme {parts.scheme!r}"
+
+        _fuzz(
+            ORIGIN_SEEDS, check, iterations=300, struct_tokens=ORIGIN_SEEDS, num_tokens=ORIGIN_SEEDS
+        )
+
+    def test_allowlisted_origin_is_never_echoed_to_another(self) -> None:
+        """End-to-end CORS: only the allowlisted origin gets the echo header.
+
+        The response header is the whole point of the parse, so assert on the
+        header the app actually sets rather than on the helper: a fuzzed
+        Origin that merely LOOKS like the allowed one (suffix, userinfo,
+        prefix) must come back without ``Access-Control-Allow-Origin``.
+        """
+        restore = (srv.CORS_ENABLED, list(srv.CORS_ALLOWED_ORIGINS))
+        srv.configure_security(cors_enabled=True, cors_allowed_origins=[_ALLOWED_ORIGIN])
+        try:
+
+            def check(data: bytes) -> None:
+                origin = data.decode("latin-1")
+                _status, headers, _body = wsgi_request(
+                    "GET", "/api/health", headers={"Origin": origin}
+                )
+                echoed = headers.get("Access-Control-Allow-Origin")
+                if echoed is None:
+                    return
+                assert echoed == origin, f"{data!r}: echoed a different origin {echoed!r}"
+                assert _normalize_origin(echoed) == _ALLOWED_ORIGIN, (
+                    f"{data!r}: {echoed!r} is not the allowlisted origin"
+                )
+                # A refused origin still has to key the cache on Origin, or a
+                # shared cache would hand an allowed client's response to the
+                # next caller.
+                assert "Origin" in headers.get("Vary", ""), (
+                    f"{data!r}: Vary {headers.get('Vary')!r}"
+                )
+
+            _fuzz(
+                ORIGIN_SEEDS,
+                check,
+                iterations=200,
+                struct_tokens=ORIGIN_SEEDS,
+                num_tokens=ORIGIN_SEEDS,
+            )
+        finally:
+            srv.configure_security(cors_enabled=restore[0], cors_allowed_origins=restore[1])
+
+
+class TestPeerAddressClassification:
+    """``REMOTE_ADDR`` → ``server._peer_is_loopback``, the localhost-only guard
+    on POST /api/regen.
+
+    A peer address is parsed with ipaddress rather than prefix-matched, so hex
+    and octal spellings classify by value.  The oracle is independent of the
+    parser: True must mean the address is exactly 127.0.0.1 or ::1, or one of
+    the three loopback names — a widening to the rest of 127.0.0.0/8, or a
+    prefix match that accepts ``127.0.0.1.evil.com``, fails here.
+    """
+
+    def test_loopback_is_never_widened(self) -> None:
+        def check(data: bytes) -> None:
+            addr = data.decode("latin-1")
+            allowed = _peer_is_loopback(addr)
+            assert isinstance(allowed, bool), f"{data!r}: returned {allowed!r}"
+            if not allowed:
+                return
+            if addr in srv.LOOPBACK_HOSTS:
+                return
+            parsed = ipaddress.ip_address(addr)
+            mapped = getattr(parsed, "ipv4_mapped", None)
+            # An IPv4-mapped address is judged by the address it maps to: a
+            # dual-stack listener reports its IPv4 peers in that form.
+            value = str(mapped) if mapped is not None else str(parsed)
+            assert value in {"127.0.0.1", "::1"}, f"{data!r}: accepted {value} as loopback"
+
+        _fuzz(ADDR_SEEDS, check, iterations=400, struct_tokens=ADDR_SEEDS, num_tokens=ADDR_SEEDS)
+
+    def test_a_wildcard_or_public_peer_is_never_loopback(self) -> None:
+        """The addresses that must never open the regen endpoint, whatever
+        else the parser does with them."""
+        for addr in ("0.0.0.0", "127.0.0.2", "127.0.0.255", "::2", "::", "10.0.0.1", ""):
+            assert not _peer_is_loopback(addr), f"{addr!r} accepted as loopback"
+
+
+class TestRequestIdAndIdempotencyKey:
+    """``X-Request-ID`` → ``_log_safe`` and ``Idempotency-Key`` → the ledger's
+    regex.  One log-forging surface and one memory-bound surface, both reached
+    by an arbitrary header value."""
+
+    def test_request_id_carries_no_control_character(self) -> None:
+        def check(data: bytes) -> None:
+            request_id = srv._log_safe(data.decode("latin-1"))[: srv._REQUEST_ID_MAX_LEN]
+            assert not _has_control(request_id), (
+                f"{data!r}: control byte in request id {request_id!r}"
+            )
+            assert len(request_id) <= srv._REQUEST_ID_MAX_LEN, (
+                f"{data!r}: id is {len(request_id)} chars"
+            )
+            assert "\n" not in request_id, f"{data!r}: forged a second log line"
+
+        _fuzz(
+            REQUEST_ID_SEEDS,
+            check,
+            iterations=300,
+            struct_tokens=REQUEST_ID_SEEDS,
+            num_tokens=REQUEST_ID_SEEDS,
+        )
+
+    def test_idempotency_key_accepts_only_the_documented_alphabet(self) -> None:
+        """A key the validator accepts is stored in the ledger, so anything it
+        lets through is what bounds its memory and reaches a log line."""
+
+        def check(data: bytes) -> None:
+            key = data.decode("latin-1")
+            matched = _REGEN_KEY_RE.fullmatch(key) is not None
+            if not matched:
+                return
+            assert 1 <= len(key) <= _REGEN_KEY_MAX, f"{data!r}: accepted a {len(key)}-character key"
+            for ch in key:
+                assert ch in _KEY_ALPHABET, f"{data!r}: accepted {ch!r}"
+                assert not _has_control(ch), f"{data!r}: accepted a control byte"
+
+        _fuzz(
+            IDEMPOTENCY_SEEDS,
+            check,
+            iterations=400,
+            struct_tokens=IDEMPOTENCY_SEEDS,
+            num_tokens=IDEMPOTENCY_SEEDS,
+        )
+
+    def test_ledger_never_exceeds_its_cap(self) -> None:
+        """Pair assertion across the ledger's memory boundary: however many
+        distinct keys a client records, the dict holds at most _REGEN_KEY_MAX
+        of them, and the most recent ones are the survivors."""
+        from recoverage import api
+
+        recorded: list[str] = []
+        original = api._REGEN_COMPLETED_KEYS
+        api._REGEN_COMPLETED_KEYS = {}
+        try:
+            for i in range(api._REGEN_KEY_MAX * 3):
+                key = f"key-{i}"
+                api._record_completed_key(key)
+                recorded.append(key)
+                assert len(api._REGEN_COMPLETED_KEYS) <= api._REGEN_KEY_MAX, (
+                    f"ledger holds {len(api._REGEN_COMPLETED_KEYS)} keys after {i + 1}"
+                )
+                assert api._regen_replayed(key), f"{key!r} was not replayable right after recording"
+            for key in recorded[-api._REGEN_KEY_MAX :]:
+                assert api._regen_replayed(key), f"{key!r} was evicted inside the retention window"
+        finally:
+            api._REGEN_COMPLETED_KEYS = original
+
+
+# ── deployment configuration ───────────────────────────────────────
+#
+# The RECOVERAGE_* readers are the other place a stranger's text becomes a
+# number the process acts on: a port it binds, a log level it installs, an
+# origin it stores in the CORS allowlist.  They document one contract, loud
+# failure at startup — every value is validated and converted before the
+# listener binds, and a value that cannot be used raises ConfigError rather
+# than falling back to a default nobody asked for.  The unit tests enumerate
+# spellings; this campaign mutates them, because the parser is int() plus a
+# strip, and int() accepts more than a deployment means.
+
+ENV_VALUE_SEEDS: list[bytes] = [
+    b"0",
+    b"8001",
+    b"-1",
+    b"65536",
+    b"99999999999999999999999999",
+    b" 12 ",
+    b"+12",
+    b"-0",
+    b"0x10",
+    b"1_0",
+    b"1e3",
+    b"  ",
+    b"",
+    b"true",
+    b"TRUE",
+    b"Yes",
+    b"on",
+    b"0",
+    b"off",
+    b"maybe",
+    b"WARNING",
+    b"warn",
+    b"50",
+    b"NOTALEVEL",
+    b"\xff\xfe",
+    "\uff18\uff10\uff10\uff11".encode(),  # fullwidth digits: int() reads them as 8001
+    "\u0663".encode(),  # Arabic-Indic three
+    b"http://localhost:5173,https://example.com",
+    b"a,b,,c,",
+    b" , , ",
+    b",",
+    b"bind-address",
+    b"/var/lib/recoverage/coverage.db",
+    b"~/db/coverage.db",
+    b"line\nbreak",
+    b"tab\there",
+]
+
+#: Values that must never resolve, whatever else the parser accepts: a
+#: non-ASCII digit, because int() reads it as the number it looks like, so a
+#: fullwidth or Arabic-Indic RECOVERAGE_PORT binds that port instead of telling
+#: the operator their variable is not a number.
+
+
+def _set_env(monkeypatch: pytest.MonkeyPatch, name: str, raw: str) -> bool:
+    """Put *raw* in the environment, or report that the OS refused it.
+
+    A value holding a NUL or an unpaired surrogate cannot be an environment
+    value at all (``os.environ`` raises on it), so such a round exercises
+    nothing a deployment could produce.
+    """
+    try:
+        monkeypatch.setenv(name, raw)
+    except ValueError:
+        return False
+    return True
+
+
+_NON_ASCII_DIGITS = ("\u0668", "\u0663", "\u06f5")
+
+
+class TestConfigEnvParsers:
+    """The RECOVERAGE_* readers: every outcome is a value in the documented
+    range or a ConfigError, never a third thing."""
+
+    @pytest.mark.parametrize("raw", [s.decode("utf-8", "replace") for s in ENV_VALUE_SEEDS])
+    def test_port_is_bounded_or_loud(self, monkeypatch: pytest.MonkeyPatch, raw: str) -> None:
+        if not _set_env(monkeypatch, "RECOVERAGE_PORT", raw):
+            return
+        try:
+            value = config.port()
+        except config.ConfigError:
+            return
+        assert config.MIN_PORT <= value <= config.MAX_PORT, f"{raw!r}: port {value} out of range"
+
+    def test_unicode_digits_are_not_silently_a_port(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        for digit in _NON_ASCII_DIGITS:
+            monkeypatch.setenv("RECOVERAGE_PORT", f"{digit}001")
+            with pytest.raises(config.ConfigError, match="RECOVERAGE_PORT"):
+                config.port()
+
+    def test_fuzzed_port_never_binds_a_bogus_port(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def check(data: bytes) -> None:
+            if not _set_env(monkeypatch, "RECOVERAGE_PORT", data.decode("latin-1")):
+                return
+            try:
+                value = config.port()
+            except config.ConfigError:
+                return
+            assert config.MIN_PORT <= value <= config.MAX_PORT, f"{data!r}: port {value}"
+
+        _fuzz(
+            ENV_VALUE_SEEDS,
+            check,
+            iterations=300,
+            struct_tokens=ENV_VALUE_SEEDS,
+            num_tokens=ENV_VALUE_SEEDS,
+        )
+
+    def test_fuzzed_bool_is_a_bool_or_loud(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def check(data: bytes) -> None:
+            raw = data.decode("latin-1")
+            for name, reader in (
+                ("RECOVERAGE_CORS", config.cors),
+                ("RECOVERAGE_ALLOW_REMOTE", config.allow_remote),
+            ):
+                if not _set_env(monkeypatch, name, raw):
+                    return
+                try:
+                    value = reader()
+                except config.ConfigError:
+                    continue
+                assert isinstance(value, bool), f"{name}={raw!r}: {value!r}"
+
+        _fuzz(
+            ENV_VALUE_SEEDS,
+            check,
+            iterations=300,
+            struct_tokens=ENV_VALUE_SEEDS,
+            num_tokens=ENV_VALUE_SEEDS,
+        )
+
+    def test_fuzzed_cors_origin_yields_only_plain_items(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Pair assertion across the allowlist boundary: whatever the split
+        produces is a list of origins, never an empty item and never a value
+        carrying a byte no header may hold."""
+
+        def check(data: bytes) -> None:
+            if not _set_env(monkeypatch, "RECOVERAGE_CORS_ORIGIN", data.decode("latin-1")):
+                return
+            try:
+                origins = config.cors_origins()
+            except config.ConfigError:
+                # A value the allowlist cannot hold is refused loudly at
+                # startup, which is the other half of the contract: it is
+                # never stored as an entry that silently matches nothing.
+                return
+            for origin in origins:
+                assert origin == origin.strip(), f"{data!r}: {origin!r} is not stripped"
+                assert origin, f"{data!r}: empty origin"
+                assert not _has_control(origin), f"{data!r}: control byte in {origin!r}"
+                assert "\n" not in origin, f"{data!r}: forged a second line"
+
+        _fuzz(
+            ENV_VALUE_SEEDS,
+            check,
+            iterations=300,
+            struct_tokens=ENV_VALUE_SEEDS,
+            num_tokens=ENV_VALUE_SEEDS,
+        )
+
+    def test_fuzzed_log_level_is_a_level_number_or_loud(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def check(data: bytes) -> None:
+            if not _set_env(monkeypatch, "RECOVERAGE_LOG_LEVEL", data.decode("latin-1")):
+                return
+            try:
+                level = config.log_level()
+            except config.ConfigError:
+                return
+            assert isinstance(level, int) and not isinstance(level, bool), f"{data!r}: {level!r}"
+            assert level in config.LOG_LEVELS.values() or level >= 0, f"{data!r}: level {level}"
+
+        _fuzz(
+            ENV_VALUE_SEEDS,
+            check,
+            iterations=300,
+            struct_tokens=ENV_VALUE_SEEDS,
+            num_tokens=ENV_VALUE_SEEDS,
+        )
+
+    def test_unknown_var_message_names_every_one(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A misspelled name is reported by name: dropping one on the floor
+        would leave the default in place while the operator believes the
+        environment was applied."""
+        names = ["RECOVERAGE_TYPO", "RECOVERAGE_PORT_", "RECOVERAGE_BIND_X"]
+        for name in names:
+            monkeypatch.setenv(name, "1")
+        with pytest.raises(config.ConfigError) as excinfo:
+            config.check_unknown_vars()
+        message = str(excinfo.value)
+        for name in names:
+            assert name in message, f"{name} missing from {message!r}"
 
 
 # ── Potato Mode ────────────────────────────────────────────────────

@@ -162,10 +162,18 @@ def _hostname_of(origin: str) -> str:
     Origins carry a scheme (``http://localhost:5173``); bare Host headers
     (``localhost:8001``) get a synthetic scheme so urlsplit parses both.
     Values containing userinfo/escape characters (``evil@host``, backslash,
-    percent-encoding, control bytes) are rejected — browsers never emit them
-    in Host/Origin, so their presence means the value is not a plain header.
+    percent-encoding, control bytes, whitespace) are rejected — browsers never
+    emit them in Host/Origin, so their presence means the value is not a plain
+    header.
+
+    The control range is C0, DEL and C1, not just ``ord < 32``: urlsplit
+    carries U+0080-U+009F through into the hostname, so a value carrying one
+    parses to a "host" no browser can address, and :func:`_normalize_origin`
+    would then store and echo it as an allowlist entry.
     """
-    if any(ch in origin for ch in ("@", "\\", "%")) or any(ord(c) < 32 for c in origin):
+    if any(ch in origin for ch in ("@", "\\", "%")) or any(
+        ch.isspace() or ord(ch) < 32 or 127 <= ord(ch) <= 159 for ch in origin
+    ):
         return ""
     try:
         candidate = origin if "://" in origin else f"//{origin}"

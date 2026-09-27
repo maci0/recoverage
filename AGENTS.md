@@ -365,7 +365,8 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   the log-injection question `sec-review` owns.
 - The untrusted-input surfaces (query parameters, the batch POST body, request
   headers, the `/potato` query string, the `/src` and `/original` path
-  segments) are fuzzed by `tests/test_fuzz.py`: a seeded mutation engine over a
+  segments, the access-gating headers, the `RECOVERAGE_*` readers) are fuzzed
+  by `tests/test_fuzz.py`: a seeded mutation engine over a
   hand-written corpus, driven by `RECOVERAGE_FUZZ_SEED` / `RECOVERAGE_FUZZ_ITERATIONS`
   so a failure replays. Each round asserts an invariant, not just a lack of crash: no 5xx,
   the JSON error envelope on a 4xx, no traceback in a body, and the contract the
@@ -376,6 +377,21 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   its own grammar needs its token tuple the same way. HTML-escaping assertions
   come in pairs: the grid view escapes through SimpleTemplate, the functions
   view's empty-result message through `potato._esc`, and a regression in either
-  one has to be visible from the response alone. No coverage-guided fuzzer is a
+  one has to be visible from the response alone. The access-gating headers
+  (`Origin`/`Host`, `REMOTE_ADDR`, `X-Request-ID`, `Idempotency-Key`) are the
+  one class of surface where a wrong answer is a bypass rather than a bad
+  render, so their campaigns assert the security property, not the status code:
+  a normalized origin is a fixed point and carries no userinfo, escape, control
+  byte or whitespace; a value that matches the CORS allowlist really is the
+  allowlisted origin and is the only one echoed as
+  `Access-Control-Allow-Origin`; `_peer_is_loopback` accepts `127.0.0.1` and
+  `::1` and nothing else, judged against `ipaddress` rather than against the
+  parser under test; the request id carries no control byte; an accepted
+  idempotency key is inside the ledger's alphabet and length, and the ledger
+  stays within `_REGEN_KEY_MAX` however many distinct keys arrive. The
+  `RECOVERAGE_*` campaigns hold the module's own contract instead: every reader
+  answers a value in its documented range or raises `ConfigError`, and never a
+  third thing (a non-ASCII digit is a rejected port, not a bound one). No
+  coverage-guided fuzzer is a
   project dependency, so the corpus lives in that file; a new surface gets a
   corpus entry there, not a new dependency.
