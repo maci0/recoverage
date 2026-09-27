@@ -146,7 +146,7 @@ _REGEN_KEY_MAX = 128
 # A key is an opaque client nonce; anything outside this set is a client bug
 # or an attempt to fill the ledger with junk, and is rejected rather than
 # stored.
-_REGEN_KEY_RE = re.compile(r"[A-Za-z0-9._:-]{1,128}")
+_REGEN_KEY_RE = re.compile(rf"[A-Za-z0-9._:-]{{1,{_REGEN_KEY_MAX}}}")
 _REGEN_COMPLETED_KEYS: dict[str, float] = {}
 _REGEN_COMPLETED_KEYS_LOCK = threading.Lock()
 

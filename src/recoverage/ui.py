@@ -241,7 +241,12 @@ def _finalized_shell(body: bytes, encoding: str, etag: str) -> bytes:
     if _if_none_match_matches(request.headers.get("If-None-Match", ""), etag):
         raise _not_modified(etag)
     return _finalized(
-        body, "text/html; charset=utf-8", encoding, ETag=etag, Cache_Control=CACHE_REVALIDATE
+        response,
+        body,
+        "text/html; charset=utf-8",
+        encoding,
+        ETag=etag,
+        Cache_Control=CACHE_REVALIDATE,
     )
 
 
@@ -381,4 +386,6 @@ def serve_static_asset(filename: str) -> Any:
 
     suffix = PurePosixPath(filename).suffix.lower()
     content_type = _STATIC_TYPES.get(suffix, "application/octet-stream")
-    return _finalized(body, content_type, encoding, ETag=etag, Cache_Control=CACHE_REVALIDATE)
+    return _finalized(
+        response, body, content_type, encoding, ETag=etag, Cache_Control=CACHE_REVALIDATE
+    )

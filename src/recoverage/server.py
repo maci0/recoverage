@@ -1647,15 +1647,17 @@ CACHE_NO_STORE = "no-cache, no-store, must-revalidate"
 CACHE_REVALIDATE = "no-cache, must-revalidate"
 
 
-def _finalized(body: bytes, content_type: str, encoding: str, **headers: str) -> bytes:
-    """Set payload headers for an already-final *body* and return it."""
-    response.content_type = content_type
+def _finalized(
+    resp: HTTPResponse, body: bytes, content_type: str, encoding: str, **headers: str
+) -> bytes:
+    """Set payload headers on *resp* for an already-final *body* and return it."""
+    resp.content_type = content_type
     if encoding:
-        response.set_header("Content-Encoding", encoding)
-    response.set_header("Vary", "Accept-Encoding")
-    response.set_header("Content-Length", str(len(body)))
+        resp.set_header("Content-Encoding", encoding)
+    resp.set_header("Vary", "Accept-Encoding")
+    resp.set_header("Content-Length", str(len(body)))
     for k, v in headers.items():
-        response.set_header(k.replace("_", "-"), v)
+        resp.set_header(k.replace("_", "-"), v)
     return body
 
 
@@ -1663,7 +1665,7 @@ def _compressed(body: bytes, content_type: str, **headers: str) -> bytes:
     """Compress body, set response headers, return final body."""
     accept_enc = _header("Accept-Encoding", "")
     body, encoding = compress_payload(body, accept_enc)
-    return _finalized(body, content_type, encoding, **headers)
+    return _finalized(response, body, content_type, encoding, **headers)
 
 
 def _json_ok(data: dict[str, Any] | list[Any] | bytes, **headers: str) -> bytes:
@@ -1674,7 +1676,7 @@ def _json_ok(data: dict[str, Any] | list[Any] | bytes, **headers: str) -> bytes:
 
 def _json_ok_precompressed(body: bytes, encoding: str, **headers: str) -> bytes:
     """Return a JSON 200 from an already-compressed body (no recompression)."""
-    return _finalized(body, "application/json", encoding, **headers)
+    return _finalized(response, body, "application/json", encoding, **headers)
 
 
 # Every JSON error response carries this trio: `error` (human message),
@@ -1716,17 +1718,10 @@ def _json_err(status: int, data: dict[str, Any], **headers: str) -> Any:
     body = json.dumps(body_data).encode("utf-8")
     accept_enc = _header("Accept-Encoding", "")
     body, encoding = compress_payload(body, accept_enc)
-    resp = HTTPResponse(status=status, body=body)
-    resp.content_type = "application/json"
-    if encoding:
-        resp.set_header("Content-Encoding", encoding)
-    resp.set_header("Vary", "Accept-Encoding")
-    resp.set_header("Content-Length", str(len(body)))
     # Errors must never be cached by intermediaries: a proxy could serve a
     # stale 503 after the DB recovers.
-    resp.set_header("Cache-Control", "no-store")
-    for k, v in headers.items():
-        resp.set_header(k.replace("_", "-"), v)
+    resp = HTTPResponse(status=status, body=body)
+    _finalized(resp, body, "application/json", encoding, Cache_Control="no-store", **headers)
     return resp
 
 
