@@ -68,7 +68,7 @@ class TestColorOptOut:
         """The stderr error path takes the same route as the verdicts."""
         monkeypatch.setenv("NO_COLOR", "1")
         result = runner.invoke(app, ["check", "--min-coverage", "200"], color=True)
-        assert result.exit_code == 1
+        assert result.exit_code == 2
         assert "\x1b[" not in result.stderr
 
 
@@ -293,20 +293,21 @@ class TestCheckCommand:
 
     def test_check_out_of_range_json_emits_error_object(self) -> None:
         """--json with an out-of-range threshold must still emit a parseable
-        JSON error (not the human-readable stderr path) before exiting 1."""
+        JSON error (not the human-readable stderr path) before exiting 2."""
         result = runner.invoke(app, ["check", "--min-coverage", "150", "--json"])
-        assert result.exit_code == 1
+        assert result.exit_code == 2
         payload = json.loads(result.output)
         assert payload["error"]
-        assert payload["exit_code"] == 1
+        assert payload["exit_code"] == 2
 
     def test_check_min_coverage_out_of_range(self) -> None:
         """--min-coverage outside [0, 100] must be rejected, not silently
         always-pass (negative) or always-fail (over 100)."""
         for bad in ("-5", "150"):
             result = runner.invoke(app, ["check", "--min-coverage", bad])
-            # Our explicit range validation → exit 1 with a clear message.
-            assert result.exit_code == 1
+            # Our explicit range validation → exit 2 with a clear message,
+            # the same usage-error code a non-numeric value gets.
+            assert result.exit_code == 2
             assert (
                 "min-coverage" in result.output.lower()
                 or "min-coverage" in (result.stderr_bytes or b"").decode().lower()

@@ -48,6 +48,12 @@ module ships in the published package. See *Breaking*.
   the returned list. Every in-tree caller already discarded the first
   element, which is what left a second ordering alive for the SPA and Potato
   Mode to agree not to use.
+- **`recoverage check --min-coverage` out of range exits 2, not 1.** A
+  threshold outside 0-100 is a usage error, and a non-numeric value already
+  exited 2 from the parser; the range check exited 1, the same code as a
+  genuine coverage failure, so a CI job could not tell a mistyped flag from a
+  build that dropped below the gate. The `--json` error object reports
+  `"exit_code": 2` with it. A gate failure still exits 1.
 
 ### Fixed
 

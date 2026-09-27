@@ -226,8 +226,8 @@ recoverage check --min-coverage 60 --target SERVER --section .text   # specific
 recoverage check --min-coverage 60 --json                       # machine-readable verdict
 ```
 
-Exit codes: 0 = gate passed, 1 = coverage below threshold (or bad input),
-2 = infrastructure error (database missing/unreadable).
+Exit codes: 0 = gate passed, 1 = coverage below threshold (or a target/section
+that matched nothing), 2 = bad `--min-coverage` value or an unreadable database.
 
 ### `recoverage regen`
 

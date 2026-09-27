@@ -434,7 +434,10 @@ def serve(
     # an env-provided port too, or an out-of-range value reaches socket.bind()
     # and surfaces as a raw OverflowError after the banner has printed.)
     port: int | None = typer.Option(
-        None, "--port", "-p", help="Port to serve on (env: RECOVERAGE_PORT)"
+        None,
+        "--port",
+        "-p",
+        help="Port to serve on, 0-65535 (default: 8001; env: RECOVERAGE_PORT)",
     ),
     bind: str | None = typer.Option(
         None,
@@ -868,18 +871,24 @@ def _section_verdict(
 
 
 def _gate_error(
-    human: str, payload: dict[str, Any], json_output: bool, fg: int = typer.colors.RED
+    human: str,
+    payload: dict[str, Any],
+    json_output: bool,
+    fg: int = typer.colors.RED,
+    exit_code: int = 1,
 ) -> NoReturn:
-    """Emit a check-gate failure in --json or human form, then exit 1.
+    """Emit a check-gate failure in --json or human form, then exit.
 
     ONE tail for every `check` failure so the two output modes cannot drift
-    (each mode's message/payload stays at its single call site).
+    (each mode's message/payload stays at its single call site).  *exit_code*
+    separates a gate failure (1) from a usage error (2), so a script can tell
+    "the build is below threshold" from "I passed a bad flag".
     """
     if json_output:
         typer.echo(json.dumps(payload))
     else:
         _secho(human, fg=fg, err=True)
-    raise typer.Exit(1)
+    raise typer.Exit(exit_code)
 
 
 @app.command()
@@ -891,12 +900,20 @@ def check(
     section: str | None = typer.Option(None, "--section", "-s", help="Section name (default: all)"),
     json_output: bool = typer.Option(False, "--json", help="Output results as JSON"),
 ) -> None:
-    """Check coverage against a threshold (CI gate)."""
+    """Check coverage against a threshold (CI gate).
+
+    Exits 0 when every compared section meets the threshold, 1 when one does
+    not, and 2 for a bad --min-coverage or an unreadable database.  Sections
+    the grid never records matches for are reported SKIP, not FAIL.
+    """
     if not 0.0 <= min_coverage <= 100.0:
+        # A flag value outside its own documented range is a usage error, the
+        # same exit 2 a non-numeric value gets from the parser.
         _gate_error(
             f"Error: --min-coverage must be between 0 and 100, got {min_coverage!r}.",
-            {"error": "--min-coverage must be between 0 and 100", "exit_code": 1},
+            {"error": "--min-coverage must be between 0 and 100", "exit_code": 2},
             json_output,
+            exit_code=2,
         )
 
     with contextlib.closing(_open_db_or_exit(missing_exit_code=2)) as conn:
@@ -995,7 +1012,12 @@ def regen() -> None:
 @app.command("open")
 def open_cmd(
     port: int = typer.Option(
-        8001, "--port", "-p", min=0, max=65535, help="Port of the running server"
+        config.DEFAULT_PORT,
+        "--port",
+        "-p",
+        min=config.MIN_PORT,
+        max=config.MAX_PORT,
+        help="Port of the running server",
     ),
 ) -> None:
     """Open the dashboard in a browser."""
