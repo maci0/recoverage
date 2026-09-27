@@ -20,6 +20,7 @@ from recoverage import __version__
 from recoverage import server as _server
 from recoverage.regen import run_regen
 from recoverage.server import (
+    _SECTION_BUCKETS_SQL,
     CACHE_NO_STORE,
     CACHE_REVALIDATE,
     DLL_DATA,
@@ -307,14 +308,15 @@ def _require_target(c: sqlite3.Cursor, target: str) -> Any | None:
     """
     try:
         targets_list = resolve_targets(c)
-    except sqlite3.OperationalError as exc:
-        # Transient SQLITE_BUSY / locked — must surface as 503, not be
-        # swallowed as "unknown target" or silent success.
-        if "busy" in str(exc).lower() or "locked" in str(exc).lower():
+    except sqlite3.Error as exc:
+        # Transient SQLITE_BUSY / locked must surface as 503, not be swallowed
+        # as "unknown target" or silent success.  Every other sqlite error
+        # means the DB is unreadable — let the endpoint's own 503 path run.
+        if isinstance(exc, sqlite3.OperationalError) and (
+            "busy" in str(exc).lower() or "locked" in str(exc).lower()
+        ):
             raise
-        return None  # DB unavailable — let the endpoint's own 503 path run
-    except sqlite3.Error:
-        return None  # DB unavailable — let the endpoint's own 503 path run
+        return None
     if any(t.get("id") == target for t in targets_list):
         return None
     return _target_not_found(target)
@@ -770,19 +772,14 @@ def _build_data_raw(c: sqlite3.Cursor, target: str, section_filter: str | None) 
     # rebrew advances the schema.
     data["known_schema"] = sorted(_server.KNOWN_SCHEMA_VERSIONS)
 
-    # Per-section cell stats from SQL view.  All buckets are selected so
-    # consumers can sum them and reconcile with total_cells (padding,
-    # none, proven, and size_mismatch were previously omitted).
+    # Per-section cell stats from SQL view.  _cell_bucket_row reads the whole
+    # row, so the projection is the shared one server._per_section_buckets
+    # uses: a hand-listed column set here can silently drop a bucket rebrew
+    # adds, and the served key set would then differ from /stats.
     data["section_cell_stats"] = {}
     stats_clause = " AND section_name = ?" if section_filter else ""
     stats_params: list[Any] = [target] + ([section_filter] if section_filter else [])
-    c.execute(
-        "SELECT section_name, total_cells, exact_count, reloc_count, "
-        "near_match_count, stub_count, padding_count, data_count, thunk_count, "
-        f"none_count, proven_count, size_mismatch_count "
-        f"FROM section_cell_stats WHERE target = ?{stats_clause}",
-        stats_params,
-    )
+    c.execute(_SECTION_BUCKETS_SQL + stats_clause, stats_params)
     for row in c.fetchall():
         data["section_cell_stats"][row["section_name"]] = _cell_bucket_row(row)
 
@@ -895,6 +892,11 @@ _MAX_PAGE_OFFSET = 10_000_000
 # different window sizes.
 _MAX_SLICE_SIZE = 4096
 
+# Longest ?search= the list endpoint accepts.  A longer pattern is a bounded
+# LIKE over a wide table, not a useful query; rejecting it keeps the work per
+# request finite.
+_MAX_SEARCH_CHARS = 500
+
 
 @app.get("/api/targets/<target>/functions")
 def handle_api_functions_list(target: str) -> bytes | Any:
@@ -902,8 +904,14 @@ def handle_api_functions_list(target: str) -> bytes | Any:
     status_filter = request.query.get("status", "").strip() or None
     _raw_search = request.query.get("search", "").strip() or None
     # Bound search length to prevent unbounded LIKE patterns (DoS).
-    if _raw_search is not None and len(_raw_search) > 500:
-        return _json_err(400, {"error": "search query too long", "detail": "max 500 characters"})
+    if _raw_search is not None and len(_raw_search) > _MAX_SEARCH_CHARS:
+        return _json_err(
+            400,
+            {
+                "error": "search query too long",
+                "detail": f"max {_MAX_SEARCH_CHARS} characters",
+            },
+        )
     search = _raw_search
     sort_param = request.query.get("sort", "va").strip()  # field:dir
     try:
@@ -926,12 +934,11 @@ def handle_api_functions_list(target: str) -> bytes | Any:
         sf, sd = sort_param.split(":", 1)
         if sf in allowed_sort:
             sort_field = sf
-            if sd.lower() == "desc":
-                sort_dir = "DESC"
-            elif sd.lower() != "asc" and sd != "":
-                sort_dir = "ASC"
-        # An unknown sort_field ignores the whole sort_param rather than applying its
-        # (possibly tainted) sort_dir.
+            # Every direction but "desc" — "asc", empty, and anything else —
+            # sorts ascending, which is the default.  An unknown sort_field
+            # ignores the whole sort_param rather than applying its (possibly
+            # tainted) sort_dir.
+            sort_dir = "DESC" if sd.lower() == "desc" else "ASC"
     elif sort_param in allowed_sort:
         sort_field = sort_param
 
@@ -1294,6 +1301,11 @@ def handle_api_asm(target: str) -> bytes | Any:
             # that constraint cannot read bytes from before the file.
             return _json_err(400, {"error": "va is before section start"})
 
+        # Both response shapes carry the same validator headers; build them once.
+        headers_asm: dict[str, str] = {"Cache_Control": CACHE_REVALIDATE}
+        if asm_etag is not None:
+            headers_asm["ETag"] = asm_etag
+
         if fmt == "json":
             # Structured JSON output
             target_data = _load_dll(target)
@@ -1319,9 +1331,6 @@ def handle_api_asm(target: str) -> bytes | Any:
                 }
                 for insn in md.disasm(code_bytes, va)
             ]
-            headers_asm: dict[str, str] = {"Cache_Control": CACHE_REVALIDATE}
-            if asm_etag is not None:
-                headers_asm["ETag"] = asm_etag
             return _json_ok(
                 {"instructions": instructions},
                 **headers_asm,
@@ -1338,10 +1347,7 @@ def handle_api_asm(target: str) -> bytes | Any:
                 },
             )
 
-        headers_asm2: dict[str, str] = {"Cache_Control": CACHE_REVALIDATE}
-        if asm_etag is not None:
-            headers_asm2["ETag"] = asm_etag
-        return _json_ok({"asm": asm_text}, **headers_asm2)
+        return _json_ok({"asm": asm_text}, **headers_asm)
 
 
 @app.get("/api/targets/<target>/sections/<section>/bytes")

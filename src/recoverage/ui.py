@@ -28,6 +28,7 @@ from recoverage.server import (
     _compressed,
     _etag_or_304,
     _finalized,
+    _if_none_match_matches,
     _project_dir,
     _safe_etag,
     _snapshot_db_mtime,
@@ -305,11 +306,10 @@ def _client_has_asset(etag: str) -> bool:
     """Whether the request's If-None-Match already covers *etag* (RFC 9110 13.1.2).
 
     Weak comparison, which is what If-None-Match calls for: a browser holding
-    the asset as W/"..." still gets its 304.  Handles the comma-separated list
-    and the "*" form.
+    the asset as W/"..." still gets its 304.  The accepted spellings come from
+    the shared matcher, so static assets and DB-derived responses cannot drift.
     """
-    raw = request.headers.get("If-None-Match", "")
-    return any(c.strip() == "*" or c.strip().removeprefix("W/") == etag for c in raw.split(","))
+    return _if_none_match_matches(request.headers.get("If-None-Match", ""), etag)
 
 
 @app.get(

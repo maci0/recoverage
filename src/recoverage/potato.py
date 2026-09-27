@@ -43,6 +43,7 @@ from recoverage.server import (
     _load_metadata,
     _open_db,
     _snapshot_db_mtime,
+    _verify_one_select,
     get_disassembly,
     resolve_targets,
 )
@@ -466,22 +467,17 @@ def _highlight_asm(text: str, target: str) -> str:
     def _plain_line(line: str) -> str:
         return _link_hex_refs(_html_escape(line))
 
-    def _addr_line(addr_part: str, highlighted_code: str) -> str:
-        return _addr_link(addr_part) + highlighted_code
-
     pg = _pygments()
     if pg is None:
-        lines = []
-        for line in text.splitlines():
-            split = _split_asm_line(line)
-            if split is None:
-                lines.append(_plain_line(line))
-            else:
-                addr_part, code_part = split
-                lines.append(_addr_line(addr_part, _link_hex_refs(_html_escape(code_part))))
-        return "\n".join(lines)
+        _render_code = lambda code: _link_hex_refs(_html_escape(code))  # noqa: E731
+    else:
+        _, _, lexer, colors = pg
 
-    _, _, lexer, colors = pg
+        def _render_code(code: str) -> str:
+            return _link_hex_refs(_highlight_tokens(lexer.get_tokens(code), colors).rstrip("\n"))
+
+    # One loop for both: only the code half's rendering differs between the
+    # pygments and no-pygments paths, and the address half is identical.
     result_lines: list[str] = []
     for line in text.splitlines():
         split = _split_asm_line(line)
@@ -489,8 +485,7 @@ def _highlight_asm(text: str, target: str) -> str:
             result_lines.append(_plain_line(line))
         else:
             addr_part, code_part = split
-            hl = _link_hex_refs(_highlight_tokens(lexer.get_tokens(code_part), colors).rstrip("\n"))
-            result_lines.append(_addr_line(addr_part, hl))
+            result_lines.append(_addr_link(addr_part) + _render_code(code_part))
     return "\n".join(result_lines)
 
 
@@ -993,13 +988,13 @@ def render_potato(parsed_url: ParseResult) -> str:
             c,
             target,
             section,
-            active_filters,
-            idx_str,
-            search_query,
-            view,
-            sort_key,
-            status_filter,
-            page_str,
+            active_filters=active_filters,
+            idx_str=idx_str,
+            search_query=search_query,
+            view=view,
+            sort_key=sort_key,
+            status_filter=status_filter,
+            page_str=page_str,
         )
 
 
@@ -1204,19 +1199,23 @@ def _compute_section_stats(
     return per_section_stats
 
 
+#: Rows each search query may scan.  The cap bounds the work a single search
+#: box keystroke can cause on a large project; ORDER BY keeps which rows those
+#: are deterministic, since SQLite's scan order is otherwise arbitrary.
+_SEARCH_ROW_LIMIT = 500
+
+
 def _search_functions(c: sqlite3.Cursor, target: str, search_query: str) -> set[str]:
     search_matched_fns: set[str] = set()
     if not search_query:
         return search_matched_fns
 
     like_pat = _escape_like(search_query)
-    # ORDER BY makes the 500-row cap deterministic (SQLite scan order is
-    # otherwise arbitrary for >500 matches).
     c.execute(
         "SELECT name, vaStart FROM functions WHERE target = ? AND ("
         "name LIKE ? ESCAPE '\\' OR vaStart LIKE ? ESCAPE '\\' "
-        "OR symbol LIKE ? ESCAPE '\\') ORDER BY name, vaStart LIMIT 500",
-        (target, like_pat, like_pat, like_pat),
+        "OR symbol LIKE ? ESCAPE '\\') ORDER BY name, vaStart LIMIT ?",
+        (target, like_pat, like_pat, like_pat, _SEARCH_ROW_LIMIT),
     )
     for name, va_start in c.fetchall():
         search_matched_fns.add(name)
@@ -1227,12 +1226,12 @@ def _search_functions(c: sqlite3.Cursor, target: str, search_query: str) -> set[
             search_matched_fns.add(va_start)
     # Same '0x'-prefixed spelling the address columns print, so an address
     # copied out of a Potato table matches when pasted into the search box.
-    # The 500-row cap applies to rows selected, not to the returned set.
+    # The row cap applies to rows selected, not to the returned set.
     c.execute(
         "SELECT name FROM globals WHERE target = ? AND ("
         "name LIKE ? ESCAPE '\\' OR ('0x' || printf('%x', va)) LIKE ? ESCAPE '\\') "
-        "ORDER BY name LIMIT 500",
-        (target, like_pat, like_pat),
+        "ORDER BY name LIMIT ?",
+        (target, like_pat, like_pat, _SEARCH_ROW_LIMIT),
     )
     search_matched_fns.update(row[0] for row in c.fetchall())
     return search_matched_fns
@@ -1482,6 +1481,13 @@ def _pager_html(
     )
 
 
+#: Ceiling on a section's declared column count.  A sections row can claim a
+#: lattice far wider than any real PE, and the sizing row emits one <td> per
+#: column, so the cap is a response-size bound, applied wherever the count is
+#: resolved.
+_MAX_GRID_COLUMNS = 256
+
+
 def _build_grid_html(
     merged_cells: list[dict[str, Any]],
     sec_data: dict[str, Any],
@@ -1507,7 +1513,7 @@ def _build_grid_html(
     """
     if grid_columns <= 0:
         raise ValueError(f"grid_columns must be positive, got {grid_columns}")
-    grid_columns = min(grid_columns, 256)
+    grid_columns = min(grid_columns, _MAX_GRID_COLUMNS)
     # Fixed 12px lattice: at 64 columns that is ~770px, which overflowed a
     # 390px phone.  12px keeps blocks legible and tappable on desktop; narrow
     # sections render the same size, so every section shares one predictable
@@ -1639,13 +1645,13 @@ def _render_function_list(
         params.extend([like, like, like])
 
     where_sql = " AND ".join(where)
-    # Cap the rendered list at 500 rows (matching the API's search cap) so a
-    # large project's ?view=functions page doesn't build a multi-MB HTML
-    # document on every request.  ORDER BY keeps the cap deterministic.
+    # Cap the rendered list (same bound as the search above) so a large
+    # project's ?view=functions page doesn't build a multi-MB HTML document on
+    # every request.  ORDER BY keeps the cap deterministic.
     c.execute(
         "SELECT name, va, vaStart, size, status, module FROM functions "
-        f"WHERE {where_sql} ORDER BY {order_by}, va LIMIT 500",
-        params,
+        f"WHERE {where_sql} ORDER BY {order_by}, va LIMIT ?",
+        [*params, _SEARCH_ROW_LIMIT],
     )
     rows = c.fetchall()
 
@@ -1742,7 +1748,7 @@ def _render_grid_view(
     grid_columns = sec_data.get("columns") or 64
     if grid_columns <= 0:
         grid_columns = 64
-    grid_columns = min(grid_columns, 256)
+    grid_columns = min(grid_columns, _MAX_GRID_COLUMNS)
     cells, merged_cells = _load_grid_cells(c, target, section, grid_columns)
     per_section_stats = _section_stats_cached(c, target, sections, data)
     block_count = len(merged_cells)
@@ -1755,16 +1761,16 @@ def _render_grid_view(
     page_slice = merged_cells[page_offset : page_offset + page_cells]
 
     grid_html = _build_grid_html(
-        page_slice,
-        sec_data,
-        grid_columns,
-        active_filters,
-        search_query,
-        search_matched_fns,
-        idx_str,
-        target,
-        section,
-        page_offset,
+        merged_cells=page_slice,
+        sec_data=sec_data,
+        grid_columns=grid_columns,
+        active_filters=active_filters,
+        search_query=search_query,
+        search_matched_fns=search_matched_fns,
+        idx_str=idx_str,
+        target=target,
+        section=section,
+        page_offset=page_offset,
     )
     if page_count > 1:
         grid_html += _pager_html(target, section, active_filters, search_query, page, page_count)
@@ -1773,12 +1779,12 @@ def _render_grid_view(
         c,
         cells,
         idx_str,
-        target,
-        section,
-        data,
-        sec_data,
-        active_filters,
-        search_query,
+        target=target,
+        section=section,
+        data=data,
+        sec_data=sec_data,
+        active_filters=active_filters,
+        search_query=search_query,
     )
     return grid_html, block_count, panel_html, sec_stats
 
@@ -1839,23 +1845,23 @@ def _render_potato_inner(
             c,
             target,
             section,
-            search_query,
-            sort_key,
-            status_filter,
+            search_query=search_query,
+            sort_key=sort_key,
+            status_filter=status_filter,
         )
     else:
         grid_html, block_count, panel_html, sec_stats = _render_grid_view(
             c,
             target,
             section,
-            sec_data,
-            sections,
-            data,
-            active_filters,
-            idx_str,
-            search_query,
-            search_matched_fns,
-            page_str,
+            sec_data=sec_data,
+            sections=sections,
+            data=data,
+            active_filters=active_filters,
+            idx_str=idx_str,
+            search_query=search_query,
+            search_matched_fns=search_matched_fns,
+            page_str=page_str,
         )
 
     clear_search_url = _build_url(target, section, active_filters or None)
@@ -2001,17 +2007,15 @@ def _panel_fn_attach_verify(c: sqlite3.Cursor, target: str, fn_data: dict[str, A
     if fn_va_resolved is None:
         return
     try:
-        cols = {r[1] for r in c.execute("PRAGMA table_info(verify_results)").fetchall()}
-        extra = "".join(f", {col}" for col in ("reg_delta", "effective_match") if col in cols)
+        # Shared projection: the optional v6 columns are probed in ONE place,
+        # so the panel's column set cannot drift from the API's.
         c.execute(
-            "SELECT verified_at, byte_delta, diff_lines, similarity"
-            + extra
-            + " FROM verify_results WHERE target=? AND va=?",
+            f"{_verify_one_select(c.connection)} FROM verify_results WHERE target=? AND va=?",
             (target, int(fn_va_resolved)),
         )
         vr = c.fetchone()
     except (sqlite3.Error, ValueError, TypeError):
-        vr = None
+        return
     if not vr:
         return
     fn_data["last_verify_time"] = vr[0]
@@ -2021,7 +2025,7 @@ def _panel_fn_attach_verify(c: sqlite3.Cursor, target: str, fn_data: dict[str, A
         fn_data["last_verify_diff_lines"] = vr[2]
     if vr[3] is not None:
         fn_data["last_verify_similarity"] = f"{vr[3]:.1f}%"
-    keys = vr.keys() if hasattr(vr, "keys") else set()
+    keys = vr.keys()
     if "reg_delta" in keys and vr["reg_delta"] is not None:
         fn_data["last_verify_reg_delta"] = vr["reg_delta"]
     if "effective_match" in keys and vr["effective_match"]:
@@ -2066,6 +2070,27 @@ def _panel_fn_source_text(data: dict[str, Any], target: str, fn_data: dict[str, 
         return None
 
 
+def _lookup_by_va_or_name(
+    c: sqlite3.Cursor, table: str, json_sql: str, target: str, value: str
+) -> sqlite3.Row | None:
+    """First row of *table* matching *value* as a VA, else as an exact name.
+
+    ONE resolution order for both the functions and the globals detail panel,
+    and the same order GET /functions/<va> uses: cell entries are VA strings
+    ("0x10001000"), while legacy cells name the symbol outright.  A
+    VA-shaped entry that matches no row still falls through to the name
+    lookup, so the two tables cannot disagree about what a cell names.
+    """
+    prefix = f"SELECT {json_sql} FROM {table} WHERE target=? AND "
+    for cand in parse_va_candidates(value):
+        c.execute(prefix + "va=?", (target, cand))
+        row = c.fetchone()
+        if row:
+            return row
+    c.execute(prefix + "name=?", (target, value))
+    return c.fetchone()
+
+
 def _panel_function_detail(
     ctx: dict[str, Any],
     c: sqlite3.Cursor,
@@ -2080,21 +2105,9 @@ def _panel_function_detail(
     caller can try the globals table.
     """
     # Cell function entries are VA strings ("0x10001000"), matching the SPA's
-    # /functions/<va> route.  Resolve via the shared spelling parser
-    # (rebrew.workspace.parse_va_candidates: 0x-hex, bare hex, or decimal) and
-    # look up by va; fall back to name for legacy/name-form cells.
-    va_candidates = parse_va_candidates(fn_name)
-
-    fn_sql = "SELECT " + _fn_json_sql(c) + " FROM functions WHERE target=? AND "
-    fn_row = None
-    for cand in va_candidates:
-        c.execute(fn_sql + "va=?", (target, cand))
-        fn_row = c.fetchone()
-        if fn_row:
-            break
-    if fn_row is None and not va_candidates:
-        c.execute(fn_sql + "name=?", (target, fn_name))
-        fn_row = c.fetchone()
+    # /functions/<va> route; the shared lookup resolves them and falls back to
+    # the name for legacy/name-form cells.
+    fn_row = _lookup_by_va_or_name(c, "functions", _fn_json_sql(c), target, fn_name)
     if not fn_row:
         return False
 
@@ -2251,25 +2264,11 @@ def _render_panel(
     ctx["fn_name"] = fn_name
     if not _panel_function_detail(ctx, c, target, section, data, fn_name):
         # ── Try globals table ────────────────────────────────────────
-        # Same resolution order as GET /functions/<va>: cell entries may name
-        # a global by its VA string (the spelling _panel_function_detail
-        # already resolves against functions), so try VA candidates first and
-        # fall back to the exact-name lookup for legacy name-form cells.
-        gl_row = None
-        for cand in parse_va_candidates(fn_name):
-            c.execute(
-                "SELECT " + _global_json_sql(c) + " FROM globals WHERE target=? AND va=?",
-                (target, cand),
-            )
-            gl_row = c.fetchone()
-            if gl_row:
-                break
-        if gl_row is None:
-            c.execute(
-                "SELECT " + _global_json_sql(c) + " FROM globals WHERE target=? AND name=?",
-                (target, fn_name),
-            )
-            gl_row = c.fetchone()
+        # Same resolution order as the functions lookup above and as
+        # GET /functions/<va>: cell entries may name a global by its VA string,
+        # so VA candidates first, then the exact name for legacy name-form
+        # cells.
+        gl_row = _lookup_by_va_or_name(c, "globals", _global_json_sql(c), target, fn_name)
         if gl_row:
             gl_data = json.loads(gl_row[0])
             ctx["gl_data"] = gl_data

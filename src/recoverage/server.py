@@ -241,6 +241,26 @@ def _snapshot_db_mtime() -> tuple[int, int] | None:
     return acc, st.st_size
 
 
+def _if_none_match_matches(raw: str, etag: str) -> bool:
+    """Whether an ``If-None-Match`` header value already covers *etag*.
+
+    ONE spelling of RFC 9110's conditional-request comparison: a
+    comma-separated list, the ``*`` wildcard, and weak validators
+    (``W/"..."``) matched weakly.  Every ETag-bearing surface answers
+    revalidation through here, so the accepted spellings cannot drift.
+    """
+    for cand in raw.split(","):
+        cand = cand.strip()
+        if cand == "*":
+            return True
+        if cand == etag:
+            return True
+        # Strip the weak prefix W/ per RFC 9110.
+        if cand.startswith("W/") and cand[2:].strip() == etag:
+            return True
+    return False
+
+
 def _etag_or_304(snap: tuple[int, int] | None, *parts: object) -> str | None:
     """DB-freshness ETag over the WAL-aware snapshot *snap* + *parts*; 304 on match.
 
@@ -256,23 +276,11 @@ def _etag_or_304(snap: tuple[int, int] | None, *parts: object) -> str | None:
     if snap is None:
         return None
     etag = _safe_etag(snap[0], *parts)
-    raw = request.headers.get("If-None-Match", "")
-    # Handle weak validators (W/"..."), comma-separated lists, and "*".
-    candidates = [c.strip() for c in raw.split(",")] if raw else []
-    for cand in candidates:
-        if cand == "*":
-            raise HTTPResponse(
-                status=304,
-                headers={"ETag": etag, "Cache-Control": CACHE_REVALIDATE},
-            )
-        # Strip weak prefix W/ per RFC 9110.
-        if cand.startswith("W/"):
-            cand = cand[2:].strip()
-        if cand == etag:
-            raise HTTPResponse(
-                status=304,
-                headers={"ETag": etag, "Cache-Control": CACHE_REVALIDATE},
-            )
+    if _if_none_match_matches(request.headers.get("If-None-Match", ""), etag):
+        raise HTTPResponse(
+            status=304,
+            headers={"ETag": etag, "Cache-Control": CACHE_REVALIDATE},
+        )
     return etag
 
 
@@ -655,6 +663,23 @@ def _find_dll_path(target: str) -> Path | None:
     return _project_dir() / filename
 
 
+def _cache_dll_unavailable(target: str, warning: str, *args: object) -> bytes | None:
+    """Record *target*'s DLL as unloadable, logging *warning* once.
+
+    Every failure path in :func:`_load_dll` ends here so the double-checked
+    insert lives in one place instead of once per path: another thread may
+    have loaded the binary while this thread was doing the work that failed,
+    and that successful load wins.  String arguments are control-char escaped
+    on the way to the log; numbers are passed through for %d.
+    """
+    with DLL_LOCK:
+        if target in DLL_DATA:
+            return DLL_DATA[target]
+        _log.warning(warning, *(_log_safe(a) if isinstance(a, str) else a for a in args))
+        DLL_DATA[target] = None
+        return None
+
+
 def _load_dll(target: str) -> bytes | None:
     """Load DLL bytes for a target into DLL_DATA (thread-safe).
 
@@ -667,43 +692,31 @@ def _load_dll(target: str) -> bytes | None:
             return DLL_DATA[target]
     dll_path = _find_dll_path(target)
     if dll_path is None:
-        with DLL_LOCK:
-            if target in DLL_DATA:
-                return DLL_DATA[target]
-            _log.warning(
-                "No [targets.%s].binary configured — cannot load DLL for target %s",
-                _log_safe(target),
-                _log_safe(target),
-            )
-            DLL_DATA[target] = None
-        return None
+        return _cache_dll_unavailable(
+            target,
+            "No [targets.%s].binary configured — cannot load DLL for target %s",
+            target,
+            target,
+        )
     try:
         file_size = dll_path.stat().st_size
         if file_size > _MAX_DLL_SIZE:
-            with DLL_LOCK:
-                if target in DLL_DATA:
-                    return DLL_DATA[target]
-                _log.warning(
-                    "DLL %s (%d MiB) exceeds %d MiB limit, skipping",
-                    dll_path,
-                    file_size >> 20,
-                    _MAX_DLL_SIZE >> 20,
-                )
-                DLL_DATA[target] = None
-            return None
+            return _cache_dll_unavailable(
+                target,
+                "DLL %s (%d MiB) exceeds %d MiB limit, skipping",
+                str(dll_path),
+                file_size >> 20,
+                _MAX_DLL_SIZE >> 20,
+            )
         data = dll_path.read_bytes()
         if len(data) > _MAX_DLL_SIZE:
-            with DLL_LOCK:
-                if target in DLL_DATA:
-                    return DLL_DATA[target]
-                _log.warning(
-                    "DLL %s (%d MiB) exceeds %d MiB limit after read, skipping",
-                    dll_path,
-                    len(data) >> 20,
-                    _MAX_DLL_SIZE >> 20,
-                )
-                DLL_DATA[target] = None
-            return None
+            return _cache_dll_unavailable(
+                target,
+                "DLL %s (%d MiB) exceeds %d MiB limit after read, skipping",
+                str(dll_path),
+                len(data) >> 20,
+                _MAX_DLL_SIZE >> 20,
+            )
     except OSError as exc:
         _log.warning(
             "Failed to load DLL for target %s at %s: %s: %s",
@@ -1691,6 +1704,18 @@ _CSP = (
 )
 
 
+def _merge_vary(origin: str) -> None:
+    """Add "Origin" to the response's Vary without dropping what is there.
+
+    Compressed responses already carry "Accept-Encoding"; a shared cache must
+    key on both, so the token is appended rather than replacing the header.
+    """
+    existing = [v.strip() for v in response.headers.get("Vary", "").split(",") if v.strip()]
+    if origin not in existing:
+        existing.append(origin)
+    response.set_header("Vary", ", ".join(existing))
+
+
 @app.hook("after_request")
 def _security_headers() -> None:
     response.set_header("X-Content-Type-Options", "nosniff")
@@ -1702,21 +1727,13 @@ def _security_headers() -> None:
     origin = request.headers.get("Origin", "")
     if CORS_ENABLED and origin and _normalize_origin(origin) in CORS_ALLOWED_ORIGINS:
         response.set_header("Access-Control-Allow-Origin", origin)
-        # Append to any existing Vary (compressed responses already carry
-        # "Accept-Encoding") instead of replacing it — a shared cache must
-        # key on both.
-        existing_vary = response.headers.get("Vary", "")
-        combined = ", ".join(v for v in (existing_vary, "Origin") if v)
-        response.set_header("Vary", combined)
+        _merge_vary("Origin")
         response.set_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         response.set_header("Access-Control-Allow-Headers", "Content-Type")
         response.set_header("Access-Control-Allow-Credentials", "true")
     elif origin:
         # Ensure caches key on Origin even when not allowed.
-        existing_vary = response.headers.get("Vary", "")
-        if "Origin" not in existing_vary:
-            combined = ", ".join(v for v in (existing_vary, "Origin") if v)
-            response.set_header("Vary", combined)
+        _merge_vary("Origin")
 
 
 @app.route("<path:path>", method="OPTIONS")
