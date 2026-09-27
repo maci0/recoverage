@@ -36,9 +36,11 @@ import json
 import os
 import random
 import re
-from collections.abc import Callable
+import sqlite3
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 import pytest
 from conftest import HAS_DB, decode_body, get_first_target, wsgi_request
@@ -1447,6 +1449,425 @@ class TestPotatoQuery:
                 _status, headers, body = wsgi_request("GET", f"/potato?{view}search={_pct(value)}")
                 text = decode_body(body, headers).decode("utf-8")
                 assert value not in text, f"search={value!r} reflected verbatim ({view or 'grid'})"
+
+
+# ── the search query language ──────────────────────────────────────
+#
+# ``?search=`` is the one query parameter that becomes a *pattern*: it is
+# escaped for LIKE, folded (NFC + casefold) and re-escaped, and the two
+# disjuncts it produces are ORed into the WHERE clause api.py builds.  Every
+# other fuzzed parameter is either an integer or a whitelist key, so this is
+# the only place a term's own characters decide which rows a reader sees.
+#
+# The properties asserted here are differential, not "did not raise": the
+# campaign re-derives the matching set in Python — ASCII-folding only for the
+# LIKE disjunct, full folding for the rc_fold disjunct, NULL as the empty
+# string — and demands the query agree row for row.  A wildcard the escape
+# dropped, a fold applied twice, a NULL that vanished, or a disjunct that
+# narrowed instead of widening all show up as a set difference, and none of
+# them is visible in a status code.
+
+#: ASCII A-Z only, which is exactly the range SQLite's LIKE folds.  Python's
+#: str.lower() is not a substitute: it also folds É to é, which LIKE does not,
+#: so an oracle using it would disagree with the engine on every accented row
+#: and hide the very regressions it is here to catch.
+_ASCII_FOLD = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
+
+SEARCH_SEEDS: list[bytes] = [
+    b"",
+    b"Render",
+    b"render",
+    b"REN",
+    b"e_",
+    b"_",
+    b"%",
+    b"%%",
+    b"100%",
+    b"\\",
+    b"\\%",
+    b"%_\\",
+    b"' OR 1=1 --",
+    b"0x1000",
+    b"Cafe",
+    "Café".encode(),
+    "CAFÉ".encode(),
+    "Café".encode(),
+    "straße".encode(),
+    b"STRASSE",
+    "ﬁle".encode(),
+    b"file",
+    b"100%_match",
+    "☃".encode(),
+    "\u0131".encode(),
+    "ǅ".encode(),
+    b"\xff\xfe",
+    b"\xc3",
+    b"\xed\xa0\x80",
+    b"a" * 300,
+    b"%" * 60,
+]
+
+SEARCH_TOKENS: tuple[bytes, ...] = (
+    b"",
+    b"%",
+    b"_",
+    b"\\",
+    b"e",
+    b"E",
+    "e\u0301".encode(),
+    "É".encode(),
+    "ß".encode(),
+    "ﬁ".encode(),
+    b"Render",
+    b"render",
+    "Caf\u00e9".encode(),
+    b"%C3%A9",
+    b"\xff",
+    b"a",
+)
+
+
+@contextmanager
+def _search_conn() -> Iterator[sqlite3.Connection]:
+    """A scratch table shaped like ``functions``, with the real fold.
+
+    The names are the ones a search has to get right: an NFD/NFC pair that
+    differ only in composition, a casefold that changes length (ß -> ss, the
+    ﬁ ligature -> fi), a row whose symbol is NULL, a row whose name is empty,
+    and two names carrying the LIKE metacharacters themselves.
+    """
+    conn = sqlite3.connect(":memory:")
+    try:
+        conn.create_function(srv.FOLD_SQL, 1, srv.fold_text, deterministic=True)
+        conn.execute("CREATE TABLE t (va INTEGER, name TEXT, symbol TEXT, vaStart TEXT)")
+        conn.executemany("INSERT INTO t VALUES (?, ?, ?, ?)", _SEARCH_ROWS)
+        yield conn
+    finally:
+        # sqlite3's own ``with`` is a transaction scope, not a closer, so a
+        # connection left to the collector is a leaked handle per round.
+        conn.close()
+
+
+_SEARCH_ROWS = (
+    (1, "Plain_Render", "plain_render", "0x1000"),
+    (2, "Café_Render", "café_render", "0x1010"),
+    (3, "STRASSE_handler", "straße_handler", "0x1020"),
+    (4, "100%_match", None, "0x1030"),
+    (5, "under_score", "a_b", "0x1040"),
+    (6, "back\\slash", "back\\slash", "0x1050"),
+    (7, "", "", "0x1060"),
+    (8, "☃snowman", "☃snow", "0x1070"),
+    (9, None, None, "0x1080"),
+    (10, "ﬁle_open", "ﬁle", "0x1090"),
+)
+
+
+def _row_matches(term: str, row: tuple[object, ...]) -> bool:
+    """Whether row *va, name, symbol, vaStart* matches *term*, computed without SQL.
+
+    Mirrors the two disjuncts the callers build: the plain LIKE over all four
+    columns (NULL coerced to the empty string, case folded for ASCII only) and,
+    for a term carrying a non-ASCII character, rc_fold over the two name
+    columns.  A term is a literal substring in both: the LIKE wildcards it may
+    carry are the caller's to escape, and a wildcard that reached the pattern
+    would make this oracle disagree — which is the finding.
+    """
+    _va, name, symbol, va_start = row
+    folded_term = srv.fold_text(term)
+    for column in (name, symbol, va_start):
+        hay = "" if column is None else str(column)
+        if term.translate(_ASCII_FOLD) in hay.translate(_ASCII_FOLD):
+            return True
+        if not term.isascii() and folded_term in srv.fold_text(hay):
+            return True
+    return False
+
+
+def _like_literal(pattern: str) -> str | None:
+    """The text a LIKE pattern matches literally, or None if it is not one.
+
+    Undoes the two wildcards a substring pattern adds and the ``ESCAPE
+    '\\'`` escaping the terms carry, so the caller can compare the result with
+    the term it passed in.  Written from the pattern's grammar rather than
+    from :func:`server._escape_like`, so a regression in the escaper is a
+    difference here rather than a shared mistake.
+    """
+    if not pattern.startswith("%") or not pattern.endswith("%") or len(pattern) < 2:
+        return None
+    out: list[str] = []
+    escaped = False
+    for ch in pattern[1:-1]:
+        if escaped:
+            out.append(ch)
+            escaped = False
+        elif ch == "\\":
+            escaped = True
+        elif ch in "%_":
+            # A bare wildcard in the interior would make the pattern match
+            # more than the term.
+            return None
+        else:
+            out.append(ch)
+    return None if escaped else "".join(out)
+
+
+class TestSearchFoldDifferential:
+    """``like_match`` + ``folded_like_clause`` against a Python oracle."""
+
+    def test_query_returns_exactly_the_rows_the_term_denotes(self) -> None:
+        chain, arity = srv.like_match(["name", "symbol", "CAST(va AS TEXT)", "vaStart"])
+        folded_sql, folded_params = srv.folded_like_clause(["name", "symbol"], "x")
+        assert folded_sql == "" and folded_params == [], "an ASCII term needs no folded disjunct"
+
+        def check(data: bytes) -> None:
+            term = data.decode("utf-8", "replace")
+            folded_sql, folded_params = srv.folded_like_clause(["name", "symbol"], term)
+            # The exact composition api.py and potato.py build.
+            where = f"{chain} OR {folded_sql}" if folded_sql else chain
+            sql = f"SELECT va FROM t WHERE {where}"
+            params = [srv._escape_like(term)] * arity + folded_params
+            with _search_conn() as conn:
+                got = {row[0] for row in conn.execute(sql, params)}
+            want = {row[0] for row in _SEARCH_ROWS if _row_matches(term, row)}
+            assert got == want, f"search={term!r}: matched {sorted(got)}, expected {sorted(want)}"
+
+        _fuzz(
+            SEARCH_SEEDS,
+            check,
+            iterations=250,
+            struct_tokens=SEARCH_TOKENS,
+            num_tokens=SEARCH_TOKENS,
+        )
+
+    def test_the_emitted_pattern_matches_the_term_and_nothing_else(self) -> None:
+        """The escaping invariant, asserted on the pattern rather than on a
+        query's outcome.
+
+        A LIKE pattern is only as private as its escaping, and a dropped
+        backslash is invisible in a row count: ``%`` would quietly turn one
+        search into a full-table match.  So the pattern is unwound and
+        compared with the term that produced it, for the plain disjunct and
+        (after folding) for the folded one.
+
+        A NUL is deliberately absent from the corpus: SQLite reads a pattern
+        as a C string, so a NUL ends it and no escaping can make the pattern
+        match a literal NUL.  The engine's behaviour there is not a property
+        of this module, and no symbol name holds one, so the campaign does not
+        claim an answer it cannot get from the engine.
+        """
+
+        def check(data: bytes) -> None:
+            term = data.decode("utf-8", "replace")
+            assert _like_literal(srv._escape_like(term)) == term, (
+                f"search={term!r}: pattern is not a literal for the term"
+            )
+            _sql, folded_params = srv.folded_like_clause(["name", "symbol"], term)
+            folded = srv.fold_text(term)
+            for param in folded_params:
+                assert _like_literal(param) == folded, (
+                    f"search={term!r}: folded pattern is not a literal for {folded!r}"
+                )
+
+        _fuzz(
+            SEARCH_SEEDS,
+            check,
+            iterations=250,
+            struct_tokens=SEARCH_TOKENS,
+            num_tokens=SEARCH_TOKENS,
+        )
+
+    def test_a_wildcard_never_becomes_a_pattern(self) -> None:
+        """The one asymmetry a LIKE pattern can carry, stated directly.
+
+        ``%`` and ``_`` are the reader's own characters: escaped, they are
+        matched literally, so a search for ``100%`` returns the row that holds
+        it and not every row.  Unescaped, the same term matches the whole
+        table, which is both a wrong answer and a cheap way to pull the
+        database.
+        """
+        every = {row[0] for row in _SEARCH_ROWS}
+        with _search_conn() as conn:
+            for term in ("%", "_", "\\"):
+                chain, arity = srv.like_match(["name", "symbol", "CAST(va AS TEXT)", "vaStart"])
+                got = {
+                    row[0]
+                    for row in conn.execute(
+                        f"SELECT va FROM t WHERE {chain}", [srv._escape_like(term)] * arity
+                    )
+                }
+                want = {row[0] for row in _SEARCH_ROWS if _row_matches(term, row)}
+                assert got == want, f"search={term!r}: got {sorted(got)}, expected {sorted(want)}"
+                # The independent statement the oracle cannot make for itself:
+                # a metacharacter widened the match to the whole table.
+                assert got != every, (
+                    f"search={term!r}: matched every row, so it acted as a wildcard"
+                )
+
+    def test_a_row_without_a_symbol_is_searchable_by_its_name(self) -> None:
+        """COALESCE is load-bearing: ``symbol`` is NULL on a real row, and one
+        NULL in an OR chain makes the whole predicate NULL, so a row whose
+        name matched would be dropped anyway."""
+        with _search_conn() as conn:
+            chain, arity = srv.like_match(["name", "symbol", "CAST(va AS TEXT)", "vaStart"])
+            got = {
+                row[0]
+                for row in conn.execute(
+                    f"SELECT va FROM t WHERE {chain}", [srv._escape_like("100%")] * arity
+                )
+            }
+            assert 4 in got, f"the NULL-symbol row was dropped: {sorted(got)}"
+
+
+# ── percent-decoding of the path and the query string ──────────────
+#
+# ``path_param`` and ``decode_query_value`` are the two decoders every
+# attacker-controlled segment passes through, and neither had a harness: the
+# repo-file campaign checked the status code the decode produced but nothing
+# about the decode itself, and a target id, a section name or a VA that
+# arrived mis-decoded 404s for a reason no test could name.  A decoder whose
+# second pass turns ``%252e%252e%252f`` into ``../`` is a containment bug one
+# refactor away, so the contracts it documents are the properties asserted
+# here: one pass, no raise, and the two documented fall-backs (a segment that
+# is not valid UTF-8, a query value that is not valid UTF-8 in latin-1) return
+# the input rather than a half-decoded guess.
+
+PATH_SEEDS: list[bytes] = [
+    b"",
+    b"demo",
+    b".text",
+    b"a b",
+    b"a#b",
+    b"a?b",
+    b"sp%20ace",
+    b"d%C3%A9mo",
+    b"d%c3%a9mo",
+    b"1000%2E",
+    b"%2e%2e%2f",
+    b"%252e%252e%252f",
+    b"%25252e",
+    b"%2",
+    b"%%",
+    b"%%20",
+    b"%zz",
+    b"%c0%ae%c0%ae",
+    b"%c0%af",
+    b"%ed%a0%80",
+    b"%f4%90%80%80",
+    b"%fe%ff",
+    b"%ff%fe",
+    b"%00",
+    b"a%00b",
+    b"main.c",
+    b"a" * 300,
+    b"%c3%28",
+    b"e%CC%81",  # combining acute: NFC composes it to é
+    b"1_000",
+]
+
+PATH_TOKENS: tuple[bytes, ...] = (
+    b"%",
+    b"%2",
+    b"%25",
+    b"%2e",
+    b"%2f",
+    b"%5c",
+    b"%00",
+    b"%c3%a9",
+    b"%c0%ae",
+    b"%ed%a0%80",
+    b"%zz",
+    b"..",
+    b"/",
+    b"\\",
+    b" ",
+    b"a",
+    b"\xff",
+    b"",
+)
+
+
+class TestPathAndQueryDecoders:
+    """``server.path_param`` and ``server.decode_query_value``."""
+
+    def test_path_param_never_raises_and_is_one_pass(self) -> None:
+        """The oracle is ``urllib.parse.unquote`` itself: the module's
+        documented contract is that result-or-identity, never anything else."""
+
+        def check(data: bytes) -> None:
+            value = data.decode("latin-1")
+            decoded = srv.path_param(value)
+            assert isinstance(decoded, str), f"{data!r}: {decoded!r}"
+            try:
+                expected = unquote(value, encoding="utf-8", errors="strict")
+            except UnicodeDecodeError:
+                # A segment whose escapes are not UTF-8 is a legal filename on
+                # Linux; it comes back unchanged so the route 404s honestly.
+                expected = value
+            assert decoded == expected, f"{data!r}: decoded to {decoded!r}, expected {expected!r}"
+            if "%" not in value:
+                assert decoded == value, f"{data!r}: a literal segment was rewritten"
+            # One pass only: a second decode of an already-decoded segment is
+            # the traversal ``%252e%252e%252f`` relies on, so the handler must
+            # never receive text that a second pass would change.  Asserting
+            # it cannot be *avoided* for every input is not possible (a
+            # filename may legitimately hold ``%2e``); what must hold is that
+            # the value reaching the containment check is the one-pass decode.
+            assert srv.path_param(decoded) in (decoded, unquote(decoded, errors="replace"))
+
+        _fuzz(PATH_SEEDS, check, iterations=400, struct_tokens=PATH_TOKENS, num_tokens=PATH_TOKENS)
+
+    def test_path_param_round_trips_a_quoted_segment(self) -> None:
+        """Positive direction: a filename a browser would escape has to come
+        back as the name the filesystem holds, or every such file 404s."""
+        for text in ("a b.c", "démo.c", "100%_x.c", "a#b?.c", "back\\slash.c", "é", "0x1000"):
+            assert srv.path_param(_pct(text)) == text, f"{text!r} did not survive quoting"
+
+    def test_decode_query_value_never_raises_and_is_idempotent(self) -> None:
+        """Two spellings of the same character must reach one comparison.
+
+        Bottle hands a query value over as latin-1, so ``?section=%C3%A9``
+        arrives as ``Ã©``; the re-encode recovers the ``é`` the client meant.
+        Applying it twice has to be a fixed point, or a value routed through
+        two readers (a page route and an API call carrying the same query)
+        would compare two different strings.
+        """
+
+        def check(data: bytes) -> None:
+            raw = data.decode("latin-1")
+            once = srv.decode_query_value(raw)
+            assert isinstance(once, str), f"{data!r}: {once!r}"
+            assert srv.decode_query_value(once) == once, (
+                f"{data!r}: second pass gave {srv.decode_query_value(once)!r}"
+            )
+            try:
+                expected = raw.encode("latin-1").decode("utf-8")
+            except (UnicodeEncodeError, UnicodeDecodeError):
+                expected = raw
+            assert once == expected, f"{data!r}: decoded to {once!r}, expected {expected!r}"
+            if raw.isascii():
+                assert once == raw, f"{data!r}: an ASCII value was rewritten"
+
+        _fuzz(PATH_SEEDS, check, iterations=300, struct_tokens=PATH_TOKENS, num_tokens=PATH_TOKENS)
+
+    def test_a_200_serves_the_bytes_the_named_file_holds(self) -> None:
+        """Differential across the containment boundary.
+
+        The status-code campaign above cannot see a traversal that answers
+        200 with someone else's file: the status is right and the content is
+        not.  A 200 therefore has to be byte-identical to the file that
+        actually lives at the decoded, root-relative path, read here from the
+        filesystem rather than from the app's own resolution.
+        """
+        for prefix in ("/src/", "/original/"):
+            for segment in ("recoverage/__init__.py", "docs/DESIGN.md", "pyproject.toml"):
+                status, _headers, body = wsgi_request("GET", prefix + _pct(segment))
+                if int(status.split()[0]) != 200:
+                    continue
+                root = (srv._project_dir() / prefix.strip("/")).resolve()
+                expected = (root / segment).read_bytes()
+                assert body == expected, (
+                    f"{prefix}{segment}: served bytes differ from the file at {root / segment}"
+                )
 
 
 # ── repo file serving ──────────────────────────────────────────────

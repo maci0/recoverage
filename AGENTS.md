@@ -495,7 +495,18 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   stays within `_REGEN_KEY_MAX` however many distinct keys arrive. The
   `RECOVERAGE_*` campaigns hold the module's own contract instead: every reader
   answers a value in its documented range or raises `ConfigError`, and never a
-  third thing (a non-ASCII digit is a rejected port, not a bound one). No
+  third thing (a non-ASCII digit is a rejected port, not a bound one). Two
+  campaigns are differential rather than crash-only, because a status code
+  cannot see a wrong answer: the search campaigns rebuild the matching set in
+  Python (ASCII-only folding for the LIKE disjunct, full folding for the
+  `rc_fold` disjunct, NULL as the empty string) and demand the query agree row
+  for row, and unwind each emitted LIKE pattern to prove it spells the term
+  and not a wildcard; the decoder campaigns pin `server.path_param` and
+  `server.decode_query_value` against `urllib.parse.unquote`, one pass and
+  never a raise, with a 200 on `/src` and `/original` asserted byte-identical
+  to the file on disk. A LIKE pattern cannot spell a literal NUL (SQLite reads
+  it as a C string), so the search corpus carries none and the campaign claims
+  no answer it cannot get from the engine. No
   coverage-guided fuzzer is a
   project dependency, so the corpus lives in that file; a new surface gets a
   corpus entry there, not a new dependency.
