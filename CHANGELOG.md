@@ -21,23 +21,6 @@ module ships in the published package. See *Breaking*.
   `RECOVERAGE_*` name, each exit 2 naming the variable. The resolved settings
   are printed on startup, the token as `token=set`.
 
-### Changed
-
-- **`make shell-lint` and `make yaml-lint` check the tree's non-Python
-  sources.** The `tools/*.sh` scripts ran under `bash` with no shellcheck and
-  the `.github/` definitions were read by no linter at all; both now run in
-  the `lint` CI job, alongside the ruff targets in `make all`. The yamllint
-  settings live in `.yamllint.yaml`. ruff additionally selects the `PTH`
-  and `RUF` groups, both clean on this tree.
-- **The `/potato` route lives in `recoverage.potato`, next to the renderer it
-  serves.** `ui.handle_potato` imported the renderer inside the handler body
-  and reached back for a private helper; the route now sits with
-  `render_potato` and `webapp` imports `potato` alongside `api` and `ui`.
-  Same responses, same headers, same 503 and 500 bodies.
-- **`_db_path` is imported from `recoverage._paths`, not re-exported through
-  `recoverage.server`.** `api`, `potato` and `cli` now name the same module as
-  the helper's owner.
-
 ### Breaking
 
 - **`server.resolve_targets` returns the one ordered target list, not a
@@ -55,8 +38,67 @@ module ships in the published package. See *Breaking*.
   build that dropped below the gate. The `--json` error object reports
   `"exit_code": 2` with it. A gate failure still exits 1.
 
+### Changed
+
+- **`make shell-lint` and `make yaml-lint` check the tree's non-Python
+  sources.** The `tools/*.sh` scripts ran under `bash` with no shellcheck and
+  the `.github/` definitions were read by no linter at all; both now run in
+  the `lint` CI job, alongside the ruff targets in `make all`. The yamllint
+  settings live in `.yamllint.yaml`. ruff additionally selects the `PTH`
+  and `RUF` groups, both clean on this tree.
+- **The `/potato` route lives in `recoverage.potato`, next to the renderer it
+  serves.** `ui.handle_potato` imported the renderer inside the handler body
+  and reached back for a private helper; the route now sits with
+  `render_potato` and `webapp` imports `potato` alongside `api` and `ui`.
+  Same responses, same headers, same 503 and 500 bodies.
+- **`_db_path` is imported from `recoverage._paths`, not re-exported through
+  `recoverage.server`.** `api`, `potato` and `cli` now name the same module as
+  the helper's owner.
+- **The design docs describe the code as it is.** `USER_STORIES.md` and
+  `DESIGN.md` still described a DOM grid of per-cell nodes, CSS-class
+  filtering, a bare `recoverage` command that serves on its own, and an
+  inlined shell of 14.55 KB; the SPA paints one canvas per section, filters
+  with a second alpha pass over cached rects, is launched as
+  `recoverage serve`, and the shell compresses to 14.1 KB. The cell-state
+  colour list, Potato Mode's colour table, the Potato test counts and the
+  payload budget now match the code, and a test fails when a cell state
+  drops out of the documented table.
+- **Static assets revalidate instead of re-downloading.** The ten
+  compressed assets sent `Cache-Control: no-cache` with no validator, so a
+  repeat visit re-sent 55 KB and every asm-pane opening re-sent
+  `hljs.min.js` and its grammars. Each now carries a strong ETag (per
+  content-encoding, so a brotli and a zstd body never share one) and answers
+  304 to a matching `If-None-Match`. `max-age` stays at 0 on purpose: the URLs
+  are not content-hashed, so an upgrade changes the bytes under the same name.
+- **Syntax highlighting follows the documented palette.** Every highlight.js
+  token color in both themes was a hand-picked literal outside the palette and
+  now derives from it, so the code and hex panes restyle with the theme
+  instead of drifting from it.
+- **Badge, link, and progress-track colors derive from the palette** rather
+  than repeating hex literals, including the empty progress-bar track, which
+  is `--none` composited over the panel color.
+- **The function list's row total is memoized, and the disassembly memo is
+  bounded.** The paginated list ran `COUNT(*)` over `functions` on every
+  filter, status and page change (7.2 ms unfiltered on a 20k-function
+  target), for a number the database had not changed; it is now keyed by the
+  same WAL-aware snapshot the other memos use plus the exact filter triple, so
+  a rebuild or a different filter misses. The disassembly memo was sized at
+  2048 entries against a worst case of ~72 KB of rendered text per entry
+  (4096 bytes of x86, the `?size=` clamp the SPA sends), so it could retain
+  ~148 MB for a cache whose hits are rare: the ETag answers the browser's
+  repeat clicks with a 304 first. It is capped at 128 entries, near 9 MB.
+
 ### Fixed
 
+- **The SPA grid is re-laid out when a rebuild re-spans a section.** Layout
+  was memoized on `(column count, cell count)`, and a rebuild that moved a
+  cell's start without changing how many there are left the key matching: the
+  stale hit-map and rect geometry mis-painted the section and handed a click
+  the wrong cell. The memo now keys on the packed cell object itself, which
+  `packSection` returns fresh per section version and after a lazy cells
+  fetch, so identity is exactly "the cells changed". A section that declares
+  a different column count after a rebuild also re-wraps, which a
+  `getComputedStyle` read of the old width could not catch.
 - **Functions with an unknown `markerType` are listed again.** The
   GLOBAL/DATA/VTABLE/STRING exclusion read `markerType NOT IN (...)`, and
   SQLite evaluates `NULL NOT IN (...)` to NULL, which `WHERE` rejects: on a
@@ -168,32 +210,6 @@ module ships in the published package. See *Breaking*.
   routable request data and originates in analyzed binary names, so a
   control character in it could forge a log line; the loader's warnings
   now route it through `_log_safe` like the rest of the request log.
-
-### Changed
-
-- **The design docs describe the code as it is.** `USER_STORIES.md` and
-  `DESIGN.md` still described a DOM grid of per-cell nodes, CSS-class
-  filtering, a bare `recoverage` command that serves on its own, and an
-  inlined shell of 14.55 KB; the SPA paints one canvas per section, filters
-  with a second alpha pass over cached rects, is launched as
-  `recoverage serve`, and the shell compresses to 14.1 KB. The cell-state
-  colour list, Potato Mode's colour table, the Potato test counts and the
-  payload budget now match the code, and a test fails when a cell state
-  drops out of the documented table.
-- **Static assets revalidate instead of re-downloading.** The ten
-  compressed assets sent `Cache-Control: no-cache` with no validator, so a
-  repeat visit re-sent 55 KB and every asm-pane opening re-sent
-  `hljs.min.js` and its grammars. Each now carries a strong ETag (per
-  content-encoding, so a brotli and a zstd body never share one) and answers
-  304 to a matching `If-None-Match`. `max-age` stays at 0 on purpose: the URLs
-  are not content-hashed, so an upgrade changes the bytes under the same name.
-- **Syntax highlighting follows the documented palette.** Every highlight.js
-  token color in both themes was a hand-picked literal outside the palette and
-  now derives from it, so the code and hex panes restyle with the theme
-  instead of drifting from it.
-- **Badge, link, and progress-track colors derive from the palette** rather
-  than repeating hex literals, including the empty progress-bar track, which
-  is `--none` composited over the panel color.
 
 ### Removed
 

@@ -24,6 +24,20 @@ _CHANGELOG = _MANIFEST.parent / "CHANGELOG.md"
 # `## [1.6.0] - 2026-09-27` or `## [1.6.0]`, with or without an Unreleased.
 _SECTION_RE = re.compile(r"^## \[(?P<version>[^\]]+)\](?: - (?P<date>[\d-]+))?$", re.MULTILINE)
 
+# Keep a Changelog's impact groups, in the order a reader wants them: what is
+# new, what breaks, what moved, what was wrong, what is gone. A release with
+# two `### Changed` headings splits one group in two, and a release with
+# `Breaking` below `Fixed` buries it.
+_CANONICAL_GROUPS = (
+    "Added",
+    "Breaking",
+    "Changed",
+    "Deprecated",
+    "Fixed",
+    "Removed",
+    "Security",
+)
+
 
 def _released_versions() -> list[str]:
     """Changelog section versions, newest first, excluding Unreleased."""
@@ -132,3 +146,17 @@ class TestDeclaredFloorsAreRecorded:
                 "Removed",
                 "Security",
             }
+
+    def test_unreleased_groups_appear_once_and_in_canonical_order(self) -> None:
+        """One heading per group, in impact order.
+
+        A repeated heading silently splits a group: a reader's tool, and the
+        `Breaking` marker a release is gated on, only see the first one. The
+        shipped Unreleased section carried two `### Changed` blocks, the
+        second holding the asset-ETag and palette notes.
+        """
+        unreleased = _changelog().split("## [Unreleased]", 1)[1].split("\n## [", 1)[0]
+        headings = re.findall(r"^### (.+)$", unreleased, re.MULTILINE)
+        duplicates = sorted({h for h in headings if headings.count(h) > 1})
+        assert duplicates == [], f"repeated changelog group(s): {duplicates}"
+        assert headings == sorted(headings, key=_CANONICAL_GROUPS.index)
