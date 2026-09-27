@@ -1446,11 +1446,13 @@ _POTATO_500_BODY = "<html><body>Internal server error</body></html>"
 
 #: Query fields whose value the page echoes back into markup, so an escaping
 #: regression is observable from the response alone.  ``filter`` is not one:
-#: ``potato._parse_filters`` intersects the value with the literal keys in
-#: ``FILTER_STATES``, so an unknown-only value never reaches the template and
-#: there is nothing to escape.  A name that IS offered is ours to escape, not
-#: the caller's, and that is pinned by ``test_potato``'s filter-pill
-#: assertions and by the ``test_filter_*`` cases below.
+#: :func:`recoverage.potato._parse_filters` intersects the value with the
+#: literal keys in ``FILTER_STATES``, so an unknown-only value is dropped
+#: before it reaches the template (an unknown key matches no cell state, and
+#: keeping it would dim every block and light no pill) and there is nothing to
+#: escape.  A name that IS offered is ours to escape, not the caller's, and
+#: that is pinned by the ``test_filter_*`` cases below and by ``test_potato``'s
+#: filter-pill assertions.
 _POTATO_REFLECTED = ("search", "target")
 
 
@@ -1508,6 +1510,23 @@ class TestPotatoQuery:
         # Everything the canary could terminate has to appear as an entity.
         assert "<RCCANARY" not in text, f"{field}: raw markup delimiter"
         assert ">RCCANARY" not in text, f"{field}: raw markup delimiter"
+
+    def test_unknown_filter_is_dropped_and_known_one_applied(self) -> None:
+        """``?filter=`` is the one query field the page never echoes: a name
+        no pill offers matches no cell state, so it is intersected away rather
+        than rendered.  Both halves matter — an unknown name must leave the
+        view unfiltered (not dim every block), and a real one must still
+        render its pill as active."""
+        unknown = _pct("RCCANARY<>&\"'=`")
+        _status, headers, body = wsgi_request("GET", f"/potato?filter={unknown}")
+        text = decode_body(body, headers).decode("utf-8")
+        assert "RCCANARY" not in text
+        assert text.rstrip().endswith("</html>")
+
+        _status, headers, body = wsgi_request("GET", "/potato?filter=exact")
+        text = decode_body(body, headers).decode("utf-8")
+        assert "filter=exact" in text  # the pill's own link, rendered back
+        assert 'accesskey="e"' in text  # and it is the active one
 
     def test_filter_reflects_only_the_names_a_pill_offers(self) -> None:
         """The filter path is quoted, and an unnamed filter is never rendered.

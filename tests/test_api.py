@@ -650,7 +650,7 @@ class TestApiAsmVaBoundaries:
         # gets us past the 501 short-circuit without the optional dependency.
         import recoverage.api as api
 
-        monkeypatch.setattr(api, "HAS_CAPSTONE", True)
+        monkeypatch.setattr(api, "capstone_unavailable_reason", lambda: None)
 
     def _asm(self, target: str, query: str) -> tuple[str, dict[str, str], bytes]:
         return wsgi_get(f"/api/targets/{target}/asm?{query}")
@@ -772,7 +772,7 @@ class TestApiAsm:
         # optional dependency.
         import recoverage.api as api
 
-        monkeypatch.setattr(api, "HAS_CAPSTONE", True)
+        monkeypatch.setattr(api, "capstone_unavailable_reason", lambda: None)
 
     def test_missing_params_returns_400(self) -> None:
         target = get_first_target()
@@ -1067,6 +1067,22 @@ class TestRegenFailureMapping:
         data = json.loads(decode_body(body, headers))
         assert data["detail"].startswith("ValueError")
         assert "corrupt JSON" not in data["detail"]
+
+    def test_failed_regen_still_invalidates_derived_caches(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """build_db can replace coverage.db and THEN fail, so the caches
+        repopulated while the run was in flight describe a file the server no
+        longer has.  The post-run invalidation must not be the success path's
+        privilege."""
+        import recoverage.api as api
+
+        cleared: list[str] = []
+        monkeypatch.setattr(
+            api, "_clear_derived_caches_logged", lambda where: cleared.append(where)
+        )
+        self._post_regen(monkeypatch, ValueError("corrupt JSON"))
+        assert "after regen" in cleared
 
 
 class TestRegenIdempotencyKey:
@@ -2029,7 +2045,7 @@ class TestErrorResponseShape:
     def test_501_not_implemented(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import recoverage.api as api
 
-        monkeypatch.setattr(api, "HAS_CAPSTONE", False)
+        monkeypatch.setattr(api, "capstone_unavailable_reason", lambda: "capstone is not installed")
         status, headers, body = wsgi_get("/api/targets/FAKEDLL/asm?va=0x10001000&size=16")
         data = self._check(status, headers, body, "not_implemented")
         assert "capstone" in data["error"]
@@ -3676,6 +3692,81 @@ class TestVaOverflowValidation:
         assert data["functions"] == []
 
 
+class TestCapstoneCapabilityProbe:
+    """``find_spec`` says a capstone distribution is on the path; it does not
+    say it loads.  A wheel for the wrong architecture, a missing libcapstone or
+    a half-unpacked install passes the spec probe and fails on import, which
+    used to reach the operator as a bare 500 with a traceback where the 501
+    contract promises an answer, and as /api/health advertising an extra the
+    process cannot use."""
+
+    @staticmethod
+    def _broken_install(monkeypatch: Any) -> None:
+        """Present-but-unloadable: the distribution is on the path, the import
+        is what fails.  ``None`` in ``sys.modules`` is the standard way to say
+        "this module exists and cannot be loaded"."""
+        import sys
+
+        import recoverage.disasm as disasm
+
+        monkeypatch.setattr(disasm, "_CAPSTONE_INSTALLED", True)
+        monkeypatch.setattr(disasm, "_probed", False)
+        monkeypatch.setattr(disasm, "_probe_reason", None)
+        # A handle cached by an earlier test would short-circuit the probe.
+        monkeypatch.setattr(disasm._CAPSTONE_MD_TLS, "md", None, raising=False)
+        monkeypatch.setitem(sys.modules, "capstone", None)
+
+    def test_probe_names_the_failure_and_memoizes(self, monkeypatch: Any) -> None:
+        import recoverage.disasm as disasm
+
+        self._broken_install(monkeypatch)
+
+        reason = disasm.capstone_unavailable_reason()
+        assert "ModuleNotFoundError" in reason
+        assert not disasm.disassembly_available()
+        # A broken install costs one failed import per process, not one per
+        # request, and the verdict is stable for every later caller.
+        assert disasm.capstone_unavailable_reason() == reason
+
+    def test_missing_extra_is_reported_as_not_installed(self, monkeypatch: Any) -> None:
+        import recoverage.disasm as disasm
+
+        monkeypatch.setattr(disasm, "_CAPSTONE_INSTALLED", False)
+        assert disasm.capstone_unavailable_reason() == "capstone is not installed"
+        assert not disasm.disassembly_available()
+
+    def test_unloadable_capstone_raises_instead_of_tracebacking(self, monkeypatch: Any) -> None:
+        import recoverage.disasm as disasm
+
+        self._broken_install(monkeypatch)
+        with pytest.raises(disasm.CapstoneUnavailableError):
+            disasm.get_capstone_md()
+
+    def test_asm_answers_501_with_the_reason(self, monkeypatch: Any) -> None:
+        import recoverage.api as api
+
+        monkeypatch.setattr(
+            api, "capstone_unavailable_reason", lambda: "OSError: libcapstone.so.5: cannot open"
+        )
+        status, headers, body = wsgi_get("/api/targets/FAKEDLL/asm?va=0x10001000&size=16")
+        data = json.loads(decode_body(body, headers))
+        assert status.startswith("501")
+        assert data["code"] == "not_implemented"
+        assert "capstone" in data["error"]
+        # The operator gets WHICH failure, not a bare "not installed": the
+        # install hint does not help someone whose capstone is already there.
+        assert "libcapstone" in data["detail"]
+
+    def test_health_does_not_advertise_an_unusable_extra(self, monkeypatch: Any) -> None:
+        import recoverage.api as api
+
+        monkeypatch.setattr(api, "disassembly_available", lambda: False)
+        status, headers, body = wsgi_get("/api/health")
+        assert status.startswith("200")
+        data = json.loads(decode_body(body, headers))
+        assert data["extras"]["capstone"] is False
+
+
 class TestUnhandledErrorContract:
     """Unexpected (non-sqlite) exceptions must be visible in the log AND keep
     every surface's format contract: JSON on /api/*, HTML on UI routes.  The
@@ -4071,7 +4162,7 @@ class TestSliceValidationDetail:
     def _capstone(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import recoverage.api as api
 
-        monkeypatch.setattr(api, "HAS_CAPSTONE", True)
+        monkeypatch.setattr(api, "capstone_unavailable_reason", lambda: None)
         self.dll = bytes((i % 251) for i in range(2048))
         monkeypatch.setattr(api, "_load_dll", lambda target: self.dll)
 

@@ -946,11 +946,12 @@ def test_clickable_asm_addresses(monkeypatch: pytest.MonkeyPatch) -> None:
     idx = _find_cell_idx(target, ".text", lambda funcs: len(funcs) > 0)
     if idx is None:
         pytest.skip("No .text function cell found")
-    # Production renders the ASM block under `if HAS_CAPSTONE`, so a plain
-    # HAS_DB gate fails on installs without the optional capstone extra.  Faking
+    # Production renders the ASM block only when disassembly is available, so
+    # a plain HAS_DB gate fails on installs without the optional capstone
+    # extra.  Faking
     # the probe (as tests/test_api.py does for the /asm endpoint) keeps the
     # assertion running on every install shape.
-    monkeypatch.setattr(_potato, "HAS_CAPSTONE", True)
+    monkeypatch.setattr(_potato, "disassembly_available", lambda: True)
     monkeypatch.setattr(
         _potato, "get_disassembly", lambda *a, **k: "0x10001000  mov eax, 0x10001010"
     )

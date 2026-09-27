@@ -494,13 +494,34 @@ def _kill_and_reap(proc: subprocess.Popen[bytes]) -> None:
     survives.  The trailing wait() reaps the child either way (setsid does
     not prevent zombies; only a wait does).  Windows has no process-group
     signal, so there only the direct child is terminated.
+
+    Best-effort, and it never raises: both callers are error paths, one of
+    them inside a daemon Timer, so a kill or wait that fails (a process that
+    exited between the two calls, an EPERM from a sandbox, a wait that
+    outlives its bound because the SIGKILL never landed) would otherwise
+    propagate out of the handler, print an unobserved "Exception in thread"
+    and leave the child unreaped — the one job this function exists to do.
+    The wait is bounded for the same reason the opener's is: a kill that did
+    not land must not trade a hung opener for a hung thread.
     """
     if os.name == "posix":
         with contextlib.suppress(ProcessLookupError, PermissionError):
             os.killpg(proc.pid, signal.SIGKILL)
     else:
-        proc.kill()
-    proc.wait()
+        try:
+            proc.kill()
+        except OSError as exc:
+            _log.warning("Browser opener pid %s could not be killed: %s", proc.pid, exc)
+    try:
+        proc.wait(timeout=_BROWSER_OPEN_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        _log.warning(
+            "Browser opener pid %s did not exit within %.1fs of SIGKILL — leaving it unreaped",
+            proc.pid,
+            float(_BROWSER_OPEN_TIMEOUT),
+        )
+    except OSError as exc:
+        _log.warning("Browser opener pid %s could not be reaped: %s", proc.pid, exc)
 
 
 def _open_and_reap(url: str, args: list[str], shell: bool = False) -> None:

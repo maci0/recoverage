@@ -263,6 +263,45 @@ class TestOpenAndReap:
         monkeypatch.setattr(cli.os, "name", "nt")
         assert cli._windows_detach_flags() == new_group | detached
 
+    def test_reap_never_raises_into_the_caller(self, monkeypatch: Any) -> None:
+        """A kill or wait that fails is the failure this function is there to
+        absorb: both of its callers are error paths, one of them inside a
+        daemon Timer, so an exception escaping here prints an unobserved
+        "Exception in thread" and leaves the child unreaped."""
+        import recoverage.cli as cli
+
+        class _BrokenProc:
+            pid = 4242
+
+            def kill(self) -> None:
+                raise OSError("ESRCH: no such process")
+
+            def wait(self, timeout: float | None = None) -> int:
+                raise OSError("ESRCH: no such process")
+
+        monkeypatch.setattr(cli.os, "name", "nt")  # the direct-kill branch
+        cli._kill_and_reap(_BrokenProc())  # type: ignore[arg-type]
+
+    def test_reap_wait_is_bounded(self, monkeypatch: Any) -> None:
+        """A SIGKILL that never lands must not trade a hung opener for a
+        thread blocked in wait() forever: the reap carries the same bound."""
+        import recoverage.cli as cli
+
+        class _StuckProc:
+            pid = 4242
+
+            def kill(self) -> None:
+                return None
+
+            def wait(self, timeout: float | None = None) -> int:
+                raise subprocess.TimeoutExpired(cmd="opener", timeout=timeout or 0)
+
+        monkeypatch.setattr(cli, "_BROWSER_OPEN_TIMEOUT", 0.1)
+        monkeypatch.setattr(cli.os, "name", "nt")
+        start = time.monotonic()
+        cli._kill_and_reap(_StuckProc())  # type: ignore[arg-type]
+        assert time.monotonic() - start < 5
+
     @pytest.mark.skipif(not HAS_PROC, reason="the zombie scan reads /proc, which only Linux has")
     def test_exiting_child_is_reaped_no_zombie(self) -> None:
         """The fire-and-forget opener must be waited on: setsid alone leaves

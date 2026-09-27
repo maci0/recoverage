@@ -22,8 +22,9 @@ from recoverage import metrics as _metrics
 from recoverage import server as _server
 from recoverage._paths import _db_path
 from recoverage.disasm import (
-    HAS_CAPSTONE,
+    capstone_unavailable_reason,
     clear_disassembly_cache,
+    disassembly_available,
     get_capstone_md,
     get_disassembly,
 )
@@ -107,6 +108,24 @@ def _clear_derived_caches() -> None:
     with DLL_LOCK:
         DLL_DATA.clear()
     clear_disassembly_cache()
+
+
+def _clear_derived_caches_logged(where: str) -> None:
+    """:func:`_clear_derived_caches`, reporting rather than propagating.
+
+    Every caller runs on an error path (the SSE broadcast and the regen tail
+    both run while something has already gone wrong).  A failed invalidation
+    is the worst outcome here: clients are told the database changed and the
+    server keeps serving payloads derived from the old one, and an exception
+    raised out of a ``finally`` would replace the regen failure the operator
+    needed to see with a cache error they cannot act on.
+    """
+    try:
+        _clear_derived_caches()
+    except Exception:
+        _log.warning(
+            "Cache invalidation %s failed — derived data may be stale", where, exc_info=True
+        )
 
 
 # Server-side regen cooldown (seconds): the UI throttles Reload clicks, but
@@ -491,12 +510,7 @@ def _broadcast_db_updated(snapshot: tuple[int, int] | None) -> None:
     the target dropdown, any cached data, and the disassembly derived from
     the original binary, not just the in-app /api/regen path.
     """
-    try:
-        _clear_derived_caches()
-    except Exception:
-        # A failed invalidation leaves stale caches behind while clients are
-        # told the DB changed — that divergence must be visible in the log.
-        _log.warning("Cache invalidation during db-updated broadcast failed", exc_info=True)
+    _clear_derived_caches_logged("during db-updated broadcast")
     payload: dict[str, Any] = {
         "event": "db-updated",
         # Basename only — the absolute path leaks the user's home-directory
@@ -819,7 +833,10 @@ def handle_api_health() -> bytes:
             "version": __version__,
             "db": db_info,
             "extras": {
-                "capstone": HAS_CAPSTONE,
+                # Whether disassembly actually runs here, not merely whether a
+                # capstone distribution is on the path: an extra that imports
+                # to a broken 500 is not an extra this process has.
+                "capstone": disassembly_available(),
                 "pygments": HAS_PYGMENTS,
             },
             "targets_count": target_count,
@@ -1617,12 +1634,13 @@ def handle_api_function(target: str, va: str) -> bytes | Any:
 @app.get("/api/targets/<target>/asm")
 def handle_api_asm(target: str) -> bytes | Any:
     target = path_param(target)
-    if not HAS_CAPSTONE:
+    reason = capstone_unavailable_reason()
+    if reason is not None:
         return _json_err(
             501,
             {
-                "error": "capstone not installed",
-                "detail": "install the optional extra to enable disassembly: "
+                "error": "capstone not available",
+                "detail": f"{reason}; disassembly needs the optional extra: "
                 "pip install 'recoverage[capstone]'",
             },
         )
@@ -1995,7 +2013,7 @@ def _do_regen(remote: str) -> bytes | Any:
     # the OLD db the moment anything queries them, and with no SSE client
     # connected the watcher would never re-invalidate them (curl-only regen ->
     # stale target dropdown).
-    _clear_derived_caches()
+    _clear_derived_caches_logged("before regen")
 
     root = _project_dir()
     _log.info("Regen started from %s", remote)
@@ -2028,7 +2046,15 @@ def _do_regen(remote: str) -> bytes | Any:
                 "detail": f"{type(e).__name__} — the server log has the full cause",
             },
         )
-    _clear_derived_caches()
+    finally:
+        # A FAILED run invalidates too, and that is the case the post-run
+        # clear used to miss: build_db replaces coverage.db before it can fail
+        # (a bad row, a full disk, a missing input), so a run that dies leaves
+        # the server serving payloads derived from the file it just replaced,
+        # and the watcher's mtime poll only clears them on its next tick — up
+        # to _SSE_POLL_INTERVAL_SECONDS of a dashboard that reports the old
+        # numbers as current.  Both outcomes go through the same tail.
+        _clear_derived_caches_logged("after regen")
     elapsed = _elapsed_s(started_at)
     _metrics.REGEN.finish(True, elapsed * 1000.0)
     _log.info("Regen completed successfully in %.1fs", elapsed)

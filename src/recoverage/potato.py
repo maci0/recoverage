@@ -29,7 +29,7 @@ from bottle import HTTPResponse, SimpleTemplate  # type: ignore[import-untyped]
 
 from recoverage import __version__
 from recoverage._paths import _db_path
-from recoverage.disasm import HAS_CAPSTONE, get_disassembly
+from recoverage.disasm import disassembly_available, get_disassembly
 from recoverage.server import (
     CACHE_NO_STORE,
     CACHE_REVALIDATE,
@@ -1520,12 +1520,12 @@ def _build_filter_data(
     # A pill is a single letter in the state's colour, so it carries the
     # state's full name in its title: a lone V or X is a lookup the legend
     # two hundred pixels away can answer, and a pointer answers instantly.
-    # The key is the filter name a ?filter= spells: it is what the pill
-    # toggles and what FILTER_STATES is keyed on, so it is the one field that
-    # says which entry a row stands for.  The accesskey is not a field: the
-    # template derives it from the label (``fb_label[0].lower()``), so the
-    # letter here was the label's own first character and a lowercase letter
-    # carried in this slot was never read by anything.
+    # (state, label letter, title).  The key is the filter name a ?filter=
+    # spells: it is what the pill toggles and what FILTER_STATES is keyed on,
+    # so it is the one field that says which entry a row stands for.  The
+    # accesskey is not a field: the template derives it from the label
+    # (``fb_label[0].lower()``), so a lowercase letter carried in this slot
+    # was never read by anything.
     filter_opts = [
         ("exact", "E", "Exact match"),
         ("reloc", "R", "Reloc match"),
@@ -2547,7 +2547,7 @@ def _panel_function_detail(
         asm_size = fn_data.get("size")
         asm_file_offset = fn_data.get("fileOffset")
         if (
-            HAS_CAPSTONE
+            disassembly_available()
             and asm_va is not None
             and asm_size is not None
             and asm_file_offset is not None

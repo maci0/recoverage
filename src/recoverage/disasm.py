@@ -12,14 +12,78 @@ from __future__ import annotations
 
 import functools
 import importlib.util
+import logging
 import threading
 from typing import Any
 
 from recoverage.server import _load_dll
 
-HAS_CAPSTONE = importlib.util.find_spec("capstone") is not None
+_log = logging.getLogger("recoverage")
+
+#: Whether a capstone distribution is on the path at all.  NOT the capability
+#: verdict: a wheel for the wrong architecture, a half-unpacked install or a
+#: missing libcapstone shared object is found here and still fails on import,
+#: so the callers gate on :func:`disassembly_available` instead.
+_CAPSTONE_INSTALLED = importlib.util.find_spec("capstone") is not None
 
 _CAPSTONE_MD_TLS = threading.local()
+
+#: Memoized load verdict + its lock.  The probe imports capstone once per
+#: process, so the cost is paid by the first caller (health, /asm, a Potato
+#: panel) and every later caller reads the answer.
+_probe_lock = threading.Lock()
+_probe_reason: str | None = None  # None once probed: either healthy or broken
+_probed = False
+
+
+class CapstoneUnavailableError(RuntimeError):
+    """capstone is on the path but cannot be loaded (broken or partial install).
+
+    Raised by :func:`get_capstone_md` and, by contract, unreachable from a
+    route: both gate on :func:`disassembly_available` first, so a broken extra
+    answers the documented 501 / omitted panel instead of a 500 traceback.
+    """
+
+
+def capstone_unavailable_reason() -> str | None:
+    """Why disassembly is unavailable, or ``None`` when it works.
+
+    ``find_spec`` answers "is there a capstone distribution", not "does it
+    load": the import itself and the ``Cs`` constructor raise on a wheel built
+    for another architecture, on a missing libcapstone, and on a half-installed
+    package, while the spec probe stays quiet.  A caller that trusted it got a
+    500 with a traceback where the 501 contract promises an answer, and
+    /api/health advertised an extra that could not be used.
+
+    The verdict is computed once and remembered, so a broken install costs one
+    failed import per process rather than one per request, and a working one
+    costs one import total.
+    """
+    global _probe_reason, _probed
+    if not _CAPSTONE_INSTALLED:
+        return "capstone is not installed"
+    if _probed:
+        return _probe_reason
+    with _probe_lock:
+        if not _probed:
+            try:
+                import capstone as _capstone  # type: ignore[import-not-found]
+
+                _capstone.Cs(_capstone.CS_ARCH_X86, _capstone.CS_MODE_32)
+            except Exception as exc:
+                # OSError (missing shared object), ImportError (wrong arch),
+                # anything the C extension raises at load: the operator needs
+                # the class and message, and the request paths answer with
+                # this reason rather than a bare "not installed".
+                _probe_reason = f"{type(exc).__name__}: {exc}"
+                _log.warning("capstone is installed but unusable — %s", _probe_reason)
+            _probed = True
+        return _probe_reason
+
+
+def disassembly_available() -> bool:
+    """Whether this process can actually disassemble (see the probe above)."""
+    return capstone_unavailable_reason() is None
 
 
 def get_capstone_md() -> Any:
@@ -28,9 +92,16 @@ def get_capstone_md() -> Any:
     A single shared ``Cs`` instance is NOT safe to disassemble concurrently
     (libcapstone is not thread-safe) — with the threaded WSGI server, request
     threads were racing on it and producing garbage/crashes.
+
+    Raises :class:`CapstoneUnavailableError` when the probe says the extra is
+    unusable, so a caller that skipped the gate names the reason instead of
+    dying on the import.
     """
     md = getattr(_CAPSTONE_MD_TLS, "md", None)
     if md is None:
+        reason = capstone_unavailable_reason()
+        if reason is not None:
+            raise CapstoneUnavailableError(reason)
         import capstone as _capstone  # type: ignore[import-not-found]
 
         md = _capstone.Cs(_capstone.CS_ARCH_X86, _capstone.CS_MODE_32)
