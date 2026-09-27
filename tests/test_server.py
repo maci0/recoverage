@@ -7,7 +7,10 @@ import gzip
 import json
 import logging
 import queue
+import shutil
 import sqlite3
+import subprocess
+import tempfile
 import threading
 import time
 from collections.abc import Sequence
@@ -2204,3 +2207,121 @@ class TestConfigDerivedMemosFollowTheConfigStat:
         assert srv._load_dll(target) == b"SECOND-BINARY", (
             "/asm and /bytes kept serving the binary the config edit replaced"
         )
+
+
+class TestSpaDbSuppliedPathsStaySameOrigin:
+    """``paths.sourceRoot`` / ``paths.originalDll`` must not steer the browser off-origin.
+
+    Both are values the coverage.db hands the SPA, and a database built from a
+    hostile binary — or imported wholesale from elsewhere — can hold any string
+    in them.  Spliced into an href or a fetch, ``//evil.example`` is a
+    protocol-relative URL and ``/\\evil.example`` is the same once a browser
+    normalizes the backslash, so either one turns the analyst's browser into a
+    beacon and the Source link into a navigation somewhere the dashboard does
+    not own.
+
+    The helper is executed rather than pattern-matched: the shipped source is
+    lifted out of app.js and run under bun, so this pins the behaviour the
+    browser sees and fails if the guard is ever edited into something weaker.
+    Skipped when bun is absent; CI installs it (see package.json packageManager).
+    """
+
+    FALLBACK = "/fallback"
+
+    # (db value, expected result). Accepted values come back unchanged; every
+    # other entry must come back as FALLBACK.
+    CASES: ClassVar[list[tuple[Any, str]]] = [
+        # Accepted: same-origin, absolute or relative.
+        ("/src/foo", "/src/foo"),
+        ("/original/target.dll", "/original/target.dll"),
+        ("src/foo", "src/foo"),
+        ("/", "/"),
+        # A colon AFTER the first slash is an ordinary path character.
+        ("/src/a:b.c", "/src/a:b.c"),
+        # Rejected: off-origin, scheme-bearing, or otherwise unparseable.
+        ("//evil.example", FALLBACK),
+        ("///evil.example", FALLBACK),
+        ("/\\evil.example", FALLBACK),
+        ("\\\\evil.example", FALLBACK),
+        ("https://evil.example", FALLBACK),
+        ("http:evil", FALLBACK),
+        ("javascript:alert(1)", FALLBACK),
+        ("data:text/html,x", FALLBACK),
+        ("", FALLBACK),
+        (None, FALLBACK),
+        (123, FALLBACK),
+        ({"a": 1}, FALLBACK),
+        ("/src/ev\nil", FALLBACK),
+        ("/src/ev\til", FALLBACK),
+        ("/src/ev\x00il", FALLBACK),
+    ]
+
+    @staticmethod
+    def _app_js() -> str:
+        import importlib.resources
+
+        from recoverage import assets
+
+        return importlib.resources.files(assets).joinpath("app.js").read_text(encoding="utf-8")
+
+    @classmethod
+    def _helper_source(cls) -> str:
+        """The guard as shipped, lifted verbatim out of app.js.
+
+        Sliced on its own boundaries rather than pasted, so the test can never
+        pass against a copy that drifted from the file the server serves.
+        """
+        app_js = cls._app_js()
+        start = app_js.find("const PATH_CONTROL_MAX")
+        end_marker = "return rawPath;\n};"
+        end = app_js.find(end_marker)
+        assert start != -1, "app.js no longer defines the same-origin path guard"
+        assert end != -1, "the same-origin path guard in app.js changed shape"
+        return app_js[start : end + len(end_marker)]
+
+    def test_guard_rejects_off_origin_and_scheme_paths(self) -> None:
+        bun = shutil.which("bun")
+        if bun is None:
+            pytest.skip("bun not on PATH")
+
+        harness = (
+            self._helper_source()
+            + "\nconst FALLBACK = "
+            + json.dumps(self.FALLBACK)
+            + ";\n"
+            + "const CASES = "
+            + json.dumps(self.CASES)
+            + ";\n"
+            + "console.log(JSON.stringify(CASES.map(([v]) => sameOriginPath(v, FALLBACK))));\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            script = Path(tmp) / "guard.mjs"
+            script.write_text(harness, encoding="utf-8")
+            proc = subprocess.run(
+                [bun, "run", str(script)],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
+            )
+        assert proc.returncode == 0, f"guard harness failed to run: {proc.stderr}"
+        actual = json.loads(proc.stdout)
+        expected = [want for _value, want in self.CASES]
+        assert actual == expected, "sameOriginPath accepted an off-origin or scheme-bearing path"
+
+    def test_both_db_path_consumers_go_through_the_guard(self) -> None:
+        """Wiring: neither consumer may read a db path without the guard.
+
+        currentDllPath() feeds fetch() with the value completely unencoded, and
+        currentSourceRoot() feeds both the C-source fetch and the href detail.js
+        builds, so a bypass on either is the vulnerability the guard exists for.
+        """
+        app_js = self._app_js()
+        for consumer in ("originalDll", "sourceRoot"):
+            at = app_js.find(f".paths.{consumer}")
+            assert at != -1, f"app.js no longer reads paths.{consumer} off the db payload"
+            window = app_js[max(0, at - 400) : at]
+            assert "sameOriginPath(" in window, (
+                f"currentDllPath/currentSourceRoot must validate paths.{consumer} "
+                "through sameOriginPath before it reaches fetch() or an href"
+            )

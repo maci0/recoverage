@@ -9,6 +9,35 @@ const { a, aside, button, div, h1, h2, h3, header, input, main, p, pre, section,
 const enc = encodeURIComponent;
 const encPath = (path) => String(path).split("/").map((seg) => enc(seg)).join("/");
 
+// paths.sourceRoot and paths.originalDll are values the coverage.db hands us,
+// and a database built from a hostile binary — or imported wholesale from
+// somewhere else — can hold any string in them.  Spliced into an href or a
+// fetch, "//evil.example" is a protocol-relative URL and "/\evil.example" is
+// the same thing once a browser normalizes the backslash, so either one sends
+// the analyst's browser off-origin: a beacon for whoever chose the name, and a
+// Source link that navigates somewhere this dashboard does not own.  Only a
+// same-origin path is accepted — a leading "/", or a relative one, carrying no
+// backslash, no scheme and no control character — and anything else falls back
+// to the server-proxied default.  The colon test is positional: after the
+// first "/" a colon is an ordinary character in a path segment, before it a
+// colon starts a scheme.
+const PATH_CONTROL_MAX = 0x1F;
+const PATH_DELETE = 0x7F;
+const isControlChar = (ch) => {
+  const point = ch.codePointAt(0);
+  return point <= PATH_CONTROL_MAX || point === PATH_DELETE;
+};
+
+const sameOriginPath = (rawPath, fallback) => {
+  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- the boundary is exactly "string from JSON"; reject the rest rather than coerce it
+  if (typeof rawPath !== "string" || !rawPath) return fallback;
+  if (rawPath.startsWith("//") || rawPath.includes("\\")) return fallback;
+  if ([...rawPath].some((ch) => isControlChar(ch))) return fallback;
+  const colon = rawPath.indexOf(":");
+  if (colon !== -1 && (!rawPath.includes("/") || colon < rawPath.indexOf("/"))) return fallback;
+  return rawPath;
+};
+
 const DATA_URL = (t, secName) => `/api/targets/${enc(t)}/data${secName ? `?section=${enc(secName)}` : ""}`;
 const ASM_URL = (t) => `/api/targets/${enc(t)}/asm`;
 const FN_URL = (t, va) => `/api/targets/${enc(t)}/functions/${enc(va)}`;
@@ -522,14 +551,25 @@ const App = () => {
   // current target's offsets.
   const currentDllPath = () => {
     const d = data.val;
-    return (d && d.paths && d.paths.originalDll) || `/original/${enc(activeTarget.val.toLowerCase())}.dll`;
+    // DB-supplied, so it goes through sameOriginPath: this value reaches fetch()
+    // completely unencoded, and a protocol-relative one would have the analyst's
+    // browser download an attacker's file instead of the target binary.
+    return sameOriginPath(
+      d && d.paths && d.paths.originalDll,
+      `/original/${enc(activeTarget.val.toLowerCase())}.dll`,
+    );
   };
   // The loaded buffer, but only while it belongs to the target on screen.
   const loadedDll = () => (originalDll.val?.path === currentDllPath() ? originalDll.val.buf : null);
 
+  // Feeds both the C-source fetch below and the Source links detail.js renders,
+  // so validating here is what keeps either of them same-origin.
   const currentSourceRoot = () => {
     const d = data.val;
-    return (d && d.paths && d.paths.sourceRoot) || `/src/${enc(activeTarget.val.toLowerCase())}`;
+    return sameOriginPath(
+      d && d.paths && d.paths.sourceRoot,
+      `/src/${enc(activeTarget.val.toLowerCase())}`,
+    );
   };
 
   const ensureOriginalDll = () => {
