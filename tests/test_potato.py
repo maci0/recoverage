@@ -1614,3 +1614,53 @@ class TestCellStateVocabularyCoverage:
         table = design.split("## Color Scheme & Styling")[1].split("\n## ")[0]
         unnamed = sorted(state for state in COLORS if state not in table)
         assert unnamed == [], f"DESIGN.md colour table does not name: {unnamed}"
+
+
+class TestSectionAccentsMatchSpa:
+    """The two renderers paint the four pane accents from separate files.
+
+    Potato Mode has no CSS, so it spells the hexes as module constants while
+    the SPA reads them from :root. A pane whose heading changed hue in one
+    renderer is drift a screenshot would not catch and a user sees as the
+    dashboard and its fallback disagreeing about what kind of pane this is.
+    """
+
+    PAIRS = (
+        ("--accent-c-source", "ACCENT_C_SOURCE"),
+        ("--accent-asm", "ACCENT_ASM"),
+        ("--accent-data", "ACCENT_DATA"),
+        ("--accent-bytes", "ACCENT_BYTES"),
+    )
+
+    @staticmethod
+    def _spa_tokens() -> dict[str, str]:
+        import importlib.resources
+
+        css = (
+            importlib.resources.files("recoverage.assets")
+            .joinpath("style.css")
+            .read_text(encoding="utf-8")
+        )
+        # :root only: .light-mode restates the same names with darker values
+        # for light surfaces, which Potato Mode has no counterpart for.
+        root = css.split(":root {", 1)[1].split("\n}", 1)[0]
+        return dict(re.findall(r"(--accent-[a-z-]+):\s*(#[0-9a-fA-F]{6});", root))
+
+    @pytest.mark.parametrize(("token", "constant"), PAIRS)
+    def test_spa_token_matches_potato_constant(self, token: str, constant: str) -> None:
+        from recoverage import potato
+
+        assert self._spa_tokens()[token] == getattr(potato, constant)
+
+    def test_every_accent_the_renderers_use_is_pinned(self) -> None:
+        """A new pane kind must be added to PAIRS, not left unpinned."""
+        from recoverage import potato
+
+        pane_accents = {name for _, name in self.PAIRS}
+        declared = {
+            name
+            for name, value in vars(potato).items()
+            if name.startswith("ACCENT_") and isinstance(value, str)
+        }
+        # ACCENT_COLOR is the phosphor accent, not a pane accent.
+        assert declared - {"ACCENT_COLOR"} == pane_accents

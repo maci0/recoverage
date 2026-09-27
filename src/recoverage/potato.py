@@ -107,6 +107,15 @@ BORDER_COLOR = "#1c2a38"  # subtle cyan-tinted dark, matches rgba(6,182,212,0.15
 TEXT_COLOR = "#e7edf4"
 MUTED_COLOR = "#8b949e"
 ACCENT_COLOR = "#06b6d4"
+# The four section-heading accents, one per pane kind.  The SPA paints the
+# same four from --accent-c-source, --accent-asm, --accent-data, and
+# --accent-bytes, so the hexes live in two files; a pane that reads blue in
+# one renderer and cyan in the other is drift nobody would notice on a
+# screenshot.  TestSectionAccentsMatchSpa pins the two sets together.
+ACCENT_C_SOURCE = "#3b82f6"
+ACCENT_ASM = "#ef4444"
+ACCENT_DATA = "#a855f7"
+ACCENT_BYTES = "#10b981"
 SANS_FONT = "system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif"
 MONO_FONT = "SFMono-Regular, Consolas, Liberation Mono, Courier New, monospace"
 
@@ -594,7 +603,7 @@ def _format_data_inspector(raw_bytes: bytes | None) -> str:
 
     parts: list[str] = []
     parts.append(
-        _section_heading("{}", "#a855f7", "Data Inspector")
+        _section_heading("{}", ACCENT_DATA, "Data Inspector")
         + f'<table width="100%" border="0" cellpadding="3" cellspacing="1"'
         f' bgcolor="{BORDER_COLOR}">'
     )
@@ -2070,7 +2079,7 @@ def _panel_empty_cell_bytes(
     raw_bytes = _get_raw_bytes(cell_file_offset, cell_size, target)
     if not raw_bytes:
         return
-    ctx["hex_heading"] = _section_heading("01", "#10b981", "Original Bytes")
+    ctx["hex_heading"] = _section_heading("01", ACCENT_BYTES, "Original Bytes")
     ctx["hex_dump_html"] = _render_original_bytes(raw_bytes, cell_file_offset)
     inspector = _format_data_inspector(raw_bytes)
     if inspector:
@@ -2215,7 +2224,7 @@ def _panel_function_detail(
     code_text = _panel_fn_source_text(data, target, fn_data)
     if code_text:
         ctx["annotations"] = _extract_annotations(code_text)
-        ctx["c_heading"] = _section_heading("C", "#3b82f6", f"C Source ({_esc(files[0])})")
+        ctx["c_heading"] = _section_heading("C", ACCENT_C_SOURCE, f"C Source ({_esc(files[0])})")
         ctx["code_html"] = _code_block_raw(_highlight_c(code_text))
 
     # Assembly (only meaningful for code cells)
@@ -2231,7 +2240,7 @@ def _panel_function_detail(
         ):
             asm_text = get_disassembly(asm_va, asm_size, asm_file_offset, target)
             if asm_text:
-                ctx["asm_heading"] = _section_heading("ASM", "#ef4444", "Assembly")
+                ctx["asm_heading"] = _section_heading("ASM", ACCENT_ASM, "Assembly")
                 ctx["asm_html"] = _code_block_raw(
                     _highlight_asm(_wrap_text(asm_text, 55), target=target)
                 )
@@ -2242,7 +2251,7 @@ def _panel_function_detail(
     if fn_file_offset is not None and fn_size is not None:
         raw_bytes = _get_raw_bytes(fn_file_offset, fn_size, target)
         if raw_bytes:
-            ctx["bytes_heading"] = _section_heading("01", "#10b981", "Original Bytes")
+            ctx["bytes_heading"] = _section_heading("01", ACCENT_BYTES, "Original Bytes")
             ctx["bytes_html"] = _render_original_bytes(raw_bytes, fn_file_offset)
             if section != ".text":
                 inspector = _format_data_inspector(raw_bytes)

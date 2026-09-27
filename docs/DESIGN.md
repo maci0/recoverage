@@ -322,6 +322,17 @@ Cell states are the keys of `potato.COLORS`, spelled as `cells.state` spells the
 | Code Block | Darker | `#0a0d14` |
 | Border | Cyan-tinted | `#1c2a38` |
 | Accent | Cyan | `#06b6d4` |
+| Pane accent: C Source | Blue | `#3b82f6` |
+| Pane accent: Assembly | Red | `#ef4444` |
+| Pane accent: Data Inspector | Violet | `#a855f7` |
+| Pane accent: Original Bytes | Green | `#10b981` |
+
+The four pane accents are `potato.ACCENT_C_SOURCE`, `ACCENT_ASM`, `ACCENT_DATA`,
+and `ACCENT_BYTES`, the same four values the SPA reads from
+`--accent-c-source`, `--accent-asm`, `--accent-data`, and `--accent-bytes`.
+Potato Mode spells them as constants because it has no CSS; the two lists are
+pinned to each other by `TestSectionAccentsMatchSpa` in `tests/test_potato.py`,
+so a pane cannot change hue in one renderer and not the other.
 
 The status rows are `potato.COLORS`, one row per colour. A state `build_db` can write that this table does not name is a bug: the legend beside the grid would be short a row, and `tests/test_potato.py` fails on it.
 
