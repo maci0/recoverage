@@ -774,6 +774,12 @@ def handle_api_targets() -> bytes:
 def handle_api_stats(target: str) -> bytes | Any:
     target = path_param(target)
     snap = _snapshot_db_mtime()
+    # Same validator contract as /data, /asm and /bytes: the payload is a pure
+    # function of the WAL-aware snapshot and the target, so a poll that
+    # revalidates gets a 304 instead of re-running the SECTION_STATS_SQL
+    # aggregation.  "stats" is a part of its own so the tag can never collide
+    # with /data's (snap, target, section) over the same DB.
+    etag = _etag_or_304(snap, target, "stats")
     key = (snap, target)
     stats: dict[str, Any] | None = None
     if snap is not None:
@@ -794,7 +800,7 @@ def handle_api_stats(target: str) -> bytes | Any:
             "sections": stats["sections"],
             "functions_by_status": stats["by_status"],
         },
-        Cache_Control=CACHE_NO_STORE,
+        **_revalidate_headers(etag),
     )
 
 
@@ -1000,6 +1006,13 @@ _MAX_SLICE_SIZE = 4096
 # request finite.
 _MAX_SEARCH_CHARS = 500
 
+# Media types POST /api/targets/<t>/functions accepts for its body.  The
+# endpoint has exactly one body format, so a request declaring anything else
+# is refused with 415 rather than being read and answered with a parse error
+# that reads as "your JSON is broken" when the bytes were fine.
+_JSON_MEDIA_TYPE = "application/json"
+_JSON_SUFFIX = "+json"
+
 # Representations GET /api/targets/<t>/asm can produce.  Anything else is
 # rejected rather than silently answered with the text form.
 _ASM_FORMATS = frozenset({"text", "json"})
@@ -1193,6 +1206,21 @@ def _batch_request_vas() -> tuple[list[int], Any | None]:
     rebrew's parse_va_candidates, which reads an all-digit string as decimal
     first, so the same digits name different VAs in the two endpoints.
     """
+    media_type = _header("Content-Type", "").split(";", 1)[0].strip().lower()
+    # A missing Content-Type is not a refusal: non-browser clients and the
+    # WSGI test harness may omit it, and the body is still parsed below.  A
+    # declared type that is not JSON is a 415 — the bytes were never going to
+    # be read as this endpoint's format, and "Body must be a JSON object"
+    # would blame the payload for a header the client set wrongly.
+    if media_type and media_type != _JSON_MEDIA_TYPE and not media_type.endswith(_JSON_SUFFIX):
+        return [], _json_err(
+            415,
+            {
+                "error": "Unsupported Media Type",
+                "detail": f"Content-Type {media_type!r} is not supported; "
+                f"expected {_JSON_MEDIA_TYPE}",
+            },
+        )
     try:
         raw = request.body.read(_MAX_BATCH_BODY_BYTES + 1)
     except (OSError, ValueError):

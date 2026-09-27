@@ -327,12 +327,23 @@ is sent with `Cache-Control: no-store`:
 
 `code` is the stable machine-readable key: `bad_request`, `unauthorized`,
 `forbidden`, `not_found`, `method_not_allowed`, `payload_too_large`,
-`unprocessable_entity`, `rate_limited`, `internal`, `not_implemented`,
-`db_unavailable`. `detail` names the parameter or constraint at fault, and
-some errors add one more key (`retry_after` on a 429).
+`unsupported_media_type`, `unprocessable_entity`, `rate_limited`, `internal`,
+`not_implemented`, `db_unavailable`. `detail` names the parameter or
+constraint at fault, and some errors add one more key (`retry_after` on a
+429).
 
 A wrong verb on a real path answers **405 with an `Allow` header**; a path no
 route matches answers **404**. A `405` never means "not found" here.
+
+### Caching
+
+Every DB-derived read endpoint (`/data`, `/stats`, `/asm`,
+`/sections/<section>/bytes` and `/potato`) carries an `ETag` over the
+WAL-aware freshness stamp of `coverage.db` plus the request's own identity
+(target, section, VA, offset, format), and `Cache-Control: no-cache,
+must-revalidate`. Send `If-None-Match` and an unchanged database answers
+**304** with no body. `/health` and `/targets` are `no-store` instead: they
+report the server's own state, not the database's.
 
 Query-parameter rules, the same on every endpoint:
 
@@ -348,7 +359,11 @@ Query-parameter rules, the same on every endpoint:
 - `/functions` (POST) takes `{"vas": [...]}`, at most 500 entries, each a hex
   string (with or without `0x`) or an integer. The body must be under 64 KiB
   (413) and the list non-empty (400). VAs with no match are omitted from the
-  response rather than reported as an error.
+  response rather than reported as an error. A `Content-Type` header, if
+  sent, must be `application/json` (or any `application/*+json`); anything
+  else is a 415 `unsupported_media_type`. Omitting the header entirely is
+  allowed, so a `curl -d` client must add `-H 'Content-Type: application/json'`
+  to stay off that path.
 
 With `--cors`, an allowlisted origin may send `Content-Type`, `Authorization`
 (the `--token` bearer check) and `If-None-Match` (the conditional GET every

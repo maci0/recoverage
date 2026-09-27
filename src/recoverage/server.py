@@ -339,8 +339,8 @@ def _if_none_match_matches(raw: str, etag: str) -> bool:
 def _etag_or_304(snap: tuple[int, int] | None, *parts: object) -> str | None:
     """DB-freshness ETag over the WAL-aware snapshot *snap* + *parts*; 304 on match.
 
-    Shared tail of every cacheable DB-derived endpoint (/data, /asm, /bytes,
-    /potato): compute ``_safe_etag(snap[0], parts...)``, answer
+    Shared tail of every cacheable DB-derived endpoint (/data, /stats, /asm,
+    /bytes, /potato): compute ``_safe_etag(snap[0], parts...)``, answer
     ``If-None-Match`` with a 304, else hand the ETag back for the caller to
     attach to its response.  Callers pass their own
     :func:`_snapshot_db_mtime` result — endpoints that also key a memo on
@@ -1686,6 +1686,7 @@ _STATUS_ERROR_CODES: dict[int, str] = {
     404: "not_found",
     405: "method_not_allowed",
     413: "payload_too_large",
+    415: "unsupported_media_type",
     422: "unprocessable_entity",
     429: "rate_limited",
     500: "internal",

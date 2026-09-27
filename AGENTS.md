@@ -211,10 +211,10 @@ The release policy is not written down anywhere else, so it is stated here and
 | `/potato` | GET | Potato Mode (pure-HTML fallback) |
 | `/api/health` | GET | Server version, DB info, installed extras, request counters |
 | `/api/targets` | GET | List available targets |
-| `/api/targets/<target>/stats` | GET | Per-section coverage stats |
+| `/api/targets/<target>/stats` | GET | Per-section coverage stats (ETag-revalidating) |
 | `/api/targets/<target>/data` | GET | Full section + cell data |
 | `/api/targets/<target>/functions` | GET | Paginated function list |
-| `/api/targets/<target>/functions` | POST | Batch lookup: `{"vas": [...]}` → function/global details in input order |
+| `/api/targets/<target>/functions` | POST | Batch lookup: `{"vas": [...]}` → function/global details in input order (`application/json`, else 415) |
 | `/api/targets/<target>/functions/<va>` | GET | Function/global detail |
 | `/api/targets/<target>/asm` | GET | Disassembly (requires capstone) |
 | `/api/targets/<target>/sections/<section>/bytes` | GET | Raw byte slice |

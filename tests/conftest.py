@@ -285,7 +285,14 @@ def wsgi_request(
     environ["CONTENT_LENGTH"] = str(len(body))
     if headers:
         for k, v in headers.items():
-            environ[f"HTTP_{k.upper().replace('-', '_')}"] = v
+            # PEP 3333: Content-Type and Content-Length are not HTTP_*
+            # headers, they are their own environ entries. Everything else
+            # keeps the HTTP_ prefix a real WSGI server assigns.
+            key = k.upper().replace("-", "_")
+            if key in ("CONTENT_TYPE", "CONTENT_LENGTH"):
+                environ[key] = v
+            else:
+                environ[f"HTTP_{key}"] = v
 
     status_holder: dict[str, str | dict[str, str]] = {"status": "", "headers": {}}
 

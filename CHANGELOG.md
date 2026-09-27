@@ -25,6 +25,23 @@ module ships in the published package. See *Breaking*.
   by status class and by route rule, so the error rate and the slowest
   endpoint are readable without attaching a debugger. Routes are counted by
   their rule rather than the raw path, keeping the breakdown bounded.
+- **`GET /api/targets/<target>/stats` revalidates.** It was the only
+  DB-derived read endpoint with no validator: every other one (`/data`, `/asm`,
+  `/sections/<section>/bytes`, `/potato`) sends an `ETag` over the WAL-aware
+  freshness stamp of `coverage.db` plus the request's own identity, and answers
+  `If-None-Match` with a 304. `/stats` sent `Cache-Control: no-store` and
+  re-ran its full-cells-table aggregation on every poll. It now sends the same
+  `ETag` and `Cache-Control: no-cache, must-revalidate`, so a polling consumer
+  gets an empty 304 while the database is unchanged.
+- **`POST /api/targets/<target>/functions` checks the request's media type.**
+  A `Content-Type` of `application/json` or any `application/*+json` is
+  accepted; a declared non-JSON type is a `415` naming the type and the one
+  expected, instead of a body that happened to parse and a `400` that read as
+  "your JSON is broken" when the bytes were fine. Omitting the header is still
+  accepted, so a header-less client keeps working (`curl -d` needs
+  `-H 'Content-Type: application/json'`). The error `code` is the new
+  `unsupported_media_type`; `415` had no entry in the status-to-code map and
+  would have been labelled `internal`.
 - **`recoverage serve` reads its configuration from the environment.**
   `RECOVERAGE_PORT`, `RECOVERAGE_BIND`, `RECOVERAGE_ALLOW_REMOTE`,
   `RECOVERAGE_CORS`, `RECOVERAGE_CORS_ORIGIN`, `RECOVERAGE_TOKEN` and

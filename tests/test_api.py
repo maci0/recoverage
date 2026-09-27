@@ -1509,6 +1509,54 @@ class TestBatchFunctionLookup:
         assert data[0]["last_verify"]["byte_delta"] == 0
         assert "last_verify" not in data[1]
 
+    def test_batch_rejects_non_json_content_type(self) -> None:
+        """A declared non-JSON media type is a 415, not a body that parses
+        by accident: the client set the header wrongly and 'Body must be a
+        JSON object' would blame the payload instead."""
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        for content_type in ("text/plain", "application/x-www-form-urlencoded"):
+            status, headers, body = wsgi_post(
+                f"/api/targets/{target}/functions",
+                headers={"Content-Type": content_type},
+                body=json.dumps({"vas": ["0x10001000"]}),
+            )
+            assert status.startswith("415"), content_type
+            data = json.loads(decode_body(body, headers))
+            assert data["code"] == "unsupported_media_type"
+            assert content_type in data["detail"]
+
+    def test_batch_accepts_json_content_type_variants(self) -> None:
+        """A charset parameter and a +json structured suffix are both JSON;
+        the check is on the media type, not a byte-exact header match."""
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        for content_type in (
+            "application/json; charset=utf-8",
+            "application/vnd.recoverage+json",
+            "APPLICATION/JSON",
+        ):
+            status, _headers, _body = wsgi_post(
+                f"/api/targets/{target}/functions",
+                headers={"Content-Type": content_type},
+                body=json.dumps({"vas": ["0x10001000"]}),
+            )
+            assert status.startswith("200"), content_type
+
+    def test_batch_accepts_absent_content_type(self) -> None:
+        """A client that omits the header entirely is not refused; the body
+        is still parsed. Keeps curl -d and other header-less clients working."""
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, _headers, _body = wsgi_post(
+            f"/api/targets/{target}/functions",
+            body=json.dumps({"vas": ["0x10001000"]}),
+        )
+        assert status.startswith("200")
+
     def test_batch_rejects_oversized_body(self) -> None:
         """The batch endpoint is unauthenticated — an oversized body must be
         rejected with 413 before it is parsed, not read into memory."""
@@ -2603,6 +2651,35 @@ def _header(headers: dict[str, str], name: str) -> str | None:
 
 class TestApiEtagContract:
     """Hashed ETag + If-None-Match 304 round-trip on the /data route."""
+
+    def test_stats_etag_roundtrip(self) -> None:
+        """Every DB-derived read endpoint revalidates, /stats included: it is
+        a pure function of the DB snapshot and the target, so a polling
+        consumer must be able to get a 304 rather than re-run the
+        SECTION_STATS_SQL aggregation."""
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, headers, _ = wsgi_get(f"/api/targets/{target}/stats")
+        assert status.startswith("200")
+        etag = _header(headers, "ETag")
+        assert etag and etag.startswith('"') and etag.endswith('"')
+        assert "no-store" not in _header(headers, "Cache-Control")
+        status, headers, body = wsgi_get(
+            f"/api/targets/{target}/stats", headers={"If-None-Match": etag}
+        )
+        assert status == "304 Not Modified"
+        assert body == b""
+
+    def test_stats_etag_differs_from_data_etag(self) -> None:
+        """The two same-snapshot routes must not share a validator, or a
+        client that revalidated /stats could cache the /data body under it."""
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        _, stats_headers, _ = wsgi_get(f"/api/targets/{target}/stats")
+        _, data_headers, _ = wsgi_get(f"/api/targets/{target}/data")
+        assert _header(stats_headers, "ETag") != _header(data_headers, "ETag")
 
     def test_data_etag_roundtrip(self) -> None:
         target = get_first_target()
