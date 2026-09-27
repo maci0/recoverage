@@ -136,29 +136,48 @@ allowed-confusables = ["×"]
 #   S102/S107 — exec, hardcoded password; S2/S5/S7 — Flask debug, request
 #   without timeout, assert, trojan source; S3xx — pickle/marshal/XML
 #   deserialisation; S6xx — shell and partial-path process launches;
-#   PLC/PLW    — the pylint correctness rules outside PLE (unnecessary-dunder
+#   S104-S108/S310/S311 — wildcard bind, hardcoded secret, /tmp path, urlopen
+#   scheme, non-crypto rng. On for src/ and tools/; the tests/* per-file-ignore
+#   below carries the reason, since every finding they produce is a fixture
+#   that deliberately binds every interface, names a token, uses /tmp, or
+#   seeds a PRNG.
+#   PLC/PLW  — the pylint correctness rules outside PLE (unnecessary-dunder
 #   call, nan comparison, bad raise type, encoding-less open, useless
-#   else-on-loop, self-assignment, global-at-statement).
-# S101 (assert), S103/S104/S105/S106/S108 (hardcoded secret, wildcard bind),
-# S310/S311 (urlopen scheme, non-crypto rng) and S603/S607/S608 (untrusted
-# argv, partial path, string-built SQL) stay off: the suite asserts by
-# design, the server binds 127.0.0.1, and the SQL and argv fragments are
-# built from validated column names rather than request input.
+#   else-on-loop, self-assignment, global-at-statement), plus the PLR and TRY
+#   codes listed in select that are defect classes rather than size limits.
+# S101 (assert) and S603/S607/S608 (untrusted argv, partial path, string-built
+# SQL) stay off: the suite asserts by design, and the SQL and argv fragments
+# are built from validated column names rather than request input.
 select = [
     "E", "F", "W", "I", "UP", "B", "SIM",
     "A", "ASYNC", "DTZ", "G", "N", "PGH", "TID", "YTT", "RUF100",
     "T10", "FLY", "ICN", "PTH",
     "PLE", "INT", "C4", "RET", "RSE", "PERF", "PIE", "ISC", "FURB", "RUF",
     "T20", "ERA", "LOG", "FA", "Q", "TD", "PT",
-    "S2", "S5", "S7", "S102", "S103", "S107",
+    "S2", "S5", "S7", "S102", "S103", "S104", "S105", "S106", "S107",
+    "S108", "S310", "S311",
     "S301", "S302", "S303", "S304", "S305", "S306", "S307", "S308",
     "S312", "S313", "S314", "S315", "S316", "S317", "S318", "S319",
     "S321", "S323", "S324",
     "S601", "S602", "S604", "S605", "S606", "S609", "S610", "S611", "S612",
     "PLC0205", "PLC0206", "PLC0208", "PLC0414", "PLC3002",
-    "PLW0120", "PLW0127", "PLW0128", "PLW0129", "PLW0133", "PLW0177",
-    "PLW0211", "PLW0602", "PLW0604", "PLW0642", "PLW1508", "PLW1509",
+    "PLW0120", "PLW0127", "PLW0128", "PLW0129", "PLW0131", "PLW0133",
+    "PLW0177", "PLW0211", "PLW0245", "PLW0406", "PLW0602", "PLW0604",
+    "PLW0642", "PLW0711", "PLW1501", "PLW1507", "PLW1508", "PLW1509",
     "PLW1641", "PLW2101", "PLW3301",
+    # pylint refactor rules that are defect classes rather than size limits:
+    # comparing a value with itself, comparing two constants, a property that
+    # takes arguments, an argument rebound from a local, a bool chain that
+    # cannot short-circuit, sys.exit reachable outside the entry point, an
+    # empty comment, a dict or list index lookup whose key is known to exist.
+    "PLR0124", "PLR0133", "PLR0206", "PLR1704", "PLR1716", "PLR1722",
+    "PLR1733", "PLR1736", "PLR2044",
+    # tryceratops: vanilla-raise, type-check-without-type-error, verbose
+    # raise, useless try/except, logging the exception class instead of the
+    # instance. TRY200 (reraise without cause) is B904, already covered by the
+    # B group; TRY300 (return in try) and TRY003 (long message in raise) are
+    # the two this tree does not pass yet.
+    "TRY002", "TRY004", "TRY201", "TRY203", "TRY400", "TRY401",
 ]
 # PT006 wants argnames as a tuple or list; the suite spells them the pytest
 # way, as one comma-separated string ("raw,expected"). PT018 asks for one
@@ -178,3 +197,11 @@ extend-immutable-calls = ["typer.Option", "typer.Argument"]
 # T201: tools/ scripts are command-line utilities whose stdout output IS their
 # interface; print is intentional there and banned everywhere else.
 "tools/*" = ["T201"]
+# S104/S105/S106/S108/S310/S311: the suite asserts on the shapes the security
+# rules exist to prevent, so its fixtures have to spell them out. A test binds
+# 0.0.0.0 to prove the server refuses a non-loopback peer, passes a token and
+# a /tmp db path through the config parser, and seeds a PRNG for the fuzz
+# campaign. None of this reaches the server: it binds 127.0.0.1, and the S1xx
+# codes are on for src/ and tools/, where a wildcard bind or a hardcoded
+# secret would be a real finding.
+"tests/*" = ["S104", "S105", "S106", "S108", "S310", "S311"]

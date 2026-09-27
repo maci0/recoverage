@@ -288,9 +288,17 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
 
 - Python 3.13+, ruff for linting, 100-char line length. The selected rule
   groups, the bandit/pylint codes that are named individually instead of by
-  prefix, and the two ignores (PT006, PT018) each carry their reason next to
-  them in `[tool.ruff.lint]` in pyproject.toml; that comment is the record of
-  what the tree is expected to pass
+  prefix, the two ignores (PT006, PT018) and each per-file-ignore set all
+  carry their reason next to them in `[tool.ruff.lint]` and
+  `[tool.ruff.lint.per-file-ignores]` in pyproject.toml; those comments are
+  the record of what the tree is expected to pass
+- The bandit security group is on for src/ and tools/, including the S1xx
+  wildcard-bind, hardcoded-secret, `/tmp` and urlopen checks; the suite's
+  fixtures are the only reason `tests/*` ignores them, and each of those
+  fixtures asserts the shape the rule exists to prevent. A new S1xx finding
+  under src/ is a real one. S101 (assert), S603/S607 (untrusted argv,
+  partial process path) and S608 (string-built SQL) stay off with their
+  reason recorded in pyproject.toml
 - Every request carries an id (`server._REQUEST_TLS`, echoed as
   `X-Request-ID`, stamped on every log record by `server._RequestIdFilter`),
   and every request is counted in `metrics.REQUESTS` under its route rule.
