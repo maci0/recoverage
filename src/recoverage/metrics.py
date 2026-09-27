@@ -29,13 +29,20 @@ SLOW_REQUEST_MS: Final = 1_000.0
 #: number in the snapshot.
 UNBOUNDED_ROUTES: Final = frozenset({"/api/events"})
 
-#: Most route labels :class:`RequestStats` keeps.  A label comes from the
-#: matched Bottle rule, so it is one of the server's own few dozen rules, but
-#: :func:`route_label` falls back to the first path segment for a request that
-#: matched nothing, and that segment is caller-chosen.  The cap is what makes
-#: the bounded-cardinality claim hold for the unrouted case too; the oldest
-#: label goes when the map is full, so the map size is the only bound and a
-#: real route's counters can be evicted under a flood of distinct segments.
+#: Most route labels :class:`RequestStats` keeps.  A label from the matched
+#: Bottle rule is one of the server's own few dozen, but :func:`route_label`
+#: falls back to the first path segment for a request that matched nothing, and
+#: that segment is caller-chosen, so the map needs a cap.
+#:
+#: The cap alone does not protect the routes the server really serves: under
+#: plain oldest-first eviction, 64 distinct unknown first segments is enough to
+#: push out a real route row inserted on its first request, and a caller
+#: choosing that many names silently blanks the breakdown an operator reads.
+#: So the two kinds of label are not treated alike.  A rule label evicts the
+#: oldest entry when the map is full (there are only a few dozen of them, and
+#: each is one the server really serves); a fallback label is never inserted
+#: into a full map, so the 404s that fill it cost no real route its row.  The
+#: request still counts in the process-wide totals and in ``by_status``.
 ROUTE_LABEL_MAX: Final = 64
 
 
@@ -64,12 +71,26 @@ class RequestStats:
         with self._lock:
             self._in_flight += 1
 
-    def finish(self, route: str, status: int, duration_ms: float, timed: bool = True) -> None:
+    def finish(
+        self,
+        route: str,
+        status: int,
+        duration_ms: float,
+        timed: bool = True,
+        rule_matched: bool = True,
+    ) -> None:
         """Record one completed request.
 
         *timed* is False for the routes whose response is held open: their
         duration is connection lifetime, so it updates the counters but not
         the latency extremes.
+
+        *rule_matched* is False for the caller-chosen fallback label
+        :func:`route_label` builds when no Bottle rule matched.  Such a label
+        is dropped rather than admitted to a full map, so a caller naming
+        enough unknown paths cannot evict the routes the server really serves
+        (see :data:`ROUTE_LABEL_MAX`); the request is still counted in the
+        totals and in ``by_status``.
         """
         slow = timed and duration_ms >= SLOW_REQUEST_MS
         with self._lock:
@@ -87,6 +108,8 @@ class RequestStats:
             self._by_status[bucket] = self._by_status.get(bucket, 0) + 1
             if route in self._by_route:
                 route_row = self._by_route[route]
+            elif not rule_matched and len(self._by_route) >= ROUTE_LABEL_MAX:
+                return
             else:
                 while len(self._by_route) >= ROUTE_LABEL_MAX:
                     del self._by_route[next(iter(self._by_route))]

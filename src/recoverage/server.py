@@ -2247,7 +2247,7 @@ def _finish_request() -> None:
         return
     duration_ms = (clock.monotonic() - started_at) * 1000.0
     timed = route not in metrics.UNBOUNDED_ROUTES
-    metrics.REQUESTS.finish(route, status, duration_ms, timed=timed)
+    metrics.REQUESTS.finish(route, status, duration_ms, timed=timed, rule_matched=rule is not None)
     _REQUEST_TLS.counted = (route, status)
     if timed and duration_ms >= metrics.SLOW_REQUEST_MS:
         _log.warning(

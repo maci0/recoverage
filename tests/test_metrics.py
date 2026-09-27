@@ -253,3 +253,30 @@ class TestStats:
         assert f"/seg{metrics.ROUTE_LABEL_MAX + 19}" in snap["by_route"]
         assert snap["total"] == metrics.ROUTE_LABEL_MAX + 20
         assert snap["by_status"]["4xx"] == metrics.ROUTE_LABEL_MAX + 20
+
+    def test_unrouted_fallbacks_never_evict_a_served_route(self) -> None:
+        # The cap alone does not protect the real routes: 64 caller-chosen
+        # first segments is enough to push one out under oldest-first
+        # eviction, blanking the breakdown an operator reads.  A fallback is
+        # admitted while the map has room and dropped once it is full, so the
+        # real route keeps its row and the 404s past the cap live in the
+        # totals and in by_status only.
+        metrics.REQUESTS.finish("/api/targets/<target>/data", 200, 1.0)
+        for i in range(metrics.ROUTE_LABEL_MAX + 20):
+            metrics.REQUESTS.finish(f"/seg{i}", 404, 1.0, rule_matched=False)
+        snap = metrics.REQUESTS.snapshot()
+        assert "/api/targets/<target>/data" in snap["by_route"]
+        assert len(snap["by_route"]) == metrics.ROUTE_LABEL_MAX
+        assert snap["total"] == metrics.ROUTE_LABEL_MAX + 21
+        assert snap["by_status"]["4xx"] == metrics.ROUTE_LABEL_MAX + 20
+
+    def test_a_late_rule_label_still_gets_a_row(self) -> None:
+        # A real route arriving after the map is full of fallbacks keeps the
+        # oldest-first eviction; the map stays bounded and serving.
+        for i in range(metrics.ROUTE_LABEL_MAX):
+            metrics.REQUESTS.finish(f"/seg{i}", 404, 1.0, rule_matched=False)
+        metrics.REQUESTS.finish("/api/targets", 200, 1.0)
+        snap = metrics.REQUESTS.snapshot()
+        assert len(snap["by_route"]) == metrics.ROUTE_LABEL_MAX
+        assert "/api/targets" in snap["by_route"]
+        assert "/seg0" not in snap["by_route"]
