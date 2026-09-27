@@ -6,6 +6,7 @@ import contextlib
 import gzip
 import json
 import logging
+import queue
 import sqlite3
 import threading
 import time
@@ -16,6 +17,7 @@ import brotli
 import pytest
 import zstandard as zstd
 
+from recoverage import clock
 from recoverage.server import (
     DLL_DATA,
     DLL_LOCK,
@@ -1727,3 +1729,118 @@ class TestSpaSectionCellsFeedback:
 
         css = importlib.resources.files(assets).joinpath("style.css").read_text(encoding="utf-8")
         assert ".grid-error {" in css
+
+
+# ── The clock seam ──────────────────────────────────────────────────────
+
+
+class TestClockSeam:
+    """Every window in the request path reads ``recoverage.clock``.
+
+    The regen cooldown, the idempotency-key retention window, the
+    failed-token throttle and the ``db-updated`` stamp are the only clock
+    reads the request path makes, and all four go through one module.  One
+    patched clock therefore drives all of them: each window is minutes wide,
+    so a test that slept through one would be a test nobody runs, and a test
+    that backdated each module global by hand would stay green with the
+    production read of the clock deleted.
+    """
+
+    def test_windows_expire_on_the_patched_clock(self, monkeypatch: Any) -> None:
+        from conftest import wsgi_request
+
+        import recoverage.api as api
+        import recoverage.server as srv
+
+        now = [1_000.0]
+        monkeypatch.setattr(clock, "monotonic", lambda: now[0])
+        monkeypatch.setattr(api, "_regen_last_attempt", None)
+        monkeypatch.setattr(api, "_do_regen", lambda remote: api._json_ok({"ok": True}))
+        monkeypatch.setattr(srv, "_AUTH_TOKEN", "tok")
+        api._REGEN_COMPLETED_KEYS.clear()
+
+        def post(**extra: str) -> tuple[str, dict[str, str], bytes]:
+            headers = {"Authorization": "Bearer tok", **extra}
+            return wsgi_request("POST", "/api/regen", headers=headers, remote_addr="127.0.0.1")
+
+        try:
+            status, _, _ = post(**{"Idempotency-Key": "k1"})
+            assert status.startswith("200"), status
+            # A fresh key at the same instant is inside the cooldown window.
+            status, _, _ = post(**{"Idempotency-Key": "k2"})
+            assert status.startswith("429"), status
+            # The retry of k1 is answered from the ledger instead of re-run.
+            status, headers, _ = post(**{"Idempotency-Key": "k1"})
+            assert status.startswith("200"), status
+            assert headers.get("Idempotent-Replay") == "true"
+
+            # Past the retention window the ledger has forgotten k1 ...
+            now[0] += api._REGEN_KEY_TTL_SECONDS + 1
+            status, headers, _ = post(**{"Idempotency-Key": "k1"})
+            assert status.startswith("200"), status
+            assert "Idempotent-Replay" not in headers
+            # ... and past the cooldown k2 runs again, both read off the clock.
+            now[0] += api._REGEN_COOLDOWN_SECONDS + 1
+            status, _, _ = post(**{"Idempotency-Key": "k2"})
+            assert status.startswith("200"), status
+
+            # The failed-token window runs off the same clock: 401 while it
+            # has room, 429 once full, 401 again after it expires.
+            bad = {"Authorization": "Bearer wrong"}
+
+            def attempt() -> str:
+                return wsgi_request("GET", "/api/health", headers=bad)[0]
+
+            for _ in range(srv._AUTH_FAIL_MAX):
+                assert attempt().startswith("401")
+            assert attempt().startswith("429")
+            now[0] += srv._AUTH_FAIL_WINDOW_SECONDS + 1
+            assert attempt().startswith("401")
+        finally:
+            srv._clear_auth_failures()
+            api._REGEN_COMPLETED_KEYS.clear()
+
+    def test_db_updated_stamp_reads_the_clock(self, monkeypatch: Any) -> None:
+        import recoverage.api as api
+
+        monkeypatch.setattr(clock, "wall_time", lambda: 1_234.5)
+        client: queue.Queue[bytes] = queue.Queue()
+        api._SSE_CLIENTS.add(client)
+        try:
+            api._broadcast_db_updated(None)
+            frame = client.get_nowait().decode()
+        finally:
+            api._SSE_CLIENTS.discard(client)
+        payload = json.loads(frame.split("data: ", 1)[1])
+        assert payload["timestamp"] == 1_234.5
+
+    def test_heartbeat_follows_the_patched_clock(self, monkeypatch: Any) -> None:
+        """A stream pings when the CLOCK says the heartbeat interval elapsed.
+
+        The queue is never fed and the heartbeat interval is a second, while
+        the patched clock jumps a hundred seconds per read: the ping arrives
+        after milliseconds of real time, so it can only have come from the
+        clock.  ``_SSE_QUEUE_POLL_SECONDS`` is named, so the empty-queue wait
+        the ping is reached through is shortened to milliseconds too.
+        """
+        import recoverage.api as api
+
+        reads = [0]
+
+        def fake() -> float:
+            reads[0] += 1
+            return 100.0 * reads[0]
+
+        monkeypatch.setattr(clock, "monotonic", fake)
+        monkeypatch.setattr(api, "_SSE_HEARTBEAT_SECONDS", 1.0)
+        monkeypatch.setattr(api, "_SSE_QUEUE_POLL_SECONDS", 0.01)
+        client: queue.Queue[bytes] = queue.Queue()
+        api._SSE_CLIENTS.add(client)
+        stream = api._SSEStream(client)
+        frames = stream._frames()
+        try:
+            assert next(frames) == b": connected\n\n"
+            assert next(frames) == b": ping\n\n"
+        finally:
+            frames.close()
+        assert client not in api._SSE_CLIENTS

@@ -838,7 +838,7 @@ class TestRegenRateLimit:
         monkeypatch.setattr(
             api,
             "_regen_last_attempt",
-            api.time.monotonic() - api._REGEN_COOLDOWN_SECONDS - 1,
+            api.clock.monotonic() - api._REGEN_COOLDOWN_SECONDS - 1,
         )
         assert_regen_accepted(wsgi_request("POST", "/api/regen", remote_addr="127.0.0.1"))
 
@@ -853,7 +853,7 @@ class TestRegenRateLimit:
 
         self._no_real_regen(monkeypatch)
         monkeypatch.setattr(api, "_regen_last_attempt", None)
-        monkeypatch.setattr(api.time, "monotonic", lambda: 1.0)
+        monkeypatch.setattr(api.clock, "monotonic", lambda: 1.0)
         assert_regen_accepted(wsgi_request("POST", "/api/regen", remote_addr="127.0.0.1"))
 
 
@@ -999,7 +999,7 @@ class TestRegenIdempotencyKey:
         # Every key is older than the retention window, so none may answer.
         real_now = time.monotonic()
         monkeypatch.setattr(
-            api.time, "monotonic", lambda: real_now + api._REGEN_KEY_TTL_SECONDS + 1
+            api.clock, "monotonic", lambda: real_now + api._REGEN_KEY_TTL_SECONDS + 1
         )
         assert not api._regen_replayed("click-0")
         assert api._REGEN_COMPLETED_KEYS == {}

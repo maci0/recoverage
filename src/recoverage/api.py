@@ -10,7 +10,6 @@ import queue
 import re
 import sqlite3
 import threading
-import time
 from collections.abc import Generator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -19,7 +18,7 @@ from typing import Any
 import typer
 from rebrew.workspace import VA_MAX, parse_va_candidates
 
-from recoverage import __version__
+from recoverage import __version__, clock
 from recoverage import metrics as _metrics
 from recoverage import server as _server
 from recoverage._paths import _db_path
@@ -115,7 +114,7 @@ def _clear_derived_caches() -> None:
 # Server-side regen cooldown (seconds): the UI throttles Reload clicks, but
 # direct API calls must not be able to trigger repeated rebrew catalog runs.
 _REGEN_COOLDOWN_SECONDS = 5.0
-# time.monotonic() of the last accepted regen POST, or None before the first
+# clock.monotonic() of the last accepted regen POST, or None before the first
 # one.  None, never 0.0: on Linux the monotonic clock counts from boot, so a
 # process started seconds after a reboot would read now < 5.0 and reject the
 # very first POST as "cooling down" for the length of the cooldown window.
@@ -161,7 +160,7 @@ def _prune_completed_keys(now: float) -> None:
 
 def _regen_replayed(key: str) -> bool:
     """True when *key* already completed a regen inside the retention window."""
-    now = time.monotonic()
+    now = clock.monotonic()
     with _REGEN_COMPLETED_KEYS_LOCK:
         _prune_completed_keys(now)
         return key in _REGEN_COMPLETED_KEYS
@@ -169,7 +168,7 @@ def _regen_replayed(key: str) -> bool:
 
 def _record_completed_key(key: str) -> None:
     """Remember that *key*'s regen completed, so its retry is answered, not re-run."""
-    now = time.monotonic()
+    now = clock.monotonic()
     with _REGEN_COMPLETED_KEYS_LOCK:
         _prune_completed_keys(now)
         # Re-insert (rather than refresh in place) so the eviction order stays
@@ -462,6 +461,10 @@ def _file_backed_section(
 
 _SSE_POLL_INTERVAL_SECONDS = 2.0
 _SSE_HEARTBEAT_SECONDS = 15.0
+# How long a stream blocks on an empty client queue before it re-reads the
+# clock.  Below the heartbeat interval so a ping is never more than one
+# poll late, and a named constant so a test can shorten the wait.
+_SSE_QUEUE_POLL_SECONDS = 1.0
 _SSE_QUEUE_MAX = 32  # per-client buffer; slow clients drop events, not memory
 _SSE_MAX_CLIENTS = 32  # cap on concurrent /api/events streams (thread DoS guard)
 
@@ -494,7 +497,7 @@ def _broadcast_db_updated(snapshot: tuple[int, int] | None) -> None:
         # Basename only — the absolute path leaks the user's home-directory
         # layout to any LAN/browser client (see security review).
         "db": {"path": _db_path().name},
-        "timestamp": time.time(),
+        "timestamp": clock.wall_time(),
     }
     if snapshot is not None:
         # Opaque WAL-aware change token (see _snapshot_db_mtime) — NOT an
@@ -624,15 +627,15 @@ class _SSEStream:
     def _frames(self) -> Generator[bytes]:
         try:
             yield b": connected\n\n"
-            last_heartbeat = time.monotonic()
+            last_heartbeat = clock.monotonic()
             while True:
                 try:
-                    frame = self._queue.get(timeout=1.0)
+                    frame = self._queue.get(timeout=_SSE_QUEUE_POLL_SECONDS)
                 except queue.Empty:
                     frame = None
                 if frame is not None:
                     yield frame
-                now = time.monotonic()
+                now = clock.monotonic()
                 if now - last_heartbeat >= _SSE_HEARTBEAT_SECONDS:
                     yield b": ping\n\n"
                     last_heartbeat = now
@@ -1747,7 +1750,7 @@ def handle_regen() -> bytes | Any:
             Retry_After=str(int(_REGEN_COOLDOWN_SECONDS)),
         )
     try:
-        now = time.monotonic()
+        now = clock.monotonic()
         since = math.inf if _regen_last_attempt is None else now - _regen_last_attempt
         if since < _REGEN_COOLDOWN_SECONDS:
             remaining = _REGEN_COOLDOWN_SECONDS - since

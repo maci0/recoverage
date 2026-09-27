@@ -29,6 +29,7 @@ recoverage/
 ├── .yamllint.yaml          # yamllint config for .github/ (document-start, 100 cols)
 ├── oxlint.config.ts        # JS/TS lint config (see the tooling notes below)
 ├── .github/
+│   ├── actions/sibling-rebrew/action.yml  # composite step: runs tools/ci_clone_rebrew.sh
 │   └── workflows/ci.yml     # lint, web-lint, test matrix, smoke, sbom
 ├── docs/                   # Screenshots & design doc
 │   ├── DESIGN.md           # Architecture and design decisions
@@ -61,6 +62,7 @@ recoverage/
     ├── __main__.py          # python -m recoverage
     ├── _paths.py            # DB path resolution (RECOVERAGE_DB, rebrew-project.toml db_dir)
     ├── config.py            # RECOVERAGE_* env: flag defaults, validation, startup banner
+    ├── clock.py             # The one time source (monotonic / wall-clock) the request path reads
     ├── metrics.py           # In-process RED counters (metrics.REQUESTS), read by /api/health
     ├── cli.py               # Typer CLI entry point (serve, stats, export, check, regen, open)
     ├── server.py            # Bottle app, shared helpers & compression
@@ -157,15 +159,17 @@ test fails the job instead of holding a runner for six hours.
 
 `rebrew` is an editable path dependency at `../rebrew` (see
 `[tool.uv.sources]`), which no runner has, so every job that runs
-`uv sync --frozen --extra dev` first runs `tools/ci_clone_rebrew.sh
-"$GITHUB_WORKSPACE/../rebrew"`, the same script `make clone-rebrew` wraps. It
-is the only mechanism that fetches the sibling: a second one (an inline
-`git clone`, or an action carrying its own ref) would decide from an unchecked
-pin which rebrew the suite tested. The script's
-`REBREW_REF`/`REBREW_SHA` defaults are the whole pin: the clone fails unless the
-tag still resolves to the commit, so a moved tag cannot change the dependency
-silently. Those defaults must keep matching `uv.lock` (checked by
-`tests/test_supply_chain.py`): when rebrew's dependencies change, re-lock in a
+`uv sync --frozen --extra dev` first uses the `sibling-rebrew` composite action
+(`.github/actions/sibling-rebrew`), whose only job is to run
+`tools/ci_clone_rebrew.sh "$GITHUB_WORKSPACE/../rebrew"`, the same script
+`make clone-rebrew` wraps. The action exists because every job needs the step
+and a job body cannot name a sibling path; it takes the clone URL as an input
+and deliberately not the ref or the sha, so the pin stays in one place. The
+script's `REBREW_REF`/`REBREW_SHA` defaults are the whole pin: the clone fails
+unless the tag still resolves to the commit, so a moved tag cannot change the
+dependency silently. Those defaults must keep matching `uv.lock` (checked by
+`tests/test_supply_chain.py`, which also fails if a job grows its own clone or
+a second local action appears): when rebrew's dependencies change, re-lock in a
 tree with the sibling present and bump the script alone. The `sbom` job
 deliberately has no such step, because `uv export --frozen` reads the lock
 alone.
@@ -288,6 +292,13 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   filed the request as a 200) must call `server._reclassify_request`, or the
   error rate silently reads zero; `test_metrics.py` pins that. The design
   rationale is in `docs/DESIGN.md` (*Request Observability*).
+- Every time read under `src/recoverage/` goes through `clock`: `monotonic()`
+  for elapsed-time arithmetic (cooldowns, retention windows, throttles,
+  heartbeats) and `wall_time()` only for a stamp a human reads. A direct
+  `time.monotonic()` in a request path is a window minutes wide that no test
+  can drive and no run can replay; `tests/test_server.py` (`TestClockSeam`)
+  drives the regen cooldown, the idempotency-key TTL, the failed-token
+  throttle and the `db-updated` stamp from one patched clock.
 - HTML/CSS/JS in `assets/` — no build step, VanJS for reactivity
 - The cell-state vocabulary is owned by rebrew (`rebrew.build_db._KNOWN_CELL_STATES`)
   and must be covered on the rendering side: `potato.COLORS` + `LEGEND_ITEMS`,

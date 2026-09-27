@@ -52,6 +52,7 @@ from rebrew.workspace import (
     targets_table,
 )
 
+from recoverage import clock
 from recoverage import metrics
 from recoverage._paths import _db_path
 
@@ -1947,7 +1948,7 @@ def _require_auth() -> None:
         _clear_auth_failures()
         return
 
-    now = time.monotonic()
+    now = clock.monotonic()
     if _auth_throttle(now, reserve_slot=True):
         raise _json_err(
             429,
