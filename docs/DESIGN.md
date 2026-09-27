@@ -124,6 +124,7 @@ The UI is broken down into functional VanJS components in `app.js`:
   * **Proven**: Bold Cyan (`rgba(6, 182, 212, 0.8)`)
   * **Stub**: Red (`rgba(255, 0, 0, 0.65)`)
   * **Padding**: Silver (`rgba(200, 200, 220, 0.55)`)
+* **One palette, not two**: every other color is drawn from the same source. Status badges tint their fill with the state hue at 0.2 alpha (border 0.4) and take their text from the same hue, lightened where 4.5:1 needs it. Links use the cyan family (`--link`), not a stock blue. The highlight.js theme in `assets/hljs.css` reuses the app tokens — text, stub red for keywords, near-match amber for strings, exact green for names, `--link` for attributes, the accent for section markers — so a code pane reads as part of the dashboard instead of a pasted-in theme. Potato Mode derives its own colors from its module constants (`BG_COLOR`, `PANEL_COLOR`, `TRACK_COLOR`, `BORDER_COLOR`); no hex literal in `potato.py` is a stock framework neutral.
 * **Transitions**: Smooth `0.3s ease` transitions on background colors, borders, and opacities ensure fluid theme switching and filter toggling.
 * **Scrollbars**: Custom WebKit scrollbars styled to match the active theme, with `scrollbar-gutter: stable` applied to code blocks to prevent layout shifts.
 * **Loading Overlay**: A pulsing, vertically-centered overlay with large text (`font-size: 32px`, `font-weight: 700`) provides immediate visual feedback during data fetches.

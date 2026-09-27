@@ -21,7 +21,7 @@
   --grid-bg: rgba(0, 0, 0, 0.22);
   --meta-item-bg: rgba(255, 255, 255, 0.03);
   --meta-item-border: rgba(255, 255, 255, 0.05);
-  --topbar-bg: rgba(15, 23, 42, 0.6);
+  --topbar-bg: rgba(15, 18, 22, 0.6);
   --modal-header-bg: rgba(15, 18, 22, 0.5);
   --scroll-track: var(--bg);
   --scroll-thumb: var(--border);
@@ -51,28 +51,30 @@
    * classify is not read as a byte nobody has looked at. */
   --other-bg: rgba(168, 85, 247, 0.55);
 
-  --badge-exact-bg: rgba(46, 160, 67, 0.2);
-  --badge-exact-border: rgba(46, 160, 67, 0.4);
-  --badge-reloc-bg: rgba(2, 132, 199, 0.2);
-  --badge-reloc-border: rgba(2, 132, 199, 0.4);
-  --badge-near-bg: rgba(210, 153, 34, 0.2);
-  --badge-near-border: rgba(210, 153, 34, 0.4);
-  --badge-stub-bg: rgba(248, 81, 73, 0.2);
-  --badge-stub-border: rgba(248, 81, 73, 0.4);
+  /* Badge surfaces carry the same status hues as the grid cells, at badge
+   * alpha.  Each text token below clears 4.5:1 on its own tinted fill. */
+  --badge-exact-bg: rgba(16, 185, 129, 0.2);
+  --badge-exact-border: rgba(16, 185, 129, 0.4);
+  --badge-reloc-bg: rgba(14, 165, 233, 0.2);
+  --badge-reloc-border: rgba(14, 165, 233, 0.4);
+  --badge-near-bg: rgba(245, 158, 11, 0.2);
+  --badge-near-border: rgba(245, 158, 11, 0.4);
+  --badge-stub-bg: rgba(239, 68, 68, 0.2);
+  --badge-stub-border: rgba(239, 68, 68, 0.4);
 
   /* Accent tokens — section logos, links, badges, delta */
   --accent-c-source: #3b82f6;
   --accent-asm: #ef4444;
   --accent-data: #a855f7;
   --accent-bytes: #10b981;
-  --link: #58a6ff;
-  --link-hover: #79c0ff;
-  --link-hover-glow: rgba(88, 166, 255, 0.5);
+  --link: #7dd3fc;
+  --link-hover: #bae6fd;
+  --link-hover-glow: rgba(125, 211, 252, 0.5);
   --delta: #f59e0b;
-  --badge-exact-text: #3fb950;
-  --badge-reloc-text: #0ea5e9;
-  --badge-near-text: #e3b341;
-  --badge-stub-text: #ff7b72;
+  --badge-exact-text: #10b981;
+  --badge-reloc-text: #7dd3fc;
+  --badge-near-text: #f59e0b;
+  --badge-stub-text: #f87171;
   --asm-link-underline: rgba(255, 255, 255, 0.5);
   --asm-link-hover-bg: rgba(31, 191, 117, 0.1);
 

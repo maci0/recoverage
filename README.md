@@ -1,4 +1,4 @@
-# 🔍 recoverage
+# recoverage
 
 <p align="center">
   <img src="docs/mascot.png" alt="recoverage mascot — a raccoon detective investigating code coverage" width="200">
@@ -25,24 +25,24 @@ decompilation project. Think of it as a **defrag map for your decomp** —
 every byte of the original binary is a cell in a grid, colored by how
 closely your C code matches the original compiled output.
 
-### 🚀 Features
+### Features
 
 - **Byte-Perfect Confidence**: Stop guessing if your C code produced the correct assembly. See exact byte comparisons visually.
 - **Fast Iteration**: Quickly identify which parts of a function are matching and which parts have diverged (e.g. register allocation differences, instruction reordering).
 - **Interactive Triage**: Click any block in the grid to immediately view the corresponding C source, disassembled binary, and hex diff.
 
-### ✨ Highlights
+### Details
 
-| | |
+| What | How |
 |---|---|
-| 🧱 **Defrag-style grid** | One cell per chunk — Exact (green), Reloc (cyan), Matching (yellow), Stub (red), None (gray) |
-| 🔎 **Function detail panel** | Click any cell to see metadata, C source, disassembly, and hex dump side-by-side |
-| 🌗 **Light & dark themes** | Retro CRT dark mode by default, clean light mode one click away |
-| 🔗 **Clickable cross-references** | Hex addresses in disassembly are live links — click to jump to that chunk |
-| 📊 **Interactive progress bar** | Segmented by status; click a segment to filter the grid |
-| 🗜️ **First draw in first TCP packet** | HTML + CSS + JS inlined & compressed (Brotli/Zstd) to ~14.5 KB |
-| 🥔 **Potato Mode** | Zero-JS server-rendered fallback for constrained environments |
-| 🔄 **Live regen** | One-click re-catalog + rebuild without restarting the server |
+| Defrag-style grid | One cell per chunk, colored by state: Exact (green), Reloc (cyan), Near-match (yellow), Stub (red), None (gray) |
+| Function detail panel | Click any cell for metadata, C source, disassembly, and hex dump side by side |
+| Light and dark themes | Retro CRT dark mode by default, clean light mode one click away |
+| Clickable cross-references | Hex addresses in the disassembly are live links that jump to that chunk |
+| Interactive progress bar | Segmented by state; click a segment to filter the grid |
+| First draw in first TCP packet | HTML, CSS, and JS inlined and compressed (Brotli/Zstd) to ~14.5 KB |
+| Potato Mode | Zero-JS server-rendered fallback for constrained environments |
+| Live regen | Re-catalog and rebuild from the browser without restarting the server |
 
 ## Screenshots
 
@@ -58,7 +58,7 @@ closely your C code matches the original compiled output.
 
 ![Dark mode with function detail panel](docs/recoverage_dark.png)
 
-### 🥔 Potato Mode
+### Potato Mode
 
 ![Potato Mode — retro pure-HTML table view](docs/recoverage_potato.png)
 

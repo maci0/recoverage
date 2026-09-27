@@ -91,6 +91,8 @@ COLORS = {
 }
 BG_COLOR = "#0f1216"
 PANEL_COLOR = "#151a21"
+# Empty progress-bar track: --none (white 0.05) composited over PANEL_COLOR.
+TRACK_COLOR = "#22272e"
 CODE_BG_COLOR = "#0a0d14"  # darker than panel, matches --code-bg rgba(0,0,0,0.26) on #0f1216
 BORDER_COLOR = "#1c2a38"  # subtle cyan-tinted dark, matches rgba(6,182,212,0.15) on dark bg
 TEXT_COLOR = "#e7edf4"
@@ -129,8 +131,8 @@ def _make_topbar_svg() -> str:
         '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="80">'
         "<defs>"
         '<linearGradient id="grad" x1="0%" y1="0%" x2="0%" y2="100%">'
-        '<stop offset="0%" style="stop-color:#0f1723;stop-opacity:1" />'
-        '<stop offset="100%" style="stop-color:#1e293b;stop-opacity:1" />'
+        f'<stop offset="0%" style="stop-color:{BG_COLOR};stop-opacity:1" />'
+        f'<stop offset="100%" style="stop-color:{PANEL_COLOR};stop-opacity:1" />'
         "</linearGradient>"
         "</defs>"
         '<rect width="1" height="80" fill="url(#grad)" />'
@@ -181,14 +183,14 @@ def _progress_svg(segments: tuple[tuple[str, float], ...]) -> str:
         (
             '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 32" preserveAspectRatio="none">'
             '<defs><clipPath id="rc"><rect width="700" height="32" rx="10" ry="10"/></clipPath></defs>'
-            '<rect width="700" height="32" fill="#1f2937" rx="10" ry="10"/>'
+            f'<rect width="700" height="32" fill="{TRACK_COLOR}" rx="10" ry="10"/>'
             '<g clip-path="url(#rc)">'
         )
     ]
 
     current_x = 0.0
     for status, pct in segments:
-        hex_color = COLORS.get(status, "#1f2937")
+        hex_color = COLORS.get(status, TRACK_COLOR)
         seg_w = 700 * pct / 100.0
         if seg_w > 0:
             svg.append(
