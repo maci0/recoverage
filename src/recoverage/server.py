@@ -52,8 +52,7 @@ from rebrew.workspace import (
     targets_table,
 )
 
-from recoverage import clock
-from recoverage import metrics
+from recoverage import clock, metrics
 from recoverage._paths import _db_path
 
 # Thread-local compressor — python-zstandard gives ZstdCompressor instances NO
