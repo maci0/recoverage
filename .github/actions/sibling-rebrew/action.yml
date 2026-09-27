@@ -1,7 +1,12 @@
 name: sibling-rebrew
 description: >-
-  Materialize the rebrew checkout that [tool.uv.sources] resolves against,
-  at the pin tools/ci_clone_rebrew.sh owns.
+  Materialize the sibling rebrew checkout that [tool.uv.sources] resolves
+  recoverage's rebrew dependency to. recoverage depends on rebrew as an
+  editable path dependency at ../rebrew (pyproject.toml), so `uv sync` fails
+  on a clean runner with "Distribution not found at ../rebrew" until that
+  directory exists. A bare clone or a git worktree has no sibling, so every
+  job that installs the environment needs this step, at the pin
+  tools/ci_clone_rebrew.sh owns.
 
 # pyproject.toml pins rebrew at the relative path ../rebrew, which no runner
 # has, and actions/checkout writes only inside GITHUB_WORKSPACE. This action
@@ -21,8 +26,19 @@ inputs:
 runs:
   using: composite
   steps:
+    # The pin (tag + commit) lives in tools/ci_clone_rebrew.sh and nowhere
+    # else, so CI installs the same rebrew `make setup` does. The script also
+    # verifies that the tag still resolves to the pinned commit; cloning
+    # directly from a ref input skipped that check and left a second pin free
+    # to drift away from uv.lock.
     - name: Clone the sibling rebrew checkout
       shell: bash
+      # The input travels as an environment variable, never spliced into the
+      # script body: a ${{ }} expansion is substituted before bash parses the
+      # block, so a value carrying a quote (or `$(...)`) would break out of the
+      # argument and run as part of the step.
       env:
         REBREW_URL: ${{ inputs.repository }}
-      run: bash "$GITHUB_ACTION_PATH/../../tools/ci_clone_rebrew.sh" "$GITHUB_WORKSPACE/../rebrew"
+      run: |
+        set -euo pipefail
+        bash "$GITHUB_ACTION_PATH/../../tools/ci_clone_rebrew.sh" "$GITHUB_WORKSPACE/../rebrew"

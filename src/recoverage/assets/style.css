@@ -80,7 +80,17 @@
 
 
   --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-
+  /* Two faces, chosen rather than accumulated: the terminal face for every
+   * name, address, heading and disassembly, the system sans for prose and
+   * control labels.  A seven-name fallback pile is the browser picking. */
+  --font-ui: system-ui, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  /* A phosphor terminal has square corners: a rounded card reads as a web
+   * dashboard, not as the instrument.  Three steps, not a scale nobody
+   * chose: hairline (cells, links, chips), control (buttons, fields,
+   * frames), pill (progress bar, badges). */
+  --radius-hair: 2px;
+  --radius: 4px;
+  --radius-pill: 6px;
 }
 
 .light-mode {
@@ -153,7 +163,7 @@ body {
   background-repeat: no-repeat;
   color: var(--text);
   text-shadow: var(--text-shadow);
-  font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, "Helvetica Neue", Arial;
+  font-family: var(--font-ui);
   overflow-x: clip;
   overflow-y: scroll;
   min-height: 100vh;
@@ -164,11 +174,13 @@ body {
 .logo-r {
   font-family: var(--mono); font-size: 20px; font-weight: 800; color: var(--c);
   text-shadow: 0 0 2px var(--c), 0 0 8px var(--c);
-  border: 2px solid var(--c); border-radius: 4px; padding: 2px 8px;
+  border: 2px solid var(--c); border-radius: var(--radius-hair); padding: 2px 8px;
   background: rgba(6, 182, 212, 0.05); box-shadow: var(--c-shadow);
   display: inline-flex; align-items: center; justify-content: center; line-height: 1;
 }
-.title { font-size: 16px; font-weight: 650; letter-spacing: 0.2px; margin: 0; }
+/* The wordmark wears the terminal face it ships in (favicon: a glowing
+   * mono R), with tracking to close the mono sidebearing. */
+.title { font-family: var(--mono); font-size: 16px; font-weight: 700; letter-spacing: 1px; margin: 0; }
 .subtitle { color: var(--muted); font-size: 13px; flex: 1; }
 
 .source-link { color: var(--link); text-decoration: none; transition: color 0.2s ease, text-shadow 0.2s ease; }
@@ -177,7 +189,7 @@ body {
 .btn {
   appearance: none; border: 1px solid var(--border); background: var(--btn-bg);
   color: var(--text); text-shadow: var(--text-shadow); height: 32px; padding: 0 12px;
-  border-radius: 8px; cursor: pointer; font-size: 13px; box-sizing: border-box;
+  border-radius: var(--radius); cursor: pointer; font-size: 13px; box-sizing: border-box;
   display: inline-flex; align-items: center; justify-content: center;
   transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, box-shadow 0.2s ease;
   font-family: inherit; font-weight: 600;
@@ -201,7 +213,7 @@ body {
 .input-el {
   appearance: none; border: 1px solid var(--border); background: var(--btn-bg);
   color: var(--text); text-shadow: var(--text-shadow); height: 32px; padding: 0 12px;
-  border-radius: 8px; box-sizing: border-box; font-size: 13px; width: 100%; outline: none;
+  border-radius: var(--radius); box-sizing: border-box; font-size: 13px; width: 100%; outline: none;
   transition: background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
 }
 .input-el:focus { border-color: rgba(42, 111, 219, 0.5); box-shadow: 0 0 0 2px rgba(42, 111, 219, 0.1); }
@@ -236,10 +248,11 @@ body {
 .layout { display: grid; grid-template-columns: minmax(0, 1fr) 720px; gap: 14px; padding: 14px; }
 @media (max-width: 1300px) { .layout { grid-template-columns: 1fr; } .panel { min-height: 420px; } }
 
+/* No drop shadow: on a near-black ground a soft neutral shadow reads as
+ * nothing, and the phosphor motif separates surfaces with the border. */
 .map, .panel {
-  border: 1px solid var(--border); border-radius: 14px; background: var(--panel);
+  border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel);
   min-width: 0; transition: background-color 0.3s ease, border-color 0.3s ease;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.05);
 }
 .map { padding: 14px; overflow: hidden; }
 /* `clip`, not `hidden`: both round the corners, but `hidden` makes .panel a
@@ -250,7 +263,7 @@ body {
 
 .legend { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
 .key { display: inline-flex; gap: 8px; align-items: center; color: var(--muted); font-size: 12px; }
-.swatch { width: 12px; height: 12px; border-radius: 3px; border: 1px solid var(--border); }
+.swatch { width: 12px; height: 12px; border-radius: var(--radius-hair); border: 1px solid var(--border); }
 .swatch-none { background: var(--none); }
 .progress-segment.exact { background: var(--exact-bg); }
 .progress-segment.reloc { background: var(--reloc-bg); }
@@ -260,7 +273,7 @@ body {
 
 
 .grid {
-  display: block; padding: 0; border-radius: 12px; background: var(--grid-bg); border: 1px solid var(--border);
+  display: block; padding: 0; border-radius: var(--radius); background: var(--grid-bg); border: 1px solid var(--border);
   user-select: none; animation: fadeInGrid 0.3s ease; position: relative; min-height: 120px; overflow: auto;
 }
 .grid-canvas { display: block; }
@@ -270,7 +283,7 @@ body {
 .grid-error {
   display: grid; place-content: center; justify-items: center; gap: 12px;
   min-height: 120px; padding: 24px; text-align: center;
-  border: 1px dashed var(--border); border-radius: 12px; background: var(--grid-bg);
+  border: 1px dashed var(--border); border-radius: var(--radius); background: var(--grid-bg);
   color: var(--muted); font-size: 13px; line-height: 1.5;
 }
 .grid-error p { margin: 0; max-width: 48ch; }
@@ -283,7 +296,7 @@ body {
 }
 .modal.show { opacity: 1; visibility: visible; }
 .modal-content {
-  background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
   min-width: 60%; max-width: 90%; max-height: 90vh; display: flex; flex-direction: column;
   overflow: hidden; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
   transform: scale(0.95); opacity: 0; transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.2s ease, background-color 0.3s ease, border-color 0.3s ease;
@@ -293,7 +306,7 @@ body {
 }
 .modal.show .modal-content { transform: scale(1); opacity: 1; }
 .modal-header { display: flex; justify-content: space-between; align-items: center; padding: 14px 18px; border-bottom: 1px solid var(--border); background: var(--modal-header-bg); flex-shrink: 0; }
-.modal-title { font-weight: 650; font-size: 14px; }
+.modal-title { font-family: var(--mono); font-weight: 600; font-size: 14px; }
 .modal-actions { display: flex; gap: 8px; align-items: center; }
 .modal-body { flex: 1; padding: 18px; overflow: auto; display: flex; flex-direction: column; }
 .modal-content .code { margin: 0; max-height: none; min-height: 0; flex-shrink: 0; min-width: min-content; }
@@ -305,9 +318,9 @@ body {
  * does not jump when data arrives. */
 .empty-state {
   min-height: 400px; display: grid; place-content: center; gap: 10px; padding: 40px 24px; text-align: center;
-  border: 1px dashed var(--border); border-radius: 12px; background: var(--grid-bg);
+  border: 1px dashed var(--border); border-radius: var(--radius); background: var(--grid-bg);
 }
-.empty-state h2 { margin: 0; font-size: 16px; font-weight: 650; }
+.empty-state h2 { margin: 0; font-size: 16px; font-weight: 600; }
 .empty-state p { margin: 0; max-width: 52ch; font-size: 13px; line-height: 1.5; color: var(--muted); }
 /* No backdrop-filter here: it is sticky, so the blur would repaint on every
  * scroll frame over a grid of thousands of cells, and it sits on the panel's
@@ -315,7 +328,9 @@ body {
 .panel-head { padding: 14px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 12px; position: sticky; top: var(--topbar-h); background: var(--panel); z-index: 10; }
 /* Mangled C++ symbols have no break opportunities, and the panel clips its
  * overflow, so without this the tail of a long name silently disappears. */
-.panel-title { font-weight: 650; font-size: 14px; margin: 0; overflow-wrap: anywhere; }
+/* Function and block names are symbols, not prose: same face as the
+   * disassembly they head. */
+.panel-title { font-family: var(--mono); font-weight: 600; font-size: 14px; margin: 0; overflow-wrap: anywhere; }
 .panel-meta { margin-top: 2px; color: var(--muted); font-family: var(--mono); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
 .panel-body { padding: 14px; display: grid; gap: 14px; min-width: 0; }
 .section { min-width: 0; overflow: hidden; }
@@ -323,7 +338,7 @@ body {
 .panel-actions { display: flex; gap: 8px; margin-bottom: 0px; }
 
 .code {
-  font-family: var(--mono); font-size: 12px; line-height: 1.35; padding: 10px; border-radius: 12px;
+  font-family: var(--mono); font-size: 12px; line-height: 1.35; padding: 10px; border-radius: var(--radius);
   border: 1px solid var(--border); background: var(--code-bg); overflow: auto; scrollbar-gutter: stable;
   max-height: 220px; white-space: pre; width: 100%; transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease;
 }
@@ -338,22 +353,22 @@ body {
 }
 
 .asm-link { color: inherit; text-decoration: underline; text-decoration-style: dotted; text-decoration-color: var(--asm-link-underline); cursor: pointer; transition: all 0.2s ease; }
-.asm-link:hover { color: var(--c); text-decoration-style: solid; text-decoration-color: var(--c); background: var(--asm-link-hover-bg); border-radius: 2px; }
+.asm-link:hover { color: var(--c); text-decoration-style: solid; text-decoration-color: var(--c); background: var(--asm-link-hover-bg); border-radius: var(--radius-hair); }
 
 .meta-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; margin-top: 6px; }
-.meta-item { display: flex; flex-direction: column; gap: 2px; background: var(--meta-item-bg); padding: 6px 8px; border-radius: 2px; border: 1px solid var(--meta-item-border); transition: background-color 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease; }
+.meta-item { display: flex; flex-direction: column; gap: 2px; background: var(--meta-item-bg); padding: 6px 8px; border-radius: var(--radius-hair); border: 1px solid var(--meta-item-border); transition: background-color 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease; }
 .meta-item:hover { border-color: var(--c); box-shadow: var(--c-shadow); }
 .meta-item.full-width { grid-column: 1 / -1; }
 /* Address ranges must not wrap mid-address (break-all splits hex pairs). */
 .meta-item.nowrap .meta-value { white-space: nowrap; }
-.inspector-grid { margin-top: 0; background: var(--inspector-bg); padding: 10px; border-radius: 12px; border: 1px solid var(--border); }
+.inspector-grid { margin-top: 0; background: var(--inspector-bg); padding: 10px; border-radius: var(--radius); border: 1px solid var(--border); }
 .meta-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); }
 .meta-value { font-size: 12px; font-family: var(--mono); color: var(--text); text-shadow: var(--text-shadow); word-break: break-all; }
 .meta-value.blocker-value { font-style: italic; opacity: 0.9; }
 .meta-value.delta-value { color: var(--delta); font-weight: bold; }
 .meta-docs { margin: 0; font-size: 12px; font-family: var(--mono); color: var(--text); text-shadow: var(--text-shadow); white-space: pre-wrap; }
 
-.status-badge { display: inline-block; padding: 2px 6px; border-radius: 10px; font-size: 11px; font-weight: 600; text-transform: uppercase; width: fit-content; }
+.status-badge { display: inline-block; padding: 2px 6px; border-radius: var(--radius-pill); font-size: 11px; font-weight: 600; text-transform: uppercase; width: fit-content; }
 .status-exact { background: var(--badge-exact-bg); color: var(--badge-exact-text); border: 1px solid var(--badge-exact-border); }
 .status-reloc { background: var(--badge-reloc-bg); color: var(--badge-reloc-text); border: 1px solid var(--badge-reloc-border); }
 .status-near-match { background: var(--badge-near-bg); color: var(--badge-near-text); border: 1px solid var(--badge-near-border); }
@@ -361,13 +376,13 @@ body {
 
 .section-title-left { display: flex; align-items: center; gap: 8px; }
 .hex-logo { display: flex; align-items: center; justify-content: center; filter: drop-shadow(0 0 4px currentColor); }
-.section-title-text { font-size: 12px; font-weight: 600; margin: 0; color: var(--text); text-shadow: var(--text-shadow); letter-spacing: 0.5px; }
+.section-title-text { font-family: var(--mono); font-size: 12px; font-weight: 600; margin: 0; color: var(--text); text-shadow: var(--text-shadow); letter-spacing: 0.5px; }
 .section-actions { display: flex; gap: 6px; }
 
 /* The bar gets its own full-width row below the title/tabs: sharing the row
  * left it a few dozen pixels, which clipped the coverage stats inside it. */
 .progress-container { user-select: none; display: flex; flex-direction: column; gap: 6px; width: 100%; flex: 1 1 100%; min-width: 320px; order: 10; }
-.progress-bar { position: relative; height: 14px; width: 100%; background: var(--none); border-radius: 7px; border: 1px solid var(--bar-border); overflow: hidden; }
+.progress-bar { position: relative; height: 14px; width: 100%; background: var(--none); border-radius: var(--radius-pill); border: 1px solid var(--bar-border); overflow: hidden; }
 .progress-segments { display: flex; flex-direction: row; width: 100%; height: 100%; position: absolute; top: 0; left: 0; }
 /* Loading/error states reuse the text-row typography (they render in place
  * of the stats, not over segment colours, so no scrim). */
@@ -389,7 +404,7 @@ body {
 
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: var(--scroll-track); }
-::-webkit-scrollbar-thumb { background: var(--scroll-thumb); border-radius: 5px; border: 2px solid var(--scroll-border); }
+::-webkit-scrollbar-thumb { background: var(--scroll-thumb); border-radius: var(--radius-hair); border: 2px solid var(--scroll-border); }
 ::-webkit-scrollbar-thumb:hover { background: var(--scroll-thumb-hover); }
 ::-webkit-scrollbar-corner { background: transparent; }
 
@@ -412,7 +427,7 @@ body.light-mode::after { background: linear-gradient(rgba(18, 16, 16, 0) 50%, rg
 .skip-link:focus {
   position: fixed; top: 4px; left: 4px; width: auto; height: auto; overflow: visible;
   padding: 8px 16px; background: var(--panel); color: var(--c); border: 2px solid var(--c);
-  border-radius: 8px; font-size: 14px; font-weight: 600; z-index: 999;
+  border-radius: var(--radius); font-size: 14px; font-weight: 600; z-index: 999;
 }
 
 @media (prefers-reduced-motion: reduce) {

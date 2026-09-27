@@ -2311,6 +2311,12 @@ class TestDataPayloadMemo:
         monkeypatch.setattr(api, "request", fake_req)
         monkeypatch.setattr(server_mod, "request", fake_req)
         monkeypatch.setattr(server_mod, "response", fake_resp)
+        # api._query_param resolves `request` in api's own namespace (see its
+        # docstring), so the stand-in has to be installed there too.  Patching
+        # only the server module left the handler reading bottle's empty
+        # thread-local, so a `?section=` filter never reached the memo key.
+        monkeypatch.setattr(api, "request", fake_req)
+        monkeypatch.setattr(api, "response", fake_resp)
         return api, open_calls, query
 
     def test_concurrent_cold_misses_single_flight(self, tmp_path: Any, monkeypatch: Any) -> None:
@@ -2412,10 +2418,13 @@ class TestDataPayloadMemo:
 
         release = threading.Event()
         # The section filter is read by api._query_param, which resolves
-        # `request` from the *api* module globals, and the ETag/compression
-        # helpers resolve it from the server globals; _gated_open installs the
-        # query-carrying stand-in in both, so the follower computes the same
-        # memo key this test registers.
+        # `request` from the *api* module globals, so the stand-in carrying
+        # it has to be patched there; a request stand-in on the server module
+        # alone would leave the handler building the unfiltered payload and
+        # this test would pass on the wrong path. The ETag/compression helpers
+        # resolve it from the server globals, so _gated_open installs the one
+        # query-carrying stand-in in both namespaces and the follower computes
+        # the same memo key this test registers.
         _, open_calls, _ = self._gated_open(tmp_path, monkeypatch, release, {"section": "nope"})
         api._clear_data_cache()
 

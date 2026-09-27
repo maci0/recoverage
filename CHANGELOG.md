@@ -155,6 +155,14 @@ module ships in the published package. See *Breaking*.
   (4096 bytes of x86, the `?size=` clamp the SPA sends), so it could retain
   ~148 MB for a cache whose hits are rare: the ETag answers the browser's
   repeat clicks with a 304 first. It is capped at 128 entries, near 9 MB.
+- **The dashboard's corners and headings match its own logo.** Border radii
+  came from nine different values, none of them a token, so the panels and
+  grids read as rounded web cards over a phosphor grid. Three steps now
+  (`--radius-hair`, `--radius`, `--radius-pill`) at terminal scale, and the
+  wordmark, section titles and panel titles wear the monospace face the
+  favicon already ships, so the product is recognizable with the logo
+  removed. The soft drop shadow under the map and panel is gone; the
+  border does that work.
 
 ### Fixed
 
@@ -162,11 +170,12 @@ module ships in the published package. See *Breaking*.
   `make setup` first.** They now pass `--extra dev` the way `make setup` does,
   so a contributor who runs the loop before the bootstrap gets the tests
   instead of `No module named pytest`.
-- **The composite action CI clones the sibling rebrew through is back.** Every
-  installing job referenced `.github/actions/sibling-rebrew` while the file
-  did not exist, so each job would have stopped at that step; the four inline
-  copies of the clone step, the second mechanism the pin test rejects, are
-  gone.
+- **CI installs rebrew one way again.** Every installing job referenced
+  `.github/actions/sibling-rebrew` while the file did not exist, so each job
+  would have stopped at that step; the action is back, it takes the clone URL
+  and never the tag or commit, and the four inline copies of the clone step,
+  the second mechanism the pin test rejects, are gone. The pin lives in
+  `tools/ci_clone_rebrew.sh` and the action is its only caller.
 - **The payload-memo concurrency tests install the request stand-in where
   `api._query_param` reads it**, so a `?section=` filter is no longer dropped
   and the follower's memo key matches the one under test.
