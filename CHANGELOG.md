@@ -51,6 +51,18 @@ module ships in the published package. See *Breaking*.
 
 ### Fixed
 
+- **Functions with an unknown `markerType` are listed again.** The
+  GLOBAL/DATA/VTABLE/STRING exclusion read `markerType NOT IN (...)`, and
+  SQLite evaluates `NULL NOT IN (...)` to NULL, which `WHERE` rejects: on a
+  `coverage.db` whose `functions.markerType` is nullable, every unmarked
+  function dropped out of the SPA list, the Potato Mode function table, and
+  the per-status counts. The filter is now one shared SQL fragment
+  (`server.NOT_DATA_MARKER_SQL`) that keeps the NULL arm.
+- **`/data` and `/stats` read one version of the database.** Both assemble
+  their answer from several statements, and Python's sqlite3 opens a
+  deferred transaction per statement, so a rebuild committing mid-request
+  paired one build's section rows with the next build's cells. Each read now
+  runs inside a pinned snapshot.
 - **`--no-color`, `NO_COLOR`, and `TERM=dumb` are honored.** Colorized errors,
   warnings, and `check` verdicts carried ANSI escapes on a terminal even with
   `NO_COLOR` set, because click only strips escapes from a non-TTY stream. The

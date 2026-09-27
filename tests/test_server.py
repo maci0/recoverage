@@ -595,6 +595,88 @@ class TestReadOnlyOpen:
             held.close()
 
 
+class TestReadSnapshot:
+    """A multi-statement read must see ONE database version.
+
+    Python's sqlite3 begins a deferred transaction per statement, so a
+    rebuild committing between two reads of the same table would answer the
+    second from the new build. `read_snapshot` pins the snapshot for the
+    block instead.
+    """
+
+    @staticmethod
+    def _wal_db(tmp_path: Path) -> Path:
+        import sqlite3
+
+        db = tmp_path / "coverage.db"
+        conn = sqlite3.connect(db)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("CREATE TABLE sections (target TEXT, name TEXT, size INTEGER)")
+        conn.execute("INSERT INTO sections VALUES ('GAME', '.text', 16)")
+        conn.commit()
+        conn.close()
+        return db
+
+    def test_rebuild_mid_block_is_invisible(self, tmp_path: Path) -> None:
+        import sqlite3
+
+        from recoverage import server as srv
+
+        db = self._wal_db(tmp_path)
+        conn = srv._open_db(db)
+        try:
+            c = conn.cursor()
+            with srv.read_snapshot(c):
+                c.execute("SELECT size FROM sections WHERE target = 'GAME'")
+                before = c.fetchone()[0]
+
+                writer = sqlite3.connect(db)
+                try:
+                    writer.execute("UPDATE sections SET size = 99")
+                    writer.commit()
+                finally:
+                    writer.close()
+
+                c.execute("SELECT size FROM sections WHERE target = 'GAME'")
+                during = c.fetchone()[0]
+            # Outside the block the next statement sees the committed rebuild.
+            c.execute("SELECT size FROM sections WHERE target = 'GAME'")
+            after = c.fetchone()[0]
+        finally:
+            conn.close()
+
+        assert before == during == 16
+        assert after == 99
+
+    def test_block_closes_the_transaction(self, tmp_path: Path) -> None:
+        from recoverage import server as srv
+
+        conn = srv._open_db(self._wal_db(tmp_path))
+        try:
+            c = conn.cursor()
+            with srv.read_snapshot(c):
+                c.execute("SELECT 1 FROM sections")
+            assert not conn.in_transaction
+        finally:
+            conn.close()
+
+    def test_nested_inside_an_open_transaction_is_a_noop(self, tmp_path: Path) -> None:
+        """The CLI reuses one connection across commands; SQLite has no
+        nested BEGIN, and the outer transaction already pins the snapshot."""
+        from recoverage import server as srv
+
+        conn = srv._open_db(self._wal_db(tmp_path))
+        try:
+            c = conn.cursor()
+            conn.execute("BEGIN")
+            with srv.read_snapshot(c):
+                c.execute("SELECT 1 FROM sections")
+            assert conn.in_transaction, "read_snapshot closed the caller's transaction"
+            conn.rollback()
+        finally:
+            conn.close()
+
+
 class TestDeepLinking:
     """J9: the SPA carries URL deep-link wiring (target/fn/section/q)."""
 

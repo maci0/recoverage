@@ -29,6 +29,7 @@ from recoverage.server import (
     HAS_CAPSTONE,
     HAS_PYGMENTS,
     LOOPBACK_HOSTS,
+    NOT_DATA_MARKER_SQL,
     _best_encoding,
     _cell_bucket_row,
     _cells_json_rows,
@@ -736,6 +737,15 @@ def _build_data_raw(c: sqlite3.Cursor, target: str, section_filter: str | None) 
     Raises the shared JSON 404 for an unknown *section_filter*.  Pure DB
     work — caching/compression stays in the endpoint.
     """
+    # Sections, cells, the search index, and the per-section buckets are four
+    # statements over four tables; a rebuild committing between them would
+    # pair one build's section rows with the next build's cells.
+    with _server.read_snapshot(c):
+        return _read_data_raw(c, target, section_filter)
+
+
+def _read_data_raw(c: sqlite3.Cursor, target: str, section_filter: str | None) -> bytes:
+    """_build_data_raw body, run against the snapshot read_snapshot pinned."""
     data: dict[str, Any] = _load_metadata(c, target)
 
     # Always load every section row so the SPA can render tabs from a
@@ -949,7 +959,7 @@ def handle_api_functions_list(target: str) -> bytes | Any:
     with _target_cursor(target) as c:
         # Base filter: GLOBAL/DATA/VTABLE/STRING marker rows are data, not
         # functions (rebrew ADR 023 widened the legal marker set).
-        where = ["target = ? AND markerType NOT IN ('GLOBAL','DATA','VTABLE','STRING')"]
+        where = ["target = ?", NOT_DATA_MARKER_SQL]
         params: list[Any] = [target]
 
         if status_filter:

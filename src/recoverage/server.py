@@ -10,6 +10,7 @@ Reads the coverage database from the path resolved by
 
 from __future__ import annotations
 
+import contextlib
 import functools
 import gzip
 import hashlib
@@ -284,6 +285,26 @@ def _etag_or_304(snap: tuple[int, int] | None, *parts: object) -> str | None:
     return etag
 
 
+#: `functions.markerType` values that name data, not a function (rebrew ADR 023
+#: widened the set past GLOBAL/DATA).  ONE definition: the SPA function list,
+#: the Potato function list, and the by-status counts all filter on it, and
+#: three copies of the literal is three chances to disagree.
+DATA_MARKER_TYPES: tuple[str, ...] = ("GLOBAL", "DATA", "VTABLE", "STRING")
+
+#: WHERE fragment excluding data markers from a `functions` query.
+#:
+#: The `markerType IS NULL OR` arm is load-bearing.  rebrew's own column is
+#: ``NOT NULL DEFAULT 'FUNCTION'``, but a hand-made or older database can leave
+#: it nullable (the columns the server requires are checked for presence, not
+#: nullability), and SQLite evaluates ``NULL NOT IN (...)`` to NULL, which
+#: WHERE rejects: every unmarked function would vanish from the list, from the
+#: Potato table, and from the by-status counts.  An unknown marker type is a
+#: function, exactly as rebrew's default says.
+NOT_DATA_MARKER_SQL = "(markerType IS NULL OR markerType NOT IN ({types}))".format(
+    types=", ".join(f"'{t}'" for t in DATA_MARKER_TYPES)
+)
+
+
 # Byte-based per-section stats query shared by /api/targets/<target>/stats and
 # the `recoverage stats` CLI.  ONE definition, so the two callers cannot drift
 # apart (see _section_stats for what the copies used to get wrong).
@@ -429,6 +450,14 @@ def _section_stats(c: sqlite3.Cursor, target: str) -> dict[str, Any]:
     both (and drifted twice — cell-count vs byte-based, covered_bytes presence,
     key names); this is the single source of truth.
     """
+    # Five statements across four tables: without a pinned snapshot a rebuild
+    # committing between them yields stats that describe no build at all.
+    with read_snapshot(c):
+        return _read_section_stats(c, target)
+
+
+def _read_section_stats(c: sqlite3.Cursor, target: str) -> dict[str, Any]:
+    """_section_stats body, run against the snapshot read_snapshot pinned."""
     # Pre-computed summary, read from the target's own metadata row
     summary: dict[str, Any] = {}
     c.execute("SELECT value FROM metadata WHERE target = ? AND key = 'summary'", (target,))
@@ -490,8 +519,7 @@ def _section_stats(c: sqlite3.Cursor, target: str) -> dict[str, Any]:
     by_status: dict[str, int] = {}
     c.execute(
         "SELECT status, COUNT(*) as cnt FROM functions"
-        " WHERE target = ? AND markerType NOT IN"
-        " ('GLOBAL','DATA','VTABLE','STRING') GROUP BY status",
+        f" WHERE target = ? AND {NOT_DATA_MARKER_SQL} GROUP BY status",
         (target,),
     )
     for row in c.fetchall():
@@ -1337,6 +1365,32 @@ def _open_db(db_path: Path) -> sqlite3.Connection:
     conn._coverage_lock = lock
     conn.row_factory = sqlite3.Row
     return conn
+
+
+@contextlib.contextmanager
+def read_snapshot(c: sqlite3.Cursor) -> Iterator[None]:
+    """Run every statement in the block against ONE database snapshot.
+
+    Python's sqlite3 opens a deferred transaction per statement, so a
+    multi-query read (metadata + cells + sections + stats) sees a rebuild
+    that commits midway through: the payload can pair section rows from one
+    build with cells from the next.  ``BEGIN`` here pins the read snapshot
+    for the whole block, so the answer is internally consistent or the
+    request fails.
+
+    No-op when the caller is already inside a transaction (the CLI reuses
+    one connection across commands): SQLite has no nested BEGIN, and the
+    outer transaction already pins the snapshot.
+    """
+    conn = c.connection
+    if conn.in_transaction:
+        yield
+        return
+    conn.execute("BEGIN")
+    try:
+        yield
+    finally:
+        conn.rollback()
 
 
 def _db() -> sqlite3.Connection:

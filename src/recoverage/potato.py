@@ -35,6 +35,7 @@ from recoverage.server import (
     CACHE_NO_STORE,
     CACHE_REVALIDATE,
     HAS_CAPSTONE,
+    NOT_DATA_MARKER_SQL,
     _cells_json_rows,
     _compressed,
     _escape_like,
@@ -1683,7 +1684,7 @@ def _render_function_list(
     # Base filter: GLOBAL/DATA marker rows live in the functions table but are
     # data markers, not functions — same exclusion as the API list endpoint
     # and _section_stats, so both surfaces list the same rows.
-    where = ["target = ?", "markerType NOT IN ('GLOBAL','DATA','VTABLE','STRING')"]
+    where = ["target = ?", NOT_DATA_MARKER_SQL]
     params: list[Any] = [target]
     if status_filter:
         where.append("status = ?")

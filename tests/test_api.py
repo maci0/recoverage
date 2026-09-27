@@ -1772,22 +1772,21 @@ class TestPostConnectSqliteError:
 
         real_conn = api._db()
 
-        class _BoomCursor:
-            def __init__(self) -> None:
-                pass
+        class _BoomConn:
+            # `BEGIN` succeeds so the pinned snapshot really opens; every
+            # other statement is the failure the endpoint must turn into 503.
+            in_transaction = False
 
-            def execute(self, *a, **k):
+            def execute(self, sql, *a, **k):
+                if sql == "BEGIN":
+                    return
                 raise sqlite3.OperationalError("no such table: section_cell_stats")
 
-            def fetchone(self) -> None:
-                return None
-
-            def fetchall(self) -> list:
-                return []
-
-        class _BoomConn:
             def cursor(self):
                 return _BoomCursor()
+
+            def rollback(self) -> None:
+                pass
 
             def close(self) -> None:
                 pass
@@ -1797,6 +1796,18 @@ class TestPostConnectSqliteError:
 
             def __exit__(self, *a):
                 return False
+
+        class _BoomCursor:
+            connection = _BoomConn()
+
+            def execute(self, *a, **k):
+                raise sqlite3.OperationalError("no such table: section_cell_stats")
+
+            def fetchone(self) -> None:
+                return None
+
+            def fetchall(self) -> list:
+                return []
 
         monkeypatch.setattr(api, "_db", lambda: _BoomConn())
         try:
@@ -1898,6 +1909,50 @@ def _point_app_at_db(monkeypatch: pytest.MonkeyPatch, db: Any) -> Any:
     monkeypatch.setattr(api, "_require_target", lambda c, t: None)
     monkeypatch.setattr(api, "request", req)
     return req
+
+
+class TestDataMarkerFilter:
+    """GLOBAL/DATA/VTABLE/STRING rows are data, not functions.
+
+    The filter has to survive a database whose ``functions.markerType`` is
+    nullable: SQLite evaluates ``NULL NOT IN (...)`` to NULL, which WHERE
+    rejects, so a plain NOT IN silently drops every unmarked function from
+    the list, from the Potato table, and from the by-status counts.  An
+    unknown marker type is a function (rebrew's own column is
+    ``NOT NULL DEFAULT 'FUNCTION'``), so the row must be counted.
+    """
+
+    def _db(self, tmp_path: Any) -> Any:
+        db = _make_schema_gate_db(tmp_path)
+        conn = sqlite3.connect(db)
+        c = conn.cursor()
+        c.executemany(
+            "INSERT INTO functions (target, va, name, vaStart, size, status, markerType)"
+            " VALUES ('GAME', ?, ?, ?, 1, 'exact', ?)",
+            [
+                (0x1000, "_fn", "0x1000", "FUNCTION"),
+                (0x1010, "_unmarked", "0x1010", None),
+                (0x1020, "_gvar", "0x1020", "GLOBAL"),
+            ],
+        )
+        conn.commit()
+        conn.close()
+        return db
+
+    def test_list_keeps_unmarked_functions(self, tmp_path: Any, monkeypatch: Any) -> None:
+        import recoverage.api as api
+
+        _point_app_at_db(monkeypatch, self._db(tmp_path))
+        body = json.loads(api.handle_api_functions_list("GAME"))
+        assert {fn["name"] for fn in body["functions"]} == {"_fn", "_unmarked"}
+        assert body["total"] == 2
+
+    def test_by_status_counts_unmarked_functions(self, tmp_path: Any, monkeypatch: Any) -> None:
+        import recoverage.api as api
+
+        _point_app_at_db(monkeypatch, self._db(tmp_path))
+        body = json.loads(api.handle_api_stats("GAME"))
+        assert body["functions_by_status"] == {"exact": 2}
 
 
 class TestDataPayloadMemo:
