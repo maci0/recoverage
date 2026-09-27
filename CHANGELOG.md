@@ -40,6 +40,20 @@ module ships in the published package. See *Breaking*.
 
 ### Changed
 
+- **One mechanism pins the sibling `rebrew` checkout.** Every CI job ran the
+  `sibling-rebrew` composite action and then `tools/ci_clone_rebrew.sh`, which
+  deletes the clone the action made and fetches the tag again. The action
+  carried its own ref, a moving `main` commit that no check compared against
+  the tag-and-SHA pair the script verifies. The action is gone; the script is
+  the single pin, and `tests/test_supply_chain.py` fails if a second mechanism
+  comes back or if the `Makefile` pin drifts from the script.
+
+- **`tools/oxlint/rikalabs-strict.json` records where it came from.** The
+  checked-in copy of the Rika-Labs `strict` preset carried no license, so the
+  README now names the package version and its MIT license, and
+  `tools/flatten-rikalabs-strict.py` refuses to regenerate the preset if a
+  bump changes that license.
+
 - **`make shell-lint` and `make yaml-lint` check the tree's non-Python
   sources.** The `tools/*.sh` scripts ran under `bash` with no shellcheck and
   the `.github/` definitions were read by no linter at all; both now run in

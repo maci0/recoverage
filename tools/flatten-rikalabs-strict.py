@@ -27,11 +27,16 @@ from pathlib import Path
 
 REPO_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 TOOLS_DIR = REPO_ROOT / "tools"
-PRESET_DIR = REPO_ROOT / "node_modules" / "@rikalabs" / "oxlint-standards" / "presets"
+PACKAGE_DIR = REPO_ROOT / "node_modules" / "@rikalabs" / "oxlint-standards"
+PRESET_DIR = PACKAGE_DIR / "presets"
 OUT = TOOLS_DIR / "oxlint" / "rikalabs-strict.json"
 # Reported next to every dropped rule so a reader can see which oxlint the
 # checked-in preset was flattened against.
 OXLINT_VERSION = "1.83.0"
+# The preset content is copied into this repo, so its grant ships with the
+# repo. A license change on a bump is a compliance change nobody reviews by
+# reading a diff of rule names, so it has to fail the regeneration instead.
+EXPECTED_LICENSE = "MIT"
 
 # Rules referenced by the Rika-Labs presets that do not exist in the
 # currently published oxlint. Drop them here; do not try to set them "off" —
@@ -57,6 +62,17 @@ def load(path: Path) -> dict:
 def main() -> int:
     if not PRESET_DIR.is_dir():
         print(f"error: {PRESET_DIR} not found; run `bun install` first", file=sys.stderr)
+        return 1
+
+    manifest = load(PACKAGE_DIR / "package.json")
+    if manifest.get("license") != EXPECTED_LICENSE:
+        print(
+            f"error: @rikalabs/oxlint-standards {manifest.get('version')} is licensed "
+            f"{manifest.get('license')!r}, not {EXPECTED_LICENSE!r}; the preset copied "
+            f"into {OUT.name} would change terms. Record the new license in the "
+            f"README vendored-assets table before regenerating.",
+            file=sys.stderr,
+        )
         return 1
 
     merged: dict = {"plugins": set(), "categories": {}, "rules": {}, "overrides": []}
