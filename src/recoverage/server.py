@@ -26,7 +26,7 @@ from collections import deque
 from collections.abc import Collection, Iterator, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Final, cast
 from urllib.parse import unquote, urlsplit
 
 import brotli  # type: ignore[import-untyped]
@@ -314,6 +314,43 @@ def query_param(name: str, default: str = "") -> str:
     latin-1 round trip in :func:`decode_query_value` is what recovers it.
     """
     return decode_query_value(request.query.get(name, default))
+
+
+#: The digits every integer a request may spell is written in.  ``int()``
+#: accepts whatever ``str.isdigit()`` calls a digit, so ``?size=٤٠٩٦`` served a
+#: 4096-byte slice and ``?page=1_0`` opened page 10: spellings no client sends
+#: and no response documents, drawn from a repertoire the operator's locale
+#: picks.  ASCII only, the same rule ``config._ASCII_INT`` holds every
+#: ``RECOVERAGE_*`` integer to, so one number means one thing at both edges.
+_ASCII_DIGITS: Final = "0123456789"
+_ASCII_HEX_DIGITS: Final = "0123456789abcdef"
+
+
+def strip_sign(text: str) -> tuple[int, str]:
+    """Split a leading ``+``/``-`` off *text*: the sign, and the rest."""
+    if text[:1] == "-":
+        return -1, text[1:]
+    if text[:1] == "+":
+        return 1, text[1:]
+    return 1, text
+
+
+def parse_ascii_int(text: str, base: int = 10) -> int:
+    """*text* as an integer written in *base* with ASCII digits, else ValueError.
+
+    The one integer parse for every request-supplied number: ``?size=``,
+    ``?offset=``, ``?limit=``, the batch VA list, and Potato Mode's ``?page=``
+    and ``?idx=``.  ``int(text, base)`` is not that check on its own: it takes
+    digits from the whole Unicode Nd/Nl/No sets plus the ``_`` separator, so a
+    request could name a byte count, a page or a VA in a spelling the endpoint
+    never documented and that no other surface accepts.  Callers already turn
+    :class:`ValueError` into their own 400 or their own default, so the reason
+    never reaches the client as one shape.
+    """
+    digits = _ASCII_HEX_DIGITS[:base] if base == 16 else _ASCII_DIGITS
+    if not text or any(c.lower() not in digits for c in text):
+        raise ValueError(f"not an ASCII base-{base} integer: {text!r}")
+    return int(text, base)
 
 
 def _snapshot_db_mtime() -> tuple[int, int] | None:

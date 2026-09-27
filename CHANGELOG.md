@@ -300,6 +300,14 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   for the rest, and a database predating the table failed with `no such table`
   where `/api/targets/<target>/stats` still answered. Both now fall back to the
   live `cells` aggregation, as `/stats` and Potato Mode already did.
+- **Numbers in a query string were read in whatever digits the operator's
+  locale used.** `?size=٤٠٩٦` served a 4096-byte slice, `?page=1_0` opened
+  page 10, and a batch VA list accepted `"١٠"` as address 16, because `int()`
+  takes digits from the whole Unicode Nd/Nl/No sets and the `_` separator.
+  Every integer a request supplies now goes through one ASCII-only parse
+  (`?size=`, `?offset=`, `?limit=`, the batch VA list, and Potato Mode's
+  `?page=` and `?idx=`), matching the rule every `RECOVERAGE_*` integer
+  already followed; anything else is the 400 or the default it always was.
 - **A Potato Mode filter pill reported the wrong state.** Each pill's row
   identity was its accesskey letter rather than the filter key, so the
   "every filter key has a pill" and "a pill toggles only its own filter"

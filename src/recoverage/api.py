@@ -1190,11 +1190,21 @@ def _parse_byte_count(raw: str) -> int:
     A sign is still honoured, because the callers clamp or reject a negative
     value with their own message.
     """
-    text = raw.strip()
-    sign = -1 if text.startswith("-") else 1
-    if text[:1] in ("+", "-"):
-        text = text[1:]
-    return sign * int(text, 16 if text[:2].lower() == "0x" else 10)
+    sign, text = _server.strip_sign(raw.strip())
+    if text[:2].lower() == "0x":
+        return sign * _server.parse_ascii_int(text[2:], 16)
+    return sign * _server.parse_ascii_int(text, 10)
+
+
+def _page_int(raw: str) -> int:
+    """A decimal pagination parameter, or :class:`ValueError` for anything else.
+
+    ``?limit=`` and ``?offset=`` are the two integers a page is built from, and
+    they carry no sign and no prefix: an unpadded run of ASCII digits.  Callers
+    turn the :class:`ValueError` into their own default, so the shape of the
+    failure never reaches the client.
+    """
+    return _server.parse_ascii_int(raw.strip(), 10)
 
 
 def _slice_size(raw_size: str, parse_error: str) -> tuple[int, Any | None]:
@@ -1274,13 +1284,13 @@ def handle_api_functions_list(target: str) -> bytes | Any:
         )
     sort_param = query_param("sort", "va").strip()  # field:dir
     try:
-        limit = min(max(int(query_param("limit", "50")), 1), _MAX_BATCH_LOOKUP)
+        limit = min(max(_page_int(query_param("limit", "50")), 1), _MAX_BATCH_LOOKUP)
     except ValueError:
         limit = 50
     try:
         # Upper bound keeps a giant ?offset= from overflowing sqlite3's
         # signed-64-bit INTEGER conversion (OverflowError -> raw 500).
-        offset = min(max(int(query_param("offset", "0")), 0), _MAX_PAGE_OFFSET)
+        offset = min(max(_page_int(query_param("offset", "0")), 0), _MAX_PAGE_OFFSET)
     except ValueError:
         offset = 0
 
@@ -1500,7 +1510,7 @@ def _batch_request_vas() -> tuple[list[int], Any | None]:
                     s = s[2:]
                 if not s:
                     raise ValueError("empty VA")
-                parsed_va = int(s, 16)
+                parsed_va = _server.parse_ascii_int(s, 16)
                 if parsed_va < 0:
                     raise ValueError("negative VA")
                 if parsed_va > VA_MAX:

@@ -150,6 +150,11 @@ _NUM_TOKENS = (
     b"1_0",
     b" 12 ",
     b"+12",
+    # Digits int() accepts and no documented spelling of a byte count, a page
+    # or a VA carries: ARABIC-INDIC, EXTENDED ARABIC-INDIC and FULLWIDTH.
+    "\u0664\u0660\u0669\u0666".encode(),
+    "\u06f1\u06f0".encode(),
+    "\uff11\uff10".encode(),
     b"1e3",
     b"NaN",
     b"Infinity",

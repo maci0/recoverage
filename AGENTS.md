@@ -583,11 +583,21 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   privileged operation copies that gate rather than trusting a loopback peer,
   and the fuzz campaign in `tests/test_fuzz.py` (`TestRegenOriginSameOrigin`)
   judges it against `urlsplit` rather than against the helper.
-- Byte counts in the query string (`?size=` on `/asm` and `/bytes`, `?offset=`
-  on `/bytes`) go through `api._parse_byte_count`: decimal, or hexadecimal with
-  a `0x`/`0X` prefix, and nothing else. `int(x, 0)` was wrong in both
-  directions, rejecting a zero-padded decimal and accepting the `0b`/`0o`
-  spellings these endpoints never documented.
+- Every integer a request supplies goes through `server.parse_ascii_int` (with
+  `server.strip_sign` and `api._parse_byte_count` on top): ASCII digits in the
+  stated base, and nothing else. `int(x, base)` is not that check, because it
+  takes digits from the whole Unicode Nd/Nl/No sets and the `_` separator, so
+  `?size=٤٠٩٦` served a 4096-byte slice and `?page=1_0` opened page 10. The
+  call sites are `api._parse_byte_count` (`?size=` on `/asm` and `/bytes`,
+  `?offset=` on `/bytes`, decimal or `0x`-prefixed hex), `api._page_int`
+  (`?limit=` and `?offset=`, no sign and no prefix), the batch POST VA list, and
+  Potato Mode's `?page=` and `?idx=`. A new request-supplied number names
+  `server.parse_ascii_int` or explains why it does not, and the rule is the one
+  `config._ASCII_INT` already holds every `RECOVERAGE_*` integer to. Pinned at
+  `tests/test_api.py` (`TestSliceValidationDetail`) and `tests/test_potato.py`
+  (`TestBlockPosition`), with the non-ASCII digit spellings in `_NUM_TOKENS` so the
+  fuzz campaigns meet them. `parse_va_candidates`, which `/functions/<va>` and
+  `/asm` read a VA through, is rebrew's and parses the same way.
 - The untrusted-input surfaces (query parameters, the batch POST body, request
   headers, the `/potato` query string, the `/src` and `/original` path
   segments, the access-gating headers, the `RECOVERAGE_*` readers) are fuzzed

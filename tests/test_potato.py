@@ -1549,6 +1549,22 @@ class TestBlockPosition:
         # An explicit ?page= still wins.
         assert _grid_page("3", "2", merged, 1, 3) == 3
 
+    def test_grid_page_rejects_non_ascii_digits(self) -> None:
+        """?page= and ?idx= are ASCII, so a foreign digit names no page at all.
+
+        ``int()`` reads every code point ``str.isdigit()`` calls a digit, so
+        an ARABIC-INDIC 3 in ``?page=`` opened page 3 and an ARABIC-INDIC 2 in
+        ``?idx=`` selected a block, out of a query that spells no such number
+        in any documented form.
+        """
+        from recoverage.potato import _grid_page, _merge_cells
+
+        cells = [{"state": "exact", "span": 1, "functions": ["a"]}] * 3
+        merged = _merge_cells(cells, 64)
+        for value in ("\u0663", "1_0", "0x2", "+2"):
+            assert _grid_page(value, "", merged, 1, 3) == 1
+            assert _grid_page("", value, merged, 1, 3) == 1
+
 
 class TestFunctionListLinks:
     """Every function row links into the grid for the SAME name it prints."""

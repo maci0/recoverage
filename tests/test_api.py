@@ -4379,13 +4379,54 @@ class TestSliceValidationDetail:
         client that meant to send something this endpoint never promised.
         """
         for value in ("0b1000", "0o17"):
-            with pytest.raises(ValueError, match="invalid literal"):
+            with pytest.raises(ValueError, match="not an ASCII"):
                 api._parse_byte_count(value)
         status, headers, body = wsgi_get(
             "/api/targets/FAKEDLL/sections/.text/bytes?offset=0&size=0b1000"
         )
         assert status.startswith("400")
         assert json.loads(decode_body(body, headers))["error"] == "invalid size"
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "\u0664\u0660",  # ARABIC-INDIC DIGIT FOUR, ZERO
+            "\uff11_\uff10",  # FULLWIDTH digits, which also carry an underscore
+            "\u06f1\u06f0",  # EXTENDED ARABIC-INDIC digits
+        ],
+    )
+    def test_byte_counts_reject_non_ascii_digits(self, value: str) -> None:
+        """A byte count is ASCII digits, whatever digits the client's locale has.
+
+        ``int()`` accepts every code point ``str.isdigit()`` calls a digit, so
+        a 40-byte slice answered a request that named no such size in any
+        spelling the endpoint documents.  ``config._ASCII_INT`` already holds
+        the ``RECOVERAGE_*`` side to ASCII; the query string is the same
+        number, so it gets the same rule.
+        """
+        with pytest.raises(ValueError, match="not an ASCII"):
+            api._parse_byte_count(value)
+        status, headers, body = wsgi_get(
+            f"/api/targets/FAKEDLL/sections/.text/bytes?offset=0&size={value}"
+        )
+        assert status.startswith("400")
+        assert json.loads(decode_body(body, headers))["error"] == "invalid size"
+
+    def test_page_parameters_reject_non_ascii_digits(self) -> None:
+        """?limit= and ?offset= fall back to their defaults, never to a foreign digit."""
+        assert api._page_int("50") == 50
+        for value in ("\u0665\u0660", "1_0", "+5"):
+            with pytest.raises(ValueError, match="not an ASCII"):
+                api._page_int(value)
+
+    def test_batch_vas_reject_non_ascii_hex_digits(self) -> None:
+        """A batch VA is ASCII hex; Arabic-Indic digits parsed as one before."""
+        status, headers, body = wsgi_post(
+            "/api/targets/FAKEDLL/functions",
+            body=json.dumps({"vas": ["\u0661\u0660"]}),
+        )
+        assert status.startswith("400")
+        assert json.loads(decode_body(body, headers))["code"] == "bad_request"
 
     def test_hex_prefixed_byte_counts_still_parse(self) -> None:
         assert api._parse_byte_count("0x40") == 64

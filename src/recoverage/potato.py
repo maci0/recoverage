@@ -54,6 +54,7 @@ from recoverage.server import (
     folded_like_clause,
     like_match,
     mtime_ns_to_utc,
+    parse_ascii_int,
     read_snapshot,
     request,
     resolve_targets,
@@ -1769,14 +1770,14 @@ def _grid_page(
     """
     if page_str:
         try:
-            return max(1, min(page_count, int(page_str)))
+            return max(1, min(page_count, parse_ascii_int(page_str)))
         except ValueError:
             return 1
     if idx_str:
         # An unparseable idx has no block to pull into view, so it pages to 1
         # like an unparseable page does.
         try:
-            idx = int(idx_str)
+            idx = parse_ascii_int(idx_str)
         except ValueError:
             return 1
         pos = _block_position(merged_cells, idx)
@@ -1876,7 +1877,7 @@ def _build_grid_html(
     # Selection target parsed ONCE for the whole page: comparing each cell's
     # orig_idx against it replaces a per-cell int() (up to ~2k parses/render).
     try:
-        sel_idx: int | None = int(idx_str)
+        sel_idx: int | None = parse_ascii_int(idx_str)
     except ValueError:
         sel_idx = None
 
@@ -2648,7 +2649,7 @@ def _render_panel(
     # spellings raise, and a non-negative range is the only index that has a
     # cell behind it.
     try:
-        idx = int(idx_str)
+        idx = parse_ascii_int(idx_str)
     except ValueError:
         idx = -1
     if not 0 <= idx < len(cells):
