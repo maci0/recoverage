@@ -1446,10 +1446,11 @@ _POTATO_500_BODY = "<html><body>Internal server error</body></html>"
 
 #: Query fields whose value the page echoes back into markup, so an escaping
 #: regression is observable from the response alone.  ``filter`` is not one:
-#: ``potato._parse_filters`` drops every name no pill offers, so an
-#: unknown-only value reaches nothing to escape; its own case is below.  A
-#: name that IS offered is ours to escape, not the caller's, and that is
-#: pinned by ``test_potato``'s filter-pill assertions.
+#: ``potato._parse_filters`` intersects the value with the literal keys in
+#: ``FILTER_STATES``, so an unknown-only value never reaches the template and
+#: there is nothing to escape.  A name that IS offered is ours to escape, not
+#: the caller's, and that is pinned by ``test_potato``'s filter-pill
+#: assertions and by the ``test_filter_*`` cases below.
 _POTATO_REFLECTED = ("search", "target")
 
 
@@ -1521,6 +1522,34 @@ class TestPotatoQuery:
         text = decode_body(body, headers).decode("utf-8")
         assert "RCCANARY" not in text, "a filter name no pill offers reached the page"
         assert "filter=exact%2C" in text, "the active filter is missing from the pill hrefs"
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "RCCANARY<>&\"'=`",
+            "exact,RCCANARY<>&\"'=`",
+            " exact ,RCCANARY<>&\"'=` ,reloc",
+            "\x00RCCANARY<>&\"'`=",
+        ],
+    )
+    def test_filter_value_cannot_reach_the_page(self, value: str) -> None:
+        """``?filter=`` is allowlisted, not escaped — the stronger property.
+
+        ``potato._parse_filters`` intersects the value with the fixed keys in
+        ``FILTER_STATES`` before the renderer ever sees it, so no caller-chosen
+        text reaches the page through this parameter.  That is why this field
+        is not in ``_POTATO_REFLECTED``: there is no reflected value to
+        escape, and asserting one would fail on a correct implementation.  A
+        known key mixed with the canary still lands as the literal pill state,
+        which is what the second assertion pins.
+        """
+        _status, headers, body = wsgi_request("GET", f"/potato?filter={_pct(value)}")
+        text = decode_body(body, headers).decode("utf-8")
+        assert "RCCANARY" not in text, f"filter={value!r}: reached the page unescaped"
+        if "exact" in value or "reloc" in value:
+            # A surviving key is echoed as the literal pill state, and only
+            # that: the hidden input is the one place the value is rendered.
+            assert '<input type="hidden" name="filter" value="' in text
 
     @pytest.mark.parametrize("field", ["search", "status"])
     def test_no_result_message_is_escaped(self, field: str) -> None:

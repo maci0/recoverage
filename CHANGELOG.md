@@ -292,6 +292,24 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   of the deferred work already lived, bringing the shell back to 14,075 B. The
   suite now fails on a shell that crosses the window, so it is a gate and not
   only a warning.
+- **A dead database watcher is now visible in the server log.** The poller's
+  first snapshot ran outside the guard that protects each poll, so a
+  `coverage.db` that could not be stat'ed killed the thread with its traceback
+  going to a stream nobody reads. Live reload was then off for the rest of the
+  process, and `/api/health` still answered `healthy` whenever no
+  event-stream client was connected. The whole loop is guarded now, and an
+  escape names the condition and says live reload needs a restart.
+- **`/api/health` logs a state change, not one line per probe.** The endpoint
+  logged a warning on every check while the database was unreadable, so a
+  monitor pointed at it filled the log with the same line and the operator
+  learned to skip it. The entry into the state and the recovery are the two
+  lines that carry news; every reason a probe found is named in the first one,
+  and repeats stay silent.
+- **Potato Mode's filter pills report their filter key again.** A pill row
+  carried the filter's display letter in the slot that names which filter it
+  toggles, so nothing could tell an `exact` pill from a `stub` one by key.
+  The lowercase accesskey that occupied the same tuple was never read by
+  anything and is gone.
 - **A bind address nothing could resolve started the server anyway.**
   `RECOVERAGE_BIND` rejected an empty value but nothing else, so a trailing
   space from a unit-file quoting slip, an embedded control character, or a

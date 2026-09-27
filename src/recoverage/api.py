@@ -528,23 +528,40 @@ def _db_watcher_loop(stop: threading.Event) -> None:
 
     Each iteration is guarded: this is a daemon thread nobody joins, so an
     unguarded exception would kill live-reload silently for the remaining
-    lifetime of the process.
+    lifetime of the process.  The guard is the WHOLE loop, baseline snapshot
+    included: the baseline read sat outside it, so a failure there (a
+    ``coverage.db`` path that cannot be stat'ed raises rather than returning
+    None) killed the thread with its traceback going to a stream nobody
+    reads.  ``/api/health`` only reports ``watcher_alive: false`` as
+    ``degraded`` while a client is connected, so with no SSE client the
+    dashboard answered "healthy" with live reload dead for the rest of the
+    process.  The ``finally`` names the exit so a dead poller is one grep
+    away, and says whether the stop event asked for it.
     """
-    last = _snapshot_db_mtime()
-    while not stop.is_set():
-        stop.wait(_SSE_POLL_INTERVAL_SECONDS)
-        if stop.is_set():
-            break
-        try:
-            snapshot = _snapshot_db_mtime()
-            if snapshot != last:
-                # Advance the baseline only after a successful broadcast: a
-                # failed iteration retries the same change on the next poll
-                # (at-least-once) instead of silently dropping the event.
-                _broadcast_db_updated(snapshot)
-                last = snapshot
-        except Exception:
-            _log.exception("DB watcher iteration failed — continuing to poll")
+    try:
+        last = _snapshot_db_mtime()
+        while not stop.is_set():
+            stop.wait(_SSE_POLL_INTERVAL_SECONDS)
+            if stop.is_set():
+                break
+            try:
+                snapshot = _snapshot_db_mtime()
+                if snapshot != last:
+                    # Advance the baseline only after a successful broadcast:
+                    # a failed iteration retries the same change on the next
+                    # poll (at-least-once) instead of silently dropping the
+                    # event.
+                    _broadcast_db_updated(snapshot)
+                    last = snapshot
+            except Exception:
+                _log.exception("DB watcher iteration failed — continuing to poll")
+    except BaseException:
+        _log.exception(
+            "DB watcher stopped after an unhandled error — live reload is off "
+            "until the server restarts"
+        )
+        raise
+    _log.debug("DB watcher stopped on request")
 
 
 def _ensure_db_watcher() -> None:
@@ -709,6 +726,40 @@ def handle_api_events() -> Any:
     return _SSEStream(client_queue)
 
 
+#: Last (status, reason) ``/api/health`` reported, so the probe logs a
+#: transition rather than one line per poll.  Without it a monitor pointed at
+#: the endpoint (an external health check, a shell while-loop) turned a missing
+#: coverage.db into a WARNING per probe for as long as it stayed missing, which
+#: is what teaches an operator to skip the line; the transition is the news,
+#: and the recovery line is what closes it.  The snapshot still carries
+#: ``status`` on every probe, so dropping the repeats loses nothing an
+#: operator reads.
+_HEALTH_LOG_LOCK = threading.Lock()
+_health_reported: tuple[str, str] | None = None
+
+
+def _log_health_status(status: str, reason: str) -> None:
+    """Log the first probe in a state, the first probe after it, and nothing else.
+
+    A repeat of the current state returns without logging.  A change of reason
+    inside one state does too: the status did not move, and the per-check
+    detail already says which dependency is unhappy.
+    """
+    global _health_reported
+    with _HEALTH_LOG_LOCK:
+        if _health_reported is not None and _health_reported[0] == status:
+            return
+        previous = _health_reported
+        _health_reported = (status, reason)
+    if previous is None or previous[0] == "healthy":
+        # The first probe of the process, or the move out of healthy: the same
+        # alert either way.  A healthy first probe is not news.
+        if status != "healthy":
+            _log.warning("Dashboard health degraded: %s", reason)
+    else:
+        _log.info("Dashboard health recovered: was %s (%s)", previous[0], previous[1])
+
+
 @app.get("/api/health")
 def handle_api_health() -> bytes:
     """Liveness and environment report: status, version, DB stat, extras, targets.
@@ -719,17 +770,19 @@ def handle_api_health() -> bytes:
     (``+00:00``), both read off one conversion of the file's mtime
     (``server.mtime_ns_to_utc``) so they cannot disagree; both are absent when
     the DB cannot be stat'ed.
+
+    Every reason the probe found is named in one log line per transition
+    (:func:`_log_health_status`), not one line per probe.
     """
     db = _db_path()
     db_info: dict[str, Any] = {"path": db.name, "exists": False}
-    status = "healthy"
+    reasons: list[str] = []
     try:
         stat = db.stat()
         db_info["exists"] = True
         db_info["size_bytes"] = stat.st_size
-    except OSError:
-        _log.warning("Database file not accessible at %s", db)
-        status = "degraded"
+    except OSError as exc:
+        reasons.append(f"coverage.db not accessible: {type(exc).__name__}: {exc}")
     # Freshness is the newest mtime across the DB and its -wal sibling: a
     # rebuild that commits only to the WAL leaves the main file's mtime where
     # it was, and every other DB-freshness surface (ETags, memos, the SSE
@@ -752,13 +805,14 @@ def handle_api_health() -> bytes:
             # number and the dropdown can never disagree on the schema row.
             target_count = len(_server.db_target_ids(c))
     except sqlite3.Error as exc:
-        _log.warning("Failed to query target count from database: %s", exc)
-        status = "degraded"
+        reasons.append(f"coverage.db target count query failed: {type(exc).__name__}: {exc}")
     streams = _stream_stats()
     if streams["watcher_alive"] is False and streams["clients"] > 0:
         # Connected clients with no poller means live reload is dead while
         # every page still renders: healthy-looking, silently stale.
-        status = "degraded"
+        reasons.append("the DB watcher is not running while event-stream clients are connected")
+    status = "degraded" if reasons else "healthy"
+    _log_health_status(status, "; ".join(reasons) or "ok")
     return _json_ok(
         {
             "status": status,

@@ -411,6 +411,19 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   the watcher is alive). `watcher_alive` is `None` before the first client,
   since the poller starts lazily, and a connected client with a dead watcher
   answers `degraded` because every page still renders and none will refresh.
+- `/api/health` is polled, so it logs a TRANSITION, not a state: the endpoint
+  runs every check through `api._log_health_status`, which warns on the first
+  probe in a state, infos on the first probe after it, and says nothing on a
+  repeat. A per-probe warning is what teaches an operator to skip the line, and
+  a monitor pointed at a broken database emitted one every poll. Each check
+  appends its own reason to a list and the log names all of them in one line,
+  so a second fault is visible in the same entry rather than the first one
+  winning. A new degradation reason joins that list; it does not log on its
+  own. The same rule governs the poller: `api._db_watcher_loop` guards the
+  WHOLE loop including the baseline snapshot, because a guard around the poll
+  alone lets a failure in the first snapshot kill a daemon thread nobody joins
+  with no line saying so, and a dead poller reads `healthy` while no SSE client
+  is connected.
 - Every time read under `src/recoverage/` goes through `clock`: `monotonic()`
   for elapsed-time arithmetic (cooldowns, retention windows, throttles,
   heartbeats) and `wall_time()` only for a stamp a human reads. A direct

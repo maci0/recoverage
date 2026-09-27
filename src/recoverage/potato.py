@@ -1520,9 +1520,12 @@ def _build_filter_data(
     # A pill is a single letter in the state's colour, so it carries the
     # state's full name in its title: a lone V or X is a lookup the legend
     # two hundred pixels away can answer, and a pointer answers instantly.
-    # The key is the filter name a ?filter= spells, not the letter: it is what
-    # the pill toggles and what FILTER_STATES is keyed on.  The letter is the
-    # label's own first character, which is what the accesskey renders.
+    # The key is the filter name a ?filter= spells: it is what the pill
+    # toggles and what FILTER_STATES is keyed on, so it is the one field that
+    # says which entry a row stands for.  The accesskey is not a field: the
+    # template derives it from the label (``fb_label[0].lower()``), so the
+    # letter here was the label's own first character and a lowercase letter
+    # carried in this slot was never read by anything.
     filter_opts = [
         ("exact", "E", "Exact match"),
         ("reloc", "R", "Reloc match"),

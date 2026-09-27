@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import copy
 import json
+import logging
 import os
 import queue
 import re
@@ -4525,3 +4526,121 @@ class TestLookupSnapshotsArePinned:
         assert json.loads(decode_body(body, headers)), "the batch lookup found nothing"
         assert len(seen) >= 3, "the handler stopped issuing one statement per table"
         assert all(seen), "a statement ran outside the pinned read transaction"
+
+
+class TestHealthLogging:
+    """/api/health logs a transition, not one line per probe.
+
+    A monitor pointed at the endpoint polled a broken database once a second
+    and filled the log with the same WARNING, which is what teaches an
+    operator to skip it; the entry into the state and the recovery are the
+    two lines worth keeping.
+    """
+
+    def test_repeat_probes_do_not_relog_the_degradation(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        import recoverage.api as api
+
+        monkeypatch.setattr(api, "_health_reported", None)
+        monkeypatch.setattr(api, "_db_path", lambda: Path("/nonexistent/coverage.db"))
+        with caplog.at_level(logging.WARNING, logger="recoverage"):
+            for _ in range(5):
+                status, headers, body = wsgi_get("/api/health")
+                assert status.startswith("200")
+                assert json.loads(decode_body(body, headers))["status"] == "degraded"
+        degraded = [r for r in caplog.records if r.levelno >= logging.WARNING]
+        assert len(degraded) == 1
+        assert "coverage.db not accessible" in degraded[0].getMessage()
+
+    def test_recovery_is_logged_and_ends_the_alert(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        import recoverage.api as api
+
+        real_db_path = api._db_path
+        monkeypatch.setattr(api, "_health_reported", None)
+        monkeypatch.setattr(api, "_db_path", lambda: Path("/nonexistent/coverage.db"))
+        with caplog.at_level(logging.INFO, logger="recoverage"):
+            wsgi_get("/api/health")
+            monkeypatch.setattr(api, "_db_path", real_db_path)
+            status, headers, body = wsgi_get("/api/health")
+            assert status.startswith("200")
+            assert json.loads(decode_body(body, headers))["status"] == "healthy"
+        messages = [r.getMessage() for r in caplog.records if r.levelno >= logging.INFO]
+        assert any("recovered" in m and "degraded" in m for m in messages)
+
+    def test_every_reason_is_named_in_one_line(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A missing DB and a dead watcher name both, not just the first."""
+        import recoverage.api as api
+
+        monkeypatch.setattr(api, "_health_reported", None)
+        monkeypatch.setattr(api, "_db_path", lambda: Path("/nonexistent/coverage.db"))
+        monkeypatch.setattr(
+            api, "_stream_stats", lambda: {"clients": 1, "max": 4, "watcher_alive": False}
+        )
+        with caplog.at_level(logging.WARNING, logger="recoverage"):
+            wsgi_get("/api/health")
+        line = next(r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING)
+        assert "coverage.db not accessible" in line
+        assert "DB watcher is not running" in line
+
+
+class TestDbWatcherLogging:
+    """The poller is a daemon thread nobody joins, so its death must be loud."""
+
+    def test_baseline_failure_is_logged_before_it_escapes(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The baseline snapshot sat outside the per-iteration guard.
+
+        A ``coverage.db`` path that raises on stat killed the thread with its
+        traceback going nowhere, and ``/api/health`` reported ``healthy`` with
+        no SSE client connected — live reload dead for the rest of the
+        process, and no log line naming it.
+        """
+        import recoverage.api as api
+
+        def _boom() -> tuple[int, int] | None:
+            raise OSError("cannot stat coverage.db")
+
+        monkeypatch.setattr(api, "_snapshot_db_mtime", _boom)
+        with (
+            caplog.at_level(logging.ERROR, logger="recoverage"),
+            pytest.raises(OSError, match=r"cannot stat coverage\.db"),
+        ):
+            api._db_watcher_loop(threading.Event())
+        errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+        assert any("DB watcher stopped" in m and "live reload is off" in m for m in errors)
+
+    def test_iteration_failure_keeps_polling_and_logs_each_round(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        import recoverage.api as api
+
+        state = {"n": 0}
+
+        def _flaky() -> tuple[int, int] | None:
+            state["n"] += 1
+            if state["n"] == 1:
+                return (1, 1)
+            raise sqlite3.OperationalError("database is locked")
+
+        stop = threading.Event()
+        monkeypatch.setattr(api, "_snapshot_db_mtime", _flaky)
+        monkeypatch.setattr(api, "_SSE_POLL_INTERVAL_SECONDS", 0.0)
+
+        def _stop_after_two() -> None:
+            while state["n"] < 3:
+                time.sleep(0.001)
+            stop.set()
+
+        stopper = threading.Thread(target=_stop_after_two, daemon=True)
+        stopper.start()
+        with caplog.at_level(logging.ERROR, logger="recoverage"):
+            api._db_watcher_loop(stop)
+        stopper.join(timeout=1.0)
+        assert any("continuing to poll" in r.getMessage() for r in caplog.records)
+        assert not any("DB watcher stopped" in r.getMessage() for r in caplog.records)

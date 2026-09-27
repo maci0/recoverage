@@ -2351,6 +2351,10 @@ class TestFilterKeysCoverTheLegend:
         # which leaves no filter= at all rather than an empty one, so the link
         # is the "All" pill's and carries no other filter.
         assert "filter=exact%2Creloc" in pills["exact"]
+        # Toggling the active filter off leaves an empty set, and _build_url
+        # omits the parameter for an empty one: the "reloc" pill is the "All"
+        # link with the same target, so the assertion is the ABSENCE of a
+        # filter, not a filter that still names reloc.
         assert "filter=" not in pills["reloc"]
         assert pills["reloc"] == "?target=S&section=.text"
         assert pills["reloc"] == pills["0"]
