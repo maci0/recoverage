@@ -37,7 +37,7 @@ from pathlib import Path
 
 from _serve_harness import build_sample_db, get, running_server, scratch_project_dir, wait_for
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 VNU_JAR = REPO_ROOT / "node_modules" / "vnu-jar" / "build" / "dist" / "vnu.jar"
 ASSETS_DIR = REPO_ROOT / "src" / "recoverage" / "assets"
 

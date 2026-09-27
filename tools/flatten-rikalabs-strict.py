@@ -25,8 +25,9 @@ import json
 import sys
 from pathlib import Path
 
-TOOLS_DIR = Path(__file__).resolve().parent
-PRESET_DIR = TOOLS_DIR.parent / "node_modules" / "@rikalabs" / "oxlint-standards" / "presets"
+REPO_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
+TOOLS_DIR = REPO_ROOT / "tools"
+PRESET_DIR = REPO_ROOT / "node_modules" / "@rikalabs" / "oxlint-standards" / "presets"
 OUT = TOOLS_DIR / "oxlint" / "rikalabs-strict.json"
 # Reported next to every dropped rule so a reader can see which oxlint the
 # checked-in preset was flattened against.

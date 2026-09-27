@@ -19,7 +19,7 @@ import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 SCRATCH_DIR = REPO_ROOT / ".scratch"
 
 

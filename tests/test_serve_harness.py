@@ -15,7 +15,7 @@ import sqlite3
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 from _serve_harness import build_sample_db  # noqa: E402
