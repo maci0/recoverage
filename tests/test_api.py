@@ -985,6 +985,62 @@ class TestRegenIdempotencyKey:
         assert headers.get("Idempotent-Replay") == "true"
         assert len(runs) == 1
 
+    def test_a_duplicate_arriving_mid_run_neither_waits_nor_reruns(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The same key arriving while its run is in flight must not start a
+        second pipeline, and must not be answered as a replay either: nothing
+        has completed, so the honest answer is the 429 the lock gives, and the
+        client's retry after the first run ends is what the ledger absorbs.
+        """
+        import recoverage.api as api
+
+        runs: list[Path] = []
+        started = threading.Event()
+        release = threading.Event()
+
+        def run(root: Path) -> None:
+            runs.append(root)
+            started.set()
+            assert release.wait(timeout=10), "test never released the regen"
+
+        monkeypatch.setattr(api, "run_regen", run)
+        monkeypatch.setattr(api, "_project_dir", lambda: Path("/nonexistent"))
+
+        first: list[Any] = []
+        worker = threading.Thread(target=lambda: first.append(self._post("click-1")))
+        worker.start()
+        assert started.wait(timeout=10), "first regen never reached run_regen"
+
+        # Backdate the cooldown so it cannot be what rejects the duplicate:
+        # a 429 here is the run lock, which is the only thing that keeps a
+        # concurrent duplicate off the pipeline.
+        monkeypatch.setattr(
+            api,
+            "_regen_last_attempt",
+            api.clock.monotonic() - api._REGEN_COOLDOWN_SECONDS - 1,
+        )
+        status, headers, body = self._post("click-1")
+        assert status.startswith("429")
+        assert json.loads(decode_body(body, headers))["code"] == "rate_limited"
+        assert len(runs) == 1
+        assert not api._regen_replayed("click-1")
+
+        release.set()
+        worker.join(timeout=10)
+        assert not worker.is_alive()
+        assert first[0][0].startswith("200")
+        assert len(runs) == 1
+
+        # The retry once the first run completed replays it.  It lands inside
+        # the cooldown window, so answering 200 at all proves the ledger was
+        # consulted before the throttle.
+        status, headers, body = self._post("click-1")
+        assert status.startswith("200")
+        assert headers.get("Idempotent-Replay") == "true"
+        assert json.loads(decode_body(body, headers)) == {"ok": True}
+        assert len(runs) == 1
+
     def test_a_fresh_key_reruns(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import recoverage.api as api
 

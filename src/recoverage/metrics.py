@@ -55,7 +55,6 @@ class RequestStats:
         self._sum_ms = 0.0
         self._timed = 0
         self._in_flight = 0
-        self._timed = 0
         self._by_route: dict[str, dict[str, int]] = {}
         self._by_status: dict[str, int] = {}
 
@@ -162,6 +161,12 @@ class RequestStats:
             }
 
     def reset(self) -> None:
+        """Zero the lifetime counters.
+
+        ``_in_flight`` is a gauge, not a lifetime counter, and is left alone:
+        a request already inside a handler holds its slot, and zeroing it here
+        would let that request's ``finish`` drive the gauge negative.
+        """
         with self._lock:
             self._total = 0
             self._errors = 0
@@ -169,7 +174,6 @@ class RequestStats:
             self._sum_ms = 0.0
             self._timed = 0
             self._max_ms = 0.0
-            self._timed = 0
             self._by_route.clear()
             self._by_status.clear()
 
