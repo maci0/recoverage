@@ -234,25 +234,34 @@ def path_param(value: str) -> str:
         return value
 
 
+def decode_query_value(raw: str) -> str:
+    """Recover the UTF-8 a client sent for one already-decoded query value.
+
+    Bottle hands query values over as latin-1 text, so ``?section=%C3%A9``
+    arrives as ``Ã©``; re-encoding recovers the ``é`` the client meant.
+    ASCII (the overwhelming majority: tokens, integers, format names) comes
+    back byte-identical.
+
+    A value that is not valid UTF-8 in latin-1, or already holds a character
+    above U+00FF (a client that sent raw UTF-8 rather than escapes), is
+    returned unchanged: it is already the text the caller meant.
+    """
+    try:
+        return raw.encode("latin-1").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return raw
+
+
 def query_param(name: str, default: str = "") -> str:
     """One query-string value, percent-decoded as UTF-8.
 
     Bottle decodes query values with ``encoding='latin1'`` (see its module
     import of ``urlunquote``), so ``?section=%C3%A9`` reaches a handler as
     ``Ã©`` and matches no section while ``parse_qs`` on the same raw
-    ``request.url`` — the path Potato Mode uses — yields ``é``.  Re-encoding
-    through latin-1 recovers the UTF-8 the client sent, and leaves ASCII
-    (the overwhelming majority: tokens, integers, format names) byte-identical.
-
-    A value that is not valid UTF-8 in latin-1, or already holds a character
-    above U+00FF (a client that sent raw UTF-8 rather than escapes), is
-    returned unchanged: it is already the text the caller meant.
+    ``request.url`` — the path Potato Mode uses — yields ``é``.  The
+    latin-1 round trip in :func:`decode_query_value` is what recovers it.
     """
-    raw = request.query.get(name, default)
-    try:
-        return raw.encode("latin-1").decode("utf-8")
-    except (UnicodeEncodeError, UnicodeDecodeError):
-        return raw
+    return decode_query_value(request.query.get(name, default))
 
 
 def _snapshot_db_mtime() -> tuple[int, int] | None:
@@ -1029,8 +1038,8 @@ def compress_static_variants(
       order and compresses once.
     * zstd runs at :data:`ZSTD_STATIC_LEVEL` rather than the dynamic level 3.
 
-    Measured on the SPA shell: brotli q11 gives 14,537 bytes against zstd's
-    17,568 at the dynamic level and 15,652 even at level 19.  zstd wins on
+    Measured on the SPA shell: brotli q11 gives 14,090 bytes against zstd's
+    17,052 at the dynamic level and 15,145 even at level 19.  zstd wins on
     throughput, not on this payload, and a fixed zstd-first preference handed
     every zstd-capable browser 3 KB more than necessary and pushed the shell
     past the initial congestion window (14,600), costing a second round trip

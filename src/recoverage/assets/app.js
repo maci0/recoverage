@@ -971,57 +971,9 @@ const App = () => {
     if (fn) {
       title = fn.name;
       const sourceRoot = (data.val && data.val.paths && data.val.paths.sourceRoot) ? data.val.paths.sourceRoot : `/src/${enc(activeTarget.val.toLowerCase())}`;
-
-      const SourceItem = () => fn.files && fn.files.length > 0
-        ? MetaItem("Source", span({ class: "meta-value" }, ...fn.files.map((file, i) =>
-            span(i > 0 ? ", " : "", a({ href: `${encPath(sourceRoot)}/${encPath(file)}`, target: "_blank", rel: "noopener noreferrer", class: "source-link" }, file)))))
-        : null;
-
-      if (fn.isGlobal) {
-        metaContent = div({ class: "meta-grid" },
-          MetaItem("VA", a({
-            href: "#",
-            class: "meta-value asm-link",
-            onclick: (e) => { e.preventDefault(); jumpToAddress(toVa(fn.va)); }
-          }, `0x${fn.va.toString(16).toUpperCase()}`)),
-          MetaItem("Type", "Global Variable"),
-          SourceItem()
-        );
-      } else {
-        const statusClass = fn.status ? `status-${fn.status.toLowerCase().replace('_', '-')}` : '';
-
-        metaContent = div({ class: "meta-grid" },
-          MetaItem("VA", a({
-            href: "#",
-            class: "meta-value asm-link",
-            onclick: (e) => { e.preventDefault(); jumpToAddress(toVa(fn.vaStart || fn.va)); }
-          }, fn.vaStart || fn.va)),
-          MetaItem("Size", `${fn.size} bytes`),
-          MetaItem("Offset", `0x${(fn.fileOffset || 0).toString(16).toUpperCase()}`),
-          MetaItem("Symbol", fn.symbol || MSG.NA),
-          MetaItem("Status", span({ class: `meta-value status-badge ${statusClass}` }, fn.status || "?")),
-          MetaItem("Module", fn.module || "?"),
-          MetaItem("Compiler", fn.cflags || MSG.NA),
-          MetaItem("Marker", fn.markerType || "?"),
-          fn.blocker ? MetaItem("Blocker", span({ class: "meta-value blocker-value" }, fn.blocker), "full-width") : null,
-          fn.blockerDelta == null ? null : MetaItem("Delta", span({ class: "meta-value delta-value" }, `${fn.blockerDelta} bytes`)),
-          fn.ghidra_name && fn.ghidra_name !== fn.name ? MetaItem("Ghidra", fn.ghidra_name) : null,
-          fn.list_name && fn.list_name !== fn.name ? MetaItem("Func List", fn.list_name) : null,
-          fn.size_reason ? MetaItem("Size Source", fn.size_reason) : null,
-          fn.last_verify ? MetaItem("Verified", `${fn.last_verify.verified_at}${fn.last_verify.byte_delta == null ? "" : ` (Δ${fn.last_verify.byte_delta}B)`}`) : null,
-          fn.last_verify && fn.last_verify.similarity != null ? MetaItem("Code Sim", `${fn.last_verify.similarity.toFixed(1)}%`) : null,
-          fn.last_verify && fn.last_verify.reg_delta != null ? MetaItem("Reg Delta", `${fn.last_verify.reg_delta}`) : null,
-          fn.last_verify && fn.last_verify.effective_match ? MetaItem("Effective", "register-only delta — prove candidate") : null,
-          fn.updated_by ? MetaItem("Updated By", `${fn.updated_by}${fn.updated_at ? ` (${fn.updated_at})` : ""}`) : null,
-          fn.similarity == null ? null : MetaItem("Similarity", `${(fn.similarity * 100).toFixed(1)}%`),
-          fn.is_thunk ? MetaItem("Type", "IAT thunk (not reversible)") : null,
-          fn.is_export ? MetaItem("Type", "Exported function") : null,
-          fn.sha256 ? MetaItem("SHA256", `${fn.sha256.slice(0, 16)}...`) : null,
-          SourceItem(),
-          docText.val && docText.val !== MSG.SELECT_FUNCTION && docText.val !== MSG.NO_DOCS
-            ? MetaItem("Annotations", pre({ class: "meta-docs" }, docText.val), "full-width") : null
-        );
-      }
+      metaContent = () => detailReady.val
+        ? window.RC.functionMeta({ fn, sourceRoot, docText: docText.val, jumpToAddress })
+        : div({ class: "code" }, detailFailed.val ? MSG.DETAIL_UNAVAILABLE : MSG.LOADING);
     } else if (cellIdx !== null && data.val && data.val.sections) {
       const sec = data.val.sections[activeSection.val];
       if (sec && sec.cells) {

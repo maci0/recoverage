@@ -379,7 +379,7 @@ recoverage/
 │   ├── smoke.py              # End-to-end server smoke run
 │   ├── _serve_harness.py     # Shared boot-and-probe harness for the two above
 │   ├── ci_clone_rebrew.sh    # Clones the ../rebrew path dep at a pinned commit
-│   ├── flatten-rikalabs-strict.py  # Regenerates tools/oxlint/rikalabs-strict.json
+│   ├── flatten-rikalabs-strict.py  # Regenerates tools/oxlint/rikalabs-strict.json (MIT) from @rikalabs/oxlint-standards 0.8.1
 │   └── oxlint/               # Vendored anti-slop rules + the flattened strict preset
 ├── tests/
 │   ├── conftest.py           # Shared fixtures (synthetic coverage.db)
@@ -411,7 +411,7 @@ recoverage/
         ├── style.css         # All styles
         ├── print.css         # Print stylesheet
         ├── app.js            # VanJS frontend
-        ├── detail.js         # Deferred panel logic (hex dump, modal, live reload)
+        ├── detail.js         # Deferred panel logic (hex dump, metadata grid, modal, live reload)
         ├── van.min.js        # VanJS library (~2 KB)
         ├── favicon.svg       # Retro "R" logo favicon
         ├── hljs.min.js       # Highlight.js core

@@ -70,7 +70,7 @@ recoverage/
         ├── style.css        # All styles
         ├── print.css        # Print stylesheet
         ├── app.js           # VanJS frontend
-        ├── detail.js        # Deferred panel logic (hex dump, modal, live reload)
+        ├── detail.js        # Deferred panel logic (hex dump, metadata grid, modal, live reload)
         ├── van.min.js       # VanJS library
         ├── favicon.svg      # Retro "R" logo favicon
         ├── hljs.min.js / hljs-c.min.js / hljs-x86asm.min.js  # Highlight.js core + grammars

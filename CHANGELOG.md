@@ -63,14 +63,19 @@ module ships in the published package. See *Breaking*.
   and the packaged assets are now served as the *smallest* representation the
   browser accepts, rather than under a fixed `zstd`-first preference, and both
   compress at maximum effort instead of the per-request settings. The shell
-  drops from 17,568 to 14,754 bytes, which keeps it within a few hundred
-  bytes of the initial congestion window (14,600) and saves a second round
-  trip before the first paint on any zstd-capable browser; `hljs.min.js` drops
-  45,575 to 37,714 and
+  drops from 17,568 to 14,537 bytes, which puts it back inside the initial
+  congestion window (14,600) and saves a second round trip before the first
+  paint on any zstd-capable browser; `hljs.min.js` drops 45,575 to 37,714 and
   `detail.js` 10,468 to 8,583. The shell also gained a strong `ETag` and
   answers `If-None-Match` with a 304, so a repeat visit re-downloads none of
   it: it was the one response still served `no-store`, so every reload pulled
   the full document while the assets beneath it revalidated to nothing.
+- **The selected function's metadata grid moved into `detail.js`.** The grid
+  under the panel title renders nothing at first paint (no function is
+  selected then), so the shell was downloading and parsing it to draw an
+  empty panel. `detail.js` already owns the rest of that pane and is preloaded
+  alongside it. The shell is now 14,090 brotli bytes, 510 under the congestion
+  window; `detail.js` is 10,186.
   Dynamic API responses are unchanged: they keep the fixed preference order and
   the cheap settings, because there the extra compression passes are paid per
   request.

@@ -1,9 +1,10 @@
 // Deferred SPA work kept out of the inlined index payload (TCP congestion window):
-// hex dump, data inspector, and the canvas coverage map.  app.js publishes
-// what this file needs on window.RC and reads the results back from it.
+// hex dump, data inspector, the function metadata grid, and the canvas
+// coverage map.  app.js publishes what this file needs on window.RC and reads
+// the results back from it.
 (() => {
-  const { MetaItem, MSG, hex } = window.RC;
-  const { canvas, div, button, p } = van.tags;
+  const { MetaItem, MSG, hex, encPath } = window.RC;
+  const { a, canvas, div, button, pre, p, span } = van.tags;
 
   const formatBytes = (buf, baseOffset = 0) => {
     const bytes = new Uint8Array(buf);
@@ -251,12 +252,72 @@
     navigator.clipboard.writeText(str).then(() => flash("Copied!")).catch(() => flash("Failed"));
   };
 
+  // The metadata grid under the panel title for a selected function.  Deferred
+  // with the rest of the detail pane: nothing is selected at first paint, so
+  // this grid is work the shell would have downloaded to render nothing.
+  // VAs arrive as hex strings or numbers, so they go through the same decode
+  // app.js uses rather than parseInt(v, 16), which would read a numeric VA as
+  // base-16 digits.
+  const functionMeta = ({ fn, sourceRoot, docText, jumpToAddress }) => {
+    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- the boundary contract is exactly "hex string | number"; decode here so no call site re-parses
+    const toVa = (v) => (typeof v === "string" ? Number.parseInt(v, 16) : v);
+
+    const SourceItem = () => fn.files && fn.files.length > 0
+      ? MetaItem("Source", span({ class: "meta-value" }, ...fn.files.map((file, i) =>
+          span(i > 0 ? ", " : "", a({ href: `${encPath(sourceRoot)}/${encPath(file)}`, target: "_blank", rel: "noopener noreferrer", class: "source-link" }, file)))))
+      : null;
+
+    if (fn.isGlobal) {
+      return div({ class: "meta-grid" },
+        MetaItem("VA", a({
+          href: "#",
+          class: "meta-value asm-link",
+          onclick: (e) => { e.preventDefault(); jumpToAddress(toVa(fn.va)); }
+        }, `0x${fn.va.toString(16).toUpperCase()}`)),
+        MetaItem("Type", "Global Variable"),
+        SourceItem()
+      );
+    }
+
+    const statusClass = fn.status ? `status-${fn.status.toLowerCase().replace('_', '-')}` : '';
+    return div({ class: "meta-grid" },
+      MetaItem("VA", a({
+        href: "#",
+        class: "meta-value asm-link",
+        onclick: (e) => { e.preventDefault(); jumpToAddress(toVa(fn.vaStart || fn.va)); }
+      }, fn.vaStart || fn.va)),
+      MetaItem("Size", `${fn.size} bytes`),
+      MetaItem("Offset", `0x${(fn.fileOffset || 0).toString(16).toUpperCase()}`),
+      MetaItem("Symbol", fn.symbol || MSG.NA),
+      MetaItem("Status", span({ class: `meta-value status-badge ${statusClass}` }, fn.status || "?")),
+      MetaItem("Module", fn.module || "?"),
+      MetaItem("Compiler", fn.cflags || MSG.NA),
+      MetaItem("Marker", fn.markerType || "?"),
+      fn.blocker ? MetaItem("Blocker", span({ class: "meta-value blocker-value" }, fn.blocker), "full-width") : null,
+      fn.blockerDelta == null ? null : MetaItem("Delta", span({ class: "meta-value delta-value" }, `${fn.blockerDelta} bytes`)),
+      fn.ghidra_name && fn.ghidra_name !== fn.name ? MetaItem("Ghidra", fn.ghidra_name) : null,
+      fn.list_name && fn.list_name !== fn.name ? MetaItem("Func List", fn.list_name) : null,
+      fn.size_reason ? MetaItem("Size Source", fn.size_reason) : null,
+      fn.last_verify ? MetaItem("Verified", `${fn.last_verify.verified_at}${fn.last_verify.byte_delta == null ? "" : ` (Δ${fn.last_verify.byte_delta}B)`}`) : null,
+      fn.last_verify && fn.last_verify.similarity != null ? MetaItem("Code Sim", `${fn.last_verify.similarity.toFixed(1)}%`) : null,
+      fn.last_verify && fn.last_verify.reg_delta != null ? MetaItem("Reg Delta", `${fn.last_verify.reg_delta}`) : null,
+      fn.last_verify && fn.last_verify.effective_match ? MetaItem("Effective", "register-only delta — prove candidate") : null,
+      fn.updated_by ? MetaItem("Updated By", `${fn.updated_by}${fn.updated_at ? ` (${fn.updated_at})` : ""}`) : null,
+      fn.similarity == null ? null : MetaItem("Similarity", `${(fn.similarity * 100).toFixed(1)}%`),
+      fn.is_thunk ? MetaItem("Type", "IAT thunk (not reversible)") : null,
+      fn.is_export ? MetaItem("Type", "Exported function") : null,
+      fn.sha256 ? MetaItem("SHA256", `${fn.sha256.slice(0, 16)}...`) : null,
+      SourceItem(),
+      docText && docText !== MSG.SELECT_FUNCTION && docText !== MSG.NO_DOCS
+        ? MetaItem("Annotations", pre({ class: "meta-docs" }, docText), "full-width") : null
+    );
+  };
+
   // The expanded code viewer.  Mounted once, on first paint of detail.js, and
   // kept in the DOM afterwards so the CSS open/close transition has something
   // to animate.
   const mountModal = ({ showModal, modalTitle, modalContent, modalLang, HighlightedCode }) => {
     if (document.querySelector(".modal")) return;
-    const { button, span } = van.tags;
 
     van.add(document.body, div({
       class: () => `modal ${showModal.val ? "show" : ""}`,
@@ -684,6 +745,6 @@
     });
   };
 
-  Object.assign(window.RC, { formatBytes, DataInspector, extractDocs, initHighlighting, highlightInto, loadAsm, connectEvents, reloadData, copyToClipboard, mountModal, mountGrid });
+  Object.assign(window.RC, { formatBytes, functionMeta, DataInspector, extractDocs, initHighlighting, highlightInto, loadAsm, connectEvents, reloadData, copyToClipboard, mountModal, mountGrid });
   window.RC.onReady();
 })();
