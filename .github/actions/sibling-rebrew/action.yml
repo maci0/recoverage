@@ -27,7 +27,12 @@ runs:
     - name: Clone rebrew into the workspace parent
       shell: bash
       run: |
-        git clone --filter=blob:none "${{ inputs.repository }}" ../rebrew
+        git clone --filter=blob:none "$REPOSITORY" ../rebrew
         git -C ../rebrew checkout --detach "$REF"
       env:
+        # Both inputs travel as environment variables, never spliced into the
+        # script body: a ${{ }} expansion is substituted before bash parses
+        # the block, so a value carrying a quote (or `$(...)`) would break
+        # out of the argument and run as part of the step.
+        REPOSITORY: ${{ inputs.repository }}
         REF: ${{ inputs.ref }}
