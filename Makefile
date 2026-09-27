@@ -22,13 +22,12 @@ UV_SYNC_FLAGS ?= --frozen --extra dev
 # installs uv unpinned (astral-sh/setup-uv with no version input).
 UV_VERSION ?= 0.12.14
 
-# The rebrew tag/commit pin is written in tools/ci_clone_rebrew.sh, the script
-# every CI job and `make clone-rebrew` runs.  REBREW_REF / REBREW_SHA here must
-# keep matching that script's defaults (tests/test_supply_chain.py): a value
-# set on the command line or in the environment takes the place of the pin for
-# that one run, which is how you develop against a different rebrew.
-REBREW_REF ?= v2.13.1
-REBREW_SHA ?= d2d67c870df79214320f16b1cba1b0f6086605a7
+# The rebrew tag/commit pin lives in tools/ci_clone_rebrew.sh and nowhere
+# else, so the Makefile does not restate it: `make clone-rebrew
+# REBREW_REF=<tag> REBREW_SHA=<commit>` reaches the script as environment
+# variables, which the command-line assignment already exports.  The commit
+# must be one whose dependency metadata still matches uv.lock, or
+# `uv sync --frozen` fails on the lock check.
 REBREW_DIR := $(abspath $(CURDIR)/../rebrew)
 
 # The floor in pyproject.toml [project].dependencies; rebrew below it lacks
@@ -113,7 +112,7 @@ warn-uv-version: ensure-uv
 
 clone-rebrew:
 	@$(SET_STRICT) \
-	REBREW_REF=$(REBREW_REF) REBREW_SHA=$(REBREW_SHA) bash tools/ci_clone_rebrew.sh "$(REBREW_DIR)"
+	bash tools/ci_clone_rebrew.sh "$(REBREW_DIR)"
 
 setup: ensure-rebrew warn-uv-version
 	uv sync $(UV_SYNC_FLAGS)

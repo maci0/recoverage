@@ -49,30 +49,61 @@ def _default(text: str, var: str) -> str:
 
 class TestRbrewPin:
     def test_ci_populates_the_sibling_only_through_the_pinned_script(self) -> None:
-        """Every installing job clones rebrew with tools/ci_clone_rebrew.sh.
+        """Every installing job fetches rebrew via the composite action, and
+        the action's only mechanism is tools/ci_clone_rebrew.sh.
 
-        A second mechanism (a composite action, an inline `git clone`) fetches
-        the same path dependency from a ref nothing else checks, and whichever
-        runs last silently decides which rebrew the suite tested.
+        A second mechanism (an inline `git clone`, or an action that carries
+        its own ref input) fetches the same path dependency from a pin nothing
+        else checks, and whichever runs last silently decides which rebrew
+        the suite tested. The composite action adds the one thing a script
+        cannot do on a runner (write outside GITHUB_WORKSPACE) and nothing
+        else, so the tag and commit stay in the script alone.
         """
         installing = {n: b for n, b in _jobs().items() if "uv sync" in b}
         assert installing, "no CI job runs uv sync; the check below would pass vacuously"
         for name, body in installing.items():
-            assert "tools/ci_clone_rebrew.sh" in body, f"job {name} never clones rebrew"
+            assert "uses: ./.github/actions/sibling-rebrew" in body, (
+                f"job {name} never materializes the sibling checkout"
+            )
             assert not re.search(r"git clone.*rebrew", body), f"job {name} clones rebrew itself"
+            assert not re.search(r"run:[^\n]*ci_clone_rebrew", body), (
+                f"job {name} runs the script directly, bypassing the one action"
+            )
 
-    def test_no_local_actions_directory_remains(self) -> None:
-        """A composite action is a pin with its own copy of the tag and commit."""
-        assert not (_ROOT / ".github" / "actions").exists()
+        action = (_ROOT / ".github" / "actions" / "sibling-rebrew" / "action.yml").read_text(
+            encoding="utf-8"
+        )
+        assert "tools/ci_clone_rebrew.sh" in action, "the action does not delegate to the script"
+        assert not re.search(r"run:.*git clone", action), "the action clones rebrew itself"
+        inputs = re.search(r"^inputs:\n(.*?)^runs:", action, re.MULTILINE | re.DOTALL).group(1)
+        assert re.findall(r"^  (\w+):$", inputs, re.MULTILINE) == ["repository"], (
+            "the action takes a pin as an input; the pin stays in the script"
+        )
+        for var in _PINS:
+            assert var not in action, f"{var} is a second pin, inside the action"
 
-    def test_makefile_pins_match_the_script_ci_runs(self) -> None:
-        """`make clone-rebrew` and CI must install the same rebrew."""
+    def test_makefile_carries_no_pin_of_its_own(self) -> None:
+        """The script is the only place the rebrew tag and commit are written.
+
+        `make clone-rebrew REBREW_REF=...` still works: a command-line make
+        variable is exported to the recipe's environment, where the script
+        reads it. An empty `REBREW_REF ?=` line would only be a second
+        mechanism that can never carry a value.
+        """
+        makefile = _MAKEFILE.read_text(encoding="utf-8")
+        for var in _PINS:
+            assert not re.search(rf"^{var} \?=", makefile, re.MULTILINE), (
+                f"Makefile: {var} is a second pin; the script owns it"
+            )
+        assert "tools/ci_clone_rebrew.sh" in makefile, (
+            "`make clone-rebrew` no longer calls the script"
+        )
+
+    def test_script_pin_is_unchanged(self) -> None:
+        """The tag and commit `make clone-rebrew` and CI both install."""
         script = _CLONE_SCRIPT.read_text(encoding="utf-8")
         for var, expected in _PINS.items():
             assert _default(script, var) == expected, f"tools/ci_clone_rebrew.sh: {var} moved"
-            assert _default(_MAKEFILE.read_text(encoding="utf-8"), var) == expected, (
-                f"Makefile: {var} disagrees with the script CI runs"
-            )
 
     def test_pinned_commit_is_a_full_sha(self) -> None:
         """A ref that is not a full object id cannot be checked for a moved tag."""
@@ -96,7 +127,7 @@ class TestCheckedInLintPreset:
         row = next(
             line
             for line in _README.read_text(encoding="utf-8").splitlines()
-            if "rikalabs-strict.json" in line and line.lstrip().startswith("|")
+            if "tools/oxlint/rikalabs-strict.json" in line and line.lstrip().startswith("|")
         )
         pin = json.loads(_PACKAGE_JSON.read_text(encoding="utf-8"))["devDependencies"][
             "@rikalabs/oxlint-standards"

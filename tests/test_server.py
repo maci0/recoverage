@@ -1543,7 +1543,8 @@ class TestSpaStateVocabulary:
         assert len([v for v in labels.split(",") if v.strip()]) == 8
         assert "STATE_LABEL" in detail_js
         published = self._window_rc_keys(app_js)
-        missing = sorted({"STATE_LABEL"} - published)
+        required = {"van", "MetaItem", "MSG", "hex", "STATE_LABEL"}
+        missing = sorted(required - published)
         assert missing == [], f"read by detail.js but not published on window.RC: {missing}"
 
     def test_cell_tooltip_names_the_state_and_function(self) -> None:

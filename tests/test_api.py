@@ -2244,7 +2244,11 @@ class TestDataPayloadMemo:
         assert ui.CACHED_INDEX_COMPRESSED == {"gzip": b"shell-gz"}
 
     def _gated_open(
-        self, tmp_path: Any, monkeypatch: Any, release: threading.Event
+        self,
+        tmp_path: Any,
+        monkeypatch: Any,
+        release: threading.Event,
+        query: dict[str, str] | None = None,
     ) -> tuple[Any, list[int], dict[str, str]]:
         """Patch ``_open_db`` to record every call and park the FIRST caller
         on *release* — freezing the payload build mid-flight so the test can
@@ -2253,9 +2257,12 @@ class TestDataPayloadMemo:
         Also installs thread-independent request/response stand-ins for the
         ``server`` module: worker threads have no bottle request context
         (thread-local), and the compression/ETag helpers resolve those names
-        from server's namespace.  The server request's ``query`` dict is
-        returned so a test can set ``?section=`` on the stand-in the handlers
-        read it from: ``api.request`` only supplies Accept-Encoding."""
+        from server's namespace.  *query* rides on that stand-in, which is
+        where ``query_param`` reads the query string from, and the stand-in's
+        ``query`` dict is returned so a test can assert on it: a test that
+        exercises a ``?section=`` (or any other) parameter has to pass it here
+        rather than patching ``api.request`` alone, which only supplies
+        Accept-Encoding."""
         import recoverage.api as api
         import recoverage.server as server_mod
 
@@ -2277,8 +2284,8 @@ class TestDataPayloadMemo:
 
         monkeypatch.setattr(server_mod, "_open_db", counting_open)
 
-        fake_req: Any = _fake_request()
-        query: dict[str, str] = fake_req.query
+        fake_req: Any = _fake_request(query)
+        query = fake_req.query
         fake_resp: Any = type(
             "R", (), {"content_type": None, "set_header": lambda self, k, v: None}
         )()
@@ -2382,16 +2389,14 @@ class TestDataPayloadMemo:
         (unknown ?section= 404) must wake, find no memo, and produce its own
         404 — not hang, not serve a stale/empty payload."""
         import recoverage.api as api
-        import recoverage.server as server_mod
 
         release = threading.Event()
-        _, open_calls, _ = self._gated_open(tmp_path, monkeypatch, release)
         # The section filter is read by server.query_param, which resolves
-        # `request` from the *server* module globals, so the stand-in has to
-        # be patched there; patching api.request would leave the handler
-        # building the unfiltered payload and this test would pass on the
-        # wrong path.
-        monkeypatch.setattr(server_mod, "request", _fake_request({"section": "nope"}))
+        # `request` from the *server* module globals, so the stand-in carrying
+        # it has to be patched there; patching api.request would leave the
+        # handler building the unfiltered payload and this test would pass on
+        # the wrong path.
+        _, open_calls, _ = self._gated_open(tmp_path, monkeypatch, release, {"section": "nope"})
         api._clear_data_cache()
 
         snap = api._snapshot_db_mtime()

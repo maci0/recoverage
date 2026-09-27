@@ -138,7 +138,10 @@ uv run python -m pytest tests/test_playwright.py
 `tools/ci_clone_rebrew.sh` backs `make clone-rebrew` and the CI jobs: it pins
 rebrew to the tag and commit in the script's defaults, and fails when the tag
 does not resolve to that commit. It refuses to remove a destination checkout
-that has uncommitted changes unless `REBREW_FORCE=1` is set.
+that has uncommitted changes unless `REBREW_FORCE=1` is set. The tag and commit
+are written in that script only: the Makefile carries no pin of its own (a
+command-line `make clone-rebrew REBREW_REF=...` reaches the script through the
+environment).
 
 ## CI
 
@@ -149,15 +152,18 @@ test fails the job instead of holding a runner for six hours.
 
 `rebrew` is an editable path dependency at `../rebrew` (see
 `[tool.uv.sources]`), which no runner has, so every job that runs
-`uv sync --frozen --extra dev` first runs `tools/ci_clone_rebrew.sh`, the same
-script `make clone-rebrew` wraps. Its `REBREW_REF`/`REBREW_SHA` defaults are
-the whole pin: the clone fails unless the tag still resolves to the commit, so
-a moved tag cannot change the dependency silently. Those defaults must keep
-matching `uv.lock` and the `Makefile` pair (checked by
+`uv sync --frozen --extra dev` first uses the composite action
+`.github/actions/sibling-rebrew`, whose only step is the same
+`tools/ci_clone_rebrew.sh` `make clone-rebrew` wraps. The action exists only
+because a workflow step cannot write outside `GITHUB_WORKSPACE`; it takes the
+clone URL and nothing else, so the pin stays in the script. The script's
+`REBREW_REF`/`REBREW_SHA` defaults are the whole pin: the clone fails unless the
+tag still resolves to the commit, so a moved tag cannot change the dependency
+silently. Those defaults must keep matching `uv.lock` (checked by
 `tests/test_supply_chain.py`): when rebrew's dependencies change, re-lock in a
-tree with the sibling present and bump the script and the `Makefile` together.
-The `sbom` job deliberately has no such step, because `uv export --frozen`
-reads the lock alone.
+tree with the sibling present and bump the script alone. The `sbom` job
+deliberately has no such step, because `uv export --frozen` reads the lock
+alone.
 
 The interpreter is pinned in `.python-version` (3.13), which is what uv builds
 the local venv from and what the lint, web-lint and smoke jobs run; the test
