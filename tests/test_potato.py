@@ -1183,6 +1183,106 @@ class TestMergeCellsInvariant:
         assert len(merged) == 2  # "none" state cells are never merged
 
 
+class TestBlockPosition:
+    """_block_position must agree with a linear walk over every merged row.
+
+    The binary search it replaced read the same sequence (orig_idx when the
+    row carries one, its own position when _merge_cells left it unannotated),
+    so both spellings have to resolve the same block — including on the rows
+    before the first merge, where the two spellings disagree and the position
+    is the answer.
+    """
+
+    @staticmethod
+    def _linear(merged: list[dict], idx: int) -> int | None:
+        for pos, cell in enumerate(merged):
+            if cell.get("orig_idx", pos) == idx:
+                return pos
+        return None
+
+    @staticmethod
+    def _lists() -> list[list[dict]]:
+        unmerged = [{"state": "none", "span": 1, "functions": []} for _ in range(12)]
+        runs = [
+            {"state": "exact", "span": 1, "functions": ["a"]},
+            {"state": "exact", "span": 1, "functions": ["a"]},
+            {"state": "none", "span": 1, "functions": []},
+            {"state": "reloc", "span": 1, "functions": ["b"]},
+            {"state": "reloc", "span": 1, "functions": ["b"]},
+            {"state": "reloc", "span": 1, "functions": ["b"]},
+            {"state": "none", "span": 1, "functions": []},
+        ]
+        # A merge that begins past the first row: the prefix stays unannotated
+        # while the tail carries orig_idx, so both spellings are live at once.
+        return [unmerged, runs, unmerged + runs, runs + unmerged]
+
+    def test_matches_linear_walk(self) -> None:
+        from recoverage.potato import _block_position, _merge_cells
+
+        for cells in self._lists():
+            for columns in (2, 3, 8, 64):
+                merged = _merge_cells(cells, columns)
+                for idx in range(-2, len(cells) + 2):
+                    assert _block_position(merged, idx) == self._linear(merged, idx), (
+                        f"columns={columns} idx={idx}"
+                    )
+
+    def test_absent_index_returns_none(self) -> None:
+        from recoverage.potato import _block_position, _merge_cells
+
+        merged = _merge_cells([{"state": "exact", "span": 1, "functions": ["a"]}] * 4, 64)
+        assert len(merged) == 1
+        assert _block_position(merged, 1) is None
+        assert _block_position([], 0) is None
+
+    def test_grid_page_uses_block_position(self) -> None:
+        from recoverage.potato import _grid_page, _merge_cells
+
+        cells = [
+            {"state": "exact", "span": 1, "functions": ["a"]},
+            {"state": "exact", "span": 1, "functions": ["a"]},
+            {"state": "none", "span": 1, "functions": []},
+        ]
+        merged = _merge_cells(cells, 64)
+        # One row per page: block 2 sits on page 2 even though it is row 1.
+        assert _grid_page("", "2", merged, 1, 3) == 2
+        # An ?idx= naming no block falls back to the first page.
+        assert _grid_page("", "99", merged, 1, 3) == 1
+        assert _grid_page("", "not-a-number", merged, 1, 3) == 1
+        # An explicit ?page= still wins.
+        assert _grid_page("3", "2", merged, 1, 3) == 3
+
+
+class TestFunctionListLinks:
+    """Every function row links into the grid for the SAME name it prints."""
+
+    def test_row_link_carries_the_printed_name(self) -> None:
+        from recoverage.potato import _render_function_list
+
+        con = sqlite3.connect(":memory:")
+        con.row_factory = sqlite3.Row
+        c = con.cursor()
+        c.execute(
+            "CREATE TABLE functions (target TEXT, va INTEGER, name TEXT, vaStart TEXT,"
+            " size INTEGER, status TEXT, module TEXT, markerType TEXT)"
+        )
+        c.execute(
+            "INSERT INTO functions VALUES ('T', 4096, 'sub_401000', '0x1000', 12,"
+            " 'EXACT', 'T', 'FUNCTION')"
+        )
+        c.execute(
+            "INSERT INTO functions VALUES ('T', 4100, 'a name/with?chars', '0x1004', 8,"
+            " 'STUB', 'B', 'FUNCTION')"
+        )
+        html = _render_function_list(c, "T", ".text", "", "va", "")
+        try:
+            assert f'<a href="?target=T&section=.text&search={quote("sub_401000")}">' in html
+            spaced = f'<a href="?target=T&section=.text&search={quote("a name/with?chars")}">'
+            assert spaced in html
+        finally:
+            con.close()
+
+
 class TestV4StateColors:
     """Every v4 cell state renders with its DB_FORMAT.md color, never the
     undocumented gray: proven (post-verify promotion) and legacy

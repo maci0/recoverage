@@ -1512,6 +1512,34 @@ def _merge_cells(cells: list[dict[str, Any]], grid_columns: int) -> list[dict[st
 _GRID_PAGE_ROWS = 32
 
 
+def _block_position(merged_cells: list[dict[str, Any]], idx: int) -> int | None:
+    """Position in *merged_cells* of original cell *idx*, or None if absent.
+
+    A merged row carries the ``orig_idx`` of the run it stands for; a row
+    _merge_cells handed back unannotated (the no-merge fast path, and the
+    prefix before the first merge) carries none, and its original index IS its
+    own position — the same default the render loop applies.  Reading that
+    sequence either way is strictly increasing, because a merge only ever
+    collapses a run and stamps the index the run started at, so the row that
+    follows it starts later.
+
+    That monotonicity is what makes the search logarithmic.  Walking the list
+    instead cost one dict lookup per cell of the whole section on every click
+    that carries an ``?idx=``: 5.8 ms against a ~4 ms render on an 80k-cell
+    .text, growing with the section.
+    """
+    lo, hi = 0, len(merged_cells)
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if merged_cells[mid].get("orig_idx", mid) < idx:
+            lo = mid + 1
+        else:
+            hi = mid
+    if lo < len(merged_cells) and merged_cells[lo].get("orig_idx", lo) == idx:
+        return lo
+    return None
+
+
 def _grid_page(
     page_str: str,
     idx_str: str,
@@ -1534,12 +1562,9 @@ def _grid_page(
             idx = int(idx_str)
         except ValueError:
             return 1
-        for pos, cell in enumerate(merged_cells):
-            # `pos` as the default matches the render loop's `i` default: when
-            # _merge_cells took its no-merge fast path the rows carry no
-            # orig_idx and the enumerate position IS the original index.
-            if cell.get("orig_idx", pos) == idx:
-                return max(1, min(page_count, pos // page_cells + 1))
+        pos = _block_position(merged_cells, idx)
+        if pos is not None:
+            return max(1, min(page_count, pos // page_cells + 1))
     return 1
 
 
@@ -1803,10 +1828,14 @@ def _render_function_list(
                 f'<tr><td colspan="5"><font color="{MUTED_COLOR}">No functions found.</font></td></tr>'
             )
     else:
+        # One row's link differs from the next only in the quoted name; the
+        # quoted target is the same string 500 times, so it is built once
+        # (same hoist as _build_grid_html's link_prefix).
+        link_prefix = f"?target={_url_quote(target)}&section=.text&search="
         for name, va, _, size, status, module in rows:
             st = status or "none"
             color = COLORS.get(st.lower(), TEXT_COLOR)
-            name_link = f"?target={_url_quote(target)}&section=.text&search={_url_quote(name)}"
+            name_link = link_prefix + _url_quote(name)
             parts.append(
                 "<tr>"
                 f'<td><a href="{name_link}"><font color="{ACCENT_COLOR}">{_esc(name)}</font></a></td>'
