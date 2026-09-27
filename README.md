@@ -296,7 +296,7 @@ Query-parameter rules, the same on every endpoint:
 
 - `/asm` requires `va` and `size`, and accepts `format=text` (default) or
   `format=json`. An unrecognized `format` is a 400, not a silent fall back to
-  text. `size` is a decimal byte count, clamped to 4096.
+  text. `size` is a byte count, decimal or 0x-prefixed, clamped to 4096.
 - `/sections/<section>/bytes` takes `offset` (default 0) and `size` (default
   256, clamped to 4096); both are decimal unless 0x-prefixed. A slice that
   would run past the section end is a 400 naming the section's size.
@@ -346,26 +346,38 @@ cover, is in [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md).
 recoverage/
 ├── pyproject.toml
 ├── README.md
+├── CONTRIBUTING.md           # Bootstrap, edit-test loop, local/CI parity
+├── Makefile                 # Contributor targets (`make help`); wraps the CI commands
 ├── docs/                     # Screenshots, mascot & design doc
 │   ├── DESIGN.md             # Detailed architecture & design doc
 │   ├── DESIGN_PRINCIPLES.md  # Core operational philosophies
 │   ├── USER_STORIES.md       # User stories with acceptance criteria
 │   ├── THREAT_MODEL.md       # Attack surface, trust boundaries, risks
 │   └── ideas.md              # Future improvement ideas
+├── tools/                    # Lint and CI harness scripts
+│   ├── lint-html.py          # Nu Html Checker over the static and served assets
+│   ├── smoke.py              # End-to-end server smoke run
+│   ├── _serve_harness.py     # Shared boot-and-probe harness for the two above
+│   ├── ci_clone_rebrew.sh    # Clones the ../rebrew path dep at a pinned commit
+│   ├── flatten-rikalabs-strict.py  # Regenerates tools/oxlint/rikalabs-strict.json
+│   └── oxlint/               # Vendored anti-slop rules + the flattened strict preset
 ├── tests/
 │   ├── conftest.py           # Shared fixtures (synthetic coverage.db)
 │   ├── test_api.py           # API validation & security tests
 │   ├── test_cli.py           # CSV export, formatting tests
+│   ├── test_config.py        # RECOVERAGE_* parsing, precedence, fail-fast
 │   ├── test_lifecycle.py     # Lifecycle (regen ordering, opener reaping, deadlines)
 │   ├── test_paths.py         # DB path resolution tests
 │   ├── test_server.py        # Compression, encoding tests
 │   ├── test_potato.py        # Potato Mode rendering tests
 │   ├── test_perf.py         # Deterministic perf regression gates (work counters, not wall clock)
+│   ├── test_release.py       # Release contract (version, changelog, declared floors)
 │   └── test_playwright.py    # Browser integration tests
 └── src/recoverage/
     ├── __init__.py
     ├── __main__.py           # python -m recoverage
     ├── _paths.py             # DB path resolution (rebrew-project.toml db_dir)
+    ├── config.py             # RECOVERAGE_* env: defaults, validation, startup banner
     ├── cli.py                # Typer CLI entry point
     ├── server.py             # Bottle app, shared helpers & compression
     ├── regen.py              # In-process rebrew regen (catalog + build-db)

@@ -309,9 +309,10 @@ NOT_DATA_MARKER_SQL = "(markerType IS NULL OR markerType NOT IN ({types}))".form
 # the `recoverage stats` CLI.  ONE definition, so the two callers cannot drift
 # apart (see _section_stats for what the copies used to get wrong).
 #
-# Only the three values that need `cells` are computed here.  The other ten
-# buckets come from section_cell_stats, which rebrew materializes per section
-# (~0.01 ms); adding all ten SUM(CASE ...) expressions to this scan cost
+# Only the three values that need `cells` are computed here.  The other eleven
+# cell counts come from section_cell_stats, which rebrew materializes per
+# section (~0.01 ms); adding the ten further SUM(CASE ...) expressions and a
+# COUNT(*) to this scan cost
 # ~15 ms on a 64k-cell target against ~6 ms for these three.  The one bucket
 # that differs between the two sources is exact_count — the materialized table
 # folds state 'verified' into it for the grid legend, this endpoint counts only
@@ -324,7 +325,7 @@ SECTION_STATS_SQL = """
     FROM cells WHERE target = ? GROUP BY section_name
 """
 
-# The other ten buckets, per section, already aggregated by rebrew.
+# The per-section cell counts, already aggregated by rebrew.
 _SECTION_BUCKETS_SQL = "SELECT * FROM section_cell_stats WHERE target = ?"
 
 # Every bucket computed from `cells` in one pass.  Used ONLY when
@@ -368,8 +369,8 @@ def _per_section_buckets(
 ) -> Iterator[tuple[str, dict[str, Any], int, int]]:
     """Yield ``(section_name, buckets, covered_bytes, total_bytes)`` per section.
 
-    Prefers rebrew's materialized ``section_cell_stats`` for the ten non-exact
-    buckets it already aggregates and takes the byte sums plus ``exact_count``
+    Prefers rebrew's materialized ``section_cell_stats`` for the cell counts it
+    already aggregates and takes the byte sums plus ``exact_count``
     from *cell_side*, which was computed from `cells`.  When that table is absent
     or empty, every bucket comes from `cells` instead — the single-query path
     this endpoint used before the split.
@@ -406,10 +407,14 @@ def _per_section_buckets(
 
 
 def _cell_bucket_row(row: sqlite3.Row) -> dict[str, Any]:
-    """Map a per-section stats row (SECTION_STATS_SQL, or the
-    section_cell_stats table for the ten non-exact buckets it supplies) to the
-    short-key bucket dict served by /stats and /data.  ONE definition so the
-    two response shapes cannot drift.
+    """Map a per-section bucket row to the short-key dict served by /stats, /data
+    and Potato Mode.  ONE definition so the response shapes cannot drift.
+
+    *row* is a ``section_cell_stats`` row (``_SECTION_BUCKETS_SQL``) or the
+    same columns computed live from `cells` (``_SECTION_STATS_FULL_SQL``); the
+    two must select an identical column set, since the mapping below subscripts
+    every one of them by name.  It is never a ``SECTION_STATS_SQL`` row, which
+    carries only the two byte sums and the exact count.
 
     ``other`` is the producer's catch-all (rebrew counts compile_error,
     extract_error, invalid_va, missing_file, missing_size, skip, unknown and
@@ -628,9 +633,12 @@ def _target_filename(tid: str, t_info: Any) -> str:
 
 #: Every built target id, excluding the reserved schema-version row.  ONE
 #: definition: the SPA dropdown, /api/health's target count, and the CLI's
-#: ``--target`` validation all read the same set from the same place, and
-#: ``metadata`` is the only table that carries it.  Sorted so every consumer
-#: gets a deterministic list (SQLite's DISTINCT order is arbitrary).
+#: ``--target`` validation all read the same set from the same place.  Most
+#: tables carry a ``target`` column too, but ``metadata`` is the one stamped
+#: for every built target (build_db writes a per-target ``db_version`` row), so
+#: a target whose payload tables came out empty is still listed.  Sorted so
+#: every consumer gets a deterministic list (SQLite's DISTINCT order is
+#: arbitrary).
 _DB_TARGETS_SQL = "SELECT DISTINCT target FROM metadata WHERE target != ? ORDER BY target"
 
 
@@ -1058,9 +1066,11 @@ def _cells_json_rows(
 def _evict_oldest(cache: dict[Any, Any], max_size: int) -> None:
     """Drop oldest entries (dict insertion order) until *cache* holds < max_size.
 
-    ONE definition of the bounded-cache arithmetic shared by the /data
-    payload memo and Potato's cells memo — both cap multi-MB payloads so a
-    long-running server across many rebuilds cannot accumulate forever.
+    ONE definition of the bounded-cache arithmetic behind every per-DB-snapshot
+    memo in the package (/data payloads, /stats, the function list totals, and
+    Potato's cells and per-section stats).  They are keyed by a snapshot that
+    changes on every rebuild, so a long-running server would otherwise
+    accumulate an entry per snapshot forever.
     Caller holds the cache's own lock.
     """
     if len(cache) >= max_size:
@@ -1164,8 +1174,12 @@ def _missing_required_columns(conn: sqlite3.Connection) -> set[str]:
     The name-only shape gate passes a DB stamped "4" whose ``functions``
     table lacks ``textOffset``/``similarity`` (queried by the function
     detail endpoint) or whose ``section_cell_stats`` table is missing a
-    counted bucket — those fail at query time instead of at open.  Column sets
-    mirror the schema build_db creates so drift is caught here.
+    counted bucket — those fail at query time instead of at open.  The sets
+    below are the columns recoverage itself subscripts, not a copy of
+    build_db's schema: a column build_db added after these endpoints were
+    written is not required here, and optional columns the live readers probe
+    for are left out on purpose (the v6 additions noted in
+    _check_schema_version_uncached).
     """
     required_columns: dict[str, set[str]] = {
         "metadata": {"target", "key", "value"},
@@ -1412,10 +1426,12 @@ def _db() -> sqlite3.Connection:
 
 # ── Response helpers ───────────────────────────────────────────────
 
-# The two cache policies for DB-derived responses.  NO_STORE: mutable
-# payloads (target lists, grids) that must never survive a rebuild.
-# REVALIDATE: ETag-bearing payloads (/data, /asm, /bytes, /potato) that a
-# browser may keep but must re-verify with If-None-Match every time.
+# The two cache policies for DB-derived responses.  NO_STORE: payloads with
+# no validator the client can cheaply re-check — the SPA shell, /api/health,
+# /api/targets, /api/targets/<t>/stats, the function list/detail routes and
+# /api/events — which must never survive a rebuild.  REVALIDATE: the larger
+# ETag-bearing payloads (/data, /asm, /bytes, /potato) that a browser may keep
+# but must re-verify with If-None-Match every time.
 CACHE_NO_STORE = "no-cache, no-store, must-revalidate"
 CACHE_REVALIDATE = "no-cache, must-revalidate"
 

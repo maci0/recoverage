@@ -67,7 +67,7 @@ _log = logging.getLogger("recoverage")
 # byte shown as "undocumented" contradicts the number printed beside it.  The
 # problem states (tooling failures and unclassified annotations) share one
 # colour: they are distinguishable from a gap, which is the point, without
-# spending eleven legend rows on states an operator cannot act on individually.
+# spending nine legend rows on states an operator cannot act on individually.
 _COLORS_PROBLEM = "#a855f7"
 COLORS = {
     "exact": "#10b981",
@@ -186,8 +186,8 @@ def _progress_svg(segments: tuple[tuple[str, float], ...]) -> str:
     overflowed phones and clipped the stats text mid-word.  Segment geometry
     is in 0..700 viewBox units; the browser scales it to the cell width.
 
-    Deliberately uncached: pct floats make repeat keys rare, so the memo
-    never hits and only pins entries."""
+    Deliberately uncached: the segment list is rebuilt per render, and a memo
+    keyed on the float percentages would pin entries without ever hitting."""
     svg = [
         (
             '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 32" preserveAspectRatio="none">'
@@ -264,10 +264,13 @@ R_LOGO_SVG = (
     "bmNob3I9J21pZGRsZScgZmlsdGVyPSd1cmwoI2cpJz5SPC90ZXh0Pjwvc3ZnPg=="
 )
 
-# Every state the grid can paint needs a key here: data (purple) and thunk
-# (orange) cells were rendering with no legend entry, so those blocks had no
-# way to be identified.  The SPA greys them out; Potato Mode keeps the colours
-# (docs/DESIGN.md "Potato Mode still colors those states"), so it must say so.
+# One row per colour a reader has to be able to name.  data (purple) and thunk
+# (orange) cells used to render with no legend entry, so those blocks had no
+# way to be identified; the SPA greys them out, Potato Mode keeps the colours
+# (docs/DESIGN.md "Potato Mode still colors those states"), so they get rows.
+# `problem` names all nine states sharing _COLORS_PROBLEM at once, and the
+# states that share an existing row's colour (near_matching, verified) need no
+# entry of their own.  COLORS, not this list, is what must cover every state.
 LEGEND_ITEMS = [
     ("none", "undocumented"),
     ("exact", "exact"),
@@ -649,7 +652,13 @@ def _build_url(
     search: str | None = None,
     page: int | None = None,
 ) -> str:
-    """Build the relative "?target=...&section=..." URL; falsy options are omitted."""
+    """Build the relative "?target=...&section=..." URL.
+
+    Options that are ``None``, an empty set, or an empty string are omitted.
+    ``idx`` is the exception: it is emitted whenever it is not ``None``, so
+    cell index 0 keeps its ``&idx=0`` and the reader's position survives the
+    round trip.
+    """
     url = "?target=" + _url_quote(target) + "&section=" + _url_quote(section)
     if filters:
         url += "&filter=" + _url_quote(",".join(sorted(filters)))
@@ -729,8 +738,8 @@ _PAGE_SRC = r"""<!DOCTYPE html>
         <!-- Search and target share the first row; the filter pills take
              their own second row.  As one row the three groups need ~1000px,
              which overflowed a 390px phone and clipped the filters (E/R/M/S/P
-             half off-screen).  Two rows fit everywhere the 700px progress bar
-             above them already fits. -->
+             half off-screen).  Two rows wrap at whatever width the viewport
+             gives them. -->
         <tr>
         <td valign="middle" nowrap>
           <form id="search-form" action="/potato" method="GET"><input type="hidden" name="target" value="{{target}}"><input type="hidden" name="section" value="{{section}}">
@@ -1281,14 +1290,18 @@ def _search_functions(c: sqlite3.Cursor, target: str, search_query: str) -> set[
             # name) in their `functions` field — the dimming test compares
             # cell entries against this set, so VA spellings must be included.
             search_matched_fns.add(va_start)
-    # Same '0x'-prefixed spelling the address columns print, so an address
-    # copied out of a Potato table matches when pasted into the search box.
+    # The address column is matched in both spellings _format_va can produce
+    # (`0x%08x`, padded, and `0x%x`, unpadded) so an address copied out of a
+    # Potato table matches when pasted into the search box.  printf('0x%x', va)
+    # has no prefix and could never match either.
     # The row cap applies to rows selected, not to the returned set.
     c.execute(
         "SELECT name FROM globals WHERE target = ? AND ("
-        "name LIKE ? ESCAPE '\\' OR ('0x' || printf('%x', va)) LIKE ? ESCAPE '\\') "
+        "name LIKE ? ESCAPE '\\' "
+        "OR ('0x' || printf('%08x', va)) LIKE ? ESCAPE '\\' "
+        "OR ('0x' || printf('%x', va)) LIKE ? ESCAPE '\\') "
         "ORDER BY name LIMIT ?",
-        (target, like_pat, like_pat, _SEARCH_ROW_LIMIT),
+        (target, like_pat, like_pat, like_pat, _SEARCH_ROW_LIMIT),
     )
     search_matched_fns.update(row[0] for row in c.fetchall())
     return search_matched_fns
@@ -1691,15 +1704,16 @@ def _render_function_list(
         params.append(status_filter)
     if search_query:
         like = _escape_like(search_query)
-        # '0x' || printf('%x', va) is the spelling _format_va prints in the
-        # VA column below, so an address copied out of this very table matches
-        # when pasted into the search box.  printf('0x%x', va) has no prefix
-        # and could never match it.
+        # The VA column below is printed by _format_va, which pads to eight
+        # digits, so both that spelling and the bare one are matched: an
+        # address copied out of this very table matches when pasted into the
+        # search box.  printf('0x%x', va) has no prefix and could never match.
         where.append(
             "(name LIKE ? ESCAPE '\\' OR symbol LIKE ? ESCAPE '\\'"
+            " OR ('0x' || printf('%08x', va)) LIKE ? ESCAPE '\\'"
             " OR ('0x' || printf('%x', va)) LIKE ? ESCAPE '\\')"
         )
-        params.extend([like, like, like])
+        params.extend([like, like, like, like])
 
     where_sql = " AND ".join(where)
     # Cap the rendered list (same bound as the search above) so a large

@@ -220,16 +220,16 @@ def serve_repo_file(filepath: str) -> Any:
 # 101 ms runs once instead of per request).
 #
 # static_file served these raw: detail.js is on the first-paint critical path
-# at 25 KB (9 KB zstd), and hljs.min.js — fetched when a function's asm pane
-# opens — is 127 KB raw vs 38 KB brotli.  Compressing the whole set saves
-# ~112 KB of transfer.
+# at 27 KB, and hljs.min.js — fetched when a function's asm pane opens — is
+# 127 KB.  Both brotli down to roughly a third of that, and the whole set is
+# ~150 KB raw.
 #
 # Each entry carries a strong ETag next to the body.  CACHE_REVALIDATE alone
 # ("no-cache") forces the browser back on every load, and with no validator to
-# compare, the only answer is to re-send all 55 KB: a repeat visit to the
-# dashboard re-downloaded detail.js (9.5 KB) and every asm pane opening
-# re-downloaded hljs.min.js (45.6 KB) plus its grammars (8.9 KB).  With the
-# ETag those repeat visits answer 304: no body, no decompression, no parse.
+# compare, the only answer is to re-send the whole compressed body: a repeat
+# visit to the dashboard re-downloaded detail.js and every asm pane opening
+# re-downloaded hljs.min.js plus its grammars.  With the ETag those repeat
+# visits answer 304: no body, no decompression, no parse.
 # max-age is deliberately NOT raised — the URLs are not content-hashed, so a
 # package upgrade changes the bytes under the same name and a long-lived
 # freshness lifetime would pin the browser to old JS.  Revalidate cheaply

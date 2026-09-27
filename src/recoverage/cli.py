@@ -474,11 +474,14 @@ def serve(
 ) -> None:
     """Start the recoverage dashboard server.
 
-    Every flag also reads a RECOVERAGE_* environment variable, used as its
-    default: RECOVERAGE_PORT, RECOVERAGE_BIND, RECOVERAGE_ALLOW_REMOTE,
+    Every setting flag also reads a RECOVERAGE_* environment variable, used as
+    its default: RECOVERAGE_PORT, RECOVERAGE_BIND, RECOVERAGE_ALLOW_REMOTE,
     RECOVERAGE_CORS, RECOVERAGE_CORS_ORIGIN, RECOVERAGE_TOKEN and
     RECOVERAGE_DB (an explicit coverage.db path, instead of resolving
-    rebrew-project.toml from the working directory). A flag always wins over
+    rebrew-project.toml from the working directory).  ``--no-open`` and
+    ``--regen`` are the two flags with no variable, because a service that
+    wants the browser or a rebuild asks for it in argv, not in the
+    environment.  A flag always wins over
     the environment; an unrecognised RECOVERAGE_* name is a startup error, and
     so is a value that is not a valid port, boolean or non-empty string.
     """

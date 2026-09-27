@@ -196,7 +196,7 @@ def _cache_data_insert(
 
 # Memoized /stats results, keyed by the WAL-aware DB snapshot + target.
 # handle_api_stats re-runs the full-cells-table SECTION_STATS_SQL aggregation
-# plus four more queries on every request; a polling consumer must not re-pay
+# plus four more queries on every miss; a polling consumer must not re-pay
 # that scan while the DB is unchanged.  Same self-invalidation contract as the
 # /data payload memo: a rebuild changes the snapshot, so stale entries miss.
 # Lives HERE, not in server._section_stats, because only this module knows
@@ -1285,15 +1285,18 @@ def handle_api_asm(target: str) -> bytes | Any:
 
     raw_va = va_str.strip()
     try:
-        # Decimal size (base-0 with no prefix), matching /bytes — the two
-        # endpoints must not interpret the same ?size= differently.
+        # Base-0 size, the same parse /bytes uses for offset and size: the two
+        # endpoints must not interpret the same ?size= differently.  Base 0
+        # accepts a 0x/0o/0b prefix, so "0x40" is 64 here exactly as it is on
+        # /bytes, and the error message below says so.
         size = min(max(int(size_str.strip(), 0), 0), _MAX_SLICE_SIZE)
     except ValueError:
         return _json_err(
             400,
             {
                 "error": "invalid va or size",
-                "detail": f"size {size_str!r} is not a decimal byte count (1..{_MAX_SLICE_SIZE})",
+                "detail": f"size {size_str!r} is not a byte count "
+                "(decimal, or 0x-prefixed hexadecimal)",
             },
         )
 

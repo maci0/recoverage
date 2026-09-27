@@ -69,6 +69,11 @@ module ships in the published package. See *Breaking*.
   deferred transaction per statement, so a rebuild committing mid-request
   paired one build's section rows with the next build's cells. Each read now
   runs inside a pinned snapshot.
+- **A Potato Mode address copied out of a table now matches in the search
+  box.** The address columns print VAs zero-padded to eight digits
+  (`0x00401000`) but the search predicate compared against the unpadded
+  `0x401000`, so pasting a padded address found nothing. Both the Functions
+  view and the grid's global dimming set match either spelling.
 - **`--no-color`, `NO_COLOR`, and `TERM=dumb` are honored.** Colorized errors,
   warnings, and `check` verdicts carried ANSI escapes on a terminal even with
   `NO_COLOR` set, because click only strips escapes from a non-TTY stream. The

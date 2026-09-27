@@ -1347,6 +1347,67 @@ class TestSearchLimit:
             conn.close()
 
 
+class TestSearchAddressSpelling:
+    """Both address spellings _format_va can print must match.
+
+    _format_va pads to eight digits (``0x00401000``) while printf('%x') does
+    not (``0x401000``), so matching only one of them means an address copied
+    out of a rendered VA column silently matches nothing."""
+
+    @staticmethod
+    def _cursor() -> tuple[sqlite3.Connection, sqlite3.Cursor]:
+        conn = sqlite3.connect(":memory:")
+        c = conn.cursor()
+        c.execute(
+            "CREATE TABLE functions (target TEXT, name TEXT, va INTEGER,"
+            " vaStart TEXT DEFAULT '', symbol TEXT DEFAULT '', size INTEGER DEFAULT 4,"
+            " status TEXT DEFAULT 'exact', module TEXT DEFAULT '',"
+            " markerType TEXT DEFAULT 'FUNCTION')"
+        )
+        c.execute(
+            "CREATE TABLE globals (target TEXT, va INTEGER, name TEXT,"
+            " decl TEXT DEFAULT '', files TEXT DEFAULT '[]',"
+            " module TEXT DEFAULT '', size INTEGER DEFAULT 4)"
+        )
+        c.execute(
+            "INSERT INTO functions (target, name, va) VALUES ('T', 'sub_401000', ?)", (0x401000,)
+        )
+        c.execute("INSERT INTO globals (target, va, name) VALUES ('T', ?, 'g_cfg')", (0x402000,))
+        return conn, c
+
+    @pytest.mark.parametrize("query", ["0x00401000", "0x401000"])
+    def test_padded_and_bare_function_va_both_match(self, query: str) -> None:
+        """The Functions view prints the VA through _format_va, so pasting that
+        same string back into its search box must find the row."""
+        from recoverage.potato import _render_function_list
+
+        conn, c = self._cursor()
+        try:
+            assert "sub_401000" in _render_function_list(c, "T", ".text", query, "va", "")
+        finally:
+            conn.close()
+
+    @pytest.mark.parametrize("query", ["0x00402000", "0x402000"])
+    def test_padded_and_bare_global_va_both_match(self, query: str) -> None:
+        from recoverage.potato import _search_functions
+
+        conn, c = self._cursor()
+        try:
+            assert _search_functions(c, "T", query) == {"g_cfg"}
+        finally:
+            conn.close()
+
+    @pytest.mark.parametrize("query", ["0x00403000", "0x403000"])
+    def test_a_different_address_does_not_match(self, query: str) -> None:
+        from recoverage.potato import _search_functions
+
+        conn, c = self._cursor()
+        try:
+            assert _search_functions(c, "T", query) == set()
+        finally:
+            conn.close()
+
+
 class TestCellsCacheInvalidation:
     """The grid memo must invalidate on a WAL-committed rebuild.
 
