@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import contextlib
-import email.message
 import enum
 import json
 import logging
@@ -18,15 +17,13 @@ import threading
 import webbrowser
 from collections.abc import Iterator
 from pathlib import Path
-from socketserver import ThreadingMixIn
-from typing import IO, Any, NamedTuple, NoReturn, cast
-from wsgiref.simple_server import ServerHandler, WSGIRequestHandler, WSGIServer
-from wsgiref.types import InputStream, WSGIApplication
+from typing import Any, NamedTuple, NoReturn
 
 import typer
 
 from recoverage import config
 from recoverage._paths import _db_path
+from recoverage.devserver import _KeepAliveRequestHandler, _ThreadingWSGIServer
 
 app = typer.Typer(
     help="Coverage dashboard for binary-matching decompilation projects.",
@@ -76,17 +73,6 @@ def _secho(message: str, **styles: Any) -> None:
     typer.secho(message, color=False if _color_off() else None, **styles)
 
 
-class _ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
-    """Threaded WSGI server for the dashboard.
-
-    wsgiref's stock WSGIServer handles one connection at a time; the SSE
-    /api/events stream stays open indefinitely, which would stall every other
-    request.  ThreadingMixIn gives each connection its own daemon thread.
-    """
-
-    daemon_threads = True
-
-
 class _ThreadingWSGIServer6(_ThreadingWSGIServer):
     """The same server on an IPv6 socket.
 
@@ -123,34 +109,6 @@ def _server_class_for(bind: str) -> type[_ThreadingWSGIServer]:
     return _ThreadingWSGIServer
 
 
-# Hard deadline for every socket operation on a client connection (the request
-# read and each response write).  Without it a half-open TCP peer (crashed
-# laptop, dropped NAT mapping) or an SSE client that stops reading pins its
-# handler thread forever: ThreadingMixIn caps neither threads nor connections,
-# so wedged peers silently accumulate until process exit.  With the deadline,
-# socket.timeout unwinds the stalled op and the thread exits, releasing the
-# connection and (for /api/events) its bounded SSE slot.  Generous multiples
-# of the 15s SSE heartbeat (_SSE_HEARTBEAT_SECONDS) so only a genuinely
-# stalled peer can trip it — healthy streams write far more often.
-_CLIENT_SOCKET_TIMEOUT_SECONDS = 120
-
-#: How long an idle keep-alive connection waits for its next request before the
-#: handler thread gives up and the socket closes.  The per-connection deadline
-#: above covers a request in flight; a browser holding a connection open
-#: between loads must not pin a thread for that whole deadline, and
-#: ThreadingMixIn starts a thread per connection.  15 s is longer than any
-#: real page load's asset burst, so a connection survives a slow load and dies
-#: soon after the tab goes quiet.
-_KEEPALIVE_IDLE_SECONDS = 15
-
-#: Status codes whose response carries no body by definition (RFC 9110 15), so a
-#: missing Content-Length on one is correct and the connection stays usable.
-#: Strings, because the wire status line is the only place they are read.
-_BODYLESS_STATUS_CODES = frozenset(("204", "304"))
-
-#: Headers that frame a body without ending the connection (RFC 9112 6).
-_SELF_DELIMITING_HEADERS = frozenset(("content-length", "transfer-encoding"))
-
 #: Log line layout, and the stamp it carries.  The date and numeric offset are
 #: load-bearing, not decoration: a bare "%H:%M:%S" cannot place a line on a
 #: timeline, so 23:59 and 00:01 read as the same moment and a log spanning a
@@ -162,130 +120,6 @@ _SELF_DELIMITING_HEADERS = frozenset(("content-length", "transfer-encoding"))
 #: it; those read `recoverage.clock.monotonic()`.
 LOG_FORMAT = "%(asctime)s %(levelname)s [%(name)s] [rid=%(request_id)s] %(message)s"
 LOG_DATEFMT = "%Y-%m-%d %H:%M:%S%z"
-
-
-class _QuietTimeoutRequestHandler(WSGIRequestHandler):
-    """wsgiref request handler with the per-connection deadline above.
-
-    Also carries bottle's FixedHandler behavior (peer address without reverse
-    DNS; no per-request logging): passing ``handler_class`` to Bottle replaces
-    FixedHandler wholesale, so both overrides must be reproduced here.
-    ``serve`` always runs with quiet=True.
-    """
-
-    timeout = _CLIENT_SOCKET_TIMEOUT_SECONDS
-
-    def address_string(self) -> str:
-        return self.client_address[0]
-
-    def log_request(self, code: int | str = "-", size: int | str = "-") -> None:
-        pass
-
-
-class _KeepAliveRequestHandler(_QuietTimeoutRequestHandler):
-    """Handler that serves every request on a connection, not just the first.
-
-    wsgiref's stock handler is HTTP/1.0 and its ``handle`` reads one request
-    line and returns, so the connection closed after every response: loading
-    the dashboard opened a fresh TCP connection for the shell, ``detail.js``,
-    ``/api/targets`` and the data payload, and paid a handshake for each.  The
-    loop below is stock ``BaseHTTPRequestHandler.handle`` behaviour that
-    wsgiref narrowed to a single request; restoring it is what makes
-    ``protocol_version = "HTTP/1.1"`` mean anything.
-
-    Two framing rules keep HTTP/1.1 honest:
-
-    * A response that names no length and no transfer encoding (the streamed
-      ``/api/events``, whose body ends when the stream does) is sent with
-      ``Connection: close``.  Under HTTP/1.1 a client would otherwise read
-      until the connection dropped, and every response after it on that
-      socket would be misframed.
-    * A connection left idle between requests falls back to the short idle
-      deadline rather than the full per-request one, so an open browser tab
-      does not hold a handler thread for two minutes.
-    """
-
-    protocol_version = "HTTP/1.1"
-
-    # wsgiref assigns this in HTTPServer.__init__; the stub types it as the
-    # BaseServer base, which has no get_app().
-    server: WSGIServer
-
-    def handle(self) -> None:
-        self.raw_requestline = self.rfile.readline(65537)
-        while self.raw_requestline:
-            if len(self.raw_requestline) > 65536:
-                self.requestline = ""
-                self.request_version = ""
-                self.command = ""
-                self.send_error(414)
-                return
-            if not self.parse_request():
-                return
-            # The request is in flight now, so the full per-connection
-            # deadline applies to its reads and writes again.
-            self.connection.settimeout(_CLIENT_SOCKET_TIMEOUT_SECONDS)
-            self._run_wsgi()
-            if self.close_connection:
-                return
-            self.connection.settimeout(_KEEPALIVE_IDLE_SECONDS)
-            self.raw_requestline = self.rfile.readline(65537)
-
-    def _run_wsgi(self) -> None:
-        # rfile/wfile/get_stderr are binary streams at runtime, which is what
-        # ServerHandler wants; the stubs name their concrete socket classes,
-        # which do not spell the wsgiref ErrorStream protocols structurally.
-        handler = _KeepAliveServerHandler(
-            cast("InputStream", self.rfile),
-            cast("IO[bytes]", self.wfile),
-            self.get_stderr(),
-            self.get_environ(),
-            multithread=True,
-        )
-        handler.request_handler = self  # backpointer for logging
-        # WSGIServer.application is optional in the stubs; the instance is
-        # built with the app below, so it is never None here.
-        handler.run(cast("WSGIApplication", self.server.application))
-
-
-class _KeepAliveServerHandler(ServerHandler):
-    """The HTTP/1.1 half of keep-alive: the status line and the framing rule.
-
-    wsgiref writes the preamble itself (``HTTP/`` + :attr:`http_version`), not
-    through the request handler, so announcing 1.1 belongs here.
-
-    A response that carries neither Content-Length nor Transfer-Encoding ends
-    only when the connection does (RFC 9112 6.3), which under HTTP/1.1 would
-    leave the client reading into whatever the next response put on the
-    socket.  The streamed ``/api/events`` is exactly that response, and
-    nothing else here is: bottle sets Content-Length for every body it
-    returns.  So an unframed response gets ``Connection: close``, which is
-    what a client has to do with it either way.
-    """
-
-    http_version = "1.1"
-
-    # wsgiref's BaseHandler.run()/parse_request() populate all four; the stubs
-    # declare none of them, so the framing checks below would read them as
-    # attributes the class does not have.
-    request_handler: _KeepAliveRequestHandler
-    headers: email.message.Message
-    environ: dict[str, str]
-    status: str
-
-    def send_headers(self) -> None:
-        if not self._response_is_framed():
-            self.request_handler.close_connection = True
-            self.headers["Connection"] = "close"
-        super().send_headers()
-
-    def _response_is_framed(self) -> bool:
-        # wsgiref's Headers.__contains__ is case-insensitive; iterating it is not.
-        if any(name in self.headers for name in _SELF_DELIMITING_HEADERS):
-            return True
-        if self.environ.get("REQUEST_METHOD") == "HEAD":
-            return True
-        return self.status[:3] in _BODYLESS_STATUS_CODES
 
 
 def _version_callback(value: bool) -> None:

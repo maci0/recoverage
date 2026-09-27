@@ -23,6 +23,7 @@ from typing import Any
 
 import pytest
 
+from recoverage import devserver
 from recoverage.cli import (
     _BROWSER_OPEN_TIMEOUT,
     _open_and_reap,
@@ -337,10 +338,9 @@ class TestClientConnectionDeadline:
         """wsgiref's stock handler has ``timeout = None`` (unbounded).  The
         deadline is the whole guarantee, so pin it on the class serve() runs.
         """
-        import recoverage.cli as cli
         from recoverage.api import _SSE_HEARTBEAT_SECONDS
 
-        timeout = cli._QuietTimeoutRequestHandler.timeout
+        timeout = devserver._QuietTimeoutRequestHandler.timeout
         assert isinstance(timeout, (int, float)), "no socket deadline on the handler"
         assert 0 < timeout <= _SSE_HEARTBEAT_SECONDS * 10, (
             f"deadline {timeout}s must be bounded and well clear of the SSE heartbeat"
@@ -350,15 +350,17 @@ class TestClientConnectionDeadline:
         import socket
         import threading
 
-        import recoverage.cli as cli
-
         # Drive the PRODUCTION handler, shortened only in the deadline the
         # test would otherwise have to wait 120 s for.  A private stub
         # handler would pass here even with the deadline removed from serve.
-        monkeypatch.setattr(cli._QuietTimeoutRequestHandler, "timeout", 0.5)
-        monkeypatch.setattr(cli._QuietTimeoutRequestHandler, "log_message", lambda *a, **k: None)
+        monkeypatch.setattr(devserver._QuietTimeoutRequestHandler, "timeout", 0.5)
+        monkeypatch.setattr(
+            devserver._QuietTimeoutRequestHandler, "log_message", lambda *a, **k: None
+        )
 
-        server = cli._ThreadingWSGIServer(("127.0.0.1", 0), cli._QuietTimeoutRequestHandler)
+        server = devserver._ThreadingWSGIServer(
+            ("127.0.0.1", 0), devserver._QuietTimeoutRequestHandler
+        )
         # block_on_close=False keeps a regressed (wedged) handler from turning
         # teardown into a hang; daemon threads die with the test process.
         server.block_on_close = False

@@ -1653,13 +1653,13 @@ class TestThreadingServer:
         from socketserver import ThreadingMixIn
         from wsgiref.simple_server import WSGIServer
 
-        from recoverage.cli import _ThreadingWSGIServer
+        from recoverage.devserver import _ThreadingWSGIServer
 
         assert issubclass(_ThreadingWSGIServer, ThreadingMixIn)
         assert issubclass(_ThreadingWSGIServer, WSGIServer)
 
     def test_threading_server_daemon_threads(self) -> None:
-        from recoverage.cli import _ThreadingWSGIServer
+        from recoverage.devserver import _ThreadingWSGIServer
 
         assert _ThreadingWSGIServer.daemon_threads is True
 

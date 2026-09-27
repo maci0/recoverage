@@ -23,7 +23,7 @@ import threading
 import unicodedata
 import uuid
 from collections import deque
-from collections.abc import Iterator, Sequence
+from collections.abc import Collection, Iterator, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
@@ -511,6 +511,69 @@ _SECTION_STATS_FULL_SQL = """
 """
 
 
+def _rows_or_absent(c: sqlite3.Cursor, sql: str, params: tuple[Any, ...]) -> list[sqlite3.Row]:
+    """Run *sql*, treating a missing schema object as an empty result.
+
+    Every degrade-on-older-schema read goes through this, so "this database
+    predates the materialized table" stays narrower than "this database could
+    not be read": a locked or truncated file raises on to the 503 contract
+    instead of answering with cells-derived rows and no signal.
+    """
+    try:
+        c.execute(sql, params)
+        return c.fetchall()
+    except sqlite3.OperationalError as exc:
+        if not _is_absent_object(exc):
+            raise
+        return []
+
+
+def section_bucket_rows(
+    c: sqlite3.Cursor,
+    target: str,
+    *,
+    projection: str = "*",
+    expected: Collection[str] = (),
+) -> Iterator[sqlite3.Row]:
+    """Per-section bucket rows for *target*: the materialized cache where it
+    covers, `cells` for the rest.
+
+    ONE reader for every section_cell_stats consumer, because the policy is
+    three rules that had been restated per caller and drifted: prefer the
+    materialized cache, re-aggregate a section it omits from `cells`, and
+    treat an absent cache as an empty one.
+
+    *projection* is the column list a caller reads.  ``*`` is the cache's full
+    row (``_cell_bucket_row`` needs all eleven buckets); a caller that renders
+    a subset may name just those columns, so a hand-made cache carrying only
+    them still serves.  *expected* is the caller's own section set, which is
+    what "the cache omits a section" is measured against: `/stats` knows the
+    sections `cells` has, the Potato map header the sections it renders.
+
+    The extra query runs only when a section is actually missing, so the
+    complete-cache path is unchanged.
+    """
+    rows = _rows_or_absent(
+        c, f"SELECT {projection} FROM section_cell_stats WHERE target = ?", (target,)
+    )
+    if not rows:
+        return iter(_rows_or_absent(c, _SECTION_STATS_FULL_SQL, (target,)))
+    covered = {row["section_name"] for row in rows}
+    gap = {name for name in expected if name not in covered}
+    if not gap:
+        return iter(rows)
+    return iter(
+        [
+            *rows,
+            *(
+                r
+                for r in _rows_or_absent(c, _SECTION_STATS_FULL_SQL, (target,))
+                if r["section_name"] in gap
+            ),
+        ]
+    )
+
+
 def _per_section_buckets(
     c: sqlite3.Cursor, target: str, cell_side: dict[str, sqlite3.Row]
 ) -> Iterator[tuple[str, dict[str, Any], int, int]]:
@@ -531,57 +594,24 @@ def _per_section_buckets(
     'exact'-only count, so a database carrying VERIFIED cells reported a total
     its buckets could not sum to, and the same DB answered two different stats
     depending on whether build_db had run.
+
+    Which rows to read is :func:`section_bucket_rows`, shared with the Potato
+    map header; the byte sums are this caller's own, because no materialized
+    column carries them.
     """
-    try:
-        c.execute(_SECTION_BUCKETS_SQL, (target,))
-        rows = c.fetchall()
-    except sqlite3.OperationalError as exc:
-        # A pre-v7 database has no section_cell_stats; the live path below is
-        # what keeps it serving.  A database that could not be READ takes the
-        # same branch if the guard is dropped, answering with cells-derived
-        # buckets and no signal, so it goes to the 503 contract instead.
-        if not _is_absent_object(exc):
-            raise
-        rows = []
-    if rows:
-        covered: set[str] = set()
-        for row in rows:
-            name = row["section_name"]
-            covered.add(name)
-            side = cell_side.get(name)
-            yield (
-                name,
-                _cell_bucket_row(row),
-                (side["covered_bytes"] if side is not None else 0) or 0,
-                (side["total_bytes"] if side is not None else 0) or 0,
-            )
-        # A section_cell_stats that is present but PARTIAL (a scoped rebuild, a
-        # hand-made database) must not drop the sections it omits: the cells
-        # scan already in *cell_side* proves they exist, and a section missing
-        # from /stats reports no coverage at all.  Re-aggregate the gap from
-        # `cells`, which is the source of truth, so the response covers the same
-        # sections either way.
-        gap = [name for name in cell_side if name not in covered]
-        if gap:
-            c.execute(_SECTION_STATS_FULL_SQL, (target,))
-            for row in c.fetchall():
-                if row["section_name"] not in gap:
-                    continue
-                yield (
-                    row["section_name"],
-                    _cell_bucket_row(row),
-                    cell_side[row["section_name"]]["covered_bytes"] or 0,
-                    cell_side[row["section_name"]]["total_bytes"] or 0,
-                )
-        return
-    c.execute(_SECTION_STATS_FULL_SQL, (target,))
-    for row in c.fetchall():
-        yield (
-            row["section_name"],
-            _cell_bucket_row(row),
-            row["covered_bytes"] or 0,
-            row["total_bytes"] or 0,
-        )
+    for row in section_bucket_rows(c, target, expected=cell_side):
+        name = row["section_name"]
+        side = cell_side.get(name)
+        # *cell_side* is the byte source on every path.  A live row carries its
+        # own byte sums too, which is what a cached section is measured against
+        # when the caller read no cells side for it.
+        source = side if side is not None else row
+        # Row membership is by value, so `.keys()` is the spelling; see
+        # _cell_bucket_row for why the bare `in` would read as absent.
+        has_bytes = "covered_bytes" in source.keys()  # noqa: SIM118
+        covered = (source["covered_bytes"] if has_bytes else 0) or 0
+        total = (source["total_bytes"] if has_bytes else 0) or 0
+        yield (name, _cell_bucket_row(row), covered, total)
 
 
 def _cell_bucket_row(row: sqlite3.Row) -> dict[str, Any]:

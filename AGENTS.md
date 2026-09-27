@@ -65,6 +65,7 @@ recoverage/
     ├── __main__.py          # python -m recoverage
     ├── _paths.py            # DB path resolution (RECOVERAGE_DB, rebrew-project.toml db_dir)
     ├── config.py            # RECOVERAGE_* env: flag defaults, validation, startup banner
+    ├── devserver.py         # WSGI serving stack serve() binds: threading server, keep-alive handlers
     ├── clock.py             # The one time source (monotonic / wall-clock) the request path reads
     ├── metrics.py           # In-process counters: RED requests (REQUESTS) + regen (REGEN), read by /api/health
     ├── cli.py               # Typer CLI entry point (serve, stats, export, check, regen, open)
@@ -289,9 +290,12 @@ The release policy is not written down anywhere else, so it is stated here and
    - A cache that is present but covers only SOME of the target's sections is
      the third case, and the one a presence check misses: the reader fills the
      gap from `cells` rather than dropping the section
-     (`server._cells_json_rows`'s `expected_sections`, `server._per_section_buckets`,
-     `potato._compute_section_stats`). A dropped section reports no coverage at
-     all, and a dropped cell payload paints a whole section as `none` bytes.
+     (`server._cells_json_rows`'s `expected_sections`, `server.section_bucket_rows`,
+     which every `section_cell_stats` reader goes through: `/stats` via
+     `_per_section_buckets` and the Potato map header via `_compute_section_stats`,
+     each passing the section set it already holds). A dropped section reports no
+     coverage at all, and a dropped cell payload paints a whole section as `none`
+     bytes.
    - **Scope every such fallback to a MISSING schema object, never to a failed
      read**: route it through `server._is_absent_object`, and let anything else
      propagate to the 503 `db_unavailable` contract. Catching the whole

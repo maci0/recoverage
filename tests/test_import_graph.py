@@ -33,6 +33,7 @@ _LEVELS: dict[str, int] = {
     "__init__": 0,
     "clock": 0,
     "config": 0,
+    "devserver": 0,
     "metrics": 0,
     "regen": 0,
     "_paths": 1,

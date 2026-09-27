@@ -15,7 +15,7 @@ import pytest
 from conftest import HAS_DB
 from typer.testing import CliRunner
 
-from recoverage import cli
+from recoverage import cli, devserver
 from recoverage.cli import app
 
 runner = CliRunner()
@@ -889,7 +889,6 @@ class TestServeServerWiring:
         neither threads nor connections; without the handler's timeout, a
         silent peer (crashed laptop, dropped NAT mapping) or an SSE client
         that stops reading pins its handler thread forever."""
-        import recoverage.cli as cli
         from recoverage.server import app as server_app
 
         captured: dict[str, Any] = {}
@@ -905,12 +904,12 @@ class TestServeServerWiring:
         monkeypatch.setattr(type(server_app), "run", capture_run)
         result = runner.invoke(app, ["serve", "--no-open", "--port", "8123"])
         assert result.exit_code == 0
-        assert captured["server_class"] is cli._ThreadingWSGIServer
+        assert captured["server_class"] is devserver._ThreadingWSGIServer
         assert captured["server_class"].daemon_threads is True
-        assert captured["handler_class"] is cli._KeepAliveRequestHandler
+        assert captured["handler_class"] is devserver._KeepAliveRequestHandler
         handler = captured["handler_class"]
-        assert issubclass(handler, cli._QuietTimeoutRequestHandler)
-        assert handler.timeout == cli._CLIENT_SOCKET_TIMEOUT_SECONDS > 0
+        assert issubclass(handler, devserver._QuietTimeoutRequestHandler)
+        assert handler.timeout == devserver._CLIENT_SOCKET_TIMEOUT_SECONDS > 0
 
     def test_served_over_http_1_1_so_the_browser_reuses_the_connection(self) -> None:
         """The handler must speak HTTP/1.1.
@@ -921,10 +920,9 @@ class TestServeServerWiring:
         1.1, and the preamble comes from the ServerHandler subclass, not the
         request handler, so both are pinned here.
         """
-        import recoverage.cli as cli
 
-        assert cli._KeepAliveRequestHandler.protocol_version == "HTTP/1.1"
-        assert cli._KeepAliveServerHandler.http_version == "1.1"
+        assert devserver._KeepAliveRequestHandler.protocol_version == "HTTP/1.1"
+        assert devserver._KeepAliveServerHandler.http_version == "1.1"
 
 
 class TestResponseFraming:
@@ -940,9 +938,7 @@ class TestResponseFraming:
     def _framed(headers: dict[str, str], status: str = "200 OK", method: str = "GET") -> bool:
         from wsgiref.headers import Headers
 
-        import recoverage.cli as cli
-
-        handler = cli._KeepAliveServerHandler.__new__(cli._KeepAliveServerHandler)
+        handler = devserver._KeepAliveServerHandler.__new__(devserver._KeepAliveServerHandler)
         handler.headers = Headers()
         for name, value in headers.items():
             handler.headers[name] = value

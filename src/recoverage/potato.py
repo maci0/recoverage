@@ -31,11 +31,9 @@ from recoverage import __version__
 from recoverage._paths import _db_path
 from recoverage.disasm import HAS_CAPSTONE, get_disassembly
 from recoverage.server import (
-    _SECTION_STATS_FULL_SQL,
     CACHE_NO_STORE,
     CACHE_REVALIDATE,
     NOT_DATA_MARKER_SQL,
-    SECTION_STATS_SQL,
     _cells_json_rows,
     _compressed,
     _escape_like,
@@ -50,7 +48,6 @@ from recoverage.server import (
     _lookup_by_va_or_name,
     _newest_mtime_ns,
     _open_db,
-    _per_section_buckets,
     _snapshot_db_mtime,
     _verify_one_select,
     app,
@@ -61,6 +58,7 @@ from recoverage.server import (
     request,
     resolve_targets,
     response,
+    section_bucket_rows,
     set_auth_cookie,
 )
 
@@ -1398,13 +1396,14 @@ def _section_stats_cached(
     return stats
 
 
-#: The six buckets the Potato map header renders, read from rebrew's
-#: materialized `section_cell_stats`.  A database without that table (or with a
-#: view carrying different column names) falls back to live SQL over `cells`
-#: in :func:`_compute_section_stats`, the same fallback /stats and /data use.
-_POTATO_BUCKETS_SQL = (
-    "SELECT section_name, total_cells, exact_count, reloc_count, "
-    "near_match_count, stub_count, padding_count FROM section_cell_stats WHERE target = ?"
+#: The six buckets the Potato map header renders.  Only these are named, so a
+#: hand-made `section_cell_stats` carrying just them still serves; which rows
+#: to read (the cache, `cells` for a section the cache omits, `cells` outright
+#: when there is no cache) is :func:`server.section_bucket_rows`, the same
+#: reader /stats and /data use.
+_POTATO_BUCKET_COLUMNS = (
+    "section_name, total_cells, exact_count, reloc_count, "
+    "near_match_count, stub_count, padding_count"
 )
 
 
@@ -1421,117 +1420,26 @@ def _compute_section_stats(
     if not isinstance(summary, dict):
         summary = {}
     per_section_stats: dict[str, dict[str, Any]] = {}
-    # The materialized buckets Potato renders, and the live fallback for a
-    # database that has no section_cell_stats at all.  The fallback is the
-    # point: /stats and /data serve such a database (server._per_section_buckets
-    # computes from `cells` when the table is absent), and /potato answering
-    # the same database with the 503 page was a compatibility promise the API
-    # kept and this one surface did not.  Only the six buckets rendered below
-    # are read, so this stays narrower than the server's full row rather than
-    # re-declaring the other seven.
-    try:
-        c.execute(_POTATO_BUCKETS_SQL, (target,))
-        rows = c.fetchall()
-    except sqlite3.OperationalError as exc:
-        # No section_cell_stats at all (the case the fallback below is for), or
-        # a view whose columns do not match.  Either way the buckets are
-        # derived from `cells` below.  A database that could not be read must
-        # not take that branch: /stats and /data answer it 503, and a header
-        # with no per-section stats is not what a caller should have to
-        # interpret.
-        if not _is_absent_object(exc):
-            raise
-        rows = []
-    if rows:
-        buckets_iter = [
-            (
-                row["section_name"],
-                row["total_cells"],
-                row["exact_count"],
-                row["reloc_count"],
-                row["near_match_count"],
-                row["stub_count"],
-                row["padding_count"],
-            )
-            for row in rows
-        ]
-    else:
-        # A cells table too narrow for the live queries (a hand-made fixture,
-        # a foreign DB) has no buckets to report: leave the map header's
-        # per-section stats empty rather than turning the whole page into a
-        # 503, which is what a missing section_cell_stats used to do.
-        try:
-            cell_side: dict[str, sqlite3.Row] = {}
-            c.execute(SECTION_STATS_SQL, (target,))
-            for row in c.fetchall():
-                cell_side[row["section_name"]] = row
-            buckets_iter = [
-                (
-                    name,
-                    buckets["total_cells"],
-                    buckets["exact"],
-                    buckets["reloc"],
-                    buckets["near_match"],
-                    buckets["stub"],
-                    buckets["padding"],
-                )
-                for name, buckets, _covered_bytes, _total_bytes in _per_section_buckets(
-                    c, target, cell_side
-                )
-            ]
-        except sqlite3.OperationalError as exc:
-            # A cells table too narrow for the live aggregation leaves the
-            # header empty rather than 500ing the page; a database that could
-            # not be read does not (see the query above).
-            if not _is_absent_object(exc):
-                raise
-            buckets_iter = []
-
-    for (
-        sec_name_r,
-        s_total,
-        s_exact,
-        s_reloc,
-        s_near_match,
-        s_stub,
-        s_padding,
-    ) in buckets_iter:
-        per_section_stats[sec_name_r] = {
-            "total": s_total,
-            "exact": s_exact,
-            "reloc": s_reloc,
-            "near_match": s_near_match,
-            "stub": s_stub,
-            "padding": s_padding,
-            "pct": _section_pct(summary, sections, sec_name_r),
+    # The buckets come from server.section_bucket_rows, the reader /stats and
+    # /data use: rebrew's materialized section_cell_stats where it covers the
+    # map header's sections, `cells` for the sections it omits and for a
+    # database that has no such table at all.  This surface used to restate all
+    # three rules against its own query, and a `cells` table too narrow for the
+    # live aggregation is left as an empty header rather than a 503, which is
+    # what the shared reader's absent-object guard gives here too.
+    for row in section_bucket_rows(c, target, projection=_POTATO_BUCKET_COLUMNS, expected=sections):
+        name = row["section_name"]
+        if name not in sections:
+            continue
+        per_section_stats[name] = {
+            "total": row["total_cells"],
+            "exact": row["exact_count"],
+            "reloc": row["reloc_count"],
+            "near_match": row["near_match_count"],
+            "stub": row["stub_count"],
+            "padding": row["padding_count"],
+            "pct": _section_pct(summary, sections, name),
         }
-    # A section_cell_stats that is present but covers only some of the target's
-    # sections leaves the rest out of the map header.  Re-aggregate the gap from
-    # `cells`, the source of truth and the same query the /stats endpoint falls
-    # back to, so the header counts the sections /stats does.
-    if set(per_section_stats) != set(sections):
-        # Same guard as the two queries above: a cells table too narrow for the
-        # live aggregation leaves the gap unfilled rather than 500ing the page.
-        try:
-            c.execute(_SECTION_STATS_FULL_SQL, (target,))
-            gap_rows = c.fetchall()
-        except sqlite3.OperationalError as exc:
-            if not _is_absent_object(exc):
-                raise
-            gap_rows = []
-        for row in gap_rows:
-            sec_name_r = row["section_name"]
-            if sec_name_r in per_section_stats or sec_name_r not in sections:
-                continue
-            per_section_stats[sec_name_r] = {
-                "total": row["total_cells"],
-                "exact": row["exact_count"],
-                "reloc": row["reloc_count"],
-                "near_match": row["near_match_count"],
-                "stub": row["stub_count"],
-                "padding": row["padding_count"],
-                "pct": _section_pct(summary, sections, sec_name_r),
-            }
     return per_section_stats
 
 

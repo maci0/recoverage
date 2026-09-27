@@ -1835,6 +1835,123 @@ class TestPartialDerivedTables:
         assert calls == []
 
 
+class TestSectionBucketRowsIsTheOneSectionCellStatsReader:
+    """``section_bucket_rows`` carries the cache-first policy for every reader.
+
+    /stats and the Potato map header each used to restate it against their own
+    query, so a rule that changed reached one surface and not the other.  The
+    three rules: the materialized cache wins, a section it omits is
+    re-aggregated from ``cells``, and a database with no cache is read from
+    ``cells`` outright.
+    """
+
+    SECTIONS = (".text", ".data")
+
+    #: The full rebrew row: every column ``_cell_bucket_row`` subscripts.
+    FULL_CACHE_DDL = (
+        "CREATE TABLE section_cell_stats (target TEXT, section_name TEXT,"
+        " total_cells INT, exact_count INT, reloc_count INT, near_match_count INT,"
+        " stub_count INT, padding_count INT, data_count INT, thunk_count INT,"
+        " none_count INT, proven_count INT, size_mismatch_count INT,"
+        " other_count INT)"
+    )
+    #: A hand-made cache carrying only the six buckets the Potato header
+    #: renders.
+    NARROW_CACHE_DDL = (
+        "CREATE TABLE section_cell_stats (target TEXT, section_name TEXT,"
+        " total_cells INT, exact_count INT, reloc_count INT, near_match_count INT,"
+        " stub_count INT, padding_count INT)"
+    )
+    NARROW_PROJECTION = (
+        "section_name, total_cells, exact_count, reloc_count,"
+        " near_match_count, stub_count, padding_count"
+    )
+
+    def _db(self, *, cache_ddl: str, cached: tuple[str, ...]) -> sqlite3.Connection:
+        """A two-section target in `cells`, with a cache covering *cached*."""
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        c = conn.cursor()
+        c.execute(
+            "CREATE TABLE cells (target TEXT, section_name TEXT, start INT, end INT, state TEXT)"
+        )
+        c.executemany(
+            "INSERT INTO cells (target, section_name, start, end, state)"
+            " VALUES ('T', ?, 0, 1, 'exact')",
+            [(name,) for name in self.SECTIONS],
+        )
+        if cache_ddl:
+            c.execute(cache_ddl)
+            width = len(c.execute("SELECT * FROM section_cell_stats").description)
+            for name in cached:
+                row = ["T", name] + [1, 1] + [0] * (width - 4)
+                c.execute(f"INSERT INTO section_cell_stats VALUES ({','.join('?' * width)})", row)
+        return conn
+
+    def test_complete_cache_answers_from_the_cache_alone(self) -> None:
+        import recoverage.server as srv
+
+        conn = self._db(cache_ddl=self.FULL_CACHE_DDL, cached=self.SECTIONS)
+        seen: list[str] = []
+        conn.set_trace_callback(seen.append)
+        rows = {
+            r["section_name"]: r["total_cells"]
+            for r in srv.section_bucket_rows(conn.cursor(), "T", expected=self.SECTIONS)
+        }
+        conn.close()
+        assert rows == {".text": 1, ".data": 1}
+        assert [s for s in seen if "FROM cells" in s] == []
+
+    def test_partial_cache_fills_the_gap_from_cells(self) -> None:
+        import recoverage.server as srv
+
+        conn = self._db(cache_ddl=self.FULL_CACHE_DDL, cached=(".text",))
+        rows = {
+            r["section_name"]: srv._cell_bucket_row(r)
+            for r in srv.section_bucket_rows(conn.cursor(), "T", expected=self.SECTIONS)
+        }
+        conn.close()
+        assert set(rows) == set(self.SECTIONS)
+        # The gap came from `cells` and reads through the same bucket mapping,
+        # so the two sources cannot report different totals for one section.
+        assert rows[".data"]["total_cells"] == 1
+        assert rows[".data"]["exact"] == 1
+
+    def test_no_cache_answers_from_cells(self) -> None:
+        import recoverage.server as srv
+
+        conn = self._db(cache_ddl="", cached=())
+        rows = {
+            r["section_name"]: r["total_cells"]
+            for r in srv.section_bucket_rows(conn.cursor(), "T", expected=self.SECTIONS)
+        }
+        conn.close()
+        assert rows == {".text": 1, ".data": 1}
+
+    def test_projection_reads_only_the_named_columns(self) -> None:
+        """A caller that renders a subset names its columns, and only those.
+
+        The Potato map header renders six of the eleven buckets, so its
+        projection names six.  A hand-made cache carrying only those still
+        serves: the full row is not required from a reader that does not
+        render it.
+        """
+        import recoverage.server as srv
+
+        conn = self._db(cache_ddl=self.NARROW_CACHE_DDL, cached=self.SECTIONS)
+        rows = {
+            r["section_name"]: r["stub_count"]
+            for r in srv.section_bucket_rows(
+                conn.cursor(),
+                "T",
+                projection=self.NARROW_PROJECTION,
+                expected=self.SECTIONS,
+            )
+        }
+        conn.close()
+        assert rows == {".text": 0, ".data": 0}
+
+
 class TestAbsentObjectIsNotUnreadableDatabase:
     """A "no such table" fallback must not cover an unreadable database.
 
@@ -1871,6 +1988,12 @@ class TestAbsentObjectIsNotUnreadableDatabase:
 
         with pytest.raises(sqlite3.Error):
             srv._per_section_buckets(self._unreadable(), "T", {})
+
+    def test_bucket_rows_propagates_an_unreadable_database(self) -> None:
+        import recoverage.server as srv
+
+        with pytest.raises(sqlite3.Error):
+            list(srv.section_bucket_rows(self._unreadable(), "T"))
 
     def test_table_columns_propagates_an_unreadable_database(self) -> None:
         """The optional-column probe must not answer "no columns" for a broken DB.
