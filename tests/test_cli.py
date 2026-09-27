@@ -639,6 +639,32 @@ class TestServePortRange:
         assert result.exit_code != 0
 
 
+class TestOpenPort:
+    """`open` targets the port `serve` would use, so the env reaches it too."""
+
+    def test_env_port_is_the_default(self, monkeypatch: Any) -> None:
+        opened: list[str] = []
+        monkeypatch.setenv("RECOVERAGE_PORT", "9100")
+        monkeypatch.setattr("recoverage.cli.open_browser", lambda url: opened.append(url))
+        result = runner.invoke(app, ["open"])
+        assert result.exit_code == 0
+        assert opened == ["http://127.0.0.1:9100"]
+
+    def test_flag_beats_env(self, monkeypatch: Any) -> None:
+        opened: list[str] = []
+        monkeypatch.setenv("RECOVERAGE_PORT", "9100")
+        monkeypatch.setattr("recoverage.cli.open_browser", lambda url: opened.append(url))
+        result = runner.invoke(app, ["open", "--port", "9200"])
+        assert result.exit_code == 0
+        assert opened == ["http://127.0.0.1:9200"]
+
+    def test_invalid_env_port_exits_2(self, monkeypatch: Any) -> None:
+        monkeypatch.setenv("RECOVERAGE_PORT", "not-a-port")
+        result = runner.invoke(app, ["open"])
+        assert result.exit_code == 2
+        assert "RECOVERAGE_PORT" in result.output
+
+
 class TestServeServerWiring:
     def test_run_gets_threaded_server_and_bounded_handler(self, monkeypatch: Any) -> None:
         """serve must wire the threaded server class AND the request handler

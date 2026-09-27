@@ -20,6 +20,15 @@ module ships in the published package. See *Breaking*.
   validated at startup: a bad port, boolean or empty value, and a misspelled
   `RECOVERAGE_*` name, each exit 2 naming the variable. The resolved settings
   are printed on startup, the token as `token=set`.
+- **`--log-level` and `RECOVERAGE_LOG_LEVEL` set the server's log threshold.**
+  Previously the level was hardcoded to `INFO`, so a deployment could not turn
+  the per-request chatter down or the detail up without a code change. Accepts
+  a `logging` level name, case-insensitively, or its number; an unknown name
+  exits 2 naming the variable instead of silently leaving the logger at
+  `WARNING`. The resolved level is printed with the other startup settings.
+- **`recoverage open` reads `RECOVERAGE_PORT`.** It defaulted to `8001` while
+  `serve` read the environment, so a deployment off the default port had to be
+  repeated in every `open` invocation. The flag still wins.
 
 ### Breaking
 

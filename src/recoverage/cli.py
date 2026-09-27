@@ -30,7 +30,7 @@ app = typer.Typer(
     rich_markup_mode="rich",
     epilog=(
         "[bold]Examples:[/bold]\n\n"
-        "  recoverage serve [dim]# start the dashboard (port 8001)[/dim]\n\n"
+        f"  recoverage serve [dim]# start the dashboard (port {config.DEFAULT_PORT})[/dim]\n\n"
         "  recoverage serve --port 3000 [dim]# custom port[/dim]\n\n"
         "  recoverage stats --json [dim]# machine-readable statistics[/dim]\n\n"
         "  recoverage export --format csv > coverage.csv [dim]# export as CSV[/dim]\n\n"
@@ -40,7 +40,8 @@ app = typer.Typer(
         "[bold]Prerequisites:[/bold]\n\n"
         "  Run [dim]rebrew catalog && rebrew build-db[/dim] first to create "
         "db/coverage.db.\n\n"
-        "[dim]Reads db/coverage.db (SQLite). Serves SPA at http://localhost:8001.[/dim]"
+        f"[dim]Reads db/coverage.db (SQLite). Serves SPA at "
+        f"http://localhost:{config.DEFAULT_PORT}.[/dim]"
     ),
 )
 
@@ -213,6 +214,7 @@ class _ServeConfig(NamedTuple):
     cors_origins: list[str]
     token: str | None
     db: Path | None
+    log_level: int
 
 
 def _resolve_serve_config(
@@ -223,6 +225,7 @@ def _resolve_serve_config(
     cors: bool | None = None,
     cors_origin: list[str] | None = None,
     token: str | None = None,
+    log_level: str | None = None,
 ) -> _ServeConfig:
     """Merge `serve`'s flags over the RECOVERAGE_* environment.
 
@@ -243,6 +246,9 @@ def _resolve_serve_config(
             token=(config.token() or None) if token is None else token,
             # Read for validation only; _db_path() resolves the value again.
             db=config.db_override(),
+            log_level=(
+                config.log_level() if log_level is None else config.parse_log_level(log_level)
+            ),
         )
     except config.ConfigError as exc:
         typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
@@ -489,19 +495,27 @@ def serve(
         "?token=, or open the dashboard as /?token=<token> to set the SPA cookie; "
         "env: RECOVERAGE_TOKEN, which keeps the token out of the process listing)",
     ),
+    log_level: str | None = typer.Option(
+        None,
+        "--log-level",
+        help="Log threshold (default: INFO; DEBUG, INFO, WARNING, ERROR, CRITICAL; "
+        "env: RECOVERAGE_LOG_LEVEL)",
+    ),
 ) -> None:
     """Start the recoverage dashboard server.
 
     Every setting flag also reads a RECOVERAGE_* environment variable, used as
     its default: RECOVERAGE_PORT, RECOVERAGE_BIND, RECOVERAGE_ALLOW_REMOTE,
-    RECOVERAGE_CORS, RECOVERAGE_CORS_ORIGIN, RECOVERAGE_TOKEN and
+    RECOVERAGE_CORS, RECOVERAGE_CORS_ORIGIN, RECOVERAGE_TOKEN,
+    RECOVERAGE_LOG_LEVEL and
     RECOVERAGE_DB (an explicit coverage.db path, instead of resolving
     rebrew-project.toml from the working directory).  ``--no-open`` and
     ``--regen`` are the two flags with no variable, because a service that
     wants the browser or a rebuild asks for it in argv, not in the
     environment.  A flag always wins over
     the environment; an unrecognised RECOVERAGE_* name is a startup error, and
-    so is a value that is not a valid port, boolean or non-empty string.
+    so is a value that is not a valid port, boolean, log level or non-empty
+    string.
     """
     import recoverage.server as _server
     from recoverage.server import (
@@ -518,6 +532,7 @@ def serve(
         cors=cors,
         cors_origin=cors_origin,
         token=token,
+        log_level=log_level,
     )
     port = resolved.port
     bind = resolved.bind
@@ -564,11 +579,13 @@ def serve(
             fg=typer.colors.YELLOW,
         )
 
-    # Configure logging — show INFO+ by default so operational messages are visible
+    # Configure logging at the resolved level, so a service can turn the
+    # per-request chatter down (WARNING) or the detail up (DEBUG) without a
+    # code change; the level it runs at is reported in the banner below.
     logging.basicConfig(
         format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
         datefmt="%H:%M:%S",
-        level=logging.INFO,
+        level=resolved.log_level,
     )
 
     allowed_origins: list[str] = []
@@ -633,6 +650,7 @@ def serve(
                 cors_origin=allowed_origins,
                 token=token,
                 db=resolved.db,
+                log_level=resolved.log_level,
             ).items()
         )
     )
@@ -1034,17 +1052,25 @@ def regen() -> None:
 
 @app.command("open")
 def open_cmd(
-    port: int = typer.Option(
-        config.DEFAULT_PORT,
+    port: int | None = typer.Option(
+        None,
         "--port",
         "-p",
-        min=config.MIN_PORT,
-        max=config.MAX_PORT,
-        help="Port of the running server",
+        help="Port of the running server (default: 8001; env: RECOVERAGE_PORT)",
     ),
 ) -> None:
-    """Open the dashboard in a browser."""
-    url = f"http://127.0.0.1:{port}"
+    """Open the dashboard in a browser.
+
+    The port falls back to RECOVERAGE_PORT, the same default `serve` uses, so
+    a deployment that moved the server off 8001 does not need every operator
+    to remember the new port as well.
+    """
+    try:
+        resolved_port = config.port() if port is None else _checked_port(port)
+    except config.ConfigError as exc:
+        typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(2) from None
+    url = f"http://127.0.0.1:{resolved_port}"
     typer.echo(f"Opening {url}")
     open_browser(url)
 

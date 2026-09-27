@@ -22,8 +22,9 @@ keeps the token out of the process listing that ``--token`` would expose it to.
 
 from __future__ import annotations
 
+import logging
 import os
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Final
 
@@ -40,6 +41,7 @@ KNOWN_VARS: Final[frozenset[str]] = frozenset(
         "RECOVERAGE_CORS",
         "RECOVERAGE_CORS_ORIGIN",
         "RECOVERAGE_DB",
+        "RECOVERAGE_LOG_LEVEL",
         "RECOVERAGE_PORT",
         "RECOVERAGE_TOKEN",
     }
@@ -49,6 +51,18 @@ KNOWN_VARS: Final[frozenset[str]] = frozenset(
 # defaults share.  A change here is a change to `recoverage serve --help`.
 DEFAULT_PORT: Final = 8001
 DEFAULT_BIND: Final = "127.0.0.1"
+
+#: Log level the server runs at.  INFO, not DEBUG: the operational lines a
+#: deployment needs (start, regen, database) without the per-request chatter
+#: DEBUG adds.
+DEFAULT_LOG_LEVEL: Final = logging.INFO
+
+#: Level names accepted from the environment, and the values they resolve to.
+#: Read from the stdlib's own table rather than restated here, so the accepted
+#: spellings are exactly the ones ``logging.getLevelName`` understands.
+LOG_LEVELS: Final[Mapping[str, int]] = {
+    name: value for name, value in logging.getLevelNamesMapping().items() if isinstance(name, str)
+}
 
 #: A port of 0 asks the OS for an ephemeral port; both bounds are the ones
 #: socket.bind() enforces, checked here so a bad value is a startup error.
@@ -155,6 +169,35 @@ def cors_origins() -> list[str]:
     return [item.strip() for item in raw.split(",") if item.strip()]
 
 
+def parse_log_level(raw: str) -> int:
+    """Resolve a log level *raw* to its ``logging`` level number.
+
+    Accepts a level name, case-insensitively (``WARNING``, ``Warn``, ``warn``),
+    or a bare number, so a service can pass whatever ``logging`` calls a level.
+    Rejecting an unknown name matters: it would otherwise reach
+    ``basicConfig`` and leave the logger at WARNING, quieter than the operator
+    asked for, with nothing on stderr to say so.
+    """
+    name = raw.strip().upper()
+    if name in LOG_LEVELS:
+        return LOG_LEVELS[name]
+    if raw.strip().isdigit():
+        return int(raw.strip())
+    allowed = ", ".join(sorted(LOG_LEVELS))
+    raise ConfigError(f"{raw!r} is not a log level (use one of: {allowed})")
+
+
+def log_level() -> int:
+    """Threshold of the root logger, as a ``logging`` level number."""
+    raw = _raw("RECOVERAGE_LOG_LEVEL")
+    if raw is None:
+        return DEFAULT_LOG_LEVEL
+    try:
+        return parse_log_level(raw)
+    except ConfigError as exc:
+        raise ConfigError(f"RECOVERAGE_LOG_LEVEL: {exc}") from None
+
+
 def db_override() -> Path | None:
     """Explicit coverage.db path, or None to resolve it from the project.
 
@@ -195,6 +238,7 @@ def active_config(
     cors_origin: Sequence[str],
     token: str | None,
     db: Path | None,
+    log_level: int,
 ) -> dict[str, str]:
     """Render the settings `serve` runs with, for the startup banner.
 
@@ -210,5 +254,6 @@ def active_config(
         "cors": str(cors).lower(),
         "cors_origin": ",".join(cors_origin) or "none",
         "db": str(db) if db is not None else "auto",
+        "log_level": logging.getLevelName(log_level),
         "token": "set" if token else "unset",
     }

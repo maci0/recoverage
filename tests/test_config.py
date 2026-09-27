@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import pytest
@@ -59,6 +60,43 @@ class TestScalarParsing:
     def test_db_override_expands_user(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("RECOVERAGE_DB", "~/proj/db/coverage.db")
         assert config.db_override() == Path("~/proj/db/coverage.db").expanduser()
+
+    @pytest.mark.parametrize(
+        "raw,expected", [("DEBUG", logging.DEBUG), ("warning", logging.WARNING), ("30", 30)]
+    )
+    def test_log_level_from_env(
+        self, monkeypatch: pytest.MonkeyPatch, raw: str, expected: int
+    ) -> None:
+        monkeypatch.setenv("RECOVERAGE_LOG_LEVEL", raw)
+        assert config.log_level() == expected
+
+    def test_log_level_defaults_to_info(self) -> None:
+        assert config.log_level() == logging.INFO
+
+
+class TestLogLevelRejectsBadValues:
+    """An unknown level would otherwise leave the logger at WARNING, in silence."""
+
+    def test_unknown_name_names_the_variable(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("RECOVERAGE_LOG_LEVEL", "chatty")
+        with pytest.raises(config.ConfigError, match="RECOVERAGE_LOG_LEVEL"):
+            config.log_level()
+
+    def test_error_lists_the_accepted_names(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("RECOVERAGE_LOG_LEVEL", "chatty")
+        with pytest.raises(config.ConfigError) as excinfo:
+            config.log_level()
+        assert "DEBUG" in str(excinfo.value) and "WARNING" in str(excinfo.value)
+
+    def test_serve_exits_2_on_a_bad_level(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import typer
+
+        from recoverage.cli import _resolve_serve_config
+
+        monkeypatch.setenv("RECOVERAGE_LOG_LEVEL", "chatty")
+        with pytest.raises(typer.Exit) as excinfo:
+            _resolve_serve_config()
+        assert excinfo.value.exit_code == 2
 
 
 class TestRejectsBadValues:
@@ -132,10 +170,12 @@ class TestActiveConfig:
             cors_origin=[],
             token=None,
             db=None,
+            log_level=logging.INFO,
         )
         assert rendered["port"] == "8001"
         assert rendered["db"] == "auto"
         assert rendered["cors_origin"] == "none"
+        assert rendered["log_level"] == "INFO"
 
     def test_token_is_reported_as_set_without_its_value(self) -> None:
         rendered = config.active_config(
@@ -146,7 +186,9 @@ class TestActiveConfig:
             cors_origin=["http://a.test"],
             token="s3cret-value",
             db=Path("/tmp/x.db"),
+            log_level=logging.WARNING,
         )
+        assert rendered["log_level"] == "WARNING"
         assert rendered["token"] == "set"
         assert "s3cret-value" not in " ".join(rendered.values())
         assert rendered["cors_origin"] == "http://a.test"
@@ -165,6 +207,7 @@ class TestServeResolution:
         assert resolved.allow_remote is False
         assert resolved.token is None
         assert resolved.db is None
+        assert resolved.log_level == logging.INFO
 
     def test_environment_supplies_every_setting(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from recoverage.cli import _resolve_serve_config
@@ -176,6 +219,7 @@ class TestServeResolution:
         monkeypatch.setenv("RECOVERAGE_CORS_ORIGIN", "http://a.test")
         monkeypatch.setenv("RECOVERAGE_TOKEN", "env-token")
         monkeypatch.setenv("RECOVERAGE_DB", "/srv/coverage.db")
+        monkeypatch.setenv("RECOVERAGE_LOG_LEVEL", "WARNING")
         resolved = _resolve_serve_config()
         assert resolved.port == 9001
         assert resolved.bind == "0.0.0.0"
@@ -184,6 +228,7 @@ class TestServeResolution:
         assert resolved.cors_origins == ["http://a.test"]
         assert resolved.token == "env-token"
         assert resolved.db == Path("/srv/coverage.db")
+        assert resolved.log_level == logging.WARNING
 
     def test_flag_beats_environment(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from recoverage.cli import _resolve_serve_config
@@ -195,6 +240,13 @@ class TestServeResolution:
         assert resolved.port == 8500
         assert resolved.bind == "127.0.0.1"
         assert resolved.token == "flag-token"
+
+    def test_log_level_flag_beats_environment(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from recoverage.cli import _resolve_serve_config
+
+        monkeypatch.setenv("RECOVERAGE_LOG_LEVEL", "WARNING")
+        resolved = _resolve_serve_config(log_level="debug")
+        assert resolved.log_level == logging.DEBUG
 
     def test_out_of_range_flag_port_exits_2(self) -> None:
         import typer

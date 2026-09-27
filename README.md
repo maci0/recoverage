@@ -157,6 +157,7 @@ Start the dashboard web server.
 | `--regen` | off | Run `rebrew catalog` + `rebrew build-db` before starting |
 | `--cors` | off | Enable CORS processing (allowlisted origins only; the wildcard is never emitted) |
 | `--cors-origin` | none | Origin URL allowed to read the API cross-origin (repeatable; without it `--cors` allows no cross-origin reads) |
+| `--log-level` | `INFO` | Log threshold: `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` (case-insensitive) |
 
 #### Environment
 
@@ -173,6 +174,7 @@ always wins over the environment.
 | `RECOVERAGE_CORS` | `false` | same booleans |
 | `RECOVERAGE_CORS_ORIGIN` | none | comma-separated origin URLs |
 | `RECOVERAGE_TOKEN` | none | the bearer token; set it empty to run unauthenticated |
+| `RECOVERAGE_LOG_LEVEL` | `INFO` | a `logging` level name, or its number |
 | `RECOVERAGE_DB` | resolved from the working directory | path to `coverage.db` |
 
 ```bash
@@ -189,10 +191,11 @@ recoverage serve --no-open
 it exits 1, whether the address came from the flag or the environment.
 
 Every value is validated at startup. An out-of-range port, a non-boolean flag,
-an empty value where one is required, or a misspelled `RECOVERAGE_*` name
-(`RECOVERAGE_PRT`) exits 2 with the variable named, instead of starting with a
-default you did not ask for. `recoverage serve` prints the settings it resolved
-on startup, with the token reported as `token=set`.
+an unknown log level, an empty value where one is required, or a misspelled
+`RECOVERAGE_*` name (`RECOVERAGE_PRT`) exits 2 with the variable named,
+instead of starting with a default you did not ask for. `recoverage serve`
+prints the settings it resolved on startup, with the token reported as
+`token=set`.
 
 ### `recoverage stats`
 
@@ -249,6 +252,9 @@ Open the dashboard in a browser (useful when `--no-open` was used).
 ```bash
 recoverage open --port 8001
 ```
+
+`--port` defaults to `RECOVERAGE_PORT`, the same port `serve` uses, so a
+deployment that moved off `8001` needs no second place to configure.
 
 ---
 
