@@ -45,6 +45,7 @@ recoverage/
 │   ├── test_server.py        # Compression, encoding, path helper tests
 │   ├── test_potato.py        # Potato Mode unit tests
 │   ├── test_perf.py         # Deterministic perf regression gates (work counters, not wall clock)
+│   ├── test_release.py       # Release contract: version, changelog, declared floors
 │   └── test_playwright.py    # Browser integration tests
 └── src/recoverage/
     ├── __init__.py
@@ -137,6 +138,30 @@ the whole pin, and it must keep matching `uv.lock`: when rebrew's
 dependencies change, re-lock in a tree with the sibling present and bump
 `.github/actions/sibling-rebrew/action.yml`. The `sbom` job deliberately has
 no such step, because `uv export --frozen` reads the lock alone.
+
+## Releases
+
+The release policy is not written down anywhere else, so it is stated here and
+`tests/test_release.py` enforces it.
+
+- `src/recoverage/__init__.py` `__version__` is the single source of truth;
+  `pyproject.toml` reads it via `[tool.setuptools.dynamic]`. Bump it in the
+  release commit, never before, and never in a feature commit.
+- `CHANGELOG.md` follows Keep a Changelog. Every released version gets a
+  `## [X.Y.Z] - YYYY-MM-DD` section above `[Unreleased]`, whose entries are
+  grouped `Added` / `Breaking` / `Changed` / `Deprecated` / `Fixed` /
+  `Removed` / `Security` and written for a user, not for a reviewer.
+- An entry belongs under `[Unreleased]` until the commit that ships it is
+  tagged. Back-filling a released section with a later fix misreports what the
+  tag contains, which is the one thing the notes exist to say.
+- A raised `requires-python` or dependency floor goes in the notes of the
+  release that raises it, with the reason. A floor drop is a breaking change
+  for whoever is still on the old one.
+- SemVer on a 1.x line: a change to a public HTTP response field, a CLI flag,
+  or a function another module imports is breaking and needs a major. A new
+  section or endpoint is a minor. Anything else is a patch.
+- The release commit is `chore: release X.Y.Z` and the tag is `vX.Y.Z`;
+  both land together, and neither is re-cut.
 
 ## API Endpoints
 

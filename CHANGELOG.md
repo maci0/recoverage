@@ -5,8 +5,67 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+Tag this **2.0.0**: `server.resolve_targets` changed its return shape and the
+module ships in the published package. See *Breaking*.
+
+### Breaking
+
+- **`server.resolve_targets` returns the one ordered target list, not a
+  `(target_ids, targets)` pair.** Before: a two-element tuple whose first
+  element was raw DB order and whose second was config-declared first. After:
+  the second element alone, so `target_ids, targets = resolve_targets(c)`
+  raises `ValueError: not enough values to unpack`. Drop the unpacking and use
+  the returned list. Every in-tree caller already discarded the first
+  element, which is what left a second ordering alive for the SPA and Potato
+  Mode to agree not to use.
+
 ### Fixed
 
+- **Coverage buckets reconcile with `total_cells`.** `/stats` and `/data`
+  section objects carry an `other` bucket matching rebrew's catch-all
+  (`compile_error`, `extract_error`, `invalid_va`, `missing_file`,
+  `missing_size`, `skip`, `unknown`, `drift`, `unchecked`). A consumer summing
+  the documented buckets now gets `total_cells` instead of a residual it read
+  as zero-sized. Both query paths compute it, and a `section_cell_stats` that
+  predates the column reports 0 rather than dropping the key.
+- **Every cell state rebrew can write is colored.** `verified`, `drift`,
+  `unchecked` and the nine problem states fell through to the `none` color and
+  painted as undocumented gaps, which contradicts the number printed beside
+  them: `build_db` counts `verified` as an exact match and `covered_bytes`
+  covers every state that is not `none`. Both legends gained a `problem` row,
+  and Potato Mode's gained a `proven` row.
+- **The SPA search box reports and acts on its own state.** It gained a clear
+  button, a live match count, Enter to jump to the first match, and Escape to
+  clear. Clearing the state alone left the typed text in the (uncontrolled)
+  input while the map stopped filtering.
+- **A failed function lookup no longer leaves stale panes.** The Assembly pane
+  read "Loading assembly..." forever and Copy/Open stayed enabled, so a
+  lookup for a VA the database does not carry copied that literal.
+- **Potato Mode hex search matches the addresses it prints.** Both the
+  function-list filter and the cell dimming test built the VA string with
+  `printf('0x%x', va)`, which emits no `0x` prefix, so an address copied out
+  of a VA column never matched when pasted back. They now emit the same
+  `0x`-prefixed spelling the column prints.
+- **SSE client slots are released on every exit path.** A peer that hung up
+  between the handler returning and the first write lost a slot, a file
+  descriptor and a handler thread for the process's remaining lifetime,
+  permanently eroding the concurrent-client cap.
+- **Potato Mode never publishes a stale read into its caches.** The grid-cell
+  and section-stats memos filed a payload under the new snapshot fingerprint
+  even when the cursor's read snapshot predated a rebuild that a broadcast had
+  already invalidated, so the stale entry survived until the next rebuild.
+- **The regen cooldown notice times itself out.** "Regenerating from cache"
+  and "regenerate unavailable" replaced the stats row and, unlike the loading
+  state, had nothing clearing them, so a second click in quick succession
+  looked like it did nothing.
+- **`export --format md` emits a well-formed table.** Each section row wrote
+  eleven cells (the exact/reloc/near-match triple twice) under an
+  eight-column header. A test asserts every data row has the header's count.
+- **`rebrew catalog --json` no longer appears in the documented pipeline.**
+  That flag suppresses the data-JSON write: it only prints a summary. The
+  quickstart, the pipeline diagram, the design docs, the user stories, and
+  the CLI's own rebuild hint all named the summary-only form. Every one now
+  shows the bare `rebrew catalog`, which is what `regen` actually runs.
 - **Potato Mode responses carry a cache directive.** `/potato` was the one
   DB-derived response sent with no `Cache-Control` at all, leaving
   heuristic freshness to the browser and leaving a shared cache free to
@@ -21,10 +80,20 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
-- `server.resolve_targets` returns the one ordered target list instead of a
-  `(target_ids, targets_list)` pair. Every caller discarded the first element,
-  which left a second ordering alive that the SPA and Potato Mode must agree
-  not to use.
+- **Static assets revalidate instead of re-downloading.** The ten
+  compressed assets sent `Cache-Control: no-cache` with no validator, so a
+  repeat visit re-sent 55 KB and every asm-pane opening re-sent
+  `hljs.min.js` and its grammars. Each now carries a strong ETag (per
+  content-encoding, so a brotli and a zstd body never share one) and answers
+  304 to a matching `If-None-Match`. `max-age` stays at 0 on purpose: the URLs
+  are not content-hashed, so an upgrade changes the bytes under the same name.
+- **Syntax highlighting follows the documented palette.** Every highlight.js
+  token color in both themes was a hand-picked literal outside the palette and
+  now derives from it, so the code and hex panes restyle with the theme
+  instead of drifting from it.
+- **Badge, link, and progress-track colors derive from the palette** rather
+  than repeating hex literals, including the empty progress-bar track, which
+  is `--none` composited over the panel color.
 
 ### Removed
 
@@ -44,15 +113,6 @@ Requires `rebrew>=2.10.0`.
 
 ### Fixed
 
-- **`rebrew catalog --json` no longer appears in the documented pipeline.**
-  That flag suppresses the data-JSON write: it only prints a summary. The
-  quickstart, the pipeline diagram, the design docs, the user stories, and
-  the CLI's own rebuild hint all named the summary-only form. Every one now
-  shows the bare `rebrew catalog`, which is what `regen` actually runs.
-- **`export --format md` emitted a malformed table.** Each section row wrote
-  eleven cells (the exact/reloc/near-match triple twice) under an
-  eight-column header. The duplicate triple is gone; a test asserts every
-  data row has the header's cell count.
 - **Regen imports `run_catalog` from `rebrew.catalog.cli`.** Since rebrew 2.7
   the `rebrew.catalog` package does not re-export it, so `recoverage regen`,
   `serve --regen`, and `POST /api/regen` raised `ImportError` against current
