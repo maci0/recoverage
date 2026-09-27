@@ -42,6 +42,114 @@ def render_potato_url(url: str) -> str:
     return render_potato(urlparse(url))
 
 
+# The four objects a Potato render reads, at the smallest shape the renderer
+# accepts: no CHECK constraints, no cached cells, and a stats view that
+# answers with exact_count and zeroes for the rest.  A test that needs more
+# (a functions row, globals, verify_results) creates it on top; a test that
+# needs a particular NULL writes the row itself.
+_POTATO_SCHEMA = (
+    (
+        "CREATE TABLE metadata (target TEXT NOT NULL, key TEXT NOT NULL,"
+        " value TEXT, PRIMARY KEY (target, key))"
+    ),
+    (
+        "CREATE TABLE sections (target TEXT NOT NULL, name TEXT NOT NULL,"
+        " va INTEGER, size INTEGER, fileOffset INTEGER, unitBytes INTEGER,"
+        " columns INTEGER, PRIMARY KEY (target, name))"
+    ),
+    (
+        "CREATE TABLE cells (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " target TEXT NOT NULL, section_name TEXT NOT NULL,"
+        " start INTEGER NOT NULL, end INTEGER NOT NULL,"
+        " span INTEGER NOT NULL DEFAULT 1, state TEXT NOT NULL,"
+        " functions TEXT NOT NULL DEFAULT '[]', label TEXT, parent_function TEXT)"
+    ),
+    (
+        "CREATE VIEW section_cell_stats AS"
+        " SELECT target, section_name, COUNT(*) as total_cells,"
+        " SUM(CASE WHEN state = 'exact' THEN 1 ELSE 0 END) as exact_count,"
+        " 0 as reloc_count, 0 as near_match_count, 0 as stub_count,"
+        " 0 as padding_count"
+        " FROM cells GROUP BY target, section_name"
+    ),
+)
+
+# The tables a function-detail render reads beside the four above, for a test
+# that seeds none of their rows and only needs them to exist.
+_FUNCTION_SIDECAR_SCHEMA = (
+    (
+        "CREATE TABLE functions (target TEXT NOT NULL, va INTEGER NOT NULL,"
+        " name TEXT NOT NULL DEFAULT '', vaStart TEXT NOT NULL DEFAULT '',"
+        " size INTEGER, fileOffset INTEGER, status TEXT NOT NULL DEFAULT 'UNKNOWN',"
+        " module TEXT NOT NULL DEFAULT '', cflags TEXT, symbol TEXT,"
+        " markerType TEXT NOT NULL DEFAULT 'FUNCTION',"
+        " ghidra_name TEXT, list_name TEXT,"
+        " is_thunk INTEGER NOT NULL DEFAULT 0, is_export INTEGER NOT NULL DEFAULT 0,"
+        " sha256 TEXT, files TEXT NOT NULL DEFAULT '[]',"
+        " detected_by TEXT NOT NULL DEFAULT '[]', size_by_tool TEXT NOT NULL DEFAULT '{}',"
+        " textOffset INTEGER, blocker TEXT, blockerDelta INTEGER,"
+        " size_reason TEXT, similarity REAL, PRIMARY KEY (target, va))"
+    ),
+    (
+        "CREATE TABLE globals (target TEXT NOT NULL, va INTEGER NOT NULL,"
+        " name TEXT NOT NULL DEFAULT '', decl TEXT NOT NULL DEFAULT '',"
+        " files TEXT NOT NULL DEFAULT '[]', module TEXT NOT NULL DEFAULT '',"
+        " size INTEGER NOT NULL DEFAULT 4, PRIMARY KEY (target, va))"
+    ),
+    (
+        "CREATE TABLE verify_results (target TEXT NOT NULL, va INTEGER NOT NULL,"
+        " verified_at TEXT NOT NULL, byte_delta INTEGER, diff_lines INTEGER,"
+        " similarity REAL, PRIMARY KEY (target, va))"
+    ),
+)
+
+# The same functions table with the CHECKs rebrew's build-db writes, for a
+# test whose stored values the real schema constrains.
+_FUNCTIONS_TABLE_CHECKED = (
+    "CREATE TABLE functions ("
+    " target TEXT NOT NULL, va INTEGER NOT NULL CHECK (va >= 0),"
+    " name TEXT NOT NULL DEFAULT '', vaStart TEXT NOT NULL DEFAULT '',"
+    " size INTEGER NOT NULL DEFAULT 0 CHECK (size >= 0), fileOffset INTEGER,"
+    " status TEXT NOT NULL DEFAULT 'UNKNOWN', module TEXT NOT NULL DEFAULT '',"
+    " cflags TEXT, symbol TEXT, markerType TEXT NOT NULL DEFAULT 'FUNCTION',"
+    " ghidra_name TEXT, list_name TEXT,"
+    " is_thunk INTEGER NOT NULL DEFAULT 0, is_export INTEGER NOT NULL DEFAULT 0,"
+    " sha256 TEXT, files TEXT NOT NULL DEFAULT '[]',"
+    " detected_by TEXT NOT NULL DEFAULT '[]', size_by_tool TEXT NOT NULL DEFAULT '{}',"
+    " textOffset INTEGER, blocker TEXT, blockerDelta INTEGER, size_reason TEXT,"
+    " similarity REAL CHECK (similarity IS NULL OR"
+    " (similarity >= 0.0 AND similarity <= 1.0)),"
+    " PRIMARY KEY (target, va))"
+)
+
+
+def _synthetic_potato_db(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    target: str,
+    total_functions: int = 0,
+    extra_schema: tuple[str, ...] = (),
+) -> sqlite3.Connection:
+    """Point ``recoverage.potato`` at a fresh fixture database and return it open.
+
+    Each caller names its own *target* so the shared resolve-targets/cells
+    memos cannot carry one fixture's rows into another's render.
+    """
+    db = tmp_path / "coverage.db"
+    conn = sqlite3.connect(db)
+    for statement in (*_POTATO_SCHEMA, *extra_schema):
+        conn.execute(statement)
+    conn.executemany(
+        "INSERT INTO metadata VALUES (?,?,?)",
+        [
+            (target, "db_version", '"4"'),
+            (target, "summary", f'{{"totalFunctions": {total_functions}}}'),
+        ],
+    )
+    monkeypatch.setattr("recoverage.potato._db_path", lambda: db)
+    return conn
+
+
 @functools.cache
 def _have_html5_tidy() -> bool:
     """HTML Tidy 5 understands <main>; Apple's 2006 tidy does not."""
@@ -322,42 +430,8 @@ def test_null_va_section_renders_grid_and_panel(
     same sec_va + cell.start arithmetic and crashed the whole page on it.
     Addresses fall back to file-relative offsets (the SPA's `sec.va || 0`).
     """
-    db = tmp_path / "coverage.db"
-    conn = sqlite3.connect(db)
-    conn.execute(
-        "CREATE TABLE metadata (target TEXT NOT NULL, key TEXT NOT NULL,"
-        " value TEXT, PRIMARY KEY (target, key))"
-    )
-    conn.execute(
-        "CREATE TABLE sections (target TEXT NOT NULL, name TEXT NOT NULL,"
-        " va INTEGER, size INTEGER, fileOffset INTEGER, unitBytes INTEGER,"
-        " columns INTEGER, PRIMARY KEY (target, name))"
-    )
-    conn.execute(
-        "CREATE TABLE cells (id INTEGER PRIMARY KEY AUTOINCREMENT,"
-        " target TEXT NOT NULL, section_name TEXT NOT NULL,"
-        " start INTEGER NOT NULL, end INTEGER NOT NULL,"
-        " span INTEGER NOT NULL DEFAULT 1, state TEXT NOT NULL,"
-        " functions TEXT NOT NULL DEFAULT '[]', label TEXT, parent_function TEXT)"
-    )
-    conn.execute(
-        "CREATE VIEW section_cell_stats AS"
-        " SELECT target, section_name, COUNT(*) as total_cells,"
-        " SUM(CASE WHEN state = 'exact' THEN 1 ELSE 0 END) as exact_count,"
-        " 0 as reloc_count, 0 as near_match_count, 0 as stub_count,"
-        " 0 as padding_count"
-        " FROM cells GROUP BY target, section_name"
-    )
-    # Unique target so the shared resolve-targets/cells caches cannot leak
-    # rows from the project coverage.db other tests use.
     t = "NULLVA_POTATO"
-    conn.executemany(
-        "INSERT INTO metadata VALUES (?,?,?)",
-        [
-            (t, "db_version", '"4"'),
-            (t, "summary", '{"totalFunctions": 0}'),
-        ],
-    )
+    conn = _synthetic_potato_db(tmp_path, monkeypatch, t)
     conn.execute("INSERT INTO sections VALUES (?, '.bss', NULL, 64, NULL, 16, 8)", (t,))
     conn.executemany(
         "INSERT INTO cells (target, section_name, start, end, span, state) VALUES (?,?,?,?,?,?)",
@@ -365,7 +439,6 @@ def test_null_va_section_renders_grid_and_panel(
     )
     conn.commit()
     conn.close()
-    monkeypatch.setattr("recoverage.potato._db_path", lambda: db)
 
     html = render_potato_url(f"/potato?target={t}&section=.bss")
     assert '<table id="grid"' in html, "grid rendered for a NULL-va section"
@@ -382,40 +455,8 @@ def test_null_columns_section_renders_grid(tmp_path: Path, monkeypatch: pytest.M
     64-column default, not TypeError on ``None <= 0`` — which escapes
     ui.handle_potato's except tuple as a raw HTML 500.  Same crash family
     as test_null_va_section_renders_grid_and_panel."""
-    db = tmp_path / "coverage.db"
-    conn = sqlite3.connect(db)
-    conn.execute(
-        "CREATE TABLE metadata (target TEXT NOT NULL, key TEXT NOT NULL,"
-        " value TEXT, PRIMARY KEY (target, key))"
-    )
-    conn.execute(
-        "CREATE TABLE sections (target TEXT NOT NULL, name TEXT NOT NULL,"
-        " va INTEGER, size INTEGER, fileOffset INTEGER, unitBytes INTEGER,"
-        " columns INTEGER, PRIMARY KEY (target, name))"
-    )
-    conn.execute(
-        "CREATE TABLE cells (id INTEGER PRIMARY KEY AUTOINCREMENT,"
-        " target TEXT NOT NULL, section_name TEXT NOT NULL,"
-        " start INTEGER NOT NULL, end INTEGER NOT NULL,"
-        " span INTEGER NOT NULL DEFAULT 1, state TEXT NOT NULL,"
-        " functions TEXT NOT NULL DEFAULT '[]', label TEXT, parent_function TEXT)"
-    )
-    conn.execute(
-        "CREATE VIEW section_cell_stats AS"
-        " SELECT target, section_name, COUNT(*) as total_cells,"
-        " SUM(CASE WHEN state = 'exact' THEN 1 ELSE 0 END) as exact_count,"
-        " 0 as reloc_count, 0 as near_match_count, 0 as stub_count,"
-        " 0 as padding_count"
-        " FROM cells GROUP BY target, section_name"
-    )
     t = "NULLCOLS_POTATO"
-    conn.executemany(
-        "INSERT INTO metadata VALUES (?,?,?)",
-        [
-            (t, "db_version", '"4"'),
-            (t, "summary", '{"totalFunctions": 0}'),
-        ],
-    )
+    conn = _synthetic_potato_db(tmp_path, monkeypatch, t)
     # columns IS NULL; everything else normal.
     conn.execute("INSERT INTO sections VALUES (?, '.text', 4096, 64, 512, 16, NULL)", (t,))
     conn.executemany(
@@ -424,7 +465,6 @@ def test_null_columns_section_renders_grid(tmp_path: Path, monkeypatch: pytest.M
     )
     conn.commit()
     conn.close()
-    monkeypatch.setattr("recoverage.potato._db_path", lambda: db)
 
     html = render_potato_url(f"/potato?target={t}&section=.text")
     assert '<table id="grid"' in html, "grid rendered for a NULL-columns section"
@@ -687,71 +727,17 @@ def test_multi_function_cell(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     idx = _find_cell_idx(target, ".text", lambda funcs: len(funcs) > 1)
     if idx is None:
         synthetic = True
-        db = tmp_path / "coverage.db"
-        conn = sqlite3.connect(db)
-        conn.execute(
-            "CREATE TABLE metadata (target TEXT NOT NULL, key TEXT NOT NULL,"
-            " value TEXT, PRIMARY KEY (target, key))"
-        )
-        conn.execute(
-            "CREATE TABLE sections (target TEXT NOT NULL, name TEXT NOT NULL,"
-            " va INTEGER, size INTEGER, fileOffset INTEGER, unitBytes INTEGER,"
-            " columns INTEGER, PRIMARY KEY (target, name))"
-        )
-        conn.execute(
-            "CREATE TABLE cells (id INTEGER PRIMARY KEY AUTOINCREMENT,"
-            " target TEXT NOT NULL, section_name TEXT NOT NULL,"
-            " start INTEGER NOT NULL, end INTEGER NOT NULL,"
-            " span INTEGER NOT NULL DEFAULT 1, state TEXT NOT NULL,"
-            " functions TEXT NOT NULL DEFAULT '[]', label TEXT, parent_function TEXT)"
-        )
-        conn.execute(
-            "CREATE VIEW section_cell_stats AS"
-            " SELECT target, section_name, COUNT(*) as total_cells,"
-            " SUM(CASE WHEN state = 'exact' THEN 1 ELSE 0 END) as exact_count,"
-            " 0 as reloc_count, 0 as near_match_count, 0 as stub_count,"
-            " 0 as padding_count"
-            " FROM cells GROUP BY target, section_name"
-        )
         t = "MULTIFN_POTATO"
-        conn.executemany(
-            "INSERT INTO metadata VALUES (?,?,?)",
-            [(t, "db_version", '"4"'), (t, "summary", '{"totalFunctions": 0}')],
-        )
+        conn = _synthetic_potato_db(tmp_path, monkeypatch, t, extra_schema=_FUNCTION_SIDECAR_SCHEMA)
         conn.execute("INSERT INTO sections VALUES (?, '.text', 4096, 32, 512, 16, 8)", (t,))
         conn.execute(
             "INSERT INTO cells (target, section_name, start, end, span, state, functions)"
             " VALUES (?,?,?,?,?,?,?)",
             (t, ".text", 0, 16, 1, "exact", '["_a", "_b"]'),
         )
-        conn.execute(
-            "CREATE TABLE functions (target TEXT NOT NULL, va INTEGER NOT NULL,"
-            " name TEXT NOT NULL DEFAULT '', vaStart TEXT NOT NULL DEFAULT '',"
-            " size INTEGER, fileOffset INTEGER, status TEXT NOT NULL DEFAULT 'UNKNOWN',"
-            " module TEXT NOT NULL DEFAULT '', cflags TEXT, symbol TEXT,"
-            " markerType TEXT NOT NULL DEFAULT 'FUNCTION',"
-            " ghidra_name TEXT, list_name TEXT,"
-            " is_thunk INTEGER NOT NULL DEFAULT 0, is_export INTEGER NOT NULL DEFAULT 0,"
-            " sha256 TEXT, files TEXT NOT NULL DEFAULT '[]',"
-            " detected_by TEXT NOT NULL DEFAULT '[]', size_by_tool TEXT NOT NULL DEFAULT '{}',"
-            " textOffset INTEGER, blocker TEXT, blockerDelta INTEGER,"
-            " size_reason TEXT, similarity REAL, PRIMARY KEY (target, va))"
-        )
-        conn.execute(
-            "CREATE TABLE globals (target TEXT NOT NULL, va INTEGER NOT NULL,"
-            " name TEXT NOT NULL DEFAULT '', decl TEXT NOT NULL DEFAULT '',"
-            " files TEXT NOT NULL DEFAULT '[]', module TEXT NOT NULL DEFAULT '',"
-            " size INTEGER NOT NULL DEFAULT 4, PRIMARY KEY (target, va))"
-        )
-        conn.execute(
-            "CREATE TABLE verify_results (target TEXT NOT NULL, va INTEGER NOT NULL,"
-            " verified_at TEXT NOT NULL, byte_delta INTEGER, diff_lines INTEGER,"
-            " similarity REAL, PRIMARY KEY (target, va))"
-        )
         conn.commit()
         conn.close()
-        monkeypatch.setattr("recoverage.potato._db_path", lambda: db)
-        monkeypatch.setattr("recoverage.server._db_path", lambda: db)
+        monkeypatch.setattr("recoverage.server._db_path", lambda: tmp_path / "coverage.db")
         _server.clear_target_cache()
         target, idx = t, 0
     html = render_potato_url(f"/potato?target={target}&section=.text&idx={idx}")
@@ -1098,57 +1084,9 @@ def test_function_detail_similarity_fraction_rendered_as_percent(
     """functions.similarity is stored as a 0-1 fraction (schema CHECK) and the
     SPA renders it scaled by 100 with a "%" (app.js).  Potato Mode's detail
     rows must show the same percentage, not the bare fraction."""
-    db = tmp_path / "coverage.db"
-    conn = sqlite3.connect(db)
-    conn.execute(
-        "CREATE TABLE metadata (target TEXT NOT NULL, key TEXT NOT NULL,"
-        " value TEXT, PRIMARY KEY (target, key))"
-    )
-    conn.execute(
-        "CREATE TABLE sections (target TEXT NOT NULL, name TEXT NOT NULL,"
-        " va INTEGER, size INTEGER, fileOffset INTEGER, unitBytes INTEGER,"
-        " columns INTEGER, PRIMARY KEY (target, name))"
-    )
-    conn.execute(
-        "CREATE TABLE cells (id INTEGER PRIMARY KEY AUTOINCREMENT,"
-        " target TEXT NOT NULL, section_name TEXT NOT NULL,"
-        " start INTEGER NOT NULL, end INTEGER NOT NULL,"
-        " span INTEGER NOT NULL DEFAULT 1, state TEXT NOT NULL,"
-        " functions TEXT NOT NULL DEFAULT '[]', label TEXT, parent_function TEXT)"
-    )
-    conn.execute(
-        "CREATE TABLE functions ("
-        " target TEXT NOT NULL, va INTEGER NOT NULL CHECK (va >= 0),"
-        " name TEXT NOT NULL DEFAULT '', vaStart TEXT NOT NULL DEFAULT '',"
-        " size INTEGER NOT NULL DEFAULT 0 CHECK (size >= 0), fileOffset INTEGER,"
-        " status TEXT NOT NULL DEFAULT 'UNKNOWN', module TEXT NOT NULL DEFAULT '',"
-        " cflags TEXT, symbol TEXT, markerType TEXT NOT NULL DEFAULT 'FUNCTION',"
-        " ghidra_name TEXT, list_name TEXT,"
-        " is_thunk INTEGER NOT NULL DEFAULT 0, is_export INTEGER NOT NULL DEFAULT 0,"
-        " sha256 TEXT, files TEXT NOT NULL DEFAULT '[]',"
-        " detected_by TEXT NOT NULL DEFAULT '[]', size_by_tool TEXT NOT NULL DEFAULT '{}',"
-        " textOffset INTEGER, blocker TEXT, blockerDelta INTEGER, size_reason TEXT,"
-        " similarity REAL CHECK (similarity IS NULL OR"
-        " (similarity >= 0.0 AND similarity <= 1.0)),"
-        " PRIMARY KEY (target, va))"
-    )
-    conn.execute(
-        "CREATE VIEW section_cell_stats AS"
-        " SELECT target, section_name, COUNT(*) as total_cells,"
-        " SUM(CASE WHEN state = 'exact' THEN 1 ELSE 0 END) as exact_count,"
-        " 0 as reloc_count, 0 as near_match_count, 0 as stub_count,"
-        " 0 as padding_count"
-        " FROM cells GROUP BY target, section_name"
-    )
-    # Unique target so the shared resolve-targets/cells caches cannot leak
-    # rows from the project coverage.db other tests use.
     t = "SIMFRAC_POTATO"
-    conn.executemany(
-        "INSERT INTO metadata VALUES (?,?,?)",
-        [
-            (t, "db_version", '"4"'),
-            (t, "summary", '{"totalFunctions": 1}'),
-        ],
+    conn = _synthetic_potato_db(
+        tmp_path, monkeypatch, t, total_functions=1, extra_schema=(_FUNCTIONS_TABLE_CHECKED,)
     )
     conn.execute("INSERT INTO sections VALUES (?, '.text', 256, 64, 16, 16, 8)", (t,))
     conn.execute(
@@ -1163,7 +1101,6 @@ def test_function_detail_similarity_fraction_rendered_as_percent(
     )
     conn.commit()
     conn.close()
-    monkeypatch.setattr("recoverage.potato._db_path", lambda: db)
 
     panel = render_potato_url(f"/potato?target={t}&section=.text&idx=0")
     assert "<b>similarity</b>" in panel

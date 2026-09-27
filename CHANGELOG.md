@@ -276,6 +276,11 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **A Potato Mode filter pill reported the wrong state.** Each pill's row
+  identity was its accesskey letter rather than the filter key, so the
+  "every filter key has a pill" and "a pill toggles only its own filter"
+  checks could not pass and no caller could tell the two apart. The pill
+  renders and links exactly as before.
 - **An IPv6 `--bind` could never listen.** `RECOVERAGE_BIND` and `--bind`
   deliberately keep the colons of an IPv6 address, but the listener inherited
   wsgiref's `AF_INET` and failed in `socket.bind()` on every platform, then

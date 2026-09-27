@@ -1533,7 +1533,7 @@ class TestPotatoQuery:
         ],
     )
     def test_filter_value_cannot_reach_the_page(self, value: str) -> None:
-        """``?filter=`` is allowlisted, not escaped — the stronger property.
+        """``?filter=`` is allowlisted, not escaped: the stronger property.
 
         ``potato._parse_filters`` intersects the value with the fixed keys in
         ``FILTER_STATES`` before the renderer ever sees it, so no caller-chosen

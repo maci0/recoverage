@@ -85,29 +85,39 @@ def _install_fake_rebrew(
         monkeypatch.setitem(sys.modules, name, module)
 
 
+def _record_rebrew_calls(monkeypatch: pytest.MonkeyPatch, events: list[tuple[str, Any]]) -> object:
+    """Install fake rebrew steps that append their name and argument to *events*.
+
+    Returns the config object ``load_config`` hands back, so a caller can
+    assert the catalog step received that same object rather than a path.
+    """
+    cfg = object()
+
+    def load_config(root: Path) -> object:
+        events.append(("load_config", root))
+        return cfg
+
+    def run_catalog(c: object) -> None:
+        events.append(("run_catalog", c))
+
+    def build_db(project_root: Path) -> None:
+        events.append(("build_db", project_root))
+
+    _install_fake_rebrew(
+        monkeypatch,
+        load_config=load_config,
+        run_catalog=run_catalog,
+        build_db=build_db,
+    )
+    return cfg
+
+
 class TestRunRegen:
     def test_loads_config_once_then_runs_steps_in_order(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         events: list[tuple[str, Any]] = []
-        cfg = object()
-
-        def load_config(root: Path) -> object:
-            events.append(("load_config", root))
-            return cfg
-
-        def run_catalog(c: object) -> None:
-            events.append(("run_catalog", c))
-
-        def build_db(project_root: Path) -> None:
-            events.append(("build_db", project_root))
-
-        _install_fake_rebrew(
-            monkeypatch,
-            load_config=load_config,
-            run_catalog=run_catalog,
-            build_db=build_db,
-        )
+        cfg = _record_rebrew_calls(monkeypatch, events)
 
         run_regen(tmp_path)
 
@@ -164,24 +174,7 @@ class TestRunRegen:
         skips, or reorders anything, so the second ends where the first did.
         """
         events: list[tuple[str, Any]] = []
-        cfg = object()
-
-        def load_config(root: Path) -> object:
-            events.append(("load_config", root))
-            return cfg
-
-        def run_catalog(c: object) -> None:
-            events.append(("run_catalog", c))
-
-        def build_db(project_root: Path) -> None:
-            events.append(("build_db", project_root))
-
-        _install_fake_rebrew(
-            monkeypatch,
-            load_config=load_config,
-            run_catalog=run_catalog,
-            build_db=build_db,
-        )
+        cfg = _record_rebrew_calls(monkeypatch, events)
 
         one_run = [
             ("load_config", tmp_path),

@@ -2024,6 +2024,23 @@ class TestAbsentObjectIsNotUnreadableDatabase:
             conn.close()
 
 
+def _spa_sources() -> tuple[str, str]:
+    """The SPA's two scripts, as shipped: (app.js, detail.js).
+
+    The classes below pin contracts the browser half of which Python cannot
+    observe, so they assert against the source text.
+    """
+    import importlib.resources
+
+    from recoverage import assets
+
+    base = importlib.resources.files(assets)
+    return (
+        base.joinpath("app.js").read_text(encoding="utf-8"),
+        base.joinpath("detail.js").read_text(encoding="utf-8"),
+    )
+
+
 class TestSpaStateVocabulary:
     """The SPA's STATE_ID must cover every state rebrew can write.
 
@@ -2032,18 +2049,6 @@ class TestSpaStateVocabulary:
     over every state != 'none'). PALETTE_VARS and FILTER_KEY are indexed by the
     same ids, so they must stay the same length.
     """
-
-    @staticmethod
-    def _assets() -> tuple[str, str]:
-        import importlib.resources
-
-        from recoverage import assets
-
-        base = importlib.resources.files(assets)
-        return (
-            base.joinpath("app.js").read_text(encoding="utf-8"),
-            base.joinpath("detail.js").read_text(encoding="utf-8"),
-        )
 
     def _window_rc_keys(self, app_js: str) -> set[str]:
         """Top-level key names of the ``window.RC = { ... }`` literal in *app_js*.
@@ -2084,7 +2089,7 @@ class TestSpaStateVocabulary:
     def test_state_id_covers_every_known_cell_state(self) -> None:
         from rebrew.build_db import _KNOWN_CELL_STATES
 
-        app_js, _ = self._assets()
+        app_js, _ = _spa_sources()
         block = app_js.split("const STATE_ID = {", 1)[1].split("};", 1)[0]
         mapped = {
             line.split(":")[0].strip()
@@ -2095,7 +2100,7 @@ class TestSpaStateVocabulary:
         assert missing == [], f"cell states the SPA paints as undocumented: {missing}"
 
     def test_verified_is_not_packed_as_none(self) -> None:
-        app_js, _ = self._assets()
+        app_js, _ = _spa_sources()
         block = app_js.split("const STATE_ID = {", 1)[1].split("};", 1)[0]
         assert "verified: 1" in block
         assert "verified: 0" not in block
@@ -2110,7 +2115,7 @@ class TestSpaStateVocabulary:
         """
         import re
 
-        app_js, detail_js = self._assets()
+        app_js, detail_js = _spa_sources()
         palette = re.search(r"const PALETTE_VARS = \[(.*?)\];", detail_js).group(1)
         filters = re.search(r"const FILTER_KEY = \[(.*?)\];", detail_js).group(1)
         assert palette.count('"--') == 8
@@ -2132,7 +2137,7 @@ class TestSpaStateVocabulary:
         It used to end in `${fn ? 1 : 0} fn`, which told a user nothing about
         the cell they were pointing at.
         """
-        _, detail_js = self._assets()
+        _, detail_js = _spa_sources()
         assert "0} fn" not in detail_js
         assert "wrap.title = [`Block ${idx}`" in detail_js
 
@@ -2292,24 +2297,12 @@ class TestSpaResourceTeardown:
     same way the SPA state vocabulary above is.
     """
 
-    @staticmethod
-    def _assets() -> tuple[str, str]:
-        import importlib.resources
-
-        from recoverage import assets
-
-        base = importlib.resources.files(assets)
-        return (
-            base.joinpath("app.js").read_text(encoding="utf-8"),
-            base.joinpath("detail.js").read_text(encoding="utf-8"),
-        )
-
     def test_grid_teardown_disconnects_the_resize_observer(self) -> None:
         """Every observed grid wrapper is dropped by dropGrids, so the
         observer that holds them must be disconnected there too. A ResizeObserver
         keeps its targets alive until unobserved, and a dropped wrapper carries
         its canvas context and the per-section hit-map typed arrays with it."""
-        _, detail_js = self._assets()
+        _, detail_js = _spa_sources()
         drop = detail_js.split("const dropGrids = () => {", 1)[1].split("};", 1)[0]
         assert "ro.disconnect()" in drop
         assert "container.innerHTML" in drop
@@ -2318,7 +2311,7 @@ class TestSpaResourceTeardown:
         """The SSE stream pins a bounded server-side /api/events slot until it
         is closed, so the derive that opens it must not open a second one when
         it re-runs."""
-        app_js, _ = self._assets()
+        app_js, _ = _spa_sources()
         after = app_js.split("let closeEvents = null;", 1)[1]
         derive = after.split("van.derive(() => {", 1)[1].split("});", 1)[0]
         assert "connectEvents" in derive
@@ -2334,20 +2327,8 @@ class TestSpaSectionCellsFeedback:
     flight and a retryable notice when the fetch fails.
     """
 
-    @staticmethod
-    def _assets() -> tuple[str, str]:
-        import importlib.resources
-
-        from recoverage import assets
-
-        base = importlib.resources.files(assets)
-        return (
-            base.joinpath("app.js").read_text(encoding="utf-8"),
-            base.joinpath("detail.js").read_text(encoding="utf-8"),
-        )
-
     def test_grid_frames_a_section_whose_cells_have_not_arrived(self) -> None:
-        _, detail_js = self._assets()
+        _, detail_js = _spa_sources()
         branch = detail_js.split("if (sec.cells == null) {", 1)[1].split("return;", 1)[0]
         assert "loading-overlay" in branch
         assert "grid-error" in branch
@@ -2355,7 +2336,7 @@ class TestSpaSectionCellsFeedback:
         assert "retrySectionCells(secName)" in branch
 
     def test_a_failed_cells_fetch_is_reported_and_retryable(self) -> None:
-        app_js, _ = self._assets()
+        app_js, _ = _spa_sources()
         fetch = app_js.split("const ensureSectionCells = async (name) => {", 1)[1]
         catch = fetch.split("} catch (error)", 1)[1].split("} finally", 1)[0]
         assert "cellLoadError.val = { section: name, detail: error.message }" in catch
