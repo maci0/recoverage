@@ -29,7 +29,7 @@ from rebrew.workspace import (
     sqlite_ro_uri,
 )
 
-from recoverage import api
+from recoverage import api, webapp
 from recoverage.server import _db_path as get_db_path
 
 # Typer 0.27 help paints option names with ANSI even under CliRunner
@@ -1817,6 +1817,47 @@ class TestBatchFunctionLookup:
         assert status.startswith("400")
         data = json.loads(decode_body(body, headers))
         assert str(api._MAX_BATCH_LOOKUP) in data["error"]
+
+    def test_batch_read_failure_is_not_reported_as_a_malformed_body(self) -> None:
+        """A body stream that breaks is a transport failure, not bad JSON.
+
+        The read used to be answered with an empty body, so a client that hung
+        up mid-transfer was told "Body must be a JSON object" and pointed at
+        its own payload for a failure it could not see or fix.  Driven through
+        the real route: the WSGI environ carries the broken stream, and only
+        the error label may differ from a genuinely empty body.
+        """
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+
+        class _BrokenStream:
+            def read(self, _n: int = -1) -> bytes:
+                raise OSError("peer closed the connection mid-body")
+
+        environ: dict[str, Any] = {}
+        setup_testing_defaults(environ)
+        environ.update(
+            REQUEST_METHOD="POST",
+            PATH_INFO=f"/api/targets/{target}/functions",
+            QUERY_STRING="",
+            REMOTE_ADDR="127.0.0.1",
+            CONTENT_TYPE="application/json",
+            CONTENT_LENGTH="32",
+            **{"wsgi.input": _BrokenStream()},
+        )
+        captured: dict[str, str] = {}
+
+        def _start_response(status: str, headers: list[tuple[str, str]], exc: Any = None) -> Any:
+            captured["status"] = status
+            return lambda chunk: None
+
+        body = b"".join(webapp.app(environ, _start_response))
+        text = body.decode("utf-8")
+
+        assert captured["status"].startswith("400")
+        assert "Could not read request body" in text
+        assert "Body must be a JSON object" not in text
 
 
 # ── Error-response consistency ────────────────────────────────────

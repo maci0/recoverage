@@ -281,6 +281,17 @@ The release policy is not written down anywhere else, so it is stated here and
      (`server._cells_json_rows`'s `expected_sections`, `server._per_section_buckets`,
      `potato._compute_section_stats`). A dropped section reports no coverage at
      all, and a dropped cell payload paints a whole section as `none` bytes.
+   - **Scope every such fallback to a MISSING schema object, never to a failed
+     read**: route it through `server._is_absent_object`, and let anything else
+     propagate to the 503 `db_unavailable` contract. Catching the whole
+     `sqlite3.Error` widens "this is a pre-v7 database" into "this database is
+     unreadable", and a locked or truncated `coverage.db` then answers with a
+     correct-looking cells-derived payload and no signal at all. The two probes
+     that never raise for a missing object (`PRAGMA table_info` and
+     `pragma_table_info`) need no branch; `server._table_columns` and
+     `server._has_materialized_cells` have none. A new degrade-on-older-schema
+     reader names `_is_absent_object` in its `except` or it is a silent failure
+     (`tests/test_server.py`, `TestAbsentObjectIsNotUnreadableDatabase`).
 3. `recoverage` → serves the DB as a web dashboard
    - Cell detail panel shows parent function as a clickable navigation link
 

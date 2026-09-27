@@ -1765,6 +1765,72 @@ class TestPartialDerivedTables:
         assert calls == []
 
 
+class TestAbsentObjectIsNotUnreadableDatabase:
+    """A "no such table" fallback must not cover an unreadable database.
+
+    Each of these readers degrades to a live query when a derived table is
+    absent, which is what keeps a pre-v7 database serving.  The degradation
+    used to catch every ``sqlite3.Error``, so a locked or corrupt
+    ``coverage.db`` took the same branch and produced a correct-looking but
+    cells-derived payload with nothing in the log and nothing in the response
+    to say the database could not be read.  ``_is_absent_object`` is the one
+    test that separates the two, and every fallback routes through it.
+    """
+
+    @staticmethod
+    def _unreadable() -> sqlite3.Cursor:
+        """A cursor whose reads all fail, the way a truncated file behaves."""
+        conn = sqlite3.connect(":memory:")
+        conn.close()
+        return conn.cursor()
+
+    def test_is_absent_object_separates_the_two_failures(self) -> None:
+        import recoverage.server as srv
+
+        assert srv._is_absent_object(sqlite3.OperationalError("no such table: cells"))
+        assert srv._is_absent_object(sqlite3.OperationalError("no such column: reg_delta"))
+        # Everything else is the database failing, not the schema being old.
+        assert not srv._is_absent_object(sqlite3.OperationalError("database is locked"))
+        assert not srv._is_absent_object(
+            sqlite3.OperationalError("database disk image is malformed")
+        )
+        assert not srv._is_absent_object(sqlite3.ProgrammingError("closed database"))
+
+    def test_section_stats_propagates_an_unreadable_database(self) -> None:
+        import recoverage.server as srv
+
+        with pytest.raises(sqlite3.Error):
+            srv._per_section_buckets(self._unreadable(), "T", {})
+
+    def test_table_columns_propagates_an_unreadable_database(self) -> None:
+        """The optional-column probe must not answer "no columns" for a broken DB.
+
+        Every v6 field (`updated_by`, `status`, `reg_delta`, ...) is projected
+        from this set, so a swallowed error silently shortened the function,
+        global and verify payloads instead of failing them.
+        """
+        import recoverage.server as srv
+
+        with pytest.raises(sqlite3.Error):
+            srv._table_columns(self._unreadable().connection, "functions")
+
+    def test_has_materialized_cells_propagates_an_unreadable_database(self) -> None:
+        import recoverage.server as srv
+
+        with pytest.raises(sqlite3.Error):
+            srv._has_materialized_cells(self._unreadable())
+
+    def test_table_columns_answers_a_missing_table_with_no_rows(self) -> None:
+        """The pre-v7 case the fallback exists for must keep working."""
+        import recoverage.server as srv
+
+        conn = sqlite3.connect(":memory:")
+        try:
+            assert srv._table_columns(conn, "functions") == set()
+        finally:
+            conn.close()
+
+
 class TestSpaStateVocabulary:
     """The SPA's STATE_ID must cover every state rebrew can write.
 

@@ -44,6 +44,7 @@ from recoverage.server import (
     _fn_json_sql,
     _format_hex_dump,
     _global_json_sql,
+    _is_absent_object,
     _load_dll,
     _load_metadata,
     _lookup_by_va_or_name,
@@ -1049,8 +1050,17 @@ def render_potato(parsed_url: ParseResult) -> str:
     db_path = _db_path()
     try:
         conn = _open_db(db_path)
-    except sqlite3.Error:
-        _log.warning("Potato mode: database unavailable at %s", db_path)
+    except sqlite3.Error as exc:
+        # The cause rides on the line: a missing file, a locked one and a
+        # corrupt one all land here, and the operator cannot tell them apart
+        # from the path alone.  Mirrors server._db_unavailable_err, which logs
+        # the same pair for the API surfaces.
+        _log.warning(
+            "Potato mode: database unavailable at %s: %s: %s",
+            db_path,
+            type(exc).__name__,
+            exc,
+        )
         # Signal failure, not a 200 page: monitoring and scripts must see the
         # DB outage (same contract as the API's 503 db_unavailable).
         raise _db_unavailable_page() from None
@@ -1367,10 +1377,15 @@ def _compute_section_stats(
     try:
         c.execute(_POTATO_BUCKETS_SQL, (target,))
         rows = c.fetchall()
-    except sqlite3.Error:
-        # No section_cell_stats at all (the case the fallback below is for),
-        # or a view whose columns do not match.  Either way the buckets are
-        # derived from `cells` below.
+    except sqlite3.OperationalError as exc:
+        # No section_cell_stats at all (the case the fallback below is for), or
+        # a view whose columns do not match.  Either way the buckets are
+        # derived from `cells` below.  A database that could not be read must
+        # not take that branch: /stats and /data answer it 503, and a header
+        # with no per-section stats is not what a caller should have to
+        # interpret.
+        if not _is_absent_object(exc):
+            raise
         rows = []
     if rows:
         buckets_iter = (
@@ -1409,7 +1424,12 @@ def _compute_section_stats(
                     c, target, cell_side
                 )
             ]
-        except sqlite3.Error:
+        except sqlite3.OperationalError as exc:
+            # A cells table too narrow for the live aggregation leaves the
+            # header empty rather than 500ing the page; a database that could
+            # not be read does not (see the query above).
+            if not _is_absent_object(exc):
+                raise
             buckets_iter = []
 
     for (
@@ -1440,7 +1460,9 @@ def _compute_section_stats(
         try:
             c.execute(_SECTION_STATS_FULL_SQL, (target,))
             gap_rows = c.fetchall()
-        except sqlite3.Error:
+        except sqlite3.OperationalError as exc:
+            if not _is_absent_object(exc):
+                raise
             gap_rows = []
         for row in gap_rows:
             sec_name_r = row["section_name"]
@@ -2390,7 +2412,15 @@ def _panel_fn_attach_verify(c: sqlite3.Cursor, target: str, fn_data: dict[str, A
             (target, int(fn_va_resolved)),
         )
         vr = c.fetchone()
-    except (sqlite3.Error, ValueError, TypeError):
+    except (ValueError, TypeError):
+        # A VA in a form this projection cannot bind is a panel with no verify
+        # row, not a failed request.
+        return
+    except sqlite3.OperationalError as exc:
+        # A function with no verify record omits these rows; a database that
+        # could not be read must not render as though it had none.
+        if not _is_absent_object(exc):
+            raise
         return
     if not vr:
         return

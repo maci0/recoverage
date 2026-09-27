@@ -253,6 +253,30 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   watcher, the cache warmup and the browser opener had started, as an
   "is another instance already running?" message. Both sources are validated
   at startup now and exit 2 with the variable named.
+- **An unreadable database answered with a plausible payload.** Every
+  derived-table fallback (`section_cell_stats`, `section_cells_json`, the
+  optional v6 columns) caught the whole `sqlite3.Error` to degrade on a
+  database that predates them, which quietly widened "this table is absent" to
+  "this database cannot be read". A locked or truncated `coverage.db`
+  therefore produced a correct-looking cells-derived `/stats`, `/data` or
+  Potato map header, with no log line and nothing in the response saying the
+  read had failed. The fallbacks now apply only to a genuinely missing schema
+  object; anything else reaches the 503 `db_unavailable` contract those
+  surfaces already give the same database, and a function panel renders
+  without its verification rows only when there is genuinely no verify record.
+- **A broken request body was reported as malformed JSON.** `POST
+  /api/targets/<target>/functions` turned a failed body read into an empty
+  body, so a client whose connection dropped mid-transfer was told "Body must
+  be a JSON object" and pointed at its own payload for a fault it could not
+  see. A read that fails is now named as one, and logged.
+- **A rejected auth cookie was silent.** If the `Set-Cookie` for a share link
+  was refused, the reader was authenticated for exactly one request and 401'd
+  on every link after it, which reads as a broken server. The page still
+  renders; the log now says what happened.
+- **`/api/targets` and Potato Mode's open failure logged no cause.** Both
+  reported "database unavailable" with the path alone, so a missing, locked
+  and corrupt database were indistinguishable without reading the source. Both
+  now log the exception class and message, as the API's 503 path already did.
 - **A partially populated cache dropped whole sections.** The dashboard
   prefers `section_cell_stats` and `section_cells_json` over re-deriving them
   from `cells`, and it decided which to use by asking whether they exist. A

@@ -494,7 +494,13 @@ def _per_section_buckets(
     try:
         c.execute(_SECTION_BUCKETS_SQL, (target,))
         rows = c.fetchall()
-    except sqlite3.Error:
+    except sqlite3.OperationalError as exc:
+        # A pre-v7 database has no section_cell_stats; the live path below is
+        # what keeps it serving.  A database that could not be READ takes the
+        # same branch if the guard is dropped, answering with cells-derived
+        # buckets and no signal, so it goes to the 503 contract instead.
+        if not _is_absent_object(exc):
+            raise
         rows = []
     if rows:
         covered: set[str] = set()
@@ -1253,6 +1259,24 @@ def folded_like_clause(columns: Sequence[str], search: str) -> tuple[str, list[s
 
 # ── SQL fragments ──────────────────────────────────────────────────
 
+#: SQLite's wording for a schema object the database does not carry.
+_ABSENT_OBJECT_MARKERS = ("no such table", "no such column")
+
+
+def _is_absent_object(exc: sqlite3.Error) -> bool:
+    """Whether *exc* is SQLite reporting a schema object the database lacks.
+
+    The one test every "this older or foreign database has no such table"
+    fallback routes through.  A degrade-on-older-schema path answers
+    ``no such table``/``no such column`` from ``cells`` so a pre-v7 database
+    still serves; any other ``sqlite3.Error`` means the file could not be read,
+    which propagates to the 503 ``db_unavailable`` contract rather than
+    producing a fallback payload that looks like a successful read.
+    """
+    message = str(exc).lower()
+    return any(marker in message for marker in _ABSENT_OBJECT_MARKERS)
+
+
 #: Optional v6 columns, probed per connection: older DBs (v5 and below)
 #: lack them, and the endpoints degrade instead of 500ing.
 _V6_FUNCTION_COLS = ("updated_by", "updated_at")
@@ -1261,11 +1285,16 @@ _V6_VERIFY_COLS = ("reg_delta", "effective_match")
 
 
 def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
-    """Column names of *table*; empty set when the table is missing."""
-    try:
-        rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
-    except sqlite3.Error:
-        return set()
+    """Column names of *table*; empty set when the table is missing.
+
+    ``PRAGMA table_info`` answers a name no table carries with zero rows, not
+    an error, so a missing table needs no guard and every ``sqlite3.Error``
+    raised here is a database that could not be read.  Returning an empty set
+    for one would drop every optional v6 column from the function, global and
+    verify payloads — a silently short response, where the 503 contract says
+    the failure belongs.
+    """
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
     return {r[1] for r in rows}
 
 
@@ -1390,15 +1419,16 @@ def _has_materialized_cells(c: sqlite3.Cursor) -> bool:
     by querying a table that is not there.  A fingerprint-keyed memo would cost
     about as much as the query it replaces.
     """
-    try:
-        c.execute(
-            "SELECT 1 FROM pragma_table_info(?) WHERE name = ?",
-            (SECTION_CELLS_TABLE, SECTION_CELLS_COLUMN),
-        )
-        return c.fetchone() is not None
-    except sqlite3.Error:
-        # Unreadable schema: treat as absent and use the live query.
-        return False
+    # No guard for a table the database does not carry: pragma_table_info
+    # answers an unknown name with zero rows, which is the False this returns.
+    # A sqlite3.Error here is a database that could not be read, and answering
+    # "no cache, use the live query" would be a slow but plausible response
+    # where the 503 contract says the failure belongs.
+    c.execute(
+        "SELECT 1 FROM pragma_table_info(?) WHERE name = ?",
+        (SECTION_CELLS_TABLE, SECTION_CELLS_COLUMN),
+    )
+    return c.fetchone() is not None
 
 
 def _cells_json_rows(
@@ -2002,11 +2032,23 @@ def set_auth_cookie() -> None:
     """
     if not _AUTH_TOKEN or not _auth_token_matches(query_param("token")):
         return
-    # A header the peer will not accept must not break the page it rides on.
-    with contextlib.suppress(Exception):
+    # A header the peer will not accept must not break the page it rides on —
+    # but it must not be invisible either.  A dropped Set-Cookie leaves the
+    # reader authenticated for exactly one request and 401 on every link they
+    # follow after it, which reads as a broken server and is diagnosable only
+    # from this line.  The value is the server's own token, never the request's.
+    try:
         response.set_header(
             "Set-Cookie",
             f"{AUTH_COOKIE_NAME}={_AUTH_TOKEN}; Path=/; HttpOnly; SameSite=Strict",
+        )
+    except Exception:
+        _log.warning(
+            "Set-Cookie rejected for %s %s — the share link will 401 on every "
+            "follow-on request (the page itself still renders)",
+            _log_safe(request.method),
+            _log_safe(request.path),
+            exc_info=True,
         )
 
 

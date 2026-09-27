@@ -2146,6 +2146,46 @@ class TestDbUnavailableContract:
         assert status.startswith("503")
         assert b"Database unavailable" in body
 
+    def test_unreadable_db_is_503_not_a_header_without_stats(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A database that opens but cannot answer queries must not render.
+
+        The section-stats fallbacks derive the map header from `cells` when
+        `section_cell_stats` is absent, and used to catch every sqlite3.Error
+        doing it.  A truncated or locked file therefore rendered a full 200
+        page whose header reported no per-section stats, with nothing saying
+        the database was unreadable — the same 503 the connect guard and
+        /stats give, from the same database.
+        """
+        from recoverage import potato
+
+        # Opens fine and refuses every read, the way a truncated or
+        # permission-locked file does — the failure mode a live connection
+        # sees, which is not the same as an open that fails.
+        conn = sqlite3.connect(":memory:")
+        conn.set_authorizer(lambda *args: sqlite3.SQLITE_DENY)
+        monkeypatch.setattr(potato, "_open_db", lambda _db: conn)
+        monkeypatch.setattr(
+            "recoverage.server._db_path", lambda: Path(__file__).with_name("nope.db")
+        )
+        status, _, body = wsgi_get("/potato")
+        assert status.startswith("503")
+        assert b"Database unavailable" in body
+
+    def test_verify_panel_propagates_an_unreadable_database(self) -> None:
+        """A missing verify row omits the rows; a broken database is a 503.
+
+        Both answers were `return`, so a locked database rendered a panel that
+        looked exactly like a function nobody had verified.
+        """
+        import recoverage.potato as potato
+
+        conn = sqlite3.connect(":memory:")
+        conn.close()
+        with pytest.raises(sqlite3.Error):
+            potato._panel_fn_attach_verify(conn.cursor(), "T", {"va": "0x1000"})
+
 
 class TestDefaultTargetMatchesSpa:
     """Potato and the SPA must open on the same target.

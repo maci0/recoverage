@@ -200,6 +200,11 @@ _DATA_CACHE_MAX = 8
 # without this, each of those cold misses materializes its own multi-MB
 # payload (full-table json_group_array + search index + json.dumps).
 _DATA_CACHE_BUILDING: dict[tuple[tuple[int, int] | None, str, str | None], threading.Event] = {}
+#: How long a follower waits on the leader's build Event.  The leader's finally
+#: always sets it, so this only bounds the case where it does not (a thread
+#: killed mid-build).  Comfortably longer than a cold /data build on a large
+#: target, so a follower that gives up here has genuinely lost its leader.
+_DATA_CACHE_BUILD_WAIT_SECONDS = 30.0
 
 
 def _clear_data_cache() -> None:
@@ -233,9 +238,11 @@ def _data_cache_checkout(
             event = _DATA_CACHE_BUILDING[key] = threading.Event()
             return None, event
     # Follower path (outside the lock): the leader's finally always sets the
-    # event — success, error, or 404 short-circuit alike.
-    # Timeout prevents an indefinite block if the leader dies without setting.
-    event.wait(timeout=30.0)
+    # event — success, error, or 404 short-circuit alike.  The bound is the
+    # backstop for the case it does not (a thread killed between checkout and
+    # the finally); a follower that gives up rebuilds its own payload, which
+    # is what the None below tells it to do.
+    event.wait(timeout=_DATA_CACHE_BUILD_WAIT_SECONDS)
     with _DATA_CACHE_LOCK:
         return _DATA_CACHE.get(key), None
 
@@ -809,8 +816,16 @@ def handle_api_targets() -> bytes:
         with contextlib.closing(_db()) as conn:
             c = conn.cursor()
             targets_list = resolve_targets(c)
-    except sqlite3.Error:
-        _log.warning("Database unavailable, falling back to config-only target list")
+    except sqlite3.Error as exc:
+        # The cause goes in the line: a locked database and a corrupt one both
+        # land here, and the operator needs to tell them apart without reading
+        # the source.
+        _log.warning(
+            "Database unavailable reading the target list, falling back to the "
+            "config-only list: %s: %s",
+            type(exc).__name__,
+            exc,
+        )
         targets_list = [
             {"id": tid, "name": Path(_target_filename(tid, t_info)).name}
             for tid, t_info in _server._get_targets_config().items()
@@ -1305,8 +1320,24 @@ def _batch_request_vas() -> tuple[list[int], Any | None]:
         )
     try:
         raw = request.body.read(_MAX_BATCH_BODY_BYTES + 1)
-    except (OSError, ValueError):
-        raw = b""
+    except (OSError, ValueError) as exc:
+        # A read that fails is not an empty body: it is a client that hung up
+        # or a stream that broke mid-transfer, and reporting it as "Body must
+        # be a JSON object" blames the payload for a transport failure the
+        # caller has to be able to see.
+        _log.warning(
+            "Reading the batch request body failed: %s: %s",
+            type(exc).__name__,
+            exc,
+        )
+        return [], _json_err(
+            400,
+            {
+                "error": "Could not read request body",
+                "detail": f"the body stream failed before it was received "
+                f"({type(exc).__name__}); resend it with a Content-Length",
+            },
+        )
     if len(raw) > _MAX_BATCH_BODY_BYTES:
         return [], _json_err(
             413,
