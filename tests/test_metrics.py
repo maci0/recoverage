@@ -57,7 +57,7 @@ def replace_route() -> Iterator[Swap]:
             return
         raise AssertionError(f"no GET route for {rule}")
 
-    yield _apply
+    return _apply
 
 
 def _boom(original: Callable) -> object:
@@ -189,6 +189,23 @@ class TestStats:
         assert snap["errors"] == 1
         assert snap["total"] == 1
         assert snap["by_route"]["/api/x"]["errors"] == 1
+
+    def test_reclassify_rebuckets_without_retracting_the_request(self) -> None:
+        """The failed request stays counted on its route.
+
+        `by_status` moves it between buckets, so `by_route` has to keep
+        counting it: retracting it there made the per-route request counts
+        stop summing to `total`, and a route whose every request failed
+        reported `requests: 0, errors: 3` — an error rate no reader can
+        compute and a route that looks like it was never called.
+        """
+        metrics.REQUESTS.finish("/api/x", 200, 5.0)
+        metrics.REQUESTS.finish("/api/y", 200, 1.0)
+        metrics.REQUESTS.reclassify("/api/x", 200, 503)
+        snap = metrics.REQUESTS.snapshot()
+        assert snap["by_route"]["/api/x"] == {"requests": 1, "errors": 1, "max_ms": 5.0}
+        assert sum(r["requests"] for r in snap["by_route"].values()) == snap["total"]
+        assert sum(r["errors"] for r in snap["by_route"].values()) == snap["errors"]
 
     def test_unbounded_route_updates_counts_but_not_latency(self) -> None:
         metrics.REQUESTS.finish("/api/events", 200, 900_000.0, timed=False)

@@ -212,6 +212,23 @@ module ships in the published package. See *Breaking*.
 - **`recoverage serve --help` and `recoverage open --help` no longer show raw
   reStructuredText markup.** Their descriptions wrapped flag and command names
   in double backticks, which Rich rendered literally.
+- **The per-section buckets reconcile again, and `/stats` agrees with `/data`.**
+  `/api/targets/<t>/stats` overwrote the materialized `exact_count` with a
+  `cells`-side count of `exact` alone, while `rebrew build-db`, `/data`, Potato
+  Mode and the grid palette all fold `verified` in (it is a match, and its
+  bytes were already counted as covered). A database holding `VERIFIED` cells
+  therefore reported a `total_cells` its buckets could not sum to, and the same
+  database answered two different stats depending on whether `build-db` had
+  run. The endpoint now reads rebrew's bucket definitions instead of
+  restating one of them, and the live-query fallback (a database predating the
+  materialized table) computes the same ones, so both paths return the same
+  numbers and `total_cells` equals the sum of the buckets.
+- **A failed request stays counted on its route in `/api/health`.** A request
+  that failed after `after_request` had filed it as a 200 is re-bucketed into
+  its real status class, but the per-route row retracted it instead of moving
+  it: a route whose every request failed reported `requests: 0, errors: 3`,
+  and the per-route request counts no longer summed to `total`. The route's
+  error count now also follows the same 500 threshold as the process-wide one.
 - **`/src/<path>` and `/original/<path>` answer 404 instead of 500 for a path
   holding a NUL.** `os.realpath` raises `ValueError` on an embedded NUL, and
   the containment check resolves the candidate before serving it, so

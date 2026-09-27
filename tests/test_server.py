@@ -10,6 +10,7 @@ import queue
 import sqlite3
 import threading
 import time
+from collections.abc import Sequence
 from pathlib import Path
 from typing import IO, Any, ClassVar
 
@@ -1356,12 +1357,29 @@ class TestBucketReconciliation:
         "other",
     )
 
+    # One cell per named bucket, plus three the buckets leave to `other`.
+    CELL_STATES = (
+        "exact",
+        "reloc",
+        "near_match",
+        "stub",
+        "padding",
+        "data",
+        "thunk",
+        "none",
+        "proven",
+        "size_mismatch",
+        "compile_error",
+        "skip",
+        "unknown",
+    )
+
     @staticmethod
     def _reconciles(sec: dict[str, Any]) -> None:
         assert sum(sec[k] for k in TestBucketReconciliation.BUCKET_KEYS) == sec["total_cells"]
 
-    @staticmethod
-    def _cells_db() -> sqlite3.Connection:
+    @classmethod
+    def _cells_db(cls, states: Sequence[str] | None = None) -> sqlite3.Connection:
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row
         c = conn.cursor()
@@ -1372,25 +1390,10 @@ class TestBucketReconciliation:
         c.execute("CREATE TABLE metadata (target TEXT, key TEXT, value TEXT)")
         c.execute("CREATE TABLE sections (target TEXT, name TEXT, va INT, size INT)")
         c.execute("CREATE TABLE functions (target TEXT, va INT, status TEXT, markerType TEXT)")
-        states = [
-            "exact",
-            "reloc",
-            "near_match",
-            "stub",
-            "padding",
-            "data",
-            "thunk",
-            "none",
-            "proven",
-            "size_mismatch",
-            "compile_error",
-            "skip",
-            "unknown",
-        ]
         c.executemany(
             "INSERT INTO cells (target, section_name, start, end, span, state)"
             " VALUES ('T', '.text', ?, ?, 1, ?)",
-            [(i, i + 1, s) for i, s in enumerate(states)],
+            [(i, i + 1, s) for i, s in enumerate(states or cls.CELL_STATES)],
         )
         return conn
 
@@ -1465,6 +1468,62 @@ class TestBucketReconciliation:
         finally:
             conn.close()
         assert stats["sections"][".text"]["other"] == 0
+
+    def test_verified_cells_count_as_exact_on_both_paths(self) -> None:
+        """'verified' is a match, and the two sources must agree on that.
+
+        build_db folds VERIFIED into exact_count, the grid palette paints it in
+        the exact slot, and covered_bytes already counts its bytes.  The
+        materialized path used to overwrite that with a cells-side 'exact'-only
+        count, which dropped every VERIFIED cell from every bucket: the served
+        total no longer reconciled with the bucket sum, /stats disagreed with
+        /data and Potato Mode over the same database, and the live fallback
+        disagreed with the materialized table.
+        """
+        import recoverage.server as srv
+
+        states = ["exact", "verified", "verified", "none", "skip"]
+
+        fallback_db = self._cells_db(states)
+        try:
+            fallback = srv._section_stats(fallback_db.cursor(), "T")["sections"][".text"]
+        finally:
+            fallback_db.close()
+
+        materialized_db = self._cells_db(states)
+        try:
+            c = materialized_db.cursor()
+            c.execute(
+                "CREATE TABLE section_cell_stats (target TEXT, section_name TEXT,"
+                " total_cells INT, exact_count INT, reloc_count INT,"
+                " near_match_count INT, stub_count INT, padding_count INT,"
+                " data_count INT, thunk_count INT, none_count INT,"
+                " proven_count INT, size_mismatch_count INT, other_count INT)"
+            )
+            c.execute(
+                "INSERT INTO section_cell_stats SELECT target, section_name,"
+                " COUNT(*),"
+                " SUM(state IN ('exact','verified')), SUM(state='reloc'),"
+                " SUM(state IN ('near_match','near_matching')), SUM(state='stub'),"
+                " SUM(state='padding'), SUM(state='data'), SUM(state='thunk'),"
+                " SUM(state='none'), SUM(state='proven'),"
+                " SUM(state='size_mismatch'),"
+                " SUM(state NOT IN ('exact','verified','reloc','near_match',"
+                " 'near_matching','stub','padding','data','thunk','none','proven',"
+                " 'size_mismatch'))"
+                " FROM cells GROUP BY target, section_name"
+            )
+            materialized = srv._section_stats(c, "T")["sections"][".text"]
+        finally:
+            materialized_db.close()
+
+        assert fallback["exact"] == 3
+        assert fallback["other"] == 1
+        self._reconciles(fallback)
+        self._reconciles(materialized)
+        assert materialized == fallback
+        # A VERIFIED byte is covered, so it is a match: matched counts it too.
+        assert materialized["matched"] == 3
 
 
 class TestSpaStateVocabulary:

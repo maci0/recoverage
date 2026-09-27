@@ -90,20 +90,28 @@ class RequestStats:
         escaped exception into a 500 (or a 503, for a database failure), so
         the hook sees 200 for a request that never succeeded.  The error
         handler calls this with what it is about to answer.
+
+        The request is re-bucketed, not retracted: ``_by_status`` moves it
+        between status buckets, so ``_by_route`` keeps counting it too, and
+        the per-route request counts keep summing to ``total``.  Retracting it
+        from the route row instead made a route whose every request failed
+        report ``requests: 0, errors: 3``.  The route's error count follows
+        the same 500 threshold as the process-wide one, so a reclassification
+        into a non-5xx bucket does not leave the two disagreeing.
         """
         if from_status == to_status:
             return
         old, new = f"{from_status // 100}xx", f"{to_status // 100}xx"
+        delta = 1 if to_status >= 500 else -1
         with self._lock:
             self._by_status[old] = self._by_status.get(old, 0) - 1
             if self._by_status[old] <= 0:
                 del self._by_status[old]
             self._by_status[new] = self._by_status.get(new, 0) + 1
-            self._errors += 1 if to_status >= 500 else -1
+            self._errors += delta
             row = self._by_route.get(route)
             if row is not None:
-                row["requests"] -= 1
-                row["errors"] += 1
+                row["errors"] += delta
                 self._by_route[route] = row
 
     def snapshot(self) -> dict[str, Any]:

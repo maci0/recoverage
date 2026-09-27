@@ -384,19 +384,20 @@ NOT_DATA_MARKER_SQL = "(markerType IS NULL OR markerType NOT IN ({types}))".form
 # the `recoverage stats` CLI.  ONE definition, so the two callers cannot drift
 # apart (see _section_stats for what the copies used to get wrong).
 #
-# Only the three values that need `cells` are computed here.  The other eleven
-# cell counts come from section_cell_stats, which rebrew materializes per
-# section (~0.01 ms); adding the ten further SUM(CASE ...) expressions and a
-# COUNT(*) to this scan cost
-# ~15 ms on a 64k-cell target against ~6 ms for these three.  The one bucket
-# that differs between the two sources is exact_count — the materialized table
-# folds state 'verified' into it for the grid legend, this endpoint counts only
-# 'exact' — so exact_count stays cells-side to keep these numbers unchanged.
+# Only the two values that need `cells` are computed here.  Every cell count
+# comes from section_cell_stats, which rebrew materializes per section
+# (~0.01 ms); adding the eleven SUM(CASE ...) expressions and a COUNT(*) to
+# this scan cost ~15 ms on a 64k-cell target against ~6 ms for these two.  That
+# includes exact_count: the cells-side copy that used to sit here counted
+# 'exact' alone while every other surface (rebrew's materialized table, /data,
+# Potato Mode, and the grid's own palette, which paints 'verified' in the exact
+# slot) folds 'verified' in, so the two disagreed on the same database and the
+# buckets failed to reconcile with total_cells.  rebrew owns the definition;
+# this endpoint reads it rather than restating it.
 SECTION_STATS_SQL = """
     SELECT section_name,
       SUM(CASE WHEN state != 'none' THEN end - start ELSE 0 END) AS covered_bytes,
-      SUM(end - start) AS total_bytes,
-      SUM(CASE WHEN state = 'exact' THEN 1 ELSE 0 END) AS exact_count
+      SUM(end - start) AS total_bytes
     FROM cells WHERE target = ? GROUP BY section_name
 """
 
@@ -406,22 +407,19 @@ _SECTION_BUCKETS_SQL = "SELECT * FROM section_cell_stats WHERE target = ?"
 # Every bucket computed from `cells` in one pass.  Used ONLY when
 # section_cell_stats is absent or empty — a hand-made or partial database (the
 # CLI's own fixtures build exactly that), which the pre-split single-query
-# version handled and which must keep working.  Kept verbatim so the numbers are
-# the ones the split was verified against.
+# version handled and which must keep working.
 #
 # other_count is the same catch-all rebrew's build_db writes into
-# section_cell_stats, so the two sources cannot disagree about the residual
-# and total_cells reconciles with the bucket sum on this path too.  It differs
-# from rebrew's in one place: this query's exact_count counts 'exact' only
-# (the endpoint's documented contract — _per_section_buckets overwrites the
-# materialized exact with the same cells-side value), so 'verified' lands in
-# other_count here while rebrew folds it into exact_count.
+# section_cell_stats, and the bucket definitions match it one for one
+# (including 'verified' counted as exact, not as other), so the two sources
+# cannot disagree and total_cells reconciles with the bucket sum on this path
+# exactly as it does on the materialized one.
 _SECTION_STATS_FULL_SQL = """
     SELECT section_name,
       SUM(CASE WHEN state != 'none' THEN end - start ELSE 0 END) AS covered_bytes,
       SUM(end - start) AS total_bytes,
       COUNT(*) AS total_cells,
-      SUM(CASE WHEN state = 'exact' THEN 1 ELSE 0 END) AS exact_count,
+      SUM(CASE WHEN state IN ('exact', 'verified') THEN 1 ELSE 0 END) AS exact_count,
       SUM(CASE WHEN state = 'reloc' THEN 1 ELSE 0 END) AS reloc_count,
       SUM(CASE WHEN state IN ('near_match','near_matching') THEN 1 ELSE 0 END) AS near_match_count,
       SUM(CASE WHEN state = 'stub' THEN 1 ELSE 0 END) AS stub_count,
@@ -432,8 +430,8 @@ _SECTION_STATS_FULL_SQL = """
       SUM(CASE WHEN state = 'proven' THEN 1 ELSE 0 END) AS proven_count,
       SUM(CASE WHEN state = 'size_mismatch' THEN 1 ELSE 0 END) AS size_mismatch_count,
       SUM(CASE WHEN state NOT IN (
-        'exact', 'reloc', 'near_match', 'near_matching', 'stub', 'padding',
-        'data', 'thunk', 'none', 'proven', 'size_mismatch'
+        'exact', 'verified', 'reloc', 'near_match', 'near_matching', 'stub',
+        'padding', 'data', 'thunk', 'none', 'proven', 'size_mismatch'
       ) THEN 1 ELSE 0 END) AS other_count
     FROM cells WHERE target = ? GROUP BY section_name
 """
@@ -444,11 +442,19 @@ def _per_section_buckets(
 ) -> Iterator[tuple[str, dict[str, Any], int, int]]:
     """Yield ``(section_name, buckets, covered_bytes, total_bytes)`` per section.
 
-    Prefers rebrew's materialized ``section_cell_stats`` for the cell counts it
-    already aggregates and takes the byte sums plus ``exact_count``
-    from *cell_side*, which was computed from `cells`.  When that table is absent
-    or empty, every bucket comes from `cells` instead — the single-query path
-    this endpoint used before the split.
+    Every cell count comes from rebrew's materialized ``section_cell_stats``;
+    the byte sums come from *cell_side*, computed from `cells`, because no
+    materialized column carries them.  When that table is absent or empty, every
+    bucket comes from `cells` instead — the single-query path this endpoint used
+    before the split — using the definitions _SECTION_STATS_FULL_SQL keeps in
+    step with build_db's.
+
+    The two paths return the same numbers for the same database.  They did
+    not: the materialized `exact_count` (which counts 'verified' as exact, like
+    /data, Potato Mode and the grid palette) was overwritten with a cells-side
+    'exact'-only count, so a database carrying VERIFIED cells reported a total
+    its buckets could not sum to, and the same DB answered two different stats
+    depending on whether build_db had run.
     """
     try:
         c.execute(_SECTION_BUCKETS_SQL, (target,))
@@ -459,14 +465,9 @@ def _per_section_buckets(
         for row in rows:
             name = row["section_name"]
             side = cell_side.get(name)
-            buckets = _cell_bucket_row(row)
-            if side is not None:
-                # exact_count counts only 'exact' here; the materialized table
-                # folds 'verified' into it for the grid legend.
-                buckets["exact"] = side["exact_count"]
             yield (
                 name,
-                buckets,
+                _cell_bucket_row(row),
                 (side["covered_bytes"] if side is not None else 0) or 0,
                 (side["total_bytes"] if side is not None else 0) or 0,
             )
