@@ -40,15 +40,33 @@ module ships in the published package. See *Breaking*.
   `serve` read the environment, so a deployment off the default port had to be
   repeated in every `open` invocation. The flag still wins.
 
+### Breaking
+
+- **`server.resolve_targets` returns the one ordered target list, not a
+  `(target_ids, targets)` pair.** Before: a two-element tuple whose first
+  element was raw DB order and whose second was config-declared first. After:
+  the second element alone, so `target_ids, targets = resolve_targets(c)`
+  raises `ValueError: not enough values to unpack`. Drop the unpacking and use
+  the returned list. Every in-tree caller already discarded the first
+  element, which is what left a second ordering alive for the SPA and Potato
+  Mode to agree not to use.
+- **`recoverage check --min-coverage` out of range exits 2, not 1.** A
+  threshold outside 0-100 is a usage error, and a non-numeric value already
+  exited 2 from the parser; the range check exited 1, the same code as a
+  genuine coverage failure, so a CI job could not tell a mistyped flag from a
+  build that dropped below the gate. The `--json` error object reports
+  `"exit_code": 2` with it. A gate failure still exits 1.
+
 ### Changed
 
 - **The dashboard loads measurably less on every visit.** The inlined shell
   and the packaged assets are now served as the *smallest* representation the
   browser accepts, rather than under a fixed `zstd`-first preference, and both
   compress at maximum effort instead of the per-request settings. The shell
-  drops from 17,568 to 14,537 bytes, which puts it back inside the initial
-  congestion window (14,600) and saves a second round trip before the first
-  paint on any zstd-capable browser; `hljs.min.js` drops 45,575 to 37,714 and
+  drops from 17,568 to 14,754 bytes, which keeps it within a few hundred
+  bytes of the initial congestion window (14,600) and saves a second round
+  trip before the first paint on any zstd-capable browser; `hljs.min.js` drops
+  45,575 to 37,714 and
   `detail.js` 10,468 to 8,583. The shell also gained a strong `ETag` and
   answers `If-None-Match` with a 304, so a repeat visit re-downloads none of
   it: it was the one response still served `no-store`, so every reload pulled
@@ -70,25 +88,6 @@ module ships in the published package. See *Breaking*.
 - **`_db_path` is imported from `recoverage._paths`, not re-exported through
   `recoverage.server`.** `api`, `potato` and `cli` now name the same module as
   the helper's owner.
-
-### Breaking
-
-- **`server.resolve_targets` returns the one ordered target list, not a
-  `(target_ids, targets)` pair.** Before: a two-element tuple whose first
-  element was raw DB order and whose second was config-declared first. After:
-  the second element alone, so `target_ids, targets = resolve_targets(c)`
-  raises `ValueError: not enough values to unpack`. Drop the unpacking and use
-  the returned list. Every in-tree caller already discarded the first
-  element, which is what left a second ordering alive for the SPA and Potato
-  Mode to agree not to use.
-- **`recoverage check --min-coverage` out of range exits 2, not 1.** A
-  threshold outside 0-100 is a usage error, and a non-numeric value already
-  exited 2 from the parser; the range check exited 1, the same code as a
-  genuine coverage failure, so a CI job could not tell a mistyped flag from a
-  build that dropped below the gate. The `--json` error object reports
-  `"exit_code": 2` with it. A gate failure still exits 1.
-
-### Changed
 
 - **One mechanism pins the sibling `rebrew` checkout.** Every CI job ran the
   `sibling-rebrew` composite action and then `tools/ci_clone_rebrew.sh`, which

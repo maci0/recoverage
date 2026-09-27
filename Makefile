@@ -22,13 +22,13 @@ UV_SYNC_FLAGS ?= --frozen --extra dev
 # installs uv unpinned (astral-sh/setup-uv with no version input).
 UV_VERSION ?= 0.12.14
 
-# The rebrew tag/commit pin lives in tools/ci_clone_rebrew.sh, the one place
-# both `make clone-rebrew` and CI read it from.  Set REBREW_REF / REBREW_SHA to
-# develop against a different rebrew; the script then takes them from the
-# environment.  The commit must be one whose dependency metadata still matches
-# uv.lock, or `uv sync --frozen` fails on the lock check.
-REBREW_REF ?=
-REBREW_SHA ?=
+# The rebrew tag/commit pin is written in tools/ci_clone_rebrew.sh, the script
+# every CI job and `make clone-rebrew` runs.  REBREW_REF / REBREW_SHA here must
+# keep matching that script's defaults (tests/test_supply_chain.py): a value
+# set on the command line or in the environment takes the place of the pin for
+# that one run, which is how you develop against a different rebrew.
+REBREW_REF ?= v2.13.1
+REBREW_SHA ?= d2d67c870df79214320f16b1cba1b0f6086605a7
 REBREW_DIR := $(abspath $(CURDIR)/../rebrew)
 
 # The floor in pyproject.toml [project].dependencies; rebrew below it lacks

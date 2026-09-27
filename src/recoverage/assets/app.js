@@ -63,7 +63,7 @@ const detailReady = van.state(false);
 const detailFailed = van.state(false);
 
 function loadDetail() {
-  window.RC = { van, MetaItem, MSG, hex, enc, encPath, STATE_LABEL, onReady: () => { detailReady.val = true; } };
+  window.RC = { van, MetaItem, MSG, hex, STATE_LABEL, enc, encPath, onReady: () => { detailReady.val = true; } };
   const el = document.createElement("script");
   el.src = "/detail.js";
   // Without this the panes it owns would sit on "Loading…" forever.

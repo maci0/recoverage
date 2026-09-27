@@ -110,11 +110,12 @@ def _check_payload_budget(payload: bytes) -> None:
     window, so it is the number checked here.
 
     The budget is the initial congestion window (10 x 1460-byte MSS), so the
-    payload should arrive in one round trip.  It currently fits with little to
-    spare: everything deferrable (the asm fetch, its formatting, the canvas
-    coverage map, and the highlight.js load among it) lives in ``detail.js``,
-    so a new byte has to come out of there rather than out of the window.  The
-    warning is the ratchet that says so, naming the exact overage.
+    payload should arrive in one round trip.  The shipped shell measures
+    14,754 bytes under brotli q11, the highest quality the library offers, so
+    it is just over: everything deferrable (the asm fetch, its formatting, the
+    canvas coverage map, and the highlight.js load among it) lives in
+    ``detail.js``, and further gains have to come from there.  The warning is
+    the ratchet that says so, naming the exact overage.
     """
     results: list[tuple[str, int]] = [
         ("gzip", len(gzip.compress(payload, compresslevel=GZIP_STATIC_LEVEL))),

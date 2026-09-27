@@ -96,7 +96,7 @@ class TestCheckedInLintPreset:
         row = next(
             line
             for line in _README.read_text(encoding="utf-8").splitlines()
-            if "rikalabs-strict.json" in line
+            if "rikalabs-strict.json" in line and line.lstrip().startswith("|")
         )
         pin = json.loads(_PACKAGE_JSON.read_text(encoding="utf-8"))["devDependencies"][
             "@rikalabs/oxlint-standards"
