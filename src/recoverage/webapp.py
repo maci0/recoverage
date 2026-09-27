@@ -85,6 +85,17 @@ def _method_not_allowed() -> Any:
     )
 
 
+def _not_found() -> Any:
+    """The JSON 404 body both misses answer."""
+    return _json_err(
+        404,
+        {
+            "error": "Not found",
+            "detail": f"no such endpoint: {_log_safe(request.path)}",
+        },
+    )
+
+
 # Registered LAST (after api+ui above), this fallback keeps unmatched paths a
 # 404.  Without it, the CORS preflight catch-all in server.py — the only rule
 # matching every path — makes bottle answer unknown GETs/POSTs with "405
@@ -98,13 +109,7 @@ def _unmatched_route(path: str) -> Any:
     # reaches it at all, so the two error handlers below cover that half.
     if _allowed_methods(request.path):
         return _method_not_allowed()
-    return _json_err(
-        404,
-        {
-            "error": "Not found",
-            "detail": f"no such endpoint: {_log_safe(request.path)}",
-        },
-    )
+    return _not_found()
 
 
 # A verb outside the catch-all's list (OPTIONS aside, which the preflight rule
@@ -122,10 +127,4 @@ def _handle_method_not_allowed(error: Any) -> Any:
 def _handle_not_found(error: Any) -> Any:
     if not request.path.startswith("/api/"):
         return app.default_error_handler(error)
-    return _json_err(
-        404,
-        {
-            "error": "Not found",
-            "detail": f"no such endpoint: {_log_safe(request.path)}",
-        },
-    )
+    return _not_found()

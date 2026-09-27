@@ -1776,9 +1776,9 @@ def _render_function_list(
     sort_key: str,
     status_filter: str,
 ) -> str:
-    # SAFETY: order_by is whitelisted via allowed_sort dict (no user strings reach SQL).
-    allowed_sort = {"name": "name", "size": "size", "status": "status", "va": "va"}
-    order_by = allowed_sort.get(sort_key, "va")
+    # SAFETY: order_by is whitelisted to allowed_sort (no user strings reach SQL).
+    allowed_sort = {"va", "name", "size", "status"}
+    order_by = sort_key if sort_key in allowed_sort else "va"
 
     # Base filter: GLOBAL/DATA marker rows live in the functions table but are
     # data markers, not functions — same exclusion as the API list endpoint
@@ -1812,7 +1812,8 @@ def _render_function_list(
     )
     rows = c.fetchall()
 
-    base = f"?target={_url_quote(target)}&section={_url_quote(section)}&view=functions"
+    prefix = f"?target={_url_quote(target)}&section={_url_quote(section)}&view=functions"
+    base = prefix
     if search_query:
         base += f"&search={_url_quote(search_query)}"
     if status_filter:
@@ -1843,7 +1844,7 @@ def _render_function_list(
     # functions found." does not say the query caused it, and this list has no
     # other sign of the active search: the user is left hunting the form at the
     # top of the page for the box they just typed in.
-    without_search = f"?target={_url_quote(target)}&section={_url_quote(section)}&view=functions"
+    without_search = prefix
     if status_filter:
         without_search += f"&status={_url_quote(status_filter)}"
 
@@ -2470,7 +2471,6 @@ def _render_panel(
     fn_name = funcs[0]
     ctx["fn_name"] = fn_name
     if not _panel_function_detail(ctx, c, target, section, data, fn_name):
-        # ── Try globals table ────────────────────────────────────────
         # Same resolution order as the functions lookup above and as
         # GET /functions/<va>: cell entries may name a global by its VA string,
         # so VA candidates first, then the exact name for legacy name-form
@@ -2482,6 +2482,5 @@ def _render_panel(
             gl_data = json.loads(gl_row[0])
             ctx["gl_data"] = gl_data
             ctx["gl_detail_rows"] = _detail_rows(gl_data, skip_fields={"files"}, hex_fields=set())
-        # else: no function and no global → "Unknown" branch in template
 
     return _PANEL_TPL.render(**ctx)

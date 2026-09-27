@@ -13,9 +13,6 @@ const DATA_URL = (t, secName) => `/api/targets/${enc(t)}/data${secName ? `?secti
 const ASM_URL = (t) => `/api/targets/${enc(t)}/asm`;
 const FN_URL = (t, va) => `/api/targets/${enc(t)}/functions/${enc(va)}`;
 
-// ============================================================================
-// Constants
-// ============================================================================
 const MSG = {
   LOADING: "Loading…",
   ERROR_PREFIX: "Error: ",
@@ -238,7 +235,6 @@ const App = () => {
         const d = await res.json();
         availableTargets.val = d.targets || [];
 
-        // Check URL params first, then localStorage, then default
         const urlTarget = URL_PARAMS.get("target");
         const savedTarget = localStorage.getItem("recoverage_target");
 
@@ -475,7 +471,6 @@ const App = () => {
     const q = foldForSearch(query);
     if (foldForSearch(name).includes(q)) return true;
 
-    // Check search index if available
     if (data.val && data.val.search_index && data.val.search_index[name]) {
       const info = data.val.search_index[name];
       if (info.va && foldForSearch(info.va).includes(q)) return true;
@@ -531,6 +526,11 @@ const App = () => {
   };
   // The loaded buffer, but only while it belongs to the target on screen.
   const loadedDll = () => (originalDll.val?.path === currentDllPath() ? originalDll.val.buf : null);
+
+  const currentSourceRoot = () => {
+    const d = data.val;
+    return (d && d.paths && d.paths.sourceRoot) || `/src/${enc(activeTarget.val.toLowerCase())}`;
+  };
 
   const ensureOriginalDll = () => {
     const dllPath = currentDllPath();
@@ -606,7 +606,6 @@ const App = () => {
     const { signal } = currentAbortController;
 
     if (activeSection.val === ".text") {
-      // Set initial loading state synchronously
       currentFn.val = { name: "Loading..." };
       cSourceText.val = "Loading...";
       docText.val = "Loading...";
@@ -627,7 +626,7 @@ const App = () => {
         if (buf) showBytes(buf, toVa(fn.vaStart || fn.va));
         else showBytesMessage(bytesMissMessage());
 
-        const sourceRoot = (data.val && data.val.paths && data.val.paths.sourceRoot) ? data.val.paths.sourceRoot : `/src/${enc(activeTarget.val.toLowerCase())}`;
+        const sourceRoot = currentSourceRoot();
         const cPath = (fn.files && fn.files[0]) ? `${encPath(sourceRoot)}/${encPath(fn.files[0])}` : null;
         const va = fn.vaStart || fn.va;
         const { size } = fn;
@@ -645,7 +644,7 @@ const App = () => {
 
         const newDocs = window.RC.extractDocs ? window.RC.extractDocs(newCSource) : null;
 
-        // Update all state synchronously to trigger a single re-render
+        // One synchronous write for both panes, so the re-render is single.
         cSourceText.val = newCSource;
         docText.val = newDocs || MSG.NO_DOCS;
       } catch (error) { // oxlint-disable-line @rikalabs/no-silent-catch-fallback -- AbortError is a cancellation; other failures become error text
@@ -653,7 +652,6 @@ const App = () => {
       }
 
     } else {
-      // Global variable
       try {
         const res = await fetch(FN_URL(activeTarget.val, id), { signal });
         if (!res.ok) throw new Error("Not found");
@@ -860,32 +858,21 @@ const App = () => {
       const sec = data.val.sections[secName];
       if (!sec) return div({ class: "subtitle" }, "Section not found");
 
-      let exactCount = 0;
-      let relocCount = 0;
-      let nearMatchCount = 0;
-      let stubCount = 0;
-      let exactBytes = 0;
-      let relocBytes = 0;
-      let nearMatchBytes = 0;
-      let stubBytes = 0;
-      let paddingBytes = 0;
-      let totalItems = 0;
-      let coveredBytes = 0;
-
+      // Both arms of the fallback are truthy here: the guard above returned
+      // on a missing summary, so `s` is either the section's row or the
+      // object itself.
       const s = summaryData.val[secName] || summaryData.val; // Fallback for .text if not nested
-      if (s) {
-        exactCount = s.exactMatches || 0;
-        relocCount = s.relocMatches || 0;
-        nearMatchCount = s.nearMatchCount || 0;
-        stubCount = s.stubCount || 0;
-        exactBytes = s.exactBytes || 0;
-        relocBytes = s.relocBytes || 0;
-        nearMatchBytes = s.nearMatchBytes || 0;
-        stubBytes = s.stubBytes || 0;
-        paddingBytes = s.paddingBytes || 0;
-        totalItems = s.totalFunctions || 0;
-        coveredBytes = s.coveredBytes || 0;
-      }
+      const exactCount = s.exactMatches || 0;
+      const relocCount = s.relocMatches || 0;
+      const nearMatchCount = s.nearMatchCount || 0;
+      const stubCount = s.stubCount || 0;
+      const exactBytes = s.exactBytes || 0;
+      const relocBytes = s.relocBytes || 0;
+      const nearMatchBytes = s.nearMatchBytes || 0;
+      const stubBytes = s.stubBytes || 0;
+      const paddingBytes = s.paddingBytes || 0;
+      const totalItems = s.totalFunctions || 0;
+      const coveredBytes = s.coveredBytes || 0;
 
       // ONE denominator per bar: .text's tracks FUNCTIONS (its "matched" stat
       // is a function count), every other section's tracks BYTES.  Padding is
@@ -978,7 +965,7 @@ const App = () => {
 
     if (fn) {
       title = fn.name;
-      const sourceRoot = (data.val && data.val.paths && data.val.paths.sourceRoot) ? data.val.paths.sourceRoot : `/src/${enc(activeTarget.val.toLowerCase())}`;
+      const sourceRoot = currentSourceRoot();
       metaContent = () => detailReady.val
         ? window.RC.functionMeta({ fn, sourceRoot, docText: docText.val, jumpToAddress })
         : div({ class: "code" }, detailFailed.val ? MSG.DETAIL_UNAVAILABLE : MSG.LOADING);
@@ -1207,12 +1194,10 @@ const App = () => {
                   const newTarget = e.target.value;
                   activeTarget.val = newTarget;
 
-                  // Update URL without reloading
                   const url = new URL(window.location);
                   url.searchParams.set("target", newTarget);
                   window.history.pushState({}, "", url);
 
-                  // Save to localStorage
                   localStorage.setItem("recoverage_target", newTarget);
 
                   // Reset UI state.  Dropping the old target's data makes
@@ -1232,10 +1217,8 @@ const App = () => {
                   asmText.val = MSG.ASM_PLACEHOLDER;
                   currentBuf.val = null;
 
-                  // Load new data
                   loadData();
 
-                  // Remove focus to hide glow
                   e.target.blur();
                 }
               }, ...availableTargets.val.map(t =>

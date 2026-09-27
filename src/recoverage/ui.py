@@ -212,9 +212,7 @@ def handle_index() -> bytes:
     if build:
         payload_local = _build_index_payload()
     assert payload_local is not None
-    body, encoding = compress_static_variants(
-        payload_local, accept_encoding, brotli_quality=BROTLI_STATIC_QUALITY
-    )
+    body, encoding = compress_static_variants(payload_local, accept_encoding)
     etag = _index_etag(payload_local, encoding)
     with INDEX_LOCK:
         if CACHED_INDEX_PAYLOAD is None:
@@ -241,14 +239,7 @@ def _finalized_shell(body: bytes, encoding: str, etag: str) -> bytes:
     and a long freshness lifetime would pin the browser to an old shell.
     """
     if _if_none_match_matches(request.headers.get("If-None-Match", ""), etag):
-        raise HTTPResponse(
-            status=304,
-            headers={
-                "ETag": etag,
-                "Vary": "Accept-Encoding",
-                "Cache-Control": CACHE_REVALIDATE,
-            },
-        )
+        raise _not_modified(etag)
     return _finalized(
         body, "text/html; charset=utf-8", encoding, ETag=etag, Cache_Control=CACHE_REVALIDATE
     )
@@ -346,6 +337,14 @@ def _client_has_asset(etag: str) -> bool:
     return _if_none_match_matches(_header("If-None-Match", ""), etag)
 
 
+def _not_modified(etag: str) -> HTTPResponse:
+    """The 304 both revalidating surfaces answer: the shell and the static assets."""
+    return HTTPResponse(
+        status=304,
+        headers={"ETag": etag, "Vary": "Accept-Encoding", "Cache-Control": CACHE_REVALIDATE},
+    )
+
+
 @app.get(
     "/<filename:re:(?:app\\.js|detail\\.js|style\\.css|print\\.css|van\\.min\\.js|favicon\\.svg"
     "|hljs\\.css|hljs\\.min\\.js|hljs-c\\.min\\.js|hljs-x86asm\\.min\\.js)>"
@@ -368,9 +367,7 @@ def serve_static_asset(filename: str) -> Any:
         except OSError:
             # Missing/unreadable asset: let bottle produce the 404, don't 500.
             return static_file(filename, root=str(_assets_dir()))
-        body, encoding = compress_static_variants(
-            raw, accept_encoding, brotli_quality=BROTLI_STATIC_QUALITY
-        )
+        body, encoding = compress_static_variants(raw, accept_encoding)
         # A racing thread may already have filled this key; keep whichever
         # landed first so every client sees one body under one ETag.
         with _STATIC_LOCK:
@@ -380,10 +377,7 @@ def serve_static_asset(filename: str) -> Any:
 
     etag, body, encoding = entry
     if _client_has_asset(etag):
-        return HTTPResponse(
-            status=304,
-            headers={"ETag": etag, "Vary": "Accept-Encoding", "Cache-Control": CACHE_REVALIDATE},
-        )
+        return _not_modified(etag)
 
     suffix = PurePosixPath(filename).suffix.lower()
     content_type = _STATIC_TYPES.get(suffix, "application/octet-stream")

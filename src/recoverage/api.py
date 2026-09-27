@@ -1073,7 +1073,6 @@ def handle_api_functions_list(target: str) -> bytes | Any:
     target = path_param(target)
     status_filter = query_param("status").strip() or None
     search = query_param("search").strip() or None
-    # Bound search length to prevent unbounded LIKE patterns (DoS).
     if search is not None and len(search) > _MAX_SEARCH_CHARS:
         return _json_err(
             400,

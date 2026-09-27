@@ -969,9 +969,7 @@ def static_variant_key(accept_encoding: str) -> str:
     return ", ".join(name for name in SUPPORTED_ENCODINGS if name in accepted)
 
 
-def compress_static_variants(
-    body: bytes, accept_encoding: str, brotli_quality: int = BROTLI_STATIC_QUALITY
-) -> tuple[bytes, str]:
+def compress_static_variants(body: bytes, accept_encoding: str) -> tuple[bytes, str]:
     """Compress *body* to the smallest representation the client accepts.
 
     The precompressed counterpart of :func:`compress_payload`, for bytes built
@@ -1006,7 +1004,7 @@ def compress_static_variants(
         if name == "zstd":
             candidate = zstd.ZstdCompressor(level=ZSTD_STATIC_LEVEL).compress(body)
         elif name == "br":
-            candidate = brotli.compress(body, quality=brotli_quality)
+            candidate = brotli.compress(body, quality=BROTLI_STATIC_QUALITY)
         else:
             candidate = gzip.compress(body, compresslevel=GZIP_STATIC_LEVEL)
         if best is None or len(candidate) < len(best[0]):
@@ -1015,9 +1013,7 @@ def compress_static_variants(
     return best
 
 
-def compress_payload(
-    body: bytes, accept_encoding: str, brotli_quality: int = BROTLI_DYNAMIC_QUALITY
-) -> tuple[bytes, str]:
+def compress_payload(body: bytes, accept_encoding: str) -> tuple[bytes, str]:
     """Compress body with the best algorithm the client accepts.
 
     Returns (compressed_body, encoding_name). encoding_name is "" if no
@@ -1028,7 +1024,7 @@ def compress_payload(
     if encoding == "zstd":
         return _get_zstd_compressor().compress(body), "zstd"
     if encoding == "br":
-        return brotli.compress(body, quality=brotli_quality), "br"
+        return brotli.compress(body, quality=BROTLI_DYNAMIC_QUALITY), "br"
     if encoding == "gzip":
         # Level 6, not gzip.compress's default 9: measured on a ~9 MB /data
         # payload, -9 costs 2x the CPU of -6 for ~9% fewer bytes (96 ms ->
