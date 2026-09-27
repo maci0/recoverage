@@ -256,7 +256,33 @@ def _resolve_serve_config(
     return resolved
 
 
-def _open_db_or_exit(*, missing_exit_code: int = 1) -> sqlite3.Connection:
+def _fail(
+    human: str,
+    error: str,
+    exit_code: int,
+    json_output: bool,
+    fg: int = typer.colors.RED,
+) -> NoReturn:
+    """Report a failure in the caller's output mode, then exit.
+
+    ONE tail for every CLI failure, so the machine channel cannot drift from
+    the human one: with --json the report goes to stdout as
+    ``{"error": ..., "exit_code": ...}``, so a script parses the same shape
+    whether the gate failed, the database is missing or a flag is out of
+    range; without it the human line goes to stderr.  *exit_code* separates
+    a gate failure (1) from a usage or infrastructure error (2), so a script
+    can tell "the build is below threshold" from "I passed a bad flag".
+    """
+    if json_output:
+        typer.echo(json.dumps({"error": error, "exit_code": exit_code}))
+    else:
+        _secho(human, fg=fg, err=True)
+    raise typer.Exit(exit_code)
+
+
+def _open_db_or_exit(
+    *, missing_exit_code: int = 1, json_output: bool = False
+) -> sqlite3.Connection:
     """Open coverage.db read-only, exiting the process on failure.
 
     Named apart from ``server._open_db`` (which raises instead of exiting):
@@ -269,17 +295,21 @@ def _open_db_or_exit(*, missing_exit_code: int = 1) -> sqlite3.Connection:
 
     p = _db_path()
     if not p.exists():
-        _secho(f"Error: database not found at {p}", fg=typer.colors.RED, err=True)
-        raise typer.Exit(missing_exit_code)
+        _fail(
+            f"Error: database not found at {p}",
+            f"database not found at {p}",
+            missing_exit_code,
+            json_output,
+        )
     try:
         conn = _open_db(p)
     except sqlite3.Error as exc:
-        _secho(
+        _fail(
             f"Error: cannot open database {p}: {exc} {_REBUILD_HINT}",
-            fg=typer.colors.RED,
-            err=True,
+            f"cannot open database: {exc}",
+            2,
+            json_output,
         )
-        raise typer.Exit(2) from exc
     return conn
 
 
@@ -289,7 +319,9 @@ def _list_targets(conn: sqlite3.Connection) -> list[str]:
     return db_target_ids(conn.cursor())
 
 
-def _select_targets(conn: sqlite3.Connection, target: str | None) -> list[str]:
+def _select_targets(
+    conn: sqlite3.Connection, target: str | None, *, json_output: bool = False
+) -> list[str]:
     """Return the targets to operate on, validating a requested --target.
 
     Named apart from ``server.resolve_targets`` (the webapp's DB+config
@@ -303,25 +335,27 @@ def _select_targets(conn: sqlite3.Connection, target: str | None) -> list[str]:
         if target is not None:
             known = _list_targets(conn)
             if target not in known:
-                _secho(
+                _fail(
                     f"Error: target {target!r} not found in database "
                     f"(have: {', '.join(known) or 'none'}).",
-                    fg=typer.colors.RED,
-                    err=True,
+                    f"target not found: {target!r}",
+                    1,
+                    json_output,
                 )
-                raise typer.Exit(1)
             return [target]
         return _list_targets(conn)
     except sqlite3.Error as exc:
-        _secho(
+        _fail(
             f"Error: cannot query coverage database: {exc} {_REBUILD_HINT}",
-            fg=typer.colors.RED,
-            err=True,
+            f"cannot query coverage database: {exc}",
+            2,
+            json_output,
         )
-        raise typer.Exit(2) from exc
 
 
-def _get_stats(conn: sqlite3.Connection, target: str) -> dict[str, Any]:
+def _get_stats(
+    conn: sqlite3.Connection, target: str, *, json_output: bool = False
+) -> dict[str, Any]:
     c = conn.cursor()
     from recoverage.server import _section_stats
 
@@ -331,12 +365,12 @@ def _get_stats(conn: sqlite3.Connection, target: str) -> dict[str, Any]:
         # A DB that lists targets but cannot answer the stats queries
         # (schema-less / partially rebuilt) must not surface as a traceback —
         # same clean-exit contract as _select_targets.
-        _secho(
+        _fail(
             f"Error: cannot read coverage statistics for target {target!r}: {exc} {_REBUILD_HINT}",
-            fg=typer.colors.RED,
-            err=True,
+            f"cannot read coverage statistics for target {target!r}: {exc}",
+            2,
+            json_output,
         )
-        raise typer.Exit(2) from exc
 
 
 def _run_regen(root: Path) -> None:
@@ -525,15 +559,15 @@ def serve(
     Every setting flag also reads a RECOVERAGE_* environment variable, used as
     its default: RECOVERAGE_PORT, RECOVERAGE_BIND, RECOVERAGE_ALLOW_REMOTE,
     RECOVERAGE_CORS, RECOVERAGE_CORS_ORIGIN, RECOVERAGE_TOKEN,
-    RECOVERAGE_LOG_LEVEL and
-    RECOVERAGE_DB (an explicit coverage.db path, instead of resolving
-    rebrew-project.toml from the working directory).  ``--no-open`` and
-    ``--regen`` are the two flags with no variable, because a service that
-    wants the browser or a rebuild asks for it in argv, not in the
-    environment.  A flag always wins over
-    the environment; an unrecognised RECOVERAGE_* name is a startup error, and
-    so is a value that is not a valid port, boolean, log level or non-empty
-    string.
+    RECOVERAGE_LOG_LEVEL and RECOVERAGE_DB (an explicit coverage.db path,
+    instead of resolving rebrew-project.toml from the working directory).
+    [bold]--no-open[/bold] and [bold]--regen[/bold] are the two flags with no
+    variable, because a service that wants the browser or a rebuild asks for
+    it in argv, not in the environment.
+
+    A flag always wins over the environment; an unrecognised RECOVERAGE_*
+    name is a startup error, and so is a value that is not a valid port,
+    boolean, log level or non-empty string.
     """
     import recoverage.server as _server
     from recoverage.server import (
@@ -779,21 +813,33 @@ def stats(
     from rich.console import Console
     from rich.table import Table
 
-    with contextlib.closing(_open_db_or_exit()) as conn:
-        targets = _select_targets(conn, target)
+    with contextlib.closing(_open_db_or_exit(json_output=json_output)) as conn:
+        targets = _select_targets(conn, target, json_output=json_output)
 
         if not targets:
-            _secho("No targets found in database.", fg=typer.colors.YELLOW, err=True)
-            raise typer.Exit(1)
+            _fail(
+                "No targets found in database.",
+                "no targets in database",
+                1,
+                json_output,
+                fg=typer.colors.YELLOW,
+            )
 
         if json_output:
-            typer.echo(json.dumps([_get_stats(conn, tid) for tid in targets], indent=2))
+            typer.echo(
+                json.dumps([_get_stats(conn, tid, json_output=True) for tid in targets], indent=2)
+            )
             return
 
         console = Console()
-        for tid in targets:
+        for index, tid in enumerate(targets):
             data = _get_stats(conn, tid)
-            console.print(f"\n[bold cyan]{tid}[/bold cyan]")
+            # Blank line between targets, never before the first one: the
+            # same rule `export --format md` follows, so redirected output
+            # does not start with an empty line.
+            if index:
+                console.print()
+            console.print(f"[bold cyan]{tid}[/bold cyan]")
 
             if data["summary"]:
                 s = data["summary"]
@@ -846,14 +892,20 @@ def export(
     and newlines.
     """
     _use_utf8_stdout()
-    with contextlib.closing(_open_db_or_exit()) as conn:
-        targets = _select_targets(conn, target)
+    json_output = output_format is ExportFormat.json
+    with contextlib.closing(_open_db_or_exit(json_output=json_output)) as conn:
+        targets = _select_targets(conn, target, json_output=json_output)
 
         if not targets:
-            _secho("No targets found in database.", fg=typer.colors.YELLOW, err=True)
-            raise typer.Exit(1)
+            _fail(
+                "No targets found in database.",
+                "no targets in database",
+                1,
+                json_output,
+                fg=typer.colors.YELLOW,
+            )
 
-        all_data = [_get_stats(conn, tid) for tid in targets]
+        all_data = [_get_stats(conn, tid, json_output=json_output) for tid in targets]
 
     if output_format == ExportFormat.json:
         typer.echo(json.dumps(all_data, indent=2))
@@ -945,27 +997,6 @@ def _section_verdict(
     )
 
 
-def _gate_error(
-    human: str,
-    payload: dict[str, Any],
-    json_output: bool,
-    fg: int = typer.colors.RED,
-    exit_code: int = 1,
-) -> NoReturn:
-    """Emit a check-gate failure in --json or human form, then exit.
-
-    ONE tail for every `check` failure so the two output modes cannot drift
-    (each mode's message/payload stays at its single call site).  *exit_code*
-    separates a gate failure (1) from a usage error (2), so a script can tell
-    "the build is below threshold" from "I passed a bad flag".
-    """
-    if json_output:
-        typer.echo(json.dumps(payload))
-    else:
-        _secho(human, fg=fg, err=True)
-    raise typer.Exit(exit_code)
-
-
 @app.command()
 def check(
     min_coverage: float = typer.Option(
@@ -986,20 +1017,21 @@ def check(
     if not 0.0 <= min_coverage <= 100.0:
         # A flag value outside its own documented range is a usage error, the
         # same exit 2 a non-numeric value gets from the parser.
-        _gate_error(
+        _fail(
             f"Error: --min-coverage must be between 0 and 100, got {min_coverage!r}.",
-            {"error": "--min-coverage must be between 0 and 100", "exit_code": 2},
+            "--min-coverage must be between 0 and 100",
+            2,
             json_output,
-            exit_code=2,
         )
 
-    with contextlib.closing(_open_db_or_exit(missing_exit_code=2)) as conn:
-        targets = _select_targets(conn, target)
+    with contextlib.closing(_open_db_or_exit(missing_exit_code=2, json_output=json_output)) as conn:
+        targets = _select_targets(conn, target, json_output=json_output)
 
         if not targets:
-            _gate_error(
+            _fail(
                 "No targets found in database.",
-                {"error": "no targets in database", "exit_code": 1},
+                "no targets in database",
+                1,
                 json_output,
                 fg=typer.colors.YELLOW,
             )
@@ -1009,7 +1041,7 @@ def check(
         compared = 0  # sections actually evaluated against the threshold
         verdicts: list[dict[str, Any]] = []  # captured for --json output
         for tid in targets:
-            data = _get_stats(conn, tid)
+            data = _get_stats(conn, tid, json_output=json_output)
             sections_to_check = data["sections"]
             if section:
                 if section not in sections_to_check:
@@ -1046,9 +1078,10 @@ def check(
                     _secho(f"{status}: {tid} {sec_name} {human}", fg=_VERDICT_COLORS[status])
 
     if checked == 0:
-        _gate_error(
+        _fail(
             "Error: no sections matched — nothing was checked.",
-            {"error": "no sections matched — nothing was checked", "exit_code": 1},
+            "no sections matched — nothing was checked",
+            1,
             json_output,
         )
     if compared == 0 and not failed:
@@ -1057,9 +1090,10 @@ def check(
         # explicit --section on an untracked section already produced a FAIL
         # verdict above; that verdict (and the JSON results array) must reach
         # the caller instead of being replaced by this generic error.
-        _gate_error(
+        _fail(
             "Error: no tracked sections — nothing was checked.",
-            {"error": "no tracked sections — nothing was checked", "exit_code": 1},
+            "no tracked sections — nothing was checked",
+            1,
             json_output,
         )
     if json_output:
@@ -1097,9 +1131,9 @@ def open_cmd(
 ) -> None:
     """Open the dashboard in a browser.
 
-    The port falls back to RECOVERAGE_PORT, the same default `serve` uses, so
-    a deployment that moved the server off 8001 does not need every operator
-    to remember the new port as well.
+    The port falls back to RECOVERAGE_PORT, the same default [bold]serve[/bold]
+    uses, so a deployment that moved the server off 8001 does not need every
+    operator to remember the new port as well.
     """
     try:
         resolved_port = config.port() if port is None else _checked_port(port)

@@ -197,6 +197,21 @@ module ships in the published package. See *Breaking*.
   action existed, so it failed on the correct CI configuration. It now checks
   that every installing job uses the action, that the action runs the pinned
   script, and that neither the job nor the action carries a pin of its own.
+- **`--json` reports every failure in the same envelope.** `check --json`
+  already answered a failed gate, a bad `--min-coverage` and an empty result
+  set with `{"error": ..., "exit_code": N}` on stdout, but a missing or
+  unreadable database and an unknown `--target` still printed a plain stderr
+  line, leaving `recoverage check --json | jq` to fail on empty input.
+  `stats --json` and `export --format json` had no envelope at all. Every
+  failure in a machine-readable mode now answers the same shape on stdout;
+  the human form is unchanged.
+- **`recoverage stats` no longer starts its output with a blank line.** The
+  first target's heading carried a leading newline that no later heading did,
+  so redirected output opened with an empty line, the rule `export --format
+  md` already followed.
+- **`recoverage serve --help` and `recoverage open --help` no longer show raw
+  reStructuredText markup.** Their descriptions wrapped flag and command names
+  in double backticks, which Rich rendered literally.
 - **`/src/<path>` and `/original/<path>` answer 404 instead of 500 for a path
   holding a NUL.** `os.realpath` raises `ValueError` on an embedded NUL, and
   the containment check resolves the candidate before serving it, so

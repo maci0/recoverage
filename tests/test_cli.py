@@ -574,6 +574,91 @@ class TestCheckMissingDbExitCode:
         assert "database not found" in result.output
 
 
+class TestJsonErrorEnvelope:
+    """A machine-readable mode answers every failure in one shape.
+
+    `check --json` emitted a JSON envelope for a failed gate, a bad
+    --min-coverage and an empty result set, but a missing database and an
+    unknown --target still printed a plain stderr line, and `stats --json` /
+    `export --format json` had no envelope at all.  A script piping the JSON
+    channel into a parser therefore had to special-case which failure it was.
+    Every failure in a --json mode now answers
+    {"error": ..., "exit_code": N} on stdout, with the exit status unchanged.
+    """
+
+    MISSING = "database not found"
+
+    def test_check_json_missing_db(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        result = runner.invoke(app, ["check", "--min-coverage", "60", "--json"])
+        assert result.exit_code == 2
+        payload = json.loads(result.stdout)
+        assert self.MISSING in payload["error"]
+        assert payload["exit_code"] == 2
+
+    def test_stats_json_missing_db(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        result = runner.invoke(app, ["stats", "--json"])
+        assert result.exit_code == 1
+        payload = json.loads(result.stdout)
+        assert self.MISSING in payload["error"]
+        assert payload["exit_code"] == 1
+
+    def test_export_json_missing_db(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        result = runner.invoke(app, ["export", "--format", "json"])
+        assert result.exit_code == 1
+        payload = json.loads(result.stdout)
+        assert self.MISSING in payload["error"]
+        assert payload["exit_code"] == 1
+
+    def test_csv_export_keeps_the_human_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A non-JSON format has no machine channel to fill, so its failure
+        stays a stderr line and stdout carries nothing a parser could
+        misread as data."""
+        monkeypatch.chdir(tmp_path)
+        result = runner.invoke(app, ["export", "--format", "csv"])
+        assert result.exit_code == 1
+        assert result.stdout == ""
+        assert self.MISSING in result.stderr
+
+    @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+    def test_unknown_target_is_an_envelope(self) -> None:
+        for argv in (
+            ["stats", "--json", "--target", "no-such-target"],
+            ["check", "--min-coverage", "0", "--json", "--target", "no-such-target"],
+        ):
+            result = runner.invoke(app, argv)
+            assert result.exit_code == 1, argv
+            payload = json.loads(result.stdout)
+            assert payload == {"error": "target not found: 'no-such-target'", "exit_code": 1}
+
+
+class TestHelpMarkup:
+    """`--help` is rendered through Rich, so a reStructuredText spelling in a
+    command docstring reaches the user verbatim: double backticks around a
+    flag name print as ``` ``--no-open`` ``` rather than as emphasis."""
+
+    @pytest.mark.parametrize("command", ["serve", "open"])
+    def test_no_raw_rest_markup_in_help(self, command: str) -> None:
+        result = runner.invoke(app, [command, "--help"])
+        assert result.exit_code == 0
+        assert "``" not in result.output
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+class TestStatsOutputStart:
+    def test_first_target_heading_starts_the_output(self) -> None:
+        """The first heading carried a leading newline no later heading did,
+        so redirected output opened with an empty line.  `export --format md`
+        already refuses that leading blank; the table must agree."""
+        result = runner.invoke(app, ["stats"])
+        assert result.exit_code == 0
+        assert result.stdout.startswith("FAKEDLL")
+
+
 class TestCheckExplicitUntrackedSectionVerdict:
     def test_fail_verdict_reaches_json_output(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

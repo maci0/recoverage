@@ -207,6 +207,11 @@ recoverage stats --target SERVER    # single target
 recoverage stats --json             # machine-readable
 ```
 
+With `--json`, a failure is reported on stdout as
+`{"error": "...", "exit_code": N}` rather than as a stderr line, so a script
+parses one shape whether the run failed or not.  `check --json` and
+`export --format json` report the same envelope.
+
 ### `recoverage export`
 
 Export coverage data to stdout.
