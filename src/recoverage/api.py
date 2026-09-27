@@ -133,7 +133,13 @@ _REGEN_LOCK = threading.Lock()  # serializes regen (check + run, TOCTOU)
 # to outlive the client's retry horizon, and the count cap keeps a client
 # that mints a fresh key per attempt from pinning memory.
 _REGEN_KEY_TTL_SECONDS = 600.0
-_REGEN_KEY_MAX = 32
+# The count cap is a memory backstop, never the binding retention rule: the
+# cooldown admits at most _REGEN_KEY_TTL_SECONDS / _REGEN_COOLDOWN_SECONDS + 1
+# = 121 completions inside any single retention window, so 128 slots always fit
+# them all.  A tighter cap silently shortened the documented window below: a
+# client regenerating more often than the cap held slots lost an unexpired key
+# and paid a second pipeline run for a retry the ledger was meant to absorb.
+_REGEN_KEY_MAX = 128
 # A key is an opaque client nonce; anything outside this set is a client bug
 # or an attempt to fill the ledger with junk, and is rejected rather than
 # stored.

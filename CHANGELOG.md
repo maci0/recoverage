@@ -28,7 +28,7 @@ module ships in the published package. See *Breaking*.
   it and answers a later request carrying it with `{"ok": true}` and
   `Idempotent-Replay: true` without regenerating. A failed run is not
   remembered, so retrying a failure retries for real. The Reload button sends
-  a fresh key per click. Keys are held for 10 minutes, 32 at a time, and a key
+  a fresh key per click. Keys are held for 10 minutes, 128 at a time, and a key
   outside 1-128 characters of `[A-Za-z0-9._:-]` is a 400.
 - **`--log-level` and `RECOVERAGE_LOG_LEVEL` set the server's log threshold.**
   Previously the level was hardcoded to `INFO`, so a deployment could not turn

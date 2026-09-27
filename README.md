@@ -280,7 +280,9 @@ A regen rebuilds `coverage.db` from scratch, so running it twice leaves the
 same state as running it once. Send an `Idempotency-Key` header with the
 request and a repeat of that key is answered with the recorded result
 (`Idempotent-Replay: true`) instead of running the pipeline again; keys are
-remembered for 10 minutes, and a failed run is not remembered.
+remembered for 10 minutes (the ledger holds more slots than the rate limit
+admits in that window, so a key is only ever dropped by its own age), and a
+failed run is not remembered.
 
 ### Error responses
 

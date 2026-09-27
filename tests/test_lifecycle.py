@@ -3,7 +3,8 @@
 Pins:
 
 - ``run_regen`` loads rebrew-project.toml once and calls rebrew's catalog and
-  build-db module functions in order, in this process (no subprocess).
+  build-db module functions in order, in this process (no subprocess), and a
+  second run repeats that sequence instead of appending to or skipping it.
 - ``_open_and_reap`` must reap the browser-opener child (setsid alone does not
   prevent zombies) and bound its wait so a hung opener cannot stall serve.
 """
@@ -142,6 +143,45 @@ class TestRunRegen:
 
         with pytest.raises(ValueError, match="corrupt"):
             run_regen(tmp_path)
+
+    def test_a_second_run_repeats_the_same_pipeline(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Running it twice runs the same three steps, with no carry-over.
+
+        The docstring claims a second run converges on the first run's state.
+        What recoverage owns is the call shape: neither execution appends to,
+        skips, or reorders anything, so the second ends where the first did.
+        """
+        events: list[tuple[str, Any]] = []
+        cfg = object()
+
+        def load_config(root: Path) -> object:
+            events.append(("load_config", root))
+            return cfg
+
+        def run_catalog(c: object) -> None:
+            events.append(("run_catalog", c))
+
+        def build_db(project_root: Path) -> None:
+            events.append(("build_db", project_root))
+
+        _install_fake_rebrew(
+            monkeypatch,
+            load_config=load_config,
+            run_catalog=run_catalog,
+            build_db=build_db,
+        )
+
+        one_run = [
+            ("load_config", tmp_path),
+            ("run_catalog", cfg),
+            ("build_db", tmp_path),
+        ]
+        run_regen(tmp_path)
+        run_regen(tmp_path)
+
+        assert events == one_run * 2
 
 
 class TestRebrewSurface:

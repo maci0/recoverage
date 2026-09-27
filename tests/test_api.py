@@ -911,6 +911,30 @@ class TestRegenIdempotencyKey:
         assert not api._regen_replayed("click-0")
         assert api._REGEN_COMPLETED_KEYS == {}
 
+    def test_the_count_cap_never_shortens_the_window(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A key survives its whole window under the busiest client the cooldown allows.
+
+        The count backstop exists to bound memory, not to retire keys early:
+        if it held fewer slots than the cooldown admits completions inside one
+        retention window, a client that regenerates often enough would lose an
+        unexpired key and pay a second pipeline run for the retry the ledger
+        exists to absorb.
+        """
+        import recoverage.api as api
+
+        self._counting_regen(monkeypatch)
+        completions = int(api._REGEN_KEY_TTL_SECONDS // api._REGEN_COOLDOWN_SECONDS) + 1
+        assert completions <= api._REGEN_KEY_MAX, (
+            "the count cap would evict a key that is still inside its window"
+        )
+
+        for i in range(completions):
+            api._regen_last_attempt = 0.0
+            assert_regen_accepted(self._post(f"click-{i}"))
+
+        assert len(api._REGEN_COMPLETED_KEYS) == completions
+        assert api._regen_replayed("click-0")
+
 
 class TestServeBindFlag:
     def test_bind_option_help(self) -> None:
@@ -2308,6 +2332,13 @@ class TestDataPayloadMemo:
         fake_resp: Any = type(
             "R", (), {"content_type": None, "set_header": lambda self, k, v: None}
         )()
+        # The query-carrying stand-in replaces the one _point_app_at_db
+        # installed, and it has to go into BOTH namespaces: api._query_param
+        # reads request.query from api's globals, and server's header helpers
+        # read request.headers from server's. Installing it only in server left
+        # a worker thread's ?section= filter invisible to the handler, so the
+        # follower built the unfiltered payload under a different memo key and
+        # never saw the in-flight build it was supposed to wait on.
         monkeypatch.setattr(api, "request", fake_req)
         monkeypatch.setattr(server_mod, "request", fake_req)
         monkeypatch.setattr(server_mod, "response", fake_resp)
