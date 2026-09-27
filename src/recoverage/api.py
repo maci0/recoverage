@@ -128,7 +128,7 @@ def _clear_derived_caches_logged(where: str) -> None:
         )
 
 
-# Server-side regen cooldown (seconds): the UI throttles Reload clicks, but
+# Server-side regen cooldown (seconds): the UI throttles Regenerate clicks, but
 # direct API calls must not be able to trigger repeated rebrew catalog runs.
 _REGEN_COOLDOWN_SECONDS = 5.0
 # clock.monotonic() of the last accepted regen POST, or None before the first

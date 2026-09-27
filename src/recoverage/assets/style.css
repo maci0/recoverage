@@ -449,6 +449,7 @@ body.light-mode::after { display: none; }
 .swatch-exact { background: var(--exact-bg); }
 .swatch-reloc { background: var(--reloc-bg); }
 .swatch-near_match { background: var(--near-match-bg); }
+.swatch-proven { background: var(--proven-bg); }
 .swatch-stub { background: var(--stub-bg); }
 .swatch-padding { background: var(--padding-bg); }
 .swatch-proven { background: var(--proven-bg); }

@@ -199,7 +199,7 @@
   let lastRegenTime = null;
   let noticeTimer = null;
   // A message set while a good map is on screen replaces the stats row, so it
-  // has to time itself out; the "Regenerating…" state does not, because
+  // has to time itself out; the "Regenerating..." state does not, because
   // summaryData is null for its whole duration and the map is loading anyway.
   const showNotice = (loadingMsg, message, MSG_MESSAGES) => {
     loadingMsg.val = message;

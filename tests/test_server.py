@@ -2252,6 +2252,47 @@ class TestSpaStateVocabulary:
         assert "--other-bg:" in css
         assert ".swatch-compile_error" in css
 
+    def test_legend_names_every_painted_slot(self) -> None:
+        """Every STATE_ID slot the grid paints needs a legend row.
+
+        The grid painted ``proven`` (slot 6) and the hover tooltip called it
+        by name, but the legend had no row for it: a verified-semantic block
+        was a colour the reader had no way to look up.  A slot with no row
+        fails the same way a state missing from STATE_ID does, one layer up.
+        """
+        import re
+
+        app_js, _ = self._assets()
+        legend = re.search(r"const LEGEND = \[(.*?)\];", app_js, re.DOTALL)
+        assert legend is not None, "app.js has no LEGEND table"
+        rows = re.findall(r'\["(\w+)",\s*"[^"]*"\]', legend.group(1))
+        assert rows, "the legend table is empty"
+
+        state_block = re.search(r"const STATE_ID = \{(.*?)\};", app_js, re.DOTALL).group(1)
+        state_id = dict(re.findall(r"(\w+):\s*(\d+)", state_block))
+        named = {int(state_id[key]) for key in rows}
+        painted = {int(slot) for slot in state_id.values()}
+        assert named == painted, (
+            f"legend rows name slots {sorted(named)}; the grid paints {sorted(painted)}"
+        )
+
+    def test_every_legend_key_has_a_swatch(self) -> None:
+        """The legend renders `swatch-<key>`, so each key needs the rule.
+
+        A missing rule leaves an empty 12px box that reads as a gap in the key.
+        """
+        import importlib.resources
+        import re
+
+        from recoverage import assets
+
+        app_js = importlib.resources.files(assets).joinpath("app.js").read_text(encoding="utf-8")
+        css = importlib.resources.files(assets).joinpath("style.css").read_text(encoding="utf-8")
+        block = re.search(r"const LEGEND = \[(.*?)\];", app_js, re.DOTALL).group(1)
+        keys = re.findall(r'\["(\w+)",\s*"[^"]*"\]', block)
+        missing = [k for k in keys if f".swatch-{k} " not in css]
+        assert missing == [], f"legend keys with no swatch rule: {missing}"
+
 
 class TestSpaGridLayoutMemo:
     """The grid layout memo must key on the packed cells, not on a count.
