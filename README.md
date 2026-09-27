@@ -320,6 +320,14 @@ Query-parameter rules, the same on every endpoint:
   (413) and the list non-empty (400). VAs with no match are omitted from the
   response rather than reported as an error.
 
+With `--cors`, an allowlisted origin may send `Content-Type`, `Authorization`
+(the `--token` bearer check) and `If-None-Match` (the conditional GET every
+ETag-bearing endpoint above expects); a preflight naming any other request
+header is refused. `ETag` and `Retry-After` are exposed as readable response
+headers, so a cross-origin client can revalidate and honour a 429's wait.
+Every 429 the server emits carries `Retry-After` alongside the `retry_after`
+body key.
+
 ---
 
 ## Architecture & How it works

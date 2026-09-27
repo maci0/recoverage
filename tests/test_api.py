@@ -1598,6 +1598,9 @@ class TestErrorResponseShape:
         data = self._check(status, headers, body, "rate_limited")
         assert data["retry_after"] >= 0
         assert data["detail"]
+        # The auth throttle answers its 429 with the same header, so a client
+        # has one place to read the wait from regardless of which limit hit.
+        assert int(_header(headers, "Retry-After") or 0) >= 1
 
     def test_501_not_implemented(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import recoverage.api as api
@@ -1765,6 +1768,24 @@ class TestCorsOriginAllowlist:
         methods = headers.get("Access-Control-Allow-Methods", "")
         assert "GET" in methods and "POST" in methods and "OPTIONS" in methods
         assert "Content-Type" in headers.get("Access-Control-Allow-Headers", "")
+
+    def test_allow_headers_cover_the_documented_auth_and_validators(self) -> None:
+        """--cors must not preflight-fail the two credentials the API documents.
+
+        Authorization carries the --token bearer check and If-None-Match
+        carries the conditional GET every ETag-bearing endpoint expects; a
+        client sending either without it in this list never gets a response.
+        """
+        self._enable(["http://localhost:5173"])
+        _status, headers, _body = wsgi_get(
+            "/api/health", headers={"Origin": "http://localhost:5173"}
+        )
+        allowed = headers.get("Access-Control-Allow-Headers", "")
+        assert "Authorization" in allowed
+        assert "If-None-Match" in allowed
+        exposed = headers.get("Access-Control-Expose-Headers", "")
+        assert "ETag" in exposed
+        assert "Retry-After" in exposed
 
     def test_preflight_unknown_origin_gets_no_acao(self) -> None:
         """Preflight for a non-allowlisted origin answers 200 but must not
@@ -2395,7 +2416,7 @@ class TestDataPayloadMemo:
         # `request` from the *server* module globals, so the stand-in carrying
         # it has to be patched there; patching api.request would leave the
         # handler building the unfiltered payload and this test would pass on
-        # the wrong path.
+        # the wrong path. _gated_open installs exactly that stand-in.
         _, open_calls, _ = self._gated_open(tmp_path, monkeypatch, release, {"section": "nope"})
         api._clear_data_cache()
 

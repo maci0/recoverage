@@ -1990,7 +1990,19 @@ def _security_headers() -> None:
         response.set_header("Access-Control-Allow-Origin", origin)
         _merge_vary("Origin")
         response.set_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        response.set_header("Access-Control-Allow-Headers", "Content-Type")
+        # The two credential/validator headers the API itself documents.
+        # Without Authorization in this list a --cors frontend cannot use the
+        # --token auth the README advertises (the preflight fails, so the
+        # request is never sent), and without If-None-Match it cannot do the
+        # conditional GET that every ETag-bearing endpoint (/data, /asm,
+        # /bytes, /potato) is built around.
+        response.set_header(
+            "Access-Control-Allow-Headers", "Content-Type, Authorization, If-None-Match"
+        )
+        # ETag and Retry-After are response headers a cross-origin client
+        # cannot read unless they are exposed; without this the validator the
+        # server sends is invisible to the client that needs it.
+        response.set_header("Access-Control-Expose-Headers", "ETag, Retry-After")
         response.set_header("Access-Control-Allow-Credentials", "true")
     elif origin:
         # Ensure caches key on Origin even when not allowed.

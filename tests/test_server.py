@@ -1542,6 +1542,9 @@ class TestSpaStateVocabulary:
         labels = re.search(r"const STATE_LABEL = \[(.*?)\];", app_js, re.DOTALL).group(1)
         assert len([v for v in labels.split(",") if v.strip()]) == 8
         assert "STATE_LABEL" in detail_js
+        # Membership, not a prefix: adding another shared export to the
+        # window.RC object literal must not read as STATE_LABEL being dropped
+        # (the tooltip reads it as window.RC.STATE_LABEL).
         published = self._window_rc_keys(app_js)
         required = {"van", "MetaItem", "MSG", "hex", "STATE_LABEL"}
         missing = sorted(required - published)

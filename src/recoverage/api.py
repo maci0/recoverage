@@ -651,7 +651,9 @@ def handle_api_events() -> Any:
                     "error": "too many event-stream clients",
                     "code": "rate_limited",
                     "detail": f"max {_SSE_MAX_CLIENTS} concurrent /api/events connections",
+                    "retry_after": _SSE_POLL_INTERVAL_SECONDS,
                 },
+                Retry_After=str(int(_SSE_HEARTBEAT_SECONDS)),
             )
         client_queue: queue.Queue[bytes] = queue.Queue(maxsize=_SSE_QUEUE_MAX)
         _SSE_CLIENTS.add(client_queue)
@@ -1675,7 +1677,9 @@ def handle_regen() -> bytes | Any:
             {
                 "error": "Rate limited: regeneration already running",
                 "detail": "a catalog/build-db run is in progress",
+                "retry_after": _REGEN_COOLDOWN_SECONDS,
             },
+            Retry_After=str(int(_REGEN_COOLDOWN_SECONDS)),
         )
     try:
         now = time.monotonic()
@@ -1689,6 +1693,9 @@ def handle_regen() -> bytes | Any:
                     "detail": f"retry after {remaining:.1f}s",
                     "retry_after": round(remaining, 1),
                 },
+                # The auth throttle sends the same header, so a client can read
+                # one Retry-After for every 429 the server emits.
+                Retry_After=str(math.ceil(remaining)),
             )
         _regen_last_attempt = now
         result = _do_regen(remote)
