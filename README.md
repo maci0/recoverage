@@ -301,7 +301,7 @@ deployment that moved off `8001` needs no second place to configure.
 | `/api/targets` | GET | List available targets |
 | `/api/targets/<target>/stats` | GET | Per-section coverage stats with percentages |
 | `/api/targets/<target>/data` | GET | Section + cell data (`?section=.text` for partial) |
-| `/api/targets/<target>/functions` | GET | Paginated list (`?status=&search=&sort=&limit=&offset=`) |
+| `/api/targets/<target>/functions` | GET | Paginated list (`?status=&search=&sort=&limit=&offset=`; a `status` outside rebrew's vocabulary is a 400) |
 | `/api/targets/<target>/functions` | POST | Batch lookup: `{"vas": [...]}` → function/global details in input order |
 | `/api/targets/<target>/functions/<va>` | GET | Single function/global detail |
 | `/api/targets/<target>/asm` | GET | Disassembly (`?format=json` for structured output) |

@@ -146,6 +146,15 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **`?status=` on the paginated function list rejects a status rebrew does not
+  define.** `GET /api/targets/<target>/functions?status=` answers `400` naming
+  the accepted values for anything outside rebrew's status vocabulary, where it
+  used to answer `200` with an empty page. A filter that can match no row and a
+  typo were indistinguishable, and a client filtering on `EXACT` against a
+  target that has none had no way to tell the two apart. Every status the
+  database can hold is still accepted, and the accepted set is read from rebrew
+  rather than restated, so a status rebrew adds is filterable as soon as it
+  lands.
 - **A stale `uv.lock` now fails the run instead of installing anyway.** Every
   `uv sync` and `uv run` in the Makefile, in `package.json` and in CI moved
   from `--frozen` to `--locked`. Both refuse to rewrite the lockfile, but

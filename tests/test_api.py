@@ -542,6 +542,31 @@ class TestApiFunctions:
         assert [fn["name"] for fn in data["functions"]] == ["_func_a"]
         assert data["total"] == 1
 
+    def test_unknown_status_is_rejected(self) -> None:
+        """A status the DB cannot hold is a 400, not a silent empty page.
+
+        The filter is a closed vocabulary (rebrew owns it), so a typo used to
+        answer 200 with total 0 — indistinguishable from a target that has no
+        functions of that status.
+        """
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, headers, body = wsgi_get(f"/api/targets/{target}/functions?status=EXACTX")
+        assert status.startswith("400")
+        data = json.loads(decode_body(body, headers))
+        assert data["code"] == "bad_request"
+        assert "EXACT" in data["detail"]
+
+    def test_every_known_status_is_accepted(self) -> None:
+        """The guard rejects typos only: no status in the vocabulary 400s."""
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        for value in sorted(api._FUNCTION_STATUSES):
+            status, _, _ = wsgi_get(f"/api/targets/{target}/functions?status={value}")
+            assert status.startswith("200"), f"{value} is in the vocabulary but was refused"
+
     def test_search_matches_name_substring(self) -> None:
         target = get_first_target()
         if not target:
@@ -589,6 +614,21 @@ class TestApiFunctions:
         assert status.startswith("200")
         data = json.loads(decode_body(body, headers))
         assert data["offset"] == 0
+
+
+class TestFunctionStatusVocabulary:
+    """The ?status= guard and rebrew's own vocabulary cannot drift.
+
+    api._FUNCTION_STATUSES is built from rebrew at import time, so a rebrew
+    that adds a status keeps it filterable. A rebrew that REMOVES one would
+    leave this set advertising a value nothing stores, and the endpoint would
+    accept a filter that can only ever be empty.
+    """
+
+    def test_matches_rebrew(self) -> None:
+        from rebrew.build_db import _FUNCTION_DB_STATUSES
+
+        assert api._FUNCTION_STATUSES == _FUNCTION_DB_STATUSES
 
 
 # ── VA boundary validation (/asm endpoint) ─────────────────────────

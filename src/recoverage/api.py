@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import typer
-from rebrew.workspace import VA_MAX, parse_va_candidates
+from rebrew.workspace import KNOWN_STATUSES, VA_MAX, parse_va_candidates
 
 from recoverage import __version__, clock
 from recoverage import metrics as _metrics
@@ -1078,6 +1078,15 @@ _MAX_SLICE_SIZE = 4096
 # request finite.
 _MAX_SEARCH_CHARS = 500
 
+#: Statuses ``functions.status`` can carry: rebrew's own vocabulary
+#: (``rebrew.build_db._FUNCTION_DB_STATUSES``, which is KNOWN_STATUSES plus the
+#: UNKNOWN default a catalog row falls back to) read from rebrew rather than
+#: restated, so a status rebrew adds is filterable the day it lands.
+#: ``tests/test_api.py`` (``TestFunctionStatusVocabulary``) pins the set against
+#: rebrew's, so a rebrew change that misses this import fails a test instead of
+#: silently 400-ing a status the DB does hold.
+_FUNCTION_STATUSES: frozenset[str] = frozenset({*KNOWN_STATUSES, "UNKNOWN"})
+
 # Media types POST /api/targets/<t>/functions accepts for its body.  The
 # endpoint has exactly one body format, so a request declaring anything else
 # is refused with 415 rather than being read and answered with a parse error
@@ -1162,6 +1171,20 @@ def handle_api_functions_list(target: str) -> bytes | Any:
     """Paginated function listing with optional filters."""
     target = path_param(target)
     status_filter = query_param("status").strip() or None
+    if status_filter is not None and status_filter not in _FUNCTION_STATUSES:
+        # Same contract as /asm's ?format=: an enum the server does not have is
+        # a rejected query, not a silent empty page.  Without it a typo
+        # (?status=EXACT vs ?status=exact) answers 200 with total 0, which
+        # reads as "this target has no EXACT functions" and costs the caller
+        # the whole filter to find out otherwise.
+        return _json_err(
+            400,
+            {
+                "error": "invalid status",
+                "detail": f"status {status_filter!r} is not a function status; "
+                f"expected one of {', '.join(sorted(_FUNCTION_STATUSES))}",
+            },
+        )
     search = query_param("search").strip() or None
     if search is not None and len(search) > _MAX_SEARCH_CHARS:
         return _json_err(
