@@ -120,6 +120,21 @@ module ships in the published package. See *Breaking*.
   had the same shape for `/api/regen`'s cooldown, which counts from boot:
   a process started seconds after a reboot rejected its first POST as rate
   limited. Both now keep "never clicked" as a distinct state.
+- **Target ids, section names and file paths with a space or a non-ASCII
+  character resolve again.** Bottle routes on the raw request path and
+  decodes query values as latin-1, so `/api/targets/caf%C3%A9/stats` looked up
+  the target `caf%C3%A9` and `?section=%C3%A9` compared against `Ã©`; every
+  such target 404'd, Potato Mode's own escaped links included, and a source
+  file named `naïve name.c` was unreachable. Path captures are now
+  percent-decoded once as UTF-8 (`server.path_param`, applied before the
+  `/src/` containment check) and query values once through
+  `server.query_param`, so both halves of a request read the same text. The
+  SPA encodes every DB-derived value it splices into a URL the same way.
+- **`export` and `check` write UTF-8 whatever the locale says.** Both write
+  target ids and section names taken from the PE image; under a non-UTF-8
+  stdout codec the write raised `UnicodeEncodeError` part-way through and
+  left a truncated file behind the `> coverage.csv` redirect the help text
+  documents.
 - **Functions with an unknown `markerType` are listed again.** The
   GLOBAL/DATA/VTABLE/STRING exclusion read `markerType NOT IN (...)`, and
   SQLite evaluates `NULL NOT IN (...)` to NULL, which `WHERE` rejects: on a

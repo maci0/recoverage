@@ -13,6 +13,7 @@ import pytest
 from conftest import HAS_DB
 from typer.testing import CliRunner
 
+from recoverage import cli
 from recoverage.cli import app
 
 runner = CliRunner()
@@ -836,3 +837,82 @@ def test_export_md_rows_match_the_header() -> None:
         if not line.startswith("| ") or set(line) <= set("|- "):
             continue
         assert line.count("|") - 1 == ncols, f"row does not match header: {line}"
+
+
+# ── stdout encoding ───────────────────────────────────────────────
+
+
+def _unicode_db(path: Path) -> Path:
+    """A DB whose target id and section name are both non-ASCII."""
+    import sqlite3 as _sqlite3
+
+    conn = _sqlite3.connect(path)
+    try:
+        c = conn.cursor()
+        c.execute("CREATE TABLE metadata (target TEXT, key TEXT, value TEXT)")
+        c.execute(
+            "CREATE TABLE sections (target TEXT, name TEXT, va INTEGER, size INTEGER,"
+            " fileOffset INTEGER, unitBytes INTEGER, columns INTEGER)"
+        )
+        c.execute(
+            "CREATE TABLE cells (id INTEGER PRIMARY KEY AUTOINCREMENT, target TEXT,"
+            " section_name TEXT, start INTEGER, end INTEGER, span INTEGER DEFAULT 1,"
+            " state TEXT, functions TEXT DEFAULT '[]', label TEXT, parent_function TEXT)"
+        )
+        c.execute(
+            "CREATE TABLE functions (target TEXT, va INTEGER, name TEXT, status TEXT,"
+            " markerType TEXT)"
+        )
+        c.execute(
+            "INSERT INTO metadata VALUES ('café & bar','summary',?)",
+            (json.dumps({"totalFunctions": 1}),),
+        )
+        c.execute("INSERT INTO sections VALUES ('café & bar','.données',0,100,0,16,8)")
+        c.execute(
+            "INSERT INTO cells (target, section_name, start, end, state)"
+            " VALUES ('café & bar','.données',0,50,'exact')"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return path
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+class TestExportStdoutEncoding:
+    """The export must not inherit the locale's codec.
+
+    Target ids and section names come from the PE image, so a non-ASCII one
+    is ordinary input.  With stdout on an ASCII codec the CSV writer raised
+    UnicodeEncodeError part-way through, leaving a truncated file behind the
+    `> coverage.csv` redirect the help text documents.
+    """
+
+    def _ascii_stdout(self, monkeypatch: pytest.MonkeyPatch) -> io.BytesIO:
+        buffer = io.BytesIO()
+        monkeypatch.setattr(sys, "stdout", io.TextIOWrapper(buffer, encoding="ascii"))
+        return buffer
+
+    def test_csv_export_survives_an_ascii_stdout(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        db = _unicode_db(tmp_path / "unicode.db")
+        monkeypatch.setattr("recoverage.cli._db_path", lambda: db)
+        buffer = self._ascii_stdout(monkeypatch)
+        # Called directly, not through CliRunner: the runner swaps in its own
+        # UTF-8 stdout, which is exactly the codec under test.
+        cli.export(output_format=cli.ExportFormat.csv, target=None)
+        sys.stdout.flush()
+        assert ".données" in buffer.getvalue().decode("utf-8")
+
+    def test_md_export_survives_an_ascii_stdout(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        db = _unicode_db(tmp_path / "unicode.db")
+        monkeypatch.setattr("recoverage.cli._db_path", lambda: db)
+        buffer = self._ascii_stdout(monkeypatch)
+        cli.export(output_format=cli.ExportFormat.md, target=None)
+        sys.stdout.flush()
+        text = buffer.getvalue().decode("utf-8")
+        assert "## café & bar" in text
+        assert ".données" in text

@@ -26,7 +26,7 @@ from collections import deque
 from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Any, cast
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 import bottle  # type: ignore[import-untyped]
 import brotli  # type: ignore[import-untyped]
@@ -208,6 +208,51 @@ def _safe_etag(*parts: object) -> str:
     """
     digest = hashlib.sha256("|".join(str(p) for p in parts).encode("utf-8")).hexdigest()[:32]
     return f'"{digest}"'
+
+
+def path_param(value: str) -> str:
+    """Percent-decode one URL path component, as UTF-8, exactly once.
+
+    Bottle routes on ``PATH_INFO`` as the WSGI server hands it over, which
+    per PEP 3333 is the *raw* request target: a browser's ``%C3%A9`` and
+    ``%20`` arrive still encoded.  Every route capture (``target``,
+    ``section``, ``filepath``) is therefore percent-encoded text, and a
+    target id or filename holding a space, ``#``, ``?`` or a non-ASCII
+    character never matches the database row, the section, or the file.
+    Potato Mode already emits ``urllib.parse.quote``-escaped links, so the
+    two halves disagreed.
+
+    One pass only, and never a second: the result feeds path containment
+    checks, so decoding twice would let ``%252e%252e%252f`` reach them as
+    ``../``.  A segment whose escapes are not valid UTF-8 (a legal
+    non-UTF-8 filename on Linux) is returned unchanged, which 404s honestly
+    instead of raising on a request the server could have served.
+    """
+    try:
+        return unquote(value, encoding="utf-8", errors="strict")
+    except UnicodeDecodeError:
+        return value
+
+
+def query_param(name: str, default: str = "") -> str:
+    """One query-string value, percent-decoded as UTF-8.
+
+    Bottle decodes query values with ``encoding='latin1'`` (see its module
+    import of ``urlunquote``), so ``?section=%C3%A9`` reaches a handler as
+    ``Ã©`` and matches no section while ``parse_qs`` on the same raw
+    ``request.url`` — the path Potato Mode uses — yields ``é``.  Re-encoding
+    through latin-1 recovers the UTF-8 the client sent, and leaves ASCII
+    (the overwhelming majority: tokens, integers, format names) byte-identical.
+
+    A value that is not valid UTF-8 in latin-1, or already holds a character
+    above U+00FF (a client that sent raw UTF-8 rather than escapes), is
+    returned unchanged: it is already the text the caller meant.
+    """
+    raw = request.query.get(name, default)
+    try:
+        return raw.encode("latin-1").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return raw
 
 
 def _snapshot_db_mtime() -> tuple[int, int] | None:
@@ -1638,7 +1683,7 @@ def _require_auth() -> None:
     if provided.startswith("Bearer "):
         provided = provided[len("Bearer ") :]
     else:
-        provided = request.query.get("token", "")
+        provided = query_param("token")
         if not provided:
             provided = request.get_cookie("recoverage_token", default="")
     if _auth_token_matches(provided):

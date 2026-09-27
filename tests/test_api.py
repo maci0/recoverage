@@ -2695,9 +2695,10 @@ class TestRepoFileServing:
         monkeypatch.chdir(tmp_path)
         (tmp_path / "src").mkdir()
         (tmp_path / "secret.txt").write_text("top secret", encoding="utf-8")
-        # Bottle decodes %2E%2E%2F before routing, so this arrives as ../.
+        # The capture is the raw request path, so %2e%2e is decoded here,
+        # before the containment check, and reaches it as ../.
         status, _, body = wsgi_get("/src/%2e%2e/secret.txt")
-        assert status.startswith(("403", "404"))
+        assert status.startswith("403")
         assert b"top secret" not in body
 
     def test_symlink_escape_blocked(self, tmp_path: Path, monkeypatch: Any) -> None:
@@ -2715,6 +2716,34 @@ class TestRepoFileServing:
         status, _, body = wsgi_get("/src/escape/passwd")
         assert status.startswith("403")
         assert b"root:x" not in body
+
+    def test_encoded_filename_is_decoded_once(self, tmp_path: Path, monkeypatch: Any) -> None:
+        """A source file whose name holds a space or a non-ASCII character.
+
+        The SPA links it as /src/<target>/<file> and the browser escapes it,
+        so the capture arrives percent-encoded; without decoding, no such
+        file is reachable.
+        """
+        monkeypatch.chdir(tmp_path)
+        src = tmp_path / "src"
+        (src / "données").mkdir(parents=True)
+        (src / "données" / "naïve name.c").write_text("int x;", encoding="utf-8")
+        status, _headers, body = wsgi_get("/src/donn%C3%A9es/na%C3%AFve%20name.c")
+        assert status.startswith("200")
+        assert b"int x;" in body
+
+    def test_double_encoded_traversal_blocked(self, tmp_path: Path, monkeypatch: Any) -> None:
+        """%252e%252e decodes once to the text "%2e%2e", never to "..".
+
+        Decoding twice would turn it into a parent reference after the
+        containment check had already run on the once-decoded text.
+        """
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "src").mkdir()
+        (tmp_path / "secret.txt").write_text("top secret", encoding="utf-8")
+        status, _, body = wsgi_get("/src/%252e%252e/secret.txt")
+        assert status.startswith(("403", "404"))
+        assert b"top secret" not in body
 
     def test_original_prefix_serves_original_dir(self, tmp_path: Path, monkeypatch: Any) -> None:
         monkeypatch.chdir(tmp_path)
@@ -3133,3 +3162,89 @@ class TestSliceValidationDetail:
         data = json.loads(decode_body(body, headers))
         assert data["error"] == "offset beyond section bounds"
         assert ".text" in data["detail"]
+
+
+# ── URL component decoding ─────────────────────────────────────────
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+class TestUnicodeUrlComponents:
+    """A target id or section name with a space or a non-ASCII character.
+
+    Bottle routes on PATH_INFO exactly as the WSGI server hands it over, so
+    a browser's percent-escapes reach the handler still encoded: the DB
+    lookup compared "caf%C3%A9" against "café" and 404'd.  Query values are
+    the mirror image, decoded as latin-1, so "section=%C3%A9" arrived as
+    "Ã©" while Potato Mode's parse_qs on the same request produced "é".
+    """
+
+    TARGET = "café & bar"
+    SECTION = ".données"
+
+    @pytest.fixture(autouse=True)
+    def _unicode_db(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        db = tmp_path / "coverage.db"
+        shutil.copy(get_db_path(), db)
+        conn = sqlite3.connect(db)
+        t = self.TARGET
+        conn.executemany(
+            "INSERT INTO metadata VALUES (?,?,?)",
+            [(t, "db_version", '"4"'), (t, "summary", '{"totalFunctions": 1}')],
+        )
+        conn.execute(
+            "INSERT INTO sections VALUES (?, ?, 0x10003000, 0x100, 0x300, 16, 8)", (t, self.SECTION)
+        )
+        conn.executemany(
+            "INSERT INTO cells (target, section_name, start, end, span, state)"
+            " VALUES (?,?,?,?,?,?)",
+            [(t, self.SECTION, 0, 16, 1, "exact"), (t, self.SECTION, 16, 32, 1, "none")],
+        )
+        conn.execute(
+            "INSERT INTO functions (target, va, name, vaStart, size, status, markerType)"
+            " VALUES (?, 0x10003000, 'func_é', '0x10003000', 16, 'EXACT', 'FUNCTION')",
+            (t,),
+        )
+        conn.commit()
+        conn.close()
+        monkeypatch.setattr("recoverage.server._db_path", lambda: db)
+        monkeypatch.setattr("recoverage.api._db_path", lambda: db)
+        monkeypatch.setattr("recoverage.potato._db_path", lambda: db)
+        monkeypatch.setattr("recoverage._paths._db_path", lambda: db)
+        from recoverage.api import _clear_derived_caches
+
+        _clear_derived_caches()
+
+    def _enc(self, value: str) -> str:
+        from urllib.parse import quote
+
+        return quote(value, safe="")
+
+    def test_stats_resolves_the_encoded_target(self) -> None:
+        status, headers, body = wsgi_get(f"/api/targets/{self._enc(self.TARGET)}/stats")
+        assert status.startswith("200")
+        data = json.loads(decode_body(body, headers))
+        assert self.SECTION in data["sections"]
+
+    def test_data_resolves_the_encoded_section(self) -> None:
+        status, headers, body = wsgi_get(
+            f"/api/targets/{self._enc(self.TARGET)}/data?section={self._enc(self.SECTION)}"
+        )
+        assert status.startswith("200")
+        data = json.loads(decode_body(body, headers))
+        assert list(data["sections"]) == [self.SECTION]
+
+    def test_function_list_search_matches_the_decoded_name(self) -> None:
+        status, headers, body = wsgi_get(
+            f"/api/targets/{self._enc(self.TARGET)}/functions?search={self._enc('é')}"
+        )
+        assert status.startswith("200")
+        data = json.loads(decode_body(body, headers))
+        assert [f["name"] for f in data["functions"]] == ["func_é"]
+
+    def test_potato_renders_the_encoded_target(self) -> None:
+        status, _, body = wsgi_get(
+            f"/potato?target={self._enc(self.TARGET)}&section={self._enc(self.SECTION)}"
+        )
+        assert status.startswith("200")
+        assert "café".encode() in body
+        assert self.SECTION.encode("utf-8") in body

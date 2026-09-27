@@ -1,9 +1,17 @@
 (() => {
 const { a, aside, button, div, h1, h2, h3, header, input, main, p, pre, section, span, code } = van.tags;
 
-const DATA_URL = (t, secName) => `/api/targets/${t}/data${secName ? `?section=${encodeURIComponent(secName)}` : ""}`;
-const ASM_URL = (t) => `/api/targets/${t}/asm`;
-const FN_URL = (t, va) => `/api/targets/${t}/functions/${va}`;
+// Every DB-derived value spliced into a URL is percent-encoded first: a
+// target id, section name or source path holding a space, '#', '?' or a
+// non-ASCII character otherwise truncates the URL, opens a new query, or
+// (once the server decodes the path) misses the row.  Path segments are
+// encoded one at a time so the '/' separators survive.
+const enc = encodeURIComponent;
+const encPath = (path) => String(path).split("/").map((seg) => enc(seg)).join("/");
+
+const DATA_URL = (t, secName) => `/api/targets/${enc(t)}/data${secName ? `?section=${enc(secName)}` : ""}`;
+const ASM_URL = (t) => `/api/targets/${enc(t)}/asm`;
+const FN_URL = (t, va) => `/api/targets/${enc(t)}/functions/${enc(va)}`;
 
 // ============================================================================
 // Constants
@@ -55,7 +63,7 @@ const detailReady = van.state(false);
 const detailFailed = van.state(false);
 
 function loadDetail() {
-  window.RC = { van, MetaItem, MSG, hex, onReady: () => { detailReady.val = true; } };
+  window.RC = { van, MetaItem, MSG, hex, enc, encPath, onReady: () => { detailReady.val = true; } };
   const el = document.createElement("script");
   el.src = "/detail.js";
   // Without this the panes it owns would sit on "Loading…" forever.
@@ -498,7 +506,7 @@ const App = () => {
   // current target's offsets.
   const currentDllPath = () => {
     const d = data.val;
-    return (d && d.paths && d.paths.originalDll) || `/original/${activeTarget.val.toLowerCase()}.dll`;
+    return (d && d.paths && d.paths.originalDll) || `/original/${enc(activeTarget.val.toLowerCase())}.dll`;
   };
   // The loaded buffer, but only while it belongs to the target on screen.
   const loadedDll = () => (originalDll.val?.path === currentDllPath() ? originalDll.val.buf : null);
@@ -598,8 +606,8 @@ const App = () => {
         if (buf) showBytes(buf, toVa(fn.vaStart || fn.va));
         else showBytesMessage(bytesMissMessage());
 
-        const sourceRoot = (data.val && data.val.paths && data.val.paths.sourceRoot) ? data.val.paths.sourceRoot : `/src/${activeTarget.val.toLowerCase()}`;
-        const cPath = (fn.files && fn.files[0]) ? `${sourceRoot}/${fn.files[0]}` : null;
+        const sourceRoot = (data.val && data.val.paths && data.val.paths.sourceRoot) ? data.val.paths.sourceRoot : `/src/${enc(activeTarget.val.toLowerCase())}`;
+        const cPath = (fn.files && fn.files[0]) ? `${encPath(sourceRoot)}/${encPath(fn.files[0])}` : null;
         const va = fn.vaStart || fn.va;
         const { size } = fn;
 
@@ -607,7 +615,7 @@ const App = () => {
         // owns the /asm formatting (and is not in the inlined shell).
         const newCSource = cPath ? await fetchTextSafe(cPath) : MSG.NO_C_SOURCE;
         window.RC.loadAsm?.({
-          url: `${ASM_URL(activeTarget.val)}?va=${va}&size=${size}&section=${activeSection.val}`,
+          url: `${ASM_URL(activeTarget.val)}?va=${enc(va)}&size=${size}&section=${enc(activeSection.val)}`,
           set: (text) => { asmText.val = text; },
           signal,
         });
@@ -697,7 +705,7 @@ const App = () => {
             // Fetch ASM for undocumented block in .text
             asmText.val = "Loading assembly...";
             window.RC.loadAsm?.({
-              url: `${ASM_URL(activeTarget.val)}?va=${sec.va + cell.start}&size=${size}&section=${activeSection.val}`,
+              url: `${ASM_URL(activeTarget.val)}?va=${enc(sec.va + cell.start)}&size=${size}&section=${enc(activeSection.val)}`,
               set: (text) => { asmText.val = text; },
               signal,
             });
@@ -941,11 +949,11 @@ const App = () => {
 
     if (fn) {
       title = fn.name;
-      const sourceRoot = (data.val && data.val.paths && data.val.paths.sourceRoot) ? data.val.paths.sourceRoot : `/src/${activeTarget.val.toLowerCase()}`;
+      const sourceRoot = (data.val && data.val.paths && data.val.paths.sourceRoot) ? data.val.paths.sourceRoot : `/src/${enc(activeTarget.val.toLowerCase())}`;
 
       const SourceItem = () => fn.files && fn.files.length > 0
         ? MetaItem("Source", span({ class: "meta-value" }, ...fn.files.map((file, i) =>
-            span(i > 0 ? ", " : "", a({ href: `${sourceRoot}/${file}`, target: "_blank", rel: "noopener noreferrer", class: "source-link" }, file)))))
+            span(i > 0 ? ", " : "", a({ href: `${encPath(sourceRoot)}/${encPath(file)}`, target: "_blank", rel: "noopener noreferrer", class: "source-link" }, file)))))
         : null;
 
       if (fn.isGlobal) {

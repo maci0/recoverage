@@ -155,7 +155,7 @@ def handle_index() -> bytes:
     # frontend change.  API clients can use Authorization: Bearer instead.
     global CACHED_INDEX_PAYLOAD
 
-    if _server._AUTH_TOKEN and _server._auth_token_matches(request.query.get("token", "")):
+    if _server._AUTH_TOKEN and _server._auth_token_matches(_server.query_param("token")):
         # Header failure must not break the page.
         with contextlib.suppress(Exception):
             response.set_header(
@@ -199,6 +199,12 @@ def handle_index() -> bytes:
 def serve_repo_file(filepath: str) -> Any:
     prefix = "src" if request.path.startswith("/src/") else "original"
     root = (_project_dir() / prefix).resolve()
+    # The capture is the raw, still percent-encoded request path (PEP 3333),
+    # so a source file whose name holds a space or a non-ASCII character
+    # arrives as "weird%20name.c" and matches no file.  Decoded once, before
+    # the containment check below, which then sees the real path — the
+    # reverse order would decode after the check had passed.
+    filepath = _server.path_param(filepath)
     # Defense-in-depth: bottle's static_file string-prefix check does NOT
     # resolve symlinks — a symlink inside src/ pointing outside the tree
     # would pass the root check and serve the target.  Resolve and verify

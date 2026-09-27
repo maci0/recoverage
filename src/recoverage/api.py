@@ -60,6 +60,8 @@ from recoverage.server import (
     clear_target_cache,
     compress_payload,
     get_disassembly,
+    path_param,
+    query_param,
     request,
     resolve_targets,
     response,
@@ -683,6 +685,7 @@ def handle_api_targets() -> bytes:
 
 @app.get("/api/targets/<target>/stats")
 def handle_api_stats(target: str) -> bytes | Any:
+    target = path_param(target)
     snap = _snapshot_db_mtime()
     key = (snap, target)
     stats: dict[str, Any] | None = None
@@ -841,7 +844,8 @@ def _dumps_with_cells(data: dict[str, Any], cells_json: dict[str, str | None]) -
 
 @app.get("/api/targets/<target>/data")
 def handle_api_data(target: str) -> bytes | Any:
-    section_filter = request.query.get("section", "").strip() or None
+    target = path_param(target)
+    section_filter = query_param("section").strip() or None
 
     # ETag caching based on DB modification time + target + section.
     # Uses the WAL-aware snapshot (mtime_ns-precision) so two rebuilds
@@ -966,8 +970,9 @@ def _revalidate_headers(etag: str | None) -> dict[str, str]:
 @app.get("/api/targets/<target>/functions")
 def handle_api_functions_list(target: str) -> bytes | Any:
     """Paginated function listing with optional filters."""
-    status_filter = request.query.get("status", "").strip() or None
-    _raw_search = request.query.get("search", "").strip() or None
+    target = path_param(target)
+    status_filter = query_param("status").strip() or None
+    _raw_search = query_param("search").strip() or None
     # Bound search length to prevent unbounded LIKE patterns (DoS).
     if _raw_search is not None and len(_raw_search) > _MAX_SEARCH_CHARS:
         return _json_err(
@@ -978,15 +983,15 @@ def handle_api_functions_list(target: str) -> bytes | Any:
             },
         )
     search = _raw_search
-    sort_param = request.query.get("sort", "va").strip()  # field:dir
+    sort_param = query_param("sort", "va").strip()  # field:dir
     try:
-        limit = min(max(int(request.query.get("limit", 50)), 1), _MAX_BATCH_LOOKUP)
+        limit = min(max(int(query_param("limit", "50")), 1), _MAX_BATCH_LOOKUP)
     except ValueError:
         limit = 50
     try:
         # Upper bound keeps a giant ?offset= from overflowing sqlite3's
         # signed-64-bit INTEGER conversion (OverflowError -> raw 500).
-        offset = min(max(int(request.query.get("offset", 0)), 0), _MAX_PAGE_OFFSET)
+        offset = min(max(int(query_param("offset", "0")), 0), _MAX_PAGE_OFFSET)
     except ValueError:
         offset = 0
 
@@ -1192,6 +1197,7 @@ def handle_api_functions_batch(target: str) -> bytes | Any:
     shape as ``GET /functions/<va>``, including the ``last_verify`` attachment.
     VAs with no match are omitted from the response (not an error).
     """
+    target = path_param(target)
     unique_vas, err = _batch_request_vas()
     if err is not None:
         return err
@@ -1246,6 +1252,8 @@ def handle_api_functions_batch(target: str) -> bytes | Any:
 
 @app.get("/api/targets/<target>/functions/<va>")
 def handle_api_function(target: str, va: str) -> bytes | Any:
+    target = path_param(target)
+    va = path_param(va)
     with _target_cursor(target) as c:
         # One shared resolution order (server._lookup_by_va_or_name): VA
         # candidates first, then the exact name for a name-form lookup.  The
@@ -1287,6 +1295,7 @@ def handle_api_function(target: str, va: str) -> bytes | Any:
 
 @app.get("/api/targets/<target>/asm")
 def handle_api_asm(target: str) -> bytes | Any:
+    target = path_param(target)
     if not HAS_CAPSTONE:
         return _json_err(
             501,
@@ -1297,10 +1306,10 @@ def handle_api_asm(target: str) -> bytes | Any:
             },
         )
 
-    va_str = request.query.get("va")
-    size_str = request.query.get("size")
-    section = request.query.get("section", ".text")
-    fmt = request.query.get("format", "text").strip().lower() or "text"
+    va_str = query_param("va")
+    size_str = query_param("size")
+    section = query_param("section", ".text")
+    fmt = query_param("format", "text").strip().lower() or "text"
     # An unrecognised ?format= used to fall through to the text
     # representation silently, so a client's typo (?format=JSOM, ?format=json5)
     # answered 200 with a body shape it cannot parse.  Reject the unknown
@@ -1311,7 +1320,7 @@ def handle_api_asm(target: str) -> bytes | Any:
             400,
             {
                 "error": "invalid format",
-                "detail": f"format {request.query.get('format', '')!r} is not supported; "
+                "detail": f"format {query_param('format')!r} is not supported; "
                 f"expected one of {', '.join(sorted(_ASM_FORMATS))}",
             },
         )
@@ -1452,7 +1461,9 @@ def handle_api_asm(target: str) -> bytes | Any:
 @app.get("/api/targets/<target>/sections/<section>/bytes")
 def handle_api_bytes(target: str, section: str) -> bytes | Any:
     """Return raw bytes from the original binary for a given section range."""
-    raw_offset = request.query.get("offset", "0")
+    target = path_param(target)
+    section = path_param(section)
+    raw_offset = query_param("offset", "0")
     try:
         req_offset = int(raw_offset, 0)
         if req_offset < 0:
@@ -1469,7 +1480,7 @@ def handle_api_bytes(target: str, section: str) -> bytes | Any:
                 "(decimal, or 0x-prefixed hexadecimal)",
             },
         )
-    raw_size = request.query.get("size", "256")
+    raw_size = query_param("size", "256")
     req_size, size_err = _slice_size(raw_size, "invalid size")
     if size_err is not None:
         return size_err

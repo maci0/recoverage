@@ -162,6 +162,24 @@ _CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
 _REBUILD_HINT = "(run 'rebrew catalog && rebrew build-db' to rebuild it)"
 
 
+def _use_utf8_stdout() -> None:
+    """Make stdout encode UTF-8, whatever the environment's locale says.
+
+    `export` and `check` write target ids and section names straight from the
+    database, and those come out of PE images: any byte is possible.  stdout
+    carries the locale's codec, so under LC_ALL=C (with locale coercion off)
+    or a Windows code page the write raises UnicodeEncodeError part-way
+    through the output and leaves a truncated file behind a `>` redirect.
+    """
+    encoding = (getattr(sys.stdout, "encoding", None) or "").lower().replace("-", "")
+    if encoding == "utf8":
+        return
+    # A stream that cannot be reconfigured (an in-memory test double, a pipe
+    # wrapper) keeps its own codec; nothing here is worth failing.
+    with contextlib.suppress(AttributeError, ValueError, OSError):
+        sys.stdout.reconfigure(encoding="utf-8")
+
+
 def _csv_safe(value: Any) -> Any:
     """Neutralize spreadsheet formula injection (CWE-1236) in exported cells.
 
@@ -753,6 +771,7 @@ def export(
     newline so Windows stdout does not double it. Markdown cells escape pipes
     and newlines.
     """
+    _use_utf8_stdout()
     with contextlib.closing(_open_db_or_exit()) as conn:
         targets = _select_targets(conn, target)
 
@@ -909,6 +928,7 @@ def check(
     not, and 2 for a bad --min-coverage or an unreadable database.  Sections
     the grid never records matches for are reported SKIP, not FAIL.
     """
+    _use_utf8_stdout()
     if not 0.0 <= min_coverage <= 100.0:
         # A flag value outside its own documented range is a usage error, the
         # same exit 2 a non-numeric value gets from the parser.
