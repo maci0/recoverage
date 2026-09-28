@@ -7,6 +7,12 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `GET /api/health` carries a `connections` block (open, max, refused) for the
+  connection cap, the same saturation reading `streams` already gave for the
+  event-stream cap. A server at that cap answers 503 to every new request
+  while the connections it already holds keep rendering, so health read
+  `healthy` while refusing every new tab. A refused connection now also
+  answers `degraded`, naming the count and the cap.
 - `GET /api/health` carries a `config` block with the settings the running
   process resolved at startup, so a deployment can ask the server itself what it
   is running with. `recoverage config` re-resolves the environment of the shell
@@ -110,6 +116,14 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **A request the HTTP layer refused left no trace in the server log.** An
+  over-long request line, a malformed one, an unsupported version, or headers
+  past the limit are all rejected before a route exists, so nothing downstream
+  logged them; the stdlib wrote them to stderr in its own format, with no level
+  and no timestamp the server's log uses. A client stuck in a rejection loop
+  was invisible to an operator reading the server's own log while the rejection
+  reached the client. These are now WARNING lines on the `recoverage` logger
+  naming the peer address.
 - **A coverage percentage no longer rounds up to "complete".** The per-section
   figure was rounded to 2 decimal places, so 999,997 of 1,000,000 covered bytes
   was served as `coverage_pct: 100.0` by `/api/targets/<target>/stats`, printed

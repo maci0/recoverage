@@ -489,6 +489,14 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   the watcher is alive). `watcher_alive` is `None` before the first client,
   since the poller starts lazily, and a connected client with a dead watcher
   answers `degraded` because every page still renders and none will refresh.
+  The same rule governs the wider connection cap
+  (`devserver._MAX_CONNECTIONS`): its gauge is `metrics.CONNECTIONS`, which
+  the admission path itself updates, so `/api/health`'s `connections` (open,
+  max, refused) and the accept decision cannot be two numbers that disagree. A
+  refusal answers `degraded` with the count, because a server at that cap keeps
+  serving the connections it already has and refuses every new one. `max` is 0
+  until the first admission, so a mounted WSGI app that never reached `serve`
+  reports no cap rather than one it is not enforcing.
 - `/api/health` is polled, so it logs a TRANSITION, not a state: the endpoint
   runs every check through `api._log_health_status`, which warns on the first
   probe in a state, infos on the first probe after it, and says nothing on a

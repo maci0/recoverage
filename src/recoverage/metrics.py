@@ -286,6 +286,78 @@ class RegenStats:
 REGEN = RegenStats()
 
 
+class ConnectionStats:
+    """Admission gauge for the connection cap, plus the refusals it has made.
+
+    The third saturation bound in the package (``devserver._MAX_CONNECTIONS``),
+    and the one that was invisible.  A server at this cap answers 503 to
+    everything and keeps every page rendering for the clients already on it,
+    so ``/api/health`` read ``healthy`` while refusing every new tab; the only
+    trace was one log line per refused accept.  ``open`` against ``max`` is the
+    distance to that refusal, the same reading ``streams`` gives for the SSE
+    cap, and ``refused`` separates a cap that has been full once from a server
+    that has refused everything since the operator last looked.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._open = 0
+        self._max = 0
+        self._refused = 0
+
+    def admit(self, limit: int) -> bool:
+        """Take a slot if the map of connections has room; answer whether it did.
+
+        *limit* is passed rather than read from a module constant so the cap
+        and the gauge cannot be configured apart.
+        """
+        with self._lock:
+            if self._open >= limit:
+                self._refused += 1
+                return False
+            self._open += 1
+            self._max = limit
+            return True
+
+    def release(self) -> None:
+        with self._lock:
+            self._open = max(0, self._open - 1)
+
+    @property
+    def open(self) -> int:
+        """Live connections, for the admission path and the tests that wait on it."""
+        with self._lock:
+            return self._open
+
+    def snapshot(self) -> dict[str, Any]:
+        """A JSON-ready copy.  ``max`` is 0 until the first admission, so a
+        mounted WSGI app that never reached ``serve`` reports no cap rather
+        than one it is not enforcing."""
+        with self._lock:
+            return {
+                "open": self._open,
+                "max": self._max,
+                "refused": self._refused,
+            }
+
+    def reset(self) -> None:
+        """Zero the lifetime refusal count and the cap.
+
+        ``open`` is a gauge, not a lifetime counter, and is left alone for the
+        reason :meth:`RequestStats.reset` gives: a connection already accepted
+        holds its slot, and zeroing it here would let that connection's
+        release drive the gauge negative.  A caller that must return the gauge
+        to zero releases the connections it is holding first.
+        """
+        with self._lock:
+            self._max = 0
+            self._refused = 0
+
+
+#: The admission registry ``devserver`` updates and /api/health reads.
+CONNECTIONS = ConnectionStats()
+
+
 def route_label(path: str, rule: str | None) -> str:
     """A bounded label for *path*: its route *rule*, else its first segment."""
     if rule:

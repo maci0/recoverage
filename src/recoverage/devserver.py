@@ -16,12 +16,13 @@ from __future__ import annotations
 
 import contextlib
 import logging
-import threading
 from http.client import HTTPMessage
 from socketserver import ThreadingMixIn
 from typing import IO, TYPE_CHECKING, Any, cast
 from wsgiref.simple_server import ServerHandler, WSGIRequestHandler, WSGIServer
 from wsgiref.types import InputStream
+
+from recoverage import metrics
 
 if TYPE_CHECKING:
     # _typeshed ships with mypy, not with CPython: the annotations below are
@@ -63,9 +64,17 @@ class _ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
     daemon_threads = True
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        self._connections_lock = threading.Lock()
-        self._connections_open = 0
         super().__init__(*args, **kwargs)
+
+    @property
+    def _connections_open(self) -> int:
+        """Live connections, read from the gauge ``/api/health`` publishes.
+
+        The counter itself is :data:`recoverage.metrics.CONNECTIONS`, shared
+        with the health endpoint, so the admission decision and the saturation
+        gauge cannot be two numbers that disagree.
+        """
+        return metrics.CONNECTIONS.open
 
     def process_request(self, request: Any, client_address: Any) -> None:
         """Admit the connection, or answer 503 and close it at the cap.
@@ -79,7 +88,7 @@ class _ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
         other one, including the thread's failure paths.
         """
         if not self._admit_connection():
-            self._refuse_connection(request)
+            self._refuse_connection(request, client_address)
             return
         try:
             super().process_request(request, client_address)
@@ -94,23 +103,24 @@ class _ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
             raise
 
     def _admit_connection(self) -> bool:
-        with self._connections_lock:
-            if self._connections_open >= _MAX_CONNECTIONS:
-                return False
-            self._connections_open += 1
-            return True
+        return metrics.CONNECTIONS.admit(_MAX_CONNECTIONS)
 
     def _release_connection(self) -> None:
-        with self._connections_lock:
-            self._connections_open = max(0, self._connections_open - 1)
+        metrics.CONNECTIONS.release()
 
-    def _refuse_connection(self, request: Any) -> None:
+    def _refuse_connection(self, request: Any, client_address: Any) -> None:
         """Answer the 503 and close, so the client learns rather than hanging.
 
         The response is written by hand on the raw socket: there is no WSGI
         request here, so there is no environ and no handler to route a 503
         through, and a silent close would read to the client as a network
         fault rather than as a server that is busy.
+
+        The peer is in the line for the reason
+        :meth:`_QuietTimeoutRequestHandler.log_error` gives: nothing downstream
+        of the accept runs, so one stalled client holding the cap open and a
+        server that is merely busy produce the same count and no way to tell
+        them apart.
         """
         body = b'{"error": "too many connections", "code": "rate_limited"}'
         with contextlib.suppress(OSError):
@@ -123,7 +133,8 @@ class _ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
                 + body
             )
         _log.warning(
-            "Refusing a connection: %d/%d already open",
+            "Refusing a connection from %s: %d/%d already open",
+            (client_address[0] if client_address else "") or "unknown peer",
             self._connections_open,
             _MAX_CONNECTIONS,
         )
@@ -202,6 +213,43 @@ class _QuietTimeoutRequestHandler(WSGIRequestHandler):
 
     def log_request(self, code: int | str = "-", size: int | str = "-") -> None:
         pass
+
+    def log_message(self, format: str, *args: Any) -> None:
+        """Swallow ``log_request``'s share of the stdlib path, keep errors.
+
+        ``http.server`` funnels both access logging and error reporting
+        through this one method, so it is the single seam: the per-request
+        line the app already emits with a request id replaces the access half,
+        and :meth:`log_error` takes the error half.
+        """
+        return
+
+    def log_error(self, format: str, *args: Any) -> None:
+        """Report a request the transport rejected, through the app's logger.
+
+        Every one of these fails BEFORE a Bottle route exists, so nothing
+        downstream logs it: an over-long request line (:meth:`_serve_requests`
+        answers 414), a malformed one, an unsupported version, headers over the
+        limit.  The stdlib default writes them to ``sys.stderr`` in
+        ``http.server``'s own format, which carries no level, no timestamp
+        format and no request id, so they land beside the app's structured
+        lines as unparseable noise that a log filter drops.  A client stuck in
+        a rejection loop was therefore invisible in the one place the operator
+        reads, while the rejection itself reached the client.
+
+        The peer address is included because these never reach a route: it is
+        the only thing that separates one misbehaving client from a scanner.
+        The message is escaped for the same reason the request log escapes the
+        path (``send_error`` quotes the request version it rejected, which is
+        attacker-controlled).  There is no request id to carry: the id is
+        minted in ``before_request``, which a transport rejection never
+        reaches.
+        """
+        _log.warning(
+            "Transport rejected a request from %s: %r",
+            self.address_string() or "unknown peer",
+            format % args,
+        )
 
 
 class _KeepAliveRequestHandler(_QuietTimeoutRequestHandler):

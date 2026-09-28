@@ -234,6 +234,11 @@ extend-immutable-calls = ["typer.Option", "typer.Argument"]
 # ruff format cannot wrap string literals. Every other file must keep lines
 # within the 100-col cap above.
 "src/recoverage/potato.py" = ["E501"]
+# A002: devserver.py overrides http.server's log_message/log_error, whose
+# signature names the printf template `format`. The name is the override
+# contract these two methods exist to satisfy, so renaming the parameter would
+# make them read as something other than the stdlib methods they replace.
+"src/recoverage/devserver.py" = ["A002"]
 # T201: tools/ scripts are command-line utilities whose stdout output IS their
 # interface; print is intentional there and banned everywhere else.
 "tools/*" = ["T201"]

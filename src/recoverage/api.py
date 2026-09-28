@@ -877,6 +877,16 @@ def handle_api_health() -> bytes:
         # Connected clients with no poller means live reload is dead while
         # every page still renders: healthy-looking, silently stale.
         reasons.append("the DB watcher is not running while event-stream clients are connected")
+    connections = _metrics.CONNECTIONS.snapshot()
+    if connections["refused"]:
+        # Refusals are the same condition /api/events reports, at the wider
+        # cap: every new request is answered 503 while the connections already
+        # open keep rendering, so a probe reading only the documents and the
+        # streams called that healthy.
+        reasons.append(
+            f"{connections['refused']} connections refused at the "
+            f"{connections['max']}-connection cap"
+        )
     status = "degraded" if reasons else "healthy"
     _log_health_status(status, "; ".join(reasons) or "ok")
     return _json_ok(
@@ -911,6 +921,11 @@ def handle_api_health() -> bytes:
             # thread for its whole life, and the cap answers 503 to the next
             # one.  clients vs max is the distance to that refusal.
             "streams": streams,
+            # Connection admission saturation: the cap above the streams one,
+            # which refuses every new request including a fresh tab.  A server
+            # at it keeps serving the connections it already has, so without
+            # this block health read "healthy" while refusing every new client.
+            "connections": connections,
         },
         Cache_Control=CACHE_NO_STORE,
     )

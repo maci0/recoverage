@@ -12,6 +12,7 @@ Pins:
 
 from __future__ import annotations
 
+import logging
 import os
 import socket
 import subprocess
@@ -522,3 +523,54 @@ class TestClientConnectionDeadline:
             server.shutdown()
             server.server_close()
             accept_thread.join(timeout=5)
+
+    def test_a_transport_rejection_reaches_the_app_logger(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A request the transport refuses must land in the app's log, not stderr.
+
+        An over-long request line is answered 414 by the handler itself, before
+        any Bottle route exists, so nothing downstream logs it. The stdlib
+        default writes it to sys.stderr in http.server's own format, which has
+        no level and no request id, so a client stuck in a rejection loop left
+        no trace in the one place the operator reads.
+        """
+        import threading
+
+        caplog.set_level(logging.WARNING, logger="recoverage")
+        server = devserver._ThreadingWSGIServer(
+            ("127.0.0.1", 0), devserver._QuietTimeoutRequestHandler
+        )
+        server.block_on_close = False
+        port = server.server_address[1]
+        accept_thread = threading.Thread(target=server.serve_forever, daemon=True)
+        accept_thread.start()
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=5) as sock:
+                sock.settimeout(5)
+                # Past the 64 KiB request-line cap _serve_requests enforces.
+                sock.sendall(b"GET /" + b"a" * 70000 + b" HTTP/1.1\r\n\r\n")
+                reply = sock.recv(64)
+            # HTTP/1.0 on the wire: send_error runs before parse_request has
+            # accepted the version, so the handler has none to answer with.
+            assert reply.startswith(b"HTTP/1.0 414"), reply
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline and not any(
+                "Transport rejected" in r.message for r in caplog.records
+            ):
+                time.sleep(0.02)
+        finally:
+            server.shutdown()
+            server.server_close()
+            accept_thread.join(timeout=5)
+
+        rejections = [r for r in caplog.records if "Transport rejected" in r.message]
+        assert rejections, f"the 414 was not logged; captured: {caplog.text}"
+        assert rejections[0].levelno == logging.WARNING
+        # The peer is the only thing separating one misbehaving client from a
+        # scanner here: a transport rejection never reaches a route, so the
+        # request-id filter has nothing to stamp.
+        assert "127.0.0.1" in rejections[0].message
+        # One line per rejection: the stdlib format string is interpolated
+        # before logging, and a newline in it would forge a second entry.
+        assert "\n" not in rejections[0].message

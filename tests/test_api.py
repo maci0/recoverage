@@ -3659,6 +3659,42 @@ class _DeadThread:
         return False
 
 
+class TestHealthConnectionCap:
+    """/api/health reports the connection cap, the widest saturation bound.
+
+    A server at this cap answers 503 to every new request, including a fresh
+    tab, while the connections already open keep rendering. Health read
+    "healthy" through that: the documents were fine and the SSE streams were
+    within their own cap. The gauge is what turns a refused client into a
+    diagnosable server.
+    """
+
+    def test_connection_gauge_is_reported_before_any_connection(self) -> None:
+        status, headers, body = wsgi_get("/api/health")
+        assert status.startswith("200"), status
+        connections = json.loads(decode_body(body, headers))["connections"]
+        assert connections["open"] == 0
+        assert connections["refused"] == 0
+        # No cap has been exercised yet, so none is reported: a mounted WSGI
+        # app that never reached serve is not enforcing one.
+        assert connections["max"] == 0
+
+    def test_a_refusal_degrades_health_and_counts(self) -> None:
+        from recoverage import metrics
+
+        try:
+            assert metrics.CONNECTIONS.admit(1) is True
+            assert metrics.CONNECTIONS.admit(1) is False, "the cap did not refuse"
+            status, headers, body = wsgi_get("/api/health")
+            assert status.startswith("200"), status
+            data = json.loads(decode_body(body, headers))
+            assert data["connections"] == {"open": 1, "max": 1, "refused": 1}
+            assert data["status"] == "degraded"
+        finally:
+            metrics.CONNECTIONS.release()
+            metrics.CONNECTIONS.reset()
+
+
 class TestSseClientCap:
     def test_excess_clients_get_503(self) -> None:
         """More concurrent /api/events clients than the cap must be rejected
