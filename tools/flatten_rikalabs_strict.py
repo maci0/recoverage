@@ -24,7 +24,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 REPO_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 TOOLS_DIR = REPO_ROOT / "tools"
@@ -59,12 +59,12 @@ REMAP = {"oxc/no-new-buffer": "unicorn/no-new-buffer"}
 
 def load(path: Path) -> dict[str, Any]:
     with path.open(encoding="utf-8") as fh:
-        return json.load(fh)
+        return cast("dict[str, Any]", json.load(fh))
 
 
 def oxlint_version() -> str:
     """The oxlint this tree lints with, taken from the manifest that owns it."""
-    return load(_PACKAGE_JSON)["devDependencies"]["oxlint"]
+    return cast(str, load(_PACKAGE_JSON)["devDependencies"]["oxlint"])
 
 
 def main() -> int:

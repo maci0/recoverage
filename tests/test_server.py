@@ -2632,9 +2632,7 @@ class TestSpaSearchFoldsLikeTheServer:
         """A needle folded one way and a haystack folded another never match."""
         app = _web("App.tsx")
         search = app.split("const matchedNames", 1)[1].split("const matchedFns", 1)[0]
-        assert search.count("foldForSearch(") == 2, (
-            "the needle and the haystack fold differently"
-        )
+        assert search.count("foldForSearch(") == 2, "the needle and the haystack fold differently"
         assert "toLowerCase()" not in search, "the search folds somewhere other than foldForSearch"
 
     def test_the_fold_composes_to_nfc(self) -> None:

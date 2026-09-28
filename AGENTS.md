@@ -493,13 +493,16 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
 
 - Python 3.13+, ruff for linting, mypy for types, 100-char line length.
   The type gate is `strict = true` over `src/recoverage` and `tools/`, with
-  three checks off and the reason next to them in `[tool.mypy]`:
+  two checks off and the reason next to them in `[tool.mypy]`:
   `disallow_untyped_decorators` (every route handler wears a `@app.route`,
-  and bottle is untyped, so the decorator erases the signature),
-  `warn_return_any` (the JSON builders read snapshot fields whose shape is
-  pinned by rebrew's reader, not by the checker), and
+  and bottle is untyped, so the decorator erases the signature), and
   `no_implicit_reexport` (api.py, ui.py and potato.py import the shared
   `request`/`response`/`HTTPResponse` from `recoverage.server` on purpose).
+  `warn_return_any` is ON: the four untyped boundaries whose values reach a
+  return (bottle's `headers.get` and `SimpleTemplate.render`, `brotli.compress`,
+  `json.load`, `socket.getsockname`) are narrowed by an explicit `cast` at the
+  call, so a new untyped call returning into a declared type is a finding
+  rather than an invisible `Any`.
   `warn_unused_ignores` is ON, which makes every `type: ignore` in
   `src/recoverage` and `tools/` a checked claim: one whose error is gone
   fails `make type-check` instead of outliving the finding it silences. The

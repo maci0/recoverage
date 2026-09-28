@@ -19,7 +19,7 @@ import unicodedata
 from collections.abc import Callable, Iterable
 from html import escape as _html_escape
 from pathlib import Path, PurePath
-from typing import Any
+from typing import Any, cast
 from urllib.parse import ParseResult, parse_qs, urlparse
 from urllib.parse import quote as _url_quote
 
@@ -2339,7 +2339,7 @@ def _render_potato_inner(
 
     db_mtime_str = _db_updated_label()
 
-    return _PAGE_TPL.render(
+    rendered = _PAGE_TPL.render(
         # Constants
         BG_COLOR=BG_COLOR,
         PANEL_COLOR=PANEL_COLOR,
@@ -2390,6 +2390,8 @@ def _render_potato_inner(
         db_mtime=db_mtime_str,
         version=__version__,
     )
+
+    return cast(str, rendered)
 
 
 def _panel_base_ctx() -> dict[str, Any]:
@@ -2591,7 +2593,7 @@ def _panel_fn_source_text(data: dict[str, Any], target: str, fn_data: dict[str, 
         # blanks the whole panel over one 0x92.  The undecodable byte
         # renders as U+FFFD in place and the rest of the file stays readable.
         with c_path.open(encoding="utf-8", errors="replace") as f:
-            return f.read()
+            return cast(str, f.read())
     except (OSError, UnicodeError) as exc:
         # UnicodeError covers a path the filesystem encoding cannot encode
         # (a lone surrogate out of a foreign DB), which open() raises before
@@ -2775,7 +2777,7 @@ def _render_panel(
     except ValueError:
         idx = -1
     if not 0 <= idx < len(cells):
-        return _PANEL_TPL.render(**ctx)
+        return cast(str, _PANEL_TPL.render(**ctx))
 
     cell = cells[idx]
     state = cell.get("state", "none")
@@ -2826,7 +2828,7 @@ def _render_panel(
 
     if not funcs:
         _panel_empty_cell_bytes(ctx, cell, sec_data, target)
-        return _PANEL_TPL.render(**ctx)
+        return cast(str, _PANEL_TPL.render(**ctx))
 
     fn_name = funcs[0]
     ctx["fn_name"] = fn_name
@@ -2846,4 +2848,4 @@ def _render_panel(
             # box, the functions detail table).
             ctx["gl_detail_rows"] = _detail_rows(gl_data, skip_fields={"files"}, hex_fields={"va"})
 
-    return _PANEL_TPL.render(**ctx)
+    return cast(str, _PANEL_TPL.render(**ctx))

@@ -18,6 +18,7 @@ import tempfile
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
+from typing import cast
 
 REPO_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 SCRATCH_DIR = REPO_ROOT / ".scratch"
@@ -75,7 +76,9 @@ def build_sample_db(project_dir: Path) -> Path:
 def free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
+        # getsockname() is typed as a union of address shapes, so the [1] is Any
+        # on a tuple the bind above just fixed to ("127.0.0.1", port).
+        return cast(int, s.getsockname()[1])
 
 
 def get(port: int, path: str) -> tuple[int, bytes]:

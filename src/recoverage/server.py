@@ -1414,7 +1414,7 @@ def _header(name: str, default: str = "") -> str:
     hook, so the failure would be a 500 on every path, before the auth hook.
     """
     try:
-        return request.headers.get(name, default)
+        return cast(str, request.headers.get(name, default))
     except UnicodeError:
         return default
 
@@ -1567,7 +1567,7 @@ def compress_static_body(body: bytes, encoding: str) -> bytes:
     if encoding == "zstd":
         return zstd.ZstdCompressor(level=ZSTD_STATIC_LEVEL).compress(body)
     if encoding == "br":
-        return brotli.compress(body, quality=BROTLI_STATIC_QUALITY)
+        return cast("bytes", brotli.compress(body, quality=BROTLI_STATIC_QUALITY))
     return gzip.compress(body, compresslevel=GZIP_STATIC_LEVEL)
 
 

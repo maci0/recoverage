@@ -605,7 +605,7 @@ def _windows_detach_flags() -> int:
     """
     if os.name != "nt":
         return 0
-    return subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS  # type: ignore[attr-defined]
+    return int(subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS)  # type: ignore[attr-defined]
 
 
 def _kill_and_reap(proc: subprocess.Popen[bytes]) -> None:

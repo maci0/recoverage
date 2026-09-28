@@ -130,19 +130,16 @@ line-length = 100
 # carry the annotations; make test-one is the loop that grows them.
 files = ["src/recoverage", "tools"]
 python_version = "3.13"
-# Strict, minus the three checks this tree does not pass yet and one that
+# Strict, minus the two checks this tree does not pass yet and one that
 # contradicts the layout:
 #   disallow_untyped_decorators — every route handler carries @app.route /
 #   @app.get, and bottle is untyped, so the decorator erases the signature.
-#   warn_return_any — the JSON builders reach sqlite3.Row values, which are
-#   Any by construction; the row shape is pinned by the SQL, not the checker.
 #   no_implicit_reexport — api.py, ui.py and potato.py import the shared
 #   server names (request, response, HTTPResponse) from recoverage.server on
 #   purpose, so every route module imports the same objects from one module.
 # Everything else --strict turns on passes today; a new module inherits it.
 strict = true
 disallow_untyped_decorators = false
-warn_return_any = false
 no_implicit_reexport = false
 # The runtime deps (bottle, brotli, rcssmin, rjsmin) ship no py.typed, so
 # every import of them is an error mypy cannot see past. ignore_missing_imports
