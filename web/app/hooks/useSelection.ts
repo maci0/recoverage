@@ -155,7 +155,6 @@ export function useSelection({
           return;
         }
         try {
-          // oxlint-disable-next-line @rikalabs/no-placeholder-implementation -- MSG.ASM_PLACEHOLDER is the pane's own "no disassembly" message, not an unimplemented stub
           const asm = await fetchAsm(target, hex(base, 8), size, section, signal);
           if (!signal.aborted) {
             setPanes((current) => ({ ...current, asm }));

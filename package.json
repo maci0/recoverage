@@ -6,7 +6,7 @@
   "description": "Frontend tooling for the recoverage dashboard (Preact + Tailwind build, JS/TS + HTML/CSS lint)",
   "scripts": {
     "lint": "bun run lint:js && bun run lint:html",
-    "lint:js": "oxlint",
+    "lint:js": "oxlint --deny-warnings --report-unused-disable-directives",
     "lint:html": "uv run --locked --extra dev python tools/lint_html.py",
     "build:web": "vite build --config web/vite.config.ts",
     "dev:web": "vite --config web/vite.config.ts",

@@ -130,14 +130,17 @@ line-length = 100
 # carry the annotations; make test-one is the loop that grows them.
 files = ["src/recoverage", "tools"]
 python_version = "3.13"
-# Strict, minus the two checks this tree does not pass yet and one that
-# contradicts the layout:
+# Strict, minus the two checks this tree cannot pass:
 #   disallow_untyped_decorators — every route handler carries @app.route /
 #   @app.get, and bottle is untyped, so the decorator erases the signature.
 #   no_implicit_reexport — api.py, ui.py and potato.py import the shared
 #   server names (request, response, HTTPResponse) from recoverage.server on
 #   purpose, so every route module imports the same objects from one module.
 # Everything else --strict turns on passes today; a new module inherits it.
+# There is deliberately no [[tool.mypy.overrides]] table: `files` above puts
+# tools/ under the same gate as src/, and the tree passes it without one, so
+# an override is a hole in `strict` that nothing reads back.
+# tests/test_supply_chain.py fails when one comes back.
 strict = true
 disallow_untyped_decorators = false
 no_implicit_reexport = false
@@ -155,12 +158,17 @@ ignore_missing_imports = true
 # error is gone (the annotation moved, the dependency shipped py.typed, the
 # line was deleted) fails the run instead of outliving the finding it silences.
 warn_unused_ignores = true
-# tools/ scripts are one-off build helpers: their mains take argv from the
-# caller and are annotated as the work grows, so the signature check is off
-# there only.
-[[tool.mypy.overrides]]
-module = "tools.*"
-disallow_untyped_defs = false
+# --strict does not reach these two, and the tree passes both today. They are
+# the checks that find a comparison or a branch the code cannot take, which is
+# a defect rather than a style: warn_unreachable reports a narrowing that ends
+# in a return or a raise, and strict_equality reports an identity comparison
+# against a literal or across types, where `==` and `is` disagree (1 and True,
+# 0 and False). Turning either on is what makes a later edit that reaches an
+# unreachable arm fail here instead of shipping it. Both were proven clean by
+# a run before they were written down, and tests/test_supply_chain.py holds
+# them on.
+warn_unreachable = true
+strict_equality = true
 
 [tool.ruff.lint]
 # RUF001-RUF003 flag every confusable in prose; the multiplication sign is
@@ -228,6 +236,11 @@ select = [
     # empty comment, a dict or list index lookup whose key is known to exist.
     "PLR0124", "PLR0133", "PLR0206", "PLR1704", "PLR1716", "PLR1722",
     "PLR1733", "PLR1736", "PLR2044",
+    # A trailing `return` at the end of a function hides the statement that
+    # was meant to be the last one, which is how an assignment or a log line
+    # silently stops running. It ran clean before it was written here, so it
+    # costs nothing to keep on.
+    "PLR1711",
     # tryceratops: vanilla-raise, type-check-without-type-error, verbose
     # raise, useless try/except, logging the exception class instead of the
     # instance. TRY200 (reraise without cause) is B904, already covered by the

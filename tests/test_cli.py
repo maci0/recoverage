@@ -1339,6 +1339,46 @@ class TestServeServerWiring:
         assert issubclass(handler, devserver._QuietTimeoutRequestHandler)
         assert handler.timeout == devserver._CLIENT_SOCKET_TIMEOUT_SECONDS > 0
 
+    def test_the_installed_cors_allowlist_is_the_normalized_one(self, monkeypatch: Any) -> None:
+        """The request path normalizes the Origin it is given and compares it
+        to the installed list, so the list has to be the normalized one. A raw
+        ``--cors-origin`` entry stores a spelling no browser sends: the host
+        keeps its case, and a scheme-default port is kept where the reducer
+        drops it, so a request from the page the entry was written for is
+        refused by the very entry that allows it.
+        """
+        from recoverage.server import app as server_app
+
+        monkeypatch.setattr("recoverage.api._ensure_db_watcher", lambda: None)
+        installed: dict[str, Any] = {}
+        monkeypatch.setattr(
+            server_app.__class__,
+            "run",
+            lambda self, **kwargs: None,
+        )
+        monkeypatch.setattr(
+            "recoverage.server.configure_security",
+            lambda **kwargs: installed.update(kwargs),
+        )
+        result = runner.invoke(
+            app,
+            [
+                "serve",
+                "--no-open",
+                "--port",
+                "8123",
+                "--cors",
+                "--cors-origin",
+                "http://App.test:80",
+            ],
+        )
+        assert result.exit_code == 0
+        assert installed["cors_enabled"] is True
+        assert installed["cors_allowed_origins"] == ["http://app.test"]
+        # The banner reports the same list, so it cannot name an allowlist the
+        # request path does not match against.
+        assert "cors_origin=http://app.test" in result.output
+
     def test_served_over_http_1_1_so_the_browser_reuses_the_connection(self) -> None:
         """The handler must speak HTTP/1.1.
 

@@ -106,7 +106,13 @@ recoverage/
 Frontend lint (bun + a JDK; see `bun run lint:js|html`): `oxlint.config.ts` is
 the JS/TS config, `tools/lint_html.py` runs vnu over both the static assets and
 the documents the server actually serves, and `tools/oxlint/anti-slop/` is a
-vendored upstream copy to keep in sync. `tools/oxlint/rikalabs-strict.json` is
+vendored upstream copy to keep in sync. `lint:js` runs oxlint with
+`--deny-warnings --report-unused-disable-directives`, so an
+`oxlint-disable-next-line` whose rule no longer reports fails the run rather
+than outliving the finding it silences: that is the frontend's RUF100 and
+`warn_unused_ignores`, and `tests/test_supply_chain.py`
+(`TestFrontendAnalysisIsEnforced`) holds both flags in place.
+`tools/oxlint/rikalabs-strict.json` is
 generated: never hand-edit it, bump `@rikalabs/oxlint-standards` then run
 `make regen-oxlint` (which wraps `tools/flatten_rikalabs_strict.py` and the
 `bun install` it reads `node_modules` from). The script's docstring and
@@ -165,7 +171,7 @@ make all                    # every check CI runs, one command
 
 # Frontend lint detail (requires bun and java on PATH)
 bun run lint                # oxlint (Rika-Labs strict preset + vendored anti-slop) + vnu HTML/CSS
-bun run lint:js             # oxlint only
+bun run lint:js             # oxlint only (warnings fail, unused directives reported)
 bun run lint:html           # vnu only: static assets + served pages (SPA shell, Potato Mode)
 bun run typecheck:web       # tsc --noEmit over web/tsconfig.json (strict)
 

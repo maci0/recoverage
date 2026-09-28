@@ -264,7 +264,15 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   came up with an empty one and refused precisely the reads the entry was
   written for. `serve` and `recoverage config` now install and report the same
   resolved list.
-
+- **`serve` installed the raw `--cors-origin` list as the request-path
+  allowlist, so an origin the page actually sends was refused by the entry
+  written to allow it.** The request path normalizes the `Origin` it is given
+  (host lowercased, scheme-default port dropped) and compares it to the
+  installed list, but the installed list was the operator's spelling: a host
+  written `http://App.test` and one written `http://app.test:80` both stored
+  an entry no browser ever emits. `serve` now installs the resolved,
+  normalized allowlist, the same one `recoverage config` and the startup
+  banner already reported, so all three name the list the matcher holds.
 - **`make build` stamped a sdist with the wrong date, or crashed, when
   `SOURCE_DATE_EPOCH` was not plain ASCII digits.** The value was checked with
   `str.isdigit`, which accepts every Unicode decimal digit and every

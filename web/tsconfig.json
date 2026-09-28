@@ -17,6 +17,11 @@
     "isolatedModules": true,
     "noEmit": true,
     "skipLibCheck": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "forceConsistentCasingInFileNames": true,
+    "allowUnreachableCode": false,
+    "allowUnusedLabels": false,
     "paths": {
       "@/*": ["./app/*"],
       "react": ["./node_modules/preact/compat/"],

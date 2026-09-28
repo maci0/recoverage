@@ -375,7 +375,6 @@ function sendRegen(key: RegenKey): Promise<Response> {
  * a 429 into a second pipeline.
  */
 export async function postRegen(key: RegenKey): Promise<RegenResult> {
-  // oxlint-disable-next-line @rikalabs/no-silent-catch-fallback -- the fallback is the re-send itself, and a second failure propagates to the caller, which reports it
   const res = await sendRegen(key).catch(() => sendRegen(key));
   // SAFETY: this origin's own JSON; `handle_regen` answers `{"ok": bool}` and,
   // for a retry of a run still going, `{"ok": true, "in_progress": true}`.

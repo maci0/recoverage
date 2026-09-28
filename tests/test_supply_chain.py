@@ -32,6 +32,7 @@ _README = _ROOT / "README.md"
 _PACKAGE_JSON = _ROOT / "package.json"
 _BUN_LOCK = _ROOT / "bun.lock"
 _MANIFEST = _ROOT / "pyproject.toml"
+_TSCONFIG = _ROOT / "web" / "tsconfig.json"
 _PYTHON_VERSION = _ROOT / ".python-version"
 _FLATTEN = _ROOT / "tools" / "flatten_rikalabs_strict.py"
 _DERIVED_PRESET = _ROOT / "tools" / "oxlint" / "rikalabs-strict.json"
@@ -738,6 +739,46 @@ class TestFrontendAnalysisIsEnforced:
                 f"no Makefile target runs `bun run {script}`; it would never gate a merge"
             )
 
+    def test_the_frontend_type_settings_stay_on(self) -> None:
+        """`strict` is a floor, and the settings that make it a floor for this
+        tree are only checked by the one script that reads this file.
+
+        oxlint runs without type information (the Rika preset is flattened
+        with typeAware: false), so a flag dropped here stops reporting
+        anything, which is indistinguishable from a tree with no type error.
+        Each of the five ran clean before it was written into tsconfig.json:
+        a switch that falls through, a function that can reach the end
+        without returning, a file spelled two ways on a case-insensitive
+        filesystem, a label nothing jumps to, and unreachable code left
+        behind a return.
+        """
+        options = json.loads(_TSCONFIG.read_text(encoding="utf-8"))["compilerOptions"]
+        for flag in (
+            "strict",
+            "noUncheckedIndexedAccess",
+            "exactOptionalPropertyTypes",
+            "noImplicitReturns",
+            "noFallthroughCasesInSwitch",
+            "forceConsistentCasingInFileNames",
+        ):
+            assert options.get(flag) is True, f"web/tsconfig.json no longer sets {flag}"
+        for flag in ("allowUnreachableCode", "allowUnusedLabels"):
+            assert options.get(flag) is False, f"web/tsconfig.json no longer sets {flag}: false"
+
+    def test_a_stale_disable_directive_fails_the_frontend_lint(self) -> None:
+        """`oxlint-disable-next-line` is the frontend's `# noqa`, and it needs
+        the same gate ruff gets from RUF100 and mypy from
+        warn_unused_ignores: a directive whose rule no longer reports (the
+        site moved, the plugin's rule changed, an override in
+        oxlint.config.ts turned the rule off) silences nothing and keeps
+        looking reviewed. Without --report-unused-disable-directives those
+        three sat in the tree for the life of the file, and without
+        --deny-warnings the report that finds them does not fail the run.
+        """
+        script = json.loads(_PACKAGE_JSON.read_text(encoding="utf-8"))["scripts"]["lint:js"]
+        for flag in ("--deny-warnings", "--report-unused-disable-directives"):
+            assert flag in script, f"package.json lint:js no longer passes {flag} to oxlint"
+
     def test_the_type_check_runs_in_make_all_and_in_ci(self) -> None:
         """The gate has to be somewhere a broken type stops a merge."""
         makefile = _MAKEFILE.read_text(encoding="utf-8")
@@ -783,6 +824,38 @@ class TestPythonAnalysisIsEnforced:
         assert self._mypy().get("warn_unused_ignores") is True, (
             "`warn_unused_ignores` is off in [tool.mypy], so a stale `type: "
             "ignore` never fails the gate"
+        )
+
+    def test_the_checks_strict_leaves_out_are_on(self) -> None:
+        """`strict` is a preset, and two of the checks this tree can pass are
+        not in it: warn_unreachable and strict_equality. Both find a defect
+        (a branch the code cannot take, a literal compared with `is`), and
+        both ran clean before they were written here. A preset is a floor,
+        not a ceiling.
+        """
+        mypy = self._mypy()
+        for check in ("warn_unreachable", "strict_equality"):
+            assert mypy.get(check) is True, f"`{check}` is off in [tool.mypy]"
+
+    def test_no_module_is_exempted_from_the_gate(self) -> None:
+        """`strict` is one setting for the tree, so a per-module override is
+        a hole in it that nothing else reads back.
+
+        `files` already puts tools/ under the same gate as src/, and the tree
+        passes it without an exception, so the one override in the manifest
+        exempted the build scripts from the def-annotation check every other
+        module is held to. A new override is a new finding written where the
+        analyzer runs, where it reads as a settled fact.
+        """
+        relaxed = {
+            table.get("module"): sorted(
+                key for key, value in table.items() if key != "module" and value is False
+            )
+            for table in self._mypy().get("overrides", [])
+        }
+        assert not relaxed, (
+            f"[tool.mypy] overrides switch checks off: {relaxed}; the finding that "
+            "needed one is fixed with annotations, not with a weaker gate"
         )
 
     def test_the_type_check_runs_in_the_lint_job(self) -> None:

@@ -18,5 +18,4 @@ if (host === null) {
 // "Loading coverage..." above a live dashboard.
 host.replaceChildren();
 
-// oxlint-disable-next-line vitest/require-hook -- not a test: this is the application entry, where mounting at import time is the point
 render(<App />, host);

@@ -2867,6 +2867,8 @@ class TestPageIdentityMatchesTheSpa:
         # The SPA's shell is the one that names the file; the two drawings are
         # compared by their canonical form, not by byte layout. The data URI
         # spells its attributes with single quotes, the file with double.
+        # A lambda, not a def: it is used on the two lines below and nowhere
+        # else, and a named local for a one-call helper reads as scope.
         canonical = lambda text: re.sub(r"""[\s'"]""", "", text)  # noqa: E731
         assert canonical(encoded) == canonical(favicon)
 
