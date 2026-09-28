@@ -264,7 +264,14 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   refusal. The stamp is now parsed as the ASCII decimal run it is required to
   be, matching how every `RECOVERAGE_*` integer is read, and a value past
   CPython's conversion limit is refused rather than raising.
-
+- **Clearing a criterion in Potato Mode's function list dropped the reader back
+  into the grid.** The `[Clear]` link beside the status note, and the topbar's
+  `[Clear search]`, both built their href without `view=functions`, so clearing
+  the criterion that narrowed the list also navigated out of the list. The
+  topbar's `[Clear search]` also discarded a status filter, quietly widening a
+  list the reader had narrowed. Every link inside the function list now carries
+  the view, and the clear-search link carries the status criterion like the two
+  forms beside it.
 - **A regen was refused on macOS and Windows for a mismatch that did not
   exist.** `RECOVERAGE_DB` and the directory rebrew writes to were compared as
   path strings, and on the two filesystems that ignore case by default
@@ -279,7 +286,9 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   one answer that says "download me" for a body the route had just decided was
   text. The type now follows the same suffix set that decides a file is text,
   so it is the same on every machine and cannot disagree with the compression
-  decision.
+  decision. An `.xml` file was the one suffix the two tables disagreed on: the
+  type table named it and the text set did not, so it was served untyped and
+  uncompressed while every other named suffix was neither.
 - `--port 0` could publish a port the listener then failed to bind. The probe
   that resolves the ephemeral port took whichever address family the resolver
   listed first, while the listener took IPv6 only when every answer was IPv6,

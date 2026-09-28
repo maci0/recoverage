@@ -362,6 +362,7 @@ _REPO_COMPRESSIBLE = frozenset(
         ".ts",
         ".tsx",
         ".txt",
+        ".xml",
         ".yaml",
         ".yml",
     }

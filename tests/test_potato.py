@@ -748,6 +748,29 @@ def test_function_list_no_match_says_what_to_do():
 
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage document")
+def test_every_clear_link_inside_the_function_list_keeps_the_view():
+    # The function list is a view of its own, and a link that omits `view`
+    # is a link back to the grid.  Both clear affordances on a status-filtered,
+    # searched list therefore have to carry it: the [Clear] beside the status
+    # note in the list header, and the topbar's own [Clear search].  Without
+    # it, clearing a criterion drops the reader out of the list they are
+    # standing in, which is what the topbar's hidden inputs were added to
+    # prevent for the two forms beside them.
+    target = require_target()
+    html = render_potato_url(
+        f"/potato?target={target}&section=.text&view=functions&status=STUB&search=_func_c"
+    )
+    clear_links = re.findall(r'<a href="([^"]*)"><font[^>]*>\[Clear(?: search)?\]</font></a>', html)
+    assert clear_links, html[:400]
+    assert all("view=functions" in href for href in clear_links), clear_links
+    # ... and the status criterion is only dropped by the [Clear] beside it,
+    # not by the topbar's [Clear search], which clears the query alone.
+    status_cleared = [href for href in clear_links if "status=STUB" not in href]
+    query_cleared = [href for href in clear_links if "search=" not in href]
+    assert status_cleared and query_cleared, clear_links
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage document")
 def test_function_list_no_match_status_filter_offers_a_way_back():
     target = require_target()
     html = render_potato_url(

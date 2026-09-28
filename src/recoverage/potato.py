@@ -799,6 +799,7 @@ def _build_url(
     search: str | None = None,
     page: int | None = None,
     status: str | None = None,
+    view: str | None = None,
 ) -> str:
     """Build the relative "?target=...&section=..." URL.
 
@@ -808,6 +809,10 @@ def _build_url(
     round trip.  ``status`` is the function list's own criterion; the links
     that move between the top-level views carry it, so a reader who set it
     does not watch the list silently change under them by way of a section tab.
+    ``view`` is the same idea for the view itself, and the omission is what
+    makes it worth spelling out: a link that omits it is a link back to the
+    grid, so every link a reader follows from inside the function list has to
+    pass it, not only the ones that leave the list on purpose.
     """
     url = "?target=" + _url_quote(target) + "&section=" + _url_quote(section)
     if filters:
@@ -820,6 +825,8 @@ def _build_url(
         url += "&page=" + str(page)
     if status:
         url += "&status=" + _url_quote(status)
+    if view:
+        url += "&view=" + _url_quote(view)
     return url
 
 
@@ -2126,12 +2133,14 @@ def _render_function_list(
     # header count and the search box both read as if the list were the whole
     # one, so a reader who set it (or followed a link carrying it) sees a
     # shorter list with no sign of the criterion and no way back off it here.
+    # Clearing it stays in the list, like every other link on this page: the
+    # `[Grid View]` link below is the one that leaves it on purpose.
     status_note = ""
     if status_filter:
         status_note = (
             f'<font size="1" color="{MUTED_COLOR}">Status: </font>'
             f'<font size="1" color="{ACCENT_COLOR}"><b>{_esc(status_filter)}</b></font> '
-            f'<a href="{_build_url(target, section, search=search_query)}">'
+            f'<a href="{_build_url(target, section, search=search_query, view="functions")}">'
             f'<font size="1" color="{ACCENT_COLOR}">[Clear]</font></a> '
         )
     cap_note = ""
@@ -2400,7 +2409,19 @@ def _render_potato_inner(
             snap=snap,
         )
 
-    clear_search_url = _build_url(target, section, active_filters or None)
+    # The topbar's [Clear search] is the third of the three ways a reader
+    # leaves the topbar, so it carries what the two forms beside it carry: the
+    # view and the status criterion.  Without them it drops a reader standing
+    # in the function list into the grid, and quietly widens a status-filtered
+    # list, which is the same loss the hidden inputs in the template were
+    # added to prevent.
+    clear_search_url = _build_url(
+        target,
+        section,
+        active_filters or None,
+        status=status_filter,
+        view="functions" if view == "functions" else None,
+    )
 
     # The header's [Functions] link is built here, not from `{{target}}` /
     # `{{section}}` in the template: those get HTML-escaped only, so a target
