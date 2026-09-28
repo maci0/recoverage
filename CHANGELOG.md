@@ -277,6 +277,14 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **A malformed `Content-Length` was read as no `Content-Length` at all.** A
+  header the ASCII parse refuses (`1_0`, a non-ASCII digit run, a negative or
+  a non-numeric value) fell through to the unframed read, so the request was
+  answered on the JSON it happened to contain rather than on the framing it
+  was sent in, and the endpoint's rejection named the wrong thing. It is now
+  refused as a malformed body with the connection closed, the same answer a
+  bad chunk-size line or a body cut short of its declared size already gets.
+
 - **`recoverage export --format md` and `--format json` reported a failed
   write as a traceback.** Only the CSV arm caught the OSError a full disk, a
   quota or a closed pipe raises, and named how many rows landed before the

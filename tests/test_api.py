@@ -2414,6 +2414,24 @@ class TestBatchFunctionLookup:
         assert status.startswith("400")
         assert headers.get("Connection") == "close"
 
+    def test_batch_refuses_a_content_length_that_is_no_byte_count(self) -> None:
+        """A present Content-Length is framing, so a bad one is refused, not dropped.
+
+        Reading it as "no length declared" switched the reader to the unframed
+        path, so "1_0" (which `int(x)` widens to 10), an Arabic-Indic digit run
+        and a negative length each silently changed the read strategy and the
+        endpoint answered 400 about the JSON instead of about the framing."""
+        target = require_target()
+        for declared in ("1_0", "٤٠", "-1", "abc", "0x10"):
+            status, headers, _body = wsgi_request(
+                "POST",
+                f"/api/targets/{target}/functions",
+                body=b'{"vas":["0x10001000"]}',
+                content_length=declared,
+            )
+            assert status.startswith("400"), f"Content-Length: {declared!r} was not refused"
+            assert headers.get("Connection") == "close"
+
     def test_batch_refuses_a_chunk_size_line_carrying_no_size(self) -> None:
         """A chunk-size line is 1*HEXDIG, so a line with no digits frames nothing.
 

@@ -578,15 +578,29 @@ def _declared_content_length() -> int | None:
     ``request.content_length``: that property returns -1 for a chunked request
     and for a body whose header the peer omitted, and a caller that treats -1
     as a length reads the socket until it blocks.
+
+    A header that is PRESENT and unparsable raises
+    :class:`RequestBodyMalformedError` rather than reading as "no length
+    declared".  Returning None there was a fallback standing in for a failure
+    the caller should have seen: ``read_request_body`` switches to the unframed
+    read on a None, so ``Content-Length: 1_0``, ``Content-Length: ٤٠٩٦`` and
+    ``Content-Length: -1`` each silently changed the read strategy instead of
+    being refused, and the endpoint answered 400 about the JSON it found
+    rather than about the framing it was sent in.  Every other ill-framed
+    thing this reader meets — a chunk size line that is not hex, a body cut
+    short of its declared size, a missing final CRLF — is already refused, and
+    the connection is already framed to expect one, so this is the same answer
+    for the same class of fault.  The value is a run of ASCII digits and
+    nothing else: ``parse_ascii_int`` rejects a sign, and a negative declared
+    length is not a length at all.
     """
     raw = request.environ.get("CONTENT_LENGTH", "")
     if not raw:
         return None
     try:
-        length = parse_ascii_int(raw)
-    except ValueError:
-        return None
-    return length
+        return parse_ascii_int(raw)
+    except ValueError as exc:
+        raise RequestBodyMalformedError(f"Content-Length is not a byte count: {raw!r}") from exc
 
 
 def _body_is_chunked() -> bool:
@@ -690,7 +704,8 @@ def read_request_body(limit: int) -> bytes:
     deadline, while the client is itself waiting for the response.
 
     Raises :class:`RequestBodyTooLargeError` past *limit* and
-    :class:`RequestBodyMalformedError` on framing this will not accept; see
+    :class:`RequestBodyMalformedError` on framing this will not accept, which
+    includes a ``Content-Length`` that is present but is not a byte count; see
     :class:`RequestBodyError` for what the caller owes the connection.
     """
     chunked = _body_is_chunked()
