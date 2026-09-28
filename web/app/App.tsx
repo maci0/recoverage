@@ -8,7 +8,6 @@ import { CoveragePanel } from "@/components/CoveragePanel";
 import { SearchResults, searchResultRows } from "@/components/SearchResults";
 import { StatsStrip } from "@/components/StatsStrip";
 import { Button, controlVariants } from "@/components/ui/button";
-import { FILTER_KEY, PALETTE_VARS, STATE_FILTERS, STATE_LABEL } from "@/grid/pack";
 import { useCoverage, type Coverage } from "@/hooks/useCoverage";
 import { useLiveReload } from "@/hooks/useLiveReload";
 import { originalDllPath, useOriginalBinary } from "@/hooks/useOriginalBinary";
@@ -25,6 +24,7 @@ import {
   trimSearch,
 } from "@/lib/format";
 import { readStored, writeStored } from "@/lib/storage";
+import { FILTER_KEY, PALETTE_VARS, STATE_FILTERS, STATE_LABEL } from "@/states";
 
 /** The dashboard shell: the document, the topbar's controls, and the map.
  *

@@ -483,7 +483,7 @@ simpler and strictly wider.
      (`summary.coveragePercent`, a section's `coverage_pct`) and never divides
      its own counts, so a fourth rendering cannot round its way to a different
      number beside the same map; its per-state counts are the `STATE_FILTERS`
-     table in `web/app/grid/pack.ts`, which the toolbar's pills are built from,
+     table in `web/app/states.ts`, which the toolbar's pills are built from,
      and each one is a filter toggle rather than a second vocabulary. Every
      number the SPA prints goes through `format.percent1` or `format.count`
      (`web/app/lib/format.ts`): `percent1` is the JS half of `pct_1dp`, and
@@ -1074,7 +1074,7 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   read as a clean bundle.
 - The cell-state vocabulary is owned by rebrew (`rebrew.build_db._KNOWN_CELL_STATES`)
   and must be covered on the rendering side: `potato.COLORS` + `LEGEND_ITEMS`,
-  and `web/app/grid/pack.ts` `STATE_SLOTS`/`PALETTE_VARS`/`FILTER_KEY`. An unmapped
+  and `web/app/states.ts` `STATE_SLOTS`/`PALETTE_VARS`/`FILTER_KEY`. An unmapped
   state paints as an undocumented gap, which contradicts `/stats` — `verified`
   is counted there as an exact match. Tests in `test_potato.py`
   (`TestCellStateVocabularyCoverage`) and `test_server.py` (`TestSpaStateVocabulary`)

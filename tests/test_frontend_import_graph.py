@@ -29,6 +29,7 @@ _LEVELS: dict[str, int] = {
     "api": 0,
     "grid": 0,
     "lib": 0,
+    "states": 0,
     "hooks": 1,
     "components": 2,
     "App": 3,

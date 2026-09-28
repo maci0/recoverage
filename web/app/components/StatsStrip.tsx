@@ -2,8 +2,8 @@ import type { ComponentChildren } from "preact";
 
 import type { StatsPayload } from "@/api";
 import { Button } from "@/components/ui/button";
-import { STATE_FILTERS, paletteVarForFilter } from "@/grid/pack";
 import { count, percentLabel } from "@/lib/format";
+import { STATE_FILTERS, paletteVarForFilter } from "@/states";
 
 /** The bucket `/stats` counts a state under. Only the tooling failures differ:
  * the server folds them into `other`, which is the state the map paints as slot

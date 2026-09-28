@@ -79,7 +79,7 @@ it is mounted from.
 * **Logo & Title**: Retro-futuristic "R" logo with CRT scanline effects.
 * **Surface**: Opaque `--panel` with a 1px bottom border, no `backdrop-filter`. The topbar was the last translucent, blurred surface in the theme: over the near-black ground the blur showed nothing, and it repainted on every scroll frame, which is the same argument the sticky panel header already records for dropping its own blur.
 * **Tabs**: Dynamic segment selectors generated from the active target's sections, ordered by ascending VA so PE load order (`.text`, `.rdata`, `.data`, `.bss`) holds and the section carrying the work leads, instead of an alphabetical row ending in `.text`.
-* **StatsStrip**: The row above the map: `size · matched · coverage %` as plain text, followed by one pill per cell state. The figures are the ones `/stats` serves, never a second division over the same counts, so the strip cannot disagree with the map beside it. **Each pill is the filter toggle for its state** (`STATE_FILTERS` in `web/app/grid/pack.ts`, the same table the toolbar is built from), reachable by keyboard and carrying `aria-pressed`; there is no separate segment strip, and no arithmetic over denominators to disagree with.
+* **StatsStrip**: The row above the map: `size · matched · coverage %` as plain text, followed by one pill per cell state. The figures are the ones `/stats` serves, never a second division over the same counts, so the strip cannot disagree with the map beside it. **Each pill is the filter toggle for its state** (`STATE_FILTERS` in `web/app/states.ts`, the same table the toolbar is built from), reachable by keyboard and carrying `aria-pressed`; there is no separate segment strip, and no arithmetic over denominators to disagree with.
 * **Target Selector**: Dropdown to switch between targets (e.g., `SERVER`, `GOLD`, `GOLDTL`). Persists selection to URL (`?target=XXX`) and localStorage.
 * **Search & Filters**: A search input and toggleable filter buttons (All, E, R, M, S, P, V, X). V isolates `proven` cells and X the problem states, so every row the legend prints is reachable as a filter instead of only through a pixel. The set is written to the URL as `?filter=` (the parameter Potato Mode already used) on every toggle, so a filtered map survives a reload and can be shared; a name outside the set is dropped, since it would dim every painted cell and light no button.
 * **Search results** (`components/SearchResults.tsx`): the matches, as a list under the box, ordered by address so it reads in the order the lattice does, capped at `SEARCH_RESULT_LIMIT` with a count of what the cap left out. Counting the matches and letting Enter jump to the first one left a target-wide term (`Init`, 400 names) with no way to reach any but the first: the reader had to keep narrowing the term until one match survived, guessing a spelling. Potato Mode's `?view=functions` list was already that answer, so this is the SPA catching up to its own sibling rather than a new pattern. The list is absolutely positioned, because the topbar is sticky and measured into `--topbar-h`, so a list in its flow moved the map the reader was looking at on every keystroke. `Escape` in the box clears the query, the list and the map's dimming together.
@@ -146,7 +146,7 @@ it is mounted from.
   * **Exact**: Green (`rgba(16, 185, 129, 0.75)`)
   * **Reloc**: Blue/Teal (`rgba(2, 132, 199, 0.8)`)
   * **Near-match**: Yellow/Amber (`rgba(255, 200, 0, 0.65)`)
-  * **Size mismatch**: Yellow/Amber, the same hue as near-match (the SPA's `STATE_SLOTS` in `web/app/grid/pack.ts` packs both to slot 3)
+  * **Size mismatch**: Yellow/Amber, the same hue as near-match (the SPA's `STATE_SLOTS` in `web/app/states.ts` packs both to slot 3)
   * **Proven**: Bold Cyan (`rgba(6, 182, 212, 0.65)`, `--proven-bg`)
   * **Stub**: Red (`rgba(255, 0, 0, 0.8)`)
   * **Padding**: Silver (`rgba(200, 200, 220, 0.55)`)
@@ -321,7 +321,7 @@ Potato Mode is a pure HTML 5 alternative UI that works **without any CSS or Java
 - **Multi-select filters** (toggle multiple filters simultaneously)
 - **Search functionality** (matches function name, VA, and symbol)
 - **Segmented progress bar** (coverage breakdown by status)
-- **A color and a legend row for every cell state** `build_db` can write, shared with the SPA's `STATE_SLOTS` vocabulary in `web/app/grid/pack.ts`.  A legend row covers every state that shares it, so a state with no row of its own still has a color and a filter
+- **A color and a legend row for every cell state** `build_db` can write, shared with the SPA's `STATE_SLOTS` vocabulary in `web/app/states.ts`.  A legend row covers every state that shares it, so a state with no row of its own still has a color and a filter
 - **Cell selection with detail panel**
 - **Target selector**
 - **Data Inspector** for `.data`, `.rdata`, and `.bss` sections

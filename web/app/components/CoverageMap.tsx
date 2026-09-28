@@ -5,16 +5,14 @@ import type { Section } from "@/api";
 import {
   DEFAULT_GRID_COLUMNS,
   MAX_GRID_COLUMNS,
-  PALETTE_VARS,
-  STATE_LABEL,
   hitTest,
   layoutSection,
   packSection,
-  survivesFilter,
   type Geometry,
   type Packed,
 } from "@/grid/pack";
 import { count, hex, isolate } from "@/lib/format";
+import { PALETTE_VARS, STATE_LABEL, survivesFilter } from "@/states";
 
 /** The roving tab stop's next cell for a key, or null when the key is not a
  * navigation key. Home and End are the lattice's own ends. */

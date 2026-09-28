@@ -9,10 +9,10 @@ import { HighlightedCode } from "@/components/HighlightedCode";
 import { Button } from "@/components/ui/button";
 import { CopyButton } from "@/components/ui/copy-button";
 import { META_GRID, MetaItem } from "@/components/ui/meta";
-import { STATE_LABEL, stateSlot } from "@/grid/pack";
 import type { Panes } from "@/hooks/useSelection";
 import type { HighlightLanguage } from "@/lib/highlight";
 import { MSG, count, dateTime, hex, isolate, similarityPct, sourceFileUrl, toVa } from "@/lib/format";
+import { STATE_LABEL, stateSlot } from "@/states";
 
 /** The selected block's detail.
  *

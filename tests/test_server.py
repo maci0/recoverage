@@ -1162,8 +1162,8 @@ class TestSpaFilterControls:
     def test_filter_url_names_are_allowlisted(self) -> None:
         from recoverage.potato import FILTER_STATES
 
-        pack = _web("grid/pack.ts")
-        raw = re.search(r"export const FILTER_KEY = \[(.*?)\];", pack).group(1)
+        states = _web("states.ts")
+        raw = re.search(r"export const FILTER_KEY = \[(.*?)\];", states).group(1)
         keys = set(re.findall(r'"([a-z_]*)"', raw))
         assert keys - {""} == set(FILTER_STATES)
 
@@ -1174,10 +1174,10 @@ class TestSpaFilterControls:
         unreachable exactly as before."""
         from recoverage.potato import FILTER_STATES
 
-        pack = _web("grid/pack.ts")
-        raw = re.search(r"export const STATE_FILTERS = \[(.*?)\] as const;", pack, re.DOTALL).group(
-            1
-        )
+        states = _web("states.ts")
+        raw = re.search(
+            r"export const STATE_FILTERS = \[(.*?)\] as const;", states, re.DOTALL
+        ).group(1)
         buttons = set(re.findall(r'key: "([a-z_]+)"', raw))
         assert buttons == set(FILTER_STATES)
         app = _web("App.tsx")
@@ -1186,8 +1186,8 @@ class TestSpaFilterControls:
     def test_every_packed_state_survives_a_filter(self) -> None:
         """A "" in FILTER_KEY means the cell is dimmed by every pill and lit by
         none, which is the state the two missing buttons were for."""
-        pack = _web("grid/pack.ts")
-        raw = re.search(r"export const FILTER_KEY = \[(.*?)\];", pack, re.DOTALL).group(1)
+        states = _web("states.ts")
+        raw = re.search(r"export const FILTER_KEY = \[(.*?)\];", states, re.DOTALL).group(1)
         keys = [value.strip().strip('"') for value in raw.split(",") if value.strip()]
         assert keys[:6] == ["", "exact", "reloc", "near_match", "stub", "padding"]
         assert keys[6:] == ["proven", "problem"]
@@ -3058,12 +3058,12 @@ def _web(relative: str) -> str:
 
 
 def _packed_slots() -> dict[str, int]:
-    """`STATE_SLOTS` from `grid/pack.ts`, as state -> palette slot."""
-    pack_ts = _web("grid/pack.ts")
+    """`STATE_SLOTS` from `states.ts`, as state -> palette slot."""
+    states_ts = _web("states.ts")
     block = re.search(
-        r"const STATE_SLOTS = new Map<string, number>\(\[(.*?)\]\);", pack_ts, re.DOTALL
+        r"const STATE_SLOTS = new Map<string, number>\(\[(.*?)\]\);", states_ts, re.DOTALL
     )
-    assert block is not None, "pack.ts no longer defines STATE_SLOTS"
+    assert block is not None, "states.ts no longer defines STATE_SLOTS"
     return {name: int(slot) for name, slot in re.findall(r'\["(\w+)",\s*(\d+)\]', block.group(1))}
 
 
@@ -3082,15 +3082,15 @@ def _full_fold_pairs() -> list[tuple[str, str]]:
 
 
 def _filter_keys() -> list[str]:
-    """`FILTER_KEY` from `grid/pack.ts`, empty first slot included.
+    """`FILTER_KEY` from `states.ts`, empty first slot included.
 
     The empty string is load-bearing: it is the key every cell in palette slot
     0 carries, and the SPA never puts it in a filter set, so a slot-0 cell is
     dimmed by any active filter unless a filter exempts it by hand.
     """
-    pack_ts = _web("grid/pack.ts")
-    block = re.search(r"export const FILTER_KEY = \[(.*?)\];", pack_ts, re.DOTALL)
-    assert block is not None, "pack.ts no longer defines FILTER_KEY"
+    states_ts = _web("states.ts")
+    block = re.search(r"export const FILTER_KEY = \[(.*?)\];", states_ts, re.DOTALL)
+    assert block is not None, "states.ts no longer defines FILTER_KEY"
     return re.findall(r'"([^"]*)"', block.group(1))
 
 
@@ -3102,14 +3102,14 @@ def _spa_ground_state() -> str:
     """
     match = re.search(r'ground\[i\] = cell\.state === "(\w+)" \? 1 : 0;', _web("grid/pack.ts"))
     assert match is not None, "pack.ts no longer marks a ground cell in the pack"
-    assert "ground === 1" in _web("grid/pack.ts"), (
+    assert "ground === 1" in _web("states.ts"), (
         "survivesFilter no longer exempts the ground, so a status filter dims it again"
     )
     return match.group(1)
 
 
 def _spa_survives_filter(state: str, active: set[str]) -> bool:
-    """The map's status-filter rule, as `grid/pack.ts` states it."""
+    """The map's status-filter rule, as `states.ts` states it."""
     if not active or state == _spa_ground_state():
         return True
     return _filter_keys()[_packed_slots().get(state, 7)] in active
@@ -3213,11 +3213,11 @@ class TestSpaStateVocabulary:
         `FILTER_KEY[slot]` undefined (a filter mismatch on every such cell),
         while a short `STATE_LABEL` prints "undefined" in the hover title.
         """
-        pack = _web("grid/pack.ts")
-        assert len(_array_items(pack, "PALETTE_VARS")) == 8
-        raw_filters = re.search(r"export const FILTER_KEY = \[(.*?)\];", pack).group(1)
+        states = _web("states.ts")
+        assert len(_array_items(states, "PALETTE_VARS")) == 8
+        raw_filters = re.search(r"export const FILTER_KEY = \[(.*?)\];", states).group(1)
         assert len(re.findall(r'"([a-z_]*)"', raw_filters)) == 8
-        assert len(_array_items(pack, "STATE_LABEL")) == 8
+        assert len(_array_items(states, "STATE_LABEL")) == 8
         assert max(_packed_slots().values()) == 7
 
     def test_other_bg_token_is_defined(self) -> None:
@@ -3234,7 +3234,7 @@ class TestSpaStateVocabulary:
         """
         app = _web("App.tsx")
         assert "STATE_LABEL.map((label, slot) =>" in app
-        labels = len(_array_items(_web("grid/pack.ts"), "STATE_LABEL"))
+        labels = len(_array_items(_web("states.ts"), "STATE_LABEL"))
         assert set(_packed_slots().values()) <= set(range(labels))
 
     def test_the_status_filter_agrees_with_potato_mode_cell_for_cell(self) -> None:
