@@ -128,10 +128,17 @@ That is the local mirror of CI, and each target is the command CI runs:
 | `make test` | test | `pytest tests/ -v --ignore=tests/test_playwright.py` |
 | `make web-lint` | web-lint | `bun install --frozen-lockfile && bun run lint` |
 | `make typecheck-web` | web-lint | `bun install --frozen-lockfile && bun run typecheck:web` (`tsc --noEmit`) |
+| `make web-build` | build | `bun install --frozen-lockfile && bun run build:web` (rebuilds `src/recoverage/assets/app.js` and `style.css`) |
+| `make build` | build | `uv build` (reproducible), after `make web-build` |
 | `make smoke` | smoke | `python tools/smoke.py` |
 | `make smoke-fail` | smoke | `python tools/smoke.py --expect-failure` |
 
 CI also builds an SBOM from `uv.lock` (`uv export`); it needs no local step.
+
+The built bundle is committed, so a change under `web/` is not served until
+`make web-build` rewrites `src/recoverage/assets/app.js` and `style.css`. The
+`build` job copies the tracked tree and rebuilds in both copies, so a bundle
+left stale fails that job rather than shipping.
 
 The `build` job is the only CI job that produces the artifact. It builds twice,
 the second time in a copy of the tree under a different path with a different

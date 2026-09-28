@@ -17,9 +17,9 @@ import { fileURLToPath } from "node:url";
  *    AI-generated code. Keep it in sync with upstream dmmulroy/anti-slop.
  *
  * The Rika-Labs standards are TypeScript-first (they assume type-aware rules).
- * This webui is a plain-JS VanJS SPA with no tsconfig, so type-aware rules are
- * disabled (options.typeAware: false in the flattened preset) and the few
- * platform exceptions below are documented.
+ * The flattened preset carries `options.typeAware: false`, so those rules are
+ * off and `tsc --noEmit` over `web/tsconfig.json` is the only thing checking
+ * the type settings; the few platform exceptions below are documented.
  */
 export default defineConfig({
   extends: [strictPreset],
@@ -59,7 +59,7 @@ export default defineConfig({
     // Browser-only SPA: `window` is the precise, self-documenting global;
     // globalThis buys nothing when there is no non-browser runtime.
     "unicorn/prefer-global-this": "off",
-    // The SPA loads app.js/detail.js as classic <script>s, not ES modules.
+    // The built bundle is loaded as a classic <script>, not an ES module.
     "import/unambiguous": "off",
     // Pedantic nesting heuristic; 40+ low-signal sites in UI glue code.
     "unicorn/max-nested-calls": "off",
@@ -85,9 +85,8 @@ export default defineConfig({
     // Closures only run after the IIFE has finished, so a later const is
     // initialized before the call. Reordering would invert domain grouping.
     "eslint/no-use-before-define": "off",
-    // VanJS components are closures over shared state; the main App component
-    // is ~900 lines of orchestration and the 60-line cap would force
-    // artificial fragmentation.
+    // The shell component is ~600 lines of topbar orchestration and the panel
+    // ~500; the 60-line cap would force artificial fragmentation.
     "eslint/max-lines-per-function": "off",
     // _-prefixed fields (cell._baseClass etc.) mark derived caches written
     // onto data objects; the underscore is the convention that separates them

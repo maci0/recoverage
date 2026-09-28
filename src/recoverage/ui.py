@@ -312,11 +312,11 @@ def serve_repo_file(filepath: str) -> bytes | HTTPResponse:
 # so the compression is paid once per set and every later hit is a dict lookup
 # — which is why this uses the precompressed path (maximum effort on every
 # accepted encoding, smallest body wins) rather than the dynamic one.  Measured
-# on hljs.min.js: brotli q=11 is 37.7 KB vs q=5's 41.4 KB, and its 101 ms runs
-# once instead of per request.
+# on the built bundle: brotli q=11 is measurably smaller than q=5, and its cost
+# runs once instead of per request.
 #
-# static_file served these raw: the bundle is ~330 KB and the stylesheet ~22 KB,
-# both of which brotli down to a third of that, and the set is what the shell
+# static_file served these raw: the bundle is ~130 KB and the stylesheet ~22 KB,
+# both of which brotli down by a third or more, and the set is what the shell
 # links beside itself.
 #
 # Each entry carries a strong ETag next to the body.  CACHE_REVALIDATE alone

@@ -419,7 +419,7 @@ graph TD
 - Modal is centered with backdrop blur and smooth scale/fade animation
 - Copy button available inside the modal
 - Close via button, Escape key, or clicking outside
-- Custom-built dialog portaled into `document.body`, with the shadcn/ui `Button` primitive for its controls
+- Custom-built dialog portaled into `document.body`, with `inert` on the page behind it, so focus is contained by the platform rather than a hand-rolled Tab handler, and with the shadcn/ui `Button` primitive for its controls
 
 ```mermaid
 graph TD
@@ -497,15 +497,15 @@ graph TD
 
 ## 16. Performance-Optimized First Load
 
-> **As an AI Operator**, I want the dashboard to render on the first TCP packet so that even over high-latency connections the UI shell appears instantly.
+> **As an AI Operator**, I want the dashboard shell to arrive in one response so that even over high-latency connections the UI appears without waiting on a render-blocking subresource.
 
 ### Acceptance Criteria
 - HTML, the built stylesheet and the built bundle inlined into a single response
 - Minified with `rjsmin`/`rcssmin` and compressed with Brotli/Zstd/gzip
-- Total payload 45,256 B brotli, against the 90,000-byte ceiling in `ui._TCP_CWND_BUDGET`; the current winner is brotli, with zstd 48,327 B and gzip 52,602 B. `make payload-budget` re-derives all three from the committed bundle, `ui._check_payload_budget` warns with the exact overage, and `tests/test_api.py` fails, so crossing the ceiling is a regression rather than a log line
+- Total payload 45,256 B brotli, which no longer fits RFC 6928's initial congestion window; the budget in `ui._TCP_CWND_BUDGET` is a 90 KB ceiling over the measurement, `ui._check_payload_budget` warns with the exact overage, and `tests/test_api.py` fails, so crossing the ceiling is a regression rather than a log line. The current winner is brotli, with zstd 48,327 B and gzip 52,602 B. `make payload-budget` re-derives all three from the committed bundle
 - The whole frontend is one built bundle inlined into the shell, so a change to the map, the asm pane, the hex dump or the data inspector moves the same measured number, and `tests/test_api.py` fails when it crosses the ceiling
 - Compression algorithm auto-selected from `Accept-Encoding` header
-- highlight.js is compiled into the bundle rather than fetched on first use, so a code pane never renders unhighlighted
+- Highlight.js is compiled into the bundle rather than fetched on first use, so a code pane never renders unhighlighted and there is no first-use fetch to fail
 - `AbortController` cancels in-flight requests when clicking rapidly between cells
 - ETag caching returns `304 Not Modified` when the coverage documents are unchanged
 

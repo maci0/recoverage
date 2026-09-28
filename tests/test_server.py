@@ -1262,7 +1262,7 @@ class TestSecurityHeaders:
         assert "default-src 'self'" in csp
         assert "object-src 'none'" in csp
         assert "base-uri 'none'" in csp
-        # The SPA injects VanJS + app.js inline; the policy must allow that.
+        # The SPA inlines its built bundle; the policy must allow that.
         assert "script-src 'self' 'unsafe-inline'" in csp
 
     def test_csp_allows_spa_inline_script_and_self_connect(self) -> None:

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Recoverage server — coverage dashboard for binary-matching projects.
 
-Bottle WSGI app serving a VanJS dashboard over rebrew's clear-text coverage
+Bottle WSGI app serving the dashboard over rebrew's clear-text coverage
 TOML.  The ``coverage-*.toml`` documents are read from the directory resolved
 by ``recoverage._paths._db_path()``, which honours ``rebrew-project.toml
 [project] db_dir`` when present and falls back to ``./db`` otherwise.
@@ -2177,7 +2177,7 @@ def _log_request() -> None:
             )
 
 
-# Content-Security-Policy for the dashboard.  The SPA inlines VanJS + app.js
+# Content-Security-Policy for the dashboard.  The SPA inlines its built bundle
 # into the HTML shell and uses inline styles, so 'unsafe-inline' is required
 # for scripts/styles; everything else is same-origin (the bundle and the assets,
 # fetch/EventSource to /api/*) or data: images (grid sprites, SVG badges).
