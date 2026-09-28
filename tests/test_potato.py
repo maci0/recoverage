@@ -1796,6 +1796,58 @@ class TestGridColumnsValidation:
             _build_grid_html([], {}, -1, set(), "", set(), "", "t", ".text")
 
 
+class TestGridTargetSize:
+    """Every lattice cell is one link, so the cell is a pointer target and
+    WCAG 2.2 SC 2.5.8 puts its floor at 24x24 CSS pixels. The selected cell
+    draws an inset to expose the accent border, so it is the one that could
+    quietly land under the floor while the rest of the lattice stayed over it."""
+
+    #: SC 2.5.8, Target Size (Minimum).
+    MINIMUM = 24
+
+    def _sizes(self, html: str) -> list[tuple[int, int]]:
+        return [
+            (int(width), int(height))
+            for width, height in re.findall(r'<img [^>]*?width="(\d+)" height="(\d+)"', html)
+        ]
+
+    def test_every_link_meets_the_floor(self):
+        from recoverage.potato import _CELL_SIZE, _build_grid_html
+
+        assert _CELL_SIZE >= self.MINIMUM
+        html = _build_grid_html(
+            [{"state": "exact", "start": 0, "end": 4, "span": 1, "functions": ["fn"]}],
+            {"va": 0x1000},
+            4,
+            set(),
+            "",
+            set(),
+            "",
+            "t",
+            ".text",
+        )
+        sizes = self._sizes(html)
+        assert sizes, "grid rendered no images"
+        assert all(width >= self.MINIMUM and height >= self.MINIMUM for width, height in sizes), (
+            f"undersized grid targets: {sizes}"
+        )
+
+    def test_the_selected_cell_meets_the_floor_too(self):
+        from recoverage.potato import _build_grid_html
+
+        cells = [
+            {"state": "stub", "start": i * 4, "end": i * 4 + 4, "span": 1, "functions": []}
+            for i in range(4)
+        ]
+        plain = _build_grid_html(cells, {"va": 0}, 4, set(), "", set(), "", "t", ".text")
+        selected = _build_grid_html(cells, {"va": 0}, 4, set(), "", set(), "2", "t", ".text")
+        assert self._sizes(selected) != self._sizes(plain), "selection did not inset anything"
+        selected_sizes = self._sizes(selected)
+        assert all(
+            width >= self.MINIMUM and height >= self.MINIMUM for width, height in selected_sizes
+        ), f"undersized selected target: {selected_sizes}"
+
+
 class TestPathTraversalGuard:
     """_panel_fn_source_text must refuse to read files outside the source root.
 

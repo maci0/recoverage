@@ -103,7 +103,15 @@ export function CodeModal({
             </Button>
           </div>
         </div>
-        <div className="modal-body min-h-0 overflow-auto p-3">
+        {/* The body is a scroll container no other control reaches, so it is
+            focusable and names itself: the long disassembly it holds cannot be
+            scrolled from the keyboard otherwise (WCAG 2.1.1). */}
+        <div
+          className="modal-body min-h-0 overflow-auto p-3"
+          tabIndex={0}
+          role="region"
+          aria-label={title === "" ? "Code viewer" : `${title} pane`}
+        >
           <HighlightedCode
             text={text}
             language={language}

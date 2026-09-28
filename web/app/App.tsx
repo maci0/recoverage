@@ -508,19 +508,29 @@ export function App() {
                 </Button>
               )}
             </div>
-            {query !== "" && matchedNames !== null && (
-              <div
-                className="search-status font-mono text-micro text-muted"
-                role="status"
-                aria-live="polite"
-              >
+            {/* The live region stays in the tree while the query is empty: a
+                status element INSERTED together with its text is announced by
+                some screen readers and dropped by others, so the region every
+                keystroke writes into has to exist before the write (WCAG 4.1.3). */}
+            <div
+              className={
+                query !== "" && matchedNames !== null
+                  ? "search-status font-mono text-micro text-muted"
+                  : "sr-only"
+              }
+              role="status"
+              aria-live="polite"
+            >
+              {query !== "" && matchedNames !== null && (
+                <>
                 Searching: "{query}" ({matchedNames.size}{" "}
                 {matchedNames.size === 1 ? "match" : "matches"})
                 {matchedNames.size === 0
                   ? " - no matches. Check the spelling, or search by VA."
                   : " - press Enter to jump to the first one."}
-              </div>
-            )}
+                </>
+              )}
+            </div>
           </div>
           <div className="filters flex flex-wrap gap-1">
             {FILTERS.map((entry) => {
@@ -599,15 +609,21 @@ export function App() {
             filters={filters}
             onToggleFilter={toggleFilter}
           />
-          {notice !== null && (
-            <p
-              className="nav-notice mb-2 rounded-hair border border-line bg-panel px-3 py-2 font-mono text-label"
-              role="status"
-              aria-live="polite"
-            >
-              {notice}
-            </p>
-          )}
+          {/* Always mounted, for the same reason as the search status above: a
+              regen that finished or a jump that found nothing has to be
+              announced, and a region inserted with its text is not reliably
+              announced (WCAG 4.1.3). Empty, it is visually nothing. */}
+          <p
+            className={
+              notice === null
+                ? "sr-only"
+                : "nav-notice mb-2 rounded-hair border border-line bg-panel px-3 py-2 font-mono text-label"
+            }
+            role="status"
+            aria-live="polite"
+          >
+            {notice ?? ""}
+          </p>
           {(loadError ?? coverage.error) !== null && (
             <p
               className="grid-error mb-2 rounded-hair border border-line bg-panel px-3 py-2 font-mono text-label text-badge-stub-text"

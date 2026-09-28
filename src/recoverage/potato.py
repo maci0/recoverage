@@ -1893,6 +1893,17 @@ _MAX_GRID_COLUMNS = 256
 #: Column count used when a sections row declares none (NULL or not a positive
 #: int), which is schema-legal the way a NULL va in a .bss cell is.
 _DEFAULT_GRID_COLUMNS = 64
+#: Side of one lattice cell, in CSS pixels.  A cell IS a link, and WCAG 2.2 SC
+#: 2.5.8 puts the floor for a pointer target at 24x24, which the 12px lattice
+#: this page shipped with missed on both axes.  The cell is two pixels above the
+#: floor because the SELECTED cell insets its image by :data:`_CELL_INSET` to
+#: show the accent border underneath, and the selected block is as much a
+#: target as any other: at exactly 24 it would be the one cell in the lattice
+#: that failed the criterion.
+_CELL_SIZE = 26
+#: Pixels the selected cell's image is inset by, so the accent border around it
+#: shows through the gap rather than being painted over by the image.
+_CELL_INSET = 2
 
 
 def _build_grid_html(
@@ -1927,12 +1938,13 @@ def _build_grid_html(
     if grid_columns <= 0:
         raise ValueError(f"grid_columns must be positive, got {grid_columns}")
     grid_columns = min(grid_columns, _MAX_GRID_COLUMNS)
-    # Fixed 12px lattice: at 64 columns that is ~770px, which overflowed a
-    # 390px phone.  12px keeps blocks legible and tappable on desktop; narrow
-    # sections render the same size, so every section shares one predictable
-    # block size.
-    cell_w = 12
-    cell_h = 12
+    # One cell is one link, so the cell and the image inside it are the target
+    # size SC 2.5.8 asks for rather than the pitch a denser map would prefer.
+    # A 64-column lattice is 1664px at this size, which is what the page scrolls
+    # for on a narrow viewport; narrowing it is the spacing exception, and two
+    # cells 12px apart do not satisfy it.
+    cell_w = _CELL_SIZE
+    cell_h = _CELL_SIZE
     sizing_tds = "".join(
         f'<td bgcolor="{BG_COLOR}" width="{cell_w}" height="1"></td>' for _ in range(grid_columns)
     )
@@ -1993,10 +2005,10 @@ def _build_grid_html(
         # links announced as "none" with no way to tell them apart (WCAG 2.4.4).
         escaped_title = _esc(title)
         w = cell_w * span
-        # One image for both cells: the selection is a 1px inset of the same
+        # One image for both cells: the selection is an inset of the same
         # link, and building the markup twice is how the alt text and the
         # title drift apart between the two.
-        inset = 2 if selected else 0
+        inset = _CELL_INSET if selected else 0
         img = (
             f'<a href="{link}" title="{escaped_title}">'
             f'<img src="{TRANSPARENT_GIF}" width="{w - inset}" height="{cell_h - inset}" '

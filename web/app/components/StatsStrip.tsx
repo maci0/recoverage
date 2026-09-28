@@ -68,7 +68,7 @@ export function StatsStrip({
             return (
               <Button
                 key={entry.key}
-                className="stat-count px-1.5 py-0 text-micro"
+                className="stat-count min-h-6 min-w-6 px-1.5 py-0.5 text-micro"
                 active={on}
                 aria-label={`${entry.title}: ${blocks} blocks, filter ${on ? "on" : "off"}`}
                 aria-pressed={on}
