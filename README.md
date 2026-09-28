@@ -670,6 +670,7 @@ recoverage/
 ├── LICENSE                  # MIT
 ├── man/recoverage.1       # Man page for the console script, installed by the wheel
 ├── NOTICE                   # Grants for the third-party code the web build bundles
+├── SECURITY.md              # Supported version line and where a vulnerability report goes
 ├── docs/                    # Screenshots, mascot & design doc
 │   ├── DESIGN.md            # Detailed architecture & design doc
 │   ├── DESIGN_PRINCIPLES.md # Core operational philosophies
@@ -693,6 +694,7 @@ recoverage/
 │   ├── payload_budget.py     # Re-derives the inlined shell size at each static encoding (make payload-budget)
 │   ├── bundled_js_inventory.py  # The browser-bundle half of the SBOM, from bun.lock (make browser-sbom)
 │   ├── license_inventory.py   # The license every resolved Python package is under, and the refusal (make license-inventory)
+│   ├── check_wheel_assets.py  # Reads BUNDLE_ASSETS back off the built wheel
 │   └── oxlint/               # Vendored anti-slop rules + the flattened strict preset
 ├── tests/
 │   ├── conftest.py           # Shared fixtures (synthetic coverage TOML)

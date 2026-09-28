@@ -32,6 +32,7 @@ recoverage/
 ├── Makefile                # Contributor targets (`make help`); wraps the CI commands
 ├── LICENSE                  # MIT
 ├── NOTICE                   # Grants for the third-party browser assets bundled in the wheel
+├── SECURITY.md             # Supported version line and where a report goes
 ├── package.json            # bun scripts: lint, build:web, dev:web, typecheck:web
 ├── .env.example            # Every RECOVERAGE_* setting, commented, with the default the
 │                           #   server uses. The deployment copy of the surface, drafted from for a
