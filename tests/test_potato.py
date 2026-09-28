@@ -2855,6 +2855,40 @@ class TestDbUnavailableContract:
         assert status.startswith("503")
         assert b"Database unavailable" in body
 
+    def test_the_coverage_read_warning_stays_one_log_line(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The "coverage unavailable" line must not be splittable by a document.
+
+        It is the record of a 503, and it is what an operator reads to find the
+        broken document: the directory comes from ``RECOVERAGE_DB`` or a
+        project's ``db_dir``, and the cause quotes the file the reader rejected.
+        Either can carry a line break, and a split here turns one outage into
+        two entries, the second of which reads as an unrelated message.  The
+        API's twin (``server._db_unavailable_err``) escapes both; this line
+        claimed to mirror it and did not.
+        """
+        import bottle
+
+        directory = self._point_at_empty_dir(tmp_path, monkeypatch, "d\nb")
+        directory.mkdir()
+        # A document whose target id (and so whose parse error) carries a break.
+        (directory / "coverage-BR\nOKEN.toml").write_text("[sections.text\n", encoding="utf-8")
+
+        with (
+            caplog.at_level("WARNING", logger="recoverage"),
+            pytest.raises(bottle.HTTPResponse) as excinfo,
+        ):
+            render_potato_url("/potato")
+        assert excinfo.value.status_code == 503
+        lines = [r for r in caplog.records if "coverage unavailable" in r.message]
+        assert lines, [r.message for r in caplog.records]
+        for record in lines:
+            assert "\ndb" not in record.message
+            assert "\nOKEN" not in record.message
+            # The escaped form is still identifiable, which is the point.
+            assert "\\x0a" in record.message
+
     def test_the_failure_lines_name_the_request_and_carry_its_fields(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:

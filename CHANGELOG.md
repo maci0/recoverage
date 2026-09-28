@@ -323,6 +323,37 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **A Potato Mode coverage failure could split the log line that records it.**
+  The "coverage unavailable" warning names the coverage directory and the
+  parse error that made it unavailable, and it claims to mirror the API's
+  `db_unavailable` line, which escapes both: the directory comes from
+  `RECOVERAGE_DB` or a project's `db_dir`, and the cause quotes a document the
+  reader rejected, so either can carry a line break. A target id or a directory
+  name holding one turned the single record of a 503 into two entries, the
+  second of which reads as an unrelated message. The same escaping now covers
+  the "source file unreadable" line in a code panel, whose path and cause come
+  out of the document too.
+
+- **An install missing the SPA shell answered `/` as a bare 500.** The shell's
+  two siblings degrade to an empty string, because a missing stylesheet or
+  bundle still leaves a page that renders, so each is read under a guard that
+  logs what is absent. `index.html` has no degraded form and was read bare: a
+  package installed without it logged a `FileNotFoundError` naming no file,
+  which is the whole of what an operator has when a wheel arrives with an asset
+  pruned. It now raises a `MissingAssetError` naming the path, the cause and
+  the remedy, while the warm-up keeps deferring the build to the first request
+  exactly as it did for any other read failure.
+
+- **A failure to release the cross-process regen lock replaced the regen
+  failure.** The advisory lock is dropped by the descriptor close whether or not
+  the explicit unlock succeeds, so an `OSError` out of the unlock reported a
+  release the kernel was about to perform anyway, and it escaped in place of
+  what the run had said: rebrew's exit status, or its traceback. The unlock
+  error is now dropped only on the way out of a body that raised, where there
+  is a better answer to give, and still surfaces after a run that succeeded,
+  since a silent failure there would leave the next regen refusing against a
+  lock no process holds.
+
 - **`RECOVERAGE_LOG_LEVEL` accepted a number no record clears.** The name arm
   already refused an unknown level, because it reaches `basicConfig` and leaves
   the logger quieter than the operator asked for; the numeric arm took any

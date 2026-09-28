@@ -5528,6 +5528,35 @@ class TestIndexWarmup:
     """ui.warm_index_cache pre-builds the SPA shell and every compressed
     variant off the request path so handle_index's first hit is a lookup."""
 
+    def test_a_missing_shell_names_the_file_and_the_cause(
+        self, monkeypatch: Any, tmp_path: Any, caplog: Any
+    ) -> None:
+        """The shell has no degraded form, so its read must say what is absent.
+
+        Its two siblings (style.css, app.js) each degrade to an empty string,
+        because a missing one leaves a page that still renders. index.html does
+        not: without it there is no page. The bare FileNotFoundError it used to
+        raise answered `/` as a 500 whose log entry named no file, which is the
+        whole of what an operator has when a wheel arrives with the asset
+        pruned.
+        """
+        import recoverage.ui as ui
+
+        monkeypatch.setattr(ui, "_assets_dir", lambda: tmp_path)
+        monkeypatch.setattr(ui, "CACHED_INDEX_PAYLOAD", None)
+        monkeypatch.setattr(ui, "CACHED_INDEX_COMPRESSED", {})
+
+        with pytest.raises(ui.MissingAssetError) as caught:
+            ui._build_index_payload()
+        message = str(caught.value)
+        assert "index.html" in message
+        # The cause rides along: the type and the OS's own message are what
+        # tell a missing file from one this process cannot read.
+        assert isinstance(caught.value.__cause__, FileNotFoundError)
+        assert isinstance(caught.value, RuntimeError) and not isinstance(caught.value, OSError), (
+            "a caller that keeps serving must be able to catch this and not an OSError"
+        )
+
     def test_warm_builds_payload_and_all_encodings(self, monkeypatch: Any) -> None:
         import recoverage.ui as ui
 

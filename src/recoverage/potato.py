@@ -1279,9 +1279,15 @@ def render_potato(parsed_url: ParseResult) -> str:
         # server._db_unavailable_err, which logs the same pair for the API.
         _log.warning(
             "Potato mode: coverage unavailable at %s: %s: %s",
-            _db_path(),
+            # Both values are as untrusted as a request path: the directory
+            # comes from RECOVERAGE_DB or a project's db_dir, and the cause
+            # quotes a document the reader rejected.  This line mirrors
+            # server._db_unavailable_err, which escapes both for the same
+            # reason: a name carrying a newline would split the one entry an
+            # operator reads to find the broken document.
+            _log_safe(str(_db_path())),
             type(exc).__name__,
-            exc,
+            _log_safe(str(exc)),
         )
         # Signal failure, not a 200 page: monitoring and scripts must see the
         # outage (same contract as the API's 503 db_unavailable).
@@ -3069,7 +3075,14 @@ def _panel_fn_source_text(data: dict[str, Any], target: str, fn_data: dict[str, 
         # the file is unreadable is otherwise indistinguishable from one whose
         # file is simply gone, and only the former is a permissions or encoding
         # problem somebody can fix.
-        _log.debug("Source file unreadable: %s: %s", c_path, f"{type(exc).__name__}: {exc}")
+        _log.debug(
+            "Source file unreadable: %s: %s: %s",
+            _log_safe(str(c_path)),
+            type(exc).__name__,
+            # The message is the OS's rendering of a path the DOCUMENT named,
+            # so it carries the same untrusted bytes the path does.
+            _log_safe(str(exc)),
+        )
         return None
 
 

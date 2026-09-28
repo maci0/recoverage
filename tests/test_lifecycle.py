@@ -193,6 +193,64 @@ class TestRunRegen:
             run_regen(tmp_path)
         assert caught.value.exit_code == 2
 
+    def test_a_failing_unlock_does_not_replace_the_regen_failure(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """The lock's cleanup must not swallow or overwrite what the run said.
+
+        The descriptor close in ``_exclusive_regen``'s outer ``finally`` drops
+        the lock whatever happens, so an OSError out of the explicit unlock
+        reports a release that is about to happen anyway. Letting it out would
+        replace the operator's answer — rebrew's exit status, or its own
+        traceback — with a message about a lock nobody is left holding.
+        """
+        from recoverage import regen
+
+        def run_catalog(c: object) -> None:
+            raise ValueError("corrupt function_structure.json")
+
+        _install_fake_rebrew(
+            monkeypatch,
+            load_config=lambda root: object(),
+            run_catalog=run_catalog,
+            build_db=lambda project_root: None,
+        )
+        monkeypatch.setattr(
+            regen,
+            "_release_lock",
+            lambda handle: (_ for _ in ()).throw(OSError("cannot unlock")),
+        )
+
+        with pytest.raises(ValueError, match="corrupt"):
+            run_regen(tmp_path)
+
+    def test_a_failing_unlock_after_a_good_run_still_surfaces(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """With nothing to protect, the unlock failure is not swallowed.
+
+        The other arm of the pair: dropping the cleanup error unconditionally
+        would make a regen that SUCCEEDED report success on a lock it never
+        released, and the next regen would answer 429/RegenBusyError against a
+        lock file no process holds.
+        """
+        from recoverage import regen
+
+        _install_fake_rebrew(
+            monkeypatch,
+            load_config=lambda root: object(),
+            run_catalog=lambda c: None,
+            build_db=lambda project_root, force: None,
+        )
+        monkeypatch.setattr(
+            regen,
+            "_release_lock",
+            lambda handle: (_ for _ in ()).throw(OSError("cannot unlock")),
+        )
+
+        with pytest.raises(OSError, match="cannot unlock"):
+            run_regen(tmp_path)
+
     def test_a_second_run_repeats_the_same_pipeline(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:

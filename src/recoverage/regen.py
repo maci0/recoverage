@@ -168,8 +168,21 @@ def _exclusive_regen(root: Path) -> Iterator[None]:
             )
         try:
             yield
-        finally:
-            _release_lock(handle)
+        except BaseException:
+            # The unlock is best effort here and required on the way out of a
+            # SUCCESSFUL body.  It is best effort in fact: the descriptor close
+            # in the outer finally drops the lock whatever happens, so an
+            # OSError out of the explicit unlock only duplicates a release the
+            # kernel is about to perform.  Propagating it would replace what
+            # the body raised — a RegenError naming rebrew's exit status, or the
+            # rebrew traceback the operator needs — with a message about a lock
+            # nobody is left holding.  Split into an except arm rather than a
+            # finally because inside a finally the body is not distinguishable
+            # from the cleanup error being handled.
+            with contextlib.suppress(OSError):
+                _release_lock(handle)
+            raise
+        _release_lock(handle)
     finally:
         handle.close()
 

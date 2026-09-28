@@ -36,6 +36,18 @@ from recoverage.server import (
 # ── Index caching ──────────────────────────────────────────────────
 
 
+class MissingAssetError(RuntimeError):
+    """A packaged asset the dashboard cannot render without is unreadable.
+
+    Its own type, distinct from the OSError underneath it, because the two
+    siblings :func:`_build_index_payload` reads degrade around a missing file
+    and this one cannot: a caller that wants to keep serving (the warm-up at
+    the bottom of this module logs and carries on) can catch this and say what
+    is absent, where catching OSError would also swallow a permission error or
+    a decode failure on a file that is present.
+    """
+
+
 class _Variant(NamedTuple):
     """One compressed representation and the headers that name it.
 
@@ -82,7 +94,24 @@ def _build_index_payload() -> bytes:
     Pure: caching is the caller's job (it already holds INDEX_LOCK).
     """
     assets = _assets_dir()
-    html = (assets / "index.html").read_text(encoding="utf-8")
+    try:
+        html = (assets / "index.html").read_text(encoding="utf-8")
+    except OSError as exc:
+        # The shell itself has no degraded form: without it there is no page to
+        # render, so there is nothing to fall back TO.  Its two siblings below
+        # each degrade to an empty string because a missing one leaves a usable
+        # page; this one raises, and it raises an error that names the file and
+        # the cause, because the bare FileNotFoundError it used to propagate
+        # answered `/` as a 500 whose log entry said only that some read failed
+        # — an incomplete install (a wheel pruned by a broken MANIFEST rule, an
+        # asset deleted from a checkout) reported nothing an operator could act
+        # on.
+        raise MissingAssetError(
+            f"the SPA shell is unreadable at {assets / 'index.html'}: "
+            f"{type(exc).__name__}: {exc}. The package is installed without one "
+            "of its assets; reinstall recoverage or run `make web-build` in a "
+            "source checkout."
+        ) from exc
     try:
         css = (assets / "style.css").read_text(encoding="utf-8")
     except OSError:
