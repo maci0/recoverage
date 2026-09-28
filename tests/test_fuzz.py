@@ -39,6 +39,7 @@ import re
 import unicodedata
 from collections.abc import Callable
 from http.cookies import SimpleCookie
+from itertools import pairwise
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlsplit
@@ -50,7 +51,12 @@ from rebrew.coverage_toml import CoverageSnapshot, Function, load_coverage
 
 from recoverage import config
 from recoverage import server as srv
-from recoverage.api import _MAX_SEARCH_CHARS, _REGEN_KEY_MAX_CHARS, _REGEN_KEY_RE
+from recoverage.api import (
+    _MAX_BATCH_BODY_BYTES,
+    _MAX_SEARCH_CHARS,
+    _REGEN_KEY_MAX_CHARS,
+    _REGEN_KEY_RE,
+)
 from recoverage.server import _best_encoding, _hostname_of, _normalize_origin, _peer_is_loopback
 
 # The three codecs the server can actually produce, in preference order.  A
@@ -2539,3 +2545,464 @@ class TestRepoFileRoute:
             status, _headers, body = wsgi_request("GET", f"{prefix}{segment}")
             assert int(status.split()[0]) == 404, f"{prefix}{segment}: {status}"
             assert b"Traceback" not in body
+
+
+# ── chunked body framing ───────────────────────────────────────────
+
+#: The bodies a client would frame.  Four parse, so the campaign reaches the
+#: accepted arm; the last two are the unparseable payloads the handler answers
+#: after the reader hands them over whole.
+_CHUNKED_BODIES: tuple[bytes, ...] = (
+    b'{"vas": ["0x10001000"]}',
+    b'{"vas": []}',
+    b'{"vas": [0x10001000, 0x10001020, 0x10001030]}',
+    b'{"vas": ["0x10001000", "0x99999999", "g_counter"]}',
+    b"not json at all",
+    b" " * 4096,
+)
+
+#: Chunk-size spellings a client sends: plain hex, upper case, zero padded,
+#: and the extension forms RFC 9112 puts after the semicolon.
+_CHUNKED_SIZES: tuple[str, ...] = (
+    "%x",
+    "%X",
+    "%.16x",
+    "%x;ext=1",
+    '%x;q="a b"',
+    "%x;",
+    "%x ",
+)
+
+#: Spellings no client sends and every one of them must be refused: a prefix
+#: the ASCII parse does not take, the ``_`` separator, a negative, a non-hex
+#: digit, an empty field and a field of whitespace.
+_CHUNKED_BAD_SIZES: tuple[str, ...] = ("0x%x", "+%x", "1_0", "-1", "g", "", " ")
+
+#: The size spellings ``int(x, 16)`` widens into a byte count and
+#: ``parse_ascii_int`` refuses: the ``_`` separator, a ``0x`` prefix, a sign,
+#: a field of nothing, and the Arabic-Indic and fullwidth digit sets ``int()``
+#: reads and the ASCII parse does not.  The two non-ASCII spellings are
+#: escaped so the source carries no character a reviewer's font renders as
+#: another one.
+#:
+#: Whitespace around the field and a hex letter are NOT here: the reader
+#: strips the size field per RFC 9112 and "e" is a hex digit, so " 10 " is
+#: 0x10 and "1e1" is 0x1e1.  Both are carried by the generated corpus.
+_REFUSED_CHUNK_SIZES: tuple[str, ...] = (
+    "1_0",
+    "0x10",
+    "+10",
+    "\u0661\u0660",
+    "\uff11\uff10",
+    "_",
+    "0x",
+    "  0x10  ",
+)
+
+
+def _chunked_frames(rng: random.Random, count: int) -> list[bytes]:
+    """*count* framings, each a whole body carried over one to four chunks.
+
+    Byte mutation of a literal framing lands in the refusal arms and almost
+    never in the accepted one, because every framing carries a CRLF it will
+    have to lose.  These are built instead: the boundaries, the size spelling
+    and the trailer vary, and one round in four is cut short so the truncated
+    arms are reached too.  The PRNG is the module's own FUZZ_SEED, so the same
+    corpus is built on every run.
+    """
+    frames: list[bytes] = []
+    for _ in range(count):
+        body = rng.choice(_CHUNKED_BODIES)
+        # Interior boundaries only: a chunk of no bytes is the terminating
+        # chunk, so a cut on an edge ends the body early rather than splitting
+        # it, and the framing stops being the one a client would send.
+        interior = range(1, len(body))
+        cuts = sorted(rng.sample(interior, min(len(interior) - 1, rng.randint(0, 3))))
+        bounds = [0, *cuts, len(body)]
+        parts = [body[start:end] for start, end in pairwise(bounds)]
+        out = bytearray()
+        for part in parts:
+            sizes = _CHUNKED_SIZES if rng.random() < 0.8 else _CHUNKED_BAD_SIZES
+            spelling = rng.choice(sizes)
+            size = spelling % len(part) if "%" in spelling else spelling
+            out += size.encode("latin-1") + b"\r\n" + part + b"\r\n"
+        out += rng.choice([b"0\r\n\r\n", b"0\r\n", b"0\r\nX-T: v\r\n\r\n"])
+        if rng.random() < 0.25:
+            out = out[: rng.randrange(len(out) + 1)]
+        frames.append(bytes(out))
+    return frames
+
+
+def _frame(*parts: bytes, trailer: bytes = b"") -> bytes:
+    """*parts* carried as one chunk each, each sized the way a client sizes it."""
+    out = b"".join(b"%x\r\n%s\r\n" % (len(part), part) for part in parts)
+    return out + b"0\r\n" + trailer + b"\r\n"
+
+
+_LOOKUP = b'{"vas": ["0x10001000"]}'
+
+CHUNKED_SEEDS: list[bytes] = [
+    *_chunked_frames(random.Random(FUZZ_SEED), 48),
+    b"",
+    b"0\r\n\r\n",
+    b"0\r\n",
+    _frame(),
+    _frame(_LOOKUP),
+    _frame(_LOOKUP[:9], _LOOKUP[9:]),
+    _frame(_LOOKUP[:1], _LOOKUP[1:5], _LOOKUP[5:]),
+    _frame(b"{}", trailer=b"X-Trailer: value\r\n"),
+    b"0\r\nX-Trailer: value\r\n\r\n",
+    b"0\r\n\r\ntrailing bytes",
+    b'4;ext=1\r\n{"v\r\n5\r\nas":[]}\r\n0\r\n\r\n',
+    b"1;x=y\r\nA\r\n0\r\n\r\n",
+    b"1_0\r\n" + _LOOKUP + b"\r\n0\r\n\r\n",
+    b"-1\r\nA\r\n0\r\n\r\n",
+    b"ffffffffffffffff\r\nA\r\n0\r\n\r\n",
+    b"g\r\nA\r\n0\r\n\r\n",
+    b"\r\n0\r\n\r\n",
+    b"  \r\n0\r\n\r\n",
+    b"1\r\nA\n0\r\n\r\n",
+    b"1\r\nA",
+    b"1\r\n",
+    _frame(b"")[:-4],
+    b"1000\r\n" + b"A" * 4096 + b"\r\n0\r\n\r\n",
+]
+
+#: Tokens the mutation engine splices into a framing.
+CHUNKED_TOKENS: tuple[bytes, ...] = (
+    b"\r\n",
+    b"\n",
+    b"0\r\n\r\n",
+    b"0\r\n",
+    b"1\r\n",
+    b";",
+    b"1_0",
+    b"-1",
+    b"ffffffffffffffff",
+    b"g",
+    b"\x00",
+    b"1;ext\r\n",
+    b"A",
+    b'{"vas": []}',
+)
+
+
+class _FramedStream:
+    """A ``wsgi.input`` that answers a read past the framing with no bytes.
+
+    Under the serving stack ``wsgi.input`` is the socket's buffered reader, so
+    a read past the client's last byte blocks until the peer goes away: the
+    handler waits and the client waits for the response.  Reading off the end
+    is recorded here and answered empty, which is what a hung-up peer looks
+    like, so a campaign sees a 400 rather than a hang.
+    """
+
+    def __init__(self, frame: bytes) -> None:
+        self._frame = frame
+        self._pos = 0
+        self.overshoot: list[int] = []
+
+    def _take(self, size: int) -> bytes:
+        if self._pos >= len(self._frame):
+            self.overshoot.append(size)
+            return b""
+        part = self._frame[self._pos : self._pos + size]
+        self._pos += len(part)
+        return part
+
+    def read(self, size: int = -1) -> bytes:
+        return self._take(len(self._frame) if size < 0 else size)
+
+    def readline(self, size: int = -1) -> bytes:
+        window = self._take(len(self._frame) if size < 0 else size)
+        cut = window.find(b"\n")
+        if cut < 0:
+            return window
+        # Hold the bytes after the newline back for the next call, as a
+        # buffered reader does: the parser under test reads line by line.
+        self._pos -= len(window) - cut - 1
+        return window[: cut + 1]
+
+    def tell(self) -> int:
+        return self._pos
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+class TestChunkedBodyFraming:
+    """``POST /api/targets/<t>/functions`` is the one route that reads a body
+    with no ``Content-Length`` to check it against, so the reader parses the
+    client's own chunk framing: hex sizes, extensions, the terminating chunk
+    and its trailers.  A size read with ``int(x, 16)`` takes the ``_`` separator
+    and the whole Unicode Nd set, so a chunk declaring ``1_0`` reads 16 bytes
+    of a connection carrying the next request; the campaign asserts the decoded
+    body, the read count, and the connection the answer leaves behind."""
+
+    PATH = "/api/targets/{}/functions"
+
+    def _post(self, framed: bytes) -> tuple[str, dict[str, str], bytes, _FramedStream]:
+        stream = _FramedStream(framed)
+        status, headers, body = wsgi_request(
+            "POST",
+            self.PATH.format(get_first_target()),
+            {"Transfer-Encoding": "chunked", "Content-Type": "application/json"},
+            body=b"",
+            wsgi_input=stream,
+            content_length=None,
+        )
+        return status, headers, body, stream
+
+    def test_framing_never_crashes_and_never_overruns(self) -> None:
+        def check(data: bytes) -> None:
+            path = self.PATH.format(get_first_target())
+            status, headers, body, stream = self._post(data)
+            code = int(status.split()[0])
+            assert code < 500, f"{path}: handler crashed with {status}: {body[:200]!r}"
+            assert code in _ALLOWED_STATUSES, f"{path}: unexpected status {status}"
+            assert b"Traceback" not in body, f"{path}: {status} leaked a traceback"
+            if code >= 400:
+                _assert_envelope(_body_json(body, headers, path), status, path)
+            if code == 413:
+                # The reader stops at its cap with the rest of the framing in
+                # the socket, so a keep-alive reader would take those bytes as
+                # a second request.
+                assert headers.get("Connection") == "close", (
+                    f"{path}: {status} on {data!r} kept the connection open"
+                )
+            if stream.overshoot:
+                # The read that overran a complete framing is a hang under the
+                # real reader; an oversize framing is refused without one.
+                assert code in (400, 413), f"{path}: read past the framing, answered {status}"
+
+        _fuzz(
+            CHUNKED_SEEDS,
+            check,
+            iterations=200,
+            struct_tokens=CHUNKED_TOKENS,
+            num_tokens=CHUNKED_TOKENS,
+        )
+
+    @pytest.mark.parametrize("size", _REFUSED_CHUNK_SIZES)
+    def test_a_size_the_ascii_parse_refuses_decodes_nothing(self, size: str) -> None:
+        """Every spelling ``int(x, 16)`` widens and ``parse_ascii_int`` refuses
+        is answered as a malformed framing, never as a body it did not frame,
+        and closes the connection the rest of the framing is sitting in.
+
+        The read COUNT is the assertion, not the status: a widened ``1_0`` is
+        16, so the reader would take sixteen bytes of a connection carrying
+        whatever request comes next, and a ``-0`` it would read as the
+        terminating chunk.  Either answers 200 or 400 here, so only the bytes
+        the reader touched tell the two apart.
+        """
+        payload = b'{"vas":["0x10001000"]}'
+        # The bytes a client puts on the wire, not the source spelling: the
+        # reader decodes the size field as ASCII, so a non-ASCII digit arrives
+        # as its UTF-8 bytes and has to fail there rather than in the test.
+        field = size.encode("utf-8")
+        framed = field + b"\r\n" + payload + b"\r\n0\r\n\r\n"
+        status, headers, body, stream = self._post(framed)
+        code = int(status.split()[0])
+        assert code != 200, f"chunk size {size!r} served {len(payload)} bytes: {body[:200]!r}"
+        assert headers.get("Connection") == "close", (
+            f"chunk size {size!r}: the refusal kept the connection open"
+        )
+        assert not stream.overshoot or code in (400, 413), (
+            f"chunk size {size!r}: the reader ran off the framing"
+        )
+        size_line = len(field) + 2
+        assert stream.tell() <= size_line, (
+            f"chunk size {size!r} was read as a length: the reader took "
+            f"{stream.tell() - size_line} bytes of chunk data it was never given"
+        )
+
+    @pytest.mark.parametrize("chunks", [1, 2, 64])
+    def test_the_cap_is_on_the_decoded_bytes(self, chunks: int) -> None:
+        """A body at the cap is read whole however it is split, and one byte
+        over it is refused however it is split.
+
+        The cap is on what the reader ACCUMULATES, so checking each chunk
+        against the cap on its own is not enough: the last chunk of a split
+        body is the one that crosses it, and a reader that sizes each chunk
+        against the full cap instead of the remainder lets the body grow by up
+        to one chunk past the limit.
+        """
+        cap = _MAX_BATCH_BODY_BYTES
+        unit = cap // chunks
+        for total, expected in ((unit * chunks, 400), (unit * chunks + 1, 413)):
+            parts = [
+                b" " * (unit if index < chunks - 1 else total - unit * (chunks - 1))
+                for index in range(chunks)
+            ]
+            status, headers, _body, _stream = self._post(_frame(*parts))
+            code = int(status.split()[0])
+            assert code == expected, (
+                f"{chunks} chunks totalling {total} bytes: {status} (cap {cap})"
+            )
+            if expected == 413:
+                assert headers.get("Connection") == "close"
+
+    def test_a_framed_body_answers_what_the_unframed_one_does(self) -> None:
+        """Pair assertion across the framing boundary: the same JSON split
+        across two chunks answers what the unframed request answers, so a
+        chunk-size parser that ate a byte of it cannot pass."""
+        payload = json.dumps({"vas": ["0x10001000"]}).encode()
+        half = len(payload) // 2
+        framed = b"%x\r\n%s\r\n%x\r\n%s\r\n0\r\n\r\n" % (
+            half,
+            payload[:half],
+            len(payload) - half,
+            payload[half:],
+        )
+        status, headers, body, stream = self._post(framed)
+        assert status.startswith("200"), f"{status}: {body[:200]!r}"
+        assert not stream.overshoot, "the reader ran past a complete framing"
+
+        path = self.PATH.format(get_first_target())
+        plain_status, plain_headers, plain_body = wsgi_request(
+            "POST",
+            path,
+            {"Content-Type": "application/json"},
+            body=payload,
+        )
+        assert plain_status.startswith("200")
+        assert _body_json(body, headers, path) == _body_json(plain_body, plain_headers, path)
+
+
+# ── conditional requests ───────────────────────────────────────────
+
+#: ``If-None-Match`` spellings, as a client and a cache send them.
+INM_SEEDS: list[bytes] = [
+    b"*",
+    b"",
+    b'""',
+    b'W/"deadbeef"',
+    b'  "deadbeef"  ',
+    b'"deadbeef", "cafe"',
+    b'"nope", "deadbeef"',
+    b"deadbeef,",
+    b",,,deadbeef,,,",
+    b'W/"nope"',
+    b"w/deadbeef",
+    b'"',
+    b'"unterminated',
+    b",".join([b'W/"nope"'] * 40),
+    b'"' + b"a" * 400 + b'"',
+    b"deadbeef",
+]
+
+#: Tokens the mutation engine splices into an If-None-Match value.
+INM_TOKENS: tuple[bytes, ...] = (
+    b"*",
+    b'"',
+    b'"deadbeef"',
+    b'W/"deadbeef"',
+    b"w/deadbeef",
+    b",",
+    b" ",
+    b"\t",
+    b"\x00",
+    b"deadbeef",
+    b"cafebabe",
+)
+
+
+def _names_served_etag(raw: str, etag: str) -> bool:
+    """Whether any comma-separated candidate of *raw* denotes *etag*.
+
+    The oracle the campaign judges against: RFC 9110's list, the ``*``
+    wildcard, and the weak ``W/`` spelling, written out here rather than
+    reused from the helper under test.
+    """
+    for candidate in raw.split(","):
+        candidate = candidate.strip()
+        if candidate == "*" or candidate == etag:
+            return True
+        if candidate[:2].upper() == "W/" and candidate[2:].strip() == etag:
+            return True
+    return False
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+class TestConditionalRequestComparison:
+    """Every cacheable DB-derived endpoint answers revalidation through
+    ``server._if_none_match_matches``, so a client-chosen header decides
+    whether a body is sent at all.  A wrong answer is a stale dashboard rather
+    than a crash, and no status code shows it: the comparison is judged against
+    the ETag the response itself carries."""
+
+    PATH = "/api/targets/{}/stats"
+
+    def _served_etag(self, path: str) -> str:
+        _status, headers, _body = wsgi_request("GET", path)
+        # wsgiref capitalizes the header name, so the lookup cannot assume
+        # either spelling: a test pinned to one of them is pinned to a server.
+        lowered = {key.lower(): value for key, value in headers.items()}
+        etag = lowered.get("etag")
+        assert etag, f"the stats response carries no ETag: {sorted(headers)}"
+        return etag
+
+    def test_a_304_means_the_header_named_the_served_etag(self) -> None:
+        path = self.PATH.format(get_first_target())
+        etag = self._served_etag(path)
+
+        def check(data: bytes) -> None:
+            raw = data.decode("latin-1")
+            status, headers, body = wsgi_request("GET", path, {"If-None-Match": raw})
+            code = int(status.split()[0])
+            assert code in (200, 304), f"If-None-Match={raw!r}: unexpected {status}"
+            served = {key.lower(): value for key, value in headers.items()}.get("etag")
+            assert served == etag, f"If-None-Match={raw!r}: the served ETag moved off {etag!r}"
+            if _names_served_etag(raw, etag):
+                assert code == 304, (
+                    f"If-None-Match={raw!r} names the served etag {etag!r} but answered {status}"
+                )
+                assert not body, f"If-None-Match={raw!r}: a 304 carried a {len(body)}-byte body"
+            else:
+                assert code == 200, (
+                    f"If-None-Match={raw!r} names nothing served but answered {status} "
+                    f"against {etag!r}"
+                )
+
+        _fuzz(INM_SEEDS, check, iterations=250, struct_tokens=INM_TOKENS, num_tokens=INM_TOKENS)
+
+    def test_the_accepted_spellings_revalidate(self) -> None:
+        """The spellings the campaign mutates around, one request each: a
+        mutation campaign cannot say the accepted forms still work."""
+        path = self.PATH.format(get_first_target())
+        etag = self._served_etag(path)
+        for raw in (
+            "*",
+            etag,
+            f"W/{etag}",
+            f"  {etag}  ",
+            f'"other", {etag}',
+        ):
+            status, _headers, _body = wsgi_request("GET", path, {"If-None-Match": raw})
+            assert int(status.split()[0]) == 304, f"If-None-Match={raw!r}: {status} (etag {etag!r})"
+
+    def test_a_candidate_containing_the_etag_does_not_match(self) -> None:
+        """The near misses, spelled from the ETag the response actually
+        carries.  The campaign's tokens are fixed strings and the ETag is a
+        digest of the snapshot, so no mutation of them can produce a candidate
+        that CONTAINS it: a comparison that widened to a substring test, a
+        prefix test or a length-blind weak match is invisible above and is the
+        whole failure mode here."""
+        path = self.PATH.format(get_first_target())
+        etag = self._served_etag(path)
+        for raw in (
+            # An ETag carries its own quotes, so these candidates CONTAIN
+            # the whole validator while denoting nothing that is served.
+            f'"x{etag}"',
+            f"x{etag}",
+            f"{etag}x",
+            f"{etag[:-1]}",
+            f"{etag}0",
+            f"W/x{etag}",
+            f"xW/{etag}",
+            f"w/{etag}",
+            f'"x", {etag}y"',
+            f'"prefix{etag}suffix"',
+        ):
+            status, _headers, _body = wsgi_request("GET", path, {"If-None-Match": raw})
+            assert int(status.split()[0]) == 200, (
+                f"If-None-Match={raw!r} matched the served etag {etag!r} and answered {status}"
+            )
