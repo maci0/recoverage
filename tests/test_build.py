@@ -20,6 +20,8 @@ import tempfile
 import tomllib
 from pathlib import Path
 
+import pytest
+
 _ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 _MAKEFILE = (_ROOT / "Makefile").read_text(encoding="utf-8")
 _CI_YML = (_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
@@ -351,4 +353,38 @@ class TestReproducibleBuild:
             finally:
                 if saved is not None:
                     os.environ["SOURCE_DATE_EPOCH"] = saved
+            assert archive.read_bytes() == before, "a refused run still rewrote the archive"
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "abc",
+            "17.5",
+            "1_700_000_000",  # int() reads this as 1700000000
+            "-1",
+            " 1700000000",  # str.strip is not applied here
+            # Arabic-Indic digits, which int() reads as 1700000000 too. Spelled
+            # as escapes so the lint rule that flags confusable characters does
+            # not fire on the very string this test is about.
+            "\u0661\u0667\u0660\u0660\u0660\u0660\u0660\u0660\u0660\u0660",
+            "\N{SUPERSCRIPT TWO}",  # a digit to str.isdigit, not to int()
+            "1700000000 ",
+        ],
+    )
+    def test_the_stamp_parser_takes_ascii_decimal_only(self, raw: str) -> None:
+        """A stamp that is not a plain ASCII run is refused, not coerced.
+
+        `str.isdigit` accepts every Unicode decimal digit and every superscript,
+        so a value pasted through a non-ASCII locale became a DIFFERENT epoch
+        and stamped every member with it, and a superscript raised out of
+        `int()` as a traceback instead of the refusal this is.
+        """
+        normalize = _normalizer()
+        with _scratch_dir() as td:
+            archive = Path(td) / "run.tar.gz"
+            _build_sdist(archive, 1_600_000_000, 1000)
+            before = archive.read_bytes()
+            with pytest.MonkeyPatch.context() as mp:
+                mp.setenv("SOURCE_DATE_EPOCH", raw)
+                assert normalize.main(["normalize_sdist.py", td]) == 2
             assert archive.read_bytes() == before, "a refused run still rewrote the archive"

@@ -14,6 +14,7 @@ import tempfile
 import threading
 import time
 from collections.abc import Sequence
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import IO, Any, ClassVar
 
@@ -46,6 +47,7 @@ from recoverage.server import (
     fold_text,
     globals_by_va,
     lookup_global,
+    mtime_ns_to_utc,
     origin_is_this_dashboard,
     select_static_variant,
     static_variant_key,
@@ -3462,3 +3464,91 @@ class TestHljsThemeFollowsAppTokens:
             f"the highlight theme {selector} spells {sorted(literals & app_values)} by hand; "
             "reference the token so the code pane follows a palette change"
         )
+
+
+class TestMtimeNsToUtc:
+    """The one mtime -> instant conversion, at the calendar and sign edges.
+
+    ``/api/health``'s ``mtime_utc`` and Potato Mode's footer both render
+    through it, from a value that came off the filesystem, so the arms worth
+    pinning are the ones a normal rebuild never reaches: a stamp before the
+    epoch, a stamp inside a leap day, a stamp on the 32-bit boundary, and the
+    nanosecond remainder that decides whether the minute is the one the file
+    landed in or the one it has not reached.
+    """
+
+    NS = 1_000_000_000
+
+    @staticmethod
+    def _ns(whole: str) -> int:
+        """The epoch-second value of an ISO instant, as nanoseconds."""
+        return int(datetime.fromisoformat(whole).timestamp()) * TestMtimeNsToUtc.NS
+
+    def test_a_pre_epoch_stamp_names_the_second_before_it(self) -> None:
+        """A document restored from an archive with a pre-1970 stamp.
+
+        ``divmod`` floors, so a negative nanosecond count splits into a second
+        and a POSITIVE remainder.  Truncating toward zero instead would put
+        the remainder on the wrong side of the second and report an instant a
+        whole second late.
+        """
+        assert mtime_ns_to_utc(-1) == datetime(1969, 12, 31, 23, 59, 59, 999999, tzinfo=UTC)
+        assert mtime_ns_to_utc(-1_500_000_000) == datetime(
+            1969, 12, 31, 23, 59, 58, 500000, tzinfo=UTC
+        )
+        # The exact instant, which is what the epoch float beside the ISO
+        # stamp in /api/health is derived from.
+        assert mtime_ns_to_utc(-1_500_000_000).timestamp() == -1.5
+
+    @pytest.mark.parametrize(
+        "instant",
+        ["2024-02-29T00:00:00+00:00", "2024-02-29T23:59:59+00:00", "2000-02-29T12:00:00+00:00"],
+    )
+    def test_a_leap_day_stamp_names_that_day(self, instant: str) -> None:
+        assert mtime_ns_to_utc(self._ns(instant)) == datetime.fromisoformat(instant)
+
+    @pytest.mark.parametrize(
+        "instant",
+        ["2023-02-28T23:59:59+00:00", "2027-03-01T00:00:00+00:00", "2100-03-01T00:00:00+00:00"],
+    )
+    def test_a_non_leap_year_does_not_gain_a_february_29(self, instant: str) -> None:
+        """1900 and 2100 are divisible by 4 and are not leap years, so a
+        conversion that assumed four-year periods would land a day out on
+        every March 1 in those years."""
+        assert mtime_ns_to_utc(self._ns(instant)) == datetime.fromisoformat(instant)
+
+    def test_a_stamp_past_the_32_bit_epoch_is_not_wrapped(self) -> None:
+        """The 2038 boundary is where a 32-bit ``time_t`` reader rolls over to
+        1906; nothing here is 32-bit, and the stamp past it must keep going."""
+        assert mtime_ns_to_utc(2_147_483_648 * self.NS) == datetime(
+            2038, 1, 19, 3, 14, 8, tzinfo=UTC
+        )
+        assert mtime_ns_to_utc(4_102_444_800 * self.NS) == datetime(2100, 1, 1, 0, 0, 0, tzinfo=UTC)
+
+    def test_the_nanosecond_remainder_truncates(self) -> None:
+        """999_999_999 ns is under a microsecond, so it renders as the same
+        instant, while a remainder past a microsecond keeps it: the stamp
+        never runs ahead of the data it describes."""
+        assert mtime_ns_to_utc(1_700_000_000 * self.NS + 999).microsecond == 0
+        assert mtime_ns_to_utc(1_700_000_000 * self.NS + 999_999_999).microsecond == 999999
+        # The last nanosecond before a minute boundary stays in its own minute,
+        # which is the arm Potato's footer renders to the minute.
+        assert (
+            mtime_ns_to_utc(self._ns("2023-11-14T22:14:50+00:00") - 1).strftime("%Y-%m-%d %H:%M")
+            == "2023-11-14 22:14"
+        )
+
+    def test_a_stamp_the_clock_cannot_name_renders_the_extreme(self) -> None:
+        """The clamp, both ends, and that it never raises: an mtime is
+        filesystem input, and a freshness stamp is never worth a 500."""
+        assert mtime_ns_to_utc(253_402_300_800 * self.NS) == datetime(
+            9999, 12, 31, 23, 59, 59, tzinfo=UTC
+        )
+        assert mtime_ns_to_utc(-62_135_596_801 * self.NS) == datetime(1, 1, 1, 0, 0, 0, tzinfo=UTC)
+
+    def test_the_result_is_aware_in_utc(self) -> None:
+        """Aware, so it cannot be compared with a naive datetime built from a
+        local wall clock, and in UTC, so a host's TZ cannot move the stamp."""
+        stamp = mtime_ns_to_utc(1_700_000_000 * self.NS)
+        assert stamp.tzinfo is not None
+        assert stamp.utcoffset() == timedelta(0)

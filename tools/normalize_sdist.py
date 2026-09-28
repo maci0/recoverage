@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import gzip
 import os
+import re
 import sys
 import tarfile
 from pathlib import Path
@@ -38,6 +39,16 @@ EXEC_MODE = 0o755
 #: Fixed so two runs of one input compress identically, rather than leaving
 #: the level to whatever the toolchain defaults to.
 GZIP_LEVEL = 9
+
+#: A Unix timestamp is an ASCII decimal run.  ``str.isdigit`` is not that test:
+#: it accepts every Unicode decimal digit, so a value mangled by a non-ASCII
+#: locale pastes as ``int()`` parses it (an Arabic-Indic run silently becomes a
+#: different epoch, and every member of the archive is stamped with it), and it
+#: accepts superscripts, which ``int()`` then refuses with a ValueError traceback
+#: instead of the refusal below.  Same rule as ``config._ASCII_INT`` and
+#: ``server.parse_ascii_int``; spelled out here because this script is stdlib
+#: only and imports neither.
+_ASCII_EPOCH = re.compile(r"\A[0-9]+\Z")
 
 
 def normalized(member: tarfile.TarInfo, epoch: int) -> tarfile.TarInfo:
@@ -78,6 +89,11 @@ def normalize_archive(path: Path, epoch: int) -> None:
     tmp.replace(path)
 
 
+def _refuse(raw: str) -> None:
+    """Say what is wrong with a SOURCE_DATE_EPOCH that is not a timestamp."""
+    print(f"SOURCE_DATE_EPOCH={raw!r} is not a Unix timestamp.", file=sys.stderr)
+
+
 def main(argv: list[str]) -> int:
     raw = os.environ.get("SOURCE_DATE_EPOCH", "")
     if not raw:
@@ -89,10 +105,14 @@ def main(argv: list[str]) -> int:
             "Build through `make build`, which sets it to the commit's own date.", file=sys.stderr
         )
         return 2
-    if not raw.isdigit():
-        print(f"SOURCE_DATE_EPOCH={raw!r} is not a Unix timestamp.", file=sys.stderr)
+    if not _ASCII_EPOCH.match(raw):
+        _refuse(raw)
         return 2
-    epoch = int(raw)
+    try:
+        epoch = int(raw)
+    except ValueError:  # more digits than CPython's int() accepts
+        _refuse(raw)
+        return 2
 
     roots = [Path(arg) for arg in argv[1:]] or [Path("dist")]
     targets = sorted(p for root in roots if root.is_dir() for p in root.glob("*.tar.gz"))

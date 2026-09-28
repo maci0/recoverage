@@ -255,6 +255,16 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **`make build` stamped a sdist with the wrong date, or crashed, when
+  `SOURCE_DATE_EPOCH` was not plain ASCII digits.** The value was checked with
+  `str.isdigit`, which accepts every Unicode decimal digit and every
+  superscript: a run of Arabic-Indic digits pasted through a non-ASCII locale
+  parsed as a different epoch and stamped every archive member with it, and a
+  superscript digit raised out of `int()` as a traceback instead of the
+  refusal. The stamp is now parsed as the ASCII decimal run it is required to
+  be, matching how every `RECOVERAGE_*` integer is read, and a value past
+  CPython's conversion limit is refused rather than raising.
+
 - **A regen was refused on macOS and Windows for a mismatch that did not
   exist.** `RECOVERAGE_DB` and the directory rebrew writes to were compared as
   path strings, and on the two filesystems that ignore case by default
