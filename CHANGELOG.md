@@ -340,7 +340,7 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **`tools/oxlint/rikalabs-strict.json` records where it came from.** The
   checked-in copy of the Rika-Labs `strict` preset carried no license, so the
   README now names the package version and its MIT license, and
-  `tools/flatten-rikalabs-strict.py` refuses to regenerate the preset if a
+  `tools/flatten_rikalabs_strict.py` refuses to regenerate the preset if a
   bump changes that license.
 
 - **The design docs describe the code as it is.** `USER_STORIES.md` and

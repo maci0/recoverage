@@ -38,7 +38,7 @@ development tools: they run at build time and are not shipped. The copy of
 dmmulroy/anti-slop under tools/oxlint/anti-slop/ is not shipped either; it
 carries its own LICENSE, is recorded in README.md, and is inventoried file by
 file with a sha256 in tools/oxlint/anti-slop.manifest.json, which
-tools/vendor-manifest.py writes from the tree.
+tools/vendor_manifest.py writes from the tree.
 
 Full dependency inventory per release: the `recoverage-python-sbom` artifact
 produced by the sbom job in .github/workflows/ci.yml.

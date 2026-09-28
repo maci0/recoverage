@@ -102,7 +102,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.check:
         current = MANIFEST.read_text(encoding="utf-8") if MANIFEST.is_file() else ""
         if current != body:
-            print(f"{MANIFEST} does not match the tree; run tools/vendor-manifest.py")
+            print(f"{MANIFEST} does not match the tree; run tools/vendor_manifest.py")
             return 1
         print(f"{MANIFEST.relative_to(REPO_ROOT)}: up to date")
         return 0

@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
  *
  * 1. `tools/oxlint/rikalabs-strict.json` — a flattened, checked-in copy of the
  *    `strict` preset from @rikalabs/oxlint-standards (see
- *    tools/flatten-rikalabs-strict.py). It is flattened because the published
+ *    tools/flatten_rikalabs_strict.py). It is flattened because the published
  *    presets reference a few rules oxlint 1.83.0 does not implement, and oxlint
  *    rejects configs that mention unknown rules even as "off".
  * 2. The vendored anti-slop plugin (tools/oxlint/anti-slop — a curated copy of

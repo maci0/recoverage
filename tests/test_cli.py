@@ -1277,14 +1277,12 @@ class TestRegenFailures:
         assert "Traceback" not in result.output
 
     def test_rebrew_error_exit_is_not_a_traceback(self, monkeypatch: Any) -> None:
-        """rebrew's error_exit raises typer.Exit, which is click's Exit (a
-        RuntimeError), not SystemExit: it must not escape as a traceback."""
-        import typer
-
+        """rebrew's error_exit becomes RegenError, whose exit status the CLI
+        reports as exit 1 rather than a traceback."""
         import recoverage.regen as regen
 
         def boom(root: Path) -> None:
-            raise typer.Exit(2)
+            raise regen.RegenError(2)
 
         monkeypatch.setattr(regen, "run_regen", boom)
 

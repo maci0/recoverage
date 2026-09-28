@@ -299,7 +299,7 @@ ensure-bun:
 # which a checkout that has only run `uv sync` does not have.
 regen-oxlint: ensure-bun
 	bun install --frozen-lockfile
-	$(UV_RUN) python tools/flatten-rikalabs-strict.py
+	$(UV_RUN) python tools/flatten_rikalabs_strict.py
 
 smoke: ensure-rebrew
 	$(UV_RUN) python tools/smoke.py

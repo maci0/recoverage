@@ -1,7 +1,7 @@
 # Keep both lockfiles and CI actions current. Weekly cadence; minor/patch
 # updates are grouped into one PR per ecosystem so majors stay individually
 # reviewable. Bumping @rikalabs/oxlint-standards additionally requires
-# re-running tools/flatten-rikalabs-strict.py (see AGENTS.md).
+# re-running tools/flatten_rikalabs_strict.py (see AGENTS.md).
 # The JavaScript lockfile is bun.lock, which the npm ecosystem here cannot
 # read: Dependabot aborts with "detected that Bun is misconfigured" and
 # "This project has a `bun.lock` file but no `package-lock.json`, `yarn.lock`

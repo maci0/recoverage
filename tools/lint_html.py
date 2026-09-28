@@ -6,7 +6,7 @@ Two passes, one vnu runner:
   Static assets (``src/recoverage/assets``) — the source files as shipped.
   ``index.html`` is validated directly; the CSS files use ``--css``, which
   forces CSS-validation mode (vnu cannot parse a bare ``.css`` file as HTML).
-  This pass used to be a separate Node script (``tools/lint-html.mjs``); it was
+  This pass used to be a separate Node script (``tools/lint_html.mjs``); it was
   folded in here because both passes need the same jar path, the same
   ``java -jar`` invocation and the same missing-jar message, and keeping them in
   two languages meant two places to update when that plumbing changed.

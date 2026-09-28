@@ -13,7 +13,6 @@ from collections.abc import Generator, Sequence
 from pathlib import Path
 from typing import Any
 
-import typer
 from rebrew.coverage_toml import CoverageSnapshot, CoverageTomlError, Function
 from rebrew.workspace import KNOWN_STATUSES, VA_MAX, parse_va_candidates
 
@@ -28,7 +27,7 @@ from recoverage.disasm import (
     get_capstone_md,
     get_disassembly,
 )
-from recoverage.regen import run_regen
+from recoverage.regen import RegenError, run_regen
 from recoverage.server import (
     CACHE_NO_STORE,
     CACHE_REVALIDATE,
@@ -1981,10 +1980,10 @@ def _do_regen(remote: str) -> bytes | HTTPResponse:
     _metrics.REGEN.start()
     try:
         run_regen(root)
-    except typer.Exit as e:
-        # rebrew's error_exit reports the failure itself and raises
-        # typer.Exit — click's Exit, a RuntimeError, not SystemExit.  Map it
-        # to the JSON 500 contract instead of letting it escape as a traceback.
+    except RegenError as e:
+        # rebrew's error_exit reported the failure and its status is carried
+        # here.  Map it to the JSON 500 contract instead of letting it escape
+        # as a traceback.
         _regen_failed(started_at, "rebrew exited with status %s", e.exit_code)
         return _json_err(
             500,

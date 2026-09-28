@@ -493,15 +493,14 @@ def _get_stats(
 
 def _run_regen(root: Path) -> None:
     """Regenerate the coverage documents by calling rebrew's pipeline in-process."""
-    from recoverage.regen import run_regen
+    from recoverage.regen import RegenError, run_regen
 
     typer.echo("Running rebrew catalog + build-db...")
     try:
         run_regen(root)
-    except typer.Exit:
-        # rebrew's error_exit reports the failure itself and raises
-        # typer.Exit — click's Exit, a RuntimeError, not SystemExit — which
-        # would otherwise escape as a raw traceback.  Keep the exit-1 contract.
+    except RegenError:
+        # rebrew's error_exit reported the failure itself; run_regen carried
+        # that across as RegenError.  Keep the exit-1 contract.
         raise typer.Exit(1) from None
     except Exception as e:
         # Same clean exit-1 contract for any other in-process failure.

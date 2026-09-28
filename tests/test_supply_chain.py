@@ -31,7 +31,7 @@ _PACKAGE_JSON = _ROOT / "package.json"
 _BUN_LOCK = _ROOT / "bun.lock"
 _MANIFEST = _ROOT / "pyproject.toml"
 _PYTHON_VERSION = _ROOT / ".python-version"
-_FLATTEN = _ROOT / "tools" / "flatten-rikalabs-strict.py"
+_FLATTEN = _ROOT / "tools" / "flatten_rikalabs_strict.py"
 _DERIVED_PRESET = _ROOT / "tools" / "oxlint" / "rikalabs-strict.json"
 # Third-party code copied into the repo, and the record of what that copy is.
 _VENDOR_TREE = _ROOT / "tools" / "oxlint" / "anti-slop"
@@ -79,13 +79,13 @@ def _jobs() -> dict[str, str]:
 
 
 def _vendor_manifest_module() -> ModuleType:
-    """`tools/vendor-manifest.py`, imported so the tree has one definition of
-    what it records.  The file is a script with a dash in its name, so the
-    loader is the only way in.
+    """`tools/vendor_manifest.py`, imported so the tree has one definition of
+    what it records.  `tools/` is a script directory rather than a package, so
+    the loader is how a test reaches in.
     """
-    path = _ROOT / "tools" / "vendor-manifest.py"
+    path = _ROOT / "tools" / "vendor_manifest.py"
     spec = importlib.util.spec_from_file_location("vendor_manifest", path)
-    assert spec and spec.loader, "tools/vendor-manifest.py is not importable"
+    assert spec and spec.loader, "tools/vendor_manifest.py is not importable"
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -440,7 +440,7 @@ class TestToolchainPins:
         dev = json.loads(_PACKAGE_JSON.read_text(encoding="utf-8"))["devDependencies"]
         oxlint = dev["oxlint"]
         assert f'"{oxlint}"' not in flatten, (
-            f"tools/flatten-rikalabs-strict.py restates oxlint {oxlint}; package.json owns it"
+            f"tools/flatten_rikalabs_strict.py restates oxlint {oxlint}; package.json owns it"
         )
 
     def test_ci_bun_version_comes_from_package_json(self) -> None:
@@ -908,7 +908,7 @@ class TestVendoredLintPlugin:
     def _manifest() -> dict:
         manifest = _VENDOR_MANIFEST
         assert manifest.is_file(), (
-            f"{manifest.name} is missing; run tools/vendor-manifest.py to record the vendored tree"
+            f"{manifest.name} is missing; run tools/vendor_manifest.py to record the vendored tree"
         )
         return json.loads(manifest.read_text(encoding="utf-8"))
 
@@ -930,7 +930,7 @@ class TestVendoredLintPlugin:
         an addition nobody checked; a listed file whose bytes moved is a
         change nobody re-vendored.
 
-        The expectation is what `tools/vendor-manifest.py` builds, imported
+        The expectation is what `tools/vendor_manifest.py` builds, imported
         rather than restated here, so the two cannot disagree about which
         paths an exclusion covers.
         """
@@ -938,7 +938,7 @@ class TestVendoredLintPlugin:
         recorded = self._manifest()
         expected = script.build_manifest()
         assert recorded["files"] == expected["files"], (
-            "the vendored tree and its manifest disagree; run tools/vendor-manifest.py "
+            "the vendored tree and its manifest disagree; run tools/vendor_manifest.py "
             "after a re-vendor, and review what changed against upstream"
         )
         assert set(recorded["files"]) == {rel for rel, _ in expected["files"].items()}

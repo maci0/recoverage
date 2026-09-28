@@ -1,6 +1,6 @@
 """Re-run safety of the tools/ serve harness.
 
-``tools/smoke.py`` and ``tools/lint-html.py`` both build their sample coverage
+``tools/smoke.py`` and ``tools/lint_html.py`` both build their sample coverage
 through :func:`build_sample_db`, and CI runs both (the smoke job runs
 ``smoke.py`` and then ``smoke.py --expect-failure``).  The harness must
 therefore produce the same documents however many times it is called, into the

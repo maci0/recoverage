@@ -419,7 +419,7 @@ This suite covers:
 - Cell selection at various indices
 - Invalid/unknown parameters (graceful fallbacks)
 
-HTML validation is a separate gate: `bun run lint:html` (`tools/lint-html.py`) validates the static assets plus the served SPA shell and Potato Mode page.
+HTML validation is a separate gate: `bun run lint:html` (`tools/lint_html.py`) validates the static assets plus the served SPA shell and Potato Mode page.
 
 Playwright comparison tests verify visual and behavioral parity with the main UI:
 ```bash

@@ -8,7 +8,7 @@
   "scripts": {
     "lint": "bun run lint:js && bun run lint:html",
     "lint:js": "oxlint",
-    "lint:html": "uv run --locked python tools/lint-html.py",
+    "lint:html": "uv run --locked python tools/lint_html.py",
     "build:web": "vite build --config web/vite.config.ts",
     "dev:web": "vite --config web/vite.config.ts",
     "typecheck:web": "tsc --noEmit --project web/tsconfig.json"

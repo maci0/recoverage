@@ -1107,8 +1107,8 @@ class TestRegenRateLimit:
 class TestRegenFailureMapping:
     """_do_regen maps in-process rebrew failures to the JSON 500 contract.
 
-    There is no timeout any more, so a ``typer.Exit`` from rebrew's
-    ``error_exit`` is a failure, never a 504.
+    There is no timeout any more, so the ``RegenError`` that ``run_regen``
+    raises for rebrew's ``error_exit`` is a failure, never a 504.
     """
 
     def teardown_method(self) -> None:
@@ -1130,9 +1130,9 @@ class TestRegenFailureMapping:
         return wsgi_request("POST", "/api/regen", remote_addr="127.0.0.1")
 
     def test_rebrew_error_exit_is_500_not_504(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        import typer
+        from recoverage.regen import RegenError
 
-        status, headers, body = self._post_regen(monkeypatch, typer.Exit(2))
+        status, headers, body = self._post_regen(monkeypatch, RegenError(2))
         assert status.startswith("500")
         data = json.loads(decode_body(body, headers))
         assert data["detail"] == "rebrew exited with status 2"

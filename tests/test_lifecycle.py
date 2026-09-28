@@ -167,6 +167,29 @@ class TestRunRegen:
         with pytest.raises(ValueError, match="corrupt"):
             run_regen(tmp_path)
 
+    def test_rebrew_error_exit_becomes_regen_failed(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """rebrew's ``error_exit`` raises ``typer.Exit``; the caller must not
+        have to import typer to read it, so run_regen translates it."""
+        import typer
+
+        from recoverage.regen import RegenError
+
+        def run_catalog(c: object) -> None:
+            raise typer.Exit(2)
+
+        _install_fake_rebrew(
+            monkeypatch,
+            load_config=lambda root: object(),
+            run_catalog=run_catalog,
+            build_db=lambda project_root: None,
+        )
+
+        with pytest.raises(RegenError) as caught:
+            run_regen(tmp_path)
+        assert caught.value.exit_code == 2
+
     def test_a_second_run_repeats_the_same_pipeline(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:

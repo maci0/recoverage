@@ -122,7 +122,7 @@ jobs:
       - name: "Lint JS/TS (oxlint: Rika-Labs strict + anti-slop) and HTML/CSS (Nu Html Checker)"
         # make web-lint owns the install, the bun/java preflight and both
         # linters, so this job and `make all` run the same commands. lint:html
-        # runs tools/lint-html.py through the env synced above, which is why
+        # runs tools/lint_html.py through the env synced above, which is why
         # this job needs uv at all.
         run: make web-lint
       - name: "Type-check the frontend (tsc --noEmit over web/tsconfig.json)"

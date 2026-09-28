@@ -43,9 +43,9 @@ recoverage/
 │   ├── THREAT_MODEL.md     # Attack surface, trust boundaries, risk ranking
 │   ├── ideas.md            # Future improvement ideas
 │   └── *.png               # Screenshots for the README
-├── tools/                  # lint-html.py, smoke.py, _serve_harness.py, oxlint/,
-│                           # ci_clone_rebrew.sh, flatten-rikalabs-strict.py,
-│                           # normalize_sdist.py, vendor-manifest.py
+├── tools/                  # lint_html.py, smoke.py, _serve_harness.py, oxlint/,
+│                           # ci_clone_rebrew.sh, flatten_rikalabs_strict.py,
+│                           # normalize_sdist.py, vendor_manifest.py
 ├── tests/
 │   ├── conftest.py           # Shared fixtures (synthetic coverage TOML)
 │   ├── coverage_fixture.py   # Builders for synthetic coverage documents
@@ -92,15 +92,15 @@ recoverage/
 ```
 
 Frontend lint (bun + a JDK; see `bun run lint:js|html`): `oxlint.config.ts` is
-the JS/TS config, `tools/lint-html.py` runs vnu over both the static assets and
+the JS/TS config, `tools/lint_html.py` runs vnu over both the static assets and
 the documents the server actually serves, and `tools/oxlint/anti-slop/` is a
 vendored upstream copy to keep in sync. `tools/oxlint/rikalabs-strict.json` is
 generated: never hand-edit it, bump `@rikalabs/oxlint-standards` then run
-`make regen-oxlint` (which wraps `tools/flatten-rikalabs-strict.py` and the
+`make regen-oxlint` (which wraps `tools/flatten_rikalabs_strict.py` and the
 `bun install` it reads `node_modules` from). The script's docstring and
 `oxlint.config.ts` own the why behind that preset. The vendored plugin is
 inventoried the same way, because no registry manifest reaches a directory
-copied into the repo: `tools/vendor-manifest.py` writes
+copied into the repo: `tools/vendor_manifest.py` writes
 `tools/oxlint/anti-slop.manifest.json` (upstream, license, every file with its
 sha256, the excluded paths), and `tests/test_supply_chain.py` fails when the
 tree and that record disagree. Re-vendor by replacing the directory, running
