@@ -11,6 +11,10 @@ Two rules, off one source of truth:
   (:data:`_LEVELS`), so nothing below the transport imports a route module;
 - the graph is acyclic.
 
+A third pins the prose to the graph: every module in :data:`_LEVELS` is named
+in the module map ``recoverage.__init__`` carries, so the map cannot fall
+behind the level table.
+
 :data:`_LEVEL_ORDER_EXCEPTIONS` is the escape hatch and is meant to stay empty.
 ``disasm`` sits below the route modules and reaches up into ``server`` for the
 DLL byte cache; :data:`_CAPABILITY_MODULES` names that band explicitly rather
@@ -118,6 +122,21 @@ def test_imports_point_one_way(importer: str) -> None:
             f"{_PACKAGE}.{dependency} (level {_LEVELS[dependency]}), which points "
             f"the wrong way"
         )
+
+
+@pytest.mark.parametrize("module", sorted(set(_LEVELS) - {"__init__"}))
+def test_the_module_map_names_every_module(module: str) -> None:
+    """``recoverage.__init__``'s map is where a reader looks first.
+
+    A module placed in :data:`_LEVELS` but absent from that map is documented
+    nowhere a newcomer reads, and nothing else would catch it: the level
+    assertion above is about the graph, not about the prose describing it.  The
+    package's own docstring is the map, so it is the one module it cannot name.
+    """
+    doc = (_SRC / "__init__.py").read_text(encoding="utf-8")
+    assert f"``{module}``" in doc, (
+        f"{_PACKAGE}.{module} is missing from the module map in {_PACKAGE}/__init__.py"
+    )
 
 
 @pytest.mark.parametrize("importer", sorted(_CAPABILITY_MODULES))

@@ -2,8 +2,14 @@
 
 Module map (dependencies point one way, left to right):
 
+- ``clock``       — the one time source the request path reads (no in-package
+  deps)
+- ``metrics``     — in-process RED + connection + regen counters (no in-package
+  deps)
 - ``config``      — RECOVERAGE_* parsing, validation, startup banner (no
   in-package deps)
+- ``devserver``   — the WSGI serving stack: socket family, admission cap, socket
+  deadline, keep-alive framing (imports config+metrics; stdlib only)
 - ``_paths``      — coverage-directory resolution (imports config)
 - ``regen``       — in-process rebrew regen: imports rebrew's catalog/build-db
   lazily and runs both under one call (no in-package deps)
@@ -22,10 +28,12 @@ Module map (dependencies point one way, left to right):
   every route; import this when you need a fully wired app
 - ``cli``         — Typer entry point (serves ``webapp.app``; imports
   server+regen for config and stats helpers)
+- ``__main__``    — ``python -m recoverage``; forwards argv to ``cli.main``
 
 Route modules register on import; there are no cycles.
-``tests/test_import_graph.py`` enforces the level order above and the
-acyclicity, so a new module has to declare where it sits.
+``tests/test_import_graph.py`` enforces the level order above, the acyclicity,
+and that every module here is named in this map, so a new module has to
+declare where it sits.
 """
 
 __version__ = "3.0.0"
