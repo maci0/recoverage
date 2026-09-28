@@ -487,7 +487,10 @@ export function App() {
             )}
             <Button
               className="icon-btn reload-btn"
-              aria-label={busy ? MSG.REGEN_IN_PROGRESS : "Regenerate coverage data"}
+              // "Reload" is the word the button shows, so it leads the name too:
+              // a voice-control user saying "click Reload" has to find it
+              // (WCAG 2.5.3).
+              aria-label={busy ? MSG.REGEN_IN_PROGRESS : "Reload coverage data"}
               title={busy ? MSG.REGEN_IN_PROGRESS : "Regenerate coverage data"}
               disabled={busy}
               onClick={reload}
@@ -497,6 +500,7 @@ export function App() {
             <a
               className={cn(controlVariants(), "potato-link")}
               href={potatoHref}
+              aria-label="HTML: open this view in Potato Mode"
               title="Open this view in Potato Mode (server-rendered HTML)"
             >
               HTML

@@ -356,10 +356,13 @@ export function CoveragePanel({
     <aside
       className="panel w-full shrink-0 self-start rounded-control border border-line bg-panel p-3 lg:w-[460px] lg:max-w-[45vw]"
       id="panel"
+      aria-labelledby="panel-title"
     >
       <div className="panel-head border-b border-line pb-2">
         <div className="flex items-center gap-2">
-          <h2 className="panel-title font-mono text-title font-bold">{title}</h2>
+          <h2 className="panel-title font-mono text-sm font-bold" id="panel-title">
+            {title}
+          </h2>
           <div className="panel-actions ms-auto flex gap-2">
             <CopyButton
               label="Copy VA"

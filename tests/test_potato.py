@@ -14,6 +14,8 @@ from coverage_fixture import cell, coverage_dir, write_coverage
 from rebrew.coverage_toml import CoverageSnapshot, load_coverage
 
 from recoverage.potato import (
+    BG_COLOR,
+    BORDER_COLOR,
     TRACK_UNITS,
     _build_progress,
     _build_url,
@@ -2791,6 +2793,39 @@ class TestRenderedPageNamesAndStates:
     ) -> None:
         html = self._render(tmp_path, monkeypatch, "&view=functions")
         assert html.count('<th scope="col">') >= 5
+
+    def test_only_the_tables_that_carry_data_keep_the_table_role(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Layout is presented as structure otherwise (WCAG 1.3.1).
+
+        The page is nested layout tables, and a screen reader in table mode is
+        read twenty wrappers instead of the coverage map. The grid container
+        (its caption names the skip-link target) and the function list (its
+        headers relate its columns) are the two tables that carry meaning, and
+        they are the two that keep the role.
+        """
+        grid = self._render(tmp_path, monkeypatch, "")
+        functions = self._render(tmp_path, monkeypatch, "&view=functions")
+        assert re.findall(r"<table(?![^>]*role=)[^>]*>", grid) == [
+            (
+                '<table id="grid-container" border="1" cellpadding="8" cellspacing="0" '
+                f'bordercolor="{BORDER_COLOR}" bgcolor="{BG_COLOR}" width="100%">'
+            ),
+        ]
+        assert re.findall(r"<table(?![^>]*role=)[^>]*>", functions) == [
+            (
+                '<table width="100%" border="1" cellpadding="6" cellspacing="0" '
+                f'bordercolor="{BORDER_COLOR}">'
+            ),
+        ]
+
+    def test_the_lattice_is_not_announced_as_a_table(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The grid is a picture of a byte range, not rows and columns."""
+        html = self._render(tmp_path, monkeypatch, "")
+        assert '<table id="grid" role="presentation"' in html
 
     def test_grid_caption_names_the_keyboard_path(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

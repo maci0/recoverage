@@ -394,7 +394,7 @@ def _section_heading(label: str, color: str, title: str) -> str:
     """
     logo = _hex_logo_svg(label, color)
     return (
-        f'<table border="0" cellpadding="0" cellspacing="4"><tr>'
+        f'<table role="presentation" border="0" cellpadding="0" cellspacing="4"><tr>'
         f'<td valign="middle">{logo}</td>'
         f'<td valign="middle">'
         f'<h2><font size="3">{_esc(title)}</font></h2>'
@@ -405,7 +405,7 @@ def _section_heading(label: str, color: str, title: str) -> str:
 def _code_block_raw(highlighted_html: str) -> str:
     """Wrap pre-highlighted HTML in a code block table."""
     return (
-        f'<table width="100%" border="0" cellpadding="10" cellspacing="1" bgcolor="{BORDER_COLOR}">'
+        f'<table role="presentation" width="100%" border="0" cellpadding="10" cellspacing="1" bgcolor="{BORDER_COLOR}">'
         f'<tr><td bgcolor="{CODE_BG_COLOR}"><font face="{MONO_FONT}" size="2">'
         f"<pre>{highlighted_html}</pre></font></td></tr></table><br>"
     )
@@ -790,6 +790,14 @@ def _build_url(
 
 # ── SimpleTemplate: Page Layout ─────────────────────────────────────
 
+# Every <table> in this page except two carries role="presentation".
+#
+# The retro look is nested layout tables, and a screen reader walking the page
+# in table-navigation mode is read the chrome: a twenty-deep table of one-cell
+# wrappers around the content, which is the WCAG 1.3.1 failure of presenting
+# layout as structure. The two that keep the table role are `#grid-container`,
+# whose <caption> names the target the "[Skip to grid]" link lands on, and the
+# function list, whose <th scope="col"> headers relate its columns.
 _PAGE_SRC = r"""<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>ReCoverage - Potato Mode</title><!-- The same phosphor R the topbar below and the SPA's assets/favicon.svg draw. An emoji in a data URI was this link's first spelling, so a browser tab showed a desktop-computer glyph on one view of the product and the logo on the other. --><link rel="icon" href="{{R_LOGO_SVG}}"></head>
@@ -804,13 +812,13 @@ _PAGE_SRC = r"""<!DOCTYPE html>
      and footer visibly cut off mid-page with an unpainted band beside them.  A
      shrink-to-fit outer cell makes those percentages resolve against the content
      width instead, so the chrome spans the whole scrollable page. -->
-<table id="page" width="100%" border="0" cellpadding="0" cellspacing="0"><tr><td>
+<table role="presentation" id="page" width="100%" border="0" cellpadding="0" cellspacing="0"><tr><td>
 
 <!-- Top Bar -->
-<table id="topbar" width="100%" border="0" cellpadding="4" cellspacing="0" background="{{TOPBAR_PNG}}">
+<table role="presentation" id="topbar" width="100%" border="0" cellpadding="4" cellspacing="0" background="{{TOPBAR_PNG}}">
   <tr>
     <td valign="middle">
-      <table id="logo" border="0" cellpadding="0" cellspacing="0">
+      <table role="presentation" id="logo" border="0" cellpadding="0" cellspacing="0">
         <tr>
           <td><img src="{{R_LOGO_SVG}}" width="48" height="32" border="0" alt="R"></td>
           <td valign="middle" nowrap><h1><a href="/"><font face="{{MONO_FONT}}" size="5" color="{{TEXT_COLOR}}">&nbsp;<b>ReCoverage</b></font></a></h1>&nbsp;<a href="/"><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">[SPA]</font></a>&nbsp;<a href="{{functions_nav_url}}"><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">[Functions]</font></a></td>
@@ -818,16 +826,16 @@ _PAGE_SRC = r"""<!DOCTYPE html>
       </table>
     </td>
     <td valign="middle" width="100%">
-      <table id="section-tabs" border="0" cellpadding="0" cellspacing="4"><tr>
+      <table role="presentation" id="section-tabs" border="0" cellpadding="0" cellspacing="4"><tr>
       % for s_name, s_url, s_active, s_key in section_tab_data:
         <td valign="middle">
         <!-- The <a> wraps the whole pill table, not just the label.  Wrapping
              only the text made the clickable area the ~20px glyph while the
              32px pill around it looked like the button and did nothing. -->
         % if s_active:
-          <a href="{{s_url}}" accesskey="{{s_key}}" aria-current="page"><table border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{ACTIVE_L}}" width="16" height="32" border="0" alt=""></td><td background="{{ACTIVE_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="#ffffff"><b>{{s_name}}</b></font></td><td><img src="{{ACTIVE_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
+          <a href="{{s_url}}" accesskey="{{s_key}}" aria-current="page"><table role="presentation" border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{ACTIVE_L}}" width="16" height="32" border="0" alt=""></td><td background="{{ACTIVE_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="#ffffff"><b>{{s_name}}</b></font></td><td><img src="{{ACTIVE_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
         % else:
-          <a href="{{s_url}}" accesskey="{{s_key}}"><table border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{INACTIVE_L}}" width="16" height="32" border="0" alt=""></td><td background="{{INACTIVE_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="{{MUTED_COLOR}}">{{s_name}}</font></td><td><img src="{{INACTIVE_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
+          <a href="{{s_url}}" accesskey="{{s_key}}"><table role="presentation" border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{INACTIVE_L}}" width="16" height="32" border="0" alt=""></td><td background="{{INACTIVE_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="{{MUTED_COLOR}}">{{s_name}}</font></td><td><img src="{{INACTIVE_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
         % end
         </td>
       % end
@@ -836,7 +844,7 @@ _PAGE_SRC = r"""<!DOCTYPE html>
   </tr>
   <tr>
     <td valign="middle" colspan="2">
-      <table id="controls" border="0" cellpadding="0" cellspacing="2" width="100%">
+      <table role="presentation" id="controls" border="0" cellpadding="0" cellspacing="2" width="100%">
         % if progress:
         <tr><td colspan="4" valign="middle" width="100%" align="center">
           <!-- Fluid bar: the SVG is viewBox-only, so width="100%" stretches
@@ -845,7 +853,7 @@ _PAGE_SRC = r"""<!DOCTYPE html>
                below the bar (same contract as the SPA's stats row): overlaying
                them on the image clipped mid-word on narrow screens, because
                the text width is fixed while the image shrinks. -->
-          <table id="progress-bar" width="100%" border="0" cellpadding="0" cellspacing="1"><tr>
+          <table role="presentation" id="progress-bar" width="100%" border="0" cellpadding="0" cellspacing="1"><tr>
             <td align="center" height="14"><img src="{{progress_bar_png}}" width="100%" height="14" border="0" alt=""></td>
           </tr><tr>
             <td align="center"><font face="{{MONO_FONT}}" size="2" color="{{TEXT_COLOR}}"><b>{{progress['sec_size']}}</b>b &middot; <b>{{progress['matched_fn']}}/{{progress['total_fn']}}</b> matched &middot; <b>{{"%.1f" % progress['coverage_pct']}}%</b></font></td>
@@ -884,16 +892,16 @@ _PAGE_SRC = r"""<!DOCTYPE html>
         </tr>
         <tr>
         <td valign="middle" colspan="4">
-          <table id="filters" border="0" cellpadding="0" cellspacing="4"><tr>
+          <table role="presentation" id="filters" border="0" cellpadding="0" cellspacing="4"><tr>
             % for fb_href, fb_label, fb_color, fb_active, fb_key, fb_title in filter_btn_data:
               <td valign="middle">
               <!-- Anchor wraps the whole pill: see the section-tab note above.
                    These are the worst case — a single-letter label gave E/R/M/S/P
                    a 10px-wide hit target inside a 32px-wide pill. -->
               % if fb_active:
-                <a href="{{fb_href}}" title="{{fb_title}}" accesskey="{{fb_label[0].lower()}}" aria-label="{{fb_title}}, on" aria-current="true"><table border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{FILTER_ACT_L}}" width="16" height="32" border="0" alt=""></td><td background="{{FILTER_ACT_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="{{fb_color}}"><b>{{fb_label}}</b></font></td><td><img src="{{FILTER_ACT_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
+                <a href="{{fb_href}}" title="{{fb_title}}" accesskey="{{fb_label[0].lower()}}" aria-label="{{fb_title}}, on" aria-current="true"><table role="presentation" border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{FILTER_ACT_L}}" width="16" height="32" border="0" alt=""></td><td background="{{FILTER_ACT_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="{{fb_color}}"><b>{{fb_label}}</b></font></td><td><img src="{{FILTER_ACT_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
               % else:
-                <a href="{{fb_href}}" title="{{fb_title}}" accesskey="{{fb_label[0].lower()}}" aria-label="{{fb_title}}, off"><table border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{FILTER_INACT_L}}" width="16" height="32" border="0" alt=""></td><td background="{{FILTER_INACT_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="{{fb_color}}">{{fb_label}}</font></td><td><img src="{{FILTER_INACT_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
+                <a href="{{fb_href}}" title="{{fb_title}}" accesskey="{{fb_label[0].lower()}}" aria-label="{{fb_title}}, off"><table role="presentation" border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{FILTER_INACT_L}}" width="16" height="32" border="0" alt=""></td><td background="{{FILTER_INACT_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="{{fb_color}}">{{fb_label}}</font></td><td><img src="{{FILTER_INACT_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
               % end
               </td>
             % end
@@ -911,9 +919,9 @@ _PAGE_SRC = r"""<!DOCTYPE html>
     </td>
   </tr>
 </table>
-<table id="topbar-divider" width="100%" border="0" cellpadding="0" cellspacing="0" bgcolor="#1c2a38"><tr><td height="1"></td></tr></table>
+<table role="presentation" id="topbar-divider" width="100%" border="0" cellpadding="0" cellspacing="0" bgcolor="#1c2a38"><tr><td height="1"></td></tr></table>
 
-<table id="layout" width="100%" border="0" cellpadding="14" cellspacing="0">
+<table role="presentation" id="layout" width="100%" border="0" cellpadding="14" cellspacing="0">
   <!-- Map and panel stack as separate rows.  As side-by-side cells the
        fixed-width grid lattice plus the panel's width floor forced the page
        past 500px on a 390px phone, clipping both.  Stacked, each takes the
@@ -927,7 +935,7 @@ _PAGE_SRC = r"""<!DOCTYPE html>
     % else:
   <tr>
     <td valign="top" width="100%">
-      <table id="map" width="100%" border="1" cellpadding="0" cellspacing="0" bgcolor="{{PANEL_COLOR}}" bordercolor="{{BORDER_COLOR}}">        <tr><td id="map-header" background="{{PANEL_HDR_PNG}}" cellpadding="8">&nbsp;<font color="{{MUTED_COLOR}}" size="2"><b>Coverage Map - {{section}}</b></font> <font color="{{MUTED_COLOR}}" size="1"> ({{block_count}} blocks)</font>
+      <table role="presentation" id="map" width="100%" border="1" cellpadding="0" cellspacing="0" bgcolor="{{PANEL_COLOR}}" bordercolor="{{BORDER_COLOR}}">        <tr><td id="map-header" background="{{PANEL_HDR_PNG}}" cellpadding="8">&nbsp;<font color="{{MUTED_COLOR}}" size="2"><b>Coverage Map - {{section}}</b></font> <font color="{{MUTED_COLOR}}" size="1"> ({{block_count}} blocks)</font>
         % if sec_stats.get('total', 0) > 0:
           <br>&nbsp;<font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">E:<font color="{{COLORS['exact']}}">{{sec_stats['exact']}}</font> R:<font color="{{COLORS['reloc']}}">{{sec_stats['reloc']}}</font> M:<font color="{{COLORS['near_match']}}">{{sec_stats['near_match']}}</font> S:<font color="{{COLORS['stub']}}">{{sec_stats['stub']}}</font> P:<font color="{{COLORS['padding']}}">{{sec_stats.get('padding', 0)}}</font> &#x2502; {{sec_stats['pct']}}% covered</font>
         % end
@@ -939,7 +947,7 @@ _PAGE_SRC = r"""<!DOCTYPE html>
                One key per row fixed the wrap but cost ~200px of vertical
                space for a legend.  Fixed pairs fit a 390px phone (each pair
                is ~260px) and cost half the height. -->
-          <table id="legend" border="0" cellpadding="0" cellspacing="2">
+          <table role="presentation" id="legend" border="0" cellpadding="0" cellspacing="2">
           % for i in range(0, len(LEGEND_ITEMS), 2):
             <tr>
             % for leg_key, leg_label in LEGEND_ITEMS[i:i+2]:
@@ -962,7 +970,7 @@ _PAGE_SRC = r"""<!DOCTYPE html>
   </tr>
   <tr>
     <td valign="top" width="100%">
-      <table id="panel" width="100%" border="1" cellpadding="0" cellspacing="0" bgcolor="{{PANEL_COLOR}}" bordercolor="{{BORDER_COLOR}}">
+      <table role="presentation" id="panel" width="100%" border="1" cellpadding="0" cellspacing="0" bgcolor="{{PANEL_COLOR}}" bordercolor="{{BORDER_COLOR}}">
         <tr><td id="panel-header" background="{{PANEL_HDR_PNG}}" cellpadding="8">&nbsp;<font color="{{MUTED_COLOR}}" size="2"><b>Block Details</b></font></td></tr>
         <tr><td height="1" bgcolor="{{BORDER_COLOR}}"></td></tr>
         <tr><td id="panel-content" bgcolor="{{PANEL_COLOR}}" cellpadding="14" valign="top">{{!panel_html}}</td></tr>
@@ -971,7 +979,7 @@ _PAGE_SRC = r"""<!DOCTYPE html>
   </tr>
     % end
 </table>
-<table id="footer" width="100%" border="0" cellpadding="8" cellspacing="0"><tr>
+<table role="presentation" id="footer" width="100%" border="0" cellpadding="8" cellspacing="0"><tr>
 <td><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">recoverage v{{version}}
 % if db_mtime:
  &middot; DB updated {{db_mtime}}
@@ -990,9 +998,9 @@ _PAGE_TPL = SimpleTemplate(source=_PAGE_SRC)
 
 _PANEL_SRC = r"""
 % if not has_cell:
-<table width="100%" border="0" cellpadding="10" cellspacing="1" bgcolor="{{BORDER_COLOR}}"><tr><td bgcolor="{{PANEL_COLOR}}" align="center"><font size="3" color="{{MUTED_COLOR}}"><b>Select a block</b></font><br><br><font color="{{MUTED_COLOR}}">Click any colored block in the grid to view details.</font></td></tr></table>
+<table role="presentation" width="100%" border="0" cellpadding="10" cellspacing="1" bgcolor="{{BORDER_COLOR}}"><tr><td bgcolor="{{PANEL_COLOR}}" align="center"><font size="3" color="{{MUTED_COLOR}}"><b>Select a block</b></font><br><br><font color="{{MUTED_COLOR}}">Click any colored block in the grid to view details.</font></td></tr></table>
 % else:
-<table width="100%" border="0" cellpadding="0" cellspacing="0"><tr><td>&nbsp;<font size="2"><b>Block {{idx}}</b></font>
+<table role="presentation" width="100%" border="0" cellpadding="0" cellspacing="0"><tr><td>&nbsp;<font size="2"><b>Block {{idx}}</b></font>
 % if prev_url:
 <a href="{{prev_url}}"><font size="1">&laquo; Prev</font></a>
 % end
@@ -1000,7 +1008,7 @@ _PANEL_SRC = r"""
 <a href="{{next_url}}"><font size="1">Next &raquo;</font></a>
 % end
 </td></tr></table>
-<table width="100%" border="0" cellpadding="3" cellspacing="1" bgcolor="{{BORDER_COLOR}}"><tr><td bgcolor="{{PANEL_COLOR}}"><font size="1" color="{{MUTED_COLOR}}"><b>Range:</b></font></td><td bgcolor="{{PANEL_COLOR}}"><font face="Courier New, monospace" size="1">{{cell_range}}</font></td></tr><tr><td bgcolor="{{PANEL_COLOR}}"><font size="1" color="{{MUTED_COLOR}}"><b>State:</b></font></td><td bgcolor="{{PANEL_COLOR}}"><font face="Courier New, monospace" size="1" color="{{state_color}}"><b>{{state_upper}}</b></font></td></tr>
+<table role="presentation" width="100%" border="0" cellpadding="3" cellspacing="1" bgcolor="{{BORDER_COLOR}}"><tr><td bgcolor="{{PANEL_COLOR}}"><font size="1" color="{{MUTED_COLOR}}"><b>Range:</b></font></td><td bgcolor="{{PANEL_COLOR}}"><font face="Courier New, monospace" size="1">{{cell_range}}</font></td></tr><tr><td bgcolor="{{PANEL_COLOR}}"><font size="1" color="{{MUTED_COLOR}}"><b>State:</b></font></td><td bgcolor="{{PANEL_COLOR}}"><font face="Courier New, monospace" size="1" color="{{state_color}}"><b>{{state_upper}}</b></font></td></tr>
 % if cell_label:
 <tr><td bgcolor="{{PANEL_COLOR}}"><font size="1" color="{{MUTED_COLOR}}"><b>Label:</b></font></td><td bgcolor="{{PANEL_COLOR}}"><font face="Courier New, monospace" size="1">{{cell_label}}</font></td></tr>
 % end
@@ -1024,10 +1032,10 @@ _PANEL_SRC = r"""
     % else:
 <br>
     % end
-<table width="100%" border="0" cellpadding="3" cellspacing="1" bgcolor="{{BORDER_COLOR}}">{{!detail_rows_html}}</table>
+<table role="presentation" width="100%" border="0" cellpadding="3" cellspacing="1" bgcolor="{{BORDER_COLOR}}">{{!detail_rows_html}}</table>
     % if annotations:
 &nbsp;<font size="2"><b>Annotations</b></font><br>
-<table width="100%" border="0" cellpadding="3" cellspacing="1" bgcolor="{{BORDER_COLOR}}">
+<table role="presentation" width="100%" border="0" cellpadding="3" cellspacing="1" bgcolor="{{BORDER_COLOR}}">
       % for tag, text in annotations:
         % tag_color = COLORS.get("stub", "#ef4444") if tag == "BLOCKER" else ACCENT_COLOR
 <tr><td bgcolor="{{PANEL_COLOR}}" width="25%"><font size="1" color="{{tag_color}}"><b>{{tag}}</b></font></td><td bgcolor="{{PANEL_COLOR}}"><font face="Courier New, monospace" size="1">{{text}}</font></td></tr>
@@ -1051,7 +1059,7 @@ _PANEL_SRC = r"""
     % end
   % elif gl_data:
 &nbsp;<font size="2"><b>Global Variable</b></font><br>
-<table width="100%" border="0" cellpadding="3" cellspacing="1" bgcolor="{{BORDER_COLOR}}">{{!gl_detail_rows}}</table>
+<table role="presentation" width="100%" border="0" cellpadding="3" cellspacing="1" bgcolor="{{BORDER_COLOR}}">{{!gl_detail_rows}}</table>
   % else:
 <font color="{{MUTED_COLOR}}"><i>Unknown: {{fn_name}}</i></font>
   % end
@@ -1080,7 +1088,7 @@ def _db_unavailable_page() -> HTTPResponse:
             "<title>ReCoverage — database unavailable</title></head>"
             f'<body bgcolor="{BG_COLOR}" text="{TEXT_COLOR}">'
             f'<font face="{MONO_FONT}">'
-            '<table width="100%" height="90%" border="0"><tr><td align="center" valign="middle">'
+            '<table role="presentation" width="100%" height="90%" border="0"><tr><td align="center" valign="middle">'
             "<h1>Database unavailable</h1>"
             f'<p><font color="{MUTED_COLOR}">Run '
             "'rebrew build-db' to create or rebuild it,"
@@ -1838,7 +1846,7 @@ def _pager_html(
         )
 
     return (
-        f'<table id="pager" border="0" cellpadding="4" cellspacing="0"><tr>'
+        f'<table role="presentation" id="pager" border="0" cellpadding="4" cellspacing="0"><tr>'
         f"<td>{link(page - 1, '[&lt; Prev]')}</td>"
         f'<td><font face="{MONO_FONT}" size="2" color="{MUTED_COLOR}">'
         f"&nbsp;Page {page} of {page_count}&nbsp;</font></td>"
@@ -1871,6 +1879,12 @@ def _build_grid_html(
 ) -> str:
     """Render the coverage grid as an HTML table.
 
+    The lattice is a picture of a byte range, not tabular data: it has no
+    headers, no row or column relationship, and reading it as a table gives a
+    screen reader a grid-shaped announcement and nothing about any block. It is
+    ``role="presentation"`` so its links are reached in reading order instead,
+    each named by the same address range and state its ``title`` carries.
+
     grid_columns controls the number of cells per row. A sizing row of empty
     cells painted in the grid background is emitted first so the browser
     allocates uniform column widths regardless of colspan usage in data rows.
@@ -1894,7 +1908,7 @@ def _build_grid_html(
     )
     grid_html_parts = [
         (
-            f'<table id="grid" border="1" frame="void" rules="all" cellpadding="0" cellspacing="0" bordercolor="{BG_COLOR}" bgcolor="{BG_COLOR}">'
+            f'<table id="grid" role="presentation" border="1" frame="void" rules="all" cellpadding="0" cellspacing="0" bordercolor="{BG_COLOR}" bgcolor="{BG_COLOR}">'
             f"<tr>{sizing_tds}</tr><tr>"
         )
     ]
@@ -1962,7 +1976,7 @@ def _build_grid_html(
         if selected:
             grid_html_parts.append(
                 f'<td id="sel" bgcolor="{BG_COLOR}" width="{w}" height="{cell_h}" colspan="{span}">'
-                f'<table border="1" cellpadding="0" cellspacing="0" bordercolor="{ACCENT_COLOR}" width="100%">'
+                f'<table role="presentation" border="1" cellpadding="0" cellspacing="0" bordercolor="{ACCENT_COLOR}" width="100%">'
                 f'<tr><td bgcolor="{bgcolor}">{img}</td></tr></table></td>'
             )
         else:
@@ -2039,7 +2053,7 @@ def _render_function_list(
         base += f"&status={_url_quote(status_filter)}"
 
     parts = [
-        f'<table width="100%" border="1" cellpadding="0" cellspacing="0" bordercolor="{BORDER_COLOR}" bgcolor="{PANEL_COLOR}">',
+        f'<table role="presentation" width="100%" border="1" cellpadding="0" cellspacing="0" bordercolor="{BORDER_COLOR}" bgcolor="{PANEL_COLOR}">',
         (
             f'<tr><td background="{PANEL_HDR_PNG}" cellpadding="8">'
             f'<font color="{MUTED_COLOR}" size="2"><b>Functions</b></font> '
@@ -2235,7 +2249,7 @@ def _render_potato_inner(
             f"<title>ReCoverage — no data for {_esc(target)}</title></head>"
             f'<body bgcolor="{BG_COLOR}" text="{TEXT_COLOR}">'
             f'<font face="{MONO_FONT}">'
-            '<table width="100%" height="90%" border="0"><tr><td align="center" valign="middle">'
+            '<table role="presentation" width="100%" height="90%" border="0"><tr><td align="center" valign="middle">'
             f"<h1>No data for target {_esc(target)}</h1>"
             f'<p><font color="{MUTED_COLOR}">Pick a built target from '
             '<a href="/potato">Potato Mode</a> or <a href="/">the SPA</a>.</font></p>'

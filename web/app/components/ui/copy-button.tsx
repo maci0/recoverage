@@ -51,6 +51,14 @@ export function CopyButton({
       onClick={copy}
     >
       {flashed ?? label}
+      {/* The outcome repeats into a live region of its own: the button's
+          accessible name is the fixed aria-label above, so a screen reader
+          focused on it hears the label and never the "Copied!" its label
+          replaced (WCAG 4.1.3). The region is always in the tree, so the text
+          lands in a region that already existed when it changed. */}
+      <span className="sr-only" role="status">
+        {flashed ?? ""}
+      </span>
     </Button>
   );
 }
