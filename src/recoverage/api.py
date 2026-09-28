@@ -1169,6 +1169,16 @@ def handle_api_health() -> bytes:
             f"{connections['refused']} connections refused at the "
             f"{connections['max']}-connection cap"
         )
+    # A peer the token gate has locked out is guessing, and it is the only
+    # condition below that says the server is under attack rather than
+    # saturated: the gate answers 429, so nothing else in this snapshot moves.
+    # The counter behind it is a lifetime one and deliberately not a reason
+    # (one typo an hour ago would degrade every probe until restart); the
+    # gauge is the live reading, and it drops with the window.
+    auth = _metrics.AUTH.snapshot()
+    auth["locked_peers"] = _server.auth_locked_peers()
+    if auth["locked_peers"]:
+        reasons.append(f"{auth['locked_peers']} peers locked out of the token gate")
     status = "degraded" if reasons else "healthy"
     _log_health_status(status, "; ".join(reasons) or "ok")
     return _json_ok(
@@ -1212,6 +1222,11 @@ def handle_api_health() -> bytes:
             # at it keeps serving the connections it already has, so without
             # this block health read "healthy" while refusing every new client.
             "connections": connections,
+            # Token-gate attempts: rejected credentials and peers the throttle
+            # has stopped reading, with the live lockout gauge.  A brute-force
+            # run is invisible in every other block here, because the gate
+            # answers 401/429 and neither is a 5xx.
+            "auth": auth,
         },
         Cache_Control=CACHE_NO_STORE,
     )

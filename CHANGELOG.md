@@ -7,6 +7,16 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `GET /api/health` reports an `auth` block (`failures`, `throttled`,
+  `locked_peers`) and a `requests.transport_rejected` counter. A peer working
+  through the `--token` gate is answered 401 and then 429, neither of which is
+  a 5xx, and a request the HTTP transport refused (an over-long request line, a
+  malformed one, a client that stalled) never reaches a route at all: both were
+  visible only as log lines, so nothing an operator polls said a
+  network-reachable server was being scanned. `locked_peers` is a gauge that
+  drops with the throttle window, so an active lockout reads `degraded` and
+  recovers on its own rather than degrading every probe until a restart.
+
 - The wheel and the sdist ship `recoverage/py.typed`, so a project that imports
   `recoverage.server`, `recoverage.config` or `recoverage.metrics` gets the
   annotations this package ships instead of having them dropped at the package

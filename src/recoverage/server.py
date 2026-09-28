@@ -2939,6 +2939,24 @@ def _auth_throttle(peer: str, now: float, reserve_slot: bool) -> bool:
         return False
 
 
+def auth_locked_peers() -> int:
+    """How many peers are answering 429 right now, on the clock.
+
+    A GAUGE, and the only reading of the throttle an operator can watch: the
+    lifetime counters (:data:`metrics.AUTH`) say a guess happened, this says one
+    is still in progress, which is the state a health probe should answer
+    ``degraded`` for.  Expired windows are dropped first, on the same window and
+    the same clock the gate enforces, so a lockout that ended between two probes
+    does not keep the dashboard degraded for the rest of the process.
+    """
+    now = clock.monotonic()
+    with _AUTH_FAILURES_LOCK:
+        for key, window in list(_auth_failures.items()):
+            if not window or now - window[-1] > _AUTH_FAIL_WINDOW_SECONDS:
+                del _auth_failures[key]
+        return sum(1 for window in _auth_failures.values() if len(window) >= _AUTH_FAIL_MAX)
+
+
 def _clear_auth_failures(peer: str) -> None:
     """Forget *peer*'s failures, and only that peer's.
 
@@ -3013,6 +3031,12 @@ def _require_auth() -> None:
 
     now = clock.monotonic()
     if _auth_throttle(peer, now, reserve_slot=True):
+        # Counted separately from a failed attempt: one is a typo answered
+        # 401, the other is a peer the gate has stopped reading.  Nothing else
+        # counts the 429 arm, because the per-request line is DEBUG below the
+        # slow-request threshold, so without this the attempts past a full
+        # window left no trace at all.
+        metrics.AUTH.note_throttled()
         # `retry_after` in the body as well as the header: the two 429s the
         # regen route sends and the 503 the SSE cap sends both put the wait in
         # the envelope, so a client reading the documented JSON contract gets
@@ -3034,6 +3058,7 @@ def _require_auth() -> None:
     # secret); REMOTE_ADDR comes from the socket peer and is escaped, because
     # behind a proxy that folds a header into it, it is as hostile as any
     # other untrusted value and a %0A in it would forge the line below.
+    metrics.AUTH.note_failure()
     _log.warning(
         "Rejected %s auth token from %s",
         "missing" if not provided else "invalid",

@@ -339,6 +339,11 @@ class _QuietTimeoutRequestHandler(WSGIRequestHandler):
             self.address_string() or "unknown peer",
             format % args,
         )
+        # Counted, because this line is the only trace and one rejection reads
+        # like a misbehaving client while a scanner produces the same line
+        # forever: /api/health is where an operator looks, and a request that
+        # never reached before_request is in none of its request counters.
+        metrics.REQUESTS.note_transport_rejection()
 
 
 class _KeepAliveRequestHandler(_QuietTimeoutRequestHandler):

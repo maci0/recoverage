@@ -110,6 +110,7 @@ class RequestStats:
         self._timed = 0
         self._in_flight = 0
         self._stale_claims = 0
+        self._transport_rejected = 0
         # The bounded window behind p50_ms / p95_ms; see LATENCY_WINDOW.
         self._recent_ms: deque[float] = deque(maxlen=LATENCY_WINDOW)
         self._by_route: dict[str, _RouteRow] = {}
@@ -200,6 +201,22 @@ class RequestStats:
             if row is not None:
                 row.errors += delta
 
+    def note_transport_rejection(self) -> None:
+        """Record one request the HTTP transport refused before any route ran.
+
+        An over-long or malformed request line, an unsupported version, an
+        oversized header block, a client that stalled past the socket deadline:
+        every one of those is answered by ``devserver``'s handler class, ahead
+        of ``before_request``, so it reaches no counter here and no ``by_status``
+        bucket.  The log line it does write is the only trace, and a scanner
+        looping on a malformed request produces one line per attempt and no
+        number an operator can alert on.  Counted apart from the request
+        counters, which cannot hold it: there is no route, no status and no
+        duration to file it under.
+        """
+        with self._lock:
+            self._transport_rejected += 1
+
     def note_stale_claim(self) -> None:
         """Record one single-flight claim that outlived the thread that took it.
 
@@ -259,6 +276,7 @@ class RequestStats:
                 "slow": self._slow,
                 "in_flight": self._in_flight,
                 "stale_claims": self._stale_claims,
+                "transport_rejected": self._transport_rejected,
                 "slow_threshold_ms": SLOW_REQUEST_MS,
                 "mean_ms": round(mean, 3),
                 "max_ms": round(self._max_ms, 3),
@@ -284,6 +302,7 @@ class RequestStats:
             self._timed = 0
             self._max_ms = 0.0
             self._stale_claims = 0
+            self._transport_rejected = 0
             self._recent_ms.clear()
             self._by_route.clear()
             self._by_status.clear()
@@ -425,6 +444,48 @@ class CacheStats:
 
 #: The registry the request path updates and ``/api/health`` reads.
 CACHES = CacheStats()
+
+
+class AuthStats:
+    """Counters for the bearer-token gate, and the gate's own window.
+
+    The gate logs every rejected token and every throttled peer, but a log line
+    is an event, not a rate: once it has rotated, or when the reader is a poll
+    of ``/api/health``, there was nothing left to say that a peer spent its
+    whole window guessing.  The refused attempts are the only reading that
+    separates a scanner working through a network-reachable ``--token`` server
+    from a quiet one, and ``throttled`` separates a peer that filled its window
+    from one that gave up after a couple of typos.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._failures = 0
+        self._throttled = 0
+
+    def note_failure(self) -> None:
+        """One rejected token (missing or wrong), answered 401."""
+        with self._lock:
+            self._failures += 1
+
+    def note_throttled(self) -> None:
+        """One request refused because the peer's window was already full."""
+        with self._lock:
+            self._throttled += 1
+
+    def snapshot(self) -> dict[str, int]:
+        """A JSON-ready copy of the lifetime counters."""
+        with self._lock:
+            return {"failures": self._failures, "throttled": self._throttled}
+
+    def reset(self) -> None:
+        with self._lock:
+            self._failures = 0
+            self._throttled = 0
+
+
+#: The registry the auth gate updates and /api/health reads.
+AUTH = AuthStats()
 
 
 class ConnectionStats:

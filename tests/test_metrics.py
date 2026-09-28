@@ -8,9 +8,10 @@ import json
 import logging
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager as ContextManager
+from unittest.mock import patch
 
 import pytest
-from conftest import wsgi_get
+from conftest import wsgi_get, wsgi_request
 
 from recoverage import api as _api
 from recoverage import clock, metrics, server
@@ -305,6 +306,109 @@ class TestCacheCounters:
         wsgi_get("/api/targets/FAKEDLL/stats")
         row = _health()["caches"][metrics.STATS_CACHE]
         assert row == {"hits": 1, "misses": 1}, row
+
+
+class TestAuthCounters:
+    """The ``auth`` block: the token gate's attempts and its live lockouts."""
+
+    @pytest.fixture(autouse=True)
+    def _token(self, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+        monkeypatch.setattr(server, "_AUTH_TOKEN", "unit-test-token")
+        metrics.AUTH.reset()
+        # The connection cap is a lifetime refusal counter that feeds the
+        # status, and an earlier test's refusals would hold this one at
+        # degraded for a reason that has nothing to do with the gate.
+        metrics.CONNECTIONS.reset()
+        server._auth_failures.clear()
+        yield
+        metrics.AUTH.reset()
+        server._auth_failures.clear()
+
+    @staticmethod
+    def _probe() -> dict:
+        """The health snapshot, read by a peer the lockout does not touch.
+
+        A verified request clears the WINDOW OF ITS OWN PEER (the mistyped-
+        then-retyped operator is forgiven), so a probe over the guessing peer's
+        own connection would empty the window and read healthy.  The monitor
+        that has to see the lockout is a different host, and that is the case
+        this reads.
+        """
+        status, _headers, body = wsgi_request(
+            "GET",
+            "/api/health",
+            headers={"Authorization": "Bearer unit-test-token"},
+            remote_addr="127.0.0.2",
+        )
+        assert status.startswith("200"), status
+        return json.loads(body)
+
+    def test_a_rejected_token_is_counted_and_the_throttle_is_not(self) -> None:
+        status, _headers, _ = wsgi_get("/api/health", headers={"Authorization": "Bearer wrong"})
+        assert status.startswith("401"), status
+        block = self._probe()["auth"]
+        assert block["failures"] == 1, block
+        assert block["throttled"] == 0, block
+
+    def test_a_full_window_is_a_throttle_and_turns_the_probe_degraded(self) -> None:
+        """The attempts past a full window are the ones nothing else records.
+
+        A peer that spent its window is answered 429, which is not a 5xx, lands
+        in no ``by_status`` an operator alerts on, and would otherwise be one
+        DEBUG line per attempt: the counter and the gauge are the only reading
+        that a network-reachable server is being guessed at.
+        """
+        bad = {"Authorization": "Bearer wrong", "Accept": "application/json"}
+        for _ in range(server._AUTH_FAIL_MAX):
+            assert wsgi_get("/api/health", headers=bad)[0].startswith("401")
+        assert wsgi_get("/api/health", headers=bad)[0].startswith("429")
+        health = self._probe()
+        block = health["auth"]
+        assert block["throttled"] == 1, block
+        assert block["locked_peers"] == 1, block
+        assert health["status"] == "degraded", health["status"]
+
+    def test_a_window_that_has_expired_stops_the_degraded_reading(self) -> None:
+        """The gauge drops with the window, so health recovers on its own.
+
+        A lifetime count cannot be the degradation trigger: one typo an hour
+        ago would hold every probe at ``degraded`` until the process restarted.
+        """
+        bad = {"Authorization": "Bearer wrong", "Accept": "application/json"}
+        for _ in range(server._AUTH_FAIL_MAX + 1):
+            wsgi_get("/api/health", headers=bad)
+        assert self._probe()["status"] == "degraded"
+        with patch.object(clock, "monotonic", return_value=clock.monotonic() + 120.0):
+            health = self._probe()
+        assert health["auth"]["locked_peers"] == 0, health["auth"]
+        assert health["status"] == "healthy", health
+        # The lifetime counters do NOT follow the window: they are the record
+        # of what happened, which is what a rotated log line no longer says.
+        assert health["auth"]["failures"] >= server._AUTH_FAIL_MAX, health["auth"]
+
+
+class TestTransportRejectionCount:
+    """A request refused before any route ran still reaches a counter."""
+
+    def test_a_transport_rejection_is_counted_and_leaves_the_request_totals(self) -> None:
+        from recoverage import devserver
+
+        handler = object.__new__(devserver._QuietTimeoutRequestHandler)
+        handler.client_address = ("127.0.0.1", 51234)  # type: ignore[attr-defined]
+        before = metrics.REQUESTS.snapshot()
+        devserver._QuietTimeoutRequestHandler.log_error(handler, "Bad request syntax (%r)", "!")
+        after = metrics.REQUESTS.snapshot()
+        assert after["transport_rejected"] == before["transport_rejected"] + 1
+        # There is no route, no status and no duration to file it under, so
+        # it must not perturb the counters a request rate is computed from.
+        assert after["total"] == before["total"]
+        assert after["by_status"] == before["by_status"]
+        after = _health()["requests"]
+        assert after["transport_rejected"] == before["transport_rejected"] + 1
+        # There is no route, no status and no duration to file it under, so
+        # it must not perturb the counters a request rate is computed from.
+        assert after["total"] == before["total"]
+        assert after["by_status"] == before["by_status"]
 
 
 class TestStats:

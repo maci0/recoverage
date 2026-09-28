@@ -636,6 +636,19 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   the process. The row is a dataclass, not a dict, so a new per-route
   counter does not widen a union every read has to narrow. The design
   rationale is in `docs/DESIGN.md` (*Request Observability*).
+- Two counters hold events the per-request ones CANNOT file, because both
+  happen outside every hook: a request the HTTP transport refused (over-long
+  or malformed request line, oversized headers, a client that stalled past the
+  socket deadline) reaches no `before_request` and therefore no route, status
+  or duration, so it is `metrics.REQUESTS.note_transport_rejection`
+  (`requests.transport_rejected`) and nothing else; a rejected or throttled
+  token is `metrics.AUTH` (`auth.failures`, `auth.throttled`) with
+  `server.auth_locked_peers()` as the live `auth.locked_peers` gauge, which is
+  the ONE health reason a brute-force attempt can move. The gauge is a gauge on
+  purpose: it drops with the throttle window, where a lifetime count would hold
+  the probe at `degraded` from one typo until the process restarted. A new
+  refusal that happens before `before_request` counts in the registry that owns
+  the event, and the health block names it.
 - The regen pipeline is counted in `metrics.REGEN`, not in `REQUESTS`: a regen
   runs for minutes, so the per-request numbers are one sample and none at all
   while it is in flight, and nothing in them says the in-flight request is a
