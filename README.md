@@ -193,7 +193,7 @@ always wins over the environment.
 | `RECOVERAGE_BIND` | `127.0.0.1` | an interface address or hostname; no whitespace, no `host:port` (the port belongs to `RECOVERAGE_PORT`) |
 | `RECOVERAGE_ALLOW_REMOTE` | `false` | `1`/`0`, `true`/`false`, `yes`/`no`, `on`/`off` |
 | `RECOVERAGE_CORS` | `false` | same booleans |
-| `RECOVERAGE_CORS_ORIGIN` | none | comma-separated origin URLs; each must be one a browser could send (`scheme://host[:port]`, no userinfo, path or whitespace) |
+| `RECOVERAGE_CORS_ORIGIN` | none | comma-separated origin URLs; each must be one a browser could send (`scheme://host[:port]`, no userinfo, path or whitespace). A value naming no origin at all (empty, or only commas and whitespace) is a startup error, so an environment that spells "not configured" as an empty value cannot start a server that refuses every cross-origin read |
 | `RECOVERAGE_TOKEN` | none | the bearer token; set it empty to run unauthenticated, and give it no surrounding or interior whitespace (headers arrive trimmed, so a padded value locks every reader out) |
 | `RECOVERAGE_LOG_LEVEL` | `INFO` | a `logging` level name, or its number (`0`, `10`, `20`, `30`, `40`, `50`; any other number is a startup error, because a threshold no record clears logs nothing at all) |
 | `RECOVERAGE_MAX_CONNECTIONS` | `128` | integer `1`-`65536`: concurrent client connections admitted, one thread and one descriptor each |

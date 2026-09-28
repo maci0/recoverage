@@ -995,19 +995,26 @@ def _cors_warnings(cors: bool, requested: list[str]) -> list[str]:
     entry that has no effect without ``--cors`` is by definition the one
     ``_allowed_origins`` did not install, so passing the installed list would
     make this warning unreachable.
+
+    Each line names BOTH spellings of the setting, because the rule does not
+    know which one supplied it: a unit file or a container spec spells the pair
+    as ``RECOVERAGE_CORS`` and ``RECOVERAGE_CORS_ORIGIN``, and a warning that
+    read as a flag would send that operator to argv for a value that belongs in
+    the environment they configured.
     """
     warnings: list[str] = []
     if cors and not requested:
         warnings.append(
             "warning: --cors without --cors-origin allows no cross-origin reads "
             "(Access-Control-Allow-Origin: * is no longer emitted). "
-            "Add --cors-origin URL for each origin you want to allow."
+            "Add --cors-origin URL for each origin you want to allow, or list them "
+            "comma-separated in RECOVERAGE_CORS_ORIGIN."
         )
     if requested and not cors:
         warnings.append(
             "warning: --cors-origin has no effect without --cors — "
             f"CORS processing is disabled, so {len(requested)} origin(s) were "
-            "dropped. Pass --cors to enable it."
+            "dropped. Pass --cors, or set RECOVERAGE_CORS=1, to enable it."
         )
     return warnings
 
@@ -1080,7 +1087,8 @@ def _ack_warnings(bind: str, allow_remote: bool) -> list[str]:
             (
                 f"warning: --allow-remote is set but --bind {bind} is a loopback address, "
                 "so the dashboard is reachable only from this machine. Bind an interface "
-                "address (0.0.0.0 for every interface) to serve the network."
+                "address (0.0.0.0 for every interface) to serve the network, in the flag "
+                "or as RECOVERAGE_BIND=0.0.0.0."
             )
         ]
     return []

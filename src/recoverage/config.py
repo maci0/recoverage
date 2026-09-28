@@ -363,20 +363,18 @@ def cors_origins() -> list[str]:
     never equal a browser's Origin, so storing it would leave --cors on with
     an allowlist one item short of what the operator wrote.
 
-    A variable that is set but empty is an error for the same reason
+    A variable that is set but yields no origin is an error for the same reason
     (:func:`db_override` and :func:`_str_var` draw the line there): the unit
     file, the container env and the CI job all spell "not configured" as an
     empty value, and this is the one that would otherwise start a server with
     CORS on and an allowlist of nothing, so every cross-origin read is refused
-    and the only clue is a browser console the operator may not open.
+    and the only clue is a browser console the operator may not open.  The empty
+    value is only one spelling of it: separators and whitespace (``,``, ``" ,
+    "``) leave the same empty list, so the check is on the parsed result.
     """
     raw = _raw("RECOVERAGE_CORS_ORIGIN")
     if raw is None:
         return []
-    if not raw:
-        raise ConfigError(
-            "RECOVERAGE_CORS_ORIGIN: set but empty (unset it, or name at least one origin)"
-        )
     origins: list[str] = []
     for item in (part.strip() for part in raw.split(",")):
         if not item:
@@ -384,6 +382,10 @@ def cors_origins() -> list[str]:
         if _carries_control_char(item):
             raise ConfigError(f"RECOVERAGE_CORS_ORIGIN: {item!r} contains a control character")
         origins.append(item)
+    if not origins:
+        raise ConfigError(
+            "RECOVERAGE_CORS_ORIGIN: set but empty (unset it, or name at least one origin)"
+        )
     return origins
 
 

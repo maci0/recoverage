@@ -155,6 +155,15 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `RECOVERAGE_CORS_ORIGIN` set to a value that names no origin, where before
+  only an empty one was refused (`,` and `" , "` parsed to an empty list, since
+  the empty items between separators are dropped), is a startup error like the
+  empty value already was. A unit file, a container env or a CI job that spells
+  "not configured" as an empty value started a server with CORS on and an
+  allowlist of nothing, which refused every cross-origin read it was configured
+  for. The two CORS startup warnings and the loopback-bind acknowledgment now
+  name the `RECOVERAGE_*` spelling beside the flag, so an operator who
+  configured through the environment is not sent to argv.
 - `recoverage regen` writes nothing to stdout. Its progress line and its
   "Done — N coverage document(s) written to ..." completion line are status,
   and they now go to stderr with the errors that were already there, so a

@@ -66,6 +66,16 @@ class TestScalarParsing:
         monkeypatch.setenv("RECOVERAGE_CORS_ORIGIN", "http://a.test, http://b.test,")
         assert config.cors_origins() == ["http://a.test", "http://b.test"]
 
+    @pytest.mark.parametrize("raw", [",", " , ", ",,", "  "])
+    def test_cors_origins_with_no_origin_is_set_but_empty(
+        self, monkeypatch: pytest.MonkeyPatch, raw: str
+    ) -> None:
+        """Separators and whitespace leave the same empty list the empty
+        value does, and start the same server: CORS on, nothing allowed."""
+        monkeypatch.setenv("RECOVERAGE_CORS_ORIGIN", raw)
+        with pytest.raises(config.ConfigError, match="set but empty"):
+            config.cors_origins()
+
     def test_token_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("RECOVERAGE_TOKEN", "s3cret")
         assert config.token() == "s3cret"
