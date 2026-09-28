@@ -1142,6 +1142,11 @@ class TestDbUpdatedLabel:
     """
 
     @staticmethod
+    def _patch_db(monkeypatch: pytest.MonkeyPatch, directory: Path) -> None:
+        """Point the coverage-directory resolution at a fixture's documents."""
+        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+
+    @staticmethod
     def _doc(directory: Path, target: str, mtime_ns: int) -> Path:
         """One document, stamped with *mtime_ns* so the assertion is exact."""
         path = write_coverage(
