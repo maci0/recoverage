@@ -22,6 +22,11 @@ export type Coverage = {
   ensureCells: (name: string) => void;
   /** Refetch after a regen or a `db-updated` event. */
   reload: () => void;
+  /** Counts the reloads, so a consumer memoizing its own build-derived data
+   * can key it on the build it fetched against. A rebuild that rewrites the
+   * target without changing the target id or the paths leaves both of those
+   * unchanged, so the token is the only thing that moves. */
+  reloadToken: number;
 };
 
 export function useCoverage(target: string, section: string): Coverage {
@@ -158,5 +163,6 @@ export function useCoverage(target: string, section: string): Coverage {
     cellError,
     ensureCells,
     reload,
+    reloadToken,
   };
 }

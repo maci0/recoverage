@@ -143,6 +143,15 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **The dashboard's copy of the target binary survived a rebuild.** The byte
+  panes download the original DLL once per target and slice it locally, and the
+  download was remembered by path alone. A `rebrew build-db` after a recompile
+  rewrites that file under the same path and announces itself with a
+  `db-updated` frame, which moved neither the path nor the target id, so the
+  cached bytes stayed the previous build's for as long as the tab was open:
+  the hex and disassembly panes read one build while `/asm` and `/bytes`, whose
+  server-side caches the rebuild does clear, served the next. The download is
+  now remembered per build as well as per path, so a reload frame refetches it.
 - **A chunked request body was framed by a number `int()` widened.** A chunk
   size of `1_0` is 16 to `int(x, 16)`, which also reads the `_` separator, so
   the body reader consumed 16 bytes of a connection it had no framing for and

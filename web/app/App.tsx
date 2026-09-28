@@ -124,7 +124,11 @@ export function App() {
     coverage.paths.sourceRoot ?? "",
     `/src/${encodeURIComponent(target)}`,
   );
-  const dll = useOriginalBinary(originalDllPath(coverage.paths.originalDll, target), target !== "");
+  const dll = useOriginalBinary(
+    originalDllPath(coverage.paths.originalDll, target),
+    target !== "",
+    coverage.reloadToken,
+  );
   const panes = useSelection({
     target,
     section,
