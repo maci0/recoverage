@@ -19,11 +19,14 @@ export type OriginalBinary = {
   failed: boolean;
 };
 
+/** The fallback for a document that names no `paths.originalDll`.
+ *
+ * The target id is used verbatim, not lowercased: rebrew creates
+ * `src/<target>` and `original/<target>.dll` with the target's own spelling,
+ * and a case-insensitive filesystem (macOS, Windows) hides a lowercased
+ * request that only resolves there. */
 export function originalDllPath(documentPath: string | undefined, target: string): string {
-  return sameOriginPath(
-    documentPath ?? "",
-    `/original/${encodeURIComponent(target.toLowerCase())}.dll`,
-  );
+  return sameOriginPath(documentPath ?? "", `/original/${encodeURIComponent(target)}.dll`);
 }
 
 export function useOriginalBinary(path: string, enabled: boolean): OriginalBinary {

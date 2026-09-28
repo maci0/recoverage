@@ -526,6 +526,21 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   frozen snapshot, so nothing but the key can straddle a rebuild); a new
   coverage-derived memo takes its token the same way or states why its read
   cannot straddle a rebuild.
+- A path that crosses into the filesystem is read with `PurePath` rules, not
+  POSIX string rules. `potato._is_plain_relative` is the one definition, keyed
+  on `anchor` (drive, leading separator, UNC) rather than `is_absolute()`, and
+  it names the SOURCE ROOT as well as the file under it: the root is the
+  containment base, so a value that survives as an anchor or a parent hop
+  replaces the base outright and the `is_relative_to` check that follows passes
+  trivially. Stripping a leading `/` is a POSIX assumption and answers for the
+  host, not for the document: a coverage document built on Windows used to name
+  a source root no Linux reader could refuse, and the lowercased `src/<target>`
+  fallback (`potato`, `web/app/App.tsx`, `web/app/hooks/useOriginalBinary.ts`)
+  only resolved on a case-insensitive filesystem. Target ids are used verbatim
+  in every path this package builds, because rebrew names the tree
+  `src/<target>` and `db/coverage-<target>.toml` with the target's own spelling.
+  Pinned at `tests/test_potato.py` (`TestPathTraversalGuard`); a new path taken
+  from a coverage document goes through the same guard.
 - One response, one snapshot. A snapshot is frozen — every collection is a
   tuple or a `MappingProxyType` — and `server.load_all_coverage` memoizes on the
   documents' own stat, so an unchanged directory returns THE SAME snapshot

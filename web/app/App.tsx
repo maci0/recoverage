@@ -113,9 +113,12 @@ export function App() {
   const topbarRef = useRef<HTMLElement | null>(null);
 
   const coverage = useCoverage(target, section);
+  // The fallback carries the target id verbatim: rebrew names the tree
+  // `src/<target>` with the target's own spelling, and a lowercased request
+  // only resolves on a case-insensitive filesystem (macOS, Windows).
   const sourceRoot = sameOriginPath(
     coverage.paths.sourceRoot ?? "",
-    `/src/${encodeURIComponent(target.toLowerCase())}`,
+    `/src/${encodeURIComponent(target)}`,
   );
   const dll = useOriginalBinary(originalDllPath(coverage.paths.originalDll, target), target !== "");
   const panes = useSelection({

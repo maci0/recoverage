@@ -72,6 +72,22 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   past the limit in a body under a kilobyte. The decoder running out of stack
   became an unhandled exception and a 500. It is a parse failure like the
   other two and now answers the same 400.
+- **Potato Mode refused a source root it could not contain, on every platform.**
+  A `paths.sourceRoot` that was anchored (`C:src`, `C:/Windows`, `\Windows`) or
+  carried a parent hop (`../..`) replaced the containment base outright, so the
+  `is_relative_to` check that guards the C-source read passed on whatever the
+  document named. Stripping a leading `/` is a POSIX assumption, so on Linux
+  those spellings were ordinary relative names and were refused anyway: the
+  guard answered for its host rather than for the document. The source root now
+  takes the same plain-relative rule as the file name under it, and an empty
+  one (which would have made the whole project directory the source tree) is
+  refused too.
+- **The fallback source and original-DLL paths no longer lowercase the target
+  id.** rebrew names the tree `src/<target>` and `original/<target>.dll` with
+  the target's own spelling, so a lowercased request resolved only on a
+  case-insensitive filesystem: a mixed-case target showed its sources and
+  disassembly on macOS and Windows and 404'd on Linux. Documents that name
+  `paths.sourceRoot` or `paths.originalDll` (every current build) are unaffected.
 - **`--no-color` is accepted after the subcommand too.** It was declared only
   on the root group, so `recoverage stats --no-color` died with "No such
   option" (exit 2) while `recoverage --no-color stats` worked. Every command

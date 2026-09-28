@@ -1694,6 +1694,37 @@ class TestPathTraversalGuard:
         (tmp_path / "src").mkdir()
         assert self._read(tmp_path, monkeypatch, "../../secret.txt") is None
 
+    def test_anchored_source_root_blocked(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A sourceRoot that is anchored or traverses is refused.
+
+        sourceRoot is the containment base, so a value that survives the
+        leading-"/" strip as an anchor (``C:src``) or a parent hop
+        (``../..``) makes the join REPLACE the base, and the
+        ``c_path.is_relative_to(base)`` check that follows passes trivially —
+        the whole filesystem becomes the source tree. Stripping only "/" is a
+        POSIX assumption: on a POSIX host these spellings are inert, so the
+        guard answered to its host rather than to the document.
+        """
+        (tmp_path / "src").mkdir()
+        for source_root in ("C:src", "../..", "/../..", "src/../..", ""):
+            assert self._read(tmp_path, monkeypatch, "main.c", source_root) is None, source_root
+
+    def test_windows_shaped_source_root_blocked(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The Windows spellings specifically, whatever the host flavour.
+
+        A POSIX host reads ``C:/Windows`` and ``\\Windows`` as ordinary
+        relative names, so the case only bites on the platform that has them;
+        asserting the refusal through the production guard on every host
+        keeps the Windows build from being the only place it is exercised.
+        """
+        (tmp_path / "src").mkdir()
+        for source_root in ("C:/Windows", "C:\\Windows", "\\Windows\\System32"):
+            assert self._read(tmp_path, monkeypatch, "main.c", source_root) is None, source_root
+
     def test_absolute_path_blocked(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """An absolute files[0] replaces the base entirely (Path join
         semantics) and must be rejected even when the file exists."""

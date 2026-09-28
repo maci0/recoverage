@@ -2495,16 +2495,29 @@ def _panel_fn_source_text(data: dict[str, Any], target: str, fn_data: dict[str, 
     # handle_potato's except tuple as a raw 500.  Same guard as the summary
     # reads in _compute_section_stats/_build_progress.
     paths = data.get("paths")
-    default_source_root = f"/src/{target.lower()}"
+    # The target id verbatim, matching rebrew's `src/<target>` and the SPA's
+    # fallback: a lowercased spelling only resolves on a case-insensitive
+    # filesystem, so it read the real tree on macOS and Windows and missed it
+    # on Linux.
+    default_source_root = f"/src/{target}"
     source_root = (
         paths.get("sourceRoot", default_source_root)
         if isinstance(paths, dict)
         else default_source_root
     )
-    base = (project_root / source_root.lstrip("/")).resolve()
-    if not base.is_relative_to(project_root):
-        _log.debug("Source root %r resolves outside the project", source_root)
+    # source_root is the containment base, so it gets the same plain-relative
+    # rule as the file name: stripping only a leading "/" left a Windows-shaped
+    # value ("C:/...", "\...", "C:src") intact on the Windows build, where the
+    # join then REPLACES the base and every is_relative_to below passes
+    # trivially — a document built anywhere but Windows would have had to carry
+    # a POSIX path to be refused, which is the guard answering to its host.
+    # An empty root is refused for the same reason: base would become the whole
+    # project directory, and any files[0] would be read out of it.
+    source_root = str(source_root).lstrip("/")
+    if not source_root or not _is_plain_relative(Path(source_root)):
+        _log.debug("Source root %r is not contained in the project", source_root)
         return None
+    base = (project_root / source_root).resolve()
     raw = files[0]
     # Reject anchored paths and parent traversal before resolve
     if not _is_plain_relative(Path(raw)):
