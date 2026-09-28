@@ -14,13 +14,17 @@ import socket
 import subprocess
 import sys
 import tempfile
-import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import cast
 
+from recoverage import clock
+
 REPO_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 SCRATCH_DIR = REPO_ROOT / ".scratch"
+
+#: Seconds between two probes while :func:`wait_for` waits for the listener.
+WAIT_FOR_INTERVAL_SECONDS = 0.3
 
 
 @contextlib.contextmanager
@@ -85,11 +89,18 @@ def get(port: int, path: str) -> tuple[int, bytes]:
 
 
 def wait_for(predicate: Callable[[], bool], timeout: float = 30.0) -> bool:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
+    """Poll *predicate* on :mod:`recoverage.clock`, the seam the server reads.
+
+    The harness drives a real subprocess, so the wait is on the same module the
+    server's own cooldowns and heartbeats read: one patched clock then reaches
+    both sides of the probe, and a replayed run makes the same attempts in the
+    same order instead of inheriting whatever cadence the wall clock decided.
+    """
+    deadline = clock.monotonic() + timeout
+    while clock.monotonic() < deadline:
         if predicate():
             return True
-        time.sleep(0.3)
+        clock.sleep(WAIT_FOR_INTERVAL_SECONDS)
     return False
 
 
