@@ -62,6 +62,7 @@ class RequestStats:
         self._sum_ms = 0.0
         self._timed = 0
         self._in_flight = 0
+        self._stale_claims = 0
         # int | float: the counters are ints, "max_ms" a float, and every read
         # below copies through float() where the width matters.
         self._by_route: dict[str, dict[str, int | float]] = {}
@@ -150,6 +151,20 @@ class RequestStats:
             if row is not None:
                 row["errors"] += delta
 
+    def note_stale_claim(self) -> None:
+        """Record one single-flight claim that outlived the thread that took it.
+
+        ``/data`` serializes one payload build per key, so a leader whose
+        thread is killed before its ``finally`` leaves a claim no waiter can
+        wake on: every later request for that key pays the full wait before it
+        reclaims it and builds its own.  The reclaim recovers the request and
+        says nothing about the fault that caused it, so the count here is the
+        only reading that distinguishes one killed leader from a dashboard that
+        merely refetches a lot.
+        """
+        with self._lock:
+            self._stale_claims += 1
+
     def snapshot(self) -> dict[str, Any]:
         """A JSON-ready copy of the counters.
 
@@ -171,6 +186,7 @@ class RequestStats:
                 "errors": self._errors,
                 "slow": self._slow,
                 "in_flight": self._in_flight,
+                "stale_claims": self._stale_claims,
                 "slow_threshold_ms": SLOW_REQUEST_MS,
                 "mean_ms": round(mean, 3),
                 "max_ms": round(self._max_ms, 3),
@@ -199,6 +215,7 @@ class RequestStats:
             self._sum_ms = 0.0
             self._timed = 0
             self._max_ms = 0.0
+            self._stale_claims = 0
             self._by_route.clear()
             self._by_status.clear()
 
@@ -284,6 +301,62 @@ class RegenStats:
 
 #: The regen registry ``/api/regen`` updates and /api/health reads.
 REGEN = RegenStats()
+
+#: The names the cache counters are keyed by.  Bounded by the call sites, never
+#: by request data, so this map cannot grow the way a route label can.
+DATA_PAYLOAD_CACHE: Final = "data_payload"
+STATS_CACHE: Final = "stats"
+REVALIDATION_CACHE: Final = "revalidate"
+
+
+class CacheStats:
+    """Hit and miss counts for the memos and the conditional-GET path.
+
+    The dashboard is fast or slow mostly because of these, and the two causes
+    are indistinguishable from latency alone: a payload memo that stopped
+    hitting makes every poll rebuild a multi-megabyte body, and an ETag that
+    stopped revalidating does the same one step earlier.  Neither showed up in
+    any counter, so ``/api/health`` could report a rising ``mean_ms`` with no
+    way to say whether the server got slower or the cache stopped working.
+
+    ``REVALIDATION_CACHE`` counts ``If-None-Match`` answers: a hit is the 304
+    the client asked for, a miss is a request the server had to answer in full
+    (a first load, a changed build, or a client that stopped sending the
+    validator).
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._by_cache: dict[str, list[int]] = {}
+
+    def hit(self, name: str) -> None:
+        with self._lock:
+            row = self._by_cache.get(name)
+            if row is None:
+                row = self._by_cache[name] = [0, 0]
+            row[0] += 1
+
+    def miss(self, name: str) -> None:
+        with self._lock:
+            row = self._by_cache.get(name)
+            if row is None:
+                row = self._by_cache[name] = [0, 0]
+            row[1] += 1
+
+    def snapshot(self) -> dict[str, dict[str, int]]:
+        """A JSON-ready copy, one row per cache that has been read from."""
+        with self._lock:
+            return {
+                name: {"hits": row[0], "misses": row[1]} for name, row in self._by_cache.items()
+            }
+
+    def reset(self) -> None:
+        with self._lock:
+            self._by_cache.clear()
+
+
+#: The registry the request path updates and ``/api/health`` reads.
+CACHES = CacheStats()
 
 
 class ConnectionStats:

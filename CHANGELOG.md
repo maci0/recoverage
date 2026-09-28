@@ -7,6 +7,17 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `GET /api/health` carries a `caches` block: hits and misses for the `/data`
+  payload memo, the `/stats` memo and the `If-None-Match` revalidation every
+  cacheable endpoint answers. A dashboard whose response time grew used to
+  look identical whether the coverage build got bigger or the cache stopped
+  being consulted; the counters say which.
+- A `/data` payload build whose leader thread is killed leaves a claim no
+  waiter can wake on. The follower that times out on it already reclaimed the
+  key and rebuilt; it now also logs one line naming the target and section
+  whose build it took over, and `requests.stale_claims` in `/api/health`
+  counts them, so a killed builder is not just a slow dashboard.
+
 - The wheel installs a man page (`share/man/man1/recoverage.1`) for the
   `recoverage` entry point, covering every subcommand, flag and `RECOVERAGE_*`
   setting `recoverage --help` lists, with the exit codes and the environment

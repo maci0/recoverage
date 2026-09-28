@@ -753,15 +753,22 @@ def _etag_or_304(snap: tuple[int, int] | None, *parts: object) -> str | None:
     that snapshot (/data) stat the DB exactly once.  Returns None when *snap*
     is None (DB unreadable) — the caller then sends no ETag (the endpoint
     itself fails with 503 shortly after).
+
+    Counts the conditional GET both ways on ``metrics.CACHES``: a 304 is a hit
+    and a full answer is a miss, which is what tells an operator reading a
+    rising mean duration whether the build got slower or the validators
+    stopped revalidating.
     """
     if snap is None:
         return None
     etag = _safe_etag(snap[0], *parts)
     if _if_none_match_matches(_header("If-None-Match", ""), etag):
+        metrics.CACHES.hit(metrics.REVALIDATION_CACHE)
         raise HTTPResponse(
             status=304,
             headers={"ETag": etag, "Cache-Control": CACHE_REVALIDATE},
         )
+    metrics.CACHES.miss(metrics.REVALIDATION_CACHE)
     return etag
 
 

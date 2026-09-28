@@ -327,8 +327,13 @@ def _data_cache_checkout(
         # new leader rather than a second follower of a dead one.
         _prune_stale_claims(now)
         entry = _DATA_CACHE.get(key)
+        # Counted inside the same critical section as the read, so the
+        # `caches` block in /api/health cannot report more hits than the memo
+        # ever served.
         if entry is not None:
+            _metrics.CACHES.hit(_metrics.DATA_PAYLOAD_CACHE)
             return entry, None
+        _metrics.CACHES.miss(_metrics.DATA_PAYLOAD_CACHE)
         claim = _DATA_CACHE_BUILDING.get(key)
         if claim is None:
             event = threading.Event()
@@ -342,7 +347,13 @@ def _data_cache_checkout(
     released = event.wait(timeout=_DATA_CACHE_BUILD_WAIT_SECONDS)
     with _DATA_CACHE_LOCK:
         if released:
-            return _DATA_CACHE.get(key), None
+            # A follower the leader's build answered: the memo miss above was
+            # the checkout, not the answer, so the published entry counts as
+            # the hit it is.
+            entry = _DATA_CACHE.get(key)
+            if entry is not None:
+                _metrics.CACHES.hit(_metrics.DATA_PAYLOAD_CACHE)
+            return entry, None
         # The wait expired on an Event nobody set.  Reclaim the claim rather
         # than build beside it: a duplicate build is the accepted cost here,
         # but leaving the dead leader registered is not — every later request
@@ -363,6 +374,30 @@ def _data_cache_checkout(
         if current is not None and current[0] is not event:
             return None, None
         _DATA_CACHE_BUILDING.pop(key, None)
+        # The claim outlived the thread that took it, so a leader was killed
+        # between checkout and its finally.  Reclaiming recovers THIS request
+        # and leaves nothing behind, which is exactly why the fault is silent:
+        # no error is raised, no line is written, and the only trace is a
+        # follower that waited the full window and built anyway — which reads
+        # as a slow dashboard rather than as a dead thread.  One line per
+        # reclaim, with the key that identifies what the killed build was
+        # serving.  The values are caller-chosen, so they ride as JSON-encoded
+        # fields rather than in the prose.
+        _log.warning(
+            "Reclaimed a /data build claim for %r after %.0fs: the leader never "
+            "released it, so this request is rebuilding the payload",
+            _server._log_safe(key[1]),
+            _DATA_CACHE_BUILD_WAIT_SECONDS,
+            extra={
+                _server.LOG_FIELDS_ATTR: {
+                    "event": "data_claim_reclaimed",
+                    "target": key[1],
+                    "section": key[2],
+                    "wait_s": _DATA_CACHE_BUILD_WAIT_SECONDS,
+                }
+            },
+        )
+        _metrics.REQUESTS.note_stale_claim()
         reclaimed = threading.Event()
         _DATA_CACHE_BUILDING[key] = (
             reclaimed,
@@ -1066,6 +1101,10 @@ def handle_api_health() -> bytes:
             # latency extremes, so the operator can tell "one slow request"
             # from "the dashboard got slow" without a metrics backend.
             "requests": _metrics.REQUESTS.snapshot(),
+            # Hit/miss for the payload memos and the conditional GET, because
+            # a rising mean duration is otherwise the same reading for "the
+            # build got slower" and "the cache stopped being consulted".
+            "caches": _metrics.CACHES.snapshot(),
             # The regen pipeline runs for minutes, so its outcome and duration
             # need counters of their own; the request snapshot cannot show a
             # run that has not finished.
@@ -1165,6 +1204,12 @@ def handle_api_stats(target: str) -> bytes | HTTPResponse:
     if snap is not None:
         with _STATS_CACHE_LOCK:
             stats = _STATS_CACHE.get(key)
+    # Counted here, at the one place the memo is read, so the numbers in
+    # /api/health's `caches` are the ones this endpoint actually served from.
+    if stats is not None:
+        _metrics.CACHES.hit(_metrics.STATS_CACHE)
+    else:
+        _metrics.CACHES.miss(_metrics.STATS_CACHE)
     if stats is None:
         with _target_snapshot(target) as coverage:
             stats = _server._section_stats(coverage)

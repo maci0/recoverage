@@ -306,7 +306,7 @@ The release policy is not written down anywhere else, so it is stated here and
 | `/original/<filepath:path>` | GET | A file under the original binary's tree (`web/app/hooks/useOriginalBinary.ts` reads it) |
 | `/<filename:app.js, style.css, print.css, favicon.svg>` | GET | The packaged static assets, `no-cache` with a strong `ETag` |
 | `/potato` | GET | Potato Mode (pure-HTML fallback) |
-| `/api/health` | GET | Server version, the settings the process resolved, DB info, installed extras, request/regen/stream counters |
+| `/api/health` | GET | Server version, the settings the process resolved, DB info, installed extras, request/regen/stream/connection counters, cache hit-miss |
 | `/api/targets` | GET | List available targets |
 | `/api/targets/<target>/stats` | GET | Per-section coverage stats (ETag-revalidating) |
 | `/api/targets/<target>/data` | GET | Full section + cell data. `?section=` narrows the cells (siblings omit the key); `?index=0` omits `search_index`, which the SPA holds already, so a section switch does not re-send it (`index` is a flag: `0`, `1` or absent, anything else a 400) |
@@ -575,6 +575,17 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   configured to hold. Both are pinned at `tests/test_concurrency.py`
   (`TestAdmissionCap`, `TestAuthThrottle`), which drive them from threads
   released by one barrier.
+- Every memo and every conditional GET is counted on `metrics.CACHES`, at the
+  read the handler actually served from: the `/data` checkout (its follower
+  path included, since the memo the leader published is the hit it was
+  answered from), the `/stats` lookup, and `server._etag_or_304` for both arms
+  of the 304. The names are `metrics.DATA_PAYLOAD_CACHE`,
+  `metrics.STATS_CACHE` and `metrics.REVALIDATION_CACHE`, so the map is bounded
+  by the call sites rather than by a request. A new memo or a new validator
+  names its cache next to the read and not at the call site that happens to
+  notice: a rising `mean_ms` with a falling revalidation hit rate is a cache
+  that stopped being consulted, and nothing else in the snapshot tells those
+  two apart. Pinned at `tests/test_metrics.py` (`TestCacheCounters`).
 - `/api/health` is polled, so it logs a TRANSITION, not a state: the endpoint
   runs every check through `api._log_health_status`, which warns on the first
   probe in a state, infos on the first probe after it, and says nothing on a
@@ -855,9 +866,15 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   single-flight claim in `api._DATA_CACHE_BUILDING`, follows the same rule: an
   in-flight marker whose owner was killed is reclaimed on its deadline
   (`_DATA_CACHE_BUILD_WAIT_SECONDS`), never left registered for a waiter that
-  no `finally` will ever wake. Pinned at `tests/test_concurrency.py`
+  no `finally` will ever wake. That reclaim is also the only trace of the fault
+  that caused it, so it counts on `metrics.REQUESTS.note_stale_claim` (the
+  `requests.stale_claims` field) and logs one line carrying the target and
+  section the killed build was serving: a claim dropped by `_prune_stale_claims`
+  was already past its deadline, which is the free path, and it stays silent.
+  Pinned at `tests/test_concurrency.py`
   (`TestDataSingleFlight`), which releases a herd of simultaneous cold misses
-  through one barrier and fails when the payload is built more than once.
+  through one barrier and fails when the payload is built more than once, and
+  which pins that one of the two ways a claim disappears is loud.
 - Every integer a request supplies goes through `server.parse_ascii_int` (with
   `server.strip_sign` and `api._parse_byte_count` on top): ASCII digits in the
   stated base, and nothing else. `int(x, base)` is not that check, because it

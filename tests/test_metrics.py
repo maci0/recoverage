@@ -233,6 +233,53 @@ class TestRedCounters:
             assert "\n" not in fields["path"] and "\r" not in fields["path"]
 
 
+class TestCacheCounters:
+    """The ``caches`` block: what the memos and the validators actually did."""
+
+    def test_a_second_payload_serving_is_a_hit(self) -> None:
+        """One cold /data, then a repeat served from the memo.
+
+        The two shapes of slowness an operator cannot otherwise tell apart are
+        a build that got slower and a memo that stopped being consulted, so the
+        counter has to follow the read the handler actually served from.
+        """
+        metrics.CACHES.reset()
+        wsgi_get("/api/targets/FAKEDLL/data?section=.text")
+        first = _health()["caches"][metrics.DATA_PAYLOAD_CACHE]
+        assert first == {"hits": 0, "misses": 1}, first
+        wsgi_get("/api/targets/FAKEDLL/data?section=.text")
+        second = _health()["caches"][metrics.DATA_PAYLOAD_CACHE]
+        assert second == {"hits": 1, "misses": 1}, second
+
+    def test_a_revalidated_request_is_a_hit(self) -> None:
+        """The conditional GET is counted where it is answered.
+
+        A 304 is the SPA's poll costing nothing; a full answer is the one that
+        rebuilds.  Counting them is what makes a payload that grew expensive
+        visible as a fall in revalidation rather than as a mystery.
+        """
+        metrics.CACHES.reset()
+        status, headers, _ = wsgi_get("/api/targets/FAKEDLL/stats")
+        assert status.startswith("200"), status
+        etag = _header(headers, "ETag")
+        assert etag
+        before = _health()["caches"][metrics.REVALIDATION_CACHE]
+        assert before["misses"] == 1 and before["hits"] == 0, before
+        status, _headers, _ = wsgi_get(
+            "/api/targets/FAKEDLL/stats", headers={"If-None-Match": etag}
+        )
+        assert status.startswith("304"), status
+        after = _health()["caches"][metrics.REVALIDATION_CACHE]
+        assert after["hits"] == 1 and after["misses"] == 1, after
+
+    def test_the_stats_memo_is_counted_both_ways(self) -> None:
+        metrics.CACHES.reset()
+        wsgi_get("/api/targets/FAKEDLL/stats")
+        wsgi_get("/api/targets/FAKEDLL/stats")
+        row = _health()["caches"][metrics.STATS_CACHE]
+        assert row == {"hits": 1, "misses": 1}, row
+
+
 class TestStats:
     def test_in_flight_returns_to_zero(self) -> None:
         metrics.REQUESTS.start()

@@ -17,6 +17,7 @@ its limit, and a throttle that hands out exactly as many slots as it promises.
 from __future__ import annotations
 
 import json
+import logging
 import threading
 from collections.abc import Callable, Mapping
 from typing import Any
@@ -112,7 +113,11 @@ class TestDataSingleFlight:
         # hit and not a second build behind a claim nobody will ever release.
         assert not api._DATA_CACHE_BUILDING
 
-    def test_a_reclaim_releases_the_claim_it_took_over(self) -> None:
+    def test_a_reclaim_releases_the_claim_it_took_over(
+        self,
+        caplog: pytest.LogCaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         """A follower that gives up on a dead leader owns the key afterwards.
 
         The leader's own ``finally`` never runs when it is killed between
@@ -120,22 +125,65 @@ class TestDataSingleFlight:
         follower that times out on it takes it over.  The entry has to be
         gone when the reclaiming follower's own build finishes, or the next
         request for the key waits on an event nobody will set.
+
+        The reclaim is also the only trace of the fault that caused it, so it
+        is counted where ``/api/health`` reads it and logged with the key the
+        killed build was serving: a killed leader and a slow dashboard are
+        otherwise the same symptom with no line between them.
         """
+        # The claim is registered with its full deadline ahead of it, so the
+        # prune does not take it: the reclaim is the branch under test, not
+        # the pruning it shadows.  The wait itself is shortened so the test
+        # reaches the expired-Event path without the production 30 s.
+        monkeypatch.setattr(api, "_DATA_CACHE_BUILD_WAIT_SECONDS", 0.05)
         key: tuple[Any, ...] = (("fingerprint", 1), "dead-target", None, True)
         event = threading.Event()  # never set: this is the killed leader
         with api._DATA_CACHE_LOCK:
-            api._DATA_CACHE_BUILDING[key] = (event, api.clock.monotonic() - 1.0)
-            api._prune_stale_claims(api.clock.monotonic())
+            api._DATA_CACHE_BUILDING[key] = (event, api.clock.monotonic() + 60.0)
 
-        entry, owned = api._data_cache_checkout(key)
+        before = metrics.REQUESTS.snapshot()["stale_claims"]
+        with caplog.at_level(logging.WARNING, logger="recoverage"):
+            entry, owned = api._data_cache_checkout(key)
         assert entry is None
         assert owned is not None and owned is not event
         api._data_cache_build_done(key, owned)
         assert key not in api._DATA_CACHE_BUILDING
+        assert metrics.REQUESTS.snapshot()["stale_claims"] == before + 1
+        reclaimed = [r for r in caplog.records if r.levelno >= logging.WARNING]
+        assert len(reclaimed) == 1, [r.getMessage() for r in caplog.records]
+        fields = getattr(reclaimed[0], _server.LOG_FIELDS_ATTR)
+        assert fields["event"] == "data_claim_reclaimed"
+        assert fields["target"] == "dead-target"
         # The dead leader's own release must not delete the new owner's claim.
         api._data_cache_build_done(key, event)
         with api._DATA_CACHE_LOCK:
             api._DATA_CACHE_BUILDING.pop(key, None)
+
+    def test_an_expired_claim_is_pruned_rather_than_waited_on(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A claim past its deadline is dropped by the prune, not the wait.
+
+        The reclaim above is the follower's path: it pays the full wait and
+        then takes the key over.  A claim that is already past its deadline
+        when the next request arrives is cheaper to drop, and the checkout
+        that does it is a plain leader claiming a free key, so it must not
+        log the reclaim an operator would read as a dead thread.
+        """
+        with caplog.at_level(logging.WARNING, logger="recoverage"):
+            key: tuple[Any, ...] = (("fingerprint", 2), "expired-target", None, True)
+            with api._DATA_CACHE_LOCK:
+                event = threading.Event()
+                api._DATA_CACHE_BUILDING[key] = (event, api.clock.monotonic() - 1.0)
+            entry, owned = api._data_cache_checkout(key)
+        try:
+            assert entry is None
+            assert owned is not None and owned is not event
+            assert not [r for r in caplog.records if r.levelno >= logging.WARNING], [
+                r.getMessage() for r in caplog.records
+            ]
+        finally:
+            api._data_cache_build_done(key, owned)
 
 
 class TestConcurrentInvalidation:
