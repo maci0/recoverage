@@ -36,6 +36,7 @@ from recoverage.server import (
     HAS_PYGMENTS,
     HTTPResponse,
     _best_encoding,
+    _config_stat_fingerprint,
     _etag_or_304,
     _format_hex_dump,
     _get_targets_config,
@@ -1165,7 +1166,24 @@ def _stream_stats() -> dict[str, Any]:
 
 
 @app.get("/api/targets")
-def handle_api_targets() -> bytes:
+def handle_api_targets() -> bytes | HTTPResponse:
+    """The target list, and the validator that lets a repeat visit skip it.
+
+    This is the one request the SPA cannot avoid and the one the shell
+    preloads (see `assets/index.html`), so it is asked on every page load.  It
+    used to be answered ``no-store`` with no ETag, which is the same defect
+    the SPA shell had: a reloading reader re-downloaded the whole list every
+    time, and ``no-cache`` on the fetch (see ``web/app/api.ts``) had no
+    validator to revalidate against.  A 304 is now the answer for a list that
+    has not moved.
+
+    The tag names BOTH inputs ``resolve_targets`` merges — the coverage
+    snapshot and the project config's stat — because the fallback above reads
+    only the config, and a key over the snapshot alone would answer 304 for the
+    config-only list after a target was added to ``rebrew-project.toml``.
+    ``max-age`` stays at zero for the same reason the shell's does: this list
+    changes under a running server, and only revalidation is honest about when.
+    """
     try:
         targets_list = resolve_targets()
     except CoverageTomlError as exc:
@@ -1183,9 +1201,22 @@ def handle_api_targets() -> bytes:
             for tid, t_info in _server._get_targets_config().items()
         ]
 
+    etag = _etag_or_304(
+        _snapshot_db_mtime(),
+        "targets",
+        _config_stat_fingerprint(_project_dir()),
+    )
+    if etag is None:
+        # An unreadable DB is the case the snapshot cannot fingerprint, so
+        # there is nothing to revalidate against and the list stays
+        # uncacheable rather than being pinned to a tag that proves nothing.
+        return _json_ok(
+            {"targets": targets_list},
+            Cache_Control=CACHE_NO_STORE,
+        )
     return _json_ok(
         {"targets": targets_list},
-        Cache_Control=CACHE_NO_STORE,
+        **_revalidate_headers(etag),
     )
 
 

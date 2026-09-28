@@ -10,9 +10,20 @@
     <title>ReCoverage</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="/print.css" media="print" />
+    <link rel="preload" href="/api/targets" as="fetch" />
+    <style>
+      #boot {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 60vh;
+        color: var(--muted);
+        font: 14px/1.5 system-ui, sans-serif;
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root"><p id="boot" role="status">Loading coverage…</p></div>
     <script type="module" src="/app/main.tsx"></script>
   </body>
 </html>

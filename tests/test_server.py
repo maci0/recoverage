@@ -1514,6 +1514,25 @@ class TestStaticAssetRevalidation:
         assert 'href="/style.css"' not in html
         assert '<div id="root">' in html
 
+    def test_index_paints_before_the_bundle_runs(self) -> None:
+        """The shell is not blank while the dashboard loads.
+
+        Nothing is visible until the inline bundle has been parsed and run, and
+        the dashboard it draws is serialized behind `/api/targets` and `/data`,
+        so an empty `#root` holds a blank screen for the whole of that. The
+        boot line is in the HTML for that reason, and it is a status region
+        so it is announced rather than merely shown."""
+        from conftest import decode_body, wsgi_get
+
+        _, headers, body = wsgi_get("/", headers={"Accept-Encoding": "gzip"})
+        html = decode_body(body, headers).decode("utf-8")
+        assert '<div id="root"><p id="boot" role="status">' in html
+        # The bundle clears the host before mounting (preact/hooks#render
+        # appends rather than replaces), so the boot line cannot survive
+        # above a live dashboard.
+        bundle = html.split("<script>", 1)[1]
+        assert "replaceChildren" in bundle
+
     def test_index_preloads_the_target_list(self) -> None:
         """The target list is on the first-paint path and cannot be discovered
         until app.js runs, so the shell advertises it as a fetch preload; the

@@ -307,7 +307,7 @@ The release policy is not written down anywhere else, so it is stated here and
 | `/<filename:app.js, style.css, print.css, favicon.svg>` | GET | The packaged static assets, `no-cache` with a strong `ETag` |
 | `/potato` | GET | Potato Mode (pure-HTML fallback) |
 | `/api/health` | GET | Server version, the settings the process resolved, DB info, installed extras, request/regen/stream/connection counters, cache hit-miss |
-| `/api/targets` | GET | List available targets |
+| `/api/targets` | GET | List available targets (ETag-revalidating) |
 | `/api/targets/<target>/stats` | GET | Per-section coverage stats (ETag-revalidating) |
 | `/api/targets/<target>/data` | GET | Full section + cell data. `?section=` narrows the cells (siblings omit the key); `?index=0` omits `search_index`, which the SPA holds already, so a section switch does not re-send it (`index` is a flag: `0`, `1` or absent, anything else a 400) |
 | `/api/targets/<target>/functions` | GET | Paginated function list (`?status=` takes rebrew's status vocabulary; anything else is a 400) |

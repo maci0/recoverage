@@ -12,10 +12,29 @@
          scan instead; the plain same-origin fetch() then reuses the preloaded
          response rather than issuing a second one. -->
     <link rel="preload" href="/api/targets" as="fetch">
+    <!-- The first paint. The app mounts only after this document's own inline
+         bundle has been parsed and run, and the dashboard it draws is
+         serialized behind /api/targets and /data, so an empty #root paints a
+         blank page for the whole of that. The boot line below is in the HTML
+         for that reason: it is the first thing a reader sees, and main.tsx
+         removes it before the app mounts. Its own rules are here rather than
+         in the injected stylesheet because the injected sheet is the built
+         Tailwind output, which carries no class for markup that never went
+         through the bundler. -->
+    <style>
+      #boot {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 60vh;
+        color: var(--muted);
+        font: 14px/1.5 system-ui, sans-serif;
+      }
+    </style>
     <!-- INJECT_CSS -->
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root"><p id="boot" role="status">Loading coverage…</p></div>
     <!-- INJECT_JS -->
   </body>
 </html>

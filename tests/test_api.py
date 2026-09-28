@@ -590,6 +590,40 @@ class TestApiTargets:
         assert "targets" in data
         assert isinstance(data["targets"], list)
 
+    def test_targets_revalidates_instead_of_resending(self) -> None:
+        """The one request the SPA cannot avoid revalidates.
+
+        The shell preloads `/api/targets` and `web/app/api.ts` fetches it with
+        `cache: "no-cache"`, so it is asked on every page load.  Served
+        `no-store` with no validator it was re-downloaded whole every time;
+        a strong ETag turns the repeat into a 304 with no body.  `max-age`
+        stays at zero, because this list changes under a running server."""
+        status, headers, _ = wsgi_get("/api/targets")
+        assert status.startswith("200")
+        etag = _header(headers, "ETag")
+        assert etag and etag.startswith('"') and etag.endswith('"')
+        assert "no-store" not in _header(headers, "Cache-Control")
+        status, headers, body = wsgi_get("/api/targets", headers={"If-None-Match": etag})
+        assert status == "304 Not Modified"
+        assert body == b""
+
+    def test_targets_etag_moves_with_the_config(self) -> None:
+        """A target added to `rebrew-project.toml` is visible before any build
+        writes a document for it, so a tag over the coverage snapshot alone
+        would answer 304 for a list that has changed.  The config's stat is
+        the other half of the key `resolve_targets` merges."""
+        from recoverage import api as api_mod
+
+        before = _header(wsgi_get("/api/targets")[1], "ETag")
+        real = api_mod._config_stat_fingerprint
+        try:
+            api_mod._config_stat_fingerprint = lambda root: (123, 456)  # type: ignore[assignment]
+            moved = _header(wsgi_get("/api/targets")[1], "ETag")
+        finally:
+            api_mod._config_stat_fingerprint = real  # type: ignore[assignment]
+        assert moved != before
+        assert real is not None
+
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
 class TestApiFunctions:

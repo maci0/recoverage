@@ -101,6 +101,20 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   under way, and the dashboard holds its in-progress line. A key that has
   completed still replays its recorded result, a run that failed is still
   retried for real, and a request carrying no key still re-runs.
+- `GET /api/targets` revalidates instead of being re-downloaded. It is the one
+  request the dashboard cannot avoid (the shell preloads it and the app fetches
+  it with `cache: "no-cache"`), and it was served `Cache-Control: no-store`
+  with no `ETag`, so a reloading browser had nothing to revalidate against and
+  fetched the whole list again every load. It now carries a strong `ETag` over
+  both inputs the list is built from (the coverage documents and the stat of
+  `rebrew-project.toml`, so a target added to the config is visible before any
+  build writes a document for it) and answers `304 Not Modified` when neither
+  has moved. `max-age` stays at zero: the list changes under a running server.
+- The dashboard shows a first frame before its bundle runs. The page was blank
+  from the first byte until the inlined script had been parsed and run and the
+  data behind `/api/targets` and `/data` had arrived, because `#root` was
+  empty. The shell now ships a `Loading coverage…` status line inside it, which
+  the app clears as it mounts.
 - Every command's `--help` names the value a flag takes (`--port PORT`,
   `--target TARGET`, `--min-coverage MIN_COVERAGE`, `--log-level LEVEL`,
   `--bind ADDRESS`, `--cors-origin ORIGIN`, `--token TOKEN`, `--section

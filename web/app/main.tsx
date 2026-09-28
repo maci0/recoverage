@@ -11,5 +11,12 @@ if (host === null) {
   throw new Error("recoverage: the shell has no #root");
 }
 
+// The shell ships its first-paint line inside #root so the page is not blank
+// while this bundle is still being parsed and the data is still in flight.
+// `render` mounts beside whatever the host already holds, so that line is
+// removed here, before the app's first node exists; leaving it would sit a
+// "Loading coverage..." above a live dashboard.
+host.replaceChildren();
+
 // oxlint-disable-next-line vitest/require-hook -- not a test: this is the application entry, where mounting at import time is the point
 render(<App />, host);
