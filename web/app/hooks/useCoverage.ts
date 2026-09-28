@@ -191,6 +191,22 @@ export function useCoverage(target: string, section: string): Coverage {
     [indexIsCurrent, merge, sections, target],
   );
 
+  // Every cell fetch the tab strip started is aborted when the hook goes away.
+  // `reload` is the only other path that releases them, and it is not reached
+  // on a target switch or on unmount: without this, each abandoned section
+  // kept a multi-megabyte /data response downloading to a `merge` nothing will
+  // read, one per section per switch, and the last reader to switch targets
+  // walked away with all of them still open.
+  useEffect(() => {
+    const claims = inflight.current;
+    return () => {
+      for (const control of claims.values()) {
+        control.abort();
+      }
+      claims.clear();
+    };
+  }, []);
+
   const reload = useCallback(() => {
     // Every section's cells are refetched, not just the visible one: a rebuild
     // re-spans cells, so the loaded siblings are as stale as the map on screen.

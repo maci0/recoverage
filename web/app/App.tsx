@@ -138,6 +138,20 @@ export function App() {
     noticeTimer.current = window.setTimeout(() => setNotice(null), NAV_NOTICE_MS);
   }, []);
 
+  // The pending expiry is cancelled on unmount. It is the one timer here with
+  // no other stop path: `flash` clears its predecessor, but the last one
+  // outlives the shell, and the `setNotice` it closes over keeps the whole
+  // component state alive until it fires.
+  useEffect(
+    () => () => {
+      if (noticeTimer.current !== null) {
+        window.clearTimeout(noticeTimer.current);
+        noticeTimer.current = null;
+      }
+    },
+    [],
+  );
+
   const coverage = useCoverage(target, section);
   // The fallback carries the target id verbatim: rebrew names the tree
   // `src/<target>` with the target's own spelling, and a lowercased request

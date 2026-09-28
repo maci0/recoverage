@@ -59,19 +59,19 @@ export function useOriginalBinary(
     ) {
       return;
     }
-    let cancelled = false;
     // The buffer belongs to the (path, build) it was fetched for, so a target
     // switch or a rebuild puts the hook back in the waiting state. The
-    // `cancelled` flag only stops the previous download from landing: it does
-    // not retract bytes that already landed, and a consumer that reads
+    // controller only stops the previous download from landing: it does not
+    // retract bytes that already landed, and a consumer that reads
     // `buffer !== null` as "the bytes for the current path are here" would
     // slice the previous binary at this target's offsets for as long as the
     // download takes.
+    const control = new AbortController();
     setBuffer(null);
     setFailed(false);
     setLoading(true);
-    void fetchArrayBufferSafe(path).then((result) => {
-      if (cancelled) {
+    void fetchArrayBufferSafe(path, control.signal).then((result) => {
+      if (control.signal.aborted) {
         return;
       }
       setLoading(false);
@@ -83,8 +83,14 @@ export function useOriginalBinary(
       setFailed(false);
       setBuffer(result);
     });
+    // Aborting, not just ignoring the answer: this is the largest response the
+    // page asks for (a built PE of several megabytes), and without the abort
+    // every deselect, target switch and rebuild left the previous download
+    // running to completion — the socket, the transfer and the browser's
+    // buffering of a body nobody will read, one per change, on a path the
+    // reader reaches by arrowing through cells.
     return () => {
-      cancelled = true;
+      control.abort();
     };
   }, [enabled, path, reloadToken]);
 

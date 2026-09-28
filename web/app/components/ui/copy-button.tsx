@@ -1,4 +1,4 @@
-import { useState } from "preact/compat";
+import { useEffect, useRef, useState } from "preact/compat";
 
 import type { ComponentChildren } from "preact";
 
@@ -24,10 +24,30 @@ export function CopyButton({
   disabled?: boolean;
 }): ComponentChildren {
   const [flashed, setFlashed] = useState<string | null>(null);
+  // The pending reset, so the next copy replaces it and unmount cancels it.
+  // `value` is the pane's text, which for a disassembly is tens of kilobytes:
+  // an uncancelled timer keeps that alive for a second after every copy, and
+  // a rapid second click used to leave the first timer to fire on its own and
+  // cut the second flash short.
+  const resetTimer = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (resetTimer.current !== null) {
+        window.clearTimeout(resetTimer.current);
+      }
+    },
+    [],
+  );
+  const scheduleReset = (): void => {
+    if (resetTimer.current !== null) {
+      window.clearTimeout(resetTimer.current);
+    }
+    resetTimer.current = window.setTimeout(() => setFlashed(null), COPIED_FLASH_MS);
+  };
   const copy = (): void => {
     if (value === "") {
       setFlashed("Nothing");
-      window.setTimeout(() => setFlashed(null), COPIED_FLASH_MS);
+      scheduleReset();
       return;
     }
     void (async () => {
@@ -38,7 +58,7 @@ export function CopyButton({
       } catch {
         setFlashed("Failed");
       } finally {
-        window.setTimeout(() => setFlashed(null), COPIED_FLASH_MS);
+        scheduleReset();
       }
     })();
   };
