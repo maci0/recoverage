@@ -104,3 +104,70 @@ def test_potato_grid_memo_skips_decode():
     assert s2.startswith("200"), s2
     assert decode_body(b2, h2) == body1
     assert calls == 0, f"grid memo miss: cell fetch {calls}x"
+
+
+def test_potato_section_data_memo_skips_the_cell_walk():
+    """A repeat Potato render must not re-walk every non-``.text`` cell.
+
+    ``_load_section_data`` reaches ``server._summary``, whose per-section arm
+    counts the function names every non-``.text`` cell carries — the whole cost
+    of the call, over a ``.rdata`` or ``.rsrc`` of tens of thousands of cells.
+    It is a pure function of the frozen snapshot, so the two memos beside it
+    (``_GRID_CACHE``, ``_POTATO_STATS_CACHE``) already keyed on the same token.
+    """
+    _potato._SECTION_DATA_CACHE.clear()
+    calls = 0
+    orig = _potato.load_metadata
+
+    def counting(*a, **k):
+        nonlocal calls
+        calls += 1
+        return orig(*a, **k)
+
+    _potato.load_metadata = counting  # type: ignore[method-assign]
+    try:
+        s, h, b = wsgi_get("/potato?target=FAKEDLL&section=.text")
+        assert s.startswith("200"), s
+        assert calls > 0, "the probe never saw a cold build, so it cannot see a warm one"
+        body1 = decode_body(b, h)
+        calls = 0
+        s2, h2, b2 = wsgi_get("/potato?target=FAKEDLL&section=.text")
+    finally:
+        _potato.load_metadata = orig
+        _potato._SECTION_DATA_CACHE.clear()
+    assert s2.startswith("200"), s2
+    assert decode_body(b2, h2) == body1
+    assert calls == 0, f"section-data memo miss: metadata rebuilt {calls}x"
+
+
+def test_resolve_targets_memo_skips_the_coverage_reader():
+    """A repeat target resolution must not walk the coverage directory again.
+
+    ``coverage_snapshots`` is a fresh ``glob`` plus a ``stat`` per document on
+    every call, whatever rebrew memoized underneath it, and the merged list is
+    exactly what the memo key already proved unchanged.  Every target-scoped
+    request reaches this through ``_target_snapshot``, so paying it on a hit is
+    paid by the whole dashboard.
+    """
+    from recoverage import server as _server
+
+    _server.clear_target_cache()
+    calls = 0
+    orig = _server.coverage_snapshots
+
+    def counting(*a, **k):
+        nonlocal calls
+        calls += 1
+        return orig(*a, **k)
+
+    _server.coverage_snapshots = counting  # type: ignore[method-assign]
+    try:
+        first = _server.resolve_targets()
+        assert calls > 0, "the probe never saw a cold resolve, so it cannot see a warm one"
+        calls = 0
+        second = _server.resolve_targets()
+    finally:
+        _server.coverage_snapshots = orig
+        _server.clear_target_cache()
+    assert second == first
+    assert calls == 0, f"target memo miss: coverage reader called {calls}x on a hit"

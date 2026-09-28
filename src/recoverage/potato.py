@@ -1385,9 +1385,47 @@ def handle_potato() -> bytes | Any:
         )
 
 
+#: The per-section descriptor table and the metadata blob every Potato render
+#: reads, memoized per DB snapshot.  Same self-invalidating contract as
+#: :data:`_GRID_CACHE` and :data:`_POTATO_STATS_CACHE`, which are keyed on the
+#: render's own change token for the reason :func:`_load_grid_cells` documents.
+#: Entries are read-only after publication: the grid, the panel, the progress
+#: bar and the section list all only read them, and the one caller
+#: (``_render_potato_inner``) is the sole owner for the life of the render.
+_SECTION_DATA_CACHE: dict[
+    tuple[int, int, str],
+    tuple[dict[str, dict[str, Any]], dict[str, Any]],
+] = {}
+_SECTION_DATA_CACHE_LOCK = threading.Lock()
+_SECTION_DATA_CACHE_MAX = 4
+
+
 def _load_section_data(
     coverage: CoverageSnapshot,
+    *,
+    snap: tuple[int, int] | None,
 ) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
+    """The section descriptors and metadata blob for *coverage*, memoized.
+
+    ``load_metadata`` rebuilds :func:`server._summary`, and its per-section arm
+    (:func:`server._section_summary`) walks EVERY cell of every non-``.text``
+    section to count the function names those cells carry.  That is the whole
+    cost of this call, and it is a pure function of the frozen snapshot, yet it
+    ran once per render while the two things computed immediately after it
+    (:data:`_GRID_CACHE` and :data:`_POTATO_STATS_CACHE`) were memoized: a
+    filter-pill click, a pager click or a search submit re-walked a ``.rdata``
+    or ``.rsrc`` of tens of thousands of cells to produce a dict it then
+    discarded.  *snap* is the render's change token, taken before the snapshot
+    was pinned, and the publish re-checks it for the reason
+    :func:`_load_grid_cells` documents.
+    """
+    key = (*snap, coverage.target) if snap is not None else None
+    if key is not None:
+        with _SECTION_DATA_CACHE_LOCK:
+            cached = _SECTION_DATA_CACHE.get(key)
+        if cached is not None:
+            return cached
+
     data: dict[str, Any] = load_metadata(coverage)
 
     sections: dict[str, dict[str, Any]] = {}
@@ -1411,7 +1449,31 @@ def _load_section_data(
         )
     )
 
+    if key is not None and _snapshot_db_mtime() == snap:
+        with _SECTION_DATA_CACHE_LOCK:
+            _evict_oldest(_SECTION_DATA_CACHE, _SECTION_DATA_CACHE_MAX)
+            _SECTION_DATA_CACHE[key] = (sections, data)
     return sections, data
+
+
+def _db_updated_stamp() -> tuple[str, str]:
+    """``(label, iso)`` for the newest document mtime, from ONE directory scan.
+
+    The two renderings are the same instant read twice, and the read behind
+    them (``server._newest_mtime_ns``) is a full ``glob`` plus a ``stat`` per
+    coverage document.  Rendering them independently meant a single Potato
+    page walked the coverage directory twice for one footer, so a page whose
+    markup is already the expensive part also paid two directory scans it had
+    no reason to repeat.
+    """
+    mtime_ns = _newest_mtime_ns()
+    if mtime_ns is None:
+        return "", ""
+    instant = mtime_ns_to_utc(mtime_ns)
+    return (
+        instant.strftime("%Y-%m-%d %H:%M UTC"),
+        instant.replace(second=0, microsecond=0).isoformat(),
+    )
 
 
 def _db_updated_label(mtime_ns: int | None) -> str:
@@ -1488,6 +1550,8 @@ def clear_cells_cache() -> None:
         _PARENT_INDEX.clear()
     with _POTATO_STATS_CACHE_LOCK:
         _POTATO_STATS_CACHE.clear()
+    with _SECTION_DATA_CACHE_LOCK:
+        _SECTION_DATA_CACHE.clear()
     with _FUNCTION_ROWS_LOCK:
         _FUNCTION_ROWS.clear()
 
@@ -2681,7 +2745,7 @@ def _render_potato_inner(
     # *coverage*: calling resolve_targets() again would answer the same list and
     # pay its directory scan and fingerprint a second time per render.
 
-    sections, data = _load_section_data(coverage)
+    sections, data = _load_section_data(coverage, snap=snap)
     if not sections:
         return (
             '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
@@ -2807,9 +2871,7 @@ def _render_potato_inner(
     # of the coverage directory, and a rebuild landing between two of them
     # filed the visible label and the `<time datetime>` attribute under
     # different builds.
-    db_mtime_ns = _newest_mtime_ns()
-    db_mtime_str = _db_updated_label(db_mtime_ns)
-    db_mtime_iso = _db_updated_iso(db_mtime_ns)
+    db_mtime_str, db_mtime_iso = _db_updated_stamp()
 
     rendered = _PAGE_TPL.render(
         # Constants

@@ -34,6 +34,7 @@ from recoverage.potato import (
     _format_hex_dump,
     _format_va,
     _load_grid_cells,
+    _load_section_data,
     _panel_fn_source_text,
     _progress_svg,
     _render_original_bytes,
@@ -387,7 +388,7 @@ def test_null_columns_section_renders_grid(tmp_path: Path, monkeypatch: pytest.M
     driven directly with the None spelling a caller-supplied section dict still
     carries.  Same crash family as test_null_va_section_renders_grid_and_panel.
     """
-    from recoverage.potato import _load_section_data, _render_grid_view
+    from recoverage.potato import _render_grid_view
 
     snap = _write_doc(
         tmp_path,
@@ -403,7 +404,7 @@ def test_null_columns_section_renders_grid(tmp_path: Path, monkeypatch: pytest.M
             }
         },
     )
-    sections, data = _load_section_data(snap)
+    sections, data = _load_section_data(snap, snap=None)
     # columns omitted from the document (the schema-legal NULL of the SQLite era).
     sec_data = dict(sections[".text"], columns=None)
     grid_html, *_rest = _render_grid_view(
@@ -1224,6 +1225,63 @@ class TestDbUpdatedLabel:
         assert len(calls) == 1
         assert "2023-11-14 22:13 UTC" in html
         assert 'datetime="2023-11-14T22:13:00+00:00"' in html
+
+    def test_the_footer_renders_from_one_directory_scan(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Both footer renderings come out of ONE walk of the coverage directory.
+
+        The label and the ISO value are the same instant, and the read behind
+        them is a glob plus a stat per document.  Rendering them independently
+        made every Potato page walk the directory twice for one footer; this
+        counts the walks, so the second one cannot come back unnoticed.
+        """
+        from recoverage import potato as _potato
+
+        directory = tmp_path / "db"
+        self._doc(directory, "ONCE", 1_700_000_000_000_000_000)
+        self._patch_db(monkeypatch, directory)
+
+        scans = 0
+        real = _potato._newest_mtime_ns
+
+        def counting() -> int | None:
+            nonlocal scans
+            scans += 1
+            return real()
+
+        monkeypatch.setattr(_potato, "_newest_mtime_ns", counting)
+
+        label, iso = _potato._db_updated_stamp()
+        assert scans == 1
+        assert datetime.fromisoformat(iso).strftime("%Y-%m-%d %H:%M UTC") == label
+
+    def test_a_rendered_page_scans_the_coverage_directory_once_for_the_footer(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A whole Potato page must not pay a second scan for the same footer.
+
+        The pair is what the footer renders, so the page is driven through the
+        real render rather than the pair alone: the header, the grid and the
+        panel all run, and only the footer read is counted.
+        """
+        from recoverage import potato as _potato
+
+        scans = 0
+        real = _potato._newest_mtime_ns
+
+        def counting() -> int | None:
+            nonlocal scans
+            scans += 1
+            return real()
+
+        monkeypatch.setattr(_potato, "_newest_mtime_ns", counting)
+        directory = tmp_path / "db"
+        self._doc(directory, "PAGE", 1_700_000_000_000_000_000)
+        self._patch_db(monkeypatch, directory)
+        page = render_potato_url("/potato?target=PAGE")
+        assert "DB updated" in page
+        assert scans == 1
 
 
 class TestDocumentNamesCarryTheirOwnDirection:
@@ -2768,6 +2826,125 @@ class TestCellsCacheInvalidation:
         potato._GRID_CACHE[k] = ([], [], k)  # type: ignore[assignment]
         potato.clear_cells_cache()
         assert not potato._GRID_CACHE
+
+
+class TestSectionDataCacheInvalidation:
+    """The section-data memo must invalidate when a document is rewritten.
+
+    ``_load_section_data`` reaches ``server._summary``, whose per-section arm
+    walks every non-``.text`` cell to count the function names they carry, so
+    it is memoized on the same token the grid memo is.  The cell counts it
+    derives are exactly the ones a rebuild changes, so a memo that outlived one
+    would render a previous build's progress bars and section table.
+    """
+
+    @staticmethod
+    def _snapshot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> CoverageSnapshot:
+        return _write_doc(
+            tmp_path,
+            monkeypatch,
+            "SD",
+            {
+                ".text": {
+                    "va": 4096,
+                    "size": 16,
+                    "fileOffset": 512,
+                    "unitBytes": 16,
+                    "columns": 8,
+                    "cells": [cell(0, 16, "exact")],
+                },
+                ".rdata": {
+                    "va": 8192,
+                    "size": 32,
+                    "fileOffset": 4096,
+                    "unitBytes": 16,
+                    "columns": 8,
+                    # totalFunctions counts the NAMES the cells carry, so a
+                    # cell with no name contributes nothing: the fixtures
+                    # below name theirs, or the count reads 0 either way and
+                    # pins nothing.
+                    "cells": [
+                        cell(0, 16, "exact", functions=["r0"]),
+                        cell(16, 32, "exact", functions=["r1"]),
+                    ],
+                },
+            },
+        )
+
+    def test_a_rebuild_forces_a_fresh_walk(self, tmp_path, monkeypatch) -> None:
+        import recoverage.potato as potato
+        import recoverage.server as srv
+
+        snap = self._snapshot(tmp_path, monkeypatch)
+        potato.clear_cells_cache()
+        try:
+            _sections, data = _load_section_data(snap, snap=srv._snapshot_db_mtime())
+            assert data["summary"][".rdata"]["totalFunctions"] == 2
+            assert len(potato._SECTION_DATA_CACHE) == 1
+
+            # The rebuild adds a .rdata cell, which is the only input
+            # totalFunctions reads. A stale hit keeps the old count.
+            fresh = _write_doc(
+                tmp_path,
+                monkeypatch,
+                "SD",
+                {
+                    ".text": {
+                        "va": 4096,
+                        "size": 16,
+                        "fileOffset": 512,
+                        "unitBytes": 16,
+                        "columns": 8,
+                        "cells": [cell(0, 16, "exact")],
+                    },
+                    ".rdata": {
+                        "va": 8192,
+                        "size": 48,
+                        "fileOffset": 4096,
+                        "unitBytes": 16,
+                        "columns": 8,
+                        "cells": [
+                            cell(0, 16, "exact", functions=["r0"]),
+                            cell(16, 32, "exact", functions=["r1"]),
+                            cell(32, 48, "exact", functions=["r2"]),
+                        ],
+                    },
+                },
+            )
+            _sections2, data2 = _load_section_data(fresh, snap=srv._snapshot_db_mtime())
+            assert data2["summary"][".rdata"]["totalFunctions"] == 3, (
+                "the memo served the previous build's cell count"
+            )
+            assert len(potato._SECTION_DATA_CACHE) == 2
+        finally:
+            potato.clear_cells_cache()
+
+    def test_rebuild_mid_read_is_not_cached(self, tmp_path, monkeypatch) -> None:
+        """A rebuild between the read and the publish must not be memoized.
+
+        The same watermark contract as the grid memo, for the same reason: the
+        broadcast that cleared the cache can be overtaken by an insert filed
+        under the fingerprint that superseded the rows it holds.
+        """
+        import recoverage.potato as potato
+
+        snap = self._snapshot(tmp_path, monkeypatch)
+        monkeypatch.setattr(potato, "_snapshot_db_mtime", lambda: (2, 64))
+
+        potato.clear_cells_cache()
+        try:
+            _sections, data = _load_section_data(snap, snap=(1, 64))
+            assert data["summary"][".rdata"]["totalFunctions"] == 2
+            assert not potato._SECTION_DATA_CACHE
+        finally:
+            potato.clear_cells_cache()
+
+    def test_clear_cells_cache_drops_section_data_entries(self) -> None:
+        import recoverage.potato as potato
+
+        potato._SECTION_DATA_CACHE[(1, 64, "SD")] = ({}, {})  # type: ignore[assignment]
+        potato.clear_cells_cache()
+        assert not potato._SECTION_DATA_CACHE
 
     def test_unknown_section_yields_empty_cells(self, tmp_path, monkeypatch) -> None:
         import recoverage.potato as potato

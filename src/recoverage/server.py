@@ -1508,7 +1508,9 @@ def resolve_targets() -> list[dict[str, str]]:
     The coverage half is stat'ed before ``coverage_snapshots`` reads, and
     re-checked before the entry is published, so a rebuild that commits during
     the read is answered by the next request rather than by a list filed under
-    the fingerprint that superseded it.
+    the fingerprint that superseded it.  That reader runs only on a miss: a hit
+    is answered from the memo, because reaching it costs a directory walk and
+    the merged list is exactly what the key already proved unchanged.
 
     Raises :class:`CoverageTomlError` when the directory holds no readable
     document: that is not "a project with no built targets", it is a project
@@ -1526,8 +1528,23 @@ def resolve_targets() -> list[dict[str, str]]:
         config_fingerprint(_project_dir()),
         _snapshot_db_mtime(),
     )
+    with _RESOLVED_TARGETS_CACHE_LOCK:
+        cached = _RESOLVED_TARGETS_CACHE
+        if cached is not None and cached[0] == key:
+            return cached[1]
+
+    # Past the cache check, because a hit needs neither the reader nor the
+    # merge, and ``coverage_snapshots`` is a fresh ``glob`` plus a ``stat`` per
+    # document on every call.  Held outside the lock: rebrew's reader memoizes
+    # the parse itself, so the walk is the whole cost, and serializing it behind
+    # the package lock made every concurrent target-scoped request queue on it
+    # for a value the previous one had already produced.  The read still happens
+    # after the token it is published under is stat'ed, and the re-check below
+    # still covers a rebuild committing across it.
     snapshots = coverage_snapshots()
     with _RESOLVED_TARGETS_CACHE_LOCK:
+        # A racing thread may have filled this key while the reader ran; keep
+        # whichever landed first, so every caller sees one list.
         cached = _RESOLVED_TARGETS_CACHE
         if cached is not None and cached[0] == key:
             return cached[1]
