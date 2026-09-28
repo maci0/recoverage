@@ -19,15 +19,23 @@ export type Cell = {
   /** The function(s) covering the cell: a name, or a VA spelling. */
   functions?: Array<string | number>;
   label?: string;
-  parent_function?: number;
+  /** The NAME of the function a data or thunk cell belongs to, not its VA:
+   * `rebrew.catalog.grid` writes `func_end_to_name[off]` here, and the Potato
+   * panel beside this one resolves it the same way (`potato._parent_url`).
+   * A reader that treats it as an address jumps nowhere. */
+  parent_function?: string;
 };
 
 export type Section = {
   target: string;
   name: string;
-  va: number;
+  /** A section the document does not place (`rebrew` writes NULL for a
+   * section with no VA, and a .bss with no file backing carries no
+   * `fileOffset`), so both are null rather than 0. A reader that adds them
+   * without a guard maps a section at address 0. */
+  va: number | null;
   size: number;
-  fileOffset: number;
+  fileOffset: number | null;
   unitBytes: number;
   columns: number;
   /** Absent when the request named another section. */
@@ -93,7 +101,10 @@ export type StatsPayload = {
 };
 
 export type SearchEntry = {
-  va: number;
+  /** The entry's address as the server spells it: a hex string for every
+   * entry (`api._build_search_index` writes `vaStart` and `hex(va)`), read
+   * through `toVa` rather than used as a number. */
+  va: string | number;
   symbol?: string;
   name?: string;
 };

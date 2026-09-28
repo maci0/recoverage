@@ -232,6 +232,19 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **A cell's parent link in the dashboard went nowhere.** `parent_function` is
+  the NAME rebrew gives the function a data or thunk block belongs to, and the
+  panel printed it as if it were an address: the link read `0X_FUNC_A` and
+  every click answered "no block covers 0X_FUNC_A". It now shows the name and
+  jumps to the function's own block, resolved through the search index the
+  search box already holds; a parent the index does not carry is shown as text
+  rather than as a link that leads nowhere.
+- **Searching the dashboard for an address matched nothing.** The search index
+  carries each address as a hex string, and the search folded it through the
+  hex formatter, which reads a string as a string: `0x10001000` was compared as
+  `0X0X10001000`. The box now folds the decimal and the hex spelling, the two
+  columns `/api/targets/<target>/functions?search=` folds beside the name and
+  the symbol, so a term that lists a row through the API highlights it here too.
 - **The dashboard's copy of the target binary survived a rebuild.** The byte
   panes download the original DLL once per target and slice it locally, and the
   download was remembered by path alone. A `rebrew build-db` after a recompile

@@ -37,7 +37,7 @@ const FILTERS: Array<{ key: string; label: string; aria: string; title: string }
 /** Sections in PE load order (ascending VA), which puts `.text` first instead
  * of leaving the section that carries the work at the end of an alphabetical
  * row. Sections without a VA sort last, keeping their relative order. */
-function sectionNames(sections: Record<string, { va?: number }>): Array<string> {
+function sectionNames(sections: Record<string, { va: number | null }>): Array<string> {
   return Object.keys(sections).toSorted(
     (left, right) => (sections[left]?.va ?? 1e18) - (sections[right]?.va ?? 1e18),
   );
@@ -283,7 +283,12 @@ export function App() {
     }
     const matched = new Set<string>();
     for (const [name, entry] of Object.entries(coverage.searchIndex)) {
-      const haystack = `${name} ${entry.symbol ?? ""} ${entry.name ?? ""} ${hex(entry.va, 8)}`;
+      // The four columns `/api/.../functions?search=` folds the same term over:
+      // name, symbol, the decimal VA and the hex spelling. `entry.va` crosses
+      // as a HEX STRING, so `hex()` on it hands back "0X0X10001000" and a term
+      // naming an address matches nothing here while the API lists the row.
+      const va = toVa(entry.va);
+      const haystack = `${name} ${entry.symbol ?? ""} ${entry.name ?? ""} ${va} ${hex(va, 8)}`;
       if (foldForSearch(haystack).includes(needle)) {
         matched.add(name);
       }
@@ -304,6 +309,18 @@ export function App() {
     }
     return matched;
   }, [coverage.searchIndex, matchedNames]);
+
+  // The address a parent-function name resolves to, or null when the index
+  // does not carry it. `parent_function` is a NAME (see `Cell`), so the jump
+  // the detail panel's Parent link offers is a name lookup, not the address it
+  // used to be handed.
+  const parentVaFor = useCallback(
+    (name: string): number | null => {
+      const entry = coverage.searchIndex[name];
+      return entry === undefined ? null : toVa(entry.va);
+    },
+    [coverage.searchIndex],
+  );
 
   const jumpToAddress = useCallback(
     (address: number) => {
@@ -631,6 +648,7 @@ export function App() {
           cellIndex={selectedIndex}
           panes={panes}
           sourceRoot={sourceRoot}
+          parentVaFor={parentVaFor}
           onJumpToAddress={jumpToAddress}
         />
       </main>

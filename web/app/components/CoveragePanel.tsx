@@ -27,6 +27,10 @@ export type CoveragePanelProps = {
   cellIndex: number | null;
   panes: Panes;
   sourceRoot: string;
+  /** The address a parent-function NAME resolves to, or null when the search
+   * index does not carry it. `Cell.parent_function` is a name, so the Parent
+   * link is a lookup rather than an address it already holds. */
+  parentVaFor: (name: string) => number | null;
   onJumpToAddress: (address: number) => void;
 };
 
@@ -290,6 +294,7 @@ function PanelMeta({
   section,
   sourceRoot,
   docs,
+  parentVaFor,
   onJumpToAddress,
 }: {
   fn: FunctionDetail | null;
@@ -297,6 +302,7 @@ function PanelMeta({
   section: Section | null;
   sourceRoot: string;
   docs: string | null;
+  parentVaFor: (name: string) => number | null;
   onJumpToAddress: (address: number) => void;
 }): ComponentChildren {
   if (fn !== null) {
@@ -312,6 +318,8 @@ function PanelMeta({
   if (cell === undefined) {
     return null;
   }
+  const parent = cell.parent_function;
+  const parentVa = parent === undefined ? null : parentVaFor(parent);
   return (
     <dl className={META_GRID}>
       <MetaItem label="State">{STATE_LABEL[stateSlot(cell.state)]}</MetaItem>
@@ -324,20 +332,27 @@ function PanelMeta({
        * gave it. Both are on the cell the server sends and on the Potato panel
        * beside this one; a block without a function is exactly the case they
        * exist for, so the branch that has no function panel is the branch that
-       * needs them. */}
+       * needs them. The parent is spelled as the NAME rebrew stored (the Potato
+       * panel beside this one prints the same string), and it is a link only
+       * when the search index resolves it to an address: a link to nowhere
+       * answers a click with a block that covers no such function. */}
       {cell.label === undefined ? null : <MetaItem label="Label">{cell.label}</MetaItem>}
-      {cell.parent_function === undefined ? null : (
+      {parent === undefined ? null : (
         <MetaItem label="Parent">
-          <a
-            className="meta-value asm-link"
-            href="#"
-            onClick={(event) => {
-              event.preventDefault();
-              onJumpToAddress(cell.parent_function ?? 0);
-            }}
-          >
-            {hex(cell.parent_function, 1)}
-          </a>
+          {parentVa === null ? (
+            <span className="meta-value">{parent}</span>
+          ) : (
+            <a
+              className="meta-value asm-link"
+              href="#"
+              onClick={(event) => {
+                event.preventDefault();
+                onJumpToAddress(parentVa);
+              }}
+            >
+              {parent}
+            </a>
+          )}
         </MetaItem>
       )}
     </dl>
@@ -349,6 +364,7 @@ export function CoveragePanel({
   cellIndex,
   panes,
   sourceRoot,
+  parentVaFor,
   onJumpToAddress,
 }: CoveragePanelProps): ComponentChildren {
   const [modal, setModal] = useState<{
@@ -408,6 +424,7 @@ export function CoveragePanel({
             section={section}
             sourceRoot={sourceRoot}
             docs={panes.docs}
+            parentVaFor={parentVaFor}
             onJumpToAddress={onJumpToAddress}
           />
         </div>
