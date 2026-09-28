@@ -77,6 +77,28 @@ export function toVa(raw: string | number): number {
   return typeof raw === "string" ? Number.parseInt(raw, 16) : raw;
 }
 
+/** Fold a name the way the server folds it, for the search box.
+ *
+ * The dashboard's search runs here, over the `search_index` the server served,
+ * while `/functions?search=` and the Potato list run `server.fold_match`. Two
+ * surfaces answering the same question have to compare in the same form, or
+ * the SPA reports "0 matches" beside a row the API lists.
+ *
+ * `normalize("NFC")` is the step that matters and the step `toLowerCase` does
+ * not do: a coverage document written from macOS spells a name NFD
+ * ("cafe" + U+0301), the NFC spelling is what a user types, and the two are
+ * different strings to a substring test. Composition also runs first because
+ * composing after lowercasing is not the same thing on every input.
+ *
+ * `toLowerCase` is not `casefold`, and JS has no case-fold operator, so a
+ * fold the server performs still does not happen here: `ß` matches "ss"
+ * through the API and not in the SPA. That gap is the other half of this and
+ * closing it means shipping a folded key from the server, not a bigger mapping
+ * in this bundle. */
+export function foldText(text: string): string {
+  return text.normalize("NFC").toLowerCase();
+}
+
 /** The annotation comments a decompiled C file carries, in the order they
  * appear: what the analyst recorded about the function. `null` when the source
  * is a pane message rather than source. */

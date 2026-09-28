@@ -2597,6 +2597,62 @@ class TestSpaLocaleFormatting:
             assert source.casefold() == folded, source
 
 
+class TestSpaSearchFoldsLikeTheServer:
+    """The search box compares in the same form `server.fold_match` does.
+
+    The dashboard runs its own search over the served `search_index` while
+    `/functions?search=` and the Potato list run `server.fold_match`, so the
+    two surfaces can disagree about a name they are both looking at. Both
+    halves of the server's fold are reproduced in the browser: the composition
+    by `normalize("NFC")` and the case half by `FULL_FOLD`, which is what
+    `toLowerCase` has no operator for. The composition is the one that silently
+    reports "0 matches" for a symbol a macOS-side tool wrote NFD.
+    """
+
+    def test_both_sides_of_the_search_go_through_the_shared_fold(self) -> None:
+        """A needle folded one way and a haystack folded another never match."""
+        app = _web("App.tsx")
+        search = app.split("const matchedNames", 1)[1].split("const matchedFns", 1)[0]
+        assert search.count("foldForSearch(") == 2, (
+            "the needle and the haystack fold differently"
+        )
+        assert "toLowerCase()" not in search, "the search folds somewhere other than foldForSearch"
+
+    def test_the_fold_composes_to_nfc(self) -> None:
+        """`toLowerCase` alone compares "café" NFD and NFC as different
+        strings, which is the whole defect: the coverage document carries
+        whichever spelling the tool that wrote it used, and the user types the
+        composed one."""
+        fmt = _web("lib/format.ts")
+        body = re.search(
+            r"export function foldForSearch\(text: string\): string \{\s*return (.*?);\s*\}",
+            fmt,
+            re.DOTALL,
+        )
+        assert body is not None, "foldForSearch is no longer a one-expression helper"
+        assert '.normalize("NFC")' in body.group(1)
+        assert body.group(1).index(".normalize(") < body.group(1).index(".toLowerCase()"), (
+            "lowercasing before composing is not the same fold"
+        )
+
+    def test_the_fold_agrees_with_the_server_on_the_nfd_pair(self) -> None:
+        """The property the fold exists for, asserted on the server's side.
+
+        The TS cannot be executed from here (no JS runtime in the test
+        environment), so the oracle is the composition itself: a name and its
+        NFD twin are one key under `fold_text`, which is the equality the SPA's
+        fold has to reproduce.
+        """
+        import unicodedata
+
+        from recoverage.server import fold_text
+
+        nfc = unicodedata.normalize("NFC", "café")
+        nfd = unicodedata.normalize("NFD", nfc)
+        assert nfc != nfd, "the two spellings are one string, so this asserts nothing"
+        assert fold_text(nfc) == fold_text(nfd)
+
+
 class TestSpaLayoutAndFeedback:
     """Structural contracts of the ported map and shell.
 
