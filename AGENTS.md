@@ -173,6 +173,8 @@ make smoke-fail             # same, against a deliberately corrupt db
 make browser-sbom           # the npm packages compiled into the shipped browser
                             #   assets, with the version and digest bun.lock pinned
                             #   (the sbom job uploads this as recoverage-browser-sbom)
+make python-sbom            # the resolved Python tree (uv.lock, every extra, hashed)
+                            #   plus the rebrew pin: the sbom job's other artifact
 make all                    # every check CI runs, one command
 
 # Frontend lint detail (requires bun and java on PATH)

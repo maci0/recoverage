@@ -169,11 +169,13 @@ That is the local mirror of CI, and each target is the command CI runs:
 | `make smoke` | smoke | `python tools/smoke.py` |
 | `make smoke-fail` | smoke | `python tools/smoke.py --expect-failure` |
 | `make browser-sbom` | sbom | `python tools/bundled_js_inventory.py` |
+| `make python-sbom` | sbom | `uv export --frozen --all-extras --hashes`, then the rebrew tag and commit the job appends |
 
 The `sbom` job is the only one that reads a lockfile without installing from
 it: the Python half comes from `uv export` over `uv.lock` and the browser half
 from `tools/bundled_js_inventory.py` over `bun.lock`, and neither needs a
-sibling `../rebrew`. `make browser-sbom` prints the second half locally.
+sibling `../rebrew`. `make python-sbom` and `make browser-sbom` print the two
+halves locally, so the artifact a release ships can be reproduced without CI.
 
 The built bundle is committed, so a change under `web/` is not served until
 `make web-build` rewrites `src/recoverage/assets/app.js` and `style.css`. The

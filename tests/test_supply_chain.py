@@ -579,6 +579,36 @@ class TestEnvironmentInstalls:
             assert "--locked" in flags, f"Makefile installs without --locked: {flags}"
             assert "--frozen" not in flags, f"Makefile installs with --frozen: {flags}"
 
+    def test_the_python_inventory_is_reproducible_without_ci(self) -> None:
+        """The sbom job's Python half has a local command, like its browser half.
+
+        `make browser-sbom` is the local mirror of one of the two artifacts the
+        job uploads; without a target for the other, the resolved Python tree
+        behind a release could only be reproduced by the job that produced it.
+        The export the target runs is the job's, down to `--frozen`: reading
+        the lock alone is what lets it run where the job runs, without the
+        sibling checkout a `--locked` re-resolve would need.
+        """
+        makefile = _MAKEFILE.read_text(encoding="utf-8")
+        exports = [
+            " ".join(line.split())
+            for line in makefile.splitlines()
+            if re.match(r"\s*uv export\b", line)
+        ]
+        assert len(exports) == 1, f"expected one uv export in the Makefile, found {exports}"
+        assert "--frozen" in exports[0] and "--locked" not in exports[0], exports[0]
+        assert "--all-extras" in exports[0] and "--hashes" in exports[0], exports[0]
+        job = _jobs()["sbom"]
+        assert all(flag in job for flag in ("--frozen", "--all-extras", "--hashes")), (
+            "the sbom job no longer exports what make python-sbom prints"
+        )
+        assert re.search(r"^python-sbom:", makefile, re.MULTILINE), (
+            "the Makefile no longer defines the target that runs the export"
+        )
+        assert re.search(r"^all:.*\bpython-sbom\b", makefile, re.MULTILINE | re.DOTALL), (
+            "`make all` does not depend on python-sbom, so it is not the local mirror of CI"
+        )
+
     def test_every_package_json_uv_run_keeps_the_dev_extra(self) -> None:
         """A `uv run` outside the Makefile re-syncs the environment, so it
         has to name the same extras the environment was built with.

@@ -4,7 +4,7 @@
 # is the one step that keeps the committed assets matching web/.
 .PHONY: help setup clean build check-bundle-clean web-build web-dev test test-one test-browser fuzz lint format format-check web-lint smoke smoke-fail \
 	shell-lint yaml-lint type-check all ensure-uv ensure-rebrew warn-uv-version clone-rebrew ensure-lint-tools \
-	ensure-bun regen-oxlint typecheck-web payload-budget browser-sbom
+	ensure-bun regen-oxlint typecheck-web payload-budget browser-sbom python-sbom
 
 # Force POSIX sh for recipes (ignore a caller-exported SHELL=bash).  Version
 # compares use ``sort -t. -k…n`` (POSIX), not GNU ``sort -V``.
@@ -127,6 +127,7 @@ help:
 		'  make smoke-fail         # the same probe against a corrupt db: must degrade, not lie' \
 		'  make payload-budget     # re-derive the inlined shell size at each static encoding' \
 		'  make browser-sbom       # list the npm packages compiled into the shipped browser assets' \
+		'  make python-sbom        # print the resolved Python tree (uv.lock, every extra, hashed)' \
 		'  make all                # every check CI runs, in one command' \
 		'  make check-bundle-clean # fail when the committed web bundle is stale (make all runs it)' \
 		'  make clean              # remove caches and build artifacts' \
@@ -382,7 +383,10 @@ ensure-lint-tools:
 	fi; \
 	if ! command -v yamllint >/dev/null 2>&1; then \
 	  echo "ERROR: yamllint not on PATH (required by 'make yaml-lint')."; \
-	  echo "Install it (pipx install yamllint, brew install yamllint)."; \
+	  echo "Install it (uv tool install yamllint, brew install yamllint)."; \
+	  echo "Either target needs the other tool too: 'make shell-lint' and"; \
+	  echo "'make yaml-lint' share this preflight, so a run of one reports the"; \
+	  echo "first of the two that is missing."; \
 	  exit 1; \
 	fi
 
@@ -420,7 +424,9 @@ ensure-bun:
 	@$(SET_STRICT) \
 	if ! command -v bun >/dev/null 2>&1; then \
 	  echo "ERROR: bun not on PATH (package.json's packageManager field pins the version)."; \
-	  echo "Install that bun (https://bun.sh), then re-run 'make web-lint'."; \
+	  echo "Install that bun (https://bun.sh), then re-run the make target you just ran."; \
+	  echo "The targets that need it: web-build, web-dev, web-lint, typecheck-web,"; \
+	  echo "regen-oxlint and build (which runs web-build)."; \
 	  exit 1; \
 	fi
 
@@ -450,9 +456,35 @@ payload-budget: ensure-rebrew
 browser-sbom: ensure-rebrew
 	$(UV_RUN) python tools/bundled_js_inventory.py
 
+# The other half of the sbom job's output: the resolved Python tree, every
+# extra, with the hashes a scanner needs. `browser-sbom` is the same job's
+# browser half, and until this target existed the Python half was the one
+# artifact a contributor could not reproduce without CI.
+#
+# --frozen, like the job's: it is the one invocation that reads uv.lock alone,
+# because --locked re-resolves the graph and the path dependency ../rebrew is
+# what the job has no checkout of. So this target needs no environment and no
+# sibling either, which is why it is the only target here with no
+# `ensure-rebrew` and no UV_RUN. It prints to stdout rather than writing a
+# file: the job names its own artifact, and a file left in the tree by a local
+# run would be a second thing to ignore. The two rebrew pin lines are the
+# same export the job appends, read from the one script that owns the pin, so
+# the artifact a release ships and the one a contributor prints name the same
+# rebrew.
+python-sbom:
+	@$(SET_STRICT) \
+	uv export --frozen --all-extras --format requirements-txt --hashes; \
+	ref=$$(sed -n 's/^REBREW_REF="$${REBREW_REF:-\(.*\)}"$$/\1/p' tools/ci_clone_rebrew.sh); \
+	sha=$$(sed -n 's/^REBREW_SHA="$${REBREW_SHA:-\(.*\)}"$$/\1/p' tools/ci_clone_rebrew.sh); \
+	if [ -z "$$ref" ] || [ -z "$$sha" ]; then \
+	  echo "ERROR: could not read the rebrew pin out of tools/ci_clone_rebrew.sh." >&2; \
+	  exit 1; \
+	fi; \
+	printf '\n# rebrew path-dependency pin\n# rebrew==%s @ %s\n' "$$ref" "$$sha"
+
 # Everything CI checks, in one local command, so nothing fails only after push.
 all: format-check lint type-check shell-lint yaml-lint test web-lint typecheck-web \
-	build check-bundle-clean browser-sbom smoke smoke-fail
+	build check-bundle-clean browser-sbom python-sbom smoke smoke-fail
 	@printf '%s\n' 'all checks passed (CI: lint, web-lint, test, build, smoke)'
 
 clean:
