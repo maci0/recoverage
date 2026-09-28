@@ -22,6 +22,9 @@ export type StatsStripProps = {
   stats: StatsPayload | null;
   /** Why the numbers are missing, when they are. */
   error: string | null;
+  /** A load is in flight, which is also the state a regen puts the strip in
+   * while it runs for minutes. */
+  loading: boolean;
   /** The section the map is showing, or null before one is known. */
   section: string | null;
   filters: ReadonlySet<string>;
@@ -39,16 +42,23 @@ export type StatsStripProps = {
 export function StatsStrip({
   stats,
   error,
+  loading,
   section,
   filters,
   onToggleFilter,
 }: StatsStripProps): ComponentChildren {
   if (stats === null) {
-    // Nothing to say until the numbers land; a failed read says so in place
-    // rather than leaving the reader to assume a target has no coverage yet.
-    return error === null ? null : (
-      <p className="stats font-mono text-micro text-muted">Coverage summary unavailable.</p>
-    );
+    // The numbers are dropped while a rebuild runs and come back after it, and
+    // a strip that is simply gone says nothing about the minutes in between:
+    // the line holds the place the figures occupied and says they are on their
+    // way. A failed read says the same thing about itself rather than leaving
+    // the reader to assume a target has no coverage yet.
+    if (error !== null) {
+      return <p className="stats font-mono text-micro text-muted">Coverage summary unavailable.</p>;
+    }
+    return loading ? (
+      <p className="stats font-mono text-micro text-muted">Coverage summary loading...</p>
+    ) : null;
   }
   const row = section === null ? undefined : stats.sections[section];
   return (

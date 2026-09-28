@@ -798,13 +798,16 @@ def _build_url(
     idx: int | None = None,
     search: str | None = None,
     page: int | None = None,
+    status: str | None = None,
 ) -> str:
     """Build the relative "?target=...&section=..." URL.
 
     Options that are ``None``, an empty set, or an empty string are omitted.
     ``idx`` is the exception: it is emitted whenever it is not ``None``, so
     cell index 0 keeps its ``&idx=0`` and the reader's position survives the
-    round trip.
+    round trip.  ``status`` is the function list's own criterion; the links
+    that move between the top-level views carry it, so a reader who set it
+    does not watch the list silently change under them by way of a section tab.
     """
     url = "?target=" + _url_quote(target) + "&section=" + _url_quote(section)
     if filters:
@@ -815,6 +818,8 @@ def _build_url(
         url += "&search=" + _url_quote(search)
     if page:
         url += "&page=" + str(page)
+    if status:
+        url += "&status=" + _url_quote(status)
     return url
 
 
@@ -901,6 +906,16 @@ _PAGE_SRC = r"""<!DOCTYPE html>
           % if active_filters:
             <input type="hidden" name="filter" value="{{','.join(sorted(active_filters))}}">
           % end
+          <!-- The view and the status criterion are the reader's own state, so
+               the topbar's two forms carry them: submitting a search from the
+               functions list used to land in the grid view instead, and a
+               status-filtered list lost the filter to the same submit. -->
+          % if view == "functions":
+            <input type="hidden" name="view" value="functions">
+          % end
+          % if status_filter:
+            <input type="hidden" name="status" value="{{status_filter}}">
+          % end
           <label for="search-input"><font size="1" color="{{MUTED_COLOR}}">Search:&nbsp;</font></label><input id="search-input" type="text" name="search" size="14" value="{{search_query}}" placeholder="Search VA or name..." accesskey="s"> <input type="submit" value="Go"></form>
         </td>
         <!-- Spacer cells, not &nbsp; text: <form> is a block box, so a leading
@@ -910,6 +925,12 @@ _PAGE_SRC = r"""<!DOCTYPE html>
         <td valign="middle" nowrap>
           <form id="target-form" action="/potato" method="GET">
             <input type="hidden" name="section" value="{{section}}">
+          % if view == "functions":
+            <input type="hidden" name="view" value="functions">
+          % end
+          % if status_filter:
+            <input type="hidden" name="status" value="{{status_filter}}">
+          % end
             <label for="target-select"><font size="1" color="{{MUTED_COLOR}}">Target:&nbsp;</font></label><select id="target-select" name="target">
             % for t in targets:
               <option value="{{t['id']}}" {{"selected" if t['id'] == target else ""}}>{{t['name']}}</option>
@@ -2104,6 +2125,18 @@ def _render_function_list(
     else:
         rows.sort(key=lambda fn: (function_sort_key(fn, order_by), fn.va))
     count_label = f"first {len(rows)} of {total} results" if truncated else f"{total} results"
+    # `?status=` narrows this list and nothing else on the page says so: the
+    # header count and the search box both read as if the list were the whole
+    # one, so a reader who set it (or followed a link carrying it) sees a
+    # shorter list with no sign of the criterion and no way back off it here.
+    status_note = ""
+    if status_filter:
+        status_note = (
+            f'<font size="1" color="{MUTED_COLOR}">Status: </font>'
+            f'<font size="1" color="{ACCENT_COLOR}"><b>{_esc(status_filter)}</b></font> '
+            f'<a href="{_build_url(target, section, search=search_query)}">'
+            f'<font size="1" color="{ACCENT_COLOR}">[Clear]</font></a> '
+        )
     cap_note = ""
     if truncated:
         cap_note = (
@@ -2124,7 +2157,8 @@ def _render_function_list(
             f'<tr><td background="{PANEL_HDR_PNG}" cellpadding="8">'
             f'<font color="{MUTED_COLOR}" size="2"><b>Functions</b></font> '
             f'<font size="1" color="{MUTED_COLOR}">({count_label})</font> '
-            f'<a href="{_build_url(target, section, search=search_query)}"><font size="1" color="{ACCENT_COLOR}">[Grid View]</font></a>'
+            + status_note
+            + f'<a href="{_build_url(target, section, search=search_query, status=status_filter)}"><font size="1" color="{ACCENT_COLOR}">[Grid View]</font></a>'
             + cap_note
             + "</td></tr>"
         ),
@@ -2201,17 +2235,21 @@ def _section_tab_data(
     sections: dict[str, dict[str, Any]],
     active_filters: set[str] | None,
     search_query: str,
+    status_filter: str = "",
 ) -> list[tuple[str, str, bool, str]]:
     """(name, url, is_active, accesskey) for the section tabs.
 
     The accesskey is the section name's second character, falling back to the
     first: a one-character section name would otherwise index off the end of
-    the string and 500 the whole page.
+    the string and 500 the whole page.  ``status_filter`` rides along, so a
+    section switch does not quietly drop the function list's own criterion.
     """
     return [
         (
             s,
-            _build_url(target, s, active_filters or None, search=search_query),
+            _build_url(
+                target, s, active_filters or None, search=search_query, status=status_filter
+            ),
             s == section,
             s[1:2] or s[:1],
         )
@@ -2331,7 +2369,7 @@ def _render_potato_inner(
     filter_btn_data = _build_filter_data(target, section, active_filters, search_query)
     progress = _build_progress(section, sec_data, data, sections)
     section_tab_data = _section_tab_data(
-        target, section, sections, active_filters or None, search_query
+        target, section, sections, active_filters or None, search_query, status_filter
     )
 
     # Defaults for whichever view the request selects.
@@ -2372,6 +2410,10 @@ def _render_potato_inner(
     # or section holding "&" would append attacker-chosen query parameters to
     # this one href.  Every other href in the page goes through _build_url.
     functions_nav_url = f"?target={_url_quote(target)}&section={_url_quote(section)}&view=functions"
+    if status_filter:
+        # The criterion the list is narrowed by travels with the link into it,
+        # so leaving for the grid and coming back does not quietly widen it.
+        functions_nav_url += "&status=" + _url_quote(status_filter)
 
     progress_bar_png_uri = _progress_svg(tuple(progress["segments"])) if progress else ""
 
@@ -2400,6 +2442,7 @@ def _render_potato_inner(
         functions_nav_url=functions_nav_url,
         view=view,
         active_filters=active_filters,
+        status_filter=status_filter,
         search_query=search_query,
         search_match_count=len(search_matched_fns),
         clear_search_url=clear_search_url,

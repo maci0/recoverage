@@ -76,6 +76,22 @@ function potatoUrl(state: {
   return `/potato?${params.toString()}`;
 }
 
+/** The guidance the search status adds after its count: no hits at all, none of
+ * them in the section on screen, or what Enter will select. */
+function searchHint(
+  matches: number,
+  sectionMatches: number | null,
+  section: string | null,
+): string {
+  if (matches === 0) {
+    return " - no matches. Check the spelling, or search by VA.";
+  }
+  if (sectionMatches === 0) {
+    return ` - none of them in ${section ?? "this section"}; press Enter to jump to the first one.`;
+  }
+  return " - press Enter to jump to the first one.";
+}
+
 export function App() {
   const params = useMemo(() => new URLSearchParams(window.location.search), []);
   const [targets, setTargets] = useState<Array<TargetInfo>>([]);
@@ -387,27 +403,52 @@ export function App() {
     jumpToAddress(address);
   }, [coverage.sections, jumpToAddress]);
 
+  /** How many of the matched blocks are in the section on screen, or null when
+   * the search index is not there or the section's cells are still loading. A
+   * search spans the whole target, so the count beside the input says nothing
+   * about the map under it: without this, a reader who switches to a section
+   * the hits are not in reads a "12 matches" line over a wholly dimmed grid. */
+  const sectionMatches = useMemo(() => {
+    const cells = active?.cells;
+    if (matchedFns === null || cells === undefined) {
+      return null;
+    }
+    return cells.filter((cell) => matchedFns.has(String(cell.functions?.[0] ?? ""))).length;
+  }, [active, matchedFns]);
+
   const onSearchKeyDown = (event: TargetedKeyboardEvent<HTMLInputElement>): void => {
     if (event.key !== "Enter" || matchedNames === null) {
       return;
     }
-    const [first] = matchedNames;
+    // The section on screen wins over the target-wide set, whose iteration order
+    // is whatever order the index was served in: taking its first entry could
+    // put the hit in a sibling, and Enter then switched tabs away from the
+    // section the reader was reading. Within the section the cell order is the
+    // map's own top-to-bottom order.
+    const local =
+      active?.cells?.findIndex((cell) => matchedFns?.has(String(cell.functions?.[0] ?? ""))) ?? -1;
+    if (local >= 0) {
+      setSelectedIndex(local);
+      gridFocus.current?.(local);
+      return;
+    }
+    // Otherwise the lowest address among the matches, so the jump lands where
+    // the reader's eye would start on the lattice.
+    const vaOf = (name: string): number => {
+      const entry = coverage.searchIndex[name];
+      return entry === undefined ? Number.POSITIVE_INFINITY : toVa(entry.va);
+    };
+    const [first] = [...matchedNames].toSorted((left, right) => vaOf(left) - vaOf(right));
     if (first === undefined) {
       flash("Search matched nothing in this target.");
       return;
     }
-    const cell = active?.cells?.findIndex((entry) => entry.functions?.[0] === first) ?? -1;
-    if (cell < 0) {
-      const entry = coverage.searchIndex[first];
-      if (entry === undefined) {
-        flash("Search matched nothing in this target.");
-        return;
-      }
-      jumpToAddress(toVa(entry.va));
+    const entry = coverage.searchIndex[first];
+    if (entry === undefined) {
+      flash(`"${first}" is not at an address this map can select.`);
       return;
     }
-    setSelectedIndex(cell);
-    gridFocus.current?.(cell);
+    jumpToAddress(toVa(entry.va));
   };
 
   const toggleFilter = (key: string): void => {
@@ -525,9 +566,7 @@ export function App() {
                 <>
                 Searching: "{query}" ({matchedNames.size}{" "}
                 {matchedNames.size === 1 ? "match" : "matches"})
-                {matchedNames.size === 0
-                  ? " - no matches. Check the spelling, or search by VA."
-                  : " - press Enter to jump to the first one."}
+                {searchHint(matchedNames.size, sectionMatches, active?.name ?? null)}
                 </>
               )}
             </div>
@@ -605,6 +644,7 @@ export function App() {
           <StatsStrip
             stats={coverage.stats}
             error={coverage.statsError}
+            loading={coverage.loading}
             section={active?.name ?? null}
             filters={filters}
             onToggleFilter={toggleFilter}

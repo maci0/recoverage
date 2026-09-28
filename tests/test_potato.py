@@ -880,6 +880,22 @@ def test_function_list_status_filter():
 
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage document")
+def test_the_status_filter_is_named_and_survives_navigation():
+    # `?status=` has no control that sets it, so a reader who arrives with one
+    # (a link, a shared URL) needs the page to say the list is narrowed and to
+    # carry the criterion across the section tabs, the [Grid View] link and the
+    # topbar forms.  Dropping it silently changes the rows under the reader.
+    target = require_target()
+    html = render_potato_url(f"/potato?target={target}&section=.text&view=functions&status=STUB")
+    assert "Status:" in html
+    assert "[Clear]" in html
+    # Section tabs, the grid link and the [Functions] link all keep it.
+    assert html.count("status=STUB") >= 4
+    unfiltered = render_potato_url(f"/potato?target={target}&section=.text&view=functions")
+    assert "Status:" not in unfiltered
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage document")
 def test_function_list_reports_the_row_cap(monkeypatch):
     # The list is capped so a large target's page stays a sane size. A header
     # reading the capped length as the total tells the reader the page is the

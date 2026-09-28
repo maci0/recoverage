@@ -12,7 +12,7 @@
     <link rel="stylesheet" href="/print.css" media="print" />
     <link rel="preload" href="/api/targets" as="fetch" />
     <style>
-      #boot {
+      #boot, .boot {
         display: flex;
         align-items: center;
         justify-content: center;
@@ -20,10 +20,23 @@
         color: var(--muted);
         font: 14px/1.5 system-ui, sans-serif;
       }
+      .boot p {
+        max-width: 40em;
+        text-align: center;
+      }
     </style>
   </head>
   <body>
     <div id="root"><p id="boot" role="status">Loading coverage…</p></div>
+    <!-- The served shell carries the same fallback: see the note in
+         src/recoverage/assets/index.html, which is the document a reader
+         actually gets. -->
+    <noscript>
+      <div class="boot">
+        <p>The interactive coverage map needs JavaScript, which this browser has turned off.</p>
+        <p><a href="/potato">Open Potato Mode</a> for the same coverage as plain server-rendered HTML.</p>
+      </div>
+    </noscript>
     <script type="module" src="/app/main.tsx"></script>
   </body>
 </html>

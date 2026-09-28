@@ -22,7 +22,7 @@
          Tailwind output, which carries no class for markup that never went
          through the bundler. -->
     <style>
-      #boot {
+      #boot, .boot {
         display: flex;
         align-items: center;
         justify-content: center;
@@ -30,11 +30,27 @@
         color: var(--muted);
         font: 14px/1.5 system-ui, sans-serif;
       }
+      .boot p {
+        max-width: 40em;
+        text-align: center;
+      }
     </style>
     <!-- INJECT_CSS -->
   </head>
   <body>
     <div id="root"><p id="boot" role="status">Loading coverage…</p></div>
+    <!-- The dashboard IS the inlined bundle below, so a reader whose browser
+         has scripting off never gets past the boot line above. Potato Mode
+         renders the same coverage as server-side HTML, so the way in is named
+         here rather than left for them to find. Browsers do not render
+         <noscript> content when scripting is on, so this costs the reader who
+         can use the dashboard nothing. -->
+    <noscript>
+      <div class="boot">
+        <p>The interactive coverage map needs JavaScript, which this browser has turned off.</p>
+        <p><a href="/potato">Open Potato Mode</a> for the same coverage as plain server-rendered HTML.</p>
+      </div>
+    </noscript>
     <!-- INJECT_JS -->
   </body>
 </html>

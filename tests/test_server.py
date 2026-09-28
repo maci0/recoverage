@@ -3000,6 +3000,16 @@ class TestSpaLayoutAndFeedback:
         assert "MSG.JUMP_NO_BLOCK" in app
         assert 'role="status"' in app
 
+    def test_the_served_shell_names_potato_mode_when_scripting_is_off(self) -> None:
+        """The dashboard IS the inlined bundle, so a reader without scripting
+        otherwise sits on the boot line forever. Potato Mode is the same
+        coverage as server-rendered HTML, and the shell has to name it."""
+        shell = (REPO_ROOT / "src" / "recoverage" / "assets" / "index.html").read_text(
+            encoding="utf-8"
+        )
+        assert "<noscript>" in shell
+        assert 'href="/potato"' in shell
+
     def test_deep_links_carry_target_section_query_and_filter(self) -> None:
         app = _web("App.tsx")
         for marker in (
@@ -3031,11 +3041,31 @@ class TestSpaJumpAndSearch:
         assert "new Set<string | number>(matchedNames)" in app
         assert "coverage.searchIndex[name]?.va" in app
 
-    def test_enter_jumps_to_the_first_matched_name(self) -> None:
+    def test_enter_jumps_to_a_matched_block_in_the_section_on_screen(self) -> None:
         app = _web("App.tsx")
-        assert "const [first] = matchedNames;" in app
-        assert "entry.functions?.[0] === first" in app
+        # The section wins over the target-wide set: the set's own order is
+        # whatever order the index arrived in, and taking its first entry put
+        # the jump in a sibling, switching tabs away from the map the reader
+        # was looking at.
+        assert "active?.cells?.findIndex(" in app
+        assert 'matchedFns?.has(String(cell.functions?.[0] ?? ""))' in app
+        assert "setSelectedIndex(local);" in app
+
+    def test_enter_outside_the_section_lands_on_the_lowest_matched_address(self) -> None:
+        app = _web("App.tsx")
+        assert "[...matchedNames].toSorted((left, right) => vaOf(left) - vaOf(right))" in app
         assert "jumpToAddress(toVa(entry.va))" in app
+
+    def test_the_status_line_says_when_the_section_holds_none_of_the_matches(self) -> None:
+        """A target-wide count beside a wholly dimmed map is the confusion.
+
+        Switching section keeps the query, so a reader who lands on a section
+        the hits are not in reads a match count that says nothing about the grid
+        under it.
+        """
+        app = _web("App.tsx")
+        assert "none of them in ${section ??" in app
+        assert "searchHint(matchedNames.size, sectionMatches, active?.name ?? null)" in app
 
 
 class TestClockSeam:
