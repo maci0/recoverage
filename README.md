@@ -560,8 +560,10 @@ recoverage/
 │   ├── THREAT_MODEL.md      # Attack surface, trust boundaries, risks
 │   └── ideas.md             # Future improvement ideas
 ├── web/                     # Frontend sources built into the assets (Vite + Preact + Tailwind)
-│   ├── vite.config.ts       # The build that emits src/recoverage/assets/app.js and style.css
-│   └── app/                 # SPA components, hooks, grid rendering
+│   ├── app/                 # SPA components, hooks, grid geometry, tokens
+│   ├── index.html           # The `vite dev` shell
+│   ├── tsconfig.json        # Strict tsc settings, including the `@/` alias
+│   └── vite.config.ts       # The build that emits src/recoverage/assets/app.js and style.css
 ├── tools/                    # Lint and CI harness scripts
 │   ├── lint_html.py          # Nu Html Checker over the static and served assets
 │   ├── smoke.py              # End-to-end server smoke run
@@ -590,11 +592,6 @@ recoverage/
 │   ├── test_fuzz.py          # Seeded mutation campaigns over the untrusted-input surfaces
 │   ├── test_serve_harness.py # The smoke + lint_html harness contract
 │   └── test_playwright.py    # Browser integration tests
-├── web/                      # Frontend sources (Vite + Preact + Tailwind)
-│   ├── app/                  # Components, hooks, grid geometry, tokens
-│   ├── index.html            # The `vite dev` shell
-│   ├── tsconfig.json         # Strict tsc settings, including the `@/` alias
-│   └── vite.config.ts        # Library build into src/recoverage/assets
 └── src/recoverage/
     ├── __init__.py
     ├── __main__.py           # python -m recoverage
@@ -602,10 +599,9 @@ recoverage/
     ├── clock.py              # The one time source the request path reads
     ├── config.py             # RECOVERAGE_* env: defaults, validation, startup banner
     ├── metrics.py            # In-process RED counters, read by /api/health
-    ├── devserver.py          # The threaded keep-alive WSGI server serve() binds
+    ├── devserver.py          # WSGI serving stack: threading server, keep-alive handlers
     ├── cli.py                # Typer CLI entry point
     ├── server.py             # Bottle app, shared helpers & compression
-    ├── devserver.py          # WSGI serving stack: threading server, keep-alive handlers
     ├── disasm.py             # Capstone disassembly (optional extra)
     ├── regen.py              # In-process rebrew regen (catalog + build-db)
     ├── api.py                # REST API routes (/api/*)

@@ -1,4 +1,8 @@
-.PHONY: help setup clean build check-bundle-clean test test-one test-browser fuzz lint format format-check web-lint smoke smoke-fail \
+# web-build is in this list like every other target: it produces no file named
+# after itself, but a stale `web-build` directory or script in the tree would
+# otherwise make make consider it up to date and skip the bundle rebuild, which
+# is the one step that keeps the committed assets matching web/.
+.PHONY: help setup clean build check-bundle-clean web-build test test-one test-browser fuzz lint format format-check web-lint smoke smoke-fail \
 	shell-lint yaml-lint type-check all ensure-uv ensure-rebrew warn-uv-version clone-rebrew ensure-lint-tools \
 	ensure-bun regen-oxlint typecheck-web payload-budget
 
@@ -88,10 +92,12 @@ help:
 		'  make format-check       # ruff format --check src/ tests/ tools/ (CI lint job)' \
 		'  make web-lint           # oxlint + Nu Html Checker (CI web-lint job)' \
 		'  make typecheck-web      # tsc --noEmit over web/ (CI web-lint job)' \
+		'  make web-build          # rebuild the committed bundle in src/recoverage/assets' \
 		'  make regen-oxlint       # regenerate tools/oxlint/rikalabs-strict.json after a preset bump' \
 		'  make shell-lint         # shellcheck over tools/*.sh (CI lint job)' \
 		'  make yaml-lint          # yamllint over .github/ (CI lint job)' \
 		'  make smoke              # boot the dashboard against a sample db and probe it' \
+		'  make smoke-fail         # the same probe against a corrupt db: must degrade, not lie' \
 		'  make payload-budget     # re-derive the inlined shell size at each static encoding' \
 		'  make all                # every check CI runs, in one command' \
 		'  make check-bundle-clean # fail when the committed web bundle is stale (make all runs it)' \
@@ -220,8 +226,13 @@ web-build: ensure-bun
 test: ensure-rebrew
 	$(UV_RUN) python -m pytest tests/ -v --ignore=tests/test_playwright.py
 
+# -rs prints each skip's reason. tests/test_playwright.py skips at module
+# level when playwright, the pinned chromium or a live server at BASE_URL is
+# missing, and CONTRIBUTING promises the skip names the command that fixes it.
+# Without -rs pytest reports only "1 skipped", so the promise was invisible and
+# the run ended in make's bare "Error 5" with nothing above it to explain.
 test-one: ensure-rebrew
-	$(UV_RUN) python -m pytest $(T) $(FLAGS) -v --tb=short
+	$(UV_RUN) python -m pytest $(T) $(FLAGS) -v -rs --tb=short
 
 # The browser tests need the playwright extra (not in the dev extra), the
 # chromium build that extra pins, and a server on the port BASE_URL names.
@@ -234,7 +245,7 @@ test-one: ensure-rebrew
 test-browser: ensure-uv
 	uv sync --locked --extra dev --extra playwright
 	$(UV_RUN) playwright install chromium
-	$(UV_RUN) python -m pytest tests/test_playwright.py -v --tb=short
+	$(UV_RUN) python -m pytest tests/test_playwright.py -v -rs --tb=short
 
 # A wider campaign over the same seeded harnesses `make test` already runs;
 # the seed and iteration count come from the environment so no file changes.

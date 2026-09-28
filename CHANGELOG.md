@@ -64,6 +64,13 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **The committed dashboard bundle matches `web/` again.** `style.css` still
+  carried the pre-phosphor `--bg-grad-1`/`--bg-grad-2` values and `app.js` a
+  Highlight.js grammar from before the accent change, so `make build` (and any
+  `make all`) rewrote both and `make check-bundle-clean` failed on a clean
+  clone. Both files are regenerated from the current sources; the rebuild is
+  byte-identical across runs, so the staleness was a missed commit rather than
+  a drifting build.
 - **A deeply nested batch lookup body no longer answers 500.**
   `POST /api/targets/<target>/functions` caught the two ways a body fails to
   parse (bad UTF-8, bad JSON) and reported them as a 400, but `json.loads`
