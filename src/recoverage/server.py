@@ -2034,10 +2034,12 @@ def _reject_broken_project_config() -> None:
         _db_path()
     except WorkspaceConfigError as exc:
         _log.warning("recoverage: %s", exc)
+        # "error" is the human message and every other 503 spells it the same
+        # way; the machine-readable key is carried by the status mapping.
         raise _json_err(
             503,
             {
-                "error": "db_unavailable",
+                "error": "Database unavailable",
                 "detail": f"{CONFIG_NAME} cannot be read; fix the file or set RECOVERAGE_DB",
             },
         ) from None

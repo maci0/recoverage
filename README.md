@@ -328,6 +328,61 @@ remembered for 10 minutes (the ledger holds more slots than the rate limit
 admits in that window, so a key is only ever dropped by its own age), and a
 failed run is not remembered.
 
+### Query parameters
+
+Every `/api/` endpoint that takes a query parameter lists it here; anything
+else in the query string is ignored.
+
+| Endpoint | Parameter | Default | Accepted | Rejected with 400 |
+|----------|-----------|---------|----------|------------------|
+| `/api/targets/<target>/data` | `section` | all sections | one section name | an unknown name is a 404 |
+| `/api/targets/<target>/functions` | `status` | no filter | rebrew's function-status vocabulary, matched case-sensitively | any other value |
+| `/api/targets/<target>/functions` | `search` | no filter | up to 500 characters | anything longer |
+| `/api/targets/<target>/functions` | `sort` | `va` | `va`, `name`, `size`, `status`, `symbol`, `module`, each optionally suffixed `:desc` | never; an unknown field ignores the whole parameter |
+| `/api/targets/<target>/functions` | `limit` | `50` | clamped to 1..500 | never; an unparseable value falls back to the default |
+| `/api/targets/<target>/functions` | `offset` | `0` | clamped to 0..10000000 | never; an unparseable value falls back to the default |
+| `/api/targets/<target>/asm` | `va` | required | hex with or without `0x`, or a decimal address | unparseable or outside the section |
+| `/api/targets/<target>/asm` | `size` | required | 1..4096, decimal or `0x`-prefixed hex | zero, negative or unparseable |
+| `/api/targets/<target>/asm` | `section` | `.text` | one section name | an unknown name is a 404 |
+| `/api/targets/<target>/asm` | `format` | `text` | `text`, `json` | any other value |
+| `/api/targets/<target>/sections/<section>/bytes` | `offset` | `0` | decimal or `0x`-prefixed hex | negative or unparseable |
+| `/api/targets/<target>/sections/<section>/bytes` | `size` | `256` | 1..4096, decimal or `0x`-prefixed hex | zero, negative or unparseable |
+
+An enum the server does not have (`status`, `format`) is a 400: the caller
+asked for a value the server cannot honour, and answering 200 with an empty
+or differently-shaped body reads as "there are none". A numeric parameter
+that only bounds the page (`limit`, `offset`) falls back to its default
+instead, because the response shape and its meaning are the same either way.
+
+`status` is matched case-sensitively against rebrew's vocabulary, which is
+spelled in upper case: `EXACT` filters, `exact` is a 400. The set is read
+from rebrew rather than restated here, so it tracks whatever the installed
+rebrew writes; `GET /api/targets/<target>/functions` answers 400 naming every
+accepted value. `format` is the exception, lowercased before it is matched.
+
+`va` is spelled two ways by design: `GET /functions/<va>` and `/asm` read an
+all-digit string as decimal first, while the `POST /functions` batch body
+reads every VA as hexadecimal with an optional `0x` prefix. A VA that fits
+both readings resolves to the decimal one on the two path routes.
+
+Real output from the sample target the smoke harness serves
+(`tools/smoke.py`), truncated at two rows:
+
+```console
+$ curl -s 'localhost:8001/api/targets/FAKEDLL/functions?limit=2'
+{"target": "FAKEDLL", "total": 3, "limit": 2, "offset": 0, "functions": [
+  {"va": 268439552, "name": "_func_a", "vaStart": "0x10001000", "size": 48,
+   "status": "EXACT", "module": "T", "symbol": "_func_a", "markerType": "FUNCTION"},
+  {"va": 268439568, "name": "_func_b", "vaStart": "0x10001010", "size": 16,
+   "status": "RELOC", "module": "T", "symbol": "_func_b", "markerType": "FUNCTION"}
+]}
+```
+
+`total` counts every row the filters match; `functions` holds at most `limit`
+of them, starting at `offset`. `va` is a decimal number, `vaStart` the hex
+spelling of the same address, and `module`, `symbol` and `markerType` are
+null when rebrew recorded nothing for the row.
+
 ### Observing a running server
 
 Every response carries an `X-Request-ID` header, and every log line for that
@@ -392,8 +447,9 @@ is sent with `Cache-Control: no-store`:
 `forbidden`, `not_found`, `method_not_allowed`, `payload_too_large`,
 `unsupported_media_type`, `unprocessable_entity`, `rate_limited`, `internal`,
 `not_implemented`, `db_unavailable`. `detail` names the parameter or
-constraint at fault, and some errors add one more key (`retry_after` on a
-429).
+constraint at fault, and some errors add one more key (`retry_after`, on a
+429 and on the 503 `/api/events` answers once its connection cap is full),
+which repeats the `Retry-After` header.
 
 A wrong verb on a real path answers **405 with an `Allow` header**; a path no
 route matches answers **404**. A `405` never means "not found" here.

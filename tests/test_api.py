@@ -2002,6 +2002,34 @@ class TestBatchFunctionLookup:
         assert status.startswith("400")
         data = json.loads(decode_body(body, headers))
         assert data["code"] == "bad_request"
+        # Every API error names the constraint at fault in `detail`; an empty
+        # list is the one case that used to answer with the field left blank.
+        assert data["detail"]
+
+    def test_every_api_error_carries_the_full_envelope(self) -> None:
+        """error + code + detail, whatever the endpoint or the status.
+
+        The README documents the trio as the contract every /api/* failure
+        answers, so a handler that raises _json_err without one of the keys
+        must not be able to ship.
+        """
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        probes: list[str] = [
+            "/api/targets/no-such-target/stats",
+            f"/api/targets/{target}/functions?status=nope",
+            f"/api/targets/{target}/functions/{target}?limit=1&status=nope",
+            f"/api/targets/{target}/asm?va=zz&size=8",
+            f"/api/targets/{target}/sections/.text/bytes?offset=-1",
+            "/api/regen",
+        ]
+        for url in probes:
+            status, headers, body = wsgi_get(url)
+            assert not status.startswith("200"), url
+            data = json.loads(decode_body(body, headers))
+            assert set(data) >= {"error", "code", "detail"}, url
+            assert data["error"] and data["code"] and data["detail"], url
 
     def test_batch_non_json_body_400(self) -> None:
         target = get_first_target()

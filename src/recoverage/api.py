@@ -1460,7 +1460,13 @@ def _batch_request_vas() -> tuple[list[int], HTTPResponse | None]:
             },
         )
     if not vas:
-        return [], _json_err(400, {"error": "vas must not be empty"})
+        return [], _json_err(
+            400,
+            {
+                "error": "vas must not be empty",
+                "detail": 'expected at least one VA: {"vas": ["0x10001000", ...]}',
+            },
+        )
     if len(vas) > _MAX_BATCH_LOOKUP:
         return [], _json_err(
             400,

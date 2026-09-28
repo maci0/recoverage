@@ -97,7 +97,8 @@ class TestResolveDbPath:
         status, headers, body = wsgi_get("/api/health")
         assert status.startswith("503")
         payload = json.loads(decode_body(body, headers))
-        assert payload["error"] == "db_unavailable"
+        assert payload["error"] == "Database unavailable"
+        assert payload["code"] == "db_unavailable"
         assert b"Traceback" not in body
 
     def test_explicit_db_still_serves_when_the_project_file_is_broken(

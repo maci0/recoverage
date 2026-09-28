@@ -5,6 +5,17 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- The 503 an unreadable `rebrew-project.toml` answers now spells its
+  human-readable `error` as `Database unavailable`, the same as every other
+  coverage-read 503. Its `code` was already `db_unavailable` and is unchanged.
+- An empty `vas` array on `POST /api/targets/<target>/functions` now carries
+  the `detail` field every other API error does.
+- The README documents every `/api/` query parameter (default, accepted range,
+  what is rejected) and a real `/functions` response, and names the SSE
+  connection-cap 503 as one of the errors carrying `retry_after`.
+
 ### Fixed
 
 - **`--no-color` is accepted after the subcommand too.** It was declared only
