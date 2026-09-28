@@ -22,7 +22,7 @@ import unicodedata
 from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
-from operator import attrgetter
+from operator import attrgetter, itemgetter
 from pathlib import Path, PurePath
 from types import MappingProxyType
 from typing import Any, Final, NamedTuple, cast
@@ -33,6 +33,7 @@ import zstandard as zstd
 from bottle import Bottle, HTTPResponse, request, response
 from rebrew.annotation import DATA_MARKERS
 from rebrew.coverage_toml import (
+    _BUCKET_OF_STATE,
     Cell,
     CoverageSnapshot,
     CoverageTomlError,
@@ -1077,30 +1078,36 @@ def _is_data_marker(fn: Any) -> bool:
     return fn.markerType in DATA_MARKER_TYPES
 
 
-#: Cell states folded into each BYTE bucket :func:`_section_summary` sums.  The
-#: served cell COUNTS are rebrew's own fold (``Section.bucket_counts``, read by
-#: :func:`_bucket_row`), so this table is not where a new state reaches a
-#: response: it is the byte side only, where ``Section.buckets`` is keyed by
-#: cell STATE and the states sharing a bucket have to be named here before
-#: their bytes are summed.  A state this table does not name therefore
-#: contributes no bytes to a counted bucket, which is why a state rebrew adds
-#: needs an entry here in the same change.
+#: Cell states folded into each BYTE bucket :func:`_section_summary` sums, read
+#: off rebrew's own fold rather than spelled out here.  The served cell COUNTS
+#: are rebrew's too (``Section.bucket_counts``, read by :func:`_bucket_row`);
+#: the byte side needed the same states named, because ``Section.buckets`` is
+#: keyed by cell STATE and the states sharing a bucket have to be grouped before
+#: their bytes are summed.  A second hand-written copy of that grouping was a
+#: vocabulary this package silently drifted from: a state rebrew added was
+#: absent here, so it contributed no bytes to a counted bucket while
+#: ``Section.covered_bytes`` still counted it, and the served byte figures
+#: stopped reconciling with no error anywhere.  Reading the owner makes that
+#: state unreachable — a rebrew that renames the mapping fails this import
+#: loudly, where the copy failed quietly.
+#: ``_BUCKET_OF_STATE`` is underscore-named on rebrew's side and is read
+#: deliberately: it is the one place the fold exists, and
+#: ``tests/test_server.py`` (``TestBucketReconciliation``) pins what it holds
+#: against a literal written in the test.
 _BUCKET_FOLD: dict[str, tuple[str, ...]] = {
-    "exact": ("exact", "verified"),
-    "reloc": ("reloc",),
-    "near_match": ("near_match", "near_matching"),
-    "stub": ("stub",),
-    "padding": ("padding",),
-    "data": ("data",),
-    "thunk": ("thunk",),
-    "none": ("none",),
-    "proven": ("proven",),
-    "size_mismatch": ("size_mismatch",),
+    bucket: tuple(state for state, _ in grouped)
+    for bucket, grouped in itertools.groupby(
+        sorted(_BUCKET_OF_STATE.items(), key=lambda pair: (pair[1], pair[0])),
+        key=itemgetter(1),
+    )
 }
 #: The buckets ``_section_summary`` reports a count and a byte sum for.  The
 #: other five (``data``, ``thunk``, ``none``, ``proven``, ``size_mismatch``)
 #: contribute covered bytes and nothing else, which is why the summary carries
-#: no key for them.
+#: no key for them.  This is the served shape rather than a vocabulary, so it
+#: is spelled out here rather than read: which buckets get a response key is
+#: this package's decision, and adding one to a released payload is a change
+#: the release notes have to make.
 _SUMMARY_COUNTED_BUCKETS: tuple[str, ...] = ("exact", "reloc", "near_match", "stub", "padding")
 
 
@@ -1133,11 +1140,10 @@ def _section_summary(section: Any) -> dict[str, Any]:
     here is a count or a byte sum over the section's own cells, which is
     exactly how the producer computed it.  The counts come from rebrew's
     ``Section.bucket_counts``; the byte sums re-bucket rebrew's ``Section
-    .buckets``, which is keyed by cell STATE, through this module's
-    :data:`_BUCKET_FOLD`, because no derived field carries a per-bucket byte
-    total.  A state rebrew folds into a bucket therefore needs a
-    ``_BUCKET_FOLD`` entry too, and the walk this replaces cost 5.8 ms on a
-    40k-cell section against 1.8 ms here.
+    .buckets``, which is keyed by cell STATE, through :data:`_BUCKET_FOLD`,
+    because no derived field carries a per-bucket byte total and the grouping
+    itself is rebrew's.  The walk this replaces cost 5.8 ms on a 40k-cell
+    section against 1.8 ms here.
 
     ``coveredBytes`` is ``Section.covered_bytes``, the reader's own
     total-minus-``none``; ``totalFunctions`` still walks the cells, because it

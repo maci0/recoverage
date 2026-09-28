@@ -2463,11 +2463,40 @@ class TestBucketReconciliation:
         assert {k: served[k] for k in (*self.BUCKET_KEYS, "total_cells")} == buckets
         self._reconciles(served)
 
-    #: The reverse of server._BUCKET_FOLD, built here so the walk below is
-    #: this module's own fold rather than the one under test.
+    #: The cell-state to bucket fold, written out here rather than read back
+    #: from ``server._BUCKET_FOLD`` (which reads it off
+    #: ``rebrew.coverage_toml._BUCKET_OF_STATE``), so the walks below are
+    #: checked against a literal and the two can be held against each other.
     _FOLD_BY_STATE: ClassVar[dict[str, str]] = {
-        state: bucket for bucket, states in _BUCKET_FOLD.items() for state in states
+        "data": "data",
+        "exact": "exact",
+        "near_match": "near_match",
+        "near_matching": "near_match",
+        "none": "none",
+        "padding": "padding",
+        "proven": "proven",
+        "reloc": "reloc",
+        "size_mismatch": "size_mismatch",
+        "stub": "stub",
+        "thunk": "thunk",
+        "verified": "exact",
     }
+
+    def test_the_state_to_bucket_fold_is_the_one_this_package_writes_down(self) -> None:
+        """``_BUCKET_FOLD`` is read off rebrew, not spelled out here any more.
+
+        A hand-written second copy of the fold was a vocabulary this package
+        drifted from silently: a state rebrew added was absent from the copy,
+        so it summed into no counted bucket while ``Section.covered_bytes``
+        still counted it, and the served byte figures stopped reconciling with
+        nothing failing. Reading the owner removes the drift; this holds what
+        the owner hands over against the mapping this package documents, so a
+        rebrew that changes the grouping says so here.
+        """
+        assert {bucket: set(states) for bucket, states in _BUCKET_FOLD.items()} == {
+            bucket: {state for state, b in self._FOLD_BY_STATE.items() if b == bucket}
+            for bucket in set(self._FOLD_BY_STATE.values())
+        }
 
     def test_the_bucket_row_matches_a_walk_of_the_cells(self) -> None:
         """The served row is a copy of what rebrew derived; prove they agree.

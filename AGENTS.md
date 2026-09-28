@@ -453,6 +453,15 @@ simpler and strictly wider.
      rebrew's, so `tests/test_server.py` (`TestBucketReconciliation`) pins
      them against an independent per-cell walk, and a cell-state vocabulary
      change lands in `rebrew.coverage_toml._BUCKET_OF_STATE` first, not here.
+     The byte side reads that same fold rather than re-spelling it:
+     `server._BUCKET_FOLD` is grouped off rebrew's `_BUCKET_OF_STATE`, because
+     `Section.buckets` is keyed by cell STATE and a second hand-written copy of
+     the grouping was a vocabulary this package drifted from silently (a state
+     rebrew added summed into no counted bucket while `Section.covered_bytes`
+     still counted it). A private name is read deliberately: it is the one
+     place the fold exists, a rename fails this import loudly where the copy
+     failed quietly, and `tests/test_server.py` (`TestBucketReconciliation`)
+     holds what it hands over against a literal written in the test.
    - `server.coverage_pct(covered, total)` is the ONE percentage a covered-byte
      ratio is rendered through: `summary.coveragePercent`, the per-section
      `coverage_pct` and `potato._section_pct` all take it, and it FLOORS to 2dp
