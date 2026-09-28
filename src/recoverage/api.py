@@ -1168,9 +1168,10 @@ def _dumps_with_cells(data: dict[str, Any], cells_json: dict[str, str | None]) -
         # String splice, not a JSON encoder: cells already holds a serialized
         # JSON array, and re-parsing it through Python dominated the cold
         # /data build.  A non-JSON cells encoding would need a real encoder
-        # here.
+        # here.  An omitted key (``cells is None``) leaves the section row as
+        # it stands, including the empty object that carries nothing else.
         if cells is None:
-            spliced = "{}" if sec_json == "{}" else sec_json
+            spliced = sec_json
         elif sec_json == "{}":
             spliced = '{"cells":' + cells + "}"
         else:

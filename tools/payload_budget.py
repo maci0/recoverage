@@ -13,23 +13,15 @@ Run it from the repository root through the locked interpreter:
 
 from __future__ import annotations
 
-import gzip
 import sys
 
-import brotli
-import zstandard
-
-from recoverage import ui
+from recoverage import server, ui
 
 
 def main() -> int:
     """Print one row per static encoding, plus the smallest and the budget."""
     payload = ui._build_index_payload()
-    sizes = {
-        "br": len(brotli.compress(payload, quality=ui.BROTLI_STATIC_QUALITY)),
-        "zstd": len(zstandard.ZstdCompressor(level=ui.ZSTD_STATIC_LEVEL).compress(payload)),
-        "gzip": len(gzip.compress(payload, compresslevel=ui.GZIP_STATIC_LEVEL)),
-    }
+    sizes = {name: len(body) for name, body in server.compress_static_bodies(payload).items()}
     winner = min(sizes, key=lambda name: sizes[name])
     print(f"inlined shell: {len(payload)} B uncompressed")
     for name in sorted(sizes, key=lambda key: sizes[key]):

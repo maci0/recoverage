@@ -2,26 +2,20 @@
 
 from __future__ import annotations
 
-import gzip
 import hashlib
 import logging
 import threading
 from pathlib import PurePosixPath
 from typing import NamedTuple
 
-import brotli  # type: ignore[import-untyped]
 import rcssmin  # type: ignore[import-untyped]
 import rjsmin  # type: ignore[import-untyped]
-import zstandard as zstd
 from bottle import static_file  # type: ignore[import-untyped]
 
 import recoverage.server as _server
 from recoverage.server import (
-    BROTLI_STATIC_QUALITY,
     CACHE_REVALIDATE,
-    GZIP_STATIC_LEVEL,
     SUPPORTED_ENCODINGS,
-    ZSTD_STATIC_LEVEL,
     HTTPResponse,
     _assets_dir,
     _finalized,
@@ -135,13 +129,12 @@ def _check_payload_budget(payload: bytes) -> None:
     ``_TCP_CWND_BUDGET`` for why the number is what it is, and docs/DESIGN.md
     for the measurement.
     """
-    results: list[tuple[str, int]] = [
-        ("gzip", len(gzip.compress(payload, compresslevel=GZIP_STATIC_LEVEL))),
-        ("br", len(brotli.compress(payload, quality=BROTLI_STATIC_QUALITY))),
-        ("zstd", len(zstd.ZstdCompressor(level=ZSTD_STATIC_LEVEL).compress(payload))),
-    ]
-
-    best_name, best_size = min(results, key=lambda r: r[1])
+    # The same bodies the shell is served from, at the same effort, so the
+    # measured figure is the one a client receives.  A tie goes to the earlier
+    # name in SUPPORTED_ENCODINGS, the tie-break the rest of the package uses.
+    bodies = compress_static_bodies(payload)
+    best_name = min(SUPPORTED_ENCODINGS, key=lambda name: len(bodies[name]))
+    best_size = len(bodies[best_name])
     if best_size <= _TCP_CWND_BUDGET:
         return
 
@@ -172,14 +165,14 @@ def warm_index_cache() -> None:
         # the identity response, so a cold first hit from any client is a
         # lookup rather than three full compressions.
         keys = [""]
-        for mask in range(1, 8):
+        for mask in range(1, 1 << len(SUPPORTED_ENCODINGS)):
             subset = [name for i, name in enumerate(SUPPORTED_ENCODINGS) if mask & (1 << i)]
             keys.append(", ".join(subset))
         # Every key picks the smallest of the same three bodies, so the shell is
-        # compressed three times for all eight keys rather than once per key
-        # (twelve), and brotli at BROTLI_STATIC_QUALITY — the most expensive
-        # compression in the package, and the one every warm-up used to run
-        # four times over — runs once.
+        # compressed three times for every key rather than once per key, and
+        # brotli at BROTLI_STATIC_QUALITY — the most expensive compression in
+        # the package, and the one every warm-up used to run four times over —
+        # runs once.
         bodies = compress_static_bodies(payload)
         variants: dict[str, _Variant] = {}
         for key in keys:

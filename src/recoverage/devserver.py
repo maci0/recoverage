@@ -63,9 +63,6 @@ class _ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
 
     daemon_threads = True
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
-
     @property
     def _connections_open(self) -> int:
         """Live connections, read from the gauge ``/api/health`` publishes.
@@ -87,7 +84,7 @@ class _ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
         branch; the superclass's own ``process_request`` releases it on every
         other one, including the thread's failure paths.
         """
-        if not self._admit_connection():
+        if not metrics.CONNECTIONS.admit(_MAX_CONNECTIONS):
             self._refuse_connection(request, client_address)
             return
         try:
@@ -98,15 +95,9 @@ class _ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
             # loses for the life of the process — exactly the failure the cap
             # exists for.  The socket goes with it: no thread will ever serve
             # this request.
-            self._release_connection()
+            metrics.CONNECTIONS.release()
             self.shutdown_request(request)
             raise
-
-    def _admit_connection(self) -> bool:
-        return metrics.CONNECTIONS.admit(_MAX_CONNECTIONS)
-
-    def _release_connection(self) -> None:
-        metrics.CONNECTIONS.release()
 
     def _refuse_connection(self, request: Any, client_address: Any) -> None:
         """Answer the 503 and close, so the client learns rather than hanging.
@@ -150,7 +141,7 @@ class _ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
         try:
             super().process_request_thread(request, client_address)
         finally:
-            self._release_connection()
+            metrics.CONNECTIONS.release()
 
     def app(self) -> WSGIApplication:
         """The WSGI app, or a loud failure if none was installed.
