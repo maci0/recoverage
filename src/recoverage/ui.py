@@ -543,8 +543,17 @@ def serve_static_asset(filename: str) -> bytes | HTTPResponse:
     variant_key = static_variant_key(accept_encoding)
     if not variant_key:
         # No shared encoding: hand off to bottle, which still does Range and
-        # If-Modified-Since on the raw file.
-        return static_file(filename, root=str(_assets_dir()))
+        # If-Modified-Since on the raw file.  The revalidation header is set
+        # here rather than left to bottle: the documented contract for these
+        # four assets is `no-cache` with a strong ETag, and bottle's
+        # `static_file` sends no Cache-Control at all, so a client that
+        # negotiates no shared encoding (or sends `identity`, which
+        # `accepted_encodings` counts as accepting nothing) got heuristic
+        # freshness instead of a revalidate.
+        raw = static_file(filename, root=str(_assets_dir()))
+        if isinstance(raw, HTTPResponse):
+            raw.set_header("Cache-Control", CACHE_REVALIDATE)
+        return raw
 
     key = (filename, variant_key)
     with _STATIC_LOCK:

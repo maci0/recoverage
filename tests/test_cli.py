@@ -1564,7 +1564,7 @@ class TestServeServerWiring:
             (["--cors"], None, []),
         ],
     )
-    def test_the_installed_cors_allowlist_is_the_resolved_one(
+    def test_the_installed_cors_allowlist_comes_from_the_flag_or_the_env(
         self,
         flag: list[str],
         environment: str | None,
