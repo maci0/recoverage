@@ -39,8 +39,11 @@ def _db_path() -> Path:
 
     Resolution is ``RECOVERAGE_DB`` when that variable is set, else
     ``rebrew.workspace.db_path(cwd)``: ``[project].db_dir`` resolved against
-    cwd when present, else ``<cwd>/db/coverage.db``.  A missing, unreadable or
-    invalid config falls back to the default (the shared reader never raises).
+    cwd when present, else ``<cwd>/db/coverage.db``.  A missing config file
+    falls back to that default.  A file that is present but not readable
+    UTF-8 TOML raises ``WorkspaceConfigError``: falling back would select
+    ``db/coverage.db``, which may be a different database than the one the
+    file names.  The environment override is applied before the file is read.
 
     Memoized per (cwd, config stat fingerprint): the config is re-read only when
     the file's mtime/size changes (or cwd moves), so request-rate calls and the

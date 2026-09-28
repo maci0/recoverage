@@ -348,6 +348,22 @@ def _check_env_or_exit() -> None:
         raise typer.Exit(2) from None
 
 
+def _db_path_or_exit(*, json_output: bool = False) -> Path:
+    """Resolve coverage.db, exiting 2 when the project file cannot be read.
+
+    A missing ``rebrew-project.toml`` still resolves to ``db/coverage.db``.
+    A file that is present but not valid TOML raises from the shared reader;
+    exiting here keeps that from becoming a traceback, and from silently
+    opening a different database.
+    """
+    from rebrew.workspace import WorkspaceConfigError
+
+    try:
+        return _db_path()
+    except WorkspaceConfigError as exc:
+        _fail(f"Error: {exc}", str(exc), 2, json_output)
+
+
 def _open_db_or_exit(
     *, missing_exit_code: int = 1, json_output: bool = False
 ) -> sqlite3.Connection:
@@ -362,7 +378,7 @@ def _open_db_or_exit(
     from recoverage.server import _open_db
 
     _check_env_or_exit()
-    p = _db_path()
+    p = _db_path_or_exit(json_output=json_output)
     if not p.exists():
         _fail(
             f"Error: database not found at {p}",
@@ -848,7 +864,7 @@ def serve(
     typer.echo(f"Serving coverage dashboard at {url}")
     typer.echo(f"  Listening on: {listen_url}")
     typer.echo(f"  Assets: {assets}")
-    typer.echo(f"  DB: {_db_path()}")
+    typer.echo(f"  DB: {_db_path_or_exit()}")
     # The full active configuration, resolved from flags and the environment,
     # so an operator can confirm what the process is actually running with.
     # The token is reported as set/unset, never by value.

@@ -7,6 +7,18 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Schema v11 is accepted.** Current rebrew stamps `db_version` `"11"`.
+  The `cells` table is `WITHOUT ROWID`, keyed by
+  `(target, section_name, start)`, and no longer has an `id` column.
+  Databases stamped `"3"` through `"10"` stay servable. A database whose
+  stamp is not `"11"` is migrated with `rebrew build-db --force`.
+- **A broken `rebrew-project.toml` is reported instead of ignored.** A file
+  that is present but not valid TOML used to be skipped, and the dashboard
+  then opened `db/coverage.db`, which can be a different database than the
+  one the file named. Commands that read the database now exit 2 with the
+  parse error, and a request answers 503. A missing config file still uses
+  `db/coverage.db`. Setting `RECOVERAGE_DB` still selects that file.
+
 ## [2.0.0] - 2026-09-27
 
 ### Added

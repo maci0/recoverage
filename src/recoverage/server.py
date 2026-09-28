@@ -43,6 +43,7 @@ from rebrew.workspace import (
     SECTION_CELLS_AGG_SQL,
     SECTION_CELLS_COLUMN,
     SECTION_CELLS_TABLE,
+    WorkspaceConfigError,
     coverage_db_lock,
     decode_section_cells,
     parse_va_candidates,
@@ -872,11 +873,19 @@ def _get_targets_config() -> dict[str, Any]:
         if _TOML_CONFIG_CACHE is not None and current == _TOML_CACHE_MTIME:
             return _TOML_CONFIG_CACHE
 
-        config = read_config(root)
-        if toml_path.is_file() and not config:
-            # read_config swallows the read/decode error and returns {}; a
-            # present file that yields nothing is unreadable or not valid TOML.
-            _log.warning("Failed to load %s: unreadable or invalid TOML", CONFIG_NAME)
+        try:
+            config = read_config(root)
+        except WorkspaceConfigError as exc:
+            # A present file that is not readable UTF-8 TOML. The shared
+            # reader raises rather than returning {}: the defaults that
+            # would fill in name a different workspace. Targets contributed
+            # by the file are dropped; an explicit RECOVERAGE_DB still serves.
+            _log.warning("Failed to load %s: %s", CONFIG_NAME, exc)
+            config = {}
+        else:
+            if toml_path.is_file() and not config:
+                # A present file that parses to nothing names no targets.
+                _log.warning("Failed to load %s: unreadable or invalid TOML", CONFIG_NAME)
         targets_info: dict[str, Any] = {}
         for tid, entry in targets_table(config).items():
             binary = target_binary(root, entry)
@@ -1737,8 +1746,10 @@ def _load_metadata(c: sqlite3.Cursor, target: str) -> dict[str, Any]:
 
 # v8 CHECK-constrains functions.status, v9 CHECK-constrains cells.state and
 # adds idx_metadata_key, v10 widens the cell-state set (extract_error,
-# invalid_va). None of those add or remove a column this server queries.
-KNOWN_SCHEMA_VERSIONS: frozenset[str] = frozenset({"3", "4", "5", "6", "7", "8", "9", "10"})
+# invalid_va), v11 stores cells WITHOUT ROWID under the primary key
+# (target, section_name, start) and drops the surrogate id. None of those
+# add or remove a column this server queries.
+KNOWN_SCHEMA_VERSIONS: frozenset[str] = frozenset({"3", "4", "5", "6", "7", "8", "9", "10", "11"})
 
 # Schema check memoized on the DB's read snapshot (see
 # _snapshot_db_mtime): the check is two queries (metadata + full sqlite_master
@@ -1751,7 +1762,7 @@ _SCHEMA_VERSION_CACHE: tuple[tuple[int, int], str] | None = None
 def _check_schema_version(conn: sqlite3.Connection) -> str:
     """Read the stored db_version metadata; warn if it is not a known-compatible version.
 
-    Known-compatible versions: 3 through 10.  Version 3 is still readable
+    Known-compatible versions: 3 through 11.  Version 3 is still readable
     because none of the v4 constraints affect reads of existing data.  Any other
     version is logged as a warning. recoverage does not abort.
 
@@ -1902,13 +1913,14 @@ def _check_schema_version_uncached(conn: sqlite3.Connection) -> str:
             missing = required - present
             if not missing and version != "3":
                 # Object names present. Verify the query-critical columns.
-                # v3 predates that column set. v4 through v10 share it:
-                # v8 through v10 add CHECK constraints and an index, not
-                # columns these queries name. v6 additions (updated_by /
-                # updated_at, globals.status, verify reg_delta /
-                # effective_match) are read when present and omitted when
-                # absent, so a missing one degrades rather than 503s. The
-                # shape gate still reports a missing required column.
+                # v3 predates that column set. v4 through v11 share it:
+                # v8 through v10 add CHECK constraints and an index, and v11
+                # drops cells.id. None of those name a column these queries
+                # read. v6 additions (updated_by / updated_at, globals.status,
+                # verify reg_delta / effective_match) are read when present
+                # and omitted when absent, so a missing one degrades rather
+                # than 503s. The shape gate still reports a missing required
+                # column.
                 missing |= _missing_required_columns(conn)
             if missing:
                 _log.warning(
@@ -2431,6 +2443,31 @@ def _require_auth() -> None:
 
 
 app.add_hook("before_request", _require_auth)
+
+
+def _reject_broken_project_config() -> None:
+    """Refuse a request when the project file is present but unreadable.
+
+    Registered after the auth hook, so a missing token still answers 401.
+    ``_db_path`` raises ``WorkspaceConfigError`` for a present file that is
+    not UTF-8 TOML; serving anyway would open ``db/coverage.db``, which may
+    be a different database than the one the file named. ``RECOVERAGE_DB``
+    is applied first, so an explicit database still serves.
+    """
+    try:
+        _db_path()
+    except WorkspaceConfigError as exc:
+        _log.warning("recoverage: %s", exc)
+        raise _json_err(
+            503,
+            {
+                "error": "db_unavailable",
+                "detail": f"{CONFIG_NAME} cannot be read; fix the file or set RECOVERAGE_DB",
+            },
+        ) from None
+
+
+app.add_hook("before_request", _reject_broken_project_config)
 
 
 def _db_unavailable_err(exc: sqlite3.Error) -> HTTPResponse:

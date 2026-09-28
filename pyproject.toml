@@ -39,8 +39,9 @@ dependencies = [
     # 2.10.0 is the floor. Regen imports rebrew.catalog.cli.run_catalog
     # (rebrew.catalog stopped re-exporting it in 2.7.0). Readers take
     # coverage_db_lock shared around open_sqlite_ro, and 2.10.0 is the
-    # first release that ships that lock. The schema stamp since 2.7.0
-    # is "10".
+    # first release that ships that lock. The current sibling stamps
+    # db_version "11". Stamps "3" through "10" stay servable, and a
+    # non-current stamp is migrated with rebrew build-db --force.
     "rebrew>=2.10.0",
     "rich>=15.0.0",
     "rjsmin>=1.2",

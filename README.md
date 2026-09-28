@@ -126,7 +126,9 @@ uv run recoverage serve
 > [!NOTE]
 > The server resolves `coverage.db` from the **current working directory**:
 > `[project] db_dir` in `rebrew-project.toml` when set, falling back to
-> `db/coverage.db` — so run it from your project root.
+> `db/coverage.db` when that file is absent — so run it from your project root.
+> A `rebrew-project.toml` that is present but not valid TOML is an error, not
+> a fallback. `RECOVERAGE_DB` still selects an explicit database.
 
 ---
 
@@ -443,7 +445,7 @@ rebrew catalog                 rebrew build-db           recoverage (Bottle + SQ
 ```
 
 1. **`rebrew catalog`**: Scans your project's source annotations and writes intermediate `db/data_*.json` files containing coverage metrics. Jump table / switch data bytes are absorbed into their parent function's size. Use `--export-ghidra-labels` to generate `ghidra_data_labels.json` for round-trip Ghidra sync.
-2. **`rebrew build-db`**: Consumes those JSON files and builds a structured `db/coverage.db` (SQLite, `db_version` `"10"`) database, storing per-function metadata (`detected_by`, `size_by_tool`, `textOffset`), per-global metadata (`module`, `size`), per-cell metadata (`label`, `parent_function`), and stamping `db_version` for schema detection.  It also materializes the two objects the dashboard reads instead of re-deriving them on every request: the per-section coverage buckets (`section_cell_stats`) and the per-section cell JSON (`section_cells_json`, zstd, cells ordered by `start`).  Both are derived from `cells` and rebuilt on every build, so a database produced by an older rebrew is still *served*. The server falls back to the equivalent live queries. `rebrew build-db` requires `--force` to migrate a database whose stamp is not `"10"`. See [DB_FORMAT.md](../rebrew/docs/DB_FORMAT.md) for the full schema.
+2. **`rebrew build-db`**: Consumes those JSON files and builds a structured `db/coverage.db` (SQLite, `db_version` `"11"`) database, storing per-function metadata (`detected_by`, `size_by_tool`, `textOffset`), per-global metadata (`module`, `size`), per-cell metadata (`label`, `parent_function`), and stamping `db_version` for schema detection.  It also materializes the two objects the dashboard reads instead of re-deriving them on every request: the per-section coverage buckets (`section_cell_stats`) and the per-section cell JSON (`section_cells_json`, zstd, cells ordered by `start`).  Both are derived from `cells` and rebuilt on every build, so a database produced by an older rebrew is still *served*. The server falls back to the equivalent live queries. `rebrew build-db` requires `--force` to migrate a database whose stamp is not `"11"`. See [DB_FORMAT.md](../rebrew/docs/DB_FORMAT.md) for the full schema.
 3. **`recoverage`**: Starts a **Bottle** web server. The backend serves API endpoints querying the SQLite database, while the frontend is a zero-build Single Page Application (SPA) powered by **VanJS**, rendering the interactive defrag grid.
 
 You can run `recoverage` independently on any machine (or even host it remotely, see the caveat below) as long as it has access to a compiled `coverage.db`.  rebrew is a required dependency (it provides the shared workspace/config resolution and the in-process regen), but no project workspace or compiler toolchain is required to serve the dashboard.

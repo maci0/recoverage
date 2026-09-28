@@ -72,15 +72,46 @@ class TestResolveDbPath:
         result = _db_path()
         assert result == tmp_path.resolve() / "db" / "coverage.db"
 
-    def test_invalid_toml_uses_fallback(
+    def test_invalid_toml_is_an_error(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A malformed rebrew-project.toml is silently ignored — fall back."""
+        """A present file that is not valid TOML must not select another database."""
+        from rebrew.workspace import WorkspaceConfigError
+
         monkeypatch.chdir(tmp_path)
         toml = tmp_path / "rebrew-project.toml"
         toml.write_text("this is not valid toml }{", encoding="utf-8")
-        result = _db_path()
-        assert result == tmp_path.resolve() / "db" / "coverage.db"
+        with pytest.raises(WorkspaceConfigError):
+            _db_path()
+
+    def test_request_refuses_invalid_project_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A request must not open a fallback database when the project file is broken."""
+        import json
+
+        from conftest import decode_body, wsgi_get
+
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "rebrew-project.toml").write_text("this is not valid toml }{", encoding="utf-8")
+        status, headers, body = wsgi_get("/api/health")
+        assert status.startswith("503")
+        payload = json.loads(decode_body(body, headers))
+        assert payload["error"] == "db_unavailable"
+        assert b"Traceback" not in body
+
+    def test_explicit_db_still_serves_when_the_project_file_is_broken(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """RECOVERAGE_DB is applied before the project file is read."""
+        from conftest import wsgi_get
+
+        db = Path("db/coverage.db").resolve()
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "rebrew-project.toml").write_text("this is not valid toml }{", encoding="utf-8")
+        monkeypatch.setenv("RECOVERAGE_DB", str(db))
+        status, _, body = wsgi_get("/api/health")
+        assert status.startswith("200"), body
 
     def test_no_project_section_uses_fallback(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

@@ -231,7 +231,7 @@ On function/global selection:
 
 ## Database Schema
 
-The database is rebrew's `coverage.db` (see [DB_FORMAT.md](../../rebrew/docs/DB_FORMAT.md)). This server reads schema v3 through v10. v10 is the stamp current rebrew writes.
+The database is rebrew's `coverage.db` (see [DB_FORMAT.md](../../rebrew/docs/DB_FORMAT.md)). This server reads schema v3 through v11. v11 is the stamp current rebrew writes. Stamps v3 through v10 stay servable. A database whose stamp is not `"11"` is migrated with `rebrew build-db --force`.
 
 ### Schema Compatibility
 
@@ -244,9 +244,10 @@ The database is rebrew's `coverage.db` (see [DB_FORMAT.md](../../rebrew/docs/DB_
 | v7 | Fully supported. `section_cell_stats` became a table and `section_cells_json` was added, both materialized by `build-db` |
 | v8 | Fully supported. `functions.status` is CHECK-constrained to the known status set. No new columns |
 | v9 | Fully supported. `cells.state` is CHECK-constrained, and `metadata` gained `idx_metadata_key`. No new columns |
-| v10 | Fully supported (current). The cell-state CHECK set follows `KNOWN_STATUSES`, so `extract_error` and `invalid_va` are stored as themselves. No new columns |
+| v10 | Fully supported. The cell-state CHECK set follows `KNOWN_STATUSES`, so `extract_error` and `invalid_va` are stored as themselves. No new columns |
+| v11 | Fully supported (current). `cells` is `WITHOUT ROWID` with primary key `(target, section_name, start)`; the surrogate `id` column is gone. No column this server queries was added or removed |
 
-Recoverage performs a soft version check on every database open and logs a warning if the stored `db_version` is not one of the known-compatible versions (`3` through `10`). It never aborts on an unexpected version. `/data` carries the accepted set as `known_schema` so the SPA can tell a stale server from an empty database.
+Recoverage performs a soft version check on every database open and logs a warning if the stored `db_version` is not one of the known-compatible versions (`3` through `11`). It never aborts on an unexpected version. Stamps `"3"` through `"10"` stay servable. A database whose stamp is not `"11"` is migrated with `rebrew build-db --force`. `/data` carries the accepted set as `known_schema` so the SPA can tell a stale server from an empty database.
 
 ### Tables
 * `metadata`: Key-value pairs per target — coverage summaries, paths, `db_version` stamp

@@ -759,6 +759,30 @@ class TestPartialSchemaCleanExit:
         assert not isinstance(result.exception, sqlite3.OperationalError)
 
 
+class TestBrokenProjectFile:
+    """A present but invalid rebrew-project.toml must not select another database."""
+
+    def test_stats_exits_2(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "rebrew-project.toml").write_text("this is not valid toml }{", encoding="utf-8")
+        result = runner.invoke(app, ["stats"])
+        text = result.output + (result.stderr or "")
+        assert result.exit_code == 2, text
+        assert "not valid TOML" in text
+        assert "Traceback" not in text
+
+    def test_stats_json_reports_the_parse_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "rebrew-project.toml").write_text("this is not valid toml }{", encoding="utf-8")
+        result = runner.invoke(app, ["stats", "--json"])
+        assert result.exit_code == 2, result.output
+        payload = json.loads(result.stdout)
+        assert payload["exit_code"] == 2
+        assert "not valid TOML" in payload["error"]
+
+
 # ── check: exit-code and verdict contracts ────────────────────────
 
 

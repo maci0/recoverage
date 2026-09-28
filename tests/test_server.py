@@ -438,8 +438,9 @@ def _create_v4_db(db: Path, functions_columns: str, *, version: str = "4") -> No
 
     *functions_columns* is the tail of the functions table's column list, so
     tests can omit query-critical columns to exercise the column gate.
-    The column set is what v4 through v10 share; *version* only changes the
-    stamp.
+    The column set is what v4 through v11 share; *version* only changes the
+    stamp. v11's ``cells`` table is ``WITHOUT ROWID`` and has no ``id``;
+    this helper keeps the older shape, which the same gate still accepts.
     """
     conn = sqlite3.connect(db)
     try:
@@ -577,6 +578,133 @@ class TestCurrentRebrewSchema:
         _create_v4_db(incomplete, _FN_COLUMNS_NO_TEXT_OFFSET, version=_CURRENT_DB_VERSION)
         with contextlib.closing(sqlite3.connect(incomplete)) as conn:
             assert srv._check_schema_version_uncached(conn) == "<incomplete>"
+
+    def test_older_stamps_stay_servable(self, tmp_path: Any) -> None:
+        """Stamps the column gate already understood keep reporting themselves."""
+        import sqlite3
+
+        from recoverage import server as srv
+
+        for stamp in ("4", "10"):
+            db = tmp_path / f"v{stamp}.db"
+            _create_v4_db(db, _FN_COLUMNS_FULL, version=stamp)
+            with contextlib.closing(sqlite3.connect(db)) as conn:
+                assert srv._check_schema_version_uncached(conn) == stamp
+
+    def test_current_cells_shape_is_readable(self, tmp_path: Any) -> None:
+        """A WITHOUT ROWID cells table with no id serves its stored rows.
+
+        The installed producer's cells table has no surrogate ``id`` and no
+        ``rowid``. Selecting either fails the query, so a shipped cell read
+        and a shipped section-stat read that return the stored cell are the
+        proof those statements do not name them.
+        """
+        import sqlite3
+
+        from rebrew.build_db import _CURRENT_DB_VERSION
+
+        from recoverage import server as srv
+
+        db = tmp_path / "coverage.db"
+        _create_current_shape_db(db, version=_CURRENT_DB_VERSION)
+        conn = sqlite3.connect(db)
+        conn.row_factory = sqlite3.Row
+        try:
+            ddl = conn.execute("SELECT sql FROM sqlite_master WHERE name = 'cells'").fetchone()
+            assert ddl is not None
+            assert "WITHOUT ROWID" in ddl[0]
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(cells)")}
+            assert "id" not in columns
+            assert srv._check_schema_version_uncached(conn) == _CURRENT_DB_VERSION
+
+            cursor = conn.cursor()
+            cells = srv._cells_json_rows(cursor, "GAME", expected_sections={".text"})
+            assert [name for name, _ in cells] == [".text"]
+            stored = json.loads(cells[0][1])
+            assert stored == [{"start": 0, "end": 16, "span": 16, "state": "exact"}]
+            assert "id" not in stored[0]
+
+            buckets = list(srv.section_bucket_rows(cursor, "GAME", expected={".text"}))
+            assert len(buckets) == 1
+            assert buckets[0]["section_name"] == ".text"
+            assert srv._cell_bucket_row(buckets[0])["exact"] == 1
+            assert srv._cell_bucket_row(buckets[0])["total_cells"] == 1
+        finally:
+            conn.close()
+
+
+def _create_current_shape_db(db: Path, *, version: str) -> None:
+    """Complete known-schema DB whose ``cells`` table matches the current producer.
+
+    ``WITHOUT ROWID``, primary key ``(target, section_name, start)``, no
+    surrogate ``id``. One ``.text`` cell is stored. ``section_cell_stats``
+    is present and empty, so the section-stat read falls through to the live
+    aggregate over ``cells`` rather than a stub view.
+    """
+    conn = sqlite3.connect(db)
+    try:
+        conn.executescript(
+            f"""
+            CREATE TABLE metadata (target TEXT, key TEXT, value TEXT);
+            CREATE TABLE sections (
+                target TEXT, name TEXT, va INTEGER, size INTEGER,
+                fileOffset INTEGER, unitBytes INTEGER, columns INTEGER
+            );
+            CREATE TABLE cells (
+                target TEXT NOT NULL,
+                section_name TEXT NOT NULL,
+                start INTEGER NOT NULL,
+                end INTEGER NOT NULL,
+                span INTEGER NOT NULL,
+                state TEXT NOT NULL,
+                functions TEXT NOT NULL,
+                label TEXT,
+                parent_function TEXT,
+                PRIMARY KEY (target, section_name, start)
+            ) WITHOUT ROWID;
+            CREATE TABLE functions (
+                target TEXT, va INTEGER, name TEXT, vaStart TEXT, size INTEGER,
+                fileOffset INTEGER, status TEXT, module TEXT, cflags TEXT,
+                symbol TEXT, markerType TEXT, ghidra_name TEXT, list_name TEXT,
+                is_thunk INTEGER, is_export INTEGER, sha256 TEXT, files TEXT,
+                detected_by TEXT, size_by_tool TEXT, {_FN_COLUMNS_FULL}
+            );
+            CREATE TABLE globals (
+                target TEXT, va INTEGER, name TEXT, decl TEXT, files TEXT,
+                module TEXT, size INTEGER
+            );
+            CREATE TABLE verify_results (
+                target TEXT, va INTEGER, verified_at TEXT, byte_delta INTEGER,
+                diff_lines INTEGER, similarity REAL
+            );
+            CREATE TABLE history (
+                id INTEGER, target TEXT, va INTEGER, old_status TEXT,
+                new_status TEXT, changed_at TEXT
+            );
+            CREATE TABLE section_cell_stats (
+                target TEXT, section_name TEXT, total_cells INTEGER,
+                exact_count INTEGER, reloc_count INTEGER, near_match_count INTEGER,
+                stub_count INTEGER, padding_count INTEGER, data_count INTEGER,
+                thunk_count INTEGER, none_count INTEGER, proven_count INTEGER,
+                size_mismatch_count INTEGER
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO metadata VALUES (?, 'db_version', ?)",
+            (SCHEMA_TARGET, f'"{version}"'),
+        )
+        conn.execute(
+            "INSERT INTO metadata VALUES ('GAME', 'db_version', ?)",
+            (f'"{version}"',),
+        )
+        conn.execute("INSERT INTO sections VALUES ('GAME', '.text', 268435456, 16, 512, 1, 16)")
+        conn.execute(
+            "INSERT INTO cells VALUES ('GAME', '.text', 0, 16, 16, 'exact', '[]', NULL, NULL)"
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 class TestReadOnlyOpen:

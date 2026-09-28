@@ -211,6 +211,11 @@ class TestRebrewSurface:
         assert list(inspect.signature(load_config).parameters)[:1] == ["root"]
         project_root = inspect.signature(build_db).parameters["project_root"]
         assert project_root.default is None
+        # The three calls run_regen makes, bound against the installed rebrew.
+        root = Path("project")
+        inspect.signature(load_config).bind(root)
+        inspect.signature(run_catalog).bind(object())
+        inspect.signature(build_db).bind(root)
 
 
 class TestOpenAndReap:
