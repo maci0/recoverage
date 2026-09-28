@@ -4739,6 +4739,39 @@ class TestRepoFileCompression:
         assert status.startswith(("206", "200")), status
         assert raw[:16] in body
 
+    def test_the_content_type_follows_the_file_not_the_host(
+        self, tmp_path: Path, monkeypatch: Any
+    ) -> None:
+        """A pane's file gets the same header on every machine.
+
+        The type used to come from `mimetypes.guess_type`, which answers from
+        the HOST's database: `.c` is `text/plain` only because Linux ships an
+        entry for it, `.def`/`.inc`/`.asm` had none at all and fell through to
+        `application/octet-stream` — the one answer that says "download me"
+        for a body this route had just decided was text.  Windows answers from
+        the registry, so the same file arrived with a third header there.
+
+        The type now follows the same suffix set that decided the file is text,
+        so a served source file is text on every host and the header cannot
+        disagree with the compression decision.
+        """
+        src = self._project(tmp_path, monkeypatch)
+        for name in ("main.c", "header.h", "exports.def", "boiler.inc", "stub.asm"):
+            (src / name).write_bytes(b"/* body */\n" * 200)
+
+        for name in ("main.c", "header.h", "exports.def", "boiler.inc", "stub.asm"):
+            status, headers, _body = wsgi_get(f"/src/demo/{name}", _ACCEPT_ALL_ENCODINGS)
+            assert status.startswith("200"), name
+            assert headers["Content-Type"].startswith("text/plain"), name
+
+    def test_a_suffix_with_a_narrower_type_gets_it(self) -> None:
+        """`.json` is not text/plain, and the pane still gets the precise type."""
+        from recoverage.ui import _repo_file_type
+
+        assert _repo_file_type(".json") == "application/json; charset=utf-8"
+        assert _repo_file_type(".css") == "text/css; charset=utf-8"
+        assert _repo_file_type(".c") == "text/plain; charset=utf-8"
+
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
 class TestVaOverflowValidation:

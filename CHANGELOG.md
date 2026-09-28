@@ -255,6 +255,26 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **A regen was refused on macOS and Windows for a mismatch that did not
+  exist.** `RECOVERAGE_DB` and the directory rebrew writes to were compared as
+  path strings, and on the two filesystems that ignore case by default
+  `/proj/DB` and `/proj/db` are one directory under two spellings, so the guard
+  exited 2 and the only way out was to respell the variable. The comparison asks
+  the operating system which directory a path names, and is still exact on a
+  case-sensitive filesystem.
+- **A source file's `Content-Type` depended on the host.** `/src/<file>` read
+  its type from the machine's mime database, so a `.c` file arrived as
+  `text/plain` on Linux (which ships an entry for it), as whatever the Windows
+  registry holds, and `.def`/`.inc`/`.asm` as `application/octet-stream`, the
+  one answer that says "download me" for a body the route had just decided was
+  text. The type now follows the same suffix set that decides a file is text,
+  so it is the same on every machine and cannot disagree with the compression
+  decision.
+- `--port 0` could publish a port the listener then failed to bind. The probe
+  that resolves the ephemeral port took whichever address family the resolver
+  listed first, while the listener took IPv6 only when every answer was IPv6,
+  so on a dual-stack host the port came off the IPv6 socket and the AF_INET
+  listener then failed on it. One definition of the family is now read by both.
 - **Potato Mode reported a near-perfect match as a perfect one.** A function's
   code-similarity (both the function row and the latest `rebrew verify` record)
   is a 0-1 fraction, and the dashboard renders it through the flooring helper

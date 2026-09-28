@@ -20,7 +20,7 @@ from rebrew.coverage_toml import CoverageTomlError
 from typer.testing import CliRunner
 
 from recoverage import cli, devserver
-from recoverage.cli import app
+from recoverage.cli import _server_class_for, app
 
 runner = CliRunner()
 
@@ -1114,6 +1114,29 @@ class TestEphemeralPort:
         assert port > 0
         with socket.socket() as probe:
             probe.bind(("127.0.0.1", port))
+
+    def test_the_probe_binds_the_family_the_listener_will_hold(self) -> None:
+        """The probe and the listener must not resolve the family separately.
+
+        The probe used to take ``infos[0][0]`` (whichever answer the resolver
+        listed first) while ``_server_class_for`` took IPv6 only when EVERY
+        answer was IPv6.  On a dual-stack host that reserved the port on the
+        IPv6 socket and printed a number the AF_INET listener then failed to
+        bind, so ``--port 0`` published a port the server never held.  One
+        definition, read by both, is the fix; this pins that they read it.
+        """
+        for host in ("127.0.0.1", "::1", "localhost"):
+            family = devserver.listen_family(host)
+            assert _server_class_for(host).address_family is family, host
+
+    def test_a_bind_the_probe_cannot_make_keeps_the_zero(self) -> None:
+        """A host that resolves but is not bindable reports 0, not a number.
+
+        The listener fails on that address with the resolver's and the OS's
+        own error and a better message; a port taken off a socket this process
+        could not open would be a number nothing ever answers on.
+        """
+        assert devserver.resolve_listen_port(0, "192.0.2.1") == 0
 
     def test_banner_and_config_name_the_bound_port(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]

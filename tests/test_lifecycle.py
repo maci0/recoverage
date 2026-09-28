@@ -250,6 +250,68 @@ class TestRunRegen:
 
         assert [name for name, *_ in events] == ["load_config", "run_catalog", "build_db"]
 
+    def test_a_differently_spelled_override_on_a_case_insensitive_fs_runs(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """`/proj/DB` and `/proj/db` are ONE directory on macOS and Windows.
+
+        Compared as strings they are two, and the guard refused a regen that
+        would have reached the dashboard, naming a mismatch that does not
+        exist.  The comparison asks the OS instead, so it is right on a
+        case-insensitive filesystem and still exact on a case-sensitive one.
+
+        Only the case arm is exercised, and only where the host agrees that
+        the two spellings are one directory: on a case-sensitive filesystem
+        they are genuinely two directories and the refusal is the correct
+        answer, so the test skips rather than asserting the wrong thing.
+        """
+        from recoverage.regen import _same_directory
+
+        upper = tmp_path / "DB"
+        upper.mkdir()
+        lower = tmp_path / "db"
+        if not _same_directory(upper, lower):
+            pytest.skip("this filesystem distinguishes the two spellings")
+
+        events: list[tuple[str, Any]] = []
+        _record_rebrew_calls(monkeypatch, events)
+        _install_fake_workspace(monkeypatch, upper)
+
+        monkeypatch.setenv("RECOVERAGE_DB", str(lower))
+        run_regen(tmp_path)
+
+        assert [name for name, *_ in events] == ["load_config", "run_catalog", "build_db"]
+
+    def test_two_directories_that_only_look_alike_are_still_refused(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """The OS is asked which directory, not whether the names match.
+
+        A symlink and its target, and a path with `..` in it, are the same
+        directory; a hardlink to a directory is not something a filesystem
+        hands out, so the two spellings below are genuinely distinct and must
+        keep raising.  Without this the samefile fallback would be a way to
+        wave a real mismatch through.
+        """
+        from recoverage.regen import RegenDbMismatchError, _same_directory
+
+        real = tmp_path / "db"
+        real.mkdir()
+        other = tmp_path / "elsewhere"
+        other.mkdir()
+
+        assert _same_directory(real, real / ".." / "db"), "a `..` hop is the same directory"
+        assert not _same_directory(real, other)
+
+        events: list[tuple[str, Any]] = []
+        _record_rebrew_calls(monkeypatch, events)
+        _install_fake_workspace(monkeypatch, real)
+
+        monkeypatch.setenv("RECOVERAGE_DB", str(other))
+        with pytest.raises(RegenDbMismatchError):
+            run_regen(tmp_path)
+        assert events == []
+
 
 def _install_fake_workspace(monkeypatch: pytest.MonkeyPatch, db_dir: Path) -> None:
     """Fake ``rebrew.workspace`` with *db_dir* as the resolved coverage directory.

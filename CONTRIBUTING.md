@@ -35,12 +35,21 @@ it. Without
 file://…/rebrew`; `make setup` names the missing checkout instead.
 
 In a git worktree the checkout is not beside the tree, so `../rebrew` resolves
-to something that is not rebrew. Symlink the sibling path at a rebrew
-checkout:
+to something that is not rebrew. Link the sibling path at a rebrew checkout
+from the worktree root:
 
 ```bash
-ln -s /path/to/rebrew ../rebrew   # from the worktree root
+ln -s /path/to/rebrew ../rebrew   # macOS and Linux
 ```
+
+```powershell
+New-Item -ItemType Junction -Path ..\rebrew -Target C:\path\to\rebrew
+```
+
+A junction, not `New-Item -ItemType SymbolicLink`: creating a Windows symlink
+needs either elevation or Developer Mode, so the symlink spelling fails on a
+default shell and the worktree bootstrap stops there. A junction needs
+neither, and uv resolves `../rebrew` through it the same way.
 
 `make setup REBREW_DIR=<path>` only moves the preflight check; uv still reads
 the path out of `pyproject.toml`, so a check that passes there and a sync that

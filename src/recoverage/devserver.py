@@ -72,6 +72,33 @@ def configure_transport(*, max_connections: int, client_timeout_seconds: int) ->
     metrics.CONNECTIONS.set_limit(max_connections)
 
 
+def listen_family(host: str) -> socket.AddressFamily:
+    """The address family the listener for *host* binds.
+
+    Probed through ``getaddrinfo`` rather than sniffed off the spelling, so a
+    hostname that resolves to IPv6 only is covered as well as a literal, and a
+    name that offers both keeps ``AF_INET`` (the historical default, and the
+    one a dual-stack host's own loopback answer points at).  A name that
+    resolves to neither keeps ``AF_INET`` and fails in ``bind()`` with the
+    resolver's own error, as it always has.
+
+    ONE definition for the family, because two readers need it and the port
+    the banner prints has to come off the socket the listener will hold:
+    :func:`resolve_listen_port` below and ``cli._server_class_for``, which
+    picks the class carrying it.  A probe that bound AF_INET6 where the
+    listener binds AF_INET reserved the port on the wrong interface, so
+    ``--port 0`` published a number the server then failed to bind.
+    """
+    try:
+        infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    except socket.gaierror:
+        return socket.AF_INET
+    families = {info[0] for info in infos}
+    if families == {socket.AF_INET6}:
+        return socket.AF_INET6
+    return socket.AF_INET
+
+
 def resolve_listen_port(port: int, host: str) -> int:
     """The port to actually bind: *port*, or one the OS picks when it is 0.
 
@@ -83,20 +110,25 @@ def resolve_listen_port(port: int, host: str) -> int:
     before the listener binds, is what keeps those four from naming port 0,
     which is not an address anything can connect to.
 
-    The socket is bound to *host* and closed again, so the port comes from the
-    family and the interface the server will use rather than from a second
-    guess at them; a host that does not resolve keeps the 0 the OS would have
+    The socket is bound to *host* on the family :func:`listen_family` names,
+    which is the family the listener itself will hold, and closed again, so the
+    port comes from the interface the server will use rather than from a second
+    guess at it; a host that does not resolve keeps the 0 the OS would have
     given the listener itself, and ``bind()`` fails there with the resolver's
     own error, as it always has.
     """
     if port != config.MIN_PORT:
         return port
-    try:
-        infos = socket.getaddrinfo(host, config.MIN_PORT, type=socket.SOCK_STREAM)
-    except socket.gaierror:
-        return port
-    with socket.socket(infos[0][0]) as probe:
-        probe.bind((host, config.MIN_PORT))
+    with socket.socket(listen_family(host)) as probe:
+        try:
+            probe.bind((host, config.MIN_PORT))
+        except OSError:
+            # An address the probe cannot bind (a host that resolves but is not
+            # a local interface, a family the OS refuses). The listener will
+            # fail on the same address with the same error and a better
+            # message; keep the 0 rather than reporting a port from a socket
+            # this process could not actually open.
+            return port
         return int(probe.getsockname()[1])
 
 

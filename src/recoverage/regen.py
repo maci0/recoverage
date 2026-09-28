@@ -50,6 +50,32 @@ class RegenDbMismatchError(RuntimeError):
     """
 
 
+def _same_directory(written_to: Path, override: Path) -> bool:
+    """Whether two resolved paths name the same directory on THIS host.
+
+    ``Path.__eq__`` compares the spelling, and on the two filesystems that
+    ignore case (macOS and Windows by default) ``/proj/DB`` and ``/proj/db``
+    are one directory under two spellings.  Compared as strings the guard
+    below therefore refused a regen that would have reached the dashboard,
+    naming a mismatch that does not exist; the operator's only way out was to
+    respell the variable, and nothing said why.
+
+    ``Path.samefile`` asks the operating system, which is the only spelling
+    that can answer this: it stats both and compares device and inode, so it
+    is right on a case-insensitive filesystem and still exact on a
+    case-sensitive one.  It raises when either path does not exist, which is
+    the normal state before a project's first ``build-db``; the string
+    comparison is the fallback there, and it is the one both hosts already
+    agreed on when the spelling is exact.
+    """
+    if written_to == override:
+        return True
+    try:
+        return written_to.samefile(override)
+    except OSError:
+        return False
+
+
 def _check_writes_where_the_dashboard_reads(root: Path) -> None:
     """Refuse a regen whose output no served directory would pick up.
 
@@ -74,7 +100,7 @@ def _check_writes_where_the_dashboard_reads(root: Path) -> None:
         # The config is present but unusable. load_config raises on exactly
         # this with a message naming the key, and that is the better report.
         return
-    if written_to == override.expanduser().resolve():
+    if _same_directory(written_to, override.expanduser().resolve()):
         return
     raise RegenDbMismatchError(
         f"RECOVERAGE_DB names {override}, but rebrew writes its coverage "

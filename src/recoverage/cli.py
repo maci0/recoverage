@@ -30,6 +30,7 @@ from recoverage.devserver import (
     _KeepAliveRequestHandler,
     _ThreadingWSGIServer,
     configure_transport,
+    listen_family,
     resolve_listen_port,
 )
 
@@ -126,19 +127,11 @@ class _ThreadingWSGIServer6(_ThreadingWSGIServer):
 def _server_class_for(bind: str) -> type[_ThreadingWSGIServer]:
     """The threaded server class whose address family *bind* needs.
 
-    Probed through ``getaddrinfo`` rather than sniffed off the spelling, so a
-    hostname that resolves to IPv6 only is covered as well as a literal, and a
-    name that offers both keeps ``AF_INET`` (the historical default, and the
-    one a dual-stack host's own loopback answer points at).  A name that
-    resolves to neither keeps ``AF_INET`` and fails in ``bind()`` with the
-    resolver's own error, as it always has.
+    The answer is :func:`devserver.listen_family`, shared with the
+    ``--port 0`` probe: the port the banner publishes has to come off a socket
+    of the family the listener will hold, so the two cannot each resolve it.
     """
-    try:
-        infos = socket.getaddrinfo(bind, None, type=socket.SOCK_STREAM)
-    except socket.gaierror:
-        return _ThreadingWSGIServer
-    families = {info[0] for info in infos}
-    if families == {socket.AF_INET6}:
+    if listen_family(bind) is socket.AF_INET6:
         return _ThreadingWSGIServer6
     return _ThreadingWSGIServer
 

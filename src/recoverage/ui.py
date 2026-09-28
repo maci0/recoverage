@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import mimetypes
 import threading
 from pathlib import Path, PurePath, PurePosixPath
 from typing import NamedTuple
@@ -404,15 +403,49 @@ def _serve_repo_file(filepath: str, candidate: Path, root: Path) -> bytes | HTTP
     if _if_none_match_matches(_header("If-None-Match", ""), etag):
         return _not_modified(etag)
     body, encoding = compress_payload(raw, accept_encoding)
-    guessed, _encoding = mimetypes.guess_type(candidate.name)
     return _finalized(
         response,
         body,
-        guessed or "application/octet-stream",
+        _repo_file_type(candidate.suffix.lower()),
         encoding,
         ETag=etag,
         Cache_Control=CACHE_REVALIDATE,
     )
+
+
+#: The precise types the handful of suffixes that have one. Everything else on
+#: :data:`_REPO_COMPRESSIBLE` is text with no narrower answer, and
+#: :func:`_repo_file_type` says so.
+_REPO_EXACT_TYPES = {
+    ".css": "text/css; charset=utf-8",
+    ".csv": "text/csv; charset=utf-8",
+    ".html": "text/html; charset=utf-8",
+    ".js": "application/javascript; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
+    ".map": "application/json; charset=utf-8",
+    ".toml": "application/toml; charset=utf-8",
+    ".xml": "application/xml; charset=utf-8",
+}
+
+
+def _repo_file_type(suffix: str) -> str:
+    """The Content-Type for a served repo file, from the suffix alone.
+
+    NOT ``mimetypes.guess_type``: that answers from the HOST's database, so
+    the same ``.c`` file is ``text/plain`` under Linux's ``/etc/mime.types``,
+    whatever the Windows registry has registered for ``.c``, and nothing at
+    all for ``.def``/``.inc``/``.asm`` on a host that ships no such entry.  A
+    pane's file therefore arrived with a different header per machine, and a
+    compressed TEXT file with no guess fell through to
+    ``application/octet-stream``, which is the one answer that says "download
+    me" for a body this route had just decided was text.
+
+    The type follows :data:`_REPO_COMPRESSIBLE`, the set that already answers
+    "is this file text", so the header and the compression decision cannot
+    disagree, and a suffix that reaches here without a narrower answer is
+    served as the text it is.
+    """
+    return _REPO_EXACT_TYPES.get(suffix, "text/plain; charset=utf-8")
 
 
 def _repo_file_etag(candidate: Path, raw: bytes, accept_encoding: str) -> str:
