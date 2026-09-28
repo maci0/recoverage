@@ -841,6 +841,22 @@ def test_search_status_line_explains_an_empty_result():
     assert hint not in hit
 
 
+@pytest.mark.skipif(not HAS_DB, reason="No coverage document")
+def test_search_status_counts_the_rows_the_function_list_prints():
+    """The status line sits above both views, so the list has to fill it in.
+
+    Only the grid view built the match set, so a search in the function list
+    read "0 matches - no matches. Check the spelling" directly over a table
+    full of the rows it had just matched.
+    """
+    target = require_target()
+    if not target:
+        pytest.fail("no coverage target resolved: the synthetic document is missing or unreadable")
+    html = render_potato_url(f"/potato?target={target}&view=functions&search=_func_a")
+    assert "no matches. Check the spelling" not in html
+    assert "(1 match)" in html or re.search(r"\(\d+ matches\)", html)
+
+
 def test_parent_url_selects_the_parents_own_block():
     """Parent navigates to the parent, not to a search for it.
 
@@ -2038,7 +2054,7 @@ class TestFunctionListLinks:
                 },
             ],
         )
-        html = _render_function_list(snap, "T", ".text", None, "", "va", "")
+        html = _render_function_list(snap, "T", ".text", None, "", "va", "")[0]
         assert f'<a href="?target=T&section=.text&search={quote("sub_401000")}">' in html
         spaced = f'<a href="?target=T&section=.text&search={quote("a name/with?chars")}">'
         assert spaced in html
@@ -2539,7 +2555,7 @@ class TestFunctionListOrdering:
         # cap has to be deterministic), so the shared key is what the rendered
         # order is non-decreasing on, and the API's page order is the same key
         # applied to the same rows.
-        html = _render_function_list(snap, "T", ".text", None, "", field, "")
+        html = _render_function_list(snap, "T", ".text", None, "", field, "")[0]
         rendered = [
             unquote(match) for match in re.findall(r"&section=\.text&search=([^\"]+)", html)
         ]
@@ -2584,7 +2600,7 @@ class TestSearchAddressSpelling:
         from recoverage.potato import _render_function_list
 
         snap = self._snapshot(tmp_path, monkeypatch)
-        assert "sub_401000" in _render_function_list(snap, "T", ".text", None, query, "va", "")
+        assert "sub_401000" in _render_function_list(snap, "T", ".text", None, query, "va", "")[0]
 
     @pytest.mark.parametrize("query", ["0x00402000", "0x402000"])
     def test_padded_and_bare_global_va_both_match(
@@ -2638,7 +2654,7 @@ class TestFunctionListSearchFolding:
         from recoverage.potato import _render_function_list
 
         snap = self._snapshot(tmp_path, monkeypatch)
-        assert "Café_Render" in _render_function_list(snap, "T", ".text", None, query, "va", "")
+        assert "Café_Render" in _render_function_list(snap, "T", ".text", None, query, "va", "")[0]
 
     def test_grid_and_list_agree_on_the_same_term(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -2647,7 +2663,7 @@ class TestFunctionListSearchFolding:
 
         snap = self._snapshot(tmp_path, monkeypatch)
         assert _search_functions(snap, "CAFÉ") == {"Café_Render"}
-        assert "Café_Render" in _render_function_list(snap, "T", ".text", None, "CAFÉ", "va", "")
+        assert "Café_Render" in _render_function_list(snap, "T", ".text", None, "CAFÉ", "va", "")[0]
 
 
 class TestCellsCacheInvalidation:

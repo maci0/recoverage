@@ -1007,7 +1007,7 @@ _PAGE_SRC = r"""<!DOCTYPE html>
         </td>
         </tr>
         % if search_query:
-        <tr><td colspan="4" valign="middle" nowrap><font size="1" color="{{ACCENT_COLOR}}">Searching: &quot;{{search_query}}&quot; ({{search_match_count}} matches)</font>
+        <tr><td colspan="4" valign="middle" nowrap><font size="1" color="{{ACCENT_COLOR}}">Searching: &quot;{{search_query}}&quot; ({{search_match_label}})</font>
         % if search_match_count == 0:
         <font size="1" color="{{MUTED_COLOR}}"> - no matches. Check the spelling, or search by VA.</font>
         % end
@@ -2354,7 +2354,14 @@ def _render_function_list(
     search_query: str,
     sort_key: str,
     status_filter: str,
-) -> str:
+) -> tuple[str, int]:
+    """The list's markup, and how many rows the search behind it matched.
+
+    The count is the topbar's, which sits above this view as well as the grid:
+    the grid view gets its own from ``_search_functions``, so a search that
+    matched and still read "0 matches" on this one was the branch that never
+    filled it in.
+    """
     order_by = sort_key if sort_key in FUNCTION_LIST_COLUMNS else "va"
 
     # `active_filters` rides along through every link below for the reason
@@ -2514,7 +2521,7 @@ def _render_function_list(
             )
 
     parts.append("</table></td></tr></table>")
-    return "".join(parts)
+    return "".join(parts), total
 
 
 def _section_tab_data(
@@ -2668,6 +2675,13 @@ def _render_potato_inner(
     sec_data: dict[str, Any] = sections.get(section, {})
 
     search_matched_fns: set[str] = set()
+    # What the topbar's "Searching: ... (N matches)" counts.  The grid view
+    # takes the names `_search_functions` found; the function list takes the
+    # row count of the list it just built, the same match set narrowed by
+    # `?status=`.  Neither branch may leave it at zero: the line is above both
+    # views, so a functions-view search used to read "0 matches - no matches.
+    # Check the spelling" directly over a table full of rows that had matched.
+    search_match_count = 0
     # One pass of accesskey claims in document order: the search box, the
     # section tabs, then the filter pills.  A letter already claimed is not
     # offered again, so no two controls on the page answer to the same key.
@@ -2694,7 +2708,7 @@ def _render_potato_inner(
     sec_stats: dict[str, Any] = {}
     functions_html = ""
     if view == "functions":
-        functions_html = _render_function_list(
+        functions_html, search_match_count = _render_function_list(
             coverage,
             target,
             section,
@@ -2710,6 +2724,7 @@ def _render_potato_inner(
         # pass over the whole list (measured 13 ms on a 6000-function target),
         # and the functions view renders none of it.
         search_matched_fns = _search_functions(coverage, search_query)
+        search_match_count = len(search_matched_fns)
         grid_html, block_count, panel_html, sec_stats = _render_grid_view(
             coverage,
             target,
@@ -2786,7 +2801,9 @@ def _render_potato_inner(
         active_filters=active_filters,
         status_filter=status_filter,
         search_query=search_query,
-        search_match_count=len(search_matched_fns),
+        search_match_count=search_match_count,
+        # "1 match" reads as a count; "1 matches" reads as a bug beside it.
+        search_match_label=f"{search_match_count} match{'' if search_match_count == 1 else 'es'}",
         clear_search_url=clear_search_url,
         targets=targets,
         section_tab_data=section_tab_data,

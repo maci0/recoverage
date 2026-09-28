@@ -3649,7 +3649,8 @@ class TestSpaJumpAndSearch:
         # The section name arrives from the coverage document, so it is
         # isolated before it joins the sentence (format.isolate).
         assert "none of them in ${isolate(section ??" in app
-        assert "searchHint(matchedNames.size, sectionMatches, active?.name ?? null)" in app
+        hint = "searchHint(matchedNames.size, sectionMatches, active?.name ?? null, resultsOpen)"
+        assert hint in app
 
 
 class TestSpaBidirectionalText:

@@ -103,17 +103,23 @@ function potatoUrl(state: {
 }
 
 /** The guidance the search status adds after its count: no hits at all, none of
- * them in the section on screen, or what Enter will select. */
+ * them in the section on screen, or what Enter will select. The list is named
+ * only while it is on screen, since the reader closes it and the line keeps
+ * counting. */
 function searchHint(
   matches: number,
   sectionMatches: number | null,
   section: string | null,
+  resultsOpen: boolean,
 ): string {
   if (matches === 0) {
     return " - no matches. Check the spelling, or search by VA.";
   }
   if (sectionMatches === 0) {
     return ` - none of them in ${isolate(section ?? "this section")}; press Enter to jump to the first one.`;
+  }
+  if (!resultsOpen) {
+    return " - press Enter to jump, or click the box to list the matches.";
   }
   return " - press Enter, or pick a name from the list below.";
 }
@@ -156,10 +162,17 @@ export function App() {
     return new Set(params.getAll("filter").filter((key) => known.has(key)));
   });
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
+  // Whether the match list under the search box is showing. It is the reader's
+  // to close: it is an overlay over the map, so a pointerdown anywhere else, a
+  // pick from it, or Escape puts the map back. It used to stay until the query
+  // itself changed, which left twenty rows floating over the lattice for the
+  // rest of the visit after one search.
+  const [resultsOpen, setResultsOpen] = useState(false);
   const [theme, setTheme] = useState<"dark" | "light">(initialTheme);
   const [notice, setNotice] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const gridFocus = useRef<((index: number) => void) | null>(null);
+  const searchBoxRef = useRef<HTMLDivElement | null>(null);
   const noticeTimer = useRef<number | null>(null);
   const topbarRef = useRef<HTMLElement | null>(null);
   // The address a jump is waiting on: a sibling section's cells are fetched
@@ -548,8 +561,8 @@ export function App() {
     }
     return `Searching: "${query}" (${count(matchedNames.size)} ${
       matchedNames.size === 1 ? "match" : "matches"
-    })${searchHint(matchedNames.size, sectionMatches, active?.name ?? null)}`;
-  }, [active?.name, matchedNames, query, sectionMatches]);
+    })${searchHint(matchedNames.size, sectionMatches, active?.name ?? null, resultsOpen)}`;
+  }, [active?.name, matchedNames, query, resultsOpen, sectionMatches]);
 
   /** The section an address falls in, for a search result's own row. Every
    * section is a candidate, so this reads the same ranges `jumpToAddress`
@@ -590,6 +603,7 @@ export function App() {
         event.preventDefault();
         setQuery("");
       }
+      setResultsOpen(false);
       return;
     }
     if (event.key !== "Enter") {
@@ -655,6 +669,7 @@ export function App() {
     // A query belongs to the binary it was typed for: keeping it would dim the
     // whole new map against a name that does not exist there.
     setQuery("");
+    setResultsOpen(false);
     setSelectedIndex(null);
     setTarget(next);
   };
@@ -785,7 +800,7 @@ export function App() {
           </div>
         </div>
         <div className="topbar-right ms-auto flex flex-wrap items-center gap-3">
-          <div className="search relative flex flex-col gap-1">
+          <div className="search relative flex flex-col gap-1" ref={searchBoxRef}>
             <div className="search-row flex items-center gap-2">
               {/* A real <label> element rather than the input's own hint
                   attribute: that hint is the field's only visible name and it
@@ -804,7 +819,24 @@ export function App() {
                 className="input-el w-56 rounded-hair border border-line bg-btn px-2 py-1 font-mono text-label text-text sm:w-72"
                 placeholder="Search function name or VA..."
                 value={query}
-                onChange={(event) => setQuery(event.currentTarget.value)}
+                onChange={(event) => {
+                  setQuery(event.currentTarget.value);
+                  setResultsOpen(true);
+                }}
+                onFocus={() => setResultsOpen(true)}
+                // The list is an overlay on the map, so the reader closes it by
+                // going somewhere else: focus leaving the box for anything
+                // outside it (a block on the map, a filter pill, another
+                // control) puts the map back, and focus moving to a row of the
+                // list itself does not, since the pick closes it in turn.
+                onBlur={(event) => {
+                  const { relatedTarget: next } = event;
+                  const box = searchBoxRef.current;
+                  if (next instanceof Node && box !== null && box.contains(next)) {
+                    return;
+                  }
+                  setResultsOpen(false);
+                }}
                 onKeyDown={onSearchKeyDown}
               />
               {query !== "" && (
@@ -812,7 +844,10 @@ export function App() {
                   className="search-clear"
                   aria-label="Clear search"
                   title="Clear search"
-                  onClick={() => setQuery("")}
+                  onClick={() => {
+                    setQuery("");
+                    setResultsOpen(false);
+                  }}
                 >
                   Clear
                 </Button>
@@ -831,14 +866,17 @@ export function App() {
             >
               {searchStatus}
             </div>
-            <SearchResults
-              results={searchResults}
-              total={matchedNames?.size ?? 0}
-              section={active?.name ?? null}
-              onPick={(result) => {
-                jumpToAddress(result.va);
-              }}
-            />
+            {resultsOpen && (
+              <SearchResults
+                results={searchResults}
+                total={matchedNames?.size ?? 0}
+                section={active?.name ?? null}
+                onPick={(result) => {
+                  setResultsOpen(false);
+                  jumpToAddress(result.va);
+                }}
+              />
+            )}
           </div>
           <div className="filters flex flex-wrap gap-1">
             {FILTERS.map((entry) => {
