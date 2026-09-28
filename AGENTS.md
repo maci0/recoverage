@@ -53,7 +53,8 @@ recoverage/
 ├── tools/                  # lint_html.py, smoke.py, payload_budget.py,
 │                           # _serve_harness.py, oxlint/, ci_clone_rebrew.sh,
 │                           # flatten_rikalabs_strict.py, normalize_sdist.py,
-│                           # vendor_manifest.py, bundled_js_inventory.py
+│                           # check_wheel_assets.py, vendor_manifest.py,
+│                           # bundled_js_inventory.py
 ├── tests/
 │   ├── conftest.py           # Shared fixtures (WSGI request helpers, session document build)
 │   ├── coverage_fixture.py   # Builders for synthetic coverage documents, and the shared
@@ -914,8 +915,17 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   out of it, and `pyproject.toml`'s `assets/*` glob makes the directory's
   contents the wheel's shipped file list. `BUNDLE_ASSETS` in the Makefile is
   that list, and `build` refuses a member that is missing or is not on it
-  before `uv build` runs. A new file under `assets/` joins `BUNDLE_ASSETS` in
-  the same change.
+  before `uv build` runs, and `tools/check_wheel_assets.py` reads the same list
+  back off the wheel `uv build` just produced, because three lists sit between
+  the directory and the shipped members (the `assets/*` glob, the sdist file
+  list, MANIFEST.in) and none of them is the directory. The declared names
+  reach the script as `--asset` from `BUNDLE_ASSETS`, so the Makefile stays
+  the one place the list is written down. A new file under `assets/` joins
+  `BUNDLE_ASSETS` in the same change. `check-bundle-clean` compares the
+  rebuilt bytes against the committed ones with `git status`, so it refuses a
+  tree git cannot read rather than passing on an empty substitution: outside a
+  work tree `git status` writes its error to stderr and yields nothing, which
+  read as a clean bundle.
 - The cell-state vocabulary is owned by rebrew (`rebrew.build_db._KNOWN_CELL_STATES`)
   and must be covered on the rendering side: `potato.COLORS` + `LEGEND_ITEMS`,
   and `web/app/grid/pack.ts` `STATE_SLOTS`/`PALETTE_VARS`/`FILTER_KEY`. An unmapped

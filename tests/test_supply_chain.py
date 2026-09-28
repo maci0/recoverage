@@ -968,6 +968,19 @@ class TestCommittedBundleIsVerified:
             "`make all` does not depend on check-bundle-clean, so a stale bundle reaches the push"
         )
 
+    def test_the_check_refuses_a_tree_it_cannot_compare(self) -> None:
+        """`git status` outside a work tree writes its error to stderr and
+        yields an empty line, so `if [ -n "$(git status ...)" ]` takes the
+        false branch and the gate passes without having compared anything: a
+        stale bundle read as a clean one, which is the one answer the check
+        exists to refuse. Outside a work tree it fails and says so."""
+        makefile = _MAKEFILE.read_text(encoding="utf-8")
+        recipe = re.search(r"^check-bundle-clean:(.*?)(?=^\S)", makefile, re.MULTILINE | re.DOTALL)
+        assert recipe, "the Makefile no longer defines check-bundle-clean"
+        assert "git rev-parse --is-inside-work-tree" in recipe.group(1), (
+            "check-bundle-clean cannot tell a clean bundle from a tree git cannot read"
+        )
+
 
 class TestNpmLockfile:
     """bun.lock is the JavaScript half of what the sbom job inventories.

@@ -218,6 +218,12 @@ setup: ensure-rebrew warn-uv-version
 # backend release can change the artifact bytes under a fixed
 # SOURCE_DATE_EPOCH. --clear drops artifacts from an earlier version, which
 # would otherwise sit in dist/ beside the new ones and be published together.
+#
+# check_wheel_assets.py reads BUNDLE_ASSETS back off the wheel the build just
+# produced. The two loops below judge the bundle DIRECTORY, and three lists sit
+# between that directory and the shipped members (the `assets/*` package-data
+# glob, the sdist file list, MANIFEST.in), so an asset that stops being packaged
+# passes every other gate here and is found by whoever installs the wheel.
 build: ensure-rebrew ensure-uv web-build
 	@$(SET_STRICT) \
 	export SOURCE_DATE_EPOCH="$(SOURCE_DATE_EPOCH)" LC_ALL=C TZ=UTC; \
@@ -240,6 +246,8 @@ build: ensure-rebrew ensure-uv web-build
 	  esac; \
 	done; \
 	uv build --out-dir dist --build-constraints build-constraints.txt --clear; \
+	assets=""; for f in $(BUNDLE_ASSETS); do assets="$$assets --asset $$f"; done; \
+	$(UV_RUN) python tools/check_wheel_assets.py dist $$assets; \
 	$(UV_RUN) python tools/normalize_sdist.py dist
 
 # The dashboard bundle is committed because a wheel built on a host with no
@@ -265,6 +273,13 @@ BUNDLE_ASSETS = app.js favicon.svg index.html print.css style.css
 
 check-bundle-clean:
 	@$(SET_STRICT) \
+	if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
+	  echo "ERROR: check-bundle-clean compares the rebuilt bundle against the"; \
+	  echo "committed one, and that is a git comparison: $(BUNDLE_DIR) is not a work tree."; \
+	  echo "Run it from a checkout; the copy of the tracked tree a CI rebuild makes is"; \
+	  echo "compared by building it twice instead."; \
+	  exit 1; \
+	fi; \
 	if [ -n "$$(git status --porcelain -- $(BUNDLE_DIR))" ]; then \
 	  echo "ERROR: the committed frontend bundle does not match web/:"; \
 	  git status --porcelain -- $(BUNDLE_DIR); \

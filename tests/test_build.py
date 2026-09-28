@@ -19,6 +19,7 @@ import stat
 import tarfile
 import tempfile
 import tomllib
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -57,6 +58,29 @@ def _scratch_dir() -> tempfile.TemporaryDirectory[str]:
     return tempfile.TemporaryDirectory(dir=_SCRATCH)
 
 
+def _wheel_assets_checker():
+    """tools/check_wheel_assets.py, imported by path (tools/ is a script dir)."""
+    spec = importlib.util.spec_from_file_location(
+        "check_wheel_assets", _ROOT / "tools" / "check_wheel_assets.py"
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _declared_assets() -> set[str]:
+    """The Makefile's BUNDLE_ASSETS, the one list of shipped bundle files."""
+    return set(_MAKEFILE.split("BUNDLE_ASSETS =", 1)[1].split("\n", 1)[0].split())
+
+
+def _build_wheel(path: Path, members: list[str]) -> None:
+    """A wheel whose only members are the named bundle assets."""
+    with zipfile.ZipFile(path, "w") as archive:
+        for member in members:
+            archive.writestr(f"recoverage/assets/{member}", b"")
+
+
 def _build_sdist(path: Path, mtime: int, uid: int) -> None:
     """An sdist-shaped archive whose only variance is build-host metadata."""
     with tarfile.open(path, "w:gz") as tar:
@@ -92,6 +116,62 @@ class TestManifestCoversShippedFiles:
             )
         }
         assert not missing, f"assets no package-data pattern picks up: {sorted(missing)}"
+
+
+class TestShippedAssetsReachTheWheel:
+    """The bundle DIRECTORY is what `make build` checks before packaging, and
+    the wheel is what a consumer installs. Three lists sit between them: the
+    `assets/*` package-data glob, the sdist file list, and MANIFEST.in. This
+    class reads the shipped list off a built archive, which nothing else here
+    does, and the last test pins the recipe to it."""
+
+    def test_the_assets_read_off_a_wheel_are_the_ones_under_the_asset_directory(self) -> None:
+        module = _wheel_assets_checker()
+        declared = _declared_assets()
+        with _scratch_dir() as td:
+            wheel = Path(td) / "recoverage-0.0.0-py3-none-any.whl"
+            _build_wheel(wheel, sorted(declared))
+            assert module.check(wheel, declared) == [], (
+                "a wheel carrying exactly the declared assets failed the check"
+            )
+
+    def test_a_declared_asset_the_wheel_does_not_carry_is_named(self) -> None:
+        """The failure this check exists for: the server reads the bundle by
+        name, so an asset MANIFEST.in stopped carrying is a dashboard that
+        serves nothing, and the source tree still looks complete."""
+        module = _wheel_assets_checker()
+        declared = _declared_assets()
+        with _scratch_dir() as td:
+            wheel = Path(td) / "recoverage-0.0.0-py3-none-any.whl"
+            _build_wheel(wheel, sorted(declared - {"app.js"}))
+            reasons = module.check(wheel, declared)
+            assert len(reasons) == 1
+            assert "app.js" in reasons[0]
+
+    def test_an_undeclared_asset_in_the_wheel_is_named(self) -> None:
+        """`emptyOutDir` is off, so a scratch file dropped in the asset
+        directory rides into the wheel; the recipe refuses it in the tree, and
+        this is the read of the same rule off the artifact."""
+        module = _wheel_assets_checker()
+        declared = _declared_assets()
+        with _scratch_dir() as td:
+            wheel = Path(td) / "recoverage-0.0.0-py3-none-any.whl"
+            _build_wheel(wheel, sorted(declared | {"app.js.orig"}))
+            reasons = module.check(wheel, declared)
+            assert len(reasons) == 1
+            assert "app.js.orig" in reasons[0]
+
+    def test_the_build_recipe_checks_the_wheel_it_just_built(self) -> None:
+        """The check is a package directory listing until the recipe runs it
+        against `dist/`, after `uv build` and before the sdist is normalized:
+        nothing else in the pipeline reads the artifact's member list."""
+        recipe = _MAKEFILE.split("\nbuild:", 1)[1].split("\n\n", 1)[0]
+        assert "check_wheel_assets.py" in recipe, "the build recipe does not check the wheel"
+        assert recipe.index("uv build") < recipe.index("check_wheel_assets.py")
+        for name in _declared_assets():
+            assert name in _MAKEFILE.split("BUNDLE_ASSETS =", 1)[1].split("\n", 1)[0], (
+                f"{name} is not a BUNDLE_ASSETS member, so the check would not ask for it"
+            )
 
 
 class TestTypingMarker:
