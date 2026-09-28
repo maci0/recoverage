@@ -68,6 +68,8 @@ recoverage/
 │   │                         #   license, declared-vs-imported deps, npm lock pin + integrity,
 │   │                         #   bundled-asset grants
 │   ├── test_fuzz.py          # Seeded mutation campaigns over the untrusted-input surfaces
+│   ├── test_concurrency.py   # Barrier-driven races: /data single flight, cache invalidation
+│   │                         #   under load, counter balance, the admission cap, the auth window
 │   ├── test_import_graph.py  # In-package import graph: level order + acyclicity
 │   └── test_playwright.py    # Browser integration tests
 └── src/recoverage/
@@ -490,8 +492,12 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   A new failure path that answers 4xx/5xx from outside a handler (bottle
   turns an escaped exception into a 500 only *after* `after_request` has
   filed the request as a 200) must call `server._reclassify_request`, or the
-  error rate silently reads zero; `test_metrics.py` pins that. The design
-  rationale is in `docs/DESIGN.md` (*Request Observability*).
+  error rate silently reads zero; `test_metrics.py` pins that. Those counters
+  are shared state every request thread mutates, so their balance under
+  concurrent requests is pinned separately at `tests/test_concurrency.py`
+  (`TestRequestCounters`): a lost update shows up as a total that disagrees
+  with the sum of its own buckets, or an `in_flight` that never returns. The
+  design rationale is in `docs/DESIGN.md` (*Request Observability*).
 - The regen pipeline is counted in `metrics.REGEN`, not in `REQUESTS`: a regen
   runs for minutes, so the per-request numbers are one sample and none at all
   while it is in flight, and nothing in them says the in-flight request is a
@@ -543,7 +549,13 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   refusal answers `degraded` with the count, because a server at that cap keeps
   serving the connections it already has and refuses every new one. `max` is 0
   until the first admission, so a mounted WSGI app that never reached `serve`
-  reports no cap rather than one it is not enforcing.
+  reports no cap rather than one it is not enforcing. The admission check and
+  the increment are one critical section for the same reason the auth window's
+  prune, cap check and reservation are (`server._auth_throttle`): read apart,
+  every accepting thread sees room and the cap admits more than it is
+  configured to hold. Both are pinned at `tests/test_concurrency.py`
+  (`TestAdmissionCap`, `TestAuthThrottle`), which drive them from threads
+  released by one barrier.
 - `/api/health` is polled, so it logs a TRANSITION, not a state: the endpoint
   runs every check through `api._log_health_status`, which warns on the first
   probe in a state, infos on the first probe after it, and says nothing on a
@@ -807,7 +819,9 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   single-flight claim in `api._DATA_CACHE_BUILDING`, follows the same rule: an
   in-flight marker whose owner was killed is reclaimed on its deadline
   (`_DATA_CACHE_BUILD_WAIT_SECONDS`), never left registered for a waiter that
-  no `finally` will ever wake.
+  no `finally` will ever wake. Pinned at `tests/test_concurrency.py`
+  (`TestDataSingleFlight`), which releases a herd of simultaneous cold misses
+  through one barrier and fails when the payload is built more than once.
 - Every integer a request supplies goes through `server.parse_ascii_int` (with
   `server.strip_sign` and `api._parse_byte_count` on top): ASCII digits in the
   stated base, and nothing else. `int(x, base)` is not that check, because it

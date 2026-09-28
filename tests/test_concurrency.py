@@ -1,0 +1,377 @@
+"""Concurrency invariants for the shared state the threaded server touches.
+
+The package keeps its cross-request state in process globals behind one lock
+each: the /data payload memo and the single-flight claim ledger beside it, the
+per-snapshot and per-target memos, the RED counters, the connection admission
+gauge and the auth throttle.  A defect in any of them is invisible to a
+single-threaded test, because the single-threaded path is the one that works.
+
+Each test here drives one of those paths from several threads released by a
+``Barrier`` at the same instant, so the interleaving is a fact of the test
+rather than a matter of timing, and asserts the property that has to hold
+whatever order the threads run in: one build per herd, no error answered to a
+reader that raced a rebuild, counters that balance, a cap that admits exactly
+its limit, and a throttle that hands out exactly as many slots as it promises.
+"""
+
+from __future__ import annotations
+
+import json
+import threading
+from collections.abc import Callable, Mapping
+from typing import Any
+
+import pytest
+from conftest import HAS_DB, decode_body, wsgi_get, wsgi_post
+
+from recoverage import api, metrics
+from recoverage import server as _server
+
+pytestmark = pytest.mark.skipif(not HAS_DB, reason="needs the synthetic coverage documents")
+
+#: Threads per concurrent test.  Enough for the check-then-act windows to be
+#: reachable on a machine with any parallelism at all, few enough that the
+#: suite does not spend its time on thread startup.
+WORKERS = 8
+
+#: One cold request per worker, on the connection a keep-alive client holds.
+_IDENTITY = {"Accept-Encoding": "identity"}
+
+
+def _in_parallel(worker: Callable[[int], None], workers: int = WORKERS) -> None:
+    """Run *worker(index)* on *workers* threads, released at the same instant.
+
+    The barrier is the point: threads that start staggered would let the
+    first finish before the last begins, and the window these tests guard
+    would never be open.  Every thread is joined, so a failure inside one
+    surfaces here rather than as a stray exception in a later test.
+    """
+    barrier = threading.Barrier(workers)
+    errors: list[BaseException] = []
+
+    def run(index: int) -> None:
+        try:
+            barrier.wait(timeout=30)
+            worker(index)
+        # Re-raised on the test thread: a worker's failure is the test's.
+        except BaseException as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=run, args=(i,)) for i in range(workers)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=60)
+        assert not thread.is_alive(), "a concurrency worker never finished"
+    if errors:
+        raise errors[0]
+
+
+class TestDataSingleFlight:
+    """The /data memo and the claim ledger that keeps a herd to one build."""
+
+    def test_a_concurrent_herd_builds_the_payload_exactly_once(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Eight simultaneous misses for one key, one build.
+
+        Every request is a cold miss at the same instant.  Without the claim
+        each materializes its own multi-MB payload, the last insert wins, and
+        the memo holds whichever body happened to be published last rather
+        than the one every client was answered from.  With it, the first
+        thread takes the claim, the rest wait on its event, and the build runs
+        once however the threads interleave.
+        """
+        builds = 0
+        build_lock = threading.Lock()
+        real_build = api._build_data_raw
+
+        def counting_build(*args: Any, **kwargs: Any) -> bytes:
+            nonlocal builds
+            with build_lock:
+                builds += 1
+            return real_build(*args, **kwargs)
+
+        monkeypatch.setattr(api, "_build_data_raw", counting_build)
+        bodies: list[bytes] = []
+        body_lock = threading.Lock()
+
+        def worker(index: int) -> None:
+            status, headers, body = wsgi_get("/api/targets/FAKEDLL/data?section=.text", _IDENTITY)
+            assert status == "200 OK", f"{status}: {decode_body(body, headers)[:200]!r}"
+            with body_lock:
+                bodies.append(body)
+
+        _in_parallel(worker)
+
+        assert builds == 1, f"the herd built the payload {builds} times"
+        # One build means one body, so every client of the herd is answered
+        # from the same bytes.
+        assert len(set(bodies)) == 1
+        # The claim is released on the way out, so a later request is a memo
+        # hit and not a second build behind a claim nobody will ever release.
+        assert not api._DATA_CACHE_BUILDING
+
+    def test_a_reclaim_releases_the_claim_it_took_over(self) -> None:
+        """A follower that gives up on a dead leader owns the key afterwards.
+
+        The leader's own ``finally`` never runs when it is killed between
+        checkout and the build, so the claim outlives its owner unless the
+        follower that times out on it takes it over.  The entry has to be
+        gone when the reclaiming follower's own build finishes, or the next
+        request for the key waits on an event nobody will set.
+        """
+        key: tuple[Any, ...] = (("fingerprint", 1), "dead-target", None, True)
+        event = threading.Event()  # never set: this is the killed leader
+        with api._DATA_CACHE_LOCK:
+            api._DATA_CACHE_BUILDING[key] = (event, api.clock.monotonic() - 1.0)
+            api._prune_stale_claims(api.clock.monotonic())
+
+        entry, owned = api._data_cache_checkout(key)
+        assert entry is None
+        assert owned is not None and owned is not event
+        api._data_cache_build_done(key, owned)
+        assert key not in api._DATA_CACHE_BUILDING
+        # The dead leader's own release must not delete the new owner's claim.
+        api._data_cache_build_done(key, event)
+        with api._DATA_CACHE_LOCK:
+            api._DATA_CACHE_BUILDING.pop(key, None)
+
+
+class TestConcurrentInvalidation:
+    """The broadcast's cache clear running against readers, as a rebuild does."""
+
+    def test_readers_survive_a_concurrent_invalidation(self) -> None:
+        """Clear every derived memo while threads read through those memos.
+
+        The clear runs on the SSE watcher's thread and the reads on request
+        threads, so a payload read through a snapshot a rebuild has replaced
+        has to be dropped rather than filed under the key naming the newer
+        build.  The assertion is the one an operator sees: every request is
+        answered, and none of them is an error.
+        """
+        stop = threading.Event()
+
+        def churn() -> None:
+            while not stop.is_set():
+                api._clear_derived_caches()
+
+        clearer = threading.Thread(target=churn, daemon=True)
+        clearer.start()
+        failures: list[tuple[str, str, str]] = []
+        fail_lock = threading.Lock()
+        try:
+
+            def worker(index: int) -> None:
+                for _ in range(6):
+                    for path in (
+                        "/api/targets/FAKEDLL/stats",
+                        "/api/targets/FAKEDLL/data?section=.text",
+                        "/api/targets/FAKEDLL/functions?limit=10",
+                        "/potato?view=map",
+                    ):
+                        status, headers, body = wsgi_get(path, _IDENTITY)
+                        if not status.startswith("200"):
+                            with fail_lock:
+                                failures.append((status, path, decode_body(body, headers)[:200]))
+
+            _in_parallel(worker)
+        finally:
+            stop.set()
+            clearer.join(timeout=30)
+        assert not failures, failures[:3]
+
+
+class TestRequestCounters:
+    """``metrics.REQUESTS`` under concurrent requests."""
+
+    def test_the_counters_balance_under_concurrent_requests(self) -> None:
+        """The status buckets sum to the request total, and the gauge returns.
+
+        ``before_request`` and ``after_request`` run on every request thread
+        and each updates the shared counters in one critical section.  A lost
+        update in any of them shows up here as a total that disagrees with the
+        sum of its own buckets, or an ``in_flight`` that never came back down.
+        """
+        before = metrics.REQUESTS.snapshot()
+        per_thread = 6
+        issued = WORKERS * per_thread
+        results: list[str] = []
+        result_lock = threading.Lock()
+
+        def worker(index: int) -> None:
+            local: list[str] = []
+            for _ in range(per_thread):
+                status, _headers, _body = wsgi_get(
+                    "/api/targets/FAKEDLL/functions?limit=5", _IDENTITY
+                )
+                local.append(status)
+            with result_lock:
+                results.extend(local)
+
+        _in_parallel(worker)
+
+        after = metrics.REQUESTS.snapshot()
+        assert len(results) == issued
+        assert set(results) == {"200 OK"}
+        assert after["total"] - before["total"] == issued
+        assert sum(after["by_status"].values()) - sum(before["by_status"].values()) == issued
+        # The gauge is a gauge: every request that entered has left, so it
+        # reads what it read before the herd.
+        assert after["in_flight"] == before["in_flight"]
+        route = "/api/targets/<target>/functions"
+        assert (
+            after["by_route"][route]["requests"] - before["by_route"][route]["requests"] == issued
+        )
+
+
+class TestAdmissionCap:
+    """``metrics.CONNECTIONS``, the cap the server refuses accepts at."""
+
+    def test_exactly_the_cap_is_admitted_from_many_threads(self) -> None:
+        """Many threads, many attempts, exactly ``limit`` admissions.
+
+        The check and the increment have to be one step.  As two steps every
+        thread can read a gauge below the cap before any of them writes, and
+        the server admits more connections than it is configured to hold: the
+        bound the whole saturation story rests on is the one number an
+        attacker gets to choose.
+        """
+        stats = metrics.ConnectionStats()
+        limit = 4
+        attempts = 5
+        admitted = 0
+        admit_lock = threading.Lock()
+
+        def worker(index: int) -> None:
+            nonlocal admitted
+            local = sum(1 for _ in range(attempts) if stats.admit(limit))
+            with admit_lock:
+                admitted += local
+
+        _in_parallel(worker)
+
+        assert admitted == limit
+        assert stats.open == limit
+        assert stats.snapshot()["refused"] == WORKERS * attempts - limit
+        for _ in range(limit):
+            stats.release()
+        assert stats.open == 0
+        # The gauge floors at zero: a release past the open count (a
+        # connection whose thread died between the admit and the release)
+        # must not report a negative number of live connections.
+        stats.release()
+        assert stats.open == 0
+
+
+class TestAuthThrottle:
+    """``server._auth_throttle``, the offline-guessing window."""
+
+    def test_exactly_the_window_is_handed_out(self) -> None:
+        """A burst of concurrent guesses gets exactly ``_AUTH_FAIL_MAX`` slots.
+
+        The prune, the cap check and the reservation are one critical section
+        on purpose.  Split, every thread in the burst sees a short deque
+        before any of them appends, so the throttle admits the whole burst
+        and the bound it exists to enforce is the one thing a caller decides.
+        """
+        now = 1_000.0
+        granted = 0
+        grant_lock = threading.Lock()
+
+        def worker(index: int) -> None:
+            nonlocal granted
+            local = 0
+            for _ in range(5):
+                if not _server._auth_throttle(now, reserve_slot=True):
+                    local += 1
+            with grant_lock:
+                granted += local
+
+        try:
+            _server._clear_auth_failures()
+            _in_parallel(worker)
+            assert granted == _server._AUTH_FAIL_MAX
+            # The window is full, so even a check that reserves nothing is
+            # refused until it ages out.
+            assert _server._auth_throttle(now, reserve_slot=False)
+            # A verified request clears it, so an operator never trips their
+            # own limit.
+            _server._clear_auth_failures()
+            assert not _server._auth_throttle(now, reserve_slot=True)
+        finally:
+            _server._clear_auth_failures()
+
+
+class TestSnapshotIndex:
+    """``server._snapshot_index``, the by-VA memos keyed on snapshot identity."""
+
+    def test_a_concurrent_build_publishes_one_index_for_the_snapshot(self) -> None:
+        """Threads building the same index agree on what was published.
+
+        The build runs outside the lock (it walks every global), so several
+        threads can build it at once.  What must not differ is the answer: a
+        half-built index, or one keyed to a snapshot the reader is no longer
+        holding, is what a caller walking the returned mapping would serve.
+        """
+        snapshot = _server.coverage_for("FAKEDLL")
+        expected: dict[int, Any] = {}
+        for gl in snapshot.globals:
+            expected.setdefault(gl.va, gl)
+        # The memo is process-wide and keyed on snapshot identity, so it can
+        # already hold an entry for a snapshot another test read. What this
+        # test owns is the delta its own herd causes.
+        before = sum(1 for key in _server._SNAPSHOT_INDEX if key[1] == "globals_by_va")
+
+        results: list[Mapping[int, Any]] = []
+        result_lock = threading.Lock()
+
+        def worker(index: int) -> None:
+            built = _server.globals_by_va(snapshot)
+            with result_lock:
+                results.append(built)
+
+        _in_parallel(worker)
+
+        assert results and all(result == expected for result in results)
+        # Every caller is answered from the ONE published index, and the herd
+        # adds at most the entry this snapshot did not already have: eight
+        # threads building the same index publish one, not eight.
+        assert all(result is results[0] for result in results)
+        after = sum(1 for key in _server._SNAPSHOT_INDEX if key[1] == "globals_by_va")
+        assert after - before <= 1
+
+
+class TestBatchLookup:
+    """The batch POST, the one endpoint whose answer is a per-caller ordering."""
+
+    def test_every_caller_is_answered_in_its_own_input_order(self) -> None:
+        """Concurrent batch lookups do not interleave rows between requests.
+
+        Each request builds its result list from the shared snapshot and the
+        shared by-VA memos, so a payload holding another caller's rows is a
+        cross-request leak rather than a wrong answer for one of them.
+        """
+        vas = ["0x10001000", "0x10001010", "0x10001020"]
+        snapshot = _server.coverage_for("FAKEDLL")
+        wanted = [int(va, 16) for va in vas if int(va, 16) in snapshot.functions_by_va]
+        assert wanted, "the synthetic target has no function at the queried VAs"
+
+        payloads: list[list[Any]] = []
+        payload_lock = threading.Lock()
+
+        def worker(index: int) -> None:
+            status, headers, body = wsgi_post(
+                "/api/targets/FAKEDLL/functions",
+                headers={"Content-Type": "application/json"},
+                body='{"vas": ["0x10001000", "0x10001010", "0x10001020"]}',
+            )
+            assert status == "200 OK", f"{status}: {decode_body(body, headers)[:200]!r}"
+            with payload_lock:
+                payloads.append(json.loads(decode_body(body, headers)))
+
+        _in_parallel(worker)
+
+        assert len(payloads) == WORKERS
+        for rows in payloads:
+            assert [row["va"] for row in rows] == wanted
