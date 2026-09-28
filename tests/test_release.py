@@ -23,6 +23,19 @@ _MANIFEST = (
 )
 _CHANGELOG = _MANIFEST.parent / "CHANGELOG.md"
 _MAN_PAGE = _MANIFEST.parent / "man" / "recoverage.1"
+_INIT = _MANIFEST.parent / "src" / "recoverage" / "__init__.py"
+
+#: The documents that restate the shipped version: the supported-versions table
+#: in `SECURITY.md` and the scope line in `docs/THREAT_MODEL.md`. Both name a
+#: release a reader is being asked to judge a vulnerability against, so a
+#: version bump has to carry them.
+_VERSION_DOCS = (_MANIFEST.parent / "SECURITY.md", _MANIFEST.parent / "docs" / "THREAT_MODEL.md")
+
+#: A `src/recoverage/__init__.py:40` style pointer at where the version is
+#: written, and a `__version__ = "3.0.0"` literal quoting its value.
+_VERSION_LOCATION_RE = re.compile(r"`src/recoverage/__init__\.py:(?P<line>\d+)`")
+_VERSION_QUOTE_RE = re.compile(r'`__version__ = "(?P<version>[^"]+)"`')
+_VERSION_TAG_RE = re.compile(r"`v(?P<version>\d+\.\d+\.\d+)`")
 
 #: The `.TH` header's version field: `.TH RECOVERAGE 1 "date" "recoverage X.Y.Z" "User Commands"`.
 _TH_VERSION_RE = re.compile(
@@ -231,6 +244,51 @@ class TestSingleVersionSource:
             f"package.json declares version {manifest.get('version')!r}, which the wheel "
             f"does not carry: __version__ is {__version__}"
         )
+
+
+class TestDocumentedVersionTracksThePackage:
+    """The documents that restate the version are read by someone deciding
+    whether a release is in scope, and a release bump does not touch them.
+
+    `SECURITY.md` answers "which versions get fixes" and `docs/THREAT_MODEL.md`
+    answers "which build was reviewed"; both name a version literal, and both
+    point at the line in `__init__.py` that holds it. Every release so far
+    moved `__version__` and the changelog and left these three numbers behind,
+    so they are read here against the package instead.
+    """
+
+    def test_the_quoted_version_is_the_package_version(self) -> None:
+        quoted: list[str] = []
+        for doc in _VERSION_DOCS:
+            quoted += _VERSION_QUOTE_RE.findall(doc.read_text(encoding="utf-8"))
+        assert quoted, f"no document quotes the `__version__` line: {_VERSION_DOCS}"
+        assert set(quoted) == {__version__}, (
+            f"a document quotes __version__ {sorted(set(quoted))}, the package is {__version__}"
+        )
+
+    def test_the_tag_named_is_the_shipped_release(self) -> None:
+        policy = (_MANIFEST.parent / "SECURITY.md").read_text(encoding="utf-8")
+        tags = _VERSION_TAG_RE.findall(policy)
+        assert tags == [__version__], (
+            f"SECURITY.md names the released tag v{tags}, the package is {__version__}"
+        )
+
+    def test_the_supported_line_is_the_current_major(self) -> None:
+        policy = (_MANIFEST.parent / "SECURITY.md").read_text(encoding="utf-8")
+        match = re.search(r"current release line is `(?P<major>\d+)\.x`", policy)
+        assert match, "SECURITY.md no longer states the supported release line"
+        assert match["major"] == __version__.split(".", 1)[0], (
+            f"SECURITY.md supports the {match['major']}.x line, the package is {__version__}"
+        )
+
+    def test_the_pointer_lands_on_the_assignment(self) -> None:
+        source = _INIT.read_text(encoding="utf-8").splitlines()
+        for doc in _VERSION_DOCS:
+            for line in _VERSION_LOCATION_RE.findall(doc.read_text(encoding="utf-8")):
+                assert source[int(line) - 1].startswith("__version__ = "), (
+                    f"{doc.name} points at src/recoverage/__init__.py:{line}, "
+                    f"which is {source[int(line) - 1].strip()!r}"
+                )
 
 
 class TestDeclaredFloorsAreRecorded:

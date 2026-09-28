@@ -8,7 +8,7 @@ older versions receive no backports.
 
 | Version | Supported |
 |---------|-----------|
-| 3.x (current, `__version__` at `src/recoverage/__init__.py:39`; `3.0.0` is tagged `v3.0.0`) | yes |
+| 3.x (current, `__version__` at `src/recoverage/__init__.py:40`; `3.0.0` is tagged `v3.0.0`) | yes |
 | < 3.0.0 | no |
 
 ## Reporting a vulnerability
