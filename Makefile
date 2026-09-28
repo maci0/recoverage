@@ -4,7 +4,7 @@
 # is the one step that keeps the committed assets matching web/.
 .PHONY: help setup clean build check-bundle-clean web-build test test-one test-browser fuzz lint format format-check web-lint smoke smoke-fail \
 	shell-lint yaml-lint type-check all ensure-uv ensure-rebrew warn-uv-version clone-rebrew ensure-lint-tools \
-	ensure-bun regen-oxlint typecheck-web payload-budget
+	ensure-bun regen-oxlint typecheck-web payload-budget browser-sbom
 
 # Force POSIX sh for recipes (ignore a caller-exported SHELL=bash).  Version
 # compares use ``sort -t. -k…n`` (POSIX), not GNU ``sort -V``.
@@ -99,6 +99,7 @@ help:
 		'  make smoke              # boot the dashboard against a sample db and probe it' \
 		'  make smoke-fail         # the same probe against a corrupt db: must degrade, not lie' \
 		'  make payload-budget     # re-derive the inlined shell size at each static encoding' \
+		'  make browser-sbom       # list the npm packages compiled into the shipped browser assets' \
 		'  make all                # every check CI runs, in one command' \
 		'  make check-bundle-clean # fail when the committed web bundle is stale (make all runs it)' \
 		'  make clean              # remove caches and build artifacts' \
@@ -355,9 +356,15 @@ smoke-fail: ensure-rebrew
 payload-budget: ensure-rebrew
 	$(UV_RUN) python tools/payload_budget.py
 
+# The npm packages `make web-build` compiles into the shipped browser assets.
+# The sbom job uploads it as an artifact; this is the same inventory to read
+# without CI, and it needs no network and no environment, only bun.lock.
+browser-sbom:
+	$(UV_RUN) python tools/bundled_js_inventory.py
+
 # Everything CI checks, in one local command, so nothing fails only after push.
 all: format-check lint type-check shell-lint yaml-lint test web-lint typecheck-web \
-	build check-bundle-clean smoke smoke-fail
+	build check-bundle-clean browser-sbom smoke smoke-fail
 	@printf '%s\n' 'all checks passed (CI: lint, web-lint, test, build, smoke)'
 
 clean:

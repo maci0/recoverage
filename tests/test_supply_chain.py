@@ -22,6 +22,8 @@ from itertools import pairwise
 from pathlib import Path
 from types import ModuleType
 
+import pytest
+
 _ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 _CI_YML = _ROOT / ".github" / "workflows" / "ci.yml"
 _CLONE_SCRIPT = _ROOT / "tools" / "ci_clone_rebrew.sh"
@@ -93,10 +95,17 @@ def _bun_lock() -> dict:
 
 
 def _jobs() -> dict[str, str]:
-    """Workflow text per job name, so a check is scoped to the job that needs it."""
+    """Workflow text per job name, so a check is scoped to the job that needs it.
+
+    Each job runs to the next header, and the last one to the end of the file:
+    `pairwise` alone would key the final job under the name of the job before
+    it, and bound its text where the last one starts, so a check scoped to the
+    final job would find nothing to read.
+    """
     text = _CI_YML.read_text(encoding="utf-8")
     starts = [(m.group("name"), m.start()) for m in _JOB_RE.finditer(text)]
-    return {name: text[start:end] for (name, start), (_, end) in pairwise(starts)}
+    ends = [end for _, (_, end) in pairwise(starts)] + [len(text)]
+    return {name: text[start:end] for (name, start), end in zip(starts, ends, strict=True)}
 
 
 def _vendor_manifest_module() -> ModuleType:
@@ -1197,6 +1206,172 @@ class TestBundledThirdPartyAssets:
         assert bundled <= set(manifest["devDependencies"]), (
             "a bundled library left package.json; update BUNDLED_LIBRARIES with it"
         )
+
+
+def _js_inventory_module() -> ModuleType:
+    """`tools/bundled_js_inventory.py`, imported so the shipped list has one
+    definition and the sbom job, `make browser-sbom` and these read it.
+    """
+    path = _ROOT / "tools" / "bundled_js_inventory.py"
+    spec = importlib.util.spec_from_file_location("bundled_js_inventory", path)
+    assert spec and spec.loader, "tools/bundled_js_inventory.py is not importable"
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class TestBrowserBundleInventory:
+    """The wheel ships compiled browser code, so that code has an inventory too.
+
+    NOTICE records the grants and `TestBundledThirdPartyAssets` holds the
+    credit list to them, but a grant says who owns the code, not which version
+    of it a build carried. The Python side answers that with the sbom job's
+    hashed export; without a browser equivalent, a consumer or a scanner
+    pointed at a wheel sees the Python tree and learns nothing about the
+    Preact and highlight.js that run in their browser. These pin that the
+    inventory names the shipped packages, that it reads the resolved tree
+    rather than the manifest, and that CI produces it.
+    """
+
+    def test_the_inventory_names_every_shipped_package_with_its_digest(self) -> None:
+        """Each line is a package the bundle carries, at the version bun.lock pinned.
+
+        The version and digest are read from the lock, so a manifest bump that
+        skipped `bun install` cannot leave the inventory describing an older
+        bundle than the one the wheel ships.
+        """
+        module = _js_inventory_module()
+        body = module.render(module.resolve())
+        lines = [
+            line
+            for line in body.splitlines()
+            if line and not line.startswith(("#", "\t")) and " " in line
+        ]
+        assert len(lines) == len(module.SHIPPED), "a shipped package produced no inventory line"
+        for entry, spec, digest in module.resolve():
+            assert spec == f"{entry.package}@{_locked_version(entry.package)}", (
+                f"{entry.package} resolves to {spec}, bun.lock pins "
+                f"{_locked_version(entry.package)}"
+            )
+            assert f"{spec} {digest} -> {entry.asset}" in body, (
+                f"the inventory does not record {spec} with its digest and target asset"
+            )
+            assert entry.because.strip(), f"{entry.package} is listed without a reason it ships"
+
+    def test_every_shipped_package_is_a_declared_dependency(self) -> None:
+        """A package nothing declares is a line describing code that cannot be built."""
+        module = _js_inventory_module()
+        declared = set(json.loads(_PACKAGE_JSON.read_text(encoding="utf-8"))["devDependencies"])
+        listed = {entry.package for entry in module.SHIPPED}
+        stale = sorted(listed - declared)
+        assert not stale, f"the inventory names packages package.json no longer declares: {stale}"
+
+    def test_the_shipped_list_agrees_with_the_credit_list(self) -> None:
+        """Every shipped library NOTICE credits, and every credit is inventoried.
+
+        Two records of the same six packages is a drift waiting to happen: a
+        dependency added to the bundle would be credited in one and missing
+        from the other, and each list on its own would still pass.
+        """
+        module = _js_inventory_module()
+        listed = {entry.package for entry in module.SHIPPED}
+        assert {"preact", "highlight.js", "tailwindcss"} <= listed, (
+            "the bundle's own credit list (TestBundledThirdPartyAssets) names a library "
+            "the inventory does not"
+        )
+        for name in ("clsx", "tailwind-merge", "class-variance-authority"):
+            assert name in listed, f"{name} is compiled into app.js and is not inventoried"
+
+    def test_the_inventory_describes_the_assets_the_wheel_ships(self) -> None:
+        """The Tailwind version the inventory prints is the one in the built CSS.
+
+        `src/recoverage/assets/style.css` carries the Tailwind banner, so the
+        two can be compared: an inventory that names a version the shipped
+        bytes were not built from is worse than none, because it reads as
+        coverage.
+        """
+        version = _locked_version("tailwindcss")
+        banner = (_ROOT / "src" / "recoverage" / "assets" / "style.css").read_text(
+            encoding="utf-8"
+        )[:200]
+        assert f"tailwindcss v{version}" in banner, (
+            f"the inventory names tailwindcss {version}, which is not the version the "
+            "committed style.css was built from; run make web-build"
+        )
+
+    def test_the_inventory_is_produced_by_the_sbom_job(self) -> None:
+        """CI exports the browser half, or the gap this closes reopens silently.
+
+        The Python export cannot see the bundle, so this job is the only place
+        the browser inventory is produced. The tool is named rather than a
+        Makefile target because the job has no sibling checkout to sync one
+        through, which is the same constraint that pins its `uv export` to
+        `--frozen`.
+        """
+        job = _jobs()["sbom"]
+        assert "tools/bundled_js_inventory.py" in job, (
+            "the sbom job no longer exports the browser-bundle inventory"
+        )
+        assert "recoverage-browser-sbom" in job, (
+            "the browser inventory is written but not uploaded as an artifact"
+        )
+        assert "uv export" in job, "the sbom job stopped exporting the Python inventory"
+
+    def test_notice_points_at_the_browser_inventory(self) -> None:
+        """A wheel consumer reads NOTICE, so the artifact is named there."""
+        notice = (_ROOT / "NOTICE").read_text(encoding="utf-8")
+        assert "recoverage-browser-sbom" in notice, (
+            "NOTICE does not name the browser inventory, so a consumer reading the "
+            "wheel is not told where to find the versions it ships"
+        )
+
+    def test_the_artifact_the_job_uploads_is_what_the_tool_writes(self, tmp_path: Path) -> None:
+        """`--output` writes the rendered inventory, and `test -s` sees a file.
+
+        The job's whole contract is the file the tool leaves behind, so a
+        `--output` that printed to stdout instead would upload nothing and the
+        job would go red on `test -s` rather than here.
+        """
+        module = _js_inventory_module()
+        out = tmp_path / "recoverage-browser-sbom.txt"
+        assert module.main(["--output", str(out)]) == 0
+        assert out.read_text(encoding="utf-8") == module.render(module.resolve())
+
+    def test_a_package_the_manifest_drops_stops_the_export(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A listed package nothing declares is an error, not an inventory line.
+
+        The list outlives a dependency that stopped reaching the bundle until
+        somebody removes it, and an inventory naming a package no longer in
+        the tree describes code the wheel cannot carry.
+        """
+        module = _js_inventory_module()
+        manifest = json.loads(_PACKAGE_JSON.read_text(encoding="utf-8"))
+        del manifest["devDependencies"]["preact"]
+        path = tmp_path / "package.json"
+        path.write_text(json.dumps(manifest), encoding="utf-8")
+        monkeypatch.setattr(module, "PACKAGE_JSON", path)
+        with pytest.raises(module.InventoryError, match="preact"):
+            module.resolve()
+
+    def test_a_lock_entry_without_a_digest_stops_the_export(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An unhashed lock entry cannot be audited, so the export refuses it."""
+        module = _js_inventory_module()
+        lock = _bun_lock()
+        lock["packages"]["clsx"] = ["clsx@2.1.1", "", {}, ""]
+        path = tmp_path / "bun.lock"
+        path.write_text(json.dumps(lock), encoding="utf-8")
+        monkeypatch.setattr(module, "BUN_LOCK", path)
+        with pytest.raises(module.InventoryError, match="integrity"):
+            module.resolve()
+
+
+def _locked_version(package: str) -> str:
+    """The version bun.lock resolves, which is the only one a build can ship."""
+    return _bun_lock()["packages"][package][0].split("@", 1)[1]
 
 
 class TestVendoredLintPlugin:

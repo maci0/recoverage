@@ -17,6 +17,15 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   key and rebuilt; it now also logs one line naming the target and section
   whose build it took over, and `requests.stale_claims` in `/api/health`
   counts them, so a killed builder is not just a slow dashboard.
+- Each release now ships a browser-bundle inventory alongside the Python one.
+  The `sbom` job uploads `recoverage-browser-sbom`: the npm packages
+  `make web-build` compiles into `src/recoverage/assets/` (preact, highlight.js,
+  tailwindcss, clsx, tailwind-merge, class-variance-authority), each with the
+  version and tarball digest `bun.lock` pinned. The wheel ships that directory,
+  so the browser half of the dependency tree runs in a reader's browser with
+  nothing on disk to identify it by, and the existing `recoverage-python-sbom`
+  export reads `uv.lock`, which cannot see it. `make browser-sbom` prints the
+  same inventory, and `NOTICE` names both artifacts.
 
 - The wheel installs a man page (`share/man/man1/recoverage.1`) for the
   `recoverage` entry point, covering every subcommand, flag and `RECOVERAGE_*`

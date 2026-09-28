@@ -390,10 +390,16 @@ jobs:
           # is checked against the Makefile's UV_VERSION by test_supply_chain.
           version: "0.12.14"
           enable-cache: true
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          # The single interpreter pin, the same file uv builds the venv from.
+          # The browser inventory below is a stdlib-only tool that reads
+          # bun.lock, so it needs an interpreter and no environment, which is
+          # what keeps it runnable in the one job with no sibling checkout.
+          python-version-file: .python-version
       # Hash-pinned inventory of the full resolved tree (runtime deps plus
       # every extra) so consumers and vuln scanners can see exactly what a
-      # given build was made from. The npm devDependencies never ship with
-      # the package, so they are not part of this inventory.
+      # given build was made from.
       - name: Export hashed dependency inventory
         # --frozen, not the --locked every other job uses: this job is the one
         # that does not clone the sibling, and --locked re-resolves the graph,
@@ -414,6 +420,17 @@ jobs:
           printf '\n# rebrew path-dependency pin\n# rebrew==%s @ %s\n' "$ref" "$sha" \
             >> recoverage-python-sbom.txt
           test -s recoverage-python-sbom.txt
+      # The export above is the Python half of the tree and the whole of what
+      # uv.lock knows. The other half ships in the wheel: `make web-build`
+      # compiles six npm devDependencies into src/recoverage/assets/, so a
+      # consumer reading only this job's output cannot tell which Preact or
+      # highlight.js runs in their browser. The tool reads bun.lock, so the
+      # versions and tarball digests are the resolved ones.
+      - name: Export the browser-bundle inventory
+        run: |
+          set -euo pipefail
+          python tools/bundled_js_inventory.py --output recoverage-browser-sbom.txt
+          test -s recoverage-browser-sbom.txt
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: recoverage-python-sbom
@@ -421,5 +438,14 @@ jobs:
           # A missing or empty export is a broken inventory, not a warning:
           # upload-artifact defaults to `warn` and would leave the job green
           # with no artifact attached for anyone to read.
+          if-no-files-found: error
+          retention-days: 30
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: recoverage-browser-sbom
+          path: recoverage-browser-sbom.txt
+          # Same reason as the Python inventory: warn would leave the job green
+          # with no artifact, and the browser half is the half nothing else
+          # records.
           if-no-files-found: error
           retention-days: 30

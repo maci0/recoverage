@@ -39,5 +39,9 @@ carries its own LICENSE, is recorded in README.md, and is inventoried file by
 file with a sha256 in tools/oxlint/anti-slop.manifest.json, which
 tools/vendor_manifest.py writes from the tree.
 
-Full dependency inventory per release: the `recoverage-python-sbom` artifact
-produced by the sbom job in .github/workflows/ci.yml.
+Full dependency inventory per release: the `recoverage-python-sbom` and
+`recoverage-browser-sbom` artifacts produced by the sbom job in
+.github/workflows/ci.yml. The second is this file's list with the exact version
+and tarball digest of each package as bun.lock resolved it, since the browser
+code above ships compiled and the Python export cannot see it. `make
+browser-sbom` prints the same inventory without CI.

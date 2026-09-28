@@ -52,7 +52,7 @@ recoverage/
 ├── tools/                  # lint_html.py, smoke.py, payload_budget.py,
 │                           # _serve_harness.py, oxlint/, ci_clone_rebrew.sh,
 │                           # flatten_rikalabs_strict.py, normalize_sdist.py,
-│                           # vendor_manifest.py
+│                           # vendor_manifest.py, bundled_js_inventory.py
 ├── tests/
 │   ├── conftest.py           # Shared fixtures (synthetic coverage TOML)
 │   ├── coverage_fixture.py   # Builders for synthetic coverage documents
@@ -156,6 +156,9 @@ make smoke                  # uv run --locked --extra dev python tools/smoke.py
 make payload-budget         # the inlined shell's size at each static encoding, which the
                             #   payload budget in docs/DESIGN.md quotes
 make smoke-fail             # same, against a deliberately corrupt db
+make browser-sbom           # the npm packages compiled into the shipped browser
+                            #   assets, with the version and digest bun.lock pinned
+                            #   (the sbom job uploads this as recoverage-browser-sbom)
 make all                    # every check CI runs, one command
 
 # Frontend lint detail (requires bun and java on PATH)
@@ -223,6 +226,21 @@ rebrew's dependencies change, re-lock in a tree with the sibling present and
 bump the script alone. The `sbom` job
 deliberately has no such step, because `uv export --frozen` reads the lock
 alone.
+
+The `sbom` job carries the second half of the inventory as well.
+`uv export` reads `uv.lock`, which knows nothing about the browser bundle, and
+the wheel ships that bundle: `make web-build` compiles preact, highlight.js,
+tailwindcss, clsx, tailwind-merge and class-variance-authority into
+`src/recoverage/assets/`, which `package-data` globs. So the job also runs
+`tools/bundled_js_inventory.py` (stdlib only, hence `setup-python` there rather
+than a synced env) and uploads the result as `recoverage-browser-sbom`. That
+tool's `SHIPPED` list is the ONE record of which devDependencies reach a
+consumer, with the reason each ships; `tests/test_supply_chain.py`
+(`TestBrowserBundleInventory`) holds it against `package.json`, `bun.lock`, the
+Tailwind version in the committed `style.css` and `NOTICE`'s credit list, and
+`make browser-sbom` prints the same inventory without CI. A dependency that
+starts reaching the bundle joins that list, `NOTICE` and the test class in the
+same change; one that stops reaching it leaves all three.
 
 The interpreter is pinned in `.python-version` (3.13), which is what uv builds
 the local venv from and what the lint, web-lint and smoke jobs run: their
