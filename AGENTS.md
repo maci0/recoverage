@@ -849,12 +849,13 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   (`TestSearchColumnGuards`) and `tests/test_api.py`
   (`test_a_unicode_space_is_a_search_term_not_an_empty_one`).
 - One response, one snapshot. A snapshot is frozen — every collection is a
-  tuple or a `MappingProxyType` — and `server.load_all_coverage` memoizes on the
-  documents' own stat, so an unchanged directory returns THE SAME snapshot
-  objects. A handler that builds its answer from several collections therefore
-  reads them all from one snapshot and cannot pair one build's cells with the
-  next build's functions; that is the guarantee the SQLite read transaction
-  used to buy, held by the type instead. The call sites are
+  tuple or a `MappingProxyType` — and rebrew's `load_all_coverage_from` (the
+  reader `server` imports) memoizes on the documents' own stat, so an
+  unchanged directory returns THE SAME snapshot objects. A handler that builds
+  its answer from several collections therefore reads them all from one
+  snapshot and cannot pair one build's cells with the next build's functions;
+  that is the guarantee the SQLite read transaction used to buy, held by the
+  type instead. The call sites are
   `api._target_snapshot` (`/stats`, `/data`, the function list, both lookup
   routes, `/asm`, `/bytes`), `cli._open_targets` (`recoverage stats`/`export`/
   `check`) and the whole `potato.render_potato` render, the widest window in the
