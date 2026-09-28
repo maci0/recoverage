@@ -186,12 +186,13 @@ function FunctionMeta({
           <a
             className="meta-value asm-link"
             href="#"
+            title={`Jump the map to ${hex(toVa(fn.va), 8)}`}
             onClick={(event) => {
               event.preventDefault();
               onJumpToAddress(toVa(fn.va));
             }}
           >
-            {hex(toVa(fn.va), 1)}
+            {hex(toVa(fn.va), 8)}
           </a>
         </MetaItem>
         <MetaItem label="Type">Global Variable</MetaItem>
@@ -201,6 +202,11 @@ function FunctionMeta({
   }
 
   const address = fn.vaStart ?? fn.va;
+  // `/functions/<va>` carries the address as a bare number, which is the
+  // spelling for the wire, not for the page: every other address on this panel
+  // is hex, and a reader matching this one against a map range, a search term
+  // or a disassembly line has to convert it by hand.
+  const addressHex = hex(toVa(address), 8);
   const status = fn.status ?? "?";
   return (
     <dl className={META_GRID}>
@@ -208,12 +214,13 @@ function FunctionMeta({
         <a
           className="meta-value asm-link"
           href="#"
+          title={`Jump the map to ${addressHex}`}
           onClick={(event) => {
             event.preventDefault();
             onJumpToAddress(toVa(address));
           }}
         >
-          {String(address)}
+          {addressHex}
         </a>
       </MetaItem>
       <MetaItem label="Size">{`${count(fn.size ?? 0)} bytes`}</MetaItem>
@@ -383,7 +390,9 @@ export function CoveragePanel({
   };
   let copyVA: string | null = null;
   if (fn !== null) {
-    copyVA = String(fn.vaStart ?? fn.va);
+    // The hex the VA row above shows, so the button hands over the address the
+    // reader can see rather than a second spelling of it.
+    copyVA = hex(toVa(fn.vaStart ?? fn.va), 8);
   } else if (cell !== undefined) {
     const base = section?.va ?? 0;
     copyVA = `${hex(base + cell.start, 8)}..${hex(base + cell.end, 8)}`;
@@ -396,11 +405,18 @@ export function CoveragePanel({
       aria-labelledby="panel-title"
     >
       <div className="panel-head border-b border-line pb-2">
-        <div className="flex items-center gap-2">
-          <h2 className="panel-title font-mono text-sm font-bold" id="panel-title">
+        <div className="flex items-start gap-2">
+          {/* A decompiled C identifier is as long as the analyst's patience, and
+              in the terminal face it has no break opportunity, so it pushes the
+              copy buttons out of the panel unless the title may break and the
+              buttons are the part that stays whole. */}
+          <h2
+            className="panel-title wrap-anywhere min-w-0 font-mono text-sm font-bold"
+            id="panel-title"
+          >
             {title}
           </h2>
-          <div className="panel-actions ms-auto flex gap-2">
+          <div className="panel-actions ms-auto flex shrink-0 gap-2">
             <CopyButton
               label="Copy VA"
               value={copyVA ?? ""}

@@ -195,8 +195,8 @@ export function App() {
     if (topbar === null) {
       return;
     }
-    // The topbar is sticky, so the panel header parks below its measured height
-    // instead of underneath it.
+    // The measured height, so whatever parks below the topbar reads the height
+    // it is actually wrapped to at this viewport rather than a guess.
     const measure = (): void => {
       document.documentElement.style.setProperty(
         "--topbar-h",
@@ -416,8 +416,34 @@ export function App() {
     return cells.filter((cell) => matchedFns.has(String(cell.functions?.[0] ?? ""))).length;
   }, [active, matchedFns]);
 
+  /** What the search status line says, or null when no query is typed. The
+   * index a search reads is target-wide and arrives with the first `/data`, so
+   * a reader who types before it lands got a blank line and an Enter that did
+   * nothing: the third arm says the index is still coming rather than letting
+   * a typed query read as a query that matched nothing. */
+  const searchStatus = useMemo(() => {
+    if (query === "") {
+      return null;
+    }
+    if (matchedNames === null) {
+      return `Searching: "${query}" (loading the function index...)`;
+    }
+    return `Searching: "${query}" (${count(matchedNames.size)} ${
+      matchedNames.size === 1 ? "match" : "matches"
+    })${searchHint(matchedNames.size, sectionMatches, active?.name ?? null)}`;
+  }, [active?.name, matchedNames, query, sectionMatches]);
+
   const onSearchKeyDown = (event: TargetedKeyboardEvent<HTMLInputElement>): void => {
-    if (event.key !== "Enter" || matchedNames === null) {
+    if (event.key !== "Enter") {
+      return;
+    }
+    if (matchedNames === null) {
+      // The Enter that has nothing to jump to says so, rather than leaving the
+      // keypress with no effect beside a line that has not counted the matches
+      // yet.
+      if (query.trim() !== "") {
+        flash(`The function index is still loading; press Enter again for "${query.trim()}".`);
+      }
       return;
     }
     // The section on screen wins over the target-wide set, whose iteration order
@@ -494,7 +520,11 @@ export function App() {
       </a>
       <header
         ref={topbarRef}
-        className="topbar sticky top-0 z-20 flex flex-wrap items-center gap-3 border-b border-line bg-topbar px-4 py-2"
+        // Pinned only where it is one or two rows tall. A narrow viewport
+        // wraps the section tabs, the filter pills and the actions into a
+        // block that can take half the screen, and a sticky block that size
+        // scrolls the map out from under the reader who is trying to read it.
+        className="topbar z-20 flex flex-wrap items-center gap-3 border-b border-line bg-topbar px-4 py-2 lg:sticky lg:top-0"
       >
         <div className="topbar-left flex flex-wrap items-center gap-3">
           <div className="title-container flex items-center gap-2">
@@ -555,20 +585,12 @@ export function App() {
                 keystroke writes into has to exist before the write (WCAG 4.1.3). */}
             <div
               className={
-                query !== "" && matchedNames !== null
-                  ? "search-status font-mono text-micro text-muted"
-                  : "sr-only"
+                searchStatus === null ? "sr-only" : "search-status font-mono text-micro text-muted"
               }
               role="status"
               aria-live="polite"
             >
-              {query !== "" && matchedNames !== null && (
-                <>
-                Searching: "{query}" ({count(matchedNames.size)}{" "}
-                {matchedNames.size === 1 ? "match" : "matches"})
-                {searchHint(matchedNames.size, sectionMatches, active?.name ?? null)}
-                </>
-              )}
+              {searchStatus}
             </div>
           </div>
           <div className="filters flex flex-wrap gap-1">
@@ -674,6 +696,7 @@ export function App() {
           )}
           <MapArea
             noTargets={noTargets}
+            target={target}
             coverage={coverage}
             active={active}
             sectionEmpty={!coverage.loading && target !== "" && names.length === 0}
@@ -718,6 +741,7 @@ export function App() {
  * the shell's own JSX, which is where the reader has to look for the data flow. */
 function MapArea({
   noTargets,
+  target,
   coverage,
   active,
   sectionEmpty,
@@ -730,6 +754,7 @@ function MapArea({
   onGridReady,
 }: {
   noTargets: boolean;
+  target: string;
   coverage: Coverage;
   active: Section | null;
   sectionEmpty: boolean;
@@ -749,8 +774,22 @@ function MapArea({
       </div>
     );
   }
+  // A target the project config declares but no build has written yet lands
+  // here rather than in the case above: it is in the dropdown, so the reader
+  // chose it deliberately, and "no sections" on its own names neither the
+  // missing document nor the command that writes it.
+  if (sectionEmpty) {
+    return (
+      <div className="empty-state rounded-control border border-line bg-panel p-6 text-center font-mono text-label text-muted">
+        <p className="font-bold text-text">No coverage data for {target}</p>
+        <p>
+          Run rebrew build-db to write db/coverage-{target}.toml, then reload this page.
+        </p>
+      </div>
+    );
+  }
   if (active === null) {
-    return pending(sectionEmpty ? "No sections in this target." : "Loading coverage data…");
+    return pending("Loading coverage data…");
   }
   if (active.cells === undefined) {
     if (coverage.cellError?.section !== active.name) {
