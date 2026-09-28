@@ -987,8 +987,8 @@ def serve(
     Exits 2 for any of those, before the listener binds. Exits 1 when --bind
     names a non-loopback address without --allow-remote (the refusal and the
     firewall warning go to stderr) or when the port is already taken, and 0 on
-    Ctrl+C. `recoverage config` runs the same checks and ends the same way,
-    so a deployment can preflight this configuration.
+    Ctrl+C. [bold]recoverage config[/bold] runs the same checks and ends the
+    same way, so a deployment can preflight this configuration.
     """
     import recoverage.server as _server
     from recoverage.server import (
@@ -1689,20 +1689,20 @@ def config_cmd(
     ),
     no_color: bool = _no_color_option(),
 ) -> None:
-    """Print the configuration `serve` would start with, without binding a port.
+    """Print the configuration [bold]serve[/bold] would start with, without binding a port.
 
-    The values come from the same merge and validation `serve` runs, so a
+    The values come from the same merge and validation [bold]serve[/bold] runs, so a
     deployment can confirm its environment before the listener opens.  The
-    token is reported as `set` or `unset`; its value is never printed.
+    token is reported as [bold]set[/bold] or [bold]unset[/bold]; its value is never printed.
 
-    It is a preflight, so it also ends the way `serve` ends: the same
+    It is a preflight, so it also ends the way [bold]serve[/bold] ends: the same
     network-bind refusal (exit 1) and the same CORS warnings, after the
-    values.  A check that exited 0 for a configuration `serve` refuses is a
-    deployment that finds out at boot instead of at the check.
+    values.  A check that exited 0 for a configuration [bold]serve[/bold] refuses
+    is a deployment that finds out at boot instead of at the check.
 
     A port of 0 prints as 0: it is the configured value, and the free port
-    `serve` binds in its place is a different one on every run.  The banner
-    that run prints is where the real number is.
+    [bold]serve[/bold] binds in its place is a different one on every run.  The
+    banner that run prints is where the real number is.
     """
     resolved = _resolve_serve_config()
     settings = config.active_config(

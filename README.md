@@ -334,10 +334,15 @@ Re-run the catalog analysis to regenerate the coverage documents.
 recoverage regen
 ```
 
-recoverage calls rebrew's catalog and build-db functions as a library, in its
-own process, not by spawning the `rebrew` console script.  The run has no
-timeout, so it always runs to completion; the dashboard's threaded server keeps
-serving while it is busy.  A failure exits 1.
+recoverage calls rebrew's catalog and build-db functions as a library, in
+process, rather than spawning the `rebrew` console script.  The run has no
+timeout, so it always runs to completion.
+
+Exit codes: 0 = the documents were written (or rebrew had no built target to
+write for), 1 = rebrew failed, 2 = `RECOVERAGE_DB` names a directory rebrew
+would not write to.  That mismatch is refused rather than reported as a done
+regen that left the dashboard stale, because rebrew resolves what it writes
+from `rebrew-project.toml` alone.
 
 ### `recoverage open`
 
