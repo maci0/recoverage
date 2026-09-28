@@ -800,8 +800,17 @@ export function App() {
           </div>
         </div>
         <div className="topbar-right ms-auto flex flex-wrap items-center gap-3">
-          <div className="search relative flex flex-col gap-1" ref={searchBoxRef}>
-            <div className="search-row flex items-center gap-2">
+          {/* Both rows below WRAP, and the search box may shrink. The topbar
+              clips its overflow (`body { overflow-x: clip }`), so a row that
+              cannot break is not scrolled off to the side: at the 320 CSS px
+              1.4.10 asks for, the actions row (target picker, Regenerate, HTML,
+              theme) is about 350px wide as one unbreakable item, and the
+              theme toggle at its end was clipped away with nothing to scroll
+              it back into reach. `min-w-0` is what lets the search column
+              shrink to its box's own minimum rather than to the widest fixed
+              width any child declares. */}
+          <div className="search relative flex min-w-0 flex-col gap-1" ref={searchBoxRef}>
+            <div className="search-row flex flex-wrap items-center gap-2">
               {/* A real <label> element rather than the input's own hint
                   attribute: that hint is the field's only visible name and it
                   disappears the moment a reader types, which is the
@@ -816,7 +825,7 @@ export function App() {
               <input
                 id="search-input"
                 type="search"
-                className="input-el w-56 rounded-hair border border-line bg-btn px-2 py-1 font-mono text-label text-text sm:w-72"
+                className="input-el w-56 max-w-full rounded-hair border border-line bg-btn px-2 py-1 font-mono text-label text-text sm:w-72"
                 placeholder="Search function name or VA..."
                 value={query}
                 onChange={(event) => {
@@ -896,10 +905,10 @@ export function App() {
               );
             })}
           </div>
-          <div className="actions flex items-center gap-2">
+          <div className="actions flex flex-wrap items-center gap-2">
             {targets.length > 0 && (
               <select
-                className="input-el target-select rounded-hair border border-line bg-btn px-2 py-1 font-mono text-label text-text"
+                className="input-el target-select max-w-full min-w-0 rounded-hair border border-line bg-btn px-2 py-1 font-mono text-label text-text"
                 aria-label="Select target binary"
                 value={target}
                 onChange={(event) => onTarget(event.currentTarget.value)}
@@ -962,7 +971,13 @@ export function App() {
           className="grid-area min-w-0 flex-1"
           id="section-panel"
           role="tabpanel"
-          aria-labelledby={`section-tab-${active?.name ?? section}`}
+          // The tab that selected this panel, so its name is the one on screen
+          // (WCAG 4.1.2). A target whose document names no section renders no
+          // tab to point at, and an `aria-labelledby` naming a missing id
+          // resolves to nothing at all, which is a panel with no name rather
+          // than one carrying the label it is asking for.
+          aria-labelledby={names.length > 0 ? `section-tab-${active?.name ?? section}` : undefined}
+          aria-label={names.length > 0 ? undefined : "Coverage map"}
         >
           <StatsStrip
             stats={coverage.stats}

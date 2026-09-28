@@ -208,10 +208,19 @@
   --link: #075985;
   --link-hover: #0c4a6e;
   --link-hover-glow: rgba(2, 132, 199, 0.3);
-  --delta: #92400e;
+  /* One step darker than the dark theme's #f59e0b needs to be here. #92400e
+   * read 4.34:1 on --bg, under the 4.5:1 a 12px label owes, because this theme's
+   * ground is a mid gray rather than a near-black one: the same step that clears
+   * 8.14:1 on --panel and 6.52:1 on the code surface on the dark ground lands
+   * under the floor on the light one. #843a0b reads 4.97 / 6.23 / 7.45 on
+   * those three grounds. */
+  --delta: #843a0b;
   --badge-exact-text: #14532d;
   --badge-reloc-text: #075985;
-  --badge-near-text: #854d0e;
+  /* One step darker than #854d0e for the same reason as `--delta` above: on
+   * this theme's mid-gray ground it read 4.20:1. #733f09 reads 5.27 / 6.60 /
+   * 7.90 on --bg, --panel and --code-bg. */
+  --badge-near-text: #733f09;
   --badge-stub-text: #991b1b;
   --asm-link-underline: rgba(0, 0, 0, 0.3);
   --asm-link-hover-bg: rgba(2, 132, 199, 0.1);

@@ -1131,6 +1131,35 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   are the retro surface the design asks for, and its `lang`, its skip link,
   its block `alt` text and its function-list `scope="col"` headers are
   deliberate.
+- The topbar rows WRAP, and the search column may shrink, because the shell
+  clips its overflow: `body { overflow-x: clip }` keeps the decorative radial
+  gradient from opening a horizontal scrollbar, and a clip means a row wider
+  than the viewport is GONE rather than scrolled off to one side. At the 320
+  CSS px 1.4.10 asks for, the actions row (target picker, Regenerate, HTML,
+  theme) is about 350px as one unbreakable item, and the theme toggle at its
+  end went with it; `min-w-0` on the search column is what lets it shrink to
+  its own box's minimum rather than to the widest fixed width any child
+  declares. A new topbar row takes `flex-wrap` with the two named ones, and
+  `tests/test_server.py` (`TestSpaTopbarReflowsAtTheNarrowViewport`) holds
+  them.
+- Every text-bearing token clears 4.5:1 on every ground it can land on, in
+  BOTH themes, and the two themes are not one palette over two grounds: the
+  light ground is a mid gray, so a step tuned for the near-black field sits
+  under the floor on it while looking identical in review. `--delta` and
+  `--badge-near-text` were the two that did (4.34:1 and 4.20:1 on `--bg` in
+  light mode, against 8.74:1 for each in dark). `tests/test_server.py`
+  (`TestSpaTextTokensClearTheTextFloor`) computes every pairing off the file
+  rather than a restated table, and the colour maths it shares with the cell
+  fill gate (`TestCellFillsAreDrawnPerTheme`, 3:1 for a graphic) sits at
+  module scope because both answer the same compositing question. A new text
+  token joins `TOKENS` in the same change, a new ground joins `GROUNDS`.
+- An `aria-labelledby` names an element that EXISTS. The map area is the
+  section tablist's `tabpanel`, labelled by the tab that selected it, and a
+  target whose document names no section renders no tab to point at: the
+  reference then resolves to nothing and the panel has no name at all, which is
+  worse than the `aria-label` it should have fallen back to. The two spellings
+  are exclusive in `App.tsx`, so the tablist's emptiness is the condition that
+  picks between them.
 - Potato Mode's `accesskey` letters are CLAIMED, not spelled per control:
   `potato._accesskey_attr` hands each one out in document order (the search
   box, the section tabs, the filter pills) and a control whose letter is

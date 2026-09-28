@@ -3442,45 +3442,7 @@ class TestCellFillsAreDrawnPerTheme:
 
     @staticmethod
     def _declarations(selector: str) -> dict[str, str]:
-        css = _web("index.css")
-        body = css.split(f"{selector} {{", 1)[1].split("\n}", 1)[0]
-        return dict(re.findall(r"(--[a-z0-9-]+):\s*([^;]+);", body))
-
-    @staticmethod
-    def _parse(value: str) -> tuple[tuple[float, float, float], float]:
-        """A CSS colour as `(channels, alpha)`, for `#rrggbb` and `rgba(r, g, b, a)`."""
-        text = value.strip()
-        literal = re.fullmatch(r"#([0-9a-fA-F]{6})", text)
-        if literal is not None:
-            digits = literal.group(1)
-            return (tuple(int(digits[index : index + 2], 16) / 255 for index in (0, 2, 4)), 1.0)  # type: ignore[return-value]
-        parts = [float(part) for part in text[text.index("(") + 1 : text.index(")")].split(",")]
-        channels = tuple(part / 255 for part in parts[:3])
-        return channels, parts[3] if len(parts) == 4 else 1.0  # type: ignore[return-value]
-
-    @classmethod
-    def _over(cls, value: str, ground: tuple[float, float, float]) -> tuple[float, float, float]:
-        """The colour as painted: a translucent fill composited over its ground."""
-        channels, alpha = cls._parse(value)
-        return tuple(  # type: ignore[return-value]
-            channel * alpha + base * (1 - alpha)
-            for channel, base in zip(channels, ground, strict=True)
-        )
-
-    @staticmethod
-    def _luminance(rgb: tuple[float, float, float]) -> float:
-        def linear(channel: float) -> float:
-            return channel / 12.92 if channel <= 0.04045 else ((channel + 0.055) / 1.055) ** 2.4
-
-        red, green, blue = (linear(channel) for channel in rgb)
-        return 0.2126 * red + 0.7152 * green + 0.0722 * blue
-
-    @classmethod
-    def _contrast(
-        cls, left: tuple[float, float, float], right: tuple[float, float, float]
-    ) -> float:
-        darker, lighter = sorted((cls._luminance(left), cls._luminance(right)))
-        return (lighter + 0.05) / (darker + 0.05)
+        return _theme_declarations(selector)
 
     def test_light_mode_declares_every_fill(self) -> None:
         """A fill light mode inherits is a fill the light ground erases."""
@@ -3492,8 +3454,8 @@ class TestCellFillsAreDrawnPerTheme:
     def test_fill_clears_the_non_text_floor_against_its_own_ground(self, token: str) -> None:
         for selector, (background, grid) in self.GRIDS.items():
             declarations = self._declarations(selector)
-            ground = self._over(grid, self._parse(background)[0])
-            ratio = self._contrast(self._over(declarations[token], ground), ground)
+            ground = _composite(grid, _parse_colour(background)[0])
+            ratio = _contrast(_composite(declarations[token], ground), ground)
             assert ratio >= self.NON_TEXT_FLOOR, (
                 f"{selector} {token} ({declarations[token]}) sits at {ratio:.2f}:1 "
                 "on its own map ground"
@@ -3506,6 +3468,179 @@ class TestCellFillsAreDrawnPerTheme:
         light = self._declarations(".light-mode")
         for token in self.FILLS:
             assert dark[token].strip() != light[token].strip(), token
+
+
+# The colour maths behind both token gates, at module scope because two classes
+# read it: a cell fill is a graphic and a text token is text, and the answer to
+# "what does this paint as on that ground" is the same compositing either way.
+
+
+def _theme_declarations(selector: str) -> dict[str, str]:
+    """The custom properties one theme block of `index.css` declares."""
+    css = _web("index.css")
+    body = css.split(f"{selector} {{", 1)[1].split("\n}", 1)[0]
+    return dict(re.findall(r"(--[a-z0-9-]+):\s*([^;]+);", body))
+
+
+def _parse_colour(value: str) -> tuple[tuple[float, float, float], float]:
+    """A CSS colour as `(channels, alpha)`, for `#rrggbb` and `rgba(r, g, b, a)`."""
+    text = value.strip()
+    literal = re.fullmatch(r"#([0-9a-fA-F]{6})", text)
+    if literal is not None:
+        digits = literal.group(1)
+        return (tuple(int(digits[index : index + 2], 16) / 255 for index in (0, 2, 4)), 1.0)  # type: ignore[return-value]
+    parts = [float(part) for part in text[text.index("(") + 1 : text.index(")")].split(",")]
+    channels = tuple(part / 255 for part in parts[:3])
+    return channels, parts[3] if len(parts) == 4 else 1.0  # type: ignore[return-value]
+
+
+def _composite(value: str, ground: tuple[float, float, float]) -> tuple[float, float, float]:
+    """The colour as painted: a translucent token over the ground behind it."""
+    channels, alpha = _parse_colour(value)
+    return tuple(  # type: ignore[return-value]
+        channel * alpha + base * (1 - alpha) for channel, base in zip(channels, ground, strict=True)
+    )
+
+
+def _luminance(rgb: tuple[float, float, float]) -> float:
+    def linear(channel: float) -> float:
+        return channel / 12.92 if channel <= 0.04045 else ((channel + 0.055) / 1.055) ** 2.4
+
+    red, green, blue = (linear(channel) for channel in rgb)
+    return 0.2126 * red + 0.7152 * green + 0.0722 * blue
+
+
+def _contrast(left: tuple[float, float, float], right: tuple[float, float, float]) -> float:
+    darker, lighter = sorted((_luminance(left), _luminance(right)))
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+class TestSpaTextTokensClearTheTextFloor:
+    """Every text-bearing token clears 4.5:1 on every ground it can land on.
+
+    The two themes are not one palette over two grounds: the light ground is a
+    mid gray, so a step tuned for a near-black field sits a full point under the
+    floor on it while looking identical in review. `--delta` was the case here
+    (4.34:1 on `--bg` in light mode, 8.74:1 in dark). The grounds below are the
+    ones the shell actually paints: the page, a panel, the code surface, and the
+    control ground the buttons and the search field use.
+    """
+
+    TEXT_FLOOR = 4.5
+    TOKENS = (
+        "--text",
+        "--muted",
+        "--c",
+        "--link",
+        "--link-hover",
+        "--delta",
+        "--badge-exact-text",
+        "--badge-reloc-text",
+        "--badge-near-text",
+        "--badge-stub-text",
+    )
+    # Per theme: the page ground, then the translucent surfaces over it, read
+    # from the file rather than restated, so a theme change moves them together.
+    GROUNDS: ClassVar[dict[str, tuple[str, ...]]] = {
+        ":root": ("--bg", "--panel", "--code-bg", "--btn-bg"),
+        ".light-mode": ("--bg", "--panel", "--code-bg", "--btn-bg"),
+    }
+
+    @pytest.mark.parametrize("selector", [":root", ".light-mode"])
+    def test_every_text_token_clears_the_floor_on_every_ground(self, selector: str) -> None:
+        declarations = _theme_declarations(selector)
+        background = _parse_colour(declarations["--bg"])[0]
+        # `--btn-bg` is `var(--panel)` in light mode, so resolve the indirection
+        # rather than trying to parse it as a colour.
+        grounds = {
+            name: (
+                _parse_colour(declarations[name])[0]
+                if declarations[name].strip().startswith("#")
+                else background
+            )
+            for name in self.GROUNDS[selector]
+        }
+        for token in self.TOKENS:
+            assert token in declarations, f"{selector} never declares {token}"
+            for name, ground in grounds.items():
+                ratio = _contrast(_parse_colour(declarations[token])[0], ground)
+                assert ratio >= self.TEXT_FLOOR, (
+                    f"{selector} {token} ({declarations[token]}) sits at {ratio:.2f}:1 "
+                    f"on {name} ({declarations[name]})"
+                )
+
+    def test_the_badge_texts_also_clear_the_floor_on_the_code_surface(self) -> None:
+        """The status hues are the ones Potato and the code panes both print,
+        and `--code-bg` is a surface of its own in each theme."""
+        for selector in self.GROUNDS:
+            declarations = _theme_declarations(selector)
+            code = _parse_colour(declarations["--code-bg"])[0]
+            for token in self.TOKENS:
+                if not token.startswith("--badge-"):
+                    continue
+                ratio = _contrast(_parse_colour(declarations[token])[0], code)
+                assert ratio >= self.TEXT_FLOOR, (
+                    f"{selector} {token} ({declarations[token]}) sits at {ratio:.2f}:1 on --code-bg"
+                )
+
+
+class TestSpaTopbarReflowsAtTheNarrowViewport:
+    """A topbar row that cannot break is content that cannot be reached.
+
+    1.4.10 asks the page to reflow to 320 CSS px, and the shell clips its
+    overflow (`body { overflow-x: clip }` in `index.css`) so the decorative
+    radial gradient cannot open a horizontal scrollbar. Clipping means a row
+    wider than the viewport is not scrolled off to the side: whatever sits past
+    the edge is gone, with no scroll position that brings it back. The rows that
+    hold the controls therefore wrap, and the search column may shrink.
+    """
+
+    #: The topbar rows, and the utility each one needs so a row added beside
+    #: them inherits the rule rather than a reviewer's memory of it.
+    ROWS: ClassVar[tuple[str, str]] = (
+        ("search-row", "flex-wrap"),
+        ("actions", "flex-wrap"),
+    )
+
+    @staticmethod
+    def _class_of(source: str, marker: str) -> str:
+        line = next(
+            (candidate for candidate in source.splitlines() if f'"{marker} ' in candidate),
+            None,
+        )
+        assert line is not None, f"the topbar no longer renders a {marker!r} row"
+        found = re.search(r'className="([^"]+)"', line)
+        assert found is not None, f"the {marker!r} row carries no className"
+        return found.group(1)
+
+    def test_body_overflow_is_clipped(self) -> None:
+        """The premise the rest of this class rests on: if the shell stopped
+        clipping, a non-wrapping row would scroll instead of disappearing, and
+        the wraps below would be belt rather than braces."""
+        assert "overflow-x: clip" in _web("index.css")
+
+    @pytest.mark.parametrize(("marker", "utility"), list(ROWS))
+    def test_the_row_wraps(self, marker: str, utility: str) -> None:
+        classes = self._class_of(_web("App.tsx"), marker)
+        assert utility in classes.split(), f"{marker} cannot wrap: {classes}"
+
+    def test_the_search_column_may_shrink(self) -> None:
+        """`min-width: auto` on a flex item resolves to its content minimum, so
+        without `min-w-0` the column is as wide as the widest fixed width any
+        child declares and wraps nothing."""
+        classes = self._class_of(_web("App.tsx"), "search")
+        assert "min-w-0" in classes.split(), classes
+
+    def test_the_search_field_is_capped_at_the_column(self) -> None:
+        """`w-56` / `sm:w-72` are the sizes the row is designed around; at the
+        320px viewport the Clear button wraps under them rather than pushing the
+        field past the edge."""
+        source = _web("App.tsx")
+        start = next(
+            index for index, line in enumerate(source.splitlines()) if 'id="search-input"' in line
+        )
+        field = " ".join(source.splitlines()[start : start + 3])
+        assert "max-w-full" in field
 
 
 class TestSpaLocaleFormatting:
