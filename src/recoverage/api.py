@@ -1659,6 +1659,24 @@ def handle_api_functions_list(target: str) -> bytes | HTTPResponse:
     # next rebuild, and every later list request reads a count that describes
     # rows the DB no longer holds.
     snap = _snapshot_db_mtime()
+    # The page is a pure function of the snapshot and every query parameter
+    # that shaped it, so it revalidates like its sibling DB-derived reads
+    # (/stats, /data, /asm, /bytes) instead of answering no-store.  Every input
+    # is in the key — the raw spellings for the ones the server reads as typed
+    # (?status, ?search, ?sort, including the ones that fall back to a
+    # default) and the resolved values for the two that clamp (?limit,
+    # ?offset), so two requests that produced the same page share the tag and
+    # two that did not cannot.
+    etag = _etag_or_304(
+        snap,
+        target,
+        "functions",
+        status_filter,
+        search,
+        sort_param,
+        limit,
+        offset,
+    )
     with _target_snapshot(target) as coverage:
         # `total` and the page come from ONE filter pass over one frozen
         # snapshot, so the count and the rows it paginates cannot describe two
@@ -1693,7 +1711,7 @@ def handle_api_functions_list(target: str) -> bytes | HTTPResponse:
                 "offset": offset,
                 "functions": items,
             },
-            Cache_Control=CACHE_NO_STORE,
+            **_revalidate_headers(etag),
         )
 
 

@@ -3810,6 +3810,67 @@ class TestApiEtagContract:
         _, h2, _ = wsgi_get(f"/api/targets/{target}/data?section=.text")
         assert _header(h1, "ETag") != _header(h2, "ETag")
 
+    def test_functions_list_etag_roundtrip(self) -> None:
+        """The function list is a pure function of the snapshot and its query
+        string, so it revalidates like /stats and /data instead of answering
+        no-store. A polling client must be able to skip the page."""
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, headers, _ = wsgi_get(f"/api/targets/{target}/functions?limit=2")
+        assert status.startswith("200")
+        etag = _header(headers, "ETag")
+        assert etag and etag.startswith('"') and etag.endswith('"')
+        assert "no-store" not in _header(headers, "Cache-Control")
+        status, headers, body = wsgi_get(
+            f"/api/targets/{target}/functions?limit=2", headers={"If-None-Match": etag}
+        )
+        assert status == "304 Not Modified"
+        assert body == b""
+
+    def test_functions_list_etag_covers_every_query_parameter(self) -> None:
+        """A tag that ignored the page it paged would answer 304 for a page the
+        client never received: one per input, so each change moves the tag."""
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        base = f"/api/targets/{target}/functions"
+        variants = [
+            "",
+            "?limit=1",
+            "?offset=1",
+            "?sort=name:desc",
+            "?status=EXACT",
+            "?search=_func",
+        ]
+        tags = set()
+        for suffix in variants:
+            _, headers, _ = wsgi_get(f"{base}{suffix}")
+            tag = _header(headers, "ETag")
+            assert tag, suffix
+            tags.add(tag)
+        assert len(tags) == len(variants), "two different pages share one validator"
+
+    def test_304_carries_the_vary_of_the_body_it_stands_in_for(self) -> None:
+        """Every revalidating body here is content-negotiated, so the 304
+        names Accept-Encoding too: a shared cache keyed without it would hand
+        a compressed body to a client that accepted none."""
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        for path in (
+            f"/api/targets/{target}/data",
+            f"/api/targets/{target}/stats",
+            f"/api/targets/{target}/functions",
+        ):
+            _, headers, _ = wsgi_get(path)
+            etag = _header(headers, "ETag")
+            assert _header(headers, "Vary") == "Accept-Encoding", path
+            status, headers, body = wsgi_get(path, headers={"If-None-Match": etag})
+            assert status == "304 Not Modified", path
+            assert _header(headers, "Vary") == "Accept-Encoding", path
+            assert body == b"", path
+
     def test_unknown_section_404s(self) -> None:
         """/data?section=<unknown> must 404 (was a silent empty grid)."""
         target = require_target()

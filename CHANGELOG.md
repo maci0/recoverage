@@ -115,6 +115,16 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   data behind `/api/targets` and `/data` had arrived, because `#root` was
   empty. The shell now ships a `Loading coverage…` status line inside it, which
   the app clears as it mounts.
+- `GET /api/targets/<target>/functions` revalidates instead of answering
+  `no-store`: the page is a pure function of the coverage snapshot and its
+  query string, so it carries a hashed `ETag` and answers `304` on
+  `If-None-Match`, the same contract `/stats`, `/data`, `/asm` and `/bytes`
+  already had. Every parameter that shapes the page is in the validator, so a
+  page the client does not hold can never be answered as the one it does.
+- The `304` a revalidating API read answers now carries `Vary:
+  Accept-Encoding`, the header its `200` already sent. Every one of those
+  bodies is content-negotiated, and a shared cache keyed without it could hand
+  a compressed body to a client that accepted none.
 - Every command's `--help` names the value a flag takes (`--port PORT`,
   `--target TARGET`, `--min-coverage MIN_COVERAGE`, `--log-level LEVEL`,
   `--bind ADDRESS`, `--cors-origin ORIGIN`, `--token TOKEN`, `--section

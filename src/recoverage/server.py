@@ -779,6 +779,12 @@ def _etag_or_304(snap: tuple[int, int] | None, *parts: object) -> str | None:
     and a full answer is a miss, which is what tells an operator reading a
     rising mean duration whether the build got slower or the validators
     stopped revalidating.
+
+    The 304 carries the same ``Vary: Accept-Encoding`` the 200 it stands in for
+    carries, which :func:`recoverage.ui._not_modified` already sent: every body
+    here is content-negotiated, and a shared cache that keyed this resource
+    without that header would hand a brotli body to a client that asked for
+    none.
     """
     if snap is None:
         return None
@@ -787,7 +793,11 @@ def _etag_or_304(snap: tuple[int, int] | None, *parts: object) -> str | None:
         metrics.CACHES.hit(metrics.REVALIDATION_CACHE)
         raise HTTPResponse(
             status=304,
-            headers={"ETag": etag, "Cache-Control": CACHE_REVALIDATE},
+            headers={
+                "ETag": etag,
+                "Vary": "Accept-Encoding",
+                "Cache-Control": CACHE_REVALIDATE,
+            },
         )
     metrics.CACHES.miss(metrics.REVALIDATION_CACHE)
     return etag

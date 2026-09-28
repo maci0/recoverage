@@ -48,14 +48,48 @@ export type SectionStats = CellBucket & {
   size_bytes: number;
 };
 
+/** The `.text` grid block of `/stats`'s `summary`, plus one entry per non-`.text`
+ * section keyed by the section name (`server._section_summary`). */
+export type SummaryBlock = {
+  totalFunctions: number;
+  matchedFunctions: number;
+  exactMatches: number;
+  relocMatches: number;
+  nearMatchCount: number;
+  stubCount: number;
+  coveredBytes: number;
+  paddingBytes: number;
+  dataBytes: number;
+  thunkBytes: number;
+  coveragePercent: number;
+  textSize: number;
+};
+
+export type SectionSummary = {
+  exactMatches: number;
+  relocMatches: number;
+  nearMatchCount: number;
+  stubCount: number;
+  paddingCount: number;
+  exactBytes: number;
+  relocBytes: number;
+  nearMatchBytes: number;
+  stubBytes: number;
+  paddingBytes: number;
+  coveredBytes: number;
+  totalFunctions: number;
+  size: number | null;
+};
+
 export type StatsPayload = {
   target: string;
-  summary: {
-    totalFunctions: number;
-    matchedFunctions: number;
-    coveragePercent: number;
-  };
+  /** The fixed keys, and one `SectionSummary` per non-`.text` section, named
+   * by the section. */
+  summary: SummaryBlock & Record<string, number | SectionSummary>;
   sections: Record<string, SectionStats>;
+  /** Function counts by rebrew's status vocabulary (`server._section_stats`),
+   * which is the same vocabulary `?status=` filters on. */
+  functions_by_status: Record<string, number>;
 };
 
 export type SearchEntry = {
@@ -97,7 +131,7 @@ function init(signal?: AbortSignal): RequestInit {
 export async function fetchTargets(signal?: AbortSignal): Promise<Array<TargetInfo>> {
   const res = await fetch("/api/targets", init(signal));
   if (!res.ok) {
-    throw new Error(`/api/targets answered ${res.status}`);
+    throw new Error(await refusal(res));
   }
   // SAFETY: the response is this origin's own JSON, whose shape
   // `recoverage.api.handle_api_targets` pins to `{"targets": [...]}`.
@@ -123,7 +157,7 @@ export async function fetchData(
   const suffix = query.size === 0 ? "" : `?${query.toString()}`;
   const res = await fetch(`/api/targets/${encodeURIComponent(target)}/data${suffix}`, init(signal));
   if (!res.ok) {
-    throw new Error(`/api/targets/${target}/data answered ${res.status}`);
+    throw new Error(await refusal(res));
   }
   // SAFETY: this origin's own JSON, whose shape
   // `recoverage.api._build_data_raw` pins: the fields read below are the ones
@@ -134,7 +168,7 @@ export async function fetchData(
 export async function fetchStats(target: string, signal?: AbortSignal): Promise<StatsPayload> {
   const res = await fetch(`/api/targets/${encodeURIComponent(target)}/stats`, init(signal));
   if (!res.ok) {
-    throw new Error(`/api/targets/${target}/stats answered ${res.status}`);
+    throw new Error(await refusal(res));
   }
   // SAFETY: this origin's own JSON, whose shape
   // `recoverage.api.handle_api_stats` pins: `summary` and `sections` are the
@@ -166,6 +200,11 @@ export type FunctionDetail = {
   is_export?: boolean;
   sha256?: string | null;
   files?: Array<string>;
+  /** Every key `server.function_json` writes is declared here, so a field the
+   * server serves is never out of this type's reach. */
+  detected_by?: Array<string>;
+  size_by_tool?: string | null;
+  textOffset?: number | null;
   updated_by?: string | null;
   updated_at?: string | null;
   decl?: string | null;
@@ -181,6 +220,27 @@ export type FunctionDetail = {
 
 export type AsmPayload = { asm?: string; error?: string; detail?: string };
 
+/** The part of `server._json_err`'s envelope a pane quotes. */
+type ErrorEnvelope = { error?: string; detail?: string };
+
+/** What a body that is not the error contract parses to: the status line is
+ * the only thing left to read, and the caller already has it. */
+const NO_ENVELOPE: ErrorEnvelope = {};
+
+/** The reason a JSON endpoint refused, read as the pane states it.
+ *
+ * `server._json_err` sends `{error, code, detail}` for every failure, so the
+ * reason is in the body rather than in the status alone. */
+async function refusal(res: Response): Promise<string> {
+  const status = `${res.status} ${res.statusText}`;
+  // SAFETY: this origin's own JSON, whose shape `recoverage.server._json_err`
+  // pins. A body outside that contract (a proxy's HTML error page) parses to
+  // nothing to read, which is the empty envelope, not a wrong answer.
+  const payload: ErrorEnvelope = await res.json().catch(() => NO_ENVELOPE);
+  const reason = payload.error ?? status;
+  return payload.detail ? `${reason}: ${payload.detail}` : reason;
+}
+
 export async function fetchFunction(
   target: string,
   va: string | number,
@@ -191,7 +251,11 @@ export async function fetchFunction(
     init(signal),
   );
   if (!res.ok) {
-    throw new Error("Not found");
+    // The server's own reason, not a fixed "Not found": this route answers 404
+    // for an unknown VA and also 401 without a token and 503 when the coverage
+    // document is unreadable, and a pane reading "Not found" for either of
+    // those names the wrong cause. `fetchAsm` reads the same envelope.
+    throw new Error(await refusal(res));
   }
   // SAFETY: this origin's own JSON, whose shape `recoverage.server.function_json`
   // pins: the fields read below are the ones it writes.
