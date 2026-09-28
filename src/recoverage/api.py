@@ -2793,7 +2793,7 @@ def _regen_forbidden(reason: str, error: str, detail: str) -> HTTPResponse:
     _log.warning(
         "Refused POST /api/regen (%s) from %s: %s",
         reason,
-        _sse_peer(),
+        _server.peer_label(),
         _server._log_safe(detail),
         extra=_server.request_log_fields(403, target="regen"),
     )
