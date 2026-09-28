@@ -255,10 +255,13 @@ directory is refused rather than run.
 .TP
 .B RECOVERAGE_MAX_CONNECTIONS
 Cap on concurrent client connections. There is no flag for it: it sizes the
-transport rather than selecting a behavior.
+transport rather than selecting a behavior. An integer 1-65536, default 128; a
+value outside the range is refused at startup.
 .TP
 .B RECOVERAGE_CLIENT_TIMEOUT
-Seconds a client socket may take to send a request. Transport, not behavior.
+Seconds a client socket may take to send a request, per socket operation and
+not for a connection's lifetime. Transport, not behavior. An integer 16-86400,
+default 120; a value outside the range is refused at startup.
 .SH "EXIT STATUS"
 .TP
 .B 0

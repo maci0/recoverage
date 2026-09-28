@@ -48,6 +48,7 @@ recoverage/
 │   ├── DESIGN_PRINCIPLES.md  # Core operational philosophies
 │   ├── USER_STORIES.md     # User stories with acceptance criteria
 │   ├── THREAT_MODEL.md     # Attack surface, trust boundaries, risk ranking
+│   ├── UPGRADING.md        # Before/after for every major that broke a consumer
 │   ├── ideas.md            # Future improvement ideas
 │   └── *.png               # Screenshots for the README
 ├── tools/                  # lint_html.py, smoke.py, payload_budget.py,
@@ -70,7 +71,8 @@ recoverage/
 │   ├── test_potato.py        # Potato Mode unit tests
 │   ├── test_perf.py          # Deterministic perf gates (work counters, not wall clock)
 │   ├── test_metrics.py       # Request id, RED counters, slow-request log line
-│   ├── test_release.py       # Release contract: version, changelog, declared floors
+│   ├── test_release.py       # Release contract: version, changelog, declared floors,
+│   │                         #   the upgrade guide's coverage of the breaking majors
 │   ├── test_supply_chain.py  # Pin contracts: rebrew tag/SHA, one clone mechanism, preset
 │   │                         #   license, declared-vs-imported deps, npm lock pin + integrity,
 │   │                         #   bundled-asset grants
@@ -309,6 +311,18 @@ The release policy is not written down anywhere else, so it is stated here and
 - An entry belongs under `[Unreleased]` until the commit that ships it is
   tagged. Back-filling a released section with a later fix misreports what the
   tag contains, which is the one thing the notes exist to say.
+- A `### Breaking` entry also gets a section in `docs/UPGRADING.md`, written
+  while the change is still under `[Unreleased]`: the before, the after, and
+  the thing the reader has to change. The changelog is read release by
+  release; the upgrade guide is read by someone arriving at a deployment to
+  do the upgrade, and notes written after the tag are notes nobody reads.
+  `tests/test_release.py` (`TestUpgradeGuideCoversEveryMajor`) holds the two
+  against each other, so a major that ships a breaking change without one
+  fails the suite in the release commit that has to write the section anyway.
+  The guide carries no version literal of its own: its per-release headings
+  are the changelog's own `## [X.Y.Z]` spellings, so the release commit
+  renames `[Unreleased]` to the version it ships as and the test follows it
+  with no second list to update.
 - A raised `requires-python` or dependency floor goes in the notes of the
   release that raises it, with the reason. A floor drop is a breaking change
   for whoever is still on the old one.

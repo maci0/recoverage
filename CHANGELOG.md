@@ -282,11 +282,12 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `RECOVERAGE_MAX_CONNECTIONS` and `RECOVERAGE_CLIENT_TIMEOUT` make the two
   serving limits a deployment chooses instead of a constant in the source. The
   cap is an integer `1`-`65536` defaulting to `128`, the cap this release
-  introduces; the deadline is an integer `5`-`86400` seconds defaulting to `120`
-  and has to outlast the 15s SSE heartbeat, or live reload is cut short. Both
-  resolve at startup like every other `RECOVERAGE_*` setting, so a value
-  outside the range is the exit 2 a deployment finds at boot rather than a
-  refused connection later. `recoverage config` prints the resolved pair.
+  introduces; the deadline is an integer `16`-`86400` seconds defaulting to
+  `120`, a per-socket-operation bound rather than a lifetime any live stream
+  has to clear. Both resolve at startup like every other `RECOVERAGE_*`
+  setting, so a value outside the range is the exit 2 a deployment finds at
+  boot rather than a refused connection later. `recoverage config` prints the
+  resolved pair.
 - `/src/<file>` and `/original/<file>` negotiate their encoding like every other
   body in the package. A text file over 1 KB answers brotli, zstd or gzip
   according to the request's `Accept-Encoding`, carries a strong `ETag` hashed

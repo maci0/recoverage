@@ -90,6 +90,20 @@ Add an extra to enable its feature: `uv sync --extra <extra>`.
 | `pygments` | pygments | Syntax highlighting in Potato Mode |
 | `playwright` | playwright, pytest-playwright | Browser integration tests (`tests/test_playwright.py`) |
 
+### Upgrading
+
+The HTTP API, the CLI and the coverage document are frozen from 1.0.0, so a
+change that breaks a consumer takes a major version. Before upgrading, run
+`recoverage config`: it resolves the environment `serve` resolves and ends the
+way `serve` ends, so a raised floor, a malformed token or a bind that needs an
+acknowledgment shows up there rather than at the next restart.
+
+[docs/UPGRADING.md](https://github.com/relumea/recovery/blob/main/docs/UPGRADING.md)
+carries the before, the after and the thing to change for every major that
+broke something, and
+[CHANGELOG.md](https://github.com/relumea/recovery/blob/main/CHANGELOG.md)
+is the full record.
+
 ---
 
 ## Quick Start

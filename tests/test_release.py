@@ -389,3 +389,68 @@ class TestShippedSectionsUseCanonicalGroups:
         assert _groups_are_canonical(misordered) is False
         unknown = "\n\n### Miscellaneous\n\n- a.\n"
         assert _groups_are_canonical(unknown) is False
+
+
+def _upgrade_guide() -> str:
+    return (_MANIFEST.parent / "docs" / "UPGRADING.md").read_text(encoding="utf-8")
+
+
+def _unreleased() -> str:
+    """The `[Unreleased]` block, without the next section heading."""
+    return _changelog().split("## [Unreleased]", 1)[1].split("\n## [", 1)[0]
+
+
+class TestUpgradeGuideCoversEveryMajor:
+    """A `Breaking` group with no upgrade note is a release nobody can take.
+
+    The changelog says what changed; it is read release by release, and a
+    reader arriving at a deployment to do an upgrade wants the before, the
+    after and the thing to change, gathered in one place. Three majors had
+    shipped and nothing carried that, and a fourth breaking release was already
+    staged. `docs/UPGRADING.md` is that place, and this class is the gate that
+    keeps it one: a major that ships a `Breaking` group and has no section
+    there fails the suite rather than shipping an upgrade path nobody wrote.
+    """
+
+    def test_the_guide_sections_the_breaking_releases(self) -> None:
+        breaking = {version for version, body in _release_sections() if "### Breaking" in body}
+        assert breaking, "no shipped section carries a Breaking group to check"
+        headings = set(_upgrade_guide_sections())
+        assert breaking <= headings, (
+            f"docs/UPGRADING.md has no section for {sorted(breaking - headings)}, "
+            "whose changes break a consumer"
+        )
+
+    def test_the_gate_fires_on_a_major_with_no_section(self) -> None:
+        """A guard nothing has seen fail is not known to work."""
+        guide = "## Before upgrading\n\n## [2.0.0]\n\n- one\n\n## [3.0.0]\n\n- two\n"
+        headings = set(re.findall(r"^## \[([^\]]+)\]$", guide, re.MULTILINE))
+        assert headings == {"2.0.0", "3.0.0"}
+        assert ({"2.0.0", "4.0.0"} - headings) == {"4.0.0"}
+
+    def test_the_pending_change_is_in_the_guide_before_it_ships(self) -> None:
+        """The Unreleased block is the release being prepared, not a draft.
+
+        Its `Breaking` entries are the ones a reader is about to meet, and the
+        guide is the only place that gathers the before and the after. Notes
+        written after the tag are notes nobody reads, so the section has to
+        exist while the changes are still staged.
+        """
+        if "### Breaking" not in _unreleased():
+            return
+        assert "Unreleased" in _upgrade_guide_sections(), (
+            "the Unreleased section carries a Breaking group and docs/UPGRADING.md "
+            "has no section for it"
+        )
+
+
+def _upgrade_guide_sections() -> list[str]:
+    """The release headings the upgrade guide carries, in document order.
+
+    The guide writes its per-release headings the way the changelog does, so
+    the same parser reads both and a release can be checked against its
+    section by version. The guide's own prose headings (`## Before
+    upgrading`) are not bracketed and so are not one: matching them here would
+    let a heading that names no release satisfy the gate.
+    """
+    return re.findall(r"^## \[([^\]]+)\]$", _upgrade_guide(), re.MULTILINE)
