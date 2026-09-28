@@ -184,6 +184,60 @@ def test_asm_pane_renders_disassembly(page: Any):
     expect(asm.locator("code.hljs")).to_have_count(1, timeout=15000)
 
 
+def test_search_lists_its_matches(page: Any):
+    """A search that counts its matches must be able to reach them.
+
+    Enter jumped to the first one and nothing else did, so a term matching
+    hundreds of functions was only reachable by narrowing the spelling until
+    one match survived. The list under the box is that answer, and a row has
+    to jump: the point of the list is reaching a match that is not the first.
+    """
+    page.goto(f"{BASE_URL}/?section=.text")
+    page.wait_for_selector(".grid-canvas")
+
+    term = page.evaluate(
+        """async (base) => {
+            const targets = await (await fetch(`${base}/api/targets`)).json();
+            const target = targets.targets?.[0]?.id;
+            if (!target) return null;
+            const data = await (await fetch(
+                `${base}/api/targets/${encodeURIComponent(target)}/data?section=.text`
+            )).json();
+            const names = Object.keys(data.search_index ?? {});
+            // A prefix shared by more than one name, so "first match" and
+            // "any match" are different rows.
+            const counts = new Map();
+            for (const name of names) {
+                const head = name.slice(0, 3).toLowerCase();
+                counts.set(head, (counts.get(head) ?? 0) + 1);
+            }
+            for (const [head, n] of counts) {
+                if (n > 1) return head;
+            }
+            return null;
+        }""",
+        BASE_URL,
+    )
+    if term is None:
+        pytest.skip("no shared name prefix in the sample database to search for")
+
+    page.fill("#search-input", term)
+    results = page.locator(".search-results .search-result")
+    expect(results.first).to_be_visible(timeout=15000)
+    assert results.count() > 1, f"a term matching {results.count()} rows listed one"
+
+    # A row selects a block: the panel leaves its no-selection state.
+    results.nth(1).click()
+    panel = page.locator("#panel")
+    expect(panel).not_to_contain_text("Click a block on the map", timeout=15000)
+
+    # Escape clears the query, the list and the map's dimming together.
+    page.focus("#search-input")
+    page.keyboard.press("Escape")
+    expect(page.locator("#search-input")).to_have_value("")
+    expect(page.locator(".search-results")).to_have_count(0)
+
+
 def test_code_modal_names_one_scroll_region(page: Any):
     """The modal's body is the pane's scroll container, so it carries the
     focusable region and its name. The <pre> inside used to declare a second

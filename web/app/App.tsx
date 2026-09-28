@@ -5,6 +5,7 @@ import type { ComponentChildren, TargetedKeyboardEvent } from "preact";
 import { fetchTargets, type Section, type TargetInfo } from "@/api";
 import { CoverageMap, type CoverageMapProps } from "@/components/CoverageMap";
 import { CoveragePanel } from "@/components/CoveragePanel";
+import { SearchResults, searchResultRows } from "@/components/SearchResults";
 import { StatsStrip } from "@/components/StatsStrip";
 import { Button, controlVariants } from "@/components/ui/button";
 import { FILTER_KEY, PALETTE_VARS, STATE_FILTERS, STATE_LABEL } from "@/grid/pack";
@@ -34,6 +35,10 @@ import { readStored, writeStored } from "@/lib/storage";
 const TARGET_KEY = "recoverage_target";
 const THEME_KEY = "recoverage_theme";
 const NAV_NOTICE_MS = 4000;
+/** How many matches the result list shows before it says how many it left out.
+ * A target-wide term can match thousands of names, and the list is there to be
+ * scanned, not to be a second index: past the cap it narrows the term. */
+const SEARCH_RESULT_LIMIT = 20;
 
 /** The filters the toolbar offers: "all" first, then one per state the grid
  * can paint. The state half is `STATE_FILTERS`, which the stats strip draws the
@@ -110,7 +115,7 @@ function searchHint(
   if (sectionMatches === 0) {
     return ` - none of them in ${isolate(section ?? "this section")}; press Enter to jump to the first one.`;
   }
-  return " - press Enter to jump to the first one.";
+  return " - press Enter, or pick a name from the list below.";
 }
 
 export function App() {
@@ -256,22 +261,37 @@ export function App() {
     return () => observer.disconnect();
   }, [theme]);
 
-  useEffect(() => {
-    const control = new AbortController();
+  // The target list's own controller, held so the error line's Retry can start
+  // a fresh request. The first load is driven by the effect below, which
+  // aborts its own controller on unmount; a retry outlives that effect, so a
+  // retry left to an unmounted shell would write state into a dead component.
+  const targetsControl = useRef<AbortController | null>(null);
+
+  const loadTargets = useCallback((signal: AbortSignal): void => {
     void (async () => {
       try {
-        setTargets(await fetchTargets(control.signal));
+        setTargets(await fetchTargets(signal));
+        setLoadError(null);
         setTargetReady(true);
-        // oxlint-disable-next-line @rikalabs/no-silent-catch-fallback -- the failure is surfaced in the header's error line, and the dashboard still renders its empty state
+        // oxlint-disable-next-line @rikalabs/no-silent-catch-fallback -- the failure is surfaced in the header's error line, which carries the Retry, and the dashboard still renders its empty state
       } catch (error: unknown) {
-        if (!control.signal.aborted) {
+        if (!signal.aborted) {
           setLoadError(error instanceof Error ? error.message : String(error));
           setTargetReady(true);
         }
       }
     })();
-    return () => control.abort();
   }, []);
+
+  useEffect(() => {
+    const control = new AbortController();
+    targetsControl.current = control;
+    loadTargets(control.signal);
+    return () => {
+      control.abort();
+      targetsControl.current = null;
+    };
+  }, [loadTargets]);
 
   // Pick a target once the list is known: a URL target that the server still
   // serves stays, then the remembered one, then the first the server offers.
@@ -531,7 +551,47 @@ export function App() {
     })${searchHint(matchedNames.size, sectionMatches, active?.name ?? null)}`;
   }, [active?.name, matchedNames, query, sectionMatches]);
 
+  /** The section an address falls in, for a search result's own row. Every
+   * section is a candidate, so this reads the same ranges `jumpToAddress`
+   * does; an address no section claims is listed without one rather than
+   * hidden, because a hit the map cannot select is still a hit. */
+  const sectionOfAddress = useCallback(
+    (va: number): string | null => {
+      for (const [name, row] of Object.entries(coverage.sections)) {
+        const base = row.va ?? 0;
+        if (va >= base && va < base + (row.size ?? 0)) {
+          return name;
+        }
+      }
+      return null;
+    },
+    [coverage.sections],
+  );
+
+  const searchResults = useMemo(
+    () =>
+      matchedNames === null
+        ? []
+        : searchResultRows(
+            matchedNames,
+            coverage.searchIndex,
+            sectionOfAddress,
+            SEARCH_RESULT_LIMIT,
+          ),
+    [coverage.searchIndex, matchedNames, sectionOfAddress],
+  );
+
   const onSearchKeyDown = (event: TargetedKeyboardEvent<HTMLInputElement>): void => {
+    if (event.key === "Escape") {
+      // Escape is the way out of a search box everywhere else, and here it had
+      // to be hunted for the Clear button: the typed term, the result list and
+      // the dimming on the map all clear together.
+      if (query !== "") {
+        event.preventDefault();
+        setQuery("");
+      }
+      return;
+    }
     if (event.key !== "Enter") {
       return;
     }
@@ -599,7 +659,51 @@ export function App() {
     setTarget(next);
   };
 
+  /** Where a selection on a narrow viewport leaves the reader.
+   *
+   * The panel is beside the map at `lg` and below it under that, and the map is
+   * a lattice as tall as the page, so a tap on a phone selected a block whose
+   * detail was thousands of pixels below the fold: the tap looked like it did
+   * nothing at all. The panel is brought into view only when it is not already
+   * on screen, so the arrow-key walk (which scrolls the map on every move) is
+   * untouched, and the scroll is instant under `prefers-reduced-motion`. */
+  useEffect(() => {
+    if (selectedIndex === null) {
+      return;
+    }
+    const panel = document.querySelector<HTMLElement>("#panel");
+    if (panel === null) {
+      return;
+    }
+    const box = panel.getBoundingClientRect();
+    if (box.top < window.innerHeight && box.bottom > 0) {
+      return;
+    }
+    const smooth = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches !== true;
+    panel.scrollIntoView({ behavior: smooth ? "smooth" : "auto", block: "start" });
+  }, [selectedIndex]);
+
+  const onGridSelect = useCallback((index: number): void => {
+    setSelectedIndex(index);
+  }, []);
+
   const noTargets = targetReady && targets.length === 0;
+
+  /** Re-run the read the error line is reporting. The target list and the
+   * section data are separate requests and a reader cannot tell from the line
+   * which one failed, so the line's retry answers for the one the shell
+   * actually holds: the list when `/api/targets` was refused, everything
+   * otherwise. */
+  const retryFailedLoad = useCallback((): void => {
+    if (loadError !== null) {
+      if (targetsControl.current === null) {
+        targetsControl.current = new AbortController();
+      }
+      loadTargets(targetsControl.current.signal);
+      return;
+    }
+    coverage.reload();
+  }, [coverage, loadError, loadTargets]);
 
   // Potato Mode reads `search` and a comma-joined `filter`, so the link carries
   // the reader's position across instead of dropping them on the default view.
@@ -681,7 +785,7 @@ export function App() {
           </div>
         </div>
         <div className="topbar-right ms-auto flex flex-wrap items-center gap-3">
-          <div className="search flex flex-col gap-1">
+          <div className="search relative flex flex-col gap-1">
             <div className="search-row flex items-center gap-2">
               {/* A real <label> element rather than the input's own hint
                   attribute: that hint is the field's only visible name and it
@@ -697,7 +801,7 @@ export function App() {
               <input
                 id="search-input"
                 type="search"
-                className="input-el rounded-hair border border-line bg-btn px-2 py-1 font-mono text-label text-text"
+                className="input-el w-56 rounded-hair border border-line bg-btn px-2 py-1 font-mono text-label text-text sm:w-72"
                 placeholder="Search function name or VA..."
                 value={query}
                 onChange={(event) => setQuery(event.currentTarget.value)}
@@ -727,6 +831,14 @@ export function App() {
             >
               {searchStatus}
             </div>
+            <SearchResults
+              results={searchResults}
+              total={matchedNames?.size ?? 0}
+              section={active?.name ?? null}
+              onPick={(result) => {
+                jumpToAddress(result.va);
+              }}
+            />
           </div>
           <div className="filters flex flex-wrap gap-1">
             {FILTERS.map((entry) => {
@@ -763,11 +875,13 @@ export function App() {
             )}
             <Button
               className="icon-btn reload-btn"
-              // "Reload" is the word the button shows, so it leads the name too:
-              // a voice-control user saying "click Reload" has to find it
-              // (WCAG 2.5.3).
-              aria-label={busy ? MSG.REGEN_IN_PROGRESS : "Reload coverage data"}
-              title={busy ? MSG.REGEN_IN_PROGRESS : "Regenerate coverage data"}
+              // "Regenerate" leads the accessible name for the same reason
+              // (WCAG 2.5.3), and is also the honest name for what the click
+              // runs: rebrew's catalog analysis, for minutes at a time, which
+              // "Reload" (the browser's own word for a refresh) does not tell a
+              // reader to expect.
+              aria-label={busy ? MSG.REGEN_IN_PROGRESS : "Regenerate coverage data"}
+              title={busy ? MSG.REGEN_IN_PROGRESS : "Re-run the coverage analysis (takes minutes)"}
               // `aria-disabled`, not `disabled`: a disabled button leaves the
               // tab order, so the reader who just activated it is dropped to
               // <body> and has to walk the whole page back to find where they
@@ -777,7 +891,7 @@ export function App() {
               aria-disabled={busy ? "true" : undefined}
               onClick={reload}
             >
-              {busy ? MSG.REGEN_IN_PROGRESS : "Reload"}
+              {busy ? MSG.REGEN_IN_PROGRESS : "Regenerate"}
             </Button>
             <a
               className={cn(controlVariants(), "potato-link")}
@@ -841,6 +955,14 @@ export function App() {
               role="alert"
             >
               {loadError ?? coverage.error}
+              {/* The next action the line did not offer. A refused read left
+                  the reader with a reason and nothing to do about it, and the
+                  only way back was reloading the whole page. It re-runs the
+                  read that failed: the target list when that is what was
+                  refused, the current section's data otherwise. */}
+              <Button className="ms-3" onClick={retryFailedLoad}>
+                Retry
+              </Button>
             </p>
           )}
           {/* The map area's own live region, mounted for the life of the shell
@@ -860,12 +982,14 @@ export function App() {
             coverage={coverage}
             active={active}
             sectionEmpty={!coverage.loading && target !== "" && names.length === 0}
+            loadError={loadError ?? coverage.error}
+            onRetry={retryFailedLoad}
             filters={filters}
             matchedFns={matchedFns}
             selectedIndex={selectedIndex}
             activeFn={panes.fnKey}
             theme={theme}
-            onSelect={setSelectedIndex}
+            onSelect={onGridSelect}
             onGridReady={(focus) => {
               gridFocus.current = focus;
             }}
@@ -911,6 +1035,10 @@ type MapAreaProps = Omit<CoverageMapProps, "section" | "onGridReady"> & {
   coverage: Coverage;
   active: Section | null;
   sectionEmpty: boolean;
+  /** A read the shell could not recover from, or null. */
+  loadError: string | null;
+  /** Re-run the read behind `loadError`. */
+  onRetry: () => void;
   onGridReady: (focus: (index: number) => void) => void;
 };
 
@@ -920,6 +1048,8 @@ function MapArea({
   coverage,
   active,
   sectionEmpty,
+  loadError,
+  onRetry,
   filters,
   matchedFns,
   selectedIndex,
@@ -932,7 +1062,7 @@ function MapArea({
     return (
       <div className="empty-state rounded-control border border-line bg-panel p-6 text-center font-mono text-label text-muted">
         <p className="font-bold text-text">No coverage database</p>
-        <p>Run rebrew build-db to create db/coverage-*.toml, then reload this page.</p>
+        <p>Run rebrew build-db to create db/coverage-*.toml, then press Regenerate.</p>
       </div>
     );
   }
@@ -944,13 +1074,25 @@ function MapArea({
     return (
       <div className="empty-state rounded-control border border-line bg-panel p-6 text-center font-mono text-label text-muted">
         <p className="font-bold text-text">No coverage data for {target}</p>
-        <p>
-          Run rebrew build-db to write db/coverage-{target}.toml, then reload this page.
-        </p>
+        <p>Run rebrew build-db to write db/coverage-{target}.toml, then press Regenerate.</p>
       </div>
     );
   }
+  // A read the shell could not recover from answers with the reason and the
+  // retry rather than a loading line that never resolves: with no target
+  // resolved, `/data` was never requested, so "Loading coverage data…" sat
+  // above an empty map for as long as the reader waited.
   if (active === null) {
+    if (loadError !== null) {
+      return (
+        <div className="grid-error rounded-control border border-line bg-panel p-4 font-mono text-label">
+          <p>Coverage data unavailable: {loadError}</p>
+          <Button className="mt-2" onClick={onRetry}>
+            Retry
+          </Button>
+        </div>
+      );
+    }
     return pending("Loading coverage data…");
   }
   if (active.cells === undefined) {

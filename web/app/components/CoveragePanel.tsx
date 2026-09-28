@@ -450,7 +450,10 @@ export function CoveragePanel({
       </div>
       <div className="panel-body pt-2">
         {fn === null && cellIndex === null ? (
-          <p className="hint text-muted">{MSG.SELECT_FUNCTION}</p>
+          <p className="hint text-muted">
+            Click a block on the map, or press Enter in the search box, to see its source,
+            disassembly and bytes here.
+          </p>
         ) : (
           <>
             <CodeSection

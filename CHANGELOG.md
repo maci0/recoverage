@@ -16,7 +16,18 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   network-reachable server was being scanned. `locked_peers` is a gauge that
   drops with the throttle window, so an active lockout reads `degraded` and
   recovers on its own rather than degrading every probe until a restart.
-
+- The dashboard lists what a search matched, under the search box in address
+  order, and a row jumps to that block. The count and Enter-to-the-first were
+  the only answers, so a term matching hundreds of functions could be reached
+  no other way than narrowing the spelling until one match survived. The list
+  is capped at 20 and says how many it left out.
+- `Escape` in the dashboard's search box clears the query, the list and the
+  map's dimming, the way it does in a search box everywhere else.
+- A failed read in the dashboard carries a Retry, and the map area shows the
+  failure in place of the grid instead of a "Loading coverage data..." line
+  that never resolved. The retry re-runs the read that failed; the only way
+  back before was reloading the page, which threw away the target, the section
+  and the search with it.
 - The wheel and the sdist ship `recoverage/py.typed`, so a project that imports
   `recoverage.server`, `recoverage.config` or `recoverage.metrics` gets the
   annotations this package ships instead of having them dropped at the package
@@ -135,6 +146,16 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- The dashboard's rebuild button reads "Regenerate" rather than "Reload". It
+  runs rebrew's catalog analysis for minutes, which is not what "Reload", the
+  browser's own word for a page refresh, told a reader to expect. The empty
+  states name the same button instead of telling the reader to reload the page
+  by hand.
+- Tapping a block in the dashboard on a narrow viewport brings the detail
+  panel into view. The panel sits below the map there, and the map is as tall
+  as the page, so the tap appeared to do nothing.
+- The dashboard's detail panel names how to open a block (click one, or press
+  Enter in the search box) instead of showing "(select a function)".
 - The strict mypy gate now covers `tests/conftest.py` and
   `tests/coverage_fixture.py` beside `src/` and `tools/`. Those two are the
   slice every other test file is built on, and a checker that skipped them

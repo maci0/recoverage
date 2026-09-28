@@ -531,7 +531,7 @@ backend to configure: these numbers live in the process and reset with it.
 minutes: the request counters can say a request is in flight but not that it
 is a rebuild, how long the last one took, or whether failures are climbing.
 `rejected` counts POSTs the cooldown or the run lock refused, which is a
-double-clicked Reload button rather than a broken pipeline, so it is kept off
+double-clicked Regenerate button rather than a broken pipeline, so it is kept off
 `failures`. `streams` reports live-reload saturation: each connected SSE
 stream pins a server thread for its whole life, so `clients` against
 `max_clients` is the distance to the 503 the next tab gets.

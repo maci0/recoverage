@@ -159,7 +159,11 @@ graph TD
 - Matching is derived on each render from the payload's `search_index`, so a keystroke updates the map without a round trip
 - Non-matching cells are dimmed, matching cells highlighted
 - The search row reports the live match count, names the query, and says what
-  to do when nothing matched; a Clear button empties the input
+  to do when nothing matched; a Clear button empties the input, and `Escape`
+  does the same from inside the box
+- The matches are listed under the box in address order, capped at 20 with a
+  count of the rest, and a row jumps to its block, so a term matching
+  hundreds of names is reachable without narrowing it to one guess at a time
 - Enter jumps to the first match, selecting the cell or jumping to its VA when the match is not in the active section
 - Clearing the search restores all cells to normal
 
@@ -168,13 +172,17 @@ graph TD
     A["Type in search box"] --> B["Derive the matching name set<br/>(name, VA, symbol)"]
     B --> C{"Any matches?"}
     C -->|Yes| D["Dim unmatched cells<br/>highlight matched cells"]
+    C -->|Yes| E["List the matches under the box<br/>(address order, capped)"]
     C -->|No| F["Status line: no matches,<br/>search by VA"]
 
-    G["Click Clear"] --> H["Empty the query<br/>restore all cells"]
+    E --> I["Click a row: jump to its block"]
+
+    G["Click Clear, or press Escape"] --> H["Empty the query<br/>restore all cells"]
 
     style A fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
     style E fill:#d1fae5,stroke:#059669,color:#065f46
     style H fill:#d1fae5,stroke:#059669,color:#065f46
+    style I fill:#d1fae5,stroke:#059669,color:#065f46
     style C fill:#fef3c7,stroke:#d97706,color:#92400e
 ```
 
@@ -589,7 +597,7 @@ graph LR
     end
 
     subgraph "Phase 4: Iteration"
-        K["Fix a function<br/>in src/"] --> L["Click Reload"]
+        K["Fix a function<br/>in src/"] --> L["Click Regenerate"]
         L --> M["Regen coverage documents"]
         M --> G
     end
