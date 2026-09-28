@@ -659,6 +659,32 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   (`TestBlockPosition`), with the non-ASCII digit spellings in `_NUM_TOKENS` so the
   fuzz campaigns meet them. `parse_va_candidates`, which `/functions/<va>` and
   `/asm` read a VA through, is rebrew's and parses the same way.
+- A request BODY is read through `server.read_request_body(limit)`, never
+  through bottle's `request.body`. That property drains the whole declared
+  `Content-Length` into a `BytesIO` before the handler sees a byte of it, and
+  spills past `MEMFILE_MAX` (100 KiB) into a `NamedTemporaryFile` — on a tmpfs
+  `/tmp`, so RAM — so the endpoint's own cap ran long after the resource it
+  exists to bound was allocated. `read_request_body` compares the declared
+  length first (a 4 GB request costs one header comparison), decodes a chunked
+  body under the same cap on the DECODED bytes, and stops within one chunk of
+  the limit otherwise. Every refusal it raises leaves the rest of the body in
+  the socket, so the answer must carry `Connection: close`; `api._body_rejected`
+  is the one helper that puts it there. A new endpoint reading a body calls
+  the helper for both `RequestBodyTooLargeError` and `RequestBodyMalformedError`.
+- Connections are capped, not just deadlines. `_CLIENT_SOCKET_TIMEOUT_SECONDS`
+  bounds how LONG a handler thread lives and never how MANY there are:
+  ThreadingMixIn starts one per accept without asking, and a peer that opens a
+  connection and sends nothing parks in the request-line read for the full
+  deadline. `_ThreadingWSGIServer.process_request` takes the slot before the
+  thread and refuses with a 503 at `_MAX_CONNECTIONS`; the release wraps
+  `process_request_thread` and the thread-creation failure, so the counter and
+  the descriptors cannot disagree. `_SSE_MAX_CLIENTS` is the same bound one
+  level in, for the one route whose response is held open by design. A new
+  route that pins a connection for a long time names that constant in its own
+  reasoning. Pinned at `tests/test_lifecycle.py`
+  (`TestClientConnectionDeadline::test_connections_are_capped_and_the_slot_is_released`)
+  and `tests/test_api.py` (`TestBatchFunctionLookup`'s body-cap cases, which
+  assert the read COUNT, not just the 413).
 - The untrusted-input surfaces (query parameters, the batch POST body, request
   headers, the `/potato` query string, the `/src` and `/original` path
   segments, the access-gating headers, the `RECOVERAGE_*` readers) are fuzzed

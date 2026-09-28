@@ -15,6 +15,8 @@ than on the adapter around them.
 from __future__ import annotations
 
 import contextlib
+import logging
+import threading
 from http.client import HTTPMessage
 from socketserver import ThreadingMixIn
 from typing import IO, TYPE_CHECKING, Any, cast
@@ -28,15 +30,116 @@ if TYPE_CHECKING:
     from _typeshed.wsgi import InputStream, WSGIApplication
 
 
+_log = logging.getLogger("recoverage")
+
+#: Concurrent connections the dashboard admits.  Generous next to what a real
+#: client needs — a browser tab holds one, a page loading assets and polling
+#: holds a handful, and ``api._SSE_MAX_CLIENTS`` streams can be open on top —
+#: and low enough that a flood of stalled peers is refused rather than spawning
+#: a thread per accept until the process cannot make one.  Refusing is loud (the
+#: client gets a 503, the operator gets a log line), which is the point: a
+#: server that has stopped accepting should say so rather than look slow.
+_MAX_CONNECTIONS = 128
+
+
 class _ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
     """Threaded WSGI server for the dashboard.
 
     wsgiref's stock WSGIServer handles one connection at a time; the SSE
     /api/events stream stays open indefinitely, which would stall every other
     request.  ThreadingMixIn gives each connection its own daemon thread.
+
+    Threads are capped at :data:`_MAX_CONNECTIONS`.  The per-connection
+    deadlines below bound how LONG one thread lives, never how MANY there are:
+    ThreadingMixIn starts a thread for every accepted connection, and the
+    accept loop starts the next one without asking.  So a client that opens
+    connections and sends nothing on them pins one thread, one stack and one
+    descriptor each for the full :data:`_CLIENT_SOCKET_TIMEOUT_SECONDS`, and can
+    do that as many times as it likes.  ``/api/events`` has its own cap
+    (``api._SSE_MAX_CLIENTS``) because a stream is the expensive case; this one
+    covers every other route the same way, and refusing costs one accept.
     """
 
     daemon_threads = True
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        self._connections_lock = threading.Lock()
+        self._connections_open = 0
+        super().__init__(*args, **kwargs)
+
+    def process_request(self, request: Any, client_address: Any) -> None:
+        """Admit the connection, or answer 503 and close it at the cap.
+
+        Refusing HERE rather than in the handler keeps the bound on the
+        resource (the thread and its descriptor) instead of on the request:
+        a connection that never gets a thread cannot pin one.
+
+        :meth:`shutdown_request` is what releases the descriptor on this
+        branch; the superclass's own ``process_request`` releases it on every
+        other one, including the thread's failure paths.
+        """
+        if not self._admit_connection():
+            self._refuse_connection(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            # Thread creation is the one thing the superclass can fail at, and
+            # a slot taken and never handed to a thread is a slot the cap
+            # loses for the life of the process — exactly the failure the cap
+            # exists for.  The socket goes with it: no thread will ever serve
+            # this request.
+            self._release_connection()
+            self.shutdown_request(request)
+            raise
+
+    def _admit_connection(self) -> bool:
+        with self._connections_lock:
+            if self._connections_open >= _MAX_CONNECTIONS:
+                return False
+            self._connections_open += 1
+            return True
+
+    def _release_connection(self) -> None:
+        with self._connections_lock:
+            self._connections_open = max(0, self._connections_open - 1)
+
+    def _refuse_connection(self, request: Any) -> None:
+        """Answer the 503 and close, so the client learns rather than hanging.
+
+        The response is written by hand on the raw socket: there is no WSGI
+        request here, so there is no environ and no handler to route a 503
+        through, and a silent close would read to the client as a network
+        fault rather than as a server that is busy.
+        """
+        body = b'{"error": "too many connections", "code": "rate_limited"}'
+        with contextlib.suppress(OSError):
+            request.sendall(
+                b"HTTP/1.1 503 Service Unavailable\r\n"
+                b"Content-Type: application/json\r\n"
+                b"Connection: close\r\n"
+                b"Retry-After: 5\r\n"
+                + f"Content-Length: {len(body)}\r\n\r\n".encode("ascii")
+                + body
+            )
+        _log.warning(
+            "Refusing a connection: %d/%d already open",
+            self._connections_open,
+            _MAX_CONNECTIONS,
+        )
+        self.shutdown_request(request)
+
+    def process_request_thread(self, request: Any, client_address: Any) -> None:
+        """One connection, one thread: the slot is released on every exit.
+
+        The release wraps the whole superclass call, which already runs
+        ``shutdown_request`` in its own ``finally``, so the counter and the
+        descriptor cannot disagree about which connections are live.
+        """
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._release_connection()
 
     def app(self) -> WSGIApplication:
         """The WSGI app, or a loud failure if none was installed.
@@ -52,6 +155,16 @@ class _ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
         if application is None:
             raise RuntimeError("no WSGI application installed on the server")
         return application
+
+
+#: Concurrent connections the dashboard admits.  Generous next to what a real
+#: client needs — a browser tab holds one connection, a page with assets and
+#: polling holds a handful, and ``_SSE_MAX_CLIENTS`` streams can be open on
+#: top — and low enough that a flood of stalled peers is refused instead of
+#: spawning threads until the process cannot make one.  Refusing is loud (the
+#: client gets a 503 and the operator gets a log line), which is the point: a
+#: server that has stopped accepting should say so rather than look slow.
+_MAX_CONNECTIONS = 128
 
 
 # Hard deadline for every socket operation on a client connection (the request

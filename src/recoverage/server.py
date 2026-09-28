@@ -377,6 +377,137 @@ def parse_ascii_int(text: str, base: int = 10) -> int:
     return int(text, base)
 
 
+class RequestBodyError(Exception):
+    """The request body could not be handed to the caller as bytes.
+
+    Both subclasses leave the connection's framing untrustworthy — the bytes
+    after the stop point are still in the socket, and a keep-alive handler
+    would read them as the next request — so a caller MUST answer with
+    ``Connection: close`` whatever it says in the body.
+    """
+
+
+class RequestBodyTooLargeError(RequestBodyError):
+    """The body is over the caller's cap."""
+
+
+class RequestBodyMalformedError(RequestBodyError):
+    """The body is framed in a way this reader will not accept."""
+
+
+#: Bytes pulled from ``wsgi.input`` per read.  A body under the caller's cap is
+#: a few reads either way, and an over-cap one stops within one chunk of the
+#: cap, so this only bounds how much is in memory mid-read.
+_BODY_READ_CHUNK = 64 * 1024
+
+#: Longest a chunked size line may be before the body is refused outright: a
+#: client sending megabytes of hex with no CRLF in sight is not one whose body
+#: this reader is going to finish parsing.
+_CHUNK_LINE_MAX = 1024
+
+
+def _declared_content_length() -> int | None:
+    """The request's declared body length in bytes, or None when it has none.
+
+    Read from ``CONTENT_LENGTH`` directly rather than through
+    ``request.content_length``: that property returns -1 for a chunked request
+    and for a body whose header the peer omitted, and a caller that treats -1
+    as a length reads the socket until it blocks.
+    """
+    raw = request.environ.get("CONTENT_LENGTH", "")
+    if not raw:
+        return None
+    try:
+        length = parse_ascii_int(raw)
+    except ValueError:
+        return None
+    return length if length >= 0 else None
+
+
+def _body_is_chunked() -> bool:
+    """Whether the request declares a chunked transfer encoding (RFC 9112 7.1)."""
+    return "chunked" in request.environ.get("HTTP_TRANSFER_ENCODING", "").lower()
+
+
+def _read_chunked_body(limit: int) -> bytes:
+    """Read a chunked body, refusing once the DECODED size passes *limit*.
+
+    The bound is on the decoded bytes, not on what was read, so a client
+    cannot smuggle an oversize body past it in one large ``read()``: every
+    chunk is checked as it arrives and the excess is never accumulated.
+    """
+    stream = request.environ["wsgi.input"]
+    body = bytearray()
+    while True:
+        line = stream.readline(_CHUNK_LINE_MAX + 1)
+        if not line or len(line) > _CHUNK_LINE_MAX or not line.endswith(b"\r\n"):
+            raise RequestBodyMalformedError("unterminated chunk size line")
+        size_field = line[:-2].split(b";", 1)[0].strip()
+        try:
+            size = int(size_field, 16) if size_field else 0
+        except ValueError as exc:
+            raise RequestBodyMalformedError(f"not a hex chunk size: {size_field!r}") from exc
+        if size < 0 or size > limit - len(body):
+            raise RequestBodyTooLargeError(f"body over the {limit}-byte limit")
+        if size == 0:
+            # The terminating chunk, then optional trailers to the final CRLF.
+            while True:
+                trailer = stream.readline(_CHUNK_LINE_MAX + 1)
+                if trailer in (b"\r\n", b"\n", b""):
+                    break
+                if len(trailer) > _CHUNK_LINE_MAX:
+                    raise RequestBodyMalformedError("oversize trailer line")
+            return bytes(body)
+        remaining = size
+        while remaining:
+            part = stream.read(min(remaining, _BODY_READ_CHUNK))
+            if not part:
+                raise RequestBodyMalformedError("chunk ended before its declared size")
+            body += part
+            remaining -= len(part)
+        if stream.read(2) != b"\r\n":
+            raise RequestBodyMalformedError("chunk not CRLF terminated")
+
+
+def read_request_body(limit: int) -> bytes:
+    """Read the request body, refusing anything over *limit* bytes.
+
+    This replaces ``request.body`` on every path that reads a client-supplied
+    payload.  Bottle's property drains the WHOLE declared body before the
+    caller sees a byte of it, holding it in a ``BytesIO`` up to 100 KiB and
+    spilling to a ``NamedTemporaryFile`` past that — so a request declaring
+    ``Content-Length: 4000000000`` wrote 4 GB (to a tmpfs ``/tmp``, so RAM)
+    before the endpoint's own 64 KiB cap could look at it, and that temporary
+    file was released only when the environ dict holding it was collected.
+    The cap was real; the resource it was meant to bound was allocated before
+    the cap ran.
+
+    Here the declared length is checked BEFORE a byte is read, so the oversized
+    request costs one header comparison, and the read itself stops within one
+    chunk of *limit* whatever the client sends after that.
+
+    Raises :class:`RequestBodyTooLargeError` past *limit* and
+    :class:`RequestBodyMalformedError` on framing this will not accept; see
+    :class:`RequestBodyError` for what the caller owes the connection.
+    """
+    chunked = _body_is_chunked()
+    declared = None if chunked else _declared_content_length()
+    if declared is not None and declared > limit:
+        raise RequestBodyTooLargeError(f"declared {declared} bytes over the {limit}-byte limit")
+    stream = request.environ["wsgi.input"]
+    if chunked:
+        return _read_chunked_body(limit)
+    # No Content-Length to compare: read up to the cap and one byte, so an
+    # unframed oversize body is detectable rather than read to its end.
+    body = bytearray()
+    while len(body) <= limit:
+        part = stream.read(min(_BODY_READ_CHUNK, limit + 1 - len(body)))
+        if not part:
+            return bytes(body)
+        body += part
+    raise RequestBodyTooLargeError(f"body over the {limit}-byte limit")
+
+
 #: Glob rebrew's writer names its documents with, and the reader globs for.
 _COVERAGE_FILE_PREFIX = "coverage-"
 _COVERAGE_FILE_SUFFIX = ".toml"

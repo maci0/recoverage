@@ -1440,13 +1440,26 @@ def handle_api_functions_list(target: str) -> bytes | HTTPResponse:
         )
 
 
+def _body_rejected(status: int, error: str, detail: str) -> HTTPResponse:
+    """A refused POST body, answered on a connection that is then closed.
+
+    ``server.read_request_body`` stops reading at its cap, so whatever the
+    client sent after that point is still in the socket and a keep-alive
+    handler would parse those bytes as the next request.  Every refusal it
+    raises therefore answers with ``Connection: close``; one helper owns that
+    so no refusal can answer without it.
+    """
+    return _json_err(status, {"error": error, "detail": detail}, Connection="close")
+
+
 def _batch_request_vas() -> tuple[list[int], HTTPResponse | None]:
     """Read + validate the POST /functions body into deduped VA ints.
 
     Returns ``(unique_vas, None)`` on success, ``([], error_response)`` when
-    the body violates the contract: a bounded read (the whole body is parsed
-    before the 500-VA cap applies, and with --allow-remote the endpoint is
-    reachable off-loopback), a JSON object
+    the body violates the contract: a body read under
+    :func:`recoverage.server.read_request_body`'s cap (with --allow-remote the
+    endpoint is reachable off-loopback, and bottle's own body reader drains
+    the whole declared body before any endpoint cap can see it), a JSON object
     with a non-empty "vas" array capped at _MAX_BATCH_LOOKUP, and entries
     that are integers or hex strings (base-16 with or without 0x prefix,
     matching rebrew's parse_va — bare hex like "10001000" is valid here).
@@ -1471,7 +1484,19 @@ def _batch_request_vas() -> tuple[list[int], HTTPResponse | None]:
             },
         )
     try:
-        raw = request.body.read(_MAX_BATCH_BODY_BYTES + 1)
+        raw = _server.read_request_body(_MAX_BATCH_BODY_BYTES)
+    except _server.RequestBodyTooLargeError:
+        return [], _body_rejected(
+            413,
+            "Request body too large",
+            f"expected a JSON body under {_MAX_BATCH_BODY_BYTES // 1024} KiB",
+        )
+    except _server.RequestBodyMalformedError:
+        return [], _body_rejected(
+            400,
+            "Malformed request body",
+            "the body is framed in a way this endpoint cannot read",
+        )
     except (OSError, ValueError) as exc:
         # A read that fails is not an empty body: it is a client that hung up
         # or a stream that broke mid-transfer, and reporting it as "Body must
@@ -1482,21 +1507,10 @@ def _batch_request_vas() -> tuple[list[int], HTTPResponse | None]:
             type(exc).__name__,
             exc,
         )
-        return [], _json_err(
+        return [], _body_rejected(
             400,
-            {
-                "error": "Could not read request body",
-                "detail": f"the body stream failed before it was received "
-                f"({type(exc).__name__}); resend it with a Content-Length",
-            },
-        )
-    if len(raw) > _MAX_BATCH_BODY_BYTES:
-        return [], _json_err(
-            413,
-            {
-                "error": "Request body too large",
-                "detail": f"expected a JSON body under {_MAX_BATCH_BODY_BYTES // 1024} KiB",
-            },
+            "Could not read request body",
+            f"the body stream failed before it was received ({type(exc).__name__})",
         )
     try:
         payload = json.loads(raw.decode("utf-8"))

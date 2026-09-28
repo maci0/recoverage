@@ -466,3 +466,59 @@ class TestClientConnectionDeadline:
         finally:
             server.shutdown()
             server.server_close()
+
+    def test_connections_are_capped_and_the_slot_is_released(self, monkeypatch) -> None:
+        """The deadlines above bound how LONG a handler thread lives, never how
+        MANY exist: ThreadingMixIn starts one per accept without asking. Open
+        past the cap and the extra connections must be refused with a 503
+        rather than each taking a thread and a descriptor for the full
+        deadline."""
+        import socket
+        import threading
+
+        monkeypatch.setattr(devserver._QuietTimeoutRequestHandler, "timeout", 5)
+        monkeypatch.setattr(
+            devserver._QuietTimeoutRequestHandler, "log_message", lambda *a, **k: None
+        )
+        monkeypatch.setattr(devserver, "_MAX_CONNECTIONS", 2)
+
+        server = devserver._ThreadingWSGIServer(
+            ("127.0.1", 0), devserver._QuietTimeoutRequestHandler
+        )
+        server.block_on_close = False
+        port = server.server_address[1]
+        accept_thread = threading.Thread(target=server.serve_forever, daemon=True)
+        accept_thread.start()
+        held: list[socket.socket] = []
+        try:
+            # Two silent peers occupy the cap; both park in the request-line read.
+            for _ in range(2):
+                sock = socket.create_connection(("127.0.1", port), timeout=5)
+                held.append(sock)
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline and server._connections_open < 2:
+                time.sleep(0.02)
+            assert server._connections_open == 2
+
+            # The third is past the cap: refused with a 503, not served.
+            with socket.create_connection(("127.0.1", port), timeout=5) as extra:
+                extra.settimeout(5)
+                reply = extra.recv(64)
+            assert reply.startswith(b"HTTP/1.1 503"), reply
+            assert server._connections_open == 2, "a refused connection took a slot"
+
+            # Freeing one slot admits the next connection again.
+            held.pop().close()
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline and server._connections_open > 0:
+                time.sleep(0.02)
+            with socket.create_connection(("127.0.1", port), timeout=5) as again:
+                again.settimeout(5)
+                again.sendall(b"GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+                assert again.recv(16).startswith(b"HTTP/")
+        finally:
+            for sock in held:
+                sock.close()
+            server.shutdown()
+            server.server_close()
+            accept_thread.join(timeout=5)

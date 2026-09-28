@@ -37,6 +37,25 @@ _NO_COLOR_ENV = {"NO_COLOR": "1", "FORCE_COLOR": None, "CLICOLOR_FORCE": None}
 HAS_TZSET = hasattr(time, "tzset")
 
 
+class _CountingStream(BytesIO):
+    """A ``wsgi.input`` that records whether anything read from it.
+
+    A body handler that materializes the request body before applying its cap
+    is invisible in a status-code assertion, because the refusal still comes
+    out a 413. The reads counter is what tells the two apart.
+    """
+
+    reads = 0
+
+    def read(self, size: int = -1) -> bytes:  # type: ignore[override]
+        type(self).reads += 1
+        return super().read(size)
+
+    def readline(self, size: int = -1) -> bytes:  # type: ignore[override]
+        type(self).reads += 1
+        return super().readline(size)
+
+
 def _plain(text: str) -> str:
     return _ANSI_RE.sub("", text)
 
@@ -1976,6 +1995,82 @@ class TestBatchFunctionLookup:
             body=b'{"vas": ["0x10001000"]' + b" " * 70_000 + b"}",
         )
         assert status.startswith("413")
+
+    def test_batch_refuses_oversize_on_the_declared_length_alone(self) -> None:
+        """A declared Content-Length over the cap is refused before ANY read.
+
+        Bottle's own body reader drains the whole declared body before a
+        handler sees a byte of it, spilling past 100 KiB into a temp file on
+        tmpfs; a peer declaring 4 GB therefore cost 4 GB of RAM before the
+        endpoint's 64 KiB cap could look at it. The stream below holds 32 bytes,
+        so if the handler reads it at all the count moves; the refusal must
+        come from the header alone.
+        """
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        stream = _CountingStream(b'{"vas": ["0x10001000"]}')
+        status, headers, _body = wsgi_request(
+            "POST",
+            f"/api/targets/{target}/functions",
+            {"Content-Length": str(4_000_000_000)},
+            body=b"",
+            wsgi_input=stream,
+        )
+        assert status.startswith("413")
+        assert stream.reads == 0, "the declared length should have refused before any read"
+        assert headers.get("Connection") == "close"
+
+    def test_batch_oversize_closes_the_connection(self) -> None:
+        """The reader stops at the cap with the rest of the body in the
+        socket, so the refusal must close: a keep-alive handler would read
+        those bytes as the next request."""
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, headers, _body = wsgi_post(
+            f"/api/targets/{target}/functions",
+            body=b'{"vas": ["0x10001000"]' + b" " * 70_000 + b"}",
+        )
+        assert status.startswith("413")
+        assert headers.get("Connection") == "close"
+
+    def test_batch_reads_a_chunked_body(self) -> None:
+        """A chunked request carries no Content-Length, so the cap can only be
+        enforced while reading. The chunks decode to the same JSON."""
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        payload = json.dumps({"vas": ["0x10001000"]}).encode()
+        chunked = b"%x\r\n%s\r\n0\r\n\r\n" % (len(payload), payload)
+        status, _, _body = wsgi_request(
+            "POST",
+            f"/api/targets/{target}/functions",
+            {"Transfer-Encoding": "chunked"},
+            body=chunked,
+            wsgi_input=None,
+            content_length=None,
+        )
+        assert status.startswith("200")
+
+    def test_batch_refuses_an_oversize_chunked_body(self) -> None:
+        """The chunked cap is on the DECODED bytes, so a body split into many
+        small chunks is refused just the same."""
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        chunk = b" " * 4096
+        framed = b"".join(b"%x\r\n%s\r\n" % (len(chunk), chunk) for _ in range(32))
+        status, headers, _body = wsgi_request(
+            "POST",
+            f"/api/targets/{target}/functions",
+            {"Transfer-Encoding": "chunked"},
+            body=framed + b"0\r\n\r\n",
+            wsgi_input=None,
+            content_length=None,
+        )
+        assert status.startswith("413")
+        assert headers.get("Connection") == "close"
 
     def test_batch_omits_unknown_vas(self) -> None:
         target = get_first_target()

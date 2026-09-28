@@ -190,8 +190,16 @@ def wsgi_request(
     headers: dict[str, str] | None = None,
     remote_addr: str = "127.0.0.1",
     body: bytes | str = b"",
+    wsgi_input: BytesIO | None = None,
+    content_length: str | None = "",
 ) -> tuple[str, dict[str, str], bytes]:
-    """Issue a WSGI request against the Bottle app and return (status, headers, body)."""
+    """Issue a WSGI request against the Bottle app and return (status, headers, body).
+
+    *wsgi_input* replaces the ``wsgi.input`` stream (a test that needs to watch
+    whether the handler read at all passes its own), and *content_length*
+    overrides the ``CONTENT_LENGTH`` entry: None omits it entirely, which is
+    what a chunked request looks like to a WSGI app.
+    """
     environ: dict[str, str | BytesIO] = {}
     setup_testing_defaults(environ)
     url_path, _, query = path.partition("?")
@@ -201,8 +209,11 @@ def wsgi_request(
     environ["REMOTE_ADDR"] = remote_addr
     if isinstance(body, str):
         body = body.encode("utf-8")
-    environ["wsgi.input"] = BytesIO(body)
-    environ["CONTENT_LENGTH"] = str(len(body))
+    environ["wsgi.input"] = wsgi_input if wsgi_input is not None else BytesIO(body)
+    if content_length is None:
+        environ.pop("CONTENT_LENGTH", None)
+    else:
+        environ["CONTENT_LENGTH"] = content_length or str(len(body))
     if headers:
         for k, v in headers.items():
             # PEP 3333: Content-Type and Content-Length are not HTTP_*

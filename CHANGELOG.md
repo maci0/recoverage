@@ -57,6 +57,10 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The "database unavailable" page and the 503 `detail` string tell the reader to
   run `rebrew build-db`, which runs the catalog itself, rather than a
   two-command sequence with no first step to run.
+- Concurrent connections are capped at 128. Every accepted connection already
+  had a socket deadline, which bounds how long a handler thread lives but not
+  how many exist; past the cap a connection is refused with a 503 and a log
+  line instead of taking a thread and a descriptor for the full deadline.
 
 ### Fixed
 
@@ -83,6 +87,16 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `rebrew build-db` committing while the endpoint was loading its snapshot left
   the pre-rebuild count filed under the post-rebuild fingerprint, and every
   later `/functions` request answered that number until the next rebuild.
+
+### Security
+
+- The batch function-lookup endpoint bounds the request body BEFORE reading
+  it. Bottle's own body reader drains the whole declared `Content-Length` into
+  memory (and past 100 KiB into a temporary file on tmpfs) before a handler
+  sees any of it, so a request declaring a gigabyte cost that gigabyte before
+  the endpoint's 64 KiB cap could apply. The declared length is now compared
+  first, a chunked body is decoded under the same cap, and every refusal
+  answers `Connection: close`.
 
 ## [4.0.0] - 2026-09-28
 
