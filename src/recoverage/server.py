@@ -2180,13 +2180,19 @@ def _finish_request() -> None:
             duration_ms,
         )
     else:
-        _log.debug(
-            "%s %s -> %d in %.0fms",
-            _log_safe(request.method),
-            _log_safe(request.path),
-            status,
-            duration_ms,
-        )
+        # `_log_safe` is two `str.translate` calls over the control-character
+        # table, and the arguments are evaluated before logging can discard
+        # them: every request paid it whether or not DEBUG was enabled.  The
+        # guard is the same check logging does internally, hoisted so the
+        # escaping is skipped with it.
+        if _log.isEnabledFor(logging.DEBUG):
+            _log.debug(
+                "%s %s -> %d in %.0fms",
+                _log_safe(request.method),
+                _log_safe(request.path),
+                status,
+                duration_ms,
+            )
 
 
 def _reclassify_request(status: int) -> None:

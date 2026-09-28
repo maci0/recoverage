@@ -1538,6 +1538,30 @@ def _search_functions(coverage: CoverageSnapshot, search_query: str) -> set[str]
     return search_matched_fns
 
 
+#: The filter pills, as ``(state, label letter, title)``.  Module scope
+#: because every row is invariant to the request: the target, the section and
+#: the active set only decide which of them is highlighted, never what they
+#: are.  (state, label letter, title).  The key is the filter name a ?filter=
+#: spells: it is what the pill toggles and what FILTER_STATES is keyed on,
+#: so it is the one field that says which entry a row stands for.  The
+#: accesskey is not a field: the template derives it from the label
+#: (``fb_label[0].lower()``), so a lowercase letter carried in this slot
+#: was never read by anything.
+FILTER_OPTS: tuple[tuple[str, str, str], ...] = (
+    ("exact", "E", "Exact match"),
+    ("reloc", "R", "Reloc match"),
+    ("near_match", "M", "Near-match"),
+    ("stub", "S", "Stub"),
+    ("padding", "P", "Padding"),
+    # The two states the legend names that had no pill: a proven section
+    # and a cell the build or the classifier failed on.  Both were
+    # painted and both dimmed under every pill, so the operator looking
+    # for the failures had no control to narrow the map with.
+    ("proven", "V", "Proven (verified equivalent)"),
+    ("problem", "X", "Problem (build or classification failure)"),
+)
+
+
 def _build_filter_data(
     target: str,
     section: str,
@@ -1547,25 +1571,6 @@ def _build_filter_data(
     # A pill is a single letter in the state's colour, so it carries the
     # state's full name in its title: a lone V or X is a lookup the legend
     # two hundred pixels away can answer, and a pointer answers instantly.
-    # (state, label letter, title).  The key is the filter name a ?filter=
-    # spells: it is what the pill toggles and what FILTER_STATES is keyed on,
-    # so it is the one field that says which entry a row stands for.  The
-    # accesskey is not a field: the template derives it from the label
-    # (``fb_label[0].lower()``), so a lowercase letter carried in this slot
-    # was never read by anything.
-    filter_opts = [
-        ("exact", "E", "Exact match"),
-        ("reloc", "R", "Reloc match"),
-        ("near_match", "M", "Near-match"),
-        ("stub", "S", "Stub"),
-        ("padding", "P", "Padding"),
-        # The two states the legend names that had no pill: a proven section
-        # and a cell the build or the classifier failed on.  Both were
-        # painted and both dimmed under every pill, so the operator looking
-        # for the failures had no control to narrow the map with.
-        ("proven", "V", "Proven (verified equivalent)"),
-        ("problem", "X", "Problem (build or classification failure)"),
-    ]
     filter_btn_data: list[tuple[str, str, str, bool, str, str]] = [
         (
             _build_url(target, section, search=search_query),
@@ -1590,7 +1595,7 @@ def _build_filter_data(
             f,
             title,
         )
-        for f, label, title in filter_opts
+        for f, label, title in FILTER_OPTS
     )
     return filter_btn_data
 

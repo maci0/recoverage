@@ -335,6 +335,7 @@ def _function_total(
     target: str,
     status_filter: str | None,
     search: str | None,
+    rows: Sequence[Function] | None = None,
 ) -> int:
     """Rows matching the list endpoint's filter, memoized per snapshot.
 
@@ -342,6 +343,12 @@ def _function_total(
     directory both match; otherwise the scan runs and repopulates it.  A None
     fingerprint (no coverage document) never memoizes — the endpoint is about
     to 503 and a value derived from that state must not outlive it.
+
+    *rows* is the caller's own ``_filtered_functions`` result for the same
+    filter.  The list endpoint needs the count and the page from the same pass
+    (that is what pins the count to the rows it paginates), so it filters once
+    and hands the result here rather than having the count re-derive a second
+    full list it would throw away.
     """
     key: tuple[tuple[int, int] | None, str, str | None, str | None] | None = (
         (snap_fingerprint, target, status_filter, search) if snap_fingerprint is not None else None
@@ -351,7 +358,11 @@ def _function_total(
             cached = _LIST_TOTAL_CACHE.get(key)
         if cached is not None:
             return cached
-    total = len(_filtered_functions(functions, status_filter, search))
+    total = (
+        len(rows)
+        if rows is not None
+        else len(_filtered_functions(functions, status_filter, search))
+    )
     # The watermark re-check every other coverage-derived memo publishes
     # through: a rebuild that committed after the caller took its token moved
     # the fingerprint, so these rows were not read from the build the key
@@ -439,16 +450,20 @@ def _section_not_found(target: str, section: str) -> HTTPResponse:
     )
 
 
-def _require_target(target: str) -> HTTPResponse | None:
-    """Return a 404 response if *target* is unknown, else None.
+def _require_target(target: str, targets: Sequence[Mapping[str, str]]) -> HTTPResponse | None:
+    """Return a 404 response if *target* is absent from *targets*, else None.
 
     *target* is valid when the last build wrote a document for it or when the
     project config declares it (a configured-but-not-yet-built target is still
     addressable).  A coverage directory with nothing readable in it is not
     "unknown target" — :func:`server.resolve_targets` raises for that, and the
     endpoint's own 503 path runs.
+
+    *targets* is the caller's already-resolved list: re-resolving here would
+    re-walk the coverage directory, which is a directory scan per document plus
+    a hash, on the path of every target-scoped request.
     """
-    if any(t.get("id") == target for t in resolve_targets()):
+    if any(t.get("id") == target for t in targets):
         return None
     return _target_not_found(target)
 
@@ -467,12 +482,12 @@ def _target_snapshot(target: str) -> Generator[CoverageSnapshot]:
     frozen, so every field a handler reads comes from one build.
     """
     try:
-        resolve_targets()
+        resolved = resolve_targets()
     except CoverageTomlError as exc:
         # Logged + detailed by the shared helper — a swallowed reader error
         # here would make a missing or malformed document invisible in the log.
         raise _server._db_unavailable_err(exc) from None
-    not_found = _require_target(target)
+    not_found = _require_target(target, resolved)
     if not_found is not None:
         raise not_found
     yield _server.coverage_for(target)
@@ -848,7 +863,12 @@ def handle_api_health() -> bytes:
     # rewrites one document per target, so reading any single one would report a
     # target that did not move.  Every other coverage-freshness surface (ETags,
     # memos, the SSE watcher, Potato Mode's footer) reads the same stamp.
-    mtime_ns = _server._newest_mtime_ns()
+    # ONE scan answers both the stamp and the sizes: the same list
+    # `_newest_mtime_ns` folds, so asking for each walked the coverage
+    # directory twice per probe, and a rebuild landing between the two walks
+    # let the reported stamp and the reported size come from different builds.
+    documents = _server._coverage_file_stats()
+    mtime_ns = max((mtime for _name, mtime, _size in documents), default=None)
     if mtime_ns is not None:
         # Seconds since the epoch (UTC) plus the same instant spelled out with
         # an explicit zone, so a client never has to assume the host's TZ.
@@ -858,7 +878,6 @@ def handle_api_health() -> bytes:
         stamp = _server.mtime_ns_to_utc(mtime_ns)
         db_info["mtime"] = stamp.timestamp()
         db_info["mtime_utc"] = stamp.isoformat()
-    documents = _server._coverage_file_stats()
     # Counted from the same read the target list uses, so the health number and
     # the dropdown can never disagree about which targets the last build wrote.
     target_count = len(_server.db_target_ids())
@@ -1413,8 +1432,8 @@ def handle_api_functions_list(target: str) -> bytes | HTTPResponse:
         # snapshot, so the count and the rows it paginates cannot describe two
         # different builds — the guarantee `read_snapshot` used to buy with a
         # deferred read transaction.
-        total = _function_total(coverage.functions, snap, target, status_filter, search)
         rows = _filtered_functions(coverage.functions, status_filter, search)
+        total = _function_total(coverage.functions, snap, target, status_filter, search, rows)
         rows.sort(
             key=lambda fn: _server.function_sort_key(fn, sort_field),
             reverse=sort_dir == "DESC",
