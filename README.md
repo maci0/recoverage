@@ -358,7 +358,7 @@ the banner that run printed holds.
 | `/original/<filepath:path>` | GET | A file under the original binary's tree |
 | `/app.js`, `/style.css`, `/print.css`, `/favicon.svg` | GET | The packaged static assets (`no-cache` with a strong `ETag`) |
 | `/potato` | GET | Potato Mode (pure-HTML fallback) |
-| `/api/health` | GET | Server version, the settings this process resolved, coverage directory info, installed extras, request/regen/stream counters |
+| `/api/health` | GET | Server version, the settings this process resolved, coverage directory info, installed extras, request/regen/stream/connection counters, cache hit-miss |
 | `/api/targets` | GET | List available targets |
 | `/api/targets/<target>/stats` | GET | Per-section coverage stats with percentages |
 | `/api/targets/<target>/data` | GET | Section + cell data (`?section=.text` for partial, `?index=0` to omit the search index) |

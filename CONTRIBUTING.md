@@ -159,8 +159,12 @@ That is the local mirror of CI, and each target is the command CI runs:
 | `make check-bundle-clean` | build | `git status --porcelain -- src/recoverage/assets` |
 | `make smoke` | smoke | `python tools/smoke.py` |
 | `make smoke-fail` | smoke | `python tools/smoke.py --expect-failure` |
+| `make browser-sbom` | sbom | `python tools/bundled_js_inventory.py` |
 
-CI also builds an SBOM from `uv.lock` (`uv export`); it needs no local step.
+The `sbom` job is the only one that reads a lockfile without installing from
+it: the Python half comes from `uv export` over `uv.lock` and the browser half
+from `tools/bundled_js_inventory.py` over `bun.lock`, and neither needs a
+sibling `../rebrew`. `make browser-sbom` prints the second half locally.
 
 The built bundle is committed, so a change under `web/` is not served until
 `make web-build` rewrites `src/recoverage/assets/app.js` and `style.css`. The
