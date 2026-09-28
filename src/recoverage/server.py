@@ -122,8 +122,8 @@ def _peer_is_loopback(addr: str) -> bool:
     if isinstance(ip, ipaddress.IPv6Address):
         v4 = ip.ipv4_mapped
         if v4 is not None:
-            return str(v4) == "127.0.0.1"
-    return str(ip) == "::1"
+            return str(v4) in LOOPBACK_HOSTS
+    return str(ip) in LOOPBACK_HOSTS
 
 
 def configure_security(
@@ -1807,7 +1807,10 @@ def accepted_encodings(accept_encoding: str) -> frozenset[str]:
 
     Relative q-values are NOT ranked.  Every modern browser sends
     ``gzip, deflate, br, zstd`` with flat q-values, so ordering by q would pick
-    by header order, not by merit.
+    by header order, not by merit.  Where a name is spelled twice the LOWER q
+    wins, so a ``gzip;q=0`` anywhere in the list still refuses gzip: a ``max``
+    here let any other spelling of the same token re-admit an encoding the
+    client excluded.
     """
     candidates: dict[str, float] = {}
     for t in accept_encoding.split(","):
@@ -1822,8 +1825,7 @@ def accepted_encodings(accept_encoding: str) -> frozenset[str]:
                     q = float(param[2:])
                 except ValueError:
                     q = 0.0
-        if q > 0:
-            candidates[name] = max(candidates.get(name, 0.0), q)
+        candidates[name] = min(candidates.get(name, 1.0), q)
     return frozenset(name for name in SUPPORTED_ENCODINGS if candidates.get(name, 0.0) > 0)
 
 
@@ -1871,6 +1873,13 @@ ZSTD_STATIC_LEVEL = 19
 # representation on the wire, so it is worth the highest level gzip offers.
 # It still loses to both modern encodings on every payload measured here.
 GZIP_STATIC_LEVEL = 9
+
+# gzip's dynamic level: level 6, not gzip.compress's default 9.  Measured on a
+# ~9 MB /data payload, -9 costs 2x the CPU of -6 for ~9% fewer bytes (96 ms ->
+# 707 KB vs 45 ms -> 774 KB).  Dynamic responses pay this on every request, and
+# scripted clients (python-requests advertises only gzip) always land here.
+# Same reasoning as BROTLI_DYNAMIC_QUALITY.
+GZIP_DYNAMIC_LEVEL = 6
 
 
 def static_variant_key(accept_encoding: str) -> str:
@@ -2006,12 +2015,7 @@ def compress_payload(body: bytes, accept_encoding: str) -> tuple[bytes, str]:
     if encoding == "br":
         return brotli.compress(body, quality=BROTLI_DYNAMIC_QUALITY), "br"
     if encoding == "gzip":
-        # Level 6, not gzip.compress's default 9: measured on a ~9 MB /data
-        # payload, -9 costs 2x the CPU of -6 for ~9% fewer bytes (96 ms ->
-        # 707 KB vs 45 ms -> 774 KB).  Dynamic responses pay this on every
-        # request, and scripted clients (python-requests advertises only
-        # gzip) always land here.  Same reasoning as BROTLI_DYNAMIC_QUALITY.
-        return gzip.compress(body, compresslevel=6), "gzip"
+        return gzip.compress(body, compresslevel=GZIP_DYNAMIC_LEVEL), "gzip"
     return body, ""
 
 
@@ -2105,9 +2109,12 @@ def fold_can_match_hex(folded_needle: str) -> bool:
 def fold_can_match_decimal(folded_needle: str) -> bool:
     """:func:`fold_can_match_hex` for a bare decimal number.
 
-    ``str(va)`` is digits alone, so the folded needle must be digits.
+    ``str(va)`` is ASCII digits alone, so the folded needle must be ASCII
+    digits.  ``str.isdigit`` also accepts every Unicode ``Nd`` digit, which
+    the column it guards can never hold: an Arabic-Indic needle passes the
+    guard, pays for the folded column and then matches nothing.
     """
-    return folded_needle.isdigit()
+    return bool(folded_needle) and all(ch in _ASCII_DIGITS for ch in folded_needle)
 
 
 # ── Function list ordering ─────────────────────────────────────────

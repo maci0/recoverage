@@ -874,7 +874,10 @@ class TestAcceptEncoding:
             assert _best_encoding(f"{name};q=0.001") == name, f"{name};q=0.001 rejected"
             assert _best_encoding(f"not-{name}, {name};q=0") == "", f"{name} matched as a substring"
             # A refused token must not be revived by an unweighted duplicate.
-            assert _best_encoding(f"{name};q=0, {name}") == name, f"{name} q=0 not overridden"
+            # This asserted the opposite (`== name`) while its own comment and
+            # this test's name say otherwise: `max` over the q-values meant any
+            # second spelling of a refused token re-admitted it.
+            assert _best_encoding(f"{name};q=0, {name}") == "", f"{name} q=0 overridden"
 
     def test_wildcard_offers_nothing(self) -> None:
         """``*`` is skipped rather than expanded, so it alone selects no codec

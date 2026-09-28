@@ -437,6 +437,14 @@ def _serve_repo_file(filepath: str, candidate: Path, root: Path) -> bytes | HTTP
     once and cache. Per-request effort is the honest setting for bytes produced
     per request.
     """
+
+    # Bottle answers every case this handler does not compress, and there are
+    # three of them: the file is not one it can compress, it is too small to
+    # bother, or it vanished between the resolve and the read.  One call, so
+    # the root and the escaping are spelled once.
+    def _uncompressed() -> HTTPResponse:
+        return static_file(filepath, root=str(root))
+
     accept_encoding = _header("Accept-Encoding", "")
     if (
         candidate.suffix.lower() not in _REPO_COMPRESSIBLE
@@ -445,15 +453,15 @@ def _serve_repo_file(filepath: str, candidate: Path, root: Path) -> bytes | HTTP
         # compressed representation cannot describe; bottle answers it.
         or _header("Range", "") != ""
     ):
-        return static_file(filepath, root=str(root))
+        return _uncompressed()
     try:
         if candidate.stat().st_size < _REPO_MIN_COMPRESS_BYTES:
-            return static_file(filepath, root=str(root))
+            return _uncompressed()
         raw = candidate.read_bytes()
     except OSError:
         # Vanished between the resolve above and the read: bottle's 404, which
         # is the answer the rest of the route already gives for a missing file.
-        return static_file(filepath, root=str(root))
+        return _uncompressed()
     etag = _repo_file_etag(candidate, raw, accept_encoding)
     if _if_none_match_matches(_header("If-None-Match", ""), etag):
         return _not_modified(etag)

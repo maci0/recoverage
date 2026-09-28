@@ -236,6 +236,17 @@ def _regen_replayed(key: str) -> bool:
         return key in _REGEN_COMPLETED_KEYS
 
 
+def _regen_replay_response(key: str) -> bytes:
+    """The answer a retry of an already-completed *key* gets.
+
+    One function because the check runs twice, before and after the lock is
+    taken, and a duplicate that reached the second read (below) must get the
+    same body and the same log line as one that reached the first.
+    """
+    _log.info("Regen %s already completed — answering the retry without re-running", key)
+    return _json_ok({"ok": True}, Idempotent_Replay="true")
+
+
 def _record_completed_key(key: str) -> None:
     """Remember that *key*'s regen completed, so its retry is answered, not re-run."""
     now = clock.monotonic()
@@ -1092,12 +1103,12 @@ def _log_health_status(status: str, reason: str) -> None:
             return
         previous = _health_reported
         _health_reported = (status, reason)
-    if previous is None or previous[0] == "healthy":
-        # The first probe of the process, or the move out of healthy: the same
+    if status != "healthy":
+        # Any move INTO a fault, including the first probe of the process,
+        # where there is no previous state to have recovered from: the same
         # alert either way.  A healthy first probe is not news.
-        if status != "healthy":
-            _log.warning("Dashboard health degraded: %s", reason)
-    else:
+        _log.warning("Dashboard health degraded: %s", reason)
+    elif previous is not None:
         _log.info("Dashboard health recovered: was %s (%s)", previous[0], previous[1])
 
 
@@ -1606,7 +1617,7 @@ def handle_api_data(target: str) -> bytes | HTTPResponse:
     # _etag_or_304).  etag is None only when the DB is unreadable — no ETag
     # is sent, and the queries below answer the standard 503 shortly after.
     snap = _snapshot_db_mtime()
-    fingerprint: tuple[tuple[int, int] | None, str, str | None, bool] = (
+    fingerprint: _DataKey = (
         snap,
         target,
         section_filter,
@@ -1691,6 +1702,13 @@ _MAX_PAGE_OFFSET = 10_000_000
 # endpoints clamp identically so the same query string cannot mean two
 # different window sizes.
 _MAX_SLICE_SIZE = 4096
+
+#: Section a disassembly request names when it names none.  The default the
+#: endpoint serves, beside _MAX_SLICE_SIZE, so both read off the one place.
+_DEFAULT_ASM_SECTION = ".text"
+
+#: Bytes a raw-slice request reads when it asks for no size.
+_DEFAULT_SLICE_SIZE = 256
 
 # Longest ?search= the list endpoint accepts.  A longer term is compared
 # against every row of every function, and names nothing a user types;
@@ -2209,7 +2227,7 @@ def handle_api_asm(target: str) -> bytes | HTTPResponse:
 
     va_str = query_param("va")
     size_str = query_param("size")
-    section = query_param("section", ".text")
+    section = query_param("section", _DEFAULT_ASM_SECTION)
     fmt = query_param("format", "text").strip().lower() or "text"
     # An unrecognised ?format= used to fall through to the text
     # representation silently, so a client's typo (?format=JSOM, ?format=json5)
@@ -2398,7 +2416,7 @@ def handle_api_bytes(target: str, section: str) -> bytes | HTTPResponse:
                 "(decimal, or 0x-prefixed hexadecimal)",
             },
         )
-    raw_size = query_param("size", "256")
+    raw_size = query_param("size", str(_DEFAULT_SLICE_SIZE))
     req_size, size_err = _slice_size(raw_size, "invalid size")
     if size_err is not None:
         return size_err
@@ -2559,8 +2577,7 @@ def handle_regen() -> bytes | HTTPResponse:
             },
         )
     if key and _regen_replayed(key):
-        _log.info("Regen %s already completed — answering the retry without re-running", key)
-        return _json_ok({"ok": True}, Idempotent_Replay="true")
+        return _regen_replay_response(key)
     if key and _regen_in_progress(key):
         # The retry of a run still going, not a second regenerate: answer with
         # the operation's own state.  202 says the request was accepted and the
@@ -2604,8 +2621,7 @@ def handle_regen() -> bytes | HTTPResponse:
         # long expired by the time that run ends.  Without this read, a retry of
         # a key that already completed starts a second full pipeline.
         if key and _regen_replayed(key):
-            _log.info("Regen %s already completed — answering the retry without re-running", key)
-            return _json_ok({"ok": True}, Idempotent_Replay="true")
+            return _regen_replay_response(key)
         now = clock.monotonic()
         since = math.inf if _regen_last_attempt is None else now - _regen_last_attempt
         if since < _REGEN_COOLDOWN_SECONDS:

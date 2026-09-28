@@ -19,7 +19,7 @@ from __future__ import annotations
 import threading
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, Final
+from typing import Any, Final, Literal
 
 #: A request slower than this is counted separately and logged at WARNING.
 #: Above the slowest cold-start read the dashboard makes, far below anything
@@ -58,6 +58,25 @@ ROUTE_LABEL_MAX: Final = 64
 #: slow", which ``max_ms`` already answers, and would grow without limit.
 LATENCY_WINDOW: Final = 512
 
+#: The quantiles reported, and the digits every millisecond figure in a
+#: snapshot is rounded to.  The process-wide block and the per-route rows are
+#: read side by side, so they take their precision and their quantiles from
+#: the same two names.
+P50: Final = 0.50
+P95: Final = 0.95
+MS_DIGITS: Final = 3
+
+
+def status_bucket(status: int) -> str:
+    """The ``by_status`` key a *status* is counted under, e.g. ``"2xx"``.
+
+    One function because a request is counted in :meth:`RequestStats.finish`
+    and moved in :meth:`RequestStats.reclassify`: two spellings of the rule
+    would put one request in two differently named buckets and the counts
+    would stop reconciling.
+    """
+    return f"{status // 100}xx"
+
 
 def percentile(samples: list[float], fraction: float) -> float:
     """The *fraction* quantile of the SORTED *samples*, by order statistic.
@@ -70,7 +89,8 @@ def percentile(samples: list[float], fraction: float) -> float:
     """
     if not samples:
         return 0.0
-    rank = min(len(samples) - 1, round(fraction * (len(samples) - 1)))
+    last = len(samples) - 1
+    rank = min(last, max(0, round(fraction * last)))
     return samples[rank]
 
 
@@ -91,6 +111,20 @@ class _RouteRow:
     #: bounded by ROUTE_LABEL_MAX * LATENCY_WINDOW samples and a route that
     #: goes quiet forgets its own history on the same terms.
     recent_ms: deque[float] = field(default_factory=lambda: deque(maxlen=LATENCY_WINDOW))
+
+
+@dataclass
+class _CacheRow:
+    """One cache's hit and miss counters.
+
+    A dataclass for the reason :class:`_RouteRow` gives: the row is written
+    and read by name, and a list addressed by a bare column index type-checks
+    just as well while a swapped index inverts every hit rate an operator
+    reads.
+    """
+
+    hits: int = 0
+    misses: int = 0
 
 
 class RequestStats:
@@ -154,7 +188,7 @@ class RequestStats:
                 self._sum_ms += duration_ms
                 self._max_ms = max(self._max_ms, duration_ms)
                 self._recent_ms.append(duration_ms)
-            bucket = f"{status // 100}xx"
+            bucket = status_bucket(status)
             self._by_status[bucket] = self._by_status.get(bucket, 0) + 1
             if route in self._by_route:
                 route_row = self._by_route[route]
@@ -189,7 +223,7 @@ class RequestStats:
         """
         if from_status == to_status:
             return
-        old, new = f"{from_status // 100}xx", f"{to_status // 100}xx"
+        old, new = status_bucket(from_status), status_bucket(to_status)
         delta = 1 if to_status >= 500 else -1
         with self._lock:
             self._by_status[old] = self._by_status.get(old, 0) - 1
@@ -261,14 +295,14 @@ class RequestStats:
                 by_route[route] = {
                     "requests": row.requests,
                     "errors": row.errors,
-                    "max_ms": round(row.max_ms, 3),
+                    "max_ms": round(row.max_ms, MS_DIGITS),
                     # Quantiles of this route's own window, so a
                     # process-wide p95 that moved can be attributed
                     # without a second request: the row whose p95 sits
                     # at SLOW_REQUEST_MS is the endpoint that moved.
                     "latency_window": len(route_window),
-                    "p50_ms": round(percentile(route_window, 0.50), 3),
-                    "p95_ms": round(percentile(route_window, 0.95), 3),
+                    "p50_ms": round(percentile(route_window, P50), MS_DIGITS),
+                    "p95_ms": round(percentile(route_window, P95), MS_DIGITS),
                 }
             return {
                 "total": self._total,
@@ -278,11 +312,11 @@ class RequestStats:
                 "stale_claims": self._stale_claims,
                 "transport_rejected": self._transport_rejected,
                 "slow_threshold_ms": SLOW_REQUEST_MS,
-                "mean_ms": round(mean, 3),
-                "max_ms": round(self._max_ms, 3),
+                "mean_ms": round(mean, MS_DIGITS),
+                "max_ms": round(self._max_ms, MS_DIGITS),
                 "latency_window": len(window),
-                "p50_ms": round(percentile(window, 0.50), 3),
-                "p95_ms": round(percentile(window, 0.95), 3),
+                "p50_ms": round(percentile(window, P50), MS_DIGITS),
+                "p95_ms": round(percentile(window, P95), MS_DIGITS),
                 "by_status": dict(self._by_status),
                 "by_route": by_route,
             }
@@ -426,26 +460,30 @@ class CacheStats:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._by_cache: dict[str, list[int]] = {}
+        self._by_cache: dict[str, _CacheRow] = {}
 
     def hit(self, name: str) -> None:
-        self._count(name, 0)
+        self._count(name, "hit")
 
     def miss(self, name: str) -> None:
-        self._count(name, 1)
+        self._count(name, "miss")
 
-    def _count(self, name: str, column: int) -> None:
+    def _count(self, name: str, outcome: Literal["hit", "miss"]) -> None:
         with self._lock:
             row = self._by_cache.get(name)
             if row is None:
-                row = self._by_cache[name] = [0, 0]
-            row[column] += 1
+                row = self._by_cache[name] = _CacheRow()
+            if outcome == "hit":
+                row.hits += 1
+            else:
+                row.misses += 1
 
     def snapshot(self) -> dict[str, dict[str, int]]:
         """A JSON-ready copy, one row per cache that has been read from."""
         with self._lock:
             return {
-                name: {"hits": row[0], "misses": row[1]} for name, row in self._by_cache.items()
+                name: {"hits": row.hits, "misses": row.misses}
+                for name, row in self._by_cache.items()
             }
 
     def reset(self) -> None:

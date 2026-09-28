@@ -725,6 +725,14 @@ _BROWSER_OPEN_TIMEOUT_SECONDS = 10
 _OPEN_LISTEN_WAIT_SECONDS = 5.0
 _OPEN_LISTEN_POLL_SECONDS = 0.05
 
+#: How long after the listener is asked to start the opener is scheduled.  It
+#: probes rather than assuming, so this only has to clear the startup banner.
+_BROWSER_OPEN_DELAY_SECONDS = 0.5
+
+#: The port a URL with no explicit one names, for the opener's probe.  It
+#: builds `http://host/` URLs, so http and nothing else.
+_DEFAULT_HTTP_PORT = 80
+
 
 def _open_when_listening(url: str) -> None:
     """Open *url* only once something is accepting on the address it names.
@@ -743,8 +751,9 @@ def _open_when_listening(url: str) -> None:
     address *url* names rather than the bind address, which for a wildcard is
     not connectable.
     """
-    host = urlsplit(url).hostname or "127.0.0.1"
-    port = urlsplit(url).port or 80
+    parts = urlsplit(url)
+    host = parts.hostname or "127.0.0.1"
+    port = parts.port or _DEFAULT_HTTP_PORT
     deadline = clock.monotonic() + _OPEN_LISTEN_WAIT_SECONDS
     while True:
         try:
@@ -1421,7 +1430,9 @@ def serve(
         # listener before it launches, so a start that never got as far as
         # accepting does not pop a browser tab pointing at a dead port by
         # either route.
-        browser_timer = threading.Timer(0.5, _open_when_listening, args=(url,))
+        browser_timer = threading.Timer(
+            _BROWSER_OPEN_DELAY_SECONDS, _open_when_listening, args=(url,)
+        )
         browser_timer.daemon = True
         browser_timer.start()
 
@@ -1577,6 +1588,7 @@ def stats(
 
     from rich import box
     from rich.console import Console
+    from rich.markup import escape
     from rich.table import Table
 
     from recoverage.server import pct_1dp
@@ -1603,7 +1615,11 @@ def stats(
             # does not start with an empty line.
             if index:
                 console.print()
-            console.print(f"[bold cyan]{tid}[/bold cyan]")
+            # escape(): the target id is a value out of a coverage document,
+            # and Rich reads square brackets in a printed string or a table
+            # cell as markup. The CSV and Markdown arms route the same value
+            # through _csv_safe / _md_safe for the same reason.
+            console.print(f"[bold cyan]{escape(tid)}[/bold cyan]")
 
             if data["summary"]:
                 s = data["summary"]
@@ -1634,7 +1650,7 @@ def stats(
             for sec_name, sec in sorted(data["sections"].items()):
                 size, cells, exact, reloc, near_match, stub, coverage_pct = _section_row(sec)
                 table.add_row(
-                    sec_name,
+                    escape(sec_name),
                     f"{size:,} B",
                     str(cells),
                     str(exact),

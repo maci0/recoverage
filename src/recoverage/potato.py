@@ -178,9 +178,19 @@ def _state_survives_filter(state: str, active_filters: set[str]) -> bool:
     dimmed by a status filter: the grid's gaps are the background the
     statuses are read against, not one of the statuses.
     """
-    if not active_filters or state == "none":
+    return _state_survives_lit_states(state, _lit_states(active_filters))
+
+
+def _state_survives_lit_states(state: str, lit_states: set[str] | None) -> bool:
+    """:func:`_state_survives_filter` against an already-resolved union.
+
+    The grid resolves :func:`_lit_states` once for the page and calls this
+    per cell, so the rule the two renderers share is stated once here rather
+    than unrolled into the cell loop beside the hoisted union.
+    """
+    if lit_states is None or state == "none":
         return True
-    return any(state in FILTER_STATES.get(f, ()) for f in active_filters)
+    return state in lit_states
 
 
 def _lit_states(active_filters: set[str]) -> set[str] | None:
@@ -1729,7 +1739,7 @@ def _section_pct(summary: dict[str, Any], sections: dict[str, dict[str, Any]], n
     which then raises TypeError on ``> 0`` and 500s the whole page.
     """
     sec_summary_entry = summary.get(name, summary)
-    covered = sec_summary_entry.get("coveredBytes", 0)
+    covered = sec_summary_entry.get("coveredBytes") or 0
     size = sections.get(name, {}).get("size") or 0
     # server.coverage_pct, the rounding /stats serves this section's row with:
     # int() floor made the map header read "87% covered" beside the topbar's
@@ -2006,12 +2016,14 @@ def _build_progress(
     # TypeError (which escapes handle_potato's except tuple as a raw 500).
     sec_size = sec_data.get("size") or 0
     sec_summ = summary.get(section, summary)
-    covered_bytes = sec_summ.get("coveredBytes", 0)
-    total_fn = sec_summ.get("totalFunctions", 0)
-    exact_matches = sec_summ.get("exactMatches", 0)
-    reloc_matches = sec_summ.get("relocMatches", 0)
-    near_match_matches = sec_summ.get("nearMatchCount", 0)
-    stub_matches = sec_summ.get("stubCount", 0)
+    # `or 0` on every count for the reason the size above uses it: a NULL
+    # count is schema-legal, and .get's default only covers a MISSING key.
+    covered_bytes = sec_summ.get("coveredBytes") or 0
+    total_fn = sec_summ.get("totalFunctions") or 0
+    exact_matches = sec_summ.get("exactMatches") or 0
+    reloc_matches = sec_summ.get("relocMatches") or 0
+    near_match_matches = sec_summ.get("nearMatchCount") or 0
+    stub_matches = sec_summ.get("stubCount") or 0
     matched_fn = exact_matches + reloc_matches  # NEAR_MATCHING/STUB are not matched
 
     # ONE denominator for the whole bar.  .text's bar tracks FUNCTIONS (the
@@ -2026,21 +2038,21 @@ def _build_progress(
     # clipped them.  Padding is a cell state with no function counterpart, so
     # it belongs only to the byte-denominated bar; on .text those bytes are
     # already inside the "none" remainder.
-    padding_bytes = sec_summ.get("paddingBytes", 0)
+    padding_bytes = sec_summ.get("paddingBytes") or 0
     if section == ".text" and total_fn > 0:
         seg_exact = exact_matches / total_fn * 100
         seg_reloc = reloc_matches / total_fn * 100
         seg_near_match = near_match_matches / total_fn * 100
         seg_stub = stub_matches / total_fn * 100
-        seg_padding = 0
+        seg_padding = 0.0
     elif sec_size > 0:
-        seg_exact = sec_summ.get("exactBytes", 0) / sec_size * 100
-        seg_reloc = sec_summ.get("relocBytes", 0) / sec_size * 100
-        seg_near_match = sec_summ.get("nearMatchBytes", 0) / sec_size * 100
-        seg_stub = sec_summ.get("stubBytes", 0) / sec_size * 100
+        seg_exact = (sec_summ.get("exactBytes") or 0) / sec_size * 100
+        seg_reloc = (sec_summ.get("relocBytes") or 0) / sec_size * 100
+        seg_near_match = (sec_summ.get("nearMatchBytes") or 0) / sec_size * 100
+        seg_stub = (sec_summ.get("stubBytes") or 0) / sec_size * 100
         seg_padding = padding_bytes / sec_size * 100
     else:
-        seg_exact = seg_reloc = seg_near_match = seg_stub = seg_padding = 0
+        seg_exact = seg_reloc = seg_near_match = seg_stub = seg_padding = 0.0
 
     # max(0, ...) still guards a summary whose state counts exceed its own
     # total (a foreign or hand-edited DB); it is not what keeps a mixed
@@ -2368,16 +2380,15 @@ def _build_grid_html(
 
         state = cell.get("state", "none")
 
-        dimmed = (lit_states is not None and state != "none" and state not in lit_states) or (
-            search_query and not any(fn in search_matched_fns for fn in cell.get("functions", []))
+        dimmed = (not _state_survives_lit_states(state, lit_states)) or (
+            bool(search_query)
+            and not any(fn in search_matched_fns for fn in cell.get("functions", []))
         )
         bgcolor = BG_COLOR if dimmed else COLORS.get(state, COLORS["none"])
         selected = orig_idx == sel_idx
         link = f"{link_prefix}&idx={orig_idx}{link_suffix}"
         funcs = cell.get("functions", [])
-        title = (
-            f"{hex(sec_va + cell.get('start', 0))}..{hex(sec_va + cell.get('end', 0))} | {state}"
-        )
+        title = f"{hex(sec_va + (cell.get('start') or 0))}..{hex(sec_va + (cell.get('end') or 0))} | {state}"
         if funcs:
             title += f" | {funcs[0]}"
         # The alt text IS the link's accessible name here, so it carries the
@@ -3379,7 +3390,7 @@ def _render_panel(
         {
             "has_cell": True,
             "idx": idx,
-            "cell_range": f"{hex(sec_va + cell.get('start', 0))} .. {hex(sec_va + cell.get('end', 0))}",
+            "cell_range": f"{hex(sec_va + (cell.get('start') or 0))} .. {hex(sec_va + (cell.get('end') or 0))}",
             "state_upper": state.upper(),
             "state_color": COLORS.get(state.lower(), TEXT_COLOR),
             "funcs": funcs,

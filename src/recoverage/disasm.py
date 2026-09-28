@@ -44,6 +44,21 @@ class CapstoneUnavailableError(RuntimeError):
     """
 
 
+def _new_cs() -> Any:
+    """A Capstone handle in the ONE configuration this module asks for.
+
+    Both the probe below and :func:`get_capstone_md` build their ``Cs`` here,
+    so the configuration the probe certifies is the one the request path
+    runs: they drifted once, and the probe verified a handle with ``detail``
+    left at its default while every caller turned it off.
+    """
+    import capstone as _capstone
+
+    md = _capstone.Cs(_capstone.CS_ARCH_X86, _capstone.CS_MODE_32)
+    md.detail = False
+    return md
+
+
 def capstone_unavailable_reason() -> str | None:
     """Why disassembly is unavailable, or ``None`` when it works.
 
@@ -66,9 +81,7 @@ def capstone_unavailable_reason() -> str | None:
     with _probe_lock:
         if not _probed:
             try:
-                import capstone as _capstone
-
-                _capstone.Cs(_capstone.CS_ARCH_X86, _capstone.CS_MODE_32)
+                _new_cs()
             except Exception as exc:
                 # OSError (missing shared object), ImportError (wrong arch),
                 # anything the C extension raises at load: the operator needs
@@ -101,11 +114,7 @@ def get_capstone_md() -> Any:
         reason = capstone_unavailable_reason()
         if reason is not None:
             raise CapstoneUnavailableError(reason)
-        import capstone as _capstone
-
-        md = _capstone.Cs(_capstone.CS_ARCH_X86, _capstone.CS_MODE_32)
-        md.detail = False
-        _CAPSTONE_MD_TLS.md = md
+        md = _CAPSTONE_MD_TLS.md = _new_cs()
     return md
 
 

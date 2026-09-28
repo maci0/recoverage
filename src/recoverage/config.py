@@ -118,6 +118,14 @@ _FALSE_VALUES: Final[frozenset[str]] = frozenset({"0", "false", "no", "off"})
 #: raises ValueError from the limit rather than from the parse.
 _ASCII_INT: Final = re.compile(r"\A[+-]?[0-9]+\Z")
 
+#: Bounds of the character classes :func:`_carries_control_char` refuses: the
+#: last C0 code point, DEL, and the last C1 code point.  A request header, a
+#: query value and a cookie are latin-1 over the wire, so no carrier can spell
+#: any of them, and a setting that holds one could never be presented.
+_C0_LAST: Final = 0x1F
+_DEL: Final = 0x7F
+_C1_LAST: Final = 0x9F
+
 
 class ConfigError(ValueError):
     """An unset or invalid ``RECOVERAGE_*`` value.
@@ -141,12 +149,22 @@ def _raw(name: str) -> str | None:
 def _as_int(name: str, raw: str) -> int:
     """*raw* as an integer, or a ConfigError naming *name*."""
     text = raw.strip()
+    message = f"{name}: {raw!r} is not an integer"
     if not _ASCII_INT.match(text):
-        raise ConfigError(f"{name}: {raw!r} is not an integer")
+        raise ConfigError(message)
     try:
         return int(text)
     except ValueError:  # more digits than CPython's int() accepts
-        raise ConfigError(f"{name}: {raw!r} is not an integer") from None
+        raise ConfigError(message) from None
+
+
+def _carries_control_char(value: str) -> bool:
+    """True if *value* holds a C0 control, DEL or a C1 control.
+
+    One spelling for the three string settings that share the floor, so
+    tightening the range is one edit rather than three.
+    """
+    return any(ord(ch) <= _C0_LAST or _DEL <= ord(ch) <= _C1_LAST for ch in value)
 
 
 def _int_var(name: str, default: int) -> int:
@@ -252,7 +270,7 @@ def validate_bind(value: str, name: str = "RECOVERAGE_BIND") -> str:
     """
     if not value:
         raise ConfigError(f"{name}: set but empty (unset it, or give it an address)")
-    if any(ch.isspace() or ord(ch) < 32 or 127 <= ord(ch) <= 159 for ch in value):
+    if any(ch.isspace() for ch in value) or _carries_control_char(value):
         raise ConfigError(
             f"{name}: {value!r} is not an interface address "
             "(it carries whitespace or a control character; quote it in the unit file)"
@@ -312,7 +330,7 @@ def validate_token(value: str | None, name: str = "RECOVERAGE_TOKEN") -> str | N
             f"{name}: leading or trailing whitespace; a request header is trimmed "
             "before it is compared, so no client could present this value"
         )
-    if any(ch.isspace() or ord(ch) < 32 or 127 <= ord(ch) <= 159 for ch in value):
+    if any(ch.isspace() for ch in value) or _carries_control_char(value):
         raise ConfigError(
             f"{name}: contains whitespace or a control character, which no request "
             "header, query value or cookie can carry"
@@ -363,7 +381,7 @@ def cors_origins() -> list[str]:
     for item in (part.strip() for part in raw.split(",")):
         if not item:
             continue
-        if any(ord(ch) < 32 or 127 <= ord(ch) <= 159 for ch in item):
+        if _carries_control_char(item):
             raise ConfigError(f"RECOVERAGE_CORS_ORIGIN: {item!r} contains a control character")
         origins.append(item)
     return origins

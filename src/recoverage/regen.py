@@ -50,6 +50,10 @@ from typing import IO
 #: lock.  The directory is resolved through rebrew rather than assumed, because
 #: ``[project].db_dir`` can point anywhere.
 _REGEN_LOCK_NAME = ".recoverage-regen.lock"
+#: rebrew's own default coverage subdirectory, which the resolution below falls
+#: back to.  Named because the mismatch message quotes that fallback, so the
+#: two have to name the same directory.
+_DEFAULT_DB_SUBDIR = "db"
 #: Bytes locked at offset 0. Windows takes a byte RANGE rather than a whole
 #: file (POSIX flocks the descriptor), so both platforms lock the same one.
 _LOCK_BYTE_COUNT = 1
@@ -138,8 +142,8 @@ def _coverage_dir(root: Path) -> Path:
 
     try:
         return db_dir(root)
-    except (OSError, LookupError, ValueError, TypeError, KeyError):
-        return root / "db"
+    except (OSError, LookupError, ValueError, TypeError):
+        return root / _DEFAULT_DB_SUBDIR
 
 
 @contextlib.contextmanager
@@ -233,7 +237,7 @@ def _check_writes_where_the_dashboard_reads(root: Path) -> None:
         return
     try:
         written_to = db_dir(root).resolve()
-    except (OSError, LookupError, ValueError, TypeError, KeyError):
+    except (OSError, LookupError, ValueError, TypeError):
         # A path rebrew resolved but this process could not (a symlink loop, a
         # permission error on a parent).  A config that does not parse is NOT
         # this arm: `db_dir` raises WorkspaceConfigError, which none of these
@@ -243,7 +247,7 @@ def _check_writes_where_the_dashboard_reads(root: Path) -> None:
         return
     raise RegenDbMismatchError(
         f"RECOVERAGE_DB names {override}, but rebrew writes its coverage "
-        f"documents to {written_to} (from {root / CONFIG_NAME}, or {root / 'db'} "
+        f"documents to {written_to} (from {root / CONFIG_NAME}, or {root / _DEFAULT_DB_SUBDIR} "
         f"when it has none). Point [project].db_dir at {override} or unset "
         f"RECOVERAGE_DB; a regen would not reach the dashboard otherwise."
     )
