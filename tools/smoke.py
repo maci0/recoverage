@@ -27,7 +27,11 @@ from _serve_harness import build_sample_db, get, running_server, scratch_project
 
 def smoke(project_dir: Path, *, expect_failure: bool = False) -> int:
     db = build_sample_db(project_dir)
-    assert db.is_file(), "sample coverage document not built"
+    if not db.is_file():
+        # Not an assert: `python -O` strips those, and the stripped line probes
+        # a server nobody built.
+        print("sample coverage document not built")
+        return 1
 
     if expect_failure:
         db.write_text("corrupt!", encoding="utf-8")  # break the document

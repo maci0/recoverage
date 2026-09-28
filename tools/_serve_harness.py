@@ -60,8 +60,7 @@ def build_sample_db(project_dir: Path) -> Path:
     finally:
         with contextlib.suppress(ValueError):
             sys.path.remove(tests_dir)
-    # tests/ is outside the type gate, so the imported builder is untyped here.
-    return cast(Path, build_synthetic_coverage(project_dir / "db"))
+    return build_synthetic_coverage(project_dir / "db")
 
 
 def free_port() -> int:

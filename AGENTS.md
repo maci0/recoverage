@@ -154,7 +154,7 @@ make test                   # uv run --locked --extra dev python -m pytest tests
 make test-one T=tests/test_api.py  # one file or pytest node id (FLAGS="-k name" narrows it)
 make fuzz                  # wider seeded campaign (SEED=, ITERATIONS= override)
 make lint                   # uv run --locked --extra dev python -m ruff check src/ tests/ tools/
-make type-check             # uv run --locked --extra dev python -m mypy (src/ + tools/, strict)
+make type-check             # uv run --locked --extra dev python -m mypy (src/ + tools/ + the shared fixtures, strict)
 make format-check           # uv run --locked --extra dev python -m ruff format --check src/ tests/ tools/
 make format                 # uv run --locked --extra dev python -m ruff format (writes)
 make shell-lint             # shellcheck -x tools/*.sh (needs shellcheck on PATH)
@@ -584,8 +584,10 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   runtime deps ship no `py.typed`, so they are covered tree-wide by
   `ignore_missing_imports` rather than by a per-import
   `# type: ignore[import-untyped]`, which would be redundant under that
-  setting and reported as stale. `tests/` is outside the gate until
-  its fixtures carry annotations; a suppression added there belongs with
+  setting and reported as stale. `tests/conftest.py` and
+  `tests/coverage_fixture.py` are under the gate (the slice whose annotations
+  the rest of the suite is built on); the other test files are outside it until
+  their fixtures carry annotations, so a suppression added there belongs with
   the first mypy run that covers it, and the existing
   `# type: ignore[...]` comments there are still the record of what needed
   silencing. The selected rule
@@ -598,8 +600,11 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   wildcard-bind, hardcoded-secret, `/tmp` and urlopen checks; the suite's
   fixtures are the only reason `tests/*` ignores them, and each of those
   fixtures asserts the shape the rule exists to prevent. A new S1xx finding
-  under src/ is a real one. S101 (assert), S603/S607 (untrusted argv,
-  partial process path) and S608 (string-built SQL) stay off with their
+  under src/ is a real one. S101 (assert) is in that set for the same reason:
+  `python -O` strips an assert, so one in the request path is a check that
+  silently stops existing, while a test that says what it believes with
+  `assert` is the mechanism the suite is written in. S603/S607 (untrusted
+  argv, partial process path) and S608 (string-built SQL) stay off with their
   reason recorded in pyproject.toml
 - Every request carries an id (`server._REQUEST_TLS`, echoed as
   `X-Request-ID`, stamped on every log record by `server._RequestIdFilter`),

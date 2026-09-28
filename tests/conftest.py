@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from io import BytesIO
 from pathlib import Path
+from typing import cast
 from wsgiref.util import setup_testing_defaults
 
 import pytest
@@ -165,11 +166,17 @@ def wsgi_request(
             else:
                 environ[f"HTTP_{key}"] = v
 
-    status_holder: dict[str, str | dict[str, str]] = {"status": "", "headers": {}}
+    status = ""
+    response_headers: dict[str, str] = {}
 
-    def _start_response(status: str, response_headers, exc_info=None):
-        status_holder["status"] = status
-        status_holder["headers"] = dict(response_headers)
+    def _start_response(
+        status_line: str,
+        headers: list[tuple[str, str]],
+        exc_info: object = None,
+    ) -> None:
+        nonlocal status, response_headers
+        status = status_line
+        response_headers = dict(headers)
 
     result = app(environ, _start_response)
     # PEP 3333: the server MUST call close() on the returned iterable when
@@ -181,7 +188,7 @@ def wsgi_request(
         close = getattr(result, "close", None)
         if close is not None:
             close()
-    return str(status_holder["status"]), dict(status_holder["headers"]), body
+    return status, response_headers, body
 
 
 def wsgi_get(path: str, headers: dict[str, str] | None = None) -> tuple[str, dict[str, str], bytes]:
@@ -207,7 +214,9 @@ def decode_body(body: bytes, headers: dict[str, str]) -> bytes:
     if encoding == "br":
         import brotli
 
-        return brotli.decompress(body)
+        # brotli ships no py.typed, so this is the one untyped boundary
+        # reaching a declared return in this file.
+        return cast(bytes, brotli.decompress(body))
     if encoding == "zstd":
         import zstandard as zstd
 

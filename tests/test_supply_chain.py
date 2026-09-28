@@ -916,6 +916,29 @@ class TestPythonAnalysisIsEnforced:
             "needed one is fixed with annotations, not with a weaker gate"
         )
 
+    @staticmethod
+    def _ruff() -> dict:
+        return tomllib.loads(_MANIFEST.read_text(encoding="utf-8"))["tool"]["ruff"]["lint"]
+
+    def test_an_assert_outside_the_suite_fails_the_run(self) -> None:
+        """`python -O` strips an assert, so one in the request path is a check
+        that silently stops existing: the server keeps answering, with the
+        branch gone. S101 is on for src/ and tools/, and the suite is the one
+        place that ignores it, because `assert` is how a test says what it
+        believes.
+        """
+        assert "S101" in self._ruff()["select"], (
+            "S101 is not selected in [tool.ruff.lint]; an assert under src/ or tools/ "
+            "would pass the gate and vanish under `python -O`"
+        )
+        ignoring = sorted(
+            path for path, codes in self._ruff()["per-file-ignores"].items() if "S101" in codes
+        )
+        assert ignoring == ["tests/*"], (
+            f"S101 is ignored for {ignoring}; only the suite asserts by design, so an "
+            "ignore anywhere else is a path that opted out of the check"
+        )
+
     def test_the_type_check_runs_in_the_lint_job(self) -> None:
         assert "make type-check" in _jobs()["lint"], (
             "the lint job does not run `make type-check`; a type error would reach main"

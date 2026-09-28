@@ -430,7 +430,10 @@ class _KeepAliveRequestHandler(_QuietTimeoutRequestHandler):
         )
         handler.request_handler = self  # backpointer for logging
         app = cast(WSGIServer, self.server).get_app()
-        assert app is not None, "cli.serve builds the server with the bottle app"
+        if app is None:
+            # Not an assert: `python -O` strips those, and the stripped line
+            # hands `run` a None application, which fails far from here.
+            raise RuntimeError("cli.serve builds the server with the bottle app")
         handler.run(app)
 
 

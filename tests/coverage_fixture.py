@@ -16,6 +16,7 @@ written directly.
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -140,10 +141,10 @@ def render_coverage(
     target: str,
     sections: dict[str, dict[str, Any]],
     *,
-    functions: list[dict[str, Any]] = (),
-    globals_: list[dict[str, Any]] = (),
-    verify_results: list[dict[str, Any]] = (),
-    history: list[dict[str, Any]] = (),
+    functions: Sequence[dict[str, Any]] = (),
+    globals_: Sequence[dict[str, Any]] = (),
+    verify_results: Sequence[dict[str, Any]] = (),
+    history: Sequence[dict[str, Any]] = (),
     paths: dict[str, Any] | None = None,
     version: int = TOML_VERSION,
 ) -> str:

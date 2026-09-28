@@ -113,7 +113,7 @@ help:
 		'  make test-browser       # browser tests: installs playwright + chromium, then runs them' \
 		'  make fuzz              # longer seeded campaign over the untrusted-input surfaces' \
 		'  make lint               # ruff check src/ tests/ tools/ (CI lint job)' \
-		'  make type-check         # mypy over src/ and tools/ (CI lint job)' \
+		'  make type-check         # mypy over src/, tools/ and the shared fixtures (CI lint job)' \
 		'  make format             # ruff format (writes)' \
 		'  make format-check       # ruff format --check src/ tests/ tools/ (CI lint job)' \
 		'  make web-lint           # oxlint + Nu Html Checker (CI web-lint job)' \

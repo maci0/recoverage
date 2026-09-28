@@ -125,6 +125,10 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- The strict mypy gate now covers `tests/conftest.py` and
+  `tests/coverage_fixture.py` beside `src/` and `tools/`. Those two are the
+  slice every other test file is built on, and a checker that skipped them
+  checked the tests against no contract at all.
 - `GET /api/targets/<target>/functions/<va>` revalidates. It was the one
   DB-derived read served `no-store` with no validator, so a client watching a
   cell re-downloaded the whole row on every poll while `/stats`, `/data`, the
@@ -297,6 +301,13 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   number is now read through the same `logging.getLevelNamesMapping()` table
   the names come from, so `0`, `10`, `20`, `30`, `40` and `50` are what the
   numeric arm accepts, and anything else is a startup error naming the variable.
+
+- **An `assert` guarded the WSGI application lookup and the smoke test's
+  sample document, and `python -O` strips both.** The request handler would
+  have handed `wsgiref` a `None` application, and the smoke run would have
+  probed a server built from a document that was never written. Both are
+  explicit failures now, and `S101` is on outside the test suite, where
+  `assert` is the mechanism a test is written in.
 
 - **`retry_after` in a 429 body and the `Retry-After` beside it could
   disagree.** Every limit the server reports now puts the header's own whole

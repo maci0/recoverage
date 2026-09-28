@@ -140,9 +140,11 @@ target-version = "py313"
 line-length = 100
 
 [tool.mypy]
-# The gate covers src/ and tools/ only. tests/ stays out until its fixtures
-# carry the annotations; make test-one is the loop that grows them.
-files = ["src/recoverage", "tools"]
+# The gate covers src/, tools/ and the two shared fixture modules. The rest of
+# tests/ stays out until its fixtures carry the annotations; make test-one is
+# the loop that grows them, and conftest.py plus coverage_fixture.py are the
+# slice that had them (every other test file builds on those two).
+files = ["src/recoverage", "tools", "tests/conftest.py", "tests/coverage_fixture.py"]
 python_version = "3.13"
 # Strict, minus the two checks this tree cannot pass:
 #   disallow_untyped_decorators — every route handler carries @app.route /
@@ -211,8 +213,12 @@ allowed-confusables = ["×"]
 # The remaining bandit and pylint rules are selected one code at a time
 # instead of by group prefix, because a prefix pulls in rules this tree does
 # not yet pass and each of those needs a decision of its own:
+#   S101 — assert. `python -O` strips an assert, so one in the request path is
+#   a check that silently stops existing; on for src/ and tools/, ignored for
+#   the suite (below), where asserting is the mechanism the tests are written
+#   in.
 #   S102/S107 — exec, hardcoded password; S2/S5/S7 — Flask debug, request
-#   without timeout, assert, trojan source; S3xx — pickle/marshal/XML
+#   without timeout, trojan source; S3xx — pickle/marshal/XML
 #   deserialisation; S6xx — shell and partial-path process launches;
 #   S104-S108/S310/S311 — wildcard bind, hardcoded secret, /tmp path, urlopen
 #   scheme, non-crypto rng. On for src/ and tools/; the tests/* per-file-ignore
@@ -223,16 +229,16 @@ allowed-confusables = ["×"]
 #   call, nan comparison, bad raise type, encoding-less open, useless
 #   else-on-loop, self-assignment, global-at-statement), plus the PLR and TRY
 #   codes listed in select that are defect classes rather than size limits.
-# S101 (assert) and S603/S607/S608 (untrusted argv, partial path, string-built
-# SQL) stay off: the suite asserts by design, and the SQL and argv fragments
-# are built from validated column names rather than request input.
+# S603/S607/S608 (untrusted argv, partial path, string-built SQL) stay off:
+# the SQL and argv fragments are built from validated column names rather than
+# request input.
 select = [
     "E", "F", "W", "I", "UP", "B", "SIM",
     "A", "ASYNC", "DTZ", "G", "N", "PGH", "TID", "YTT", "RUF100",
     "T10", "FLY", "ICN", "PTH",
     "PLE", "INT", "C4", "RET", "RSE", "PERF", "PIE", "ISC", "FURB", "RUF",
     "T20", "ERA", "LOG", "FA", "Q", "TD", "PT",
-    "S2", "S5", "S7", "S102", "S103", "S104", "S105", "S106", "S107",
+    "S2", "S5", "S7", "S101", "S102", "S103", "S104", "S105", "S106", "S107",
     "S108", "S310", "S311",
     "S301", "S302", "S303", "S304", "S305", "S306", "S307", "S308",
     "S312", "S313", "S314", "S315", "S316", "S317", "S318", "S319",
@@ -285,11 +291,12 @@ extend-immutable-calls = ["typer.Option", "typer.Argument"]
 # T201: tools/ scripts are command-line utilities whose stdout output IS their
 # interface; print is intentional there and banned everywhere else.
 "tools/*" = ["T201"]
-# S104/S105/S106/S108/S310/S311: the suite asserts on the shapes the security
-# rules exist to prevent, so its fixtures have to spell them out. A test binds
+# S101/S104/S105/S106/S108/S310/S311: the suite asserts on the shapes the
+# security rules exist to prevent, so its fixtures have to spell them out. A
+# test asserts because that is how a test says what it believes, binds
 # 0.0.0.0 to prove the server refuses a non-loopback peer, passes a token and
 # a /tmp db path through the config parser, and seeds a PRNG for the fuzz
 # campaign. None of this reaches the server: it binds 127.0.0.1, and the S1xx
 # codes are on for src/ and tools/, where a wildcard bind or a hardcoded
-# secret would be a real finding.
-"tests/*" = ["S104", "S105", "S106", "S108", "S310", "S311"]
+# secret would be a real finding, and an assert would vanish under `python -O`.
+"tests/*" = ["S101", "S104", "S105", "S106", "S108", "S310", "S311"]
