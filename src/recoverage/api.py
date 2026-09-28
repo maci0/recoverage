@@ -549,12 +549,16 @@ def _filtered_functions(
         rows = [fn for fn in rows if fn.status == status_filter]
     if search:
         needle = _server.fold_needle(search)
+        # `str(va)` is built and folded per row, so a term holding a character
+        # no decimal number can hold skips the arm outright
+        # (server.fold_can_match_decimal).
+        match_decimal = _server.fold_can_match_decimal(needle)
         rows = [
             fn
             for fn in rows
             if fold_match_folded(fn.name, needle)
             or fold_match_folded(fn.symbol, needle)
-            or fold_match_folded(str(fn.va), needle)
+            or (match_decimal and fold_match_folded(str(fn.va), needle))
             or fold_match_folded(fn.vaStart, needle)
         ]
     return rows

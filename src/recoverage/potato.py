@@ -18,6 +18,7 @@ import textwrap
 import threading
 import unicodedata
 from collections.abc import Callable, Iterable
+from heapq import nsmallest
 from html import escape as _html_escape
 from pathlib import Path
 from typing import Any, cast
@@ -46,6 +47,7 @@ from recoverage.server import (
     app,
     coverage_for,
     coverage_pct,
+    fold_can_match_hex,
     fold_match_folded,
     fold_needle,
     function_json,
@@ -1543,15 +1545,26 @@ def _search_functions(coverage: CoverageSnapshot, search_query: str) -> set[str]
         return search_matched_fns
 
     needle = fold_needle(search_query)
-    fn_rows = [
-        fn
-        for fn in coverage.functions
-        if fold_match_folded(fn.name, needle)
-        or fold_match_folded(fn.vaStart, needle)
-        or fold_match_folded(fn.symbol, needle)
-    ]
-    fn_rows.sort(key=lambda fn: (fn.name, fn.vaStart))
-    for fn in fn_rows[:_SEARCH_ROW_LIMIT]:
+    # A term no hex address can hold cannot match either address spelling, so
+    # the two formats and folds per global are built only when it can
+    # (server.fold_can_match_hex).
+    match_hex = fold_can_match_hex(needle)
+    # The cap takes the FIRST rows of the sorted match set, so only that many
+    # have to be ordered: nsmallest is the documented equivalent of
+    # ``sorted(rows, key=...)[:_SEARCH_ROW_LIMIT]`` and keeps the same answer,
+    # stable and all, at O(n log k) against the O(n log n) a full sort of a
+    # match set several times the cap's size costs on every keystroke.
+    for fn in nsmallest(
+        _SEARCH_ROW_LIMIT,
+        (
+            fn
+            for fn in coverage.functions
+            if fold_match_folded(fn.name, needle)
+            or fold_match_folded(fn.vaStart, needle)
+            or fold_match_folded(fn.symbol, needle)
+        ),
+        key=lambda fn: (fn.name, fn.vaStart),
+    ):
         search_matched_fns.add(fn.name)
         if fn.vaStart:
             # Grid .text cells store the function's vaStart string (not the
@@ -1559,15 +1572,18 @@ def _search_functions(coverage: CoverageSnapshot, search_query: str) -> set[str]
             # cell entries against this set, so VA spellings must be included.
             search_matched_fns.add(fn.vaStart)
 
-    gl_rows = [
-        gl
-        for gl in coverage.globals
-        if fold_match_folded(gl.name, needle)
-        or fold_match_folded(f"0x{gl.va:08x}", needle)
-        or fold_match_folded(f"0x{gl.va:x}", needle)
-    ]
-    gl_rows.sort(key=lambda gl: gl.name)
-    search_matched_fns.update(gl.name for gl in gl_rows[:_SEARCH_ROW_LIMIT])
+    gl_rows = nsmallest(
+        _SEARCH_ROW_LIMIT,
+        (
+            gl
+            for gl in coverage.globals
+            if fold_match_folded(gl.name, needle)
+            or (match_hex and fold_match_folded(f"0x{gl.va:08x}", needle))
+            or (match_hex and fold_match_folded(f"0x{gl.va:x}", needle))
+        ),
+        key=lambda gl: gl.name,
+    )
+    search_matched_fns.update(gl.name for gl in gl_rows)
     return search_matched_fns
 
 
@@ -2061,24 +2077,32 @@ def _render_function_list(
         # this view's own addition, where _search_functions matches
         # `vaStart` instead because that is the string a .text cell stores.
         needle = fold_needle(search_query)
+        match_hex = fold_can_match_hex(needle)
         rows = [
             fn
             for fn in rows
             if fold_match_folded(fn.name, needle)
             or fold_match_folded(fn.symbol, needle)
-            or fold_match_folded(f"0x{fn.va:08x}", needle)
-            or fold_match_folded(f"0x{fn.va:x}", needle)
+            or (match_hex and fold_match_folded(f"0x{fn.va:08x}", needle))
+            or (match_hex and fold_match_folded(f"0x{fn.va:x}", needle))
         ]
     # The rendered list is capped (same bound as the search above) so a large
     # project's ?view=functions page doesn't build a multi-MB HTML document on
     # every request.  The secondary `va` key keeps the cap deterministic.  The
     # count is read before the cap: a header reading "(500 results)" on a
     # target with thousands tells the reader the list is complete when the page
-    # they are looking at is a slice.
-    rows.sort(key=lambda fn: (function_sort_key(fn, order_by), fn.va))
+    # they are looking at is a slice.  Only the capped slice is ordered, by the
+    # same stable selection _search_functions uses: the count needs every row,
+    # the page needs the first 500 of the sorted set, and sorting all of them
+    # to throw most away costs O(n log n) on every keystroke.
     total = len(rows)
     truncated = total > _SEARCH_ROW_LIMIT
-    rows = rows[:_SEARCH_ROW_LIMIT]
+    if truncated:
+        rows = nsmallest(
+            _SEARCH_ROW_LIMIT, rows, key=lambda fn: (function_sort_key(fn, order_by), fn.va)
+        )
+    else:
+        rows.sort(key=lambda fn: (function_sort_key(fn, order_by), fn.va))
     count_label = f"first {len(rows)} of {total} results" if truncated else f"{total} results"
     cap_note = ""
     if truncated:

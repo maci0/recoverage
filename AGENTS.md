@@ -371,6 +371,16 @@ simpler and strictly wider.
      served bucket dict (`total_cells`, the state counts, and `other`, the
      producer's catch-all, always emitted so the buckets reconcile with
      `total_cells`). `/stats`, `/data` and the Potato map header all read it.
+     It returns a `dict()` COPY of `Section.bucket_counts`, the same fold
+     rebrew derived at load, rather than counting the cells again:
+     `server._section_summary` likewise reads `Section.buckets`,
+     `Section.covered_bytes` and `Section.bucket_counts`, and `_summary` reads
+     the `.text` section's, instead of walking the cells per request. A second
+     pass over the largest section's cells is 2-6 ms on a 40k-cell `.text`,
+     once per `/stats`, `/data` and Potato render. The counts these read are
+     rebrew's, so `tests/test_server.py` (`TestBucketReconciliation`) pins
+     them against an independent per-cell walk, and a cell-state vocabulary
+     change lands in `rebrew.coverage_toml._BUCKET_OF_STATE` first, not here.
    - `server.coverage_pct(covered, total)` is the ONE percentage a covered-byte
      ratio is rendered through: `summary.coveragePercent`, the per-section
      `coverage_pct` and `potato._section_pct` all take it, and it FLOORS to 2dp
@@ -885,7 +895,20 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   then the folded comparison — so the row the search highlighted opens by
   name. A lookup added beside them (globals, labels, anything compared for
   identity) must fold too; byte equality there is the bug this paragraph exists
-  to stop.
+  to stop. A search arm over a column the term cannot hold skips building it:
+  `server.fold_can_match_hex` and `server.fold_can_match_decimal` answer
+  whether a FOLDED needle could occur in a `0x` address or a bare decimal VA,
+  and the address arms in `api._filtered_functions` and both Potato search
+  readers consult them before formatting and folding two strings per row per
+  keystroke. The test is necessary, not sufficient: a term inside the alphabet
+  can still match nothing, and then the columns are built and miss as before.
+  A new search column follows the same rule, and `fold_can_match_*` is named
+  for its own alphabet rather than a shared "is this a number" test. Pinned at
+  `tests/test_server.py` (`TestSearchColumnGuards`), which drives the guard
+  against the comparison it replaces. The capped search rows
+  (`potato._SEARCH_ROW_LIMIT`) are selected with `heapq.nsmallest`, the
+  documented equivalent of `sorted(...)[:limit]`, so a match set larger than
+  the cap is not fully ordered to keep the first 500.
 - `_log_safe` escapes the characters that end a log line, which is C0, DEL,
   the C1 controls, and U+2028/U+2029 (a header value carries those literally,
   and every viewer that breaks on `\n` breaks on them). It deliberately leaves

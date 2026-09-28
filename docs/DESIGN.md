@@ -257,8 +257,10 @@ Nothing below is stored.  `rebrew.coverage_toml` computes each one once, at load
 
 Two served shapes are recoverage's own, and each has one definition so it cannot drift:
 
-* `server._bucket_row` maps a section's cells to the bucket dict `/stats`, `/data` and Potato Mode's map header all serve.  `other` is the producer's catch-all, so the buckets still reconcile with `total_cells`.
-* `server._summary` rebuilds the catalog `summary` blob, which the writer does not store.  `/stats` and `/data` serve the rebuild, so a change there is a change to a served payload.
+* `server._bucket_row` serves the bucket dict `/stats`, `/data` and Potato Mode's map header all read, as a copy of `Section.bucket_counts` — the same fold the reader derived at load, not a second pass over the cells.  `other` is the producer's catch-all, so the buckets still reconcile with `total_cells`.
+* `server._summary` rebuilds the catalog `summary` blob, which the writer does not store.  `/stats` and `/data` serve the rebuild, so a change there is a change to a served payload.  Its counts and byte sums come from the derived `Section` fields; only `totalFunctions`, which counts the function NAMES the covered cells carry, still walks them.
+
+Re-deriving what the load already derived costs a pass over the largest section per request: 2-6 ms on a 40k-cell `.text`, once per `/stats`, `/data` and Potato render.  `tests/test_server.py` (`TestBucketReconciliation`) pins the served rows against an independent per-cell walk, so reading the derived value and computing it cannot silently diverge.
 
 A stored aggregate is a second place for two writers to disagree: the number would have to be computed on the way in and trusted on the way out, and a change to what counts as covered or as matched would have to be applied to the stored copy too, or the file and the reader would report different coverage for the same rows.  Each number above is a pure function of rows already in the document, so one pass at load is the whole cost and no file can hold a figure that contradicts its own cells.  That is the decision the SQLite format made the other way (see *Derived at Load Instead of Materialized*): materializing them was worth it when reading them back cost one query where re-deriving them cost a group-by.
 

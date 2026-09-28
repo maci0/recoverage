@@ -25,6 +25,7 @@ from rebrew.coverage_toml import CoverageSnapshot, CoverageTomlError, load_cover
 
 from recoverage import clock
 from recoverage.server import (
+    _BUCKET_FOLD,
     DLL_DATA,
     DLL_LOCK,
     SUPPORTED_ENCODINGS,
@@ -36,6 +37,8 @@ from recoverage.server import (
     clear_target_cache,
     compress_payload,
     compress_static_bodies,
+    fold_can_match_decimal,
+    fold_can_match_hex,
     fold_match,
     fold_match_folded,
     fold_needle,
@@ -619,6 +622,47 @@ class TestSearchFolding:
             (None, ""),
         ):
             assert fold_match_folded(haystack, fold_needle(needle)) == fold_match(haystack, needle)
+
+
+class TestSearchColumnGuards:
+    """A skipped address column must be one the term could not have matched.
+
+    The address arms build and fold a string per row per keystroke, so a term
+    no address can hold skips them.  The guard is necessary, not sufficient:
+    a term inside the alphabet can still match nothing, and then the columns
+    are built and miss.  A term OUTSIDE it cannot match one, so skipping has
+    to be the same answer the comparison gave.
+    """
+
+    @pytest.mark.parametrize("query", ["0x00401000", "0X401000", "401000", "0x", "deadbeef"])
+    def test_a_hex_address_term_is_not_skipped(self, query: str) -> None:
+        assert fold_can_match_hex(fold_needle(query))
+
+    @pytest.mark.parametrize("query", ["sub_401000", "Sym_1", "100%", "café", "a b"])
+    def test_a_name_term_skips_the_hex_columns(self, query: str) -> None:
+        assert not fold_can_match_hex(fold_needle(query))
+
+    @pytest.mark.parametrize("query", ["1000", "4194304"])
+    def test_a_decimal_term_is_not_skipped(self, query: str) -> None:
+        assert fold_can_match_decimal(fold_needle(query))
+
+    @pytest.mark.parametrize("query", ["fn_1", "0x1000", "100%", ""])
+    def test_a_non_decimal_term_skips_the_va_column(self, query: str) -> None:
+        assert not fold_can_match_decimal(fold_needle(query))
+
+    @pytest.mark.parametrize("query", ["0x00401000", "0x401000", "deadbeef", "1000"])
+    def test_a_skipped_column_never_matched_in_the_first_place(self, query: str) -> None:
+        """The guard is only sound because the column could not have matched.
+
+        A term the guard rejects must find no address anywhere, so a caller
+        that skipped the arm and one that built it answer the same.
+        """
+        needle = fold_needle(query)
+        spellings = (f"0x{0x401000:08x}", f"0x{0x401000:x}", str(0x401000))
+        for spelling in spellings:
+            matched = fold_match_folded(spelling, needle)
+            guarded = fold_can_match_hex(needle) or fold_can_match_decimal(needle)
+            assert not (matched and not guarded), f"{query!r} matched {spelling!r} but was skipped"
 
 
 class TestSnapshotVaIndices:
@@ -2024,6 +2068,81 @@ class TestBucketReconciliation:
         served = srv._section_stats(snap)["sections"][".text"]
         assert {k: served[k] for k in (*self.BUCKET_KEYS, "total_cells")} == buckets
         self._reconciles(served)
+
+    #: The reverse of server._BUCKET_FOLD, built here so the walk below is
+    #: this module's own fold rather than the one under test.
+    _FOLD_BY_STATE: ClassVar[dict[str, str]] = {
+        state: bucket for bucket, states in _BUCKET_FOLD.items() for state in states
+    }
+
+    def test_the_bucket_row_matches_a_walk_of_the_cells(self) -> None:
+        """The served row is a copy of what rebrew derived; prove they agree.
+
+        ``_bucket_row`` reads ``Section.bucket_counts`` rather than counting
+        the cells again, so the fold that decides which state lands in which
+        bucket is rebrew's rather than this module's.  Counting the cells here
+        is the independent check that the two folds are the same fold.
+        """
+        import recoverage.server as srv
+
+        snap = self._snap((*self.CELL_STATES, "near_matching", "verified", "drift"))
+        section = snap.sections[".text"]
+        counts: dict[str, int] = dict.fromkeys(self.BUCKET_KEYS, 0)
+        other = 0
+        for c in section.cells:
+            bucket = self._FOLD_BY_STATE.get(c.state)
+            if bucket is None:
+                other += 1
+            else:
+                counts[bucket] += 1
+        assert srv._bucket_row(section) == {
+            "total_cells": len(section.cells),
+            **counts,
+            "other": other,
+        }
+
+    def test_the_section_summary_matches_a_walk_of_the_cells(self) -> None:
+        """The same for the per-section summary, byte sums included.
+
+        ``_section_summary`` reads the reader's ``buckets`` and
+        ``bucket_counts`` and keeps its own count of the function NAMES the
+        covered cells carry.  Both halves are recomputed here from the cells.
+        """
+        import recoverage.server as srv
+
+        snap = self._snap(
+            ("exact", "verified", "none", "reloc", "data", "thunk", "proven", "size_mismatch")
+        )
+        section = snap.sections[".text"]
+        named = ("exact", "reloc", "near_match", "stub", "padding")
+        counts = dict.fromkeys(named, 0)
+        sizes = dict.fromkeys(named, 0)
+        covered = 0
+        total_functions = 0
+        for c in section.cells:
+            if c.state == "none":
+                continue
+            covered += c.size
+            total_functions += len(c.functions)
+            bucket = self._FOLD_BY_STATE.get(c.state)
+            if bucket in counts:
+                counts[bucket] += 1
+                sizes[bucket] += c.size
+        assert srv._section_summary(section) == {
+            "exactMatches": counts["exact"],
+            "relocMatches": counts["reloc"],
+            "nearMatchCount": counts["near_match"],
+            "stubCount": counts["stub"],
+            "paddingCount": counts["padding"],
+            "exactBytes": sizes["exact"],
+            "relocBytes": sizes["reloc"],
+            "nearMatchBytes": sizes["near_match"],
+            "stubBytes": sizes["stub"],
+            "paddingBytes": sizes["padding"],
+            "coveredBytes": covered,
+            "totalFunctions": total_functions,
+            "size": section.size,
+        }
 
     def test_verified_cells_count_as_exact(self) -> None:
         """'verified' is a match, and every surface must agree on that.
