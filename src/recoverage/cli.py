@@ -1120,17 +1120,27 @@ def serve(
     # for servers that never receive an SSE client (curl-only automation).
     from recoverage.api import _ensure_db_watcher
 
-    _ensure_db_watcher()
-
     # Warm the SPA shell cache off the request path: the first page load
     # would otherwise pay the asset read + minify + three full-strength
     # compressions synchronously.  Daemon thread, started before the listener
     # accepts; failures are logged and stay lazy.
     from recoverage.ui import warm_index_cache
 
-    threading.Thread(target=warm_index_cache, name="recoverage-index-warmup", daemon=True).start()
-
+    # Both starts are INSIDE the try, and the try opens at the first of them
+    # rather than at bottle_app.run: each is a Thread.start, which raises
+    # RuntimeError under thread exhaustion, and a raise there escaped before
+    # the finally existed — so the armed opener popped a tab at a port nothing
+    # was listening on half a second later, which is the exact outcome the
+    # finally's own comment claims to cover.  A startup step that fails this
+    # way is a failed start, whichever step it was.
     try:
+        _ensure_db_watcher()
+
+        warmup = threading.Thread(
+            target=warm_index_cache, name="recoverage-index-warmup", daemon=True
+        )
+        warmup.start()
+
         bottle_app.run(
             host=bind,
             port=listen_port,
@@ -1160,12 +1170,12 @@ def serve(
     finally:
         # Once bottle_app.run has returned there is no listener left, so the
         # deferred opener has nothing to open: a start that failed (EADDRINUSE,
-        # Ctrl+C) and one that ran and stopped both pop a browser tab at a
-        # dead port if the timer is still armed.  One place covers every exit,
-        # including the unexpected one — an OverflowError out of socket.bind()
-        # or a RuntimeError from a server with no app installed used to leave
-        # the timer to fire half a second after the traceback, which is the one
-        # exit path nobody had covered.
+        # Ctrl+C, a thread that would not start) and one that ran and stopped
+        # both pop a browser tab at a dead port if the timer is still armed.
+        # One place covers every exit, including the unexpected one — an
+        # OverflowError out of socket.bind() or a RuntimeError from a server
+        # with no app installed used to leave the timer to fire half a second
+        # after the traceback, which is the one exit path nobody had covered.
         if browser_timer is not None:
             browser_timer.cancel()
 
@@ -1322,16 +1332,50 @@ def export(
         # Windows' text-mode stdout, corrupting every row to \r\r\n.  One \n
         # here means the platform writes its native ending exactly once.
         stream = _utf8_stream(sys.stdout)
-        writer = csv.writer(stream, lineterminator="\n")
-        writer.writerow(["target", "section", *_SECTION_COLUMNS])
-        for data in all_data:
-            for sec_name, sec in sorted(data["sections"].items()):
-                writer.writerow(
-                    [_csv_safe(data["target"]), _csv_safe(sec_name), *_section_row(sec)]
-                )
-        stream.flush()
-        if isinstance(stream, io.TextIOWrapper) and stream is not sys.stdout:
-            stream.detach()
+        written = 0
+        total = sum(len(data["sections"]) for data in all_data)
+        try:
+            writer = csv.writer(stream, lineterminator="\n")
+            writer.writerow(["target", "section", *_SECTION_COLUMNS])
+            for data in all_data:
+                for sec_name, sec in sorted(data["sections"].items()):
+                    writer.writerow(
+                        [_csv_safe(data["target"]), _csv_safe(sec_name), *_section_row(sec)]
+                    )
+                    written += 1
+            stream.flush()
+        except BrokenPipeError:
+            # `recoverage export | head` is a documented use, and main() owns
+            # that contract: it repoints stdout at devnull and reports the
+            # truncation with exit 1. Swallowing it here would export a
+            # complete file and exit 0.
+            raise
+        except OSError as exc:
+            # A failed write is a half-written file, and the redirect the
+            # operator is looking at is exactly that file: ENOSPC, a quota, a
+            # closed pipe on a network mount. Saying so, with the row it
+            # stopped on, is the difference between a truncated export and a
+            # usable one.
+            _secho(
+                f"Error: CSV export failed after {written} of {total} section rows "
+                f"({type(exc).__name__}: {exc}). The output is truncated; free space "
+                "or redirect to another path and retry.",
+                fg=typer.colors.RED,
+                err=True,
+            )
+            raise typer.Exit(1) from None
+        finally:
+            # Detach on EVERY path, not only the successful one: the wrapper
+            # _utf8_stream built owns sys.stdout's buffer, and its destructor
+            # closes what it wraps. Leaving it attached to unwind out of a
+            # failed write closed the real stdout, so the error the operator
+            # needed was replaced by a ValueError from the interpreter's
+            # final flush. detach() flushes, so a pending write can make it
+            # raise the same OSError; the exit is already reported and a
+            # second one here would mask it.
+            if isinstance(stream, io.TextIOWrapper) and stream is not sys.stdout:
+                with contextlib.suppress(OSError, ValueError):
+                    stream.detach()
 
     elif output_format == ExportFormat.md:
 

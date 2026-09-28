@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import typer
 from conftest import HAS_DB
 from coverage_fixture import cell, coverage_dir, write_coverage
 from rebrew.coverage_toml import CoverageTomlError
@@ -800,6 +801,47 @@ class TestExportCsvStdoutEncoding:
         pinned.flush()
         assert sink.getvalue() == "café".encode()
 
+    def test_a_failed_write_reports_and_does_not_close_stdout(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A write that fails mid-export must say so, and must not close stdout.
+
+        The redirect the operator is reading IS the file being written, so an
+        ENOSPC halfway through leaves it truncated; the command reporting that
+        with the row it stopped on is the whole difference between a usable
+        and an unusable export. The wrapper ``_utf8_stream`` built owns
+        stdout's buffer and its destructor closes what it wraps, so leaving it
+        attached on the failure path turned one clear error into a closed
+        stdout and a ValueError from the interpreter's final flush.
+        """
+        from recoverage.cli import ExportFormat, export
+
+        class _FailingBuffer(io.RawIOBase):
+            def writable(self) -> bool:
+                return True
+
+            def write(self, data: Any) -> int:
+                raise OSError(28, "No space left on device")
+
+        directory = _coverage_dir(tmp_path)
+        _write_sections(directory, [".text"], [(".text", 0, 100, "exact")])
+        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+
+        buffer = _FailingBuffer()
+        real_stdout = sys.stdout
+        wrapper = io.TextIOWrapper(buffer, encoding="ascii", errors="strict")
+        monkeypatch.setattr(sys, "stdout", wrapper)
+        try:
+            with pytest.raises(typer.Exit) as raised:
+                export(output_format=ExportFormat.csv, target=None)
+        finally:
+            monkeypatch.setattr(sys, "stdout", real_stdout)
+        assert raised.value.exit_code == 1
+        # The wrapper must not have taken stdout's buffer down with it: the
+        # error above was reported, and the interpreter still has to flush.
+        assert not real_stdout.closed
+        assert not real_stdout.buffer.closed
+
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
 class TestCheckFailureExit:
@@ -1404,6 +1446,40 @@ class TestServeKeyboardInterrupt:
         assert result.exit_code != 0
         time.sleep(0.7)  # past the timer's 0.5s deadline
         assert opened == [], "cancelled opener still fired after the listener failed"
+
+    def test_a_failed_watcher_start_cancels_the_deferred_browser_opener(
+        self, monkeypatch: Any
+    ) -> None:
+        """A startup step BETWEEN the armed opener and the listener is a failed
+        start too.
+
+        The DB watcher thread and the cache warm-up thread start after the
+        timer is armed, and each raises RuntimeError under thread exhaustion.
+        While they sat outside the try, such a raise unwound past the finally,
+        so half a second after the traceback a tab opened on a port nothing
+        was listening on — the outcome the surrounding comment claimed the
+        finally covered.
+        """
+        import time
+
+        from recoverage.server import app as server_app
+
+        def no_watcher() -> None:
+            raise RuntimeError("can't start new thread")
+
+        monkeypatch.setattr("recoverage.api._ensure_db_watcher", no_watcher)
+        opened: list[str] = []
+        monkeypatch.setattr("recoverage.cli.open_browser", lambda url: opened.append(url) or True)
+
+        # The listener must never be reached: the watcher start raises first.
+        def blow_up(self: Any, **kwargs: Any) -> None:
+            raise AssertionError("the listener should not have started")
+
+        monkeypatch.setattr(type(server_app), "run", blow_up)
+        result = runner.invoke(app, ["serve", "--port", "8123"])
+        assert result.exit_code != 0
+        time.sleep(0.7)  # past the timer's 0.5s deadline
+        assert opened == [], "cancelled opener still fired after the watcher failed to start"
 
 
 class TestRegenFailures:

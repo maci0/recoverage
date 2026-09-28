@@ -259,6 +259,21 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   left the rest of the stream to the next request on a keep-alive socket. The
   size line takes the same ASCII-only parse as every other request-supplied
   number, and anything else is refused as malformed with the connection closed.
+- **`serve` opened a browser tab at a dead port when a startup step failed.**
+  The database watcher and the cache warm-up thread start after the deferred
+  browser opener is armed, and both are `Thread.start`, so a process that is
+  out of threads raised between the two and unwound past the block that cancels
+  the opener. Half a second after the traceback a tab opened on a port nothing
+  was listening on. Every startup step now runs inside that block, so a start
+  that never reached the listener never pops a tab.
+- **`recoverage export --format csv` unwound on a failed write, leaving a
+  truncated file and a closed stdout.** The redirect a user is looking at is
+  the file being written, so a failure part-way through (no space left, a
+  quota, an unreachable mount) left a half-written export with a raw traceback
+  and nothing saying the file was cut short; the encoding wrapper this path
+  builds also owns stdout's buffer, and leaving it attached on the failure path
+  closed the real stdout. The command now reports how many section rows landed
+  out of how many, exits 1, and always detaches the wrapper.
 - **`serve --port 0` reported port 0 everywhere it printed the port.** Port 0
   is the documented floor and means "bind a free port", but the banner, the
   `config` block and the URL handed to the browser all named the 0 that was
