@@ -39,6 +39,11 @@ app = typer.Typer(
     help="Coverage dashboard for binary-matching decompilation projects.",
     add_completion=True,
     rich_markup_mode="rich",
+    # -h alongside --help, on the group and on every subcommand: the man page
+    # documents it and POSIX readers reach for it first.  No command claims -h,
+    # so the alias cannot shadow a flag, and one context setting covers the
+    # whole tree rather than repeating the option per command.
+    context_settings={"help_option_names": ["-h", "--help"]},
     epilog=(
         "[bold]Examples:[/bold]\n\n"
         f"  recoverage [dim]# start the dashboard (port {config.DEFAULT_PORT})[/dim]\n\n"

@@ -236,14 +236,24 @@ every compared section met the threshold.
 Failure. For
 .BR check ,
 a section fell below it; for
-.B open \fR,
+.BR stats " and " export ,
+a coverage directory holding no
+.I coverage\-<target>.toml
+or a
+.B \-\-target
+no build has written; for
+.BR open ,
 no browser could be launched; for a non-loopback bind without
 .BR \-\-allow\-remote ,
 the bind was refused.
 .TP
 .B 2
 Misconfiguration: an invalid flag or RECOVERAGE_*
-value, or an unreadable coverage directory.
+value; and, for
+.BR check ,
+a coverage directory holding no document or a coverage document that does
+not parse, which a gate reports as an infrastructure error rather than as
+coverage below the threshold.
 .SH FILES
 .TP
 .I db/coverage\-<target>.toml

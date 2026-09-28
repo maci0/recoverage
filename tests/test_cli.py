@@ -167,6 +167,34 @@ class TestVersionFlag:
         assert "recoverage" in result.output
 
 
+class TestHelpOptionNames:
+    """`-h` is the alias the man page documents, on the group and every command.
+
+    The man page lists `-h, --help`, and `-h` is the spelling a POSIX reader
+    reaches for first, so a tree that only accepted `--help` made the page
+    wrong. The context setting covers the group and every subcommand, and no
+    command claims `-h` for anything else.
+    """
+
+    COMMANDS = (
+        (),
+        ("serve",),
+        ("stats",),
+        ("export",),
+        ("check",),
+        ("regen",),
+        ("open",),
+        ("config",),
+    )
+
+    def test_short_help_works_everywhere_long_help_does(self) -> None:
+        for command in self.COMMANDS:
+            short = runner.invoke(app, [*command, "-h"])
+            long = runner.invoke(app, [*command, "--help"])
+            assert short.exit_code == 0, (command, short.output)
+            assert short.output == long.output, command
+
+
 class TestRebuildAdvice:
     """Every place the CLI tells a user how to build the documents.
 

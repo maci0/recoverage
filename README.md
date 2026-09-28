@@ -289,6 +289,10 @@ With `--json`, a failure is reported on stdout as
 parses one shape whether the run failed or not.  `check --json` and
 `export --format json` report the same envelope.
 
+Exit codes: 0 = the table (or the JSON) was printed, 1 = the coverage
+directory holds no document, or `--target` names a target no build has
+written, 2 = an invalid flag or `RECOVERAGE_*` value.
+
 ### `recoverage export`
 
 Export coverage data to stdout.
@@ -298,6 +302,12 @@ recoverage export --format json     # JSON (default)
 recoverage export --format csv      # CSV
 recoverage export --format md       # Markdown table
 ```
+
+The rows are the only thing on stdout, so `> coverage.csv` and a pipe get clean
+data. Exit codes: 0 = the rows were written, 1 = the coverage directory holds
+no document, or `--target` names a target no build has written, 2 = an invalid
+flag or `RECOVERAGE_*` value. Under `--format json` the failure envelope goes
+to stdout, as it does for `stats --json`.
 
 ### `recoverage check`
 
