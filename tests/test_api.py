@@ -2296,6 +2296,25 @@ class TestBatchFunctionLookup:
         data = json.loads(decode_body(body, headers))
         assert str(api._MAX_BATCH_LOOKUP) in data["error"]
 
+    def test_batch_va_past_the_address_space_is_reported_as_out_of_range(self) -> None:
+        """A VA that parsed but does not fit is a range fault, in either spelling.
+
+        The integer arm and the hex arm are one check split across two parse
+        paths; reporting the hex one as "unparseable ... expected hex like
+        0x10001000" blamed the format for a string that parsed fine.
+        """
+        import recoverage.api as api
+
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        too_big = api.VA_MAX + 1
+        for entry in (too_big, f"0x{too_big:x}"):
+            status, headers, body = self._post(target, json.dumps({"vas": [entry]}))
+            assert status.startswith("400")
+            data = json.loads(decode_body(body, headers))
+            assert data["detail"] == f"VA out of range (max 0x{api.VA_MAX:x})"
+
     def test_batch_read_failure_is_not_reported_as_a_malformed_body(self) -> None:
         """A body stream that breaks is a transport failure, not bad JSON.
 

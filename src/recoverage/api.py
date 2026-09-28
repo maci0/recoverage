@@ -1711,13 +1711,18 @@ def _batch_request_vas() -> tuple[list[int], HTTPResponse | None]:
                 if not s:
                     raise ValueError("empty VA")
                 parsed_va = _server.parse_ascii_int(s, 16)
-                if parsed_va > VA_MAX:
-                    raise ValueError("VA exceeds 64 bits")
-                va_ints.append(parsed_va)
             except ValueError:
                 return [], invalid_va(
                     entry, f"unparseable VA {entry!r}; expected hex like 0x10001000"
                 )
+            # Range-checked outside the parse arm, so a well-formed VA past the
+            # address space gets the same "VA out of range" answer the integer
+            # arm gives it.  Raising it inside the try answered "unparseable VA
+            # '0x1'0000000000000000'; expected hex like 0x10001000" for a string
+            # that parsed perfectly, naming the format as the fault.
+            if parsed_va > VA_MAX:
+                return [], invalid_va(entry, f"VA out of range (max 0x{VA_MAX:x})")
+            va_ints.append(parsed_va)
         else:
             return [], invalid_va(entry, "VAs must be hex strings or integers")
 
