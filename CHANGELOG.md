@@ -332,6 +332,15 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `sleep` beside its two reads and the loop uses it, so the whole poll is
   driven from one place. Production behaviour is unchanged: the function is
   `time.sleep` under another name.
+- **A `[targets.X].binary` outside the project tree was read and served.**
+  The disassembly and raw-byte endpoints load the binary a project's
+  `rebrew-project.toml` names, and the value was joined onto the project root
+  without a containment check: a parent hop or an absolute path in the file
+  made `/asm` and `/bytes` answer with the bytes of any file the process can
+  open. A configured binary now has to resolve inside the project tree (a
+  symlink out of it is refused too), and the refusal is logged, so a target
+  with no binary configured and one whose binary is out of bounds are
+  distinguishable in the log.
 - **A Potato Mode coverage failure could split the log line that records it.**
   The "coverage unavailable" warning names the coverage directory and the
   parse error that made it unavailable, and it claims to mirror the API's

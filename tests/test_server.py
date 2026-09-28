@@ -421,6 +421,62 @@ class TestPathHelpers:
         ):
             assert _find_dll_path("GAME") == Path("/proj/bin/game.dll")
 
+    def test_find_dll_path_refuses_a_binary_outside_the_tree(self, monkeypatch: Any) -> None:
+        """A configured binary naming a file outside the project is refused.
+
+        rebrew-project.toml arrives in the checkout, and `_load_dll` READS the
+        path it names and `/asm` and `/bytes` serve the bytes, so a parent hop
+        or an anchor is a read of any file the process can open.  Each value
+        below is one of the shapes that gets out of the tree, and the answer is
+        the refusal the /src and /original routes give a path that escapes
+        theirs.
+        """
+        from unittest.mock import patch
+
+        from recoverage import server as srv
+
+        escaping = (
+            "/etc/hostname",
+            "../../outside.dll",
+            "..",
+            "bin/../../outside.dll",
+            "./../outside.dll",
+        )
+        for filename in escaping:
+            with (
+                patch.object(srv, "_project_dir", return_value=Path("/proj")),
+                patch.object(
+                    srv, "_get_targets_config", return_value={"GAME": {"filename": filename}}
+                ),
+            ):
+                assert _find_dll_path("GAME") is None, f"{filename!r} was served from outside /proj"
+
+    def test_find_dll_path_refuses_a_symlink_out_of_the_tree(self, tmp_path: Path) -> None:
+        """Containment is decided on the RESOLVED path, so a link out of the
+        tree is refused too: ``bin/game.dll`` inside the project is plain and
+        relative, and the file it names is not."""
+        from unittest.mock import patch
+
+        from recoverage import server as srv
+
+        root = tmp_path.resolve()
+        outside = root.parent / f"outside-{root.name}.dll"
+        outside.write_bytes(b"MZ")
+        (root / "bin").mkdir(parents=True, exist_ok=True)
+        (root / "bin" / "game.dll").symlink_to(outside)
+        try:
+            with (
+                patch.object(srv, "_project_dir", return_value=root),
+                patch.object(
+                    srv,
+                    "_get_targets_config",
+                    return_value={"GAME": {"filename": str(root / "bin" / "game.dll")}},
+                ),
+            ):
+                assert _find_dll_path("GAME") is None
+        finally:
+            outside.unlink()
+
 
 # ── DB-freshness ETags ─────────────────────────────────────────────
 

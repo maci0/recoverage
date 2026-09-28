@@ -26,7 +26,12 @@ tests enumerate:
   section and target names into a table, a JSON document, a CSV file and a
   Markdown file, each with its own escaping rule. A wrong answer from either
   is a reader shown the wrong function or a spreadsheet executing a formula,
-  neither of which a status code can show.
+  neither of which a status code can show;
+* ``rebrew-project.toml``, the other untrusted document this package reads: it
+  arrives in the checkout rather than over a socket, and it names the coverage
+  directory, the target ids the dashboard offers, and the binary whose bytes
+  ``/asm`` and ``/bytes`` serve. It gets both arms the documents get, and the
+  pair assertion the reader itself is the far side of.
 
 No coverage-guided fuzzer is available offline, so the harness is a seeded
 mutation engine: a hand-written corpus of real-shaped seeds (the spellings the
@@ -57,7 +62,7 @@ from urllib.parse import unquote, urlsplit
 
 import pytest
 from conftest import HAS_DB, WSGI_PEER, decode_body, get_first_target, wsgi_request
-from coverage_fixture import cell, write_coverage
+from coverage_fixture import build_synthetic_coverage, cell, write_coverage
 from rebrew.coverage_toml import CoverageSnapshot, Function, load_coverage
 from typer.testing import CliRunner
 
@@ -3816,3 +3821,325 @@ class TestCliRendersHostileDocumentValues:
         assert section.replace("|", cli._MD_PIPE).translate(cli._MD_LINE_BREAKS) in body, (
             f"the section name did not survive the Markdown export: {body!r}"
         )
+
+
+# ── rebrew-project.toml ────────────────────────────────────────────
+
+#: The value the config escaping assertions are written against, the same
+#: canary the document campaign uses: markup, a quote and a scheme at once.
+_HOSTILE_TARGET_ID = '<script>alert("x")</script>'
+
+#: Target ids a project's own config can carry.  The file is untrusted input
+#: like a coverage document — it arrives in the checkout — and a target id is
+#: read verbatim into the API payload, the SPA dropdown, the Potato section
+#: tabs and the CLI's own tables, so every one of these is a value that
+#: crosses four renderers.
+_CONFIG_TARGET_IDS = (
+    "FAKEDLL",
+    "demo",
+    "",
+    "..",
+    "a b",
+    "demo.dll",
+    "démo",
+    "démo",
+    _HOSTILE_TARGET_ID,
+    "a\nb",
+    "a\x00b",
+    'a"b',
+    "a\\b",
+    "a\tb",
+    "0x10",
+    "\u0664\u0660\u0669\u0666",
+    "a\u2028b",
+    "a" * 200,
+    "",
+)
+
+#: ``[targets.X].binary`` values, which name a file the process then READS
+#: and whose bytes ``/asm`` and ``/bytes`` serve.  A parent hop, an anchor and
+#: a Windows drive spelling are in the pool because each is a way out of the
+#: project tree that the join alone does not stop.
+_CONFIG_BINARIES = (
+    "bin/game.dll",
+    "bin/game.exe",
+    "orig/game.dll",
+    "",
+    "   ",
+    "..",
+    "../../outside.dll",
+    "/etc/hostname",
+    "C:/windows/system32/drivers/etc/hosts",
+    "bin/../bin/game.dll",
+    "bin\\game.dll",
+    "game\x00.dll",
+    "\u2028.dll",
+    "d" * 300,
+    "",
+)
+
+#: ``[project].db_dir`` values as TOML value text, so a round can also draw
+#: the non-string shapes a hand edit leaves behind.
+_CONFIG_DB_DIRS = (
+    '"db"',
+    '""',
+    '"   "',
+    '".."',
+    '"/etc"',
+    '"db/../db"',
+    '"nope"',
+    "5",
+    '["db"]',
+    "true",
+)
+
+
+def _config_seeds() -> list[bytes]:
+    """The well-formed project config plus the shapes worth mutating."""
+    whole = (
+        '[project]\ndb_dir = "db"\ndefault_target = "demo"\n\n'
+        '[targets.demo]\nbinary = "bin/game.dll"\nreversed_dir = "src/demo"\nmarker = "DEMO"\n'
+    )
+    hostile = (
+        f'[project]\ndb_dir = "db"\n\n[targets."{_HOSTILE_TARGET_ID}"]\n'
+        'binary = "../../outside.dll"\n'
+    )
+    return [
+        whole.encode(),
+        hostile.encode(),
+        b"",
+        b"[project\ndb_dir = ]\n",
+        whole.encode()[: len(whole) // 2],
+    ]
+
+
+#: Grammar tokens for the config grammar itself.  Byte mutation of a TOML
+#: file mostly produces another syntax error, so the tokens are what reach the
+#: readers' type branches: a table where a value is expected, an array where
+#: a string is, a key that is not a name.
+_CONFIG_TOKENS = (
+    b"[project]\n",
+    b"[targets]\n",
+    b"[[targets]]\n",
+    b'db_dir = "db"\n',
+    b"db_dir = 5\n",
+    b'db_dir = ["db"]\n',
+    b'db_dir = ""\n',
+    b'binary = "bin/game.dll"\n',
+    b'binary = "../../outside.dll"\n',
+    b'binary = "/etc/hostname"\n',
+    b"binary = 5\n",
+    b"binary = []\n",
+    b"reversed_dir = 5\n",
+    b"marker = 5\n",
+    b"default_target = 5\n",
+    b'[targets.""]\n',
+    b'[targets."<script>"]\n',
+    b"[targets.]\n",
+    b"project = 5\n",
+    b"targets = 5\n",
+    b"targets = []\n",
+    b"project = []\n",
+    b"\x00",
+    b"\xff\xfe",
+    b"\xef\xbb\xbf",
+    b'"' + b"a" * 200 + b'"',
+)
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+class TestProjectConfigDocument:
+    """``rebrew-project.toml`` is the other untrusted document this package reads.
+
+    It arrives in the checkout rather than over a socket, which is the only
+    difference from a coverage document: it names the coverage directory, the
+    target ids the dashboard offers, and the binary whose bytes ``/asm`` and
+    ``/bytes`` serve.  Nothing about it is validated beyond what
+    ``rebrew.workspace`` reads out of it, so it gets the same campaign as the
+    documents: a file that either resolves or raises ``WorkspaceConfigError``,
+    and either way no endpoint crashes, no error body leaks a traceback, and
+    the HTML surfaces close.
+
+    Two arms, because they reach different code.  Byte mutation lands on the
+    parse refusal and the type branches.  The drawn arm builds a config the
+    parser accepts, so every round reaches the consumers themselves, and adds
+    the two properties a status code cannot show: a declared target id arrives
+    at ``/api/targets`` byte for byte (a mangled one silently retargets a
+    dashboard), and a declared ``binary`` never names a file outside the
+    project tree (the bytes of one would be served from ``/asm``).
+    """
+
+    PATHS = (
+        "/api/targets",
+        "/api/health",
+        "/potato",
+        f"/api/targets/{_DOC_TARGET}/stats",
+    )
+
+    @pytest.fixture
+    def project(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        """A project directory holding a build and nothing else.
+
+        ``RECOVERAGE_DB`` names the documents so the coverage half of every
+        memo is stable across rounds; the config under test is the file the
+        campaign rewrites, and ``_project_dir`` is what rebrew's reader resolves
+        it against.
+        """
+        monkeypatch.chdir(tmp_path)
+        root = tmp_path.resolve()
+        monkeypatch.setattr(srv, "_project_dir", lambda: root)
+        monkeypatch.setenv("RECOVERAGE_DB", str(root / "db"))
+        build_synthetic_coverage(root / "db")
+        _clear_derived_caches()
+        return root
+
+    def _install(self, project: Path, data: bytes) -> None:
+        (project / "rebrew-project.toml").write_bytes(data)
+        # Both memos the config feeds: the parsed targets and the resolved
+        # target list.  Without the drop, a rewritten file of the same length
+        # inside one stat tick answers from the previous round.
+        _clear_derived_caches()
+
+    def _assert_response(self, status: str, headers: dict[str, str], body: bytes, path: str) -> str:
+        code = int(status.split()[0])
+        text = decode_body(body, headers).decode("utf-8", errors="replace")
+        assert code != 500, f"{path}: handler crashed with {status}: {text[:300]!r}"
+        assert code in _ALLOWED_STATUSES, f"{path}: unexpected status {status}"
+        for marker in _LEAK_MARKERS:
+            assert marker not in text, f"{path}: {status} leaks {marker!r}: {text[:300]!r}"
+        if path.startswith("/api/"):
+            payload = _body_json(body, headers, path)
+            if code >= 300:
+                _assert_envelope(payload, status, path)
+        else:
+            assert code != 404 or "not found" in text.lower(), f"{path}: a bare 404 from {status}"
+            assert text.rstrip().endswith("</html>"), f"{path}: the page is not a closed document"
+        return text
+
+    def _drive(self, path: str) -> tuple[str, dict[str, str], bytes, str]:
+        status, headers, body = wsgi_request("GET", path)
+        text = self._assert_response(status, headers, body, path)
+        return status, headers, body, text
+
+    def test_a_corrupt_config_never_crashes_a_reader(
+        self, project: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        runner = CliRunner()
+
+        def check(data: bytes) -> None:
+            self._install(project, data)
+            for path in self.PATHS:
+                self._drive(path)
+            result = runner.invoke(cli.app, ["stats", "--json"])
+            assert result.exit_code in (0, 1, 2), (
+                f"stats: exit {result.exit_code}: "
+                f"{type(result.exception).__name__}: {result.exception}"
+            )
+            assert "Traceback" not in result.output, "stats: a traceback reached the terminal"
+
+        _fuzz(
+            _config_seeds(),
+            check,
+            iterations=150,
+            struct_tokens=_CONFIG_TOKENS,
+            num_tokens=_CONFIG_TOKENS,
+        )
+
+    def test_a_declared_target_reaches_every_reader_intact(
+        self, project: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The pair assertions, both sides of the config boundary.
+
+        A target id the config declares is echoed at ``/api/targets`` byte for
+        byte: the SPA links every row by that id, so a mangled one is a
+        dashboard pointed at a target that does not exist.  A ``binary`` the
+        config declares resolves inside the project tree or not at all: the
+        loader READS that file and ``/asm`` and ``/bytes`` serve the bytes, so
+        a parent hop or an anchor turns a checked-in file into a read of any
+        file the process can open.
+
+        Structure-aware by construction: every value is drawn from the pools
+        above and rendered as TOML, so the round exercises the consumers rather
+        than the parse refusal.
+        """
+        rng = random.Random(FUZZ_SEED)
+        for round_index in range(FUZZ_ITERATIONS):
+            # Distinct ids: TOML refuses to declare one table twice, and a
+            # round that landed on that refusal would test the parser's error
+            # path instead of the consumers this arm is about.
+            ids = list(
+                dict.fromkeys(rng.choice(_CONFIG_TARGET_IDS) for _ in range(rng.randint(1, 3)))
+            )
+            binaries = {tid: rng.choice(_CONFIG_BINARIES) for tid in ids}
+            db_dir = rng.choice(_CONFIG_DB_DIRS)
+            lines = ["[project]", f"db_dir = {db_dir}"]
+            for tid in ids:
+                # json.dumps is a TOML basic string for everything a pool can
+                # hold, and it escapes the control characters an id may carry
+                # so the rendered file is parseable TOML.
+                lines += [f"[targets.{json.dumps(tid)}]", f"binary = {json.dumps(binaries[tid])}"]
+            text = "\n".join(lines) + "\n"
+            try:
+                self._install(project, text.encode("utf-8", "surrogatepass"))
+            except UnicodeEncodeError:  # a lone surrogate is not a file
+                continue
+            try:
+                self._check_round(project, ids, binaries)
+            except AssertionError as failure:
+                raise AssertionError(
+                    f"seed={FUZZ_SEED} round={round_index}: {failure}\nconfig was:\n{text}"
+                ) from failure
+
+    def _check_round(self, project: Path, ids: list[str], binaries: dict[str, str]) -> None:
+        status, headers, body, page = self._drive("/api/targets")
+        payload = _body_json(body, headers, "/api/targets")
+        served = payload.get("targets") if isinstance(payload, dict) else None
+        assert isinstance(served, list), f"/api/targets: no target list: {payload!r}"
+        served_ids = {entry.get("id") for entry in served if isinstance(entry, dict)}
+        if int(status.split()[0]) == 200:
+            # A config the reader accepted declares these; the payload is where
+            # the SPA's every link resolves the id.
+            for tid in ids:
+                assert tid in served_ids, (
+                    f"a declared target id is missing from /api/targets: {tid!r} "
+                    f"in {sorted(map(str, served_ids))!r}"
+                )
+        for entry in served:
+            if not isinstance(entry, dict):
+                continue
+            name = entry.get("name")
+            # The name is a DISPLAY label: a blank one comes from a blank id
+            # the config declared, and the id is what every link resolves, so
+            # the label is not the contract here.  What must not happen is a
+            # path: the name is built with Path(...).name, so the directories
+            # of a configured binary never reach the dropdown.
+            assert isinstance(name, str), f"/api/targets: a target with no name: {entry!r}"
+            # Path(...).name strips the separators of the platform it runs on,
+            # and only those: on POSIX a backslash is a legal filename
+            # character, so a target id spelled ``a\b`` keeps it and the
+            # assertion is the forward slash every flavour strips.
+            assert "/" not in name, f"/api/targets: a display name carries a separator: {name!r}"
+        self._drive("/potato")
+        assert _HOSTILE_TARGET_ID not in page, (
+            f"the hostile target id reached the page unescaped: {page[:300]!r}"
+        )
+        # The containment rule, on the reader rather than on the response.
+        for tid, binary in binaries.items():
+            resolved = srv._find_dll_path(tid)
+            if resolved is None:
+                continue
+            assert not _escapes(resolved, project), (
+                f"[targets.{tid}].binary = {binary!r} resolved outside the project: {resolved}"
+            )
+
+    def _project(self) -> Path:
+        return srv._project_dir()
+
+
+def _escapes(candidate: Path, project_root: Path) -> bool:
+    """Whether *candidate* names something outside *project_root*."""
+    try:
+        resolved = candidate.resolve()
+    except (OSError, ValueError):
+        return True
+    return not resolved.is_relative_to(project_root.resolve())

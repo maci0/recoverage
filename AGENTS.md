@@ -1503,7 +1503,7 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
 - The untrusted-input surfaces (query parameters, the batch POST body, request
   headers, the `/potato` query string, the `/src` and `/original` path
   segments, the access-gating headers, the `--token` gate, the `RECOVERAGE_*`
-  readers) are fuzzed
+  readers, and `rebrew-project.toml`) are fuzzed
   by `tests/test_fuzz.py`: a seeded mutation engine over a
   hand-written corpus, driven by `RECOVERAGE_FUZZ_SEED` / `RECOVERAGE_FUZZ_ITERATIONS`
   so a failure replays. A failure names the seed and the round it failed in,
@@ -1532,7 +1532,18 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   and the assertion would be pinning the test runner. HTML-escaping assertions
   come in pairs: the grid view escapes through SimpleTemplate, the functions
   view's empty-result message through `potato._esc`, and a regression in either
-  one has to be visible from the response alone. The access-gating headers
+  one has to be visible from the response alone. `rebrew-project.toml`
+  (`TestProjectConfigDocument`) is the untrusted document that does not arrive
+  over a socket: it names the coverage directory, the target ids
+  `/api/targets` serves, and the binary `server._load_dll` reads for `/asm`
+  and `/bytes`, so its campaign carries the same two arms as the documents'
+  (byte mutation onto the parse refusal, drawn values onto the consumers) plus
+  the two pair assertions a status code cannot show, that a declared target id
+  reaches `/api/targets` byte for byte and that a declared `binary` resolves
+  inside the project tree. A `[targets.X].binary` that does not is refused by
+  `_find_dll_path` and logged, and the test
+  `TestPathHelpers::test_find_dll_path_refuses_a_binary_outside_the_tree` pins
+  the shapes it has to refuse. The access-gating headers
   (`Origin`/`Host`, `REMOTE_ADDR`, `X-Request-ID`, `Idempotency-Key`) and the
   `--token` gate (`Authorization: Bearer`, `?token=`, the `recoverage_token`
   cookie) are the

@@ -1557,7 +1557,8 @@ def _find_dll_path(target: str) -> Path | None:
     the caller then reports a target-specific error instead of silently
     serving a different target's DLL (previously fell back to SERVER's
     binary, which produced plausible-but-wrong disassembly for config-less
-    targets).
+    targets) — and when the configured path names something outside the
+    project tree, which is a refusal of the file rather than of the target.
     """
     targets = _get_targets_config()
     if target not in targets:
@@ -1566,7 +1567,30 @@ def _find_dll_path(target: str) -> Path | None:
     filename = t_info.get("filename", "") if isinstance(t_info, dict) else ""
     if not filename:
         return None
-    return _project_dir() / filename
+    root = _project_dir()
+    candidate = root / filename
+    # rebrew-project.toml is untrusted input like a coverage document: it
+    # arrives in the checkout, and `[targets.X].binary` is read here and its
+    # bytes served from /asm and /bytes. The loader already joined the value
+    # onto the root, so containment is the rule left: an absolute value, a
+    # parent hop, or a symlink out of the tree would otherwise name any file
+    # the process can read. The resolve settles all three at once, and a
+    # non-strict resolve normalizes a path that does not exist, which is the
+    # common case for a stale config.
+    try:
+        resolved = candidate.resolve()
+    except (OSError, ValueError):
+        # A name the platform cannot resolve at all (a NUL byte) is a
+        # refusal, not a path.
+        resolved = None
+    if resolved is None or not resolved.is_relative_to(root.resolve()):
+        _log.warning(
+            "Refusing [targets.%s].binary outside the project tree: %s",
+            _log_safe(target),
+            _log_safe(filename),
+        )
+        return None
+    return candidate
 
 
 def _cache_dll_unavailable(
