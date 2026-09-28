@@ -15,6 +15,7 @@ than on the adapter around them.
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 import os
 import socket
@@ -50,6 +51,12 @@ _log = logging.getLogger("recoverage")
 #: listener binds, and :func:`recoverage.config.active_config` reports the
 #: values the process runs with.
 _MAX_CONNECTIONS = config.DEFAULT_MAX_CONNECTIONS
+
+#: Seconds a refused peer is told to wait, in the ``Retry-After`` header and in
+#: the ``retry_after`` field of the body, so the two agree as they do on every
+#: other limit refusal in the package (a client reading the documented JSON
+#: contract gets the same field whichever limit it hit).
+_REFUSAL_RETRY_AFTER_SECONDS = 5
 
 
 def configure_transport(*, max_connections: int, client_timeout_seconds: int) -> None:
@@ -209,13 +216,24 @@ class _ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
         server that is merely busy produce the same count and no way to tell
         them apart.
         """
-        body = b'{"error": "too many connections", "code": "rate_limited"}'
+        # The same `error` / `code` / `detail` trio every `_json_err` body
+        # carries, plus the `retry_after` the header below already sends: this
+        # response is written by hand because no WSGI request exists yet, not
+        # because the documented envelope does not apply to it.
+        body = json.dumps(
+            {
+                "error": "too many connections",
+                "code": "rate_limited",
+                "detail": "the admission cap is full",
+                "retry_after": _REFUSAL_RETRY_AFTER_SECONDS,
+            }
+        ).encode("utf-8")
         with contextlib.suppress(OSError):
             request.sendall(
                 b"HTTP/1.1 503 Service Unavailable\r\n"
                 b"Content-Type: application/json\r\n"
                 b"Connection: close\r\n"
-                b"Retry-After: 5\r\n"
+                + f"Retry-After: {_REFUSAL_RETRY_AFTER_SECONDS}\r\n".encode("ascii")
                 + f"Content-Length: {len(body)}\r\n\r\n".encode("ascii")
                 + body
             )

@@ -145,7 +145,10 @@ export function useSelection({
           section === ".bss"
             ? { bytes: MSG.BYTES_BSS, inspector: null }
             : bytesPane(
-                sliceAt((sectionOffset ?? 0) + cell.start, section === ".text" ? size : 16),
+                sliceAt(
+                  sectionOffset === null ? null : sectionOffset + cell.start,
+                  section === ".text" ? size : 16,
+                ),
                 base,
               );
         setPanes({

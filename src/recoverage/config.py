@@ -363,7 +363,7 @@ def cors_origins() -> list[str]:
     for item in (part.strip() for part in raw.split(",")):
         if not item:
             continue
-        if any(ord(ch) < 32 or ord(ch) == 127 for ch in item):
+        if any(ord(ch) < 32 or 127 <= ord(ch) <= 159 for ch in item):
             raise ConfigError(f"RECOVERAGE_CORS_ORIGIN: {item!r} contains a control character")
         origins.append(item)
     return origins

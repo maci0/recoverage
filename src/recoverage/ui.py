@@ -277,7 +277,7 @@ def _finalized_shell(variant: _Variant) -> bytes:
     and a long freshness lifetime would pin the browser to an old shell.
     """
     body, encoding, etag = variant
-    if _if_none_match_matches(request.headers.get("If-None-Match", ""), etag):
+    if _if_none_match_matches(_header("If-None-Match", ""), etag):
         raise _not_modified(etag)
     return _finalized(
         response,

@@ -62,7 +62,7 @@ export function SearchResults({
               )}
               <span className="shrink-0 text-muted">{hex(result.va, 8)}</span>
               {section !== null && result.section === section ? (
-                <span className="shrink-0 text-accent">in {section}</span>
+                <span className="shrink-0 text-accent">in {isolate(section)}</span>
               ) : null}
             </button>
           </li>

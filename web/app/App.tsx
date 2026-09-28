@@ -1184,13 +1184,13 @@ function describeMapArea(
   }
   if (active.cells === undefined) {
     if (cellError?.section === active.name) {
-      return `Could not load the ${active.name} map.`;
+      return `Could not load the ${isolate(active.name)} map.`;
     }
-    return `Loading ${active.name}.`;
+    return `Loading ${isolate(active.name)}.`;
   }
   const filtered =
     filters.size > 0 ? ` Filtered by ${[...filters].toSorted().join(", ")}.` : "";
-  return `${active.name} map, ${count(active.cells.length)} blocks.${filtered}`;
+  return `${isolate(active.name)} map, ${count(active.cells.length)} blocks.${filtered}`;
 }
 
 function pending(text: string): ComponentChildren {

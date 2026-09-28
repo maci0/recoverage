@@ -1677,13 +1677,13 @@ def export(
     """
     _use_utf8_stdout()
     if json_flag and output_format is not ExportFormat.json:
-        _secho(
+        _fail(
             f"Error: --json and --format {output_format.value} cannot be "
             "combined: --json is shorthand for --format json.",
-            fg=typer.colors.RED,
-            err=True,
+            f"--json and --format {output_format.value} cannot be combined",
+            2,
+            json_flag,
         )
-        raise typer.Exit(2)
     if json_flag:
         output_format = ExportFormat.json
     json_output = output_format is ExportFormat.json
@@ -1993,6 +1993,10 @@ def regen(no_color: bool = _no_color_option()) -> None:
     from recoverage.server import _project_dir
 
     _use_utf8_stdout()
+    # `_run_regen` prints its failures to stderr and they carry the coverage
+    # directory, so this command needs the stderr arm `serve` and
+    # `recoverage config` both take before the logging filter is installed.
+    _use_utf8_stderr()
     _check_env_or_exit()
     written = _run_regen(_project_dir())
     if written:
@@ -2113,7 +2117,9 @@ def config_cmd(
 
 # Group flags that answer the invocation themselves, so ``recoverage --help``
 # must not grow a subcommand behind them.
-_GROUP_TERMINAL_FLAGS = frozenset({"-h", "--help", "--version", "-V", "--show-completion"})
+_GROUP_TERMINAL_FLAGS = frozenset(
+    {"-h", "--help", "--version", "-V", "--show-completion", "--install-completion"}
+)
 
 
 def _argv_with_default_command(argv: list[str]) -> list[str]:

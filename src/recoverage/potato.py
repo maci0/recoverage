@@ -1858,18 +1858,29 @@ def _build_filter_data(
     search_query: str,
     used_accesskeys: set[str],
     view: str = "",
+    status_filter: str = "",
 ) -> list[tuple[str, str, str, bool, str, str, _AccessKey]]:
     # A pill is a single letter in the state's colour, so it carries the
     # state's full name in its title: a lone V or X is a lookup the legend
     # two hundred pixels away can answer, and a pointer answers instantly.
     # The "All" pill has no letter of its own to claim: it spells the state
     # every filter is off, so it takes no shortcut.
-    # `view` rides along so a pill pressed from inside the function list stays
-    # in the function list rather than dropping the reader into the grid.
+    # `view` and `status_filter` both ride along for the reason
+    # `_section_tab_data` gives: a pill pressed from inside the function list
+    # stays in the function list, and under the criterion the list was
+    # narrowed to, rather than dropping the reader into the grid with every
+    # status back on.
     view_arg = view or None
+    status_arg = status_filter or None
     filter_btn_data: list[tuple[str, str, str, bool, str, str, _AccessKey]] = [
         (
-            _build_url(target, section, search=search_query, view=view_arg),
+            _build_url(
+                target,
+                section,
+                search=search_query,
+                status=status_arg,
+                view=view_arg,
+            ),
             "All",
             TEXT_COLOR if not active_filters else MUTED_COLOR,
             not active_filters,
@@ -1887,7 +1898,12 @@ def _build_filter_data(
         filter_btn_data.append(
             (
                 _build_url(
-                    target, section, active_filters ^ {f}, search=search_query, view=view_arg
+                    target,
+                    section,
+                    active_filters ^ {f},
+                    search=search_query,
+                    status=status_arg,
+                    view=view_arg,
                 ),
                 label,
                 FILTER_COLORS[f],
@@ -2704,7 +2720,7 @@ def _render_potato_inner(
         view,
     )
     filter_btn_data = _build_filter_data(
-        target, section, active_filters, search_query, used_accesskeys, view
+        target, section, active_filters, search_query, used_accesskeys, view, status_filter
     )
 
     # Defaults for whichever view the request selects.
