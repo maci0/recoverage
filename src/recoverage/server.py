@@ -420,7 +420,7 @@ def _declared_content_length() -> int | None:
         length = parse_ascii_int(raw)
     except ValueError:
         return None
-    return length if length >= 0 else None
+    return length
 
 
 def _body_is_chunked() -> bool:
@@ -849,9 +849,9 @@ def _section_summary(section: Any) -> dict[str, Any]:
     covered_bytes = 0
     total_functions = 0
     for cell in section.cells:
-        names = len(cell.functions)
         if cell.state == "none":
             continue
+        names = len(cell.functions)
         size = cell.size
         covered_bytes += size
         total_functions += names

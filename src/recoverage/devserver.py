@@ -240,6 +240,11 @@ _CLIENT_SOCKET_TIMEOUT_SECONDS = config.DEFAULT_CLIENT_TIMEOUT_SECONDS
 #: soon after the tab goes quiet.
 _KEEPALIVE_IDLE_SECONDS = 15
 
+# Longest request line the server will look at. The read asks for one byte
+# more, so a line over the limit arrives whole and is refused rather than
+# parsed as a truncated request.
+_MAX_REQUEST_LINE = 65536
+
 #: Status codes whose response carries no body by definition (RFC 9110 15), so a
 #: missing Content-Length on one is correct and the connection stays usable.
 #: Strings, because the wire status line is the only place they are read.
@@ -360,9 +365,9 @@ class _KeepAliveRequestHandler(_QuietTimeoutRequestHandler):
             self._serve_requests()
 
     def _serve_requests(self) -> None:
-        self.raw_requestline = self.rfile.readline(65537)
+        self.raw_requestline = self.rfile.readline(_MAX_REQUEST_LINE + 1)
         while self.raw_requestline:
-            if len(self.raw_requestline) > 65536:
+            if len(self.raw_requestline) > _MAX_REQUEST_LINE:
                 self.requestline = ""
                 self.request_version = ""
                 self.command = ""
@@ -377,7 +382,7 @@ class _KeepAliveRequestHandler(_QuietTimeoutRequestHandler):
             if self.close_connection:
                 return
             self.connection.settimeout(_KEEPALIVE_IDLE_SECONDS)
-            self.raw_requestline = self.rfile.readline(65537)
+            self.raw_requestline = self.rfile.readline(_MAX_REQUEST_LINE + 1)
 
     def _run_wsgi(self) -> None:
         # The two casts are typeshed gaps, not laundered evidence:

@@ -267,6 +267,8 @@ def _data_cache_checkout(
     - Leader that never came back: the wait expires, the caller takes the claim
       over and builds (the same answer as the failed-leader case above, from a
       claim that is actually released afterwards).
+    - ``(None, None)``: a live leader registered between the wait expiring and
+      the reclaim. The caller builds beside it, unclaimed.
     """
     now = clock.monotonic()
     with _DATA_CACHE_LOCK:
@@ -300,9 +302,20 @@ def _data_cache_checkout(
         # for this key would pay the same full wait again, and the entry would
         # outlive the process.  The `is event` guard means a leader that
         # released (or was superseded by an earlier reclaim) is left alone.
+        # The `is event` guard means a leader that released (or was
+        # superseded by an earlier reclaim) is left alone — and the same guard
+        # has to decide the install.  A claim registered in between (an
+        # earlier follower already reclaimed and a later request became the
+        # leader) belongs to a LIVE builder, and overwriting it would
+        # disarm its single-flight: its _data_cache_build_done identity check
+        # would no longer match, so the claim would never be released and a
+        # third request would start a second build beside it.  Building
+        # without a claim is the accepted duplicate cost; displacing a live
+        # leader is not.
         current = _DATA_CACHE_BUILDING.get(key)
-        if current is not None and current[0] is event:
-            del _DATA_CACHE_BUILDING[key]
+        if current is not None and current[0] is not event:
+            return None, None
+        _DATA_CACHE_BUILDING.pop(key, None)
         reclaimed = threading.Event()
         _DATA_CACHE_BUILDING[key] = (
             reclaimed,
@@ -387,19 +400,18 @@ def _clear_list_total_cache() -> None:
 
 
 def _function_total(
-    functions: Sequence[Function],
     snap_fingerprint: tuple[int, int] | None,
     target: str,
     status_filter: str | None,
     search: str | None,
-    rows: Sequence[Function] | None = None,
+    rows: Sequence[Function],
 ) -> int:
-    """Rows matching the list endpoint's filter, memoized per snapshot.
+    """*rows* count, memoized per snapshot.
 
     The count is served from the memo only when the filter and the coverage
-    directory both match; otherwise the scan runs and repopulates it.  A None
-    fingerprint (no coverage document) never memoizes — the endpoint is about
-    to 503 and a value derived from that state must not outlive it.
+    directory both match; otherwise it is taken and the memo repopulated.  A
+    None fingerprint (no coverage document) never memoizes — the endpoint is
+    about to 503 and a value derived from that state must not outlive it.
 
     *rows* is the caller's own ``_filtered_functions`` result for the same
     filter.  The list endpoint needs the count and the page from the same pass
@@ -415,11 +427,7 @@ def _function_total(
             cached = _LIST_TOTAL_CACHE.get(key)
         if cached is not None:
             return cached
-    total = (
-        len(rows)
-        if rows is not None
-        else len(_filtered_functions(functions, status_filter, search))
-    )
+    total = len(rows)
     # The watermark re-check every other coverage-derived memo publishes
     # through: a rebuild that committed after the caller took its token moved
     # the fingerprint, so these rows were not read from the build the key
@@ -1339,6 +1347,10 @@ def handle_api_data(target: str) -> bytes | HTTPResponse:
 # one batch lookup accepts.
 _MAX_BATCH_LOOKUP = 500
 
+# Page size the function list serves when ?limit= is absent or unparseable:
+# one constant, so the two answers cannot drift apart.
+_DEFAULT_PAGE_LIMIT = 50
+
 # Bound on the batch-lookup request body: the payload is fully parsed before
 # the _MAX_BATCH_LOOKUP cap applies, so an unbounded read would let one
 # request pin memory and CPU.  The read takes cap + 1 so an oversized body
@@ -1489,9 +1501,12 @@ def handle_api_functions_list(target: str) -> bytes | HTTPResponse:
         )
     sort_param = query_param("sort", "va").strip()  # field:dir
     try:
-        limit = min(max(_page_int(query_param("limit", "50")), 1), _MAX_BATCH_LOOKUP)
+        limit = min(
+            max(_page_int(query_param("limit", str(_DEFAULT_PAGE_LIMIT))), 1),
+            _MAX_BATCH_LOOKUP,
+        )
     except ValueError:
-        limit = 50
+        limit = _DEFAULT_PAGE_LIMIT
     try:
         # Upper bound keeps a giant ?offset= from naming a page the row loop
         # would have to walk to before it discovered there is nothing there.
@@ -1527,7 +1542,7 @@ def handle_api_functions_list(target: str) -> bytes | HTTPResponse:
         # different builds — the guarantee `read_snapshot` used to buy with a
         # deferred read transaction.
         rows = _filtered_functions(coverage.functions, status_filter, search)
-        total = _function_total(coverage.functions, snap, target, status_filter, search, rows)
+        total = _function_total(snap, target, status_filter, search, rows)
         rows.sort(
             key=lambda fn: _server.function_sort_key(fn, sort_field),
             reverse=sort_dir == "DESC",
@@ -1696,8 +1711,6 @@ def _batch_request_vas() -> tuple[list[int], HTTPResponse | None]:
                 if not s:
                     raise ValueError("empty VA")
                 parsed_va = _server.parse_ascii_int(s, 16)
-                if parsed_va < 0:
-                    raise ValueError("negative VA")
                 if parsed_va > VA_MAX:
                     raise ValueError("VA exceeds 64 bits")
                 va_ints.append(parsed_va)
@@ -2175,11 +2188,17 @@ def _do_regen(remote: str) -> bytes | HTTPResponse:
     # stale target dropdown).
     _clear_derived_caches_logged("before regen")
 
-    root = _project_dir()
-    _log.info("Regen started from %s", remote, extra=_regen_log_fields("started"))
+    # The counters open before the guard because every arm below closes them,
+    # and the BaseException arm reads started_at.  Resolving the project root
+    # is inside it: it touches the filesystem (a deleted cwd raises), and an
+    # exception escaping there would skip _regen_failed, leave REGEN in flight,
+    # and answer an HTML 500 instead of the JSON contract every other outcome
+    # uses.
     started_at = clock.monotonic()
     _metrics.REGEN.start()
     try:
+        root = _project_dir()
+        _log.info("Regen started from %s", remote, extra=_regen_log_fields("started"))
         run_regen(root)
     except RegenDbMismatchError as e:
         # A setting this package reads and rebrew cannot honour: the regen was
@@ -2229,7 +2248,7 @@ def _do_regen(remote: str) -> bytes | HTTPResponse:
         # record, then let the exception through: it is the server's exit, not
         # this handler's to swallow.
         elapsed = _elapsed_s(started_at)
-        _metrics.REGEN.finish(False, elapsed * 1000.0)
+        _metrics.REGEN.finish(False, _elapsed_ms(started_at))
         _log.error(
             "Regen interrupted after %.1fs: %s",
             elapsed,
@@ -2247,7 +2266,7 @@ def _do_regen(remote: str) -> bytes | HTTPResponse:
         # numbers as current.  Both outcomes go through the same tail.
         _clear_derived_caches_logged("after regen")
     elapsed = _elapsed_s(started_at)
-    _metrics.REGEN.finish(True, elapsed * 1000.0)
+    _metrics.REGEN.finish(True, _elapsed_ms(started_at))
     _log.info(
         "Regen completed successfully in %.1fs", elapsed, extra=_regen_log_fields("ok", elapsed)
     )
@@ -2257,6 +2276,16 @@ def _do_regen(remote: str) -> bytes | HTTPResponse:
 def _elapsed_s(started_at: float) -> float:
     """Seconds since *started_at* on the injectable clock."""
     return clock.monotonic() - started_at
+
+
+def _elapsed_ms(started_at: float) -> float:
+    """Milliseconds since *started_at*, the unit ``REGEN.finish`` records.
+
+    The inverse of :func:`_elapsed_s`, which every log line in the regen
+    lifecycle reads.  Written as a named conversion so the metric's unit and
+    the log's cannot drift apart at a call site.
+    """
+    return _elapsed_s(started_at) * 1000.0
 
 
 def _regen_log_fields(outcome: str, elapsed_s: float | None = None) -> dict[str, dict[str, object]]:
@@ -2288,4 +2317,4 @@ def _regen_failed(started_at: float, reason: str, *args: object) -> None:
         *args,
         extra=_regen_log_fields("failed", elapsed),
     )
-    _metrics.REGEN.finish(False, elapsed * 1000.0)
+    _metrics.REGEN.finish(False, _elapsed_ms(started_at))

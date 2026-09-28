@@ -1691,7 +1691,7 @@ def _build_progress(
     seg_none = max(0, 100 - seg_exact - seg_reloc - seg_near_match - seg_stub - seg_padding)
     return {
         "sec_size": sec_size,
-        "coverage_pct": (covered_bytes / sec_size * 100) if sec_size > 0 else 0,
+        "coverage_pct": coverage_pct(covered_bytes, sec_size) if sec_size > 0 else 0,
         "total_fn": total_fn,
         "matched_fn": matched_fn,
         "segments": [
