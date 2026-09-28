@@ -1613,9 +1613,12 @@ def _search_functions(coverage: CoverageSnapshot, search_query: str) -> set[str]
     returns.
     A global's address is matched in both spellings ``0x%08x`` and ``0x%x``
     can produce, so an address copied out of a Potato global row matches when
-    pasted into the search box.  A function row matches ``vaStart`` only, the
-    one spelling a ``.text`` cell stores; a function's own table prints the
-    padded form, so that one does not match (see the reader below).
+    pasted into the search box.  A function's address is matched the same way
+    in both spellings, for the same reason: the cell panel prints the padded
+    form, which is not what ``vaStart`` spells below 0x10000000, so matching
+    ``vaStart`` alone highlighted nothing for a reader who pasted the address
+    the page had just shown.  ``vaStart`` is still matched, because it is the
+    spelling a ``.text`` cell stores.
 
     The row cap applies to the rows selected, not to the returned set: a
     project with more matches than the cap still dims every name it found.
@@ -1642,6 +1645,18 @@ def _search_functions(coverage: CoverageSnapshot, search_query: str) -> set[str]
             if fold_match_folded(fn.name, needle)
             or fold_match_folded(fn.vaStart, needle)
             or fold_match_folded(fn.symbol, needle)
+            # The address the reader copied out of this page, in both spellings
+            # ``0x%08x`` and ``0x%x`` can produce — the two the globals arm
+            # below and the functions view (``_render_function_list``) already
+            # match.  ``vaStart`` alone is the string a ``.text`` cell stores,
+            # which is not the string the cell panel PRINTS for an address below
+            # 0x10000000: a target whose functions sit at 0x401000 spells that
+            # ``vaStart`` as 0x401000 and the panel as 0x00401000, so pasting the
+            # address the page showed highlighted nothing while the functions
+            # view found the row.  Gated on match_hex for the same reason as the
+            # globals arm: a term no hex address can hold skips both formats.
+            or (match_hex and fold_match_folded(f"0x{fn.va:08x}", needle))
+            or (match_hex and fold_match_folded(f"0x{fn.va:x}", needle))
         ),
         key=lambda fn: (fn.name, fn.vaStart),
     ):

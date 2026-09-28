@@ -287,6 +287,28 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **`retry_after` in a 429 body and the `Retry-After` beside it could
+  disagree.** Every limit the server reports now puts the header's own whole
+  number of seconds in the JSON, and the key is an integer wherever it
+  appears. The regen cooldown sent a rounded float (`4.2`) beside a ceiled
+  header (`5`), so a client that read the body waited 4.2 seconds and was
+  refused again by the cooldown it had just been told about; the lock and the
+  event-stream cap sent the same value as a float the header spelled as an
+  integer, leaving a client reading the key to handle both types.
+
+- **A `/bytes` refusal for an impossible file offset carried no reason.** The
+  negative-file-offset guard answered `{"error": "offset beyond section
+  bounds"}` with an empty `detail`, the one answer in that endpoint a caller
+  could not act on. It now names the section and the offset the document
+  carries, like the two bounds refusals beside it.
+
+- **Potato Mode's search ignored the address it had just printed.** The cell
+  panel renders an address padded to eight hex digits, and the grid's search
+  matched only the unpadded `vaStart` spelling a `.text` cell stores, so for a
+  target whose functions sit below `0x10000000` a reader who copied the
+  address off the page highlighted nothing. It now matches both spellings, as
+  the functions view and the API's `?search=` already did.
+
 - **A malformed `Content-Length` was read as no `Content-Length` at all.** A
   header the ASCII parse refuses (`1_0`, a non-ASCII digit run, a negative or
   a non-numeric value) fell through to the unframed read, so the request was

@@ -1010,12 +1010,14 @@ def handle_api_events() -> Any:
                     "error": "too many event-stream clients",
                     "code": "rate_limited",
                     "detail": f"max {_SSE_MAX_CLIENTS} concurrent /api/events connections",
-                    "retry_after": _SSE_POLL_INTERVAL_SECONDS,
+                    "retry_after": int(_SSE_POLL_INTERVAL_SECONDS),
                 },
                 # One value in both places: a client that reads the header
                 # instead of the body (the auth throttle and /api/regen send
                 # the same header) must not be told a different wait than one
-                # the JSON states.
+                # the JSON states.  An int in both, which is the type every
+                # 429's `retry_after` now carries too, so one client reads one
+                # JSON type out of the key whichever refusal it hit.
                 Retry_After=str(int(_SSE_POLL_INTERVAL_SECONDS)),
             )
         client_queue: queue.Queue[bytes] = queue.Queue(maxsize=_SSE_QUEUE_MAX)
@@ -1282,6 +1284,15 @@ def handle_api_targets() -> bytes | HTTPResponse:
 
 @app.get("/api/targets/<target>/stats")
 def handle_api_stats(target: str) -> bytes | HTTPResponse:
+    """Per-section coverage stats, derived from one frozen snapshot.
+
+    No query parameters: the payload is a pure function of the coverage
+    documents and *target*, so the ``ETag`` covers the snapshot alone and two
+    requests carrying the same tag describe the same numbers.  ``summary`` is
+    the ``.text`` block, ``sections`` one row per section and
+    ``functions_by_status`` the counts behind the list endpoint's ``?status=``
+    vocabulary.
+    """
     target = path_param(target)
     snap = _snapshot_db_mtime()
     # Same validator contract as /data, /asm and /bytes: the payload is a pure
@@ -1457,6 +1468,14 @@ def _dumps_with_cells(data: dict[str, Any], cells_json: dict[str, str | None]) -
 
 @app.get("/api/targets/<target>/data")
 def handle_api_data(target: str) -> bytes | HTTPResponse:
+    """The section rows, their cells, and the target-wide search index.
+
+    ``?section=`` narrows the CELLS (every section row is still sent, so the
+    tabs render, and the siblings carry no ``cells`` key), and ``?index=0``
+    omits ``search_index`` for the section-switch request that already holds
+    it.  Both are part of the ``ETag``, so a request that would produce a
+    different payload never answers 304 for one that did not.
+    """
     target = path_param(target)
     section_filter = query_param("section").strip() or None
     # `?index=0` is the section-switch request: it arrives for one more
@@ -2309,8 +2328,18 @@ def handle_api_bytes(target: str, section: str) -> bytes | HTTPResponse:
             # Same guard as /asm: unreachable for a document rebrew wrote, and
             # kept for the same reason — a negative offset would slice from
             # before the file, where Python's negative indexing would silently
-            # serve tail-of-binary bytes.
-            return _json_err(400, {"error": "offset beyond section bounds"})
+            # serve tail-of-binary bytes.  It names the offset the document
+            # carries, like the two bounds refusals above: an `error` with an
+            # empty `detail` is the one answer in this endpoint a caller cannot
+            # act on, and here the actionable part IS the number.
+            return _json_err(
+                400,
+                {
+                    "error": "offset beyond section bounds",
+                    "detail": f"section {section!r} maps offset {req_offset} to "
+                    f"file offset {file_start}, before the start of the file",
+                },
+            )
         chunk = target_data[file_start : file_start + req_size]
 
         return _json_ok(
@@ -2447,7 +2476,10 @@ def handle_regen() -> bytes | HTTPResponse:
             {
                 "error": "Rate limited: regeneration already running",
                 "detail": "a catalog/build-db run is in progress",
-                "retry_after": _REGEN_COOLDOWN_SECONDS,
+                # An int, the type the cooldown arm below and every other 429
+                # in the package send, so a client reads one JSON type out of
+                # `retry_after` whichever limit it hit.
+                "retry_after": int(_REGEN_COOLDOWN_SECONDS),
             },
             Retry_After=str(int(_REGEN_COOLDOWN_SECONDS)),
         )
@@ -2468,16 +2500,25 @@ def handle_regen() -> bytes | HTTPResponse:
         if since < _REGEN_COOLDOWN_SECONDS:
             remaining = _REGEN_COOLDOWN_SECONDS - since
             _metrics.REGEN.reject()
+            # The wait ONE number, read in two places.  Every other 429 and the
+            # 503 the SSE cap sends put the header's own value in the body
+            # (``server._auth_throttle``, ``handle_api_events``), and this arm
+            # sent a rounded float beside a ceiled integer: a client that read
+            # the body waited 4.2s and was refused again, while one that read
+            # the header waited the 5s the header named.  The header is the
+            # whole seconds RFC 9110 allows, so the body carries that same
+            # value and the human-precision wait stays in ``detail``.
+            wait = math.ceil(remaining)
             return _json_err(
                 429,
                 {
                     "error": "Rate limited: wait before regenerating again",
                     "detail": f"retry after {remaining:.1f}s",
-                    "retry_after": round(remaining, 1),
+                    "retry_after": wait,
                 },
                 # The auth throttle sends the same header, so a client can read
                 # one Retry-After for every 429 the server emits.
-                Retry_After=str(math.ceil(remaining)),
+                Retry_After=str(wait),
             )
         _regen_last_attempt = now
         # From here to the release the key names THIS run, so a retry arriving

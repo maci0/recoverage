@@ -2217,6 +2217,36 @@ class TestSearchLimit:
         )
         assert _search_functions(snap, "") == set()
 
+    def test_an_address_the_page_printed_matches(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Pasting the address the cell panel shows must highlight the row.
+
+        The panel prints an address through `_format_va`, which pads to eight
+        hex digits, and a target whose functions sit below 0x10000000 spells
+        the same address differently in `vaStart` (the string a .text cell
+        stores, and the one the dimming set is compared against).  Matching
+        `vaStart` alone meant the address on screen highlighted nothing while
+        the functions view, which matches both spellings, found the row.  Both
+        spellings match here, and the search still has to agree with the API
+        list, which matches `vaStart` too.
+        """
+        from recoverage.potato import _search_functions
+
+        snap = _write_doc(
+            tmp_path,
+            monkeypatch,
+            "T",
+            {".text": {"size": 16, "cells": [cell(0, 16, "exact")]}},
+            functions=[{"va": 0x401000, "vaStart": "0x401000", "name": "_low"}],
+            globals_=[{"va": 0x402000, "name": "_low_global"}],
+        )
+        for spelling in ("0x00401000", "0x401000", "0X401000"):
+            assert "_low" in _search_functions(snap, spelling), spelling
+        # The global the panel shows, same rule.
+        for spelling in ("0x00402000", "0x402000"):
+            assert "_low_global" in _search_functions(snap, spelling), spelling
+
     def test_functions_cap_is_deterministic(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         """The functions half of the 1000-entry bound: with >500 matches the
         cap must keep exactly the first 500 by name, vaStart.  A cap without the

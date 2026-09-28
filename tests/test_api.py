@@ -1269,17 +1269,24 @@ class TestApiBytes:
         """A foreign document whose section carries a negative fileOffset (a
         rebrew-built one cannot: the writer clamps it >= 0) must get the 400
         contract instead of Python's negative-index slicing silently serving
-        tail-of-binary bytes — same guard as /asm."""
+        tail-of-binary bytes — same guard as /asm.
+
+        The refusal names the offset it refused, like the two bounds refusals
+        beside it: an `error` with an empty `detail` is the one answer here a
+        caller cannot act on, and the actionable part is the number.
+        """
         self._foreign_section_doc(
             tmp_path,
             monkeypatch,
             ".text",
             {"va": 4096, "size": 4096, "fileOffset": -4096, "unitBytes": 16, "columns": 8},
         )
-        status, headers, body = wsgi_get("/api/targets/T/sections/.text/bytes?offset=0&size=4")
+        status, headers, body = wsgi_get("/api/targets/T/sections/.text/bytes?offset=8&size=4")
         assert status.startswith("400"), body
         data = json.loads(decode_body(body, headers))
         assert data["code"] == "bad_request"
+        assert data["error"] == "offset beyond section bounds"
+        assert data["detail"], "a refusal with no reason is not actionable"
 
 
 class TestRegenRateLimit:
@@ -2747,16 +2754,38 @@ class TestErrorResponseShape:
         throttle's used to be header-only, so a client parsing the documented
         error envelope read ``rate_limited`` with no way to act on it. Both
         places carry the same number.
+
+        The comparison is exact and the type is asserted: the ``int(...) ==
+        int(...)`` form this replaced passed against a body reading ``4.2``
+        beside a header reading ``5``, which is the disagreement it looked
+        like it was ruling out. A client waits on the number, and an int is
+        what every ``retry_after`` in the package now sends.
         """
         import recoverage.api as api
         import recoverage.server as server_mod
+
+        def _wait(payload: dict, headers: dict) -> int:
+            value = payload["retry_after"]
+            assert isinstance(value, int), f"retry_after is not a whole number: {value!r}"
+            return int(_header(headers, "Retry-After") or 0) - value
 
         api._regen_last_attempt = None
         monkeypatch.setattr(api, "_do_regen", lambda remote: api._json_ok({"ok": True}))
         wsgi_request("POST", "/api/regen", remote_addr="127.0.0.1")
         status, headers, body = wsgi_request("POST", "/api/regen", remote_addr="127.0.0.1")
         cooldown = self._check(status, headers, body, "rate_limited")
-        assert int(cooldown["retry_after"]) == int(_header(headers, "Retry-After"))
+        assert _wait(cooldown, headers) == 0
+
+        # The lock arm, the other 429 this endpoint sends.
+        api._regen_last_attempt = None
+        monkeypatch.setattr(api, "_do_regen", lambda remote: api._json_ok({"ok": True}))
+        api._REGEN_LOCK.acquire()
+        try:
+            status, headers, body = wsgi_request("POST", "/api/regen", remote_addr="127.0.0.1")
+            busy = self._check(status, headers, body, "rate_limited")
+            assert _wait(busy, headers) == 0
+        finally:
+            api._REGEN_LOCK.release()
 
         monkeypatch.setattr(server_mod, "_AUTH_TOKEN", "unit-test-token")
         bad = {"Authorization": "Bearer wrong", "Accept": "application/json"}
@@ -2766,7 +2795,7 @@ class TestErrorResponseShape:
             status, headers, body = wsgi_request("GET", "/api/health", headers=bad)
             throttled = self._check(status, headers, body, "rate_limited")
             assert throttled["retry_after"] == int(server_mod._AUTH_FAIL_WINDOW_SECONDS)
-            assert int(throttled["retry_after"]) == int(_header(headers, "Retry-After"))
+            assert _wait(throttled, headers) == 0
         finally:
             server_mod._clear_auth_failures("127.0.0.1")
 
@@ -4649,7 +4678,12 @@ class TestSseClientCap:
     def test_503_retry_after_header_matches_body(self) -> None:
         """The header and the body must state the same wait: a client that
         reads Retry-After (the auth throttle and /api/regen send the same
-        header) must not be told a longer or shorter retry than the JSON."""
+        header) must not be told a longer or shorter retry than the JSON.
+
+        Exactly, and as an int: the cast form this replaced passed against a
+        float the header spelled as an integer, so the key's JSON type was
+        pinned to nothing and one client had to handle both.
+        """
         import recoverage.api as api
 
         with api._SSE_CLIENTS_LOCK:
@@ -4659,7 +4693,8 @@ class TestSseClientCap:
             status, headers, body = wsgi_get("/api/events")
             assert status.startswith("503")
             payload = json.loads(decode_body(body, headers))
-            assert int(headers["Retry-After"]) == int(payload["retry_after"])
+            assert isinstance(payload["retry_after"], int)
+            assert int(headers["Retry-After"]) == payload["retry_after"]
         finally:
             with api._SSE_CLIENTS_LOCK:
                 api._SSE_CLIENTS.clear()

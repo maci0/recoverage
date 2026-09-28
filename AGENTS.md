@@ -347,7 +347,7 @@ The release policy is not written down anywhere else, so it is stated here and
 | `/api/targets/<target>/data` | GET | Full section + cell data. `?section=` narrows the cells (siblings omit the key); `?index=0` omits `search_index`, which the SPA holds already, so a section switch does not re-send it (`index` is a flag: `0`, `1` or absent, anything else a 400) |
 | `/api/targets/<target>/functions` | GET | Paginated function list (`?status=` takes rebrew's status vocabulary; anything else is a 400). ETag-revalidating like `/stats` and `/data`: every parameter that shapes the page is in the validator |
 | `/api/targets/<target>/functions` | POST | Batch lookup: `{"vas": [...]}` → function/global details in input order (`application/json`, else 415) |
-| `/api/targets/<target>/functions/<va>` | GET | Function/global detail |
+| `/api/targets/<target>/functions/<va>` | GET | Function/global detail (ETag-revalidating: the tag names the snapshot, the target and the requested spelling) |
 | `/api/targets/<target>/asm` | GET | Disassembly (requires capstone). `?size=` is capped at `_MAX_SLICE_SIZE` AND at what the section holds from `?va=`, so a va at the section's tail cannot read the next section's bytes |
 | `/api/targets/<target>/sections/<section>/bytes` | GET | Raw byte slice |
 | `/api/events` | GET | Server-Sent Events: `db-updated` when the coverage documents change (SPA auto-refresh) |

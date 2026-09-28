@@ -381,12 +381,12 @@ the banner that run printed holds.
 | `/app.js`, `/style.css`, `/print.css`, `/favicon.svg` | GET | The packaged static assets (`no-cache` with a strong `ETag`) |
 | `/potato` | GET | Potato Mode (pure-HTML fallback) |
 | `/api/health` | GET | Server version, the settings this process resolved, coverage directory info, installed extras, request/regen/stream/connection counters, cache hit-miss |
-| `/api/targets` | GET | List available targets |
-| `/api/targets/<target>/stats` | GET | Per-section coverage stats with percentages |
+| `/api/targets` | GET | List available targets. Revalidates: an `ETag` over the coverage snapshot and the project config's stat, so a repeat is a 304 |
+| `/api/targets/<target>/stats` | GET | Per-section coverage stats with percentages (no query parameters) |
 | `/api/targets/<target>/data` | GET | Section + cell data (`?section=.text` for partial, `?index=0` to omit the search index) |
 | `/api/targets/<target>/functions` | GET | Paginated list (`?status=&search=&sort=&limit=&offset=`; a `status` outside rebrew's vocabulary is a 400). Revalidates: an `ETag` over the snapshot and every parameter, so a repeat is a 304 |
 | `/api/targets/<target>/functions` | POST | Batch lookup: `{"vas": [...]}` → function/global details in input order |
-| `/api/targets/<target>/functions/<va>` | GET | Single function/global detail |
+| `/api/targets/<target>/functions/<va>` | GET | Single function/global detail. Revalidates like the list: the tag names the snapshot, the target and the requested spelling |
 | `/api/targets/<target>/asm` | GET | Disassembly (`?format=json` for structured output) |
 | `/api/targets/<target>/sections/<section>/bytes` | GET | Raw byte slice (`?offset=&size=`) |
 | `/api/events` | GET | Server-Sent Events: `db-updated` when the coverage documents change (SPA auto-refresh) |
@@ -529,7 +529,7 @@ is sent with `Cache-Control: no-store`:
 `not_implemented`, `db_unavailable`. `detail` names the parameter or
 constraint at fault, and some errors add one more key (`retry_after`, on a
 429 and on the 503 `/api/events` answers once its connection cap is full),
-which repeats the `Retry-After` header.
+which is the same whole number of seconds the `Retry-After` header carries.
 
 A wrong verb on a real path answers **405 with an `Allow` header**; a path no
 route matches answers **404**. A `405` never means "not found" here.
@@ -537,12 +537,18 @@ route matches answers **404**. A `405` never means "not found" here.
 ### Caching
 
 Every coverage-derived read endpoint (`/data`, `/stats`, `/asm`,
-`/sections/<section>/bytes` and `/potato`) carries an `ETag` over the
+`/sections/<section>/bytes`, the function list, the function detail route and
+`/potato`) carries an `ETag` over the
 freshness stamp of the coverage documents plus the request's own identity
-(target, section, VA, offset, format), and `Cache-Control: no-cache,
+(target, section, VA, offset, format, and the list's filters and page window),
+and `Cache-Control: no-cache,
 must-revalidate`. Send `If-None-Match` and unchanged documents answer
-**304** with no body. `/health` and `/targets` are `no-store` instead: they
-report the server's own state, not the coverage documents'.
+**304** with no body. `/api/health` is `no-store` instead: it
+reports the server's own state, not the coverage documents'.
+`/api/targets` revalidates as well — its tag names both the coverage snapshot
+and the project config's stat, because the list merges the two, and it falls
+back to `no-store` when the coverage directory cannot be read, since there is
+then nothing to revalidate against.
 
 Query-parameter rules, the same on every endpoint:
 
