@@ -2,7 +2,7 @@
 # after itself, but a stale `web-build` directory or script in the tree would
 # otherwise make make consider it up to date and skip the bundle rebuild, which
 # is the one step that keeps the committed assets matching web/.
-.PHONY: help setup clean build check-bundle-clean web-build test test-one test-browser fuzz lint format format-check web-lint smoke smoke-fail \
+.PHONY: help setup clean build check-bundle-clean web-build web-dev test test-one test-browser fuzz lint format format-check web-lint smoke smoke-fail \
 	shell-lint yaml-lint type-check all ensure-uv ensure-rebrew warn-uv-version clone-rebrew ensure-lint-tools \
 	ensure-bun regen-oxlint typecheck-web payload-budget browser-sbom
 
@@ -93,6 +93,7 @@ help:
 		'  make web-lint           # oxlint + Nu Html Checker (CI web-lint job)' \
 		'  make typecheck-web      # tsc --noEmit over web/ (CI web-lint job)' \
 		'  make web-build          # rebuild the committed bundle in src/recoverage/assets' \
+		'  make web-dev            # vite dev server for web/ on 127.0.0.1:5173 (see CONTRIBUTING)' \
 		'  make regen-oxlint       # regenerate tools/oxlint/rikalabs-strict.json after a preset bump' \
 		'  make shell-lint         # shellcheck over tools/*.sh (CI lint job)' \
 		'  make yaml-lint          # yamllint over .github/ (CI lint job)' \
@@ -126,6 +127,13 @@ ensure-uv:
 # recoverage imports rebrew.workspace for db path resolution and rebrew's
 # catalog/build-db for regen.  Name the missing checkout before uv reports it
 # as "Distribution not found at file://…/rebrew".
+#
+# Every target that reaches uv depends on this, not only the ones whose tool
+# imports rebrew: `uv run` and `uv sync` both resolve uv.lock, and the lock
+# carries the path dependency, so `make lint` on a clone with no sibling
+# checkout dies in uv before ruff ever starts.  The tool it would have run is
+# beside the point: the answer the contributor gets names neither the missing
+# checkout nor the command that fetches it.
 ensure-rebrew: ensure-uv
 	@$(SET_STRICT) \
 	if [ ! -e "$(REBREW_DIR)/pyproject.toml" ]; then \
@@ -228,6 +236,17 @@ web-build: ensure-bun
 	bun install --frozen-lockfile; \
 	bun run build:web
 
+# The frontend edit loop. CONTRIBUTING describes it, but as prose the
+# contributor has to reassemble: `bun install` on its own, then `bun run
+# dev:web` from the worktree root, against a `recoverage serve` in another
+# shell. Every other bun target here runs the install first, and a checkout
+# that has only run `make setup` has no node_modules, so the raw pair dies on
+# a module vite cannot resolve. Same install, same pin as the gates; the dev
+# server itself is a long-lived process the contributor stops with ^C.
+web-dev: ensure-bun
+	bun install --frozen-lockfile
+	bun run dev:web
+
 # Match CI's invocation so a local pass and a CI pass mean the same thing.
 # `python -m`, never the bare tool name: with the dev extra installed a bare
 # `uv run pytest` would still fall back to whatever `pytest` happens to be on
@@ -252,7 +271,7 @@ test-one: ensure-rebrew
 # pyproject.toml and locked, and `--frozen` would install uv.lock even after a
 # playwright dependency edit skipped `uv lock`, so the browser tests would
 # pass against a package the manifest does not describe.
-test-browser: ensure-uv
+test-browser: ensure-rebrew
 	uv sync --locked --extra dev --extra playwright
 	$(UV_RUN) playwright install chromium
 	$(UV_RUN) python -m pytest tests/test_playwright.py -v -rs --tb=short
@@ -266,19 +285,19 @@ fuzz: ensure-rebrew
 	RECOVERAGE_FUZZ_SEED=$(SEED) RECOVERAGE_FUZZ_ITERATIONS=$(ITERATIONS) \
 		$(UV_RUN) python -m pytest tests/test_fuzz.py -v --tb=short
 
-lint: ensure-uv
+lint: ensure-rebrew
 	$(UV_RUN) python -m ruff check src/ tests/ tools/
 
-format: ensure-uv
+format: ensure-rebrew
 	$(UV_RUN) python -m ruff format src/ tests/ tools/
 
-format-check: ensure-uv
+format-check: ensure-rebrew
 	$(UV_RUN) python -m ruff format --check src/ tests/ tools/
 
 # The type gate.  The paths are the gate's [tool.mypy] files list, not
 # a restatement of it: tests/ joins that list when its fixtures are
 # annotated, and a second copy of the list here is one that drifts.
-type-check: ensure-uv
+type-check: ensure-rebrew
 	$(UV_RUN) python -m mypy
 
 # shellcheck and yamllint cover the tree's non-Python sources: the CI clone
@@ -340,7 +359,7 @@ ensure-bun:
 # @rikalabs/oxlint-standards and is review-blocking, so the install of the
 # package it reads is part of the command: the script looks under node_modules,
 # which a checkout that has only run `uv sync` does not have.
-regen-oxlint: ensure-bun
+regen-oxlint: ensure-rebrew ensure-bun
 	bun install --frozen-lockfile
 	$(UV_RUN) python tools/flatten_rikalabs_strict.py
 
@@ -359,7 +378,7 @@ payload-budget: ensure-rebrew
 # The npm packages `make web-build` compiles into the shipped browser assets.
 # The sbom job uploads it as an artifact; this is the same inventory to read
 # without CI, and it needs no network and no environment, only bun.lock.
-browser-sbom:
+browser-sbom: ensure-rebrew
 	$(UV_RUN) python tools/bundled_js_inventory.py
 
 # Everything CI checks, in one local command, so nothing fails only after push.

@@ -151,6 +151,7 @@ make format                 # uv run --locked --extra dev python -m ruff format 
 make shell-lint             # shellcheck -x tools/*.sh (needs shellcheck on PATH)
 make yaml-lint              # yamllint -c .yamllint.yaml .github/ (needs yamllint on PATH)
 make web-build              # bun install --frozen-lockfile && bun run build:web (the dashboard bundle)
+make web-dev                # bun install --frozen-lockfile && bun run dev:web (the frontend edit loop)
 make web-lint               # bun install --frozen-lockfile && bun run lint
 make typecheck-web          # bun install --frozen-lockfile && bun run typecheck:web (tsc --noEmit)
 make smoke                  # uv run --locked --extra dev python tools/smoke.py

@@ -128,15 +128,15 @@ failing.
 ### The frontend loop
 
 `web/` has a dev server of its own, and it is the fast way to see a change:
-`bun run dev:web` serves `web/index.html` on `127.0.0.1:5173` and proxies
+`make web-dev` (which is `bun install --frozen-lockfile` then `bun run
+dev:web`) serves `web/index.html` on `127.0.0.1:5173` and proxies
 `/api`, `/src` and `/original` to a running dashboard on
-`http://127.0.0.1:8001` (`RECOVERAGE_DEV_API` points it elsewhere). It needs
-`bun install` first, which `make web-lint` and `make web-build` both do, and a
+`http://127.0.0.1:8001` (`RECOVERAGE_DEV_API` points it elsewhere). It needs a
 `recoverage serve` in another shell for the API half:
 
 ```bash
 uv run recoverage serve --no-open   # 127.0.0.1:8001, the proxy's default
-bun run dev:web                     # http://127.0.0.1:5173
+make web-dev                        # http://127.0.0.1:5173
 ```
 
 Without the dev server a `web/` change is only visible after `make web-build`
@@ -217,6 +217,12 @@ here.
   route.
 - Tests live in `tests/`, one module per source module, and reuse the
   `tests/conftest.py` fixtures for the synthetic coverage documents.
+- A change a user of the dashboard or the CLI can see gets a `CHANGELOG.md`
+  entry under `[Unreleased]`, in one of the groups `Added` / `Breaking` /
+  `Changed` / `Deprecated` / `Fixed` / `Removed` / `Security`. A refactor, a
+  test and a doc change do not. `tests/test_release.py` fails on a group
+  outside that set, on a group that repeats, and on a `Breaking` marker the
+  release has to answer with a major.
 - `filterwarnings = ["error"]` in `pyproject.toml` means a new
   `ResourceWarning` (unclosed socket, file, or connection) fails the build.
   Close the resource instead of filtering the warning.
