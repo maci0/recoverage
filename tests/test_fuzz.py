@@ -283,6 +283,11 @@ def _pct(value: str) -> str:
     return quote(value, safe="")
 
 
+def _batch_path() -> str:
+    """The batch function-lookup URL, which every /functions campaign fuzzes."""
+    return f"/api/targets/{_pct(get_first_target())}/functions"
+
+
 # ── surfaces ────────────────────────────────────────────────────────
 
 
@@ -380,11 +385,8 @@ class TestBatchLookupBody:
     whole attacker-supplied body (bounded read, JSON decode, per-entry VA
     parse, then a parameterized query with one placeholder per entry)."""
 
-    def _path(self) -> str:
-        return f"/api/targets/{_pct(get_first_target())}/functions"
-
     def test_body_never_crashes(self) -> None:
-        path = self._path()
+        path = _batch_path()
 
         def check(data: bytes) -> None:
             status, headers, body = wsgi_request("POST", path, body=data)
@@ -411,7 +413,7 @@ class TestBatchLookupBody:
         parser regression (dropped entry, default VA, reordered list) shows up
         in first.
         """
-        path = self._path()
+        path = _batch_path()
         for seed in BATCH_SEEDS:
             status, headers, body = wsgi_request("POST", path, body=seed)
             if int(status.split()[0]) != 200:
@@ -466,11 +468,8 @@ _NESTING_TOKENS = tuple(
 class TestBatchBodyNesting:
     """POST bodies whose *nesting* is the payload, not their bytes."""
 
-    def _path(self) -> str:
-        return f"/api/targets/{_pct(get_first_target())}/functions"
-
     def test_nested_body_never_crashes(self) -> None:
-        path = self._path()
+        path = _batch_path()
 
         def check(data: bytes) -> None:
             status, headers, body = wsgi_request("POST", path, body=data)
@@ -484,7 +483,7 @@ class TestBatchBodyNesting:
     def test_every_depth_answers_a_documented_status(self) -> None:
         """The exhaustive half: a refusal must be a refusal a client can read,
         not a decoder stack exhaustion surfacing as a 500."""
-        path = self._path()
+        path = _batch_path()
         for depth in (0, 1, 100, 400, 490, 495, 500, 505, 1000, 5000, 20000):
             for tail in (b"", b"0x10001000"):
                 close = b", " + tail if tail else b""
@@ -535,9 +534,6 @@ class TestBatchContentType:
     is an input surface in its own right: a wrong answer is either a body
     parsed under the wrong format or a refusal that never happened."""
 
-    def _path(self) -> str:
-        return f"/api/targets/{_pct(get_first_target())}/functions"
-
     def _post(self, path: str, media_type: str, body: bytes) -> tuple[int, Any, bytes]:
         status, headers, raw = wsgi_request(
             "POST", path, headers={"Content-Type": media_type}, body=body
@@ -545,7 +541,7 @@ class TestBatchContentType:
         return int(status.split()[0]), _assert_ok(status, headers, raw, path), raw
 
     def test_media_type_never_crashes(self) -> None:
-        path = self._path()
+        path = _batch_path()
         body = b'{"vas": ["0x10001000"]}'
 
         def check(data: bytes) -> None:
@@ -564,7 +560,7 @@ class TestBatchContentType:
     def test_an_accepted_media_type_answers_exactly_as_no_header(self) -> None:
         """Pair assertion across the header boundary: the header may only
         decide whether the body is read, never what is read out of it."""
-        path = self._path()
+        path = _batch_path()
         bodies = (b'{"vas": ["0x10001000"]}', b'{"vas": []}', b"{}", b"not json", b"")
         for seed in _CONTENT_TYPE_SEEDS:
             media_type = seed.decode("latin-1")
@@ -586,7 +582,7 @@ class TestBatchContentType:
     def test_a_refusal_carries_no_control_byte(self) -> None:
         """The media type is echoed in the 415 detail; a header value carrying
         a line break must not put one in the response."""
-        path = self._path()
+        path = _batch_path()
         for media_type in ("text/plain\r\nX: y", "text/plain\n", "text/plain\x00x"):
             code, payload, raw = self._post(path, media_type, b'{"vas": ["0x10001000"]}')
             assert code == 415, f"{path}: {media_type!r} answered {code}"
@@ -603,7 +599,7 @@ class TestListQuery:
     a value wider than 64 bits raises OverflowError (a raw 500)."""
 
     def test_query_never_crashes(self) -> None:
-        path = f"/api/targets/{_pct(get_first_target())}/functions"
+        path = _batch_path()
 
         def check(data: bytes) -> None:
             status, headers, body = wsgi_request("GET", f"{path}?{data.decode('latin-1')}")

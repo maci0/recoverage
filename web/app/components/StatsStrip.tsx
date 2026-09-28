@@ -5,15 +5,6 @@ import { Button } from "@/components/ui/button";
 import { STATE_FILTERS, paletteVarForFilter } from "@/grid/pack";
 import { count, percent1 } from "@/lib/format";
 
-/** The numbers above the map: how much of the target is covered, and how the
- * section on screen breaks down.
- *
- * Potato Mode prints the same two lines from the same `/stats` payload (its
- * progress bar and its map header), so the two views of one target cannot
- * disagree about the map below them. Each state count is also the filter pill
- * for that state: "where are the stubs" is one click, and it answers with the
- * pill the toolbar already draws rather than a second vocabulary to learn. */
-
 /** The bucket `/stats` counts a state under. Only the tooling failures differ:
  * the server folds them into `other`, which is the state the map paints as slot
  * 7 and the toolbar calls "problem". */
@@ -37,6 +28,14 @@ export type StatsStripProps = {
   onToggleFilter: (key: string) => void;
 };
 
+/** The numbers above the map: how much of the target is covered, and how the
+ * section on screen breaks down.
+ *
+ * Potato Mode prints the same two lines from the same `/stats` payload (its
+ * progress bar and its map header), so the two views of one target cannot
+ * disagree about the map below them. Each state count is also the filter pill
+ * for that state: "where are the stubs" is one click, and it answers with the
+ * pill the toolbar already draws rather than a second vocabulary to learn. */
 export function StatsStrip({
   stats,
   error,

@@ -1291,6 +1291,30 @@ class TestRegenIdempotencyKey:
         monkeypatch.setattr(api, "_project_dir", lambda: Path("/nonexistent"))
         return runs
 
+    def _blocking_regen(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> tuple[list[Path], threading.Event, threading.Event]:
+        """A regen that parks in `run_regen` until the test releases it.
+
+        Returns the run list, the event `run` sets on entry, and the one that
+        releases it. The caller waits for `started` before asserting anything
+        about the state a run in flight leaves behind.
+        """
+        import recoverage.api as api
+
+        runs: list[Path] = []
+        started = threading.Event()
+        release = threading.Event()
+
+        def run(root: Path) -> None:
+            runs.append(root)
+            started.set()
+            assert release.wait(timeout=10), "test never released the regen"
+
+        monkeypatch.setattr(api, "run_regen", run)
+        monkeypatch.setattr(api, "_project_dir", lambda: Path("/nonexistent"))
+        return runs, started, release
+
     def _post(self, key: str | None = None) -> tuple[str, dict[str, str], bytes]:
         headers = {"Idempotency-Key": key} if key else None
         return wsgi_request("POST", "/api/regen", headers, remote_addr="127.0.0.1")
@@ -1320,17 +1344,7 @@ class TestRegenIdempotencyKey:
         """
         import recoverage.api as api
 
-        runs: list[Path] = []
-        started = threading.Event()
-        release = threading.Event()
-
-        def run(root: Path) -> None:
-            runs.append(root)
-            started.set()
-            assert release.wait(timeout=10), "test never released the regen"
-
-        monkeypatch.setattr(api, "run_regen", run)
-        monkeypatch.setattr(api, "_project_dir", lambda: Path("/nonexistent"))
+        runs, started, release = self._blocking_regen(monkeypatch)
 
         first: list[Any] = []
         worker = threading.Thread(target=lambda: first.append(self._post("click-1")))
@@ -1381,17 +1395,7 @@ class TestRegenIdempotencyKey:
         """
         import recoverage.api as api
 
-        runs: list[Path] = []
-        started = threading.Event()
-        release = threading.Event()
-
-        def run(root: Path) -> None:
-            runs.append(root)
-            started.set()
-            assert release.wait(timeout=10), "test never released the regen"
-
-        monkeypatch.setattr(api, "run_regen", run)
-        monkeypatch.setattr(api, "_project_dir", lambda: Path("/nonexistent"))
+        runs, started, release = self._blocking_regen(monkeypatch)
 
         first: list[Any] = []
         worker = threading.Thread(target=lambda: first.append(self._post("click-1")))

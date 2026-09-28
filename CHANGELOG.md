@@ -26,7 +26,6 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   nothing on disk to identify it by, and the existing `recoverage-python-sbom`
   export reads `uv.lock`, which cannot see it. `make browser-sbom` prints the
   same inventory, and `NOTICE` names both artifacts.
-
 - The wheel installs a man page (`share/man/man1/recoverage.1`) for the
   `recoverage` entry point, covering every subcommand, flag and `RECOVERAGE_*`
   setting `recoverage --help` lists, with the exit codes and the environment
