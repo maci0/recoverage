@@ -3372,6 +3372,64 @@ class TestConfigDerivedMemosFollowTheConfigStat:
             "Mode until the next rebuild"
         )
 
+    def test_resolved_targets_are_not_published_under_a_superseded_snapshot(
+        self, project: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A rebuild that commits mid-read must not be answered from a stale list.
+
+        The memo is keyed on the coverage snapshot AND filed under that key, so
+        the token has to be taken before the read it describes and re-checked at
+        publish.  Taken after the read, it names the build that landed during
+        it while the list is built from the previous one: a target added by that
+        build is then missing from /api/targets, the dropdown and Potato Mode
+        for the rest of its life, because the invalidation that would have
+        cleared the entry has already run.
+        """
+        import recoverage.server as srv
+
+        write_coverage(project / "db", "FROMDB", {".text": _cell_section(["exact"])})
+        monkeypatch.setenv("RECOVERAGE_DB", str(project / "db"))
+        clear_target_cache()
+
+        tokens = iter([(1, 1), (2, 2)])
+        monkeypatch.setattr(srv, "_snapshot_db_mtime", lambda: next(tokens))
+
+        assert [t["id"] for t in srv.resolve_targets()] == ["FROMDB"]
+        assert srv._RESOLVED_TARGETS_CACHE is None, (
+            "the list was filed under the fingerprint of the build that "
+            "superseded the one it was read from"
+        )
+
+    def test_resolved_targets_publish_when_the_snapshot_holds_still(
+        self, project: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The re-check must not cost the memo its whole point.
+
+        A rebuild that does not land during the read is the ordinary case, and
+        there the entry is published and the next call is served from it.
+        """
+        import recoverage.server as srv
+
+        write_coverage(project / "db", "FROMDB", {".text": _cell_section(["exact"])})
+        monkeypatch.setenv("RECOVERAGE_DB", str(project / "db"))
+        clear_target_cache()
+
+        calls: list[int] = []
+
+        def stable() -> tuple[int, int]:
+            calls.append(1)
+            return (7, 7)
+
+        monkeypatch.setattr(srv, "_snapshot_db_mtime", stable)
+
+        assert [t["id"] for t in srv.resolve_targets()] == ["FROMDB"]
+        assert srv._RESOLVED_TARGETS_CACHE is not None
+        reads = len(calls)
+        assert [t["id"] for t in srv.resolve_targets()] == ["FROMDB"]
+        # One more read, for the key: the second call is served from the entry
+        # the first published, it does not merge the list again.
+        assert len(calls) == reads + 1
+
     def test_dll_bytes_follow_a_re_pointed_binary(self, project: Path) -> None:
         import recoverage.server as srv
 

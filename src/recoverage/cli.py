@@ -14,6 +14,7 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 import webbrowser
 from collections.abc import Iterator, Mapping
 from pathlib import Path
@@ -24,7 +25,7 @@ import typer
 from rebrew.coverage_toml import CoverageSnapshot, CoverageTomlError
 from rebrew.utils import floor_pct
 
-from recoverage import config
+from recoverage import clock, config
 from recoverage._paths import _db_path
 from recoverage.devserver import (
     _KeepAliveRequestHandler,
@@ -597,6 +598,45 @@ def _run_regen(root: Path) -> list[Path]:
 # Openers exit in well under a second; the bound only guards a wedged one.
 _BROWSER_OPEN_TIMEOUT_SECONDS = 10
 
+#: How long the deferred opener waits for the listener to answer before it
+#: gives up, and how often it looks.  Long enough to cover a bind that lands
+#: after the warmup thread has been started, short enough that a start that
+#: failed does not hold the thread.
+_OPEN_LISTEN_WAIT_SECONDS = 5.0
+_OPEN_LISTEN_POLL_SECONDS = 0.05
+
+
+def _open_when_listening(url: str) -> None:
+    """Open *url* only once something is accepting on the address it names.
+
+    ``Timer.cancel`` sets the timer's event and returns; it does not wait, so a
+    start that fails while the timer is already past its own check (EADDRINUSE
+    from a second instance, a Ctrl+C inside the scheduling window) still ran
+    this callback, and cancelling it then did nothing at all.  The tab popped
+    at a port nothing would ever listen on, which is the outcome the cancel
+    exists to prevent.  Asking the listener removes the guess: no answer, no
+    opener, whatever order the two threads got to.
+
+    A connect that fails is the answer to poll on, not an error to report: the
+    bind has not landed yet.  The opener is one attempt at a local socket, so
+    the probe closes as soon as the listener accepts it, and it probes the
+    address *url* names rather than the bind address, which for a wildcard is
+    not connectable.
+    """
+    host = urlsplit(url).hostname or "127.0.0.1"
+    port = urlsplit(url).port or 80
+    deadline = clock.monotonic() + _OPEN_LISTEN_WAIT_SECONDS
+    while True:
+        try:
+            with socket.create_connection((host, port), timeout=_OPEN_LISTEN_POLL_SECONDS):
+                break
+        except OSError:
+            if clock.monotonic() >= deadline:
+                _log.debug("no listener on %s:%d — not opening a browser", host, port)
+                return
+            time.sleep(_OPEN_LISTEN_POLL_SECONDS)
+    open_browser(url)
+
 
 def _windows_detach_flags() -> int:
     """Creation flags that detach an opener from this console on Windows.
@@ -1158,10 +1198,11 @@ def serve(
     browser_timer: threading.Timer | None = None
     if not no_open:
         # Daemon + kept reference: a hung opener must never delay interpreter
-        # exit, and the finally below cancels the timer, so a start that
-        # never got as far as accepting does not pop a browser tab pointing at
-        # a dead port.
-        browser_timer = threading.Timer(0.5, open_browser, args=(url,))
+        # exit.  The finally below cancels the timer, and the opener asks the
+        # listener before it launches, so a start that never got as far as
+        # accepting does not pop a browser tab pointing at a dead port by
+        # either route.
+        browser_timer = threading.Timer(0.5, _open_when_listening, args=(url,))
         browser_timer.daemon = True
         browser_timer.start()
 
@@ -1226,6 +1267,9 @@ def serve(
         # OverflowError out of socket.bind() or a RuntimeError from a server
         # with no app installed used to leave the timer to fire half a second
         # after the traceback, which is the one exit path nobody had covered.
+        # Cancel alone cannot be the whole answer: it returns before the timer
+        # thread has stopped, so a callback already past its own check runs
+        # anyway — hence the listener probe inside the opener.
         if browser_timer is not None:
             browser_timer.cancel()
 

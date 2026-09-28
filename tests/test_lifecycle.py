@@ -392,6 +392,48 @@ class TestOpenAndReap:
         assert elapsed >= 0.3, f"waited {elapsed:.2f}s: the bound was not applied"
         assert elapsed < 5, f"hung opener blocked {elapsed:.1f}s (unbounded wait)"
 
+    def test_nothing_listening_means_no_browser(self, monkeypatch: Any) -> None:
+        """The deferred opener asks the listener before it launches a tab.
+
+        ``Timer.cancel`` returns without waiting for the timer thread, so a
+        start that fails while the callback is already running (EADDRINUSE, a
+        Ctrl+C inside the scheduling window) still runs it, and cancelling it
+        does nothing.  Without the probe that is a tab at a port nothing will
+        ever listen on, which is the outcome the cancel exists to prevent.
+        """
+        import recoverage.cli as cli
+
+        monkeypatch.setattr(cli, "_OPEN_LISTEN_WAIT_SECONDS", 0.2)
+        opened: list[str] = []
+        monkeypatch.setattr(cli, "open_browser", lambda url: opened.append(url) or True)
+
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]  # bound, never listening: nothing accepts
+
+            cli._open_when_listening(f"http://127.0.0.1:{port}")
+
+        assert opened == [], "opened a tab at an address with no listener"
+
+    def test_a_listener_is_what_releases_the_browser(self, monkeypatch: Any) -> None:
+        """The probe is a liveness check, not a way to suppress the opener.
+
+        The port the banner prints is handed to the browser only once the
+        server answers on it, so the ordinary start still opens its tab.
+        """
+        import recoverage.cli as cli
+
+        opened: list[str] = []
+        monkeypatch.setattr(cli, "open_browser", lambda url: opened.append(url) or True)
+
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+            listener.bind(("127.0.0.1", 0))
+            listener.listen(1)
+            port = listener.getsockname()[1]
+            cli._open_when_listening(f"http://127.0.0.1:{port}")
+
+        assert opened == [f"http://127.0.0.1:{port}"]
+
     def test_detach_flags_match_the_platform(self, monkeypatch: Any) -> None:
         """Openers detach everywhere, by the mechanism each platform has.
 

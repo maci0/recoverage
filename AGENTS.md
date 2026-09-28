@@ -648,10 +648,16 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   repeat forever), and a verified request clears only its own peer's window,
   because emptying one shared window on every success handed a guesser riding
   alongside the operator's traffic an unbounded supply of attempts. The map is
-  bounded by `_AUTH_FAIL_MAX_PEERS` through the same `_evict_oldest` every other
-  memo here uses, since the key is a peer address, and a request with no
-  `REMOTE_ADDR` shares one `_UNKNOWN_PEER` bucket rather than getting a fresh
-  window each time.
+  bounded by `_AUTH_FAIL_MAX_PEERS` since the key is a peer address, and a
+  request with no `REMOTE_ADDR` shares one `_UNKNOWN_PEER` bucket rather than
+  getting a fresh window each time. That bound is a memory bound, so the
+  eviction drops a window whose newest failure has aged out first
+  (`_evict_spent_peer_window`) rather than the oldest key: oldest-first threw
+  away a peer still inside its window, and the next distinct address arrived
+  to find a fresh one, so a guesser with addresses to spare bought unlimited
+  attempts out of a cap that reads as a limit on them. When every window is
+  live the oldest still goes, because holding the map open is the worse
+  failure (`tests/test_concurrency.py`, `TestAuthThrottle`).
 - Every memo and every conditional GET is counted on `metrics.CACHES`, at the
   read the handler actually served from: the `/data` checkout (its follower
   path included, since the memo the leader published is the hit it was
@@ -726,8 +732,13 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   `api.handle_api_functions_list` stat before their snapshot load for the same
   reason, and `_function_total` re-checks the watermark before publishing, the
   one place a memo of a pure in-memory count needs it (its rows are already a
-  frozen snapshot, so nothing but the key can straddle a rebuild); a new
-  coverage-derived memo takes its token the same way or states why its read
+  frozen snapshot, so nothing but the key can straddle a rebuild).
+  `server.resolve_targets` did neither at first, and a rebuild that committed
+  between its read and its stat filed the previous build's target list under the
+  fingerprint that superseded it, so the target the rebuild added stayed out of
+  `/api/targets`, the dropdown and Potato Mode for the rest of that build's
+  life: the invalidation that would have cleared the entry had already run. A
+  new coverage-derived memo takes its token the same way or states why its read
   cannot straddle a rebuild.
 - A path that crosses into the filesystem is read with `PurePath` rules, not
   POSIX string rules. `server.is_plain_relative` is the one definition, keyed
@@ -945,6 +956,17 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   the plain format did (every record from bottle or rebrew). A new log line
   whose values an operator would filter on names the helper; a new formatter
   is not the place to add a second rendering.
+- The deferred browser opener is `cli._open_when_listening`, and it asks the
+  listener before it launches anything. `Timer.cancel` sets the timer's event
+  and returns without waiting for the thread, so a start that fails while the
+  callback is already past its own check (EADDRINUSE from a second instance, a
+  Ctrl+C inside the 0.5 s window) still runs it and cancelling does nothing:
+  the cancel in `serve`'s `finally` claims an outcome only the probe delivers.
+  The probe waits for the listener (`_OPEN_LISTEN_WAIT_SECONDS`) rather than
+  trusting the schedule, and it connects to the address the URL names, since a
+  wildcard bind address is not connectable. A startup that defers work on a
+  timer does not treat `cancel()` as a join
+  (`tests/test_lifecycle.py`, `TestOpenAndReap`).
 - `server.set_auth_cookie` is the one place the `?token=` share-link cookie is
   written, and every page route a share link can land on calls it: `/` and
   `/potato`. Both pages link with relative URLs, so the cookie is what carries

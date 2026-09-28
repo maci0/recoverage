@@ -1336,16 +1336,28 @@ def resolve_targets() -> list[dict[str, str]]:
     list omitted it until the next rebuild cleared the memo.  Both halves are
     named here so neither depends on an event that may never fire.
 
+    The coverage half is stat'ed before ``coverage_snapshots`` reads, and
+    re-checked before the entry is published, so a rebuild that commits during
+    the read is answered by the next request rather than by a list filed under
+    the fingerprint that superseded it.
+
     Raises :class:`CoverageTomlError` when the directory holds no readable
     document: that is not "a project with no built targets", it is a project
     with nothing to serve, and every caller answers it with the 503 contract.
     """
     global _RESOLVED_TARGETS_CACHE
-    snapshots = coverage_snapshots()
+    # The snapshot token is taken BEFORE the read it describes, and re-checked
+    # at publish, like every other coverage-derived memo.  Taken after
+    # ``coverage_snapshots()`` it names the build that landed during the read
+    # while the list is built from the previous one, and a rebuild whose
+    # ``clear_target_cache`` has already run never comes back to clear it: the
+    # next build's target is missing from /api/targets, the dropdown and Potato
+    # until the build after that.
     key: _ResolvedTargetsKey = (
         _config_stat_fingerprint(_project_dir()),
         _snapshot_db_mtime(),
     )
+    snapshots = coverage_snapshots()
     with _RESOLVED_TARGETS_CACHE_LOCK:
         cached = _RESOLVED_TARGETS_CACHE
         if cached is not None and cached[0] == key:
@@ -1364,7 +1376,8 @@ def resolve_targets() -> list[dict[str, str]]:
             {"id": tid, "name": tid} for tid in sorted(snapshots) if tid not in targets_info
         ]
 
-        _RESOLVED_TARGETS_CACHE = (key, targets_list)
+        if _snapshot_db_mtime() == key[1]:
+            _RESOLVED_TARGETS_CACHE = (key, targets_list)
         return targets_list
 
 
@@ -2550,7 +2563,8 @@ _AUTH_FAIL_MAX = 10
 #: address: a server accepting connections from a wide range cannot grow it
 #: without limit, and each entry is a deque bounded by :data:`_AUTH_FAIL_MAX`
 #: anyway.  Far above the number of machines on the LAN this is deployed on;
-#: over it, the oldest entry goes (see :func:`_evict_oldest`).
+#: over it, a window whose failures have all aged out goes first, then the
+#: oldest (see :func:`_evict_spent_peer_window`).
 _AUTH_FAIL_MAX_PEERS = 1024
 #: The throttle key for a request that carries no REMOTE_ADDR.  ONE bucket for
 #: every such client, so an environ that never names a peer degrades to the one
@@ -2559,6 +2573,28 @@ _AUTH_FAIL_MAX_PEERS = 1024
 _UNKNOWN_PEER = ""
 _auth_failures: dict[str, deque[float]] = {}
 _AUTH_FAILURES_LOCK = threading.Lock()
+
+
+def _evict_spent_peer_window(now: float) -> None:
+    """Make room for one more peer window, dropping a spent one if any exists.
+
+    Caller holds :data:`_AUTH_FAILURES_LOCK`, and the map is already at
+    :data:`_AUTH_FAIL_MAX_PEERS`.
+
+    Evicting oldest-first regardless of the window's age throws away the
+    throttle of a peer still inside it, and the address that arrives next
+    resets a guesser that has already spent its ten attempts: an attacker with
+    addresses to spare buys unlimited guesses out of a cap that reads as a
+    limit on them.  Only a window whose NEWEST failure has aged out holds no
+    state, so those go first, and the oldest still goes when every window is
+    live, because the cap is a memory bound and keeping it costs one slow
+    guess rather than an unbounded map.
+    """
+    for key, window in _auth_failures.items():
+        if not window or now - window[-1] > _AUTH_FAIL_WINDOW_SECONDS:
+            del _auth_failures[key]
+            return
+    _evict_oldest(_auth_failures, _AUTH_FAIL_MAX_PEERS)
 
 
 def _auth_throttle(peer: str, now: float, reserve_slot: bool) -> bool:
@@ -2577,7 +2613,8 @@ def _auth_throttle(peer: str, now: float, reserve_slot: bool) -> bool:
         window = _auth_failures.get(peer)
         if window is None:
             window = deque()
-            _evict_oldest(_auth_failures, _AUTH_FAIL_MAX_PEERS)
+            if len(_auth_failures) >= _AUTH_FAIL_MAX_PEERS:
+                _evict_spent_peer_window(now)
             _auth_failures[peer] = window
         while window and now - window[0] > _AUTH_FAIL_WINDOW_SECONDS:
             window.popleft()

@@ -443,6 +443,61 @@ class TestAuthThrottle:
             _server._clear_auth_failures(attacker)
             _server._clear_auth_failures(operator)
 
+    def test_a_live_window_survives_pressure_from_other_peers(self) -> None:
+        """The cap is a memory bound, not a way to refund a guesser.
+
+        The map is bounded per peer count, so it has to evict something when it
+        is full.  Evicting the oldest entry regardless of its window throws away
+        the throttle of a peer still inside it, and the next distinct address
+        arrives to find a fresh window: a guesser with addresses to spare buys
+        unlimited attempts out of a cap that reads as a limit on them.  A window
+        whose newest failure has aged out holds no state, so those go first.
+        """
+        now = 1_000.0
+        attacker = "203.0.113.7"
+        spent = "203.0.113.8"
+        try:
+            for _ in range(_server._AUTH_FAIL_MAX):
+                assert not _server._auth_throttle(attacker, now, reserve_slot=True)
+            assert _server._auth_throttle(attacker, now, reserve_slot=False)
+
+            # Fill the map to its cap from addresses that are all mid-window,
+            # so every one of them is a window worth keeping, and put one
+            # entry in past its window: that entry is what a new peer takes.
+            for index in range(_server._AUTH_FAIL_MAX_PEERS - 2):
+                _server._auth_throttle(f"198.51.100.{index % 256}-{index}", now, reserve_slot=True)
+            _server._auth_throttle(spent, now - _server._AUTH_FAIL_WINDOW_SECONDS - 1.0, True)
+            for index in range(1):
+                _server._auth_throttle(f"203.0.113.{index % 256}-{index}", now, reserve_slot=True)
+
+            assert spent not in _server._auth_failures, "the spent window was not the one dropped"
+            assert _server._auth_throttle(attacker, now, reserve_slot=False), (
+                "the attacker's exhausted window was evicted and refunded by "
+                "traffic from other peers"
+            )
+        finally:
+            _server._auth_failures.clear()
+
+    def test_the_peer_map_is_bounded_when_every_window_is_live(self) -> None:
+        """Memory is a hard limit: the oldest window still goes past the cap.
+
+        With more live peers than the cap allows there is no spent entry to
+        drop, and holding the map open is the worse failure, so the eviction
+        falls back to oldest-first.  What must not happen is the map growing
+        instead, which is what an unbounded peer key would have done.
+        """
+        now = 1_000.0
+        try:
+            for index in range(_server._AUTH_FAIL_MAX_PEERS + 50):
+                _server._auth_throttle(f"198.51.100.{index % 256}-{index}", now, reserve_slot=True)
+
+            assert len(_server._auth_failures) <= _server._AUTH_FAIL_MAX_PEERS
+            newest = _server._AUTH_FAIL_MAX_PEERS + 49
+            assert f"198.51.100.{newest % 256}-{newest}" in _server._auth_failures
+            assert "198.51.100.0-0" not in _server._auth_failures
+        finally:
+            _server._auth_failures.clear()
+
     def test_the_peer_map_is_bounded(self) -> None:
         """The key is a peer address, so the map is capped rather than open.
 
