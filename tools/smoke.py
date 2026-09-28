@@ -1,19 +1,19 @@
-"""smoke.py — boot the dashboard against a real coverage.db and probe it.
+"""smoke.py — boot the dashboard against real coverage documents and probe it.
 
-End-to-end server smoke for CI: builds a minimal ``db/coverage.db`` matching
-rebrew build-db's schema v4 (``tests/conftest._build_synthetic_db``, reached
-through ``tools/_serve_harness.build_sample_db``), starts ``recoverage serve``
-on a random port, and probes the surfaces a browser hits: the SPA shell, the
-health endpoint, a target's data API, and Potato Mode.  Exits non-zero on
+End-to-end server smoke for CI: builds a minimal ``db/coverage-FAKEDLL.toml``
+matching rebrew's coverage schema (``tests/conftest.build_synthetic_coverage``,
+reached through ``tools/_serve_harness.build_sample_db``), starts ``recoverage
+serve`` on a random port, and probes the surfaces a browser hits: the SPA shell,
+the health endpoint, a target's data API, and Potato Mode.  Exits non-zero on
 any failed probe.
 
 Usage::
 
     python tools/smoke.py                 # full smoke (expects success)
-    python tools/smoke.py --expect-failure  # negative: corrupt DB must fail
+    python tools/smoke.py --expect-failure  # negative: corrupt coverage must fail
 
-No rebrew needed — the DB is built from the shared synthetic schema, so this
-runs entirely inside recoverage's own CI.
+No rebrew needed — the documents are built from the shared synthetic schema, so
+this runs entirely inside recoverage's own CI.
 """
 
 from __future__ import annotations
@@ -27,10 +27,10 @@ from _serve_harness import build_sample_db, get, running_server, scratch_project
 
 def smoke(project_dir: Path, *, expect_failure: bool = False) -> int:
     db = build_sample_db(project_dir)
-    assert db.is_file(), "sample coverage.db not built"
+    assert db.is_file(), "sample coverage document not built"
 
     if expect_failure:
-        db.write_text("corrupt!", encoding="utf-8")  # break the schema
+        db.write_text("corrupt!", encoding="utf-8")  # break the document
 
     with running_server(project_dir) as (port, proc):
         if not wait_for(lambda: get(port, "/api/health")[0] == 200):
@@ -40,14 +40,14 @@ def smoke(project_dir: Path, *, expect_failure: bool = False) -> int:
             return 1
 
         if expect_failure:
-            # Corrupt DB: the dashboard must report a degraded health status
+            # Corrupt coverage: the dashboard must report a degraded health status
             # (the SPA shell still serves 200 with its empty state — that is
             # the designed degradation, not a healthy server).
             status, body = get(port, "/api/health")
             if status != 200 or b'"degraded"' not in body:
                 print(f"expected degraded health but got status {status}: {body[:120]!r}")
                 return 1
-            print("negative smoke passed (corrupt DB reported as degraded)")
+            print("negative smoke passed (corrupt coverage reported as degraded)")
             return 0
 
         probes = {
@@ -79,7 +79,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--expect-failure",
         action="store_true",
-        help="Negative smoke: a corrupt DB must not serve 200s.",
+        help="Negative smoke: corrupt coverage must not serve 200s.",
     )
     args = parser.parse_args(argv)
 

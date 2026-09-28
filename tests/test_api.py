@@ -2,19 +2,15 @@
 
 from __future__ import annotations
 
-import contextlib
 import copy
 import json
 import logging
 import os
 import queue
 import re
-import shutil
-import sqlite3
 import threading
 import time
 import unicodedata
-import zlib
 from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
@@ -22,17 +18,11 @@ from typing import Any, ClassVar
 from wsgiref.util import setup_testing_defaults
 
 import pytest
-import zstandard
 from conftest import HAS_DB, decode_body, get_first_target, wsgi_get, wsgi_post, wsgi_request
-from rebrew.workspace import (
-    SECTION_CELLS_AGG_SQL,
-    SECTION_CELLS_COLUMN,
-    SECTION_CELLS_TABLE,
-    sqlite_ro_uri,
-)
+from coverage_fixture import cell, write_coverage
+from rebrew.coverage_toml import CoverageSnapshot, CoverageTomlError, load_coverage
 
 from recoverage import api, webapp
-from recoverage.server import _db_path as get_db_path
 
 # Typer 0.27 help paints option names with ANSI even under CliRunner
 # isolation on CI (FORCE_COLOR / a detected tty). Strip before matching
@@ -49,6 +39,62 @@ HAS_TZSET = hasattr(time, "tzset")
 
 def _plain(text: str) -> str:
     return _ANSI_RE.sub("", text)
+
+
+# ── Test-local coverage documents ──────────────────────────────────
+#
+# The suite used to build a throwaway SQLite database per fixture.  The
+# dashboard reads rebrew's clear-text coverage documents now, so a fixture is a
+# document written with coverage_fixture.write_coverage plus the one environment
+# variable that points the server at it.
+
+
+def _coverage_dir(root: Path) -> Path:
+    """The coverage directory a test-local fixture lives in.
+
+    Spelled ``db`` beneath *root* on purpose: ``RECOVERAGE_DB`` names the
+    directory itself, while rebrew's reader takes the project ROOT and resolves
+    the configured ``db_dir`` (``<root>/db`` by default) beneath it, so the two
+    only agree on the same directory when it is named this way.
+    """
+    return root / "db"
+
+
+def _snapshot_mapping(
+    root: Path, target: str, sections: dict[str, dict[str, Any]], **kwargs: Any
+) -> dict[str, CoverageSnapshot]:
+    """Write ``<root>/db/coverage-<target>.toml`` and return it as a mapping.
+
+    The shape a patched ``server.load_all_coverage_from`` has to hand back, loaded
+    through the real reader so the test asserts against what the server would
+    have read.
+    """
+    write_coverage(_coverage_dir(root), target, sections, **kwargs)
+    return {target: load_coverage(root, target)}
+
+
+def _alternating_reader(
+    monkeypatch: pytest.MonkeyPatch, mappings: list[dict[str, CoverageSnapshot]]
+) -> list[int]:
+    """Patch ``server.load_all_coverage_from`` to hand back *mappings* in turn.
+
+    The last mapping repeats once the list runs out, and the returned list
+    records the index each call served.  An unchanged directory can never
+    produce two different answers, so a response that mixed two reads shows up
+    as fields from different builds; this is how a pin to one snapshot is
+    observable from the response alone.
+    """
+    import recoverage.server as server_mod
+
+    served: list[int] = []
+
+    def _reader(_root: Path) -> dict[str, CoverageSnapshot]:
+        index = min(len(served), len(mappings) - 1)
+        served.append(index)
+        return mappings[index]
+
+    monkeypatch.setattr(server_mod, "load_all_coverage_from", _reader)
+    return served
 
 
 def assert_regen_accepted(result: tuple[str, dict[str, str], bytes]) -> None:
@@ -306,32 +352,34 @@ class TestApiHealth:
         _, headers, _ = wsgi_get("/api/health")
         assert "application/json" in headers.get("Content-Type", "")
 
-    def test_health_targets_count_excludes_schema_row(self) -> None:
-        """targets_count counts built targets, never the reserved schema row.
+    def test_health_targets_count_counts_the_documents(self) -> None:
+        """targets_count counts built targets and nothing else.
 
-        The reserved schema metadata target carries the db_version stamp, not
-        a build, so counting it would report more targets than the dropdown
-        lists.
+        The SQLite schema kept a reserved metadata row carrying the format
+        version; the document stamps its own version, so the count is exactly
+        the set of targets the coverage directory holds — counting anything
+        beside them would report more targets than the dropdown lists.
         """
-        import contextlib
-
         import recoverage.server as server_mod
 
         status, headers, body = wsgi_get("/api/health")
         assert status.startswith("200")
         data = json.loads(decode_body(body, headers))
-        with contextlib.closing(server_mod._open_db(server_mod._db_path())) as conn:
-            ids = server_mod.db_target_ids(conn.cursor())
-        assert ids, "fixture database has no built target"
-        assert server_mod.SCHEMA_TARGET not in ids
+        ids = server_mod.db_target_ids()
+        assert ids, "fixture coverage directory has no built target"
         assert data["targets_count"] == len(ids)
 
     def test_health_degraded_when_db_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """A missing coverage.db must be reported as degraded (with
+        """A missing coverage directory must be reported as degraded (with
         exists=false), not crash the endpoint or claim healthy."""
         import recoverage.api as api
+        import recoverage.server as server_mod
 
-        monkeypatch.setattr(api, "_db_path", lambda: Path("/nonexistent/coverage.db"))
+        missing = Path("/nonexistent/coverage-dir")
+        monkeypatch.setattr(api, "_db_path", lambda: missing)
+        # The freshness probes read server's own binding, so the health answer
+        # is only about a directory both halves of the read path agree on.
+        monkeypatch.setattr(server_mod, "_db_path", lambda: missing)
         status, headers, body = wsgi_get("/api/health")
         assert status.startswith("200")
         data = json.loads(decode_body(body, headers))
@@ -340,31 +388,40 @@ class TestApiHealth:
         assert "mtime" not in data["db"]
 
 
-@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+@pytest.mark.skipif(not HAS_DB, reason="No coverage database")
 class TestHealthDbMtime:
-    """/api/health's freshness stamp is WAL-aware and zone-explicit.
+    """/api/health's freshness stamp names the newest coverage document.
 
-    A rebuild commits to coverage.db-wal without necessarily moving the main
-    file's mtime, so a main-file-only stamp reports a rebuild that already
-    happened as not yet done; and an epoch float carries no zone, so a client
-    has to assume one.  mtime_utc is the same instant with the offset spelled
-    out.
+    A rebuild rewrites one ``coverage-*.toml`` per target, so reading any single
+    file would report a target that did not move; the stamp is the newest mtime
+    across the directory's documents.  ``mtime_utc`` is the same instant with
+    the offset spelled out, so a client never has to assume the host's zone.
     """
 
-    def test_mtime_follows_a_wal_only_rebuild(
+    @staticmethod
+    def _point_at(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        """A one-document coverage directory the health probe reads."""
+        import recoverage.api as api
+        import recoverage.server as server_mod
+
+        directory = _coverage_dir(tmp_path)
+        write_coverage(
+            directory,
+            "FRESH",
+            {".text": {"va": 0x1000, "size": 16, "cells": [cell(0x1000, 0x1010, "exact")]}},
+        )
+        monkeypatch.setattr(api, "_db_path", lambda: directory)
+        monkeypatch.setattr(server_mod, "_db_path", lambda: directory)
+        return directory
+
+    def test_mtime_follows_the_newest_document(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        import recoverage.api as api
-
-        db = tmp_path / "coverage.db"
-        wal = Path(f"{db}-wal")
-        db.write_bytes(b"SQLite format 3\x00")
-        wal.write_bytes(b"wal")
+        directory = self._point_at(tmp_path, monkeypatch)
+        doc = directory / "coverage-FRESH.toml"
         old_ns = 1_700_000_000_000_000_000
         new_ns = old_ns + 90 * 1_000_000_000
-        os.utime(db, ns=(old_ns, old_ns))
-        os.utime(wal, ns=(old_ns, old_ns))
-        monkeypatch.setattr(api, "_db_path", lambda: db)
+        os.utime(doc, ns=(old_ns, old_ns))
 
         status, headers, body = wsgi_get("/api/health")
         assert status.startswith("200")
@@ -372,7 +429,15 @@ class TestHealthDbMtime:
         assert data["mtime"] == pytest.approx(old_ns / 1e9)
         assert data["mtime_utc"] == "2023-11-14T22:13:20+00:00"
 
-        os.utime(wal, ns=(new_ns, new_ns))
+        # A rebuild rewrites the documents: a second target written beside the
+        # first must move the stamp, which is why the stamp cannot be one file's.
+        os.utime(doc, ns=(new_ns, new_ns))
+        other = write_coverage(
+            directory,
+            "OTHER",
+            {".text": {"va": 0x2000, "size": 16, "cells": [cell(0x2000, 0x2010, "exact")]}},
+        )
+        os.utime(other, ns=(new_ns, new_ns))
         status, headers, body = wsgi_get("/api/health")
         assert status.startswith("200")
         data = json.loads(decode_body(body, headers))["db"]
@@ -382,7 +447,7 @@ class TestHealthDbMtime:
 
     @pytest.mark.skipif(not HAS_TZSET, reason="no time.tzset() on this platform")
     def test_mtime_utc_is_utc_regardless_of_host_tz(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """The same DB stamp must render identically on a host in any zone:
+        """The same coverage stamp must render identically on a host in any zone:
         a server-local rendering would move the reported instant with TZ."""
         monkeypatch.setenv("TZ", "Asia/Tokyo")
         try:
@@ -408,14 +473,11 @@ class TestHealthDbMtime:
         before it happened.  Both fields now come from one truncating
         conversion, so a client that derives one from the other always agrees.
         """
-        import recoverage.api as api
-
-        db = tmp_path / "coverage.db"
-        db.write_bytes(b"SQLite format 3\x00")
+        directory = self._point_at(tmp_path, monkeypatch)
+        doc = directory / "coverage-FRESH.toml"
         # 2023-11-14T22:13:59.999999999Z, the last nanosecond of a second.
         ns = 1_700_000_039_999_999_999
-        os.utime(db, ns=(ns, ns))
-        monkeypatch.setattr(api, "_db_path", lambda: db)
+        os.utime(doc, ns=(ns, ns))
 
         status, headers, body = wsgi_get("/api/health")
         assert status.startswith("200")
@@ -499,40 +561,46 @@ class TestApiFunctions:
         assert data["offset"] == 0
         assert len(data["functions"]) <= 5
 
-    def test_count_and_page_share_one_read_snapshot(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """`total` and the page it paginates must come from ONE database snapshot.
+    def test_count_and_page_share_one_read_snapshot(self, tmp_path: Path, monkeypatch: Any) -> None:
+        """`total` and the page it paginates must come from ONE snapshot.
 
-        They are two separate statements, and python's sqlite3 opens a
-        deferred transaction per statement, so a `rebrew build-db` committing
-        between them served a count from one build beside rows from the next
-        (the SPA then paginates against a total the rows do not match).  The
-        handler pins the read with read_snapshot; this records the connection's
-        transaction state at both statements.
+        They are two passes over the function list, and the documents are
+        re-read per request: a `rebrew build-db` committing between them served
+        a count from one build beside rows from the next (the SPA then
+        paginates against a total the rows do not match).  The handler holds one
+        frozen CoverageSnapshot; this makes the reader answer with a DIFFERENT
+        mapping on every call and requires the response to describe one of them.
         """
-        from recoverage import api as _api
+        import recoverage.api as api
 
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
-        _api._clear_list_total_cache()
+        first = _snapshot_mapping(
+            tmp_path / "one",
+            "GAME",
+            {".text": {"va": 0x1000, "size": 16, "cells": [cell(0x1000, 0x1010, "exact")]}},
+            functions=[
+                {"va": va, "name": name, "vaStart": hex(va), "size": 16, "status": "EXACT"}
+                for va, name in ((0x1000, "_a"), (0x1010, "_b"), (0x1020, "_c"))
+            ],
+        )
+        second = _snapshot_mapping(
+            tmp_path / "two",
+            "GAME",
+            {".text": {"va": 0x1000, "size": 16, "cells": [cell(0x1000, 0x1010, "exact")]}},
+            functions=[{"va": 0x1000, "name": "_only", "vaStart": "0x1000", "size": 16}],
+        )
+        monkeypatch.setenv("RECOVERAGE_DB", str(_coverage_dir(tmp_path / "one")))
+        _alternating_reader(monkeypatch, [first, second])
+        api._clear_list_total_cache()
 
-        seen: list[bool] = []
-        orig_total = _api._function_total
-
-        def probe(c: sqlite3.Cursor, *args: Any, **kwargs: Any) -> int:
-            seen.append(c.connection.in_transaction)
-            return orig_total(c, *args, **kwargs)
-
-        monkeypatch.setattr(_api, "_function_total", probe)
-        status, headers, body = wsgi_get(f"/api/targets/{target}/functions?limit=5")
-        assert status.startswith("200")
-        assert seen, "the handler stopped routing the count through _function_total"
-        assert seen[0], "the COUNT ran outside a pinned read transaction"
-
+        status, headers, body = wsgi_get("/api/targets/GAME/functions?limit=5")
+        assert status.startswith("200"), body
         data = json.loads(decode_body(body, headers))
-        # The page SELECT ran on the same connection, inside the same
-        # transaction: the total can never exceed what that snapshot holds.
-        assert data["total"] >= len(data["functions"])
+        # `total` and the rows are two reads of the same list: a mixed answer
+        # would report three functions with one row (or the reverse).
+        assert (data["total"], [fn["name"] for fn in data["functions"]]) in (
+            (3, ["_a", "_b", "_c"]),
+            (1, ["_only"]),
+        )
 
     def test_limit_capped_at_500(self) -> None:
         target = get_first_target()
@@ -638,9 +706,12 @@ class TestFunctionStatusVocabulary:
     """
 
     def test_matches_rebrew(self) -> None:
-        from rebrew.build_db import _FUNCTION_DB_STATUSES
+        from rebrew.workspace import KNOWN_STATUSES
 
-        assert api._FUNCTION_STATUSES == _FUNCTION_DB_STATUSES
+        # The stored vocabulary plus the UNKNOWN default a catalog row falls
+        # back to, which is the set the endpoint accepts and the document's
+        # ``status`` field can carry.
+        assert frozenset({*KNOWN_STATUSES, "UNKNOWN"}) == api._FUNCTION_STATUSES
 
 
 # ── VA boundary validation (/asm endpoint) ─────────────────────────
@@ -857,32 +928,18 @@ class TestApiBytes:
     def _get(self, query: str, section: str = ".text") -> tuple[str, dict[str, str], bytes]:
         return wsgi_get(f"/api/targets/FAKEDLL/sections/{section}/bytes?{query}")
 
-    def _foreign_sections_db(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, row: str
+    def _foreign_section_doc(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        name: str,
+        definition: dict[str, Any],
     ) -> None:
-        """Point the app at a one-section DB whose sections row carries an
-        offset shape rebrew never writes (NULL or negative fileOffset)."""
-        import recoverage.api as api
-        import recoverage.server as srv
-
-        db = tmp_path / "coverage.db"
-        conn = sqlite3.connect(db)
-        conn.execute(
-            "CREATE TABLE sections (target TEXT, name TEXT, va INTEGER, size INTEGER,"
-            " fileOffset INTEGER, unitBytes INTEGER, columns INTEGER)"
-        )
-        conn.execute(f"INSERT INTO sections VALUES ({row})")
-        conn.commit()
-        conn.close()
-
-        def _tmp_db() -> sqlite3.Connection:
-            c = sqlite3.connect(sqlite_ro_uri(db), uri=True)
-            c.row_factory = sqlite3.Row
-            return c
-
-        monkeypatch.setattr(api, "_db", _tmp_db)
-        monkeypatch.setattr(srv, "_db_path", lambda: db)
-        monkeypatch.setattr(api, "_require_target", lambda c, t: None)
+        """Point the app at a one-section document whose section row carries an
+        offset shape rebrew never writes (no VA, or a negative fileOffset)."""
+        directory = _coverage_dir(tmp_path)
+        write_coverage(directory, "T", {name: {**definition, "cells": []}})
+        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
 
     def test_happy_path_serves_slice_as_hex_and_raw(self) -> None:
         status, headers, body = self._get("offset=0&size=16")
@@ -942,12 +999,18 @@ class TestApiBytes:
     def test_null_file_offset_returns_422(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A .bss-style section (NULL va/fileOffset/size) has nothing on disk
-        to slice: the endpoint must answer its JSON 422 contract instead of a
-        TypeError 500 from the pointer arithmetic."""
-        self._foreign_sections_db(tmp_path, monkeypatch, "'T', '.bss', NULL, NULL, NULL, 16, 8")
+        """A .bss-style section (no VA, no file extent) has nothing on disk to
+        slice: the endpoint must answer its JSON 422 contract instead of a
+        TypeError 500 from the pointer arithmetic.
+
+        The document stores both absences as ``""``, which rebrew's reader
+        keeps as ``None``. A stored 0 is a REAL file offset — a section that
+        starts at the beginning of the file — and must not be read as absence,
+        so this test writes no ``fileOffset`` key at all.
+        """
+        self._foreign_section_doc(tmp_path, monkeypatch, ".bss", {"size": 0, "unitBytes": 16})
         status, headers, body = wsgi_get("/api/targets/T/sections/.bss/bytes?offset=0&size=4")
-        assert status.startswith("422")
+        assert status.startswith("422"), body
         data = json.loads(decode_body(body, headers))
         assert data["error"] == "section has no file backing"
 
@@ -965,13 +1028,18 @@ class TestApiBytes:
     def test_negative_file_offset_is_rejected(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A foreign DB whose sections row carries a negative fileOffset (a
-        rebrew-built DB cannot: the schema CHECKs it >= 0) must get the 400
+        """A foreign document whose section carries a negative fileOffset (a
+        rebrew-built one cannot: the writer clamps it >= 0) must get the 400
         contract instead of Python's negative-index slicing silently serving
         tail-of-binary bytes — same guard as /asm."""
-        self._foreign_sections_db(tmp_path, monkeypatch, "'T', '.text', 4096, 4096, -4096, 16, 8")
+        self._foreign_section_doc(
+            tmp_path,
+            monkeypatch,
+            ".text",
+            {"va": 4096, "size": 4096, "fileOffset": -4096, "unitBytes": 16, "columns": 8},
+        )
         status, headers, body = wsgi_get("/api/targets/T/sections/.text/bytes?offset=0&size=4")
-        assert status.startswith("400")
+        assert status.startswith("400"), body
         data = json.loads(decode_body(body, headers))
         assert data["code"] == "bad_request"
 
@@ -1526,21 +1594,30 @@ class TestSseEvents:
     # WAL-only-commit coverage for _snapshot_db_mtime lives in
     # test_server.py::TestDbEtag (same function object; kept in one place).
 
-    def test_snapshot_ignores_shm_file(
+    def test_snapshot_ignores_non_coverage_files(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """-shm is touched by every connection — it must NOT change the
-        snapshot or ETags would be unstable between requests."""
-        import recoverage.api as api
-        import recoverage.server as srv
+        """A stray file beside the documents must NOT change the snapshot or
+        ETags would be unstable between requests.
 
-        db = tmp_path / "coverage.db"
-        db.write_bytes(b"x" * 100)
-        monkeypatch.setattr(srv, "_db_path", lambda: db)
+        The SQLite era had ``-shm`` touched by every connection; the same
+        property now belongs to anything in the directory that is not a
+        ``coverage-*.toml`` document.
+        """
+        import recoverage.api as api
+
+        directory = _coverage_dir(tmp_path)
+        write_coverage(
+            directory,
+            "GAME",
+            {".text": {"va": 0x1000, "size": 16, "cells": [cell(0x1000, 0x1010, "exact")]}},
+        )
+        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
         before = api._snapshot_db_mtime()
         assert before is not None
-        shm = tmp_path / "coverage.db-shm"
-        shm.write_bytes(b"z" * 100)
+        (directory / "coverage.db-shm").write_bytes(b"z" * 100)
+        (directory / "coverage.db").write_bytes(b"z" * 100)
+        (directory / "notes.txt").write_bytes(b"z" * 100)
         after = api._snapshot_db_mtime()
         assert after == before
 
@@ -2095,50 +2172,49 @@ class TestErrorResponseShape:
         assert "capstone" in data["error"]
 
     def test_503_db_unavailable(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        import recoverage.api as api
+        import recoverage.server as server_mod
 
         target = get_first_target()
         if not target:
             pytest.skip("No targets in DB")
 
-        def _boom() -> sqlite3.Connection:
-            raise sqlite3.OperationalError("no such file")
+        def _boom(_root: Path) -> dict[str, CoverageSnapshot]:
+            raise CoverageTomlError("no readable coverage document")
 
-        monkeypatch.setattr(api, "_db", _boom)
+        monkeypatch.setattr(server_mod, "load_all_coverage_from", _boom)
         status, headers, body = wsgi_get(f"/api/targets/{target}/stats")
         self._check(status, headers, body, "db_unavailable")
 
     def test_503_db_unavailable_is_logged_with_cause(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """A swallowed sqlite3.Error in the shared target cursor must not make
-        a missing/corrupt database invisible: the failure is logged with the
+        """A swallowed CoverageTomlError in the shared target snapshot must not
+        make an unreadable document invisible: the failure is logged with the
         request context and the cause.  The 503 body names the exception class
-        but not its message, which quotes the absolute database path and would
+        but not its message, which quotes the absolute coverage path and would
         reach any unauthenticated caller (--allow-remote)."""
         import logging as _logging
 
         import recoverage.api as api
+        import recoverage.server as server_mod
 
         target = get_first_target()
         if not target:
             pytest.skip("No targets in DB")
 
-        def _boom() -> sqlite3.Connection:
-            raise sqlite3.OperationalError("unable to open database file")
+        def _boom(_root: Path) -> dict[str, CoverageSnapshot]:
+            raise CoverageTomlError("coverage-GAME.toml: malformed TOML (torn file)")
 
-        monkeypatch.setattr(api, "_db", _boom)
+        monkeypatch.setattr(server_mod, "load_all_coverage_from", _boom)
+        api._clear_stats_cache()
         with caplog.at_level(_logging.WARNING, logger="recoverage"):
             status, headers, body = wsgi_get(f"/api/targets/{target}/stats")
         self._check(status, headers, body, "db_unavailable")
         data = json.loads(decode_body(body, headers))
-        assert "OperationalError" in data["detail"]
-        assert "unable to open database file" not in data["detail"]
+        assert "CoverageTomlError" in data["detail"]
+        assert "malformed TOML" not in data["detail"]
         logged = [rec.getMessage() for rec in caplog.records]
-        assert any(
-            "Database unavailable" in msg and "unable to open database file" in msg
-            for msg in logged
-        )
+        assert any("Coverage unavailable" in msg and "malformed TOML" in msg for msg in logged)
 
 
 # ── Host-header validation & CORS allowlist (security) ─────────────
@@ -2370,14 +2446,15 @@ class TestConfiguredUnbuiltTarget:
         assert get_first_target() in ids
 
     def test_db_down_still_lists_config_only_targets(self, monkeypatch: Any) -> None:
-        """With the DB unreadable, /api/targets falls back to the config list
-        instead of 500ing — the SPA needs a target dropdown either way."""
-        import recoverage.api as api
+        """With the coverage documents unreadable, /api/targets falls back to
+        the config list instead of 500ing — the SPA needs a target dropdown
+        either way."""
+        import recoverage.server as server_mod
 
-        def _boom() -> sqlite3.Connection:
-            raise sqlite3.OperationalError("unable to open database file")
+        def _boom(_root: Path) -> dict[str, CoverageSnapshot]:
+            raise CoverageTomlError("no readable coverage document")
 
-        monkeypatch.setattr(api, "_db", _boom)
+        monkeypatch.setattr(server_mod, "load_all_coverage_from", _boom)
         status, headers, body = wsgi_get("/api/targets")
         assert status.startswith("200")
         ids = [t["id"] for t in json.loads(decode_body(body, headers))["targets"]]
@@ -2408,68 +2485,31 @@ class TestServeBindGuard:
         assert "--cors-origin" in help_text
 
 
-class TestPostConnectSqliteError:
-    """Queries that fail after connect (corrupt DB, SQLITE_BUSY) must keep
-    the JSON 503 contract instead of surfacing Bottle's HTML 500."""
+class TestPostResolveReadFailure:
+    """A coverage read that fails AFTER the target resolved (the document
+    replaced between the stat and the parse) must keep the JSON 503 contract
+    instead of surfacing Bottle's HTML 500."""
 
-    @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
-    def test_query_failure_returns_json_503(self, monkeypatch: Any) -> None:
-        import recoverage.api as api
+    @pytest.mark.skipif(not HAS_DB, reason="No coverage database")
+    def test_read_failure_returns_json_503(self, monkeypatch: Any) -> None:
+        import recoverage.server as server_mod
 
         target = get_first_target()
         if not target:
             pytest.skip("No targets in DB")
 
-        # A warm /stats memo returns before touching the cursor at all; this
-        # test exercises the post-connect query-failure path, so it must
-        # start from a cold memo.
+        # A warm /stats memo returns before reading coverage at all; this test
+        # exercises the read-failure path, so it must start from a cold memo.
         api._clear_stats_cache()
 
-        real_conn = api._db()
+        def _boom(_target: str) -> CoverageSnapshot:
+            raise CoverageTomlError("coverage-GAME.toml: cannot read (torn file)")
 
-        class _BoomConn:
-            # `BEGIN` succeeds so the pinned snapshot really opens; every
-            # other statement is the failure the endpoint must turn into 503.
-            in_transaction = False
-
-            def execute(self, sql, *a, **k):
-                if sql == "BEGIN":
-                    return
-                raise sqlite3.OperationalError("no such table: section_cell_stats")
-
-            def cursor(self):
-                return _BoomCursor()
-
-            def rollback(self) -> None:
-                pass
-
-            def close(self) -> None:
-                pass
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *a):
-                return False
-
-        class _BoomCursor:
-            connection = _BoomConn()
-
-            def execute(self, *a, **k):
-                raise sqlite3.OperationalError("no such table: section_cell_stats")
-
-            def fetchone(self) -> None:
-                return None
-
-            def fetchall(self) -> list:
-                return []
-
-        monkeypatch.setattr(api, "_db", lambda: _BoomConn())
-        try:
-            status, headers, body = wsgi_get(f"/api/targets/{target}/stats")
-        finally:
-            real_conn.close()
-        assert status.startswith("503")
+        # The target resolves fine (the shared fixture's documents are
+        # readable); the read that builds the answer is what fails.
+        monkeypatch.setattr(server_mod, "coverage_for", _boom)
+        status, headers, body = wsgi_get(f"/api/targets/{target}/stats")
+        assert status.startswith("503"), body
         data = json.loads(decode_body(body, headers))
         assert data["error"] == "Database unavailable"
         assert data["code"] == "db_unavailable"
@@ -2489,57 +2529,37 @@ class TestNormalizeOriginEdges:
         assert _normalize_origin("http://[::1]:8001") == "http://[::1]:8001"
 
 
-def _make_schema_gate_db(tmp_path: Path, cells: list[tuple[str, int, int, str]] = ()) -> Any:
-    """A minimal but schema-gate-valid v4 DB (passes _db()'s shape check),
-    optionally seeded with (section, start, end, state) cells for target GAME."""
-    db = tmp_path / "coverage.db"
-    conn = sqlite3.connect(db)
-    c = conn.cursor()
-    c.execute("CREATE TABLE metadata (target TEXT, key TEXT, value TEXT)")
-    c.execute(
-        "CREATE TABLE sections (target TEXT, name TEXT, va INTEGER, size INTEGER, "
-        "fileOffset INTEGER, unitBytes INTEGER, columns INTEGER)"
+def _game_coverage(
+    tmp_path: Path,
+    cells: tuple[tuple[str, int, int, str], ...] = (),
+    functions: tuple[dict[str, Any], ...] = (),
+    globals_: tuple[dict[str, Any], ...] = (),
+    *,
+    sections: dict[str, dict[str, Any]] | None = None,
+) -> Path:
+    """Write a ``GAME`` coverage document and return the coverage DIRECTORY.
+
+    The SQLite era built a schema-gate-valid database here; the reader takes a
+    document now, so the same fixture is a ``coverage-GAME.toml``.  *cells* is
+    the compact ``(section, start, end, state)`` tuple list the old helper
+    seeded: a section named only there gets a row anchored at its first cell.
+    """
+    built: dict[str, dict[str, Any]] = {
+        name: {**definition, "cells": list(definition.get("cells", []))}
+        for name, definition in (sections or {}).items()
+    }
+    for section_name, start, end, state in cells:
+        row = built.setdefault(section_name, {"va": start, "size": end - start, "cells": []})
+        row["cells"].append(cell(start, end, state))
+    directory = _coverage_dir(tmp_path)
+    write_coverage(
+        directory,
+        "GAME",
+        built,
+        functions=list(functions),
+        globals_=list(globals_),
     )
-    c.execute(
-        "CREATE TABLE cells (id INTEGER PRIMARY KEY AUTOINCREMENT, target TEXT, "
-        "section_name TEXT, start INTEGER, end INTEGER, span INTEGER, state TEXT, "
-        "functions TEXT DEFAULT '[]', label TEXT, parent_function TEXT)"
-    )
-    c.execute(
-        "CREATE TABLE functions (target TEXT, va INTEGER, name TEXT, vaStart TEXT, "
-        "size INTEGER, "
-        "fileOffset INTEGER, status TEXT, module TEXT, cflags TEXT, symbol TEXT, "
-        "markerType TEXT, ghidra_name TEXT, list_name TEXT, is_thunk INTEGER, "
-        "is_export INTEGER, sha256 TEXT, files TEXT, detected_by TEXT, size_by_tool TEXT, "
-        "textOffset INTEGER, blocker TEXT, blockerDelta INTEGER, size_reason TEXT, "
-        "similarity REAL)"
-    )
-    c.execute(
-        "CREATE TABLE globals (target TEXT, name TEXT, va INTEGER, decl TEXT, files TEXT, "
-        "module TEXT, size INTEGER)"
-    )
-    c.execute(
-        "CREATE TABLE verify_results (target TEXT, va INTEGER, verified_at TEXT, "
-        "byte_delta INTEGER, diff_lines TEXT, similarity REAL)"
-    )
-    c.execute("CREATE TABLE history (id INTEGER)")
-    c.execute(
-        "CREATE VIEW section_cell_stats AS SELECT target, section_name, "
-        "COUNT(*) AS total_cells, 0 AS exact_count, 0 AS reloc_count, 0 AS near_match_count, "
-        "0 AS stub_count, 0 AS padding_count, 0 AS data_count, 0 AS thunk_count, "
-        "0 AS none_count, 0 AS proven_count, 0 AS size_mismatch_count "
-        "FROM cells GROUP BY target, section_name"
-    )
-    c.execute("INSERT INTO metadata VALUES ('GAME', 'db_version', '\"4\"')")
-    if cells:
-        c.executemany(
-            "INSERT INTO cells (target, section_name, start, end, span, state)"
-            " VALUES ('GAME', ?, ?, ?, 1, ?)",
-            list(cells),
-        )
-    conn.commit()
-    conn.close()
-    return db
+    return directory
 
 
 def _fake_request(query: dict[str, str] | None = None) -> Any:
@@ -2556,26 +2576,18 @@ def _fake_request(query: dict[str, str] | None = None) -> Any:
     return type("R", (), {"headers": {}, "query": dict(query or {}), "environ": {}})()
 
 
-def _point_app_at_db(monkeypatch: pytest.MonkeyPatch, db: Any) -> Any:
-    """Point the app at a synthetic DB and return the mock request."""
+def _point_app_at_coverage(monkeypatch: pytest.MonkeyPatch, directory: Path) -> Any:
+    """Point the app at a coverage directory and return the mock request.
+
+    ``RECOVERAGE_DB`` names the directory, which is the one seam both halves of
+    the read path resolve through: ``server``'s freshness stats and ``api``'s
+    target list.
+    """
     import recoverage.api as api
     import recoverage.server as server_mod
 
-    # The request path reaches the database through server._db(), whose body
-    # resolves _open_db in server's module globals, so that is the binding a
-    # monkeypatch has to replace; patching api._open_db is inert. The wrapper
-    # delegates to the real opener so the connection still takes the
-    # coverage_db_lock a production read holds.
-    real_open_db = server_mod._open_db
-
-    def _open_like(p: Any) -> Any:
-        return real_open_db(p)
-
     req = _fake_request()
-    monkeypatch.setattr(api, "_db_path", lambda: db)
-    monkeypatch.setattr("recoverage.server._db_path", lambda: db)
-    monkeypatch.setattr(server_mod, "_open_db", _open_like)
-    monkeypatch.setattr(api, "_require_target", lambda c, t: None)
+    monkeypatch.setenv("RECOVERAGE_DB", str(directory))
     # Both modules bind `request` at import time, and every header read goes
     # through server._header, so a fake that patched only api.request left the
     # real (empty) request answering Accept-Encoding.
@@ -2587,35 +2599,47 @@ def _point_app_at_db(monkeypatch: pytest.MonkeyPatch, db: Any) -> Any:
 class TestDataMarkerFilter:
     """GLOBAL/DATA/VTABLE/STRING rows are data, not functions.
 
-    The filter has to survive a database whose ``functions.markerType`` is
-    nullable: SQLite evaluates ``NULL NOT IN (...)`` to NULL, which WHERE
-    rejects, so a plain NOT IN silently drops every unmarked function from
-    the list, from the Potato table, and from the by-status counts.  An
-    unknown marker type is a function (rebrew's own column is
-    ``NOT NULL DEFAULT 'FUNCTION'``), so the row must be counted.
+    The marker crosses the document boundary as text, so an absent one arrives
+    as ``""`` and lands on the function side — the same verdict rebrew's own
+    ``NOT NULL DEFAULT 'FUNCTION'`` column gives.  A filter that dropped the
+    unmarked row would silently hide every function from the list, from the
+    Potato table and from the by-status counts.
     """
 
-    def _db(self, tmp_path: Any) -> Any:
-        db = _make_schema_gate_db(tmp_path)
-        conn = sqlite3.connect(db)
-        c = conn.cursor()
-        c.executemany(
-            "INSERT INTO functions (target, va, name, vaStart, size, status, markerType)"
-            " VALUES ('GAME', ?, ?, ?, 1, 'exact', ?)",
-            [
-                (0x1000, "_fn", "0x1000", "FUNCTION"),
-                (0x1010, "_unmarked", "0x1010", None),
-                (0x1020, "_gvar", "0x1020", "GLOBAL"),
-            ],
+    def _doc(self, tmp_path: Any) -> Path:
+        return _game_coverage(
+            tmp_path,
+            functions=(
+                {
+                    "va": 0x1000,
+                    "name": "_fn",
+                    "vaStart": "0x1000",
+                    "size": 1,
+                    "status": "exact",
+                    "markerType": "FUNCTION",
+                },
+                {
+                    "va": 0x1010,
+                    "name": "_unmarked",
+                    "vaStart": "0x1010",
+                    "size": 1,
+                    "status": "exact",
+                },
+                {
+                    "va": 0x1020,
+                    "name": "_gvar",
+                    "vaStart": "0x1020",
+                    "size": 1,
+                    "status": "exact",
+                    "markerType": "GLOBAL",
+                },
+            ),
         )
-        conn.commit()
-        conn.close()
-        return db
 
     def test_list_keeps_unmarked_functions(self, tmp_path: Any, monkeypatch: Any) -> None:
         import recoverage.api as api
 
-        _point_app_at_db(monkeypatch, self._db(tmp_path))
+        _point_app_at_coverage(monkeypatch, self._doc(tmp_path))
         body = json.loads(api.handle_api_functions_list("GAME"))
         assert {fn["name"] for fn in body["functions"]} == {"_fn", "_unmarked"}
         assert body["total"] == 2
@@ -2623,122 +2647,65 @@ class TestDataMarkerFilter:
     def test_by_status_counts_unmarked_functions(self, tmp_path: Any, monkeypatch: Any) -> None:
         import recoverage.api as api
 
-        _point_app_at_db(monkeypatch, self._db(tmp_path))
+        _point_app_at_coverage(monkeypatch, self._doc(tmp_path))
         body = json.loads(api.handle_api_stats("GAME"))
         assert body["functions_by_status"] == {"exact": 2}
 
 
-def _drop_section_row(conn: sqlite3.Connection) -> None:
-    """Leave the materialized cache covering only .text.
-
-    The fixture's section_cell_stats is a view over cells, so a partial
-    cache is staged as the table a hand-made or half-rebuilt database
-    carries: same columns, fewer sections.
-    """
-    conn.execute("DROP VIEW section_cell_stats")
-    conn.execute(
-        "CREATE TABLE section_cell_stats (target TEXT, section_name TEXT, "
-        "total_cells INTEGER, exact_count INTEGER, reloc_count INTEGER, "
-        "near_match_count INTEGER, stub_count INTEGER, padding_count INTEGER, "
-        "data_count INTEGER, thunk_count INTEGER, none_count INTEGER, "
-        "proven_count INTEGER, size_mismatch_count INTEGER)"
-    )
-    conn.execute(
-        "INSERT INTO section_cell_stats VALUES ('GAME', '.text', 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0)"
-    )
-
-
 class TestDataSectionBuckets:
-    """/data reads the per-section buckets through the shared reader.
+    """/data reports a bucket row for every section the document carries.
 
-    ``server.section_bucket_rows`` carries the cache-first policy every
-    section_cell_stats consumer owes: prefer the materialized cache,
-    re-aggregate a section it omits from `cells`, and treat an absent table
-    as an empty one.  /data ran its own SELECT, so a cache covering only
-    some of the target's sections left the rest with no buckets at all,
-    which is the one case a presence check misses.
+    The SQLite era preferred a materialized ``section_cell_stats`` cache and
+    re-aggregated the sections it omitted, which a presence check missed; the
+    document stores cells, so the buckets are always derived from them and no
+    section can be dropped.
     """
 
-    #: (section, start, end, state) cells, two sections so a partial cache
-    #: leaves a visible gap.
-    CELLS: ClassVar[list[tuple[str, int, int, str]]] = [
+    #: (section, start, end, state) cells, two sections so a dropped one is
+    #: visible.
+    CELLS: ClassVar[tuple[tuple[str, int, int, str], ...]] = (
         (".text", 0x1000, 0x1004, "exact"),
         (".data", 0x2000, 0x2002, "none"),
-    ]
+    )
 
-    def _db(self, tmp_path: Any) -> Any:
-        db = _make_schema_gate_db(tmp_path, cells=self.CELLS)
-        conn = sqlite3.connect(db)
-        c = conn.cursor()
-        c.executemany(
-            "INSERT INTO sections (target, name, va, size) VALUES ('GAME', ?, ?, 2)",
-            [(".text", 0x1000), (".data", 0x2000)],
-        )
-        conn.commit()
-        conn.close()
-        return db
+    def _doc(self, tmp_path: Any) -> Path:
+        return _game_coverage(tmp_path, cells=self.CELLS)
 
-    def _buckets(self, db: Any, monkeypatch: Any) -> dict[str, Any]:
+    def test_every_section_gets_buckets(self, tmp_path: Any, monkeypatch: Any) -> None:
         import recoverage.api as api
 
-        _point_app_at_db(monkeypatch, db)
-        body = json.loads(api.handle_api_data("GAME"))
-        return body["section_cell_stats"]
-
-    def test_partial_cache_fills_the_gap(self, tmp_path: Any, monkeypatch: Any) -> None:
-        db = self._db(tmp_path)
-        conn = sqlite3.connect(db)
-        _drop_section_row(conn)
-        conn.commit()
-        conn.close()
-
-        buckets = self._buckets(db, monkeypatch)
+        _point_app_at_coverage(monkeypatch, self._doc(tmp_path))
+        buckets = json.loads(api.handle_api_data("GAME"))["section_cell_stats"]
         assert set(buckets) == {".text", ".data"}
         assert buckets[".text"]["total_cells"] == 1
         assert buckets[".data"]["none"] == 1
 
-    def test_section_filtered_payload_gaps_too(self, tmp_path: Any, monkeypatch: Any) -> None:
-        """``?section=`` narrows the cells, not the section set: the one
-        section it names is exactly the one a partial cache can be missing."""
+    def test_section_filtered_payload_keeps_the_named_section(
+        self, tmp_path: Any, monkeypatch: Any
+    ) -> None:
+        """``?section=`` narrows the cells, not the section set: the one section
+        it names is exactly the one a dropped bucket would hide."""
         import recoverage.api as api
-
-        db = self._db(tmp_path)
-        conn = sqlite3.connect(db)
-        _drop_section_row(conn)
-        conn.commit()
-        conn.close()
-
-        _point_app_at_db(monkeypatch, db)
-        req = _fake_request({"section": ".data"})
-        monkeypatch.setattr(api, "request", req)
         import recoverage.server as server_mod
 
+        _point_app_at_coverage(monkeypatch, self._doc(tmp_path))
+        req = _fake_request({"section": ".data"})
+        monkeypatch.setattr(api, "request", req)
         monkeypatch.setattr(server_mod, "request", req)
         body = json.loads(api.handle_api_data("GAME"))
         assert body["section_cell_stats"][".data"]["none"] == 1
 
-    def test_absent_table_degrades_to_cells(self, tmp_path: Any) -> None:
-        """A database without the materialized table still has to serve.
-
-        The schema gate refuses such a file to every endpoint, so this
-        drives the payload builder directly: the reader answers from `cells`
-        rather than raising `no such table`, which is the same degrade the
-        other surfaces make.
-        """
+    def test_builder_derives_buckets_from_the_snapshot(
+        self, tmp_path: Any, monkeypatch: Any
+    ) -> None:
+        """The payload builder needs no materialized stats: it derives every
+        bucket from the snapshot's own cells rather than raising over a missing
+        cache object."""
         import recoverage.api as api
 
-        db = self._db(tmp_path)
-        conn = sqlite3.connect(db)
-        conn.execute("DROP VIEW section_cell_stats")
-        conn.commit()
-        conn.close()
-
-        conn = sqlite3.connect(sqlite_ro_uri(db), uri=True)
-        conn.row_factory = sqlite3.Row
-        try:
-            payload = json.loads(api._read_data_raw(conn.cursor(), "GAME", None))
-        finally:
-            conn.close()
+        directory = self._doc(tmp_path)
+        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+        payload = json.loads(api._build_data_raw(load_coverage(tmp_path, "GAME"), "GAME", None))
         assert set(payload["section_cell_stats"]) == {".text", ".data"}
         assert payload["section_cell_stats"][".text"]["total_cells"] == 1
 
@@ -2752,13 +2719,14 @@ class TestDataPayloadMemo:
     """
 
     def _make_db(self, tmp_path: Any) -> Any:
-        return _make_schema_gate_db(tmp_path)
+        return _game_coverage(tmp_path)
 
     def _patch(self, tmp_path: Any, monkeypatch: Any) -> Any:
-        """Point the app at a synthetic DB and return the mock request."""
+        """Point the app at a synthetic coverage directory and return the mock
+        request."""
         import recoverage.api as api
 
-        req = _point_app_at_db(monkeypatch, self._make_db(tmp_path))
+        req = _point_app_at_coverage(monkeypatch, self._make_db(tmp_path))
         api._clear_data_cache()
         return req
 
@@ -2789,7 +2757,7 @@ class TestDataPayloadMemo:
         assert len(api._DATA_CACHE) == 0
 
     def test_memo_self_invalidates_on_db_change(self, tmp_path: Any, monkeypatch: Any) -> None:
-        """A DB fingerprint change (rebuild) must empty the memo — a memo
+        """A document fingerprint change (rebuild) must empty the memo — a memo
         keyed on a constant would pass the explicit-clear test above."""
         import os
 
@@ -2799,12 +2767,14 @@ class TestDataPayloadMemo:
 
         api.handle_api_data("GAME")
         assert len(api._DATA_CACHE) == 1
-        # Simulate a rebuild: bump the DB's mtime (same content, new time).
-        st = api._db_path().stat()
-        os.utime(api._db_path(), (st.st_atime + 2, st.st_mtime + 2))
+        # Simulate a rebuild: the document's stat moves (same cells, new
+        # mtime), which is the change token every memo keys on.
+        doc = api._db_path() / "coverage-GAME.toml"
+        st = doc.stat()
+        os.utime(doc, ns=(st.st_atime_ns + 2 * 10**9, st.st_mtime_ns + 2 * 10**9))
         api.handle_api_data("GAME")
         # A constant fingerprint would still hold ONE key; two keys prove
-        # the snapshot is fingerprint-sensitive (the changed mtime produced
+        # the snapshot is fingerprint-sensitive (the changed stat produced
         # a different cache key — a miss, not a stale hit).
         assert len(api._DATA_CACHE) == 2
 
@@ -2921,9 +2891,9 @@ class TestDataPayloadMemo:
         release: threading.Event,
         query: dict[str, str] | None = None,
     ) -> tuple[Any, list[int], dict[str, str]]:
-        """Patch ``_open_db`` to record every call and park the FIRST caller
-        on *release* — freezing the payload build mid-flight so the test can
-        observe what concurrent requests do while a build is in progress.
+        """Patch the coverage read to record every call and park the FIRST
+        caller on *release* — freezing the payload build mid-flight so the test
+        can observe what concurrent requests do while a build is in progress.
 
         Also installs thread-independent request/response stand-ins for both
         the ``server`` and ``api`` namespaces: worker threads have no bottle
@@ -2942,26 +2912,26 @@ class TestDataPayloadMemo:
 
         open_calls: list[int] = []
         lock = threading.Lock()
-        # The payload build opens its connection through server._db(), whose
-        # body resolves _open_db in server's module namespace.
-        real_open_db = server_mod._open_db
+        # The payload build reads the target's snapshot through
+        # server.coverage_for, which is the one read the build cannot skip.
+        real_coverage_for = server_mod.coverage_for
 
-        def counting_open(p: Any) -> Any:
+        def counting_coverage_for(t: str) -> Any:
             with lock:
                 open_calls.append(1)
                 first = len(open_calls) == 1
             if first:
-                assert release.wait(timeout=15), "builder parked forever in _open_db"
-            return real_open_db(p)
+                assert release.wait(timeout=15), "builder parked forever reading coverage"
+            return real_coverage_for(t)
 
-        monkeypatch.setattr(server_mod, "_open_db", counting_open)
+        monkeypatch.setattr(server_mod, "coverage_for", counting_coverage_for)
 
         fake_req: Any = _fake_request(query)
         query = fake_req.query
         fake_resp: Any = type(
             "R", (), {"content_type": None, "set_header": lambda self, k, v: None}
         )()
-        # The query-carrying stand-in replaces the one _point_app_at_db
+        # The query-carrying stand-in replaces the one _point_app_at_coverage
         # installed, and it has to go into BOTH namespaces: api._query_param
         # reads request.query from api's globals, and server's header helpers
         # read request.headers from server's. Installing it only in server left
@@ -2985,8 +2955,8 @@ class TestDataPayloadMemo:
         A rebuild broadcast clears the memo and wakes every SSE client, which
         all refetch /data at once; without single-flight each of those misses
         re-runs the full-table queries + serialization.  The first builder is
-        frozen inside _open_db while the rest arrive: each must come back with
-        identical bytes having opened the DB zero extra times."""
+        frozen inside the coverage read while the rest arrive: each must come
+        back with identical bytes having read the documents zero extra times."""
         import recoverage.api as api
 
         release = threading.Event()
@@ -3010,8 +2980,8 @@ class TestDataPayloadMemo:
         barrier.wait(timeout=15)
 
         # Give the followers time to reach the checkout point while the
-        # builder sits frozen in _open_db; a duplicate build would show up as
-        # a second _open_db call.
+        # builder sits frozen in the coverage read; a duplicate build would show
+        # up as a second read.
         time.sleep(0.3)
         assert len(open_calls) <= 1, "concurrent cold miss started a duplicate build"
         release.set()
@@ -3055,7 +3025,7 @@ class TestDataPayloadMemo:
             try:
                 t.join(timeout=1.0)
                 assert t.is_alive(), "follower did not wait for the in-flight build"
-                assert open_calls == [], "follower opened the DB despite an in-flight build"
+                assert open_calls == [], "follower read coverage despite an in-flight build"
                 api._DATA_CACHE[key] = {"raw": b'{"memoized": true}'}
             finally:
                 built.set()
@@ -3107,9 +3077,9 @@ class TestDataPayloadMemo:
             t.start()
             t.join(timeout=0.3)
             assert t.is_alive(), "follower did not wait for the in-flight build"
-            assert open_calls == [], "follower opened the DB despite an in-flight build"
+            assert open_calls == [], "follower read coverage despite an in-flight build"
             built.set()
-            release.set()  # the follower's own build may now open the DB
+            release.set()  # the follower's own build may now read the documents
             t.join(timeout=15)
             assert not t.is_alive(), "404 path deadlocked the follower"
             kind, resp = outcome[0]
@@ -3476,26 +3446,27 @@ class TestDbWatcherResilience:
             thread.join(timeout=2)
 
 
-class TestDataEndpointSchemaGate:
-    """/data must go through the _db() schema gate like every other endpoint,
-    so an incomplete-schema DB yields the clear 503 contract."""
+class TestDataEndpointUnreadableCoverage:
+    """/data must answer the shared 503 contract for unreadable coverage, like
+    every other endpoint — an unreadable document is not a 500."""
 
-    def test_data_503_when_db_gate_fails(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_data_503_when_the_documents_are_unreadable(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         import recoverage.api as api
+        import recoverage.server as server_mod
 
         api._clear_data_cache()  # drop memo entries earlier tests left behind
         target = get_first_target()
         if not target:
             pytest.skip("No targets in DB")
 
-        def _boom() -> sqlite3.Connection:
-            raise sqlite3.OperationalError(
-                "coverage.db schema is incomplete (missing tables/views)"
-            )
+        def _boom(_root: Path) -> dict[str, CoverageSnapshot]:
+            raise CoverageTomlError("coverage-GAME.toml: malformed TOML")
 
-        monkeypatch.setattr(api, "_db", _boom)
+        monkeypatch.setattr(server_mod, "load_all_coverage_from", _boom)
         status, _, body = wsgi_get(f"/api/targets/{target}/data")
-        assert status.startswith("503")
+        assert status.startswith("503"), body
         data = json.loads(decode_body(body, {}))
         assert data["code"] == "db_unavailable"
 
@@ -3513,11 +3484,11 @@ class TestKnownSchemaContract:
         status, _, body = wsgi_get(f"/api/targets/{target}/data")
         assert status.startswith("200")
         data = json.loads(decode_body(body, {}))
-        assert data["known_schema"] == sorted(server_mod.KNOWN_SCHEMA_VERSIONS)
+        assert data["known_schema"] == server_mod.known_schema_versions()
         for sec in data["sections"].values():
             assert isinstance(sec["cells"], list)
-            for cell in sec["cells"]:
-                assert {"start", "end", "state"} <= cell.keys()
+            for served_cell in sec["cells"]:
+                assert {"start", "end", "state"} <= served_cell.keys()
 
     def test_cells_omit_row_id(self) -> None:
         """No consumer reads cells.id, and as the only high-entropy column it
@@ -3538,149 +3509,83 @@ class TestKnownSchemaContract:
         assert {"start", "end", "span", "state"} <= seen
 
 
-class TestMaterializedCellsCache:
-    """recoverage serves rebrew's precomputed per-section cell JSON.
+class TestServedCellsComeFromTheSnapshot:
+    """The /data cells are the document's cells, through the ONE serializer.
 
-    build_db writes ``section_cells_json`` so a dashboard does not re-run
-    ``json_group_array`` over every cell; the endpoint prefers it and falls
-    back to the live query when a DB predates it.  The two paths must be
-    interchangeable, so this pins them to byte-identical payloads — a
-    divergence here silently changes what every grid renders.
-
-    The cache is encoded here with zstd directly rather than through
-    ``encode_section_cells``. Going through rebrew's encoder would hide a
-    decoder that cannot read a frame this server might be handed. The column
-    name is still what selects the codec.
+    rebrew used to materialize a zstd ``section_cells_json`` cache beside the
+    ``cells`` table, and the endpoint had to prefer it while falling back to a
+    live query — two paths that had to agree byte for byte, and a stale-coded
+    cache that had to be declined rather than mis-decoded.  The document IS the
+    source now, so what is left to pin is that the endpoint renders every
+    section through ``server.cells_json`` rather than encoding cells a second
+    way.
     """
 
     @staticmethod
-    def _encode(cells_json: str) -> bytes:
-        return zstandard.ZstdCompressor(level=3).compress(cells_json.encode("utf-8"))
+    def _doc(tmp_path: Path) -> Path:
+        """Two sections with a mix of cell states, so a dropped or re-encoded
+        cell is visible in the payload."""
+        directory = _coverage_dir(tmp_path)
+        write_coverage(
+            directory,
+            "GAME",
+            {
+                ".text": {
+                    "va": 0x1000,
+                    "size": 32,
+                    "fileOffset": 0x200,
+                    "unitBytes": 16,
+                    "columns": 8,
+                    "cells": [
+                        cell(0x1000, 0x1004, "exact", functions=("f",)),
+                        cell(0x1004, 0x1008, "padding"),
+                    ],
+                },
+                ".data": {
+                    "va": 0x2000,
+                    "size": 16,
+                    "fileOffset": 0x1200,
+                    "unitBytes": 16,
+                    "columns": 8,
+                    "cells": [cell(0x2000, 0x2004, "none")],
+                },
+            },
+        )
+        return directory
 
-    def _payload(self, db: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
+    def test_served_cells_are_the_document_cells(self, tmp_path: Path, monkeypatch: Any) -> None:
+        import recoverage.server as srv
+
+        directory = self._doc(tmp_path)
+        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+        snap = load_coverage(tmp_path, "GAME")
+        status, headers, body = wsgi_get("/api/targets/GAME/data")
+        assert status.startswith("200")
+        sections = json.loads(decode_body(body, headers))["sections"]
+        assert set(sections) == set(snap.sections)
+        for name, section in snap.sections.items():
+            assert sections[name]["cells"] == json.loads(srv.cells_json(section.cells))
+
+    def test_served_cells_go_through_the_shared_serializer(
+        self, tmp_path: Path, monkeypatch: Any
+    ) -> None:
+        """Guard the assertion above against passing vacuously.
+
+        If the endpoint encoded cells some other way, poisoning the one
+        serializer would change nothing and the equality test above would still
+        pass on a payload the SPA's cell shape never came from.
+        """
         import recoverage.api as api
         import recoverage.server as srv
 
-        monkeypatch.setattr(srv, "_db_path", lambda: db)
-        monkeypatch.setattr(api, "_db_path", lambda: db)
-        # The probe and the assembled-payload memo are per DB generation;
-        # dropping them is what makes the app re-read a mutated DB.
-        api._clear_derived_caches()
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
-        status, _, body = wsgi_get(f"/api/targets/{target}/data")
+        directory = self._doc(tmp_path)
+        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+        api._clear_data_cache()
+        monkeypatch.setattr(srv, "cells_json", lambda cells: "[]")
+
+        status, headers, body = wsgi_get("/api/targets/GAME/data")
         assert status.startswith("200")
-        return json.loads(decode_body(body, {}))
-
-    def _populate_cache(self, db: Path) -> None:
-        """Fill section_cells_json the way build_db does, via the shared codec."""
-        conn = sqlite3.connect(db)
-        c = conn.cursor()
-        # The copy of the fixture DB may already carry the table (a genuine
-        # rebrew build-db output does), and a bare CREATE TABLE would abort
-        # on it. Drop first so the test owns the exact schema and rows it
-        # compares against, whatever the source DB held.
-        c.execute(f"DROP TABLE IF EXISTS {SECTION_CELLS_TABLE}")
-        c.execute(
-            f"CREATE TABLE {SECTION_CELLS_TABLE} ("
-            " target TEXT NOT NULL, section_name TEXT NOT NULL,"
-            f" {SECTION_CELLS_COLUMN} BLOB NOT NULL,"
-            " PRIMARY KEY (target, section_name)) WITHOUT ROWID"
-        )
-        c.executemany(
-            f"INSERT INTO {SECTION_CELLS_TABLE} VALUES (?, ?, ?)",
-            [
-                (tgt, sec, self._encode(cells_json))
-                for tgt, sec, cells_json in c.execute(
-                    f"SELECT target, section_name, {SECTION_CELLS_AGG_SQL}"
-                    " FROM cells GROUP BY target, section_name"
-                ).fetchall()
-            ],
-        )
-        conn.commit()
-        conn.close()
-
-    def test_materialized_and_live_paths_agree(self, tmp_path: Path, monkeypatch: Any) -> None:
-        src = get_db_path()
-        if not src.is_file():
-            pytest.skip("No DB")
-        db = tmp_path / "coverage.db"
-        shutil.copy(src, db)
-
-        live = self._payload(db, monkeypatch)
-        assert live["sections"], "fixture DB has no sections to compare"
-
-        self._populate_cache(db)
-        cached = self._payload(db, monkeypatch)
-
-        assert cached == live
-
-    def test_legacy_codec_column_falls_back(self, tmp_path: Path, monkeypatch: Any) -> None:
-        """A cache table in the old zlib codec must be ignored, not mis-decoded.
-
-        The codec moved zlib -> zstd, and the column name is the only signal the
-        reader has.  The old column must therefore route to the live query: the
-        failure mode this guards is a zstd decoder being handed a zlib stream,
-        which is an exception in the middle of building the payload, not a wrong
-        answer.
-        """
-        src = get_db_path()
-        if not src.is_file():
-            pytest.skip("No DB")
-        db = tmp_path / "coverage.db"
-        shutil.copy(src, db)
-        live = self._payload(db, monkeypatch)
-
-        conn = sqlite3.connect(db)
-        c = conn.cursor()
-        # Drop first: a source DB that already has the table (a real
-        # build-db output does) would make the bare CREATE fail, and the
-        # legacy-codec table must replace the current-codec one anyway.
-        c.execute(f"DROP TABLE IF EXISTS {SECTION_CELLS_TABLE}")
-        c.execute(
-            f"CREATE TABLE {SECTION_CELLS_TABLE} ("
-            " target TEXT NOT NULL, section_name TEXT NOT NULL,"
-            " cells_zlib BLOB NOT NULL,"
-            " PRIMARY KEY (target, section_name)) WITHOUT ROWID"
-        )
-        c.executemany(
-            f"INSERT INTO {SECTION_CELLS_TABLE} VALUES (?, ?, ?)",
-            [
-                (tgt, sec, zlib.compress(cells_json.encode("utf-8")))
-                for tgt, sec, cells_json in c.execute(
-                    f"SELECT target, section_name, {SECTION_CELLS_AGG_SQL}"
-                    " FROM cells GROUP BY target, section_name"
-                ).fetchall()
-            ],
-        )
-        conn.commit()
-        conn.close()
-
-        # Same payload as the live query — the stale-coded cache was declined.
-        assert self._payload(db, monkeypatch) == live
-
-    def test_cache_is_actually_used(self, tmp_path: Path, monkeypatch: Any) -> None:
-        """Guard the assertion above against passing vacuously.
-
-        If the endpoint ignored the cache table, the equality test would still
-        pass — both sides would be the live query.  Poison the cached bytes so
-        only a genuinely-served cache can show through.
-        """
-        src = get_db_path()
-        if not src.is_file():
-            pytest.skip("No DB")
-        db = tmp_path / "coverage.db"
-        shutil.copy(src, db)
-
-        self._populate_cache(db)
-        conn = sqlite3.connect(db)
-        sentinel = self._encode("[]")
-        conn.execute(f"UPDATE {SECTION_CELLS_TABLE} SET {SECTION_CELLS_COLUMN} = ?", (sentinel,))
-        conn.commit()
-        conn.close()
-
-        payload = self._payload(db, monkeypatch)
+        payload = json.loads(decode_body(body, headers))
         assert all(sec["cells"] == [] for sec in payload["sections"].values())
 
 
@@ -3981,12 +3886,15 @@ class TestUnhandledErrorContract:
     def test_api_500_is_json_and_logged(self, monkeypatch: Any, caplog: Any) -> None:
         import logging
 
-        import recoverage.api as api
+        import recoverage.server as server_mod
 
-        def boom() -> None:
-            raise RuntimeError("exploding cursor")
+        def boom(_root: Path) -> dict[str, CoverageSnapshot]:
+            raise RuntimeError("exploding reader")
 
-        monkeypatch.setattr(api, "_db", boom)
+        # An unexpected (non-CoverageTomlError) failure anywhere under the read
+        # path is what the 500 contract is about; the shared reader is the one
+        # call every target-scoped endpoint makes.
+        monkeypatch.setattr(server_mod, "load_all_coverage_from", boom)
         with caplog.at_level(logging.ERROR, logger="recoverage"):
             status, headers, body = wsgi_get("/api/targets/x/stats")
         assert status.startswith("500")
@@ -4006,12 +3914,12 @@ class TestUnhandledErrorContract:
         undecoded, so the raw control character goes straight into it."""
         import logging
 
-        import recoverage.api as api
+        import recoverage.server as server_mod
 
-        def boom() -> None:
-            raise RuntimeError("exploding cursor")
+        def boom(_root: Path) -> dict[str, CoverageSnapshot]:
+            raise RuntimeError("exploding reader")
 
-        monkeypatch.setattr(api, "_db", boom)
+        monkeypatch.setattr(server_mod, "load_all_coverage_from", boom)
         forged_path = "/api/targets/br\n\nINJECTED: pwned/stats"
         with caplog.at_level(logging.ERROR, logger="recoverage"):
             wsgi_get(forged_path)
@@ -4037,83 +3945,79 @@ class TestUnhandledErrorContract:
 
 
 class TestSectionStatsMemo:
-    """/api/targets/<t>/stats memoises per WAL-aware DB fingerprint + target.
+    """/api/targets/<t>/stats memoises per document fingerprint + target.
 
-    One request re-runs the full-cells-table SECTION_STATS_SQL aggregation
-    plus three more queries; repeat callers (a polling consumer) must not
-    re-pay that scan while the DB is unchanged, and a rebuild (fingerprint
-    change) must never serve stale buckets.
+    One request walks every cell of the target to aggregate its buckets; repeat
+    callers (a polling consumer) must not re-pay that walk while the documents
+    are unchanged, and a rebuild (fingerprint change) must never serve stale
+    buckets.
     """
 
-    def _make_db(self, tmp_path: Any, cells: list[tuple[str, int, int, str]]) -> Any:
-        return _make_schema_gate_db(tmp_path, cells)
+    def _make_db(self, tmp_path: Any, cells: tuple[tuple[str, int, int, str], ...]) -> Any:
+        return _game_coverage(tmp_path, cells)
 
-    def _patch(self, tmp_path: Any, monkeypatch: Any, db: Any) -> Any:
-        """Point the app at *db* and return the mock request."""
+    def _patch(self, tmp_path: Any, monkeypatch: Any, directory: Any) -> Any:
+        """Point the app at *directory* and return the mock request."""
         import recoverage.api as api
 
-        req = _point_app_at_db(monkeypatch, db)
+        req = _point_app_at_coverage(monkeypatch, directory)
         api._clear_stats_cache()
         return req
 
-    def test_memo_hit_skips_the_queries(self, tmp_path: Any, monkeypatch: Any) -> None:
+    def test_memo_hit_skips_the_read(self, tmp_path: Any, monkeypatch: Any) -> None:
         import recoverage.api as api
         import recoverage.server as server_mod
 
-        db = self._make_db(tmp_path, [(".text", 0, 16, "exact"), (".text", 16, 32, "none")])
-        self._patch(tmp_path, monkeypatch, db)
+        directory = self._make_db(tmp_path, ((".text", 0, 16, "exact"), (".text", 16, 32, "none")))
+        self._patch(tmp_path, monkeypatch, directory)
 
-        # Count connections at the binding the request path consults:
-        # server._db() resolves _open_db in server's module globals, so
-        # counting api._open_db would never see a call. The real opener is
-        # kept underneath, so the counter sees production connections only.
-        real_open_db = server_mod._open_db
-        opens: list[Any] = []
+        # Count reads at the binding the request path consults: the handler
+        # resolves the target's snapshot through server.coverage_for, so that is
+        # the call a memo hit must not make.  The real reader is kept
+        # underneath, so the counter sees production reads only.
+        real_coverage_for = server_mod.coverage_for
+        reads: list[str] = []
 
-        def counting_open(p: Any) -> Any:
-            opens.append(p)
-            return real_open_db(p)
+        def counting_coverage_for(target: str) -> Any:
+            reads.append(target)
+            return real_coverage_for(target)
 
-        monkeypatch.setattr(server_mod, "_open_db", counting_open)
+        monkeypatch.setattr(server_mod, "coverage_for", counting_coverage_for)
 
         first = api.handle_api_stats("GAME")
         assert isinstance(first, bytes)
-        assert opens, "the miss did not open the database; the counter is not wired"
-        opens_after_miss = len(opens)
+        assert reads, "the miss did not read coverage; the counter is not wired"
+        reads_after_miss = len(reads)
 
-        # The second request must not touch the database at all: the open
-        # count is the proof, since the memo answer required no connection.
+        # The second request must not touch the documents at all: the read
+        # count is the proof, since the memo answer required no snapshot.
         second = api.handle_api_stats("GAME")
         assert second == first
-        assert len(opens) == opens_after_miss, "memo hit re-opened the database"
+        assert len(reads) == reads_after_miss, "memo hit re-read the coverage"
 
         api._clear_stats_cache()
         assert len(api._STATS_CACHE) == 0
 
     def test_memo_self_invalidates_on_db_change(self, tmp_path: Any, monkeypatch: Any) -> None:
-        """A rebuild must change the result: new cells + a fingerprint bump
-        produce fresh buckets; the snapshot keying (not an explicit clear)
-        is what makes the fresh result visible."""
+        """A rebuild must change the result: cells rewritten into the document
+        plus a fingerprint bump produce fresh buckets; the snapshot keying (not
+        an explicit clear) is what makes the fresh result visible."""
         import os
 
         import recoverage.api as api
 
-        db = self._make_db(tmp_path, [(".text", 0, 16, "exact")])
-        self._patch(tmp_path, monkeypatch, db)
+        directory = self._make_db(tmp_path, ((".text", 0, 16, "exact"),))
+        self._patch(tmp_path, monkeypatch, directory)
 
         body1 = json.loads(api.handle_api_stats("GAME"))
         assert body1["sections"][".text"]["total_cells"] == 1
 
-        # Simulate a rebuild: more cells committed to the DB.
-        rw = sqlite3.connect(db)
-        rw.execute(
-            "INSERT INTO cells (target, section_name, start, end, span, state)"
-            " VALUES ('GAME', '.text', 16, 32, 1, 'exact')"
-        )
-        rw.commit()
-        rw.close()
-        st = db.stat()
-        os.utime(db, (st.st_atime + 2, st.st_mtime + 2))
+        # Simulate a rebuild: the document is rewritten with one more cell and
+        # a newer stat, which is the change token every memo keys on.
+        self._make_db(tmp_path, ((".text", 0, 16, "exact"), (".text", 16, 32, "exact")))
+        doc = directory / "coverage-GAME.toml"
+        st = doc.stat()
+        os.utime(doc, ns=(st.st_atime_ns + 2 * 10**9, st.st_mtime_ns + 2 * 10**9))
 
         body2 = json.loads(api.handle_api_stats("GAME"))
         assert body2["sections"][".text"]["total_cells"] == 2
@@ -4569,33 +4473,33 @@ class TestUnicodeUrlComponents:
 
     @pytest.fixture(autouse=True)
     def _unicode_db(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        db = tmp_path / "coverage.db"
-        shutil.copy(get_db_path(), db)
-        conn = sqlite3.connect(db)
-        t = self.TARGET
-        conn.executemany(
-            "INSERT INTO metadata VALUES (?,?,?)",
-            [(t, "db_version", '"4"'), (t, "summary", '{"totalFunctions": 1}')],
+        write_coverage(
+            _coverage_dir(tmp_path),
+            self.TARGET,
+            {
+                self.SECTION: {
+                    "va": 0x10003000,
+                    "size": 0x100,
+                    "fileOffset": 0x300,
+                    "unitBytes": 16,
+                    "columns": 8,
+                    "cells": [
+                        cell(0x10003000, 0x10003010, "exact"),
+                        cell(0x10003010, 0x10003020, "none"),
+                    ],
+                }
+            },
+            functions=[
+                {
+                    "va": 0x10003000,
+                    "name": "func_é",
+                    "vaStart": "0x10003000",
+                    "size": 16,
+                    "status": "EXACT",
+                }
+            ],
         )
-        conn.execute(
-            "INSERT INTO sections VALUES (?, ?, 0x10003000, 0x100, 0x300, 16, 8)", (t, self.SECTION)
-        )
-        conn.executemany(
-            "INSERT INTO cells (target, section_name, start, end, span, state)"
-            " VALUES (?,?,?,?,?,?)",
-            [(t, self.SECTION, 0, 16, 1, "exact"), (t, self.SECTION, 16, 32, 1, "none")],
-        )
-        conn.execute(
-            "INSERT INTO functions (target, va, name, vaStart, size, status, markerType)"
-            " VALUES (?, 0x10003000, 'func_é', '0x10003000', 16, 'EXACT', 'FUNCTION')",
-            (t,),
-        )
-        conn.commit()
-        conn.close()
-        monkeypatch.setattr("recoverage.server._db_path", lambda: db)
-        monkeypatch.setattr("recoverage.api._db_path", lambda: db)
-        monkeypatch.setattr("recoverage.potato._db_path", lambda: db)
-        monkeypatch.setattr("recoverage._paths._db_path", lambda: db)
+        monkeypatch.setenv("RECOVERAGE_DB", str(_coverage_dir(tmp_path)))
         from recoverage.api import _clear_derived_caches
 
         _clear_derived_caches()
@@ -4664,45 +4568,65 @@ class TestSearchCaseFolding:
 
     @pytest.fixture(autouse=True)
     def _fold_db(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        db = tmp_path / "coverage.db"
-        shutil.copy(get_db_path(), db)
-        conn = sqlite3.connect(db)
-        t = self.TARGET
-        conn.executemany(
-            "INSERT INTO metadata VALUES (?,?,?)",
-            [(t, "db_version", '"4"'), (t, "summary", '{"totalFunctions": 3}')],
-        )
-        conn.execute(
-            "INSERT INTO sections VALUES (?, ?, 0x10003000, 0x100, 0x300, 16, 8)", (t, self.SECTION)
-        )
-        conn.executemany(
-            "INSERT INTO cells (target, section_name, start, end, span, state)"
-            " VALUES (?,?,?,?,?,?)",
-            [(t, self.SECTION, i * 16, (i + 1) * 16, 1, "exact") for i in range(3)],
-        )
-        # name, vaStart.  The NFD row is what a macOS-side tool writes; the
-        # user pastes the NFC spelling they see in a symbol table.
-        conn.executemany(
-            "INSERT INTO functions (target, va, name, vaStart, size, status, markerType)"
-            " VALUES (?, ?, ?, ?, 16, 'EXACT', 'FUNCTION')",
-            [
-                (t, 0x10003000, NFC_NAME, "0x10003000"),
-                (t, 0x10003010, NFD_NAME, "0x10003010"),
-                (t, 0x10003020, "_plain_ascii", "0x10003020"),
-                (t, 0x10003030, NFC_ONLY, "0x10003030"),
+        write_coverage(
+            _coverage_dir(tmp_path),
+            self.TARGET,
+            {
+                self.SECTION: {
+                    "va": 0x10003000,
+                    "size": 0x100,
+                    "fileOffset": 0x300,
+                    "unitBytes": 16,
+                    "columns": 8,
+                    "cells": [
+                        cell(0x10003000 + i * 16, 0x10003000 + (i + 1) * 16, "exact")
+                        for i in range(3)
+                    ],
+                }
+            },
+            # The NFD row is what a macOS-side tool writes; the user pastes the
+            # NFC spelling they see in a symbol table.
+            functions=[
+                {
+                    "va": 0x10003000,
+                    "name": NFC_NAME,
+                    "vaStart": "0x10003000",
+                    "size": 16,
+                    "status": "EXACT",
+                },
+                {
+                    "va": 0x10003010,
+                    "name": NFD_NAME,
+                    "vaStart": "0x10003010",
+                    "size": 16,
+                    "status": "EXACT",
+                },
+                {
+                    "va": 0x10003020,
+                    "name": "_plain_ascii",
+                    "vaStart": "0x10003020",
+                    "size": 16,
+                    "status": "EXACT",
+                },
+                {
+                    "va": 0x10003030,
+                    "name": NFC_ONLY,
+                    "vaStart": "0x10003030",
+                    "size": 16,
+                    "status": "EXACT",
+                },
+            ],
+            globals_=[
+                {
+                    "va": 0x10004000,
+                    "name": SHARP_S_NAME,
+                    "decl": "int g_strasse",
+                    "module": "T",
+                    "size": 4,
+                }
             ],
         )
-        conn.execute(
-            "INSERT INTO globals (target, va, name, decl, files, module, size)"
-            " VALUES (?, ?, ?, ?, '[]', 'T', 4)",
-            (t, 0x10004000, SHARP_S_NAME, "int g_strasse"),
-        )
-        conn.commit()
-        conn.close()
-        monkeypatch.setattr("recoverage.server._db_path", lambda: db)
-        monkeypatch.setattr("recoverage.api._db_path", lambda: db)
-        monkeypatch.setattr("recoverage.potato._db_path", lambda: db)
-        monkeypatch.setattr("recoverage._paths._db_path", lambda: db)
+        monkeypatch.setenv("RECOVERAGE_DB", str(_coverage_dir(tmp_path)))
         from recoverage.api import _clear_derived_caches
 
         _clear_derived_caches()
@@ -4776,109 +4700,96 @@ class TestSearchCaseFolding:
         assert b"no matches" not in body
 
 
-class _TransactionProbe:
-    """Cursor proxy recording ``connection.in_transaction`` per statement.
-
-    The function lookup routes answer from several statements, and python's
-    sqlite3 opens a deferred transaction per statement, so "did this handler
-    pin one read snapshot" is invisible from the response.  This wraps the
-    handler's cursor and records the connection's transaction state as each
-    statement is issued, which is what ``server.read_snapshot`` turns True for.
-    """
-
-    def __init__(self, cursor: sqlite3.Cursor, seen: list[bool]) -> None:
-        self._cursor = cursor
-        self._seen = seen
-
-    @property
-    def connection(self) -> sqlite3.Connection:
-        return self._cursor.connection
-
-    def execute(self, sql: str, *args: Any) -> Any:
-        self._seen.append(self._cursor.connection.in_transaction)
-        return self._cursor.execute(sql, *args)
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._cursor, name)
-
-
-def _first_function_va() -> int | None:
-    """Lowest VA of the first target's functions, or None when there are none."""
-    try:
-        conn = api._db()
-    except sqlite3.Error:
-        return None
-    try:
-        row = conn.execute(
-            "SELECT va FROM functions WHERE markerType IS NULL OR markerType NOT IN"
-            " ('GLOBAL', 'DATA', 'VTABLE', 'STRING') ORDER BY va LIMIT 1"
-        ).fetchone()
-    except sqlite3.Error:
-        return None
-    finally:
-        conn.close()
-    return row[0] if row else None
-
-
-@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+@pytest.mark.skipif(not HAS_DB, reason="No coverage database")
 class TestLookupSnapshotsArePinned:
-    """The function lookup routes read several tables to build one answer.
+    """A function lookup route answers from ONE frozen CoverageSnapshot.
 
-    ``/functions/<va>`` runs the VA candidates, the exact name and the folded
-    name for functions, then the same three for globals, then
-    ``verify_results`` for the winner; the batch POST runs three statements
-    over three tables.  A ``rebrew build-db`` committing between them pairs
-    one build's function row with the next build's ``last_verify``, which
-    reports a size and a diff for a payload that no longer carries them.
-    Both pin one read snapshot, the contract /data, /stats and the paginated
-    list already follow.
+    ``/functions/<va>`` resolves the VA, the exact name and the folded name for
+    functions, then the same three for globals, then reads ``verify_results``
+    for the winner; the batch POST resolves VAs across functions and globals.
+    A ``rebrew build-db`` committing between those reads used to pair one
+    build's function row with the next build's ``last_verify``, which reports a
+    size and a diff for a payload that no longer carries them. The pin is the
+    snapshot object, so these tests make the reader hand back a DIFFERENT
+    mapping on every call and require the answer to describe one of them.
     """
 
-    @staticmethod
-    def _probed_cursor(monkeypatch: Any, seen: list[bool]) -> Any:
-        real_cursor = api._target_cursor
+    #: The two builds the reader alternates between.  Name, size and byte_delta
+    #: move together, so a response that mixed two snapshots names itself.
+    BUILDS: ClassVar[tuple[dict[str, Any], ...]] = (
+        {"name": "_build_one", "size": 16, "byte_delta": 1},
+        {"name": "_build_two", "size": 32, "byte_delta": 2},
+    )
 
-        @contextlib.contextmanager
-        def _probed(target: str) -> Any:
-            with real_cursor(target) as real:
-                yield _TransactionProbe(real, seen)
+    @classmethod
+    def _mappings(cls, tmp_path: Path) -> list[dict[str, CoverageSnapshot]]:
+        return [
+            _snapshot_mapping(
+                tmp_path / f"build{index}",
+                "GAME",
+                {
+                    ".text": {
+                        "va": 0x1000,
+                        "size": 64,
+                        "fileOffset": 0x200,
+                        "unitBytes": 16,
+                        "columns": 8,
+                        "cells": [cell(0x1000, 0x1010, "exact", functions=(build["name"],))],
+                    }
+                },
+                functions=[
+                    {
+                        "va": 0x1000,
+                        "name": build["name"],
+                        "vaStart": "0x1000",
+                        "size": build["size"],
+                        "status": "EXACT",
+                    }
+                ],
+                verify_results=[
+                    {
+                        "va": 0x1000,
+                        "verified_at": "2026-01-01T00:00:00+00:00",
+                        "byte_delta": build["byte_delta"],
+                        "diff_lines": 0,
+                        "similarity": 0.5,
+                    }
+                ],
+            )
+            for index, build in enumerate(cls.BUILDS)
+        ]
 
-        monkeypatch.setattr(api, "_target_cursor", _probed)
+    @classmethod
+    def _expected(cls) -> set[tuple[Any, ...]]:
+        return {tuple(build[key] for key in ("name", "size", "byte_delta")) for build in cls.BUILDS}
 
-    def test_single_lookup_runs_inside_one_transaction(self, monkeypatch: Any) -> None:
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
-        va = _first_function_va()
-        if va is None:
-            pytest.skip("No functions in DB")
+    def test_single_lookup_reads_one_snapshot(self, tmp_path: Path, monkeypatch: Any) -> None:
+        monkeypatch.setenv("RECOVERAGE_DB", str(_coverage_dir(tmp_path / "build0")))
+        _alternating_reader(monkeypatch, self._mappings(tmp_path))
 
-        seen: list[bool] = []
-        self._probed_cursor(monkeypatch, seen)
-        status, _headers, _body = wsgi_get(f"/api/targets/{target}/functions/{va}")
-        assert status.startswith("200")
-        assert seen, "the handler issued no statement through the probe"
-        assert all(seen), "a statement ran outside the pinned read transaction"
+        status, headers, body = wsgi_get("/api/targets/GAME/functions/0x1000")
+        assert status.startswith("200"), body
+        data = json.loads(decode_body(body, headers))
+        # The row and its last_verify are read at two different points of the
+        # handler; one snapshot means they name the same build.
+        served = (data["name"], data["size"], data["last_verify"]["byte_delta"])
+        assert served in self._expected(), served
 
-    def test_batch_lookup_runs_inside_one_transaction(self, monkeypatch: Any) -> None:
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
-        va = _first_function_va()
-        if va is None:
-            pytest.skip("No functions in DB")
+    def test_batch_lookup_reads_one_snapshot(self, tmp_path: Path, monkeypatch: Any) -> None:
+        monkeypatch.setenv("RECOVERAGE_DB", str(_coverage_dir(tmp_path / "build0")))
+        _alternating_reader(monkeypatch, self._mappings(tmp_path))
 
-        seen: list[bool] = []
-        self._probed_cursor(monkeypatch, seen)
         status, headers, body = wsgi_post(
-            f"/api/targets/{target}/functions",
+            "/api/targets/GAME/functions",
             headers={"Content-Type": "application/json"},
-            body=json.dumps({"vas": [f"0x{va:x}"]}).encode(),
+            body=json.dumps({"vas": ["0x1000"]}).encode(),
         )
-        assert status.startswith("200")
-        assert json.loads(decode_body(body, headers)), "the batch lookup found nothing"
-        assert len(seen) >= 3, "the handler stopped issuing one statement per table"
-        assert all(seen), "a statement ran outside the pinned read transaction"
+        assert status.startswith("200"), body
+        data = json.loads(decode_body(body, headers))
+        assert len(data) == 1, "the batch lookup found nothing"
+        row = data[0]
+        served = (row["name"], row["size"], row["last_verify"]["byte_delta"])
+        assert served in self._expected(), served
 
 
 class TestHealthLogging:
@@ -4894,9 +4805,12 @@ class TestHealthLogging:
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
         import recoverage.api as api
+        import recoverage.server as server_mod
 
+        missing = Path("/nonexistent/coverage-dir")
         monkeypatch.setattr(api, "_health_reported", None)
-        monkeypatch.setattr(api, "_db_path", lambda: Path("/nonexistent/coverage.db"))
+        monkeypatch.setattr(api, "_db_path", lambda: missing)
+        monkeypatch.setattr(server_mod, "_db_path", lambda: missing)
         with caplog.at_level(logging.WARNING, logger="recoverage"):
             for _ in range(5):
                 status, headers, body = wsgi_get("/api/health")
@@ -4904,19 +4818,24 @@ class TestHealthLogging:
                 assert json.loads(decode_body(body, headers))["status"] == "degraded"
         degraded = [r for r in caplog.records if r.levelno >= logging.WARNING]
         assert len(degraded) == 1
-        assert "coverage.db not accessible" in degraded[0].getMessage()
+        assert "no coverage-*.toml document" in degraded[0].getMessage()
 
     def test_recovery_is_logged_and_ends_the_alert(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
         import recoverage.api as api
+        import recoverage.server as server_mod
 
-        real_db_path = api._db_path
+        real_api_db_path = api._db_path
+        real_server_db_path = server_mod._db_path
+        missing = Path("/nonexistent/coverage-dir")
         monkeypatch.setattr(api, "_health_reported", None)
-        monkeypatch.setattr(api, "_db_path", lambda: Path("/nonexistent/coverage.db"))
+        monkeypatch.setattr(api, "_db_path", lambda: missing)
+        monkeypatch.setattr(server_mod, "_db_path", lambda: missing)
         with caplog.at_level(logging.INFO, logger="recoverage"):
             wsgi_get("/api/health")
-            monkeypatch.setattr(api, "_db_path", real_db_path)
+            monkeypatch.setattr(api, "_db_path", real_api_db_path)
+            monkeypatch.setattr(server_mod, "_db_path", real_server_db_path)
             status, headers, body = wsgi_get("/api/health")
             assert status.startswith("200")
             assert json.loads(decode_body(body, headers))["status"] == "healthy"
@@ -4926,18 +4845,22 @@ class TestHealthLogging:
     def test_every_reason_is_named_in_one_line(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """A missing DB and a dead watcher name both, not just the first."""
+        """A missing coverage directory and a dead watcher name both, not just
+        the first."""
         import recoverage.api as api
+        import recoverage.server as server_mod
 
+        missing = Path("/nonexistent/coverage-dir")
         monkeypatch.setattr(api, "_health_reported", None)
-        monkeypatch.setattr(api, "_db_path", lambda: Path("/nonexistent/coverage.db"))
+        monkeypatch.setattr(api, "_db_path", lambda: missing)
+        monkeypatch.setattr(server_mod, "_db_path", lambda: missing)
         monkeypatch.setattr(
             api, "_stream_stats", lambda: {"clients": 1, "max": 4, "watcher_alive": False}
         )
         with caplog.at_level(logging.WARNING, logger="recoverage"):
             wsgi_get("/api/health")
         line = next(r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING)
-        assert "coverage.db not accessible" in line
+        assert "no coverage-*.toml document" in line
         assert "DB watcher is not running" in line
 
 
@@ -4979,7 +4902,9 @@ class TestDbWatcherLogging:
             state["n"] += 1
             if state["n"] == 1:
                 return (1, 1)
-            raise sqlite3.OperationalError("database is locked")
+            # Any failure from one poll is retried; the type is not what the
+            # loop keys on (a stat of the coverage directory fails like this).
+            raise OSError("coverage directory is locked")
 
         stop = threading.Event()
         monkeypatch.setattr(api, "_snapshot_db_mtime", _flaky)

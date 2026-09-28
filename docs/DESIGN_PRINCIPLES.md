@@ -4,7 +4,7 @@ This document outlines the core architectural and operational philosophies that 
 
 How the dashboard is built is [DESIGN.md](DESIGN.md); the requirements these
 principles serve are [USER_STORIES.md](USER_STORIES.md). Last verified against
-the code: 2026-09-27.
+the code: 2026-09-28.
 
 ## 1. Lightweight & Dependency-Free Stack
 The UI is built to be as light and fast as possible. We avoid heavy frontend frameworks, relying instead on VanJS (a ~2 kB reactive library) and Vanilla CSS. The backend uses the minimal Bottle framework to serve data. The goal is uncompromising speed and low maintenance overhead.
@@ -13,10 +13,10 @@ The UI is built to be as light and fast as possible. We avoid heavy frontend fra
 Initial page load time is critical. The entire Single Page Application (SPA) shell, including `index.html`, `style.css`, `app.js`, and `van.min.js`, must be inlined, minified, and aggressively compressed (via Brotli or Zstd), and must fit inside the initial TCP congestion window (10 x 1460-byte MSS). The shell sits at 14,075 B compressed, 525 bytes under the budget, so it fits with little to spare: `index.html` carries no static markup, which means the only way to hold that line is to leave deferrable work in `detail.js`, where the grid, hex dump, data inspector, function metadata grid, annotation extractor, code viewer, asm fetch, highlighting, and regen handler already live. `ui._check_payload_budget` prints the overage on every start and `tests/test_api.py` fails when the shipped shell crosses the window, so further growth is a regression.
 
 ## 3. Decoupled Architecture
-Recoverage is a pure data consumer. Its serving path never links the `rebrew` matching tools: it expects a structured SQLite database (`coverage.db`) and never modifies it. `rebrew` is a runtime dependency only for the shared, stdlib-only workspace resolution (`rebrew.workspace`) and the in-process regen commands. This one-way data flow guarantees that the dashboard never interferes with the underlying decompilation pipeline.
+Recoverage is a pure data consumer. Its serving path never links the `rebrew` matching tools: it reads rebrew's clear-text coverage documents (`db/coverage-<target>.toml`) and never writes them. `rebrew` is a runtime dependency only for the shared, stdlib-only workspace resolution (`rebrew.workspace`), the document reader (`rebrew.coverage_toml`), and the in-process regen commands. This one-way data flow guarantees that the dashboard never interferes with the underlying decompilation pipeline.
 
-## 4. Shift Computation to the Backend & Database
-The frontend should be as "dumb" as possible regarding data processing. Coverage statistics, cell matching states, and JSON grouping must be pre-calculated by the database (`SQLite json_group_array`) or the backend before transmission. This ensures the UI remains fluid even when rendering binaries with tens of thousands of functions.
+## 4. Shift Computation to the Reader & the Backend
+The frontend should be as "dumb" as possible regarding data processing. Coverage statistics, cell matching states, and the JSON grouping the API serves must be computed before transmission — in the document reader (`rebrew.coverage_toml`'s derived fields) or in the backend — never in the browser. This ensures the UI remains fluid even when rendering binaries with tens of thousands of functions.
 
 ## 5. Aggressive Render Optimization
 Rendering grids with thousands of cells (e.g., `.text` or `.bss` sections) requires strict render management:

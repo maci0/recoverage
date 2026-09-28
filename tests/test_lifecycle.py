@@ -73,14 +73,14 @@ def _install_fake_rebrew(
     catalog.__path__ = []  # type: ignore[attr-defined]
     catalog_cli = types.ModuleType("rebrew.catalog.cli")
     catalog_cli.run_catalog = run_catalog  # type: ignore[attr-defined]
-    build = types.ModuleType("rebrew.build_db")
-    build.build_db = build_db  # type: ignore[attr-defined]
+    writer = types.ModuleType("rebrew.coverage_toml")
+    writer.write_coverage_toml = build_db  # type: ignore[attr-defined]
     for name, module in (
         ("rebrew", package),
         ("rebrew.config", config),
         ("rebrew.catalog", catalog),
         ("rebrew.catalog.cli", catalog_cli),
-        ("rebrew.build_db", build),
+        ("rebrew.coverage_toml", writer),
     ):
         monkeypatch.setitem(sys.modules, name, module)
 
@@ -100,8 +100,8 @@ def _record_rebrew_calls(monkeypatch: pytest.MonkeyPatch, events: list[tuple[str
     def run_catalog(c: object) -> None:
         events.append(("run_catalog", c))
 
-    def build_db(project_root: Path) -> None:
-        events.append(("build_db", project_root))
+    def build_db(project_root: Path, force: bool = False) -> None:
+        events.append(("build_db", project_root, force))
 
     _install_fake_rebrew(
         monkeypatch,
@@ -124,7 +124,10 @@ class TestRunRegen:
         assert events == [
             ("load_config", tmp_path),
             ("run_catalog", cfg),
-            ("build_db", tmp_path),
+            # force=True: a coverage file from the previous format is the file
+            # this command exists to replace, and the writer takes the flag so
+            # a later version check cannot silently refuse it.
+            ("build_db", tmp_path, True),
         ]
 
     def test_missing_rebrew_import_error_propagates(
@@ -139,7 +142,7 @@ class TestRunRegen:
             "rebrew.config",
             "rebrew.catalog",
             "rebrew.catalog.cli",
-            "rebrew.build_db",
+            "rebrew.coverage_toml",
         ):
             monkeypatch.delitem(sys.modules, name, raising=False)
 
@@ -179,7 +182,7 @@ class TestRunRegen:
         one_run = [
             ("load_config", tmp_path),
             ("run_catalog", cfg),
-            ("build_db", tmp_path),
+            ("build_db", tmp_path, True),
         ]
         run_regen(tmp_path)
         run_regen(tmp_path)
@@ -198,9 +201,9 @@ class TestRebrewSurface:
     def test_regen_entrypoints_match_run_regen(self) -> None:
         import inspect
 
-        from rebrew.build_db import build_db
         from rebrew.catalog.cli import run_catalog
         from rebrew.config import load_config
+        from rebrew.coverage_toml import write_coverage_toml
 
         catalog_required = [
             name
@@ -209,13 +212,16 @@ class TestRebrewSurface:
         ]
         assert catalog_required == ["cfg"]
         assert list(inspect.signature(load_config).parameters)[:1] == ["root"]
-        project_root = inspect.signature(build_db).parameters["project_root"]
-        assert project_root.default is None
+        root_parameter = inspect.signature(write_coverage_toml).parameters["root_dir"]
+        assert root_parameter.default is inspect.Parameter.empty
         # The three calls run_regen makes, bound against the installed rebrew.
         root = Path("project")
         inspect.signature(load_config).bind(root)
         inspect.signature(run_catalog).bind(object())
-        inspect.signature(build_db).bind(root)
+        # force=True is the fourth call shape regen depends on: the writer takes
+        # it so a coverage file from the previous format is replaced rather than
+        # refused, which is the one file a regen exists to replace.
+        inspect.signature(write_coverage_toml).bind(root, force=True)
 
 
 class TestOpenAndReap:

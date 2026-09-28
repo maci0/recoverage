@@ -13,7 +13,7 @@ const encPath = (path) => String(path).split("/").map((seg) => enc(seg)).join("/
 // it shares a row with come back.
 const NAV_NOTICE_MS = 4000;
 
-// paths.sourceRoot and paths.originalDll are values the coverage.db hands us,
+// paths.sourceRoot and paths.originalDll are values the coverage documents hand us,
 // and a database built from a hostile binary — or imported wholesale from
 // somewhere else — can hold any string in them.  Spliced into an href or a
 // fetch, "//evil.example" is a protocol-relative URL and "/\evil.example" is
@@ -304,7 +304,7 @@ const App = () => {
         if (availableTargets.val.length === 0) {
           // First run: serve started before the database was built.
           activeTarget.val = "";
-          stopLoading({ title: "No coverage database", detail: "Run rebrew build-db to create db/coverage.db, then reload this page." });
+          stopLoading({ title: "No coverage database", detail: "Run rebrew build-db to create db/coverage-*.toml, then reload this page." });
           return;
         }
         if (urlTarget && availableTargets.val.some(t => t.id === urlTarget)) {
@@ -538,7 +538,7 @@ const App = () => {
     loadData();
   })();
 
-  // Live-reload: refresh the grid when coverage.db changes on disk.  The
+  // Live-reload: refresh the grid when the coverage documents change.  The
   // subscription lives in detail.js, so it starts once that lands rather than
   // competing with first paint.  connectEvents returns the disposer that closes
   // the EventSource: the stream pins a server-side /api/events slot, a bounded

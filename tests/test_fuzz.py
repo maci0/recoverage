@@ -36,18 +36,20 @@ import json
 import os
 import random
 import re
-import sqlite3
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+import unicodedata
+from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
 import pytest
 from conftest import HAS_DB, decode_body, get_first_target, wsgi_request
+from coverage_fixture import cell, write_coverage
+from rebrew.coverage_toml import CoverageSnapshot, Function, load_coverage
 
 from recoverage import config
 from recoverage import server as srv
-from recoverage.api import _REGEN_KEY_MAX_CHARS, _REGEN_KEY_RE
+from recoverage.api import _MAX_SEARCH_CHARS, _REGEN_KEY_MAX_CHARS, _REGEN_KEY_RE
 from recoverage.server import _best_encoding, _hostname_of, _normalize_origin, _peer_is_loopback
 
 # The three codecs the server can actually produce, in preference order.  A
@@ -1610,25 +1612,19 @@ class TestPotatoQuery:
 
 # ── the search query language ──────────────────────────────────────
 #
-# ``?search=`` is the one query parameter that becomes a *pattern*: it is
-# escaped for LIKE, folded (NFC + casefold) and re-escaped, and the two
-# disjuncts it produces are ORed into the WHERE clause api.py builds.  Every
-# other fuzzed parameter is either an integer or a whitelist key, so this is
-# the only place a term's own characters decide which rows a reader sees.
+# ``?search=`` is the one query parameter compared against *content*: it is
+# folded and matched as a substring rather than parsed into an integer or a
+# whitelist key, so a term's own characters decide which rows a reader sees.
+# One folding covers both sides now — NFC composition, then casefold — over the
+# name, the symbol, the decimal VA and the ``vaStart`` hex spelling, with an
+# absent column read as the empty string.
 #
-# The properties asserted here are differential, not "did not raise": the
-# campaign re-derives the matching set in Python — ASCII-folding only for the
-# LIKE disjunct, full folding for the rc_fold disjunct, NULL as the empty
-# string — and demands the query agree row for row.  A wildcard the escape
-# dropped, a fold applied twice, a NULL that vanished, or a disjunct that
-# narrowed instead of widening all show up as a set difference, and none of
-# them is visible in a status code.
-
-#: ASCII A-Z only, which is exactly the range SQLite's LIKE folds.  Python's
-#: str.lower() is not a substitute: it also folds É to é, which LIKE does not,
-#: so an oracle using it would disagree with the engine on every accented row
-#: and hide the very regressions it is here to catch.
-_ASCII_FOLD = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
+# The campaign is differential rather than crash-only, because a status code
+# cannot see a wrong answer: it re-derives the matching set in Python and
+# demands the endpoint agree row for row.  The oracle is written from that rule,
+# NOT from ``server.fold_match``, so a fold applied twice, a column dropped from
+# the comparison, a row whose symbol is absent vanishing, or a term whose own
+# characters widen the match all show up as a set difference.
 
 SEARCH_SEEDS: list[bytes] = [
     b"",
@@ -1662,6 +1658,10 @@ SEARCH_SEEDS: list[bytes] = [
     b"\xed\xa0\x80",
     b"a" * 300,
     b"%" * 60,
+    # A NUL is an ordinary character to a folding substring search: nothing
+    # reads the term as a C string any more, so the campaign meets one.
+    b"\x00",
+    b"a\x00b",
 ]
 
 SEARCH_TOKENS: tuple[bytes, ...] = (
@@ -1679,114 +1679,144 @@ SEARCH_TOKENS: tuple[bytes, ...] = (
     b"render",
     "Caf\u00e9".encode(),
     b"%C3%A9",
+    b"\x00",
     b"\xff",
     b"a",
 )
 
+#: Target id the corpus document is written under.
+SEARCH_TARGET = "FUZZSEARCH"
 
-@contextmanager
-def _search_conn() -> Iterator[sqlite3.Connection]:
-    """A scratch table shaped like ``functions``, with the real fold.
+#: Rows the one folding has to get right: an NFC name beside an NFD spelling of
+#: the same word, a casefold that changes length (ß -> ss, the ﬁ ligature ->
+#: fi), a row whose name and symbol are both empty, two rows with no symbol at
+#: all, names carrying the metacharacters as ordinary text, and a data marker
+#: the list endpoint drops.  ``va`` doubles as the decimal spelling the search
+#: compares against, so a term of digits reaches the VA column too.
+_SEARCH_FUNCTIONS: list[dict[str, Any]] = [
+    {"va": 0x10001000, "name": "Plain_Render", "symbol": "plain_render", "vaStart": "0x10001000"},
+    {"va": 0x10001010, "name": "Café_Render", "symbol": "café_render", "vaStart": "0x10001010"},
+    {
+        "va": 0x10001020,
+        "name": "STRASSE_handler",
+        "symbol": "straße_handler",
+        "vaStart": "0x10001020",
+    },
+    {"va": 0x10001030, "name": "100%_match", "vaStart": "0x10001030"},
+    {"va": 0x10001040, "name": "under_score", "symbol": "a_b", "vaStart": "0x10001040"},
+    {"va": 0x10001050, "name": "back\\slash", "symbol": "back\\slash", "vaStart": "0x10001050"},
+    {"va": 0x10001060, "name": "", "symbol": "", "vaStart": "0x10001060"},
+    {"va": 0x10001070, "name": "☃snowman", "symbol": "☃snow", "vaStart": "0x10001070"},
+    {"va": 0x10001080, "name": "no_symbol_row", "vaStart": "0x10001080"},
+    {"va": 0x10001090, "name": "ﬁle_open", "symbol": "ﬁle", "vaStart": "0x10001090"},
+    # The NFD twin of row 2's first word: a term spelled either way must find
+    # both, which is the composition half of the folding.
+    {"va": 0x100010A0, "name": "Cafe\u0301_Decomposed", "vaStart": "0x100010a0"},
+    {
+        "va": 0x100010B0,
+        "name": "data_marker_render",
+        "markerType": "DATA",
+        "vaStart": "0x100010b0",
+    },
+]
 
-    The names are the ones a search has to get right: an NFD/NFC pair that
-    differ only in composition, a casefold that changes length (ß -> ss, the
-    ﬁ ligature -> fi), a row whose symbol is NULL, a row whose name is empty,
-    and two names carrying the LIKE metacharacters themselves.
+
+@pytest.fixture
+def search_corpus(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> CoverageSnapshot:
+    """The search corpus as a coverage document the API serves.
+
+    The SQLite version of this fixture opened an in-memory database and built
+    its own ``functions`` table from ``_SEARCH_ROWS``.  The rows are a real
+    ``coverage-<target>.toml`` now, read back through rebrew's ``load_coverage``
+    so the oracle and the endpoint compare exactly one snapshot.
     """
-    conn = sqlite3.connect(":memory:")
-    try:
-        conn.create_function(srv.FOLD_SQL, 1, srv.fold_text, deterministic=True)
-        conn.execute("CREATE TABLE t (va INTEGER, name TEXT, symbol TEXT, vaStart TEXT)")
-        conn.executemany("INSERT INTO t VALUES (?, ?, ?, ?)", _SEARCH_ROWS)
-        yield conn
-    finally:
-        # sqlite3's own ``with`` is a transaction scope, not a closer, so a
-        # connection left to the collector is a leaked handle per round.
-        conn.close()
+    directory = tmp_path / "db"
+    write_coverage(
+        directory,
+        SEARCH_TARGET,
+        {
+            ".text": {
+                "va": 0x10001000,
+                "size": 0x100,
+                "fileOffset": 0x200,
+                "unitBytes": 16,
+                "columns": 8,
+                "cells": [cell(0, 16, "exact")],
+            }
+        },
+        functions=_SEARCH_FUNCTIONS,
+    )
+    # RECOVERAGE_DB names the coverage directory itself, which is what lets the
+    # corpus live outside a rebrew project.
+    monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+    return load_coverage(tmp_path, SEARCH_TARGET)
 
 
-_SEARCH_ROWS = (
-    (1, "Plain_Render", "plain_render", "0x1000"),
-    (2, "Café_Render", "café_render", "0x1010"),
-    (3, "STRASSE_handler", "straße_handler", "0x1020"),
-    (4, "100%_match", None, "0x1030"),
-    (5, "under_score", "a_b", "0x1040"),
-    (6, "back\\slash", "back\\slash", "0x1050"),
-    (7, "", "", "0x1060"),
-    (8, "☃snowman", "☃snow", "0x1070"),
-    (9, None, None, "0x1080"),
-    (10, "ﬁle_open", "ﬁle", "0x1090"),
-)
+def _fold(value: str | None) -> str:
+    """The one folding, written from the rule rather than from the server."""
+    return unicodedata.normalize("NFC", value or "").casefold()
 
 
-def _row_matches(term: str, row: tuple[object, ...]) -> bool:
-    """Whether row *va, name, symbol, vaStart* matches *term*, computed without SQL.
+def _row_matches(term: str, fn: Function) -> bool:
+    """Whether the endpoint must return *fn* for *term*, computed without it.
 
-    Mirrors the two disjuncts the callers build: the plain LIKE over all four
-    columns (NULL coerced to the empty string, case folded for ASCII only) and,
-    for a term carrying a non-ASCII character, rc_fold over the two name
-    columns.  A term is a literal substring in both: the LIKE wildcards it may
-    carry are the caller's to escape, and a wildcard that reached the pattern
-    would make this oracle disagree — which is the finding.
+    The four columns ``_filtered_functions`` compares, the term stripped the way
+    the handler strips it (an all-whitespace search is not a search at all), an
+    absent column as the empty string, and a substring test with both sides
+    folded — which is what makes a wildcard in the term match literally.
     """
-    _va, name, symbol, va_start = row
-    folded_term = srv.fold_text(term)
-    for column in (name, symbol, va_start):
-        hay = "" if column is None else str(column)
-        if term.translate(_ASCII_FOLD) in hay.translate(_ASCII_FOLD):
-            return True
-        if not term.isascii() and folded_term in srv.fold_text(hay):
-            return True
-    return False
+    needle = _fold(term.strip())
+    if not needle:
+        return True
+    return any(needle in _fold(column) for column in (fn.name, fn.symbol, str(fn.va), fn.vaStart))
 
 
-def _like_literal(pattern: str) -> str | None:
-    """The text a LIKE pattern matches literally, or None if it is not one.
+def _served_rows(term: str) -> tuple[int, Any]:
+    """GET the function list filtered by *term*: (status code, JSON payload).
 
-    Undoes the two wildcards a substring pattern adds and the ``ESCAPE
-    '\\'`` escaping the terms carry, so the caller can compare the result with
-    the term it passed in.  Written from the pattern's grammar rather than
-    from :func:`server._escape_like`, so a regression in the escaper is a
-    difference here rather than a shared mistake.
+    ``limit`` is the endpoint's own cap, so every row of the corpus is on the
+    page the comparison reads.
     """
-    if not pattern.startswith("%") or not pattern.endswith("%") or len(pattern) < 2:
-        return None
-    out: list[str] = []
-    escaped = False
-    for ch in pattern[1:-1]:
-        if escaped:
-            out.append(ch)
-            escaped = False
-        elif ch == "\\":
-            escaped = True
-        elif ch in "%_":
-            # A bare wildcard in the interior would make the pattern match
-            # more than the term.
-            return None
-        else:
-            out.append(ch)
-    return None if escaped else "".join(out)
+    path = f"/api/targets/{SEARCH_TARGET}/functions?search={_pct(term)}&limit=500"
+    status, headers, body = wsgi_request("GET", path)
+    return int(status.split()[0]), _assert_ok(status, headers, body, path)
+
+
+def _expected_vas(corpus: CoverageSnapshot, term: str) -> set[int]:
+    """The VAs the one folding says *term* denotes, from the loaded snapshot."""
+    return {
+        fn.va for fn in corpus.functions if not srv._is_data_marker(fn) and _row_matches(term, fn)
+    }
+
+
+def _assert_search_agrees(corpus: CoverageSnapshot, data: bytes) -> None:
+    """One campaign round: the endpoint's answer is the oracle's, row for row."""
+    term = data.decode("utf-8", "replace")
+    code, payload = _served_rows(term)
+    if code == 400:
+        # The one documented refusal, and it must be about length: a term the
+        # endpoint reads being turned away would hide every answer it owes.
+        assert len(term.strip()) > _MAX_SEARCH_CHARS, f"search={term!r}: refused a term it reads"
+        return
+    assert code == 200, f"search={term!r}: unexpected {code}: {payload!r}"
+    served = {row["va"] for row in payload["functions"]}
+    want = _expected_vas(corpus, term)
+    assert served == want, f"search={term!r}: served {sorted(served)}, expected {sorted(want)}"
+    # `total` is the same filter pass as the page, so a page that agrees while
+    # the count does not is still a wrong answer.
+    assert payload["total"] == len(want), (
+        f"search={term!r}: total {payload['total']} != {len(want)}"
+    )
 
 
 class TestSearchFoldDifferential:
-    """``like_match`` + ``folded_like_clause`` against a Python oracle."""
+    """``?search=`` against a Python oracle built from the folding rule."""
 
-    def test_query_returns_exactly_the_rows_the_term_denotes(self) -> None:
-        chain, arity = srv.like_match(["name", "symbol", "CAST(va AS TEXT)", "vaStart"])
-        folded_sql, folded_params = srv.folded_like_clause(["name", "symbol"], "x")
-        assert folded_sql == "" and folded_params == [], "an ASCII term needs no folded disjunct"
-
+    def test_query_returns_exactly_the_rows_the_term_denotes(
+        self, search_corpus: CoverageSnapshot
+    ) -> None:
         def check(data: bytes) -> None:
-            term = data.decode("utf-8", "replace")
-            folded_sql, folded_params = srv.folded_like_clause(["name", "symbol"], term)
-            # The exact composition api.py and potato.py build.
-            where = f"{chain} OR {folded_sql}" if folded_sql else chain
-            sql = f"SELECT va FROM t WHERE {where}"
-            params = [srv._escape_like(term)] * arity + folded_params
-            with _search_conn() as conn:
-                got = {row[0] for row in conn.execute(sql, params)}
-            want = {row[0] for row in _SEARCH_ROWS if _row_matches(term, row)}
-            assert got == want, f"search={term!r}: matched {sorted(got)}, expected {sorted(want)}"
+            _assert_search_agrees(search_corpus, data)
 
         _fuzz(
             SEARCH_SEEDS,
@@ -1796,83 +1826,40 @@ class TestSearchFoldDifferential:
             num_tokens=SEARCH_TOKENS,
         )
 
-    def test_the_emitted_pattern_matches_the_term_and_nothing_else(self) -> None:
-        """The escaping invariant, asserted on the pattern rather than on a
-        query's outcome.
+    def test_a_wildcard_never_becomes_a_pattern(self, search_corpus: CoverageSnapshot) -> None:
+        """The one asymmetry a search language could carry, stated directly.
 
-        A LIKE pattern is only as private as its escaping, and a dropped
-        backslash is invisible in a row count: ``%`` would quietly turn one
-        search into a full-table match.  So the pattern is unwound and
-        compared with the term that produced it, for the plain disjunct and
-        (after folding) for the folded one.
-
-        A NUL is deliberately absent from the corpus: SQLite reads a pattern
-        as a C string, so a NUL ends it and no escaping can make the pattern
-        match a literal NUL.  The engine's behaviour there is not a property
-        of this module, and no symbol name holds one, so the campaign does not
-        claim an answer it cannot get from the engine.
+        ``%`` and ``_`` are the reader's own characters: matched literally, a
+        search for ``100%`` returns the row that holds it and not every row.  A
+        term that widened into a pattern would return the whole table, which is
+        both a wrong answer and a cheap way to pull the collection.
         """
-
-        def check(data: bytes) -> None:
-            term = data.decode("utf-8", "replace")
-            assert _like_literal(srv._escape_like(term)) == term, (
-                f"search={term!r}: pattern is not a literal for the term"
+        every = {fn.va for fn in search_corpus.functions if not srv._is_data_marker(fn)}
+        for term in ("%", "_", "\\", "%_\\", "100%", "%%"):
+            code, payload = _served_rows(term)
+            assert code == 200, f"search={term!r}: {code}"
+            served = {row["va"] for row in payload["functions"]}
+            # The independent statement the oracle cannot make for itself: a
+            # metacharacter widened the match to the whole table.
+            assert served != every, f"search={term!r}: matched every row, so it acted as a wildcard"
+            assert served == _expected_vas(search_corpus, term), (
+                f"search={term!r}: {sorted(served)}"
             )
-            _sql, folded_params = srv.folded_like_clause(["name", "symbol"], term)
-            folded = srv.fold_text(term)
-            for param in folded_params:
-                assert _like_literal(param) == folded, (
-                    f"search={term!r}: folded pattern is not a literal for {folded!r}"
-                )
 
-        _fuzz(
-            SEARCH_SEEDS,
-            check,
-            iterations=250,
-            struct_tokens=SEARCH_TOKENS,
-            num_tokens=SEARCH_TOKENS,
-        )
+    def test_a_row_without_a_symbol_is_searchable_by_its_name(
+        self, search_corpus: CoverageSnapshot
+    ) -> None:
+        """An absent column is the empty string, not a dropped row.
 
-    def test_a_wildcard_never_becomes_a_pattern(self) -> None:
-        """The one asymmetry a LIKE pattern can carry, stated directly.
-
-        ``%`` and ``_`` are the reader's own characters: escaped, they are
-        matched literally, so a search for ``100%`` returns the row that holds
-        it and not every row.  Unescaped, the same term matches the whole
-        table, which is both a wrong answer and a cheap way to pull the
-        database.
+        ``symbol`` is missing on real function rows (TOML has no null, so the
+        document spells it ``""``), and the row whose name matched must still be
+        returned: one absent column must not take the whole row out of the
+        answer.
         """
-        every = {row[0] for row in _SEARCH_ROWS}
-        with _search_conn() as conn:
-            for term in ("%", "_", "\\"):
-                chain, arity = srv.like_match(["name", "symbol", "CAST(va AS TEXT)", "vaStart"])
-                got = {
-                    row[0]
-                    for row in conn.execute(
-                        f"SELECT va FROM t WHERE {chain}", [srv._escape_like(term)] * arity
-                    )
-                }
-                want = {row[0] for row in _SEARCH_ROWS if _row_matches(term, row)}
-                assert got == want, f"search={term!r}: got {sorted(got)}, expected {sorted(want)}"
-                # The independent statement the oracle cannot make for itself:
-                # a metacharacter widened the match to the whole table.
-                assert got != every, (
-                    f"search={term!r}: matched every row, so it acted as a wildcard"
-                )
-
-    def test_a_row_without_a_symbol_is_searchable_by_its_name(self) -> None:
-        """COALESCE is load-bearing: ``symbol`` is NULL on a real row, and one
-        NULL in an OR chain makes the whole predicate NULL, so a row whose
-        name matched would be dropped anyway."""
-        with _search_conn() as conn:
-            chain, arity = srv.like_match(["name", "symbol", "CAST(va AS TEXT)", "vaStart"])
-            got = {
-                row[0]
-                for row in conn.execute(
-                    f"SELECT va FROM t WHERE {chain}", [srv._escape_like("100%")] * arity
-                )
-            }
-            assert 4 in got, f"the NULL-symbol row was dropped: {sorted(got)}"
+        code, payload = _served_rows("100%")
+        assert code == 200
+        served = {row["va"] for row in payload["functions"]}
+        assert 0x10001030 in served, f"the row with no symbol was dropped: {sorted(served)}"
 
 
 # ── percent-decoding of the path and the query string ──────────────

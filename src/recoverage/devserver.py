@@ -14,6 +14,7 @@ than on the adapter around them.
 
 from __future__ import annotations
 
+import contextlib
 from http.client import HTTPMessage
 from socketserver import ThreadingMixIn
 from typing import IO, TYPE_CHECKING, Any, cast
@@ -131,6 +132,22 @@ class _KeepAliveRequestHandler(_QuietTimeoutRequestHandler):
     server: _ThreadingWSGIServer
 
     def handle(self) -> None:
+        """Serve every request on the connection, then return on the deadline.
+
+        Both exceptions below are the CLOSE PATH, not a fault: the readline
+        that times out is an idle keep-alive connection hitting
+        :data:`_KEEPALIVE_IDLE_SECONDS`, and the ConnectionError is a peer that
+        went away mid-loop.  ``socketserver`` prints a full traceback for
+        anything escaping ``handle()``, so an unwrapped timeout buried a
+        working dashboard under a dozen lines of noise for every browser tab
+        that idled past the deadline.  Nothing is lost by swallowing them: the
+        connection is being closed either way, and a real fault in a handler
+        arrives through the app, not through the request-line read.
+        """
+        with contextlib.suppress(TimeoutError, ConnectionError):
+            self._serve_requests()
+
+    def _serve_requests(self) -> None:
         self.raw_requestline = self.rfile.readline(65537)
         while self.raw_requestline:
             if len(self.raw_requestline) > 65536:

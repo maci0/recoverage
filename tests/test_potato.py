@@ -1,17 +1,17 @@
 import base64
 import functools
-import json
 import os
 import re
-import sqlite3
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath, PureWindowsPath
+from typing import Any
 from urllib.parse import quote, urlparse
 
 import pytest
 from conftest import HAS_DB, get_first_target, wsgi_get
-from rebrew.workspace import sqlite_ro_uri
+from coverage_fixture import cell, write_coverage
+from rebrew.coverage_toml import CoverageSnapshot, load_coverage
 
 from recoverage.potato import (
     TRACK_UNITS,
@@ -35,7 +35,6 @@ from recoverage.potato import (
     _wrap_text,
     render_potato,
 )
-from recoverage.server import _db_path as get_db_path
 from recoverage.server import _snapshot_db_mtime
 
 
@@ -43,112 +42,55 @@ def render_potato_url(url: str) -> str:
     return render_potato(urlparse(url))
 
 
-# The four objects a Potato render reads, at the smallest shape the renderer
-# accepts: no CHECK constraints, no cached cells, and a stats view that
-# answers with exact_count and zeroes for the rest.  A test that needs more
-# (a functions row, globals, verify_results) creates it on top; a test that
-# needs a particular NULL writes the row itself.
-_POTATO_SCHEMA = (
-    (
-        "CREATE TABLE metadata (target TEXT NOT NULL, key TEXT NOT NULL,"
-        " value TEXT, PRIMARY KEY (target, key))"
-    ),
-    (
-        "CREATE TABLE sections (target TEXT NOT NULL, name TEXT NOT NULL,"
-        " va INTEGER, size INTEGER, fileOffset INTEGER, unitBytes INTEGER,"
-        " columns INTEGER, PRIMARY KEY (target, name))"
-    ),
-    (
-        "CREATE TABLE cells (id INTEGER PRIMARY KEY AUTOINCREMENT,"
-        " target TEXT NOT NULL, section_name TEXT NOT NULL,"
-        " start INTEGER NOT NULL, end INTEGER NOT NULL,"
-        " span INTEGER NOT NULL DEFAULT 1, state TEXT NOT NULL,"
-        " functions TEXT NOT NULL DEFAULT '[]', label TEXT, parent_function TEXT)"
-    ),
-    (
-        "CREATE VIEW section_cell_stats AS"
-        " SELECT target, section_name, COUNT(*) as total_cells,"
-        " SUM(CASE WHEN state = 'exact' THEN 1 ELSE 0 END) as exact_count,"
-        " 0 as reloc_count, 0 as near_match_count, 0 as stub_count,"
-        " 0 as padding_count"
-        " FROM cells GROUP BY target, section_name"
-    ),
-)
-
-# The tables a function-detail render reads beside the four above, for a test
-# that seeds none of their rows and only needs them to exist.
-_FUNCTION_SIDECAR_SCHEMA = (
-    (
-        "CREATE TABLE functions (target TEXT NOT NULL, va INTEGER NOT NULL,"
-        " name TEXT NOT NULL DEFAULT '', vaStart TEXT NOT NULL DEFAULT '',"
-        " size INTEGER, fileOffset INTEGER, status TEXT NOT NULL DEFAULT 'UNKNOWN',"
-        " module TEXT NOT NULL DEFAULT '', cflags TEXT, symbol TEXT,"
-        " markerType TEXT NOT NULL DEFAULT 'FUNCTION',"
-        " ghidra_name TEXT, list_name TEXT,"
-        " is_thunk INTEGER NOT NULL DEFAULT 0, is_export INTEGER NOT NULL DEFAULT 0,"
-        " sha256 TEXT, files TEXT NOT NULL DEFAULT '[]',"
-        " detected_by TEXT NOT NULL DEFAULT '[]', size_by_tool TEXT NOT NULL DEFAULT '{}',"
-        " textOffset INTEGER, blocker TEXT, blockerDelta INTEGER,"
-        " size_reason TEXT, similarity REAL, PRIMARY KEY (target, va))"
-    ),
-    (
-        "CREATE TABLE globals (target TEXT NOT NULL, va INTEGER NOT NULL,"
-        " name TEXT NOT NULL DEFAULT '', decl TEXT NOT NULL DEFAULT '',"
-        " files TEXT NOT NULL DEFAULT '[]', module TEXT NOT NULL DEFAULT '',"
-        " size INTEGER NOT NULL DEFAULT 4, PRIMARY KEY (target, va))"
-    ),
-    (
-        "CREATE TABLE verify_results (target TEXT NOT NULL, va INTEGER NOT NULL,"
-        " verified_at TEXT NOT NULL, byte_delta INTEGER, diff_lines INTEGER,"
-        " similarity REAL, PRIMARY KEY (target, va))"
-    ),
-)
-
-# The same functions table with the CHECKs rebrew's build-db writes, for a
-# test whose stored values the real schema constrains.
-_FUNCTIONS_TABLE_CHECKED = (
-    "CREATE TABLE functions ("
-    " target TEXT NOT NULL, va INTEGER NOT NULL CHECK (va >= 0),"
-    " name TEXT NOT NULL DEFAULT '', vaStart TEXT NOT NULL DEFAULT '',"
-    " size INTEGER NOT NULL DEFAULT 0 CHECK (size >= 0), fileOffset INTEGER,"
-    " status TEXT NOT NULL DEFAULT 'UNKNOWN', module TEXT NOT NULL DEFAULT '',"
-    " cflags TEXT, symbol TEXT, markerType TEXT NOT NULL DEFAULT 'FUNCTION',"
-    " ghidra_name TEXT, list_name TEXT,"
-    " is_thunk INTEGER NOT NULL DEFAULT 0, is_export INTEGER NOT NULL DEFAULT 0,"
-    " sha256 TEXT, files TEXT NOT NULL DEFAULT '[]',"
-    " detected_by TEXT NOT NULL DEFAULT '[]', size_by_tool TEXT NOT NULL DEFAULT '{}',"
-    " textOffset INTEGER, blocker TEXT, blockerDelta INTEGER, size_reason TEXT,"
-    " similarity REAL CHECK (similarity IS NULL OR"
-    " (similarity >= 0.0 AND similarity <= 1.0)),"
-    " PRIMARY KEY (target, va))"
-)
+# ── Test-local coverage documents ──────────────────────────────────
+#
+# The suite used to build a throwaway SQLite database per fixture.  The
+# dashboard reads rebrew's clear-text coverage documents now, so a fixture is a
+# document written with coverage_fixture.write_coverage plus the one environment
+# variable that points the server at it.
 
 
-def _synthetic_potato_db(
-    tmp_path: Path,
+def _coverage_dir(root: Path) -> Path:
+    """The coverage directory a test-local fixture lives in.
+
+    Spelled ``db`` beneath *root* on purpose: ``RECOVERAGE_DB`` names the
+    directory itself, while rebrew's reader takes the project ROOT and resolves
+    the configured ``db_dir`` (``<root>/db`` by default) beneath it, so the two
+    only agree on the same directory when it is named this way.
+    """
+    return root / "db"
+
+
+def _write_doc(
+    root: Path,
     monkeypatch: pytest.MonkeyPatch,
     target: str,
-    total_functions: int = 0,
-    extra_schema: tuple[str, ...] = (),
-) -> sqlite3.Connection:
-    """Point ``recoverage.potato`` at a fresh fixture database and return it open.
+    sections: dict[str, dict[str, Any]],
+    **kwargs: Any,
+) -> CoverageSnapshot:
+    """Write ``<root>/db/coverage-<target>.toml`` and point the server at it.
 
-    Each caller names its own *target* so the shared resolve-targets/cells
-    memos cannot carry one fixture's rows into another's render.
+    Returns the loaded snapshot: every helper this file unit-tests takes one of
+    these instead of the cursor it read through when coverage lived in SQLite.
+    Each caller names its own *target* so one fixture's snapshot cannot be
+    confused with another's.
     """
-    db = tmp_path / "coverage.db"
-    conn = sqlite3.connect(db)
-    for statement in (*_POTATO_SCHEMA, *extra_schema):
-        conn.execute(statement)
-    conn.executemany(
-        "INSERT INTO metadata VALUES (?,?,?)",
-        [
-            (target, "db_version", '"4"'),
-            (target, "summary", f'{{"totalFunctions": {total_functions}}}'),
-        ],
-    )
-    monkeypatch.setattr("recoverage.potato._db_path", lambda: db)
-    return conn
+    directory = _coverage_dir(root)
+    write_coverage(directory, target, sections, **kwargs)
+    monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+    return load_coverage(root, target)
+
+
+def _shared_snapshot() -> CoverageSnapshot:
+    """The first target of the shared synthetic documents conftest writes.
+
+    Reads the ambient ``<cwd>/db`` the way the server does, so a
+    ``HAS_DB``-gated assertion exercises the same document the render does.
+    """
+    target = get_first_target()
+    if not target:
+        pytest.skip("No targets in DB")
+    return load_coverage(Path.cwd(), target)
 
 
 @functools.cache
@@ -188,30 +130,31 @@ def _test_tidy(html: str) -> tuple[bool | None, str]:
     return True, ""
 
 
-def test_section_stats_fall_back_to_cells_without_materialized_table():
-    """A database with no section_cell_stats still reports per-section stats.
+def test_section_stats_come_from_the_document_cells(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Per-section stats are derived from the document's own cells.
 
-    /stats and /data compute the buckets live from `cells` for such a
-    database; /potato read the materialized table and nothing else, so the
-    same database answered the API and 503'd the page.
+    The SQLite era materialized a ``section_cell_stats`` table and had to
+    re-aggregate from ``cells`` when it was missing; the document stores no
+    derived counts at all, so every section is answered from its own cell list
+    and the two surfaces cannot disagree about one section's buckets.
     """
-    conn = sqlite3.connect(":memory:")
-    conn.row_factory = sqlite3.Row
-    c = conn.cursor()
-    c.execute(
-        "CREATE TABLE cells (target TEXT, section_name TEXT,"
-        " start INTEGER, end INTEGER, state TEXT)"
+    snap = _write_doc(
+        tmp_path,
+        monkeypatch,
+        "T",
+        {
+            ".text": {
+                "size": 3,
+                "cells": [cell(0, 1, "exact"), cell(1, 2, "none"), cell(2, 3, "stub")],
+            }
+        },
     )
-    c.executemany(
-        "INSERT INTO cells (target, section_name, start, end, state)"
-        " VALUES ('T', '.text', ?, ?, ?)",
-        [(0x1000, 0x1001, "exact"), (0x1001, 0x1002, "none"), (0x1002, 0x1003, "stub")],
-    )
-    stats = _compute_section_stats(c, "T", {".text": {"size": 3}}, {})
+    stats = _compute_section_stats(snap, {".text": {"size": 3}}, {})
     assert stats[".text"]["total"] == 3
     assert stats[".text"]["exact"] == 1
     assert stats[".text"]["stub"] == 1
-    conn.close()
 
 
 def test_format_va():
@@ -223,133 +166,115 @@ def test_format_va():
     assert _format_va("not_a_number") == "not_a_number"
 
 
-def test_section_stats_pct_rounds_like_api():
+def test_section_stats_pct_rounds_like_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The map-header percentage rounds to 2dp (same as /api .../stats).
 
     int() truncation made 1329/1330 bytes read "99% covered" in the Potato
     map header while the topbar, the SPA overlay, and the API all said
     ~99.92% for the same section.
     """
-    conn = sqlite3.connect(":memory:")
-    conn.row_factory = sqlite3.Row
-    c = conn.cursor()
-    c.execute("CREATE TABLE cells (target TEXT, section_name TEXT, state TEXT)")
-    c.execute(
-        "CREATE VIEW section_cell_stats AS"
-        " SELECT target, section_name,"
-        " COUNT(*) as total_cells,"
-        " SUM(CASE WHEN state = 'exact' THEN 1 ELSE 0 END) as exact_count,"
-        " 0 as reloc_count, 0 as near_match_count, 0 as stub_count, 0 as padding_count"
-        " FROM cells GROUP BY target, section_name"
-    )
-    c.executemany(
-        "INSERT INTO cells (target, section_name, state) VALUES ('T', '.text', ?)",
-        [("exact",), ("exact",), ("exact",), ("none",)],
+    snap = _write_doc(
+        tmp_path,
+        monkeypatch,
+        "T",
+        {
+            ".text": {
+                "size": 1330,
+                "cells": [
+                    cell(0, 1, "exact"),
+                    cell(1, 2, "exact"),
+                    cell(2, 3, "exact"),
+                    cell(3, 4, "none"),
+                ],
+            }
+        },
     )
     sections = {".text": {"size": 1330}}
     data = {"summary": {".text": {"coveredBytes": 1329}}}
-    stats = _compute_section_stats(c, "T", sections, data)
+    stats = _compute_section_stats(snap, sections, data)
     assert stats[".text"]["pct"] == round(1329 / 1330 * 100, 2)
     assert stats[".text"]["pct"] != int(1329 / 1330 * 100)
-    conn.close()
 
 
-def test_section_stats_pct_zero_size_is_zero():
-    conn = sqlite3.connect(":memory:")
-    conn.row_factory = sqlite3.Row
-    c = conn.cursor()
-    c.execute("CREATE TABLE cells (target TEXT, section_name TEXT, state TEXT)")
-    c.execute(
-        "CREATE VIEW section_cell_stats AS"
-        " SELECT target, section_name,"
-        " COUNT(*) as total_cells,"
-        " 0 as exact_count, 0 as reloc_count, 0 as near_match_count,"
-        " 0 as stub_count, 0 as padding_count"
-        " FROM cells GROUP BY target, section_name"
+def test_section_stats_pct_zero_size_is_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    snap = _write_doc(
+        tmp_path, monkeypatch, "T", {".bss": {"size": 0, "cells": [cell(0, 1, "none")]}}
     )
-    c.execute("INSERT INTO cells (target, section_name, state) VALUES ('T', '.bss', 'none')")
-    # A NULL-size (.bss-style) section must not divide by zero: pct is 0.
-    stats = _compute_section_stats(c, "T", {".bss": {"size": 0}}, {"summary": {}})
+    # A zero-size (.bss-style) section must not divide by zero: pct is 0.
+    stats = _compute_section_stats(snap, {".bss": {"size": 0}}, {"summary": {}})
     assert stats[".bss"]["pct"] == 0
-    conn.close()
 
 
-def test_section_stats_pct_null_size_is_zero():
-    """Same contract as the zero-size case above, with an actual NULL.
+def test_section_stats_pct_null_size_is_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same contract as the zero-size case above, with an absent size.
 
-    dict.get("size", 0) returns None for a schema-legal NULL column, and
-    `None > 0` raised TypeError — a raw 500 through handle_potato's except
-    tuple — instead of the pct 0 this asserts.
+    TOML has no null: a section whose size the catalog could not state reads
+    back as 0, and ``sections.get(name, {}).get("size")`` returns None for a
+    caller that spells the section that way.  ``None > 0`` raised TypeError —
+    a raw 500 through handle_potato's except tuple — instead of the pct 0 this
+    asserts.
     """
-    conn = sqlite3.connect(":memory:")
-    conn.row_factory = sqlite3.Row
-    c = conn.cursor()
-    c.execute("CREATE TABLE cells (target TEXT, section_name TEXT, state TEXT)")
-    c.execute(
-        "CREATE VIEW section_cell_stats AS"
-        " SELECT target, section_name,"
-        " COUNT(*) as total_cells,"
-        " 0 as exact_count, 0 as reloc_count, 0 as near_match_count,"
-        " 0 as stub_count, 0 as padding_count"
-        " FROM cells GROUP BY target, section_name"
+    snap = _write_doc(
+        tmp_path, monkeypatch, "T", {".bss": {"size": None, "cells": [cell(0, 1, "none")]}}
     )
-    c.execute("INSERT INTO cells (target, section_name, state) VALUES ('T', '.bss', 'none')")
-    stats = _compute_section_stats(c, "T", {".bss": {"size": None}}, {"summary": {}})
+    stats = _compute_section_stats(snap, {".bss": {"size": None}}, {"summary": {}})
     assert stats[".bss"]["pct"] == 0
     sec = {"name": ".bss", "va": None, "size": None}
     progress = _build_progress(".bss", sec, {"summary": {}}, {".bss": {}})
     assert progress["coverage_pct"] == 0
-    conn.close()
 
 
-def test_section_stats_fills_a_partial_section_cell_stats():
-    """A materialized section_cell_stats covering only some sections still
-    reports the rest.
+def test_every_document_section_reports_stats(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every section the document carries reports stats, cells or not.
 
-    The table is a cache over `cells`; a scoped rebuild or a hand-made database
-    can carry one that omits a section, and the map header then showed no counts
-    for it at all.  The gap is re-aggregated from `cells`, the same fallback
-    /api .../stats uses, so the two surfaces agree on the section set.
+    The materialized ``section_cell_stats`` a scoped rebuild wrote could cover
+    only some sections, and the map header then showed no counts at all for the
+    rest.  The counts are derived from each section's own cells now, so a
+    section the document holds without cells reports zeroes instead of vanishing
+    (and its grid renders empty rather than 500ing — see
+    ``test_cell_less_section_renders_an_empty_grid``).
     """
-    conn = sqlite3.connect(":memory:")
-    conn.row_factory = sqlite3.Row
-    c = conn.cursor()
-    c.execute(
-        "CREATE TABLE cells (target TEXT, section_name TEXT, start INT, end INT,"
-        " span INT, state TEXT)"
+    snap = _write_doc(
+        tmp_path,
+        monkeypatch,
+        "T",
+        {
+            ".text": {"size": 2, "cells": [cell(0, 1, "exact"), cell(1, 2, "exact")]},
+            ".data": {"size": 2, "cells": [cell(0, 1, "exact"), cell(1, 2, "none")]},
+            ".bss": {"size": 0},
+        },
     )
-    c.execute(
-        "CREATE TABLE section_cell_stats (target TEXT, section_name TEXT,"
-        " total_cells INT, exact_count INT, reloc_count INT, near_match_count INT,"
-        " stub_count INT, padding_count INT)"
-    )
-    c.executemany(
-        "INSERT INTO cells (target, section_name, start, end, span, state)"
-        " VALUES ('T', ?, ?, ?, 1, ?)",
-        [
-            (".text", 0, 1, "exact"),
-            (".text", 1, 2, "exact"),
-            (".data", 0, 1, "exact"),
-            (".data", 1, 2, "none"),
-        ],
-    )
-    # Only .text made it into the cache.
-    c.execute(
-        "INSERT INTO section_cell_stats"
-        " SELECT target, section_name, COUNT(*),"
-        " SUM(state IN ('exact','verified')), 0, 0, 0, 0"
-        " FROM cells WHERE section_name = '.text' GROUP BY target, section_name"
-    )
+    sections = {".text": {"size": 2}, ".data": {"size": 2}, ".bss": {"size": 0}}
+    stats = _compute_section_stats(snap, sections, {"summary": {}})
 
-    sections = {".text": {"size": 2}, ".data": {"size": 2}}
-    stats = _compute_section_stats(c, "T", sections, {"summary": {}})
-
-    assert set(stats) == {".text", ".data"}
+    assert set(stats) == {".text", ".data", ".bss"}
     assert stats[".data"]["total"] == 2
     assert stats[".data"]["exact"] == 1
-    # .text still answers from the cache it was already answered from.
-    assert stats[".text"]["total"] == 2
-    conn.close()
+    assert stats[".bss"]["total"] == 0
+
+
+def test_cell_less_section_renders_an_empty_grid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A section with no cells renders an empty grid, not a 500.
+
+    This is the new spelling of the partial ``section_cell_stats`` degrade: a
+    section the document holds with an empty (or absent) ``cells`` array used to
+    make the readers that re-aggregated from a table drop it, and a dropped
+    section painted nothing at all.
+    """
+    _write_doc(tmp_path, monkeypatch, "EMPTY_POTATO", {".bss": {"va": 0x2000, "size": 64}})
+    html = render_potato_url("/potato?target=EMPTY_POTATO&section=.bss")
+    assert '<table id="grid"' in html, "an empty section still renders its grid"
+    # The map header counts the section rather than dropping it: zero blocks,
+    # not an absent heading.
+    assert "(0 blocks)" in html
 
 
 def test_progress_bar_segments_share_one_denominator():
@@ -423,52 +348,85 @@ def test_progress_svg_segments_stay_inside_the_track():
 def test_null_va_section_renders_grid_and_panel(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A .bss-style section (NULL va/fileOffset) must render instead of
+    """A .bss-style section (no va/fileOffset) must render instead of
     TypeError-500ing on hex(None + start).
 
-    The api.py /asm and /bytes endpoints document NULL va/fileOffset as the
-    normal shape for file-unbacked sections; the Potato grid and panel do the
-    same sec_va + cell.start arithmetic and crashed the whole page on it.
-    Addresses fall back to file-relative offsets (the SPA's `sec.va || 0`).
+    TOML has no null, so a section the catalog left unbacked is written with
+    empty ``va``/``fileOffset`` and reads back as None — the normal shape for
+    file-unbacked sections, as api.py's /asm and /bytes endpoints document.  The
+    Potato grid and panel do the same sec_va + cell.start arithmetic and crashed
+    the whole page on it.  Addresses fall back to file-relative offsets (the
+    SPA's `sec.va || 0`).
     """
-    t = "NULLVA_POTATO"
-    conn = _synthetic_potato_db(tmp_path, monkeypatch, t)
-    conn.execute("INSERT INTO sections VALUES (?, '.bss', NULL, 64, NULL, 16, 8)", (t,))
-    conn.executemany(
-        "INSERT INTO cells (target, section_name, start, end, span, state) VALUES (?,?,?,?,?,?)",
-        [(t, ".bss", 0, 16, 1, "data"), (t, ".bss", 16, 32, 1, "none")],
+    _write_doc(
+        tmp_path,
+        monkeypatch,
+        "NULLVA_POTATO",
+        {
+            ".bss": {
+                "va": None,
+                "size": 64,
+                "fileOffset": None,
+                "unitBytes": 16,
+                "columns": 8,
+                "cells": [cell(0, 16, "data"), cell(16, 32, "none")],
+            }
+        },
     )
-    conn.commit()
-    conn.close()
 
-    html = render_potato_url(f"/potato?target={t}&section=.bss")
+    html = render_potato_url("/potato?target=NULLVA_POTATO&section=.bss")
     assert '<table id="grid"' in html, "grid rendered for a NULL-va section"
     # Cell titles show file-relative offsets: hex() of 0..16.
     assert "0x0..0x10 | data" in html
 
-    panel = render_potato_url(f"/potato?target={t}&section=.bss&idx=0")
+    panel = render_potato_url("/potato?target=NULLVA_POTATO&section=.bss&idx=0")
     assert "Block 0" in panel
     assert "0x0 .. 0x10" in panel
 
 
 def test_null_columns_section_renders_grid(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A NULL sections.columns value (schema-legal) must fall back to the
-    64-column default, not TypeError on ``None <= 0`` — which escapes
-    ui.handle_potato's except tuple as a raw HTML 500.  Same crash family
-    as test_null_va_section_renders_grid_and_panel."""
-    t = "NULLCOLS_POTATO"
-    conn = _synthetic_potato_db(tmp_path, monkeypatch, t)
-    # columns IS NULL; everything else normal.
-    conn.execute("INSERT INTO sections VALUES (?, '.text', 4096, 64, 512, 16, NULL)", (t,))
-    conn.executemany(
-        "INSERT INTO cells (target, section_name, start, end, span, state) VALUES (?,?,?,?,?,?)",
-        [(t, ".text", 0, 16, 1, "exact"), (t, ".text", 16, 32, 1, "none")],
-    )
-    conn.commit()
-    conn.close()
+    """An absent sections.columns value must fall back to the 64-column default,
+    not TypeError on ``None <= 0`` — which escapes handle_potato's except tuple
+    as a raw HTML 500.
 
-    html = render_potato_url(f"/potato?target={t}&section=.text")
-    assert '<table id="grid"' in html, "grid rendered for a NULL-columns section"
+    The document's optional columns field reads back as 0, so the guard is
+    driven directly with the None spelling a caller-supplied section dict still
+    carries.  Same crash family as test_null_va_section_renders_grid_and_panel.
+    """
+    from recoverage.potato import _load_section_data, _render_grid_view
+
+    snap = _write_doc(
+        tmp_path,
+        monkeypatch,
+        "NULLCOLS_POTATO",
+        {
+            ".text": {
+                "va": 4096,
+                "size": 64,
+                "fileOffset": 512,
+                "unitBytes": 16,
+                "cells": [cell(0, 16, "exact"), cell(16, 32, "none")],
+            }
+        },
+    )
+    sections, data = _load_section_data(snap)
+    # columns omitted from the document (the schema-legal NULL of the SQLite era).
+    sec_data = dict(sections[".text"], columns=None)
+    grid_html, *_rest = _render_grid_view(
+        snap,
+        "NULLCOLS_POTATO",
+        ".text",
+        sec_data=sec_data,
+        sections=sections,
+        data=data,
+        active_filters=set(),
+        idx_str="",
+        search_query="",
+        search_matched_fns=set(),
+        page_str="",
+        snap=None,
+    )
+    assert '<table id="grid"' in grid_html, "grid rendered for a NULL-columns section"
 
 
 def test_render_original_bytes_keeps_dump_lines_intact() -> None:
@@ -578,48 +536,40 @@ def test_format_data_inspector():
     assert "string (ascii)" in ascii_inspector and "Hello" in ascii_inspector
 
 
-@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+@pytest.mark.skipif(not HAS_DB, reason="No coverage document")
 def test_grid_structure():
     """Every section's grid sizes its spacer row to the section column count
     and every merged row's colspans sum back to exactly that count."""
-    target = get_first_target()
-    if not target:
-        pytest.skip("No targets in DB")
-    db_path = get_db_path()
-    conn = sqlite3.connect(sqlite_ro_uri(db_path), uri=True)
-    try:
-        c = conn.cursor()
-        c.execute("SELECT DISTINCT name FROM sections WHERE target=?", (target,))
-        section_names = [r[0] for r in c.fetchall()]
-        # A targetless query used to make this loop vacuous: the test passed
-        # without executing a single assertion (hardcoded target name).
-        assert section_names, f"target {target!r} has no sections to check"
+    snap = _shared_snapshot()
+    target = snap.target
+    section_names = list(snap.sections)
+    # A targetless query used to make this loop vacuous: the test passed
+    # without executing a single assertion (hardcoded target name).
+    assert section_names, f"target {target!r} has no sections to check"
 
-        for sec in section_names:
-            html = render_potato_url(f"/potato?target={target}&section={sec}")
-            m = re.search(r'(<table id="grid"[^>]*>.*?</table>)', html, re.DOTALL)
-            assert m, f"grid {sec}: table found"
+    for sec in section_names:
+        html = render_potato_url(f"/potato?target={target}&section={sec}")
+        m = re.search(r'(<table id="grid"[^>]*>.*?</table>)', html, re.DOTALL)
+        assert m, f"grid {sec}: table found"
 
-            table = m.group(1)
-            table_rows = [str(r) for r in re.split(r"</tr>\s*<tr[^>]*>", table)]
-            first_row_tds = re.findall(r"<td\b", table_rows[0]) or []
+        table = m.group(1)
+        table_rows = [str(r) for r in re.split(r"</tr>\s*<tr[^>]*>", table)]
+        first_row_tds = re.findall(r"<td\b", table_rows[0]) or []
 
-            c.execute("SELECT columns FROM sections WHERE target=? AND name=?", (target, sec))
-            row_data = c.fetchone()
-            grid_columns = int(row_data[0]) if row_data and row_data[0] is not None else 64
+        # The document's own columns field, defaulting to the 64 the renderer
+        # falls back to for a section that states none.
+        grid_columns = int(snap.sections[sec].columns) or 64
 
-            assert len(first_row_tds) >= grid_columns, f"grid {sec}: sizing row"
+        assert len(first_row_tds) >= grid_columns, f"grid {sec}: sizing row"
 
-            for ri in range(1, len(table_rows)):
-                row = table_rows[ri]
-                spans = re.findall(r'colspan="(\d+)"', row) or []
-                if spans:
-                    total = sum(int(s) for s in spans)
-                    assert total == grid_columns, (
-                        f"grid {sec}: row {ri} sums to {total} not {grid_columns}"
-                    )
-    finally:
-        conn.close()
+        for ri in range(1, len(table_rows)):
+            row = table_rows[ri]
+            spans = re.findall(r'colspan="(\d+)"', row) or []
+            if spans:
+                total = sum(int(s) for s in spans)
+                assert total == grid_columns, (
+                    f"grid {sec}: row {ri} sums to {total} not {grid_columns}"
+                )
 
 
 # List of URLs to test, with what each render must actually say. A
@@ -678,7 +628,7 @@ URLS = [
 ]
 
 
-@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+@pytest.mark.skipif(not HAS_DB, reason="No coverage document")
 @pytest.mark.parametrize("url,name,must_contain,must_not_contain", URLS)
 def test_rendering_paths(url, name, must_contain, must_not_contain):
     html = render_potato_url(url)
@@ -697,51 +647,36 @@ def test_rendering_paths(url, name, must_contain, must_not_contain):
 
 
 def _find_cell_idx(target: str, section: str, predicate) -> int | None:
-    conn = sqlite3.connect(sqlite_ro_uri(get_db_path()), uri=True)
-    try:
-        c = conn.cursor()
-        c.execute(
-            "SELECT functions FROM cells WHERE target = ? AND section_name = ? ORDER BY id",
-            (target, section),
-        )
-        # ?idx= addresses a cell by its POSITION within the section's cell
-        # list (_render_panel indexes cells[idx]; grid links carry that
-        # position), not the cells.id column.
-        for pos, (funcs_json,) in enumerate(c.fetchall()):
-            funcs = []
-            if funcs_json:
-                funcs = json.loads(funcs_json)
-            if predicate(funcs):
-                return pos
-    finally:
-        conn.close()
+    """Position of the first cell in *section* whose functions satisfy *predicate*.
+
+    ?idx= addresses a cell by its POSITION within the section's cell list
+    (_render_panel indexes cells[idx]; grid links carry that position), not by a
+    stored id — the document has no id column at all.
+    """
+    found = load_coverage(Path.cwd(), target).sections.get(section)
+    if found is None:
+        return None
+    for pos, cell_row in enumerate(found.cells):
+        if predicate(list(cell_row.functions)):
+            return pos
     return None
 
 
-@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+@pytest.mark.skipif(not HAS_DB, reason="No coverage document")
 def test_globals_detail_panel():
-    target = get_first_target()
-    conn = sqlite3.connect(sqlite_ro_uri(get_db_path()), uri=True)
-    try:
-        c = conn.cursor()
-        c.execute("SELECT name FROM globals WHERE target = ?", (target,))
-        globals_set = {row[0] for row in c.fetchall()}
-        c.execute(
-            "SELECT section_name, functions FROM cells "
-            "WHERE target = ? AND section_name IN ('.data', '.rdata') ORDER BY id",
-            (target,),
-        )
-        match: tuple[int, str] | None = None
+    snap = _shared_snapshot()
+    target = snap.target
+    globals_set = {gl.name for gl in snap.globals}
+
+    match: tuple[int, str] | None = None
+    for sec in (".data", ".rdata"):
+        section = snap.sections.get(sec)
+        if section is None:
+            continue
         # Same position-not-id contract as _find_cell_idx above.
-        positions: dict[str, int] = {}
-        for sec, funcs_json in c.fetchall():
-            funcs = json.loads(funcs_json) if funcs_json else []
-            pos = positions.get(sec, 0)
-            positions[sec] = pos + 1
-            if match is None and any(fn in globals_set for fn in funcs):
+        for pos, cell_row in enumerate(section.cells):
+            if match is None and any(fn in globals_set for fn in cell_row.functions):
                 match = (pos, sec)
-    finally:
-        conn.close()
     if not match:
         pytest.skip("No global-mapped .data/.rdata cell in DB")
     idx, sec = match
@@ -749,41 +684,38 @@ def test_globals_detail_panel():
     assert "Global Variable" in html
 
 
-@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
 def test_multi_function_cell(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    import recoverage.server as _server
+    """A cell carrying two function names is not an empty cell.
 
-    target = get_first_target()
-    synthetic = False
-    idx = _find_cell_idx(target, ".text", lambda funcs: len(funcs) > 1)
-    if idx is None:
-        synthetic = True
-        t = "MULTIFN_POTATO"
-        conn = _synthetic_potato_db(tmp_path, monkeypatch, t, extra_schema=_FUNCTION_SIDECAR_SCHEMA)
-        conn.execute("INSERT INTO sections VALUES (?, '.text', 4096, 32, 512, 16, 8)", (t,))
-        conn.execute(
-            "INSERT INTO cells (target, section_name, start, end, span, state, functions)"
-            " VALUES (?,?,?,?,?,?,?)",
-            (t, ".text", 0, 16, 1, "exact", '["_a", "_b"]'),
-        )
-        conn.commit()
-        conn.close()
-        monkeypatch.setattr("recoverage.server._db_path", lambda: tmp_path / "coverage.db")
-        _server.clear_target_cache()
-        target, idx = t, 0
-    html = render_potato_url(f"/potato?target={target}&section=.text&idx={idx}")
+    The panel's unknown-first-name branch used to be reached for such a cell in
+    a document with no functions rows; the cell lists two names, so it is never
+    the "No functions in this block." case.
+    """
+    _write_doc(
+        tmp_path,
+        monkeypatch,
+        "MULTIFN_POTATO",
+        {
+            ".text": {
+                "va": 4096,
+                "size": 32,
+                "fileOffset": 512,
+                "unitBytes": 16,
+                "columns": 8,
+                "cells": [cell(0, 16, "exact", functions=("_a", "_b"))],
+            }
+        },
+    )
+    html = render_potato_url("/potato?target=MULTIFN_POTATO&section=.text&idx=0")
     # A cell carrying two function names is not an empty cell, so the panel
     # must not take the "No functions in this block." branch.
     assert "No functions in this block." not in html
-    if synthetic:
-        # The synthetic DB seeds no functions/globals rows, so the cell's
-        # primary function (_a, first of the two) lands in the Unknown branch.
-        assert "Unknown: _a" in html
-    else:
-        assert "Function Details" in html
+    # The document seeds no functions/globals rows, so the cell's primary
+    # function (_a, first of the two) lands in the Unknown branch.
+    assert "Unknown: _a" in html
 
 
-@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+@pytest.mark.skipif(not HAS_DB, reason="No coverage document")
 def test_function_list_view():
     target = get_first_target()
     html = render_potato_url(f"/potato?target={target}&section=.text&view=functions")
@@ -791,7 +723,7 @@ def test_function_list_view():
     assert "Origin" in html
 
 
-@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+@pytest.mark.skipif(not HAS_DB, reason="No coverage document")
 def test_function_list_no_match_says_what_to_do():
     """An empty list must name the query that emptied it and offer a way out.
 
@@ -810,7 +742,7 @@ def test_function_list_no_match_says_what_to_do():
     assert f'href="?target={quote(target)}&section=.text&view=functions"' in html
 
 
-@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+@pytest.mark.skipif(not HAS_DB, reason="No coverage document")
 def test_function_list_no_match_status_filter_offers_a_way_back():
     target = get_first_target()
     html = render_potato_url(
@@ -820,7 +752,7 @@ def test_function_list_no_match_status_filter_offers_a_way_back():
     assert "[Clear filter]" in html
 
 
-@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+@pytest.mark.skipif(not HAS_DB, reason="No coverage document")
 def test_search_status_line_explains_an_empty_result():
     """The SPA's search line spells out what to try; Potato's must match.
 
@@ -910,7 +842,7 @@ def test_parent_url_index_matches_the_linear_walk():
     assert not potato._PARENT_INDEX
 
 
-@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+@pytest.mark.skipif(not HAS_DB, reason="No coverage document")
 def test_function_list_sort():
     """?sort= orders the function rows.
 
@@ -932,7 +864,7 @@ def test_function_list_sort():
     assert order_size == ["_func_b", "_func_c", "_func_a"]
 
 
-@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+@pytest.mark.skipif(not HAS_DB, reason="No coverage document")
 def test_function_list_status_filter():
     # The synthetic DB seeds _func_a EXACT, _func_b RELOC, _func_c STUB.  An
     # ignored ?status= would still list all three, so the filtered-out names
@@ -946,7 +878,7 @@ def test_function_list_status_filter():
     assert "(1 results)" in html
 
 
-@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+@pytest.mark.skipif(not HAS_DB, reason="No coverage document")
 def test_prev_next_navigation():
     target = get_first_target()
     html = render_potato_url(f"/potato?target={target}&section=.text&idx=5")
@@ -955,14 +887,14 @@ def test_prev_next_navigation():
     assert "Next" in html
 
 
-@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+@pytest.mark.skipif(not HAS_DB, reason="No coverage document")
 def test_skip_link():
     target = get_first_target()
     html = render_potato_url(f"/potato?target={target}")
     assert 'href="#grid-container"' in html
 
 
-@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+@pytest.mark.skipif(not HAS_DB, reason="No coverage document")
 def test_accesskey_attributes():
     target = get_first_target()
     html = render_potato_url(f"/potato?target={target}")
@@ -973,7 +905,7 @@ def test_accesskey_attributes():
     assert 'accesskey="d"' in html  # .data tab
 
 
-@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+@pytest.mark.skipif(not HAS_DB, reason="No coverage document")
 def test_functions_nav_link_is_url_quoted():
     # The header [Functions] href is percent-encoded, so a target or section
     # holding "&" cannot append query parameters to it.  Every other href on
@@ -983,7 +915,7 @@ def test_functions_nav_link_is_url_quoted():
     assert f'href="?target={target}&amp;section=.text&amp;view=functions"' in html
 
 
-@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+@pytest.mark.skipif(not HAS_DB, reason="No coverage document")
 def test_clickable_asm_addresses(monkeypatch: pytest.MonkeyPatch) -> None:
     from recoverage import potato as _potato
 
@@ -1009,14 +941,14 @@ def test_clickable_asm_addresses(monkeypatch: pytest.MonkeyPatch) -> None:
     assert f'href="?target={target}&search=0x10001010"' in html
 
 
-@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+@pytest.mark.skipif(not HAS_DB, reason="No coverage document")
 def test_back_to_main_link():
     target = get_first_target()
     html = render_potato_url(f"/potato?target={target}")
     assert 'href="/"' in html
 
 
-@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+@pytest.mark.skipif(not HAS_DB, reason="No coverage document")
 def test_footer_db_date():
     target = get_first_target()
     html = render_potato_url(f"/potato?target={target}")
@@ -1025,48 +957,57 @@ def test_footer_db_date():
 
 
 class TestDbUpdatedLabel:
-    """DB-updated footer stamp: WAL-aware wall-clock rendering of the DB mtime."""
+    """DB-updated footer stamp: wall-clock rendering of the newest document mtime."""
 
     @staticmethod
-    def _patch_db(monkeypatch: pytest.MonkeyPatch, db: Path) -> None:
-        # The stamp is read through server._db_mtime_ns, so the path both the
-        # renderer and that helper resolve is the one to redirect.
-        monkeypatch.setattr("recoverage.potato._db_path", lambda: db)
-        monkeypatch.setattr("recoverage.server._db_path", lambda: db)
+    def _patch_db(monkeypatch: pytest.MonkeyPatch, directory: Path) -> None:
+        # The stamp is read through server._newest_mtime_ns, whose one input is
+        # the coverage directory _db_path resolves — the same directory the
+        # renderer globs for its documents.
+        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+
+    @staticmethod
+    def _doc(directory: Path, target: str, mtime_ns: int) -> Path:
+        """One document, stamped with *mtime_ns* so the assertion is exact."""
+        path = write_coverage(
+            directory, target, {".text": {"size": 16, "cells": [cell(0, 16, "exact")]}}
+        )
+        os.utime(path, ns=(mtime_ns, mtime_ns))
+        return path
 
     def test_missing_db_renders_empty(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        self._patch_db(monkeypatch, tmp_path / "nope.db")
+        self._patch_db(monkeypatch, tmp_path / "nope")
         assert _db_updated_label() == ""
 
-    def test_label_reflects_newer_wal_mtime(
+    def test_label_reflects_the_newest_document_mtime(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A rebuild that commits only to -wal must advance the stamp: the main
-        file keeps its old mtime, and a main-file-only read would show a stale
-        instant while the served data already changed."""
-        db = tmp_path / "coverage.db"
-        wal = Path(f"{db}-wal")
-        db.write_bytes(b"SQLite format 3\x00")
-        wal.write_bytes(b"wal")
+        """A rebuild rewrites one target's document, so the stamp must be the
+        newest of them: reading any single one shows a stale instant while the
+        served data for the rewritten target already changed."""
+        directory = tmp_path / "db"
         old_ns = 1_700_000_000_000_000_000
         new_ns = old_ns + 90 * 1_000_000_000
-        os.utime(db, ns=(old_ns, old_ns))
-        os.utime(wal, ns=(new_ns, new_ns))
-        self._patch_db(monkeypatch, db)
-        expected = datetime.fromtimestamp(new_ns / 1e9, tz=UTC).strftime("%Y-%m-%d %H:%M UTC")
+        self._doc(directory, "STALE", old_ns)
+        self._doc(directory, "FRESH", new_ns)
+        self._patch_db(monkeypatch, directory)
+        expected = datetime.fromtimestamp(new_ns // 1_000_000_000, tz=UTC).strftime(
+            "%Y-%m-%d %H:%M UTC"
+        )
         assert _db_updated_label() == expected
 
-    def test_label_without_wal_file_uses_main_mtime(
+    def test_label_with_a_single_document_uses_its_mtime(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        db = tmp_path / "coverage.db"
-        db.write_bytes(b"SQLite format 3\x00")
+        directory = tmp_path / "db"
         ns = 1_700_000_000_000_000_000
-        os.utime(db, ns=(ns, ns))
-        self._patch_db(monkeypatch, db)
-        expected = datetime.fromtimestamp(ns / 1e9, tz=UTC).strftime("%Y-%m-%d %H:%M UTC")
+        self._doc(directory, "ONLY", ns)
+        self._patch_db(monkeypatch, directory)
+        expected = datetime.fromtimestamp(ns // 1_000_000_000, tz=UTC).strftime(
+            "%Y-%m-%d %H:%M UTC"
+        )
         assert _db_updated_label() == expected
 
     def test_label_truncates_rather_than_rounds_the_minute(
@@ -1077,16 +1018,15 @@ class TestDbUpdatedLabel:
         conversion rounds 12:34:59.999999999 up to 12:35, and a footer that
         reads ahead of the data it describes is worse than one that lags by a
         fraction of a second."""
-        db = tmp_path / "coverage.db"
-        db.write_bytes(b"SQLite format 3\x00")
+        directory = tmp_path / "db"
         # 2023-11-14T22:13:59.999999999Z: rounds up through a float second.
         ns = 1_700_000_039_999_999_999
-        os.utime(db, ns=(ns, ns))
-        self._patch_db(monkeypatch, db)
+        self._doc(directory, "TRUNC", ns)
+        self._patch_db(monkeypatch, directory)
         assert _db_updated_label() == "2023-11-14 22:13 UTC"
 
 
-@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+@pytest.mark.skipif(not HAS_DB, reason="No coverage document")
 def test_detail_panel_label_value_rows():
     # The detail panel renders label/value rows as <td> pairs, not <th>:
     # potato.py's panel template has no header cells at all.
@@ -1099,7 +1039,7 @@ def test_detail_panel_label_value_rows():
     assert "<b>State:</b>" in html
 
 
-@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+@pytest.mark.skipif(not HAS_DB, reason="No coverage document")
 def test_function_detail_shows_verify_similarity():
     """The function data panel surfaces the `rebrew verify -o` record — byte
     delta, diff-line count, and the code-similarity score."""
@@ -1116,7 +1056,7 @@ def test_function_detail_shows_verify_similarity():
     pytest.fail("no .text cell rendered the verified function's code-similarity (87.3%)")
 
 
-@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+@pytest.mark.skipif(not HAS_DB, reason="No coverage document")
 def test_label_for_search():
     target = get_first_target()
     html = render_potato_url(f"/potato?target={target}")
@@ -1127,34 +1067,43 @@ def test_label_for_search():
 def test_function_detail_similarity_fraction_rendered_as_percent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """functions.similarity is stored as a 0-1 fraction (schema CHECK) and the
-    SPA renders it scaled by 100 with a "%" (app.js).  Potato Mode's detail
-    rows must show the same percentage, not the bare fraction."""
-    t = "SIMFRAC_POTATO"
-    conn = _synthetic_potato_db(
-        tmp_path, monkeypatch, t, total_functions=1, extra_schema=(_FUNCTIONS_TABLE_CHECKED,)
+    """functions.similarity is stored as a 0-1 fraction (rebrew's own unit
+    interval) and the SPA renders it scaled by 100 with a "%" (app.js).  Potato
+    Mode's detail rows must show the same percentage, not the bare fraction."""
+    _write_doc(
+        tmp_path,
+        monkeypatch,
+        "SIMFRAC_POTATO",
+        {
+            ".text": {
+                "va": 256,
+                "size": 64,
+                "fileOffset": 16,
+                "unitBytes": 16,
+                "columns": 8,
+                "cells": [cell(0, 32, "exact", functions=("_func_sim",))],
+            }
+        },
+        functions=[
+            {
+                "va": 256,
+                "name": "_func_sim",
+                "vaStart": "0x100",
+                "size": 32,
+                "fileOffset": 16,
+                "status": "EXACT",
+                "similarity": 0.8734,
+            }
+        ],
     )
-    conn.execute("INSERT INTO sections VALUES (?, '.text', 256, 64, 16, 16, 8)", (t,))
-    conn.execute(
-        "INSERT INTO cells (target, section_name, start, end, span, state, functions)"
-        " VALUES (?, '.text', 0, 32, 1, 'exact', '[\"_func_sim\"]')",
-        (t,),
-    )
-    conn.execute(
-        "INSERT INTO functions (target, va, name, vaStart, size, fileOffset, status,"
-        " similarity) VALUES (?, 256, '_func_sim', '0x100', 32, 16, 'EXACT', 0.8734)",
-        (t,),
-    )
-    conn.commit()
-    conn.close()
 
-    panel = render_potato_url(f"/potato?target={t}&section=.text&idx=0")
+    panel = render_potato_url("/potato?target=SIMFRAC_POTATO&section=.text&idx=0")
     assert "<b>similarity</b>" in panel
     assert "87.3%" in panel
     assert "0.8734" not in panel
 
 
-@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+@pytest.mark.skipif(not HAS_DB, reason="No coverage document")
 def test_etag_caching():
     target = get_first_target()
 
@@ -1341,7 +1290,7 @@ class TestSectionTabAccesskey:
 # ── Index parsing (potato.py idx handling, via the real render) ────
 
 
-@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+@pytest.mark.skipif(not HAS_DB, reason="No coverage document")
 class TestIdxParsing:
     """?idx= handling through the real render path.
 
@@ -1462,10 +1411,10 @@ class TestMergeCellsInvariant:
                         {**acc_cell, "orig_idx": start_idx, "span": acc_span, "end": acc_end}
                     )
 
-            for i, cell in enumerate(cells):
-                state = cell.get("state")
-                fns = cell.get("functions")
-                span = int(cell.get("span", 1))
+            for i, row in enumerate(cells):
+                state = row.get("state")
+                fns = row.get("functions")
+                span = int(row.get("span", 1))
                 if (
                     acc_cell is not None
                     and state not in ("none", None)
@@ -1476,16 +1425,16 @@ class TestMergeCellsInvariant:
                     if out is None:
                         out = cells[:start_idx]
                     acc_span += span
-                    acc_end = cell.get("end")
+                    acc_end = row.get("end")
                     acc_col += span
                     continue
                 flush()
                 start_idx = i
-                acc_cell = cell
+                acc_cell = row
                 acc_state = state
                 acc_fns = fns
                 acc_span = span
-                acc_end = cell.get("end")
+                acc_end = row.get("end")
                 acc_col += span
                 if acc_col > grid_columns:
                     acc_col = span
@@ -1537,8 +1486,8 @@ class TestBlockPosition:
 
     @staticmethod
     def _linear(merged: list[dict], idx: int) -> int | None:
-        for pos, cell in enumerate(merged):
-            if cell.get("orig_idx", pos) == idx:
+        for pos, row in enumerate(merged):
+            if row.get("orig_idx", pos) == idx:
                 return pos
         return None
 
@@ -1614,31 +1563,39 @@ class TestBlockPosition:
 class TestFunctionListLinks:
     """Every function row links into the grid for the SAME name it prints."""
 
-    def test_row_link_carries_the_printed_name(self) -> None:
+    def test_row_link_carries_the_printed_name(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         from recoverage.potato import _render_function_list
 
-        con = sqlite3.connect(":memory:")
-        con.row_factory = sqlite3.Row
-        c = con.cursor()
-        c.execute(
-            "CREATE TABLE functions (target TEXT, va INTEGER, name TEXT, vaStart TEXT,"
-            " size INTEGER, status TEXT, module TEXT, markerType TEXT)"
+        snap = _write_doc(
+            tmp_path,
+            monkeypatch,
+            "T",
+            {".text": {"size": 32, "cells": [cell(0, 32, "exact")]}},
+            functions=[
+                {
+                    "va": 4096,
+                    "name": "sub_401000",
+                    "vaStart": "0x1000",
+                    "size": 12,
+                    "status": "EXACT",
+                    "module": "T",
+                },
+                {
+                    "va": 4100,
+                    "name": "a name/with?chars",
+                    "vaStart": "0x1004",
+                    "size": 8,
+                    "status": "STUB",
+                    "module": "B",
+                },
+            ],
         )
-        c.execute(
-            "INSERT INTO functions VALUES ('T', 4096, 'sub_401000', '0x1000', 12,"
-            " 'EXACT', 'T', 'FUNCTION')"
-        )
-        c.execute(
-            "INSERT INTO functions VALUES ('T', 4100, 'a name/with?chars', '0x1004', 8,"
-            " 'STUB', 'B', 'FUNCTION')"
-        )
-        html = _render_function_list(c, "T", ".text", "", "va", "")
-        try:
-            assert f'<a href="?target=T&section=.text&search={quote("sub_401000")}">' in html
-            spaced = f'<a href="?target=T&section=.text&search={quote("a name/with?chars")}">'
-            assert spaced in html
-        finally:
-            con.close()
+        html = _render_function_list(snap, "T", ".text", "", "va", "")
+        assert f'<a href="?target=T&section=.text&search={quote("sub_401000")}">' in html
+        spaced = f'<a href="?target=T&section=.text&search={quote("a name/with?chars")}">'
+        assert spaced in html
 
 
 class TestV4StateColors:
@@ -1814,106 +1771,82 @@ class TestPathTraversalGuard:
 class TestSearchLimit:
     """_search_functions should limit results."""
 
-    @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+    @pytest.mark.skipif(not HAS_DB, reason="No coverage document")
     def test_search_returns_bounded_results(self):
         """_search_functions caps at 500 rows per query (500 functions +
         500 globals, so at most 1000 entries in the returned set)."""
         from recoverage.potato import _search_functions
-        from recoverage.server import _db_path
 
-        conn = sqlite3.connect(sqlite_ro_uri(_db_path()), uri=True)
-        try:
-            c = conn.cursor()
-            c.execute("SELECT DISTINCT target FROM metadata LIMIT 1")
-            row = c.fetchone()
-            if not row:
-                pytest.skip("No targets in DB")
-            target = row[0]
-            # Empty search returns empty set (short-circuit)
-            results = _search_functions(c, target, "")
-            assert len(results) == 0
-            # Search with a single common letter — should be bounded
-            results = _search_functions(c, target, "a")
-            # The 1000-entry bound (500 functions + 500 globals) is pinned by
-            # the cap tests below against >500-row fixtures; against this
-            # 3-function DB the only thing left to show is that a non-empty
-            # query matches and stays inside the bound.
-            assert 0 < len(results) <= 1000
-        finally:
-            conn.close()
+        snap = _shared_snapshot()
+        # Empty search returns empty set (short-circuit)
+        assert _search_functions(snap, "") == set()
+        # Search with a single common letter — should be bounded.  The
+        # 1000-entry bound (500 functions + 500 globals) is pinned by the cap
+        # tests below against >500-row fixtures; against this 3-function
+        # document the only thing left to show is that a non-empty query
+        # matches and stays inside the bound.
+        results = _search_functions(snap, "a")
+        assert 0 < len(results) <= 1000
 
-    def test_search_empty_returns_empty(self):
-        """Empty search query short-circuits to empty set (no DB needed)."""
+    def test_search_empty_returns_empty(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        """Empty search query short-circuits to the empty set.
+
+        The short-circuit is before any name comparison, so it holds for a
+        document whose rows would otherwise match every term.
+        """
         from recoverage.potato import _search_functions
 
-        # Create an in-memory DB with no tables needed — empty search returns early
-        conn = sqlite3.connect(":memory:")
-        c = conn.cursor()
-        result = _search_functions(c, "TEST", "")
-        assert result == set()
-        conn.close()
+        snap = _write_doc(
+            tmp_path,
+            monkeypatch,
+            "T",
+            {".text": {"size": 16, "cells": [cell(0, 16, "exact")]}},
+            functions=[{"va": 0x1000, "name": "aaa"}],
+            globals_=[{"va": 0x2000, "name": "aaa_global"}],
+        )
+        assert _search_functions(snap, "") == set()
 
-    def test_functions_cap_is_deterministic(self):
+    def test_functions_cap_is_deterministic(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         """The functions half of the 1000-entry bound: with >500 matches the
-        cap must keep exactly the first 500 by ORDER BY name, vaStart.  A cap
-        without the ORDER BY follows scan order and keeps the wrong half."""
+        cap must keep exactly the first 500 by name, vaStart.  A cap without the
+        ordering keeps whichever rows the document happened to list first."""
         from recoverage.potato import _search_functions
 
-        conn = sqlite3.connect(":memory:")
-        c = conn.cursor()
-        c.execute(
-            "CREATE TABLE functions (target TEXT, name TEXT, vaStart TEXT DEFAULT '',"
-            " symbol TEXT DEFAULT '')"
-        )
-        c.execute(
-            "CREATE TABLE globals (target TEXT, va INTEGER, name TEXT,"
-            " decl TEXT DEFAULT '', files TEXT DEFAULT '[]',"
-            " module TEXT DEFAULT '', size INTEGER DEFAULT 4)"
-        )
         names = [f"func_{i:04d}" for i in range(600)]
-        # Insert in REVERSE name order, with no vaStart, so the result is the
+        # Listed in REVERSE name order, with no vaStart, so the result is the
         # capped name set alone (each matching row contributes one entry).
-        c.executemany(
-            "INSERT INTO functions (target, name) VALUES ('T', ?)",
-            [(n,) for n in reversed(names)],
+        snap = _write_doc(
+            tmp_path,
+            monkeypatch,
+            "T",
+            {".text": {"size": 16, "cells": [cell(0, 16, "exact")]}},
+            functions=[
+                {"va": 0x10000000 + i * 4, "name": n} for i, n in enumerate(reversed(names))
+            ],
         )
-        try:
-            result = _search_functions(c, "T", "func_")
-            assert len(result) == 500
-            assert result == set(sorted(names)[:500])
-        finally:
-            conn.close()
+        result = _search_functions(snap, "func_")
+        assert len(result) == 500
+        assert result == set(sorted(names)[:500])
 
-    def test_globals_cap_is_deterministic(self):
+    def test_globals_cap_is_deterministic(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         """With >500 matches, which globals enter the dimming set must be
-        reproducible: the 500-row cap is only deterministic with an ORDER BY,
-        same invariant as the functions query above."""
+        reproducible: the 500-row cap is only deterministic with an ordering,
+        same invariant as the functions case above."""
         from recoverage.potato import _search_functions
 
-        conn = sqlite3.connect(":memory:")
-        c = conn.cursor()
-        c.execute(
-            "CREATE TABLE functions (target TEXT, name TEXT, vaStart TEXT DEFAULT '',"
-            " symbol TEXT DEFAULT '')"
-        )
-        c.execute(
-            "CREATE TABLE globals (target TEXT, va INTEGER, name TEXT,"
-            " decl TEXT DEFAULT '', files TEXT DEFAULT '[]',"
-            " module TEXT DEFAULT '', size INTEGER DEFAULT 4)"
-        )
         names = [f"glob_{i:04d}" for i in range(600)]
-        # Insert in REVERSE name order: a cap without ORDER BY follows scan
-        # order (rowid) and keeps the wrong half.
-        c.executemany(
-            "INSERT INTO globals (target, va, name) VALUES ('T', ?, ?)",
-            [(0x10000000 + i * 4, n) for i, n in enumerate(reversed(names))],
+        # Listed in REVERSE name order: a cap without an ordering keeps the
+        # rows the document lists first and the wrong half of the set.
+        snap = _write_doc(
+            tmp_path,
+            monkeypatch,
+            "T",
+            {".text": {"size": 16, "cells": [cell(0, 16, "exact")]}},
+            globals_=[{"va": 0x10000000 + i * 4, "name": n} for i, n in enumerate(reversed(names))],
         )
-        try:
-            result = _search_functions(c, "T", "glob_")
-            assert len(result) == 500
-            assert result == set(sorted(names)[:500])
-        finally:
-            conn.close()
+        result = _search_functions(snap, "glob_")
+        assert len(result) == 500
+        assert result == set(sorted(names)[:500])
 
 
 class TestSearchAddressSpelling:
@@ -1924,94 +1857,64 @@ class TestSearchAddressSpelling:
     out of a rendered VA column silently matches nothing."""
 
     @staticmethod
-    def _cursor() -> tuple[sqlite3.Connection, sqlite3.Cursor]:
-        conn = sqlite3.connect(":memory:")
-        c = conn.cursor()
-        c.execute(
-            "CREATE TABLE functions (target TEXT, name TEXT, va INTEGER,"
-            " vaStart TEXT DEFAULT '', symbol TEXT DEFAULT '', size INTEGER DEFAULT 4,"
-            " status TEXT DEFAULT 'exact', module TEXT DEFAULT '',"
-            " markerType TEXT DEFAULT 'FUNCTION')"
+    def _snapshot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> CoverageSnapshot:
+        return _write_doc(
+            tmp_path,
+            monkeypatch,
+            "T",
+            {".text": {"size": 16, "cells": [cell(0, 16, "exact")]}},
+            functions=[{"va": 0x401000, "name": "sub_401000", "status": "exact"}],
+            globals_=[{"va": 0x402000, "name": "g_cfg"}],
         )
-        c.execute(
-            "CREATE TABLE globals (target TEXT, va INTEGER, name TEXT,"
-            " decl TEXT DEFAULT '', files TEXT DEFAULT '[]',"
-            " module TEXT DEFAULT '', size INTEGER DEFAULT 4)"
-        )
-        c.execute(
-            "INSERT INTO functions (target, name, va) VALUES ('T', 'sub_401000', ?)", (0x401000,)
-        )
-        c.execute("INSERT INTO globals (target, va, name) VALUES ('T', ?, 'g_cfg')", (0x402000,))
-        return conn, c
 
     @pytest.mark.parametrize("query", ["0x00401000", "0x401000"])
-    def test_padded_and_bare_function_va_both_match(self, query: str) -> None:
+    def test_padded_and_bare_function_va_both_match(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, query: str
+    ) -> None:
         """The Functions view prints the VA through _format_va, so pasting that
         same string back into its search box must find the row."""
         from recoverage.potato import _render_function_list
 
-        conn, c = self._cursor()
-        try:
-            assert "sub_401000" in _render_function_list(c, "T", ".text", query, "va", "")
-        finally:
-            conn.close()
+        snap = self._snapshot(tmp_path, monkeypatch)
+        assert "sub_401000" in _render_function_list(snap, "T", ".text", query, "va", "")
 
     @pytest.mark.parametrize("query", ["0x00402000", "0x402000"])
-    def test_padded_and_bare_global_va_both_match(self, query: str) -> None:
+    def test_padded_and_bare_global_va_both_match(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, query: str
+    ) -> None:
         from recoverage.potato import _search_functions
 
-        conn, c = self._cursor()
-        try:
-            assert _search_functions(c, "T", query) == {"g_cfg"}
-        finally:
-            conn.close()
+        snap = self._snapshot(tmp_path, monkeypatch)
+        assert _search_functions(snap, query) == {"g_cfg"}
 
     @pytest.mark.parametrize("query", ["0x00403000", "0x403000"])
-    def test_a_different_address_does_not_match(self, query: str) -> None:
+    def test_a_different_address_does_not_match(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, query: str
+    ) -> None:
         from recoverage.potato import _search_functions
 
-        conn, c = self._cursor()
-        try:
-            assert _search_functions(c, "T", query) == set()
-        finally:
-            conn.close()
+        snap = self._snapshot(tmp_path, monkeypatch)
+        assert _search_functions(snap, query) == set()
 
 
 class TestFunctionListSearchFolding:
     """The Functions view must fold a non-ASCII term the way the grid does.
 
-    SQLite's LIKE folds case for ASCII only, so a bare ``name LIKE ?`` chain
-    returns nothing for "CAFÉ" against a "Café_Render" row, and an NFD spelling
-    misses its NFC twin.  _search_functions (grid) ORs a folded disjunct in;
-    the function list used a hand-written chain without it, so the same query
-    matched in one view and not the other.
+    A byte comparison folds case for ASCII only, so a bare name match returns
+    nothing for "CAFÉ" against a "Café_Render" row, and an NFD spelling misses
+    its NFC twin.  Both readers now fold through ``server.fold_match``, so the
+    list and the grid that sits beside it return the same rows for one term.
     """
 
     @staticmethod
-    def _cursor() -> tuple[sqlite3.Connection, sqlite3.Cursor]:
-        from recoverage.server import FOLD_SQL, fold_text
-
-        conn = sqlite3.connect(":memory:")
-        # _open_db registers the folding function on every read connection;
-        # a bare connect() has to do the same or the folded clause cannot run.
-        conn.create_function(FOLD_SQL, 1, fold_text, deterministic=True)
-        c = conn.cursor()
-        c.execute(
-            "CREATE TABLE functions (target TEXT, name TEXT, va INTEGER,"
-            " vaStart TEXT DEFAULT '', symbol TEXT DEFAULT '', size INTEGER DEFAULT 4,"
-            " status TEXT DEFAULT 'exact', module TEXT DEFAULT '',"
-            " markerType TEXT DEFAULT 'FUNCTION')"
+    def _snapshot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> CoverageSnapshot:
+        return _write_doc(
+            tmp_path,
+            monkeypatch,
+            "T",
+            {".text": {"size": 16, "cells": [cell(0, 16, "exact")]}},
+            functions=[{"va": 0x401000, "name": "Café_Render"}],
         )
-        c.execute(
-            "CREATE TABLE globals (target TEXT, va INTEGER, name TEXT,"
-            " decl TEXT DEFAULT '', files TEXT DEFAULT '[]',"
-            " module TEXT DEFAULT '', size INTEGER DEFAULT 4)"
-        )
-        c.execute(
-            "INSERT INTO functions (target, name, va) VALUES ('T', 'Café_Render', ?)",
-            (0x401000,),
-        )
-        return conn, c
 
     @pytest.mark.parametrize(
         "query",
@@ -2021,98 +1924,97 @@ class TestFunctionListSearchFolding:
             "café",  # lowercase
         ],
     )
-    def test_case_folded_term_matches(self, query: str) -> None:
+    def test_case_folded_term_matches(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, query: str
+    ) -> None:
         from recoverage.potato import _render_function_list
 
-        conn, c = self._cursor()
-        try:
-            assert "Café_Render" in _render_function_list(c, "T", ".text", query, "va", "")
-        finally:
-            conn.close()
+        snap = self._snapshot(tmp_path, monkeypatch)
+        assert "Café_Render" in _render_function_list(snap, "T", ".text", query, "va", "")
 
-    def test_grid_and_list_agree_on_the_same_term(self) -> None:
+    def test_grid_and_list_agree_on_the_same_term(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         from recoverage.potato import _render_function_list, _search_functions
 
-        conn, c = self._cursor()
-        try:
-            assert _search_functions(c, "T", "CAFÉ") == {"Café_Render"}
-            assert "Café_Render" in _render_function_list(c, "T", ".text", "CAFÉ", "va", "")
-        finally:
-            conn.close()
+        snap = self._snapshot(tmp_path, monkeypatch)
+        assert _search_functions(snap, "CAFÉ") == {"Café_Render"}
+        assert "Café_Render" in _render_function_list(snap, "T", ".text", "CAFÉ", "va", "")
 
 
 class TestCellsCacheInvalidation:
-    """The grid memo must invalidate on a WAL-committed rebuild.
+    """The grid memo must invalidate when a document is rewritten.
 
-    Main-file mtime alone misses it (the writer can commit to coverage.db-wal
-    without checkpointing), so the fingerprint uses the WAL-aware snapshot —
-    same contract as /data's memo and the SSE watcher."""
+    The fingerprint folds every coverage-*.toml's name, mtime and size, so a
+    rebuild that rewrites one target moves it — same contract as /data's memo
+    and the SSE watcher."""
 
     @staticmethod
-    def _cells_cursor() -> sqlite3.Cursor:
-        conn = sqlite3.connect(":memory:")
-        c = conn.cursor()
-        c.execute(
-            "CREATE TABLE cells ("
-            " id INTEGER PRIMARY KEY, target TEXT NOT NULL, section_name TEXT NOT NULL,"
-            " start INTEGER NOT NULL, end INTEGER NOT NULL, span INTEGER NOT NULL,"
-            " state TEXT NOT NULL, functions TEXT NOT NULL DEFAULT '[]',"
-            " label TEXT, parent_function TEXT)"
+    def _snapshot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> CoverageSnapshot:
+        """One .text cell (start 0, exact): the payload every case below caches."""
+        return _write_doc(
+            tmp_path,
+            monkeypatch,
+            "T",
+            {".text": {"size": 16, "columns": 64, "cells": [cell(0, 16, "exact")]}},
         )
-        c.execute(
-            "INSERT INTO cells (target, section_name, start, end, span, state)"
-            " VALUES ('T', '.text', 0, 16, 1, 'exact')"
-        )
-        return c
 
-    def test_wal_only_change_forces_refetch(self, tmp_path, monkeypatch) -> None:
+    def test_document_change_forces_refetch(self, tmp_path, monkeypatch) -> None:
         import recoverage.potato as potato
         import recoverage.server as srv
 
-        db = tmp_path / "coverage.db"
-        db.write_bytes(b"x" * 64)
-        wal = tmp_path / "coverage.db-wal"
-        wal.write_bytes(b"")
-        monkeypatch.setattr(srv, "_db_path", lambda: db)
-
+        snap = self._snapshot(tmp_path, monkeypatch)
         potato.clear_cells_cache()
-        c = self._cells_cursor()
         try:
-            _load_grid_cells(c, "T", ".text", 64, snap=srv._snapshot_db_mtime())
+            _load_grid_cells(snap, ".text", 64, snap=srv._snapshot_db_mtime())
             assert len(potato._GRID_CACHE) == 1
-            # Simulate a rebuild that commits only to -wal: main file untouched.
-            wal.write_bytes(b"y" * 64)
-            _load_grid_cells(c, "T", ".text", 64, snap=srv._snapshot_db_mtime())
-            # Two keys prove fingerprint sensitivity: the WAL change produced
-            # a cache miss (fresh query), not a stale hit.
+            # A rebuild that rewrites the target's document: the file's stat
+            # moves, so the next render must read fresh cells rather than take
+            # the memoized pair.
+            fresh = _write_doc(
+                tmp_path,
+                monkeypatch,
+                "T",
+                {
+                    ".text": {
+                        "size": 32,
+                        "columns": 64,
+                        "cells": [cell(0, 16, "exact"), cell(16, 32, "none")],
+                    }
+                },
+            )
+            cells, _merged, _key = _load_grid_cells(
+                fresh, ".text", 64, snap=srv._snapshot_db_mtime()
+            )
+            # Two keys prove fingerprint sensitivity: the rewrite produced a
+            # cache miss (fresh read), not a stale hit.
             assert len(potato._GRID_CACHE) == 2
+            assert len(cells) == 2
         finally:
             potato.clear_cells_cache()
-            c.connection.close()
 
     def test_rebuild_mid_read_is_not_cached(self, tmp_path, monkeypatch) -> None:
         """A rebuild between the read and the publish must not be memoized.
 
-        *snap* is the token the render pinned BEFORE its read snapshot, so a
-        fingerprint that has moved by the time the rows are read means a rebuild
-        committed mid-render.  Filing that payload under the NEW fingerprint
-        poisons the memo: the broadcast that cleared it can be overtaken by this
-        insert, and nothing invalidates it afterwards.
+        *snap* is the token the render pinned BEFORE its read, so a fingerprint
+        that has moved by the time the rows are read means a rebuild committed
+        mid-render.  Filing that payload under the NEW fingerprint poisons the
+        memo: the broadcast that cleared it can be overtaken by this insert, and
+        nothing invalidates it afterwards.
         """
         import recoverage.potato as potato
 
+        snap = self._snapshot(tmp_path, monkeypatch)
         # The publish re-check: the render's token still reads (1, 64)...
         monkeypatch.setattr(potato, "_snapshot_db_mtime", lambda: (2, 64))
 
         potato.clear_cells_cache()
-        c = self._cells_cursor()
         try:
-            cells, _merged, _key = _load_grid_cells(c, "T", ".text", 64, snap=(1, 64))
+            cells, _merged, _key = _load_grid_cells(snap, ".text", 64, snap=(1, 64))
             assert cells  # this request still gets its payload
             assert not potato._GRID_CACHE  # filed under no fingerprint
         finally:
             potato.clear_cells_cache()
-            c.connection.close()
 
     def test_snapshot_taken_inside_the_read_is_not_the_key(self, tmp_path, monkeypatch) -> None:
         """The key must come from the caller's token, never from a fresh stat.
@@ -2124,16 +2026,14 @@ class TestCellsCacheInvalidation:
         """
         import recoverage.potato as potato
 
-        db = tmp_path / "coverage.db"
-        db.write_bytes(b"x" * 64)
+        snap = self._snapshot(tmp_path, monkeypatch)
         # A stat inside the memo would report the newer fingerprint; the caller's
-        # token says the render pinned its read snapshot before the rebuild.
+        # token says the render pinned its read before the rebuild.
         monkeypatch.setattr(potato, "_snapshot_db_mtime", lambda: (2, 64))
 
         potato.clear_cells_cache()
-        c = self._cells_cursor()
         try:
-            cells, _merged, key = _load_grid_cells(c, "T", ".text", 64, snap=(1, 64))
+            cells, _merged, key = _load_grid_cells(snap, ".text", 64, snap=(1, 64))
             assert key is not None
             # Keyed on the caller's token, never on the value a stat inside the
             # memo would have read.
@@ -2147,7 +2047,6 @@ class TestCellsCacheInvalidation:
             assert not potato._GRID_CACHE  # the re-check failed, so nothing filed
         finally:
             potato.clear_cells_cache()
-            c.connection.close()
 
     def test_clear_cells_cache_drops_entries(self) -> None:
         import recoverage.potato as potato
@@ -2157,31 +2056,37 @@ class TestCellsCacheInvalidation:
         potato.clear_cells_cache()
         assert not potato._GRID_CACHE
 
-    def test_unknown_section_yields_empty_cells(self) -> None:
+    def test_unknown_section_yields_empty_cells(self, tmp_path, monkeypatch) -> None:
         import recoverage.potato as potato
 
+        snap = self._snapshot(tmp_path, monkeypatch)
         potato.clear_cells_cache()
-        c = self._cells_cursor()
         try:
-            cells, merged, _key = _load_grid_cells(
-                c, "T", ".missing", 64, snap=_snapshot_db_mtime()
-            )
+            cells, merged, _key = _load_grid_cells(snap, ".missing", 64, snap=_snapshot_db_mtime())
             assert cells == []
             assert merged == []
         finally:
             potato.clear_cells_cache()
-            c.connection.close()
 
 
 class TestDbUnavailableContract:
-    """A missing/unopenable DB must signal 503, not a 200 error page."""
+    """A missing or unreadable coverage document must signal 503, not a 200 page."""
+
+    @staticmethod
+    def _point_at_empty_dir(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str = "db"
+    ) -> Path:
+        """Point the server at a coverage directory holding no readable document."""
+        directory = tmp_path / name
+        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+        return directory
 
     def test_render_potato_raises_503_without_db(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         import bottle
 
-        monkeypatch.setattr("recoverage.potato._db_path", lambda: tmp_path / "nope.db")
+        self._point_at_empty_dir(tmp_path, monkeypatch, "nope")
         with pytest.raises(bottle.HTTPResponse) as excinfo:
             render_potato_url("/potato")
         assert excinfo.value.status_code == 503
@@ -2190,54 +2095,78 @@ class TestDbUnavailableContract:
     def test_potato_route_returns_503_when_db_missing(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # potato._db_path (render) and server._db_path (_snapshot_db_mtime for
-        # the ETag) must both point at the missing file.
-        missing = tmp_path / "nope.db"
-        monkeypatch.setattr("recoverage.potato._db_path", lambda: missing)
-        monkeypatch.setattr("recoverage.server._db_path", lambda: missing)
+        # The render's coverage_for and the ETag's _snapshot_db_mtime both read
+        # the directory _db_path resolves, so one override redirects both.
+        self._point_at_empty_dir(tmp_path, monkeypatch, "nope")
         status, _, body = wsgi_get("/potato")
         assert status.startswith("503")
         assert b"Database unavailable" in body
 
-    def test_unreadable_db_is_503_not_a_header_without_stats(
-        self, monkeypatch: pytest.MonkeyPatch
+    @pytest.mark.parametrize(
+        "document",
+        [
+            # Malformed TOML: the file a half-written or torn rebuild leaves.
+            'version = 1\ntarget = "BROKEN"\n[sections.text\n',
+            # A version this reader does not know: a document from a newer (or
+            # older, pre-migration) writer, whose layout it must not guess at.
+            'version = 99\ntarget = "FUTURE"\n',
+        ],
+    )
+    def test_unreadable_document_answers_503(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, document: str
     ) -> None:
-        """A database that opens but cannot answer queries must not render.
+        """A document that cannot be read must not render a 200 page.
 
-        The section-stats fallbacks derive the map header from `cells` when
-        `section_cell_stats` is absent, and used to catch every sqlite3.Error
-        doing it.  A truncated or locked file therefore rendered a full 200
-        page whose header reported no per-section stats, with nothing saying
-        the database was unreadable — the same 503 the connect guard and
-        /stats give, from the same database.
+        The SQLite equivalent opened the file and then failed every read, and
+        the section-stats fallbacks caught every sqlite3.Error doing it — so a
+        truncated database rendered a full page whose header reported no
+        per-section stats, with nothing saying the store was unreadable.  A
+        skipped document leaves the directory empty, and an empty directory is
+        the 503 contract, not an empty dashboard.
         """
-        from recoverage import potato
-
-        # Opens fine and refuses every read, the way a truncated or
-        # permission-locked file does — the failure mode a live connection
-        # sees, which is not the same as an open that fails.
-        conn = sqlite3.connect(":memory:")
-        conn.set_authorizer(lambda *args: sqlite3.SQLITE_DENY)
-        monkeypatch.setattr(potato, "_open_db", lambda _db: conn)
-        monkeypatch.setattr(
-            "recoverage.server._db_path", lambda: Path(__file__).with_name("nope.db")
-        )
+        directory = self._point_at_empty_dir(tmp_path, monkeypatch)
+        directory.mkdir()
+        (directory / "coverage-BROKEN.toml").write_text(document, encoding="utf-8")
         status, _, body = wsgi_get("/potato")
         assert status.startswith("503")
         assert b"Database unavailable" in body
 
-    def test_verify_panel_propagates_an_unreadable_database(self) -> None:
-        """A missing verify row omits the rows; a broken database is a 503.
+    def test_verify_panel_attaches_the_snapshot_record(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A verify record rides on the snapshot; its absence omits the rows.
 
-        Both answers were `return`, so a locked database rendered a panel that
-        looked exactly like a function nobody had verified.
+        The two answers used to be one `return` in a try/except around a query,
+        so a document the server could not read rendered a panel that looked
+        exactly like a function nobody had verified.  The unreadable case is the
+        503 page now (``test_unreadable_document_answers_503``); this pins that a
+        readable one still attaches what it holds.
         """
-        import recoverage.potato as potato
+        from recoverage.potato import _panel_fn_attach_verify
 
-        conn = sqlite3.connect(":memory:")
-        conn.close()
-        with pytest.raises(sqlite3.Error):
-            potato._panel_fn_attach_verify(conn.cursor(), "T", {"va": "0x1000"})
+        snap = _write_doc(
+            tmp_path,
+            monkeypatch,
+            "T",
+            {".text": {"size": 16, "cells": [cell(0, 16, "exact")]}},
+            verify_results=[
+                {
+                    "va": 0x1000,
+                    "verified_at": "2026-01-01T00:00:00+00:00",
+                    "byte_delta": 4,
+                    "diff_lines": 1,
+                    "similarity": 0.5,
+                }
+            ],
+        )
+        fn_data: dict[str, Any] = {"va": 0x1000}
+        _panel_fn_attach_verify(snap, fn_data)
+        assert fn_data["last_verify_similarity"] == "50.0%"
+        assert fn_data["last_verify_delta"] == "4B"
+
+        absent: dict[str, Any] = {"va": 0x2000}
+        _panel_fn_attach_verify(snap, absent)
+        assert "last_verify_similarity" not in absent
 
 
 class TestDefaultTargetMatchesSpa:
@@ -2245,35 +2174,32 @@ class TestDefaultTargetMatchesSpa:
 
     Both render the list resolve_targets returns and default to its first
     entry; a project whose config order differs from its metadata order must
-    not open the two surfaces on different targets.
+    not open the two surfaces on different targets — and the default must be
+    chosen BEFORE the snapshot is loaded, or the page renders the empty
+    document for the empty target name (a "no data" page on a project with
+    data) while the target list already names the right one.
     """
 
     def test_potato_defaults_to_first_listed_target(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import recoverage.potato as potato_mod
 
         targets = [{"id": "CONFIG_FIRST", "name": "a"}, {"id": "FROM_DB_FIRST", "name": "b"}]
-        monkeypatch.setattr(potato_mod, "resolve_targets", lambda _c: targets)
+        monkeypatch.setattr(potato_mod, "resolve_targets", lambda: targets)
 
         chosen: list[str] = []
+        real_coverage_for = potato_mod.coverage_for
 
-        def _fake_load(_c: object, target: str) -> tuple[dict, dict]:
+        def _recording_coverage_for(target: str) -> CoverageSnapshot:
             chosen.append(target)
-            return {}, {}
+            # The never-built target's empty snapshot short-circuits the render
+            # on its "no data" page right after the choice this test is about.
+            return real_coverage_for(target)
 
-        monkeypatch.setattr(potato_mod, "_load_section_data", _fake_load)
-        # target="": render must fall back to the default.  _load_section_data
-        # returns no data, so the render short-circuits on its "no data" page
-        # right after the choice this test is about.
-        potato_mod._render_potato_inner(
-            None, "", ".text", set(), "", "", "", "", "", "1", snap=None
-        )
+        monkeypatch.setattr(potato_mod, "coverage_for", _recording_coverage_for)
+        potato_mod.render_potato(urlparse("/potato"))
 
         # /api/targets serves `targets`, and the SPA picks entry [0] from it.
         assert chosen == [targets[0]["id"]]
-
-
-if __name__ == "__main__":
-    raise SystemExit(pytest.main([__file__, "-v"]))
 
 
 class TestCellStateVocabularyCoverage:
@@ -2466,72 +2392,84 @@ class TestSectionAccentsMatchSpa:
         assert declared - {"ACCENT_COLOR"} == pane_accents
 
 
-@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
 class TestRenderIsPinnedToOneSnapshot:
-    """A Potato page is built from many statements across many tables.
+    """A Potato page is built from one frozen CoverageSnapshot.
 
-    ``_render_potato_inner`` reads metadata, sections, cells,
-    section_cell_stats, functions, globals and (for the detail panels)
-    verify_results, and the grid is the most expensive render in the package,
-    so a ``rebrew build-db`` committing midway is a real window.  Unpinned the
-    page pairs one build's section rows with the next build's cells, which is
-    a grid whose coverage legend disagrees with its own bytes.  The render runs
-    inside one pinned read snapshot, the contract /data, /stats and the
-    function list already follow.
+    ``render_potato`` loads the snapshot once and hands it to every reader —
+    sections, cells, functions, globals and (for the detail panels)
+    verify_results — and the grid is the most expensive render in the package,
+    so a ``rebrew build-db`` committing midway is a real window.  The
+    snapshot's immutability is what the SQLite read transaction used to buy:
+    the page cannot pair one build's section rows with the next build's cells,
+    which would be a grid whose coverage legend disagrees with its own bytes.
+    Same contract /data, /stats and the function list already follow.
     """
 
-    def test_every_render_statement_is_inside_the_pinned_transaction(
-        self, monkeypatch: pytest.MonkeyPatch
+    def test_the_render_cannot_see_a_rebuild_committed_mid_page(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from recoverage import potato
 
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = "SPLIT_POTATO"
 
-        seen: list[bool] = []
-        real_open_db = potato._open_db
+        def _doc(state: str, size: int, end: int) -> None:
+            write_coverage(
+                _coverage_dir(tmp_path),
+                target,
+                {
+                    ".text": {
+                        "size": size,
+                        "columns": 8,
+                        "cells": [cell(0, end, state)],
+                    }
+                },
+            )
 
-        class _ProbedConnection:
-            def __init__(self, conn: sqlite3.Connection) -> None:
-                self._conn = conn
+        monkeypatch.setenv("RECOVERAGE_DB", str(_coverage_dir(tmp_path)))
+        _doc("exact", 16, 16)
 
-            def cursor(self) -> sqlite3.Cursor:
-                return _ProbedCursor(self._conn.cursor(), seen)
+        # One snapshot per render: the target is resolved once and the document
+        # is read once, not re-read per section or per panel.
+        loaded: list[str] = []
+        real_coverage_for = potato.coverage_for
 
-            def __getattr__(self, name: str) -> object:
-                return getattr(self._conn, name)
+        def _counted_coverage_for(name: str) -> CoverageSnapshot:
+            loaded.append(name)
+            return real_coverage_for(name)
 
-        class _ProbedCursor:
-            def __init__(self, cursor: sqlite3.Cursor, seen: list[bool]) -> None:
-                self._cursor = cursor
-                self._seen = seen
+        # The rebuild lands mid-render: _search_functions runs after the
+        # snapshot was loaded and before the grid and panel are built.
+        rewritten: list[bool] = []
+        real_search = potato._search_functions
 
-            @property
-            def connection(self) -> sqlite3.Connection:
-                return self._cursor.connection
+        def _rewrite_then_search(coverage: CoverageSnapshot, query: str) -> set[str]:
+            _doc("stub", 32, 32)
+            rewritten.append(True)
+            return real_search(coverage, query)
 
-            def execute(self, sql: str, *args: object) -> sqlite3.Cursor:
-                self._seen.append(self._cursor.connection.in_transaction)
-                return self._cursor.execute(sql, *args)
+        monkeypatch.setattr(potato, "coverage_for", _counted_coverage_for)
+        monkeypatch.setattr(potato, "_search_functions", _rewrite_then_search)
 
-            def __getattr__(self, name: str) -> object:
-                return getattr(self._cursor, name)
-
-        monkeypatch.setattr(potato, "_open_db", lambda p: _ProbedConnection(real_open_db(p)))
         html = render_potato_url(f"/potato?target={target}&section=.text")
-        assert html
-        assert len(seen) > 1, "the render stopped issuing more than one statement"
-        assert all(seen), "a render statement ran outside the pinned read transaction"
+        assert rewritten, "the mid-render rewrite never ran"
+        assert loaded == [target], "the render loaded the documents more than once"
+        assert "0x0..0x10 | exact" in html, "the page paired the second build's cells"
+        assert "0x0..0x20 | stub" not in html
 
+        # And the rewrite was a real rebuild: the next render reads it.
+        monkeypatch.setattr(potato, "_search_functions", real_search)
+        after = render_potato_url(f"/potato?target={target}&section=.text")
+        assert "0x0..0x20 | stub" in after, "the mid-render rewrite was not a real rebuild"
+
+    @pytest.mark.skipif(not HAS_DB, reason="No coverage document")
     def test_rebuild_after_the_token_is_taken_is_not_memoized(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A rebuild committing after the render pinned its token caches nothing.
 
-        The token is stat'ed BEFORE the connection opens, so the first read is
+        The token is stat'ed BEFORE the snapshot is loaded, so the first read is
         the one the render pinned against and every later read sees the
-        post-rebuild fingerprint.  A mem that took its own stat would read that
+        post-rebuild fingerprint.  A memo that took its own stat would read that
         same post-rebuild value on both sides of its publish comparison, match,
         and file cells from the previous build under the fingerprint that
         supersedes them — a grid every later request is served stale from, with
@@ -2543,8 +2481,8 @@ class TestRenderIsPinnedToOneSnapshot:
         if not target:
             pytest.skip("No targets in DB")
 
-        # Call 1: the render's token, before it opens the connection.  Every
-        # call after it sees a `rebrew build-db` that committed mid-render.
+        # Call 1: the render's token, before it loads the snapshot.  Every call
+        # after it sees a `rebrew build-db` that committed mid-render.
         tokens = iter([(1, 64), *[(2, 64)] * 64])
         monkeypatch.setattr(potato, "_snapshot_db_mtime", lambda: next(tokens))
 

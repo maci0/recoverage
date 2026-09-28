@@ -1,10 +1,9 @@
-"""Shared harness for booting the dashboard against a synthetic coverage.db.
+"""Shared harness for booting the dashboard against synthetic coverage documents.
 
 Used by tools/smoke.py and tools/lint-html.py: both build the synthetic
-DB through ``build_sample_db`` (which calls ``tests/conftest``'s builder
-directly), start ``recoverage
-serve`` on a free local port, probe documents over HTTP, and always stop the
-server process.
+coverage through ``build_sample_db`` (which calls ``tests/conftest``'s builder
+directly), start ``recoverage serve`` on a free local port, probe documents over
+HTTP, and always stop the server process.
 """
 
 from __future__ import annotations
@@ -29,9 +28,9 @@ def scratch_project_dir() -> Iterator[Path]:
     """Yield an empty throwaway project dir, removed on exit.
 
     Under the repo's gitignored ``.scratch/``, not the system temp dir: the
-    system temp is RAM-backed, so a SQLite database and the served HTML tree
-    would eat memory and vanish on reboot, and the build is easier to inspect
-    when it lands next to the tree it came from.
+    system temp is RAM-backed, so the coverage documents and the served HTML
+    tree would eat memory and vanish on reboot, and the build is easier to
+    inspect when it lands next to the tree it came from.
     """
     SCRATCH_DIR.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=SCRATCH_DIR) as td:
@@ -41,30 +40,24 @@ def scratch_project_dir() -> Iterator[Path]:
 
 
 def build_sample_db(project_dir: Path) -> Path:
-    """Build db/coverage.db using the shared synthetic schema builder.
+    """Build the sample coverage documents in *project_dir*/db.
 
     Re-runnable: any number of calls, in any order, against the same or a
-    different *project_dir*, in one process or across processes, all end
-    with the same database.  Two things used to break that, and both are
-    fixed here:
-
-    - ``import conftest`` is a no-op once the module is in ``sys.modules``,
-      and conftest's import-time side effect binds its own output path to
-      the cwd at ITS first import, so a second call built nothing.  The
-      builder is now called directly with the target path.
-    - The ``tests`` entry added to ``sys.path`` for that import was never
-      removed, so each call left another copy behind.
+    different *project_dir*, in one process or across processes, all end with
+    the same documents.  The builder is called directly with the target
+    directory, and the ``tests`` entry added to ``sys.path`` for that import is
+    removed again, so no call leaves a copy behind.
 
     The chdir still happens, because conftest's own import-time side effect
-    creates ``db/coverage.db`` under the cwd: confining it to *project_dir*
-    keeps it out of whatever directory the tool was launched from.  Touching
-    the target first makes that side effect skip, so the database is written
-    exactly once, by the call below.
+    creates the documents under the cwd: confining it to *project_dir* keeps
+    them out of whatever directory the tool was launched from.  A sentinel
+    document is written first so that side effect skips, and the documents are
+    then written exactly once, by the call below.
     """
     db_dir = project_dir / "db"
     db_dir.mkdir(parents=True, exist_ok=True)
-    db_file = db_dir / "coverage.db"
-    db_file.touch()
+    sentinel = db_dir / "coverage-FAKEDLL.toml"
+    sentinel.write_text("version = 1\n", encoding="utf-8")
     tests_dir = str(REPO_ROOT / "tests")
     old_cwd = Path.cwd()
     sys.path.insert(0, tests_dir)
@@ -75,8 +68,8 @@ def build_sample_db(project_dir: Path) -> Path:
         os.chdir(old_cwd)
         with contextlib.suppress(ValueError):
             sys.path.remove(tests_dir)
-    conftest._build_synthetic_db(db_file)  # type: ignore[attr-defined]
-    return db_file
+    conftest.build_synthetic_coverage(db_dir)  # type: ignore[attr-defined]
+    return sentinel
 
 
 def free_port() -> int:

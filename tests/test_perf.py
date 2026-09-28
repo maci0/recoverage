@@ -58,18 +58,20 @@ def test_potato_grid_memo_skips_decode():
     assert s.startswith("200"), s
     body1 = decode_body(b, h)
     calls = 0
-    orig = _potato._cells_json_rows
+    orig = _potato._cell_object
 
     def counting(*a, **k):
         nonlocal calls
         calls += 1
         return orig(*a, **k)
 
-    _potato._cells_json_rows = counting  # type: ignore[method-assign]
+    # The cells come from the frozen snapshot now, so the work a memo miss
+    # would repeat is building the grid's cell objects — one call per cell.
+    _potato._cell_object = counting  # type: ignore[method-assign]
     try:
         s2, h2, b2 = wsgi_get("/potato?target=FAKEDLL&section=.text")
     finally:
-        _potato._cells_json_rows = orig
+        _potato._cell_object = orig
     assert s2.startswith("200"), s2
     assert decode_body(b2, h2) == body1
     assert calls == 0, f"grid memo miss: cell fetch {calls}x"

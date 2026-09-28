@@ -27,7 +27,11 @@ node_modules/
 # Scratch space (experiments, probes, throwaway files)
 .scratch/
 
-# Coverage database (runtime artifact, not source)
+# Coverage documents the smoke harness and the serve harness write into a
+# project's coverage directory (runtime artifact, not source).  The SQLite
+# database this pattern used to ignore is no longer produced: rebrew writes
+# db/coverage-<target>.toml and recoverage only reads them.
+db/
 coverage.db
 coverage.db-shm
 coverage.db-wal

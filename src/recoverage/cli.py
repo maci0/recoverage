@@ -11,16 +11,16 @@ import os
 import platform
 import signal
 import socket
-import sqlite3
 import subprocess
 import sys
 import threading
 import webbrowser
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import IO, Any, NamedTuple, NoReturn
 
 import typer
+from rebrew.coverage_toml import CoverageSnapshot, CoverageTomlError
 
 from recoverage import config
 from recoverage._paths import _db_path
@@ -32,7 +32,8 @@ app = typer.Typer(
     rich_markup_mode="rich",
     epilog=(
         "[bold]Examples:[/bold]\n\n"
-        f"  recoverage serve [dim]# start the dashboard (port {config.DEFAULT_PORT})[/dim]\n\n"
+        f"  recoverage [dim]# start the dashboard (port {config.DEFAULT_PORT})[/dim]\n\n"
+        f"  recoverage serve [dim]# same thing, spelled out[/dim]\n\n"
         "  recoverage serve --port 3000 [dim]# custom port[/dim]\n\n"
         "  recoverage stats --json [dim]# machine-readable statistics[/dim]\n\n"
         "  recoverage export --format csv > coverage.csv [dim]# export as CSV[/dim]\n\n"
@@ -42,8 +43,8 @@ app = typer.Typer(
         "  recoverage config [dim]# show the settings serve would start with[/dim]\n\n"
         "[bold]Prerequisites:[/bold]\n\n"
         "  Run [dim]rebrew catalog && rebrew build-db[/dim] first to create "
-        "db/coverage.db.\n\n"
-        f"[dim]Reads db/coverage.db (SQLite). Serves SPA at "
+        "db/coverage-*.toml.\n\n"
+        f"[dim]Reads db/coverage-*.toml. Serves SPA at "
         f"http://localhost:{config.DEFAULT_PORT}.[/dim]"
     ),
 )
@@ -349,12 +350,12 @@ def _check_env_or_exit() -> None:
 
 
 def _db_path_or_exit(*, json_output: bool = False) -> Path:
-    """Resolve coverage.db, exiting 2 when the project file cannot be read.
+    """Resolve the coverage directory, exiting 2 when the project file is broken.
 
-    A missing ``rebrew-project.toml`` still resolves to ``db/coverage.db``.
-    A file that is present but not valid TOML raises from the shared reader;
-    exiting here keeps that from becoming a traceback, and from silently
-    opening a different database.
+    A missing ``rebrew-project.toml`` still resolves to ``db/``.  A file that is
+    present but not valid TOML raises from the shared reader; exiting here keeps
+    that from becoming a traceback, and from silently reading a different
+    project's coverage.
     """
     from rebrew.workspace import WorkspaceConfigError
 
@@ -364,118 +365,100 @@ def _db_path_or_exit(*, json_output: bool = False) -> Path:
         _fail(f"Error: {exc}", str(exc), 2, json_output)
 
 
-def _open_db_or_exit(
+def _load_coverage_or_exit(
     *, missing_exit_code: int = 1, json_output: bool = False
-) -> sqlite3.Connection:
-    """Open coverage.db read-only, exiting the process on failure.
+) -> Mapping[str, CoverageSnapshot]:
+    """Load every coverage document, exiting the process on failure.
 
-    Named apart from ``server._open_db`` (which raises instead of exiting):
-    a missing database exits with *missing_exit_code* (``check`` passes 2:
-    its documented contract classifies a missing/unreadable database as an
-    infrastructure error, distinct from "coverage below threshold" = 1);
-    sibling commands keep their historical exit 1.
+    A directory with no ``coverage-*.toml`` exits with *missing_exit_code*
+    (``check`` passes 2: its documented contract classifies a missing or
+    unreadable coverage set as an infrastructure error, distinct from
+    "coverage below threshold" = 1); sibling commands keep their historical 1.
     """
-    from recoverage.server import _open_db
+    from recoverage.server import coverage_snapshots
 
     _check_env_or_exit()
     p = _db_path_or_exit(json_output=json_output)
-    if not p.exists():
+    if not any(p.glob("coverage-*.toml")):
         _fail(
-            f"Error: database not found at {p}",
-            f"database not found at {p}",
+            f"Error: coverage not found at {p}",
+            f"coverage not found at {p}",
             missing_exit_code,
             json_output,
         )
     try:
-        conn = _open_db(p)
-    except sqlite3.Error as exc:
+        return coverage_snapshots()
+    except CoverageTomlError as exc:
         _fail(
-            f"Error: cannot open database {p}: {exc} {_REBUILD_HINT}",
-            f"cannot open database: {exc}",
+            f"Error: cannot read coverage at {p}: {exc} {_REBUILD_HINT}",
+            f"cannot read coverage: {exc}",
             2,
             json_output,
         )
-    return conn
 
 
-def _list_targets(conn: sqlite3.Connection) -> list[str]:
+def _list_targets() -> list[str]:
     from recoverage.server import db_target_ids
 
-    return db_target_ids(conn.cursor())
+    return db_target_ids()
 
 
-def _select_targets(
-    conn: sqlite3.Connection, target: str | None, *, json_output: bool = False
-) -> list[str]:
+def _select_targets(target: str | None, *, json_output: bool = False) -> list[str]:
     """Return the targets to operate on, validating a requested --target.
 
-    Named apart from ``server.resolve_targets`` (the webapp's DB+config
-    merge): this one only reads the DB and validates a CLI --target choice.
-    A requested target that is not in the DB exits 1 with a clear error —
-    sibling commands must not silently succeed on a typo'd target.  A DB
-    that cannot be queried (schema-less/corrupt) exits 2 with a rebuild hint
-    instead of a raw traceback.
+    Named apart from ``server.resolve_targets`` (the webapp's coverage+config
+    merge): this one reads only the documents and validates a CLI --target
+    choice.  A requested target that was never built exits 1 with a clear
+    error — sibling commands must not silently succeed on a typo'd target.
     """
-    try:
-        if target is not None:
-            known = _list_targets(conn)
-            if target not in known:
-                _fail(
-                    f"Error: target {target!r} not found in database "
-                    f"(have: {', '.join(known) or 'none'}).",
-                    f"target not found: {target!r}",
-                    1,
-                    json_output,
-                )
-            return [target]
-        return _list_targets(conn)
-    except sqlite3.Error as exc:
+    known = _list_targets()
+    if target is None:
+        return known
+    if target not in known:
         _fail(
-            f"Error: cannot query coverage database: {exc} {_REBUILD_HINT}",
-            f"cannot query coverage database: {exc}",
-            2,
+            f"Error: target {target!r} not found in coverage (have: {', '.join(known) or 'none'}).",
+            f"target not found: {target!r}",
+            1,
             json_output,
         )
+    return [target]
 
 
 @contextlib.contextmanager
 def _open_targets(
     target: str | None, *, missing_exit_code: int = 1, json_output: bool = False
-) -> Iterator[tuple[sqlite3.Connection, list[str]]]:
-    """Yield the open database and the targets the command operates on.
+) -> Iterator[tuple[Mapping[str, CoverageSnapshot], list[str]]]:
+    """Yield the loaded documents and the targets the command operates on.
 
-    Open, ``--target`` validation and the empty-database exit are one
-    contract for every command that reads targets, so they are written once
-    here.  *missing_exit_code* is ``check``'s 2 for an unreadable database;
-    the siblings keep their historical 1.
+    Load, ``--target`` validation and the empty-coverage exit are one contract
+    for every command that reads targets, so they are written once here.
+    *missing_exit_code* is ``check``'s 2 for unreadable coverage; the siblings
+    keep their historical 1.
     """
-    with contextlib.closing(
-        _open_db_or_exit(missing_exit_code=missing_exit_code, json_output=json_output)
-    ) as conn:
-        targets = _select_targets(conn, target, json_output=json_output)
-        if not targets:
-            _fail(
-                "No targets found in database.",
-                "no targets in database",
-                1,
-                json_output,
-                fg=typer.colors.YELLOW,
-            )
-        yield conn, targets
+    snapshots = _load_coverage_or_exit(missing_exit_code=missing_exit_code, json_output=json_output)
+    targets = _select_targets(target, json_output=json_output)
+    if not targets:
+        _fail(
+            "No targets found in coverage.",
+            "no targets in coverage",
+            1,
+            json_output,
+            fg=typer.colors.YELLOW,
+        )
+    yield snapshots, targets
 
 
 def _get_stats(
-    conn: sqlite3.Connection, target: str, *, json_output: bool = False
+    snapshots: Mapping[str, CoverageSnapshot], target: str, *, json_output: bool = False
 ) -> dict[str, Any]:
-    c = conn.cursor()
     from recoverage.server import _section_stats
 
     try:
-        return {"target": target, **_section_stats(c, target)}
-    except sqlite3.Error as exc:
-        # A DB that lists targets but cannot answer the stats queries
-        # (schema-less / partially rebuilt) must not surface as a traceback —
-        # same clean-exit contract as _select_targets.
+        return {"target": target, **_section_stats(snapshots[target])}
+    except CoverageTomlError as exc:
+        # A document that lists a target but cannot be walked (replaced between
+        # the stat and the read) must not surface as a traceback — same
+        # clean-exit contract as _select_targets.
         _fail(
             f"Error: cannot read coverage statistics for target {target!r}: {exc} {_REBUILD_HINT}",
             f"cannot read coverage statistics for target {target!r}: {exc}",
@@ -485,7 +468,7 @@ def _get_stats(
 
 
 def _run_regen(root: Path) -> None:
-    """Regenerate coverage.db by calling rebrew's catalog + build-db in-process."""
+    """Regenerate the coverage documents by calling rebrew's pipeline in-process."""
     from recoverage.regen import run_regen
 
     typer.echo("Running rebrew catalog + build-db...")
@@ -727,7 +710,7 @@ def serve(
     Every setting flag also reads a RECOVERAGE_* environment variable, used as
     its default: RECOVERAGE_PORT, RECOVERAGE_BIND, RECOVERAGE_ALLOW_REMOTE,
     RECOVERAGE_CORS, RECOVERAGE_CORS_ORIGIN, RECOVERAGE_TOKEN,
-    RECOVERAGE_LOG_LEVEL and RECOVERAGE_DB (an explicit coverage.db path,
+    RECOVERAGE_LOG_LEVEL and RECOVERAGE_DB (an explicit coverage directory,
     instead of resolving rebrew-project.toml from the working directory).
     [bold]--no-open[/bold] and [bold]--regen[/bold] are the two flags with no
     variable, because a service that wants the browser or a rebuild asks for
@@ -983,10 +966,12 @@ def stats(
     from rich.console import Console
     from rich.table import Table
 
-    with _open_targets(target, json_output=json_output) as (conn, targets):
+    with _open_targets(target, json_output=json_output) as (snapshots, targets):
         if json_output:
             typer.echo(
-                json.dumps([_get_stats(conn, tid, json_output=True) for tid in targets], indent=2)
+                json.dumps(
+                    [_get_stats(snapshots, tid, json_output=True) for tid in targets], indent=2
+                )
             )
             return
 
@@ -997,7 +982,7 @@ def stats(
         # every _secho caller does.
         console = Console(no_color=True if _color_off() else None)
         for index, tid in enumerate(targets):
-            data = _get_stats(conn, tid)
+            data = _get_stats(snapshots, tid)
             # Blank line between targets, never before the first one: the
             # same rule `export --format md` follows, so redirected output
             # does not start with an empty line.
@@ -1057,8 +1042,8 @@ def export(
     """
     _use_utf8_stdout()
     json_output = output_format is ExportFormat.json
-    with _open_targets(target, json_output=json_output) as (conn, targets):
-        all_data = [_get_stats(conn, tid, json_output=json_output) for tid in targets]
+    with _open_targets(target, json_output=json_output) as (snapshots, targets):
+        all_data = [_get_stats(snapshots, tid, json_output=json_output) for tid in targets]
 
     if output_format == ExportFormat.json:
         typer.echo(json.dumps(all_data, indent=2))
@@ -1181,13 +1166,16 @@ def check(
             json_output,
         )
 
-    with _open_targets(target, missing_exit_code=2, json_output=json_output) as (conn, targets):
+    with _open_targets(target, missing_exit_code=2, json_output=json_output) as (
+        snapshots,
+        targets,
+    ):
         failed = False
         checked = 0
         compared = 0  # sections actually evaluated against the threshold
         verdicts: list[dict[str, Any]] = []  # captured for --json output
         for tid in targets:
-            data = _get_stats(conn, tid, json_output=json_output)
+            data = _get_stats(snapshots, tid, json_output=json_output)
             sections_to_check = data["sections"]
             if section:
                 if section not in sections_to_check:
@@ -1259,12 +1247,12 @@ def check(
 
 @app.command()
 def regen() -> None:
-    """Re-run rebrew catalog + build-db to regenerate coverage.db."""
+    """Re-run rebrew catalog + build-db to regenerate the coverage documents."""
     from recoverage.server import _project_dir
 
     _check_env_or_exit()
     _run_regen(_project_dir())
-    _secho("Done — coverage.db regenerated.", fg=typer.colors.GREEN)
+    _secho("Done — coverage documents regenerated.", fg=typer.colors.GREEN)
 
 
 @app.command("open")
@@ -1323,7 +1311,23 @@ def config_cmd(
         typer.echo(f"{key}={value}")
 
 
+def _argv_with_default_command(argv: list[str]) -> list[str]:
+    """Bare ``recoverage`` runs ``serve``.
+
+    The dashboard is the only thing most invocations want, and it is the one
+    a user types in a rebrew project directory without thinking — the way
+    ``rebrew`` itself runs its action when no subcommand is named.  The
+    subcommand stays the only spelling with flags (``recoverage serve
+    --port 9000``), because the flags belong to ``serve`` and a group that
+    declared them too would carry two option tables that can disagree.  Any
+    argument at all — a subcommand or a group flag — is left exactly as it
+    came, so ``recoverage --help`` still prints the help and not a server.
+    """
+    return argv if len(argv) > 1 else [*argv, "serve"]
+
+
 def main() -> None:
+    sys.argv = _argv_with_default_command(sys.argv)
     try:
         app()
     except BrokenPipeError:

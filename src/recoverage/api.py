@@ -8,13 +8,13 @@ import logging
 import math
 import queue
 import re
-import sqlite3
 import threading
-from collections.abc import Generator
+from collections.abc import Generator, Sequence
 from pathlib import Path
 from typing import Any
 
 import typer
+from rebrew.coverage_toml import CoverageSnapshot, CoverageTomlError, Function
 from rebrew.workspace import KNOWN_STATUSES, VA_MAX, parse_va_candidates
 
 from recoverage import __version__, clock
@@ -35,36 +35,24 @@ from recoverage.server import (
     DLL_DATA,
     DLL_LOCK,
     HAS_PYGMENTS,
-    NOT_DATA_MARKER_SQL,
     HTTPResponse,
     _best_encoding,
-    _cell_bucket_row,
-    _cells_json_rows,
-    _db,
-    _escape_like,
     _etag_or_304,
-    _fn_json_sql,
     _format_hex_dump,
     _get_targets_config,
-    _global_json_sql,
     _header,
     _json_err,
     _json_ok,
     _json_ok_precompressed,
     _load_dll,
-    _load_metadata,
-    _open_db,
     _peer_is_loopback,
     _project_dir,
     _snapshot_db_mtime,
     _target_filename,
-    _verify_one_select,
-    _verify_select,
     app,
     clear_target_cache,
     compress_payload,
-    folded_like_clause,
-    like_match,
+    fold_match,
     origin_is_this_dashboard,
     path_param,
     query_param,
@@ -80,7 +68,7 @@ _log = logging.getLogger("recoverage")
 
 
 def _clear_derived_caches() -> None:
-    """Drop every cache derived from coverage.db or the original binaries.
+    """Drop every cache derived from the coverage documents or the binaries.
 
     ONE invalidation entry point, shared by the SSE ``db-updated`` broadcast
     and both regen paths (in-app POST /api/regen): resolved targets + TOML
@@ -91,7 +79,7 @@ def _clear_derived_caches() -> None:
 
     The SPA shell cache (ui.CACHED_INDEX_PAYLOAD) is deliberately NOT
     invalidated here: it is built solely from static package assets and has
-    no dependence on coverage.db.  Clearing it on every rebuild would make
+    no dependence on the coverage documents.  Clearing it would make
     the next / request re-read the assets, re-minify, and redo the three
     full-strength budget compressions under INDEX_LOCK for zero staleness
     benefit.
@@ -143,7 +131,7 @@ _REGEN_LOCK = threading.Lock()  # serializes regen (check + run, TOCTOU)
 # from the ledger instead of running catalog+build-db a second time: a client
 # retry (proxy replay, a lost response, a double-clicked Reload) re-sends the
 # request it never saw answered, and re-running it is minutes of duplicated
-# work plus a second write of coverage.db for an identical result.
+# work plus a second write of the coverage documents for an identical result.
 #
 # Key -> monotonic completion time.  Only completed runs are recorded, so a
 # run that failed retries for real, and only the outcome is stored: the
@@ -344,36 +332,91 @@ def _clear_list_total_cache() -> None:
 
 
 def _function_total(
-    c: sqlite3.Cursor,
+    functions: Sequence[Function],
+    snap_fingerprint: tuple[int, int] | None,
     target: str,
-    where_sql: str,
-    params: list[Any],
-    snap: tuple[int, int] | None,
     status_filter: str | None,
     search: str | None,
 ) -> int:
-    """Rows matching the list endpoint's filter, memoized per DB snapshot.
+    """Rows matching the list endpoint's filter, memoized per snapshot.
 
-    The count is served from the memo only when the filter and the database
-    both match; otherwise the COUNT(*) runs and repopulates it.  A None
-    snapshot (DB unreadable) never memoizes — the endpoint is about to 503
-    and a value derived from that state must not outlive it.
+    The count is served from the memo only when the filter and the coverage
+    directory both match; otherwise the scan runs and repopulates it.  A None
+    fingerprint (no coverage document) never memoizes — the endpoint is about
+    to 503 and a value derived from that state must not outlive it.
     """
     key: tuple[tuple[int, int] | None, str, str | None, str | None] | None = (
-        (snap, target, status_filter, search) if snap is not None else None
+        (snap_fingerprint, target, status_filter, search) if snap_fingerprint is not None else None
     )
     if key is not None:
         with _LIST_TOTAL_CACHE_LOCK:
             cached = _LIST_TOTAL_CACHE.get(key)
         if cached is not None:
             return cached
-    c.execute(f"SELECT COUNT(*) FROM functions WHERE {where_sql}", params)
-    total = c.fetchone()[0]
+    total = len(_filtered_functions(functions, status_filter, search))
     if key is not None:
         with _LIST_TOTAL_CACHE_LOCK:
             _server._evict_oldest(_LIST_TOTAL_CACHE, _LIST_TOTAL_CACHE_MAX)
             _LIST_TOTAL_CACHE[key] = total
     return total
+
+
+#: The columns the list endpoint can sort by, and the direction spellings it
+#: accepts.  ONE list: an unknown field ignores the whole sort parameter rather
+#: than applying a direction to a column the response does not carry.
+_ALLOWED_SORT = ("va", "name", "size", "status", "symbol", "module")
+
+
+def _filtered_functions(
+    functions: Sequence[Function], status_filter: str | None, search: str | None
+) -> list[Function]:
+    """The functions the list endpoint would serve, before paging.
+
+    GLOBAL/DATA/VTABLE/STRING marker rows are data, not functions (rebrew ADR
+    023 widened the legal marker set), so they are dropped here for the count,
+    the page and the by-status filter alike.
+
+    Search folds BOTH sides through :func:`server.fold_match`, over the same
+    four columns the SQL matched: the name, the symbol, the decimal VA text and
+    the ``vaStart`` hex spelling Potato Mode matches.  The old statement needed
+    two disjuncts — SQLite's ASCII-only ``LIKE`` plus an ``rc_fold`` arm — only
+    because the comparison happened in SQL; one folding in Python matches what
+    the SPA highlights, which is the guarantee the fuzz campaigns assert.
+    """
+    rows = [fn for fn in functions if not _server._is_data_marker(fn)]
+    if status_filter is not None:
+        rows = [fn for fn in rows if fn.status == status_filter]
+    if search:
+        rows = [
+            fn
+            for fn in rows
+            if fold_match(fn.name, search)
+            or fold_match(fn.symbol, search)
+            or fold_match(str(fn.va), search)
+            or fold_match(fn.vaStart, search)
+        ]
+    return rows
+
+
+def _function_sort_key(fn: Function, field: str) -> Any:
+    """Sort key for *field*, with SQLite's NULL ordering.
+
+    SQLite orders NULL before every value ascending (it is the smallest
+    value), so an unknown size on a 4-byte pointer global sorts first there.
+    Reproducing it keeps a page boundary where the served page list always had
+    it; a plain ``None`` key would raise comparing against an int.
+    """
+    if field == "va":
+        return (fn.va,)
+    if field == "size":
+        return (0, 0) if fn.size is None else (1, fn.size)
+    if field == "status":
+        return (fn.status,)
+    if field == "module":
+        return (fn.module,)
+    if field == "symbol":
+        return (fn.symbol,)
+    return (fn.name,)
 
 
 def _target_not_found(target: str) -> HTTPResponse:
@@ -414,76 +457,76 @@ def _section_not_found(target: str, section: str) -> HTTPResponse:
     )
 
 
-def _require_target(c: sqlite3.Cursor, target: str) -> HTTPResponse | None:
+def _require_target(target: str) -> HTTPResponse | None:
     """Return a 404 response if *target* is unknown, else None.
 
-    *target* is valid when it has DB rows or is declared in the project
-    config (a configured-but-not-yet-built target is still addressable).
+    *target* is valid when the last build wrote a document for it or when the
+    project config declares it (a configured-but-not-yet-built target is still
+    addressable).  A coverage directory with nothing readable in it is not
+    "unknown target" — :func:`server.resolve_targets` raises for that, and the
+    endpoint's own 503 path runs.
     """
-    try:
-        targets_list = resolve_targets(c)
-    except sqlite3.Error as exc:
-        # Transient SQLITE_BUSY / locked must surface as 503, not be swallowed
-        # as "unknown target" or silent success.  Every other sqlite error
-        # means the DB is unreadable — let the endpoint's own 503 path run.
-        if isinstance(exc, sqlite3.OperationalError) and (
-            "busy" in str(exc).lower() or "locked" in str(exc).lower()
-        ):
-            raise
-        return None
-    if any(t.get("id") == target for t in targets_list):
+    if any(t.get("id") == target for t in resolve_targets()):
         return None
     return _target_not_found(target)
 
 
 @contextlib.contextmanager
-def _target_cursor(target: str) -> Generator[sqlite3.Cursor]:
-    """Open coverage.db read-only and yield a cursor with *target* validated.
+def _target_snapshot(target: str) -> Generator[CoverageSnapshot]:
+    """Yield *target*'s frozen snapshot with *target* validated.
 
     ONE shared tail for every /api/targets/<target>/* endpoint: fails the
     request with the standard JSON contract (503 ``db_unavailable`` when the
-    DB cannot open, 404 ``not_found`` for an unknown target) by raising the
-    HTTPResponse, so handlers are straight-line code instead of repeating
-    the connect/close/validate boilerplate.  The connection always closes.
+    coverage directory holds nothing readable, 404 ``not_found`` for an unknown
+    target) by raising the HTTPResponse, so handlers are straight-line code
+    instead of repeating the read/validate boilerplate.
+
+    The snapshot IS the read pin `server.read_snapshot` used to provide: it is
+    frozen, so every field a handler reads comes from one build.
     """
     try:
-        conn = _db()
-    except sqlite3.Error as exc:
-        # Logged + detailed by the shared helper — a swallowed sqlite3.Error
-        # here would make a missing/corrupt DB invisible in the server log.
+        resolve_targets()
+    except CoverageTomlError as exc:
+        # Logged + detailed by the shared helper — a swallowed reader error
+        # here would make a missing or malformed document invisible in the log.
         raise _server._db_unavailable_err(exc) from None
-    try:
-        c = conn.cursor()
-        not_found = _require_target(c, target)
-        if not_found is not None:
-            raise not_found
-        yield c
-    finally:
-        conn.close()
+    not_found = _require_target(target)
+    if not_found is not None:
+        raise not_found
+    yield _server.coverage_for(target)
 
 
-def _file_backed_section(
-    c: sqlite3.Cursor, target: str, section: str, *fields: str
-) -> dict[str, Any]:
-    """Fetch *target*'s *section* row and require int-typed *fields*, else raise.
+def _file_backed_section(snap: CoverageSnapshot, section: str, *fields: str) -> dict[str, Any]:
+    """Fetch *snapshot*'s *section* row and require int-typed *fields*, else raise.
 
     ONE shared guard for the endpoints that do pointer arithmetic on a
     section (asm, bytes): an unknown section raises the shared JSON 404,
-    and NULL/non-int fields — sections with no file backing (.bss) carry
-    NULL offsets — raise this endpoint family's JSON 422 contract instead of
-    letting the arithmetic raise TypeError and surface as an HTML 500.
+    and a section with no file backing raises this endpoint family's JSON 422
+    contract instead of letting the arithmetic raise TypeError and surface as
+    an HTML 500.
+
+    The absence test is any of the three ints the arithmetic below needs: a
+    section the catalog could not place in the image has no VA, and a `.bss`
+    has no file offset at all, so a section carrying neither has nothing on
+    disk to slice and both endpoints answer their JSON 422 contract instead of
+    letting the addition raise TypeError into an HTML 500.  The document
+    spells an absent value as ``""`` and the reader keeps it as ``None`` — a
+    stored 0 is a real offset and is NOT the same answer.
     """
-    c.execute("SELECT * FROM sections WHERE target = ? AND name = ?", (target, section))
-    row = c.fetchone()
-    if row is None:
-        raise _section_not_found(target, section)
-    sec = dict(row)
+    found = snap.sections.get(section)
+    if found is None:
+        raise _section_not_found(snap.target, section)
+    sec = {
+        "va": found.va,
+        "size": found.size,
+        "fileOffset": found.file_offset,
+    }
     if any(not isinstance(sec[f], int) for f in fields):
         raise _json_err(
             422,
             {
                 "error": "section has no file backing",
-                "detail": f"section {section!r} has NULL {'/'.join(fields)} — "
+                "detail": f"section {section!r} has no {'/'.join(fields)} — "
                 "raw bytes are only served for file-backed sections",
             },
         )
@@ -492,7 +535,7 @@ def _file_backed_section(
 
 # ── Server-Sent Events (live DB change notifications) ─────────────
 #
-# A single background watcher thread polls coverage.db mtime every couple of
+# A single background watcher thread polls the coverage documents' mtime every
 # seconds and broadcasts a `db-updated` SSE frame to every connected client.
 # Each /api/events connection gets its own bounded queue; the route drains it
 # and streams frames.  When no client is connected the watcher keeps polling
@@ -551,7 +594,7 @@ def _broadcast_db_updated(snapshot: tuple[int, int] | None) -> None:
 
 
 def _db_watcher_loop(stop: threading.Event) -> None:
-    """Poll coverage.db mtime every few seconds and broadcast changes.
+    """Poll the coverage documents' mtime every few seconds and broadcast changes.
 
     The first snapshot is the baseline; any later change (including the file
     appearing or disappearing) broadcasts an event.  Runs until ``stop`` is
@@ -561,7 +604,7 @@ def _db_watcher_loop(stop: threading.Event) -> None:
     unguarded exception would kill live-reload silently for the remaining
     lifetime of the process.  The guard is the WHOLE loop, baseline snapshot
     included: the baseline read sat outside it, so a failure there (a
-    ``coverage.db`` path that cannot be stat'ed raises rather than returning
+    coverage directory that cannot be walked raises rather than returning
     None) killed the thread with its traceback going to a stream nobody
     reads.  ``/api/health`` only reports ``watcher_alive: false`` as
     ``degraded`` while a client is connected, so with no SSE client the
@@ -701,7 +744,7 @@ class _SSEStream:
 
 @app.get("/api/events")
 def handle_api_events() -> Any:
-    """SSE stream: emits a db-updated event when coverage.db is rewritten.
+    """SSE stream: emits a db-updated event when the coverage documents change.
 
     Bottle streams the returned :class:`_SSEStream`.  The watcher thread
     broadcasts to a per-client queue; this route drains it.  Disconnects are
@@ -760,7 +803,7 @@ def handle_api_events() -> Any:
 #: Last (status, reason) ``/api/health`` reported, so the probe logs a
 #: transition rather than one line per poll.  Without it a monitor pointed at
 #: the endpoint (an external health check, a shell while-loop) turned a missing
-#: coverage.db into a WARNING per probe for as long as it stayed missing, which
+#: coverage into a WARNING per probe for as long as it stayed missing, which
 #: is what teaches an operator to skip the line; the transition is the news,
 #: and the recovery line is what closes it.  The snapshot still carries
 #: ``status`` on every probe, so dropping the repeats loses nothing an
@@ -793,32 +836,26 @@ def _log_health_status(status: str, reason: str) -> None:
 
 @app.get("/api/health")
 def handle_api_health() -> bytes:
-    """Liveness and environment report: status, version, DB stat, extras, targets.
+    """Liveness and environment report: status, version, coverage stat, extras, targets.
 
-    status is "degraded" (not an error) when coverage.db cannot be stat'ed or
-    queried; db.path is the basename only, never the absolute path.  db.mtime
+    status is "degraded" (not an error) when the coverage directory cannot be
+    read; db.path is the basename only, never the absolute path.  db.mtime
     is epoch seconds and db.mtime_utc the same instant as an ISO-8601 instant
-    (``+00:00``), both read off one conversion of the file's mtime
+    (``+00:00``), both read off one conversion of the newest document's mtime
     (``server.mtime_ns_to_utc``) so they cannot disagree; both are absent when
-    the DB cannot be stat'ed.
+    no document can be stat'ed.
 
     Every reason the probe found is named in one log line per transition
     (:func:`_log_health_status`), not one line per probe.
     """
     db = _db_path()
-    db_info: dict[str, Any] = {"path": db.name, "exists": False}
+    db_info: dict[str, Any] = {"path": db.name, "exists": db.is_dir()}
     reasons: list[str] = []
-    try:
-        stat = db.stat()
-        db_info["exists"] = True
-        db_info["size_bytes"] = stat.st_size
-    except OSError as exc:
-        reasons.append(f"coverage.db not accessible: {type(exc).__name__}: {exc}")
-    # Freshness is the newest mtime across the DB and its -wal sibling: a
-    # rebuild that commits only to the WAL leaves the main file's mtime where
-    # it was, and every other DB-freshness surface (ETags, memos, the SSE
-    # watcher, Potato Mode's footer) already reads the WAL-aware stamp.
-    mtime_ns = _server._newest_mtime_ns(db)
+    # Freshness is the newest mtime across the directory's documents: a rebuild
+    # rewrites one document per target, so reading any single one would report a
+    # target that did not move.  Every other coverage-freshness surface (ETags,
+    # memos, the SSE watcher, Potato Mode's footer) reads the same stamp.
+    mtime_ns = _server._newest_mtime_ns()
     if mtime_ns is not None:
         # Seconds since the epoch (UTC) plus the same instant spelled out with
         # an explicit zone, so a client never has to assume the host's TZ.
@@ -828,15 +865,20 @@ def handle_api_health() -> bytes:
         stamp = _server.mtime_ns_to_utc(mtime_ns)
         db_info["mtime"] = stamp.timestamp()
         db_info["mtime_utc"] = stamp.isoformat()
-    target_count = 0
-    try:
-        with contextlib.closing(_open_db(db)) as conn:
-            c = conn.cursor()
-            # Counted from the same read the target list uses, so the health
-            # number and the dropdown can never disagree on the schema row.
-            target_count = len(_server.db_target_ids(c))
-    except sqlite3.Error as exc:
-        reasons.append(f"coverage.db target count query failed: {type(exc).__name__}: {exc}")
+    documents = _server._coverage_file_stats()
+    # Counted from the same read the target list uses, so the health number and
+    # the dropdown can never disagree about which targets the last build wrote.
+    target_count = len(_server.db_target_ids())
+    if documents:
+        db_info["size_bytes"] = sum(size for _name, _mtime, size in documents)
+        if not target_count:
+            # A document present but unreadable is the corrupt-coverage case:
+            # the reader skipped it (with a warning of its own) and there is
+            # nothing to serve.  Reporting only the missing-directory case
+            # would call that deployment healthy.
+            reasons.append(f"no readable coverage-*.toml in {db}")
+    else:
+        reasons.append(f"no coverage-*.toml document in {db}")
     streams = _stream_stats()
     if streams["watcher_alive"] is False and streams["clients"] > 0:
         # Connected clients with no poller means live reload is dead while
@@ -901,15 +943,13 @@ def _stream_stats() -> dict[str, Any]:
 @app.get("/api/targets")
 def handle_api_targets() -> bytes:
     try:
-        with contextlib.closing(_db()) as conn:
-            c = conn.cursor()
-            targets_list = resolve_targets(c)
-    except sqlite3.Error as exc:
-        # The cause goes in the line: a locked database and a corrupt one both
-        # land here, and the operator needs to tell them apart without reading
-        # the source.
+        targets_list = resolve_targets()
+    except CoverageTomlError as exc:
+        # The cause goes in the line: a missing directory and a malformed
+        # document both land here, and the operator needs to tell them apart
+        # without reading the source.
         _log.warning(
-            "Database unavailable reading the target list, falling back to the "
+            "Coverage unavailable reading the target list, falling back to the "
             "config-only list: %s: %s",
             type(exc).__name__,
             exc,
@@ -930,10 +970,10 @@ def handle_api_stats(target: str) -> bytes | HTTPResponse:
     target = path_param(target)
     snap = _snapshot_db_mtime()
     # Same validator contract as /data, /asm and /bytes: the payload is a pure
-    # function of the WAL-aware snapshot and the target, so a poll that
-    # revalidates gets a 304 instead of re-running the SECTION_STATS_SQL
-    # aggregation.  "stats" is a part of its own so the tag can never collide
-    # with /data's (snap, target, section) over the same DB.
+    # function of the coverage snapshot and the target, so a poll that
+    # revalidates gets a 304 instead of re-walking every cell.  "stats" is a
+    # part of its own so the tag can never collide with /data's
+    # (snap, target, section) over the same directory.
     etag = _etag_or_304(snap, target, "stats")
     key = (snap, target)
     stats: dict[str, Any] | None = None
@@ -941,8 +981,8 @@ def handle_api_stats(target: str) -> bytes | HTTPResponse:
         with _STATS_CACHE_LOCK:
             stats = _STATS_CACHE.get(key)
     if stats is None:
-        with _target_cursor(target) as c:
-            stats = _server._section_stats(c, target)
+        with _target_snapshot(target) as coverage:
+            stats = _server._section_stats(coverage)
         # Same watermark re-check as _cache_data_insert: a rebuild committed
         # between the snapshot and the aggregation would file pre-rebuild
         # numbers under the post-rebuild fingerprint, and the broadcast's
@@ -951,6 +991,7 @@ def handle_api_stats(target: str) -> bytes | HTTPResponse:
             with _STATS_CACHE_LOCK:
                 _server._evict_oldest(_STATS_CACHE, _STATS_CACHE_MAX)
                 _STATS_CACHE[key] = stats
+
     # ONE response shape for memo hits and fresh builds.
     return _json_ok(
         {
@@ -963,7 +1004,7 @@ def handle_api_stats(target: str) -> bytes | HTTPResponse:
     )
 
 
-def _build_search_index(c: sqlite3.Cursor, target: str) -> dict[str, Any]:
+def _build_search_index(snap: CoverageSnapshot) -> dict[str, Any]:
     """Lightweight name -> {va, symbol} index for the SPA search box.
 
     Names are not unique across functions and globals — keep the FIRST
@@ -971,99 +1012,75 @@ def _build_search_index(c: sqlite3.Cursor, target: str) -> dict[str, Any]:
     colliding global's VA.
     """
     index: dict[str, Any] = {}
-    c.execute(
-        "SELECT name, vaStart, symbol FROM functions WHERE target = ?",
-        (target,),
-    )
-    # Iterate the cursor rather than fetchall(): this walks every function of
-    # the target (tens of thousands of rows), and fetchall would hold the whole
-    # rowset as a list on top of the index being built from it.
-    for row in c:
-        index.setdefault(row["name"], {"va": row["vaStart"], "symbol": row["symbol"]})
-    # Globals get their own cursor: one cursor per query keeps the functions
-    # rowset above from being clobbered by the second execute.
-    c2 = c.connection.cursor()
-    try:
-        c2.execute("SELECT name, va FROM globals WHERE target = ?", (target,))
-        for row in c2:
-            va = row["va"]
-            index.setdefault(row["name"], {"va": hex(va) if va is not None else "", "symbol": ""})
-    finally:
-        c2.close()
+    for fn in snap.functions:
+        index.setdefault(fn.name, {"va": fn.vaStart, "symbol": fn.symbol})
+    for gl in snap.globals:
+        index.setdefault(gl.name, {"va": hex(gl.va), "symbol": ""})
     return index
 
 
-def _build_data_raw(c: sqlite3.Cursor, target: str, section_filter: str | None) -> bytes:
-    """Query and serialize the full /data payload (sections + cells + search index).
+def _build_data_raw(snap: CoverageSnapshot, target: str, section_filter: str | None) -> bytes:
+    """Serialize the full /data payload (sections + cells + search index).
 
-    Raises the shared JSON 404 for an unknown *section_filter*.  Pure DB
-    work — caching/compression stays in the endpoint.
+    Raises the shared JSON 404 for an unknown *section_filter*.  Pure snapshot
+    work — caching/compression stays in the endpoint, and the snapshot is
+    already the pin `server.read_snapshot` used to take: every field below comes
+    from one build.
     """
-    # The metadata, section, cell, search-index and per-section bucket reads
-    # are several statements over several tables; a rebuild committing between
-    # them would pair one build's section rows with the next build's cells.
-    with _server.read_snapshot(c):
-        return _read_data_raw(c, target, section_filter)
-
-
-def _read_data_raw(c: sqlite3.Cursor, target: str, section_filter: str | None) -> bytes:
-    """_build_data_raw body, run against the snapshot read_snapshot pinned."""
-    data: dict[str, Any] = _load_metadata(c, target)
+    data: dict[str, Any] = _server.load_metadata(snap)
 
     # Always load every section row so the SPA can render tabs from a
     # ?section= payload.  Cells are the multi-MB part: omit siblings when
     # the client asked for one section (null, not []).
-    c.execute("SELECT * FROM sections WHERE target = ?", (target,))
-    data["sections"] = {}
-    for row in c.fetchall():
-        data["sections"][row["name"]] = dict(row)
+    data["sections"] = {
+        name: {
+            "target": snap.target,
+            "name": name,
+            "va": sec.va,
+            "size": sec.size,
+            "fileOffset": sec.file_offset,
+            "unitBytes": sec.unit_bytes,
+            "columns": sec.columns,
+        }
+        for name, sec in snap.sections.items()
+    }
 
     if section_filter and section_filter not in data["sections"]:
         # Mirror /asm: an unknown section must 404, not return a silent
         # empty grid (which would also get memoized under that key).
         raise _section_not_found(target, section_filter)
 
-    # SQLite already emitted each section's cells as a JSON array.  Parsing
-    # that into Python and json.dumps-ing it back was ~70 ms of the ~115 ms
-    # cold /data build on an 80k-cell DB, for identical bytes.  Keep the
-    # strings and splice them into the envelope below.
+    # Each section's cells are serialized to JSON text once and spliced into
+    # the envelope, rather than parsed back into Python: re-encoding them
+    # dominated the cold /data build on an 80k-cell target, for identical bytes.
     cells_json: dict[str, str | None] = {}
-    # data["sections"] is every section row for the target, so a materialized
-    # section_cells_json that covers only some of them cannot silently blank
-    # the rest: _cells_json_rows re-aggregates the gaps from `cells`.
-    for row in _cells_json_rows(c, target, section_filter, set(data["sections"])):
-        sec_name = row[0]
-        if sec_name in data["sections"]:
-            cells_json[sec_name] = row[1]
-    if section_filter:
-        for name in data["sections"]:
-            cells_json.setdefault(name, None)
+    for name, sec in snap.sections.items():
+        if section_filter and name != section_filter:
+            # Siblings are omitted (absent key), which is the SPA's lazy-load
+            # signal, not an empty grid.
+            cells_json[name] = None
+        else:
+            cells_json[name] = _server.cells_json(sec.cells)
 
-    data["search_index"] = _build_search_index(c, target)
+    data["search_index"] = _build_search_index(snap)
 
-    # The accepted schema set travels with the payload: the SPA's empty-state
-    # message needs it to tell "no section rows yet" from "this build does not
-    # understand the DB", and a second copy hardcoded in app.js would drift as
-    # rebrew advances the schema.
-    data["known_schema"] = sorted(_server.KNOWN_SCHEMA_VERSIONS)
+    # The accepted format-version set travels with the payload: the SPA's
+    # empty-state message needs it to tell "no section rows yet" from "this
+    # build does not understand the document", and a second copy hardcoded in
+    # app.js would drift as rebrew advances the format.
+    data["known_schema"] = _server.known_schema_versions()
 
     # Per-section cell stats, through the same reader /stats and the Potato map
-    # header use: prefer the materialized table, re-aggregate a section it omits
-    # from `cells`, and treat an absent table as an empty one.  A private SELECT
-    # here honoured only the first rule, so a cache covering some of the
-    # sections served buckets for those and none for the rest, and a database
-    # predating the table raised `no such table` where /stats still answered.
-    # `*` is the whole row, which is what _cell_bucket_row reads: a hand-listed
-    # column set here can silently drop a bucket rebrew adds, and the served key
-    # set would then differ from /stats.
-    data["section_cell_stats"] = {}
+    # header use: the buckets are derived from the snapshot's cells, so /data
+    # and /stats cannot disagree about the same section.
     # ?section= narrows the cells, not the section set, so the unfiltered
-    # payload is keyed by every section the database has; the filtered one
+    # payload is keyed by every section the document has; the filtered one
     # carries the single section it was asked for.
-    wanted = {section_filter} if section_filter else set(data["sections"])
-    for row in _server.section_bucket_rows(c, target, expected=wanted):
-        if row["section_name"] in wanted:
-            data["section_cell_stats"][row["section_name"]] = _cell_bucket_row(row)
+    data["section_cell_stats"] = {
+        name: _server._bucket_row(sec)
+        for name, sec in snap.sections.items()
+        if sec.cells and (not section_filter or name == section_filter)
+    }
 
     return _dumps_with_cells(data, cells_json)
 
@@ -1141,8 +1158,8 @@ def handle_api_data(target: str) -> bytes | HTTPResponse:
         return _json_ok_precompressed(body, encoding, **headers)
 
     try:
-        with _target_cursor(target) as c:
-            raw_json = _build_data_raw(c, target, section_filter)
+        with _target_snapshot(target) as coverage:
+            raw_json = _build_data_raw(coverage, target, section_filter)
             accept_enc = _header("Accept-Encoding", "")
             body, encoding = compress_payload(raw_json, accept_enc)
             _cache_data_insert(fingerprint, raw_json, encoding, body)
@@ -1315,76 +1332,42 @@ def handle_api_functions_list(target: str) -> bytes | HTTPResponse:
     except ValueError:
         offset = 0
 
-    # SAFETY: sort_field is whitelisted to allowed_sort (no user strings reach SQL).
-    # sort_dir is validated to "ASC"/"DESC" only. ORDER BY cannot use parameterized queries.
-    allowed_sort = {"va", "name", "size", "status", "symbol", "module"}
     sort_field = "va"
     sort_dir = "ASC"
     if ":" in sort_param:
         sf, sd = sort_param.split(":", 1)
-        if sf in allowed_sort:
+        if sf in _ALLOWED_SORT:
             sort_field = sf
             # Every direction but "desc" — "asc", empty, and anything else —
             # sorts ascending, which is the default.  An unknown sort_field
-            # ignores the whole sort_param rather than applying its (possibly
-            # tainted) sort_dir.
+            # ignores the whole sort_param rather than applying its sort_dir.
             sort_dir = "DESC" if sd.lower() == "desc" else "ASC"
-    elif sort_param in allowed_sort:
+    elif sort_param in _ALLOWED_SORT:
         sort_field = sort_param
 
-    with _target_cursor(target) as c:
-        # Base filter: GLOBAL/DATA/VTABLE/STRING marker rows are data, not
-        # functions (rebrew ADR 023 widened the legal marker set).
-        where = ["target = ?", NOT_DATA_MARKER_SQL]
-        params: list[Any] = [target]
-
-        if status_filter:
-            where.append("status = ?")
-            params.append(status_filter)
-        if search:
-            # vaStart (hex text) search keeps parity with Potato Mode, which
-            # matches hex addresses; CAST(va AS TEXT) alone only matches
-            # decimal spellings.
-            chain, arity = like_match(["name", "symbol", "CAST(va AS TEXT)", "vaStart"])
-            like = _escape_like(search)
-            # The folded disjunct covers the two name columns only (the VA
-            # columns hold ASCII hex, which LIKE folds correctly) and joins
-            # the same OR group, because it is an alternative the ASCII LIKE
-            # cannot judge, not a further requirement: ANDed, it would only
-            # narrow the result.  Without it a term like "CAFÉ" silently
-            # misses "Café_Render" (SQLite folds case for ASCII only) and an
-            # NFD spelling misses its NFC twin.
-            folded_sql, folded_params = folded_like_clause(["name", "symbol"], search)
-            where.append(f"{chain} OR {folded_sql}" if folded_sql else chain)
-            params.extend([like] * arity)
-            params.extend(folded_params)
-
-        where_sql = " AND ".join(where)
-
-        # SAFETY: where_sql joins whitelisted column fragments with
-        # parameterized values; sort_field/sort_dir were whitelisted above.
-        #
-        # One pinned read snapshot for the COUNT and the page: they are two
-        # separate statements, and Python's sqlite3 opens a deferred
-        # transaction per statement, so a `rebrew build-db` committing between
-        # them served `total` from one build beside a page from the next (the
-        # SPA then paginates against a count the rows do not match).  The
-        # snapshot is stat'ed BEFORE the BEGIN, so the pinned read is never
-        # older than the memo key it is filed under.
+    with _target_snapshot(target) as coverage:
+        # `total` and the page come from ONE filter pass over one frozen
+        # snapshot, so the count and the rows it paginates cannot describe two
+        # different builds — the guarantee `read_snapshot` used to buy with a
+        # deferred read transaction.
         snap = _snapshot_db_mtime()
-        with _server.read_snapshot(c):
-            total = _function_total(c, target, where_sql, params, snap, status_filter, search)
-
-            c.execute(
-                f"SELECT va, name, vaStart, size, status, module, symbol, markerType "
-                f"FROM functions WHERE {where_sql} "
-                f"ORDER BY {sort_field} {sort_dir} LIMIT ? OFFSET ?",
-                [*params, limit, offset],
-            )
-            # SELECT enumerates exactly the response fields; dict(row) carries
-            # the same keys, in the same order, as an explicit per-field dict
-            # would.
-            items: list[dict[str, Any]] = [dict(row) for row in c.fetchall()]
+        total = _function_total(coverage.functions, snap, target, status_filter, search)
+        rows = _filtered_functions(coverage.functions, status_filter, search)
+        rows.sort(key=lambda fn: _function_sort_key(fn, sort_field), reverse=sort_dir == "DESC")
+        # Enumerate exactly the response fields, in the order the SELECT did.
+        items = [
+            {
+                "va": fn.va,
+                "name": fn.name,
+                "vaStart": fn.vaStart,
+                "size": fn.size,
+                "status": fn.status,
+                "module": fn.module,
+                "symbol": fn.symbol,
+                "markerType": fn.markerType,
+            }
+            for fn in rows[offset : offset + limit]
+        ]
 
         return _json_ok(
             {
@@ -1396,27 +1379,6 @@ def handle_api_functions_list(target: str) -> bytes | HTTPResponse:
             },
             Cache_Control=CACHE_NO_STORE,
         )
-
-
-def _last_verify_payload(vr: sqlite3.Row) -> dict[str, Any]:
-    """Shape a verify_results row as the ``last_verify`` object attached to
-    function details — ONE definition shared by the single-VA and batch
-    endpoints so the two response shapes cannot drift apart.
-
-    ``similarity`` is passed through as the 0-1 fraction the column stores
-    (its CHECK constrains the unit interval), like ``functions.similarity``;
-    the percent scaling belongs to the renderers."""
-    keys = vr.keys()
-    return {
-        "verified_at": vr["verified_at"],
-        "byte_delta": vr["byte_delta"],
-        "diff_lines": vr["diff_lines"],
-        "similarity": vr["similarity"],
-        "reg_delta": vr["reg_delta"] if "reg_delta" in keys else None,
-        "effective_match": bool(vr["effective_match"])
-        if "effective_match" in keys and vr["effective_match"] is not None
-        else None,
-    }
 
 
 def _batch_request_vas() -> tuple[list[int], HTTPResponse | None]:
@@ -1562,116 +1524,62 @@ def handle_api_functions_batch(target: str) -> bytes | HTTPResponse:
     if err is not None:
         return err
 
-    with _target_cursor(target) as c:
-        results: list[str] = []
+    with _target_snapshot(target) as coverage:
+        # Functions first (parity with GET /functions/<va>), then globals, and
+        # every row comes from the same frozen snapshot — the build's function
+        # rows and the `last_verify` attached to them cannot describe two builds.
+        verify_by_va = {
+            row["va"]: row for row in coverage.verify_results if isinstance(row.get("va"), int)
+        }
+        results: list[dict[str, Any]] = []
+        for wanted in unique_vas:
+            fn = coverage.functions_by_va.get(wanted)
+            if fn is not None:
+                payload = _server.function_json(fn)
+                record = verify_by_va.get(fn.va)
+                if record is not None:
+                    payload["last_verify"] = _server.verify_payload(record)
+                results.append(payload)
+                continue
+            found = next((gl for gl in coverage.globals if gl.va == wanted), None)
+            if found is not None:
+                results.append(_server.global_json(found))
 
-        placeholders = ",".join("?" * len(unique_vas))
-
-        # Three statements over three tables make one answer, so they share one
-        # pinned read snapshot (see server.read_snapshot): Python's sqlite3
-        # opens a deferred transaction per statement, and a `rebrew build-db`
-        # committing between them attached a build's verify_results rows to the
-        # next build's function rows — a `last_verify` describing a size and a
-        # diff the function payload beside it does not carry.  Same contract as
-        # /data, /stats and the function list.
-        with _server.read_snapshot(c):
-            # SAFETY: placeholders is only "?,?,..." built from the length of the
-            # validated VA list; every value reaches the statement parameterized.
-            # Functions first (parity with GET /functions/<va>), then globals.
-            #
-            # Both projections are already one JSON object per row, so a row's
-            # text IS the object the response array carries.  Decoding it into a
-            # dict here and re-encoding it into the array costs about 2 ms over a
-            # full _MAX_BATCH_LOOKUP batch, against the ~0.5 ms the statement
-            # itself takes, to produce what the statement already wrote.  So the
-            # text is carried through untouched and only a row that actually
-            # gains a key is decoded, which is the `last_verify` attachment
-            # below and nothing else.  The `va` column is selected beside the
-            # object for the key, so nothing has to be parsed to index the map.
-            fn_json_by_va: dict[int, str] = {}
-            c.execute(
-                f"SELECT va, {_fn_json_sql(c.connection)} FROM functions "
-                f"WHERE target = ? AND va IN ({placeholders})",
-                [target, *unique_vas],
-            )
-            for row in c.fetchall():
-                fn_json_by_va[row["va"]] = row[1]
-
-            if fn_json_by_va:
-                c.execute(
-                    f"{_verify_select(c.connection)} FROM verify_results"
-                    f" WHERE target = ? AND va IN ({placeholders})",
-                    [target, *unique_vas],
-                )
-                for vr in c.fetchall():
-                    encoded = fn_json_by_va.get(vr["va"])
-                    if encoded is not None:
-                        fn = json.loads(encoded)
-                        fn["last_verify"] = _last_verify_payload(vr)
-                        fn_json_by_va[fn["va"]] = json.dumps(fn)
-
-            c.execute(
-                f"SELECT va, {_global_json_sql(c.connection)} FROM globals "
-                f"WHERE target = ? AND va IN ({placeholders})",
-                [target, *unique_vas],
-            )
-            globals_json_by_va: dict[int, str] = {row["va"]: row[1] for row in c.fetchall()}
-
-        # A globals row never gains a key (last_verify is functions-only), so
-        # both maps hold response text from here on.
-        for va in unique_vas:
-            if va in fn_json_by_va:
-                results.append(fn_json_by_va[va])
-            elif va in globals_json_by_va:
-                results.append(globals_json_by_va[va])
-
-        # Concatenated rather than json.dumps'd: the elements are already
-        # JSON, and a joined array is the same document without the encode.
-        return _json_ok(f"[{','.join(results)}]".encode(), Cache_Control=CACHE_NO_STORE)
+        return _json_ok(json.dumps(results).encode("utf-8"), Cache_Control=CACHE_NO_STORE)
 
 
 @app.get("/api/targets/<target>/functions/<va>")
 def handle_api_function(target: str, va: str) -> bytes | HTTPResponse:
     target = path_param(target)
     va = path_param(va)
-    with _target_cursor(target) as c:
-        # The resolution below is several statements (VA candidates, exact
-        # name, folded name — for functions, then for globals) plus the
-        # verify_results read, so the whole answer is pinned to ONE read
-        # snapshot (see server.read_snapshot).  Unpinned, a `rebrew build-db`
-        # committing midway pairs one build's function row with the next
-        # build's `last_verify`, which reports a size and a diff for a payload
-        # that no longer carries them.
-        with _server.read_snapshot(c):
-            # One shared resolution order (server._lookup_by_va_or_name): VA
-            # candidates first, then the exact name for a name-form lookup.  The
-            # value comes from the path, and the stripped spelling is used for
-            # both, so a URL carrying a padded name resolves the same way the
-            # name is spelled in the database.
-            value = va.strip()
+    with _target_snapshot(target) as coverage:
+        # One shared resolution order (server.lookup_function): VA
+        # candidates first, then the exact name and then the folded one.  The
+        # value comes from the path, and the stripped spelling is used for
+        # both, so a URL carrying a padded name resolves the same way the name
+        # is spelled in the document.
+        #
+        # The row and its `last_verify` come from ONE frozen snapshot, so a
+        # rebuild between the two reads cannot report a size and a diff for a
+        # payload that no longer carries them — the pin `read_snapshot` took.
+        value = va.strip()
 
-            # Functions win over globals (parity with the batch endpoint).
-            row = _server._lookup_by_va_or_name(
-                c, "functions", _fn_json_sql(c.connection), target, value
-            )
-            if row:
-                fn_json = json.loads(row[0])
-                # Attach the last `rebrew verify -o` record for this function.
-                c.execute(
-                    f"{_verify_one_select(c.connection)} FROM verify_results "
-                    f"WHERE target = ? AND va = ?",
-                    (target, fn_json["va"]),
-                )
-                vr = c.fetchone()
-                if vr:
-                    fn_json["last_verify"] = _last_verify_payload(vr)
-                return _json_ok(json.dumps(fn_json).encode("utf-8"), Cache_Control=CACHE_NO_STORE)
+        # Functions win over globals (parity with the batch endpoint).
+        found_fn = _server.lookup_function(coverage, value)
+        if isinstance(found_fn, Function):
+            fn_json = _server.function_json(found_fn)
+            # Attach the last `rebrew verify -o` record for this function.
+            record = next((r for r in coverage.verify_results if r.get("va") == found_fn.va), None)
+            if record is not None:
+                fn_json["last_verify"] = _server.verify_payload(record)
+            return _json_ok(json.dumps(fn_json).encode("utf-8"), Cache_Control=CACHE_NO_STORE)
 
-            row = _server._lookup_by_va_or_name(
-                c, "globals", _global_json_sql(c.connection), target, value
+        found_gl = _server.lookup_global(coverage, value)
+        if found_gl is not None:
+            return _json_ok(
+                json.dumps(_server.global_json(found_gl)).encode("utf-8"),
+                Cache_Control=CACHE_NO_STORE,
             )
-            if row:
-                return _json_ok(row[0].encode("utf-8"), Cache_Control=CACHE_NO_STORE)
 
         return _json_err(
             404,
@@ -1758,8 +1666,8 @@ def handle_api_asm(target: str) -> bytes | HTTPResponse:
     # revalidation identity.
     asm_etag = _etag_or_304(_snapshot_db_mtime(), target, section, raw_va, size, fmt)
 
-    with _target_cursor(target) as c:
-        sec = _file_backed_section(c, target, section, "fileOffset", "va", "size")
+    with _target_snapshot(target) as coverage:
+        sec = _file_backed_section(coverage, section, "va", "size", "fileOffset")
 
         # Resolve among the decimal/hex candidate spellings: whichever lands
         # inside the section wins (decimal-first when both fit, matching
@@ -1883,8 +1791,8 @@ def handle_api_bytes(target: str, section: str) -> bytes | HTTPResponse:
     # bytes (raw st_mtime alone missed WAL-committed rebuilds).
     bytes_etag = _etag_or_304(_snapshot_db_mtime(), target, section, req_offset, req_size)
 
-    with _target_cursor(target) as c:
-        sec = _file_backed_section(c, target, section, "fileOffset", "size")
+    with _target_snapshot(target) as coverage:
+        sec = _file_backed_section(coverage, section, "va", "size", "fileOffset")
         if req_offset >= sec["size"]:
             return _json_err(
                 400,
@@ -1940,7 +1848,7 @@ def handle_regen() -> bytes | HTTPResponse:
 
     Duplicate execution: a rebuild is convergent, so a second run ends in the
     same state as the first, but it is minutes of work and a second write of
-    coverage.db.  Send an ``Idempotency-Key`` header to make a retry cheap:
+    the coverage documents.  Send an ``Idempotency-Key`` header to make a retry cheap:
     the key is remembered once the run completes (see ``_REGEN_KEY_TTL_SECONDS``
     for the retention window and ``_REGEN_LEDGER_MAX_ENTRIES`` for the ledger's
     cap) and a later request
@@ -2015,7 +1923,7 @@ def handle_regen() -> bytes | HTTPResponse:
     # Server-side cooldown + serialization: the cooldown check and the regen
     # run must be atomic — two concurrent POSTs could otherwise both pass the
     # check and run catalog/build-db in parallel, tearing the data_*.json /
-    # coverage.db (TOCTOU).  Non-blocking acquire: a second POST while a regen
+    # documents (TOCTOU).  Non-blocking acquire: a second POST while a regen
     # runs gets an immediate 429 instead of blocking on the lock for the whole
     # run.
     if not _REGEN_LOCK.acquire(blocking=False):
@@ -2100,7 +2008,7 @@ def _do_regen(remote: str) -> bytes | HTTPResponse:
         )
     finally:
         # A FAILED run invalidates too, and that is the case the post-run
-        # clear used to miss: build_db replaces coverage.db before it can fail
+        # clear used to miss: the writer replaces the documents before it can fail
         # (a bad row, a full disk, a missing input), so a run that dies leaves
         # the server serving payloads derived from the file it just replaced,
         # and the watcher's mtime poll only clears them on its next tick — up

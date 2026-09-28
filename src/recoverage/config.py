@@ -288,11 +288,12 @@ def log_level() -> int:
 
 
 def db_override() -> Path | None:
-    """Explicit coverage.db path, or None to resolve it from the project.
+    """Explicit coverage directory, or None to resolve it from the project.
 
     Overrides the cwd-relative resolution (``[project] db_dir`` in
-    ``rebrew-project.toml``, else ``db/coverage.db``) so a service can run
-    from a directory that is not the project root.
+    ``rebrew-project.toml``, else ``db/``) so a service can run from a
+    directory that is not the project root.  It names the directory holding the
+    ``coverage-*.toml`` documents, which is the directory ``coverage.db`` was in.
     """
     raw = _raw("RECOVERAGE_DB")
     if raw is None:

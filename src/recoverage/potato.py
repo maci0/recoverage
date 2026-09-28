@@ -8,13 +8,10 @@ highlighting via inline <font> tags.
 from __future__ import annotations
 
 import base64
-import contextlib
 import functools
 import importlib.util
-import json
 import logging
 import re
-import sqlite3
 import struct
 import textwrap
 import threading
@@ -26,6 +23,7 @@ from urllib.parse import ParseResult, parse_qs, urlparse
 from urllib.parse import quote as _url_quote
 
 from bottle import HTTPResponse, SimpleTemplate  # type: ignore[import-untyped]
+from rebrew.coverage_toml import Cell, CoverageSnapshot, CoverageTomlError, Function
 
 from recoverage import __version__
 from recoverage._paths import _db_path
@@ -33,34 +31,30 @@ from recoverage.disasm import disassembly_available, get_disassembly
 from recoverage.server import (
     CACHE_NO_STORE,
     CACHE_REVALIDATE,
-    NOT_DATA_MARKER_SQL,
-    _cells_json_rows,
+    _bucket_row,
     _compressed,
-    _escape_like,
     _etag_or_304,
     _evict_oldest,
-    _fn_json_sql,
     _format_hex_dump,
-    _global_json_sql,
-    _is_absent_object,
+    _is_data_marker,
     _load_dll,
-    _load_metadata,
-    _lookup_by_va_or_name,
     _newest_mtime_ns,
-    _open_db,
     _snapshot_db_mtime,
-    _verify_one_select,
     app,
-    folded_like_clause,
-    like_match,
+    coverage_for,
+    fold_match,
+    function_json,
+    global_json,
+    load_metadata,
+    lookup_function,
+    lookup_global,
     mtime_ns_to_utc,
     parse_ascii_int,
-    read_snapshot,
     request,
     resolve_targets,
     response,
-    section_bucket_rows,
     set_auth_cookie,
+    verify_payload,
 )
 
 _log = logging.getLogger("recoverage")
@@ -1046,7 +1040,7 @@ _PANEL_TPL = SimpleTemplate(source=_PANEL_SRC)
 
 
 def _db_unavailable_page() -> HTTPResponse:
-    """503 HTML page for an unreadable/unqueryable coverage.db in Potato Mode.
+    """503 HTML page for unreadable coverage in Potato Mode.
 
     ONE definition shared by the connect guard in :func:`render_potato` and
     the query-failure tail of :func:`handle_potato`, so both surfaces carry
@@ -1076,9 +1070,9 @@ def _db_unavailable_page() -> HTTPResponse:
 def render_potato(parsed_url: ParseResult) -> str:
     """Render the Potato Mode page for *parsed_url*'s query string.
 
-    Raises the 503 page from :func:`_db_unavailable_page` when coverage.db
-    cannot be opened; the route below does not catch it, so it leaves the
-    route as a response rather than a render error.
+    Raises the 503 page from :func:`_db_unavailable_page` when the coverage
+    documents cannot be read; the route below does not catch it, so it leaves
+    the route as a response rather than a render error.
     """
     qs = parse_qs(parsed_url.query, keep_blank_values=True)
     target = qs.get("target", [""])[0]
@@ -1092,59 +1086,62 @@ def render_potato(parsed_url: ParseResult) -> str:
     status_filter = qs.get("status", [""])[0]
     page_str = qs.get("page", [""])[0]
 
-    db_path = _db_path()
-    # The render's change token, taken BEFORE the connection opens and
-    # therefore before read_snapshot pins the read view.  Every memo this
-    # render publishes is keyed on it, and a payload may only be filed under a
-    # fingerprint that is not newer than the rows it was read through.  A stat
-    # taken INSIDE the pinned snapshot cannot say that: a rebuild committing
-    # between the BEGIN and the first query leaves both the key and the
-    # re-check reporting the new fingerprint while the rows are the old build's,
-    # so the stale payload is cached under the new key and served until the next
-    # rebuild.  Same order api.handle_api_stats and api.handle_api_data use.
+    # The render's change token, taken BEFORE the snapshot is loaded.  Every
+    # memo this render publishes is keyed on it, and a payload may only be filed
+    # under a fingerprint that is not newer than the rows it was read from.  A
+    # stat taken after the read cannot say that: a rebuild committing between
+    # the read and the stat leaves both the key and the re-check reporting the
+    # new fingerprint while the rows are the old build's, so the stale payload
+    # is cached under the new key and served until the next rebuild.  Same order
+    # api.handle_api_stats and api.handle_api_data use.
     snap = _snapshot_db_mtime()
     try:
-        conn = _open_db(db_path)
-    except sqlite3.Error as exc:
-        # The cause rides on the line: a missing file, a locked one and a
-        # corrupt one all land here, and the operator cannot tell them apart
-        # from the path alone.  Mirrors server._db_unavailable_err, which logs
-        # the same pair for the API surfaces.
+        # The target default is resolved BEFORE the snapshot, and both come from
+        # the same read: the SPA prefers ?target=, then a localStorage choice,
+        # then /api/targets[0].  Potato Mode honours ?target= and otherwise
+        # takes the first target, so the two surfaces agree on the first target
+        # unless localStorage names a different one.  Loading the snapshot
+        # first and defaulting afterwards rendered the empty document for the
+        # empty target name — a "no data" page on a project with data.
+        targets = resolve_targets()
+        if not target and targets:
+            target = targets[0]["id"]
+        coverage = coverage_for(target)
+    except CoverageTomlError as exc:
+        # The cause rides on the line: a missing directory, a malformed
+        # document and a broken project file all land here, and the operator
+        # cannot tell them apart from the path alone.  Mirrors
+        # server._db_unavailable_err, which logs the same pair for the API.
         _log.warning(
-            "Potato mode: database unavailable at %s: %s: %s",
-            db_path,
+            "Potato mode: coverage unavailable at %s: %s: %s",
+            _db_path(),
             type(exc).__name__,
             exc,
         )
         # Signal failure, not a 200 page: monitoring and scripts must see the
-        # DB outage (same contract as the API's 503 db_unavailable).
+        # outage (same contract as the API's 503 db_unavailable).
         raise _db_unavailable_page() from None
 
-    with contextlib.closing(conn):
-        c = conn.cursor()
-        # One pinned read snapshot for the whole render.  A Potato page reads
-        # metadata, sections, cells, section_cell_stats, functions, globals and
-        # (for the detail panels) verify_results, in that order, and takes long
-        # enough doing it — the grid is the most expensive render in the
-        # package — that a `rebrew build-db` committing midway is a real
-        # window.  Unpinned, the page pairs one build's section rows with the
-        # next build's cells, which is a grid whose coverage legend disagrees
-        # with its own bytes.  Same contract as /stats, /data and the function
-        # list; a WAL reader blocks no writer, so the pin costs nothing.
-        with read_snapshot(c):
-            return _render_potato_inner(
-                c,
-                target,
-                section,
-                snap=snap,
-                active_filters=active_filters,
-                idx_str=idx_str,
-                search_query=search_query,
-                view=view,
-                sort_key=sort_key,
-                status_filter=status_filter,
-                page_str=page_str,
-            )
+    # ONE frozen snapshot for the whole render.  A Potato page reads metadata,
+    # sections, cells, functions, globals and (for the detail panels)
+    # verify_results, and takes long enough doing it — the grid is the most
+    # expensive render in the package — that a `rebrew build-db` committing
+    # midway is a real window.  The snapshot's immutability is the pin the read
+    # transaction used to provide: the page cannot pair one build's section rows
+    # with the next build's cells.
+    return _render_potato_inner(
+        coverage,
+        target,
+        section,
+        snap=snap,
+        active_filters=active_filters,
+        idx_str=idx_str,
+        search_query=search_query,
+        view=view,
+        sort_key=sort_key,
+        status_filter=status_filter,
+        page_str=page_str,
+    )
 
 
 # ── HTTP surface ───────────────────────────────────────────────────
@@ -1184,12 +1181,12 @@ def handle_potato() -> bytes | Any:
             response.set_header("ETag", etag)
         return resp_body
 
-    except sqlite3.Error:
-        # A DB that opens but cannot answer queries is the same
-        # db_unavailable condition render_potato's connect guard reports as
+    except CoverageTomlError:
+        # A directory whose documents cannot be read is the same
+        # db_unavailable condition render_potato's load guard reports as
         # 503 — not an application bug.  One contract (and one page) for
         # both surfaces.
-        _log.exception("Potato mode database query failed")
+        _log.exception("Potato mode coverage read failed")
         return _db_unavailable_page()
     # json.JSONDecodeError needs no entry: it subclasses ValueError.
     except (OSError, ValueError, KeyError):
@@ -1202,21 +1199,20 @@ def handle_potato() -> bytes | Any:
 
 
 def _load_section_data(
-    c: sqlite3.Cursor,
-    target: str,
+    coverage: CoverageSnapshot,
 ) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
-    data: dict[str, Any] = _load_metadata(c, target)
+    data: dict[str, Any] = load_metadata(coverage)
 
-    c.execute(
-        "SELECT name, va, size, fileOffset, columns FROM sections WHERE target = ?",
-        (target,),
-    )
     sections: dict[str, dict[str, Any]] = {}
-    _sec_keys = ("name", "va", "size", "fileOffset", "columns")
-    for row in c.fetchall():
-        sec: dict[str, Any] = dict(zip(_sec_keys, row, strict=True))
-        sec["cells"] = []
-        sections[sec["name"]] = sec
+    for name, section in coverage.sections.items():
+        sections[name] = {
+            "name": name,
+            "va": section.va,
+            "size": section.size,
+            "fileOffset": section.file_offset,
+            "columns": section.columns,
+            "cells": [],
+        }
     # PE load order (ascending VA), matching the SPA's sectionNames sort: the
     # section carrying the work (.text) leads instead of trailing an
     # alphabetical row.  Sections without a VA sort last, behind every real
@@ -1231,16 +1227,49 @@ def _load_section_data(
     return sections, data
 
 
-def _db_updated_mtime_ns() -> int | None:
-    """Newest mtime_ns across coverage.db and its -wal sibling, or None.
+def _cell_object(cell: Cell) -> dict[str, Any]:
+    """One snapshot cell as the grid and the detail panel read it.
 
-    The footer's "DB updated" stamp must include -wal: a rebuild that commits
-    only to the WAL leaves the main file's mtime untouched, and reading the
-    main file alone would display a stale instant (same WAL-awareness contract
-    as _snapshot_db_mtime, rendered as wall-clock time instead of folded into
-    an opaque change token).
+    The same key set and the same omissions as the JSON the SPA is served
+    (``server._cell_json``): the three optional keys are absent rather than
+    null, which every consumer here already treats alike with ``.get``.
     """
-    return _newest_mtime_ns(_db_path())
+    obj: dict[str, Any] = {"start": cell.start, "end": cell.end, "span": cell.span}
+    obj["state"] = cell.state
+    if cell.functions:
+        obj["functions"] = list(cell.functions)
+    if cell.label:
+        obj["label"] = cell.label
+    if cell.parent_function:
+        obj["parent_function"] = cell.parent_function
+    return obj
+
+
+def _function_list_key(fn: Function, order_by: str) -> Any:
+    """Sort key for the Potato function list, with SQLite's NULL ordering.
+
+    SQLite orders NULL before every value ascending, so an unknown size sorts
+    first there; a bare ``None`` key would raise comparing against an int.
+    """
+    if order_by == "name":
+        return (fn.name,)
+    if order_by == "size":
+        return (0, 0) if fn.size is None else (1, fn.size)
+    if order_by == "status":
+        return (fn.status,)
+    return (fn.va,)
+
+
+def _db_updated_mtime_ns() -> int | None:
+    """Newest mtime_ns across the coverage documents, or None when there are none.
+
+    A rebuild rewrites one document per target, so the footer's "DB updated"
+    stamp reads the newest of them; reading any single one would display a
+    stale instant for a target that did not move (same contract as
+    _snapshot_db_mtime, rendered as wall-clock time instead of folded into an
+    opaque change token).
+    """
+    return _newest_mtime_ns()
 
 
 def _db_updated_label() -> str:
@@ -1290,8 +1319,7 @@ def clear_cells_cache() -> None:
 
 
 def _load_grid_cells(
-    c: sqlite3.Cursor,
-    target: str,
+    coverage: CoverageSnapshot,
     section: str,
     grid_columns: int,
     *,
@@ -1319,20 +1347,18 @@ def _load_grid_cells(
     re-deriving one from a fresh stat, which a rebuild landing in between would
     let disagree with the payload it describes.
     """
-    key = (*snap, target, section, int(grid_columns)) if snap is not None else None
+    key = (*snap, coverage.target, section, int(grid_columns)) if snap is not None else None
     if key is not None:
         with _GRID_CACHE_LOCK:
             cached = _GRID_CACHE.get(key)
         if cached is not None:
             return cached[0], cached[1], cached[2]
 
-    # {section}: a materialized section_cells_json that does not cover this
-    # section is re-aggregated from `cells` rather than rendering an empty grid,
-    # which would report every byte in the section as `none`.
-    rows = _cells_json_rows(c, target, section, {section} if section is not None else None)
-    # An unknown or cell-less section decodes to no cells: _cells_json_rows
-    # returns no rows and the grid renders empty.
-    cells: list[dict[str, Any]] = json.loads(rows[0][1]) if rows else []
+    # An unknown or cell-less section has no cells and the grid renders empty.
+    found = coverage.sections.get(section)
+    cells: list[dict[str, Any]] = (
+        [_cell_object(cell) for cell in found.cells] if found is not None else []
+    )
     merged = _merge_cells(cells, grid_columns)
     # The watermark re-check: *snap* predates this cursor's read snapshot, so
     # equality here means no rebuild committed while these rows were read.  A
@@ -1390,8 +1416,7 @@ _POTATO_STATS_CACHE_MAX = 16
 
 
 def _section_stats_cached(
-    c: sqlite3.Cursor,
-    target: str,
+    coverage: CoverageSnapshot,
     sections: dict[str, dict[str, Any]],
     data: dict[str, Any],
     *,
@@ -1407,13 +1432,13 @@ def _section_stats_cached(
 
     Entries are small — one dict per section — so the cap is generous.
     """
-    key = (*snap, target) if snap is not None else None
+    key = (*snap, coverage.target) if snap is not None else None
     if key is not None:
         with _POTATO_STATS_CACHE_LOCK:
             cached = _POTATO_STATS_CACHE.get(key)
         if cached is not None:
             return cached
-    stats = _compute_section_stats(c, target, sections, data)
+    stats = _compute_section_stats(coverage, sections, data)
     # Same watermark re-check as _load_grid_cells, over the same token: a
     # rebuild that committed after this render pinned its read snapshot must
     # not leave its rows filed under the new fingerprint.
@@ -1424,20 +1449,8 @@ def _section_stats_cached(
     return stats
 
 
-#: The six buckets the Potato map header renders.  Only these are named, so a
-#: hand-made `section_cell_stats` carrying just them still serves; which rows
-#: to read (the cache, `cells` for a section the cache omits, `cells` outright
-#: when there is no cache) is :func:`server.section_bucket_rows`, the same
-#: reader /stats and /data use.
-_POTATO_BUCKET_COLUMNS = (
-    "section_name, total_cells, exact_count, reloc_count, "
-    "near_match_count, stub_count, padding_count"
-)
-
-
 def _compute_section_stats(
-    c: sqlite3.Cursor,
-    target: str,
+    coverage: CoverageSnapshot,
     sections: dict[str, dict[str, Any]],
     data: dict[str, Any],
 ) -> dict[str, dict[str, Any]]:
@@ -1448,24 +1461,21 @@ def _compute_section_stats(
     if not isinstance(summary, dict):
         summary = {}
     per_section_stats: dict[str, dict[str, Any]] = {}
-    # The buckets come from server.section_bucket_rows, the reader /stats and
-    # /data use: rebrew's materialized section_cell_stats where it covers the
-    # map header's sections, `cells` for the sections it omits and for a
-    # database that has no such table at all.  This surface used to restate all
-    # three rules against its own query, and a `cells` table too narrow for the
-    # live aggregation is left as an empty header rather than a 503, which is
-    # what the shared reader's absent-object guard gives here too.
-    for row in section_bucket_rows(c, target, projection=_POTATO_BUCKET_COLUMNS, expected=sections):
-        name = row["section_name"]
+    # The buckets come from server._bucket_row, the same reader /stats and
+    # /data use, over the section's own cells: the three cases a materialized
+    # cache used to create (present, partial, absent) are one case now that the
+    # counts are derived rather than stored.
+    for name, section in coverage.sections.items():
         if name not in sections:
             continue
+        buckets = _bucket_row(section)
         per_section_stats[name] = {
-            "total": row["total_cells"],
-            "exact": row["exact_count"],
-            "reloc": row["reloc_count"],
-            "near_match": row["near_match_count"],
-            "stub": row["stub_count"],
-            "padding": row["padding_count"],
+            "total": buckets["total_cells"],
+            "exact": buckets["exact"],
+            "reloc": buckets["reloc"],
+            "near_match": buckets["near_match"],
+            "stub": buckets["stub"],
+            "padding": buckets["padding"],
             "pct": _section_pct(summary, sections, name),
         }
     return per_section_stats
@@ -1495,47 +1505,48 @@ def _section_pct(summary: dict[str, Any], sections: dict[str, dict[str, Any]], n
 _SEARCH_ROW_LIMIT = 500
 
 
-def _search_functions(c: sqlite3.Cursor, target: str, search_query: str) -> set[str]:
+def _search_functions(coverage: CoverageSnapshot, search_query: str) -> set[str]:
+    """Names the grid should highlight for *search_query*.
+
+    Both sides fold through :func:`server.fold_match`, so a non-ASCII term
+    matches (the SQLite ``LIKE`` beside the ``rc_fold`` disjunct folded ASCII
+    alone) and the grid highlights exactly what the API's ``?search=`` returns.
+    The address column is matched in both spellings ``_format_va`` can produce
+    (``0x%08x`` and ``0x%x``) so an address copied out of a Potato table
+    matches when pasted into the search box.
+
+    The row cap applies to the rows selected, not to the returned set: a
+    project with more matches than the cap still dims every name it found.
+    """
     search_matched_fns: set[str] = set()
     if not search_query:
         return search_matched_fns
 
-    # A non-ASCII term gets a second, folded disjunct over the name columns:
-    # SQLite's LIKE folds case for ASCII only, so "CAFÉ" would otherwise miss
-    # "Café_Render" and an NFD spelling would miss its NFC twin.  The VA
-    # columns are ASCII hex, so LIKE already folds them correctly.
-    fn_folded_sql, fn_folded_params = folded_like_clause(["name", "symbol"], search_query)
-    like_pat = _escape_like(search_query)
-    fn_chain, fn_arity = like_match(["name", "vaStart", "symbol"])
-    c.execute(
-        f"SELECT name, vaStart FROM functions WHERE target = ? AND {fn_chain}"
-        + (f" OR {fn_folded_sql}" if fn_folded_sql else "")
-        + " ORDER BY name, vaStart LIMIT ?",
-        (target, *([like_pat] * fn_arity), *fn_folded_params, _SEARCH_ROW_LIMIT),
-    )
-    for name, va_start in c.fetchall():
-        search_matched_fns.add(name)
-        if va_start:
+    fn_rows = [
+        fn
+        for fn in coverage.functions
+        if fold_match(fn.name, search_query)
+        or fold_match(fn.vaStart, search_query)
+        or fold_match(fn.symbol, search_query)
+    ]
+    fn_rows.sort(key=lambda fn: (fn.name, fn.vaStart))
+    for fn in fn_rows[:_SEARCH_ROW_LIMIT]:
+        search_matched_fns.add(fn.name)
+        if fn.vaStart:
             # Grid .text cells store the function's vaStart string (not the
             # name) in their `functions` field — the dimming test compares
             # cell entries against this set, so VA spellings must be included.
-            search_matched_fns.add(va_start)
-    # The address column is matched in both spellings _format_va can produce
-    # (`0x%08x`, padded, and `0x%x`, unpadded) so an address copied out of a
-    # Potato table matches when pasted into the search box.  printf('0x%x', va)
-    # has no prefix and could never match either.
-    # The row cap applies to rows selected, not to the returned set.
-    g_folded_sql, g_folded_params = folded_like_clause(["name"], search_query)
-    g_chain, g_arity = like_match(
-        ["name", "'0x' || printf('%08x', va)", "'0x' || printf('%x', va)"]
-    )
-    c.execute(
-        f"SELECT name FROM globals WHERE target = ? AND {g_chain}"
-        + (f" OR {g_folded_sql}" if g_folded_sql else "")
-        + " ORDER BY name LIMIT ?",
-        (target, *([like_pat] * g_arity), *g_folded_params, _SEARCH_ROW_LIMIT),
-    )
-    search_matched_fns.update(row[0] for row in c.fetchall())
+            search_matched_fns.add(fn.vaStart)
+
+    gl_rows = [
+        gl
+        for gl in coverage.globals
+        if fold_match(gl.name, search_query)
+        or fold_match(f"0x{gl.va:08x}", search_query)
+        or fold_match(f"0x{gl.va:x}", search_query)
+    ]
+    gl_rows.sort(key=lambda gl: gl.name)
+    search_matched_fns.update(gl.name for gl in gl_rows[:_SEARCH_ROW_LIMIT])
     return search_matched_fns
 
 
@@ -1978,51 +1989,41 @@ def _build_grid_html(
 
 
 def _render_function_list(
-    c: sqlite3.Cursor,
+    coverage: CoverageSnapshot,
     target: str,
     section: str,
     search_query: str,
     sort_key: str,
     status_filter: str,
 ) -> str:
-    # SAFETY: order_by is whitelisted to allowed_sort (no user strings reach SQL).
     allowed_sort = {"va", "name", "size", "status"}
     order_by = sort_key if sort_key in allowed_sort else "va"
 
-    # Base filter: GLOBAL/DATA marker rows live in the functions table but are
-    # data markers, not functions — same exclusion as the API list endpoint
-    # and _section_stats, so both surfaces list the same rows.
-    where = ["target = ?", NOT_DATA_MARKER_SQL]
-    params: list[Any] = [target]
+    # Base filter: GLOBAL/DATA marker rows live in the functions array but are
+    # data markers, not functions — same exclusion as the API list endpoint and
+    # server._section_stats, so both surfaces list the same rows.
+    rows = [fn for fn in coverage.functions if not _is_data_marker(fn)]
     if status_filter:
-        where.append("status = ?")
-        params.append(status_filter)
+        rows = [fn for fn in rows if fn.status == status_filter]
     if search_query:
-        like = _escape_like(search_query)
         # The VA column below is printed by _format_va, which pads to eight
-        # digits, so both that spellings are matched: an address copied out of
-        # this very table matches when pasted into the search box.
-        # printf('0x%x', va) has no prefix and could never match.  Same chain
-        # shape and folded disjunct as _search_functions, so this list and the
-        # grid it sits beside return the same rows for one term.
-        chain, arity = like_match(
-            ["name", "symbol", "'0x' || printf('%08x', va)", "'0x' || printf('%x', va)"]
-        )
-        folded_sql, folded_params = folded_like_clause(["name", "symbol"], search_query)
-        where.append(f"{chain} OR {folded_sql}" if folded_sql else chain)
-        params.extend([like] * arity)
-        params.extend(folded_params)
-
-    where_sql = " AND ".join(where)
-    # Cap the rendered list (same bound as the search above) so a large
+        # digits, so both spellings are matched: an address copied out of this
+        # very table matches when pasted into the search box.  Same fold and
+        # column set as _search_functions, so this list and the grid it sits
+        # beside return the same rows for one term.
+        rows = [
+            fn
+            for fn in rows
+            if fold_match(fn.name, search_query)
+            or fold_match(fn.symbol, search_query)
+            or fold_match(f"0x{fn.va:08x}", search_query)
+            or fold_match(f"0x{fn.va:x}", search_query)
+        ]
+    # The rendered list is capped (same bound as the search above) so a large
     # project's ?view=functions page doesn't build a multi-MB HTML document on
-    # every request.  ORDER BY keeps the cap deterministic.
-    c.execute(
-        "SELECT name, va, vaStart, size, status, module FROM functions "
-        f"WHERE {where_sql} ORDER BY {order_by}, va LIMIT ?",
-        [*params, _SEARCH_ROW_LIMIT],
-    )
-    rows = c.fetchall()
+    # every request.  The secondary `va` key keeps the cap deterministic.
+    rows.sort(key=lambda fn: (_function_list_key(fn, order_by), fn.va))
+    rows = rows[:_SEARCH_ROW_LIMIT]
 
     prefix = f"?target={_url_quote(target)}&section={_url_quote(section)}&view=functions"
     base = prefix
@@ -2086,7 +2087,8 @@ def _render_function_list(
         # section is the one this list was rendered under: a hardcoded .text
         # here opened the panel in the wrong section for every other list.
         link_prefix = f"?target={_url_quote(target)}&section={_url_quote(section)}&search="
-        for name, va, _, size, status, module in rows:
+        for fn in rows:
+            name, va, size, status, module = fn.name, fn.va, fn.size, fn.status, fn.module
             st = status or "none"
             color = COLORS.get(st.lower(), TEXT_COLOR)
             name_link = link_prefix + _url_quote(name)
@@ -2129,7 +2131,7 @@ def _section_tab_data(
 
 
 def _render_grid_view(
-    c: sqlite3.Cursor,
+    coverage: CoverageSnapshot,
     target: str,
     section: str,
     sec_data: dict[str, Any],
@@ -2156,8 +2158,8 @@ def _render_grid_view(
     if grid_columns <= 0:
         grid_columns = _DEFAULT_GRID_COLUMNS
     grid_columns = min(grid_columns, _MAX_GRID_COLUMNS)
-    cells, merged_cells, grid_key = _load_grid_cells(c, target, section, grid_columns, snap=snap)
-    per_section_stats = _section_stats_cached(c, target, sections, data, snap=snap)
+    cells, merged_cells, grid_key = _load_grid_cells(coverage, section, grid_columns, snap=snap)
+    per_section_stats = _section_stats_cached(coverage, sections, data, snap=snap)
     block_count = len(merged_cells)
 
     # Paginate: one page is _GRID_PAGE_ROWS rows of the grid.
@@ -2183,7 +2185,7 @@ def _render_grid_view(
         grid_html += _pager_html(target, section, active_filters, search_query, page, page_count)
     sec_stats = per_section_stats.get(section, {})
     panel_html = _render_panel(
-        c,
+        coverage,
         cells,
         idx_str,
         target=target,
@@ -2198,7 +2200,7 @@ def _render_grid_view(
 
 
 def _render_potato_inner(
-    c: sqlite3.Cursor,
+    coverage: CoverageSnapshot,
     target: str,
     section: str,
     active_filters: set[str],
@@ -2211,16 +2213,12 @@ def _render_potato_inner(
     *,
     snap: tuple[int, int] | None,
 ) -> str:
-    targets = resolve_targets(c)
-    if not target and targets:
-        # The SPA prefers ?target=, then a localStorage choice, then
-        # /api/targets[0]. Potato Mode honours ?target= and otherwise takes
-        # the first target, so the two surfaces agree on the first target
-        # unless localStorage names a different one.
-        target = targets[0]["id"]
+    # The default target was resolved by render_potato, from the same read that
+    # produced *coverage*, so this is the memoized answer and not a second one.
+    targets = resolve_targets()
 
-    sections, data = _load_section_data(c, target)
-    if not data:
+    sections, data = _load_section_data(coverage)
+    if not sections:
         return (
             '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width, initial-scale=1">'
@@ -2239,7 +2237,7 @@ def _render_potato_inner(
 
     sec_data: dict[str, Any] = sections.get(section, {})
 
-    search_matched_fns = _search_functions(c, target, search_query)
+    search_matched_fns = _search_functions(coverage, search_query)
     filter_btn_data = _build_filter_data(target, section, active_filters, search_query)
     progress = _build_progress(section, sec_data, data, sections)
     section_tab_data = _section_tab_data(
@@ -2254,7 +2252,7 @@ def _render_potato_inner(
     functions_html = ""
     if view == "functions":
         functions_html = _render_function_list(
-            c,
+            coverage,
             target,
             section,
             search_query=search_query,
@@ -2263,7 +2261,7 @@ def _render_potato_inner(
         )
     else:
         grid_html, block_count, panel_html, sec_stats = _render_grid_view(
-            c,
+            coverage,
             target,
             section,
             sec_data=sec_data,
@@ -2421,50 +2419,43 @@ def _panel_empty_cell_bytes(
         ctx["inspector_html"] = inspector
 
 
-def _panel_fn_attach_verify(c: sqlite3.Cursor, target: str, fn_data: dict[str, Any]) -> None:
+def _panel_fn_attach_verify(coverage: CoverageSnapshot, fn_data: dict[str, Any]) -> None:
     """Attach the latest `rebrew verify -o` record (byte_delta / diff_lines /
     code-similarity) so the detail panel shows verification stats the same
     way the SPA's last_verify does.  Keyed on the function's resolved VA
     (works for both name-form and VA-form cell references).  Best-effort:
-    a function with no verify record just omits these rows."""
+    a function with no verify record just omits these rows.
+
+    A function with no verify record omits these rows; a document that could
+    not be read never reaches here — the whole render answers 503 instead.
+    """
     fn_va_resolved = fn_data.get("va")
     if fn_va_resolved is None:
         return
     try:
-        # Shared projection: the optional v6 columns are probed in ONE place,
-        # so the panel's column set cannot drift from the API's.
-        c.execute(
-            f"{_verify_one_select(c.connection)} FROM verify_results WHERE target=? AND va=?",
-            (target, int(fn_va_resolved)),
-        )
-        vr = c.fetchone()
+        wanted = int(fn_va_resolved)
     except (ValueError, TypeError):
-        # A VA in a form this projection cannot bind is a panel with no verify
-        # row, not a failed request.
+        # A VA in a form this lookup cannot bind is a panel with no verify row,
+        # not a failed request.
         return
-    except sqlite3.OperationalError as exc:
-        # A function with no verify record omits these rows; a database that
-        # could not be read must not render as though it had none.
-        if not _is_absent_object(exc):
-            raise
+    record = next((row for row in coverage.verify_results if row.get("va") == wanted), None)
+    if record is None:
         return
-    if not vr:
-        return
-    fn_data["last_verify_time"] = vr[0]
-    if vr[1] is not None:
-        fn_data["last_verify_delta"] = f"{vr[1]}B"
-    if vr[2] is not None:
-        fn_data["last_verify_diff_lines"] = vr[2]
-    if vr[3] is not None:
-        # verify_results.similarity is a 0-1 fraction (the column CHECKs the
-        # unit interval and rebrew's verify import divides its percent scale by
-        # 100), same unit as functions.similarity below.  Rendered unscaled it
-        # read 100x low: a 87.3% match showed as "0.9%".
-        fn_data["last_verify_similarity"] = f"{vr[3] * 100:.1f}%"
-    keys = vr.keys()
-    if "reg_delta" in keys and vr["reg_delta"] is not None:
-        fn_data["last_verify_reg_delta"] = vr["reg_delta"]
-    if "effective_match" in keys and vr["effective_match"]:
+    fields = verify_payload(record)
+    fn_data["last_verify_time"] = fields["verified_at"]
+    if fields["byte_delta"] is not None:
+        fn_data["last_verify_delta"] = f"{fields['byte_delta']}B"
+    if fields["diff_lines"] is not None:
+        fn_data["last_verify_diff_lines"] = fields["diff_lines"]
+    if fields["similarity"] is not None:
+        # verify_results.similarity is a 0-1 fraction (rebrew's verify import
+        # divides its percent scale by 100), same unit as functions.similarity
+        # below.  Rendered unscaled it read 100x low: a 87.3% match showed as
+        # "0.9%".
+        fn_data["last_verify_similarity"] = f"{fields['similarity'] * 100:.1f}%"
+    if fields["reg_delta"] is not None:
+        fn_data["last_verify_reg_delta"] = fields["reg_delta"]
+    if fields["effective_match"]:
         fn_data["last_verify_effective"] = True
 
 
@@ -2528,7 +2519,7 @@ def _panel_fn_source_text(data: dict[str, Any], target: str, fn_data: dict[str, 
 
 def _panel_function_detail(
     ctx: dict[str, Any],
-    c: sqlite3.Cursor,
+    coverage: CoverageSnapshot,
     target: str,
     section: str,
     data: dict[str, Any],
@@ -2542,13 +2533,13 @@ def _panel_function_detail(
     # Cell function entries are VA strings ("0x10001000"), matching the SPA's
     # /functions/<va> route; the shared lookup resolves them and falls back to
     # the name for legacy/name-form cells.
-    fn_row = _lookup_by_va_or_name(c, "functions", _fn_json_sql(c.connection), target, fn_name)
-    if not fn_row:
+    found_fn = lookup_function(coverage, fn_name)
+    if not isinstance(found_fn, Function):
         return False
 
-    fn_data = json.loads(fn_row[0])
+    fn_data = function_json(found_fn)
     ctx["fn_data"] = fn_data
-    _panel_fn_attach_verify(c, target, fn_data)
+    _panel_fn_attach_verify(coverage, fn_data)
 
     hex_fields = {"va", "fileOffset"}
     skip_fields = {"files", "sha256", "is_thunk", "is_export"}
@@ -2667,7 +2658,7 @@ def _parent_url(
 
 
 def _render_panel(
-    c: sqlite3.Cursor,
+    coverage: CoverageSnapshot,
     cells: list[dict[str, Any]],
     idx_str: str,
     target: str,
@@ -2751,16 +2742,14 @@ def _render_panel(
 
     fn_name = funcs[0]
     ctx["fn_name"] = fn_name
-    if not _panel_function_detail(ctx, c, target, section, data, fn_name):
+    if not _panel_function_detail(ctx, coverage, target, section, data, fn_name):
         # Same resolution order as the functions lookup above and as
         # GET /functions/<va>: cell entries may name a global by its VA string,
         # so VA candidates first, then the exact name for legacy name-form
         # cells.
-        gl_row = _lookup_by_va_or_name(
-            c, "globals", _global_json_sql(c.connection), target, fn_name
-        )
-        if gl_row:
-            gl_data = json.loads(gl_row[0])
+        found_gl = lookup_global(coverage, fn_name)
+        if found_gl is not None:
+            gl_data = global_json(found_gl)
             ctx["gl_data"] = gl_data
             ctx["gl_detail_rows"] = _detail_rows(gl_data, skip_fields={"files"}, hex_fields=set())
 

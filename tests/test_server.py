@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-import contextlib
 import gzip
 import json
 import logging
 import queue
 import shutil
-import sqlite3
 import subprocess
 import tempfile
 import threading
@@ -20,22 +18,68 @@ from typing import IO, Any, ClassVar
 import brotli
 import pytest
 import zstandard as zstd
+from coverage_fixture import TOML_VERSION, cell, write_coverage
+from rebrew.coverage_toml import CoverageSnapshot, CoverageTomlError, load_coverage
 
 from recoverage import clock
 from recoverage.server import (
     DLL_DATA,
     DLL_LOCK,
-    SCHEMA_TARGET,
     _best_encoding,
     _db_path,
-    _escape_like,
     _find_dll_path,
     _load_dll,
     _project_dir,
     clear_target_cache,
     compress_payload,
+    fold_match,
+    fold_text,
     origin_is_this_dashboard,
 )
+
+
+def _coverage_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Point the server at a test-local coverage directory and return it.
+
+    ``RECOVERAGE_DB`` names the DIRECTORY holding the ``coverage-*.toml``
+    documents now, and its parent is the root ``rebrew.coverage_toml`` resolves
+    that directory from — so the directory has to be spelled ``db`` for the two
+    resolutions to agree.  Every test that serves its own documents goes through
+    this, rather than setting the variable and hoping the two readers land in
+    the same place.
+    """
+    directory = tmp_path / "db"
+    monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+    return directory
+
+
+def _snapshot_for(sections: dict[str, dict[str, Any]], **kwargs: Any) -> CoverageSnapshot:
+    """One target's snapshot, built by the reader the server actually uses.
+
+    Written to a throwaway directory rather than hand-constructed: ``buckets``,
+    ``covered_bytes``, ``coverage_pct`` and ``function_stats`` are all derived,
+    and a snapshot assembled in the test would be a second formula to keep in
+    step with the reader's.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        write_coverage(root / "db", "T", sections, **kwargs)
+        return load_coverage(root, "T")
+
+
+def _cell_section(
+    states: Sequence[str], *, name: str = ".text", va: int = 0x1000
+) -> dict[str, Any]:
+    """A section table holding one one-byte cell per state, in order."""
+    return {
+        "va": va,
+        "size": len(states),
+        "fileOffset": 0,
+        "unitBytes": 1,
+        "columns": 1,
+        "cells": [cell(i, i + 1, state) for i, state in enumerate(states)],
+    }
+
 
 # ── Advisory-lock probe ────────────────────────────────────────────
 
@@ -235,9 +279,15 @@ class TestPathHelpers:
     def test_project_dir_is_absolute(self) -> None:
         assert _project_dir().is_absolute()
 
-    def test_db_path_ends_with_coverage_db(self) -> None:
-        assert _db_path().name == "coverage.db"
-        assert _db_path().parent.name == "db"
+    def test_db_path_is_the_coverage_directory(self) -> None:
+        """The storage layer names a DIRECTORY now: one document per target.
+
+        ``RECOVERAGE_DB`` used to name ``coverage.db`` itself; the name is kept
+        and names the directory that file used to live in, so every consumer
+        that wants "where does the coverage live" still has one answer.
+        """
+        assert _db_path().name == "db"
+        assert _db_path().parent == Path.cwd()
 
     def test_find_dll_path_none_for_unconfigured_target(self) -> None:
         """A target with no [targets.<tid>].binary must return None, not a
@@ -264,56 +314,85 @@ class TestPathHelpers:
 
 
 class TestDbEtag:
-    """DB-freshness ETags must key on the WAL-aware snapshot, not raw mtime.
+    """DB-freshness ETags must key on the WHOLE coverage directory.
 
-    A rebuild can commit only to coverage.db-wal (main file untouched);
-    raw-st_mtime ETags then keep answering 304 and browsers serve stale
-    /data, /asm, /bytes, and /potato responses forever.
+    A rebuild writes one ``coverage-<target>.toml`` per target, so a target
+    added, rewritten or removed anywhere in the directory has to move the change
+    token behind every ETag.  A token derived from one file (the raw ``st_mtime``
+    the WAL-aware ``coverage.db`` snapshot replaced) would keep answering 304
+    while another target's ``/data``, ``/asm``, ``/bytes`` and ``/potato``
+    responses were stale.
     """
 
-    def test_snapshot_tracks_wal_file(self, tmp_path: Path, monkeypatch: Any) -> None:
+    @staticmethod
+    def _doc(directory: Path, target: str) -> Path:
+        return write_coverage(directory, target, {".text": _cell_section(["exact"])})
+
+    def test_snapshot_tracks_a_rewritten_document(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         import recoverage.server as srv
 
-        db = tmp_path / "coverage.db"
-        db.write_bytes(b"x" * 64)
-        wal = tmp_path / "coverage.db-wal"
-        wal.write_bytes(b"")
-        monkeypatch.setattr(srv, "_db_path", lambda: db)
+        directory = _coverage_dir(tmp_path, monkeypatch)
+        first = self._doc(directory, "FAKEDLL")
+        self._doc(directory, "OTHER")
         before = srv._snapshot_db_mtime()
         assert before is not None
-        wal.write_bytes(b"y" * 64)
+
+        # Appending moves BOTH halves of the stat the token folds, so the test
+        # does not depend on the filesystem's mtime granularity.
+        first.write_text(first.read_text(encoding="utf-8") + "# rebuilt\n", encoding="utf-8")
         after = srv._snapshot_db_mtime()
         assert after is not None
         assert after != before
 
-    def test_etag_changes_on_wal_only_commit(self, tmp_path: Path, monkeypatch: Any) -> None:
-        """The /asm//bytes/potato ETag input must change when only -wal does."""
+    def test_snapshot_tracks_a_document_that_disappears(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A target deleted by a scoped rebuild must invalidate the token too."""
         import recoverage.server as srv
 
-        db = tmp_path / "coverage.db"
-        db.write_bytes(b"x" * 64)
-        wal = tmp_path / "coverage.db-wal"
-        wal.write_bytes(b"")
-        monkeypatch.setattr(srv, "_db_path", lambda: db)
+        directory = _coverage_dir(tmp_path, monkeypatch)
+        self._doc(directory, "FAKEDLL")
+        gone = self._doc(directory, "OTHER")
+        before = srv._snapshot_db_mtime()
+
+        gone.unlink()
+        assert srv._snapshot_db_mtime() != before
+
+    def test_etag_changes_on_a_document_rewrite(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The /asm//bytes/potato ETag input must move when a document does."""
+        import recoverage.server as srv
+
+        directory = _coverage_dir(tmp_path, monkeypatch)
+        first = self._doc(directory, "FAKEDLL")
         before = srv._etag_or_304(srv._snapshot_db_mtime(), "FAKEDLL", ".text", 16)
         assert before is not None
-        wal.write_bytes(b"y" * 64)
+
+        first.write_text(first.read_text(encoding="utf-8") + "# rebuilt\n", encoding="utf-8")
         after = srv._etag_or_304(srv._snapshot_db_mtime(), "FAKEDLL", ".text", 16)
         assert after is not None
         assert after != before
 
-    def test_etag_none_when_db_unreadable(self, tmp_path: Path, monkeypatch: Any) -> None:
+    def test_etag_none_when_the_directory_is_empty(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No document is the old missing-file answer: no token, so no ETag."""
         import recoverage.server as srv
 
-        monkeypatch.setattr(srv, "_db_path", lambda: tmp_path / "missing.db")
+        _coverage_dir(tmp_path, monkeypatch)
+        assert srv._snapshot_db_mtime() is None
         assert srv._etag_or_304(srv._snapshot_db_mtime(), "T") is None
 
-    def test_matching_if_none_match_raises_304(self, tmp_path: Path, monkeypatch: Any) -> None:
+    def test_matching_if_none_match_raises_304(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         import recoverage.server as srv
 
-        db = tmp_path / "coverage.db"
-        db.write_bytes(b"x" * 64)
-        monkeypatch.setattr(srv, "_db_path", lambda: db)
+        directory = _coverage_dir(tmp_path, monkeypatch)
+        self._doc(directory, "T")
         etag = srv._etag_or_304(srv._snapshot_db_mtime(), "T")
 
         class _Req:
@@ -342,13 +421,11 @@ class TestClearTargetCache:
         srv._TOML_CONFIG_CACHE = {"a": 1}
         srv._TOML_CACHE_MTIME = (1, 2)
         srv._RESOLVED_TARGETS_CACHE = ["T"]
-        srv._SCHEMA_VERSION_CACHE = 3
 
         clear_target_cache()
         assert srv._TOML_CONFIG_CACHE is None
         assert srv._TOML_CACHE_MTIME is None
         assert srv._RESOLVED_TARGETS_CACHE is None
-        assert srv._SCHEMA_VERSION_CACHE is None
 
         # Idempotent: a second clear over the emptied state changes nothing.
         clear_target_cache()
@@ -373,465 +450,306 @@ class TestClearTargetCache:
         assert not errors
 
 
-# ── LIKE escape consistency ────────────────────────────────────────
+# ── Search folding ─────────────────────────────────────────────────
 
 
-class TestLikeEscape:
-    """Verify that LIKE wildcard escaping is consistent."""
+class TestSearchFolding:
+    """A search term is TEXT, matched caselessly, never a pattern.
 
-    def test_percent_escaped(self) -> None:
-        assert _escape_like("100%") == "%100\\%%"
-
-    def test_underscore_escaped(self) -> None:
-        assert _escape_like("foo_bar") == "%foo\\_bar%"
-
-    def test_no_special_chars(self) -> None:
-        assert _escape_like("alloc") == "%alloc%"
-
-    def test_both_wildcards(self) -> None:
-        assert _escape_like("100%_test") == "%100\\%\\_test%"
-
-    # ── LIKE escape fuzz ──────────────────────────────────────────
-
-    def test_backslash_in_search(self) -> None:
-        """Backslash is the ESCAPE char in LIKE — must be escaped to match literally."""
-        result = _escape_like("c:\\path")
-        assert result == "%c:\\\\path%"
-
-    def test_consecutive_underscores(self) -> None:
-        result = _escape_like("__init__")
-        assert result == "%\\_\\_init\\_\\_%"
-
-    def test_all_percents(self) -> None:
-        result = _escape_like("%%%")
-        assert result == "%\\%\\%\\%%"
-
-    def test_empty_search(self) -> None:
-        result = _escape_like("")
-        assert result == "%%"
-
-    def test_unicode_search(self) -> None:
-        """Unicode chars are not LIKE specials, should pass through."""
-        result = _escape_like("日本語")
-        assert "日本語" in result
-
-    def test_sql_injection_in_search(self) -> None:
-        """SQL injection attempt must have its wildcards escaped."""
-        result = _escape_like("' OR 1=1; DROP TABLE--")
-        assert "' OR 1=1; DROP TABLE--" in result
-        # No unescaped % or _ injected
-        assert result == "%' OR 1=1; DROP TABLE--%"
-
-    def test_backslash_before_percent(self) -> None:
-        """Input '\\%' must produce escaped backslash + escaped percent, not a wildcard."""
-        result = _escape_like("\\%")
-        assert result == "%\\\\\\%%"
-
-    def test_backslash_before_underscore(self) -> None:
-        """Input '\\_' must produce escaped backslash + escaped underscore."""
-        result = _escape_like("\\_")
-        assert result == "%\\\\\\_%"
-
-
-def _create_v4_db(db: Path, functions_columns: str, *, version: str = "4") -> None:
-    """Create a minimal v4-shaped DB stamped with *version*.
-
-    *functions_columns* is the tail of the functions table's column list, so
-    tests can omit query-critical columns to exercise the column gate.
-    The column set is what v4 through v11 share; *version* only changes the
-    stamp. v11's ``cells`` table is ``WITHOUT ROWID`` and has no ``id``;
-    this helper keeps the older shape, which the same gate still accepts.
+    This is the guarantee the SQLite-era LIKE escaping protected, restated over
+    the in-memory folding that replaced it.  The escaping existed because the
+    term was interpolated into a LIKE pattern; the documents are read into
+    Python now, so there is no pattern to escape — and the property that has to
+    survive the move is the same one: `%`, `_` and `\\` are ordinary characters
+    a user may search for, `ß` matches `ss`, and the NFD spelling of a name
+    matches its NFC twin.
     """
-    conn = sqlite3.connect(db)
-    try:
-        c = conn.cursor()
-        c.executescript(
-            f"""
-            CREATE TABLE metadata (target TEXT, key TEXT, value TEXT);
-            CREATE TABLE sections (
-                target TEXT, name TEXT, va INTEGER, size INTEGER,
-                fileOffset INTEGER, unitBytes INTEGER, columns INTEGER
-            );
-            CREATE TABLE cells (
-                target TEXT, section_name TEXT, start INTEGER, end INTEGER,
-                span INTEGER, state TEXT, functions TEXT, label TEXT,
-                parent_function TEXT
-            );
-            CREATE TABLE functions (
-                target TEXT, va INTEGER, name TEXT, vaStart TEXT, size INTEGER,
-                fileOffset INTEGER, status TEXT, module TEXT, cflags TEXT,
-                symbol TEXT, markerType TEXT, ghidra_name TEXT, list_name TEXT,
-                is_thunk INTEGER, is_export INTEGER, sha256 TEXT, files TEXT,
-                detected_by TEXT, size_by_tool TEXT, {functions_columns}
-            );
-            CREATE TABLE globals (
-                target TEXT, va INTEGER, name TEXT, decl TEXT, files TEXT,
-                module TEXT, size INTEGER
-            );
-            CREATE TABLE verify_results (
-                target TEXT, va INTEGER, verified_at TEXT, byte_delta INTEGER,
-                diff_lines INTEGER, similarity REAL
-            );
-            CREATE TABLE history (
-                id INTEGER, target TEXT, va INTEGER, old_status TEXT,
-                new_status TEXT, changed_at TEXT
-            );
-            CREATE VIEW section_cell_stats AS
-                SELECT target, section_name, COUNT(*) AS total_cells,
-                0 AS exact_count, 0 AS reloc_count, 0 AS near_match_count,
-                0 AS stub_count, 0 AS padding_count, 0 AS data_count,
-                0 AS thunk_count, 0 AS none_count, 0 AS proven_count,
-                0 AS size_mismatch_count
-                FROM cells GROUP BY target, section_name;
-            """
-        )
-        c.execute(
-            "INSERT INTO metadata VALUES (?, 'db_version', ?)",
-            (SCHEMA_TARGET, f'"{version}"'),
-        )
-        conn.commit()
-    finally:
-        conn.close()
+
+    def test_match_is_case_insensitive(self) -> None:
+        assert fold_match("_func_a", "FUNC")
+
+    def test_percent_is_a_literal(self) -> None:
+        assert fold_match("100%", "%")
+        assert not fold_match("1000", "%")
+
+    def test_underscore_is_a_literal(self) -> None:
+        assert fold_match("foo_bar", "_")
+        assert not fold_match("fooxbar", "_")
+
+    def test_backslash_is_a_literal(self) -> None:
+        assert fold_match("c:\\path", "\\")
+        assert not fold_match("c:path", "\\")
+
+    def test_a_run_of_wildcards_is_matched_whole(self) -> None:
+        assert fold_match("%%%", "%%%")
+        assert not fold_match("---", "%%%")
+
+    def test_empty_term_matches_anything(self) -> None:
+        assert fold_match("alloc", "")
+        assert fold_match(None, "")
+
+    def test_absent_column_matches_no_nonempty_term(self) -> None:
+        """NULL folded as the empty string, which is what COALESCE gave it."""
+        assert not fold_match(None, "x")
+
+    def test_unicode_term_is_matched_literally(self) -> None:
+        assert fold_match("日本語", "日本語")
+        assert not fold_match("日本語", "語日")
+
+    def test_sql_injection_spelling_is_ordinary_text(self) -> None:
+        """Nothing is interpolated into SQL now; the spelling that used to need
+        escaping must still be searchable, and must not match anything else."""
+        injection = "' OR 1=1; DROP TABLE--"
+        assert fold_match(injection, injection)
+        assert not fold_match("harmless", injection)
+
+    def test_casefold_expansion_matches_both_spellings(self) -> None:
+        """ß casefolds to ss, so either spelling finds the one row."""
+        assert fold_match("straße", "STRASSE")
+        assert fold_match("STRASSE", "straße")
+
+    def test_nfd_spelling_matches_its_nfc_twin(self) -> None:
+        """A name written by a macOS-side tool is NFD; the stored one is NFC."""
+        import unicodedata
+
+        nfd = unicodedata.normalize("NFD", "café")
+        assert nfd != "café"
+        assert fold_match("café", nfd)
+        assert fold_match(nfd, "café")
+
+    def test_fold_text_passes_an_absent_column_through(self) -> None:
+        assert fold_text(None) is None
+        assert fold_text("_Func_A") == "_func_a"
 
 
-_FN_COLUMNS_FULL = (
-    "textOffset INTEGER, blocker TEXT, blockerDelta INTEGER, size_reason TEXT, similarity REAL"
-)
-_FN_COLUMNS_NO_TEXT_OFFSET = "blocker TEXT, blockerDelta INTEGER, size_reason TEXT, similarity REAL"
+class TestCoverageDocumentShapeGuard:
+    """A document that is not shaped like this schema must not serve.
+
+    The SQLite reader stamped a schema version into a ``metadata`` row and
+    probed the objects that version implied (``PRAGMA table_info``, the
+    ``section_cell_stats`` view, the v6 optional columns), reporting
+    ``<incomplete>`` so the endpoints answered the 503 contract instead of
+    failing at query time.  A document carries its own ``version`` and its
+    shape is checked as it is parsed: a foreign version, a non-table
+    ``sections`` and a ``cells`` value that is not an array of tables are all
+    the same answer — this target is not readable, and the caller gets
+    ``db_unavailable``.
+    """
+
+    def test_well_formed_document_reports_its_version(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import recoverage.server as srv
+
+        directory = _coverage_dir(tmp_path, monkeypatch)
+        write_coverage(directory, "GAME", {".text": _cell_section(["exact"])})
+        snap = srv.coverage_snapshots()["GAME"]
+        assert srv.coverage_version(snap) == str(TOML_VERSION)
+        assert srv.known_schema_versions() == [str(TOML_VERSION)]
+
+    @pytest.mark.parametrize(
+        ("label", "body"),
+        [
+            # A version this reader does not implement: reading it the way the
+            # vocabulary happens to line up is how a foreign layout is guessed at.
+            ("foreign_version", 'version = 42\ntarget = "GAME"\n'),
+            # `sections` written as a scalar: the table the whole payload hangs
+            # off is not a table.
+            ("sections_not_a_table", "sections = 4\n"),
+            # A cells row that is not a table: the row shape is not this
+            # schema's, so no field can be trusted.
+            (
+                "cells_row_not_a_table",
+                'version = 1\ntarget = "GAME"\n[sections.".text"]\nva = 0\ncells = [1, 2]\n',
+            ),
+            # `functions` as a table instead of the array of tables the writer
+            # emits.
+            ("functions_not_an_array", "functions = { va = 1 }\n"),
+        ],
+    )
+    def test_a_shape_violation_is_unreadable(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, label: str, body: str
+    ) -> None:
+        import recoverage.server as srv
+
+        directory = _coverage_dir(tmp_path, monkeypatch)
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / f"coverage-{label}.toml").write_text(body, encoding="utf-8")
+
+        with pytest.raises(CoverageTomlError):
+            srv.coverage_snapshots()
 
 
-class TestSchemaShapeGuard:
-    """A DB stamped with a known version but missing required schema objects
-    must report <incomplete> (endpoints then return the 503 contract)."""
+class TestCoverageVersionGate:
+    """The version this server writes and reads is the one it advertises."""
 
-    def test_missing_object_reports_incomplete(self, tmp_path: Any) -> None:
-        import sqlite3
+    def test_fixture_version_is_what_the_reader_accepts(self) -> None:
+        """The fixture's TOML_VERSION is the format both sides are written to.
 
-        from recoverage import server as srv
-
-        db = tmp_path / "coverage.db"
-        conn = sqlite3.connect(db)
-        c = conn.cursor()
-        c.execute("CREATE TABLE metadata (target TEXT, key TEXT, value TEXT)")
-        c.execute(
-            "INSERT INTO metadata VALUES (?, 'db_version', '\"4\"')",
-            (SCHEMA_TARGET,),
-        )
-        c.execute("CREATE TABLE sections (id INTEGER)")
-        # Deliberately omit history + section_cell_stats view.
-        conn.commit()
-        conn.close()
-
-        with contextlib.closing(sqlite3.connect(db)) as conn2:
-            assert srv._check_schema_version_uncached(conn2) == "<incomplete>"
-
-    def test_complete_db_reports_version(self, tmp_path: Any) -> None:
-        import sqlite3
-
-        from recoverage import server as srv
-
-        db = tmp_path / "coverage.db"
-        # A complete v4 DB: the shape guard now verifies the query-critical
-        # columns, not just table names.
-        _create_v4_db(db, _FN_COLUMNS_FULL)
-
-        with contextlib.closing(sqlite3.connect(db)) as conn2:
-            assert srv._check_schema_version_uncached(conn2) == "4"
-
-
-class TestSchemaColumnGate:
-    def test_missing_column_reports_incomplete(self, tmp_path: Any) -> None:
-        """A complete v4 object set with ONE required column missing must
-        report <incomplete> — the name-only gate would pass it and the
-        dashboard would 500 at query time."""
-        import sqlite3
-
-        from recoverage import server as srv
-
-        db = tmp_path / "coverage.db"
-        _create_v4_db(db, _FN_COLUMNS_NO_TEXT_OFFSET)
-        # functions intentionally lacks the query-critical textOffset column
-        # (see _FN_COLUMNS_NO_TEXT_OFFSET) — the column gate must reject it
-        # even though every object name is present.
-
-        with contextlib.closing(sqlite3.connect(db)) as conn2:
-            assert srv._check_schema_version_uncached(conn2) == "<incomplete>"
-
-
-class TestCurrentRebrewSchema:
-    """The installed rebrew's stamp must be a version this server accepts."""
-
-    def test_stamp_is_known_and_column_gated(self, tmp_path: Any) -> None:
-        import sqlite3
-
-        from rebrew.build_db import _CURRENT_DB_VERSION
-
-        from recoverage import server as srv
-
-        assert _CURRENT_DB_VERSION in srv.KNOWN_SCHEMA_VERSIONS
-        db = tmp_path / "coverage.db"
-        _create_v4_db(db, _FN_COLUMNS_FULL, version=_CURRENT_DB_VERSION)
-        with contextlib.closing(sqlite3.connect(db)) as conn:
-            assert srv._check_schema_version_uncached(conn) == _CURRENT_DB_VERSION
-
-        incomplete = tmp_path / "incomplete.db"
-        _create_v4_db(incomplete, _FN_COLUMNS_NO_TEXT_OFFSET, version=_CURRENT_DB_VERSION)
-        with contextlib.closing(sqlite3.connect(incomplete)) as conn:
-            assert srv._check_schema_version_uncached(conn) == "<incomplete>"
-
-    def test_older_stamps_stay_servable(self, tmp_path: Any) -> None:
-        """Stamps the column gate already understood keep reporting themselves."""
-        import sqlite3
-
-        from recoverage import server as srv
-
-        for stamp in ("4", "10"):
-            db = tmp_path / f"v{stamp}.db"
-            _create_v4_db(db, _FN_COLUMNS_FULL, version=stamp)
-            with contextlib.closing(sqlite3.connect(db)) as conn:
-                assert srv._check_schema_version_uncached(conn) == stamp
-
-    def test_current_cells_shape_is_readable(self, tmp_path: Any) -> None:
-        """A WITHOUT ROWID cells table with no id serves its stored rows.
-
-        The installed producer's cells table has no surrogate ``id`` and no
-        ``rowid``. Selecting either fails the query, so a shipped cell read
-        and a shipped section-stat read that return the stored cell are the
-        proof those statements do not name them.
+        ``known_schema`` is served to the SPA so it can tell "no section rows
+        yet" from "this build does not understand the file"; a version in that
+        list that no reader accepts would make that message wrong.
         """
-        import sqlite3
+        import rebrew.coverage_toml as cov
 
-        from rebrew.build_db import _CURRENT_DB_VERSION
+        assert cov._TOML_VERSION == TOML_VERSION
 
-        from recoverage import server as srv
+    def test_known_schema_names_only_readable_versions(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A version the reader refuses never reaches the served list.
 
-        db = tmp_path / "coverage.db"
-        _create_current_shape_db(db, version=_CURRENT_DB_VERSION)
-        conn = sqlite3.connect(db)
-        conn.row_factory = sqlite3.Row
-        try:
-            ddl = conn.execute("SELECT sql FROM sqlite_master WHERE name = 'cells'").fetchone()
-            assert ddl is not None
-            assert "WITHOUT ROWID" in ddl[0]
-            columns = {row[1] for row in conn.execute("PRAGMA table_info(cells)")}
-            assert "id" not in columns
-            assert srv._check_schema_version_uncached(conn) == _CURRENT_DB_VERSION
+        The SQLite reader accepted a RANGE of stamps and reported which one it
+        found; a document carries exactly one version and either parses or does
+        not, so the list has to be read off the snapshots that were built rather
+        than off a constant.  Naming a version nothing serves is what makes the
+        SPA's "this build does not understand the file" message lie.
+        """
+        import recoverage.server as srv
 
-            cursor = conn.cursor()
-            cells = srv._cells_json_rows(cursor, "GAME", expected_sections={".text"})
-            assert [name for name, _ in cells] == [".text"]
-            stored = json.loads(cells[0][1])
-            assert stored == [{"start": 0, "end": 16, "span": 16, "state": "exact"}]
-            assert "id" not in stored[0]
+        directory = _coverage_dir(tmp_path, monkeypatch)
+        write_coverage(directory, "GAME", {".text": _cell_section(["exact"])})
+        (directory / "coverage-FOREIGN.toml").write_text(
+            'version = 42\ntarget = "FOREIGN"\n', encoding="utf-8"
+        )
 
-            buckets = list(srv.section_bucket_rows(cursor, "GAME", expected={".text"}))
-            assert len(buckets) == 1
-            assert buckets[0]["section_name"] == ".text"
-            assert srv._cell_bucket_row(buckets[0])["exact"] == 1
-            assert srv._cell_bucket_row(buckets[0])["total_cells"] == 1
-        finally:
-            conn.close()
+        assert srv.known_schema_versions() == [str(TOML_VERSION)]
+        assert srv.db_target_ids() == ["GAME"]
+
+    def test_the_served_cell_payload_has_no_surrogate_id(self) -> None:
+        """The stored cell is served as the file holds it and nothing more.
+
+        ``build_db``'s ``cells`` table had a surrogate ``id`` (dropped again in
+        the current producer); a client never saw it and must not start.  The
+        keys are the whole contract — the document's own columns, minus the two
+        optional ones the payload omits when empty.
+        """
+        import recoverage.server as srv
+
+        snap = _snapshot_for(
+            {".text": _cell_section(["exact"])},
+            functions=[{"va": 0x1000, "name": "f", "status": "EXACT", "size": 1}],
+        )
+        stored = json.loads(srv.cells_json(snap.sections[".text"].cells))
+        assert stored == [{"start": 0, "end": 1, "span": 1, "state": "exact"}]
+        assert "id" not in stored[0]
+        assert srv._bucket_row(snap.sections[".text"])["exact"] == 1
 
 
-def _create_current_shape_db(db: Path, *, version: str) -> None:
-    """Complete known-schema DB whose ``cells`` table matches the current producer.
+class TestCoverageReadsAreSideEffectFree:
+    """Reading coverage must not write to the directory the operator owns.
 
-    ``WITHOUT ROWID``, primary key ``(target, section_name, start)``, no
-    surrogate ``id``. One ``.text`` cell is stored. ``section_cell_stats``
-    is present and empty, so the section-stat read falls through to the live
-    aggregate over ``cells`` rather than a stub view.
+    ``_open_db`` opened ``coverage.db`` read-only (``immutable=1``) and took a
+    shared advisory lock, so a running dashboard could not corrupt the file a
+    build was replacing and left a stray ``.lock`` behind.  The documents need
+    neither — the reader only stats and reads them — and that is the property
+    worth pinning on this side: a full read path leaves the directory
+    byte-identical, so the dashboard can run beside the builder that owns it.
     """
-    conn = sqlite3.connect(db)
-    try:
-        conn.executescript(
-            f"""
-            CREATE TABLE metadata (target TEXT, key TEXT, value TEXT);
-            CREATE TABLE sections (
-                target TEXT, name TEXT, va INTEGER, size INTEGER,
-                fileOffset INTEGER, unitBytes INTEGER, columns INTEGER
-            );
-            CREATE TABLE cells (
-                target TEXT NOT NULL,
-                section_name TEXT NOT NULL,
-                start INTEGER NOT NULL,
-                end INTEGER NOT NULL,
-                span INTEGER NOT NULL,
-                state TEXT NOT NULL,
-                functions TEXT NOT NULL,
-                label TEXT,
-                parent_function TEXT,
-                PRIMARY KEY (target, section_name, start)
-            ) WITHOUT ROWID;
-            CREATE TABLE functions (
-                target TEXT, va INTEGER, name TEXT, vaStart TEXT, size INTEGER,
-                fileOffset INTEGER, status TEXT, module TEXT, cflags TEXT,
-                symbol TEXT, markerType TEXT, ghidra_name TEXT, list_name TEXT,
-                is_thunk INTEGER, is_export INTEGER, sha256 TEXT, files TEXT,
-                detected_by TEXT, size_by_tool TEXT, {_FN_COLUMNS_FULL}
-            );
-            CREATE TABLE globals (
-                target TEXT, va INTEGER, name TEXT, decl TEXT, files TEXT,
-                module TEXT, size INTEGER
-            );
-            CREATE TABLE verify_results (
-                target TEXT, va INTEGER, verified_at TEXT, byte_delta INTEGER,
-                diff_lines INTEGER, similarity REAL
-            );
-            CREATE TABLE history (
-                id INTEGER, target TEXT, va INTEGER, old_status TEXT,
-                new_status TEXT, changed_at TEXT
-            );
-            CREATE TABLE section_cell_stats (
-                target TEXT, section_name TEXT, total_cells INTEGER,
-                exact_count INTEGER, reloc_count INTEGER, near_match_count INTEGER,
-                stub_count INTEGER, padding_count INTEGER, data_count INTEGER,
-                thunk_count INTEGER, none_count INTEGER, proven_count INTEGER,
-                size_mismatch_count INTEGER
-            );
-            """
-        )
-        conn.execute(
-            "INSERT INTO metadata VALUES (?, 'db_version', ?)",
-            (SCHEMA_TARGET, f'"{version}"'),
-        )
-        conn.execute(
-            "INSERT INTO metadata VALUES ('GAME', 'db_version', ?)",
-            (f'"{version}"',),
-        )
-        conn.execute("INSERT INTO sections VALUES ('GAME', '.text', 268435456, 16, 512, 1, 16)")
-        conn.execute(
-            "INSERT INTO cells VALUES ('GAME', '.text', 0, 16, 16, 'exact', '[]', NULL, NULL)"
-        )
-        conn.commit()
-    finally:
-        conn.close()
+
+    def test_a_read_leaves_the_directory_untouched(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import recoverage.server as srv
+
+        directory = _coverage_dir(tmp_path, monkeypatch)
+        write_coverage(directory, "GAME", {".text": _cell_section(["exact"])})
+
+        def listing() -> dict[str, tuple[int, bytes]]:
+            return {
+                p.name: (p.stat().st_mtime_ns, p.read_bytes()) for p in sorted(directory.iterdir())
+            }
+
+        before = listing()
+        srv.coverage_snapshots()
+        srv.resolve_targets()
+        srv._bucket_row(srv.coverage_for("GAME").sections[".text"])
+        assert listing() == before
+
+    def test_the_lock_sidecar_is_not_part_of_the_format(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A ``coverage.db.lock`` left over from the SQLite era is ignored.
+
+        The reader globs ``coverage-*.toml``, so a stale sidecar is neither read
+        nor mistaken for a target, and nothing recreates one.
+        """
+        import recoverage.server as srv
+
+        directory = _coverage_dir(tmp_path, monkeypatch)
+        write_coverage(directory, "GAME", {".text": _cell_section(["exact"])})
+        (directory / "coverage.db.lock").write_bytes(b"")
+
+        assert srv.db_target_ids() == ["GAME"]
+        assert not (directory / "coverage-GAME.toml.lock").exists()
 
 
-class TestReadOnlyOpen:
-    def test_open_db_rejects_writes(self, tmp_path: Path) -> None:
-        import sqlite3
+class TestSnapshotIsTheReadPin:
+    """A multi-statement read must see ONE build.
 
-        from recoverage import server as srv
-
-        db = tmp_path / "coverage.db"
-        sqlite3.connect(db).close()
-        conn = srv._open_db(db)
-        try:
-            with pytest.raises(sqlite3.OperationalError):
-                conn.execute("CREATE TABLE blocked (id INTEGER)")
-        finally:
-            conn.close()
-
-    def test_shared_lock_drops_when_the_connection_is_collected(self, tmp_path: Path) -> None:
-        import gc
-        import sqlite3
-
-        from recoverage import server as srv
-
-        db = tmp_path / "coverage.db"
-        sqlite3.connect(db).close()
-        conn = srv._open_db(db)
-        lock_path = db.with_name(db.name + ".lock")
-        # Binary handles: msvcrt.locking needs a fileno it can lock a byte
-        # range on, and fcntl behaves the same on one.
-        held = lock_path.open("ab")
-        try:
-            with pytest.raises(BlockingIOError):
-                _probe_free_lock(held)
-        finally:
-            held.close()
-
-        conn.close()
-        del conn
-        gc.collect()
-
-        held = lock_path.open("ab")
-        try:
-            _probe_free_lock(held)
-        finally:
-            held.close()
-
-
-class TestReadSnapshot:
-    """A multi-statement read must see ONE database version.
-
-    Python's sqlite3 begins a deferred transaction per statement, so a
-    rebuild committing between two reads of the same table would answer the
-    second from the new build. `read_snapshot` pins the snapshot for the
-    block instead.
+    Python's sqlite3 opened a deferred transaction per statement, so a rebuild
+    committing between two reads of the same table answered the second from the
+    new build; ``read_snapshot`` pinned the version for the whole block instead.
+    A snapshot is frozen and memoized on the directory's own stat, so the same
+    consistency is held by the type and the reader: two reads inside one
+    response get THE SAME snapshot, and a rebuild that lands between them
+    cannot be observed by the first one.
     """
 
     @staticmethod
-    def _wal_db(tmp_path: Path) -> Path:
-        import sqlite3
+    def _write(directory: Path, size: int) -> None:
+        write_coverage(
+            directory,
+            "GAME",
+            {
+                ".text": {
+                    "va": 0x1000,
+                    "size": size,
+                    "fileOffset": 0x200,
+                    "unitBytes": 16,
+                    "columns": 8,
+                    "cells": [cell(0, 16, "exact")],
+                }
+            },
+        )
 
-        db = tmp_path / "coverage.db"
-        conn = sqlite3.connect(db)
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("CREATE TABLE sections (target TEXT, name TEXT, size INTEGER)")
-        conn.execute("INSERT INTO sections VALUES ('GAME', '.text', 16)")
-        conn.commit()
-        conn.close()
-        return db
+    def test_a_rebuild_mid_read_is_invisible(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import recoverage.server as srv
 
-    def test_rebuild_mid_block_is_invisible(self, tmp_path: Path) -> None:
-        import sqlite3
+        directory = _coverage_dir(tmp_path, monkeypatch)
+        self._write(directory, 16)
+        pinned = srv.coverage_snapshots()["GAME"]
+        before = pinned.sections[".text"].size
 
-        from recoverage import server as srv
-
-        db = self._wal_db(tmp_path)
-        conn = srv._open_db(db)
-        try:
-            c = conn.cursor()
-            with srv.read_snapshot(c):
-                c.execute("SELECT size FROM sections WHERE target = 'GAME'")
-                before = c.fetchone()[0]
-
-                writer = sqlite3.connect(db)
-                try:
-                    writer.execute("UPDATE sections SET size = 99")
-                    writer.commit()
-                finally:
-                    writer.close()
-
-                c.execute("SELECT size FROM sections WHERE target = 'GAME'")
-                during = c.fetchone()[0]
-            # Outside the block the next statement sees the committed rebuild.
-            c.execute("SELECT size FROM sections WHERE target = 'GAME'")
-            after = c.fetchone()[0]
-        finally:
-            conn.close()
+        # The rebuild lands between the two reads.
+        self._write(directory, 99)
+        during = pinned.sections[".text"].size
+        # Outside the pin the next read sees the committed rebuild.
+        after = srv.coverage_snapshots()["GAME"].sections[".text"].size
 
         assert before == during == 16
         assert after == 99
 
-    def test_block_closes_the_transaction(self, tmp_path: Path) -> None:
-        from recoverage import server as srv
+    def test_an_unchanged_directory_returns_the_same_snapshot(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The identity is the change token every DB-derived memo keys on."""
+        import recoverage.server as srv
 
-        conn = srv._open_db(self._wal_db(tmp_path))
-        try:
-            c = conn.cursor()
-            with srv.read_snapshot(c):
-                c.execute("SELECT 1 FROM sections")
-            assert not conn.in_transaction
-        finally:
-            conn.close()
+        directory = _coverage_dir(tmp_path, monkeypatch)
+        self._write(directory, 16)
+        assert srv.coverage_snapshots()["GAME"] is srv.coverage_snapshots()["GAME"]
 
-    def test_nested_inside_an_open_transaction_is_a_noop(self, tmp_path: Path) -> None:
-        """The CLI reuses one connection across commands; SQLite has no
-        nested BEGIN, and the outer transaction already pins the snapshot."""
-        from recoverage import server as srv
-
-        conn = srv._open_db(self._wal_db(tmp_path))
-        try:
-            c = conn.cursor()
-            conn.execute("BEGIN")
-            with srv.read_snapshot(c):
-                c.execute("SELECT 1 FROM sections")
-            assert conn.in_transaction, "read_snapshot closed the caller's transaction"
-            conn.rollback()
-        finally:
-            conn.close()
+    def test_a_snapshot_cannot_be_mutated(self) -> None:
+        """The freeze is what replaces the read transaction: a caller cannot
+        publish half of one build alongside half of the next."""
+        snap = _snapshot_for({".text": _cell_section(["exact"])})
+        with pytest.raises(AttributeError):
+            snap.target = "OTHER"  # type: ignore[misc]
+        with pytest.raises(TypeError):
+            snap.sections[".text"] = None  # type: ignore[index]
 
 
 class TestDeepLinking:
@@ -1640,19 +1558,20 @@ class TestGetDisassemblyNoNegativeCache:
 
 
 class TestBucketReconciliation:
-    """total_cells must equal the sum of the counted buckets on BOTH paths.
+    """total_cells must equal the sum of the counted buckets.
 
-    rebrew's build_db writes an `other_count` catch-all into
+    rebrew's build_db wrote an `other_count` catch-all into
     section_cell_stats for exactly this reason: without it the residual states
     (compile_error, extract_error, invalid_va, missing_file, missing_size,
-    skip, unknown, drift, unchecked) vanish and the buckets silently
-    undercount.  The live-query fallback carried no such catch-all, so the
-    same database answered two different totals depending on whether the
-    materialized table was present.
+    skip, unknown, and the data drift/unchecked verdicts) vanished and the
+    buckets silently undercounted.  The document format stores facts, not
+    counts, so the catch-all is now the `else` arm of the one fold that turns a
+    section's cells into buckets — and that fold is what every reader goes
+    through.
     """
 
-    # Every short key _cell_bucket_row emits except total_cells, which is the
-    # sum they must reconcile with.
+    # Every short key _bucket_row emits except total_cells, which is the sum
+    # they must reconcile with.
     BUCKET_KEYS = (
         "exact",
         "reloc",
@@ -1689,237 +1608,103 @@ class TestBucketReconciliation:
         assert sum(sec[k] for k in TestBucketReconciliation.BUCKET_KEYS) == sec["total_cells"]
 
     @classmethod
-    def _cells_db(cls, states: Sequence[str] | None = None) -> sqlite3.Connection:
-        conn = sqlite3.connect(":memory:")
-        conn.row_factory = sqlite3.Row
-        c = conn.cursor()
-        c.execute(
-            "CREATE TABLE cells (target TEXT, section_name TEXT, start INT,"
-            " end INT, span INT, state TEXT)"
-        )
-        c.execute("CREATE TABLE metadata (target TEXT, key TEXT, value TEXT)")
-        c.execute("CREATE TABLE sections (target TEXT, name TEXT, va INT, size INT)")
-        c.execute("CREATE TABLE functions (target TEXT, va INT, status TEXT, markerType TEXT)")
-        c.executemany(
-            "INSERT INTO cells (target, section_name, start, end, span, state)"
-            " VALUES ('T', '.text', ?, ?, 1, ?)",
-            [(i, i + 1, s) for i, s in enumerate(states or cls.CELL_STATES)],
-        )
-        return conn
+    def _snap(cls, states: Sequence[str] | None = None) -> CoverageSnapshot:
+        return _snapshot_for({".text": _cell_section(states or cls.CELL_STATES)})
 
-    def test_fallback_path_reconciles(self) -> None:
+    def test_residual_states_land_in_other(self) -> None:
         import recoverage.server as srv
 
-        conn = self._cells_db()
-        try:
-            c = conn.cursor()
-            # No section_cell_stats: the live-query fallback answers.
-            stats = srv._section_stats(c, "T")
-        finally:
-            conn.close()
-        sec = stats["sections"][".text"]
-        assert sec["other"] == 3
-        self._reconciles(sec)
+        # 'near_matching' is the other spelling of 'near_match'; 'verified'
+        # folds into exact.  Neither may reach `other`.
+        snap = self._snap((*self.CELL_STATES, "near_matching", "verified", "drift"))
+        section = srv._section_stats(snap)["sections"][".text"]
+        assert section["other"] == 4
+        assert section["near_match"] == 2
+        assert section["exact"] == 2
+        self._reconciles(section)
 
-    def test_materialized_path_reconciles(self) -> None:
-        import recoverage.server as srv
+    def test_the_bucket_row_always_emits_other(self) -> None:
+        """A section with nothing residual keeps the key, at 0.
 
-        conn = self._cells_db()
-        try:
-            c = conn.cursor()
-            c.execute(
-                "CREATE TABLE section_cell_stats (target TEXT, section_name TEXT,"
-                " total_cells INT, exact_count INT, reloc_count INT,"
-                " near_match_count INT, stub_count INT, padding_count INT,"
-                " data_count INT, thunk_count INT, none_count INT,"
-                " proven_count INT, size_mismatch_count INT, other_count INT)"
-            )
-            # rebrew's definition: 'verified' folds into exact_count.
-            c.execute(
-                "INSERT INTO section_cell_stats SELECT target, section_name,"
-                " COUNT(*),"
-                " SUM(state IN ('exact','verified')), SUM(state='reloc'),"
-                " SUM(state IN ('near_match','near_matching')), SUM(state='stub'),"
-                " SUM(state='padding'), SUM(state='data'), SUM(state='thunk'),"
-                " SUM(state='none'), SUM(state='proven'),"
-                " SUM(state='size_mismatch'),"
-                " SUM(state NOT IN ('exact','verified','reloc','near_match',"
-                " 'near_matching','stub','padding','data','thunk','none','proven',"
-                " 'size_mismatch'))"
-                " FROM cells GROUP BY target, section_name"
-            )
-            stats = srv._section_stats(c, "T")
-        finally:
-            conn.close()
-        sec = stats["sections"][".text"]
-        assert sec["other"] == 3
-        self._reconciles(sec)
-
-    def test_absent_other_count_column_reports_zero(self) -> None:
-        """A pre-catch-all section_cell_stats keeps the key, at 0."""
-        import recoverage.server as srv
-
-        conn = self._cells_db()
-        try:
-            c = conn.cursor()
-            c.execute(
-                "CREATE TABLE section_cell_stats (target TEXT, section_name TEXT,"
-                " total_cells INT, exact_count INT, reloc_count INT,"
-                " near_match_count INT, stub_count INT, padding_count INT,"
-                " data_count INT, thunk_count INT, none_count INT,"
-                " proven_count INT, size_mismatch_count INT)"
-            )
-            c.execute(
-                "INSERT INTO section_cell_stats SELECT target, section_name,"
-                " COUNT(*), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 FROM cells"
-                " GROUP BY target, section_name"
-            )
-            stats = srv._section_stats(c, "T")
-        finally:
-            conn.close()
-        assert stats["sections"][".text"]["other"] == 0
-
-    def test_verified_cells_count_as_exact_on_both_paths(self) -> None:
-        """'verified' is a match, and the two sources must agree on that.
-
-        build_db folds VERIFIED into exact_count, the grid palette paints it in
-        the exact slot, and covered_bytes already counts its bytes.  The
-        materialized path used to overwrite that with a cells-side 'exact'-only
-        count, which dropped every VERIFIED cell from every bucket: the served
-        total no longer reconciled with the bucket sum, /stats disagreed with
-        /data and Potato Mode over the same database, and the live fallback
-        disagreed with the materialized table.
+        The served shape is fixed: a client reading ``other`` off a payload must
+        not have to guess whether the producer omitted it.
         """
         import recoverage.server as srv
 
-        states = ["exact", "verified", "verified", "none", "skip"]
+        snap = self._snap(("exact", "none"))
+        assert srv._bucket_row(snap.sections[".text"])["other"] == 0
 
-        fallback_db = self._cells_db(states)
-        try:
-            fallback = srv._section_stats(fallback_db.cursor(), "T")["sections"][".text"]
-        finally:
-            fallback_db.close()
+    def test_section_stats_reuses_the_bucket_row(self) -> None:
+        """One fold: the section entry is the bucket row plus byte sums."""
+        import recoverage.server as srv
 
-        materialized_db = self._cells_db(states)
-        try:
-            c = materialized_db.cursor()
-            c.execute(
-                "CREATE TABLE section_cell_stats (target TEXT, section_name TEXT,"
-                " total_cells INT, exact_count INT, reloc_count INT,"
-                " near_match_count INT, stub_count INT, padding_count INT,"
-                " data_count INT, thunk_count INT, none_count INT,"
-                " proven_count INT, size_mismatch_count INT, other_count INT)"
-            )
-            c.execute(
-                "INSERT INTO section_cell_stats SELECT target, section_name,"
-                " COUNT(*),"
-                " SUM(state IN ('exact','verified')), SUM(state='reloc'),"
-                " SUM(state IN ('near_match','near_matching')), SUM(state='stub'),"
-                " SUM(state='padding'), SUM(state='data'), SUM(state='thunk'),"
-                " SUM(state='none'), SUM(state='proven'),"
-                " SUM(state='size_mismatch'),"
-                " SUM(state NOT IN ('exact','verified','reloc','near_match',"
-                " 'near_matching','stub','padding','data','thunk','none','proven',"
-                " 'size_mismatch'))"
-                " FROM cells GROUP BY target, section_name"
-            )
-            materialized = srv._section_stats(c, "T")["sections"][".text"]
-        finally:
-            materialized_db.close()
+        snap = self._snap()
+        section = snap.sections[".text"]
+        buckets = srv._bucket_row(section)
+        served = srv._section_stats(snap)["sections"][".text"]
+        assert {k: served[k] for k in (*self.BUCKET_KEYS, "total_cells")} == buckets
+        self._reconciles(served)
 
-        assert fallback["exact"] == 3
-        assert fallback["other"] == 1
-        self._reconciles(fallback)
-        self._reconciles(materialized)
-        assert materialized == fallback
+    def test_verified_cells_count_as_exact(self) -> None:
+        """'verified' is a match, and every surface must agree on that.
+
+        build_db folded VERIFIED into exact_count, the grid palette paints it in
+        the exact slot, and covered_bytes already counts its bytes.  A
+        cells-side 'exact'-only count would drop every VERIFIED cell from every
+        bucket: the served total would no longer reconcile with the bucket sum,
+        /stats would disagree with /data and Potato Mode over the same
+        documents, and the header would understate coverage.
+        """
+        import recoverage.server as srv
+
+        snap = self._snap(("exact", "verified", "verified", "none", "skip"))
+        section = srv._section_stats(snap)["sections"][".text"]
+        assert section["exact"] == 3
+        assert section["other"] == 1
+        self._reconciles(section)
         # A VERIFIED byte is covered, so it is a match: matched counts it too.
-        assert materialized["matched"] == 3
+        assert section["matched"] == 3
+        assert section["coverage_pct"] == 80.0
 
 
-class TestPartialDerivedTables:
-    """A PARTIAL derived table must not drop sections it does not cover.
+class TestEveryDeclaredSectionIsServed:
+    """A section the directory declares must never be dropped from the response.
 
-    rebrew's `section_cell_stats` and `section_cells_json` are caches over
-    `cells`.  Both are read in preference to a live aggregation, and a presence
-    check alone does not prove they hold every section: a scoped rebuild, or a
-    hand-made database, can carry a current-codec table that covers only some of
-    the sections `cells` has.  The omitted section then vanished from the
-    response: no stats at all, and (for the cell JSON) an empty grid that reads
-    as a whole section of `none` bytes, which is a wrong answer rather than a
-    slow one.
+    rebrew's `section_cell_stats` and `section_cells_json` were materialized
+    caches over `cells`, read in preference to a live aggregation; a cache that
+    covered only SOME of a target's sections dropped the rest — no stats at all,
+    and an empty grid that reads as a whole section of `none` bytes, which is a
+    wrong answer rather than a slow one.  The document format carries no cache,
+    so that particular failure cannot be produced any more; what is left to pin
+    is the property the gap fills protected, which is stronger here: every
+    section of the file is served, and each one's numbers come from ITS OWN
+    cells and nobody else's.
     """
 
     SECTIONS = (".text", ".data")
     #: .text gets two exact cells, .data one exact and one none, so the two
     #: sections' numbers differ and a dropped section cannot pass unnoticed.
-    CELLS = (
-        (".text", 0, 1, "exact"),
-        (".text", 1, 2, "exact"),
-        (".data", 0, 1, "exact"),
-        (".data", 1, 2, "none"),
-    )
+    CELL_STATES: ClassVar[dict[str, tuple[str, ...]]] = {
+        ".text": ("exact", "exact"),
+        ".data": ("exact", "none"),
+    }
 
     @classmethod
-    def _db(cls) -> sqlite3.Connection:
-        conn = sqlite3.connect(":memory:")
-        conn.row_factory = sqlite3.Row
-        c = conn.cursor()
-        # The column set CELLS_JSON_OBJECT_SQL names, so the live fallback in
-        # the cell-JSON tests below builds the same shape the cache stores.
-        c.execute(
-            "CREATE TABLE cells (target TEXT, section_name TEXT, start INT,"
-            " end INT, span INT, state TEXT, functions TEXT, label TEXT,"
-            " parent_function TEXT)"
-        )
-        c.execute("CREATE TABLE metadata (target TEXT, key TEXT, value TEXT)")
-        c.execute("CREATE TABLE sections (target TEXT, name TEXT, va INT, size INT)")
-        c.execute("CREATE TABLE functions (target TEXT, va INT, status TEXT, markerType TEXT)")
-        c.executemany(
-            "INSERT INTO sections (target, name, va, size) VALUES ('T', ?, 0x1000, 2)",
-            [(name,) for name in cls.SECTIONS],
-        )
-        c.executemany(
-            "INSERT INTO cells (target, section_name, start, end, span, state)"
-            " VALUES ('T', ?, ?, ?, 1, ?)",
-            cls.CELLS,
-        )
-        return conn
-
-    @classmethod
-    def _partial_section_cell_stats(cls, c: sqlite3.Cursor, only: str) -> None:
-        """A materialized section_cell_stats holding *only* section *only*."""
-        c.execute(
-            "CREATE TABLE section_cell_stats (target TEXT, section_name TEXT,"
-            " total_cells INT, exact_count INT, reloc_count INT,"
-            " near_match_count INT, stub_count INT, padding_count INT,"
-            " data_count INT, thunk_count INT, none_count INT,"
-            " proven_count INT, size_mismatch_count INT, other_count INT)"
-        )
-        c.execute(
-            "INSERT INTO section_cell_stats SELECT target, section_name,"
-            " COUNT(*), SUM(state IN ('exact','verified')), SUM(state='reloc'),"
-            " SUM(state IN ('near_match','near_matching')), SUM(state='stub'),"
-            " SUM(state='padding'), SUM(state='data'), SUM(state='thunk'),"
-            " SUM(state='none'), SUM(state='proven'),"
-            " SUM(state='size_mismatch'), 0"
-            " FROM cells WHERE section_name = ? GROUP BY target, section_name",
-            (only,),
+    def _snap(cls) -> CoverageSnapshot:
+        return _snapshot_for(
+            {
+                name: _cell_section(states, va=0x1000 + 0x1000 * idx)
+                for idx, (name, states) in enumerate(cls.CELL_STATES.items())
+            }
         )
 
-    def test_partial_section_cell_stats_keeps_the_missing_section(self) -> None:
+    def test_every_declared_section_reports_its_own_cells(self) -> None:
         import recoverage.server as srv
 
-        conn = self._db()
-        try:
-            c = conn.cursor()
-            self._partial_section_cell_stats(c, ".text")
-            stats = srv._section_stats(c, "T")["sections"]
-        finally:
-            conn.close()
-
+        stats = srv._section_stats(self._snap())["sections"]
         assert set(stats) == set(self.SECTIONS)
-        # .data comes from `cells`: one covered byte of two, and both its cells
-        # bucketed, so the section reports what the live query reports.
+        # .data reports what its own two cells say: one covered byte of two,
+        # both cells bucketed.
         assert stats[".data"]["total_cells"] == 2
         assert stats[".data"]["exact"] == 1
         assert stats[".data"]["none"] == 1
@@ -1927,278 +1712,201 @@ class TestPartialDerivedTables:
         assert stats[".data"]["total_bytes"] == 2
         assert stats[".data"]["coverage_pct"] == 50.0
 
-    def test_partial_section_cell_stats_does_not_re_emit_covered_sections(self) -> None:
-        """The covered sections keep the materialized numbers, not a second copy."""
+    def test_one_section_cannot_borrow_another_s_cells(self) -> None:
+        """The two sections' numbers differ, so a spliced payload shows up."""
         import recoverage.server as srv
 
-        conn = self._db()
-        try:
-            c = conn.cursor()
-            self._partial_section_cell_stats(c, ".text")
-            c.execute(
-                "UPDATE section_cell_stats SET total_cells = 99 WHERE section_name = ?", (".text",)
-            )
-            stats = srv._section_stats(c, "T")["sections"]
-        finally:
-            conn.close()
+        stats = srv._section_stats(self._snap())["sections"]
+        assert stats[".text"]["total_cells"] == 2
+        assert stats[".text"]["none"] == 0
 
-        assert stats[".text"]["total_cells"] == 99
-        assert len(stats) == 2
-
-    def test_partial_section_cells_json_re_aggregates_the_gap(self) -> None:
-        """A materialized section_cells_json missing a section is filled from cells."""
-        from rebrew.workspace import SECTION_CELLS_COLUMN, SECTION_CELLS_TABLE, encode_section_cells
-
+    def test_the_cell_payload_keeps_every_stored_cell(self) -> None:
+        """The grid is built from the section's own cells, in spatial order."""
         import recoverage.server as srv
 
-        cached = encode_section_cells('[{"start": 0, "end": 1, "span": 1, "state": "exact"}]')
-        conn = self._db()
-        try:
-            c = conn.cursor()
-            c.execute(
-                f"CREATE TABLE {SECTION_CELLS_TABLE} (target TEXT, section_name TEXT,"
-                f" {SECTION_CELLS_COLUMN} BLOB, PRIMARY KEY (target, section_name))"
-            )
-            c.execute(
-                f"INSERT INTO {SECTION_CELLS_TABLE} VALUES ('T', '.text', ?)",
-                (cached,),
-            )
-            rows = dict(srv._cells_json_rows(c, "T", None, set(self.SECTIONS)))
-        finally:
-            conn.close()
+        snap = self._snap()
+        payload = json.loads(srv.cells_json(snap.sections[".data"].cells))
+        assert [entry["state"] for entry in payload] == ["exact", "none"]
+        assert [entry["start"] for entry in payload] == [0, 1]
 
-        assert set(rows) == set(self.SECTIONS)
-        # .text still comes from the cache, verbatim; .data is aggregated live
-        # and carries the cells the cache omitted.  Without the gap fill .data
-        # would be absent, and _dumps_with_cells would splice an empty array,
-        # a whole section painted as `none`.
-        assert [cell["state"] for cell in json.loads(rows[".text"])] == ["exact"]
-        assert [cell["state"] for cell in json.loads(rows[".data"])] == ["exact", "none"]
+    def test_a_section_with_no_cells_serves_an_empty_grid(self) -> None:
+        """A declared section with no cells is not a section of `none` bytes.
 
-    def test_complete_section_cells_json_runs_no_live_fallback(self) -> None:
-        """A cache that covers every expected section answers alone."""
-        from rebrew.workspace import SECTION_CELLS_COLUMN, SECTION_CELLS_TABLE, encode_section_cells
-
+        The old ``GROUP BY section_name`` produced no row for it, and the cell
+        payload is empty rather than absent, so the grid renders nothing instead
+        of inventing a section-wide miss.
+        """
         import recoverage.server as srv
 
-        payload = encode_section_cells('[{"start": 0, "end": 1, "span": 1, "state": "exact"}]')
-        conn = self._db()
-        try:
-            c = conn.cursor()
-            c.execute(
-                f"CREATE TABLE {SECTION_CELLS_TABLE} (target TEXT, section_name TEXT,"
-                f" {SECTION_CELLS_COLUMN} BLOB, PRIMARY KEY (target, section_name))"
-            )
-            c.executemany(
-                f"INSERT INTO {SECTION_CELLS_TABLE} VALUES ('T', ?, ?)",
-                [(name, payload) for name in self.SECTIONS],
-            )
-            calls: list[str] = []
-            original = srv._live_cells_json_rows
-
-            def _counting(*args: Any, **kwargs: Any) -> list[tuple[str, str]]:
-                calls.append("live")
-                return original(*args, **kwargs)
-
-            srv._live_cells_json_rows = _counting  # type: ignore[assignment]
-            try:
-                rows = dict(srv._cells_json_rows(c, "T", None, set(self.SECTIONS)))
-            finally:
-                srv._live_cells_json_rows = original  # type: ignore[assignment]
-        finally:
-            conn.close()
-
-        assert set(rows) == set(self.SECTIONS)
-        assert calls == []
+        snap = _snapshot_for(
+            {
+                ".text": _cell_section(["exact"]),
+                ".empty": {
+                    "va": 0x2000,
+                    "size": 0x100,
+                    "fileOffset": 0,
+                    "unitBytes": 0,
+                    "columns": 0,
+                    "cells": [],
+                },
+            }
+        )
+        assert ".empty" in snap.sections
+        assert ".empty" not in srv._section_stats(snap)["sections"]
+        assert srv.cells_json(snap.sections[".empty"].cells) == "[]"
 
 
-class TestSectionBucketRowsIsTheOneSectionCellStatsReader:
-    """``section_bucket_rows`` carries the cache-first policy for every reader.
+class TestBucketVocabularyIsShared:
+    """The bucket keys and their fold are ONE definition for every reader.
 
-    /stats and the Potato map header each used to restate it against their own
-    query, so a rule that changed reached one surface and not the other.  The
-    three rules: the materialized cache wins, a section it omits is
-    re-aggregated from ``cells``, and a database with no cache is read from
-    ``cells`` outright.
+    ``section_bucket_rows`` carried the cache-first policy for /stats, /data and
+    the Potato map header, so a rule that changed reached all three.  The
+    documents carry no cache and the policy is gone with it; what remains is the
+    reason it was centralized — a reader that restates the fold drifts from the
+    others — and these are the three rules that survive: every section serves
+    the same key set, the keys reconcile with ``total_cells``, and the summary's
+    per-section counts are the same numbers the section entry reports.
     """
 
     SECTIONS = (".text", ".data")
 
-    #: The full rebrew row: every column ``_cell_bucket_row`` subscripts.
-    FULL_CACHE_DDL = (
-        "CREATE TABLE section_cell_stats (target TEXT, section_name TEXT,"
-        " total_cells INT, exact_count INT, reloc_count INT, near_match_count INT,"
-        " stub_count INT, padding_count INT, data_count INT, thunk_count INT,"
-        " none_count INT, proven_count INT, size_mismatch_count INT,"
-        " other_count INT)"
-    )
-    #: A hand-made cache carrying only the six buckets the Potato header
-    #: renders.
-    NARROW_CACHE_DDL = (
-        "CREATE TABLE section_cell_stats (target TEXT, section_name TEXT,"
-        " total_cells INT, exact_count INT, reloc_count INT, near_match_count INT,"
-        " stub_count INT, padding_count INT)"
-    )
-    NARROW_PROJECTION = (
-        "section_name, total_cells, exact_count, reloc_count,"
-        " near_match_count, stub_count, padding_count"
-    )
-
-    def _db(self, *, cache_ddl: str, cached: tuple[str, ...]) -> sqlite3.Connection:
-        """A two-section target in `cells`, with a cache covering *cached*."""
-        conn = sqlite3.connect(":memory:")
-        conn.row_factory = sqlite3.Row
-        c = conn.cursor()
-        c.execute(
-            "CREATE TABLE cells (target TEXT, section_name TEXT, start INT, end INT, state TEXT)"
+    def _snap(self) -> CoverageSnapshot:
+        return _snapshot_for(
+            {
+                ".text": _cell_section(["exact", "verified", "reloc", "stub", "padding"]),
+                ".data": _cell_section(["exact", "none", "skip"], va=0x2000),
+            }
         )
-        c.executemany(
-            "INSERT INTO cells (target, section_name, start, end, state)"
-            " VALUES ('T', ?, 0, 1, 'exact')",
-            [(name,) for name in self.SECTIONS],
-        )
-        if cache_ddl:
-            c.execute(cache_ddl)
-            width = len(c.execute("SELECT * FROM section_cell_stats").description)
-            for name in cached:
-                row = ["T", name] + [1, 1] + [0] * (width - 4)
-                c.execute(f"INSERT INTO section_cell_stats VALUES ({','.join('?' * width)})", row)
-        return conn
 
-    def test_complete_cache_answers_from_the_cache_alone(self) -> None:
+    def test_every_section_serves_the_same_key_set(self) -> None:
         import recoverage.server as srv
 
-        conn = self._db(cache_ddl=self.FULL_CACHE_DDL, cached=self.SECTIONS)
-        seen: list[str] = []
-        conn.set_trace_callback(seen.append)
-        rows = {
-            r["section_name"]: r["total_cells"]
-            for r in srv.section_bucket_rows(conn.cursor(), "T", expected=self.SECTIONS)
-        }
-        conn.close()
-        assert rows == {".text": 1, ".data": 1}
-        assert [s for s in seen if "FROM cells" in s] == []
+        stats = srv._section_stats(self._snap())["sections"]
+        expected = {"total_cells", *TestBucketReconciliation.BUCKET_KEYS}
+        for name in self.SECTIONS:
+            assert expected <= set(stats[name]), f"{name} is missing bucket keys"
 
-    def test_partial_cache_fills_the_gap_from_cells(self) -> None:
+    def test_a_state_outside_the_fold_keeps_the_sum_reconciling(self) -> None:
         import recoverage.server as srv
 
-        conn = self._db(cache_ddl=self.FULL_CACHE_DDL, cached=(".text",))
-        rows = {
-            r["section_name"]: srv._cell_bucket_row(r)
-            for r in srv.section_bucket_rows(conn.cursor(), "T", expected=self.SECTIONS)
-        }
-        conn.close()
-        assert set(rows) == set(self.SECTIONS)
-        # The gap came from `cells` and reads through the same bucket mapping,
-        # so the two sources cannot report different totals for one section.
-        assert rows[".data"]["total_cells"] == 1
-        assert rows[".data"]["exact"] == 1
+        stats = srv._section_stats(self._snap())["sections"][".data"]
+        assert stats["other"] == 1
+        assert sum(stats[k] for k in TestBucketReconciliation.BUCKET_KEYS) == stats["total_cells"]
 
-    def test_no_cache_answers_from_cells(self) -> None:
-        import recoverage.server as srv
+    def test_the_summary_reports_the_section_s_buckets(self) -> None:
+        """``_summary``'s per-section entries are the same counts /stats serves.
 
-        conn = self._db(cache_ddl="", cached=())
-        rows = {
-            r["section_name"]: r["total_cells"]
-            for r in srv.section_bucket_rows(conn.cursor(), "T", expected=self.SECTIONS)
-        }
-        conn.close()
-        assert rows == {".text": 1, ".data": 1}
-
-    def test_projection_reads_only_the_named_columns(self) -> None:
-        """A caller that renders a subset names its columns, and only those.
-
-        The Potato map header renders six of the eleven buckets, so its
-        projection names six.  A hand-made cache carrying only those still
-        serves: the full row is not required from a reader that does not
-        render it.
+        The summary is what the SPA renders a section's header from and the
+        section entry is what its own map reports, so a second fold there would
+        let a rebuild's header disagree with its own grid.
         """
         import recoverage.server as srv
 
-        conn = self._db(cache_ddl=self.NARROW_CACHE_DDL, cached=self.SECTIONS)
-        rows = {
-            r["section_name"]: r["stub_count"]
-            for r in srv.section_bucket_rows(
-                conn.cursor(),
-                "T",
-                projection=self.NARROW_PROJECTION,
-                expected=self.SECTIONS,
-            )
-        }
-        conn.close()
-        assert rows == {".text": 0, ".data": 0}
+        snap = self._snap()
+        stats = srv._section_stats(snap)
+        # `_summary` carries one entry per section OTHER than .text: the grid
+        # summary at the top level IS the .text one.
+        entry = stats["sections"][".data"]
+        summary = stats["summary"][".data"]
+        assert summary["exactMatches"] == entry["exact"]
+        assert summary["relocMatches"] == entry["reloc"]
+        assert summary["stubCount"] == entry["stub"]
+        assert summary["paddingCount"] == entry["padding"]
+        assert summary["nearMatchCount"] == entry["near_match"]
+        # And the top-level entry is the .text grid the SPA falls back to, read
+        # off the section's own cells rather than a second count of them.
+        text = snap.sections[".text"]
+        assert stats["summary"]["textSize"] == text.size
+        assert stats["summary"]["coveredBytes"] == text.covered_bytes
 
 
-class TestAbsentObjectIsNotUnreadableDatabase:
-    """A "no such table" fallback must not cover an unreadable database.
+class TestUnreadableDocumentIsNotAnEmptyTarget:
+    """A document that cannot be read must surface, never degrade to empty.
 
-    Each of these readers degrades to a live query when a derived table is
-    absent, which is what keeps a pre-v7 database serving.  The degradation
-    used to catch every ``sqlite3.Error``, so a locked or corrupt
-    ``coverage.db`` took the same branch and produced a correct-looking but
-    cells-derived payload with nothing in the log and nothing in the response
-    to say the database could not be read.  ``_is_absent_object`` is the one
-    test that separates the two, and every fallback routes through it.
+    The SQLite-era fallbacks caught every ``sqlite3.Error`` so a pre-v7 database
+    kept serving from ``cells``; a locked or truncated ``coverage.db`` took the
+    same branch and produced a correct-looking cells-derived payload with
+    nothing in the log and nothing in the response to say the database could not
+    be read.  A document cannot be partially read: one that does not parse is
+    NOT a target with no sections, and every reader has to say so with the 503
+    ``db_unavailable`` contract.  The one legible degradation left is the one
+    the reader owns — a broken document beside a good one is skipped, so the
+    good target still serves.
     """
 
-    @staticmethod
-    def _unreadable() -> sqlite3.Cursor:
-        """A cursor whose reads all fail, the way a truncated file behaves."""
-        conn = sqlite3.connect(":memory:")
-        conn.close()
-        return conn.cursor()
+    BROKEN = "version = = 1\n"
 
-    def test_is_absent_object_separates_the_two_failures(self) -> None:
+    def test_a_malformed_document_is_not_an_empty_directory(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         import recoverage.server as srv
 
-        assert srv._is_absent_object(sqlite3.OperationalError("no such table: cells"))
-        assert srv._is_absent_object(sqlite3.OperationalError("no such column: reg_delta"))
-        # Everything else is the database failing, not the schema being old.
-        assert not srv._is_absent_object(sqlite3.OperationalError("database is locked"))
-        assert not srv._is_absent_object(
-            sqlite3.OperationalError("database disk image is malformed")
+        directory = _coverage_dir(tmp_path, monkeypatch)
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "coverage-BROKEN.toml").write_text(self.BROKEN, encoding="utf-8")
+
+        with pytest.raises(CoverageTomlError):
+            srv.coverage_snapshots()
+        with pytest.raises(CoverageTomlError):
+            srv.resolve_targets()
+
+    def test_a_missing_document_is_a_503(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import recoverage.server as srv
+
+        _coverage_dir(tmp_path, monkeypatch)
+        assert srv.db_target_ids() == []
+        with pytest.raises(CoverageTomlError):
+            srv.coverage_snapshots()
+
+    def test_the_endpoint_answers_the_db_unavailable_contract(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The failure reaches the client as JSON 503, not as a 500 or an empty
+        target that never built."""
+        from conftest import wsgi_get
+
+        directory = _coverage_dir(tmp_path, monkeypatch)
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "coverage-BROKEN.toml").write_text(self.BROKEN, encoding="utf-8")
+
+        status, headers, body = wsgi_get("/api/targets/BROKEN/stats")
+        assert status.startswith("503"), status
+        assert headers.get("Content-Type", "").startswith("application/json")
+        payload = json.loads(body)
+        assert payload["code"] == "db_unavailable"
+        assert "CoverageTomlError" in payload["detail"]
+
+    def test_one_broken_document_beside_a_good_one_still_serves(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The degradation the reader owns: two of three targets beat a 500."""
+        from conftest import wsgi_get
+
+        import recoverage.server as srv
+
+        directory = _coverage_dir(tmp_path, monkeypatch)
+        write_coverage(directory, "GOOD", {".text": _cell_section(["exact"])})
+        (directory / "coverage-BROKEN.toml").write_text(self.BROKEN, encoding="utf-8")
+
+        assert srv.db_target_ids() == ["GOOD"]
+        status, _, body = wsgi_get("/api/targets/GOOD/stats")
+        assert status.startswith("200"), status
+        assert json.loads(body)["sections"][".text"]["exact"] == 1
+
+    def test_a_foreign_version_is_refused_not_guessed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import recoverage.server as srv
+
+        directory = _coverage_dir(tmp_path, monkeypatch)
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "coverage-FUTURE.toml").write_text(
+            'version = 99\ntarget = "FUTURE"\n', encoding="utf-8"
         )
-        assert not srv._is_absent_object(sqlite3.ProgrammingError("closed database"))
-
-    def test_section_stats_propagates_an_unreadable_database(self) -> None:
-        import recoverage.server as srv
-
-        with pytest.raises(sqlite3.Error):
-            srv._per_section_buckets(self._unreadable(), "T", {})
-
-    def test_bucket_rows_propagates_an_unreadable_database(self) -> None:
-        import recoverage.server as srv
-
-        with pytest.raises(sqlite3.Error):
-            list(srv.section_bucket_rows(self._unreadable(), "T"))
-
-    def test_table_columns_propagates_an_unreadable_database(self) -> None:
-        """The optional-column probe must not answer "no columns" for a broken DB.
-
-        Every v6 field (`updated_by`, `status`, `reg_delta`, ...) is projected
-        from this set, so a swallowed error silently shortened the function,
-        global and verify payloads instead of failing them.
-        """
-        import recoverage.server as srv
-
-        with pytest.raises(sqlite3.Error):
-            srv._table_columns(self._unreadable().connection, "functions")
-
-    def test_has_materialized_cells_propagates_an_unreadable_database(self) -> None:
-        import recoverage.server as srv
-
-        with pytest.raises(sqlite3.Error):
-            srv._has_materialized_cells(self._unreadable())
-
-    def test_table_columns_answers_a_missing_table_with_no_rows(self) -> None:
-        """The pre-v7 case the fallback exists for must keep working."""
-        import recoverage.server as srv
-
-        conn = sqlite3.connect(":memory:")
-        try:
-            assert srv._table_columns(conn, "functions") == set()
-        finally:
-            conn.close()
+        with pytest.raises(CoverageTomlError):
+            srv.coverage_snapshots()
 
 
 def _spa_sources() -> tuple[str, str]:
@@ -2418,6 +2126,31 @@ class TestSpaGridLayoutMemo:
         app_js = importlib.resources.files(assets).joinpath("app.js").read_text(encoding="utf-8")
         assert "delete sec._pack;" in app_js
         assert "sec._pack = " in app_js
+
+    def test_a_block_wraps_instead_of_being_clamped_to_the_row(self) -> None:
+        """A block wider than a row must be drawn whole, across lines.
+
+        ``spanAt`` clamped a span to the column count, so the tail of every
+        over-wide block was dropped from the map: unpainted, and (with the
+        hit-map overflow) unclickable.  A span is measured against the DECLARED
+        width, so a dense lattice made that the common case, not the rare one.
+        ``walk`` now emits one PLACEMENT per line a block crosses, and the
+        paint, the hit-map and the selection stroke all read placements.
+        """
+        detail_js = self._detail_js()
+        assert "spanAt" not in detail_js, (
+            "the span clamp is back: an over-wide block loses its tail"
+        )
+        # The wrap itself: take what fits, keep the rest for the next line.
+        assert "const take = Math.min(left, cols - col);" in detail_js
+        # One placement per line, and the paint reads the placement arrays.
+        assert "const pCell = new Int32Array(parts);" in detail_js
+        assert "for (let k = 0; k < parts; k += 1) {" in detail_js
+        assert "ctx.rect(pX[k], pY[k], pW[k], cell);" in detail_js
+        # The stroke follows a wrapped cell across its lines, and the per-cell
+        # geometry still names the FIRST placement for scrollCell.
+        assert "for (let k = cellFirst[i]; k < parts && pCell[k] === i; k += 1) {" in detail_js
+        assert "cellFirst[i] = placed;" in detail_js
 
     def test_layout_also_keys_on_the_wrapper_width(self) -> None:
         """A hidden section reports clientWidth 0, so the ResizeObserver never
@@ -2781,27 +2514,27 @@ class TestConfigDerivedMemosFollowTheConfigStat:
         with srv.DLL_LOCK:
             srv.DLL_DATA.clear()
 
-    def test_resolved_targets_pick_up_a_config_only_target(self, project: Path) -> None:
+    def test_resolved_targets_pick_up_a_config_only_target(
+        self, project: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         import recoverage.server as srv
 
-        conn = sqlite3.connect(":memory:")
-        conn.execute("CREATE TABLE metadata (target TEXT)")
-        conn.execute("INSERT INTO metadata VALUES ('FROMDB')")
-        c = conn.cursor()
-        try:
-            assert [t["id"] for t in srv.resolve_targets(c)] == ["FROMDB"]
+        # The built half of the merge is the coverage directory now, so the
+        # target has to exist as a document for the memo to have two inputs.
+        write_coverage(project / "db", "FROMDB", {".text": _cell_section(["exact"])})
+        monkeypatch.setenv("RECOVERAGE_DB", str(project / "db"))
 
-            (project / "rebrew-project.toml").write_text(
-                '[targets.NEWONE]\nbinary = "bin/new.dll"\n', encoding="utf-8"
-            )
-            ids = [t["id"] for t in srv.resolve_targets(c)]
-            assert "NEWONE" in ids, (
-                "a target declared in rebrew-project.toml after the server "
-                "started stayed out of the dropdown, /api/targets and Potato "
-                "Mode until the next coverage.db rebuild"
-            )
-        finally:
-            conn.close()
+        assert [t["id"] for t in srv.resolve_targets()] == ["FROMDB"]
+
+        (project / "rebrew-project.toml").write_text(
+            '[targets.NEWONE]\nbinary = "bin/new.dll"\n', encoding="utf-8"
+        )
+        ids = [t["id"] for t in srv.resolve_targets()]
+        assert "NEWONE" in ids, (
+            "a target declared in rebrew-project.toml after the server "
+            "started stayed out of the dropdown, /api/targets and Potato "
+            "Mode until the next rebuild"
+        )
 
     def test_dll_bytes_follow_a_re_pointed_binary(self, project: Path) -> None:
         import recoverage.server as srv

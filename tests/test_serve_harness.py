@@ -1,19 +1,18 @@
 """Re-run safety of the tools/ serve harness.
 
-``tools/smoke.py`` and ``tools/lint-html.py`` both build their sample
-database through :func:`build_sample_db`, and CI runs both (the smoke job
-runs ``smoke.py`` and then ``smoke.py --expect-failure``).  The harness
-must therefore produce the same database however many times it is called,
-into the same directory or a fresh one, without leaking process-wide
-state.
+``tools/smoke.py`` and ``tools/lint-html.py`` both build their sample coverage
+through :func:`build_sample_db`, and CI runs both (the smoke job runs
+``smoke.py`` and then ``smoke.py --expect-failure``).  The harness must
+therefore produce the same documents however many times it is called, into the
+same directory or a fresh one, without leaking process-wide state.
 """
 
 from __future__ import annotations
 
 import hashlib
-import sqlite3
 import sys
 from pathlib import Path
+from typing import Any
 
 REPO_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 
@@ -25,12 +24,25 @@ def _digest(db: Path) -> str:
     return hashlib.sha256(db.read_bytes()).hexdigest()
 
 
-def _count(db: Path, query: str) -> int:
-    conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
-    try:
-        return conn.execute(query).fetchone()[0]
-    finally:
-        conn.close()
+def _snapshot(db_dir: Path) -> Any:
+    """The synthetic document, read through the real reader.
+
+    *db_dir* is the directory the documents live in; the reader resolves the
+    directory from the project ROOT, which is one level up.
+    """
+    from rebrew.coverage_toml import load_coverage
+
+    return load_coverage(db_dir.parent, "FAKEDLL")
+
+
+def _count(directory: Path) -> int:
+    """Cells the synthetic document carries."""
+    return sum(len(section.cells) for section in _snapshot(directory).sections.values())
+
+
+def load_functions(directory: Path) -> tuple[Any, ...]:
+    """Functions the synthetic document carries."""
+    return _snapshot(directory).functions
 
 
 class TestBuildSampleDbRerun:
@@ -50,8 +62,8 @@ class TestBuildSampleDbRerun:
         rebuilt = build_sample_db(tmp_path / "proj")
 
         assert _digest(rebuilt) == _digest(build_sample_db(tmp_path / "other"))
-        assert _count(rebuilt, "SELECT COUNT(*) FROM cells") == 9
-        assert _count(rebuilt, "SELECT COUNT(*) FROM functions") == 3
+        assert _count(rebuilt.parent) == 9
+        assert len(load_functions(rebuilt.parent)) == 3
 
     def test_repeated_calls_leave_no_process_state_behind(self, tmp_path: Path) -> None:
         """sys.path and the cwd are restored, so N calls cost N entries, not 2N."""

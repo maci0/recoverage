@@ -111,24 +111,30 @@ Install an extra to enable its feature: `pip install 'recoverage[<extra>]'`
 ## Quick Start
 
 ```bash
-# 1. Generate the coverage database (from your project directory)
+# 1. Generate the coverage documents (from your project directory)
 uv run rebrew catalog
 # Analyzes the target binary, parses your annotations, and dumps raw match data to db/data_*.json
 
 uv run rebrew build-db
-# Consumes the JSON files and builds a fast SQLite database (db/coverage.db) for the dashboard
+# Consumes the JSON files and writes one clear-text coverage document per target
+# (db/coverage-<target>.toml) for the dashboard
 
 # 2. Start the dashboard
-uv run recoverage serve
-# Starts a lightweight Bottle web server serving the frontend SPA and providing the API backend
+recoverage
+# Same as `recoverage serve`: starts a lightweight Bottle web server serving
+# the frontend SPA and providing the API backend
 ```
 
 > [!NOTE]
-> The server resolves `coverage.db` from the **current working directory**:
-> `[project] db_dir` in `rebrew-project.toml` when set, falling back to
-> `db/coverage.db` when that file is absent — so run it from your project root.
-> A `rebrew-project.toml` that is present but not valid TOML is an error, not
-> a fallback. `RECOVERAGE_DB` still selects an explicit database.
+> The server resolves the coverage **directory** from the **current working
+> directory**: `[project] db_dir` in `rebrew-project.toml` when set, falling back
+> to `<root>/db` — so run it from your project root. A `rebrew-project.toml` that
+> is present but not valid TOML is an error, not a fallback.
+> `RECOVERAGE_DB` still selects an explicit coverage directory.
+>
+> Serving the dashboard needs one readable `coverage-<target>.toml` document in
+> that directory, not a database file: rebrew's pipeline produces the documents
+> and recoverage only reads them.
 
 ---
 
@@ -150,7 +156,8 @@ human note goes to stderr.
 
 ### `recoverage serve`
 
-Start the dashboard web server.
+Start the dashboard web server. `recoverage` on its own, with no subcommand, is
+this command with its default settings.
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -180,12 +187,12 @@ always wins over the environment.
 | `RECOVERAGE_CORS_ORIGIN` | none | comma-separated origin URLs; each must be one a browser could send (`scheme://host[:port]`, no userinfo, path or whitespace) |
 | `RECOVERAGE_TOKEN` | none | the bearer token; set it empty to run unauthenticated |
 | `RECOVERAGE_LOG_LEVEL` | `INFO` | a `logging` level name, or its number |
-| `RECOVERAGE_DB` | resolved from the working directory | path to `coverage.db` |
+| `RECOVERAGE_DB` | resolved from the working directory | path to the coverage directory (the one holding `coverage-<target>.toml`) |
 
 ```bash
 # A service that is not run from the project root, on a LAN interface,
 # with a token that never reaches the process listing:
-export RECOVERAGE_DB=/srv/project/db/coverage.db
+export RECOVERAGE_DB=/srv/project/db
 export RECOVERAGE_BIND=0.0.0.0
 export RECOVERAGE_ALLOW_REMOTE=1
 export RECOVERAGE_TOKEN="$(cat /run/secrets/recoverage_token)"
@@ -265,11 +272,13 @@ recoverage check --min-coverage 60 --json                       # machine-readab
 ```
 
 Exit codes: 0 = gate passed, 1 = coverage below threshold (or a target/section
-that matched nothing), 2 = bad `--min-coverage` value or an unreadable database.
+that matched nothing), 2 = bad `--min-coverage` value or an unreadable coverage
+document.
 
 ### `recoverage regen`
 
-Re-run `rebrew catalog` + `rebrew build-db` to regenerate `coverage.db`.
+Re-run `rebrew catalog` + `rebrew build-db` to regenerate the coverage
+documents.
 
 ```bash
 recoverage regen
@@ -299,7 +308,7 @@ deployment that moved off `8001` needs no second place to configure.
 |------|--------|-------------|
 | `/` | GET | Main SPA dashboard |
 | `/potato` | GET | Potato Mode (pure-HTML fallback) |
-| `/api/health` | GET | Server version, DB info, installed extras, request/regen/stream counters |
+| `/api/health` | GET | Server version, coverage directory info, installed extras, request/regen/stream counters |
 | `/api/targets` | GET | List available targets |
 | `/api/targets/<target>/stats` | GET | Per-section coverage stats with percentages |
 | `/api/targets/<target>/data` | GET | Section + cell data (`?section=.text` for partial) |
@@ -308,10 +317,10 @@ deployment that moved off `8001` needs no second place to configure.
 | `/api/targets/<target>/functions/<va>` | GET | Single function/global detail |
 | `/api/targets/<target>/asm` | GET | Disassembly (`?format=json` for structured output) |
 | `/api/targets/<target>/sections/<section>/bytes` | GET | Raw byte slice (`?offset=&size=`) |
-| `/api/events` | GET | Server-Sent Events: `db-updated` when coverage.db changes (SPA auto-refresh) |
+| `/api/events` | GET | Server-Sent Events: `db-updated` when the coverage documents change (SPA auto-refresh) |
 | `/api/regen` | POST | Re-run catalog + build-db (loopback peer and, when present, same-origin only; rate-limited; optional `Idempotency-Key` header) |
 
-A regen rebuilds `coverage.db` from scratch, so running it twice leaves the
+A regen rebuilds the coverage documents from scratch, so running it twice leaves the
 same state as running it once. Send an `Idempotency-Key` header with the
 request and a repeat of that key is answered with the recorded result
 (`Idempotent-Replay: true`) instead of running the pipeline again; keys are
@@ -391,13 +400,13 @@ route matches answers **404**. A `405` never means "not found" here.
 
 ### Caching
 
-Every DB-derived read endpoint (`/data`, `/stats`, `/asm`,
+Every coverage-derived read endpoint (`/data`, `/stats`, `/asm`,
 `/sections/<section>/bytes` and `/potato`) carries an `ETag` over the
-WAL-aware freshness stamp of `coverage.db` plus the request's own identity
+freshness stamp of the coverage documents plus the request's own identity
 (target, section, VA, offset, format), and `Cache-Control: no-cache,
-must-revalidate`. Send `If-None-Match` and an unchanged database answers
+must-revalidate`. Send `If-None-Match` and unchanged documents answer
 **304** with no body. `/health` and `/targets` are `no-store` instead: they
-report the server's own state, not the database's.
+report the server's own state, not the coverage documents'.
 
 Query-parameter rules, the same on every endpoint:
 
@@ -439,16 +448,16 @@ body key.
 **recoverage** is designed as a standalone **consumer** of the data that [rebrew](../rebrew) produces — the two packages are intentionally decoupled.
 
 ```text
-rebrew catalog                 rebrew build-db           recoverage (Bottle + SQLite)
+rebrew catalog                 rebrew build-db           recoverage (Bottle)
        │                             │                       │
-  db/data_*.json  ──────────▶  db/coverage.db  ──────────▶  VanJS Dashboard
+  db/data_*.json  ──────────▶  db/coverage-<target>.toml ──▶  VanJS Dashboard
 ```
 
 1. **`rebrew catalog`**: Scans your project's source annotations and writes intermediate `db/data_*.json` files containing coverage metrics. Jump table / switch data bytes are absorbed into their parent function's size. Use `--export-ghidra-labels` to generate `ghidra_data_labels.json` for round-trip Ghidra sync.
-2. **`rebrew build-db`**: Consumes those JSON files and builds a structured `db/coverage.db` (SQLite, `db_version` `"11"`) database, storing per-function metadata (`detected_by`, `size_by_tool`, `textOffset`), per-global metadata (`module`, `size`), per-cell metadata (`label`, `parent_function`), and stamping `db_version` for schema detection.  It also materializes the two objects the dashboard reads instead of re-deriving them on every request: the per-section coverage buckets (`section_cell_stats`) and the per-section cell JSON (`section_cells_json`, zstd, cells ordered by `start`).  Both are derived from `cells` and rebuilt on every build, so a database produced by an older rebrew is still *served*. The server falls back to the equivalent live queries. `rebrew build-db` requires `--force` to migrate a database whose stamp is not `"11"`. See [DB_FORMAT.md](../rebrew/docs/DB_FORMAT.md) for the full schema.
-3. **`recoverage`**: Starts a **Bottle** web server. The backend serves API endpoints querying the SQLite database, while the frontend is a zero-build Single Page Application (SPA) powered by **VanJS**, rendering the interactive defrag grid.
+2. **`rebrew build-db`**: Consumes those JSON files and writes one clear-text TOML document per target, `db/coverage-<target>.toml` (`version = 1`), holding the facts: the sections with their cells, the functions (`detected_by`, `size_by_tool`, `textOffset`, …), the globals (`module`, `size`), the verify results, the history, and `[metadata].paths`.  Nothing derivable is stored: the per-section buckets, the per-section byte totals, the coverage percentages, the function-stats summary and the by-VA index are all computed at load by `rebrew.coverage_toml`, the same reader rebrew's own dashboard uses.  Every run replaces each document whole, so `--force` has nothing to migrate.  See [DB_FORMAT.md](../rebrew/docs/DB_FORMAT.md) for the full document shape.
+3. **`recoverage`**: Starts a **Bottle** web server. The backend serves API endpoints built from the parsed coverage documents, while the frontend is a zero-build Single Page Application (SPA) powered by **VanJS**, rendering the interactive defrag grid.
 
-You can run `recoverage` independently on any machine (or even host it remotely, see the caveat below) as long as it has access to a compiled `coverage.db`.  rebrew is a required dependency (it provides the shared workspace/config resolution and the in-process regen), but no project workspace or compiler toolchain is required to serve the dashboard.
+You can run `recoverage` independently on any machine (or even host it remotely, see the caveat below) as long as it has access to a readable `coverage-<target>.toml` document.  rebrew is a required dependency (it provides the shared workspace/config resolution, the document reader, and the in-process regen), but no project workspace or compiler toolchain is required to serve the dashboard.
 
 ### Hosting it on a network
 
@@ -487,14 +496,14 @@ recoverage/
 │   ├── flatten-rikalabs-strict.py  # Regenerates tools/oxlint/rikalabs-strict.json (MIT) from @rikalabs/oxlint-standards 0.8.1
 │   └── oxlint/               # Vendored anti-slop rules + the flattened strict preset
 ├── tests/
-│   ├── conftest.py           # Shared fixtures (synthetic coverage.db)
+│   ├── conftest.py           # Shared fixtures (synthetic coverage TOML)
 │   ├── test_api.py           # API validation & security tests
 │   ├── test_build.py         # Shipped files and reproducible build bytes
 │   ├── test_cli.py           # CSV export, formatting tests
 │   ├── test_config.py        # RECOVERAGE_* parsing, precedence, fail-fast
 │   ├── test_import_graph.py  # The import rules the modules rely on
 │   ├── test_lifecycle.py     # Lifecycle (regen ordering, opener reaping, deadlines)
-│   ├── test_paths.py         # DB path resolution tests
+│   ├── test_paths.py         # Coverage directory resolution tests
 │   ├── test_server.py        # Compression, encoding tests
 │   ├── test_potato.py        # Potato Mode rendering tests
 │   ├── test_perf.py          # Deterministic perf regression gates (work counters, not wall clock)
@@ -507,7 +516,7 @@ recoverage/
 └── src/recoverage/
     ├── __init__.py
     ├── __main__.py           # python -m recoverage
-    ├── _paths.py             # DB path resolution (rebrew-project.toml db_dir)
+    ├── _paths.py             # Coverage directory resolution (RECOVERAGE_DB, db_dir)
     ├── clock.py              # The one time source the request path reads
     ├── config.py             # RECOVERAGE_* env: defaults, validation, startup banner
     ├── metrics.py            # In-process RED counters, read by /api/health
@@ -548,7 +557,7 @@ check.
 | `web-lint` | ubuntu, Python 3.13, bun 1.4.2, temurin 17 | oxlint (Rika-Labs strict + anti-slop) over the SPA sources, then the Nu Html Checker over every static and served HTML/CSS asset |
 | `test` | ubuntu 3.13 + 3.14, macos 3.13, windows 3.13 | `pytest tests/`, warnings-as-errors. Browser tests (`tests/test_playwright.py`) stay out of the default run and are not run in CI |
 | `build` | ubuntu, Python 3.13 | `make build` twice, the second time from a copy of the tree under a different path, locale and timezone, and fails when the two archives differ. Uploads the wheel and sdist |
-| `smoke` | ubuntu, Python 3.13 | boots `recoverage serve` against a synthetic `coverage.db` and probes the SPA shell, health, target data/stats/functions and Potato Mode, then repeats with a corrupt database to prove it reports `degraded` instead of healthy |
+| `smoke` | ubuntu, Python 3.13 | boots `recoverage serve` against synthetic coverage documents and probes the SPA shell, health, target data/stats/functions and Potato Mode, then repeats with a corrupt document to prove it reports `degraded` instead of healthy |
 | `sbom` | ubuntu | `uv export --frozen --all-extras --hashes` as a build artifact: the exact resolved tree behind a given build, plus the rebrew tag and commit the path dependency was pinned at |
 
 Every job but `sbom` installs with `uv sync --locked --extra dev` and then runs

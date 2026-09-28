@@ -1,27 +1,33 @@
 """Path resolution helpers for recoverage.
 
 Provides _db_path(), recoverage's memoized wrapper around the shared
-``rebrew.workspace.db_path`` resolution: ``RECOVERAGE_DB`` when set, else
-``rebrew-project.toml`` ``[project] db_dir`` when present, ``./db/coverage.db``
-otherwise.  The environment override comes first so a service can serve a
-project it was not started from the root of.
+``rebrew.workspace.db_dir`` resolution: ``RECOVERAGE_DB`` when set, else
+``rebrew-project.toml`` ``[project] db_dir`` when present, ``./db`` otherwise.
+The environment override comes first so a service can serve a project it was
+not started from the root of.
+
+The name is left over from the SQLite era and is kept deliberately: the path
+``_db_path`` returns names the DIRECTORY that holds the ``coverage-*.toml``
+documents, which is exactly the directory ``coverage.db`` used to live in.  A
+second name for the same directory would be two things to keep in step.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from rebrew.workspace import CONFIG_NAME, db_path
+from rebrew.workspace import CONFIG_NAME, db_dir
 
 from recoverage import config
 
 # Memoized _db_path() result, keyed by cwd + the config file's stat
-# fingerprint.  _db_path() runs on every request (each ETag snapshot, DB open,
-# Potato render) and on every SSE watcher poll; re-reading and TOML-parsing the
-# config each time is pure waste.  The key makes a rewritten/deleted/re-pointed
-# rebrew-project.toml take effect on the next call: one stat replaces the
-# read+parse on the hot path.  Torn reads are impossible: the tuple swap is
-# atomic under the GIL, and a racing recomputation yields the same value.
+# fingerprint.  _db_path() runs on every request (each ETag snapshot, the
+# coverage directory glob, Potato render) and on every SSE watcher poll;
+# re-reading and TOML-parsing the config each time is pure waste.  The key makes
+# a rewritten/deleted/re-pointed rebrew-project.toml take effect on the next
+# call: one stat replaces the read+parse on the hot path.  Torn reads are
+# impossible: the tuple swap is atomic under the GIL, and a racing
+# recomputation yields the same value.
 _DB_PATH_CACHE: tuple[tuple[str, tuple[int, int] | None], Path] | None = None
 
 
@@ -35,15 +41,16 @@ def _config_fingerprint(cfg: Path) -> tuple[int, int] | None:
 
 
 def _db_path() -> Path:
-    """Return the path to coverage.db, honouring rebrew-project.toml [project] db_dir.
+    """Return the directory holding the coverage TOML documents.
 
-    Resolution is ``RECOVERAGE_DB`` when that variable is set, else
-    ``rebrew.workspace.db_path(cwd)``: ``[project].db_dir`` resolved against
-    cwd when present, else ``<cwd>/db/coverage.db``.  A missing config file
-    falls back to that default.  A file that is present but not readable
+    Resolution is ``RECOVERAGE_DB`` when that variable is set — naming the
+    directory itself, since that is what the variable used to name the file
+    inside — else ``rebrew.workspace.db_dir(cwd)``: ``[project].db_dir``
+    resolved against cwd when present, else ``<cwd>/db``.  A missing config
+    file falls back to that default.  A file that is present but not readable
     UTF-8 TOML raises ``WorkspaceConfigError``: falling back would select
-    ``db/coverage.db``, which may be a different database than the one the
-    file names.  The environment override is applied before the file is read.
+    ``db/``, which may be a different project's coverage than the one the file
+    names.  The environment override is applied before the file is read.
 
     Memoized per (cwd, config stat fingerprint): the config is re-read only when
     the file's mtime/size changes (or cwd moves), so request-rate calls and the
@@ -61,6 +68,6 @@ def _db_path() -> Path:
     if cached is not None and cached[0] == fingerprint:
         return cached[1]
 
-    resolved = db_path(cwd)
+    resolved = db_dir(cwd)
     _DB_PATH_CACHE = (fingerprint, resolved)
     return resolved

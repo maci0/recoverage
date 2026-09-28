@@ -3,16 +3,18 @@
 ## Overview
 
 **recoverage** is a coverage dashboard for binary-matching decompilation projects.
-It serves a VanJS + SQLite dashboard visualising per-byte match status across
-PE sections (`.text`, `.data`, `.bss`). Two modes: a modern SPA (default) and
-a retro "Potato Mode" that renders entirely in server-side HTML tables.
+It serves a VanJS dashboard over rebrew's clear-text coverage TOML,
+visualising per-byte match status across PE sections (`.text`, `.data`,
+`.bss`). Two modes: a modern SPA (default) and a retro "Potato Mode" that
+renders entirely in server-side HTML tables.
 
 This package is a **consumer** of data produced by `rebrew`, which it depends
-on as a library: `rebrew.workspace` provides the shared `rebrew-project.toml` +
-`coverage.db` resolution (stdlib only), and the regen commands call rebrew's
-`run_catalog` (`rebrew.catalog.cli`) and `build_db` in-process; see
-`src/recoverage/regen.py`. Serving a dashboard needs no project workspace
-or compiler toolchain, only a valid `coverage.db` file.
+on as a library: `rebrew.workspace` provides the shared `rebrew-project.toml` + coverage
+directory resolution (stdlib only), `rebrew.coverage_toml` reads the
+`coverage-<target>.toml` documents, and the regen commands call rebrew's
+`write_coverage_toml` in-process (which runs the catalog analysis itself); see
+`src/recoverage/regen.py`. Serving a dashboard needs no project workspace or
+compiler toolchain, only a readable coverage document.
 
 ## Project Structure
 
@@ -43,15 +45,16 @@ recoverage/
 │                           # ci_clone_rebrew.sh, flatten-rikalabs-strict.py,
 │                           # normalize_sdist.py, vendor-manifest.py
 ├── tests/
-│   ├── conftest.py           # Shared fixtures (synthetic coverage.db)
+│   ├── conftest.py           # Shared fixtures (synthetic coverage TOML)
+│   ├── coverage_fixture.py   # Builders for synthetic coverage documents
 │   ├── test_build.py          # Artifact build: shipped files, reproducible bytes
 │   ├── test_api.py           # API validation, security, SQL injection tests
 │   ├── test_cli.py           # CSV export, formatting, edge case tests
 │   ├── test_lifecycle.py     # Lifecycle: regen ordering, browser-opener reaping
-│   ├── test_paths.py         # DB path resolution tests
+│   ├── test_paths.py         # Coverage directory resolution tests
 │   ├── test_config.py        # RECOVERAGE_* env: parsing, precedence, fail-fast
-│   ├── test_server.py        # Compression, encoding, path helper tests
-│   ├── test_serve_harness.py # Shared serve harness (builds the sample db, boots the server)
+│   ├── test_server.py        # Compression, encoding, snapshot, path helper tests
+│   ├── test_serve_harness.py # Shared serve harness (builds the sample coverage, boots the server)
 │   ├── test_potato.py        # Potato Mode unit tests
 │   ├── test_perf.py          # Deterministic perf gates (work counters, not wall clock)
 │   ├── test_metrics.py       # Request id, RED counters, slow-request log line
@@ -64,7 +67,7 @@ recoverage/
 └── src/recoverage/
     ├── __init__.py
     ├── __main__.py          # python -m recoverage
-    ├── _paths.py            # DB path resolution (RECOVERAGE_DB, rebrew-project.toml db_dir)
+    ├── _paths.py            # Coverage directory resolution (RECOVERAGE_DB, db_dir)
     ├── config.py            # RECOVERAGE_* env: flag defaults, validation, startup banner
     ├── devserver.py         # WSGI serving stack serve() binds: threading server, keep-alive handlers
     ├── clock.py             # The one time source (monotonic / wall-clock) the request path reads
@@ -149,6 +152,7 @@ bun run lint:html           # vnu only: static assets + served pages (SPA shell,
 
 # Runtime (inside the synced env)
 uv sync --extra dev --extra capstone
+uv run recoverage                     # same as `serve` (main() appends the subcommand to a bare argv)
 uv run recoverage serve             # start dashboard on :8001
 uv run recoverage serve --port 9000 # custom port
 uv run recoverage serve --regen     # re-run rebrew catalog + build-db first
@@ -273,59 +277,55 @@ The release policy is not written down anywhere else, so it is stated here and
 | `/api/targets/<target>/functions/<va>` | GET | Function/global detail |
 | `/api/targets/<target>/asm` | GET | Disassembly (requires capstone) |
 | `/api/targets/<target>/sections/<section>/bytes` | GET | Raw byte slice |
-| `/api/events` | GET | Server-Sent Events: `db-updated` when coverage.db changes (SPA auto-refresh) |
+| `/api/events` | GET | Server-Sent Events: `db-updated` when the coverage documents change (SPA auto-refresh) |
 | `/api/regen` | POST | Re-run catalog + build-db (localhost only, rate-limited; optional `Idempotency-Key` header, replayed from a bounded ledger) |
 
-Search folding is split by layer, deliberately: the SPA folds both sides in JS
-(NFC composition, then a root-collation scan for `ß`/`ss` and accents, see
-`matchesSearch` in `assets/app.js`), while every server-side `?search=` matches
-through `server._escape_like`, where SQLite's LIKE folds ASCII and nothing
-else. A non-ASCII query therefore highlights grid cells but returns no rows
-from `/functions`. Closing that server-side needs a folded column, which is a
-schema change, not a query change.
+Search folds both sides the same way in Python: `server.fold_text` is NFC
+composition plus `str.casefold`, and `server.fold_match` is the substring test
+both the API list, the Potato list and the name lookup run every column
+through. The SPA folds in JS (`matchesSearch` in `assets/app.js`) with
+`toLowerCase` where the server uses `casefold`, so a case-fold expansion such
+as `ß` → `ss` matches through the API and not in the SPA. This was a SQL split
+(LIKE folded ASCII, an `rc_fold` disjunct covered the rest) only because the
+comparison happened inside SQLite; one folding over the in-memory rows is both
+simpler and strictly wider.
 
 ## Data Pipeline
 
-1. `rebrew catalog` (or `--data-json`) → writes `db/data_*.json` in the project
-   workspace; `--json` alone only prints a summary, and `recoverage --regen`
-   runs the bare form for exactly this reason
+1. `rebrew build-db` → writes `db/coverage-<target>.toml` (via
+   `rebrew.coverage_toml.write_coverage_toml`). It runs the catalog analysis
+   in-process per target (`rebrew.catalog.pipeline.build_catalog_data`), so
+   there is no snapshot file between the analysis and the document and a
+   document cannot describe an older tree than the one that produced it.
+   `recoverage --regen` and `POST /api/regen` call the same function; there is
+   no separate `rebrew catalog` step to run first.
    - Absorbs jump table / switch data bytes into parent function sizes
    - Links data and thunk cells to their parent function via `parent_function` field
    - `rebrew catalog --export-ghidra-labels` → generates `ghidra_data_labels.json` for round-trip Ghidra sync
-2. `rebrew build-db` → reads JSON, builds `db/coverage.db` (SQLite)
-   - Cells table includes `label` (Ghidra data label) and `parent_function` columns
-   - Also materializes `section_cell_stats` (coverage buckets per section) and
-     `section_cells_json` (per-section cell JSON, zstd), which the server reads
-     in preference to re-deriving them. **Keep the live-SQL fallback on every
-     read**: a database predating the cached object still has to serve, and the
-     fallback is what makes that true. Producer and server share rebrew's
-     `CELLS_JSON_OBJECT_SQL` and `SECTION_CELLS_AGG_SQL`, so cached and live
-     rows cannot drift. Schema, bucket columns, and the reconciliation that
-     makes `other_count` sum to `total_cells` are documented in `docs/DESIGN.md`
-     (database schema section); `server._cell_bucket_row` always emits the
-     `other` key, 0 when the source predates the column.
-   - A cache that is present but covers only SOME of the target's sections is
-     the third case, and the one a presence check misses: the reader fills the
-     gap from `cells` rather than dropping the section
-     (`server._cells_json_rows`'s `expected_sections`, `server.section_bucket_rows`,
-     which every `section_cell_stats` reader goes through: `/stats` via
-     `_per_section_buckets`, the Potato map header via `_compute_section_stats`,
-     and the `/data` payload via `_read_data_raw`,
-     each passing the section set it already holds). A dropped section reports no
-     coverage at all, and a dropped cell payload paints a whole section as `none`
-     bytes.
-   - **Scope every such fallback to a MISSING schema object, never to a failed
-     read**: route it through `server._is_absent_object`, and let anything else
-     propagate to the 503 `db_unavailable` contract. Catching the whole
-     `sqlite3.Error` widens "this is a pre-v7 database" into "this database is
-     unreadable", and a locked or truncated `coverage.db` then answers with a
-     correct-looking cells-derived payload and no signal at all. The two probes
-     that never raise for a missing object (`PRAGMA table_info` and
-     `pragma_table_info`) need no branch; `server._table_columns` and
-     `server._has_materialized_cells` have none. A new degrade-on-older-schema
-     reader names `_is_absent_object` in its `except` or it is a silent failure
-     (`tests/test_server.py`, `TestAbsentObjectIsNotUnreadableDatabase`).
-3. `recoverage` → serves the DB as a web dashboard
+   - The document stores FACTS only: the sections with their cells, the
+     functions, the globals, the verify results and the history. Every aggregate
+     the SQLite schema used to materialize (`section_cell_stats`,
+     `section_cells_json`, the per-section buckets, the byte coverage) is
+     derived by `rebrew.coverage_toml` at load, in `Section.__post_init__` and
+     `_derive_function_stats`. **Do not port a reader of a stored aggregate**:
+     there is none to read, and a second computation of the same number is
+     exactly the drift the format exists to remove.
+   - `server._bucket_row` is the ONE mapping from a section's cells to the
+     served bucket dict (`total_cells`, the state counts, and `other`, the
+     producer's catch-all, always emitted so the buckets reconcile with
+     `total_cells`). `/stats`, `/data` and the Potato map header all read it.
+   - The catalog's `summary` blob is NOT stored in the document (the writer
+     keeps the facts, not the precomputed answers). `server._summary` rebuilds
+     it from the stored cells and functions, and `/stats` and `/data` serve the
+     rebuild; a change there is a change to a served payload.
+   - A target the project config declares but no build has written is served
+     from an EMPTY snapshot (`server.coverage_for`), which is what the SQLite
+     reader got from an empty table set. A document that exists but does not
+     parse is the opposite case and must stay distinguishable: it raises
+     `CoverageTomlError`, which is the 503 `db_unavailable` contract — never a
+     target that silently reads as having no sections
+     (`tests/test_server.py`, `TestUnreadableDocumentIsNotAnEmptyTarget`).
+2. `recoverage` → serves the coverage as a web dashboard
    - Cell detail panel shows parent function as a clickable navigation link
 
 ## Dependencies
@@ -334,7 +334,8 @@ Required (`[project].dependencies`, floors only; `uv.lock` pins the exact set):
 - `bottle>=0.13` (web server)
 - `brotli>=1.1` (Brotli compression)
 - `rcssmin>=1.1` (CSS minification)
-- `rebrew>=2.10.0` (sibling path dep pinned in `[tool.uv.sources]`): `rebrew.workspace` for shared `rebrew-project.toml` + coverage.db resolution, plus rebrew's catalog/build-db for in-process regen
+- `rebrew>=2.16.0` (sibling path dep pinned in `[tool.uv.sources]`; the first
+  release that ships `rebrew.coverage_toml`): `rebrew.workspace` for shared `rebrew-project.toml` + coverage-directory resolution, `rebrew.coverage_toml` for reading and writing the documents, plus rebrew's catalog for in-process regen
 - `rich>=15.0.0` (terminal tables)
 - `rjsmin>=1.2` (JS minification)
 - `typer>=0.27.2` (CLI framework)
@@ -348,7 +349,7 @@ Optional extras:
 Dev extra (`.[dev]`, what CI installs): `mypy>=1.14`, `pytest>=9.1.1`, `ruff>=0.16.7`.
 
 `rebrew` is a *runtime* import, not a regen-only one: `src/recoverage/_paths.py`
-resolves every `coverage.db` lookup through `rebrew.workspace`, so the path source
+resolves every coverage-directory lookup through `rebrew.workspace`, so the path source
 in `[tool.uv.sources]` must resolve for `uv sync` to work at all. That source is
 a relative `../rebrew`, which only holds in a sibling checkout. `make clone-rebrew`
 (populated from `tools/ci_clone_rebrew.sh`, the same script every CI job runs
@@ -398,8 +399,8 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   three checks off and the reason next to them in `[tool.mypy]`:
   `disallow_untyped_decorators` (every route handler wears a `@app.route`,
   and bottle is untyped, so the decorator erases the signature),
-  `warn_return_any` (the JSON builders read `sqlite3.Row`, which is `Any` by
-  construction; the row shape is pinned by the SQL, not the checker), and
+  `warn_return_any` (the JSON builders read snapshot fields whose shape is
+  pinned by rebrew's reader, not by the checker), and
   `no_implicit_reexport` (api.py, ui.py and potato.py import the shared
   `request`/`response`/`HTTPResponse` from `recoverage.server` on purpose).
   `warn_unused_ignores` is off because `ignore_missing_imports` makes every
@@ -479,40 +480,37 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
 - The memos derived from `rebrew-project.toml` all key on the file's stat
   (`server._config_stat_fingerprint`), one token for all of them:
   `_get_targets_config`, `resolve_targets` (keyed on that stat AND the
-  WAL-aware DB snapshot, its other input), and the `DLL_DATA` byte cache.
-  Editing the config is a write that reaches no server code and moves no DB
-  file, so the stat is the only invalidation signal there is, and the rebuild
-  broadcast watches `coverage.db` alone. A new config-derived memo names
+  coverage-directory snapshot, its other input), and the `DLL_DATA` byte cache.
+  Editing the config is a write that reaches no server code and moves no
+  coverage file, so the stat is the only invalidation signal there is, and the
+  rebuild broadcast watches the documents alone. A new config-derived memo names
   `_config_stat_fingerprint` in its key or it will disagree with the other two
   (`tests/test_server.py`, `TestConfigDerivedMemosFollowTheConfigStat`).
-  DB-derived memos key on `_snapshot_db_mtime`, and the potato ones re-check
-  the watermark before publishing, so a payload read through a pinned
-  `read_snapshot` is never filed under a newer fingerprint. That token is
-  stat'ed BEFORE the read snapshot is pinned (`render_potato` takes it before
-  `_open_db`, and hands it to `_load_grid_cells` / `_section_stats_cached`),
-  because a stat taken inside the pinned snapshot reads the post-rebuild value
-  on both sides of the publish comparison and matches, filing the previous
-  build's rows under the fingerprint that supersedes them. `api.handle_api_data`
-  and `api.handle_api_stats` stat before their cursor opens for the same
-  reason; a new DB-derived memo takes its token the same way or states why its
-  read cannot straddle a rebuild.
-- One response, one read snapshot. Any handler that builds its answer from
-  more than one statement wraps them in `server.read_snapshot`, which `BEGIN`s
-  a deferred read transaction and rolls it back: python's sqlite3 opens a
-  transaction per statement, so an unpinned multi-statement read pairs one
-  build's rows with the next build's. The pinned call sites are
-  `server._section_stats` (`/stats`, `recoverage stats`), `api._build_data_raw`
-  (`/data`), the paginated function list (`total` beside the page it paginates),
-  the two function lookup routes (`/functions/<va>` and the batch POST, where
-  the resolution runs several statements before the `verify_results` read that
-  becomes `last_verify`), and the whole `potato.render_potato` render, the
-  widest window in the package. A new multi-statement reader either names
-  `read_snapshot` or explains why its statements cannot straddle a rebuild; a
-  WAL reader blocks no writer, so the pin is free. Pinned at
-  `tests/test_api.py` (`TestLookupSnapshotsArePinned`) and
-  `tests/test_potato.py` (`TestRenderIsPinnedToOneSnapshot`), which record
-  `connection.in_transaction` at every statement, so dropping the pin fails
-  rather than silently reopening the window.
+  Coverage-derived memos key on `server._snapshot_db_mtime`, and the potato ones
+  re-check the watermark before publishing, so a payload read from one snapshot
+  is never filed under a newer fingerprint. That token is stat'ed BEFORE the
+  snapshot is loaded (`render_potato` takes it before `coverage_for`, and hands
+  it to `_load_grid_cells` / `_section_stats_cached`), because a stat taken
+  after the read reads the post-rebuild value on both sides of the publish
+  comparison and matches, filing the previous build's rows under the fingerprint
+  that supersedes them. `api.handle_api_data` and `api.handle_api_stats` stat
+  before their snapshot load for the same reason; a new coverage-derived memo
+  takes its token the same way or states why its read cannot straddle a rebuild.
+- One response, one snapshot. A snapshot is frozen — every collection is a
+  tuple or a `MappingProxyType` — and `server.load_all_coverage` memoizes on the
+  documents' own stat, so an unchanged directory returns THE SAME snapshot
+  objects. A handler that builds its answer from several collections therefore
+  reads them all from one snapshot and cannot pair one build's cells with the
+  next build's functions; that is the guarantee the SQLite read transaction
+  used to buy, held by the type instead. The call sites are
+  `api._target_snapshot` (`/stats`, `/data`, the function list, both lookup
+  routes, `/asm`, `/bytes`), `cli._open_targets` (`recoverage stats`/`export`/
+  `check`) and the whole `potato.render_potato` render, the widest window in the
+  package. A new multi-collection reader either takes a snapshot or explains why
+  its reads cannot straddle a rebuild. Pinned at `tests/test_api.py` (the lookup
+  pin classes) and `tests/test_potato.py`
+  (`TestRenderIsPinnedToOneSnapshot`), which drive a rebuild from inside the
+  read and require the page to stay the first build's.
 - HTML/CSS/JS in `assets/` — no build step, VanJS for reactivity
 - The cell-state vocabulary is owned by rebrew (`rebrew.build_db._KNOWN_CELL_STATES`)
   and must be covered on the rendering side: `potato.COLORS` + `LEGEND_ITEMS`,
@@ -558,20 +556,20 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   `app.js`/`detail.js` are wrapped in IIFEs and share state via `window.RC`.
   Rationale-bearing `oxlint-disable` comments are the sanctioned escape hatch
   for UI error boundaries and VanJS idioms (see `oxlint.config.ts`).
-- Search compares names through `server.like_match`, never a hand-written
-  `OR` chain: SQLite's `LIKE` folds case for ASCII only, so a term carrying a
-  non-ASCII character needs `server.folded_like_clause` (NFC + casefold via the
-  `rc_fold` function `_open_db` registers) ORed into the same group, and every
-  column goes through `COALESCE(col, '')` because one NULL makes the predicate
-  NULL and a row with no `symbol` then matches nothing. The SPA folds the same
-  way in `app.js` (`foldForSearch`), except that it uses `toLowerCase` where
-  the server uses `casefold`, so a case-fold expansion such as `ß` → `ss`
-  matches through the API and not in the SPA. Name resolution folds the same
-  way: `server._lookup_by_va_or_name` tries the indexed byte equality first
-  and falls through to `rc_fold(name) = rc_fold(?)` on a miss, so the NFD
-  spelling a user pastes opens the row the search matched. A lookup added
-  beside it (globals, labels, anything compared for identity) must fold too;
-  byte equality there is the bug this paragraph exists to stop.
+- Search compares names through `server.fold_match`, never a hand-written
+  comparison: both sides go through `server.fold_text` (NFC composition plus
+  `str.casefold`), so a non-ASCII term matches, `ß` matches `ss`, and the NFD
+  spelling a user pastes matches the NFC one rebrew stored. A NULL column folds
+  as the empty string, which no non-empty term matches — the answer
+  `COALESCE(col, '')` gave a nullable `symbol`. The SPA folds in `app.js`
+  (`foldForSearch`) with `toLowerCase` where the server uses `casefold`, so a
+  case-fold expansion such as `ß` → `ss` matches through the API and not in the
+  SPA. Name resolution folds the same way: `server.lookup_function` /
+  `server.lookup_global` try the VA arm first, then byte equality on the name,
+  then the folded comparison — so the row the search highlighted opens by
+  name. A lookup added beside them (globals, labels, anything compared for
+  identity) must fold too; byte equality there is the bug this paragraph exists
+  to stop.
 - `_log_safe` escapes the characters that end a log line, which is C0, DEL,
   the C1 controls, and U+2028/U+2029 (a header value carries those literally,
   and every viewer that breaks on `\n` breaks on them). It deliberately leaves
@@ -645,15 +643,13 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   third thing (a non-ASCII digit is a rejected port, not a bound one). Two
   campaigns are differential rather than crash-only, because a status code
   cannot see a wrong answer: the search campaigns rebuild the matching set in
-  Python (ASCII-only folding for the LIKE disjunct, full folding for the
-  `rc_fold` disjunct, NULL as the empty string) and demand the query agree row
-  for row, and unwind each emitted LIKE pattern to prove it spells the term
-  and not a wildcard; the decoder campaigns pin `server.path_param` and
+  Python (`server.fold_text`, the one folding both sides go through) and demand
+  the query agree row for row; the decoder campaigns pin `server.path_param` and
   `server.decode_query_value` against `urllib.parse.unquote`, one pass and
   never a raise, with a 200 on `/src` and `/original` asserted byte-identical
-  to the file on disk. A LIKE pattern cannot spell a literal NUL (SQLite reads
-  it as a C string), so the search corpus carries none and the campaign claims
-  no answer it cannot get from the engine. No
+  to the file on disk. A search term cannot be a wildcard: the comparison is a
+  Python substring test, so there is no pattern to unwind and no spelling that
+  means anything but the literal text. No
   coverage-guided fuzzer is a
   project dependency, so the corpus lives in that file; a new surface gets a
   corpus entry there, not a new dependency.

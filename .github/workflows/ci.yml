@@ -299,9 +299,9 @@ jobs:
       # and no job may fetch the sibling any other way.
       - uses: ./.github/actions/sibling-rebrew
       - run: uv sync --locked --extra dev
-      - name: Boot dashboard against a sample coverage.db and probe it
+      - name: Boot dashboard against sample coverage documents and probe it
         run: make smoke
-      - name: Negative smoke (corrupt DB must degrade, not lie)
+      - name: Negative smoke (corrupt document must degrade, not lie)
         run: make smoke-fail
 
   sbom:

@@ -4,11 +4,11 @@ Module map (dependencies point one way, left to right):
 
 - ``config``      — RECOVERAGE_* parsing, validation, startup banner (no
   in-package deps)
-- ``_paths``      — coverage.db path resolution (imports config)
+- ``_paths``      — coverage-directory resolution (imports config)
 - ``regen``       — in-process rebrew regen: imports rebrew's catalog/build-db
   lazily and runs both under one call (no in-package deps)
-- ``server``      — Bottle app, hooks/auth, shared helpers (DB open, schema
-  check, compression, stats SQL, DLL cache); defines ``app`` plus its
+- ``server``      — Bottle app, hooks/auth, shared helpers (snapshot access,
+  compression, stats, DLL cache); defines ``app`` plus its
   cross-cutting wiring (auth/log/security-header hooks, 500 handler,
   OPTIONS preflight catch-all) but no content routes; configured at
   startup via ``configure_security()``

@@ -176,7 +176,7 @@
   };
 
   // Live reload via Server-Sent Events: subscribes to /api/events, where a
-  // db-updated event (coverage.db rewritten by rebrew build-db) triggers a grid
+  // db-updated event (coverage documents rewritten by rebrew build-db) triggers a grid
   // refresh.  EventSource reconnects on its own, so stream drops self-heal.
   let eventsDebounceTimer = null;
   const connectEvents = (onDbUpdated) => {
@@ -473,6 +473,18 @@
     };
     const minCellPx = () => (window.innerWidth < 700 ? 12 : 6);
 
+    // Cell size the map aims for, in CSS px.  The section's declared column
+    // count is the FLOOR, not the target: a 64-column section in a 1900px
+    // wrapper drew 28px blocks, six rows of them per screen, and a function's
+    // shape was unreadable without scrolling.  Filling the width with as many
+    // columns as this pitch affords instead paints the whole section as a
+    // compact lattice — the defragmenter map, one dot per cell — and because
+    // the row count falls with the wider lattice, it also makes the map SHORTER
+    // for the same number of cells.  A span keeps its column count, so a
+    // three-column function is three columns wide in both spellings; only the
+    // pixel size of a column changed.
+    const targetCellPx = 10;
+
     const layoutOf = (wrap) => {
       const gap = 2;
       const pad = 8;
@@ -483,34 +495,47 @@
       // leaves a blank band under a short canvas (an 8-cell section at 8
       // declared columns painted one row of 6px cells, then ~250px of grid
       // background).  Narrow screens shrink the cells to `min` instead.
-      const cols = Number(wrap.dataset.cols) || 64;
+      const declared = Number(wrap.dataset.cols) || 64;
+      const cols = Math.max(declared, Math.floor((usable + gap) / (targetCellPx + gap)));
       const cell = Math.max(min, (usable - gap * (cols - 1)) / cols);
       return { cols, gap, pad, cell };
     };
 
-    // A run of dots is drawn inside ONE row, so its usable length is bounded
-    // by the column count, and a run never occupies less than one dot.  Both
-    // ends matter: a span wider than the row wrote its hit-map entries off the
-    // end of that row and into the next (Int32Array drops the overflow, so the
-    // tail was unpaintable and unclickable), and pack.spans is a Uint16Array,
-    // so a span of 65536 stored as 0 there — cellW then computed 0 * cell +
-    // (0 - 1) * gap, a negative-width rect that claimed no column at all.
-    const spanAt = (pack, i, cols) => {
-      const s = pack.spans[i];
-      if (s < 1) return 1;
-      return s > cols ? cols : s;
-    };
-
+    // A block lays out like a line of text: it fills the columns left on its
+    // row, continues on the next, and ends where it ends.  A block wider than
+    // the row used to be clamped to it, so its tail was dropped from the map
+    // entirely — unpainted and unclickable — and a block that did not fit the
+    // columns left on its row jumped a whole line, leaving the rest of that
+    // row blank.  A dense lattice makes both the common case: a run is measured
+    // against the DECLARED width (64), not the one on screen.
+    //
+    // One PLACEMENT per line a block touches, so the rect geometry is per
+    // placement while the hit-map still answers every dot of the block with
+    // the same cell.  A span never occupies less than one dot: pack.spans is
+    // a Uint16Array, so a span of 65536 stored as 0 there would emit a
+    // zero-width placement that claims no column at all.
+    //
+    // Returns the line count and the placement count, so the counting pass
+    // below can size both geometry arrays before the filling pass runs.
     const walk = (pack, cols, fn) => {
       let col = 0;
       let row = 0;
+      let parts = 0;
       for (let i = 0; i < pack.n; i += 1) {
-        const s = spanAt(pack, i, cols);
-        if (col + s > cols && col > 0) { row += 1; col = 0; }
-        fn(i, col, row, s);
-        col += s;
-        if (col >= cols) { col = 0; row += 1; }
+        let left = pack.spans[i];
+        if (left < 1) left = 1;
+        while (left > 0) {
+          const take = Math.min(left, cols - col);
+          if (fn) fn(i, col, row, take);
+          parts += 1;
+          left -= take;
+          col += take;
+          if (col >= cols) { col = 0; row += 1; }
+        }
       }
+      // col > 0 means the last line is a partial one the loop never closed;
+      // an empty section (n == 0) is 0 lines, not 1.
+      return { rows: row + (col > 0 ? 1 : 0), parts };
     };
 
     // Layout (walk, rows, hit-map, canvas size) is cached per section and
@@ -540,20 +565,10 @@
       g.layWidth = width;
       g.cols = lay.cols;
       const { cols, gap, pad, cell } = lay;
-      // Row count first: walk is cheap, and sizing the map needs it upfront.
-      // A trailing row filled exactly is already counted, so an empty
-      // section (n == 0) is 0 rows, not 1.
-      let rows = 0;
-      {
-        let col = 0;
-        for (let i = 0; i < pack.n; i += 1) {
-          const s = spanAt(pack, i, cols);
-          if (col + s > cols && col > 0) { rows += 1; col = 0; }
-          col += s;
-          if (col >= cols) { col = 0; rows += 1; }
-        }
-        if (col > 0) rows += 1;
-      }
+      // One counting walk sizes the hit-map and the placement geometry; the
+      // filling walk below writes both.  Parts, not cells: a wrapped block
+      // owns one placement per line it crosses.
+      const { rows, parts } = walk(pack, cols, null);
       g.rows = rows;
       const map = new Int32Array(Math.max(1, rows) * cols);
       map.fill(-1);
@@ -561,23 +576,51 @@
       // Per-cell rect geometry, filled once per layout: the batched paint
       // below draws one path per state instead of one fillRect per cell
       // (~12ms -> ~2.6ms at 39k cells), and reuses these coords so it never
-      // re-walks.
+      // re-walks.  These name the cell's FIRST placement, which is what
+      // scrollCell needs; the paint reads the placement arrays.
       const cellX = new Float32Array(pack.n);
       const cellY = new Float32Array(pack.n);
       const cellW = new Float32Array(pack.n);
+      // Per-placement geometry, and the first placement of each cell so a
+      // stroke can walk the rest of a wrapped block (its placements are
+      // consecutive, by construction).
+      const cellFirst = new Int32Array(pack.n);
+      cellFirst.fill(-1);
+      const pCell = new Int32Array(parts);
+      const pX = new Float32Array(parts);
+      const pY = new Float32Array(parts);
+      const pW = new Float32Array(parts);
+      let placed = 0;
       walk(pack, cols, (i, col, row, s) => {
-        cellRow[i] = row;
         const base = row * cols + col;
         for (let k = 0; k < s; k += 1) map[base + k] = i;
-        cellX[i] = pad + col * (cell + gap);
-        cellY[i] = pad + row * (cell + gap);
-        cellW[i] = s * cell + (s - 1) * gap;
+        const x = pad + col * (cell + gap);
+        const y = pad + row * (cell + gap);
+        const w = s * cell + (s - 1) * gap;
+        if (cellFirst[i] < 0) {
+          cellFirst[i] = placed;
+          cellRow[i] = row;
+          cellX[i] = x;
+          cellY[i] = y;
+          cellW[i] = w;
+        }
+        pCell[placed] = i;
+        pX[placed] = x;
+        pY[placed] = y;
+        pW[placed] = w;
+        placed += 1;
       });
       g.map = map;
       g.cellRow = cellRow;
       g.cellX = cellX;
       g.cellY = cellY;
       g.cellW = cellW;
+      g.cellFirst = cellFirst;
+      g.parts = parts;
+      g.pCell = pCell;
+      g.pX = pX;
+      g.pY = pY;
+      g.pW = pW;
       const w = pad * 2 + cols * cell + Math.max(0, cols - 1) * gap;
       const h = pad * 2 + rows * cell + Math.max(0, rows - 1) * gap;
       const dpr = Math.min(2, window.devicePixelRatio || 1);
@@ -619,7 +662,7 @@
       layout(secName, pack, relayout);
       palette(secName, opts.retheme);
       const { cell } = g.lay;
-      const { ctx, pal, accent, cellX, cellY, cellW } = g;
+      const { ctx, pal, accent, cellFirst, parts, pCell, pX, pY, pW } = g;
       const filters = activeFilters.val;
       const filtering = filters.size > 0;
       const query = searchQuery.val;
@@ -633,7 +676,8 @@
       // assignment per cell dominated repaint (~12ms -> ~2.6ms at 39k
       // cells).  Opaque cells fill in the first pass, dimmed cells (filter
       // mismatch or search miss) in a second alpha pass, so globalAlpha
-      // changes twice per state instead of once per cell.
+      // changes twice per state instead of once per cell.  The loop is over
+      // PLACEMENTS, not cells: a block that wraps owns one per line.
       const isDim = (i) => ((filtering && !filters.has(FILTER_KEY[states[i]] || ""))
         || (query !== "" && !matched.has(fns[i])));
       for (let pass = 0; pass < 2; pass += 1) {
@@ -641,20 +685,25 @@
         for (let st = 0; st < pal.length; st += 1) {
           ctx.fillStyle = pal[st] || pal[0];
           ctx.beginPath();
-          for (let i = 0; i < n; i += 1) {
+          for (let k = 0; k < parts; k += 1) {
+            const i = pCell[k];
             if (states[i] !== st || (pass === 0) === isDim(i)) continue;
-            ctx.rect(cellX[i], cellY[i], cellW[i], cell);
+            ctx.rect(pX[k], pY[k], pW[k], cell);
           }
           ctx.fill();
         }
       }
       ctx.globalAlpha = 1;
-      // Selection + focus strokes stay per-cell: at most two rects.
+      // Selection + focus strokes stay per-cell: at most two cells' worth of
+      // rects.  Every placement of a cell is consecutive from its first, so a
+      // wrapped block is outlined on each line it crosses.
       const strokeActive = (i, dashed) => {
         ctx.strokeStyle = accent;
         ctx.lineWidth = dashed ? 1 : 2;
         if (dashed) ctx.setLineDash([2, 2]);
-        ctx.strokeRect(cellX[i] + 0.5, cellY[i] + 0.5, cellW[i] - 1, cell - 1);
+        for (let k = cellFirst[i]; k < parts && pCell[k] === i; k += 1) {
+          ctx.strokeRect(pX[k] + 0.5, pY[k] + 0.5, pW[k] - 1, cell - 1);
+        }
         if (dashed) ctx.setLineDash([]);
       };
       if (activeIdx != null && activeIdx >= 0 && activeIdx < n) strokeActive(activeIdx, false);
@@ -723,7 +772,7 @@
         // without this pins each one (canvas, 2D context, and the per-section
         // hit-map and geometry typed arrays) for the rest of the session.
         // Every reload drops the grids, and live reload fires on each
-        // coverage.db rebuild, so the observed set would grow without bound.
+        // coverage rebuild, so the observed set would grow without bound.
         // New wrappers re-observe on creation, so a disconnect here is safe.
         ro.disconnect();
         container.innerHTML = "";

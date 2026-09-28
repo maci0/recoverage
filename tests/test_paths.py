@@ -1,4 +1,4 @@
-"""Tests for recoverage._paths — db path resolution with rebrew-project.toml support."""
+"""Tests for recoverage._paths — coverage directory resolution."""
 
 from __future__ import annotations
 
@@ -27,20 +27,20 @@ def _force_distinct_mtime(path: Path) -> None:
 
 class TestResolveDbPath:
     def test_fallback_when_no_toml(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Falls back to <cwd>/db/coverage.db when no rebrew-project.toml is present."""
+        """Falls back to <cwd>/db when no rebrew-project.toml is present."""
         monkeypatch.chdir(tmp_path)
         result = _db_path()
-        assert result == tmp_path.resolve() / "db" / "coverage.db"
+        assert result == tmp_path.resolve() / "db"
 
     def test_reads_db_dir_from_project_section(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Reads [project] db_dir and appends coverage.db to the resolved path."""
+        """Reads [project] db_dir and returns the resolved coverage directory."""
         monkeypatch.chdir(tmp_path)
         toml = tmp_path / "rebrew-project.toml"
         toml.write_text('[project]\ndb_dir = "mydb"\n', encoding="utf-8")
         result = _db_path()
-        assert result == tmp_path.resolve() / "mydb" / "coverage.db"
+        assert result == tmp_path.resolve() / "mydb"
 
     def test_relative_db_dir_resolved_against_cwd(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -50,7 +50,7 @@ class TestResolveDbPath:
         toml = tmp_path / "rebrew-project.toml"
         toml.write_text('[project]\ndb_dir = "subdir/data"\n', encoding="utf-8")
         result = _db_path()
-        assert result == tmp_path.resolve() / "subdir" / "data" / "coverage.db"
+        assert result == tmp_path.resolve() / "subdir" / "data"
 
     def test_missing_db_dir_key_uses_fallback(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -60,7 +60,7 @@ class TestResolveDbPath:
         toml = tmp_path / "rebrew-project.toml"
         toml.write_text('[project]\nname = "myproject"\n', encoding="utf-8")
         result = _db_path()
-        assert result == tmp_path.resolve() / "db" / "coverage.db"
+        assert result == tmp_path.resolve() / "db"
 
     def test_empty_db_dir_string_uses_fallback(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -70,7 +70,7 @@ class TestResolveDbPath:
         toml = tmp_path / "rebrew-project.toml"
         toml.write_text('[project]\ndb_dir = ""\n', encoding="utf-8")
         result = _db_path()
-        assert result == tmp_path.resolve() / "db" / "coverage.db"
+        assert result == tmp_path.resolve() / "db"
 
     def test_invalid_toml_is_an_error(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -106,7 +106,7 @@ class TestResolveDbPath:
         """RECOVERAGE_DB is applied before the project file is read."""
         from conftest import wsgi_get
 
-        db = Path("db/coverage.db").resolve()
+        db = Path("db").resolve()
         monkeypatch.chdir(tmp_path)
         (tmp_path / "rebrew-project.toml").write_text("this is not valid toml }{", encoding="utf-8")
         monkeypatch.setenv("RECOVERAGE_DB", str(db))
@@ -121,17 +121,15 @@ class TestResolveDbPath:
         toml = tmp_path / "rebrew-project.toml"
         toml.write_text('[targets.foo]\nbinary = "foo.exe"\n', encoding="utf-8")
         result = _db_path()
-        assert result == tmp_path.resolve() / "db" / "coverage.db"
+        assert result == tmp_path.resolve() / "db"
 
-    def test_result_ends_with_coverage_db(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Regardless of configuration, the filename is always coverage.db."""
+    def test_result_names_the_db_dir(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Regardless of configuration, the last component is the db dir."""
         monkeypatch.chdir(tmp_path)
         toml = tmp_path / "rebrew-project.toml"
         toml.write_text('[project]\ndb_dir = "custom"\n', encoding="utf-8")
         result = _db_path()
-        assert result.name == "coverage.db"
+        assert result.name == "custom"
 
     def test_result_is_absolute(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Returned path is always absolute."""
@@ -149,10 +147,10 @@ class TestDbPathMemoInvalidation:
         monkeypatch.chdir(tmp_path)
         toml = tmp_path / "rebrew-project.toml"
         toml.write_text('[project]\ndb_dir = "first"\n', encoding="utf-8")
-        assert _db_path() == tmp_path.resolve() / "first" / "coverage.db"
+        assert _db_path() == tmp_path.resolve() / "first"
         toml.write_text('[project]\ndb_dir = "second"\n', encoding="utf-8")
         _force_distinct_mtime(toml)
-        assert _db_path() == tmp_path.resolve() / "second" / "coverage.db"
+        assert _db_path() == tmp_path.resolve() / "second"
 
     def test_same_size_rewrite_is_picked_up(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -161,10 +159,10 @@ class TestDbPathMemoInvalidation:
         monkeypatch.chdir(tmp_path)
         toml = tmp_path / "rebrew-project.toml"
         toml.write_text('[project]\ndb_dir = "aaaaaa"\n', encoding="utf-8")
-        assert _db_path() == tmp_path.resolve() / "aaaaaa" / "coverage.db"
+        assert _db_path() == tmp_path.resolve() / "aaaaaa"
         toml.write_text('[project]\ndb_dir = "bbbbbb"\n', encoding="utf-8")
         _force_distinct_mtime(toml)
-        assert _db_path() == tmp_path.resolve() / "bbbbbb" / "coverage.db"
+        assert _db_path() == tmp_path.resolve() / "bbbbbb"
 
     def test_deleted_config_falls_back(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -173,9 +171,9 @@ class TestDbPathMemoInvalidation:
         monkeypatch.chdir(tmp_path)
         toml = tmp_path / "rebrew-project.toml"
         toml.write_text('[project]\ndb_dir = "custom"\n', encoding="utf-8")
-        assert _db_path() == tmp_path.resolve() / "custom" / "coverage.db"
+        assert _db_path() == tmp_path.resolve() / "custom"
         toml.unlink()
-        assert _db_path() == tmp_path.resolve() / "db" / "coverage.db"
+        assert _db_path() == tmp_path.resolve() / "db"
 
     def test_cwd_change_switches_resolution(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -187,9 +185,9 @@ class TestDbPathMemoInvalidation:
             '[project]\ndb_dir = "one"\n', encoding="utf-8"
         )
         monkeypatch.chdir(tmp_path)
-        assert _db_path() == tmp_path.resolve() / "one" / "coverage.db"
+        assert _db_path() == tmp_path.resolve() / "one"
         monkeypatch.chdir(other)
-        assert _db_path() == other.resolve() / "db" / "coverage.db"
+        assert _db_path() == other.resolve() / "db"
 
     def test_env_override_beats_project_config(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -200,8 +198,8 @@ class TestDbPathMemoInvalidation:
             '[project]\ndb_dir = "one"\n', encoding="utf-8"
         )
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setenv("RECOVERAGE_DB", str(tmp_path / "elsewhere" / "coverage.db"))
-        assert _db_path() == tmp_path / "elsewhere" / "coverage.db"
+        monkeypatch.setenv("RECOVERAGE_DB", str(tmp_path / "elsewhere"))
+        assert _db_path() == tmp_path / "elsewhere"
         # Unset again: the project resolution returns, with no stale memo.
         monkeypatch.delenv("RECOVERAGE_DB")
-        assert _db_path() == tmp_path.resolve() / "one" / "coverage.db"
+        assert _db_path() == tmp_path.resolve() / "one"

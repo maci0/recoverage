@@ -5,7 +5,6 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
-import sqlite3
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager as ContextManager
 
@@ -131,10 +130,15 @@ class TestRedCounters:
         assert body["requests"]["errors"] >= 1
 
     def test_db_failure_is_counted_as_503(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        def _raise() -> None:
-            raise sqlite3.OperationalError("database is locked")
+        from rebrew.coverage_toml import CoverageTomlError
 
-        monkeypatch.setattr(_api, "_db", _raise)
+        def _raise() -> None:
+            raise CoverageTomlError("no readable coverage document")
+
+        # The coverage read is what a target-scoped handler runs first, so
+        # patching it is the "the storage layer cannot answer" fault this test
+        # is about; it used to be a sqlite3.OperationalError out of `_db`.
+        monkeypatch.setattr(_api, "resolve_targets", _raise)
         status, _headers, _ = wsgi_get("/api/targets/FAKEDLL/stats")
         assert status.startswith("503"), status
         body = _health()

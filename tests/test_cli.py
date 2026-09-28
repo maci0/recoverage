@@ -13,6 +13,8 @@ from typing import Any
 
 import pytest
 from conftest import HAS_DB
+from coverage_fixture import cell, write_coverage
+from rebrew.coverage_toml import CoverageTomlError
 from typer.testing import CliRunner
 
 from recoverage import cli, devserver
@@ -136,6 +138,55 @@ class TestVersionFlag:
         result = runner.invoke(app, ["--version"])
         assert result.exit_code == 0
         assert "recoverage" in result.output
+
+
+class TestBareInvocationServes:
+    """`recoverage` with no arguments serves the dashboard.
+
+    Click's "Missing command" is what a user standing in a rebrew project
+    directory used to get, which is the one answer that helps nobody: the
+    dashboard is the only thing most invocations want, and `serve` is the
+    only spelling of it that requires remembering the subcommand.  Any
+    argument at all keeps click's own answer, so `recoverage --help` still
+    prints help and `recoverage --version` still prints the version.
+    """
+
+    def test_bare_argv_runs_serve(self) -> None:
+        assert cli._argv_with_default_command(["recoverage"]) == ["recoverage", "serve"]
+
+    @pytest.mark.parametrize(
+        "argv",
+        [
+            ["recoverage", "serve"],
+            ["recoverage", "stats"],
+            ["recoverage", "serve", "--port", "9000"],
+            ["recoverage", "--no-color", "stats"],
+            ["recoverage", "--help"],
+        ],
+    )
+    def test_any_argument_is_left_alone(self, argv: list[str]) -> None:
+        assert cli._argv_with_default_command(argv) == argv
+
+    def test_bare_run_reaches_the_server(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # End to end through the entry point, with the listener stubbed: the
+        # proof is that `serve`'s banner is printed, not click's error.
+        class _StubApp:
+            @staticmethod
+            def run(**_kwargs: Any) -> None:
+                raise KeyboardInterrupt
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("recoverage.webapp.app", _StubApp)
+        monkeypatch.setattr(cli, "open_browser", lambda _url: None)
+        monkeypatch.setattr(sys, "argv", ["recoverage"])
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+        assert exc.value.code == 0
+        out = capsys.readouterr().out
+        assert "Serving coverage dashboard at" in out
+        assert "Missing command" not in out
 
 
 class TestLogStamp:
@@ -312,13 +363,21 @@ class TestExportCommand:
 class TestStatsCommand:
     def test_stats_runs(self) -> None:
         """The table is the deliverable, so read it: exit code 0 says only
-        that nothing raised. The synthetic DB seeds FAKEDLL with 3 functions
-        and two sections, and `.text` is 3 of 8 cells matched (87.5%)."""
+        that nothing raised. The synthetic coverage seeds FAKEDLL with 3
+        functions and two sections, and `.text` is 87.5% covered by bytes
+        (112 of its 128 cell bytes are not 'none').
+
+        The function line is derived now, not read from a stored summary blob:
+        rebrew counts a function matched when it is byte-identical, so _func_a
+        (EXACT) and _func_b (RELOC) are 2 of the 3, and only _func_c (STUB) is
+        not.  The SQLite fixture hand-wrote a summary without the
+        matchedFunctions key, so the CLI's default of 0 stood in for it.
+        """
         result = runner.invoke(app, ["stats"])
         assert result.exit_code == 0
         out = result.output
         assert "FAKEDLL" in out
-        assert "Functions: 0/3 matched" in out
+        assert "Functions: 2/3 matched" in out
         assert ".text" in out and ".data" in out
         assert "87.5%" in out
 
@@ -333,46 +392,44 @@ class TestStatsCommand:
 # ── Check command ─────────────────────────────────────────────────
 
 
-def _make_section_db(
-    path: Path,
+#: Target id every throwaway document below writes, which is the id the
+#: assertions that read them name.
+FIXTURE_TARGET = "T"
+
+
+def _coverage_dir(tmp_path: Path, *parts: str) -> Path:
+    """A directory a throwaway coverage document can be written into.
+
+    ``RECOVERAGE_DB`` names the coverage directory itself, but the readers
+    resolve it back to a project root (rebrew's ``<root>/db``), so a fixture
+    directory has to be called ``db`` for the read to land where the write did.
+    Extra *parts* give one test several independent roots, so a second fixture
+    cannot be read through the first one's override.
+    """
+    directory = tmp_path.joinpath(*parts, "db")
+    directory.mkdir(parents=True)
+    return directory
+
+
+def _write_sections(
+    directory: Path,
     sections: list[str],
     cells: list[tuple[str, int, int, str]],
-) -> None:
-    """Build a minimal DB: each *section* is 100 bytes with one cell per entry."""
-    import sqlite3 as _sqlite3
+) -> Path:
+    """Write one coverage document: each *section* is 100 bytes, one cell per entry.
 
-    conn = _sqlite3.connect(path)
-    try:
-        c = conn.cursor()
-        c.execute(
-            "CREATE TABLE metadata (target TEXT, key TEXT, value TEXT, PRIMARY KEY (target, key))"
-        )
-        c.execute(
-            "CREATE TABLE sections (target TEXT, name TEXT, va INTEGER,"
-            " size INTEGER, fileOffset INTEGER, unitBytes INTEGER,"
-            " columns INTEGER, PRIMARY KEY (target, name))"
-        )
-        c.execute(
-            "CREATE TABLE cells (id INTEGER PRIMARY KEY AUTOINCREMENT,"
-            " target TEXT, section_name TEXT, start INTEGER, end INTEGER,"
-            " span INTEGER DEFAULT 1, state TEXT, functions TEXT DEFAULT '[]',"
-            " label TEXT, parent_function TEXT)"
-        )
-        c.execute("CREATE TABLE functions (target TEXT, status TEXT, markerType TEXT)")
-        c.execute(
-            "INSERT INTO metadata VALUES ('T','summary',?)",
-            (json.dumps({"totalFunctions": 1}),),
-        )
-        for name in sections:
-            c.execute("INSERT INTO sections VALUES ('T',?,0,100,0,16,8)", (name,))
-        for sec_name, start, end, state in cells:
-            c.execute(
-                "INSERT INTO cells (target, section_name, start, end, state) VALUES ('T',?,?,?,?)",
-                (sec_name, start, end, state),
-            )
-        conn.commit()
-    finally:
-        conn.close()
+    The document-era replacement for the throwaway SQLite database: the CLI
+    reads rebrew's ``coverage-*.toml`` now, so a test-local fixture is a
+    directory of documents rather than a scratch ``coverage.db``.  *directory*
+    comes from :func:`_coverage_dir`, and the caller points the CLI at it with
+    ``monkeypatch.setenv("RECOVERAGE_DB", str(directory))``.
+    """
+    definitions: dict[str, dict[str, Any]] = {
+        name: {"size": 100, "unitBytes": 16, "columns": 8, "cells": []} for name in sections
+    }
+    for section, start, end, state in cells:
+        definitions[section]["cells"].append(cell(start, end, state))
+    return write_coverage(directory, FIXTURE_TARGET, definitions)
 
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
@@ -413,25 +470,25 @@ class TestCheckCommand:
         coverage_pct: 999997/1000000 bytes is truly 99.9997% covered even
         though _section_stats stores it as 100.0, so --min-coverage 100 must
         FAIL — and a ratio exactly at the threshold still PASSes."""
-        db = tmp_path / "cov.db"
-        _make_section_db(
-            db,
+        near = _coverage_dir(tmp_path, "near")
+        _write_sections(
+            near,
             [".text"],
             [(".text", 0, 999_997, "exact"), (".text", 999_997, 1_000_000, "none")],
         )
-        monkeypatch.setattr("recoverage.cli._db_path", lambda: db)
+        monkeypatch.setenv("RECOVERAGE_DB", str(near))
         result = runner.invoke(app, ["check", "--min-coverage", "100", "--json"])
         assert result.exit_code == 1
         payload = json.loads(result.output)
         assert payload["passed"] is False
 
-        exact_db = tmp_path / "exact.db"
-        _make_section_db(
-            exact_db,
+        exact = _coverage_dir(tmp_path, "exact")
+        _write_sections(
+            exact,
             [".text"],
             [(".text", 0, 875, "exact"), (".text", 875, 1_000, "none")],
         )
-        monkeypatch.setattr("recoverage.cli._db_path", lambda: exact_db)
+        monkeypatch.setenv("RECOVERAGE_DB", str(exact))
         result = runner.invoke(app, ["check", "--min-coverage", "87.5", "--json"])
         assert result.exit_code == 0
         payload = json.loads(result.output)
@@ -483,14 +540,14 @@ class TestCheckCommand:
     ) -> None:
         """Sections whose cells are all 'none' carry no coverage signal and
         must not fail the gate; explicitly gating one must fail loudly."""
-        db = tmp_path / "cov.db"
-        _make_section_db(
-            db,
+        directory = _coverage_dir(tmp_path)
+        _write_sections(
+            directory,
             [".text", ".data"],
             [(".text", 0, 50, "exact"), (".text", 50, 100, "none"), (".data", 0, 100, "none")],
         )
 
-        monkeypatch.setattr("recoverage.cli._db_path", lambda: db)
+        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
         # Untracked .data must be skipped; .text (50%) is still evaluated.
         result = runner.invoke(app, ["check", "--min-coverage", "50"])
         assert result.exit_code == 0
@@ -502,10 +559,10 @@ class TestCheckCommand:
         assert result.exit_code == 1
         assert "no tracked cells" in result.output
         # A project with nothing tracked must not pass vacuously.
-        db2 = tmp_path / "cov2.db"
-        _make_section_db(db2, [".text"], [(".text", 0, 100, "none")])
+        untracked = _coverage_dir(tmp_path, "untracked")
+        _write_sections(untracked, [".text"], [(".text", 0, 100, "none")])
 
-        monkeypatch.setattr("recoverage.cli._db_path", lambda: db2)
+        monkeypatch.setenv("RECOVERAGE_DB", str(untracked))
         result = runner.invoke(app, ["check", "--min-coverage", "0"])
         assert result.exit_code == 1
         assert "nothing was checked" in result.output
@@ -552,10 +609,10 @@ class TestExportCsvFormulaInjection:
     def _export_rows(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, section: str
     ) -> list[list[str]]:
-        """Export a one-section DB as CSV; return the parsed rows."""
-        db = tmp_path / "cov.db"
-        _make_section_db(db, [section], [(section, 0, 100, "exact")])
-        monkeypatch.setattr("recoverage.cli._db_path", lambda: db)
+        """Export a one-section document as CSV; return the parsed rows."""
+        directory = _coverage_dir(tmp_path)
+        _write_sections(directory, [section], [(section, 0, 100, "exact")])
+        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
 
         result = runner.invoke(app, ["export", "--format", "csv"])
         assert result.exit_code == 0
@@ -599,12 +656,12 @@ class TestExportCsvStdoutEncoding:
     def _export_to_ascii_stdout(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, section: str
     ) -> bytes:
-        """Export a one-section DB with an ASCII stdout; return the raw bytes."""
+        """Export a one-section document with an ASCII stdout; return the raw bytes."""
         from recoverage.cli import ExportFormat, export
 
-        db = tmp_path / "cov.db"
-        _make_section_db(db, [section], [(section, 0, 100, "exact")])
-        monkeypatch.setattr("recoverage.cli._db_path", lambda: db)
+        directory = _coverage_dir(tmp_path)
+        _write_sections(directory, [section], [(section, 0, 100, "exact")])
+        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
 
         sink = io.BytesIO()
         real_stdout = sys.stdout
@@ -677,86 +734,54 @@ class TestStatsNullSectionSize:
     def test_stats_survives_null_section_size(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A schema-legal NULL sections.size on a section that has cells must
-        render as "0 B", not crash `recoverage stats`/`export` with a raw
-        TypeError from f"{size_bytes:,}" (None is not formattable)."""
-        import sqlite3
+        """A coverage document with no recorded size for a section that has
+        cells must render as "0 B", not crash `recoverage stats`/`export` with
+        a raw TypeError from f"{size_bytes:,}" (None is not formattable).
 
-        db = tmp_path / "coverage.db"
-        conn = sqlite3.connect(db)
-        try:
-            c = conn.cursor()
-            c.execute("CREATE TABLE metadata (target TEXT, key TEXT, value TEXT)")
-            c.execute(
-                "CREATE TABLE sections (target TEXT, name TEXT, va INTEGER,"
-                " size INTEGER, fileOffset INTEGER, unitBytes INTEGER,"
-                " columns INTEGER, PRIMARY KEY (target, name))"
-            )
-            c.execute(
-                "CREATE TABLE cells (id INTEGER PRIMARY KEY AUTOINCREMENT,"
-                " target TEXT, section_name TEXT, start INTEGER, end INTEGER,"
-                " span INTEGER DEFAULT 1, state TEXT, functions TEXT DEFAULT '[]',"
-                " label TEXT, parent_function TEXT)"
-            )
-            c.execute("CREATE TABLE functions (target TEXT, status TEXT, markerType TEXT)")
-            c.execute(
-                "CREATE VIEW section_cell_stats AS"
-                " SELECT target, section_name, COUNT(*) as total_cells,"
-                " SUM(CASE WHEN state = 'exact' THEN 1 ELSE 0 END) as exact_count,"
-                " SUM(CASE WHEN state = 'reloc' THEN 1 ELSE 0 END) as reloc_count,"
-                " SUM(CASE WHEN state IN ('near_match','near_matching') THEN 1 ELSE 0 END)"
-                "   as near_match_count,"
-                " SUM(CASE WHEN state = 'stub' THEN 1 ELSE 0 END) as stub_count,"
-                " SUM(CASE WHEN state = 'padding' THEN 1 ELSE 0 END) as padding_count,"
-                " SUM(CASE WHEN state = 'data' THEN 1 ELSE 0 END) as data_count,"
-                " SUM(CASE WHEN state = 'thunk' THEN 1 ELSE 0 END) as thunk_count,"
-                " SUM(CASE WHEN state = 'none' THEN 1 ELSE 0 END) as none_count,"
-                " SUM(CASE WHEN state = 'proven' THEN 1 ELSE 0 END) as proven_count,"
-                " SUM(CASE WHEN state = 'size_mismatch' THEN 1 ELSE 0 END)"
-                "   as size_mismatch_count"
-                " FROM cells GROUP BY target, section_name"
-            )
-            c.execute("INSERT INTO metadata VALUES ('T','summary','{}')")
-            # .bss shape: every column NULL except identity.
-            c.execute("INSERT INTO sections VALUES ('T','.bss',NULL,NULL,NULL,NULL,NULL)")
-            c.execute(
-                "INSERT INTO cells (target, section_name, start, end, state)"
-                " VALUES ('T','.bss',0,16,'none')"
-            )
-            conn.commit()
-        finally:
-            conn.close()
+        TOML has no null: the schema's NULL ``sections.size`` — the .bss shape,
+        which has no file extent — is the absent key, and the reader defaults
+        it to 0.
+        """
+        directory = _coverage_dir(tmp_path)
+        # .bss shape: a cell to report and no va/size/fileOffset at all.
+        write_coverage(directory, FIXTURE_TARGET, {".bss": {"cells": [cell(0, 16, "none")]}})
 
-        monkeypatch.setattr("recoverage.cli._db_path", lambda: db)
+        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
         result = runner.invoke(app, ["stats"])
         assert result.exit_code == 0
         assert ".bss" in result.output
         assert "0 B" in result.output
 
 
-class TestPartialSchemaCleanExit:
-    """A DB that lists targets but cannot answer stats queries must exit 2
-    with a rebuild hint, not a traceback (same contract as _select_targets)."""
+class TestUnreadableCoverageCleanExit:
+    """A document that cannot be read as coverage must exit 2 with a rebuild
+    hint, not a traceback (same contract as _select_targets).
 
-    def test_stats_clean_error_on_partial_schema(
+    The SQLite era probed a partially-created database — one that listed
+    targets but had none of the tables the stats queries needed.  The document
+    era's equivalent is a file that carries the ``coverage-*.toml`` name and
+    none of the schema, which the reader skips; with no readable document left
+    the command has nothing to report coverage from.
+    """
+
+    def test_stats_clean_error_on_unreadable_document(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        import sqlite3
+        directory = _coverage_dir(tmp_path)
+        # Valid TOML, wrong shape: `sections` is a table of tables in the
+        # schema, so a string here is what makes the reader refuse the file.
+        (directory / f"coverage-{FIXTURE_TARGET}.toml").write_text(
+            'version = 1\ntarget = "T"\nsections = "not a table"\n', encoding="utf-8"
+        )
 
-        db = tmp_path / "coverage.db"
-        conn = sqlite3.connect(db)
-        conn.execute("CREATE TABLE metadata (target TEXT, key TEXT, value TEXT)")
-        conn.execute("INSERT INTO metadata VALUES ('t1', 'db_version', '\"4\"')")
-        conn.commit()
-        conn.close()
-
-        monkeypatch.setattr("recoverage.cli._db_path", lambda: db)
+        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
         result = runner.invoke(app, ["stats"])
         assert result.exit_code == 2
         assert "rebuild" in result.output
-        # The partial schema must surface as the clean exit 2 above, not as a
-        # leaked sqlite3 error riding out through the runner.
-        assert not isinstance(result.exception, sqlite3.OperationalError)
+        # The unreadable document must surface as the clean exit 2 above, not
+        # as a leaked reader error riding out through the runner.
+        assert "Traceback" not in result.output
+        assert not isinstance(result.exception, CoverageTomlError)
 
 
 class TestBrokenProjectFile:
@@ -788,20 +813,20 @@ class TestBrokenProjectFile:
 
 class TestCheckMissingDbExitCode:
     def test_missing_db_exits_2(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """A missing database is an infrastructure error: README documents
-        exit 2 for `check` (database missing/unreadable), distinct from the
+        """A missing coverage set is an infrastructure error: README documents
+        exit 2 for `check` (coverage missing/unreadable), distinct from the
         gate-failure exit 1 a CI consumer acts on."""
         monkeypatch.chdir(tmp_path)
         result = runner.invoke(app, ["check", "--min-coverage", "60"])
         assert result.exit_code == 2
-        assert "database not found" in result.output
+        assert "coverage not found" in result.output
 
 
 class TestJsonErrorEnvelope:
     """A machine-readable mode answers every failure in one shape.
 
     `check --json` emitted a JSON envelope for a failed gate, a bad
-    --min-coverage and an empty result set, but a missing database and an
+    --min-coverage and an empty result set, but a missing coverage set and an
     unknown --target still printed a plain stderr line, and `stats --json` /
     `export --format json` had no envelope at all.  A script piping the JSON
     channel into a parser therefore had to special-case which failure it was.
@@ -809,7 +834,7 @@ class TestJsonErrorEnvelope:
     {"error": ..., "exit_code": N} on stdout, with the exit status unchanged.
     """
 
-    MISSING = "database not found"
+    MISSING = "coverage not found"
 
     def test_check_json_missing_db(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.chdir(tmp_path)
@@ -889,13 +914,13 @@ class TestCheckExplicitUntrackedSectionVerdict:
         """Gating an explicitly requested untracked section records FAIL; that
         verdict — not the generic 'nothing was checked' error object — must be
         what --json emits."""
-        db = tmp_path / "cov.db"
-        _make_section_db(
-            db,
+        directory = _coverage_dir(tmp_path)
+        _write_sections(
+            directory,
             [".text", ".rdata"],
             [(".text", 0, 100, "exact"), (".rdata", 0, 100, "none")],
         )
-        monkeypatch.setattr("recoverage.cli._db_path", lambda: db)
+        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
 
         result = runner.invoke(
             app, ["check", "--min-coverage", "60", "--section", ".rdata", "--json"]
@@ -905,7 +930,7 @@ class TestCheckExplicitUntrackedSectionVerdict:
         assert payload["passed"] is False
         assert payload["results"] == [
             {
-                "target": "T",
+                "target": FIXTURE_TARGET,
                 "section": ".rdata",
                 "status": "FAIL",
                 "reason": "no tracked cells — coverage is not recorded for this section",
@@ -918,21 +943,11 @@ class TestCheckExplicitUntrackedSectionVerdict:
     ) -> None:
         """With no explicit section and nothing tracked anywhere, the guard
         still fires: no recorded coverage must not pass vacuously."""
-        db = tmp_path / "cov.db"
-        _make_section_db(
-            db,
-            [".text", ".rdata"],
-            [(".text", 0, 100, "exact"), (".rdata", 0, 100, "none")],
-        )
-        monkeypatch.setattr("recoverage.cli._db_path", lambda: db)
-
-        # Drop the tracked .text cell so every section is untracked.
-        import sqlite3 as _sqlite3
-
-        conn = _sqlite3.connect(db)
-        conn.execute("DELETE FROM cells WHERE section_name = '.text'")
-        conn.commit()
-        conn.close()
+        directory = _coverage_dir(tmp_path)
+        # .text carries no cell at all (the SQLite version dropped the one it
+        # had), so only .rdata's untracked 'none' cell is left to evaluate.
+        _write_sections(directory, [".text", ".rdata"], [(".rdata", 0, 100, "none")])
+        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
 
         result = runner.invoke(app, ["check", "--min-coverage", "0", "--json"])
         assert result.exit_code == 1
@@ -1026,6 +1041,59 @@ class TestServeServerWiring:
 
         assert devserver._KeepAliveRequestHandler.protocol_version == "HTTP/1.1"
         assert devserver._KeepAliveServerHandler.http_version == "1.1"
+
+    @pytest.mark.parametrize(
+        "error", [TimeoutError("timed out"), ConnectionResetError("peer gone")]
+    )
+    def test_a_dead_connection_closes_without_a_traceback(self, error: BaseException) -> None:
+        """An idle keep-alive peer must not print a socketserver traceback.
+
+        The readline that reads the NEXT request runs under the 15s idle
+        deadline, so every browser tab that sat still tripped it, and
+        socketserver prints a full traceback for anything escaping ``handle()``.
+        The dashboard was working; the log was a dozen lines of noise per tab.
+        """
+        handler = devserver._KeepAliveRequestHandler.__new__(devserver._KeepAliveRequestHandler)
+
+        class _DeadRFile:
+            def readline(self, limit: int) -> bytes:
+                raise error
+
+        handler.rfile = _DeadRFile()  # type: ignore[assignment]
+        handler.handle()  # must return, not raise
+
+    def test_a_served_request_still_walks_the_loop(self) -> None:
+        """The quiet close must not swallow the loop: a real request line is
+        read, dispatched, and the next one read until the peer stops sending."""
+        served: list[str] = []
+        handler = devserver._KeepAliveRequestHandler.__new__(devserver._KeepAliveRequestHandler)
+        lines = [b"GET /a HTTP/1.1\r\n\r\n", b"GET /b HTTP/1.1\r\n\r\n", b""]
+
+        class _RFile:
+            def readline(self, limit: int) -> bytes:
+                return lines.pop(0) if lines else b""
+
+        def parse_request() -> bool:
+            served.append(handler.raw_requestline.split()[1].decode())
+            handler.close_connection = False  # the response was framed
+            return True
+
+        handler.rfile = _RFile()  # type: ignore[assignment]
+        handler.connection = _FakeConnection()  # type: ignore[assignment]
+        handler.parse_request = parse_request  # type: ignore[method-assign]
+        handler._run_wsgi = lambda: None  # type: ignore[method-assign]
+        handler.handle()
+        assert served == ["/a", "/b"]
+
+
+class _FakeConnection:
+    """Just enough socket for the keep-alive loop's settimeout calls."""
+
+    def __init__(self) -> None:
+        self.timeouts: list[float] = []
+
+    def settimeout(self, value: float) -> None:
+        self.timeouts.append(value)
 
 
 class TestResponseFraming:
@@ -1242,40 +1310,15 @@ def test_export_md_rows_match_the_header() -> None:
 # ── stdout encoding ───────────────────────────────────────────────
 
 
-def _unicode_db(path: Path) -> Path:
-    """A DB whose target id and section name are both non-ASCII."""
-    import sqlite3 as _sqlite3
-
-    conn = _sqlite3.connect(path)
-    try:
-        c = conn.cursor()
-        c.execute("CREATE TABLE metadata (target TEXT, key TEXT, value TEXT)")
-        c.execute(
-            "CREATE TABLE sections (target TEXT, name TEXT, va INTEGER, size INTEGER,"
-            " fileOffset INTEGER, unitBytes INTEGER, columns INTEGER)"
-        )
-        c.execute(
-            "CREATE TABLE cells (id INTEGER PRIMARY KEY AUTOINCREMENT, target TEXT,"
-            " section_name TEXT, start INTEGER, end INTEGER, span INTEGER DEFAULT 1,"
-            " state TEXT, functions TEXT DEFAULT '[]', label TEXT, parent_function TEXT)"
-        )
-        c.execute(
-            "CREATE TABLE functions (target TEXT, va INTEGER, name TEXT, status TEXT,"
-            " markerType TEXT)"
-        )
-        c.execute(
-            "INSERT INTO metadata VALUES ('café & bar','summary',?)",
-            (json.dumps({"totalFunctions": 1}),),
-        )
-        c.execute("INSERT INTO sections VALUES ('café & bar','.données',0,100,0,16,8)")
-        c.execute(
-            "INSERT INTO cells (target, section_name, start, end, state)"
-            " VALUES ('café & bar','.données',0,50,'exact')"
-        )
-        conn.commit()
-    finally:
-        conn.close()
-    return path
+def _unicode_dir(tmp_path: Path) -> Path:
+    """A coverage directory whose target id and section name are both non-ASCII."""
+    directory = _coverage_dir(tmp_path)
+    write_coverage(
+        directory,
+        "café & bar",
+        {".données": {"size": 100, "unitBytes": 16, "columns": 8, "cells": [cell(0, 50, "exact")]}},
+    )
+    return directory
 
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
@@ -1296,8 +1339,8 @@ class TestExportStdoutEncoding:
     def test_csv_export_survives_an_ascii_stdout(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        db = _unicode_db(tmp_path / "unicode.db")
-        monkeypatch.setattr("recoverage.cli._db_path", lambda: db)
+        directory = _unicode_dir(tmp_path)
+        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
         buffer = self._ascii_stdout(monkeypatch)
         # Called directly, not through CliRunner: the runner swaps in its own
         # UTF-8 stdout, which is exactly the codec under test.
@@ -1308,8 +1351,8 @@ class TestExportStdoutEncoding:
     def test_md_export_survives_an_ascii_stdout(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        db = _unicode_db(tmp_path / "unicode.db")
-        monkeypatch.setattr("recoverage.cli._db_path", lambda: db)
+        directory = _unicode_dir(tmp_path)
+        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
         buffer = self._ascii_stdout(monkeypatch)
         cli.export(output_format=cli.ExportFormat.md, target=None)
         sys.stdout.flush()

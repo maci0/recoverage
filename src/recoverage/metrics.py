@@ -1,7 +1,7 @@
 """In-process RED counters for the dashboard server.
 
 The server is a single process serving one operator (or one team behind a
-shared ``coverage.db``).  There is no metrics backend to push to, so the
+shared coverage read).  There is no metrics backend to push to, so the
 numbers live in memory and are read back through ``/api/health``: request
 count, error count, slow-request count, and the latency extremes needed to
 tell "one slow request" from "every request got slower".

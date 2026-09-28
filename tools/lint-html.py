@@ -75,7 +75,7 @@ def main() -> int:
 
     with scratch_project_dir() as project_dir:
         if not build_sample_db(project_dir).is_file():
-            print("sample coverage.db not built")
+            print("sample coverage document not built")
             return 1
 
         with running_server(project_dir) as (port, _):

@@ -28,8 +28,9 @@ checkout with uncommitted changes it stops instead of discarding the work; run
 
 The sibling checkout is not optional. `pyproject.toml` pins rebrew to
 `path = "../rebrew"`, and recoverage imports `rebrew.workspace` for
-`rebrew-project.toml` / `coverage.db` resolution plus rebrew's
-catalog/build-db for regen, so `uv sync` cannot resolve without it. Without
+`rebrew-project.toml` / coverage-directory resolution plus rebrew's coverage
+reader and its catalog/build-db for regen, so `uv sync` cannot resolve without
+it. Without
 `make clone-rebrew` a bare `uv sync` fails with `Distribution not found at
 file://…/rebrew`; `make setup` names the missing checkout instead.
 
@@ -90,7 +91,7 @@ editing a dependency without running `uv lock` would test the old tree and pass.
 After changing a dependency, run `uv lock` (and bump `REBREW_REF`/`REBREW_SHA`
 in `tools/ci_clone_rebrew.sh` if rebrew moved) before the next `make`.
 
-The suite is hermetic. It builds its own synthetic `coverage.db` (see
+The suite is hermetic. It builds its own synthetic coverage documents (see
 `tests/conftest.py`) and needs no project workspace, compiler toolchain, or
 network. `tests/test_playwright.py` is excluded by default (`addopts` in
 `pyproject.toml`) and no CI job runs it; `make test-browser` syncs the

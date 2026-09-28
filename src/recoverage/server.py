@@ -1,16 +1,14 @@
 #!/usr/bin/env python3
 """Recoverage server — coverage dashboard for binary-matching projects.
 
-Bottle WSGI app serving a VanJS + SQLite dashboard.
-Reads the coverage database from the path resolved by
-``recoverage._paths._db_path()``, which honours
-``rebrew-project.toml [project] db_dir`` when present and falls back to
-``./db/coverage.db`` otherwise.
+Bottle WSGI app serving a VanJS dashboard over rebrew's clear-text coverage
+TOML.  The ``coverage-*.toml`` documents are read from the directory resolved
+by ``recoverage._paths._db_path()``, which honours ``rebrew-project.toml
+[project] db_dir`` when present and falls back to ``./db`` otherwise.
 """
 
 from __future__ import annotations
 
-import contextlib
 import gzip
 import hashlib
 import hmac
@@ -18,37 +16,35 @@ import importlib.util
 import ipaddress
 import json
 import logging
-import sqlite3
 import threading
 import unicodedata
 import uuid
 from collections import deque
-from collections.abc import Collection, Iterator, Sequence
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Final, cast
 from urllib.parse import unquote, urlsplit
 
 import brotli  # type: ignore[import-untyped]
 import zstandard as zstd
 from bottle import Bottle, HTTPResponse, request, response  # type: ignore[import-untyped]
-
-# SCHEMA_TARGET is the reserved metadata target holding the schema-level
-# db_version stamp (written by rebrew build-db).  It is NOT a real project
-# target and must never appear in target enumeration, stats, or the dashboard
-# dropdown.
+from rebrew.coverage_toml import (
+    Cell,
+    CoverageSnapshot,
+    CoverageTomlError,
+    Function,
+    Global,
+    load_all_coverage_from,
+)
+from rebrew.utils import floor_pct
 from rebrew.workspace import (
     CONFIG_NAME,
-    SCHEMA_TARGET,
-    SECTION_CELLS_AGG_SQL,
-    SECTION_CELLS_COLUMN,
-    SECTION_CELLS_TABLE,
+    MATCHED_STATUSES,
     WorkspaceConfigError,
-    coverage_db_lock,
-    decode_section_cells,
     parse_va_candidates,
     read_config,
-    sqlite_ro_uri,
     target_binary,
     targets_table,
 )
@@ -354,37 +350,57 @@ def parse_ascii_int(text: str, base: int = 10) -> int:
     return int(text, base)
 
 
-def _snapshot_db_mtime() -> tuple[int, int] | None:
-    """Return (fingerprint, main-file size) of coverage.db, or None when unreadable.
+#: Glob rebrew's writer names its documents with, and the reader globs for.
+_COVERAGE_FILE_PREFIX = "coverage-"
+_COVERAGE_FILE_SUFFIX = ".toml"
 
-    The fingerprint folds the DB's identity into one int (main-file
-    mtime_ns + size, plus -wal's when present); element 1 is the main file's
-    size alone.  Callers must treat the fingerprint as an opaque change
+
+def _coverage_file_stats() -> tuple[tuple[str, int, int], ...]:
+    """``(name, mtime_ns, size)`` for every coverage document, name-sorted.
+
+    ONE directory scan behind both freshness surfaces (:func:`_snapshot_db_mtime`
+    and :func:`_newest_mtime_ns`) and behind the SSE watcher, so the change
+    token, the rendered stamp and the broadcast cannot disagree about what the
+    coverage directory holds.  Sorted because a directory listing's order is not
+    a fact about the files; a file that vanishes between the listing and the
+    stat is skipped, and the next call's differing key catches the miss.
+    """
+    entries: list[tuple[str, int, int]] = []
+    for path in _db_path().glob(f"{_COVERAGE_FILE_PREFIX}*{_COVERAGE_FILE_SUFFIX}"):
+        try:
+            st = path.stat()
+        except OSError:
+            continue
+        entries.append((path.name, st.st_mtime_ns, st.st_size))
+    entries.sort()
+    return tuple(entries)
+
+
+def _snapshot_db_mtime() -> tuple[int, int] | None:
+    """Return (fingerprint, total size) of the coverage documents, or None.
+
+    The replacement for the WAL-aware ``coverage.db`` snapshot: the token
+    folds every ``coverage-*.toml`` — its name, mtime_ns and size — into one int,
+    and element 1 is their total size, which `/api/health` publishes as the
+    coverage size.  Callers must treat the fingerprint as an opaque change
     token, never as an mtime.
 
-    WAL-aware: the DB runs in ``journal_mode=wal``, so a writer can commit
-    to ``coverage.db-wal`` without checkpointing the main file — main-file
-    mtime/size alone would miss the change (stale memo/ETag/watcher).  Fold
-    the -wal stat in.  (NOT -shm: sqlite touches the shared-memory index on
-    every connection, so including it would make the snapshot — and thus
-    every ETag — change between requests.)
+    A directory holding no document reads as None, which is the old missing-file
+    answer: every DB-derived memo keys on this, every ETag is built from it, and
+    the endpoints answer the 503 ``db_unavailable`` contract a moment later.
+    A single file's mtime is not enough here the way it was for SQLite: a
+    rebuild writes one document per target, so a target added, removed or
+    rewritten anywhere in the directory has to move the token.
 
-    EVERY DB-derived cache key and ETag must be built on this snapshot, not
-    raw ``st_mtime`` — raw mtimes served stale 304s after rebuilds that only
-    touched the WAL.
+    EVERY coverage-derived cache key and ETag must be built on this snapshot,
+    not raw ``st_mtime`` on one file.
     """
-    db = _db_path()
-    try:
-        st = db.stat()
-    except OSError:
+    entries = _coverage_file_stats()
+    if not entries:
         return None
-    acc = (st.st_mtime_ns << 32) ^ (st.st_size & 0xFFFFFFFF)
-    try:
-        w = Path(f"{db}-wal").stat()
-        acc ^= (w.st_mtime_ns << 32) ^ (w.st_size & 0xFFFFFFFF)
-    except OSError:
-        pass
-    return acc, st.st_size
+    payload = "\0".join(f"{name}:{mtime_ns}:{size}" for name, mtime_ns, size in entries)
+    digest = hashlib.sha256(payload.encode("utf-8")).digest()
+    return int.from_bytes(digest[:8], "big"), sum(size for _n, _m, size in entries)
 
 
 #: Nanoseconds in a second, and in a microsecond: the two constants the
@@ -413,21 +429,119 @@ def mtime_ns_to_utc(mtime_ns: int) -> datetime:
     )
 
 
-def _newest_mtime_ns(db: Path) -> int | None:
-    """Newest mtime_ns across *db* and its -wal sibling, or None.
+def _newest_mtime_ns() -> int | None:
+    """Newest mtime_ns across the coverage documents, or None when there are none.
 
-    The same WAL-awareness contract as :func:`_snapshot_db_mtime`, as a
-    plain instant instead of a folded token: for the surfaces that RENDER the
-    freshness time (``/api/health``, Potato Mode's footer stamp) rather than
-    key a cache on it.
+    The same directory scan :func:`_snapshot_db_mtime` folds, as a plain instant
+    instead of an opaque token: for the surfaces that RENDER the freshness time
+    (``/api/health``, Potato Mode's footer stamp) rather than key a cache on it.
     """
-    try:
-        newest = db.stat().st_mtime_ns
-    except OSError:
+    entries = _coverage_file_stats()
+    if not entries:
         return None
-    with contextlib.suppress(OSError):
-        newest = max(newest, Path(f"{db}-wal").stat().st_mtime_ns)
-    return newest
+    return max(mtime_ns for _name, mtime_ns, _size in entries)
+
+
+# ── Coverage snapshots ─────────────────────────────────────────────
+#
+# Every fact the dashboard serves comes from one call to rebrew's coverage TOML
+# reader.  That call parses each `coverage-<target>.toml` and derives what the
+# SQLite schema used to materialize (per-section buckets, byte coverage, the
+# by-VA index), and it is memoized on the files' own stat — so an unchanged
+# directory returns THE SAME mapping and the SAME snapshot objects.  That
+# identity is the change token every DB-derived cache here keys on, exactly the
+# role the WAL-aware fingerprint played against SQLite.
+#
+# The snapshot replaces `read_snapshot`'s pin as well: a snapshot is frozen
+# (every collection is a tuple or a MappingProxyType), so a response built from
+# one can never pair one build's cells with the next build's functions — the
+# consistency the SQLite read transaction bought, now held by the type.
+
+
+def coverage_snapshots() -> Mapping[str, CoverageSnapshot]:
+    """Every target's snapshot, keyed by target id.
+
+    Raises :class:`CoverageTomlError` when the directory holds no readable
+    document at all, which is the missing-or-corrupt database of the
+    SQLite era: a project with nothing to serve answers 503, not an empty
+    dashboard.  One unreadable document beside readable ones is skipped by the
+    reader with a warning naming the file, and the other targets keep serving.
+    """
+    snapshots = load_all_coverage_from(_db_path())
+    if not snapshots:
+        raise CoverageTomlError(
+            f"{_db_path()}: no coverage-*.toml document — run 'rebrew catalog && rebrew build-db'"
+        )
+    return snapshots
+
+
+def db_target_ids() -> list[str]:
+    """Target ids the coverage directory alone knows about, sorted.
+
+    The read-only counterpart to :func:`resolve_targets`: the ids written by the
+    last build, before the project config contributes a target that has never
+    been built.  An empty directory is an empty list here rather than an error,
+    because this is also what the config-only fallback target list is built
+    from.
+    """
+    return sorted(load_all_coverage_from(_db_path()))
+
+
+def coverage_for(target: str) -> CoverageSnapshot:
+    """The snapshot for *target*, or an empty one it has never been built.
+
+    A target the project config declares but no build has written is still
+    addressable — :func:`resolve_targets` lists it, so the endpoints must answer
+    it.  The SQLite reader answered those from an empty table set (every query
+    returned no rows); the TOML equivalent is a snapshot with no sections, no
+    cells and no functions, so the response shapes are the same empty ones.
+    """
+    snapshot = load_all_coverage_from(_db_path()).get(target)
+    if snapshot is not None:
+        return snapshot
+    return CoverageSnapshot(
+        target=target,
+        version=0,
+        sections=MappingProxyType({}),
+        functions=(),
+        globals=(),
+        verify_results=(),
+        history=(),
+        function_stats=MappingProxyType(
+            {
+                "total": 0,
+                "covered_bytes": 0,
+                "matched_bytes": 0,
+                "total_bytes": 0,
+                "by_status": MappingProxyType({}),
+                "by_module_counts": MappingProxyType({}),
+            }
+        ),
+        paths=MappingProxyType({}),
+    )
+
+
+def coverage_version(snap: CoverageSnapshot) -> str:
+    """The schema version of *snap*, as the string the SPA compares.
+
+    `db_version` used to be a metadata row; the TOML document stamps its own
+    format version, and it is the only version a client can be told.  Spelled as
+    a string because that is what the served payload always carried and what the
+    SPA compares against ``known_schema``.
+    """
+    return str(snap.version)
+
+
+def known_schema_versions() -> list[str]:
+    """Every coverage format version this server can read, sorted.
+
+    The served ``known_schema`` list, which the SPA's empty-state message uses to
+    tell "no section rows yet" from "this build does not understand the file".
+    It is read off the snapshots rather than from a constant: a version this
+    server cannot read never becomes a snapshot, so the list can only ever name
+    versions it does serve.
+    """
+    return sorted({str(snap.version) for snap in load_all_coverage_from(_db_path()).values()})
 
 
 def _if_none_match_matches(raw: str, etag: str) -> bool:
@@ -479,302 +593,196 @@ def _etag_or_304(snap: tuple[int, int] | None, *parts: object) -> str | None:
 #: three copies of the literal is three chances to disagree.
 DATA_MARKER_TYPES: tuple[str, ...] = ("GLOBAL", "DATA", "VTABLE", "STRING")
 
-#: WHERE fragment excluding data markers from a `functions` query.
-#:
-#: The `markerType IS NULL OR` arm is load-bearing.  rebrew's own column is
-#: ``NOT NULL DEFAULT 'FUNCTION'``, but a hand-made or older database can leave
-#: it nullable (the columns the server requires are checked for presence, not
-#: nullability), and SQLite evaluates ``NULL NOT IN (...)`` to NULL, which
-#: WHERE rejects: every unmarked function would vanish from the list, from the
-#: Potato table, and from the by-status counts.  An unknown marker type is a
-#: function, exactly as rebrew's default says.
-NOT_DATA_MARKER_SQL = "(markerType IS NULL OR markerType NOT IN ({types}))".format(
-    types=", ".join(f"'{t}'" for t in DATA_MARKER_TYPES)
+
+def _is_data_marker(fn: Any) -> bool:
+    """Whether *fn* names data rather than a function.
+
+    The predicate replaces `NOT_DATA_MARKER_SQL`.  An unknown marker type is a
+    function, exactly as rebrew's ``NOT NULL DEFAULT 'FUNCTION'`` says: the
+    stored marker crosses the TOML boundary as text, so an absent one arrives
+    as ``""`` and lands on the function side, which is the same verdict the
+    SQL's ``markerType IS NULL OR`` arm gave a nullable column.
+    """
+    return fn.markerType in DATA_MARKER_TYPES
+
+
+#: Cell states folded into each served bucket.  ONE definition of the
+#: vocabulary /stats, /data and Potato Mode all report: rebrew owns the state
+#: set and the fold ('verified' is an exact match, 'near_matching' is
+#: near_match), and a state this table does not name lands in `other`, the
+#: producer's catch-all, so the buckets still reconcile with total_cells.
+_BUCKET_FOLD: dict[str, tuple[str, ...]] = {
+    "exact": ("exact", "verified"),
+    "reloc": ("reloc",),
+    "near_match": ("near_match", "near_matching"),
+    "stub": ("stub",),
+    "padding": ("padding",),
+    "data": ("data",),
+    "thunk": ("thunk",),
+    "none": ("none",),
+    "proven": ("proven",),
+    "size_mismatch": ("size_mismatch",),
+}
+_KNOWN_BUCKET_STATES: frozenset[str] = frozenset(
+    state for states in _BUCKET_FOLD.values() for state in states
 )
 
 
-# Byte-based per-section stats query shared by /api/targets/<target>/stats and
-# the `recoverage stats` CLI.  ONE definition, so the two callers cannot drift
-# apart (see _section_stats for what the copies used to get wrong).
-#
-# Only the two values that need `cells` are computed here.  Every cell count
-# comes from section_cell_stats, which rebrew materializes per section
-# (~0.01 ms); adding the twelve SUM(CASE ...) expressions and a COUNT(*) to
-# this scan cost ~15 ms on a 64k-cell target against ~6 ms for these two.  That
-# includes exact_count: the cells-side copy that used to sit here counted
-# 'exact' alone while every other surface (rebrew's materialized table, /data,
-# Potato Mode, and the grid's own palette, which paints 'verified' in the exact
-# slot) folds 'verified' in, so the two disagreed on the same database and the
-# buckets failed to reconcile with total_cells.  rebrew owns the definition;
-# this endpoint reads it rather than restating it.
-SECTION_STATS_SQL = """
-    SELECT section_name,
-      SUM(CASE WHEN state != 'none' THEN end - start ELSE 0 END) AS covered_bytes,
-      SUM(end - start) AS total_bytes
-    FROM cells WHERE target = ? GROUP BY section_name
-"""
+def _bucket_row(section: Any) -> dict[str, Any]:
+    """Map a section's cells to the short-key bucket dict served by /stats,
+    /data and Potato Mode.  ONE definition so the response shapes cannot drift.
 
-# Every bucket computed from `cells` in one pass.  Used ONLY when
-# section_cell_stats is absent or empty — a hand-made or partial database (the
-# CLI's own fixtures build exactly that), which the pre-split single-query
-# version handled and which must keep working.
-#
-# other_count is the same catch-all rebrew's build_db writes into
-# section_cell_stats, and the bucket definitions match it one for one
-# (including 'verified' counted as exact, not as other), so the two sources
-# cannot disagree and total_cells reconciles with the bucket sum on this path
-# exactly as it does on the materialized one.
-_SECTION_STATS_FULL_SQL = """
-    SELECT section_name,
-      SUM(CASE WHEN state != 'none' THEN end - start ELSE 0 END) AS covered_bytes,
-      SUM(end - start) AS total_bytes,
-      COUNT(*) AS total_cells,
-      SUM(CASE WHEN state IN ('exact', 'verified') THEN 1 ELSE 0 END) AS exact_count,
-      SUM(CASE WHEN state = 'reloc' THEN 1 ELSE 0 END) AS reloc_count,
-      SUM(CASE WHEN state IN ('near_match','near_matching') THEN 1 ELSE 0 END) AS near_match_count,
-      SUM(CASE WHEN state = 'stub' THEN 1 ELSE 0 END) AS stub_count,
-      SUM(CASE WHEN state = 'padding' THEN 1 ELSE 0 END) AS padding_count,
-      SUM(CASE WHEN state = 'data' THEN 1 ELSE 0 END) AS data_count,
-      SUM(CASE WHEN state = 'thunk' THEN 1 ELSE 0 END) AS thunk_count,
-      SUM(CASE WHEN state = 'none' THEN 1 ELSE 0 END) AS none_count,
-      SUM(CASE WHEN state = 'proven' THEN 1 ELSE 0 END) AS proven_count,
-      SUM(CASE WHEN state = 'size_mismatch' THEN 1 ELSE 0 END) AS size_mismatch_count,
-      SUM(CASE WHEN state NOT IN (
-        'exact', 'verified', 'reloc', 'near_match', 'near_matching', 'stub',
-        'padding', 'data', 'thunk', 'none', 'proven', 'size_mismatch'
-      ) THEN 1 ELSE 0 END) AS other_count
-    FROM cells WHERE target = ? GROUP BY section_name
-"""
-
-
-def _rows_or_absent(c: sqlite3.Cursor, sql: str, params: tuple[Any, ...]) -> list[sqlite3.Row]:
-    """Run *sql*, treating a missing schema object as an empty result.
-
-    Every degrade-on-older-schema read goes through this, so "this database
-    predates the materialized table" stays narrower than "this database could
-    not be read": a locked or truncated file raises on to the 503 contract
-    instead of answering with cells-derived rows and no signal.
+    The counts are CELL counts, byte-identical to what rebrew's materialized
+    ``section_cell_stats`` carried: that table was dropped from the coverage
+    format because a TOML reader can count its own cells, and this is that
+    count.  ``other`` is the producer's catch-all (compile_error, extract_error,
+    invalid_va, missing_file, missing_size, skip, unknown and the data
+    drift/unchecked verdicts), so total_cells still reconciles with the bucket
+    sum.
     """
-    try:
-        c.execute(sql, params)
-        return c.fetchall()
-    except sqlite3.OperationalError as exc:
-        if not _is_absent_object(exc):
-            raise
-        return []
+    total_cells = len(section.cells)
+    buckets: dict[str, Any] = dict.fromkeys(_BUCKET_FOLD, 0)
+    other = 0
+    for cell in section.cells:
+        for name, states in _BUCKET_FOLD.items():
+            if cell.state in states:
+                buckets[name] += 1
+                break
+        else:
+            other += 1
+    return {"total_cells": total_cells, **buckets, "other": other}
 
 
-def section_bucket_rows(
-    c: sqlite3.Cursor,
-    target: str,
-    *,
-    projection: str = "*",
-    expected: Collection[str] = (),
-) -> Iterator[sqlite3.Row]:
-    """Per-section bucket rows for *target*: the materialized cache where it
-    covers, `cells` for the rest.
+def _section_summary(section: Any) -> dict[str, Any]:
+    """The per-section entry `build_db` added to the stored ``summary`` blob.
 
-    ONE reader for every section_cell_stats consumer, because the policy is
-    three rules that had been restated per caller and drifted: prefer the
-    materialized cache, re-aggregate a section it omits from `cells`, and
-    treat an absent cache as an empty one.
-
-    *projection* is the column list a caller reads.  ``*`` is the cache's full
-    row (``_cell_bucket_row`` needs all eleven buckets); a caller that renders
-    a subset may name just those columns, so a hand-made cache carrying only
-    them still serves.  *expected* is the caller's own section set, which is
-    what "the cache omits a section" is measured against: `/stats` knows the
-    sections `cells` has, the Potato map header the sections it renders.
-
-    The extra query runs only when a section is actually missing, so the
-    complete-cache path is unchanged.
+    Rebuilt from the cells rather than read, because the TOML format stores
+    facts: every field here is a count or a byte sum over the section's own
+    cells, which is exactly how the producer computed it.  Non-``none`` cells
+    only; ``totalFunctions`` counts the function names those cells carry, which
+    is the `totalFunctions` the progress bars divide by.
     """
-    rows = _rows_or_absent(
-        c, f"SELECT {projection} FROM section_cell_stats WHERE target = ?", (target,)
-    )
-    if not rows:
-        return iter(_rows_or_absent(c, _SECTION_STATS_FULL_SQL, (target,)))
-    covered = {row["section_name"] for row in rows}
-    gap = {name for name in expected if name not in covered}
-    if not gap:
-        return iter(rows)
-    return iter(
-        [
-            *rows,
-            *(
-                r
-                for r in _rows_or_absent(c, _SECTION_STATS_FULL_SQL, (target,))
-                if r["section_name"] in gap
-            ),
-        ]
-    )
-
-
-def _per_section_buckets(
-    c: sqlite3.Cursor, target: str, cell_side: dict[str, sqlite3.Row]
-) -> Iterator[tuple[str, dict[str, Any], int, int]]:
-    """Yield ``(section_name, buckets, covered_bytes, total_bytes)`` per section.
-
-    Every cell count comes from rebrew's materialized ``section_cell_stats``;
-    the byte sums come from *cell_side*, computed from `cells`, because no
-    materialized column carries them.  When that table is absent or empty, every
-    bucket comes from `cells` instead — the single-query path this endpoint used
-    before the split — using the definitions _SECTION_STATS_FULL_SQL keeps in
-    step with build_db's.  When it is present but covers only some of the
-    sections `cells` has, the missing ones are filled from `cells` too, so a
-    partial cache never drops a section from the response.
-
-    The two paths return the same numbers for the same database.  They did
-    not: the materialized `exact_count` (which counts 'verified' as exact, like
-    /data, Potato Mode and the grid palette) was overwritten with a cells-side
-    'exact'-only count, so a database carrying VERIFIED cells reported a total
-    its buckets could not sum to, and the same DB answered two different stats
-    depending on whether build_db had run.
-
-    Which rows to read is :func:`section_bucket_rows`, shared with the Potato
-    map header; the byte sums are this caller's own, because no materialized
-    column carries them.
-    """
-    for row in section_bucket_rows(c, target, expected=cell_side):
-        name = row["section_name"]
-        side = cell_side.get(name)
-        # *cell_side* is the byte source on every path.  A live row carries its
-        # own byte sums too, which is what a cached section is measured against
-        # when the caller read no cells side for it.
-        source = side if side is not None else row
-        # Row membership is by value, so `.keys()` is the spelling; see
-        # _cell_bucket_row for why the bare `in` would read as absent.
-        has_bytes = "covered_bytes" in source.keys()  # noqa: SIM118
-        covered = (source["covered_bytes"] if has_bytes else 0) or 0
-        total = (source["total_bytes"] if has_bytes else 0) or 0
-        yield (name, _cell_bucket_row(row), covered, total)
-
-
-def _cell_bucket_row(row: sqlite3.Row) -> dict[str, Any]:
-    """Map a per-section bucket row to the short-key dict served by /stats, /data
-    and Potato Mode.  ONE definition so the response shapes cannot drift.
-
-    *row* is a ``section_cell_stats`` row (the ``*`` projection
-    :func:`section_bucket_rows` reads) or the
-    same columns computed live from `cells` (``_SECTION_STATS_FULL_SQL``); the
-    two must select an identical column set, since the mapping below subscripts
-    every one of them by name.  It is never a ``SECTION_STATS_SQL`` row, which
-    carries only the two byte sums.
-
-    ``other`` is the producer's catch-all (rebrew counts compile_error,
-    extract_error, invalid_va, missing_file, missing_size, skip, unknown and
-    the data drift/unchecked verdicts there so total_cells reconciles with the
-    bucket sum).  Both query paths compute it; a database whose
-    section_cell_stats predates the column reports 0 rather than dropping the
-    key, so the served shape is the same either way.
-    """
-    buckets: dict[str, Any] = {
-        "total_cells": row["total_cells"],
-        "exact": row["exact_count"],
-        "reloc": row["reloc_count"],
-        "near_match": row["near_match_count"],
-        "stub": row["stub_count"],
-        "padding": row["padding_count"],
-        "data": row["data_count"],
-        "thunk": row["thunk_count"],
-        "none": row["none_count"],
-        "proven": row["proven_count"],
-        "size_mismatch": row["size_mismatch_count"],
+    counts = {"exact": 0, "reloc": 0, "near_match": 0, "stub": 0, "padding": 0}
+    sizes = {"exact": 0, "reloc": 0, "near_match": 0, "stub": 0, "padding": 0}
+    covered_bytes = 0
+    total_functions = 0
+    for cell in section.cells:
+        names = len(cell.functions)
+        if cell.state == "none":
+            continue
+        size = cell.size
+        covered_bytes += size
+        total_functions += names
+        for name, states in _BUCKET_FOLD.items():
+            if name in sizes and cell.state in states:
+                counts[name] += 1
+                sizes[name] += size
+                break
+    return {
+        "exactMatches": counts["exact"],
+        "relocMatches": counts["reloc"],
+        "nearMatchCount": counts["near_match"],
+        "stubCount": counts["stub"],
+        "paddingCount": counts["padding"],
+        "exactBytes": sizes["exact"],
+        "relocBytes": sizes["reloc"],
+        "nearMatchBytes": sizes["near_match"],
+        "stubBytes": sizes["stub"],
+        "paddingBytes": sizes["padding"],
+        "coveredBytes": covered_bytes,
+        "totalFunctions": total_functions,
+        "size": section.size,
     }
-    # row.keys(), not a bare subscript: a v6-era section_cell_stats (or the
-    # pre-other_count view a hand-made DB carries) has no such column, and
-    # sqlite3.Row raises IndexError on a missing name.  `in row` is NOT the
-    # spelling: sqlite3.Row.__contains__ iterates the row's VALUES, not its
-    # keys, so it answers False for a column that is present.
-    has_other = "other_count" in row.keys()  # noqa: SIM118 -- Row membership is by value
-    buckets["other"] = row["other_count"] if has_other else 0
-    return buckets
 
 
-def _section_stats(c: sqlite3.Cursor, target: str) -> dict[str, Any]:
-    """Byte-based per-section stats + summary + by_status for *target*.
+def _summary(snap: CoverageSnapshot) -> dict[str, Any]:
+    """The ``summary`` blob ``build_db`` stored, rebuilt from the snapshot.
+
+    ``build_db`` took rebrew's catalog-grid summary, added one entry per
+    non-``.text`` section, and stored the result; the TOML writer stores the
+    facts and drops the blob, because every number in it is a pure function of
+    the cells and functions beside it.  The top level is the grid summary (the
+    ``.text`` fallback the SPA and Potato read) and the section entries are
+    :func:`_section_summary`, so a client sees the keys and the values it always
+    did.
+    """
+    stats = snap.function_stats
+    by_status = stats["by_status"]
+    text = snap.sections.get(".text")
+    text_size = text.size if text is not None else 0
+    text_buckets: dict[str, int] = {}
+    if text is not None:
+        for cell in text.cells:
+            text_buckets[cell.state] = text_buckets.get(cell.state, 0) + cell.size
+    covered = sum(size for state, size in text_buckets.items() if state != "none")
+    matched = sum(count for status, count in by_status.items() if status in MATCHED_STATUSES)
+    summary: dict[str, Any] = {
+        "totalFunctions": stats["total"],
+        "matchedFunctions": matched,
+        "exactMatches": by_status.get("EXACT", 0),
+        "relocMatches": by_status.get("RELOC", 0),
+        "nearMatchCount": by_status.get("NEAR_MATCHING", 0),
+        "stubCount": by_status.get("STUB", 0),
+        "coveredBytes": covered,
+        "paddingBytes": text_buckets.get("padding", 0),
+        "dataBytes": text_buckets.get("data", 0),
+        "thunkBytes": text_buckets.get("thunk", 0),
+        "coveragePercent": floor_pct(covered, text_size, 2),
+        "textSize": text_size,
+    }
+    for name, section in snap.sections.items():
+        if name != ".text":
+            summary[name] = _section_summary(section)
+    return summary
+
+
+def _section_stats(snap: CoverageSnapshot) -> dict[str, Any]:
+    """Byte-based per-section stats + summary + by_status for *snap*.
 
     ONE implementation shared by the ``/api/targets/<target>/stats`` endpoint
-    and the ``recoverage stats`` CLI.  The summary parse, the SECTION_STATS_SQL
+    and the ``recoverage stats`` CLI.  The summary parse, the per-section bucket
     loop, the section-size lookup, and the by-status count were copy-pasted in
     both (and drifted twice — cell-count vs byte-based, covered_bytes presence,
     key names); this is the single source of truth.
+
+    A section with no cells is absent from ``sections``, which is the shape the
+    old ``GROUP BY section_name`` produced: a section row the catalog built
+    without any cell is a section with nothing to report, not one reporting
+    zero coverage over its whole size.
     """
-    # Five statements across five tables: without a pinned snapshot a rebuild
-    # committing between them yields stats that describe no build at all.
-    with read_snapshot(c):
-        return _read_section_stats(c, target)
-
-
-def _read_section_stats(c: sqlite3.Cursor, target: str) -> dict[str, Any]:
-    # Pre-computed summary, read from the target's own metadata row
-    summary: dict[str, Any] = {}
-    c.execute("SELECT value FROM metadata WHERE target = ? AND key = 'summary'", (target,))
-    row = c.fetchone()
-    if row:
-        try:
-            summary = json.loads(row[0])
-        except (json.JSONDecodeError, TypeError):
-            # Target ids are routable request data (/api/targets/<id>/stats)
-            # and originate in analyzed binary names, so they get the same
-            # control-char escaping as method/path before hitting the log.
-            _log.warning("Corrupt summary metadata for target %s", _log_safe(target))
-        else:
-            if not isinstance(summary, dict):
-                # Valid JSON but not an object (foreign/hand-edited DB): the
-                # CLI reads totalFunctions off it with .get() and would crash
-                # with AttributeError.  Treat like corrupt JSON above.
-                _log.warning(
-                    "Summary metadata for target %s is not an object",
-                    _log_safe(target),
-                )
-                summary = {}
-
-    # Per-section stats.  Coverage is BYTE-based: covered = every cell span
-    # whose state is not "none", over the section's total cell bytes.
-    cell_side: dict[str, sqlite3.Row] = {}
-    c.execute(SECTION_STATS_SQL, (target,))
-    for row in c.fetchall():
-        cell_side[row["section_name"]] = row
-
     sections: dict[str, Any] = {}
-    for name, buckets, covered, total in _per_section_buckets(c, target, cell_side):
+    for name, section in snap.sections.items():
+        if not section.cells:
+            continue
+        buckets = _bucket_row(section)
         # PROVEN is a semantic-equivalence promotion, so it counts as matched
         # HERE only; rebrew's catalog grid counts byte-identical EXACT/RELOC
         # alone, so this number is not the grid's matchedFunctions.
         matched = buckets["exact"] + buckets["reloc"] + buckets["proven"]
+        covered = section.covered_bytes
+        total = sum(cell.size for cell in section.cells)
         sections[name] = {
             **buckets,
             "matched": matched,
             "covered_bytes": covered,
             "total_bytes": total,
             "coverage_pct": round(covered / total * 100, 2) if total else 0.0,
+            # The section row's declared size, which the schema allowed to be
+            # NULL (.bss carries no file extent).  A section of unknown size
+            # has zero known bytes, same treatment as the byte sums above.
+            "size_bytes": section.size or 0,
         }
 
-    # Section byte sizes, which the schema allows to be NULL
-    c.execute("SELECT name, size FROM sections WHERE target = ?", (target,))
-    for row in c.fetchall():
-        name = row["name"]
-        if name in sections:
-            # `or 0`, not raw: a NULL size is schema-legal (the .bss shape),
-            # and the CLI formats size_bytes with `:,` — None would crash
-            # `recoverage stats`/`export` with a TypeError.  A section of
-            # unknown size has zero known bytes, same treatment as
-            # total_bytes/covered_bytes above.
-            sections[name]["size_bytes"] = row["size"] or 0
-
     # Function counts by status.  GLOBAL/DATA/VTABLE/STRING marker rows live in
-    # the functions table but are data markers, not functions — exclude them.
+    # the functions array but are data markers, not functions — exclude them.
     by_status: dict[str, int] = {}
-    c.execute(
-        "SELECT status, COUNT(*) as cnt FROM functions"
-        f" WHERE target = ? AND {NOT_DATA_MARKER_SQL} GROUP BY status",
-        (target,),
-    )
-    for row in c.fetchall():
-        by_status[row["status"] or "unknown"] = row["cnt"]
+    for fn in snap.functions:
+        if _is_data_marker(fn):
+            continue
+        key = fn.status or "unknown"
+        by_status[key] = by_status.get(key, 0) + 1
 
-    return {"summary": summary, "sections": sections, "by_status": by_status}
+    return {"summary": _summary(snap), "sections": sections, "by_status": by_status}
 
 
 # ── Path helpers ───────────────────────────────────────────────────
@@ -897,12 +905,11 @@ def _get_targets_config() -> dict[str, Any]:
 
 
 def clear_target_cache() -> None:
-    global _TOML_CONFIG_CACHE, _TOML_CACHE_MTIME, _RESOLVED_TARGETS_CACHE, _SCHEMA_VERSION_CACHE
+    global _TOML_CONFIG_CACHE, _TOML_CACHE_MTIME, _RESOLVED_TARGETS_CACHE
     with _RESOLVED_TARGETS_CACHE_LOCK:
         _TOML_CONFIG_CACHE = None
         _TOML_CACHE_MTIME = None
         _RESOLVED_TARGETS_CACHE = None
-        _SCHEMA_VERSION_CACHE = None
 
 
 def _target_filename(tid: str, t_info: Any) -> str:
@@ -917,46 +924,28 @@ def _target_filename(tid: str, t_info: Any) -> str:
     return filename or tid
 
 
-#: Every built target id, excluding the reserved schema-version row.  ONE
-#: definition: the SPA dropdown, /api/health's target count, and the CLI's
-#: ``--target`` validation all read the same set from the same place.  Most
-#: tables carry a ``target`` column too, but ``metadata`` is the one stamped
-#: for every built target (build_db writes a per-target ``db_version`` row), so
-#: a target whose payload tables came out empty is still listed.  Sorted so
-#: every consumer gets a deterministic list (SQLite's DISTINCT order is
-#: arbitrary).
-_DB_TARGETS_SQL = "SELECT DISTINCT target FROM metadata WHERE target != ? ORDER BY target"
+def resolve_targets() -> list[dict[str, str]]:
+    """Resolve available targets from the coverage directory + config.
 
+    Config-declared targets first, then any target the last build wrote, so the
+    SPA dropdown and Potato Mode render and default to the same first entry.
 
-def db_target_ids(c: sqlite3.Cursor) -> list[str]:
-    """Target ids with build data in *c*, schema row excluded, sorted.
-
-    The read-only counterpart to :func:`resolve_targets`: the ids the database
-    alone knows about, before the project config contributes any target that has
-    never been built.
-    """
-    c.execute(_DB_TARGETS_SQL, (SCHEMA_TARGET,))
-    return [row[0] for row in c.fetchall()]
-
-
-def resolve_targets(c: sqlite3.Cursor) -> list[dict[str, str]]:
-    """Resolve available targets from DB + config (thread-safe, cached via RLock).
-
-    Config-declared targets first, then any DB-only target, so the SPA
-    dropdown and Potato Mode render and default to the same first entry.
-
-    Memoized per (config stat, WAL-aware DB snapshot) — both inputs to the
-    merge, the same contract every other DB-derived memo follows.  Keying on
-    the config alone would have been the obvious half: the parsed config
+    Memoized per (config stat, coverage snapshot) — both inputs to the merge,
+    the same contract every other coverage-derived memo follows.  Keying on the
+    config alone would have been the obvious half: the parsed config
     self-invalidates on its stat, so without the config half in this key the
     two disagreed.  Adding a target to ``rebrew-project.toml`` while the
-    server ran left ``_get_targets_config`` reporting it (and
-    ``_require_target`` accepting it) while the dropdown, ``/api/targets`` and
-    Potato Mode's list omitted it until the next coverage.db rebuild cleared
-    the memo.  The DB half is what the rebuild broadcast already covered; both
-    are named here so neither depends on an event that may never fire.
+    server ran left ``_get_targets_config`` reporting it (and every target
+    check accepting it) while the dropdown, ``/api/targets`` and Potato Mode's
+    list omitted it until the next rebuild cleared the memo.  Both halves are
+    named here so neither depends on an event that may never fire.
+
+    Raises :class:`CoverageTomlError` when the directory holds no readable
+    document: that is not "a project with no built targets", it is a project
+    with nothing to serve, and every caller answers it with the 503 contract.
     """
     global _RESOLVED_TARGETS_CACHE
+    snapshots = coverage_snapshots()
     key: _ResolvedTargetsKey = (
         _config_stat_fingerprint(_project_dir()),
         _snapshot_db_mtime(),
@@ -966,17 +955,18 @@ def resolve_targets(c: sqlite3.Cursor) -> list[dict[str, str]]:
         if cached is not None and cached[0] == key:
             return cached[1]
 
-        target_ids = db_target_ids(c)
         targets_info = _get_targets_config()
 
         # Config-declared targets come first and are always addressable, even
-        # before their first build — _require_target treats "declared in the
-        # project config" as valid, so a never-built target must not 404.
+        # before their first build — "declared in the project config" is what
+        # makes a never-built target valid, so it must not 404.
         targets_list = [
             {"id": tid, "name": Path(_target_filename(tid, t_info)).name}
             for tid, t_info in targets_info.items()
         ]
-        targets_list += [{"id": tid, "name": tid} for tid in target_ids if tid not in targets_info]
+        targets_list += [
+            {"id": tid, "name": tid} for tid in sorted(snapshots) if tid not in targets_info
+        ]
 
         _RESOLVED_TARGETS_CACHE = (key, targets_list)
         return targets_list
@@ -1038,7 +1028,7 @@ def _load_dll(target: str) -> bytes | None:
     DLL_DATA is keyed by target alone, so a config edit that re-points
     ``[targets.X].binary`` — or gives a target one it had none of — left the
     old bytes (or the ``None`` of a not-yet-configured target) served to /asm
-    and /bytes until the next coverage.db rebuild.  Re-pointing a binary is an
+    and /bytes until the next coverage rebuild.  Re-pointing a binary is an
     operator edit to rebrew-project.toml: it reaches no server code, and the
     rebuild broadcast that clears this dict fires on the DB alone.  The memo
     therefore carries the same config stat its path resolution keys on
@@ -1334,355 +1324,266 @@ def compress_payload(body: bytes, accept_encoding: str) -> tuple[bytes, str]:
     return body, ""
 
 
-# ── SQL helpers ────────────────────────────────────────────────────
-
-
-def _escape_like(search: str) -> str:
-    """Escape SQL LIKE wildcards (% and _) for safe parameterized queries.
-
-    Returns the escaped pattern wrapped in % for substring matching.
-    Uses backslash as the ESCAPE character — all callers must include
-    ``ESCAPE '\\\\'`` in their LIKE clauses.
-
-    Backslash itself must be escaped first, since it is the ESCAPE character
-    and would otherwise consume the next character as a literal.
-
-    Case folding stops at ASCII: SQLite's LIKE (and its lower()) match "A"
-    against "a" and nothing else, so a server-side search for "STRASSE"
-    misses "Straße" and an NFD query misses the NFC name stored in the row.
-    The SPA's own grid search folds properly in JS (see app.js), so the two
-    halves of the search box differ for non-ASCII queries.  Closing that on
-    this side needs a folded column, which means a schema migration, not a
-    query change.
-    """
-    return "%" + search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+# ── Search folding ─────────────────────────────────────────────────
 
 
 def fold_text(text: str | None) -> str | None:
     """NFC + full case folding: the one form a name is searched in.
 
-    ``LIKE`` folds case for ASCII only, so ``name LIKE '%CAFÉ%'`` does not
-    match ``Café_Render`` and a search that a user can see in the symbol table
-    returns nothing.  NFC first, so the NFD spelling of the same name (what a
-    macOS-side tool writes) matches the NFC one.  ``casefold``, not ``lower``:
-    it is the folding operators for caseless matching, and it maps ß to ss
-    the way a reader expects.  Compatibility folding is deliberately not
-    applied: NFKC would make a superscript or a circled digit compare equal to
-    a plain letter, which is not what a substring search should claim.
+    ONE folding for every server-side search and name lookup.  It used to be a
+    SQL function (``rc_fold``) ORed beside an ASCII-only ``LIKE``, because the
+    comparison happened inside SQLite and a ``LIKE`` folds case for ASCII alone;
+    the coverage documents are read into Python now, so both sides fold here and
+    the split has no reason to exist.  The guarantee it protected is unchanged
+    and stronger: a term that matches what the SPA highlights matches a row
+    here, ß folds to ss, and the NFD spelling of a name (what a macOS-side tool
+    writes) matches its NFC twin.
 
-    NULL passes through: this is registered as a SQL function and a nullable
-    column (``functions.symbol``) reaches it as NULL, which a ``str`` call
-    would raise on, failing the whole query.
+    ``casefold``, not ``lower``: it is the folding operator for caseless
+    matching.  Compatibility folding is deliberately not applied — NFKC would
+    make a superscript or a circled digit compare equal to a plain letter, which
+    is not what a substring search should claim.  NULL passes through for
+    callers holding an absent optional column; a text column read from a
+    document is never NULL.
     """
     if text is None:
         return None
     return unicodedata.normalize("NFC", text).casefold()
 
 
-#: SQL name of :func:`fold_text`, registered on every read connection by
-#: :func:`_open_db`.  One name for the one folding, so the SPA, the API list
-#: and Potato Mode cannot drift onto different definitions.
-FOLD_SQL = "rc_fold"
+def fold_match(haystack: str | None, needle: str) -> bool:
+    """Whether *needle* occurs in *haystack* under the one folding.
 
-
-def like_match(columns: Sequence[str]) -> tuple[str, int]:
-    """``(sql, param_count)`` for an OR chain of LIKE tests over *columns*.
-
-    Every column goes through ``COALESCE(col, '')`` and that is load-bearing,
-    not defensive: ``functions.symbol`` is nullable, and SQL's three-valued
-    logic turns one NULL in an ``OR`` chain into a NULL predicate.  ANDed
-    against another match (``AND (a OR NULL) AND (folded match)``), the row is
-    dropped even though its name matched — a row with no symbol was invisible
-    to every search.
-
-    A NULL therefore compares as the empty string, which no non-empty search
-    term can match: :func:`_escape_like` always wraps the term in ``%``.
+    The in-memory replacement for ``COALESCE(col, '') LIKE ? ESCAPE '\\'``
+    ORed with ``rc_fold(col) LIKE ?``.  A NULL column folds as the empty
+    string, which no non-empty term matches — the answer ``COALESCE`` gave a
+    nullable ``symbol``.
     """
-    disjunct = " OR ".join(f"COALESCE({col}, '') LIKE ? ESCAPE '\\'" for col in columns)
-    return f"({disjunct})", len(columns)
+    return cast(str, fold_text(needle)) in (fold_text(haystack) or "")
 
 
-def folded_like_clause(columns: Sequence[str], search: str) -> tuple[str, list[str]]:
-    """``(sql, params)`` for a Unicode-correct disjunct over *columns*.
+# ── Snapshot projections ───────────────────────────────────────────
+#
+# Every served object is built here from the snapshot, in the order and with
+# the key names the SQLite projections used.  The JSON builders are dicts, not
+# SQL: the documents are already parsed, so a `json_object(...)` shape would be
+# a string built to be parsed back.
 
-    ``LIKE`` already folds ASCII correctly, so a pure-ASCII term needs
-    nothing extra and the common path keeps its single predicate.  A term
-    carrying any non-ASCII character is one SQLite's folding cannot judge, so
-    the caller adds this disjunct alongside its ``LIKE``: the columns and the
-    pattern both go through :data:`FOLD_SQL` before the comparison.
 
-    Returns ``("", [])`` for an ASCII term or no columns, so callers can test
-    the clause rather than the term.  The pattern is escaped after folding, so
-    a wildcard character the fold produced cannot act as one.
+def _plain(value: Any) -> Any:
+    """*value* as plain JSON-serializable containers.
+
+    A snapshot is frozen (tuples and ``MappingProxyType``), and ``json.dumps``
+    refuses a mapping proxy — so every value travelling into a response is
+    thawed here, in one place, rather than at each call site.  Tuples become
+    lists, which is what the JSON arrays they replace always were.
     """
-    if not columns or search.isascii():
-        return "", []
-    folded = _escape_like(cast(str, fold_text(search)))
-    disjunct = " OR ".join(f"COALESCE({FOLD_SQL}({col}), '') LIKE ? ESCAPE '\\'" for col in columns)
-    return f"({disjunct})", [folded] * len(columns)
+    if isinstance(value, Mapping):
+        return {key: _plain(item) for key, item in value.items()}
+    if isinstance(value, tuple | list):
+        return [_plain(item) for item in value]
+    return value
 
 
-# ── SQL fragments ──────────────────────────────────────────────────
+def _cell_json(cell: Cell) -> dict[str, Any]:
+    """One coverage cell as the SPA and Potato Mode read it.
 
-#: SQLite's wording for a schema object the database does not carry.
-_ABSENT_OBJECT_MARKERS = ("no such table", "no such column")
-
-
-def _is_absent_object(exc: sqlite3.Error) -> bool:
-    """Whether *exc* is SQLite reporting a schema object the database lacks.
-
-    The one test every "this older or foreign database has no such table"
-    fallback routes through.  A degrade-on-older-schema path answers
-    ``no such table``/``no such column`` from ``cells`` so a pre-v7 database
-    still serves; any other ``sqlite3.Error`` means the file could not be read,
-    which propagates to the 503 ``db_unavailable`` contract rather than
-    producing a fallback payload that looks like a successful read.
+    The optional keys are OMITTED rather than null, which is what rebrew's
+    ``CELLS_JSON_OBJECT_SQL`` emits: `json_patch` removes a key whose patch
+    value is null, and every consumer reads them with a truthiness test, so
+    absent and null are the same thing to them.  Keeping the omission keeps the
+    served bytes of a multi-megabyte payload where they were.
     """
-    message = str(exc).lower()
-    return any(marker in message for marker in _ABSENT_OBJECT_MARKERS)
+    obj: dict[str, Any] = {"start": cell.start, "end": cell.end, "span": cell.span}
+    obj["state"] = cell.state
+    if cell.functions:
+        obj["functions"] = list(cell.functions)
+    if cell.label:
+        obj["label"] = cell.label
+    if cell.parent_function:
+        obj["parent_function"] = cell.parent_function
+    return obj
 
 
-#: Optional v6 columns, probed per connection: older DBs (v5 and below)
-#: lack them, and the endpoints degrade instead of 500ing.
-_V6_FUNCTION_COLS = ("updated_by", "updated_at")
-_V6_GLOBAL_COLS = ("status",)
-_V6_VERIFY_COLS = ("reg_delta", "effective_match")
+def cells_json(cells: Sequence[Cell]) -> str:
+    """One section's cells as a JSON array in spatial order.
 
-
-def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
-    """Column names of *table*; empty set when the table is missing.
-
-    ``PRAGMA table_info`` answers a name no table carries with zero rows, not
-    an error, so a missing table needs no guard and every ``sqlite3.Error``
-    raised here is a database that could not be read.  Returning an empty set
-    for one would drop every optional v6 column from the function, global and
-    verify payloads — a silently short response, where the 503 contract says
-    the failure belongs.
+    The replacement for ``SECTION_CELLS_AGG_SQL``: a section's cells arrive in
+    spatial order (the writer sorts them), and the array is serialized once so
+    the response builder can splice the text instead of re-encoding it.
+    ``ensure_ascii=False`` matches the SQLite JSON functions, which emit UTF-8
+    rather than escapes.
     """
-    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
-    return {r[1] for r in rows}
+    return json.dumps(
+        [_cell_json(cell) for cell in cells], ensure_ascii=False, separators=(",", ":")
+    )
 
 
-def _fn_json_sql(conn: sqlite3.Connection) -> str:
-    """Function detail projection, extended with v6 columns when present."""
-    cols = _table_columns(conn, "functions")
-    extra = "".join(f", '{c}', {c}" for c in _V6_FUNCTION_COLS if c in cols)
-    return _FN_JSON_SQL[:-1] + extra + ")"
+def function_json(fn: Function) -> dict[str, Any]:
+    """The function-detail object, one key per ``functions`` column.
+
+    The same names and the same order as ``build_db``'s ``json_object``
+    projection, including the two v6 columns (`updated_by`/`updated_at`) that
+    used to be added only when the database carried them: a coverage document
+    always carries every column, so the shape is the full one.
+    """
+    return {
+        "va": fn.va,
+        "name": fn.name,
+        "vaStart": fn.vaStart,
+        "size": fn.size,
+        "fileOffset": fn.fileOffset,
+        "status": fn.status,
+        "module": fn.module,
+        "cflags": _plain(fn.cflags),
+        "symbol": fn.symbol,
+        "markerType": fn.markerType,
+        "ghidra_name": fn.ghidra_name,
+        "list_name": fn.list_name,
+        "is_thunk": fn.is_thunk,
+        "is_export": fn.is_export,
+        "sha256": fn.sha256,
+        "files": list(fn.files),
+        "detected_by": list(fn.detected_by),
+        "size_by_tool": _plain(fn.size_by_tool),
+        "textOffset": fn.textOffset,
+        "blocker": fn.blocker,
+        "blockerDelta": fn.blockerDelta,
+        "size_reason": fn.size_reason,
+        "similarity": fn.similarity,
+        "updated_by": fn.updated_by,
+        "updated_at": fn.updated_at,
+    }
 
 
-def _global_json_sql(conn: sqlite3.Connection) -> str:
-    """Global detail projection, extended with v6 status when present."""
-    cols = _table_columns(conn, "globals")
-    extra = "".join(f", '{c}', {c}" for c in _V6_GLOBAL_COLS if c in cols)
-    return _GLOBAL_JSON_SQL[:-1] + extra + ")"
+def global_json(gl: Global) -> dict[str, Any]:
+    """The global-detail object, one key per ``globals`` column.
+
+    ``isGlobal`` is the discriminator the batch and detail responses have always
+    carried, so a client can tell a data symbol from a function without a second
+    request.
+    """
+    return {
+        "va": gl.va,
+        "name": gl.name,
+        "decl": gl.decl,
+        "files": list(gl.files),
+        "module": gl.module,
+        "size": gl.size,
+        "isGlobal": 1,
+        "status": gl.status,
+    }
 
 
-def _verify_select(conn: sqlite3.Connection) -> str:
-    """verify_results column list, extended with v6 columns when present."""
-    cols = _table_columns(conn, "verify_results")
-    extra = "".join(f", {c}" for c in _V6_VERIFY_COLS if c in cols)
-    return "SELECT va, verified_at, byte_delta, diff_lines, similarity" + extra
+def _name_match_functions(rows: Sequence[Function], value: str) -> Function | None:
+    """The first function whose ``name`` equals *value*, else the first folded match.
+
+    Byte equality first, then the folded comparison, which is the order the SQL
+    lookup used: the exact spelling resolves without paying the fold, and only a
+    miss falls through to the NFC + case fold that makes the NFD spelling a user
+    pastes open the row the search matched.
+    """
+    for row in rows:
+        if row.name == value:
+            return row
+    folded = fold_text(value)
+    for row in rows:
+        if fold_text(row.name) == folded:
+            return row
+    return None
 
 
-def _verify_one_select(conn: sqlite3.Connection) -> str:
-    """Single-row verify_results projection, extended when v6 is present."""
-    cols = _table_columns(conn, "verify_results")
-    extra = "".join(f", {c}" for c in _V6_VERIFY_COLS if c in cols)
-    return "SELECT verified_at, byte_delta, diff_lines, similarity" + extra
+def _name_match_globals(rows: Sequence[Global], value: str) -> Global | None:
+    """:func:`_name_match_functions` over the globals array."""
+    for row in rows:
+        if row.name == value:
+            return row
+    folded = fold_text(value)
+    for row in rows:
+        if fold_text(row.name) == folded:
+            return row
+    return None
 
 
-_FN_JSON_SQL = (
-    "json_object("
-    "'va', va, 'name', name, 'vaStart', vaStart, 'size', size, "
-    "'fileOffset', fileOffset, 'status', status, 'module', module, "
-    "'cflags', cflags, 'symbol', symbol, 'markerType', markerType, "
-    "'ghidra_name', ghidra_name, 'list_name', list_name, "
-    "'is_thunk', is_thunk, 'is_export', is_export, 'sha256', sha256, "
-    "'files', json(files), "
-    "'detected_by', json(detected_by), 'size_by_tool', json(size_by_tool), "
-    "'textOffset', textOffset, 'blocker', blocker, 'blockerDelta', blockerDelta, "
-    "'size_reason', size_reason, 'similarity', similarity"
-    ")"
-)
-
-_GLOBAL_JSON_SQL = (
-    "json_object("
-    "'va', va, 'name', name, 'decl', decl, "
-    "'files', json(files), 'module', module, 'size', size, 'isGlobal', 1"
-    ")"
-)
-
-# Cell shape for the SPA /data payload and the Potato grid. SECTION_CELLS_AGG_SQL
-# is the ordered aggregate build_db writes into section_cells_json (the
-# CELLS_JSON_OBJECT_SQL projection, json_group_array ... ORDER BY start). The
-# live fallback uses that same expression so a database without the cache cannot
-# drift into a different cell shape or into planner row order. `id` is omitted
-# from the projection: no consumer reads it.
-_CELLS_JSON_SQL = f"SELECT section_name, {SECTION_CELLS_AGG_SQL} FROM cells WHERE target = ?"
-
-
-def _lookup_by_va_or_name(
-    c: sqlite3.Cursor, table: str, json_sql: str, target: str, value: str
-) -> sqlite3.Row | None:
-    """First row of *table* matching *value* as a VA, else as a folded name.
+def lookup_function(snap: CoverageSnapshot, value: str) -> Function | None:
+    """The function *value* names, as a VA first and then as a name.
 
     ONE resolution order for the /functions/<va> route and both Potato Mode
-    detail panels: callers name a function by VA ("0x10001000") or, for
-    legacy cells, by the symbol outright.  A VA-shaped entry that matches no
-    row still falls through to the name lookup, so the route and the panels
-    cannot disagree about what a value names.  *table* and *json_sql* are
-    literals from the call sites; target and the value are parameterized.
+    detail panels: callers name a function by VA ("0x10001000") or, for legacy
+    cells, by the symbol outright.  A VA-shaped entry that matches no row still
+    falls through to the name lookup, so the route and the panels cannot
+    disagree about what a value names.
 
-    The name is first compared byte for byte, then only a miss falls through to
-    the folded comparison through :data:`FOLD_SQL`, the same NFC + case fold
-    every search uses.  Byte equality alone made a symbol the user could find
-    through /functions?search= unresolvable by name: the NFD spelling macOS puts
-    on the clipboard (``e`` + U+0301 COMBINING ACUTE) is a different byte string
-    from the NFC one rebrew stores, so the row the search highlighted 404'd when
-    it was opened.  Folding in SQL rather than in Python keeps the stored name
-    untouched, so a database predating this lookup needs no migration.
-
-    Neither name arm is served by an index.  rebrew's ``build_db`` drops
-    ``idx_functions_name`` and ``idx_globals_name`` on every rebuild (a
-    b-tree cannot serve the leading-wildcard ``LIKE`` that is the only other
-    name predicate either table gets, so they were pure per-row write cost),
-    and the byte-equality arm here is a separate query shape it does not
-    cover.  Both name arms therefore scan the target's partition, which is
-    acceptable only because the VA arms run first and nearly every cell
-    carries a VA: a name-form lookup is a user click, not a request-rate
-    path.  Adding ``(target, name)`` to rebrew's build is what would make
-    them seeks, and it is rebrew's schema, not this reader's.
-
-    SAFETY: the interpolated parts are the table name, the projection and the
-    registered function name, all supplied by this module or the caller as
-    literals.
+    The VA arm is an index hit on the snapshot; the name arms walk the target's
+    rows, which is acceptable because nearly every cell carries a VA and a
+    name-form lookup is a user click rather than a request-rate path.
     """
-    prefix = f"SELECT {json_sql} FROM {table} WHERE target=? AND "
     for candidate in parse_va_candidates(value):
-        c.execute(prefix + "va=?", (target, candidate))
-        row = c.fetchone()
-        if row:
-            return row
-    c.execute(prefix + "name=?", (target, value))
-    row = c.fetchone()
-    if row is not None:
-        return row
-    c.execute(prefix + f"{FOLD_SQL}(name)={FOLD_SQL}(?)", (target, fold_text(value)))
-    return c.fetchone()
+        found = snap.functions_by_va.get(candidate)
+        if found is not None:
+            return found
+    return _name_match_functions(snap.functions, value)
 
 
-def _has_materialized_cells(c: sqlite3.Cursor) -> bool:
-    """Whether this DB carries rebrew's precomputed cell JSON in the current codec.
+def lookup_global(snap: CoverageSnapshot, value: str) -> Global | None:
+    """:func:`lookup_function` over the globals array.
 
-    One query answers all three cases, because it asks for the COLUMN rather than
-    the table: no table (pre-v7 database), a table in the old zlib codec (a
-    database built before the codec switch), and the current zstd column.  Only
-    the last is decoded; the others are served by the live query, which is
-    correct — just slower — and self-heals on the next ``build-db``.  Probing the
-    column is also why the codec needs no version check here.
-
-    Deliberately NOT memoized.  The check costs 0.002 ms against the ~9 ms it
-    saves, and memoizing it would have to be keyed by something — a bare
-    module global assumes one DB per process, which is false for the tests and
-    for any caller that re-points _db_path, and it fails *loudly and wrongly*
-    by querying a table that is not there.  A fingerprint-keyed memo would cost
-    about as much as the query it replaces.
+    Globals have no by-VA index: nothing reads them by VA at request rate (the
+    batch lookup walks a few hundred rows), so the VA arm is a linear scan.
     """
-    # No guard for a table the database does not carry: pragma_table_info
-    # answers an unknown name with zero rows, which is the False this returns.
-    # A sqlite3.Error here is a database that could not be read, and answering
-    # "no cache, use the live query" would be a slow but plausible response
-    # where the 503 contract says the failure belongs.
-    c.execute(
-        "SELECT 1 FROM pragma_table_info(?) WHERE name = ?",
-        (SECTION_CELLS_TABLE, SECTION_CELLS_COLUMN),
-    )
-    return c.fetchone() is not None
+    for candidate in parse_va_candidates(value):
+        for gl in snap.globals:
+            if gl.va == candidate:
+                return gl
+    return _name_match_globals(snap.globals, value)
 
 
-def _cells_json_rows(
-    c: sqlite3.Cursor,
-    target: str,
-    section: str | None = None,
-    expected_sections: set[str] | None = None,
-) -> list[tuple[str, str]]:
-    """Per-section cell JSON payloads as (section_name, cells_json) rows.
+def verify_payload(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Shape a ``verify_results`` row as the ``last_verify`` object.
 
-    Prefers rebrew's materialized ``section_cells_json`` table — reading and
-    decompressing one pre-aggregated zstd blob (measured 0.3 ms to read, ~0.47 ms
-    to inflate the largest 4.13 MB section) beats re-running
-    ``json_group_array`` over every cell (10.7 ms on a 39k-cell section).
-    Falls back to the live query when the table is absent or written in an older
-    codec, so a pre-v7 database keeps working and self-heals on its next build.
-
-    *expected_sections* is the section-name set the caller already read from
-    ``sections``.  When the materialized table is PARTIAL (present and current
-    codec, but missing a section, as a scoped rebuild or a hand-made database
-    leaves it), the
-    missing sections are re-aggregated from ``cells`` rather than dropped: a
-    dropped section renders as an empty grid, and every one of its bytes reads
-    as ``none`` in the SPA and Potato Mode, which is a wrong answer rather than
-    a slow one.  The caller already holds the section list inside the same
-    pinned snapshot, so the extra query only runs when a section is actually
-    missing.
+    ONE definition shared by the single-VA and batch endpoints so the two
+    response shapes cannot drift apart.  ``similarity`` is passed through as the
+    0-1 fraction the writer stores, like ``functions.similarity``; the percent
+    scaling belongs to the renderers.  ``reg_delta``/``effective_match`` are
+    omitted rather than null when the document does not carry them, which is the
+    shape the optional-column probe produced.
     """
-    clause = " AND section_name = ?" if section else ""
-    params: list[Any] = [target, *([section] if section else [])]
-    if _has_materialized_cells(c):
-        c.execute(
-            f"SELECT section_name, {SECTION_CELLS_COLUMN} FROM {SECTION_CELLS_TABLE}"
-            f" WHERE target = ?{clause}",
-            params,
-        )
-        rows = [(row[0], decode_section_cells(row[1])) for row in c.fetchall()]
-        missing = _uncovered_sections({name for name, _ in rows}, expected_sections)
-        if not missing:
-            return rows
-        rows += _live_cells_json_rows(c, target, missing)
-        return rows
-
-    return _live_cells_json_rows(c, target, None, section)
+    return {
+        "verified_at": row.get("verified_at"),
+        "byte_delta": row.get("byte_delta"),
+        "diff_lines": row.get("diff_lines"),
+        "similarity": row.get("similarity"),
+        "reg_delta": row.get("reg_delta"),
+        "effective_match": bool(row["effective_match"])
+        if row.get("effective_match") is not None
+        else None,
+    }
 
 
-def _uncovered_sections(present: set[str], expected: set[str] | None) -> list[str]:
-    """Expected section names *present* does not cover, in a stable order."""
-    if not expected:
-        return []
-    return sorted(name for name in expected if name not in present)
+def load_metadata(snap: CoverageSnapshot) -> dict[str, Any]:
+    """The metadata the /data payload carries, rebuilt from the snapshot.
 
-
-def _live_cells_json_rows(
-    c: sqlite3.Cursor,
-    target: str,
-    only: list[str] | None,
-    section: str | None = None,
-) -> list[tuple[str, str]]:
-    """``json_group_array`` over ``cells`` for *target*, narrowed by *section*
-    and/or *only*.
-
-    *only* names the sections to aggregate; every other section is skipped, so
-    filling the gap a partial cache left does not re-aggregate the whole target.
+    ``build_db`` wrote four metadata rows per target — ``db_version``, the
+    derived ``function_stats``, the catalog's ``summary`` blob and ``paths`` —
+    and the TOML writer stores the facts instead, so three of the four are
+    recomputed here (:func:`_summary`, :func:`coverage_version`) and the fourth
+    (``paths``) is read straight off the document.
     """
-    clause = ""
-    params: list[Any] = [target]
-    if section is not None:
-        clause = " AND section_name = ?"
-        params.append(section)
-    if only is not None:
-        if not only:
-            return []
-        # SAFETY: placeholders is only "?,?,...", its length comes from *only*,
-        # and every value reaches the statement parameterized.
-        clause += f" AND section_name IN ({','.join('?' * len(only))})"
-        params.extend(only)
-    c.execute(_CELLS_JSON_SQL + f"{clause} GROUP BY section_name", params)
-    return [(row[0], row[1]) for row in c.fetchall()]
+    return {
+        "db_version": coverage_version(snap),
+        "function_stats": _plain(snap.function_stats),
+        "summary": _summary(snap),
+        "paths": _plain(snap.paths),
+    }
+
+
+# ── Shared caches ──────────────────────────────────────────────────
 
 
 def _evict_oldest(cache: dict[Any, Any], max_size: int) -> None:
     """Drop oldest entries (dict insertion order) until *cache* holds < max_size.
 
-    ONE definition of the bounded-cache arithmetic behind every per-DB-snapshot
+    ONE definition of the bounded-cache arithmetic behind every per-snapshot
     memo in the package (/data payloads, /stats, the function list totals, and
     Potato's cells and per-section stats).  They are keyed by a snapshot that
     changes on every rebuild, so a long-running server would otherwise
@@ -1718,337 +1619,6 @@ def _format_hex_dump(raw_bytes: bytes, base_offset: int = 0, max_bytes: int | No
     if max_bytes is not None and len(raw_bytes) > max_bytes:
         lines.append(f"... ({len(raw_bytes) - max_bytes} more bytes)")
     return "\n".join(lines)
-
-
-_METADATA_VALUE_MAX_BYTES = 1 * 1024 * 1024
-
-
-def _load_metadata(c: sqlite3.Cursor, target: str) -> dict[str, Any]:
-    """Load *target*'s metadata rows as a dict, JSON-decoding values when valid.
-
-    ONE loader for every consumer of the metadata table (SPA /data, Potato
-    summary/paths): malformed JSON falls back to the raw string instead of
-    failing the whole response.  Values larger than 1 MiB are kept as raw
-    strings to bound json.loads work per-row.
-    """
-    data: dict[str, Any] = {}
-    c.execute("SELECT key, value FROM metadata WHERE target = ?", (target,))
-    for key, value in c.fetchall():
-        if isinstance(value, str) and len(value.encode("utf-8")) > _METADATA_VALUE_MAX_BYTES:
-            data[key] = value
-            continue
-        try:
-            data[key] = json.loads(value)
-        except (json.JSONDecodeError, TypeError):
-            data[key] = value
-    return data
-
-
-# v8 CHECK-constrains functions.status, v9 CHECK-constrains cells.state and
-# adds idx_metadata_key, v10 widens the cell-state set (extract_error,
-# invalid_va), v11 stores cells WITHOUT ROWID under the primary key
-# (target, section_name, start) and drops the surrogate id. None of those
-# add or remove a column this server queries.
-KNOWN_SCHEMA_VERSIONS: frozenset[str] = frozenset({"3", "4", "5", "6", "7", "8", "9", "10", "11"})
-
-# Schema check memoized on the DB's read snapshot (see
-# _snapshot_db_mtime): the check is two queries (metadata + full sqlite_master
-# scan) that would otherwise run on every request; the DB only changes when
-# build-db rewrites it, which the SSE watcher already detects and funnels
-# through clear_target_cache().
-_SCHEMA_VERSION_CACHE: tuple[tuple[int, int], str] | None = None
-
-
-def _check_schema_version(conn: sqlite3.Connection) -> str:
-    """Read the stored db_version metadata; warn if it is not a known-compatible version.
-
-    Known-compatible versions: 3 through 11.  Version 3 is still readable
-    because none of the v4 constraints affect reads of existing data.  Any other
-    version is logged as a warning. recoverage does not abort.
-
-    The version stamp alone is not proof of shape: a DB stamped "4" can be
-    missing required objects (e.g. the ``history`` table) and pass this gate,
-    then 500 at query time.  A known version with missing objects is reported
-    as ``"<incomplete>"`` so endpoints can respond with a clear 503 instead.
-
-    Returns the version string (or ``"<unknown>"`` / ``"<incomplete>"``).
-    """
-    global _SCHEMA_VERSION_CACHE
-    # WAL-aware snapshot, not raw st_mtime: a rebuild that commits only to
-    # -wal must invalidate the memo or a stale verdict (e.g. "<incomplete>")
-    # survives the fix — same contract as every other DB-derived cache key.
-    fingerprint = _snapshot_db_mtime()
-    if fingerprint is not None:
-        with _RESOLVED_TARGETS_CACHE_LOCK:
-            if _SCHEMA_VERSION_CACHE is not None and _SCHEMA_VERSION_CACHE[0] == fingerprint:
-                return _SCHEMA_VERSION_CACHE[1]
-    version = _check_schema_version_uncached(conn)
-    if fingerprint is not None:
-        with _RESOLVED_TARGETS_CACHE_LOCK:
-            _SCHEMA_VERSION_CACHE = (fingerprint, version)
-    return version
-
-
-def _missing_required_columns(conn: sqlite3.Connection) -> set[str]:
-    """Query-critical columns a v4 DB must have; ``table.column`` for gaps.
-
-    The name-only shape gate passes a DB stamped "4" whose ``functions``
-    table lacks ``textOffset``/``similarity`` (queried by the function
-    detail endpoint) or whose ``section_cell_stats`` table is missing a
-    counted bucket — those fail at query time instead of at open.  The sets
-    below are the columns recoverage itself subscripts, not a copy of
-    build_db's schema: a column build_db added after these endpoints were
-    written is not required here, and optional columns the live readers probe
-    for are left out on purpose (the v6 additions noted in
-    _check_schema_version_uncached).
-    """
-    required_columns: dict[str, set[str]] = {
-        "metadata": {"target", "key", "value"},
-        "sections": {"target", "name", "va", "size", "fileOffset", "unitBytes", "columns"},
-        "cells": {
-            "target",
-            "section_name",
-            "start",
-            "end",
-            "span",
-            "state",
-            "functions",
-            "label",
-            "parent_function",
-        },
-        "functions": {
-            "target",
-            "va",
-            "name",
-            "vaStart",
-            "size",
-            "fileOffset",
-            "status",
-            "module",
-            "cflags",
-            "symbol",
-            "markerType",
-            "ghidra_name",
-            "list_name",
-            "is_thunk",
-            "is_export",
-            "sha256",
-            "files",
-            "detected_by",
-            "size_by_tool",
-            "textOffset",
-            "blocker",
-            "blockerDelta",
-            "size_reason",
-            "similarity",
-        },
-        "globals": {"target", "va", "name", "decl", "files", "module", "size"},
-        "verify_results": {"target", "va", "verified_at", "byte_delta", "diff_lines", "similarity"},
-        "section_cell_stats": {
-            "target",
-            "section_name",
-            "total_cells",
-            "exact_count",
-            "reloc_count",
-            "near_match_count",
-            "stub_count",
-            "padding_count",
-            "data_count",
-            "thunk_count",
-            "none_count",
-            "proven_count",
-            "size_mismatch_count",
-        },
-    }
-    missing: set[str] = set()
-    for obj, cols in required_columns.items():
-        # No guard, for the reason _table_columns gives: PRAGMA table_info
-        # answers a name no table carries with zero rows, so a table the
-        # database lacks lands in `cols - actual` and every column of it is
-        # reported missing.  A sqlite3.Error here is a database that could not
-        # be read, and it belongs to the 503 contract, not to this set.
-        actual = _table_columns(conn, obj)
-        for col in cols - actual:
-            missing.add(f"{obj}.{col}")
-    return missing
-
-
-def _check_schema_version_uncached(conn: sqlite3.Connection) -> str:
-    """Uncached schema version read; see :func:`_check_schema_version`."""
-    try:
-        # Prefer the SCHEMA_TARGET stamp (deterministic across targets); fall
-        # back to any per-target stamp for legacy DBs.
-        row = conn.execute(
-            "SELECT value FROM metadata WHERE target = ? AND key = 'db_version' LIMIT 1",
-            (SCHEMA_TARGET,),
-        ).fetchone()
-        if row is None:
-            row = conn.execute(
-                "SELECT value FROM metadata WHERE key = 'db_version' LIMIT 1"
-            ).fetchone()
-        if row is None:
-            return "<unknown>"
-        v = row[0]
-        if isinstance(v, str):
-            v = v.strip('"')
-        version = str(v)
-        if version in KNOWN_SCHEMA_VERSIONS:
-            present = {
-                r[0]
-                for r in conn.execute(
-                    "SELECT name FROM sqlite_master"
-                    " WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%'"
-                ).fetchall()
-            }
-            required = {
-                "metadata",
-                "sections",
-                "cells",
-                "functions",
-                "globals",
-                "verify_results",
-                "history",
-                "section_cell_stats",
-            }
-            missing = required - present
-            if not missing and version != "3":
-                # Object names present. Verify the query-critical columns.
-                # v3 predates that column set. v4 through v11 share it:
-                # v8 through v10 add CHECK constraints and an index, and v11
-                # drops cells.id. None of those name a column these queries
-                # read. v6 additions (updated_by / updated_at, globals.status,
-                # verify reg_delta / effective_match) are read when present
-                # and omitted when absent, so a missing one degrades rather
-                # than 503s. The shape gate still reports a missing required
-                # column.
-                missing |= _missing_required_columns(conn)
-            if missing:
-                _log.warning(
-                    "recoverage: db_version %r but missing schema objects: %s",
-                    version,
-                    ", ".join(sorted(missing)),
-                )
-                return "<incomplete>"
-        else:
-            _log.warning(
-                "recoverage: unexpected db_version %r (known: %s) — "
-                "some features may not work correctly",
-                version,
-                ", ".join(sorted(KNOWN_SCHEMA_VERSIONS)),
-            )
-        return version
-    except sqlite3.Error as exc:
-        _log.warning("recoverage: could not read db_version: %s", exc)
-        return "<unknown>"
-
-
-# Same busy wait as rebrew.workspace.open_sqlite_ro. A reader blocked on
-# build-db's write lock should wait out a short transaction, not the
-# sqlite default of 5s.
-_SQLITE_RO_TIMEOUT_SECONDS = 30.0
-
-
-class _LockedReadConnection(sqlite3.Connection):
-    """Read-only connection that releases the shared coverage lock on close.
-
-    ``sqlite3.Connection.close`` cannot be replaced on an instance, and the
-    stock connection cannot be weak-referenced, so the lock lives on this
-    subclass. ``contextlib.closing`` calls ``close``. There is no ``__del__``:
-    sqlite forbids ``close`` from a thread other than the one that opened
-    the connection, and a failed ``connect`` still finalizes the subclass.
-    Dropping the connection without ``close`` drops the lock object, and
-    that generator's cleanup unlocks the file. ``build-db --force`` waits
-    on the lock before unlinking the file.
-    """
-
-    _coverage_lock: contextlib.AbstractContextManager[None] | None = None
-
-    def close(self) -> None:
-        lock = getattr(self, "_coverage_lock", None)
-        self._coverage_lock = None
-        try:
-            super().close()
-        finally:
-            if lock is not None:
-                lock.__exit__(None, None, None)
-
-
-def _open_db(db_path: Path) -> sqlite3.Connection:
-    """Open *db_path* read-only, holding ``coverage_db_lock`` until close.
-
-    Same reader setup as ``rebrew.workspace.open_sqlite_ro`` (``mode=ro``
-    URI, ``query_only``, 30s busy timeout). The connection is a
-    :class:`_LockedReadConnection` so the shared lock survives for the open.
-
-    :data:`FOLD_SQL` is registered here so every surface searching through
-    this connection folds names the same way; a clause naming it against a
-    connection that lacks it would fail the whole query.
-    """
-    lock = coverage_db_lock(db_path, shared=True)
-    lock.__enter__()
-    try:
-        conn = sqlite3.connect(
-            sqlite_ro_uri(db_path),
-            uri=True,
-            timeout=_SQLITE_RO_TIMEOUT_SECONDS,
-            factory=_LockedReadConnection,
-        )
-        try:
-            conn.execute("PRAGMA query_only=ON")
-            conn.create_function(FOLD_SQL, 1, fold_text, deterministic=True)
-        except BaseException:
-            # The lock is not attached yet, so close() does not release it.
-            conn.close()
-            raise
-    except BaseException:
-        lock.__exit__(None, None, None)
-        raise
-    conn._coverage_lock = lock
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
-@contextlib.contextmanager
-def read_snapshot(c: sqlite3.Cursor) -> Iterator[None]:
-    """Run every statement in the block against ONE database snapshot.
-
-    Python's sqlite3 opens a deferred transaction per statement, so a
-    multi-query read (metadata + cells + sections + stats) sees a rebuild
-    that commits midway through: the payload can pair section rows from one
-    build with cells from the next.  ``BEGIN`` here pins the read snapshot
-    for the whole block, so the answer is internally consistent or the
-    request fails.
-
-    No-op when the caller is already inside a transaction (the CLI reuses
-    one connection across commands): SQLite has no nested BEGIN, and the
-    outer transaction already pins the snapshot.
-    """
-    conn = c.connection
-    if conn.in_transaction:
-        yield
-        return
-    conn.execute("BEGIN")
-    try:
-        yield
-    finally:
-        conn.rollback()
-
-
-def _db() -> sqlite3.Connection:
-    conn = _open_db(_db_path())
-    version = _check_schema_version(conn)
-    # DEBUG: this runs on every DB-touching request; an INFO line here makes
-    # the operational log one "opened coverage.db" entry per request.
-    _log.debug("recoverage: opened coverage.db (schema v%s)", version)
-    if version == "<incomplete>":
-        # Stamped with a known version but missing required objects — every
-        # query would 500.  Fail fast with the standard 503 JSON contract.
-        conn.close()
-        raise sqlite3.OperationalError(
-            "coverage.db schema is incomplete (missing tables/views) — "
-            "run rebrew build-db --force to rebuild"
-        )
-    return conn
 
 
 # ── Response helpers ───────────────────────────────────────────────
@@ -2334,7 +1904,7 @@ def _reclassify_request(status: int) -> None:
     ``after_request`` runs before bottle hands an escaped exception to the
     error handler, so it counted the request as the 200 it was still
     carrying.  Without this, every 500 and 503 (a corrupt or rebuilding
-    coverage.db, the failure the operator most needs to see) would land in
+    unreadable coverage, the failure the operator most needs to see) would land in
     the 2xx bucket and the error rate would read zero.
     """
     counted = getattr(_REQUEST_TLS, "counted", None)
@@ -2450,9 +2020,9 @@ def _reject_broken_project_config() -> None:
 
     Registered after the auth hook, so a missing token still answers 401.
     ``_db_path`` raises ``WorkspaceConfigError`` for a present file that is
-    not UTF-8 TOML; serving anyway would open ``db/coverage.db``, which may
-    be a different database than the one the file named. ``RECOVERAGE_DB``
-    is applied first, so an explicit database still serves.
+    not UTF-8 TOML; serving anyway would read ``db/``, which may be a
+    different project's coverage than the one the file named. ``RECOVERAGE_DB``
+    is applied first, so an explicit coverage directory still serves.
     """
     try:
         _db_path()
@@ -2470,21 +2040,20 @@ def _reject_broken_project_config() -> None:
 app.add_hook("before_request", _reject_broken_project_config)
 
 
-def _db_unavailable_err(exc: sqlite3.Error) -> HTTPResponse:
-    """JSON 503 for an unreadable coverage.db, logged so the failure is visible.
+def _db_unavailable_err(exc: Exception) -> HTTPResponse:
+    """JSON 503 for unreadable coverage, logged so the failure is visible.
 
-    ONE tail for every DB-open failure path (the shared target cursor and the
-    unexpected-error handler): without the log line a missing or corrupt
-    database is invisible in the server log — the 503 only reaches the one
-    client that happened to make the request.  The log line carries the full
-    OS/SQLite cause; the body carries the exception class and the rebuild hint
-    and nothing else, because every read endpoint is unauthenticated unless
-    the operator passed --token and --allow-remote puts it on a network, and
-    sqlite3 messages routinely quote the absolute database path.  Potato Mode's
-    503 page carries the same hint.
+    ONE tail for every coverage-read failure path (the shared target snapshot
+    and the unexpected-error handler): without the log line a missing or
+    malformed document is invisible in the server log — the 503 only reaches
+    the one client that happened to make the request.  The log line carries the
+    full cause and the absolute path; the body carries the exception class and
+    the rebuild hint and nothing else, because every read endpoint is
+    unauthenticated unless the operator passed --token, and --allow-remote puts
+    it on a network.  Potato Mode's 503 page carries the same hint.
     """
     _log.warning(
-        "Database unavailable serving %s %s: %s: %s",
+        "Coverage unavailable serving %s %s: %s: %s",
         _log_safe(request.method),
         _log_safe(request.path),
         type(exc).__name__,
@@ -2505,20 +2074,20 @@ def _db_unavailable_err(exc: sqlite3.Error) -> HTTPResponse:
 def _handle_unexpected_error(error: Any) -> HTTPResponse:
     """Keep every surface's error contract when a handler raises unexpectedly.
 
-    ``_db()`` open failures already return 503 JSON, but every query after
-    connect was unguarded — a corrupt/incompatible DB or SQLITE_BUSY during a
-    concurrent build-db raised inside ``c.execute`` and surfaced as Bottle's
-    HTML 500.  All sqlite3 errors become a 503 JSON response instead.
+    Snapshot loading already returns 503 JSON, but a document that turns out to
+    be unreadable while a handler walks it (a file replaced between the stat and
+    the read) raised inside the handler and surfaced as Bottle's HTML 500.
+    Every :class:`CoverageTomlError` becomes a 503 JSON response instead.
 
-    Non-DB exceptions are logged here with their request context: bottle only
-    dumps the raw traceback to wsgi.errors (and ``serve`` runs wsgiref with
+    Non-coverage exceptions are logged here with their request context: bottle
+    only dumps the raw traceback to wsgi.errors (and ``serve`` runs wsgiref with
     quiet=True), so without this the failing endpoint is hard to identify from
     the log alone.  /api/* requests get the standard JSON 500 contract — the
     SPA's fetch() handlers and API consumers parse JSON, not Bottle's HTML
     error page — while UI routes keep Bottle's HTML error page.
     """
     exc = getattr(error, "exception", None)
-    if isinstance(exc, sqlite3.Error):
+    if isinstance(exc, CoverageTomlError):
         _reclassify_request(503)
         return _db_unavailable_err(exc)
     # Returning the HTTPError itself would make _cast re-enter the error

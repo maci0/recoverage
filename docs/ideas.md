@@ -22,7 +22,7 @@ Cross-reference lookup — which functions call this VA, and which VAs does this
 Raw byte slice endpoint with `?offset=N&size=M` params.
 
 ### ~~`GET /api/health`~~ ✅ Implemented
-Simple health check returning server version, DB path, DB size, DB mtime (WAL-aware, as epoch seconds and as an ISO-8601 UTC instant), optional extras installed, and available targets count.
+Simple health check returning server version, coverage directory name, total document size, newest document mtime (as epoch seconds and as an ISO-8601 UTC instant), optional extras installed, and available targets count.
 
 ### `POST /api/targets/<target>/functions/<va>/annotate`
 Write-back annotations to source files. Accept a JSON body with annotation key-value pairs (`NOTE`, `BLOCKER`, `STATUS`, etc.) and patch the corresponding `.c` file. Enables in-browser editing of annotations without leaving the dashboard.
@@ -74,7 +74,7 @@ Re-run `rebrew catalog` + `rebrew build-db` from the terminal without starting t
 ## WebSocket / SSE Support
 
 ### ~~Live Reload via Server-Sent Events~~ ✅ Implemented
-`/api/events` pushes `db-updated` events when `coverage.db` is modified (mtime polling by a background watcher thread, no extra dependency). The SPA auto-refreshes the grid without polling or manual reload clicks.
+`/api/events` pushes `db-updated` events when the coverage documents change (a background watcher polls the directory's per-document name, mtime and size; no extra dependency). The SPA auto-refreshes the grid without polling or manual reload clicks.
 
 ### Regen Progress
 Stream `/api/regen` progress as SSE events instead of blocking the request until completion (a long regen keeps the connection open for its whole run).
@@ -88,9 +88,6 @@ For very large targets, stream the `/data` JSON response using chunked transfer 
 
 ### Pre-compressed Cache Files
 Write `.br` and `.gz` cache files to disk for the inlined index and large JSON payloads. Avoids re-compressing on every cold start.
-
-### Connection Pooling
-Replace per-request `sqlite3.connect()` calls with a thread-local connection pool to avoid connection setup overhead.
 
 ---
 

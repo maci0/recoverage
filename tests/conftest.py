@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-import json
 import os
-import sqlite3
 from io import BytesIO
 from pathlib import Path
+from typing import Any
 from wsgiref.util import setup_testing_defaults
 
 import pytest
+from coverage_fixture import cell, write_coverage
 
 from recoverage.api import _clear_derived_caches
 from recoverage.webapp import app
@@ -42,233 +42,144 @@ def _clean_derived_caches() -> None:
     _clear_derived_caches()
 
 
-# -- Synthetic coverage.db -------------------------------------------------
-# The DB-gated tests below skip when no coverage.db is in cwd, and CI has no
-# real rebrew project — so they silently never ran.  Generate a minimal DB
-# matching rebrew build-db's schema (schema v4) so those tests execute
-# everywhere.  The file is gitignored (see .gitignore).
+# -- Synthetic coverage documents ------------------------------------------
+# The document-gated tests below read the directory `_db_path()` resolves, and
+# CI has no real rebrew project — so they silently never ran.  Write a minimal
+# set of coverage documents matching rebrew's schema so those tests execute
+# everywhere.  The files are gitignored (see .gitignore).
 
-_DB_FILE = Path.cwd() / "db" / "coverage.db"
+_DB_DIR = Path.cwd() / "db"
+_DB_FILE = _DB_DIR / "coverage-FAKEDLL.toml"
+
+TARGET = "FAKEDLL"
+
+SECTIONS: dict[str, dict[str, Any]] = {
+    ".text": {
+        "va": 0x10001000,
+        "size": 0x1000,
+        "fileOffset": 0x200,
+        "unitBytes": 16,
+        "columns": 8,
+        "cells": [
+            cell(0, 16, "exact", functions=("_func_a",)),
+            cell(16, 32, "reloc", functions=("_func_b",)),
+            cell(32, 48, "stub", functions=("_func_c",)),
+            cell(48, 64, "padding"),
+            cell(64, 80, "data", label="jt_10001060"),
+            cell(80, 96, "thunk", parent_function="_func_a"),
+            cell(96, 112, "none"),
+            cell(112, 128, "exact"),
+        ],
+    },
+    ".data": {
+        "va": 0x10002000,
+        "size": 0x400,
+        "fileOffset": 0x1200,
+        "unitBytes": 16,
+        "columns": 8,
+        "cells": [cell(0, 16, "data", functions=("g_counter",), label="g_counter")],
+    },
+}
+
+#: The three functions and one global every fixture-driven assertion is written
+#: against.  Kept as module data so a test that needs a different shape can
+#: write its own document rather than editing the shared one.
+FUNCTIONS: list[dict[str, Any]] = [
+    {
+        "va": 0x10001000,
+        "name": "_func_a",
+        "vaStart": "0x10001000",
+        "size": 48,
+        "fileOffset": 0x200,
+        "status": "EXACT",
+        "module": "T",
+        "cflags": "/O2",
+        "symbol": "_func_a",
+    },
+    {
+        "va": 0x10001010,
+        "name": "_func_b",
+        "vaStart": "0x10001010",
+        "size": 16,
+        "fileOffset": 0x210,
+        "status": "RELOC",
+        "module": "T",
+        "cflags": "/O2",
+        "symbol": "_func_b",
+    },
+    {
+        "va": 0x10001030,
+        "name": "_func_c",
+        "vaStart": "0x10001030",
+        "size": 32,
+        "fileOffset": 0x230,
+        "status": "STUB",
+        "module": "T",
+        "cflags": "",
+        "symbol": "_func_c",
+    },
+]
+
+GLOBALS: list[dict[str, Any]] = [
+    {
+        "va": 0x10002000,
+        "name": "g_counter",
+        "decl": "int g_counter",
+        "module": "T",
+        "size": 4,
+    },
+]
+
+VERIFY_RESULTS: list[dict[str, Any]] = [
+    {
+        "va": 0x10001000,
+        "verified_at": "2026-01-01T00:00:00+00:00",
+        "byte_delta": 0,
+        "diff_lines": 0,
+        # 0.873, the unit-interval fraction rebrew's verify import stores
+        # (its schema CHECKs 0..1); 87.3 would be 8730%.
+        "similarity": 0.873,
+    }
+]
 
 
-def _build_synthetic_db(db_file: Path) -> None:
-    """Create a minimal coverage.db (rebrew build-db schema v4) at *db_file*.
+def build_synthetic_coverage(directory: Path) -> Path:
+    """Write the shared synthetic documents into *directory*.
 
-    Rebuilds unconditionally: an existing file is removed first, so a
-    second run over the same directory produces the same database as the
-    first instead of failing on the CREATE TABLE statements.  The path is
-    a parameter rather than the module-level ``_DB_FILE`` so a caller that
-    imports this module once can still build a database somewhere else.
+    Rebuilds unconditionally: every file is removed first, so a second run over
+    the same directory produces the same documents as the first instead of
+    leaving one from a previous test behind.  *directory* is a parameter rather
+    than the module-level ``_DB_DIR`` so a caller that imports this module once
+    can still build coverage somewhere else.
     """
-    db_file.parent.mkdir(parents=True, exist_ok=True)
-    db_file.unlink(missing_ok=True)
-    conn = sqlite3.connect(db_file)
-    try:
-        c = conn.cursor()
-        c.execute(
-            "CREATE TABLE metadata ("
-            " target TEXT NOT NULL, key TEXT NOT NULL, value TEXT,"
-            " PRIMARY KEY (target, key))"
-        )
-        c.execute(
-            "CREATE TABLE sections ("
-            " target TEXT NOT NULL, name TEXT NOT NULL,"
-            " va INTEGER CHECK (va IS NULL OR va >= 0),"
-            " size INTEGER CHECK (size IS NULL OR size >= 0),"
-            " fileOffset INTEGER CHECK (fileOffset IS NULL OR fileOffset >= 0),"
-            " unitBytes INTEGER CHECK (unitBytes IS NULL OR unitBytes > 0),"
-            " columns INTEGER CHECK (columns IS NULL OR columns > 0),"
-            " PRIMARY KEY (target, name))"
-        )
-        c.execute(
-            "CREATE TABLE cells ("
-            " id INTEGER PRIMARY KEY AUTOINCREMENT,"
-            " target TEXT NOT NULL, section_name TEXT NOT NULL,"
-            " start INTEGER NOT NULL CHECK (start >= 0),"
-            " end INTEGER NOT NULL CHECK (end >= start),"
-            " span INTEGER NOT NULL DEFAULT 1 CHECK (span > 0),"
-            " state TEXT NOT NULL,"
-            " functions TEXT NOT NULL DEFAULT '[]',"
-            " label TEXT, parent_function TEXT)"
-        )
-        c.execute(
-            "CREATE TABLE functions ("
-            " target TEXT NOT NULL, va INTEGER NOT NULL CHECK (va >= 0),"
-            " name TEXT NOT NULL DEFAULT '', vaStart TEXT NOT NULL DEFAULT '',"
-            " size INTEGER CHECK (size IS NULL OR size >= 0),"
-            " fileOffset INTEGER CHECK (fileOffset IS NULL OR fileOffset >= 0),"
-            " status TEXT NOT NULL DEFAULT 'UNKNOWN',"
-            " module TEXT NOT NULL DEFAULT '', cflags TEXT, symbol TEXT,"
-            " markerType TEXT NOT NULL DEFAULT 'FUNCTION'"
-            "  CHECK (markerType IN ('FUNCTION','LIBRARY','STUB','GLOBAL','DATA')),"
-            " ghidra_name TEXT, list_name TEXT,"
-            " is_thunk INTEGER NOT NULL DEFAULT 0 CHECK (is_thunk IN (0, 1)),"
-            " is_export INTEGER NOT NULL DEFAULT 0 CHECK (is_export IN (0, 1)),"
-            " sha256 TEXT,"
-            " files TEXT NOT NULL DEFAULT '[]',"
-            " detected_by TEXT NOT NULL DEFAULT '[]',"
-            " size_by_tool TEXT NOT NULL DEFAULT '{}',"
-            " textOffset INTEGER CHECK (textOffset IS NULL OR textOffset >= 0),"
-            " blocker TEXT,"
-            " blockerDelta INTEGER CHECK (blockerDelta IS NULL OR blockerDelta >= 0),"
-            " size_reason TEXT,"
-            " similarity REAL CHECK (similarity IS NULL OR "
-            "(similarity >= 0.0 AND similarity <= 1.0)),"
-            " PRIMARY KEY (target, va))"
-        )
-        c.execute(
-            "CREATE TABLE globals ("
-            " target TEXT NOT NULL, va INTEGER NOT NULL CHECK (va >= 0),"
-            " name TEXT NOT NULL DEFAULT '', decl TEXT NOT NULL DEFAULT '',"
-            " files TEXT NOT NULL DEFAULT '[]',"
-            " module TEXT NOT NULL DEFAULT '',"
-            " size INTEGER NOT NULL DEFAULT 4 CHECK (size >= 0),"
-            " PRIMARY KEY (target, va))"
-        )
-        c.execute(
-            "CREATE VIEW section_cell_stats AS"
-            " SELECT target, section_name,"
-            " COUNT(*) as total_cells,"
-            " SUM(CASE WHEN state = 'exact' THEN 1 ELSE 0 END) as exact_count,"
-            " SUM(CASE WHEN state = 'reloc' THEN 1 ELSE 0 END) as reloc_count,"
-            " SUM(CASE WHEN state IN ('near_match','near_matching') THEN 1 ELSE 0 END)"
-            "   as near_match_count,"
-            " SUM(CASE WHEN state = 'stub' THEN 1 ELSE 0 END) as stub_count,"
-            " SUM(CASE WHEN state = 'padding' THEN 1 ELSE 0 END) as padding_count,"
-            " SUM(CASE WHEN state = 'data' THEN 1 ELSE 0 END) as data_count,"
-            " SUM(CASE WHEN state = 'thunk' THEN 1 ELSE 0 END) as thunk_count,"
-            " SUM(CASE WHEN state = 'none' THEN 1 ELSE 0 END) as none_count,"
-            " SUM(CASE WHEN state = 'proven' THEN 1 ELSE 0 END) as proven_count,"
-            " SUM(CASE WHEN state = 'size_mismatch' THEN 1 ELSE 0 END) as size_mismatch_count"
-            " FROM cells GROUP BY target, section_name"
-        )
-
-        target = "FAKEDLL"
-        c.executemany(
-            "INSERT INTO metadata (target, key, value) VALUES (?, ?, ?)",
-            [
-                (target, "db_version", '"4"'),
-                (target, "summary", json.dumps({"totalFunctions": 3})),
-                (target, "function_stats", json.dumps({"total": 3})),
-            ],
-        )
-        c.executemany(
-            "INSERT INTO sections (target, name, va, size, fileOffset, unitBytes, columns)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?)",
-            [
-                (target, ".text", 0x10001000, 0x1000, 0x200, 16, 8),
-                (target, ".data", 0x10002000, 0x400, 0x1200, 16, 8),
-            ],
-        )
-        c.executemany(
-            "INSERT INTO cells (target, section_name, start, end, span, state,"
-            " functions, label, parent_function) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            [
-                (target, ".text", 0, 16, 1, "exact", '["_func_a"]', None, None),
-                (target, ".text", 16, 32, 1, "reloc", '["_func_b"]', None, None),
-                (target, ".text", 32, 48, 1, "stub", '["_func_c"]', None, None),
-                (target, ".text", 48, 64, 1, "padding", "[]", None, None),
-                (target, ".text", 64, 80, 1, "data", "[]", "jt_10001060", None),
-                (target, ".text", 80, 96, 1, "thunk", "[]", None, "_func_a"),
-                (target, ".text", 96, 112, 1, "none", "[]", None, None),
-                (target, ".text", 112, 128, 1, "exact", "[]", None, None),
-                (target, ".data", 0, 16, 1, "data", '["g_counter"]', "g_counter", None),
-            ],
-        )
-        c.executemany(
-            "INSERT INTO functions (target, va, name, vaStart, size, fileOffset, status,"
-            " module, cflags, symbol, markerType) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            [
-                (
-                    target,
-                    0x10001000,
-                    "_func_a",
-                    "0x10001000",
-                    48,
-                    0x200,
-                    "EXACT",
-                    "T",
-                    "/O2",
-                    "_func_a",
-                    "FUNCTION",
-                ),
-                (
-                    target,
-                    0x10001010,
-                    "_func_b",
-                    "0x10001010",
-                    16,
-                    0x210,
-                    "RELOC",
-                    "T",
-                    "/O2",
-                    "_func_b",
-                    "FUNCTION",
-                ),
-                (
-                    target,
-                    0x10001030,
-                    "_func_c",
-                    "0x10001030",
-                    32,
-                    0x230,
-                    "STUB",
-                    "T",
-                    "",
-                    "_func_c",
-                    "FUNCTION",
-                ),
-            ],
-        )
-        c.execute(
-            "INSERT INTO globals (target, va, name, decl, files, module, size)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (target, 0x10002000, "g_counter", "int g_counter", "[]", "T", 4),
-        )
-        c.execute(
-            "CREATE TABLE verify_results ("
-            " target TEXT NOT NULL, va INTEGER NOT NULL,"
-            " verified_at TEXT NOT NULL,"
-            " byte_delta INTEGER, diff_lines INTEGER,"
-            " similarity REAL,"
-            " PRIMARY KEY (target, va))"
-        )
-        c.execute(
-            "INSERT INTO verify_results "
-            "(target, va, verified_at, byte_delta, diff_lines, similarity)"
-            " VALUES (?, ?, ?, ?, ?, ?)",
-            # 0.873, the unit-interval fraction rebrew's verify import stores
-            # (its schema CHECKs 0..1); 87.3 would be 8730%.
-            (target, 0x10001000, "2026-01-01T00:00:00+00:00", 0, 0, 0.873),
-        )
-        # history + all required objects must exist: the schema-shape check
-        # (round-4) verifies the full object set, not just the version stamp.
-        c.execute(
-            "CREATE TABLE history ("
-            " id INTEGER PRIMARY KEY AUTOINCREMENT,"
-            " target TEXT NOT NULL, va INTEGER NOT NULL,"
-            " old_status TEXT, new_status TEXT, changed_at TEXT NOT NULL)"
-        )
-        conn.commit()
-    finally:
-        conn.close()
+    directory.mkdir(parents=True, exist_ok=True)
+    for stale in directory.glob("coverage-*.toml"):
+        stale.unlink()
+    return write_coverage(
+        directory,
+        TARGET,
+        SECTIONS,
+        functions=FUNCTIONS,
+        globals_=GLOBALS,
+        verify_results=VERIFY_RESULTS,
+    )
 
 
-# Build the synthetic DB only when we are NOT inside a real rebrew workspace:
-# a real project has a rebrew-project.toml and its own coverage.db, which the
-# DB-gated tests must never read (assertions would depend on unrelated project
-# data, and building a synthetic DB here could clobber the real one).
+# Build the synthetic documents only when we are NOT inside a real rebrew
+# workspace: a real project has a rebrew-project.toml and its own coverage,
+# which the document-gated tests must never read (assertions would depend on
+# unrelated project data, and building a synthetic set here could clobber the
+# real one).
 #
-# Everywhere else the file is rebuilt on every session, not only when it is
-# missing: db/coverage.db is gitignored, so a copy left by an older checkout
-# survives a rebase with the old schema and the old column units (a
-# verify_results.similarity on the 0-100 scale, which the current renderer
-# scales by 100 again).  Reusing it made a DB-gated test fail on data this
-# tree no longer produces, and CI, which never has the file, stayed green.
+# Everywhere else the files are rebuilt on every session, not only when they
+# are missing: db/coverage-*.toml is gitignored, so a copy left by an older
+# checkout survives a rebase and a document-gated test then asserts against
+# data this tree no longer produces while CI, which never has the file, stays
+# green.
 _IN_REAL_PROJECT = (Path.cwd() / "rebrew-project.toml").exists()
 
 if not _IN_REAL_PROJECT:
-    _build_synthetic_db(_DB_FILE)
+    build_synthetic_coverage(_DB_DIR)
 
 HAS_DB = _DB_FILE.exists() and not _IN_REAL_PROJECT
 
@@ -354,16 +265,8 @@ def decode_body(body: bytes, headers: dict[str, str]) -> bytes:
 
 
 def get_first_target() -> str:
-    """Get the first target from the coverage database."""
-    from rebrew.workspace import sqlite_ro_uri
+    """The first target the coverage directory holds."""
+    from recoverage.server import db_target_ids
 
-    from recoverage.server import _db_path
-
-    conn = sqlite3.connect(sqlite_ro_uri(_db_path()), uri=True)
-    try:
-        c = conn.cursor()
-        c.execute("SELECT DISTINCT target FROM metadata ORDER BY target LIMIT 1")
-        row = c.fetchone()
-        return row[0] if row else ""
-    finally:
-        conn.close()
+    found = db_target_ids()
+    return found[0] if found else ""

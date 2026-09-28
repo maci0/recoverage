@@ -5,7 +5,7 @@ User stories for the **recoverage** coverage dashboard, organized by persona and
 What the dashboard must do, one story per workflow, each with acceptance criteria
 that the shipped code satisfies. How it is built is [DESIGN.md](DESIGN.md); the
 attack surface is [THREAT_MODEL.md](THREAT_MODEL.md). Last verified against the
-code: 2026-09-27.
+code: 2026-09-28.
 
 ---
 
@@ -22,23 +22,23 @@ code: 2026-09-27.
 
 ## 1. Launching the Dashboard
 
-> **As an RE Dev**, I want to start the coverage dashboard from my project directory so that I can visually inspect progress without reading raw JSON or SQL.
+> **As an RE Dev**, I want to start the coverage dashboard from my project directory so that I can visually inspect progress without reading raw JSON.
 
 ### Acceptance Criteria
 - `recoverage serve` serves a local web dashboard on port 8001
 - Dashboard auto-opens in the default browser (`recoverage serve --no-open` suppresses it)
-- Server resolves `coverage.db` from the current working directory: `[project] db_dir` in `rebrew-project.toml` when set, falling back to `db/coverage.db`
+- Server resolves the coverage directory from the current working directory: `[project] db_dir` in `rebrew-project.toml` when set, falling back to `db/`; the directory must hold at least one `coverage-<target>.toml` document
 - `--regen` flag runs rebrew's catalog + build-db (in-process, via `rebrew.catalog` / `rebrew.build_db`) before starting
 - `--no-open` flag suppresses the browser auto-open
 
 ```mermaid
 graph TD
-    A["Project directory<br/>with rebrew-project.toml"] --> B{"db/coverage.db<br/>exists?"}
+    A["Project directory<br/>with rebrew-project.toml"] --> B{"coverage-*.toml<br/>present?"}
     B -->|Yes| C["recoverage serve --port 8001"]
     B -->|No| D["recoverage serve --regen"]
     D --> E["rebrew catalog"]
     E --> F["rebrew build-db"]
-    F --> G["db/coverage.db created"]
+    F --> G["db/coverage-*.toml created"]
     G --> C
     C --> H["Dashboard opens at<br/>http://localhost:8001"]
 
@@ -246,7 +246,7 @@ graph TD
 - Coverage stats rendered as a text row above the bar (never inside it): total section bytes, matched cells, coverage %
 - "Matched" counts exact + reloc cells only: a near-match is a miss and a stub is a stand-in
 - Each segment is clickable to filter the grid by that status, and reachable by keyboard with `aria-pressed`
-- Coverage stats are precomputed in the DB (`section_cell_stats`) and served via API
+- Coverage stats are derived at load from the stored cells and functions and served via API
 
 ```mermaid
 graph LR
@@ -348,7 +348,7 @@ graph TD
 - The Regenerate button sends a fresh `Idempotency-Key` per click; a key whose run already completed is replayed from a bounded ledger (`{"ok": true}`, `Idempotent-Replay: true`) instead of rebuilding, and a failed run is not remembered
 - Only accessible from localhost (security gate)
 - Dashboard reloads data after regeneration completes
-- ETag-based caching: if DB unchanged, API returns `304 Not Modified`
+- ETag-based caching: if the coverage documents are unchanged, API returns `304 Not Modified`
 
 ```mermaid
 sequenceDiagram
@@ -365,11 +365,11 @@ sequenceDiagram
     Server->>Rebrew: run_catalog
     Rebrew-->>Server: db/data_*.json updated
     Server->>Rebrew: build_db
-    Rebrew-->>Server: db/coverage.db updated
+    Rebrew-->>Server: db/coverage-*.toml updated
 
     Server-->>UI: 200 OK
     UI->>Server: GET /api/targets/<target>/data
-    Note over Server: New ETag (DB mtime changed)
+    Note over Server: New ETag (document mtime changed)
     Server-->>UI: Fresh JSON payload
     UI->>UI: Rebuild grids + progress bar
 ```
@@ -472,7 +472,7 @@ graph TD
 > **As an RE Dev**, I want to click source links in the detail panel to view the original `.c` files so that I can cross-reference the dashboard with the actual decompiled code.
 
 ### Acceptance Criteria
-- Source links in the panel point at `paths.sourceRoot` from the DB, falling back to `/src/<target>/<file>.c`
+- Source links in the panel point at `paths.sourceRoot` from the document, falling back to `/src/<target>/<file>.c`
 - Server proxies `/src/*` and `/original/*` from the project directory (path-traversal safe)
 - Original DLL bytes are fetched from `paths.originalDll`, falling back to `/original/<target>.dll`, as an ArrayBuffer cached in `data.originalDll`
 - A section with no file backing (or a `.bss` cell) has no bytes to slice, and the hex pane says so rather than showing unrelated bytes
@@ -508,7 +508,7 @@ graph TD
 - Compression algorithm auto-selected from `Accept-Encoding` header
 - Deferred Highlight.js loading: fetched from this origin (vendored in `assets/`) only on first code block click
 - `AbortController` cancels in-flight requests when clicking rapidly between cells
-- ETag caching returns `304 Not Modified` when DB is unchanged
+- ETag caching returns `304 Not Modified` when the coverage documents are unchanged
 
 ```mermaid
 graph TD
@@ -578,7 +578,7 @@ graph LR
     subgraph "Phase 1: Data Generation"
         A["rebrew catalog"] --> B["db/data_*.json"]
         B --> C["rebrew build-db"]
-        C --> D["db/coverage.db"]
+        C --> D["db/coverage-*.toml"]
     end
 
     subgraph "Phase 2: Dashboard Launch"
@@ -596,7 +596,7 @@ graph LR
 
     subgraph "Phase 4: Iteration"
         K["Fix a function<br/>in src/"] --> L["Click Reload"]
-        L --> M["Regen coverage.db"]
+        L --> M["Regen coverage documents"]
         M --> G
     end
 

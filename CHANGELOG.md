@@ -5,6 +5,33 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **`recoverage` on its own starts the dashboard.** Invoked with no
+  subcommand it runs `recoverage serve` with the default settings, so in a
+  rebrew project directory it is one command instead of two. The subcommand
+  spelling is unchanged, and any argument at all (`recoverage --help`,
+  `recoverage serve --port 9000`) keeps its current meaning.
+
+### Breaking
+
+- **The required `rebrew` is 2.16.0.** Recoverage reads and writes the coverage
+  documents through `rebrew.coverage_toml`, which no earlier release ships, so
+  an older rebrew can neither write a document nor parse one. Installing rebrew
+  from a package index rather than a sibling checkout now needs that release.
+- **The dashboard reads rebrew's clear-text coverage TOML, not
+  `db/coverage.db`.** Run `rebrew build-db` to write `db/coverage-<target>.toml`
+  beside the database; the dashboard reads those documents and nothing else.
+  `RECOVERAGE_DB` now names the directory holding them rather than a
+  `coverage.db` file, and a directory that holds no `coverage-*.toml` is the
+  503 the dashboard used to report for a missing database. Two served values
+  change with the storage: `/api/targets/<target>/data`'s `db_version` is the
+  document's own format version (`"1"`), and `known_schema` lists the format
+  versions this build can read (`["1"]`) instead of the SQLite schema numbers.
+  Every other route, status code, field name and value is unchanged —
+  `/stats`, `/functions`, `/functions/<va>`, the batch POST and `/potato` are
+  byte-identical against the same project.
+
 ## [2.1.0] - 2026-09-28
 
 ### Changed

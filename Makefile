@@ -52,8 +52,9 @@ PYTHON_VERSION := $(shell cat .python-version)
 REBREW_DIR := $(abspath $(CURDIR)/../rebrew)
 
 # The floor in pyproject.toml [project].dependencies; rebrew below it lacks
-# rebrew.catalog.cli.run_catalog and the coverage.db shared lock.
-REBREW_FLOOR ?= 2.10.0
+# rebrew.coverage_toml, the module that writes and reads the coverage
+# documents this dashboard serves.
+REBREW_FLOOR ?= 2.16.0
 
 # Timestamp the built artifacts are stamped with, so two builds of one commit
 # agree byte for byte. The commit's own date, which is what a release wants and
@@ -126,9 +127,12 @@ ensure-rebrew: ensure-uv
 	  exit 1; \
 	fi; \
 	ver=$$(awk -F'"' '/^__version__ = "/{print $$2; exit}' "$(REBREW_DIR)/src/rebrew/__init__.py"); \
-	lowest=$$(printf '%s\n%s\n' "$$ver" "$(REBREW_FLOOR)" | sort -t. -k1,1n -k2,2n -k3,3n | sed -n '1p'); \
-	if [ "$$lowest" != "$(REBREW_FLOOR)" ]; then \
-	  echo "ERROR: $(REBREW_DIR) is rebrew $$ver, below the $(REBREW_FLOOR) floor in pyproject.toml."; \
+	if [ -f "$(REBREW_DIR)/src/rebrew/coverage_toml.py" ]; then \
+	  :; \
+	else \
+	  echo "ERROR: $(REBREW_DIR) is rebrew $$ver and ships no src/rebrew/coverage_toml.py,"; \
+	  echo "which is what $(REBREW_FLOOR) is the floor for: it writes and reads every"; \
+	  echo "coverage-<target>.toml this repository serves and produces."; \
 	  echo "Re-run 'make clone-rebrew' to check out the pinned rebrew, then 'make setup'."; \
 	  echo "To develop against a different one: make clone-rebrew REBREW_REF=<tag> REBREW_SHA=<commit>"; \
 	  exit 1; \
