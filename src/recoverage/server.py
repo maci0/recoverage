@@ -857,6 +857,20 @@ def _section_summary(section: Any) -> dict[str, Any]:
     }
 
 
+def coverage_pct(covered: int, total: int) -> float:
+    """Byte coverage of *covered* of *total*, as a percentage floored to 2dp.
+
+    Floored, not rounded to nearest, and that is the whole point: 999_997 of
+    1_000_000 covered bytes round to ``100.0`` while three bytes are still
+    unmatched, so a project one short of complete reads as complete in every
+    surface that shows the number.  ``summary.coveragePercent`` and the
+    per-section ``coverage_pct`` are the same quantity, so they take the same
+    rounding, from here (rebrew's ``floor_pct``) rather than each one calling
+    ``round``.  A *total* of 0 has no ratio and answers 0.0.
+    """
+    return floor_pct(covered, total, 2)
+
+
 def _summary(snap: CoverageSnapshot) -> dict[str, Any]:
     """The ``summary`` blob ``build_db`` stored, rebuilt from the snapshot.
 
@@ -889,7 +903,7 @@ def _summary(snap: CoverageSnapshot) -> dict[str, Any]:
         "paddingBytes": text_buckets.get("padding", 0),
         "dataBytes": text_buckets.get("data", 0),
         "thunkBytes": text_buckets.get("thunk", 0),
-        "coveragePercent": floor_pct(covered, text_size, 2),
+        "coveragePercent": coverage_pct(covered, text_size),
         "textSize": text_size,
     }
     for name, section in snap.sections.items():
@@ -928,7 +942,7 @@ def _section_stats(snap: CoverageSnapshot) -> dict[str, Any]:
             "matched": matched,
             "covered_bytes": covered,
             "total_bytes": total,
-            "coverage_pct": round(covered / total * 100, 2) if total else 0.0,
+            "coverage_pct": coverage_pct(covered, total),
             # The section row's declared size, which the schema allowed to be
             # NULL (.bss carries no file extent).  A section of unknown size
             # has zero known bytes, same treatment as the byte sums above.

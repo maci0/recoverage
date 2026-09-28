@@ -43,6 +43,7 @@ from recoverage.server import (
     _snapshot_db_mtime,
     app,
     coverage_for,
+    coverage_pct,
     fold_match_folded,
     fold_needle,
     function_json,
@@ -1475,10 +1476,11 @@ def _section_pct(summary: dict[str, Any], sections: dict[str, dict[str, Any]], n
     sec_summary_entry = summary.get(name, summary)
     covered = sec_summary_entry.get("coveredBytes", 0)
     size = sections.get(name, {}).get("size") or 0
-    # Same rounding as server._section_stats (round to 2dp): int() floor made
-    # the map header read "87% covered" beside the topbar's "88.0%" for the
-    # same section.
-    return round(covered / size * 100, 2) if size > 0 else 0
+    # server.coverage_pct, the rounding /stats serves this section's row with:
+    # int() floor made the map header read "87% covered" beside the topbar's
+    # "88.0%" for the same section, and round() made a section three bytes
+    # short of complete read "100.0%".
+    return coverage_pct(covered, size) if size > 0 else 0
 
 
 #: Rows each search query may scan.  The cap bounds the work a single search

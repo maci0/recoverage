@@ -21,6 +21,7 @@ from typing import IO, Any, NamedTuple, NoReturn
 
 import typer
 from rebrew.coverage_toml import CoverageSnapshot, CoverageTomlError
+from rebrew.utils import floor_pct
 
 from recoverage import config
 from recoverage._paths import _db_path
@@ -1082,7 +1083,10 @@ def stats(
                 s = data["summary"]
                 total_fn = s.get("totalFunctions", 0)
                 matched_fn = s.get("matchedFunctions", 0)
-                pct = round(matched_fn / total_fn * 100, 1) if total_fn else 0
+                # Floored, like every other match figure rebrew reports: 2809
+                # of 2810 functions is 99.96%, and round() printed that line as
+                # "(100.0%)" with a function still unmatched beside it.
+                pct = floor_pct(matched_fn, total_fn, 1)
                 console.print(f"  Functions: {matched_fn}/{total_fn} matched ({pct}%)")
 
             table = Table(show_header=True, header_style="bold")
@@ -1193,9 +1197,10 @@ def _section_verdict(
     *pct* is the UNROUNDED coverage percentage — callers recompute it from
     the raw covered/total byte counts, because the gate must decide on the
     true ratio: comparing the 2dp display value _section_stats stores lets
-    99.9997% (stored as 100.0) pass a --min-coverage 100 gate.  Display and
-    the JSON payload stay at 2dp so a verdict never quotes numbers that
-    disagree with what /stats serves.
+    99.9997% pass a --min-coverage 100 gate.  The quoted value is the same
+    floored-to-2dp percentage /stats serves (server.coverage_pct), so a
+    verdict never quotes a number the dashboard does not, and a FAIL line
+    cannot read "coverage 100.00% < 100.00%".
 
     Sections whose cells are all "none" carry no coverage signal — the grid
     only records match states in .text — so they must not fail the gate.
@@ -1214,17 +1219,21 @@ def _section_verdict(
             {"reason": "no tracked cells — coverage not recorded"},
             "has no tracked cells — coverage not recorded",
         )
-    # Compare the unrounded ratio, print it rounded to 2dp (see docstring).
+    # Compare the unrounded ratio, print it floored to 2dp (see docstring).
+    # The /100 denominator cancels the helper's own ×100: what matters is that
+    # the value is floored, so 99.9997% cannot be quoted as 100.00% beside a
+    # FAIL verdict that just compared it against 100.00%.
+    shown = floor_pct(pct, 100, 2)
     if pct < min_coverage:
         return (
             "FAIL",
-            {"coverage_pct": round(pct, 2)},
-            f"coverage {pct:.2f}% < {min_coverage:.2f}%",
+            {"coverage_pct": shown},
+            f"coverage {shown:.2f}% < {min_coverage:.2f}%",
         )
     return (
         "PASS",
-        {"coverage_pct": round(pct, 2)},
-        f"coverage {pct:.2f}% >= {min_coverage:.2f}%",
+        {"coverage_pct": shown},
+        f"coverage {shown:.2f}% >= {min_coverage:.2f}%",
     )
 
 

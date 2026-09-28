@@ -110,6 +110,21 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **A coverage percentage no longer rounds up to "complete".** The per-section
+  figure was rounded to 2 decimal places, so 999,997 of 1,000,000 covered bytes
+  was served as `coverage_pct: 100.0` by `/api/targets/<target>/stats`, printed
+  as `100.0%` by `recoverage stats` and Potato Mode, and quoted as `100.00%` by
+  `recoverage check` on a project with three bytes still unmatched. It is now
+  floored, the way rebrew's own match figures are, so the section row, the
+  summary and Potato's header are the same number and none of them claims a
+  build is finished before it is. `recoverage stats` also floors the function
+  match line for the same reason (2809 of 2810 functions is 99.96%, not
+  100.0%).
+- **A section declaring a negative column count no longer hangs the dashboard.**
+  The coverage map sized its lattice from the document's `columns` value with no
+  lower bound, so a negative count (or a wrapper too narrow to fit one cell)
+  produced a zero-column grid whose cell-by-cell walk never advanced, freezing
+  the tab. The lattice is now at least one column wide.
 - **The committed dashboard bundle matches `web/` again.** `style.css` still
   carried the pre-phosphor `--bg-grad-1`/`--bg-grad-2` values and `app.js` a
   Highlight.js grammar from before the accent change, so `make build` (and any

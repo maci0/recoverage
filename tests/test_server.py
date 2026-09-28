@@ -1942,6 +1942,57 @@ class TestBucketReconciliation:
         assert section["coverage_pct"] == 80.0
 
 
+class TestCoveragePercentIsFloored:
+    """A coverage percentage must never round UP into "complete".
+
+    ``round(covered / total * 100, 2)`` puts 999_997 of 1_000_000 covered
+    bytes at ``100.0``: the dashboard, the Potato header and `check --json`
+    then all report a project with three bytes still unmatched as fully
+    covered.  rebrew floors this figure everywhere else (``rebrew.utils.
+    floor_pct``), and ``summary.coveragePercent`` did too, so the per-section
+    number was the one surface that disagreed with its own response.
+    """
+
+    #: 999_997 exact bytes then 3 uncovered, a section one part in 333_333
+    #: short of complete — well inside the range of rounding to 100.0.
+    NEARLY_COMPLETE: ClassVar[dict[str, Any]] = {
+        "va": 0x1000,
+        "size": 1_000_000,
+        "fileOffset": 0,
+        "unitBytes": 1,
+        "columns": 1,
+        "cells": [cell(0, 999_997, "exact"), cell(999_997, 1_000_000, "none")],
+    }
+
+    def test_section_row_does_not_read_complete(self) -> None:
+        import recoverage.server as srv
+
+        snap = _snapshot_for({".text": self.NEARLY_COMPLETE})
+        stats = srv._section_stats(snap)
+        assert stats["sections"][".text"]["coverage_pct"] == 99.99
+        # The summary field over the same bytes already floored; the two are
+        # the same quantity, so they must be the same number.
+        assert stats["summary"]["coveragePercent"] == stats["sections"][".text"]["coverage_pct"]
+
+    def test_potato_header_reads_the_same_number(self) -> None:
+        import recoverage.potato as pot
+        import recoverage.server as srv
+
+        snap = _snapshot_for({".text": self.NEARLY_COMPLETE})
+        summary = srv._summary(snap)
+        sections = {".text": {"size": 1_000_000}}
+        assert pot._section_pct(summary, sections, ".text") == 99.99
+
+    def test_a_section_with_no_bytes_is_zero_not_an_error(self) -> None:
+        import recoverage.server as srv
+
+        assert srv.coverage_pct(0, 0) == 0.0
+        # Rounds down, never up: 99.9999 is 99.99 at 2dp, and a value that is
+        # already at 2dp is untouched (no float drift on the way through).
+        assert srv.coverage_pct(999_999, 1_000_000) == 99.99
+        assert srv.coverage_pct(875, 1_000) == 87.5
+
+
 class TestEveryDeclaredSectionIsServed:
     """A section the directory declares must never be dropped from the response.
 

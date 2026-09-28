@@ -319,6 +319,14 @@ simpler and strictly wider.
      served bucket dict (`total_cells`, the state counts, and `other`, the
      producer's catch-all, always emitted so the buckets reconcile with
      `total_cells`). `/stats`, `/data` and the Potato map header all read it.
+   - `server.coverage_pct(covered, total)` is the ONE percentage a covered-byte
+     ratio is rendered through: `summary.coveragePercent`, the per-section
+     `coverage_pct` and `potato._section_pct` all take it, and it FLOORS to 2dp
+     through rebrew's `floor_pct`, because these figures must not round up
+     (999,997 of 1,000,000 bytes is not 100%). The `check` gate compares the
+     UNROUNDED ratio and quotes this one, so a FAIL line cannot read
+     "coverage 100.00% < 100.00%". A new percentage over the same counts calls
+     the helper rather than `round`.
    - The catalog's `summary` blob is NOT stored in the document (the writer
      keeps the facts, not the precomputed answers). `server._summary` rebuilds
      it from the stored cells and functions, and `/stats` and `/data` serve the

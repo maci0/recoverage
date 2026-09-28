@@ -224,7 +224,13 @@ export function layoutSection(
   // Never render fewer columns than the section declares: shrinking the
   // lattice below that count re-wraps cells onto extra rows and leaves a blank
   // band under a short canvas. Narrow screens shrink the cells to `min`.
-  const cols = Math.max(declaredColumns, Math.floor((usableWidth + GAP) / (TARGET_CELL_PX + GAP)));
+  // The floor of 1 is load-bearing, not a default: `declaredColumns` comes
+  // from the coverage document, so a section declaring a negative count drops
+  // the first term, and a wrapper narrower than one cell drops the second
+  // (a hidden tab measures 0 wide). A zero-column lattice makes
+  // forEachPlacement's `take = min(left, cols - col)` zero on every pass, so
+  // `left` never reaches 0 and the walk spins forever in the render.
+  const cols = Math.max(1, declaredColumns, Math.floor((usableWidth + GAP) / (TARGET_CELL_PX + GAP)));
   const cell = Math.max(min, (usableWidth - GAP * (cols - 1)) / cols);
   const { parts, rows } = forEachPlacement(pack, cols);
   const map = new Int32Array(Math.max(1, rows) * cols);

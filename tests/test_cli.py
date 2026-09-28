@@ -506,6 +506,10 @@ class TestCheckCommand:
         assert result.exit_code == 1
         payload = json.loads(result.output)
         assert payload["passed"] is False
+        # The quoted figure is floored, so a verdict cannot report 100.0% for a
+        # section with three bytes still uncovered.  It is the same number
+        # /stats serves for that section (server.coverage_pct).
+        assert payload["results"][0]["coverage_pct"] == 99.99
 
         exact = _coverage_dir(tmp_path, "exact")
         _write_sections(
