@@ -3174,6 +3174,106 @@ class TestDataPayloadMemo:
             api._DATA_CACHE_BUILDING.pop(key, None)
 
 
+class TestFunctionListTotalMemo:
+    """The function list's ``total`` is memoized on the coverage snapshot.
+
+    The same contract every other coverage-derived memo follows: the change
+    token is stat'ed BEFORE the read snapshot is loaded, and a value whose
+    watermark moved is served but never filed.  A count filed under a
+    fingerprint newer than the rows it counted outlives the broadcast's clear
+    and is served to every later list request until the next rebuild.
+    """
+
+    def _patch(self, tmp_path: Any, monkeypatch: Any) -> Any:
+        """Point the app at a synthetic coverage directory, memo emptied."""
+        import recoverage.api as api
+
+        req = _point_app_at_coverage(
+            monkeypatch,
+            _game_coverage(
+                tmp_path,
+                functions=(
+                    {"va": 0x1000, "name": "f1", "status": "exact", "size": 16},
+                    {"va": 0x2000, "name": "f2", "status": "stub", "size": 8},
+                ),
+            ),
+        )
+        api._clear_list_total_cache()
+        return req
+
+    def test_token_is_statted_before_the_snapshot_is_read(
+        self, tmp_path: Any, monkeypatch: Any
+    ) -> None:
+        """A rebuild committing between the token and the read must not be
+        memoized.
+
+        The endpoint reads build A's snapshot while a rebuild commits build B
+        to the documents, so the fingerprint the memo would be filed under
+        describes rows the DB no longer holds: every later list request
+        answers build A's count until the next rebuild, and the
+        db-updated broadcast's clear has already run.
+        """
+        import recoverage.api as api
+        import recoverage.server as server_mod
+
+        self._patch(tmp_path, monkeypatch)
+        # Build A, read into a frozen snapshot; the documents move to build B
+        # at the moment the endpoint goes looking for them.
+        build_a = server_mod.coverage_for("GAME")
+
+        def racing_coverage_for(t: str) -> Any:
+            _game_coverage(
+                tmp_path,
+                functions=(
+                    {"va": 0x1000, "name": "f1", "status": "exact", "size": 16},
+                    {"va": 0x2000, "name": "f2", "status": "stub", "size": 8},
+                    {"va": 0x3000, "name": "f3", "status": "exact", "size": 4},
+                ),
+            )
+            return build_a
+
+        monkeypatch.setattr(server_mod, "coverage_for", racing_coverage_for)
+
+        body = json.loads(api.handle_api_functions_list("GAME"))
+        # The response is one build's count over that build's rows, which is
+        # what the endpoint owes its caller whatever the DB does mid-read.
+        assert body["total"] == 2
+        assert len(body["functions"]) == 2
+        assert api._LIST_TOTAL_CACHE == {}
+
+    def test_memo_declines_publish_under_a_moved_watermark(
+        self, tmp_path: Any, monkeypatch: Any
+    ) -> None:
+        """A rebuild committing after the token was taken: serve, never file."""
+        import recoverage.api as api
+
+        self._patch(tmp_path, monkeypatch)
+        monkeypatch.setattr(api, "_snapshot_db_mtime", _sequential_snapshot([(1, 1), (2, 2)]))
+
+        body = json.loads(api.handle_api_functions_list("GAME"))
+        assert body["total"] == 2
+        assert api._LIST_TOTAL_CACHE == {}
+
+    def test_memo_publishes_and_serves_when_the_watermark_holds(
+        self, tmp_path: Any, monkeypatch: Any
+    ) -> None:
+        """An unchanged DB re-stats to the same token: the memo is kept and
+        the second request's total comes from it."""
+        import recoverage.api as api
+
+        self._patch(tmp_path, monkeypatch)
+        monkeypatch.setattr(api, "_snapshot_db_mtime", _sequential_snapshot([(7, 7), (7, 7)]))
+
+        api.handle_api_functions_list("GAME")
+        assert len(api._LIST_TOTAL_CACHE) == 1
+        key = next(iter(api._LIST_TOTAL_CACHE))
+        assert key[0] == (7, 7) and key[1] == "GAME"
+
+        body = json.loads(api.handle_api_functions_list("GAME"))
+        assert body["total"] == 2
+        assert len(api._LIST_TOTAL_CACHE) == 1
+
+
 def _header(headers: dict[str, str], name: str) -> str | None:
     """Case-insensitive header lookup (Bottle sends 'Etag', tests use 'ETag')."""
     for k, v in headers.items():

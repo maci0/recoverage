@@ -353,7 +353,11 @@ def _function_total(
         if cached is not None:
             return cached
     total = len(_filtered_functions(functions, status_filter, search))
-    if key is not None:
+    # The watermark re-check every other coverage-derived memo publishes
+    # through: a rebuild that committed after the caller took its token moved
+    # the fingerprint, so these rows were not read from the build the key
+    # names and nothing files them.
+    if key is not None and _snapshot_db_mtime() == snap_fingerprint:
         with _LIST_TOTAL_CACHE_LOCK:
             _server._evict_oldest(_LIST_TOTAL_CACHE, _LIST_TOTAL_CACHE_MAX)
             _LIST_TOTAL_CACHE[key] = total
@@ -1368,12 +1372,28 @@ def handle_api_functions_list(target: str) -> bytes | HTTPResponse:
     elif sort_param in _ALLOWED_SORT:
         sort_field = sort_param
 
+    # The change token the total is memoized on is stat'ed BEFORE the read
+    # snapshot is loaded, the same order api.handle_api_stats,
+    # api.handle_api_data and potato.render_potato use. Stat'ed after, a
+    # rebuild committing between the load and the stat files the PRE-rebuild
+    # count under the post-rebuild fingerprint — and the db-updated broadcast
+    # has already run its clear by then, so nothing drops that entry until the
+    # next rebuild, and every later list request reads a count that describes
+    # rows the DB no longer holds.
+    # The change token the total is memoized on is stat'ed BEFORE the read
+    # snapshot is loaded, the same order api.handle_api_stats,
+    # api.handle_api_data and potato.render_potato use. Stat'ed after, a
+    # rebuild committing between the load and the stat files the PRE-rebuild
+    # count under the post-rebuild fingerprint — and the db-updated broadcast
+    # has already run its clear by then, so nothing drops that entry until the
+    # next rebuild, and every later list request reads a count that describes
+    # rows the DB no longer holds.
+    snap = _snapshot_db_mtime()
     with _target_snapshot(target) as coverage:
         # `total` and the page come from ONE filter pass over one frozen
         # snapshot, so the count and the rows it paginates cannot describe two
         # different builds — the guarantee `read_snapshot` used to buy with a
         # deferred read transaction.
-        snap = _snapshot_db_mtime()
         total = _function_total(coverage.functions, snap, target, status_filter, search)
         rows = _filtered_functions(coverage.functions, status_filter, search)
         rows.sort(key=lambda fn: _function_sort_key(fn, sort_field), reverse=sort_dir == "DESC")

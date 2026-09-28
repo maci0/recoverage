@@ -515,9 +515,13 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   it to `_load_grid_cells` / `_section_stats_cached`), because a stat taken
   after the read reads the post-rebuild value on both sides of the publish
   comparison and matches, filing the previous build's rows under the fingerprint
-  that supersedes them. `api.handle_api_data` and `api.handle_api_stats` stat
-  before their snapshot load for the same reason; a new coverage-derived memo
-  takes its token the same way or states why its read cannot straddle a rebuild.
+  that supersedes them. `api.handle_api_data`, `api.handle_api_stats` and
+  `api.handle_api_functions_list` stat before their snapshot load for the same
+  reason, and `_function_total` re-checks the watermark before publishing, the
+  one place a memo of a pure in-memory count needs it (its rows are already a
+  frozen snapshot, so nothing but the key can straddle a rebuild); a new
+  coverage-derived memo takes its token the same way or states why its read
+  cannot straddle a rebuild.
 - One response, one snapshot. A snapshot is frozen — every collection is a
   tuple or a `MappingProxyType` — and `server.load_all_coverage` memoizes on the
   documents' own stat, so an unchanged directory returns THE SAME snapshot

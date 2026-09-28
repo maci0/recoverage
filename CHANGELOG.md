@@ -39,6 +39,10 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `RECOVERAGE_BIND` without `RECOVERAGE_ALLOW_REMOTE` exits 1, and the CORS
   warnings go to stderr after the settings. A preflight that exited 0 for a
   configuration `serve` refuses is a deployment that finds out at boot.
+- The function list's memoized `total` cannot outlive the build it counted. A
+  `rebrew build-db` committing while the endpoint was loading its snapshot left
+  the pre-rebuild count filed under the post-rebuild fingerprint, and every
+  later `/functions` request answered that number until the next rebuild.
 
 ## [4.0.0] - 2026-09-28
 
