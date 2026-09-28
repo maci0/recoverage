@@ -208,24 +208,47 @@ _DATA_CACHE_LOCK = threading.Lock()
 # Upper bound on retained payloads: a long-running server across many rebuilds
 # must not accumulate one multi-MB payload per fingerprint forever.
 _DATA_CACHE_MAX = 8
-# Single-flight build coordination: fingerprint -> Event set while one thread
+# Single-flight build coordination: fingerprint -> claim held while one thread
 # serializes that key.  A rebuild broadcast clears the memo and wakes every
 # connected SSE client, which all refetch /data at once; without this, each of
 # those cold misses materializes its own multi-MB payload.
-_DATA_CACHE_BUILDING: dict[_DataKey, threading.Event] = {}
-#: How long a follower waits on the leader's build Event.  The leader's finally
-#: always sets it, so this only bounds the case where it does not (a thread
-#: killed mid-build).  Comfortably longer than a cold /data build on a large
-#: target, so a follower that gives up here has genuinely lost its leader.
+#
+# A claim is the Event a follower waits on plus the monotonic instant it stops
+# being answerable, because a leader that is KILLED between checkout and its
+# finally never sets the Event and never releases the claim.  Duplicate
+# execution safety for that leader is the whole reason the deadline is in the
+# value: an unbounded claim is one that outlives its owner, so a later request
+# for the same key parks on an Event nobody will ever set, pays the full wait
+# again, and the entry itself is never released.  The deadline bounds that
+# (a claim past it is dropped on the next checkout, whether or not a follower
+# ever arrives for that key), and the follower that times out on it reclaims
+# the claim instead of leaving the dead owner registered.
+_DataClaim = tuple[threading.Event, float]
+_DATA_CACHE_BUILDING: dict[_DataKey, _DataClaim] = {}
+#: How long a follower waits on the leader's build Event, and how long a claim
+#: stays answerable after it was taken.  The leader's finally always sets the
+#: Event and releases the claim, so this only bounds the case where it does not
+#: (a thread killed mid-build).  Comfortably longer than a cold /data build on
+#: a large target, so a follower that gives up here has genuinely lost its
+#: leader, and a live leader is never mistaken for a dead one.
 _DATA_CACHE_BUILD_WAIT_SECONDS = 30.0
 
 
+def _prune_stale_claims(now: float) -> None:
+    """Drop claims whose owner never released them. Caller holds the lock."""
+    for key, (_event, expires_at) in list(_DATA_CACHE_BUILDING.items()):
+        if now >= expires_at:
+            del _DATA_CACHE_BUILDING[key]
+
+
 def _clear_data_cache() -> None:
-    # Deliberately leaves _DATA_CACHE_BUILDING alone: each Event is owned by
-    # the thread that registered it and is set in that thread's finally, so
+    # Deliberately leaves _DATA_CACHE_BUILDING alone: each claim is owned by
+    # the thread that took it and is released in that thread's finally, so
     # waiters always wake.  Clearing here could strand a waiter on an Event
     # nobody will ever set.  A waiter that wakes to a cleared memo simply
-    # builds the (post-clear) payload itself.
+    # builds the (post-clear) payload itself.  A claim whose owner was killed
+    # is the one entry here that no finally will ever release, and that is
+    # what _prune_stale_claims reclaims, on its own deadline rather than here.
     with _DATA_CACHE_LOCK:
         _DATA_CACHE.clear()
 
@@ -236,35 +259,69 @@ def _data_cache_checkout(
     """Return ``(memo_entry, owned_event)`` for *key*.
 
     - Memo hit: ``(<entry>, None)`` — serve it.
-    - No entry, no in-flight build: ``(None, <event>)`` — caller builds and
-      MUST pass *owned_event* to :func:`_data_cache_build_done` in a finally.
+    - No entry, no live claim: ``(None, <event>)`` — caller builds and MUST pass
+      *owned_event* to :func:`_data_cache_build_done` in a finally.
     - Build already running: waits for it, then returns whatever the memo
       holds now (None when the leader failed or short-circuited with a 404 —
       the caller then builds its own payload).
+    - Leader that never came back: the wait expires, the caller takes the claim
+      over and builds (the same answer as the failed-leader case above, from a
+      claim that is actually released afterwards).
     """
+    now = clock.monotonic()
     with _DATA_CACHE_LOCK:
+        # A claim past its deadline belongs to a leader that was killed
+        # between checkout and its finally: it never published a payload and
+        # never released the claim, so leaving it registered would park every
+        # later request for this key on an Event nobody will ever set.  Drop
+        # it here, before the lookup below, so the caller below becomes the
+        # new leader rather than a second follower of a dead one.
+        _prune_stale_claims(now)
         entry = _DATA_CACHE.get(key)
         if entry is not None:
             return entry, None
-        event = _DATA_CACHE_BUILDING.get(key)
-        if event is None:
-            event = _DATA_CACHE_BUILDING[key] = threading.Event()
+        claim = _DATA_CACHE_BUILDING.get(key)
+        if claim is None:
+            event = threading.Event()
+            _DATA_CACHE_BUILDING[key] = (event, now + _DATA_CACHE_BUILD_WAIT_SECONDS)
             return None, event
+        event = claim[0]
     # Follower path (outside the lock): the leader's finally always sets the
-    # event — success, error, or 404 short-circuit alike.  The bound is the
-    # backstop for the case it does not (a thread killed between checkout and
-    # the finally); a follower that gives up rebuilds its own payload, which
-    # is what the None below tells it to do.
-    event.wait(timeout=_DATA_CACHE_BUILD_WAIT_SECONDS)
+    # event — success, error, or 404 short-circuit alike — and only then
+    # releases the claim, so a set event is the leader's own answer and
+    # whatever it published (or did not) is what this request reads.
+    released = event.wait(timeout=_DATA_CACHE_BUILD_WAIT_SECONDS)
     with _DATA_CACHE_LOCK:
-        return _DATA_CACHE.get(key), None
+        if released:
+            return _DATA_CACHE.get(key), None
+        # The wait expired on an Event nobody set.  Reclaim the claim rather
+        # than build beside it: a duplicate build is the accepted cost here,
+        # but leaving the dead leader registered is not — every later request
+        # for this key would pay the same full wait again, and the entry would
+        # outlive the process.  The `is event` guard means a leader that
+        # released (or was superseded by an earlier reclaim) is left alone.
+        current = _DATA_CACHE_BUILDING.get(key)
+        if current is not None and current[0] is event:
+            del _DATA_CACHE_BUILDING[key]
+        reclaimed = threading.Event()
+        _DATA_CACHE_BUILDING[key] = (
+            reclaimed,
+            clock.monotonic() + _DATA_CACHE_BUILD_WAIT_SECONDS,
+        )
+        return None, reclaimed
 
 
 def _data_cache_build_done(key: _DataKey, event: threading.Event) -> None:
     """Release followers of *key* (owner only — see :func:`_data_cache_checkout`)."""
     with _DATA_CACHE_LOCK:
-        if _DATA_CACHE_BUILDING.get(key) is event:
+        current = _DATA_CACHE_BUILDING.get(key)
+        if current is not None and current[0] is event:
             del _DATA_CACHE_BUILDING[key]
+    # Set after the claim is released, not before: a follower that wakes on a
+    # set event takes the memo as this build's answer, so the claim must
+    # already be gone by then or a second checkout would hand the same key to
+    # two builders.  Identity-checked above, so a leader whose claim a
+    # reclaiming follower already took over cannot delete the new owner's.
     event.set()
 
 

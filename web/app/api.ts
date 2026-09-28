@@ -230,20 +230,46 @@ export async function fetchArrayBufferSafe(
 
 export type RegenResult = { ok: boolean };
 
-export async function postRegen(): Promise<RegenResult> {
-  // One key per click: a request the browser or a proxy replays, or a response
-  // that never arrives, re-sends the same key and is answered from the server's
-  // ledger instead of regenerating a second time. randomUUID needs a secure
-  // context, which a plain-HTTP LAN visit is not.
-  const key =
-    crypto.randomUUID === undefined
-      ? `${Date.now()}-${Math.random().toString(36).slice(2)}`
-      : crypto.randomUUID();
-  const res = await fetch("/api/regen", {
+/** The ledger key for one regenerate action. */
+export type RegenKey = string;
+
+/** Mint the key for ONE regenerate action, at the action site.
+ *
+ * The server keeps a completed key for a bounded window and answers a later
+ * request carrying it from that ledger instead of re-running the pipeline, so
+ * the key identifies the action, not the request: a re-send of the same action
+ * has to present the same key or the ledger never engages.  A key minted per
+ * request would make every re-send a fresh one.
+ *
+ * `randomUUID` needs a secure context, which a plain-HTTP LAN visit is not.
+ */
+export function newRegenKey(): RegenKey {
+  return crypto.randomUUID === undefined
+    ? `${Date.now()}-${Math.random().toString(36).slice(2)}`
+    : crypto.randomUUID();
+}
+
+function sendRegen(key: RegenKey): Promise<Response> {
+  return fetch("/api/regen", {
     method: "POST",
     cache: "no-store",
     headers: { "Idempotency-Key": key },
   });
+}
+
+/** Regenerate, re-sending once on a transport failure with the SAME *key*.
+ *
+ * A `fetch` that throws never got an answer, and the answer is the only thing
+ * that says whether the pipeline ran: the run is minutes long, the response
+ * can be lost on the way back, and the documents on disk are already the new
+ * ones.  The re-send is answered from the ledger when the first run completed
+ * and runs the pipeline once when the first request never arrived.  It never
+ * re-sends an answered request, because re-sending a refusal the server gave
+ * on purpose would turn a 429 into a second pipeline.
+ */
+export async function postRegen(key: RegenKey): Promise<RegenResult> {
+  // oxlint-disable-next-line @rikalabs/no-silent-catch-fallback -- the fallback is the re-send itself, and a second failure propagates to the caller, which reports it
+  const res = await sendRegen(key).catch(() => sendRegen(key));
   // SAFETY: this origin's own JSON; `handle_api_regen` answers `{"ok": bool}`.
   const payload = (await res.json()) as { ok?: boolean };
   return { ok: payload.ok === true };

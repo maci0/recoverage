@@ -722,6 +722,18 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   privileged operation copies that gate rather than trusting a loopback peer,
   and the fuzz campaign in `tests/test_fuzz.py` (`TestRegenOriginSameOrigin`)
   judges it against `urlsplit` rather than against the helper.
+- `POST /api/regen` is the package's one retried side effect, and its
+  `Idempotency-Key` names the OPERATION, not the request: the SPA mints the
+  key once per click (`api.newRegenKey`) and `postRegen` re-sends the same one
+  on a transport failure, because a key minted per request is a new operation
+  to `api._REGEN_COMPLETED_KEYS` and a lost response then costs a second full
+  pipeline. A new client of that endpoint takes the key from its action site,
+  not from inside the send helper, and re-sends on a lost response rather than
+  leaving the reader to click again. The other in-flight marker, the `/data`
+  single-flight claim in `api._DATA_CACHE_BUILDING`, follows the same rule: an
+  in-flight marker whose owner was killed is reclaimed on its deadline
+  (`_DATA_CACHE_BUILD_WAIT_SECONDS`), never left registered for a waiter that
+  no `finally` will ever wake.
 - Every integer a request supplies goes through `server.parse_ascii_int` (with
   `server.strip_sign` and `api._parse_byte_count` on top): ASCII digits in the
   stated base, and nothing else. `int(x, base)` is not that check, because it

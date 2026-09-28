@@ -136,6 +136,23 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   ship, and swallowed the resulting `command not found`, so the one failure
   that needs a diff produced none. It prints both hashes now and adds
   diffoscope's breakdown where the image carries it.
+- **The Regenerate button minted a fresh `Idempotency-Key` on every request,
+  so a retry re-ran the whole pipeline.** The key was generated inside the
+  fetch helper, which made every attempt a new logical operation to the
+  server's ledger. A response lost on the way back (the run is minutes long)
+  therefore cost a second full catalog + build-db when the reader clicked
+  Reload again. The key is now minted once per click and the request is
+  re-sent once on a transport failure with that same key, so the server
+  answers the re-send from the ledger instead of running the pipeline again.
+- **A `/api/targets/<target>/data` build killed mid-flight left its
+  single-flight claim registered for the life of the process.** The claim is
+  released in the building thread's `finally`, and a thread killed between
+  the claim and that `finally` never released it, so every later request for
+  that key waited the full 30 seconds on an event nobody would ever set,
+  rebuilt the payload anyway, and the entry never drained. A claim now carries
+  the instant it stops being answerable: it is dropped on the next checkout
+  of the same key, and the request that finds an expired one takes the build
+  over rather than waiting on it.
 - **A request the HTTP layer refused left no trace in the server log.** An
   over-long request line, a malformed one, an unsupported version, or headers
   past the limit are all rejected before a route exists, so nothing downstream

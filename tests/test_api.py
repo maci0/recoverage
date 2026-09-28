@@ -3170,7 +3170,10 @@ class TestDataPayloadMemo:
         assert snap is not None
         key: tuple[tuple[int, int], str, None, bool] = (snap, "GAME", None, True)
         built = threading.Event()
-        api._DATA_CACHE_BUILDING[key] = built
+        api._DATA_CACHE_BUILDING[key] = (
+            built,
+            api.clock.monotonic() + api._DATA_CACHE_BUILD_WAIT_SECONDS,
+        )
 
         outcome: list[Any] = []
 
@@ -3220,7 +3223,10 @@ class TestDataPayloadMemo:
         assert snap is not None
         key: tuple[tuple[int, int], str, str | None, bool] = (snap, "GAME", "nope", True)
         built = threading.Event()
-        api._DATA_CACHE_BUILDING[key] = built
+        api._DATA_CACHE_BUILDING[key] = (
+            built,
+            api.clock.monotonic() + api._DATA_CACHE_BUILD_WAIT_SECONDS,
+        )
 
         outcome: list[Any] = []
 
@@ -3255,6 +3261,131 @@ class TestDataPayloadMemo:
             # that would have set it never ran), so a failure above must not
             # strand it for a later test.
             built.set()
+            api._DATA_CACHE_BUILDING.pop(key, None)
+
+    def test_a_killed_leader_claim_is_reclaimed_not_waited_on_again(
+        self, tmp_path: Any, monkeypatch: Any
+    ) -> None:
+        """A leader killed between checkout and its finally leaves a claim with
+        no owner: the next request must take it over, not park on its Event.
+
+        The pre-fix claim had no deadline at all, so a leader that never
+        reached its finally kept the key registered for the life of the
+        process.  Every later request for that key waited the full
+        ``_DATA_CACHE_BUILD_WAIT_SECONDS`` on an Event nobody would ever set,
+        the single-flight guard was permanently off for it, and the entry
+        itself never drained.  The claim now carries the instant it stops
+        being answerable, so the request after the kill is a leader again.
+        """
+        import recoverage.api as api
+
+        release = threading.Event()
+        _, open_calls, _ = self._gated_open(tmp_path, monkeypatch, release)
+        api._clear_data_cache()
+
+        snap = api._snapshot_db_mtime()
+        assert snap is not None
+        key: tuple[tuple[int, int], str, None, bool] = (snap, "GAME", None, True)
+        # A leader that was killed: registered, never set, never released.
+        # The deadline is already past, so the next checkout must drop it.
+        dead = threading.Event()
+        api._DATA_CACHE_BUILDING[key] = (dead, api.clock.monotonic() - 1.0)
+        owned: threading.Event | None = None
+        try:
+            start = time.monotonic()
+            entry, owned = api._data_cache_checkout(key)
+            waited = time.monotonic() - start
+            assert entry is None, "served a payload from a leader that never published one"
+            assert owned is not None, "a reclaimed key must be handed to its new leader"
+            assert waited < 1.0, f"waited {waited:.1f}s on a dead leader's Event"
+            # Reclaimed, not joined: the key's claim is the new one.
+            claim = api._DATA_CACHE_BUILDING.get(key)
+            assert claim is not None and claim[0] is owned
+            assert claim[0] is not dead
+        finally:
+            if owned is not None:
+                api._data_cache_build_done(key, owned)
+            api._DATA_CACHE_BUILDING.pop(key, None)
+        assert api._DATA_CACHE_BUILDING == {}
+        assert open_calls == []
+
+    def test_a_claim_left_by_a_killed_leader_never_blocks_the_request_path(
+        self, tmp_path: Any, monkeypatch: Any
+    ) -> None:
+        """The same claim reached through ``handle_api_data``: the request that
+        follows a killed leader serves its own payload, and the claim drains.
+
+        The unit test above pins the checkout; this one pins that the handler
+        releases what it was handed, so a reclaim is not just a re-registration
+        that the next process restart inherits.
+        """
+        import recoverage.api as api
+
+        release = threading.Event()
+        _, open_calls, _ = self._gated_open(tmp_path, monkeypatch, release)
+        api._clear_data_cache()
+
+        snap = api._snapshot_db_mtime()
+        assert snap is not None
+        key: tuple[tuple[int, int], str, None, bool] = (snap, "GAME", None, True)
+        dead = threading.Event()
+        api._DATA_CACHE_BUILDING[key] = (dead, api.clock.monotonic() - 1.0)
+        release.set()
+        try:
+            body = api.handle_api_data("GAME")
+            assert isinstance(body, bytes) and body.startswith(b"{")
+            assert open_calls == [1]
+            assert api._DATA_CACHE_BUILDING == {}
+        finally:
+            api._DATA_CACHE.pop(key, None)
+            api._DATA_CACHE_BUILDING.pop(key, None)
+
+    def test_a_claim_whose_leader_is_alive_is_not_reclaimed(
+        self, tmp_path: Any, monkeypatch: Any
+    ) -> None:
+        """A leader inside its deadline keeps the key: the next request is a
+        follower that waits, which is the whole point of the single-flight."""
+        import recoverage.api as api
+
+        release = threading.Event()
+        _, open_calls, _ = self._gated_open(tmp_path, monkeypatch, release)
+        api._clear_data_cache()
+
+        snap = api._snapshot_db_mtime()
+        assert snap is not None
+        key: tuple[tuple[int, int], str, None, bool] = (snap, "GAME", None, True)
+        live = threading.Event()
+        api._DATA_CACHE_BUILDING[key] = (
+            live,
+            api.clock.monotonic() + api._DATA_CACHE_BUILD_WAIT_SECONDS,
+        )
+
+        outcome: list[Any] = []
+
+        def follower() -> None:
+            outcome.append(api.handle_api_data("GAME"))
+
+        t = threading.Thread(target=follower)
+        try:
+            t.start()
+            t.join(timeout=0.3)
+            assert t.is_alive(), "a live leader's claim was reclaimed out from under it"
+            assert open_calls == [], "follower read coverage despite an in-flight build"
+            live.set()
+            release.set()
+            t.join(timeout=15)
+            assert not t.is_alive(), "follower never woke"
+            assert len(outcome) == 1
+            # The follower published a payload but claims nothing: only the
+            # leader releases its own claim, so the live leader's Event is
+            # still the key's claim rather than one the follower took over.
+            assert open_calls == [1]
+            assert key in api._DATA_CACHE
+            claim = api._DATA_CACHE_BUILDING.get(key)
+            assert claim is not None and claim[0] is live
+        finally:
+            live.set()
+            api._DATA_CACHE.pop(key, None)
             api._DATA_CACHE_BUILDING.pop(key, None)
 
 

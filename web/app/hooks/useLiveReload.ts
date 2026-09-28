@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "preact/compat";
 
-import { postRegen } from "@/api";
+import { postRegen, newRegenKey } from "@/api";
 import { MSG } from "@/lib/format";
 
 /** Live reload and the Reload button.
@@ -68,9 +68,13 @@ export function useLiveReload({
     lastRegen.current = now;
     setBusy(true);
     onNotice(MSG.REGEN_IN_PROGRESS);
+    // One key per action, minted here and not inside postRegen: the key is what
+    // tells the server a re-send is the same regenerate rather than a second
+    // one, so it has to outlive the request it is attached to.
+    const key = newRegenKey();
     void (async () => {
       try {
-        const { ok } = await postRegen();
+        const { ok } = await postRegen(key);
         onNotice(ok ? null : MSG.REGEN_UNAVAILABLE);
         // oxlint-disable-next-line @rikalabs/no-silent-catch-fallback -- a failed regen is reported to the reader as REGEN_UNAVAILABLE, and the refresh still runs
       } catch {
