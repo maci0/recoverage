@@ -831,7 +831,8 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   assert the read COUNT, not just the 413).
 - The untrusted-input surfaces (query parameters, the batch POST body, request
   headers, the `/potato` query string, the `/src` and `/original` path
-  segments, the access-gating headers, the `RECOVERAGE_*` readers) are fuzzed
+  segments, the access-gating headers, the `--token` gate, the `RECOVERAGE_*`
+  readers) are fuzzed
   by `tests/test_fuzz.py`: a seeded mutation engine over a
   hand-written corpus, driven by `RECOVERAGE_FUZZ_SEED` / `RECOVERAGE_FUZZ_ITERATIONS`
   so a failure replays. Each round asserts an invariant, not just a lack of crash: no 5xx,
@@ -844,7 +845,9 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   come in pairs: the grid view escapes through SimpleTemplate, the functions
   view's empty-result message through `potato._esc`, and a regression in either
   one has to be visible from the response alone. The access-gating headers
-  (`Origin`/`Host`, `REMOTE_ADDR`, `X-Request-ID`, `Idempotency-Key`) are the
+  (`Origin`/`Host`, `REMOTE_ADDR`, `X-Request-ID`, `Idempotency-Key`) and the
+  `--token` gate (`Authorization: Bearer`, `?token=`, the `recoverage_token`
+  cookie) are the
   one class of surface where a wrong answer is a bypass rather than a bad
   render, so their campaigns assert the security property, not the status code:
   a normalized origin is a fixed point and carries no userinfo, escape, control
@@ -854,7 +857,15 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   `::1` and nothing else, judged against `ipaddress` rather than against the
   parser under test; the request id carries no control byte; an accepted
   idempotency key is inside the ledger's alphabet and length, and the ledger
-  stays within `_REGEN_KEY_MAX` however many distinct keys arrive. The
+  stays within `_REGEN_KEY_MAX` however many distinct keys arrive. The token
+  gate's accept decision is judged against the extraction rules
+  `server._require_auth` documents, not against the status code: a carrier
+  is served only when the value the gate extracts from it is the configured
+  token, with each carrier's own grammar as the oracle (`http.cookies`
+  `SimpleCookie` for the cookie, percent-decoding for the query, and the
+  latin-1/UTF-8 read `server._header` does for the header), so a
+  case-folding, trimming or percent-decoding shortcut in the gate fails the
+  campaign. A new credential carrier names the same oracle. The
   `RECOVERAGE_*` campaigns hold the module's own contract instead: every reader
   answers a value in its documented range or raises `ConfigError`, and never a
   third thing (a non-ASCII digit is a rejected port, not a bound one). Two

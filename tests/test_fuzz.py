@@ -38,6 +38,7 @@ import random
 import re
 import unicodedata
 from collections.abc import Callable
+from http.cookies import SimpleCookie
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlsplit
@@ -1333,6 +1334,204 @@ class TestRequestIdAndIdempotencyKey:
                 assert api._regen_replayed(key), f"{key!r} was evicted inside the retention window"
         finally:
             api._REGEN_COMPLETED_KEYS = original
+
+
+# ── the token gate ─────────────────────────────────────────────────
+#
+# With --token set, EVERY route is behind server._require_auth, and the
+# credential reaches it in three carriers: the Authorization header, the
+# ?token= share link, and the HttpOnly cookie that share link sets.  A wrong
+# answer from this parser is a read of somebody else's dashboard, so the
+# campaign judges the ACCEPT decision against the documented extraction
+# rules rather than against a status code: a request is served only when the
+# value the gate extracts is the configured token, byte for byte, and every
+# other spelling of it is a rejection that stays a rejection.
+
+#: The gate's own answers join the set a handler may give: with a token
+#: configured, 401 and 429 are the documented refusals, and the campaigns
+#: below that run WITHOUT a token are the ones that must never see them.
+_AUTH_STATUSES = _ALLOWED_STATUSES | {401, 429}
+
+#: The token under test.  Mixed case, a digit and two separators, so a
+#: case-folding or trimming shortcut in the gate cannot pass by accident.
+_AUTH_TOKEN = "S3cret-Token_9"
+
+AUTH_SEEDS: list[bytes] = [
+    _AUTH_TOKEN.encode(),
+    f"Bearer {_AUTH_TOKEN}".encode(),
+    f"bearer {_AUTH_TOKEN}".encode(),
+    f"BEARER {_AUTH_TOKEN}".encode(),
+    f"Bearer  {_AUTH_TOKEN}".encode(),
+    f"Bearer{_AUTH_TOKEN}".encode(),
+    f"Basic {_AUTH_TOKEN}".encode(),
+    _AUTH_TOKEN.upper().encode(),
+    _AUTH_TOKEN.lower().encode(),
+    f" {_AUTH_TOKEN} ".encode(),
+    f"{_AUTH_TOKEN}\n".encode(),
+    f"{_AUTH_TOKEN}\x00".encode(),
+    f"{_AUTH_TOKEN}\r\nX-Injected: 1".encode(),
+    f"{_AUTH_TOKEN}%00".encode(),
+    _AUTH_TOKEN[:-1].encode(),
+    (_AUTH_TOKEN + "0").encode(),
+    f"Bearer {_AUTH_TOKEN[:-1]}".encode(),
+    b"Bearer",
+    b"Bearer ",
+    b"",
+    b"\xff\xfe",
+    b"\x00",
+    b"a" * 400,
+    "\u00e9".encode(),
+]
+
+
+def _accepts_via_header(value: str) -> bool:
+    """Whether ``_require_auth`` would authenticate an Authorization value.
+
+    ``server._header`` drops a value that is not decodable text (a WSGI server
+    hands raw header bytes over latin-1, bottle re-reads them as UTF-8), and
+    ``_require_auth`` strips exactly one ``Bearer `` prefix, falling through
+    to the two carriers this request leaves empty when it is absent.
+    """
+    try:
+        value.encode("latin-1").decode("utf-8")
+    except UnicodeError:
+        return False
+    presented = value[len("Bearer ") :] if value.startswith("Bearer ") else ""
+    return presented == _AUTH_TOKEN
+
+
+def _accepts_via_query(value: bytes) -> bool:
+    """Whether a ``?token=`` value carrying *value* authenticates.
+
+    ``query_param`` percent-decodes as UTF-8, and the campaign spells the
+    value with every byte escaped, so the query carries the bytes unchanged
+    whatever they are.
+    """
+    from urllib.parse import quote
+
+    return quote(value.decode("latin-1"), safe="") == quote(_AUTH_TOKEN, safe="")
+
+
+def _accepts_via_cookie(value: str) -> bool:
+    """Whether a ``recoverage_token`` cookie carrying *value* authenticates.
+
+    The cookie jar is the stdlib's: bottle parses ``HTTP_COOKIE`` with
+    ``SimpleCookie``, so the oracle is that same grammar rather than a second
+    guess at it, and a value carrying a ``;`` or a quote is judged as the
+    cookie the peer actually sent.
+    """
+    jar = SimpleCookie(f"recoverage_token={value}")
+    morsel = jar.get("recoverage_token")
+    return (morsel.value if morsel is not None else "") == _AUTH_TOKEN
+
+
+class TestAuthCredentialPresentation:
+    """``--token`` → ``server._require_auth`` over all three carriers."""
+
+    @pytest.fixture(autouse=True)
+    def _token_gate(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(srv, "_AUTH_TOKEN", _AUTH_TOKEN)
+        yield
+        srv._clear_auth_failures()
+
+    def _check(self, carriers: list[tuple[str, str | None, str, bool]]) -> None:
+        """Drive every carrier and hold each to its own accept oracle."""
+        for label, header, path, accepts in carriers:
+            srv._clear_auth_failures()
+            status, headers, body = wsgi_request("GET", path, headers=header)
+            code = int(status.split()[0])
+            assert code in _AUTH_STATUSES, f"{label}: unexpected status {status}"
+            if code == 200:
+                assert accepts, f"{label}: a rejected credential was served: {status}"
+                payload = json.loads(decode_body(body, headers).decode("utf-8"))
+                assert isinstance(payload, dict) and "version" in payload
+                continue
+            assert not accepts, f"{label}: the configured token was refused: {status}"
+            payload = _body_json(body, headers, path)
+            _assert_envelope(payload, status, path)
+            assert _AUTH_TOKEN not in json.dumps(payload), f"{label}: token echoed in the body"
+            if code == 429:
+                assert headers.get("Retry-After"), f"{label}: 429 without Retry-After"
+
+    def test_header_credential_matches_the_extraction_rules(self) -> None:
+        def check(data: bytes) -> None:
+            raw = data.decode("latin-1")
+            self._check(
+                [("Authorization", {"Authorization": raw}, "/api/health", _accepts_via_header(raw))]
+            )
+
+        _fuzz(AUTH_SEEDS, check, struct_tokens=AUTH_SEEDS, num_tokens=AUTH_SEEDS)
+
+    def test_share_link_credential_matches_the_extraction_rules(self) -> None:
+        def check(data: bytes) -> None:
+            from urllib.parse import quote
+
+            quoted = quote(data.decode("latin-1"), safe="")
+            self._check(
+                [("?token=", None, f"/api/health?token={quoted}", _accepts_via_query(data))]
+            )
+
+        _fuzz(AUTH_SEEDS, check, struct_tokens=AUTH_SEEDS, num_tokens=AUTH_SEEDS)
+
+    def test_cookie_credential_matches_the_extraction_rules(self) -> None:
+        def check(data: bytes) -> None:
+            raw = data.decode("latin-1")
+            self._check(
+                [
+                    (
+                        "Cookie",
+                        {"Cookie": f"recoverage_token={raw}"},
+                        "/api/health",
+                        _accepts_via_cookie(raw),
+                    )
+                ]
+            )
+
+        _fuzz(AUTH_SEEDS, check, struct_tokens=AUTH_SEEDS, num_tokens=AUTH_SEEDS)
+
+    def test_a_rejected_credential_never_renders_a_page(self) -> None:
+        """A page route answers the 401 page, never the dashboard, and the
+        page carries the token neither in its body nor in a header."""
+
+        def check(data: bytes) -> None:
+            raw = data.decode("latin-1")
+            srv._clear_auth_failures()
+            status, headers, body = wsgi_request(
+                "GET", "/", headers={"Accept": "text/html", "Authorization": raw}
+            )
+            code = int(status.split()[0])
+            assert code in (200, 401, 429), f"unexpected status {status}"
+            if code == 200:
+                assert _accepts_via_header(raw), f"{raw!r} was served: {status}"
+                return
+            assert _accepts_via_header(raw) is False
+            assert headers.get("Cache-Control") == "no-store"
+            assert _AUTH_TOKEN.encode() not in body, "the token reached the 401 page"
+
+        _fuzz(AUTH_SEEDS, check, iterations=120, struct_tokens=AUTH_SEEDS, num_tokens=AUTH_SEEDS)
+
+    def test_guessing_is_bounded_and_a_correct_token_is_never_throttled(self) -> None:
+        """The failed-token window caps guessing, and a correct credential
+        neither waits for it nor inherits it: the gate answers before the
+        throttle runs and clears the window on the way through."""
+        for _ in range(srv._AUTH_FAIL_MAX):
+            status, _, _ = wsgi_request(
+                "GET", "/api/health", headers={"Authorization": "Bearer wrong-guess"}
+            )
+            assert status.startswith("401"), f"a bad guess was not a 401: {status}"
+        for _ in range(3):
+            status, headers, _ = wsgi_request("GET", "/api/health")
+            assert status.startswith("429"), f"guessing was not bounded: {status}"
+            assert headers.get("Retry-After")
+
+        status, _, _ = wsgi_request(
+            "GET", "/api/health", headers={"Authorization": f"Bearer {_AUTH_TOKEN}"}
+        )
+        assert status.startswith("200"), f"the right token was throttled: {status}"
+        status, _, _ = wsgi_request(
+            "GET", "/api/health", headers={"Authorization": "Bearer wrong-guess"}
+        )
+        assert status.startswith("401"), f"a success did not clear the window: {status}"
 
 
 # ── deployment configuration ───────────────────────────────────────
