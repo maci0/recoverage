@@ -16,6 +16,12 @@
 # checkout (`path = "../rebrew"`), and Dependabot aborts the whole uv job with
 # "The following path based dependencies could not be retrieved". Renovate
 # reads uv sources, so renovate.json owns the Python packages too.
+# renovate.json's `enabledManagers` names that split (pep621/uv, bun/npm) and
+# leaves every other manager off: config:recommended does not restrict managers,
+# so without it Renovate's default list also covered github-actions and the two
+# bots opened a PR each against the same pinned action SHAs, with whichever one
+# merged first making the other's stale. This file is the single owner of the
+# action pins.
 version: 2
 
 updates:

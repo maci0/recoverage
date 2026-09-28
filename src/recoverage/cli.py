@@ -1143,7 +1143,7 @@ def serve(
     # binds (user opted in via --allow-remote) skip validation.
     _server.configure_security(
         cors_enabled=cors,
-        cors_allowed_origins=cors_origin,
+        cors_allowed_origins=allowed_origins,
         auth_token=token or "",
         allowed_hosts=None if is_remote else set(LOOPBACK_HOSTS),
     )
@@ -1172,7 +1172,7 @@ def serve(
         bind=bind,
         allow_remote=allow_remote,
         cors=cors,
-        cors_origin=cors_origin,
+        cors_origin=allowed_origins,
         token=token,
         db=resolved.db,
         log_level=resolved.log_level,

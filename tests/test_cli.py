@@ -19,7 +19,7 @@ from coverage_fixture import cell, coverage_dir, write_coverage
 from rebrew.coverage_toml import CoverageTomlError
 from typer.testing import CliRunner
 
-from recoverage import cli, devserver
+from recoverage import cli, devserver, server
 from recoverage.cli import _server_class_for, app
 
 runner = CliRunner()
@@ -1160,6 +1160,50 @@ class TestEphemeralPort:
         # The config block is the other reader of the value (/api/health
         # serves it), and it has to be the same number.
         assert f"port={bound}" in out
+
+
+class TestServeInstallsTheResolvedOriginList:
+    """`serve` installs and reports the RESOLVED allowlist, never `--cors-origin`.
+
+    The flag is `list[str] | None` and is None for every invocation that
+    does not spell it out, so passing it on reaches `list(None)` inside
+    `configure_security` and `",".join(None)` inside `active_config`: a bare
+    `recoverage serve` died on a TypeError before the listener bound.  The
+    values both callers want are `resolved.cors_origins`, which
+    `_resolve_serve_config` normalized and dropped to empty when CORS is off.
+    """
+
+    @staticmethod
+    def _serve(argv: list[str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> str:
+        class _StubApp:
+            @staticmethod
+            def run(**_kwargs: Any) -> None:
+                raise KeyboardInterrupt
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("recoverage.webapp.app", _StubApp)
+        monkeypatch.setattr(cli, "open_browser", lambda _url: None)
+        monkeypatch.setattr(sys, "argv", ["recoverage", *argv])
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+        assert exc.value.code == 0
+        return str(server.ACTIVE_CONFIG["cors_origin"])
+
+    def test_no_flag_installs_and_reports_no_origin(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        assert self._serve(["serve", "--no-open"], monkeypatch, tmp_path) == "none"
+
+    def test_the_installed_allowlist_is_the_normalized_one(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        reported = self._serve(
+            ["serve", "--cors", "--cors-origin", "http://localhost:5173", "--no-open"],
+            monkeypatch,
+            tmp_path,
+        )
+        assert reported == "http://localhost:5173"
+        assert server.CORS_ALLOWED_ORIGINS == ["http://localhost:5173"]
 
 
 class TestServePortRange:

@@ -1,6 +1,7 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:recommended", "schedule:weekly"],
+  "enabledManagers": ["pep621", "uv", "bun", "npm"],
   "packageRules": [
     {
       "groupName": "uv-minor-and-patch",
