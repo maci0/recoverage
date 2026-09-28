@@ -17,6 +17,7 @@ from rebrew.coverage_toml import CoverageSnapshot, load_coverage
 from recoverage.potato import (
     BG_COLOR,
     BORDER_COLOR,
+    MUTED_COLOR,
     PANEL_COLOR,
     TRACK_UNITS,
     _AccessKey,
@@ -434,7 +435,10 @@ def test_render_original_bytes_keeps_dump_lines_intact() -> None:
     assert len(lines) == 4, f"one output line per 16-byte row, got {len(lines)}: {lines!r}"
     for i, line in enumerate(lines):
         offset = f"{0x200 + i * 16:08x}"
-        assert line.startswith(f'<font color="#858585">{offset}</font>'), (
+        # The offset column is read by name, not by the hex it happens to
+        # hold: what this test pins is that the column is colored at all, and
+        # the gray it is was retinted with the rest of the code pane.
+        assert line.startswith(f'<font color="{MUTED_COLOR}">{offset}</font>'), (
             f"line {i} keeps its coloured offset column: {line!r}"
         )
         assert line.endswith("|</font>"), f"line {i} keeps its ASCII column: {line!r}"
@@ -3208,6 +3212,100 @@ class TestPageIdentityMatchesTheSpa:
         # else, and a named local for a one-call helper reads as scope.
         canonical = lambda text: re.sub(r"""[\s'"]""", "", text)  # noqa: E731
         assert canonical(encoded) == canonical(favicon)
+
+
+class TestCodePaneColorsMatchTheSpa:
+    """A code pane is one pane, and both renderers paint it one way.
+
+    Potato Mode's Pygments map was VS Code Dark+ shipped verbatim: a phosphor
+    green comment, an orange string, a periwinkle keyword. The SPA's
+    highlight.js theme reads the token layer, so the same C function was one
+    palette in the dashboard and another in its own fallback, and a
+    contributor reading either file would copy whichever they found first.
+    """
+
+    PAIRS = (
+        # The highlight.js theme is declared in the @layer components :root and
+        # spells its own values there.
+        ("--hljs-symbol", "HLJS_SYMBOL"),
+        ("--hljs-string", "HLJS_STRING"),
+        ("--hljs-title", "HLJS_TITLE"),
+        ("--hljs-section", "HLJS_SECTION"),
+        ("--hljs-name", "HLJS_NAME"),
+        # The rest are token-layer values the theme reaches through var(), so
+        # they are read from the block that declares them.
+        ("--muted", "HLJS_COMMENT"),
+        ("--badge-stub-text", "HLJS_KEYWORD"),
+        ("--link", "HLJS_ATTR"),
+    )
+
+    @staticmethod
+    def _spa_tokens() -> dict[str, str]:
+        """The dark values of the eight names, each read from the block that
+        declares it.
+
+        Two blocks, because the stylesheet declares them in two places: the
+        token layer's own ``:root``, and the highlight.js theme's ``:root``
+        inside ``@layer components``. Reading the whole file in one pass would
+        let either block's names win by position, and a ``.light-mode`` block
+        restates a name with the deeper step of the same hue, which is not the
+        value Potato Mode paints. Each block is taken on its own and up to its
+        own closing brace.
+        """
+        css = (Path(__file__).resolve().parents[1] / "web" / "app" / "index.css").read_text(
+            encoding="utf-8"
+        )
+        token_root = css.split(":root {", 1)[1].split("\n}", 1)[0]
+        # The theme block is cut at its OWN closing brace. Stopping at the
+        # .light-mode one that follows it would carry that block's deeper steps
+        # in, and a name the light theme restates would win by position.
+        theme = css.split("@layer components {", 1)[1].split(":root {", 1)[1]
+        theme_root = theme.split(".light-mode", 1)[0].rsplit("}", 1)[0]
+        found = dict(re.findall(r"(--[a-z-]+):\s*(#[0-9a-fA-F]{6});", token_root))
+        # The theme block restates --muted, --link and --badge-stub-text as
+        # var() references rather than hexes, so it contributes the --hljs-*
+        # names it alone declares; the token values are the ones above.
+        found.update(re.findall(r"(--hljs-[a-z-]+):\s*(#[0-9a-fA-F]{6});", theme_root))
+        return found
+
+    @pytest.mark.parametrize(("token", "constant"), PAIRS)
+    def test_spa_token_matches_potato_constant(self, token: str, constant: str) -> None:
+        from recoverage import potato
+
+        assert self._spa_tokens()[token].lower() == getattr(potato, constant).lower()
+
+    def test_the_pygments_map_holds_no_unpinned_hue(self) -> None:
+        """Every colour the lexer map reaches is one of the pinned tokens.
+
+        The map is what actually paints, so a hex added to it and not to PAIRS
+        is the drift this class exists to catch, whatever it is named.
+        """
+        from recoverage import potato
+
+        pg = potato._pygments()
+        assert pg is not None
+        _, c_colors, _, asm_colors = pg
+        pinned = {getattr(potato, name).lower() for _, name in self.PAIRS}
+        pinned |= {potato.TEXT_COLOR.lower(), potato.MUTED_COLOR.lower()}
+        for colors in (c_colors, asm_colors):
+            assert {value.lower() for value in colors.values()} <= pinned
+
+    def test_the_hex_dump_reads_the_same_palette(self) -> None:
+        """The dump draws its filler and its printable ASCII by name.
+
+        The coloring is ``_highlight_hex`` over the shared plain dump, and the
+        dump carried two stock hexes beside the gray filler, so this drives the
+        colored form the panel actually renders rather than the raw rows.
+        """
+        from recoverage import potato
+
+        raw = potato._format_hex_dump(b"\x00\x41\xff", 0x1000)
+        dump = potato._highlight_hex(raw)
+        assert "#858585" not in dump
+        assert "#4ec9b0" not in dump
+        assert "#6a9955" not in dump
+        assert potato.MUTED_COLOR in dump
+        assert potato.HLJS_NAME in dump
 
 
 class TestSelectionIsTheAccent:

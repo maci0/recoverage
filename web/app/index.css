@@ -255,6 +255,12 @@
   --color-topbar: var(--topbar-bg);
   --color-modal-header: var(--modal-header-bg);
   --color-overlay: var(--overlay-bg);
+  /* The scrim behind the code modal. It was declared per theme and reached
+     nothing, so the modal reached for a raw `bg-black/80`: the one surface
+     painted from a Tailwind literal rather than the token layer, and the same
+     80% black in both themes, which is a mechanical inversion where the light
+     ground's own scrim already existed. */
+  --color-backdrop: var(--modal-backdrop);
   --color-inspector: var(--inspector-bg);
   --color-bar-border: var(--bar-border);
   --color-scroll-track: var(--scroll-track);

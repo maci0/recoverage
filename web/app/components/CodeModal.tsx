@@ -90,7 +90,7 @@ export function CodeModal({
 
   return createPortal(
     <div
-      className="modal show fixed inset-0 z-40 flex items-center justify-center bg-black/80 p-6"
+      className="modal show fixed inset-0 z-40 flex items-center justify-center bg-backdrop p-6"
       role="dialog"
       aria-modal="true"
       aria-labelledby={titleId}

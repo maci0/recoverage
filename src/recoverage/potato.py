@@ -135,6 +135,20 @@ ACCENT_C_SOURCE = "#3b82f6"
 ACCENT_ASM = "#ef4444"
 ACCENT_DATA = "#a855f7"
 ACCENT_BYTES = "#10b981"
+# The code-pane hues, the same steps the SPA's highlight.js theme names in
+# `web/app/index.css` (--muted, --badge-stub-text, --hljs-symbol, --hljs-string,
+# --text, --hljs-title, --link, --hljs-section, --hljs-name). Potato Mode paints
+# with <font color> and no stylesheet, so it cannot read those vars; it spells
+# the same values here. TestPygmentsColorsMatchTheSpaTheme holds the two sets
+# together, so a palette change moves both renderers or neither.
+HLJS_COMMENT = MUTED_COLOR
+HLJS_KEYWORD = "#f87171"
+HLJS_SYMBOL = "#5eead4"
+HLJS_STRING = "#fcd34d"
+HLJS_TITLE = "#d8b4fe"
+HLJS_ATTR = "#7dd3fc"
+HLJS_SECTION = "#67e8f9"
+HLJS_NAME = "#6ee7b7"
 SANS_FONT = "system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif"
 MONO_FONT = "SFMono-Regular, Consolas, Liberation Mono, Courier New, monospace"
 
@@ -533,29 +547,34 @@ def _pygments() -> tuple[Any, dict[Any, str], Any, dict[Any, str]] | None:
         )
         return None
 
+    # The product's own hues, the same steps the SPA's highlight.js theme
+    # reads by name out of `web/app/index.css`: a comment in the two renderers
+    # of one pane was a phosphor green here and --muted there, because this map
+    # was VS Code Dark+ shipped verbatim. Every value clears 4.5:1 on both the
+    # code ground (CODE_BG_COLOR) and the panel it is drawn on.
     base = {
-        Comment: "#6a9955",
-        Keyword: "#569cd6",
-        Keyword.Type: "#4ec9b0",
-        String: "#ce9178",
-        Operator: "#d4d4d4",
-        Punctuation: "#d4d4d4",
+        Comment: HLJS_COMMENT,
+        Keyword: HLJS_KEYWORD,
+        Keyword.Type: HLJS_SYMBOL,
+        String: HLJS_STRING,
+        Operator: TEXT_COLOR,
+        Punctuation: TEXT_COLOR,
     }
     c_colors = {
         **base,
-        Comment.Preproc: "#c586c0",
-        Number: "#b5cea8",
-        Name.Function: "#dcdcaa",
+        Comment.Preproc: HLJS_TITLE,
+        Number: HLJS_ATTR,
+        Name.Function: HLJS_TITLE,
     }
     asm_colors = {
         **base,
-        Name.Builtin: "#dcdcaa",
-        Name.Function: "#dcdcaa",
-        Name.Label: "#9cdcfe",
-        Name.Variable: "#9cdcfe",
-        Number: "#b5cea8",
-        Number.Hex: "#b5cea8",
-        Number.Integer: "#b5cea8",
+        Name.Builtin: HLJS_SYMBOL,
+        Name.Function: HLJS_TITLE,
+        Name.Label: HLJS_SECTION,
+        Name.Variable: HLJS_NAME,
+        Number: HLJS_ATTR,
+        Number.Hex: HLJS_ATTR,
+        Number.Integer: HLJS_ATTR,
     }
     return CLexer(), c_colors, NasmLexer(), asm_colors
 
@@ -589,7 +608,7 @@ def _highlight_asm(text: str, target: str) -> str:
     def _addr_link(addr: str) -> str:
         return (
             f'<a href="?target={_url_quote(target)}&search={_url_quote(addr.strip())}">'
-            f'<font color="#858585">{_html_escape(addr)}</font></a>'
+            f'<font color="{MUTED_COLOR}">{_html_escape(addr)}</font></a>'
         )
 
     def _link_hex_refs(html: str) -> str:
@@ -642,21 +661,21 @@ def _highlight_hex(text: str) -> str:
                 continue
             hex_part = rest[: pipe_start + 2]
             ascii_part = rest[pipe_start + 2 :]
-            out = f'<font color="#858585">{_html_escape(offset)}</font>'
-            out += f'<font color="#4ec9b0">{_html_escape(hex_part)}</font>'
-            out += '<font color="#858585">|</font>'
+            out = f'<font color="{MUTED_COLOR}">{_html_escape(offset)}</font>'
+            out += f'<font color="{HLJS_ATTR}">{_html_escape(hex_part)}</font>'
+            out += f'<font color="{MUTED_COLOR}">|</font>'
             inner = ascii_part[1:-1] if len(ascii_part) >= 2 else ascii_part
             ascii_pieces: list[str] = []
             for ch in inner:
                 if ch == ".":
-                    ascii_pieces.append('<font color="#858585">.</font>')
+                    ascii_pieces.append(f'<font color="{MUTED_COLOR}">.</font>')
                 else:
-                    ascii_pieces.append(f'<font color="#6a9955">{_html_escape(ch)}</font>')
+                    ascii_pieces.append(f'<font color="{HLJS_NAME}">{_html_escape(ch)}</font>')
             out += "".join(ascii_pieces)
-            out += '<font color="#858585">|</font>'
+            out += f'<font color="{MUTED_COLOR}">|</font>'
             result_lines.append(out)
         elif line.startswith("... ("):
-            result_lines.append(f'<font color="#858585">{_html_escape(line)}</font>')
+            result_lines.append(f'<font color="{MUTED_COLOR}">{_html_escape(line)}</font>')
         else:
             result_lines.append(_html_escape(line))
     return "\n".join(result_lines)
@@ -998,7 +1017,7 @@ _PAGE_SRC = r"""<!DOCTYPE html>
     </td>
   </tr>
 </table>
-<table role="presentation" id="topbar-divider" width="100%" border="0" cellpadding="0" cellspacing="0" bgcolor="#1c2a38"><tr><td height="1"></td></tr></table>
+<table role="presentation" id="topbar-divider" width="100%" border="0" cellpadding="0" cellspacing="0" bgcolor="{{BORDER_COLOR}}"><tr><td height="1"></td></tr></table>
 
 <table role="presentation" id="layout" width="100%" border="0" cellpadding="14" cellspacing="0">
   <!-- Map and panel stack as separate rows.  As side-by-side cells the
