@@ -10,9 +10,12 @@ from __future__ import annotations
 import ast
 import json
 import re
+import sys
 import tomllib
 from itertools import pairwise
 from pathlib import Path
+
+import pytest
 
 from recoverage import __version__
 
@@ -427,10 +430,20 @@ class TestUpgradeGuideCoversEveryMajor:
             "whose changes break a consumer"
         )
 
-    def test_the_gate_fires_on_a_major_with_no_section(self) -> None:
-        """A guard nothing has seen fail is not known to work."""
+    def test_the_gate_fires_on_a_major_with_no_section(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A guard nothing has seen fail is not known to work.
+
+        Driven through `_upgrade_guide_sections`, the parser the gate above
+        reads.  Re-deriving the headings with a second regex in this test
+        would leave the parser untested: loosening it to match the guide's
+        prose headings passes the copy and fails the gate.
+        """
         guide = "## Before upgrading\n\n## [2.0.0]\n\n- one\n\n## [3.0.0]\n\n- two\n"
-        headings = set(re.findall(r"^## \[([^\]]+)\]$", guide, re.MULTILINE))
+        monkeypatch.setattr(sys.modules[__name__], "_upgrade_guide", lambda: guide)
+        headings = set(_upgrade_guide_sections())
+        # The prose heading names no release, so it is not one of these.
         assert headings == {"2.0.0", "3.0.0"}
         assert ({"2.0.0", "4.0.0"} - headings) == {"4.0.0"}
 

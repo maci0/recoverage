@@ -137,13 +137,16 @@ class TestRedCounters:
         assert body["requests"]["total"] == 0
         assert _health()["requests"]["total"] == 1
         # Read from inside a request, so it counts the one asking.
-        assert _health()["requests"]["in_flight"] >= 1
+        # Read from inside a request, so it counts the one asking and no
+        # other: the autouse fixture zeroes the counters, so the exact figure
+        # is known.  A bound here would pass on a counter that fires twice.
+        assert _health()["requests"]["in_flight"] == 1
         assert body["requests"]["slow_threshold_ms"] == metrics.SLOW_REQUEST_MS
 
     def test_client_error_is_counted_as_4xx(self) -> None:
         wsgi_get("/api/no-such-endpoint")
         body = _health()
-        assert body["requests"]["by_status"]["4xx"] >= 1
+        assert body["requests"]["by_status"] == {"4xx": 1}
         assert body["requests"]["errors"] == 0
 
     def test_unhandled_exception_is_counted_as_5xx(self, replace_route: Swap) -> None:
@@ -151,8 +154,8 @@ class TestRedCounters:
             status, _headers, _ = wsgi_get("/api/health")
         assert status.startswith("500"), status
         body = _health()
-        assert body["requests"]["by_status"]["5xx"] >= 1
-        assert body["requests"]["errors"] >= 1
+        assert body["requests"]["by_status"] == {"5xx": 1}
+        assert body["requests"]["errors"] == 1
 
     def test_db_failure_is_counted_as_503(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from rebrew.coverage_toml import CoverageTomlError
@@ -167,8 +170,8 @@ class TestRedCounters:
         status, _headers, _ = wsgi_get("/api/targets/FAKEDLL/stats")
         assert status.startswith("503"), status
         body = _health()
-        assert body["requests"]["by_status"]["5xx"] >= 1
-        assert body["requests"]["errors"] >= 1
+        assert body["requests"]["by_status"] == {"5xx": 1}
+        assert body["requests"]["errors"] == 1
 
     def test_routes_are_bucketed_by_rule_not_by_path(self) -> None:
         wsgi_get("/api/does-not-exist-one")
@@ -450,6 +453,50 @@ class TestStats:
         }
         assert sum(r["requests"] for r in snap["by_route"].values()) == snap["total"]
         assert sum(r["errors"] for r in snap["by_route"].values()) == snap["errors"]
+
+    def test_reclassify_out_of_the_5xx_bucket_takes_the_error_back(self) -> None:
+        """The negative delta arm, and the equality guard beside it.
+
+        `reclassify` is documented to move the error with the request, so a
+        5xx reclassified as a 4xx has to give the error back: an
+        implementation that always added one would report an error rate above
+        the share of requests that errored, and one that dropped the
+        `from_status == to_status` guard would delete the live `2xx` bucket
+        on the way there.
+        """
+        metrics.REQUESTS.finish("/api/x", 500, 5.0)
+        metrics.REQUESTS.reclassify("/api/x", 500, 404)
+        snap = metrics.REQUESTS.snapshot()
+        assert snap["by_status"] == {"4xx": 1}
+        assert snap["errors"] == 0
+        assert snap["total"] == 1
+        assert snap["by_route"]["/api/x"]["errors"] == 0
+        metrics.REQUESTS.reclassify("/api/x", 404, 404)
+        snap = metrics.REQUESTS.snapshot()
+        assert snap["by_status"] == {"4xx": 1}
+        assert snap["total"] == 1
+
+    def test_reset_leaves_the_in_flight_gauge_alone(self) -> None:
+        """`reset` zeroes lifetime counters, not the gauge.
+
+        The autouse fixture calls it around every test in this file while
+        requests are alive, and a `reset` that zeroed the gauge would let the
+        in-flight request's own `finish` drive it negative.  The reading is
+        taken relative to the gauge's own value, which this file does not
+        reset: the claim is that `reset` leaves it untouched, not that it is
+        a particular number.
+        """
+        metrics.REQUESTS.start()
+        metrics.REQUESTS.finish("/api/x", 500, 5.0)
+        metrics.REQUESTS.start()
+        held = metrics.REQUESTS.snapshot()["in_flight"]
+        metrics.REQUESTS.reset()
+        snap = metrics.REQUESTS.snapshot()
+        assert snap["in_flight"] == held, "reset moved the in-flight gauge"
+        assert snap["total"] == 0
+        assert snap["by_status"] == {}
+        metrics.REQUESTS.finish("/api/x", 200, 1.0)
+        assert metrics.REQUESTS.snapshot()["in_flight"] == held - 1
 
     def test_unbounded_route_updates_counts_but_not_latency(self) -> None:
         metrics.REQUESTS.finish("/api/events", 200, 900_000.0, timed=False)

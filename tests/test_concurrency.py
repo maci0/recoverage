@@ -280,10 +280,18 @@ class TestConcurrentInvalidation:
         answered, and none of them is an error.
         """
         stop = threading.Event()
+        churn_errors: list[BaseException] = []
+        invalidations = 0
 
         def churn() -> None:
+            nonlocal invalidations
             while not stop.is_set():
-                api._clear_derived_caches()
+                try:
+                    api._clear_derived_caches()
+                    invalidations += 1
+                except BaseException as exc:  # the failure is reported, not swallowed
+                    churn_errors.append(exc)
+                    return
 
         clearer = threading.Thread(target=churn, daemon=True)
         clearer.start()
@@ -308,6 +316,11 @@ class TestConcurrentInvalidation:
         finally:
             stop.set()
             clearer.join(timeout=30)
+        # A churn thread that raised, or was made a no-op, would leave every
+        # reader green over a run that never invalidated anything, so the
+        # invalidations the readers raced are counted rather than assumed.
+        assert not churn_errors, churn_errors[:3]
+        assert invalidations > 0, "the memos were never invalidated during the read"
         assert not failures, failures[:3]
 
 
@@ -515,18 +528,33 @@ class TestAuthThrottle:
         finally:
             _server._auth_failures.clear()
 
-    def test_the_peer_map_is_bounded(self) -> None:
-        """The key is a peer address, so the map is capped rather than open.
+    def test_a_peer_is_refunded_once_its_failures_age_out(self) -> None:
+        """The window SLIDES: an exhausted peer is let back in on the clock.
 
-        Bounded by the same oldest-first eviction every other memo here uses, so
-        a server reachable from a wide range of addresses cannot grow one entry
-        per guest for the life of the process.
+        Every other case here either reserves at one frozen `now` or arrives as
+        a new peer with an old timestamp, so the prune inside `_auth_throttle`
+        itself never runs.  A throttle that never dropped an aged-out failure
+        would keep answering one peer 429 for the life of the process after a
+        burst that ended a minute earlier.
         """
+        peer = "203.0.113.7"
         now = 1_000.0
         try:
-            for index in range(_server._AUTH_FAIL_MAX_PEERS + 50):
-                _server._auth_throttle(f"198.51.100.{index % 256}-{index}", now, reserve_slot=True)
-            assert len(_server._auth_failures) <= _server._AUTH_FAIL_MAX_PEERS
+            for _ in range(_server._AUTH_FAIL_MAX):
+                assert not _server._auth_throttle(peer, now, reserve_slot=True), (
+                    "the peer was refused before its window was full"
+                )
+            assert _server._auth_throttle(peer, now, reserve_slot=True), (
+                "an exhausted peer was not refused at the cap"
+            )
+            aged = now + _server._AUTH_FAIL_WINDOW_SECONDS + 1.0
+            assert not _server._auth_throttle(peer, aged, reserve_slot=True), (
+                "the peer stayed locked out after every failure aged out of the window"
+            )
+            assert len(_server._auth_failures[peer]) == 1, (
+                "the aged-out failures were not pruned, so the window refills "
+                "from a deque that never empties"
+            )
         finally:
             _server._auth_failures.clear()
 
@@ -578,28 +606,44 @@ class TestBatchLookup:
 
         Each request builds its result list from the shared snapshot and the
         shared by-VA memos, so a payload holding another caller's rows is a
-        cross-request leak rather than a wrong answer for one of them.
+        cross-request leak rather than a wrong answer for one of them.  Every
+        caller asks for a DIFFERENT rotation of the same VAs: with one body
+        shared by all of them, a handler holding a single result list across
+        callers would answer correctly.
         """
         vas = ["0x10001000", "0x10001010", "0x10001020"]
         snapshot = _server.coverage_for("FAKEDLL")
-        wanted = [int(va, 16) for va in vas if int(va, 16) in snapshot.functions_by_va]
-        assert wanted, "the synthetic target has no function at the queried VAs"
+        known = {int(va, 16) for va in vas if int(va, 16) in snapshot.functions_by_va}
+        assert known, "the synthetic target has no function at the queried VAs"
+        orders = {tuple(vas[i:] + vas[:i]) for i in range(len(vas))}
+        assert len(orders) == len(vas), "the rotations are not distinct"
 
-        payloads: list[list[Any]] = []
+        payloads: dict[tuple[str, ...], list[Any]] = {}
+        answered = 0
         payload_lock = threading.Lock()
 
         def worker(index: int) -> None:
+            nonlocal answered
+            order = tuple(vas[index % len(vas) :] + vas[: index % len(vas)])
             status, headers, body = wsgi_post(
                 "/api/targets/FAKEDLL/functions",
                 headers={"Content-Type": "application/json"},
-                body='{"vas": ["0x10001000", "0x10001010", "0x10001020"]}',
+                body=json.dumps({"vas": list(order)}),
             )
             assert status == "200 OK", f"{status}: {decode_body(body, headers)[:200]!r}"
             with payload_lock:
-                payloads.append(json.loads(decode_body(body, headers)))
+                payloads[order] = json.loads(decode_body(body, headers))
+                answered += 1
 
         _in_parallel(worker)
 
-        assert len(payloads) == WORKERS
-        for rows in payloads:
-            assert [row["va"] for row in rows] == wanted
+        assert answered == WORKERS
+        assert set(payloads) == orders, (
+            "a caller was answered with another caller's rows: "
+            f"{sorted(payloads)} against {sorted(orders)}"
+        )
+        for order, rows in payloads.items():
+            expected = [int(va, 16) for va in order if int(va, 16) in known]
+            assert [row["va"] for row in rows] == expected, (
+                f"the rows are not in the caller's own input order: {order}"
+            )

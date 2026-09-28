@@ -11,6 +11,7 @@ import re
 import threading
 import time
 import unicodedata
+from collections.abc import Callable
 from datetime import UTC, datetime
 from io import BytesIO
 from operator import attrgetter
@@ -2212,9 +2213,22 @@ class TestSseDbWatcher:
         import recoverage.api as api
 
         calls: list[tuple[int, int]] = []
-        stop, thread = _start_watcher(api, monkeypatch, lambda: (111, 1), lambda s: calls.append(s))
+        # Wait for the loop to have polled rather than for a duration: a sleep
+        # that outlasts the thread's startup leaves this green over a watcher
+        # that never ran a second poll, which is the only thing it asserts.
+        polled = threading.Event()
+        polls = 0
+
+        def snapshot() -> tuple[int, int]:
+            nonlocal polls
+            polls += 1
+            if polls >= 2:
+                polled.set()
+            return (111, 1)
+
+        stop, thread = _start_watcher(api, monkeypatch, snapshot, lambda s: calls.append(s))
         try:
-            time.sleep(0.05)
+            assert polled.wait(timeout=2), "the watcher never reached a second poll"
             assert calls == []
         finally:
             stop.set()
@@ -3257,7 +3271,10 @@ class TestFramedBodyIsReadToItsDeclaredLength:
             body=payload,
             wsgi_input=stream,
         )
-        assert not status.startswith("5xx"), status
+        # The reader returned the framed body and the handler ran, answering
+        # 404 for the missing target.  A vacuous "not a 5xx" guard here would
+        # pass on any status line, including a handler that never ran.
+        assert status.startswith("404"), status
         assert stream.overshoot == []
         assert stream.tell() == len(payload)
 
@@ -3303,9 +3320,11 @@ class TestChunkedTrailerSection:
 
     def test_complete_trailer_section_is_read(self) -> None:
         # 404 is the missing target, which is past the framing: what matters
-        # is that the reader returned the body instead of refusing it.
+        # is that the reader returned the body instead of refusing it.  The
+        # status is asserted outright because a "not 400 or 413" guard also
+        # admits a 500 from a reader that raised inside the handler.
         status, _headers, _body = self._post(b"13\r\n" + self.BODY + b"\r\n0\r\nX-T: v\r\n\r\n")
-        assert not status.startswith(("400", "413")), status
+        assert status.startswith("404"), status
 
     def test_truncated_trailer_section_is_refused(self) -> None:
         status, headers, _body = self._post(b"13\r\n" + self.BODY + b"\r\n0\r\nX-T: v\r\n")
@@ -4210,14 +4229,23 @@ class TestFunctionListPaging:
         direction: str,
         offset: int,
     ) -> None:
-        from recoverage.server import function_sort_key
+        from operator import attrgetter
 
         served = self._page(
             monkeypatch, tmp_path, f"sort={field}:{direction}&limit={self.PAGE}&offset={offset}"
         )
-        ordered = sorted(
-            self._sortable(), key=function_sort_key(field), reverse=direction == "desc"
-        )
+        # The order is spelled out here rather than taken from
+        # `server.function_sort_key`, which is the key the handler sorts with:
+        # comparing the two is true by construction, and every case above
+        # passes on a key whose NULL handling or tie-break is wrong.  The
+        # `size` arm pins the documented contract: an unknown size sorts
+        # BEFORE every known one, and never compares against an int.
+        rows = self._sortable()
+        if field == "size":
+            key: Callable[[Any], Any] = lambda r: (r.size is not None, r.size or 0)  # noqa: E731
+        else:
+            key = attrgetter(field)
+        ordered = sorted(rows, key=key, reverse=direction == "desc")
         expected = [row.name for row in ordered[offset : offset + self.PAGE]]
         assert served == expected
         assert len(served) == max(0, min(self.PAGE, self.ROWS - offset))
@@ -4791,13 +4819,20 @@ class TestKnownSchemaContract:
     understood" wording tracks the server instead of a stale client copy."""
 
     def test_data_payload_lists_known_schema(self) -> None:
+        from rebrew.coverage_toml import load_coverage_from
+
         from recoverage import server as server_mod
 
         target = require_target()
         status, _, body = wsgi_get(f"/api/targets/{target}/data")
         assert status.startswith("200")
         data = json.loads(decode_body(body, {}))
-        assert data["known_schema"] == server_mod.known_schema_versions()
+        # Read the document independently of `known_schema_versions`, which is
+        # the call the handler makes: comparing the two is true by
+        # construction, and an empty list would pass it.
+        document = load_coverage_from(server_mod._db_path(), target)
+        assert data["known_schema"] == [str(document.version)]
+        assert data["known_schema"], "the payload tells the SPA it knows no schema"
         for sec in data["sections"].values():
             assert isinstance(sec["cells"], list)
             for served_cell in sec["cells"]:

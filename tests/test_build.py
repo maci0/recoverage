@@ -160,13 +160,40 @@ class TestShippedAssetsReachTheWheel:
     does, and the last test pins the recipe to it."""
 
     def test_the_assets_read_off_a_wheel_are_the_ones_under_the_asset_directory(self) -> None:
+        """The wheel is built from the bundle DIRECTORY and checked against
+        BUNDLE_ASSETS, so the two lists are compared rather than one of them
+        compared with itself: a wheel synthesized out of the declared list
+        agrees with it whatever the directory holds."""
+        module = _wheel_assets_checker()
+        declared = _declared_assets()
+        present = {p.name for p in _ASSETS.iterdir() if p.is_file()}
+        with _scratch_dir() as td:
+            wheel = Path(td) / "recoverage-0.0.0-py3-none-any.whl"
+            _build_wheel(wheel, sorted(present))
+            assert module.check(wheel, declared) == [], (
+                "the bundle directory and BUNDLE_ASSETS disagree: the wheel built "
+                f"from the directory would carry {sorted(present)} against a declared "
+                f"{sorted(declared)}"
+            )
+
+    def test_only_a_top_level_file_under_the_asset_prefix_is_a_bundle_asset(self) -> None:
+        """`wheel_assets` reads names, not paths, so a nested member must not
+        report as the file it is named after, and a member outside the asset
+        prefix must not report at all.  Every other case here builds a wheel
+        out of flat `assets/<name>` members, so both filters go untested."""
         module = _wheel_assets_checker()
         declared = _declared_assets()
         with _scratch_dir() as td:
             wheel = Path(td) / "recoverage-0.0.0-py3-none-any.whl"
-            _build_wheel(wheel, sorted(declared))
+            with zipfile.ZipFile(wheel, "w") as archive:
+                for name in sorted(declared):
+                    archive.writestr(f"{module.ASSET_PREFIX}{name}", b"")
+                archive.writestr(f"{module.ASSET_PREFIX}nested/app.js", b"")
+                archive.writestr("recoverage/assets", b"")  # the directory entry
+                archive.writestr("recoverage/other/stray.js", b"")
             assert module.check(wheel, declared) == [], (
-                "a wheel carrying exactly the declared assets failed the check"
+                "a nested member or one outside the asset prefix was read as a "
+                "top-level bundle asset"
             )
 
     def test_a_declared_asset_the_wheel_does_not_carry_is_named(self) -> None:
@@ -202,10 +229,16 @@ class TestShippedAssetsReachTheWheel:
         recipe = _MAKEFILE.split("\nbuild:", 1)[1].split("\n\n", 1)[0]
         assert "check_wheel_assets.py" in recipe, "the build recipe does not check the wheel"
         assert recipe.index("uv build") < recipe.index("check_wheel_assets.py")
-        for name in _declared_assets():
-            assert name in _MAKEFILE.split("BUNDLE_ASSETS =", 1)[1].split("\n", 1)[0], (
-                f"{name} is not a BUNDLE_ASSETS member, so the check would not ask for it"
-            )
+        # The check asks for the declared assets by name, so the flags have to
+        # be assembled from BUNDLE_ASSETS before the checker runs.  Comparing
+        # each declared name against the BUNDLE_ASSETS line it was parsed out
+        # of would be true by construction.
+        assert recipe.index('assets=""') < recipe.index("check_wheel_assets.py"), (
+            "the check runs before the --asset flags are built, so it asks for nothing"
+        )
+        assert "for f in $(BUNDLE_ASSETS); do assets=" in recipe, (
+            "the --asset flags are not built from BUNDLE_ASSETS, so a new asset is never asked for"
+        )
 
 
 class TestTypingMarker:
