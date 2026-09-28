@@ -1,4 +1,4 @@
-.PHONY: help setup clean build test test-one test-browser fuzz lint format format-check web-lint smoke smoke-fail \
+.PHONY: help setup clean build check-bundle-clean test test-one test-browser fuzz lint format format-check web-lint smoke smoke-fail \
 	shell-lint yaml-lint type-check all ensure-uv ensure-rebrew warn-uv-version clone-rebrew ensure-lint-tools \
 	ensure-bun regen-oxlint typecheck-web payload-budget
 
@@ -94,6 +94,7 @@ help:
 		'  make smoke              # boot the dashboard against a sample db and probe it' \
 		'  make payload-budget     # re-derive the inlined shell size at each static encoding' \
 		'  make all                # every check CI runs, in one command' \
+		'  make check-bundle-clean # fail when the committed web bundle is stale (make all runs it)' \
 		'  make clean              # remove caches and build artifacts' \
 		'' \
 		'Bootstrap (clean clone):' \
@@ -181,6 +182,26 @@ build: ensure-rebrew ensure-uv web-build
 	export SOURCE_DATE_EPOCH="$(SOURCE_DATE_EPOCH)" LC_ALL=C TZ=UTC; \
 	uv build --out-dir dist --build-constraints build-constraints.txt --clear; \
 	$(UV_RUN) python tools/normalize_sdist.py dist
+
+# The dashboard bundle is committed because a wheel built on a host with no
+# bundler must still carry a frontend, and `build` regenerates both files from
+# web/ before packaging. That leaves the committed bytes unverified: a
+# contributor who edits web/ and ships a stale app.js gets a build that passes
+# every other gate here. A rebuild that changes a tracked asset is the signal,
+# so the check names the asset directory rather than the whole tree, and a
+# contributor with unrelated work in progress can still run it. The CI build
+# job runs this after its first build for the same reason: the two-build
+# comparison would pass on a tree that was already out of date.
+BUNDLE_DIR = src/recoverage/assets
+
+check-bundle-clean:
+	@$(SET_STRICT) \
+	if [ -n "$$(git status --porcelain -- $(BUNDLE_DIR))" ]; then \
+	  echo "ERROR: the committed frontend bundle does not match web/:"; \
+	  git status --porcelain -- $(BUNDLE_DIR); \
+	  echo "Run 'make web-build' and commit the result."; \
+	  exit 1; \
+	fi
 
 # The dashboard bundle. It is committed (src/recoverage/assets/app.js and
 # style.css) because the CI build job copies the tracked tree and builds it
@@ -315,8 +336,9 @@ payload-budget: ensure-rebrew
 	$(UV_RUN) python tools/payload_budget.py
 
 # Everything CI checks, in one local command, so nothing fails only after push.
-all: format-check lint type-check shell-lint yaml-lint test web-lint typecheck-web smoke smoke-fail
-	@printf '%s\n' 'all checks passed (CI: lint, web-lint, test, smoke)'
+all: format-check lint type-check shell-lint yaml-lint test web-lint typecheck-web \
+	build check-bundle-clean smoke smoke-fail
+	@printf '%s\n' 'all checks passed (CI: lint, web-lint, test, build, smoke)'
 
 clean:
 	rm -rf .pytest_cache .pytest-tmp .ruff_cache .mypy_cache .scratch build dist \

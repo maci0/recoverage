@@ -129,7 +129,8 @@ That is the local mirror of CI, and each target is the command CI runs:
 | `make web-lint` | web-lint | `bun install --frozen-lockfile && bun run lint` |
 | `make typecheck-web` | web-lint | `bun install --frozen-lockfile && bun run typecheck:web` (`tsc --noEmit`) |
 | `make web-build` | build | `bun install --frozen-lockfile && bun run build:web` (rebuilds `src/recoverage/assets/app.js` and `style.css`) |
-| `make build` | build | `uv build` (reproducible), after `make web-build` |
+| `make build` | build | `make web-build`, then `uv build` (reproducible) and `tools/normalize_sdist.py` |
+| `make check-bundle-clean` | build | `git status --porcelain -- src/recoverage/assets` |
 | `make smoke` | smoke | `python tools/smoke.py` |
 | `make smoke-fail` | smoke | `python tools/smoke.py --expect-failure` |
 
@@ -139,6 +140,12 @@ The built bundle is committed, so a change under `web/` is not served until
 `make web-build` rewrites `src/recoverage/assets/app.js` and `style.css`. The
 `build` job copies the tracked tree and rebuilds in both copies, so a bundle
 left stale fails that job rather than shipping.
+
+`check-bundle-clean` is the one target here that is not a linter: `make build`
+rebuilds `src/recoverage/assets/app.js` and `style.css` from `web/` before
+packaging, so a commit whose committed bundle is out of date still produces a
+good artifact and would pass every other check. It fails when the build changed
+a tracked file under `src/recoverage/assets`, and names the file.
 
 The `build` job is the only CI job that produces the artifact. It builds twice,
 the second time in a copy of the tree under a different path with a different

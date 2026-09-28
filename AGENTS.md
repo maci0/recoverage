@@ -543,9 +543,14 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   read and require the page to stay the first build's.
 - The dashboard frontend is `web/` (Vite + Preact + TypeScript + Tailwind CSS 4
   + shadcn/ui primitives), built into `assets/app.js` and `assets/style.css` by
-  `make web-build`. The built files are committed: the CI build job copies the
-  tracked tree and rebuilds in both copies, so the committed bundle is proved to
-  match its sources. Never hand-edit them.
+  `make web-build`. The built files are committed, and `make build` runs that
+  bundler before `uv build`, so a wheel always carries the current sources. The
+  committed bytes are checked by `make check-bundle-clean`, which the CI build
+  job runs after its first build and `make all` runs locally: the two-build
+  reproducibility comparison cannot tell a stale commit from a fresh one,
+  because both trees rebuild the same bytes from the same sources. It fails
+  when the build changed a tracked file under `src/recoverage/assets`. Never
+  hand-edit them.
 - The cell-state vocabulary is owned by rebrew (`rebrew.build_db._KNOWN_CELL_STATES`)
   and must be covered on the rendering side: `potato.COLORS` + `LEGEND_ITEMS`,
   and `web/app/grid/pack.ts` `STATE_SLOTS`/`PALETTE_VARS`/`FILTER_KEY`. An unmapped

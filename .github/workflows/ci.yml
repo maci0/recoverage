@@ -247,6 +247,14 @@ jobs:
           ln -s "$GITHUB_WORKSPACE/../rebrew" "$RUNNER_TEMP/rebrew"
 
           make build
+          # The dashboard bundle is committed and `make build` regenerates it
+          # from web/ before packaging, so the two-build comparison below would
+          # pass on a tree whose committed app.js was already stale: both trees
+          # rebuild the same bytes from the same sources. The Makefile target
+          # owns that check so this job and `make all` run the same one, and
+          # its recipe records why it exists.
+          make check-bundle-clean
+
           cp dist/*.whl dist/*.tar.gz "$RUNNER_TEMP/first/"
 
           # A different path, locale and timezone: an artifact carrying a

@@ -574,6 +574,47 @@ class TestFrontendAnalysisIsEnforced:
         )
 
 
+class TestCommittedBundleIsVerified:
+    """The committed dashboard bundle is rebuilt by every packaging run.
+
+    `make build` runs the bundler before `uv build`, so a wheel always carries
+    the current sources, and the CI build job compares two such builds against
+    each other. That comparison is over two trees built the same way, so it
+    passed on a commit whose `assets/app.js` had not been rebuilt and committed:
+    the only thing that can tell the committed bytes from a fresh build is the
+    working tree they left behind.
+    """
+
+    def test_the_build_job_checks_the_tree_after_building(self) -> None:
+        build = _jobs()["build"]
+        check = build.find("make check-bundle-clean")
+        assert check != -1, "the build job does not check the committed bundle"
+        assert build.find("make build") < check, (
+            "check-bundle-clean runs before the build it is supposed to judge"
+        )
+
+    def test_the_check_is_the_makefile_target_and_make_all_runs_it(self) -> None:
+        makefile = _MAKEFILE.read_text(encoding="utf-8")
+        recipe = re.search(r"^check-bundle-clean:(.*?)(?=^\S)", makefile, re.MULTILINE | re.DOTALL)
+        assert recipe, "the Makefile no longer defines check-bundle-clean"
+        assert "git status --porcelain" in recipe.group(1), (
+            "check-bundle-clean no longer reads the working tree the build left"
+        )
+        # Scoped to the built assets: a bare `git status` fails on whatever
+        # else the contributor has in progress, which is a gate that reports
+        # the wrong thing rather than a stale bundle.
+        assert re.search(r"git status --porcelain -- \$\(BUNDLE_DIR\)", recipe.group(1)), (
+            "check-bundle-clean reads the whole tree instead of the built assets"
+        )
+        assert re.search(r"^BUNDLE_DIR = src/recoverage/assets$", makefile, re.MULTILINE), (
+            "BUNDLE_DIR no longer names the directory the bundler writes"
+        )
+        all_recipe = re.search(r"^all:(.*?)(?=^\S)", makefile, re.MULTILINE | re.DOTALL)
+        assert all_recipe and "check-bundle-clean" in all_recipe.group(1), (
+            "`make all` does not depend on check-bundle-clean, so a stale bundle reaches the push"
+        )
+
+
 class TestNpmLockfile:
     """bun.lock is the JavaScript half of what the sbom job inventories.
 

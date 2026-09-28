@@ -20,6 +20,14 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `make all` now also builds the distribution and checks the committed
+  dashboard bundle against `web/`, so the two CI jobs it did not mirror
+  (`build`) fail on a workstation instead of after a push. The new
+  `make check-bundle-clean` is the check on its own: `make build` regenerates
+  `src/recovery/assets/app.js` and `style.css` before packaging, so a commit
+  carrying a stale bundle still produced a good artifact and passed every other
+  gate. The CI `build` job runs it too, because the two-build reproducibility
+  comparison cannot tell a stale commit from a fresh one.
 - The 503 an unreadable `rebrew-project.toml` answers now spells its
   human-readable `error` as `Database unavailable`, the same as every other
   coverage-read 503. Its `code` was already `db_unavailable` and is unchanged.
