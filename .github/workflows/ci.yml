@@ -206,6 +206,14 @@ jobs:
           --ignore=tests/test_playwright.py
 
   build:
+    # The only job that produces a distributable artifact, and the one a
+    # release is cut from, so it waits for the suite: without this a commit
+    # whose tests fail still attaches `recoverage-dist` to the run, and
+    # anything that downloads a workflow artifact takes the wheel from the
+    # run's head rather than from a run that passed. `make all` runs the same
+    # two in this order, so the local mirror and the pipeline agree on which
+    # artifact is a candidate.
+    needs: test
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -380,6 +388,15 @@ jobs:
   sbom:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    # PYTHONHASHSEED matches the Makefile's PYTHON_HASH_SEED, which every
+    # local recipe exports. It is spelled out here because this job is the one
+    # that starts a Python interpreter without going through make: no make on
+    # the path exports the seed, and CPython reads it at interpreter startup,
+    # so a value set inside the tool would be too late. The browser inventory
+    # below is an uploaded artifact, so two runs of one commit have to produce
+    # the same bytes for it to be diffable.
+    env:
+      PYTHONHASHSEED: "0"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

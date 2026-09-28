@@ -529,7 +529,8 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   dependency without the sibling checkout.
 
   The `build` job in `.github/workflows/ci.yml` is the only CI job that
-  produces the artifact, and it is what makes reproducibility tested rather
+  produces the artifact, it `needs: test` so a red suite never attaches a
+  downloadable wheel, and it is what makes reproducibility tested rather
   than asserted: it builds twice, the second time from a copy of the tracked
   tree under a different path with `LC_ALL=C.UTF-8` and `TZ=Asia/Tokyo`, and
   fails when the two archives differ, printing both hashes and adding
@@ -743,10 +744,14 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   reaching an assertion, a served payload or a log line through an unsorted
   collection is a coin flip, and two runs of one seed cannot be diffed. It
   cannot be a fixture (the seed is read before any import this tree
-  controls), so two places declare it and must agree: the Makefile's
-  exported `PYTHON_HASH_SEED` and the test job's `env:` in ci.yml, which
-  spells its pytest command out because the Windows runner has no make
-  (`tests/test_supply_chain.py`, `TestToolchainPins`). Pinning the seed is
+  controls), so ci.yml declares it wherever a job starts an interpreter that
+  no make recipe can reach, and the two places must agree with each other and
+  with the Makefile's exported `PYTHON_HASH_SEED`: the test job's `env:`,
+  which spells its pytest command out because the Windows runner has no make,
+  and the sbom job's, which runs `tools/bundled_js_inventory.py` with no make
+  at all and whose output is an uploaded artifact
+  (`tests/test_supply_chain.py`, `TestToolchainPins`, which finds those steps
+  by their `python ` line rather than by job name). Pinning the seed is
   NOT a substitute for sorting: it makes set order a function of the values
   alone, so an unsorted collection reaching output stays a defect to find
   rather than becoming noise to re-run. A new one still gets `sorted()`.

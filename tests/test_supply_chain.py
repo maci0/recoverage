@@ -705,7 +705,8 @@ class TestToolchainPins:
         controls, so a value set once pytest is running is ignored. Two places
         therefore declare it, and they have to agree: the Makefile exports it
         to every local recipe, and the test job spells its pytest command out
-        because the Windows runner has no make.
+        because the Windows runner has no make.  The sbom job is the other
+        workflow job that starts an interpreter with no recipe to export it.
         """
         makefile = _MAKEFILE.read_text(encoding="utf-8")
         declared = re.search(r"^PYTHON_HASH_SEED \?= (\S+)$", makefile, re.MULTILINE)
@@ -727,6 +728,18 @@ class TestToolchainPins:
         )
         assert job, "the test job's pytest step is gone"
         assert "PYTHONHASHSEED" in job.group(0) or pinned, "the suite runs unpinned"
+        # The other interpreter this workflow starts itself, rather than
+        # through a make recipe that exports the seed: the sbom job's browser
+        # inventory, whose output is an uploaded artifact.  Matching a
+        # `python ` line rather than naming the job keeps this catching a
+        # third such step instead of pinning the one that exists today, and it
+        # does not match the test job, whose command line starts with `uv run`
+        # and is covered by the check above.
+        for name, text in _jobs().items():
+            if re.search(r"^\s+python \S", text, re.MULTILINE):
+                assert "PYTHONHASHSEED" in text, (
+                    f"the {name} job starts a Python interpreter without the pinned seed"
+                )
 
 
 class TestFrontendAnalysisIsEnforced:

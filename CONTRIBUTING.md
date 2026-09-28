@@ -186,12 +186,13 @@ packaging, so a commit whose committed bundle is out of date still produces a
 good artifact and would pass every other check. It fails when the build changed
 a tracked file under `src/recoverage/assets`, and names the file.
 
-The `build` job is the only CI job that produces the artifact. It builds twice,
-the second time in a copy of the tree under a different path with a different
-locale and timezone, and fails when the two disagree, printing both hashes and
-adding `diffoscope`'s field-by-field breakdown when the image carries it. That
-is what makes the reproducibility claim tested rather than asserted, and it
-uploads the artifacts it built.
+The `build` job is the only CI job that produces the artifact, and it waits for
+`test`, so a commit whose suite fails never attaches a wheel for anything to
+download. It builds twice, the second time in a copy of the tree under a
+different path with a different locale and timezone, and fails when the two
+disagree, printing both hashes and adding `diffoscope`'s field-by-field
+breakdown when the image carries it. That is what makes the reproducibility
+claim tested rather than asserted, and it uploads the artifacts it built.
 
 Every target is a wrapper around the third column. Only the `test` row runs on
 the whole matrix (Linux, macOS, Windows); every other job is Linux-only. `make` itself
