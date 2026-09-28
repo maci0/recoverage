@@ -1,6 +1,6 @@
 # recoverage
 
-![recoverage mascot: a raccoon detective reading a coverage grid](docs/mascot.png)
+![recoverage mascot: a raccoon detective reading a coverage grid](https://raw.githubusercontent.com/relumea/recovery/main/docs/mascot.png)
 
 Coverage dashboard for binary-matching decompilation projects, for the person
 whose decomp stopped matching the original binary and has to find out which part.
@@ -36,19 +36,19 @@ block that covers it.
 
 ### Main Dashboard
 
-![Main dashboard — coverage grid with section tabs and filter buttons](docs/recoverage_main.png)
+![Main dashboard — coverage grid with section tabs and filter buttons](https://raw.githubusercontent.com/relumea/recovery/main/docs/recoverage_main.png)
 
 ### Function Detail
 
-![Function detail panel showing metadata, C source, and disassembly](docs/recoverage_detail.png)
+![Function detail panel showing metadata, C source, and disassembly](https://raw.githubusercontent.com/relumea/recovery/main/docs/recoverage_detail.png)
 
 ### Dark Mode
 
-![Dark mode with function detail panel](docs/recoverage_dark.png)
+![Dark mode with function detail panel](https://raw.githubusercontent.com/relumea/recovery/main/docs/recoverage_dark.png)
 
 ### Potato Mode
 
-![Potato Mode — retro pure-HTML table view](docs/recoverage_potato.png)
+![Potato Mode — retro pure-HTML table view](https://raw.githubusercontent.com/relumea/recovery/main/docs/recoverage_potato.png)
 
 Potato Mode is a **zero-JavaScript**, server-side rendered HTML fallback.
 Every view is a plain HTML table — no CSS, no JS — so it works on
@@ -123,8 +123,11 @@ recoverage
 
 ## CLI Commands
 
-The wheel installs a man page with the entry point, so an installed copy
-answers `man recoverage` without this README at hand.
+The wheel installs a man page with the entry point, at
+`<prefix>/share/man/man1/recovery.1`. A system or user prefix puts that on
+the man path, so such an installed copy answers `man recoverage` without this
+README at hand; a virtualenv prefix does not, and `MANPATH` has to name that
+directory for `man` to find the page there.
 
 ### Global flags
 
@@ -574,7 +577,7 @@ body key.
 
 ## Architecture & How it works
 
-**recoverage** is designed as a standalone **consumer** of the data that [rebrew](../rebrew) produces — the two packages are intentionally decoupled.
+**recoverage** is designed as a standalone **consumer** of the data that [rebrew](https://github.com/maci0/rebrew) produces — the two packages are intentionally decoupled.
 
 ```text
 rebrew build-db (catalog in-process)  recoverage (Bottle)
@@ -582,7 +585,7 @@ rebrew build-db (catalog in-process)  recoverage (Bottle)
   db/coverage-<target>.toml  ─────────────▶  Preact dashboard
 ```
 
-1. **`rebrew build-db`**: Scans your project's source annotations, runs the catalog analysis in process (jump table / switch data bytes are absorbed into their parent function's size, and data and thunk cells link to their parent through `parent_function`) and writes one clear-text TOML document per target, `db/coverage-<target>.toml` (`version = 1`), holding the facts: the sections with their cells, the functions (`detected_by`, `size_by_tool`, `textOffset`, …), the globals (`module`, `size`), the verify results, the history, and `[metadata].paths`.  Nothing derivable is stored: the per-section buckets, the per-section byte totals, the coverage percentages, the function-stats summary and the by-VA index are all computed at load by `rebrew.coverage_toml`, the same reader rebrew's own dashboard uses.  There is no intermediate snapshot between the analysis and the document, so a document cannot describe an older tree than the one that produced it.  Every run replaces each document whole, so `--force` has nothing to migrate.  See [COVERAGE_DOCUMENT.md](../rebrew/docs/COVERAGE_DOCUMENT.md) for the full document shape.  `rebrew catalog --export-ghidra-labels` remains a separate command, generating `ghidra_data_labels.json` for round-trip Ghidra sync.
+1. **`rebrew build-db`**: Scans your project's source annotations, runs the catalog analysis in process (jump table / switch data bytes are absorbed into their parent function's size, and data and thunk cells link to their parent through `parent_function`) and writes one clear-text TOML document per target, `db/coverage-<target>.toml` (`version = 1`), holding the facts: the sections with their cells, the functions (`detected_by`, `size_by_tool`, `textOffset`, …), the globals (`module`, `size`), the verify results, the history, and `[metadata].paths`.  Nothing derivable is stored: the per-section buckets, the per-section byte totals, the coverage percentages, the function-stats summary and the by-VA index are all computed at load by `rebrew.coverage_toml`, the same reader rebrew's own dashboard uses.  There is no intermediate snapshot between the analysis and the document, so a document cannot describe an older tree than the one that produced it.  Every run replaces each document whole, so `--force` has nothing to migrate.  See [COVERAGE_DOCUMENT.md](https://github.com/maci0/rebrew/blob/main/docs/COVERAGE_DOCUMENT.md) for the full document shape.  `rebrew catalog --export-ghidra-labels` remains a separate command, generating `ghidra_data_labels.json` for round-trip Ghidra sync.
 2. **`recoverage`**: Starts a **Bottle** web server. The backend serves API endpoints built from the parsed coverage documents, while the frontend is a **Preact** + Tailwind Single Page Application built from `web/` by `make web-build` (Vite, TypeScript, Tailwind CSS 4) into `assets/app.js` and `assets/style.css`, which the server inlines into the `/` shell, rendering the interactive defrag grid.
 
 You can run `recoverage` independently on any machine (or even host it remotely, see the caveat below) as long as it has access to a readable `coverage-<target>.toml` document.  rebrew is a required dependency (it provides the shared workspace/config resolution, the document reader, and the in-process regen), but no project workspace or compiler toolchain is required to serve the dashboard.
@@ -597,7 +600,7 @@ for any non-loopback `--bind`) and `--token` (the bearer check every request
 then has to pass); `--cors` is for a separate local frontend origin and is never
 needed for the dashboard's own page. There is no TLS, so a token on a network
 bind travels in cleartext. The full picture, including what the code does not
-cover, is in [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md).
+cover, is in [docs/THREAT_MODEL.md](https://github.com/relumea/recoverage/blob/main/docs/THREAT_MODEL.md).
 
 ---
 
@@ -735,7 +738,7 @@ The dashboard ships no vendored blob under `src/recoverage/assets/`: the
 `app.js` and `style.css` it serves are built by `make web-build` from the npm
 dependencies declared in `package.json`, so what the build folds into those two
 files is distributed with the wheel whether or not anyone records where it came
-from. The grants ship in [`NOTICE`](NOTICE), which `license-files` puts in the
+from. The grants ship in [`NOTICE`](https://github.com/relumea/recoverage/blob/main/NOTICE), which `license-files` puts in the
 distribution metadata next to the MIT license, and which is the file to read
 and amend when a dependency is added to `web/`:
 
@@ -777,5 +780,5 @@ directory from upstream, run `uv run python tools/vendor_manifest.py`, then
 MIT
 
 The wheel also bundles the third-party code listed above. Their grants ship
-as [`NOTICE`](NOTICE), which `license-files` puts in the distribution metadata
+as [`NOTICE`](https://github.com/relumea/recoverage/blob/main/NOTICE), which `license-files` puts in the distribution metadata
 next to the MIT license.

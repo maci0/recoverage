@@ -14,6 +14,7 @@ import fnmatch
 import importlib.util
 import io
 import os
+import re
 import stat
 import tarfile
 import tempfile
@@ -220,6 +221,123 @@ class TestManPage:
         page = self._page()
         missing = sorted(name for name in KNOWN_VARS - self._NOT_A_SETTING if name not in page)
         assert not missing, f"settings the man page does not document: {missing}"
+
+
+class TestLongDescriptionLinksResolveWhereItIsRendered:
+    """README.md is the wheel's long description, and the wheel's long
+    description is the index page.
+
+    A relative target (`docs/mascot.png`, `NOTICE`, `../rebrew`) resolves
+    against the repository when the README is read on GitHub and against
+    `pypi.org/project/<name>/` when the same text is rendered as the project
+    page, where every one of them is a 404. The screenshots are the whole
+    point of the page, so a link that only works in one of its two homes is a
+    broken artifact rather than a style question.
+    """
+
+    #: A target the index page can fetch. The blob host serves the file as
+    #: stored; the raw host serves its bytes, which is what an image needs.
+    _REPO_BLOB = "https://github.com/relumea/recovery/blob/main/"
+    _REPO_RAW = "https://raw.githubusercontent.com/relumea/recovery/main/"
+    _TARGET_RE = re.compile(r"\]\((?P<target>[^)\s]+)\)")
+
+    @staticmethod
+    def _relative_targets() -> list[str]:
+        """Every link and image target that is not absolute and not an
+        in-page anchor."""
+        text = (_ROOT / "README.md").read_text(encoding="utf-8")
+        return sorted(
+            {
+                match["target"]
+                for match in TestLongDescriptionLinksResolveWhereItIsRendered._TARGET_RE.finditer(
+                    text
+                )
+                if not match["target"].startswith(("#", "http://", "https://", "mailto:"))
+            }
+        )
+
+    def test_no_target_is_relative(self) -> None:
+        """The whole point: a target the index page cannot fetch is a link
+        that works on GitHub and 404s on the page the README ships as.
+        """
+        assert not self._relative_targets(), (
+            "README.md is the wheel's long description, so a relative target "
+            f"resolves against the index page and 404s there: {self._relative_targets()}"
+        )
+
+    def test_every_repository_target_is_a_file_in_the_tree(self) -> None:
+        """An absolute URL is only better than a relative one if the file is
+        there: the page renders a broken image either way once the file moves
+        and the URL does not.
+        """
+        text = (_ROOT / "README.md").read_text(encoding="utf-8")
+        for match in self._TARGET_RE.finditer(text):
+            target = match["target"]
+            for prefix in (self._REPO_BLOB, self._REPO_RAW):
+                if target.startswith(prefix):
+                    path = target.removeprefix(prefix)
+                    assert (_ROOT / path).is_file(), (
+                        f"{target} names a file this commit does not have"
+                    )
+
+
+class TestShippedMetadataNamesItsAuthor:
+    """Who wrote the package, as an installed copy can see it.
+
+    The wheel's METADATA and the LICENSE beside it are the only authorship
+    record a consumer gets, and a package with neither names nobody: the index
+    page reads "unknown author" and the license grants its permission to
+    no one at all.
+    """
+
+    #: `Copyright (c) 2026` with nothing after it is the form this tree
+    #: shipped: a year and no holder, which is a notice rather than a grant.
+    _COPYRIGHT_RE = re.compile(
+        r"^Copyright \(c\) (?P<years>\d{4}([-,] *\d{4})*) (?P<holder>\S.*)$", re.MULTILINE
+    )
+
+    @classmethod
+    def _holder(cls) -> str:
+        text = (_ROOT / "LICENSE").read_text(encoding="utf-8")
+        match = cls._COPYRIGHT_RE.search(text)
+        assert match, (
+            "the LICENSE ships in the wheel and carries no "
+            f"'Copyright (c) <year> <holder>' line: {text.splitlines()[:3]}"
+        )
+        holder = match["holder"].strip()
+        assert holder, "the LICENSE names a copyright year and nobody to hold it"
+        return holder
+
+    def test_the_license_names_its_copyright_holder(self) -> None:
+        """Without a holder the MIT permission is granted to no one, so the
+        file the artifact ships as its license permits nothing.
+        """
+        assert self._holder()
+
+    def test_the_declared_author_is_the_license_holder(self) -> None:
+        """`authors` is what becomes the wheel's Author field, and LICENSE is
+        what a distributor reads to attribute the code. One name, or the
+        artifact contradicts itself about who wrote it.
+        """
+        project = tomllib.loads((_ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+        names = sorted(entry["name"] for entry in project.get("authors", []) if entry.get("name"))
+        assert names, (
+            "pyproject.toml declares no author, so the index lists the package "
+            "as authored by nobody"
+        )
+        assert names == [self._holder()], (
+            f"the declared author(s) {names} and the LICENSE holder "
+            f"{self._holder()!r} are not the same name"
+        )
+
+    def test_the_python_3_only_classifier_is_declared(self) -> None:
+        """`requires-python = ">=3.13"` refuses every other line at install
+        time; the classifier is the same statement for a reader browsing the
+        index, and a package with only per-minor entries reads as if it also
+        supports 2.x.
+        """
+        project = tomllib.loads((_ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+        assert "Programming Language :: Python :: 3 :: Only" in project["classifiers"]
 
 
 class TestReproducibleBuild:

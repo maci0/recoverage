@@ -38,11 +38,15 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   nothing on disk to identify it by, and the existing `recoverage-python-sbom`
   export reads `uv.lock`, which cannot see it. `make browser-sbom` prints the
   same inventory, and `NOTICE` names both artifacts.
-- The wheel installs a man page (`share/man/man1/recoverage.1`) for the
-  `recoverage` entry point, covering every subcommand, flag and `RECOVERAGE_*`
-  setting `recoverage --help` lists, with the exit codes and the environment
-  each flag defaults from. `man recoverage` works on an installed copy, which
-  previously shipped the entry point and no documentation for it.
+- The wheel installs a man page (`<prefix>/share/man/man1/recoverage.1`) for
+  the `recoverage` entry point, covering every subcommand, flag and
+  `RECOVERAGE_*` setting `recoverage --help` lists, with the exit codes and the
+  environment each flag defaults from. A system or user prefix puts that
+  directory on the man path, so `man recoverage` works on such an installed
+  copy; a virtualenv prefix does not, and a reader who installs into one finds
+  the page at `$VIRTUAL_ENV/share/man/man1/recovery.1` and can add that
+  directory to `MANPATH`. An installed copy previously shipped the entry point
+  and no documentation for it at all.
 - The dashboard prints the target's coverage and the section on screen above
   the map: `82.4% covered, 1,234/1,500 functions matched` and the active
   section's per-state block counts with its own covered percentage. Potato Mode
@@ -302,6 +306,22 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   one `.venv`, one `node_modules` and one `dist/`, and `all` chains work that
   writes to all three in the order it declares them, but make orders a
   prerequisite list under `-j` by nothing. The Makefile is now `.NOTPARALLEL:`.
+- **The index page rendered every README link as a 404, and the Potato Mode
+  screenshot never rendered at all.** `README.md` is the wheel's long
+  description, so it is the project page, and every target in it was relative
+  (`docs/mascot.png`, `NOTICE`, `../rebrew`): a target that resolves against
+  the repository on GitHub resolves against `pypi.org/project/recoverage/` on
+  the page that ships the package. All of them are absolute URLs now. The
+  Potato Mode image pointed at `docs/recovery_potato.png` where the file is
+  `docs/recoverae_potato.png`, so that screenshot was broken in both places.
+  `tests/test_build.py` holds every target in the README: none relative, and
+  every repository URL naming a file this commit has.
+- **The wheel's metadata named no author and the license named no holder.**
+  `pyproject.toml` declared no `authors`, so the index page listed the package
+  as authored by nobody, and the MIT `LICENSE` the wheel and the sdist carry
+  read `Copyright (c) 2026` with nothing after it, a notice that grants its
+  permission to no one. Both name the project's author now, and the two are
+  held against each other by `tests/test_build.py`.
 - **`recoverage serve` exited on a `TypeError` before it bound a port.** The
   command passed the raw `--cors-origin` flag to the security configuration
   instead of the resolved allowlist, and the flag is `None` whenever it was

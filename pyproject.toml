@@ -19,15 +19,23 @@ license = "MIT"
 # into the browser assets, which ship inside the wheel. Without it here a wheel
 # consumer gets the MIT license and no way back to Preact or Highlight.js.
 license-files = ["LICENSE", "NOTICE"]
+# The index page and the wheel's Author field read this, and a package with
+# none is listed as authored by nobody. It is the same name LICENSE grants the
+# copyright to, so a consumer reading the artifact can tell who to attribute
+# it to; `tests/test_build.py` (TestShippedMetadataNamesItsAuthor) holds the two
+# against each other.
+authors = [{ name = "Marcel W. Wysocki" }]
 keywords = ["reverse-engineering", "decompilation", "code-coverage", "binary-matching"]
 classifiers = [
     "Development Status :: 3 - Alpha",
+    "Environment :: Console",
     "Intended Audience :: Developers",
     # Pure-Python package; every dependency ships wheels for the three OSes
     # the test matrix exercises (see .github/workflows/ci.yml) and README
     # claims "any machine".
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
     "Topic :: Software Development :: Disassemblers",
@@ -92,10 +100,12 @@ recoverage = ["assets/*"]
 
 # The console script is the only thing a package index hands a user, so it
 # ships a man page with it. data_files is the only mechanism a wheel has for
-# this: pip installs share/man/man1/ into the prefix, and every Unix `man`
-# path already on the machine finds it. MANIFEST.in carries the same file
-# into the sdist, or a wheel rebuilt from the published archive would ship
-# the entry point and nothing to read about it.
+# this: the installer puts the file at <prefix>/share/man/man1/recovery.1,
+# which a system or user prefix puts on the man path and a virtualenv prefix
+# does not, so a reader who installs into one adds that directory to MANPATH.
+# MANIFEST.in carries the same file into the sdist, or a wheel rebuilt from
+# the published archive would ship the entry point and nothing to read about
+# it.
 [tool.setuptools.data-files]
 "share/man/man1" = ["man/recoverage.1"]
 
