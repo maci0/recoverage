@@ -3538,6 +3538,30 @@ class TestDataPayloadMemo:
         assert ui.CACHED_INDEX_PAYLOAD == b"shell-bytes"
         assert ui.CACHED_INDEX_COMPRESSED == {"gzip": b"shell-gz"}
 
+    def test_derived_cache_clear_drops_the_potato_grid_memo(self) -> None:
+        """The Potato grid memo is api's to invalidate and potato's to own,
+        so the composition root wires the two together (webapp registers
+        potato.clear_cells_cache). Without that registration a rebuild would
+        keep serving the previous build's grid from a route that never learns
+        the documents moved, which is the stale-panel bug the shared entry
+        point exists to prevent."""
+        import recoverage.api as api
+        import recoverage.potato as potato
+
+        assert potato.clear_cells_cache in api._EXTRA_INVALIDATORS
+
+        calls: list[int] = []
+
+        def record() -> None:
+            calls.append(1)
+
+        api.register_cache_invalidator(record)
+        try:
+            api._clear_derived_caches()
+        finally:
+            api._EXTRA_INVALIDATORS.remove(record)
+        assert calls == [1]
+
     def _gated_open(
         self,
         tmp_path: Any,

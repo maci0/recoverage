@@ -1450,7 +1450,9 @@ class TestServeServerWiring:
 
         assert devserver._KeepAliveRequestHandler.protocol_version == "HTTP/1.1"
 
-    def test_the_installed_cors_allowlist_is_the_resolved_one(self, monkeypatch: Any) -> None:
+    def test_serve_installs_the_normalized_allowlist_and_a_keep_alive_handler(
+        self, monkeypatch: Any
+    ) -> None:
         """The request-path allowlist is what `_allowed_origins` installed.
 
         `serve` resolved the operator's spelling into `resolved.cors_origins`

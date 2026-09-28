@@ -9,7 +9,7 @@ import math
 import queue
 import re
 import threading
-from collections.abc import Generator, Mapping, Sequence
+from collections.abc import Callable, Generator, Mapping, Sequence
 from heapq import nlargest, nsmallest
 from pathlib import Path
 from typing import Any
@@ -69,6 +69,25 @@ _log = logging.getLogger("recoverage")
 
 # ── Cache invalidation ─────────────────────────────────────────────
 
+#: Invalidators for caches this module does not own.  ``_clear_derived_caches``
+#: is the one entry point every rebuild path calls, but a sibling route module's
+#: state is that module's to drop, and importing it here would be a
+#: route-to-route edge: the two sit at the SAME level, so the level table in
+#: ``tests/test_import_graph.py`` cannot see it and the graph ``webapp``
+#: documents would be prose rather than structure.  The composition root
+#: registers each one instead (see :func:`register_cache_invalidator`).
+_EXTRA_INVALIDATORS: list[Callable[[], None]] = []
+
+
+def register_cache_invalidator(invalidate: Callable[[], None]) -> None:
+    """Run *invalidate* inside :func:`_clear_derived_caches`.
+
+    Called by ``recoverage.webapp`` at import time, which is the one place
+    that already imports every route module to mount its routes: the wiring
+    lands beside the mounting, not in a consumer of it.
+    """
+    _EXTRA_INVALIDATORS.append(invalidate)
+
 
 def _clear_derived_caches() -> None:
     """Drop every cache derived from the coverage documents or the binaries.
@@ -91,9 +110,8 @@ def _clear_derived_caches() -> None:
     _clear_data_cache()
     _clear_stats_cache()
     _clear_list_total_cache()
-    from recoverage.potato import clear_cells_cache
-
-    clear_cells_cache()
+    for invalidate in _EXTRA_INVALIDATORS:
+        invalidate()
     # Disassembly/DLL bytes reflect the original binary and section layout,
     # both of which change with a rebuild.
     with DLL_LOCK:

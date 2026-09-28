@@ -8,6 +8,12 @@ dependency graph stays one-directional:
 
     config ← _paths ← server ← disasm ← {api, potato, ui} ← webapp ← cli
 
+The three route modules import each other NEVER: they share the kernel in
+``server``, and the one relationship between two of them (api's rebuild
+invalidation drops potato's grid memo) is registered below rather than
+imported, because same-level edges are invisible to the level table in
+``tests/test_import_graph.py``.
+
 ``disasm`` sits one level below the route modules, not beside them: it is a
 pure capability (availability probe, thread-local ``Cs``, per-slice memo) that
 reaches UP into ``server`` for the DLL byte cache.  It holds no route and
@@ -31,12 +37,17 @@ from typing import Any
 
 import bottle
 
-import recoverage.api  # mounts /api/* routes on server.app
-import recoverage.potato  # mounts /potato on server.app
+import recoverage.api as _api  # mounts /api/* routes on server.app
+import recoverage.potato as _potato  # mounts /potato on server.app
 import recoverage.ui  # noqa: F401 — mounts / and the static routes
 from recoverage.server import _json_err, _log_safe, app, request
 
 __all__ = ["app"]
+
+# api owns the one cache-invalidation entry point every rebuild path calls,
+# and potato owns the grid memo it drops; the two are wired together here so
+# neither route module has to import the other.
+_api.register_cache_invalidator(_potato.clear_cells_cache)
 
 
 def _build_method_probe(routes: list[bottle.Route]) -> bottle.Router:

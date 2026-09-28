@@ -13,7 +13,9 @@ Two rules, off one source of truth:
 
 A third pins the prose to the graph: every module in :data:`_LEVELS` is named
 in the module map ``recoverage.__init__`` carries, so the map cannot fall
-behind the level table.
+behind the level table.  A fourth covers the edges the level rule cannot see:
+the route modules share one level, so a route importing its sibling passes
+every level assertion while reaching into another route's state.
 
 :data:`_LEVEL_ORDER_EXCEPTIONS` is the escape hatch and is meant to stay empty.
 ``disasm`` sits below the route modules and reaches up into ``server`` for the
@@ -54,6 +56,13 @@ _LEVELS: dict[str, int] = {
 #: Edges that point the wrong way, and why each is allowed to.  Empty today;
 #: a new entry is a deliberate layering decision that says so in its reason.
 _LEVEL_ORDER_EXCEPTIONS: dict[tuple[str, str], str] = {}
+
+#: The route modules, all at one level.  A same-level edge between two of them
+#: is a route reaching into a sibling route's state, and the level assertion
+#: above cannot see it (``4 >= 4`` holds).  Cross-route wiring belongs to the
+#: composition root, which imports them all: ``webapp.register_...`` is how
+#: ``api`` drops ``potato``'s grid memo on a rebuild.
+_ROUTE_MODULES = frozenset({"api", "potato", "ui"})
 
 #: Pure capability modules: one concern each, no routes, no app wiring.  They
 #: may reach into the shared kernel below them, and that is the only upward
@@ -146,6 +155,17 @@ def test_capability_modules_import_no_route_module(importer: str) -> None:
             f"{_PACKAGE}.{importer} is a capability module and may import only "
             f"{sorted(_CAPABILITY_ALLOWED_UP)}, not {_PACKAGE}.{dependency}"
         )
+
+
+@pytest.mark.parametrize("importer", sorted(_ROUTE_MODULES))
+def test_route_modules_import_no_sibling_route(importer: str) -> None:
+    siblings = _graph()[importer] & _ROUTE_MODULES
+    assert not siblings, (
+        f"{_PACKAGE}.{importer} imports {sorted(_ROUTE_MODULES & siblings)}, a "
+        f"sibling route module. Both sit at level {_LEVELS[importer]}, so the "
+        f"level rule cannot see this edge. Wire it from the composition root "
+        f"({_PACKAGE}.webapp) or move the shared piece into {_PACKAGE}.server."
+    )
 
 
 def test_no_import_cycles() -> None:
