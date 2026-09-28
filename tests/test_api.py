@@ -4397,6 +4397,134 @@ class TestRepoFileServing:
         assert b"original tree" in body
 
 
+_ACCEPT_ALL_ENCODINGS = {"Accept-Encoding": "br, gzip, deflate, zstd"}
+
+
+def _etag_of(headers: dict[str, str]) -> str:
+    """The validator, whatever spelling bottle gave the header."""
+    return next(value for key, value in headers.items() if key.lower() == "etag")
+
+
+class TestRepoFileCompression:
+    """The code panes download a whole `src/<target>` file on every
+    selection, and `static_file` served those bytes raw: a 43 KB header went
+    over the wire as 43 KB while every other body in the package is negotiated,
+    compressed and validated. Measured on real headers, brotli/zstd takes that
+    to about a quarter of the size, so the assertions below pin the contract
+    rather than the ratio (the ratio is the compressor's, not this route's).
+
+    The cases that must NOT be compressed are the point of half the class:
+    compression here is a decision about the file, and a file the dashboard
+    does not read as text, or one too small to benefit, is bottle's again.
+    """
+
+    @staticmethod
+    def _project(tmp_path: Path, monkeypatch: Any) -> Path:
+        monkeypatch.chdir(tmp_path)
+        src = tmp_path / "src" / "demo"
+        src.mkdir(parents=True)
+        return src
+
+    def test_text_file_is_negotiated_and_decodes_to_the_file(
+        self, tmp_path: Path, monkeypatch: Any
+    ) -> None:
+        src = self._project(tmp_path, monkeypatch)
+        body = ("int func(int a) { return a * 2; }\n" * 200).encode()
+        (src / "main.c").write_bytes(body)
+
+        status, headers, wire = wsgi_get("/src/demo/main.c", _ACCEPT_ALL_ENCODINGS)
+
+        assert status.startswith("200")
+        assert headers["Content-Encoding"] in ("br", "zstd", "gzip")
+        assert len(wire) < len(body)
+        assert headers["Vary"] == "Accept-Encoding"
+        assert decode_body(wire, headers) == body, "the compressed body is not the file"
+
+    def test_revalidating_a_text_file_answers_304_with_no_body(
+        self, tmp_path: Path, monkeypatch: Any
+    ) -> None:
+        src = self._project(tmp_path, monkeypatch)
+        (src / "main.c").write_bytes(b"int x;\n" * 300)
+        _status, headers, _body = wsgi_get("/src/demo/main.c", _ACCEPT_ALL_ENCODINGS)
+
+        status, _headers, body = wsgi_get(
+            "/src/demo/main.c",
+            {**_ACCEPT_ALL_ENCODINGS, "If-None-Match": _etag_of(headers)},
+        )
+
+        assert status.startswith("304"), status
+        assert body == b""
+
+    def test_a_rewritten_file_gets_a_new_validator(self, tmp_path: Path, monkeypatch: Any) -> None:
+        """The tag is over the content, not the stat: a rebuild replaces the
+        bytes under the same path and the same mtime tick, and a validator that
+        survived that would answer 304 for a file the pane never received."""
+        src = self._project(tmp_path, monkeypatch)
+        (src / "main.c").write_bytes(b"int a;\n" * 300)
+        _status, headers, _body = wsgi_get("/src/demo/main.c", _ACCEPT_ALL_ENCODINGS)
+
+        (src / "main.c").write_bytes(b"int bbbbbbbbbbbb;\n" * 300)
+        status, _headers, body = wsgi_get(
+            "/src/demo/main.c",
+            {**_ACCEPT_ALL_ENCODINGS, "If-None-Match": _etag_of(headers)},
+        )
+
+        assert status.startswith("200"), status
+        assert body != b""
+
+    def test_a_file_below_the_floor_is_served_as_is(self, tmp_path: Path, monkeypatch: Any) -> None:
+        """gzip's framing costs more than a 7-byte header can pay back."""
+        src = self._project(tmp_path, monkeypatch)
+        (src / "tiny.h").write_bytes(b"int x;\n")
+
+        status, headers, body = wsgi_get("/src/demo/tiny.h", _ACCEPT_ALL_ENCODINGS)
+
+        assert status.startswith("200")
+        assert "Content-Encoding" not in headers
+        assert body == b"int x;\n"
+
+    def test_a_binary_suffix_is_left_to_bottle(self, tmp_path: Path, monkeypatch: Any) -> None:
+        """`/original/<target>.dll` is a multi-megabyte PE re-read on every
+        byte-pane selection: a per-request brotli at that size costs more CPU
+        than the bandwidth it saves, so the suffix is not on the list."""
+        src = self._project(tmp_path, monkeypatch)
+        raw = bytes(range(256)) * 40
+        (src / "demo.dll").write_bytes(raw)
+
+        status, headers, body = wsgi_get("/src/demo/demo.dll", _ACCEPT_ALL_ENCODINGS)
+
+        assert status.startswith("200")
+        assert "Content-Encoding" not in headers
+        assert body == raw
+
+    def test_a_client_that_decodes_nothing_gets_the_raw_file(
+        self, tmp_path: Path, monkeypatch: Any
+    ) -> None:
+        src = self._project(tmp_path, monkeypatch)
+        body = b"int y;\n" * 300
+        (src / "main.c").write_bytes(body)
+
+        status, headers, wire = wsgi_get("/src/demo/main.c")
+
+        assert status.startswith("200")
+        assert "Content-Encoding" not in headers
+        assert wire == body
+
+    def test_a_range_request_still_reaches_bottle(self, tmp_path: Path, monkeypatch: Any) -> None:
+        """A Range asks for a window of the file on disk, which a compressed
+        representation cannot describe, so the request is handed over whole."""
+        src = self._project(tmp_path, monkeypatch)
+        raw = b"0123456789abcdef" * 200
+        (src / "main.c").write_bytes(raw)
+
+        status, _headers, body = wsgi_get(
+            "/src/demo/main.c", {**_ACCEPT_ALL_ENCODINGS, "Range": "bytes=0-15"}
+        )
+
+        assert status.startswith(("206", "200")), status
+        assert raw[:16] in body
+
+
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
 class TestVaOverflowValidation:
     """VAs beyond SQLite's INTEGER range must be rejected (or cleanly miss),

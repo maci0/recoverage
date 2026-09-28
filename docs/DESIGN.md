@@ -37,7 +37,7 @@ lives in hooks under `web/app/hooks/`. Preact `useState`/`useMemo`/`useRef`,
 not a global store: the shell is the only subscriber, and the four data hooks
 are the only things that fetch.
 * `useCoverage(target, section)` (`hooks/useCoverage.ts`): the fetched snapshot as `sections`, `searchIndex` and `paths`, plus `loading`, `loadError`, a per-section `cellError` with an `ensureCells` lazy fetch, and `reload`. Every payload carries all section rows but only the requested one's cells, so a sibling tab fetches its cells on first visit; a tab that silently painted nothing would be unusable, so a failed fetch is remembered with the reason.
-* `useOriginalBinary(path, enabled)` (`hooks/useOriginalBinary.ts`): the original DLL's raw ArrayBuffer, keyed on the resolved path so a target switch mid-download cannot install the previous target's bytes. Fetched from `paths.originalDll` when the document carries that metadata, otherwise from `/original/<target>.dll`, which the server proxies anyway; when neither exists the hex pane says so instead of failing silently.
+* `useOriginalBinary(path, enabled)` (`hooks/useOriginalBinary.ts`): the original DLL's raw ArrayBuffer, keyed on the resolved path so a target switch mid-download cannot install the previous target's bytes. Fetched from `paths.originalDll` when the document carries that metadata, otherwise from `/original/<target>.dll`, which the server proxies anyway; when neither exists the hex pane says so instead of failing silently. `enabled` is the first selection, not the resolved target: this is the page's largest download and only the byte pane reads it (see *Original DLL Byte Slicing*).
 * `useSelection(...)` (`hooks/useSelection.ts`): the selected cell, its panes' fetch state, and the modal's `showModal` / `title` / `content` / `lang` state.
 * `useLiveReload(...)` (`hooks/useLiveReload.ts`): the `/api/events` subscription, the Reload/Regenerate action, and its 5 s cooldown (`busy` while a run is in flight).
 * Shell-local state in `App.tsx`: `targets` and the current `target` (persisted to URL `?target=XXX` and `localStorage`), `section`, the search `query` and its debounce (round-tripped through `?q=`), the `filters` `Set` (round-tripped through `?filter=`, a key outside the toolbar's list is dropped, since it would dim every painted cell and light no button), the selected cell index, the `theme` (`recoverage_theme` in `localStorage`, falling back to `prefers-color-scheme`), the nav `notice`, and the `loadError` banner. `matchedNames` / `matchedFns` are `useMemo` derivations of the query against `searchIndex`, not stored state. The first paint is blocked on the target list (`targetReady`), because the shell cannot know the target id until `/api/targets` answers.
@@ -211,7 +211,12 @@ Registered custom `hex` language with patterns for:
 
 ### Original DLL Byte Slicing
 On function/global selection:
-1. Fetch original binary as ArrayBuffer (`/original/target.dll`)
+1. Fetch original binary as ArrayBuffer (`/original/target.dll`). This is the
+   largest response the page ever requests, so the fetch is gated on the
+   selection rather than on the target resolving: a visit that reads the map
+   and leaves never transfers it, and the pane says `Loading...` while the one
+   that does need the bytes waits for them. The buffer is then kept for the
+   rest of the (path, build) pair, so a second selection costs nothing.
 2. Calculate raw file offset from VA using section info
 3. Slice the relevant bytes and format as hex dump
 

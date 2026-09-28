@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import mimetypes
 import threading
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import NamedTuple
 
 import rcssmin
@@ -24,6 +25,7 @@ from recoverage.server import (
     _project_dir,
     _safe_etag,
     app,
+    compress_payload,
     compress_static_bodies,
     compress_static_variants,
     request,
@@ -297,7 +299,132 @@ def serve_repo_file(filepath: str) -> bytes | HTTPResponse:
                 "detail": "path escapes the project tree",
             },
         )
-    return static_file(filepath, root=str(root))
+    return _serve_repo_file(filepath, candidate, root)
+
+
+#: Below this size compression is a loss, not a saving: gzip spends ~20 bytes
+#: on framing and builds a dictionary before it emits anything, so a 300-byte
+#: header file comes back LARGER compressed than it went in. The `src/` tree is
+#: full of exactly that.
+_REPO_MIN_COMPRESS_BYTES = 1024
+
+#: The suffixes the repo-file route squeezes. The `src/<target>` tree is what
+#: the code panes download, whole, when a cell is selected, and it is text:
+#: brotli takes a 60 KB C file to roughly 12 KB, which is the difference
+#: between the pane arriving inside a slow link's first round trip and not.
+#:
+#: What is left out is deliberate. Media and archives are already dense, so
+#: squeezing them buys a few percent for the CPU, and `/original/<target>.dll`
+#: is a multi-megabyte PE the byte panes re-read from disk on every selection:
+#: a per-request brotli at that size is the expensive side of the trade, and
+#: the one file here that a rebuild replaces under the same path.
+_REPO_COMPRESSIBLE = frozenset(
+    {
+        ".asm",
+        ".c",
+        ".cc",
+        ".cfg",
+        ".cmake",
+        ".cpp",
+        ".css",
+        ".csv",
+        ".def",
+        ".h",
+        ".hpp",
+        ".html",
+        ".inc",
+        ".in",
+        ".ini",
+        ".js",
+        ".json",
+        ".ld",
+        ".map",
+        ".md",
+        ".py",
+        ".rc",
+        ".s",
+        ".sh",
+        ".sql",
+        ".textproto",
+        ".toml",
+        ".ts",
+        ".tsx",
+        ".txt",
+        ".yaml",
+        ".yml",
+    }
+)
+
+
+def _serve_repo_file(filepath: str, candidate: Path, root: Path) -> bytes | HTTPResponse:
+    """Serve a resolved repo file, compressed when the client can decode it.
+
+    Everything bottle's ``static_file`` already gets right (the 404, Range, the
+    undecodable client) still goes to bottle. Only the plain 200 for a text
+    file is answered here, and it is answered the way every other body in the
+    package is: negotiated, compressed, and validated.
+
+    The *dynamic* compressor, not the precompressed one the shell and the
+    static assets use: a repo file is re-read from the project tree on every
+    request and a recompile replaces its bytes, so there is nothing to compress
+    once and cache. Per-request effort is the honest setting for bytes produced
+    per request.
+    """
+    accept_encoding = _header("Accept-Encoding", "")
+    if (
+        candidate.suffix.lower() not in _REPO_COMPRESSIBLE
+        or not static_variant_key(accept_encoding)
+        # A Range request asks for a window of the file ON DISK, which a
+        # compressed representation cannot describe; bottle answers it.
+        or _header("Range", "") != ""
+    ):
+        return static_file(filepath, root=str(root))
+    try:
+        if candidate.stat().st_size < _REPO_MIN_COMPRESS_BYTES:
+            return static_file(filepath, root=str(root))
+        raw = candidate.read_bytes()
+    except OSError:
+        # Vanished between the resolve above and the read: bottle's 404, which
+        # is the answer the rest of the route already gives for a missing file.
+        return static_file(filepath, root=str(root))
+    etag = _repo_file_etag(candidate, raw, accept_encoding)
+    if _if_none_match_matches(_header("If-None-Match", ""), etag):
+        return _not_modified(etag)
+    body, encoding = compress_payload(raw, accept_encoding)
+    guessed, _encoding = mimetypes.guess_type(candidate.name)
+    return _finalized(
+        response,
+        body,
+        guessed or "application/octet-stream",
+        encoding,
+        ETag=etag,
+        Cache_Control=CACHE_REVALIDATE,
+    )
+
+
+def _repo_file_etag(candidate: Path, raw: bytes, accept_encoding: str) -> str:
+    """Strong validator for a repo file: its bytes and its representation.
+
+    Hashed from the CONTENT rather than from the stat, because the stat is not
+    a version: a rebuild can write a source file of the same length, and two
+    writes inside one filesystem timestamp tick leave the mtime the same too,
+    so a stat-derived tag answers 304 for a body the pane would then render
+    from a copy the client still holds. The read the hash needs is the read the
+    200 would have done anyway, and on the 304 it is a few hundred kilobytes of
+    hashing.
+
+    The accepted-encoding KEY is folded in rather than the chosen encoding, for
+    the reason :func:`_asset_etag` gives: one file compressed two ways is two
+    bodies, and a strong validator must not match across them. The key is a
+    function of the same header that picks the encoding, so it separates every
+    pair of bodies the two could ever differ over.
+    """
+    return _safe_etag(
+        "repofile",
+        str(candidate),
+        static_variant_key(accept_encoding),
+        hashlib.sha256(raw).hexdigest(),
+    )
 
 
 # Compressed static assets, memoized per (filename, accepted-encoding set).

@@ -62,7 +62,16 @@ function bytesMissMessage(dll: OriginalBinary): string {
   if (dll.buffer !== null) {
     return MSG.BYTES_FAILED;
   }
-  return dll.loading ? MSG.LOADING : MSG.BYTES_LOAD_FAILED;
+  // A ladder over the hook's three states rather than `loading ? ... : ...`.
+  // The download starts on the first SELECTION rather than the moment a
+  // target resolves, so the first frame of a selection carries neither flag
+  // yet: the old pair read that as a failure and flashed "(failed to load)"
+  // over a download that was about to start. Nothing requested yet is
+  // "loading"; only a finished one is "failed".
+  if (dll.failed) {
+    return MSG.BYTES_LOAD_FAILED;
+  }
+  return MSG.LOADING;
 }
 
 /** The panes for a selection of *cellIndex* in *section*, fetched and sliced. */

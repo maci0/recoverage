@@ -130,9 +130,16 @@ export function App() {
     coverage.paths.sourceRoot ?? "",
     `/src/${encodeURIComponent(target)}`,
   );
+  // The original binary is the largest thing this page will ever download —
+  // a built PE of several megabytes — and only the byte pane and the
+  // inspector read it, through useSelection, which runs for a SELECTION. It
+  // used to be gated on the target resolving, so every visit paid for it
+  // before anything was selected and most visits never select anything. The
+  // pane shows MSG.LOADING while the fetch is in flight, so the one visit
+  // that does need the bytes waits a moment longer and no other notice moves.
   const dll = useOriginalBinary(
     originalDllPath(coverage.paths.originalDll, target),
-    target !== "",
+    selectedIndex !== null,
     coverage.reloadToken,
   );
   const panes = useSelection({
