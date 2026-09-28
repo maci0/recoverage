@@ -170,10 +170,7 @@ export function App() {
   // The fallback carries the target id verbatim: rebrew names the tree
   // `src/<target>` with the target's own spelling, and a lowercased request
   // only resolves on a case-insensitive filesystem (macOS, Windows).
-  const sourceRoot = sameOriginPath(
-    coverage.paths.sourceRoot ?? "",
-    `/src/${encodeURIComponent(target)}`,
-  );
+  const sourceRoot = sameOriginPath(coverage.paths.sourceRoot ?? "", `/src/${target}`);
   // The original binary is the largest thing this page will ever download —
   // a built PE of several megabytes — and only the byte pane and the
   // inspector read it, through useSelection, which runs for a SELECTION. It

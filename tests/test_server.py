@@ -3327,10 +3327,16 @@ class TestSpaTimestampRendering:
         A greedy `^\\d{4}-\\d{2}-\\d{2}` would rewrite `2026-09-29T12:00:00Z`
         into a value with no offset, and the instant rebrew stored would then
         be read as the reader's noon rather than as UTC noon.
+
+        The `u` flag is required alongside: it is what makes the pattern the
+        Unicode-aware parser the lint gate asks for, and it leaves `\\d` the
+        ASCII digits it already was, so a non-ASCII digit spelling of a day
+        still fails the test and falls back to the raw string.
         """
-        match = re.search(r"const DATE_ONLY = /(.+?)/;", _web("lib/format.ts"))
+        match = re.search(r"const DATE_ONLY = /(.+?)/(\w*);", _web("lib/format.ts"))
         assert match is not None, "DATE_ONLY is no longer a pattern literal"
         assert match.group(1) == r"^\d{4}-\d{2}-\d{2}$", match.group(1)
+        assert "u" in match.group(2), f"DATE_ONLY lost its u flag: /{match.group(2)}/"
 
 
 class TestSpaSearchFoldsLikeTheServer:
@@ -3975,6 +3981,105 @@ class TestSpaDbSuppliedPathsStaySameOrigin:
         app = _web("App.tsx")
         assert "sameOriginPath(" in app
         assert "coverage.paths.sourceRoot" in app
+
+
+class TestSpaDocumentPathsArePercentEncoded:
+    """A document-supplied path must be encoded before it becomes a URL.
+
+    ``paths.sourceRoot`` and ``paths.originalDll`` arrive raw from a coverage
+    document and go straight into a ``fetch`` and an ``href``.  ``sameOriginPath``
+    answers a question about ORIGIN and hands the value back untouched, so every
+    character a URL treats as structure still means structure: a
+    ``paths.sourceRoot`` of ``src/a#b`` reached the browser as
+    ``src/a#b/main.c``, the fragment was resolved away, and the request went to
+    ``/src/a``.  The same ``#`` inside a file name was already encoded to
+    ``%23``, which is the asymmetry these cases pin.
+
+    Executed through bun against the shipped TypeScript, so the assertion is the
+    URL a browser resolves rather than the string the helper happened to build.
+    """
+
+    #: (sourceRoot, file, expected pathname + search after resolution).
+    CASES: ClassVar[list[tuple[str, str, str]]] = [
+        ("src/FAKEDLL", "main.c", "/src/FAKEDLL/main.c"),
+        ("/src/FAKEDLL", "main.c", "/src/FAKEDLL/main.c"),
+        # The failing inputs: a fragment, a query and a bare percent sign in the
+        # ROOT, each of which the browser reads as structure rather than as a
+        # character of the path.  The same characters in the file half already
+        # survived, which is what made the two halves disagree.
+        ("src/a#b", "main.c", "/src/a%23b/main.c"),
+        ("src/a?b", "main.c", "/src/a%3Fb/main.c"),
+        ("src/100%", "main.c", "/src/100%25/main.c"),
+        ("src/a#b", "a#b/c d.c", "/src/a%23b/a%23b/c%20d.c"),
+        # Non-ASCII and spaces: encoded, and still resolving to the same path the
+        # filesystem holds.
+        ("src/café", "main.c", "/src/caf%C3%A9/main.c"),
+        ("src/my dir", "main.c", "/src/my%20dir/main.c"),
+    ]
+
+    #: (document originalDll, target, expected fetch pathname).
+    DLL_CASES: ClassVar[list[tuple[str | None, str, str]]] = [
+        (None, "FAKEDLL", "/original/FAKEDLL.dll"),
+        ("", "FAKEDLL", "/original/FAKEDLL.dll"),
+        ("/original/a#b.dll", "FAKEDLL", "/original/a%23b.dll"),
+        ("/original/café.dll", "FAKEDLL", "/original/caf%C3%A9.dll"),
+        # The guard still owns the origin: an off-origin value is not encoded
+        # into a request, it falls back to the target's own binary.
+        ("//evil.example/x.dll", "FAKEDLL", "/original/FAKEDLL.dll"),
+        ("https://evil.example/x.dll", "FAKEDLL", "/original/FAKEDLL.dll"),
+    ]
+
+    def test_document_paths_are_encoded_into_the_url(self) -> None:
+        bun = shutil.which("bun")
+        if bun is None:
+            pytest.skip("bun not on PATH")
+
+        driver = (
+            "import { sourceFileUrl } from "
+            + json.dumps(str(WEB_APP / "lib" / "format.ts"))
+            + ";\n"
+            "import { originalDllPath } from "
+            + json.dumps(str(WEB_APP / "hooks" / "useOriginalBinary.ts"))
+            + ";\n"
+            "const payload = JSON.parse(await Bun.file(process.argv[2]).text());\n"
+            "const BASE = 'http://dashboard.invalid/';\n"
+            "const resolve = (u) => { const p = new URL(u, BASE); "
+            "return p.pathname + p.search; };\n"
+            "console.log(JSON.stringify([\n"
+            "  ...payload.source.map(([root, file]) => resolve(sourceFileUrl(root, file))),\n"
+            "  ...payload.dll.map(([doc, target]) => resolve(originalDllPath(doc, target))),\n"
+            "]));\n"
+        )
+        payload = {"source": self.CASES, "dll": self.DLL_CASES}
+        with tempfile.TemporaryDirectory() as tmp:
+            script = Path(tmp) / "paths.ts"
+            script.write_text(driver, encoding="utf-8")
+            cases = Path(tmp) / "cases.json"
+            cases.write_text(json.dumps(payload), encoding="utf-8")
+            proc = subprocess.run(
+                [bun, "run", str(script), str(cases)],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
+            )
+        assert proc.returncode == 0, f"path harness failed to run: {proc.stderr}"
+        expected = [want for _root, _file, want in self.CASES] + [
+            want for _doc, _target, want in self.DLL_CASES
+        ]
+        assert json.loads(proc.stdout) == expected, (
+            "a document path reached the URL unencoded, or the fallback was encoded twice"
+        )
+
+    def test_fallback_roots_are_spelled_raw(self) -> None:
+        """Wiring: an already-encoded fallback would be encoded a second time.
+
+        ``sourceFileUrl`` encodes both halves, so a fallback that pre-encodes the
+        target id lands as ``my%2520target`` for a target spelled with a space.
+        """
+        app = _web("App.tsx")
+        assert "`/src/${target}`" in app
+        assert "encodeURIComponent(target)" not in app
 
 
 class TestHljsThemeFollowsAppTokens:

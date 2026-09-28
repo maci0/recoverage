@@ -39,8 +39,11 @@ export function count(amount: number): string {
   return amount.toLocaleString();
 }
 
-/** A bare calendar day, `YYYY-MM-DD`, with no time and no offset. */
-const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+/** A bare calendar day, `YYYY-MM-DD`, with no time and no offset. The `u` flag
+ * is the Unicode-aware parser; `\d` stays ASCII digits under it, so a
+ * non-ASCII digit spelling still fails the test and the stamp falls back to
+ * the raw string. */
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/u;
 
 /** A stored timestamp, written the way the reader's locale writes a date and
  * in their own timezone. The documents carry ISO 8601, which is a wire format
@@ -242,9 +245,28 @@ export function sameOriginPath(rawPath: string, fallback: string): string {
   return rawPath;
 }
 
-/** The URL of one file under an accepted `sourceRoot`. Each segment is
- * encoded on its own, so a file name carrying a slash or a space survives
- * the round trip and a separator stays a separator. */
+/** Every `/`-separated segment of *path* percent-encoded, separators intact.
+ *
+ * One segment at a time because `/` is the only structure in the value: encode
+ * the whole string and a separator becomes a `%2F` inside a path segment. An
+ * empty segment (a leading `/`, a trailing one) encodes to the empty string, so
+ * both spellings of the same root survive. */
+export function encodePathSegments(path: string): string {
+  return path.split("/").map((segment) => encodeURIComponent(segment)).join("/");
+}
+
+/** The URL of one file under an accepted `sourceRoot`. Both halves are encoded,
+ * segment by segment, so a slash or a space survives the round trip and a
+ * separator stays a separator.
+ *
+ * The root is encoded for the same reason the file is, and a `#` is what makes
+ * that visible: a document whose `paths.sourceRoot` is `src/a#b` reached the
+ * fetch as `src/a#b/a.c`, and the browser resolved the fragment away, so the
+ * request went to `/src/a` and the source pane 404'd a file that is sitting on
+ * disk. The same `#` inside a file name was already encoded to `%23`. One
+ * encoder over the whole value is what stops the two halves disagreeing again;
+ * a caller handing in a root it has already encoded double-encodes it, so the
+ * fallback roots in `App.tsx` and `originalDllPath` are spelled raw. */
 export function sourceFileUrl(sourceRoot: string, file: string): string {
-  return `${sourceRoot}/${file.split("/").map((segment) => encodeURIComponent(segment)).join("/")}`;
+  return `${encodePathSegments(sourceRoot)}/${encodePathSegments(file)}`;
 }

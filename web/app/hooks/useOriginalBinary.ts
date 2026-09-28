@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "preact/compat";
 
 import { fetchArrayBufferSafe } from "@/api";
-import { sameOriginPath } from "@/lib/format";
+import { encodePathSegments, sameOriginPath } from "@/lib/format";
 
 /** The target binary, downloaded once per (target, build), on first use.
  *
@@ -36,9 +36,21 @@ export type OriginalBinary = {
  * The target id is used verbatim, not lowercased: rebrew creates
  * `src/<target>` and `original/<target>.dll` with the target's own spelling,
  * and a case-insensitive filesystem (macOS, Windows) hides a lowercased
- * request that only resolves there. */
+ * request that only resolves there.
+ *
+ * A document-supplied path is percent-encoded before the fetch and the fallback
+ * already is, because the guard accepts the value raw and this string goes
+ * straight into `fetch`: a `paths.originalDll` of `/original/a#b.dll` asked for
+ * `/original/a` and the byte panes fell back to a decode error on a file that
+ * is sitting on disk. The branch is identity rather than equality because
+ * `sameOriginPath` hands back the very string it was given when it accepts one,
+ * and a fallback built here is never that string. */
 export function originalDllPath(documentPath: string | undefined, target: string): string {
-  return sameOriginPath(documentPath ?? "", `/original/${encodeURIComponent(target)}.dll`);
+  const accepted = sameOriginPath(
+    documentPath ?? "",
+    `/original/${encodeURIComponent(target)}.dll`,
+  );
+  return accepted === documentPath ? encodePathSegments(accepted) : accepted;
 }
 
 export function useOriginalBinary(
