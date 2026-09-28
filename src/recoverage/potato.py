@@ -85,11 +85,12 @@ COLORS = {
     "exact": "#10b981",
     "reloc": "#0ea5e9",
     "near_match": "#f59e0b",
-    # Canonical spelling of near_match (rebrew DB_FORMAT.md); same yellow.
+    # Canonical spelling of near_match; the map palette is its own (rebrew's
+    # document carries the terminal report's STATUS_HEX, a darker set).
     "near_matching": "#f59e0b",
-    # Post-verify semantic promotion — bold cyan per rebrew DB_FORMAT.md.
+    # Post-verify semantic promotion, a state of its own rather than a match.
     "proven": "#06b6d4",
-    # SIZE_MISMATCH state — yellow per rebrew DB_FORMAT.md.
+    # SIZE_MISMATCH: not a match, so it shares the near-match yellow.
     "size_mismatch": "#f59e0b",
     "stub": "#ef4444",
     "padding": "#C0C0D4",

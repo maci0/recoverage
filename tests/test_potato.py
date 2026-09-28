@@ -1837,7 +1837,7 @@ class TestFunctionListLinks:
 
 
 class TestV4StateColors:
-    """Every v4 cell state renders with its DB_FORMAT.md color, never the
+    """Every v4 cell state renders with its own COLORS entry, never the
     undocumented gray: proven (post-verify promotion) and legacy
     near_matching / size_mismatch previously fell through to COLORS["none"],
     hiding verified work as holes in the map while /stats counted them."""

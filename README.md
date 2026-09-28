@@ -28,7 +28,7 @@ block that covers it.
 | Light and dark themes | Retro CRT dark mode by default, clean light mode one click away |
 | Clickable cross-references | Hex addresses in the disassembly are live links that jump to that chunk |
 | Interactive progress bar | Segmented by state; click a segment to filter the grid |
-| First draw without a subrequest | HTML, CSS, and the JS bundle inlined and compressed (Brotli/Zstd) to ~46 KB |
+| First draw without a subrequest | HTML, CSS, and the JS bundle inlined and compressed (Brotli/Zstd) to ~48 KB |
 | Potato Mode | Zero-JS server-rendered fallback for constrained environments |
 | Live regen | Re-catalog and rebuild from the browser without restarting the server |
 
@@ -563,7 +563,7 @@ rebrew build-db (catalog in-process)  recoverage (Bottle)
   db/coverage-<target>.toml  ─────────────▶  Preact dashboard
 ```
 
-1. **`rebrew build-db`**: Scans your project's source annotations, runs the catalog analysis in process (jump table / switch data bytes are absorbed into their parent function's size, and data and thunk cells link to their parent through `parent_function`) and writes one clear-text TOML document per target, `db/coverage-<target>.toml` (`version = 1`), holding the facts: the sections with their cells, the functions (`detected_by`, `size_by_tool`, `textOffset`, …), the globals (`module`, `size`), the verify results, the history, and `[metadata].paths`.  Nothing derivable is stored: the per-section buckets, the per-section byte totals, the coverage percentages, the function-stats summary and the by-VA index are all computed at load by `rebrew.coverage_toml`, the same reader rebrew's own dashboard uses.  There is no intermediate snapshot between the analysis and the document, so a document cannot describe an older tree than the one that produced it.  Every run replaces each document whole, so `--force` has nothing to migrate.  See [DB_FORMAT.md](../rebrew/docs/DB_FORMAT.md) for the full document shape.  `rebrew catalog --export-ghidra-labels` remains a separate command, generating `ghidra_data_labels.json` for round-trip Ghidra sync.
+1. **`rebrew build-db`**: Scans your project's source annotations, runs the catalog analysis in process (jump table / switch data bytes are absorbed into their parent function's size, and data and thunk cells link to their parent through `parent_function`) and writes one clear-text TOML document per target, `db/coverage-<target>.toml` (`version = 1`), holding the facts: the sections with their cells, the functions (`detected_by`, `size_by_tool`, `textOffset`, …), the globals (`module`, `size`), the verify results, the history, and `[metadata].paths`.  Nothing derivable is stored: the per-section buckets, the per-section byte totals, the coverage percentages, the function-stats summary and the by-VA index are all computed at load by `rebrew.coverage_toml`, the same reader rebrew's own dashboard uses.  There is no intermediate snapshot between the analysis and the document, so a document cannot describe an older tree than the one that produced it.  Every run replaces each document whole, so `--force` has nothing to migrate.  See [COVERAGE_DOCUMENT.md](../rebrew/docs/COVERAGE_DOCUMENT.md) for the full document shape.  `rebrew catalog --export-ghidra-labels` remains a separate command, generating `ghidra_data_labels.json` for round-trip Ghidra sync.
 2. **`recoverage`**: Starts a **Bottle** web server. The backend serves API endpoints built from the parsed coverage documents, while the frontend is a **Preact** + Tailwind Single Page Application built from `web/` by `make web-build` (Vite, TypeScript, Tailwind CSS 4) into `assets/app.js` and `assets/style.css`, which the server inlines into the `/` shell, rendering the interactive defrag grid.
 
 You can run `recoverage` independently on any machine (or even host it remotely, see the caveat below) as long as it has access to a readable `coverage-<target>.toml` document.  rebrew is a required dependency (it provides the shared workspace/config resolution, the document reader, and the in-process regen), but no project workspace or compiler toolchain is required to serve the dashboard.
@@ -614,6 +614,7 @@ recoverage/
 │   ├── flatten_rikalabs_strict.py  # Regenerates tools/oxlint/rikalabs-strict.json (MIT) from @rikalabs/oxlint-standards 0.8.1
 │   ├── vendor_manifest.py    # Inventories the vendored anti-slop tree file by file
 │   ├── payload_budget.py     # Re-derives the inlined shell size at each static encoding (make payload-budget)
+│   ├── bundled_js_inventory.py  # The browser-bundle half of the SBOM, from bun.lock (make browser-sbom)
 │   └── oxlint/               # Vendored anti-slop rules + the flattened strict preset
 ├── tests/
 │   ├── conftest.py           # Shared fixtures (synthetic coverage TOML)
