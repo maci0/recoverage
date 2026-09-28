@@ -954,8 +954,9 @@ def _if_none_match_matches(raw: str, etag: str) -> bool:
 def _etag_or_304(snap: tuple[int, int] | None, *parts: object) -> str | None:
     """DB-freshness ETag over the document snapshot *snap* + *parts*; 304 on match.
 
-    Shared tail of every cacheable DB-derived endpoint (/data, /stats, /asm,
-    /bytes, /potato): compute ``_safe_etag(snap[0], parts...)``, answer
+    Shared tail of every cacheable DB-derived endpoint (/api/targets, /stats,
+    /data, the function list, the function detail route, /asm, /bytes,
+    /potato): compute ``_safe_etag(snap[0], parts...)``, answer
     ``If-None-Match`` with a 304, else hand the ETag back for the caller to
     attach to its response.  Callers pass their own
     :func:`_snapshot_db_mtime` result — endpoints that also key a memo on
@@ -1033,11 +1034,14 @@ def _is_data_marker(fn: Any) -> bool:
     return fn.markerType in DATA_MARKER_TYPES
 
 
-#: Cell states folded into each served bucket.  ONE definition of the
-#: vocabulary /stats, /data and Potato Mode all report: rebrew owns the state
-#: set and the fold ('verified' is an exact match, 'near_matching' is
-#: near_match), and a state this table does not name lands in `other`, the
-#: producer's catch-all, so the buckets still reconcile with total_cells.
+#: Cell states folded into each BYTE bucket :func:`_section_summary` sums.  The
+#: served cell COUNTS are rebrew's own fold (``Section.bucket_counts``, read by
+#: :func:`_bucket_row`), so this table is not where a new state reaches a
+#: response: it is the byte side only, where ``Section.buckets`` is keyed by
+#: cell STATE and the states sharing a bucket have to be named here before
+#: their bytes are summed.  A state this table does not name therefore
+#: contributes no bytes to a counted bucket, which is why a state rebrew adds
+#: needs an entry here in the same change.
 _BUCKET_FOLD: dict[str, tuple[str, ...]] = {
     "exact": ("exact", "verified"),
     "reloc": ("reloc",),
@@ -1084,12 +1088,13 @@ def _section_summary(section: Any) -> dict[str, Any]:
 
     Rebuilt rather than read, because the TOML format stores facts: every field
     here is a count or a byte sum over the section's own cells, which is
-    exactly how the producer computed it.  The counts and byte sums come from
-    what rebrew derived at load (``Section.bucket_counts`` and
-    ``Section.buckets``) rather than from a second walk of the cells: a state
-    rebrew folds into a bucket is the same state this module's
-    :data:`_BUCKET_FOLD` names, so the two cannot answer differently, and the
-    walk this replaces cost 5.8 ms on a 40k-cell section against 1.8 ms here.
+    exactly how the producer computed it.  The counts come from rebrew's
+    ``Section.bucket_counts``; the byte sums re-bucket rebrew's ``Section
+    .buckets``, which is keyed by cell STATE, through this module's
+    :data:`_BUCKET_FOLD`, because no derived field carries a per-bucket byte
+    total.  A state rebrew folds into a bucket therefore needs a
+    ``_BUCKET_FOLD`` entry too, and the walk this replaces cost 5.8 ms on a
+    40k-cell section against 1.8 ms here.
 
     ``coveredBytes`` is ``Section.covered_bytes``, the reader's own
     total-minus-``none``; ``totalFunctions`` still walks the cells, because it
@@ -1815,9 +1820,9 @@ def compress_static_variants(body: bytes, accept_encoding: str) -> tuple[bytes, 
     * zstd runs at :data:`ZSTD_STATIC_LEVEL` rather than the dynamic level 3.
 
     Measured on the committed bundle, with the shipped levels
-    (``tools/payload_budget.py`` prints these): the inlined shell is 155,718 B
-    raw, and brotli q11 gives 46,413 B against zstd's 49,606 B at level 19 and
-    gzip's 53,897 B at level 9.  zstd wins on throughput, not on this payload,
+    (``tools/payload_budget.py`` prints these): the inlined shell is 160,585 B
+    raw, and brotli q11 gives 47,977 B against zstd's 51,289 B at level 19 and
+    gzip's 55,707 B at level 9.  zstd wins on throughput, not on this payload,
     so choosing by size hands every client the brotli body and hands a
     zstd-first client 3 KB more than necessary.  The smallest body no longer
     fits one initial congestion window (14,600 B); ``ui._TCP_CWND_BUDGET``
@@ -2009,8 +2014,11 @@ def fold_can_match_decimal(folded_needle: str) -> bool:
 # because a page boundary is a page boundary: the two surfaces must not be able
 # to order the same rows differently and hand a reader a different row 1.
 
-#: The columns a function list may sort by, mapped to the attribute each reads.
-#: An unknown field is the caller's to reject, not this table's.
+#: The columns :func:`function_sort_key` reads through ``getattr``, mapped to
+#: the attribute each one names.  ``size`` is absent because it is handled by
+#: an arm of its own: its NULL needs a tuple the rest do not, and a key whose
+#: attribute is not in this table would raise rather than sort.  An unknown
+#: field is the caller's to reject, not this table's.
 FUNCTION_SORT_FIELDS: dict[str, str] = {
     "va": "va",
     "name": "name",
@@ -2375,12 +2383,13 @@ def _format_hex_dump(raw_bytes: bytes, base_offset: int, max_bytes: int | None =
 
 # ── Response helpers ───────────────────────────────────────────────
 
-# The two cache policies for DB-derived responses.  NO_STORE: payloads with
-# no validator the client can cheaply re-check — /api/health, /api/targets,
-# the function list/detail routes and /api/events — which must never survive a
-# rebuild.  REVALIDATE: the ETag-bearing payloads (the SPA shell, /stats,
-# /data, /asm, /bytes, /potato) that a browser may keep but must re-verify with
-# If-None-Match every time.
+# The two cache policies for DB-derived responses.  NO_STORE: payloads the
+# client must never reuse — /api/health, /api/events and the batch POST, none
+# of which carries a validator — and the one ETag-less fallback, an
+# /api/targets list served from an unreadable DB.  REVALIDATE: the
+# ETag-bearing payloads (the SPA shell and the packaged assets, /api/targets,
+# /stats, /data, the function list and detail routes, /asm, /bytes, /potato)
+# that a browser may keep but must re-verify with If-None-Match every time.
 CACHE_NO_STORE = "no-cache, no-store, must-revalidate"
 CACHE_REVALIDATE = "no-cache, must-revalidate"
 

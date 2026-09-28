@@ -1163,10 +1163,14 @@ _PANEL_TPL = SimpleTemplate(source=_PANEL_SRC)
 def _db_unavailable_page() -> HTTPResponse:
     """503 HTML page for unreadable coverage in Potato Mode.
 
-    ONE definition shared by the connect guard in :func:`render_potato` and
-    the query-failure tail of :func:`handle_potato`, so both surfaces carry
-    the same message (the two inline copies had already drifted: "to create
-    it" vs "to create or rebuild it").
+    ONE definition, so the page a reader gets is the same whichever tail
+    answered: the connect guard in :func:`render_potato` raises it and
+    :func:`handle_potato` returns it from the same exception.  The two inline
+    copies it replaced had already drifted ("to create it" vs "to create or
+    rebuild it").  The route's own ``except CoverageTomlError`` cannot fire
+    today — :func:`render_potato` is the only reader of a document on this path
+    and it converts the error itself — so the arm is the second tail to keep,
+    not a second code path.
     """
     return HTTPResponse(
         status=503,
@@ -1606,9 +1610,11 @@ def _search_functions(coverage: CoverageSnapshot, search_query: str) -> set[str]
     Both sides fold through :func:`server.fold_match`, so a non-ASCII term
     matches and the grid highlights exactly what the API's ``?search=``
     returns.
-    The address column is matched in both spellings ``_format_va`` can produce
-    (``0x%08x`` and ``0x%x``) so an address copied out of a Potato table
-    matches when pasted into the search box.
+    A global's address is matched in both spellings ``0x%08x`` and ``0x%x``
+    can produce, so an address copied out of a Potato global row matches when
+    pasted into the search box.  A function row matches ``vaStart`` only, the
+    one spelling a ``.text`` cell stores; a function's own table prints the
+    padded form, so that one does not match (see the reader below).
 
     The row cap applies to the rows selected, not to the returned set: a
     project with more matches than the cap still dims every name it found.
@@ -1735,15 +1741,19 @@ def _build_filter_data(
     active_filters: set[str],
     search_query: str,
     used_accesskeys: set[str],
+    view: str = "",
 ) -> list[tuple[str, str, str, bool, str, str, _AccessKey]]:
     # A pill is a single letter in the state's colour, so it carries the
     # state's full name in its title: a lone V or X is a lookup the legend
     # two hundred pixels away can answer, and a pointer answers instantly.
     # The "All" pill has no letter of its own to claim: it spells the state
     # every filter is off, so it takes no shortcut.
+    # `view` rides along so a pill pressed from inside the function list stays
+    # in the function list rather than dropping the reader into the grid.
+    view_arg = view or None
     filter_btn_data: list[tuple[str, str, str, bool, str, str, _AccessKey]] = [
         (
-            _build_url(target, section, search=search_query),
+            _build_url(target, section, search=search_query, view=view_arg),
             "All",
             TEXT_COLOR if not active_filters else MUTED_COLOR,
             not active_filters,
@@ -1760,7 +1770,9 @@ def _build_filter_data(
     for f, label, title in FILTER_OPTS:
         filter_btn_data.append(
             (
-                _build_url(target, section, active_filters ^ {f}, search=search_query),
+                _build_url(
+                    target, section, active_filters ^ {f}, search=search_query, view=view_arg
+                ),
                 label,
                 FILTER_COLORS[f],
                 f in active_filters,
@@ -2326,7 +2338,12 @@ def _render_function_list(
         # built once (same hoist as _build_grid_html's link_prefix).  The
         # section is the one this list was rendered under: a hardcoded .text
         # here opened the panel in the wrong section for every other list.
-        link_prefix = f"?target={_url_quote(target)}&section={_url_quote(section)}&search="
+        # The status criterion rides along beside them, so opening a function's
+        # panel and stepping back to the list finds the same list.
+        link_prefix = f"?target={_url_quote(target)}&section={_url_quote(section)}"
+        if status_filter:
+            link_prefix += f"&status={_url_quote(status_filter)}"
+        link_prefix += "&search="
         for fn in rows:
             name, va, size, status, module = fn.name, fn.va, fn.size, fn.status, fn.module
             st = status or "none"
@@ -2354,6 +2371,7 @@ def _section_tab_data(
     search_query: str,
     used_accesskeys: set[str],
     status_filter: str = "",
+    view: str = "",
 ) -> list[tuple[str, str, bool, _AccessKey]]:
     """(name, url, is_active, accesskey attribute) for the section tabs.
 
@@ -2362,14 +2380,20 @@ def _section_tab_data(
     the string and 500 the whole page.  Two sections can land on the same one
     (``.data`` and ``.rdata`` both answer ``d``), so each letter goes through
     :func:`_accesskey_attr` and the later tab takes none.
-    ``status_filter`` rides along, so a section switch does not quietly drop
-    the function list's own criterion.
+    ``status_filter`` and ``view`` both ride along, so a section switch from
+    inside the function list neither drops that list's own criterion nor drops
+    the reader out of the list itself.
     """
     return [
         (
             s,
             _build_url(
-                target, s, active_filters or None, search=search_query, status=status_filter
+                target,
+                s,
+                active_filters or None,
+                search=search_query,
+                status=status_filter,
+                view=view or None,
             ),
             s == section,
             _accesskey_attr(used_accesskeys, s[1:2] or s[:1]),
@@ -2500,9 +2524,10 @@ def _render_potato_inner(
         search_query,
         used_accesskeys,
         status_filter,
+        view,
     )
     filter_btn_data = _build_filter_data(
-        target, section, active_filters, search_query, used_accesskeys
+        target, section, active_filters, search_query, used_accesskeys, view
     )
 
     # Defaults for whichever view the request selects.

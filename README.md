@@ -502,8 +502,10 @@ double-clicked Reload button rather than a broken pipeline, so it is kept off
 `failures`. `streams` reports live-reload saturation: each connected SSE
 stream pins a server thread for its whole life, so `clients` against
 `max_clients` is the distance to the 503 the next tab gets.
-`watcher_alive` is `null` until the first client connects, since the poller
-starts lazily. A connected client with a dead poller answers `degraded`: every
+`serve` starts the poller at startup rather than on the first stream, so an
+external rebuild refreshes a server that never has an SSE client (curl-only
+automation); `watcher_alive` is `null` only in a process that never ran
+`serve`. A connected client with a dead poller answers `degraded`: every
 page still renders, none of them will ever refresh again.
 
 ### Error responses

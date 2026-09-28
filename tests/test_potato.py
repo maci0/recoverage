@@ -19,6 +19,7 @@ from recoverage.potato import (
     BORDER_COLOR,
     TRACK_UNITS,
     _AccessKey,
+    _build_filter_data,
     _build_progress,
     _build_url,
     _cell_file_offset,
@@ -770,6 +771,39 @@ def test_every_clear_link_inside_the_function_list_keeps_the_view():
     status_cleared = [href for href in clear_links if "status=STUB" not in href]
     query_cleared = [href for href in clear_links if "search=" not in href]
     assert status_cleared and query_cleared, clear_links
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage document")
+def test_the_topbar_chrome_keeps_the_reader_inside_the_function_list():
+    # The clear affordances are not the only links a reader follows from
+    # inside the list: the section tabs and the filter pills sit in the same
+    # topbar, and each one was built without `view`, so a section switch or a
+    # filter toggle silently dropped the reader into the grid.  Rendered
+    # through the two builders the page takes its URLs from, so this fails on
+    # the wiring rather than on a regex over markup.
+    sections = {".text": {}, ".data": {}, ".rdata": {}, ".bss": {}}
+    tabs = _section_tab_data("T", ".text", sections, None, "_func_a", set(), "STUB", "functions")
+    assert all("view=functions" in url for _name, url, _on, _key in tabs), tabs
+    assert all("status=STUB" in url for _name, url, _on, _key in tabs), tabs
+
+    pills = _build_filter_data("T", ".text", {"exact"}, "_func_a", set(), "functions")
+    assert all("view=functions" in row[0] for row in pills), pills
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage document")
+def test_a_function_row_link_keeps_the_status_it_was_listed_under():
+    # A row link is the one link that does leave the list: it opens the
+    # function's panel in the grid, which is the point.  It still has to
+    # carry the status criterion, or opening a function and stepping back
+    # finds the whole list instead of the filtered one the reader chose.
+    target = require_target()
+    html = render_potato_url(f"/potato?target={target}&section=.text&view=functions&status=STUB")
+    row_links = [
+        href
+        for href in re.findall(r'<a href="([^"]*)"><font color="[^"]*">_func_', html)
+        if "status=" not in href
+    ]
+    assert not row_links, row_links
 
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage document")

@@ -535,9 +535,11 @@ def _function_total(
     return total
 
 
-#: The columns the list endpoint can sort by, and the direction spellings it
-#: accepts.  ONE list: an unknown field ignores the whole sort parameter rather
-#: than applying a direction to a column the response does not carry.
+#: The columns the list endpoint can sort by.  ONE list: an unknown field
+#: ignores the whole sort parameter rather than applying a direction to a column
+#: the response does not carry.  ``size`` is here and absent from
+#: ``server.FUNCTION_SORT_FIELDS``, which maps the rest to their attributes;
+#: the sort key gives it an arm of its own for its NULL.
 _ALLOWED_SORT = ("va", "name", "size", "status", "symbol", "module")
 
 
@@ -816,8 +818,9 @@ def _db_watcher_loop(stop: threading.Event) -> None:
     reads.  ``/api/health`` only reports ``watcher_alive: false`` as
     ``degraded`` while a client is connected, so with no SSE client the
     dashboard answered "healthy" with live reload dead for the rest of the
-    process.  The ``finally`` names the exit so a dead poller is one grep
-    away, and says whether the stop event asked for it.
+    process.  Both exits name themselves, so a dead poller is one grep away:
+    the ``except`` arm logs at exception level and re-raises, and a stop the
+    event asked for falls through to the debug line under it.
     """
     try:
         last = _snapshot_db_mtime()
@@ -1420,7 +1423,7 @@ def _dumps_with_cells(data: dict[str, Any], cells_json: dict[str, str | None]) -
     """Serialize *data* while splicing pre-encoded ``cells`` JSON arrays.
 
     ``data["sections"][name]`` is the section row *without* a cells key.
-    *cells_json* maps names to ``json_group_array`` output, or ``None`` to
+    *cells_json* maps names to ``server.cells_json`` output, or ``None`` to
     omit the key (SPA lazy-load).  Missing names become ``[]``.
     """
     sections = data.pop("sections")
@@ -1579,7 +1582,7 @@ _MAX_SEARCH_CHARS = 500
 
 #: Statuses ``functions.status`` can carry: rebrew's own vocabulary
 #: (``rebrew.workspace.status.COVERAGE_DB_STATUSES``, which build_db installs as
-#: ``_FUNCTION_DB_STATUSES``) read from rebrew rather than restated, so a status
+#: ``FUNCTION_DB_STATUSES``) read from rebrew rather than restated, so a status
 #: rebrew adds is filterable the day it lands, and one it withdraws stops being
 #: accepted the day it goes.  The same rule ``server.DATA_MARKER_TYPES`` follows
 #: for the marker vocabulary.
@@ -1682,7 +1685,14 @@ def _slice_size(raw_size: str, parse_error: str) -> tuple[int, HTTPResponse | No
 
 
 def _revalidate_headers(etag: str | None) -> dict[str, str]:
-    """Cache headers for a revalidating binary-slice response."""
+    """Cache headers for a revalidating response that carries a strong ETag.
+
+    The shared helper behind every GET that answers a validator:
+    ``/api/targets``, ``/stats``, ``/data``, the function list, the function
+    detail route, ``/asm`` and ``/bytes``.  *etag* is ``None`` only where the
+    response has no validator to publish yet, and the caller then falls back to
+    ``no-store`` rather than serving an unvalidatable body as revalidating.
+    """
     headers = {"Cache_Control": CACHE_REVALIDATE}
     if etag is not None:
         headers["ETag"] = etag
@@ -2171,9 +2181,11 @@ def handle_api_asm(target: str) -> bytes | HTTPResponse:
         size = min(size, sec["size"] - (va - sec_va))
         file_offset = sec["fileOffset"] + va - sec_va
         if file_offset < 0:
-            # Unreachable for a schema-valid sections row (fileOffset carries a
-            # CHECK >= 0 and va >= sec_va here) — kept so a foreign DB without
-            # that constraint cannot read bytes from before the file.
+            # Unreachable for a document rebrew wrote (every fileOffset it
+            # emits is the section's own position in the file), and kept
+            # because nothing validates the field on read: a hand-edited or
+            # foreign document carrying a negative offset would otherwise
+            # slice from before the start of the file.
             return _json_err(
                 400,
                 {
@@ -2295,10 +2307,10 @@ def handle_api_bytes(target: str, section: str) -> bytes | HTTPResponse:
 
         file_start = sec["fileOffset"] + req_offset
         if file_start < 0:
-            # Same guard as /asm: unreachable for a schema-valid sections row
-            # (fileOffset carries CHECK >= 0), kept so a foreign DB with a
-            # negative offset cannot slice from before the file — Python's
-            # negative indexing would silently serve tail-of-binary bytes.
+            # Same guard as /asm: unreachable for a document rebrew wrote, and
+            # kept for the same reason — a negative offset would slice from
+            # before the file, where Python's negative indexing would silently
+            # serve tail-of-binary bytes.
             return _json_err(400, {"error": "offset beyond section bounds"})
         chunk = target_data[file_start : file_start + req_size]
 
