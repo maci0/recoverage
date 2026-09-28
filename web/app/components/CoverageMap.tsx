@@ -14,7 +14,7 @@ import {
   type Geometry,
   type Packed,
 } from "@/grid/pack";
-import { hex } from "@/lib/format";
+import { hex, isolate } from "@/lib/format";
 
 /** The roving tab stop's next cell for a key, or null when the key is not a
  * navigation key. Home and End are the lattice's own ends. */
@@ -115,7 +115,7 @@ export function CoverageMap({
         `Block ${index}`,
         `${hex(base + (pack.starts[index] ?? 0), 8)} to ${hex(base + (pack.ends[index] ?? 0), 8)}`,
         STATE_LABEL[pack.states[index] ?? 0],
-        name === "" ? "no function" : String(name),
+        name === "" ? "no function" : isolate(String(name)),
       ].join(", ");
     },
     [pack, section.va],
@@ -397,7 +397,7 @@ export function CoverageMap({
       // the cell the arrow keys are on. The status paragraph below is the
       // value, the hint paragraph is how to move it.
       role="application"
-      aria-label={`${section.name} coverage map`}
+      aria-label={`${isolate(section.name)} coverage map`}
       aria-describedby={hintId}
       tabIndex={0}
       onPointerMove={(event) => onPointer(event.clientX, event.clientY, false)}

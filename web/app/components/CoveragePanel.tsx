@@ -12,7 +12,7 @@ import { META_GRID, MetaItem } from "@/components/ui/meta";
 import { STATE_LABEL, stateSlot } from "@/grid/pack";
 import type { Panes } from "@/hooks/useSelection";
 import type { HighlightLanguage } from "@/lib/highlight";
-import { MSG, count, dateTime, hex, similarityPct, sourceFileUrl, toVa } from "@/lib/format";
+import { MSG, count, dateTime, hex, isolate, similarityPct, sourceFileUrl, toVa } from "@/lib/format";
 
 /** The selected block's detail.
  *
@@ -386,9 +386,9 @@ export function CoveragePanel({
   const cell = cellIndex === null || cells === undefined ? undefined : cells.at(cellIndex);
   const { fn } = panes;
   const subject = cellIndex === null ? (section?.name ?? "") : `Block ${cellIndex}`;
-  const title = fn?.name ?? subject;
+  const title = isolate(fn?.name ?? subject);
   const openModal = (heading: string, text: string, language: HighlightLanguage): void => {
-    setModal({ title: `${heading}: ${fn?.name ?? subject}`, text, language });
+    setModal({ title: `${heading}: ${title}`, text, language });
   };
   let copyVA: string | null = null;
   if (fn !== null) {
@@ -415,6 +415,7 @@ export function CoveragePanel({
           <h2
             className="panel-title wrap-anywhere min-w-0 font-mono text-sm font-bold"
             id="panel-title"
+            dir="auto"
           >
             {title}
           </h2>

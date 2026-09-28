@@ -13,7 +13,16 @@ import { useLiveReload } from "@/hooks/useLiveReload";
 import { originalDllPath, useOriginalBinary } from "@/hooks/useOriginalBinary";
 import { cellIndexForVa, useSelection } from "@/hooks/useSelection";
 import { cn } from "@/lib/cn";
-import { MSG, count, foldForSearch, hex, sameOriginPath, toVa, trimSearch } from "@/lib/format";
+import {
+  MSG,
+  count,
+  foldForSearch,
+  hex,
+  isolate,
+  sameOriginPath,
+  toVa,
+  trimSearch,
+} from "@/lib/format";
 import { readStored, writeStored } from "@/lib/storage";
 
 /** The dashboard shell: the document, the topbar's controls, and the map.
@@ -99,7 +108,7 @@ function searchHint(
     return " - no matches. Check the spelling, or search by VA.";
   }
   if (sectionMatches === 0) {
-    return ` - none of them in ${section ?? "this section"}; press Enter to jump to the first one.`;
+    return ` - none of them in ${isolate(section ?? "this section")}; press Enter to jump to the first one.`;
   }
   return " - press Enter to jump to the first one.";
 }
@@ -746,7 +755,7 @@ export function App() {
                 onChange={(event) => onTarget(event.currentTarget.value)}
               >
                 {targets.map((entry) => (
-                  <option key={entry.id} value={entry.id}>
+                  <option key={entry.id} value={entry.id} dir="auto">
                     {entry.name}
                   </option>
                 ))}
@@ -946,7 +955,7 @@ function MapArea({
   }
   if (active.cells === undefined) {
     if (coverage.cellError?.section !== active.name) {
-      return pending(`Loading ${active.name}…`);
+      return pending(`Loading ${isolate(active.name)}…`);
     }
     return (
       <div
@@ -954,7 +963,7 @@ function MapArea({
         aria-busy="true"
       >
         <p>
-          Could not load the {active.name} map: {coverage.cellError.detail}
+          Could not load the {isolate(active.name)} map: {coverage.cellError.detail}
         </p>
         <Button className="mt-2" onClick={() => coverage.ensureCells(active.name)}>
           Retry

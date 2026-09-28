@@ -309,6 +309,17 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   explicit failures now, and `S101` is on outside the test suite, where
   `assert` is the mechanism a test is written in.
 
+- **A symbol written right to left read in the wrong order.** Every name on
+  the dashboard comes from a PE image, so a target whose symbols are Arabic or
+  Hebrew is a document the reader can have, and both surfaces laid such a value
+  out against the page's own left-to-right direction: the name was reordered
+  against the numbers and punctuation beside it, and a metadata cell or a
+  function-list row filled the wrong way round. A value that stands alone in a
+  cell now takes its own direction, and one interpolated into a sentence of the
+  page's copy is isolated from it. Potato Mode's footer stamp also carries the
+  instant in ISO 8601 beside the fixed-pattern text, so a reader's own tooling
+  can re-render it in their locale.
+
 - **`retry_after` in a 429 body and the `Retry-After` beside it could
   disagree.** Every limit the server reports now puts the header's own whole
   number of seconds in the JSON, and the key is an integer wherever it

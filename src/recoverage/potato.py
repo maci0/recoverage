@@ -464,7 +464,11 @@ def _detail_rows(
         rows.append(
             f'<tr><th bgcolor="{PANEL_COLOR}" width="28%">'
             f'<font size="1" color="{MUTED_COLOR}"><b>{_esc(k)}</b></font></th>'
-            f'<td bgcolor="{PANEL_COLOR}">'
+            # dir="auto" reads the value's own first strong character, so a
+            # symbol, module name or Ghidra label written right to left fills
+            # the cell the way its author wrote it, and the ASCII values (a VA,
+            # a size) keep the left-to-right cell they had.
+            f'<td bgcolor="{PANEL_COLOR}" dir="auto">'
             f'<font face="Courier New, monospace" size="1">{val}</font></td></tr>'
         )
     return "".join(rows)
@@ -898,9 +902,9 @@ _PAGE_SRC = r"""<!DOCTYPE html>
              only the text made the clickable area the ~20px glyph while the
              32px pill around it looked like the button and did nothing. -->
         % if s_active:
-          <a href="{{s_url}}" {{!s_acc}} aria-current="page"><table role="presentation" border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{ACTIVE_L}}" width="16" height="32" border="0" alt=""></td><td background="{{ACTIVE_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="#ffffff"><b>{{s_name}}</b></font></td><td><img src="{{ACTIVE_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
+          <a href="{{s_url}}" {{!s_acc}} aria-current="page"><table role="presentation" border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{ACTIVE_L}}" width="16" height="32" border="0" alt=""></td><td background="{{ACTIVE_MID}}" height="32" nowrap dir="auto"><font face="{{MONO_FONT}}" size="3" color="#ffffff"><b>{{s_name}}</b></font></td><td><img src="{{ACTIVE_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
         % else:
-          <a href="{{s_url}}" {{!s_acc}}><table role="presentation" border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{INACTIVE_L}}" width="16" height="32" border="0" alt=""></td><td background="{{INACTIVE_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="{{MUTED_COLOR}}">{{s_name}}</font></td><td><img src="{{INACTIVE_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
+          <a href="{{s_url}}" {{!s_acc}}><table role="presentation" border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{INACTIVE_L}}" width="16" height="32" border="0" alt=""></td><td background="{{INACTIVE_MID}}" height="32" nowrap dir="auto"><font face="{{MONO_FONT}}" size="3" color="{{MUTED_COLOR}}">{{s_name}}</font></td><td><img src="{{INACTIVE_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
         % end
         </td>
       % end
@@ -1063,7 +1067,7 @@ _PAGE_SRC = r"""<!DOCTYPE html>
 <table role="presentation" id="footer" width="100%" border="0" cellpadding="8" cellspacing="0"><tr>
 <td><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">recoverage v{{version}}
 % if db_mtime:
- &middot; DB updated {{db_mtime}}
+ &middot; DB updated <time datetime="{{db_mtime_iso}}">{{db_mtime}}</time>
 % end
 </font></td>
 <td align="center"><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">{{!shortcuts_html}}</font></td>
@@ -1116,10 +1120,10 @@ _PANEL_SRC = r"""
 </td></tr></table>
 <table role="presentation" width="100%" border="0" cellpadding="3" cellspacing="1" bgcolor="{{BORDER_COLOR}}"><tr><td bgcolor="{{PANEL_COLOR}}"><font size="1" color="{{MUTED_COLOR}}"><b>Range:</b></font></td><td bgcolor="{{PANEL_COLOR}}"><font face="Courier New, monospace" size="1">{{cell_range}}</font></td></tr><tr><td bgcolor="{{PANEL_COLOR}}"><font size="1" color="{{MUTED_COLOR}}"><b>State:</b></font></td><td bgcolor="{{PANEL_COLOR}}"><font face="Courier New, monospace" size="1" color="{{state_color}}"><b>{{state_upper}}</b></font></td></tr>
 % if cell_label:
-<tr><td bgcolor="{{PANEL_COLOR}}"><font size="1" color="{{MUTED_COLOR}}"><b>Label:</b></font></td><td bgcolor="{{PANEL_COLOR}}"><font face="Courier New, monospace" size="1">{{cell_label}}</font></td></tr>
+<tr><td bgcolor="{{PANEL_COLOR}}"><font size="1" color="{{MUTED_COLOR}}"><b>Label:</b></font></td><td bgcolor="{{PANEL_COLOR}}" dir="auto"><font face="Courier New, monospace" size="1">{{cell_label}}</font></td></tr>
 % end
 % if parent_function:
-<tr><td bgcolor="{{PANEL_COLOR}}"><font size="1" color="{{MUTED_COLOR}}"><b>Parent:</b></font></td><td bgcolor="{{PANEL_COLOR}}"><font face="Courier New, monospace" size="1"><a href="{{parent_url}}"><font color="{{ACCENT_COLOR}}">{{parent_function}}</font></a></font></td></tr>
+<tr><td bgcolor="{{PANEL_COLOR}}"><font size="1" color="{{MUTED_COLOR}}"><b>Parent:</b></font></td><td bgcolor="{{PANEL_COLOR}}" dir="auto"><font face="Courier New, monospace" size="1"><a href="{{parent_url}}"><font color="{{ACCENT_COLOR}}">{{parent_function}}</font></a></font></td></tr>
 % end
 </table>
   % if not funcs:
@@ -1402,11 +1406,33 @@ def _db_updated_label() -> str:
     rounding (see server.mtime_ns_to_utc), together mean the stamp never runs
     ahead of the served data: a rebuild landing in the last microsecond of a
     minute reads as the minute it started in, not the one it has not reached.
+
+    The visible text is a fixed pattern on purpose: this page carries its own
+    English copy in the markup and is served to a reader whose locale the
+    server never learns (``Accept-Language`` names a preference, not a format,
+    and Python has no locale-aware formatter in the stdlib). :func:`
+    _db_updated_iso` carries the same instant in a form a reader's own tooling
+    can re-render, which the footer's ``<time datetime>`` publishes.
     """
     mtime_ns = _newest_mtime_ns()
     if mtime_ns is None:
         return ""
     return mtime_ns_to_utc(mtime_ns).strftime("%Y-%m-%d %H:%M UTC")
+
+
+def _db_updated_iso() -> str:
+    """The same instant as :func:`_db_updated_label`, in ISO 8601 ("" with no DB).
+
+    Truncated to the minute for the same reason and through the same read of
+    the same documents, so the two cannot disagree: the footer's ``<time>``
+    element carries this as its machine-readable value beside the label a
+    reader sees, and a consumer that re-renders the instant in a locale gets
+    the one the truncation names rather than one recovered from the text.
+    """
+    mtime_ns = _newest_mtime_ns()
+    if mtime_ns is None:
+        return ""
+    return mtime_ns_to_utc(mtime_ns).replace(second=0, microsecond=0).isoformat()
 
 
 # Potato mode re-derived the grid input on EVERY page render: a per-cell JSON
@@ -2446,7 +2472,7 @@ def _render_function_list(
             name_link = link_prefix + _url_quote(name)
             parts.append(
                 "<tr>"
-                f'<td><a href="{name_link}"><font color="{ACCENT_COLOR}">{_esc(name)}</font></a></td>'
+                f'<td dir="auto"><a href="{name_link}"><font color="{ACCENT_COLOR}">{_esc(name)}</font></a></td>'
                 f'<td><font face="Courier New, monospace" size="2">{_esc(_format_va(va))}</font></td>'
                 f'<td><font face="Courier New, monospace" size="2">{_esc(size or "")}</font></td>'
                 f'<td><font color="{color}" face="Courier New, monospace" size="2"><b>{_esc(st.upper())}</b></font></td>'
@@ -2700,6 +2726,7 @@ def _render_potato_inner(
     progress_bar_png_uri = _progress_svg(tuple(progress["segments"])) if progress else ""
 
     db_mtime_str = _db_updated_label()
+    db_mtime_iso = _db_updated_iso()
 
     rendered = _PAGE_TPL.render(
         # Constants
@@ -2753,6 +2780,7 @@ def _render_potato_inner(
         functions_html=functions_html,
         panel_html=panel_html,
         db_mtime=db_mtime_str,
+        db_mtime_iso=db_mtime_iso,
         version=__version__,
     )
 

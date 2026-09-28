@@ -889,6 +889,22 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   rather than the method. Pinned at `tests/test_server.py`
   (`TestSearchColumnGuards`) and `tests/test_api.py`
   (`test_a_unicode_space_is_a_search_term_not_an_empty_one`).
+- A value read out of a coverage document is laid out in its OWN direction.
+  Every name the dashboard shows comes from a PE image, so a target whose
+  symbols are Arabic, Hebrew, or a mix of those with ASCII is a document the
+  reader can have, and the page's base direction is left-to-right, so the
+  bidirectional algorithm reorders such a value against the punctuation and
+  numbers around it. Two mechanisms, and which one fits is the whole rule: a
+  value standing ALONE in an element takes `dir="auto"` (the SPA's
+  `MetaItem` value cell and panel title, Potato's `_detail_rows` cell, the
+  function-list name cell, the panel's label and parent cells, the section
+  tabs), while a value interpolated into a sentence the page owns goes
+  through `format.isolate` (the map's `describe`, the panel's modal title, the
+  pending and cell-error lines, the search status). No attribute on an
+  ancestor can carve a run out of a text node, which is why the second case
+  needs the U+2068/U+2069 pair. Pinned at `tests/test_server.py`
+  (`TestSpaBidirectionalText`) and `tests/test_potato.py`
+  (`TestDocumentNamesCarryTheirOwnDirection`).
 - One response, one snapshot. A snapshot is frozen — every collection is a
   tuple or a `MappingProxyType` — and rebrew's `load_all_coverage_from` (the
   reader `server` imports) memoizes on the documents' own stat, so an

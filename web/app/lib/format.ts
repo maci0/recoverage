@@ -154,6 +154,30 @@ export function trimSearch(text: string): string {
   return text.replace(ASCII_SPACE, "");
 }
 
+/** FIRST STRONG ISOLATE / POP DIRECTIONAL ISOLATE, the pair HTML's `<bdi>`
+ * carries. */
+const FSI = "\u2068";
+const PDI = "\u2069";
+
+/** A value out of a coverage document, isolated from the text around it.
+ *
+ * Every name the dashboard shows comes from a PE image, so a target whose
+ * symbols are Arabic, Hebrew or a mix of both renders text the page's own
+ * direction (LTR) does not describe. The Unicode bidirectional algorithm then
+ * reorders the run: a cell label next to its address range puts the punctuation
+ * on the wrong end, and a trailing digit run moves to the other side of the
+ * name. Wrapping the value in an isolate keeps the reordering inside it, where
+ * it belongs, and leaves the surrounding sentence alone.
+ *
+ * `dir="auto"` is the other half and not a substitute: it picks the base
+ * direction for an element whose value stands ALONE (a table cell, a panel
+ * title), while a value interpolated into a sentence with fixed English around
+ * it needs the isolate. Isolates are formatting controls, so a screen reader
+ * passes them over rather than announcing them. */
+export function isolate(documentText: string): string {
+  return `${FSI}${documentText}${PDI}`;
+}
+
 /** VAs cross the API boundary as hex strings ("0x10001000") or plain numbers
  * (/functions/<va> emits a decimal number). Parse only strings as hex: routing
  * a number through parseInt(x, 16) reads its decimal digits as base-16. */

@@ -3625,8 +3625,60 @@ class TestSpaJumpAndSearch:
         under it.
         """
         app = _web("App.tsx")
-        assert "none of them in ${section ??" in app
+        # The section name arrives from the coverage document, so it is
+        # isolated before it joins the sentence (format.isolate).
+        assert "none of them in ${isolate(section ??" in app
         assert "searchHint(matchedNames.size, sectionMatches, active?.name ?? null)" in app
+
+
+class TestSpaBidirectionalText:
+    """A value out of a coverage document is laid out in its own direction.
+
+    Every name the dashboard shows comes from a PE image, so a target whose
+    symbols are Arabic, Hebrew or a mix of the two with ASCII is a document the
+    reader can have, not a hypothetical. In a page whose base direction is
+    left-to-right the bidirectional algorithm then reorders such a value
+    against the punctuation and the numbers around it, so a name reads in an
+    order its author never wrote and a trailing address moves to the other side
+    of the cell.
+
+    Two mechanisms, and the difference is which one fits: `dir="auto"` on an
+    element whose value stands alone (a metadata cell, a panel title) reads the
+    value's own first strong character, while a value interpolated into a
+    sentence of the page's own English needs the Unicode isolate pair, because
+    no attribute on an ancestor can carve a run out of a text node.
+    """
+
+    def test_a_standalone_document_value_takes_its_own_direction(self) -> None:
+        assert 'dir="auto"' in _web("components/ui/meta.tsx")
+        assert 'id="panel-title"\n            dir="auto"' in _web("components/CoveragePanel.tsx")
+
+    def test_isolate_wraps_a_value_in_the_unicode_isolate_pair(self) -> None:
+        fmt = _web("lib/format.ts")
+        assert 'const FSI = "\\u2068";' in fmt
+        assert 'const PDI = "\\u2069";' in fmt
+        body = fmt.split("export function isolate", 1)[1].split("\n}", 1)[0]
+        assert "${FSI}" in body
+        assert "${PDI}" in body
+
+    def test_a_name_inside_a_sentence_is_isolated(self) -> None:
+        """The map's cursor description, the panel's modal title, the pending
+        and error lines, and the search status all read a document name inside
+        a sentence the page owns."""
+        assert "isolate(String(name))" in _web("components/CoverageMap.tsx")
+        panel = _web("components/CoveragePanel.tsx")
+        assert "const title = isolate(fn?.name ?? subject);" in panel
+        assert "setModal({ title: `${heading}: ${title}`" in panel
+        app = _web("App.tsx")
+        assert "Loading ${isolate(active.name)}" in app
+        assert "Could not load the {isolate(active.name)} map" in app
+
+    def test_the_map_announces_the_isolated_name(self) -> None:
+        """The `role="status"` paragraph is where a screen reader hears the
+        block, so the same isolation the canvas tooltip needs applies to the
+        announced text; both read `describe`."""
+        map_ts = _web("components/CoverageMap.tsx")
+        assert "isolate(section.name)} coverage map" in map_ts
 
 
 class TestClockSeam:

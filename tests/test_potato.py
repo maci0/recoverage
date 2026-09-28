@@ -17,6 +17,7 @@ from rebrew.coverage_toml import CoverageSnapshot, load_coverage
 from recoverage.potato import (
     BG_COLOR,
     BORDER_COLOR,
+    PANEL_COLOR,
     TRACK_UNITS,
     _AccessKey,
     _build_filter_data,
@@ -24,6 +25,7 @@ from recoverage.potato import (
     _build_url,
     _cell_file_offset,
     _compute_section_stats,
+    _db_updated_iso,
     _db_updated_label,
     _esc,
     _extract_annotations,
@@ -1193,6 +1195,87 @@ class TestDbUpdatedLabel:
         self._doc(directory, "TRUNC", ns)
         self._patch_db(monkeypatch, directory)
         assert _db_updated_label() == "2023-11-14 22:13 UTC"
+
+    def test_the_footers_time_element_carries_the_same_instant(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The label is a fixed pattern on a page whose locale the server never
+        learns, so the footer's ``<time>`` publishes the same instant in a form
+        a reader's own tooling can re-render, truncated the same way."""
+        directory = tmp_path / "db"
+        ns = 1_700_000_039_999_999_999
+        self._doc(directory, "ISO", ns)
+        self._patch_db(monkeypatch, directory)
+        iso = _db_updated_iso()
+        assert iso == "2023-11-14T22:13:00+00:00"
+        assert datetime.fromisoformat(iso).strftime("%Y-%m-%d %H:%M UTC") == _db_updated_label()
+
+    def test_no_db_leaves_the_time_element_out(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._patch_db(monkeypatch, tmp_path / "nope")
+        assert _db_updated_iso() == ""
+
+
+class TestDocumentNamesCarryTheirOwnDirection:
+    """A name out of a coverage document is laid out the way it was written.
+
+    Every symbol, module, section and label on this page comes from a PE image,
+    so a target whose names are Arabic or Hebrew is a document the reader can
+    have.  The page's own direction is left-to-right, and the bidirectional
+    algorithm reorders such a value against the numbers and punctuation around
+    it: a name reads in an order its author never wrote, and a trailing digit
+    run lands on the other side of the cell.  ``dir="auto"`` on the cell reads
+    the value's own first strong character, and leaves an ASCII value laid out
+    exactly as it was.
+    """
+
+    def test_the_detail_rows_take_their_own_direction(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _write_doc(
+            tmp_path,
+            monkeypatch,
+            "RTL_POTATO",
+            {".text": {"size": 32, "cells": [cell(0, 32, "exact", functions=("_مرحبا",))]}},
+            functions=[
+                {
+                    "va": 256,
+                    "name": "_مرحبا",
+                    "vaStart": "0x100",
+                    "size": 32,
+                    "fileOffset": 16,
+                    "status": "EXACT",
+                    "module": "النواة",
+                }
+            ],
+        )
+        panel = render_potato_url("/potato?target=RTL_POTATO&section=.text&idx=0")
+        assert f'<td bgcolor="{PANEL_COLOR}" dir="auto">' in panel
+        assert "النواة" in panel
+
+    def test_the_function_list_name_cell_takes_its_own_direction(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _write_doc(
+            tmp_path,
+            monkeypatch,
+            "RTLLIST_POTATO",
+            {".text": {"size": 32, "cells": [cell(0, 32, "exact", functions=("_שלום",))]}},
+            functions=[
+                {
+                    "va": 256,
+                    "name": "_שלום",
+                    "vaStart": "0x100",
+                    "size": 32,
+                    "fileOffset": 16,
+                    "status": "EXACT",
+                }
+            ],
+        )
+        listed = render_potato_url("/potato?target=RTLLIST_POTATO&section=.text&view=functions")
+        assert '<td dir="auto">' in listed
+        assert "_שלום" in listed
 
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage document")
