@@ -96,8 +96,11 @@ Request-controlled values that matter: `Host`, `Origin`, `Sec-Fetch-Site`,
 `Authorization`, `Cookie`, `X-Request-ID`, `Accept-Encoding`,
 `If-None-Match`, `Content-Length`, `Transfer-Encoding`, `Content-Type` are
 headers; `token`, `target`, `va`, `section`, `status`, `search`, `sort`,
-`limit`, `offset`, `size`, `offset`, `format` are query values;
-`{"vas": [...]}` is the only request body.
+`limit`, `offset`, `size`, `format`, `index` (the `/data` flag that omits
+`search_index`, a flag of `0`, `1` or absent) are API query values, and Potato
+Mode adds `filter`, `idx`, `view` and `page` over the same
+`request.query_string` (`src/recoverage/potato.py`); `{"vas": [...]}` is the only
+request body.
 
 Non-network entry points:
 
@@ -284,10 +287,16 @@ and the byte and asm endpoints serve arbitrary offsets of the original binary
 `GET /api/health` additionally hands any authenticated client the process's
 resolved deployment: bind address, `allow_remote`, the CORS allowlist, log
 level, connection and timeout caps, and whether a token is set
-(`src/recoverage/api.py`, `src/recoverage/config.py`). Every field is a setting the operator
-chose and none is the token's value, so this is a configuration-disclosure
-read and a `token: set` / `unset` oracle for a client that does not already
-know the answer. Denial of
+(`src/recoverage/api.py`, `src/recoverage/config.py`; the `config` block drops
+`db`, which the `db` block beside it already answers by basename). It also
+carries the live counters: request and error rates, cache hits, the regen
+lifecycle, stream and connection saturation, and the `auth` block's failed
+attempts and `locked_peers` gauge (`src/recoverage/api.py`,
+`src/recoverage/metrics.py`). Every field is a setting the operator chose or a
+count the process made, and none is the token's value, so this is a
+configuration-disclosure read, a `token: set` / `unset` oracle for a client that
+does not already know the answer, and a live view of whether someone is
+working through the token gate. Denial of
 service: no per-client quota anywhere; only `/api/events` and the auth window
 are bounded. Repudiation: every action is attributable only to a shared token
 and a socket peer, never to a client. Elevation of privilege: an
@@ -340,7 +349,12 @@ do not stop a local binary, and the `Sec-Fetch-Site` check is skipped entirely
 when an `Origin` is sent that the same-origin test accepts
 (`server.origin_is_this_dashboard`, `src/recoverage/server.py`: the origin's host and
 port against the request's own `Host`, so a page on another loopback port is
-refused). Regen runs with no timeout by design (`src/recoverage/regen.py`).
+refused). Regen runs with no timeout by design (`src/recoverage/regen.py`). The
+in-process lock and cooldown are not the whole answer, because a second writer
+this process cannot see (another terminal, a cron job) is a duplicate rather
+than a flood: `regen._exclusive_regen` takes an advisory lock on an open
+descriptor and refuses rather than queues (`src/recoverage/regen.py`), so a
+second pipeline cannot interleave a whole-document replace with the first.
 
 **Config to runtime.** A `rebrew-project.toml` from a cloned or shared project,
 or a `RECOVERAGE_DB` / `RECOVERAGE_BIND` inherited from a parent environment,
@@ -363,6 +377,7 @@ the memoized path just recomputes (`src/recoverage/_paths.py`, `src/recoverage/s
 | `Sec-Fetch-Site: cross-site` and same-origin `Origin` gate on regen | `src/recoverage/api.py` | Cross-site POST |
 | Regen refuses to run when rebrew would write a coverage directory the dashboard does not read (`regen._check_writes_where_the_dashboard_reads`, `RECOVERAGE_DB` compared against `rebrew.workspace.db_dir`), raised as `RegenDbMismatchError` and answered as exit 2 by the CLI or a JSON 500 by the API | `src/recoverage/regen.py`, `src/recoverage/cli.py`, `src/recoverage/api.py` | A regen that reports `Done` after rewriting documents no served directory reads: a silent staleness, which reads as a dashboard that simply never refreshes |
 | Single-flight lock + cooldown on regen | `src/recoverage/api.py` | Concurrent torn rebuilds, regen flood |
+| Cross-process advisory lock on regen (`.recoverage-regen.lock`, taken on an open descriptor in the directory `rebrew.workspace.db_dir` resolves, non-blocking, released by the kernel when a holder dies; a held lock raises `RegenBusyError`, answered as exit 1 by the CLI and as the 429 the in-process lock sends, counted under `rejected`) | `src/recoverage/regen.py`, `src/recoverage/api.py` | A duplicate this process cannot see: a `recoverage regen` at another terminal, or a cron job over the same tree. The writer replaces each `coverage-<target>.toml` whole, so two writers interleave and a reader can land between one truncate and its write. Taking it on a descriptor is what releases it when a regen is killed mid-run, which a lock file's mere presence could not do |
 | `Idempotency-Key` ledger: charset-validated (`[A-Za-z0-9._:-]`, 128 chars), 600 s TTL, 128-slot eviction, a completed run replayed and an in-flight run answered 202 with `in_progress` before the cooldown | `src/recoverage/api.py` | Duplicated pipeline runs from retries, double-clicks, proxy replay |
 | CSP, `nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` | `src/recoverage/server.py` | Injection, framing, token leak via Referer |
 | `Secure` on the auth cookie and `Strict-Transport-Security` beside it, both read off the request through `server.request_is_https` (`wsgi.url_scheme`, or `X-Forwarded-Proto` behind a TLS-terminating proxy) | `server.set_auth_cookie`, `src/recoverage/server.py` | A cookie handed to whoever was on the wire when a reader followed an http link to a host that also answers https. A constant `Secure` would instead stop the cookie being stored at all on the plaintext loopback bind the bundled listener serves, and neither answer is a bypass: a client that claims https over plaintext only ever makes the response stricter |
@@ -371,6 +386,7 @@ the memoized path just recomputes (`src/recoverage/_paths.py`, `src/recoverage/s
 | Independent containment check on Potato Mode's source panel | `src/recoverage/potato.py` | Path traversal through a second reader |
 | Allowlist regex for package assets | `src/recoverage/ui.py` | Arbitrary file read from the assets dir |
 | Bounded request body, VA list, page offset, slice size, search length | `src/recoverage/api.py` | Memory and CPU exhaustion per request |
+| `/data` single flight: one leader builds a cold payload while followers park on its claim, with the claim reclaimed on `_DATA_CACHE_BUILD_WAIT_SECONDS` and a reclaimed stale claim counted as `requests.stale_claims` with a log line naming the target and section | `src/recoverage/api.py` | A herd of simultaneous cold misses paying for the same grid build once each, and an in-flight marker whose owner was killed holding a claim no `finally` will ever release |
 | Body read through `server.read_request_body`, never `request.body`: the declared `Content-Length` is compared before a byte is read, a framed body is read to its declared length and no further, a chunked body is bounded on the DECODED bytes, a chunk-size line is capped at 1 KiB and read through `parse_ascii_int` | `src/recoverage/server.py`, `src/recoverage/api.py` | A declared 4 GB body allocated before the endpoint's own cap could look at it; a `read()` to EOF parking the handler until the client hangs up; a chunk line smuggling a length through a non-ASCII digit set or the `_` separator. Bottle's `request.body` drains the whole declared body into a `BytesIO` and spills past 100 KiB into a `NamedTemporaryFile`, so the resource the cap exists to bound was allocated first |
 | Every body refusal answers `Connection: close` through `api._body_rejected`, the one helper that puts the header there | `src/recoverage/api.py` | Request smuggling: the reader stops at its cap, so the bytes after the stop point are still in the socket and a keep-alive handler would parse them as the next request |
 | Chunked and unframed framing refused rather than guessed: a non-hex chunk size, an unterminated chunk, a missing CRLF or an oversize trailer line is `RequestBodyMalformedError` | `src/recoverage/server.py` | A framing this reader cannot account for, silently accepted as a shorter body |
@@ -432,8 +448,12 @@ the memoized path just recomputes (`src/recoverage/_paths.py`, `src/recoverage/s
    read-only viewer and the operator have identical reach.
 9. No audit persistence: the only trail is stderr at INFO and above, request
    logging is DEBUG (`src/recoverage/server.py`), and nothing distinguishes one
-   holder of the shared token from another. The in-process RED counters
-   (`src/recoverage/metrics.py`) are a live gauge, not a record, and are lost on restart.
+   holder of the shared token from another. The counters in
+   `GET /api/health` (requests, caches, regen, streams, connections, auth;
+   `src/recoverage/metrics.py`, `src/recoverage/api.py`) are a live gauge served
+   to anyone who can read the endpoint, not a record: they reset on restart, so
+   a brute-force run that finished an hour ago leaves nothing to investigate
+   from.
 10. Capstone and the DLL reader parse attacker-shaped binaries in-process; a
     crafted target is a worker-level availability and memory-safety risk that
     only the size cap touches, and that cap is post-read.
@@ -461,7 +481,9 @@ the memoized path just recomputes (`src/recoverage/_paths.py`, `src/recoverage/s
   host's CPU and rewrite `db/`, degrading the dashboard for the operator. The
   cooldown bounds rate, not volume; the `Idempotency-Key` ledger absorbs a
   *retry* of one key, not a caller that mints a fresh key per attempt, which is
-  bounded only by the 5 s cooldown and the single-flight 429.
+  bounded only by the 5 s cooldown, the single-flight 429 and the advisory
+  lock's refusal (`src/recoverage/regen.py`), which stops a second pipeline
+  rather than slowing the first.
 - Any webpage a developer visits can hold 32 `/api/events` connections to their
   own loopback dashboard (`src/recoverage/api.py`) without any credential, because the
   SPA's EventSource is same-origin and no-cors from a cross-site page. A
@@ -493,6 +515,16 @@ the memoized path just recomputes (`src/recoverage/_paths.py`, `src/recoverage/s
   `src/recoverage/api.py`), slow requests at WARNING (`src/recoverage/server.py`), and
   health-state transitions (`src/recoverage/api.py`). Everything else is DEBUG and
   off by default.
+- Two classes of event reach no route at all, so no per-request line names
+  them. A request the HTTP transport refused (over-long or malformed request
+  line, oversized headers, a client stalled past the socket deadline) is
+  counted as `requests.transport_rejected`, and a rejected or throttled token as
+  `auth.failures` / `auth.throttled` beside the live `auth.locked_peers` gauge
+  (`src/recoverage/metrics.py`, filed at `src/recoverage/devserver.py` and
+  `src/recoverage/server.py`). Both surface in the `GET /api/health` blocks
+  (`src/recoverage/api.py`), which log a state TRANSITION rather than a state, so
+  a monitor pointed at a server being scanned sees one line per change instead
+  of one per poll.
 - Every request carries an `X-Request-ID` from the client or a minted one
   (`src/recoverage/server.py`), echoed on the response, so a
   report of "the export was slow" is matchable to a specific line.
