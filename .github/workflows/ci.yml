@@ -233,8 +233,18 @@ jobs:
       - name: Build the distribution twice and compare
         run: |
           set -euo pipefail
+          # Every destination is removed, not merely created. RUNNER_TEMP
+          # outlives one execution of this step (a self-hosted runner, a
+          # retried step, a local reproduction of it), and the two steps below
+          # both MERGE into what they find: the tar below leaves a file that
+          # has since been deleted from the tracked tree, and the second build
+          # then packages it, so the two builds are compared across different
+          # trees and report a difference that is not one. `ln -s` fails the
+          # same way a step louder, with "File exists", before any build runs.
           work="$RUNNER_TEMP/rebuild"
-          mkdir -p "$RUNNER_TEMP/first" "$work"
+          first="$RUNNER_TEMP/first"
+          rm -rf -- "$work" "$first" "$RUNNER_TEMP/rebrew"
+          mkdir -p -- "$first" "$work"
           # The second tree carries the tracked files only: dist/ is what the
           # second build produces, and .git would make the copy as large as
           # the checkout. SOURCE_DATE_EPOCH below replaces the one thing the
@@ -255,7 +265,7 @@ jobs:
           # its recipe records why it exists.
           make check-bundle-clean
 
-          cp dist/*.whl dist/*.tar.gz "$RUNNER_TEMP/first/"
+          cp dist/*.whl dist/*.tar.gz "$first/"
 
           # A different path, locale and timezone: an artifact carrying a
           # build-host absolute path or an unstamped mtime shows up here.
@@ -265,9 +275,9 @@ jobs:
           # a bare `cmp` would only report that they differ.
           for artifact in dist/*.whl dist/*.tar.gz; do
             name="$(basename "$artifact")"
-            if ! cmp -s "$artifact" "$RUNNER_TEMP/first/$name"; then
+            if ! cmp -s "$artifact" "$first/$name"; then
               echo "::error::$name is not reproducible across path, locale and timezone"
-              diffoscope "$RUNNER_TEMP/first/$name" "$artifact" || true
+              diffoscope "$first/$name" "$artifact" || true
               exit 1
             fi
             echo "$name reproducible: $(sha256sum "$artifact" | cut -d' ' -f1)"

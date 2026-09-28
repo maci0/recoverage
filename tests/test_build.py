@@ -22,6 +22,7 @@ from pathlib import Path
 
 _ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 _MAKEFILE = (_ROOT / "Makefile").read_text(encoding="utf-8")
+_CI_YML = (_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
 _ASSETS = _ROOT / "src" / "recoverage" / "assets"
 _SCRATCH = _ROOT / ".scratch"
 #: Arbitrary but fixed, so a normalized archive's bytes are a constant the test
@@ -141,6 +142,23 @@ class TestReproducibleBuild:
         for var in ("SOURCE_DATE_EPOCH", "LC_ALL=C", "TZ=UTC"):
             assert var in recipe, f"the build recipe does not export {var}"
         assert "normalize_sdist.py" in recipe, "the sdist is not normalized after the build"
+
+    def test_the_two_build_step_clears_what_it_extracts_into(self) -> None:
+        """The second tree is extracted with tar and linked with ln, both of
+        which MERGE into an existing destination: on a self-hosted runner or a
+        retried step, where RUNNER_TEMP survives the run, a file deleted from
+        the tracked tree since the last execution is still there and gets
+        packaged, so the comparison is between two different trees and reports
+        a difference that is not one. `ln -s` fails outright instead. Both
+        need the destination gone first, which is what a build step that runs
+        more than once has to guarantee."""
+        step = _CI_YML.split("Build the distribution twice and compare", 1)[1]
+        step = step.split("\n        env:", 1)[0]
+        assert 'rm -rf -- "$work" "$first" "$RUNNER_TEMP/rebrew"' in step, (
+            "the two-build step extracts and links into whatever RUNNER_TEMP "
+            "holds, so a re-run compares two different trees"
+        )
+        assert 'mkdir -p -- "$first" "$work"' in step, "the cleared trees are not recreated"
 
     def test_the_build_recipe_pins_the_backend_and_clears_stale_artifacts(self) -> None:
         """`uv build` resolves PEP 517 build requirements outside uv.lock, so

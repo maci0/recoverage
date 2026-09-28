@@ -402,7 +402,12 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   fails when the two archives differ, naming the field through `diffoscope`.
   The copy gets `../rebrew` as a symlink for the same reason the preflight
   exists, and `SOURCE_DATE_EPOCH` is pinned to a constant in that job so the
-  two builds cannot disagree over anything but the tree.
+  two builds cannot disagree over anything but the tree. The step removes
+  every destination under `RUNNER_TEMP` before it extracts or links into it:
+  both merge into what they find, and that directory outlives one execution of
+  the step on a self-hosted runner or a retry, so the second build would
+  otherwise package a file the tracked tree no longer has and the comparison
+  would report a difference that is not one.
 
 - Python 3.13+, ruff for linting, mypy for types, 100-char line length.
   The type gate is `strict = true` over `src/recoverage` and `tools/`, with
