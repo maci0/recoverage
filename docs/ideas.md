@@ -67,7 +67,7 @@ CI-oriented: exits non-zero if coverage drops below a threshold.
 Open the browser to an existing running server (useful when `--no-open` was used at startup).
 
 ### ~~`recoverage regen` Subcommand~~ ✅ Implemented
-Re-run `rebrew catalog` + `rebrew build-db` from the terminal without starting the web server (same in-process pipeline and error handling as `serve --regen`).
+Re-run rebrew's catalog analysis and coverage-document writer from the terminal without starting the web server (same in-process pipeline and error handling as `serve --regen`; there is no separate `rebrew catalog` step to run first).
 
 ---
 
@@ -99,7 +99,7 @@ Write `.br` and `.gz` cache files to disk for the inlined index and large JSON p
 ### ~~Rate Limiting on `/api/regen`~~ ✅ Implemented
 The 5-second cooldown now exists server-side too: `/api/regen` returns 429
 with `retry_after` when called within `_REGEN_COOLDOWN_SECONDS` of the last
-accepted attempt, so direct API calls cannot hammer `rebrew catalog`/`build-db`.
+accepted attempt, so direct API calls cannot hammer the rebuild pipeline.
 
 ### ~~Token Auth~~ ✅ Implemented
 Optional `serve --token <secret>` requires every request to authenticate via

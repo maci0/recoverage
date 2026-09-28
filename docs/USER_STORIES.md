@@ -28,7 +28,7 @@ code: 2026-09-29.
 - `recoverage serve` serves a local web dashboard on port 8001
 - Dashboard auto-opens in the default browser (`recoverage serve --no-open` suppresses it)
 - Server resolves the coverage directory from the current working directory: `[project] db_dir` in `rebrew-project.toml` when set, falling back to `db/`. A directory holding no `coverage-<target>.toml` is not a refusal: `serve` warns that the dashboard will list no targets until `rebrew build-db` writes one, and every figure then reads as a healthy zero. A path that is not a directory is refused at startup
-- `--regen` flag runs rebrew's catalog + build-db (in-process, via `rebrew.catalog` / `rebrew.build_db`) before starting
+- `--regen` flag runs rebrew's catalog analysis and coverage-document writer in-process before starting (`rebrew.catalog.cli.run_catalog`, then `rebrew.coverage_toml.write_coverage_toml`); there is no separate `rebrew catalog` step to run first
 - `--no-open` flag suppresses the browser auto-open
 
 ```mermaid
@@ -350,7 +350,7 @@ graph TD
 - Regenerate button in the topbar with a 5-second cooldown to prevent spam
 - The button reads *Regenerating...* and is disabled for the duration of the run, so the click is acknowledged where it was made and a repeat click is a no-op
 - The server enforces its own 5-second cooldown and serializes regen behind a lock, so a second caller gets `429` rather than a second build
-- `POST /api/regen` runs rebrew's catalog + build-db in-process
+- `POST /api/regen` runs rebrew's catalog analysis and coverage-document writer in-process
 - The Regenerate button sends a fresh `Idempotency-Key` per click; a key whose run already completed is replayed from a bounded ledger (`{"ok": true}`, `Idempotent-Replay: true`) instead of rebuilding, and a failed run is not remembered
 - Only accessible from localhost (security gate)
 - Dashboard reloads data after regeneration completes
@@ -509,7 +509,7 @@ graph TD
 ### Acceptance Criteria
 - HTML, the built stylesheet and the built bundle inlined into a single response
 - Minified with `rjsmin`/`rcssmin` and compressed with Brotli/Zstd/gzip
-- Total payload 49,684 B brotli, which no longer fits RFC 6928's initial congestion window; the budget in `ui._TCP_CWND_BUDGET` is a 90 KB ceiling over the measurement, `ui._check_payload_budget` warns with the exact overage, and `tests/test_api.py` fails, so crossing the ceiling is a regression rather than a log line. The current winner is brotli, with zstd 53,112 B and gzip 57,741 B. `make payload-budget` re-derives all three from the committed bundle (measured 2026-09-29)
+- Total payload 49,908 B brotli, which no longer fits RFC 6928's initial congestion window; the budget in `ui._TCP_CWND_BUDGET` is a 90 KB ceiling over the measurement, `ui._check_payload_budget` warns with the exact overage, and `tests/test_api.py` fails, so crossing the ceiling is a regression rather than a log line. The current winner is brotli, with zstd 53,235 B and gzip 58,020 B. `make payload-budget` re-derives all three from the committed bundle (measured 2026-09-29)
 - The whole frontend is one built bundle inlined into the shell, so a change to the map, the asm pane, the hex dump or the data inspector moves the same measured number, and `tests/test_api.py` fails when it crosses the ceiling
 - Compression algorithm auto-selected from `Accept-Encoding` header
 - Highlight.js is compiled into the bundle rather than fetched on first use, so a code pane never renders unhighlighted and there is no first-use fetch to fail
@@ -525,7 +525,7 @@ graph TD
     E -->|zstd| F["Zstandard compress"]
     E -->|br| G["Brotli compress"]
     E -->|gzip| H["Gzip compress"]
-    F --> I["Smallest accepted body wins<br/>(49,684 B brotli today)"]
+    F --> I["Smallest accepted body wins<br/>(49,908 B brotli today)"]
     G --> I
     H --> I
     I --> J["Browser parses + renders<br/>UI shell in first paint"]

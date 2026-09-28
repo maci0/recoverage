@@ -118,7 +118,7 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `hljs.css` assets are no longer shipped. Anyone serving or caching those URLs
   by name has to update: only `/app.js`, `/style.css`, `/print.css` and
   `/favicon.svg` are still answered from the assets directory.
-- **The inlined shell is ~46 KB brotli, not ~14 KB.** It cannot fit RFC 6928's
+- **The inlined shell is ~50 KB brotli, not ~14 KB.** It cannot fit RFC 6928's
   initial congestion window, so `ui._TCP_CWND_BUDGET` is now a 90 KB ceiling
   with headroom over the measurement rather than the protocol constant. The
   shell still paints without a render-blocking subresource request, and
