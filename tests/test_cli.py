@@ -2166,6 +2166,27 @@ class TestRegenFailures:
         assert result.exit_code == 1
         assert "Traceback" not in result.output
 
+    def test_a_regen_running_elsewhere_exits_cleanly(self, monkeypatch: Any) -> None:
+        """A second regen of the same tree is refused, not run alongside the first.
+
+        Nothing in this process is holding a lock in that case: the duplicate is
+        a `recoverage regen` at another terminal, or a cron job over the same
+        documents, and two writers of one `coverage-<target>.toml` interleave
+        rather than converge.  Exit 1 (the regen did not happen) with a message
+        saying why, and never a traceback.
+        """
+        import recoverage.regen as regen
+
+        def busy(root: Path) -> None:
+            raise regen.RegenBusyError("another regen is already writing /proj/db")
+
+        monkeypatch.setattr(regen, "run_regen", busy)
+
+        result = runner.invoke(app, ["regen"])
+        assert result.exit_code == 1
+        assert "another regen is already writing" in result.output
+        assert "Traceback" not in result.output
+
 
 class TestBrokenPipe:
     def test_main_converts_broken_pipe_to_clean_exit(self, monkeypatch: Any) -> None:

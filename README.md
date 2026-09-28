@@ -352,10 +352,19 @@ process, rather than spawning the `rebrew` console script.  The run has no
 timeout, so it always runs to completion.
 
 Exit codes: 0 = the documents were written (or rebrew had no built target to
-write for), 1 = rebrew failed, 2 = `RECOVERAGE_DB` names a directory rebrew
+write for), 1 = rebrew failed or another regen of the same project already
+holds its lock, 2 = `RECOVERAGE_DB` names a directory rebrew
 would not write to.  That mismatch is refused rather than reported as a done
 regen that left the dashboard stale, because rebrew resolves what it writes
 from `rebrew-project.toml` alone.
+
+Running it a second time *while the first is still going* is refused rather
+than run: two writers of one `coverage-<target>.toml` interleave instead of
+converging, and the dashboard can read the gap. The guard is a lock in the
+coverage directory, so it also covers a `recoverage regen` run beside a
+running dashboard or from a cron job, which this process's own lock cannot
+see. The lock is released by the operating system when its holder exits, so a
+regen that is killed does not block the next one.
 
 ### `recoverage open`
 
@@ -404,6 +413,12 @@ a regen runs for minutes and a proxy gives up long before it finishes. Keys are
 remembered for 10 minutes (the ledger holds more slots than the rate limit
 admits in that window, so a key is only ever dropped by its own age), and a
 failed run is not remembered.
+
+Both of those are this process's own bookkeeping. A regen under way in another
+process (a `recovery regen` at a terminal, a cron job over the same tree) is a
+duplicate none of them can see, so the pipeline takes a lock in the coverage
+directory and the POST is answered `429` with the same body the in-process lock
+sends, counting as a refusal rather than a failure.
 
 ### Query parameters
 

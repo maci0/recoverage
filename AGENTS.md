@@ -62,7 +62,7 @@ recoverage/
 │   ├── test_build.py          # Artifact build: shipped files, the man page, reproducible bytes
 │   ├── test_api.py           # API validation, security, SQL injection tests
 │   ├── test_cli.py           # CSV export, formatting, edge case tests
-│   ├── test_lifecycle.py     # Lifecycle: regen ordering, browser-opener reaping
+│   ├── test_lifecycle.py     # Lifecycle: regen ordering, the cross-process regen lock, browser-opener reaping
 │   ├── test_paths.py         # Coverage directory resolution tests
 │   ├── test_config.py        # RECOVERAGE_* env: parsing, precedence, fail-fast
 │   ├── test_server.py        # Compression, encoding, snapshot, path helper tests
@@ -93,7 +93,7 @@ recoverage/
     ├── server.py            # Bottle app, shared helpers & compression
     ├── disasm.py            # Capstone disassembly (optional extra): loadability probe,
     │                        #   thread-local Cs, memo
-    ├── regen.py             # In-process rebrew regen (calls rebrew as a library)
+    ├── regen.py             # In-process rebrew regen (calls rebrew as a library), cross-process lock
     ├── api.py               # REST API routes (/api/*)
     ├── ui.py                # UI routes (/, static files)
     ├── potato.py            # Potato Mode renderer + the /potato route
@@ -1271,6 +1271,26 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   only after the predecessor released, and the cooldown cannot catch that
   window either (it counts from the previous run's START, and a regen runs for
   minutes). Pinned at `tests/test_api.py` (`TestRegenIdempotencyKey`).
+  Every one of those is IN this process. A duplicate the ledger cannot see is
+  a `recoverage regen` at another terminal beside a running dashboard, or a
+  cron job over the same tree, and a rebuild is only convergent when the two
+  runs do not overlap: the writer replaces each `coverage-<target>.toml` whole,
+  so two writers interleave and a reader can land between one truncate and its
+  write. So `regen._exclusive_regen` holds an advisory lock
+  (`.recoverage-regen.lock`, named in the directory `rebrew.workspace.db_dir`
+  resolves, because `[project].db_dir` can point anywhere) around the pipeline,
+  and a holder raises `RegenBusyError`: the CLI exits 1 naming it, the API
+  answers the 429 the in-process lock already sends and counts it under
+  `rejected`. Two properties the choice of lock carries: it is non-blocking,
+  because the second caller is a duplicate and not a queue for a run that takes
+  minutes, and it is taken on an OPEN DESCRIPTOR, so a regen killed mid-run
+  releases it on process exit, which a lock file's mere presence could not do
+  (a stale file wedges every regen after the crash). `msvcrt` is reached
+  through `importlib` because typeshed ships its stub only on Windows, so a
+  direct import is an unresolved-import error on every other platform and its
+  suppression is an unused-ignore error on that one. Pinned at
+  `tests/test_lifecycle.py` (`TestRunRegen`), including a forked second process
+  and the death that frees the lock.
   The other in-flight marker, the `/data`
   single-flight claim in `api._DATA_CACHE_BUILDING`, follows the same rule: an
   in-flight marker whose owner was killed is reclaimed on its deadline

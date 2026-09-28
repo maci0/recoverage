@@ -16,6 +16,18 @@ still-running catalog/writer keep writing the documents after the lock was
 released.  The dashboard's server is threaded, so it keeps answering requests
 while a regen runs.
 
+Serialization is per PROCESS, and this module is reached from three processes
+that no single in-process lock can see: a ``POST /api/regen`` against a running
+server, a ``recoverage regen`` typed at another terminal, and a cron job
+rebuilding the same tree.  Two pipelines writing the same documents and the
+same catalog ``data_*.json`` at once interleave: the writer replaces each
+document whole, and a second writer truncating one the first is halfway through
+leaves a truncated file, which reads as a corrupt document (503
+``db_unavailable``) rather than as a concurrent run.  So the pipeline also holds
+an advisory lock on a file in the coverage directory, which the operating
+system releases when the holding process dies: a killed regen cannot wedge the
+next one, which a lock file's mere presence could.
+
 This module also owns rebrew's failure vocabulary.  rebrew's ``error_exit``
 reports the problem itself and raises ``typer.Exit`` (click's ``Exit``, a
 ``RuntimeError``); that becomes :class:`RegenError` here, so the two callers
@@ -26,7 +38,21 @@ untouched.
 
 from __future__ import annotations
 
+import contextlib
+import importlib
+import os
+from collections.abc import Iterator
 from pathlib import Path
+from typing import IO
+
+#: The advisory lock every regen holds, named in the coverage directory
+#: rebrew writes into, so the processes that share the documents also share the
+#: lock.  The directory is resolved through rebrew rather than assumed, because
+#: ``[project].db_dir`` can point anywhere.
+_REGEN_LOCK_NAME = ".recoverage-regen.lock"
+#: Bytes locked at offset 0. Windows takes a byte RANGE rather than a whole
+#: file (POSIX flocks the descriptor), so both platforms lock the same one.
+_LOCK_BYTE_COUNT = 1
 
 
 class RegenError(RuntimeError):
@@ -48,6 +74,104 @@ class RegenDbMismatchError(RuntimeError):
     it is this package's own configuration refusing, and the callers map it to
     exit 2 (misconfiguration) rather than exit 1 (a regen that ran and failed).
     """
+
+
+class RegenBusyError(RuntimeError):
+    """Another process is already regenerating this project's documents.
+
+    The one outcome a second concurrent run can produce that a single one
+    cannot: two writers truncating and rewriting the same document interleave,
+    and a reader can land between the truncate and the write.  The callers
+    answer it as the answer they already give a regen of their own that is
+    still running: the API's 429, the CLI's exit 1.
+    """
+
+
+def _try_lock(handle: IO[bytes]) -> bool:
+    """Take an exclusive OS lock on *handle*; False when another process holds it.
+
+    ``msvcrt`` is reached through ``importlib`` rather than imported directly:
+    typeshed ships its stub only on Windows, so a plain ``import msvcrt`` is an
+    unresolved-import error under this project's type gate on every other
+    platform, and a suppression for it would be an unused-ignore error on the
+    one platform that has the module.
+    """
+    if os.name == "nt":
+        msvcrt = importlib.import_module("msvcrt")
+        handle.seek(0)
+        try:
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, _LOCK_BYTE_COUNT)
+        except OSError:
+            return False
+        return True
+    import fcntl
+
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return False
+    return True
+
+
+def _release_lock(handle: IO[bytes]) -> None:
+    """Drop the lock :func:`_try_lock` took. The descriptor close releases it too."""
+    if os.name == "nt":
+        msvcrt = importlib.import_module("msvcrt")
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, _LOCK_BYTE_COUNT)
+        return
+    import fcntl
+
+    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _coverage_dir(root: Path) -> Path:
+    """The directory rebrew writes the coverage documents into, for the lock.
+
+    Resolution failures fall back to ``root/db``, rebrew's own default: a lock
+    in the wrong directory costs two processes the ability to see each other,
+    while refusing here would turn a regen rebrew was going to run into one
+    this package stops.  :func:`run_regen` calls this after ``load_config``, so
+    a config that does not parse has already been reported by rebrew's loader.
+    """
+    from rebrew.workspace import db_dir
+
+    try:
+        return db_dir(root)
+    except (OSError, LookupError, ValueError, TypeError, KeyError):
+        return root / "db"
+
+
+@contextlib.contextmanager
+def _exclusive_regen(root: Path) -> Iterator[None]:
+    """Hold the project's regen lock for the body; raise :class:`RegenBusyError` if taken.
+
+    Non-blocking on purpose: a second regen queues behind a pipeline that runs
+    for minutes, and the caller that queued is a script with a timeout or a
+    reader who pressed the button again, not a rebuild that was asked for
+    twice.  The lock lives on an open descriptor, so a regen killed mid-run
+    releases it when the process exits and the next one proceeds; nothing here
+    has to be cleaned up by a signal handler or a finally that a SIGKILL skips.
+    """
+    directory = _coverage_dir(root)
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / _REGEN_LOCK_NAME
+    # "a+b" creates the file if it is the first regen and never truncates one
+    # another process is holding locked; the lock is on the descriptor, so the
+    # bytes in the file are only a marker for a human.
+    handle = path.open("a+b")
+    try:
+        if not _try_lock(handle):
+            raise RegenBusyError(
+                f"another regen is already writing {directory}; it holds {path.name}. "
+                "Wait for it to finish, or stop the process that holds it."
+            )
+        try:
+            yield
+        finally:
+            _release_lock(handle)
+    finally:
+        handle.close()
 
 
 def _same_directory(written_to: Path, override: Path) -> bool:
@@ -126,11 +250,16 @@ def run_regen(root: Path) -> list[Path]:
     ``rebrew.catalog`` package does not re-export it.
 
     Running it twice converges: catalog rewrites its ``data_*.json`` outputs and
-    the writer replaces each ``coverage-<target>.toml`` whole, so the second run
-    ends in the state the first produced.  Callers that must not pay for a
-    duplicate pay for it themselves: the API serializes regens behind its lock
-    and replays a completed ``Idempotency-Key``; the CLI runs them one at a
-    time.
+    the writer replaces each ``coverage-<target>.toml`` whole, so a second run
+    after the first finished ends in the state the first produced.  Callers that
+    must not pay for a duplicate pay for it themselves: the API serializes
+    regens behind its lock and replays a completed ``Idempotency-Key``.  A
+    SECOND run AT THE SAME TIME is a different matter, because two writers of
+    one document interleave rather than converge, so the pipeline holds
+    :func:`_exclusive_regen` and raises :class:`RegenBusyError` rather than
+    overlapping.  That guard crosses processes, which the callers' own locks
+    cannot: a ``recoverage regen`` at a terminal beside a running dashboard, or
+    a cron job over the same tree, is a duplicate no in-process lock sees.
 
     ``force=True`` keeps the call shape the SQLite-era regen had: rebrew's
     writer accepts it for signature symmetry with ``build_db`` and a document
@@ -148,7 +277,8 @@ def run_regen(root: Path) -> list[Path]:
     _check_writes_where_the_dashboard_reads(root)
     cfg = load_config(root)
     try:
-        run_catalog(cfg)
-        return write_coverage_toml(root, force=True)
+        with _exclusive_regen(root):
+            run_catalog(cfg)
+            return write_coverage_toml(root, force=True)
     except typer.Exit as e:
         raise RegenError(e.exit_code) from None

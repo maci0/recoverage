@@ -215,6 +215,144 @@ class TestRunRegen:
 
         assert events == one_run * 2
 
+    def test_a_second_run_during_the_first_is_refused(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Two runs AT ONCE are not a second execution, they are a collision.
+
+        A regen is convergent, so a second run after the first ends is the case
+        the test above covers.  Two writers of one document at the same time
+        are not: each replaces ``coverage-<target>.toml`` whole, so the second
+        truncates while the first is still writing and a reader can land in
+        between.  The pipeline holds a lock for exactly that window, and this
+        drives a second run from inside the first one's catalog step, where an
+        unguarded pipeline would be writing right now.
+        """
+        from recoverage.regen import RegenBusyError
+
+        events: list[tuple[str, Any]] = []
+        cfg = _record_rebrew_calls(monkeypatch, events)
+        inner: list[str] = []
+
+        def run_catalog(c: object) -> None:
+            events.append(("run_catalog", c))
+            try:
+                run_regen(tmp_path)
+            except RegenBusyError:
+                inner.append("refused")
+            else:
+                inner.append("ran")
+
+        # The fake `rebrew` package is not importable by dotted name (it has an
+        # empty __path__), so the step is reached through sys.modules.
+        monkeypatch.setattr(sys.modules["rebrew.catalog.cli"], "run_catalog", run_catalog)
+
+        run_regen(tmp_path)
+
+        assert inner == ["refused"]
+        # The refused run read the config and stopped: no second catalog step and
+        # no second writer, which are the two that touch the documents.
+        assert events == [
+            ("load_config", tmp_path),
+            ("run_catalog", cfg),
+            ("load_config", tmp_path),
+            ("build_db", tmp_path, True),
+        ]
+
+    def test_a_failed_run_leaves_the_lock_free(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """A run that died must not wedge the next one.
+
+        The lock is held on an open descriptor, so a pipeline that raises is
+        the case a `finally` covers and a SIGKILL does not; both have to leave
+        the tree rebuildable, or the one failed run costs every run after it.
+        """
+        events: list[tuple[str, Any]] = []
+        _record_rebrew_calls(monkeypatch, events)
+
+        def boom(c: object) -> None:
+            raise ValueError("corrupt function_structure.json")
+
+        monkeypatch.setattr(sys.modules["rebrew.catalog.cli"], "run_catalog", boom)
+        with pytest.raises(ValueError, match="corrupt"):
+            run_regen(tmp_path)
+
+        monkeypatch.undo()
+        events.clear()
+        cfg = _record_rebrew_calls(monkeypatch, events)
+        run_regen(tmp_path)
+
+        assert events == [
+            ("load_config", tmp_path),
+            ("run_catalog", cfg),
+            ("build_db", tmp_path, True),
+        ]
+
+    @pytest.mark.skipif(not hasattr(os, "fork"), reason="Windows has no fork to test with")
+    def test_a_regen_in_another_process_is_refused_and_its_death_frees_the_lock(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """The guard the callers' own locks cannot provide, in a second process.
+
+        `_REGEN_LOCK` and the idempotency ledger live in the server's memory, so
+        a `recoverage regen` typed at a terminal beside a running dashboard, or a
+        cron job over the same tree, is a duplicate run no in-process lock sees.
+        A forked child is a real second process holding the real lock; when it
+        exits without releasing anything itself, the next regen has to proceed,
+        which is the property a lock FILE (whose mere presence would wedge every
+        run after a SIGKILL) could not have.
+        """
+        import select
+
+        from recoverage.regen import _REGEN_LOCK_NAME, RegenBusyError, _try_lock
+
+        events: list[tuple[str, Any]] = []
+        _record_rebrew_calls(monkeypatch, events)
+        lock_path = tmp_path / "db" / _REGEN_LOCK_NAME
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+
+        ready_r, ready_w = os.pipe()
+        done_r, done_w = os.pipe()
+        pid = os.fork()
+        if pid == 0:
+            # The child shares the parent's fds and pytest state; it does the
+            # one thing the parent cannot do for it (hold a lock in a process of
+            # its own) and leaves through _exit so no teardown runs twice.
+            os.close(ready_r)
+            os.close(done_w)
+            handle = lock_path.open("a+b")
+            code = 0 if _try_lock(handle) else 2
+            if code == 0:
+                os.write(ready_w, b"1")
+                os.read(done_r, 1)
+            os._exit(code)
+        os.close(ready_w)
+        try:
+            ready, _, _ = select.select([ready_r], [], [], 10)
+            assert ready, "the forked holder never took the lock"
+            with pytest.raises(RegenBusyError) as excinfo:
+                run_regen(tmp_path)
+            assert _REGEN_LOCK_NAME in str(excinfo.value)
+            # Refused before the pipeline: the writer never started, so there is
+            # no second writer of the document the child is busy with.
+            assert events == [("load_config", tmp_path)]
+        finally:
+            os.write(done_w, b"1")
+            os.close(done_r)
+            assert os.waitpid(pid, 0)[1] == 0
+            os.close(ready_r)
+
+        # The holder is gone without having released anything itself.
+        events.clear()
+        cfg = _record_rebrew_calls(monkeypatch, events)
+        run_regen(tmp_path)
+        assert events == [
+            ("load_config", tmp_path),
+            ("run_catalog", cfg),
+            ("build_db", tmp_path, True),
+        ]
+
     def test_refuses_a_db_override_rebrew_would_not_write_to(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:

@@ -320,6 +320,21 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   instant in ISO 8601 beside the fixed-pattern text, so a reader's own tooling
   can re-render it in their locale.
 
+- **Two regens of the same project running at once could interleave their
+  writes.** A rebuild is convergent, so a second run after the first finished
+  ends in the same state, but the writer replaces each `coverage-<target>.toml`
+  whole: a second run truncating one the first is halfway through left a
+  truncated document, which the dashboard reports as a corrupt db rather than
+  as a concurrent rebuild. The in-process lock and the `Idempotency-Key` ledger
+  live in one server's memory, so neither could see a `recovery regen` run at
+  another terminal beside a running dashboard, or a cron job over the same
+  tree. The pipeline now holds an advisory lock (`.recoverage-regen.lock`) in
+  the coverage directory for its length; `recoverage regen` exits 1 with a
+  message naming the holder, and `POST /api/regen` answers the same 429 body
+  the in-process lock sends and counts it as a refusal rather than a failure.
+  The lock is held on an open descriptor, so a regen that is killed releases it
+  instead of blocking every regen after it.
+
 - **`retry_after` in a 429 body and the `Retry-After` beside it could
   disagree.** Every limit the server reports now puts the header's own whole
   number of seconds in the JSON, and the key is an integer wherever it

@@ -29,7 +29,7 @@ from recoverage.disasm import (
     get_capstone_md,
     get_disassembly,
 )
-from recoverage.regen import RegenDbMismatchError, RegenError, run_regen
+from recoverage.regen import RegenBusyError, RegenDbMismatchError, RegenError, run_regen
 from recoverage.server import (
     CACHE_NO_STORE,
     CACHE_REVALIDATE,
@@ -2395,7 +2395,15 @@ def handle_regen() -> bytes | HTTPResponse:
 
     Duplicate execution: a rebuild is convergent, so a second run ends in the
     same state as the first, but it is minutes of work and a second write of
-    the coverage documents.  Send an ``Idempotency-Key`` header to make a retry cheap:
+    the coverage documents.  Two runs at the SAME time are worse than that: they
+    interleave, and a reader can land between one writer's truncate and its
+    write.  ``_REGEN_LOCK`` and the ledger below are this process's, so neither
+    sees a ``recoverage regen`` at another terminal or a cron job over the same
+    tree; ``regen.run_regen`` takes an advisory lock in the coverage directory
+    for that, and the refusal arrives here as the same 429 the in-process lock
+    gives.
+
+    Send an ``Idempotency-Key`` header to make a retry cheap:
     the key is remembered once the run completes (see ``_REGEN_KEY_TTL_SECONDS``
     for the retention window and ``_REGEN_LEDGER_MAX_ENTRIES`` for the ledger's
     cap) and a later request
@@ -2608,6 +2616,25 @@ def _do_regen(remote: str) -> bytes | HTTPResponse:
                 "error": "Regen refused",
                 "detail": str(e),
             },
+        )
+    except RegenBusyError as e:
+        # Another PROCESS holds this project's regen lock: a `recoverage regen`
+        # at a terminal beside this server, or a cron job over the same tree.
+        # `_REGEN_LOCK` cannot see either, so this is the one duplicate the
+        # handler's own serialization does not already answer. It gets the same
+        # answer the in-process lock gives, so a client has one shape for "a
+        # regen is already running", and it is counted as the refusal it is
+        # rather than a pipeline that broke.
+        _regen_failed(started_at, "%s: %s", type(e).__name__, e)
+        _metrics.REGEN.reject()
+        return _json_err(
+            429,
+            {
+                "error": "Rate limited: regeneration already running",
+                "detail": str(e),
+                "retry_after": int(_REGEN_COOLDOWN_SECONDS),
+            },
+            Retry_After=str(int(_REGEN_COOLDOWN_SECONDS)),
         )
     except RegenError as e:
         # rebrew's error_exit reported the failure and its status is carried

@@ -654,7 +654,12 @@ def _get_stats(
 
 def _run_regen(root: Path) -> list[Path]:
     """Regenerate the coverage documents by calling rebrew's pipeline in-process."""
-    from recoverage.regen import RegenDbMismatchError, RegenError, run_regen
+    from recoverage.regen import (
+        RegenBusyError,
+        RegenDbMismatchError,
+        RegenError,
+        run_regen,
+    )
 
     typer.echo("Running rebrew catalog + build-db...")
     try:
@@ -665,6 +670,15 @@ def _run_regen(root: Path) -> list[Path]:
         # never ran and the operator has to change something first.
         _secho(f"Error: {e}", fg=typer.colors.RED, err=True)
         raise typer.Exit(2) from None
+    except RegenBusyError as e:
+        # Another PROCESS is rebuilding the same documents (a dashboard
+        # running beside this terminal, a cron job over the same tree). Not
+        # misconfiguration and not a rebrew failure, so it is the regen-failed
+        # 1, but with a message saying the work is already under way: a second
+        # writer of one document interleaves with the first rather than
+        # producing the same bytes, so this one is refused rather than run.
+        _secho(f"Error: {e}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1) from None
     except RegenError:
         # rebrew's error_exit reported the failure itself; run_regen carried
         # that across as RegenError.  Keep the exit-1 contract.
@@ -1948,8 +1962,9 @@ def regen(no_color: bool = _no_color_option()) -> None:
     Writes no data to stdout, only progress, so a caller can read the report
     from the exit code alone. Exits 2 when RECOVERAGE_DB names a directory
     rebrew would not write to (the mismatch is refused rather than reported
-    as a done regen that left the dashboard stale), 1 when rebrew fails, and
-    0 when it succeeds, whether or not it had a built target to write.
+    as a done regen that left the dashboard stale), 1 when rebrew fails or
+    another process already holds this project's regen lock, and 0 when it
+    succeeds, whether or not it had a built target to write.
     """
     from recoverage.server import _project_dir
 

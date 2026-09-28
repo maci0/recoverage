@@ -1414,6 +1414,37 @@ class TestRegenFailureMapping:
         self._post_regen(monkeypatch, ValueError("corrupt JSON"))
         assert "after regen" in cleared
 
+    def test_a_regen_running_in_another_process_is_the_same_429(self, monkeypatch) -> None:
+        """A duplicate this process cannot see still gets the answer a client
+        already handles.
+
+        `_REGEN_LOCK` and the idempotency ledger live in this process's memory,
+        so a `recoverage regen` at another terminal is a duplicate run neither
+        can dedup. `run_regen` refuses it and this endpoint has to answer with
+        the shape the in-process lock already sends, not with a 500: the
+        pipeline did not break, the work is simply already under way, and a
+        reader who sees "Regen failed" presses the button again.
+        """
+        import recoverage.api as api
+        from recoverage.regen import RegenBusyError
+
+        before = api._metrics.REGEN.snapshot()
+        status, headers, body = self._post_regen(
+            monkeypatch, RegenBusyError("another regen is already writing /p/db")
+        )
+        assert status.startswith("429")
+        assert headers.get("Retry-After") == str(int(api._REGEN_COOLDOWN_SECONDS))
+        data = json.loads(decode_body(body, headers))
+        assert data["error"] == "Rate limited: regeneration already running"
+        assert data["code"] == "rate_limited"
+        assert "already writing" in data["detail"]
+        after = api._metrics.REGEN.snapshot()
+        # A refusal, not a pipeline that broke, and the gauge the health
+        # endpoint reads is back where it was.
+        assert after["failures"] - before["failures"] == 1
+        assert after["rejected"] - before["rejected"] == 1
+        assert after["in_flight"] == before["in_flight"]
+
 
 class TestRegenIdempotencyKey:
     """POST /api/regen dedups a retry that carries a completed key.
