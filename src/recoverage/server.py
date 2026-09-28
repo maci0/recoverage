@@ -445,9 +445,12 @@ def _read_chunked_body(limit: int) -> bytes:
         try:
             # parse_ascii_int, not int(x, 16): the latter takes digits from the
             # whole Unicode Nd set and accepts "_" as a separator, so a chunk
-            # line the framing does not allow would be read as a length.
-            size = parse_ascii_int(size_field.decode("latin-1"), 16) if size_field else 0
-        except ValueError as exc:
+            # size of "1_0" declared 16 bytes where the client sent 2 and the
+            # reader consumed the next 16 bytes of the connection, bytes
+            # belonging to whatever request follows this one on a keep-alive
+            # socket.
+            size = parse_ascii_int(size_field.decode("ascii"), 16) if size_field else 0
+        except (UnicodeDecodeError, ValueError) as exc:
             raise RequestBodyMalformedError(f"not a hex chunk size: {size_field!r}") from exc
         if size < 0 or size > limit - len(body):
             raise RequestBodyTooLargeError(f"body over the {limit}-byte limit")

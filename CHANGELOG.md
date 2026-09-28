@@ -130,6 +130,12 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **A chunked request body was framed by a number `int()` widened.** A chunk
+  size of `1_0` is 16 to `int(x, 16)`, which also reads the `_` separator, so
+  the body reader consumed 16 bytes of a connection it had no framing for and
+  left the rest of the stream to the next request on a keep-alive socket. The
+  size line takes the same ASCII-only parse as every other request-supplied
+  number, and anything else is refused as malformed with the connection closed.
 - **A Potato Mode line could start with a combining mark.** The detail panel
   and the disassembly pane hard-wrap their text at a fixed column count, and
   the wrap landed between a character and a combining mark that followed it,

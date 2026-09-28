@@ -790,8 +790,11 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   `?size=٤٠٩٦` served a 4096-byte slice and `?page=1_0` opened page 10. The
   call sites are `api._parse_byte_count` (`?size=` on `/asm` and `/bytes`,
   `?offset=` on `/bytes`, decimal or `0x`-prefixed hex), `api._page_int`
-  (`?limit=` and `?offset=`, no sign and no prefix), the batch POST VA list, and
-  Potato Mode's `?page=` and `?idx=`. A new request-supplied number names
+  (`?limit=` and `?offset=`, no sign and no prefix), the batch POST VA list,
+  Potato Mode's `?page=` and `?idx=`, and `server._read_chunked_body`'s chunk
+  size line, where a `1_0` the widened parse read as 16 made the reader consume
+  16 bytes of a connection it had no framing for. A new request-supplied number
+  names
   `server.parse_ascii_int` or explains why it does not, and the rule is the one
   `config._ASCII_INT` already holds every `RECOVERAGE_*` integer to. Pinned at
   `tests/test_api.py` (`TestSliceValidationDetail`) and `tests/test_potato.py`

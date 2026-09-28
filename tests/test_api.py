@@ -2105,6 +2105,27 @@ class TestBatchFunctionLookup:
         assert status.startswith("413")
         assert headers.get("Connection") == "close"
 
+    def test_batch_refuses_a_chunk_size_int_would_widen(self) -> None:
+        """A chunk size is a request-supplied number, so it takes the ASCII parse.
+
+        `int(x, 16)` reads the `_` separator, so "1_0" is a chunk size of 16 and
+        this body decodes whole — a body the client never framed that way, read
+        off a socket that is carrying whatever follows it. Refused as malformed
+        instead, and the connection closed with it."""
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        status, headers, _body = wsgi_request(
+            "POST",
+            f"/api/targets/{target}/functions",
+            {"Transfer-Encoding": "chunked"},
+            body=b"1_0\r\n" + b'{"vas":["0x10"]}' + b"\r\n0\r\n\r\n",
+            wsgi_input=None,
+            content_length=None,
+        )
+        assert status.startswith("400")
+        assert headers.get("Connection") == "close"
+
     def test_batch_omits_unknown_vas(self) -> None:
         target = get_first_target()
         if not target:
