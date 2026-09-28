@@ -174,6 +174,36 @@ class TestRegenOriginValidation:
         """Localhost REMOTE_ADDR passes the remote check and runs the regen."""
         assert_regen_accepted(wsgi_request("POST", "/api/regen", remote_addr="127.0.0.1"))
 
+    def test_a_valid_token_does_not_buy_regen_from_a_remote_peer(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The two principals are separate, and a credential is only one.
+
+        A --allow-remote --token deployment hands the same bearer token to
+        every reader on the network, so the regen gate has to keep refusing a
+        non-loopback peer for a request that carries it.  The sibling tests
+        run with no token configured at all, which leaves this cell of the
+        matrix unpinned: a gate written as "authenticated OR local" would
+        pass every one of them and serve a rebuild to anyone holding the
+        share link.
+        """
+        import recoverage.server as server_mod
+
+        monkeypatch.setattr(server_mod, "_AUTH_TOKEN", "unit-test-token")
+        auth = {"Authorization": "Bearer unit-test-token"}
+
+        status, headers, body = wsgi_request(
+            "POST", "/api/regen", headers=auth, remote_addr="192.168.1.100"
+        )
+        assert status.startswith("403")
+        assert json.loads(decode_body(body, headers))["error"] == "Forbidden: localhost only"
+
+        # The same credential from the operator's own host is the other half
+        # of the cell: refusing everything would be a broken gate, not a safe one.
+        assert_regen_accepted(
+            wsgi_request("POST", "/api/regen", headers=auth, remote_addr="127.0.0.1")
+        )
+
     def test_cross_origin_rejected(self) -> None:
         """Cross-origin request should be rejected with 403."""
         status, headers, body = wsgi_request(

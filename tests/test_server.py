@@ -1092,6 +1092,87 @@ class TestTokenAuthEndpoint:
             srv._AUTH_TOKEN = original
 
 
+def _concrete_path(rule: str) -> str:
+    """A path a Bottle ``rule`` actually matches, for a structural route sweep.
+
+    Every ``<placeholder>`` becomes a single ``sample`` segment; a
+    ``<name:re:...>`` placeholder takes the first alternative of its own
+    filter, because a value the regex does not match would 404 the route out
+    of the sweep and hide the assertion it is there to make.
+    """
+
+    def substitute(match: re.Match[str]) -> str:
+        token = match.group(0)
+        if ":re:" not in token:
+            return "sample"
+        return re.split(r"\|", token.split(":re:", 1)[1])[0].replace("\\", "")
+
+    return re.sub(r"<[^>]+>", substitute, rule)
+
+
+class TestEveryRouteIsBehindTheTokenGate:
+    """The deny side of the matrix, pinned over the whole route table.
+
+    ``_require_auth`` is a ``before_request`` hook on the one shared Bottle
+    app, so every route it serves is behind the gate by construction.  The
+    per-route tests sample that (a page, the API, Potato), which cannot
+    notice an endpoint added later off the hook chain: the route is mounted,
+    nothing refuses it, and the suite stays green.  This enumerates
+    ``app.routes`` instead, so a new route has to earn its 401 like the rest.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _token(self, monkeypatch: Any) -> None:
+        import recoverage.server as srv
+
+        monkeypatch.setattr(srv, "_AUTH_TOKEN", "unit-test-token")
+        yield
+        srv._clear_auth_failures()
+
+    def test_no_route_serves_an_unauthenticated_request(self) -> None:
+        from conftest import wsgi_request
+
+        from recoverage.server import app
+
+        served: list[str] = []
+        for route in app.routes:
+            path = _concrete_path(route.rule)
+            for method in route.method:
+                # No Origin and no Access-Control-Request-Method, so the
+                # CORS preflight exemption cannot answer for any of these:
+                # the exemption is for the handshake, not the route behind it.
+                status, _, _ = wsgi_request(method, path)
+                served.append(f"{method} {path}")
+                # 429 once the sweep outruns the failed-token window, which is
+                # the gate answering as designed, not a served route.
+                assert status.startswith(("401", "429")), (
+                    f"{method} {path} answered {status} with no token; "
+                    "every route must be behind _require_auth"
+                )
+        # A rule table that emptied (a rename, a mis-scoped import) would
+        # satisfy the loop above without testing anything.
+        assert len(served) >= 20, f"route sweep covered only {sorted(served)}"
+
+    def test_the_same_routes_answer_200_with_the_token(self) -> None:
+        """The sweep above is only evidence because each route also works.
+
+        Without it, a table of rules the router never dispatches would pass
+        the 401 assertion by 404ing everything.
+        """
+        from conftest import wsgi_request
+
+        from recoverage.server import app
+
+        auth = {"Authorization": "Bearer unit-test-token"}
+        for route in app.routes:
+            path = _concrete_path(route.rule)
+            method = next(iter(route.method))
+            status, _, _ = wsgi_request(method, path, headers=auth)
+            assert not status.startswith(("401", "403", "404")), (
+                f"{method} {path} is unroutable ({status}) but registered"
+            )
+
+
 class TestCorsPreflightBypassesTheTokenGate:
     """A CORS preflight carries no credentials, so the gate must not apply.
 
