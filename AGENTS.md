@@ -280,6 +280,11 @@ The release policy is not written down anywhere else, so it is stated here and
   so a "tag this as 2.0.0" note would ship to the reader.
 - The release commit is `chore: release X.Y.Z` and the tag is `vX.Y.Z`;
   both land together, and neither is re-cut.
+- `rebrew` is a hard runtime dependency and is not on the package index, so
+  recoverage must not be published first: the wheel would fail to resolve for
+  every installer, and it would leave the `rebrew` name unclaimed on the index,
+  where the next upload of that name installs into anyone resolving the wheel
+  as a dependency. Publish rebrew, confirm it resolves, then release.
 
 ## API Endpoints
 

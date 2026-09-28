@@ -9,7 +9,7 @@
     },
     {
       "groupName": "npm-minor-and-patch",
-      "matchManagers": ["npm"],
+      "matchManagers": ["bun", "npm"],
       "matchUpdateTypes": ["minor", "patch"]
     }
   ]

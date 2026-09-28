@@ -5,8 +5,13 @@
 # The JavaScript lockfile is bun.lock, which the npm ecosystem here cannot
 # read: Dependabot aborts with "detected that Bun is misconfigured" and
 # "This project has a `bun.lock` file but no `package-lock.json`, `yarn.lock`
-# or `pnpm-lock.yaml`". Renovate's npm manager reads bun.lock, so
-# renovate.json owns those packages.
+# or `pnpm-lock.yaml`". renovate.json owns those packages, and its
+# npm-minor-and-patch group names both managers that can resolve a bun.lock
+# (`npm` and `bun`): Renovate moved bun.lock handling out of the npm manager
+# and into a `bun` manager, so a group naming only the older one matches
+# nothing and every devDependency bump opens its own PR against the policy
+# above. A name Renovate no longer uses matches nothing and costs nothing, so
+# the group lists both.
 # The Python manifest resolves rebrew through [tool.uv.sources] as a sibling
 # checkout (`path = "../rebrew"`), and Dependabot aborts the whole uv job with
 # "The following path based dependencies could not be retrieved". Renovate
