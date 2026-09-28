@@ -2182,6 +2182,23 @@ class TestUnreadableDocumentIsNotAnEmptyTarget:
         with pytest.raises(CoverageTomlError):
             srv.coverage_snapshots()
 
+    def test_the_error_names_the_command_that_writes_the_documents(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`rebrew build-db` runs the catalog analysis in process.
+
+        An advice string naming a separate `rebrew catalog` step sends the
+        operator after a command they do not have to run.
+        """
+        import recoverage.server as srv
+
+        _coverage_dir(tmp_path, monkeypatch)
+        with pytest.raises(CoverageTomlError) as excinfo:
+            srv.coverage_snapshots()
+        message = str(excinfo.value)
+        assert "rebrew build-db" in message
+        assert "rebrew catalog" not in message
+
     def test_the_endpoint_answers_the_db_unavailable_contract(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

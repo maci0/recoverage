@@ -153,6 +153,12 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the instant it stops being answerable: it is dropped on the next checkout
   of the same key, and the request that finds an expired one takes the build
   over rather than waiting on it.
+- **The rebuild advice named a command that does not have to run.** `rebrew
+  build-db` runs the catalog analysis in process, so the `--help` prerequisites
+  line, the database-error hint in `stats`, `export` and `check`, and the 503
+  message the server logs for a coverage directory with no document told an
+  operator to run `rebrew catalog && rebrew build-db` first. All three now name
+  `rebrew build-db` alone, which is what writes `db/coverage-<target>.toml`.
 - **A request the HTTP layer refused left no trace in the server log.** An
   over-long request line, a malformed one, an unsupported version, or headers
   past the limit are all rejected before a route exists, so nothing downstream

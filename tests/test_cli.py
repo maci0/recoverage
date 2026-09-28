@@ -165,6 +165,27 @@ class TestVersionFlag:
         assert "recoverage" in result.output
 
 
+class TestRebuildAdvice:
+    """Every place the CLI tells a user how to build the documents.
+
+    `rebrew build-db` runs the catalog analysis in process, so an advice
+    string naming a separate `rebrew catalog` step sends a user looking for
+    a command they do not have to run. Both spellings are pinned here, since
+    they are separate strings in the source and one can drift alone.
+    """
+
+    def test_help_names_only_the_command_that_writes_the_documents(self) -> None:
+        result = runner.invoke(app, ["--help"])
+        assert result.exit_code == 0
+        prerequisites = result.output.split("Prerequisites:")[1]
+        assert "rebrew build-db" in prerequisites
+        assert "rebrew catalog" not in prerequisites
+
+    def test_the_database_error_hint_names_only_build_db(self) -> None:
+        assert "rebrew catalog" not in cli._REBUILD_HINT
+        assert "rebrew build-db" in cli._REBUILD_HINT
+
+
 class TestBareInvocationServes:
     """`recoverage` with no arguments serves the dashboard.
 

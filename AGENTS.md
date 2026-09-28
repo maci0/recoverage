@@ -283,7 +283,11 @@ The release policy is not written down anywhere else, so it is stated here and
 
 | Path | Method | Description |
 |------|--------|-------------|
-| `/` | GET | Main SPA dashboard |
+| `/` | GET | Main SPA dashboard (the bundle inlined) |
+| `/index.html` | GET | Same document, for a URL that names it |
+| `/src/<filepath:path>` | GET | A file under the target's `src/` tree, for the code panes |
+| `/original/<filepath:path>` | GET | A file under the original binary's tree (`web/app/hooks/useOriginalBinary.ts` reads it) |
+| `/<filename:app.js, style.css, print.css, favicon.svg>` | GET | The packaged static assets, `no-cache` with a strong `ETag` |
 | `/potato` | GET | Potato Mode (pure-HTML fallback) |
 | `/api/health` | GET | Server version, the settings the process resolved, DB info, installed extras, request/regen/stream counters |
 | `/api/targets` | GET | List available targets |

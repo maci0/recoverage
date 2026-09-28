@@ -627,7 +627,7 @@ def coverage_snapshots() -> Mapping[str, CoverageSnapshot]:
     snapshots = load_all_coverage_from(_db_path())
     if not snapshots:
         raise CoverageTomlError(
-            f"{_db_path()}: no coverage-*.toml document — run 'rebrew catalog && rebrew build-db'"
+            f"{_db_path()}: no coverage-*.toml document — run 'rebrew build-db'"
         )
     return snapshots
 

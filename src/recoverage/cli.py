@@ -43,7 +43,7 @@ app = typer.Typer(
         "  recoverage open [dim]# open a running dashboard in a browser[/dim]\n\n"
         "  recoverage config [dim]# show the settings serve would start with[/dim]\n\n"
         "[bold]Prerequisites:[/bold]\n\n"
-        "  Run [dim]rebrew catalog && rebrew build-db[/dim] first to create "
+        "  Run [dim]rebrew build-db[/dim] first to create "
         "db/coverage-*.toml.\n\n"
         f"[dim]Reads db/coverage-*.toml (RECOVERAGE_DB overrides the directory, "
         f"for every command). Serves SPA at "
@@ -199,7 +199,7 @@ _CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
 
 # ONE spelling of the operator-facing rebuild advice so it cannot drift
 # between the commands that embed it in their database-error messages.
-_REBUILD_HINT = "(run 'rebrew catalog && rebrew build-db' to rebuild it)"
+_REBUILD_HINT = "(run 'rebrew build-db' to rebuild it)"
 
 
 def _use_utf8_stdout() -> None:

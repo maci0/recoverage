@@ -353,5 +353,5 @@ all: format-check lint type-check shell-lint yaml-lint test web-lint typecheck-w
 
 clean:
 	rm -rf .pytest_cache .pytest-tmp .ruff_cache .mypy_cache .scratch build dist \
-		src/recoverage.egg-info recoverage.egg-info
+		src/recoverage.egg-info
 	find src tests tools -type d -name __pycache__ -prune -exec rm -rf {} +

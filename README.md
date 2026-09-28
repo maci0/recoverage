@@ -572,6 +572,7 @@ recoverage/
 │   ├── normalize_sdist.py     # Pins the sdist's mtimes/order/header for a reproducible build
 │   ├── flatten_rikalabs_strict.py  # Regenerates tools/oxlint/rikalabs-strict.json (MIT) from @rikalabs/oxlint-standards 0.8.1
 │   ├── vendor_manifest.py    # Inventories the vendored anti-slop tree file by file
+│   ├── payload_budget.py     # Re-derives the inlined shell size at each static encoding (make payload-budget)
 │   └── oxlint/               # Vendored anti-slop rules + the flattened strict preset
 ├── tests/
 │   ├── conftest.py           # Shared fixtures (synthetic coverage TOML)
