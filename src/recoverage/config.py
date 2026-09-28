@@ -87,9 +87,11 @@ MAX_PORT: Final = 65535
 #: the dashboard: the same binary serves one developer on a laptop and a team
 #: behind a reverse proxy on a container with a 512 MiB limit, and each of
 #: those admits a different number of connections and wants a different stall
-#: deadline.  The floor on the deadline is the SSE heartbeat it must outlast
-#: (``api._SSE_HEARTBEAT_SECONDS``), or a healthy stream is cut mid-life.
-MIN_CLIENT_TIMEOUT_SECONDS: Final = 5
+#: deadline.  The floor on the deadline is one second PAST the SSE heartbeat it
+#: must outlast (``api._SSE_HEARTBEAT_SECONDS``): a deadline at or under the
+#: heartbeat closes a healthy /api/events stream on the clock rather than on
+#: the peer going away.
+MIN_CLIENT_TIMEOUT_SECONDS: Final = 16
 MAX_CLIENT_TIMEOUT_SECONDS: Final = 24 * 60 * 60
 DEFAULT_CLIENT_TIMEOUT_SECONDS: Final = 120
 
@@ -207,10 +209,11 @@ def client_timeout() -> int:
     """Per-connection socket deadline, in seconds.
 
     Bounds how LONG one handler thread lives on a half-open peer.  The floor
-    is the SSE heartbeat it must outlast: a deadline at or under
+    is past the SSE heartbeat it must outlast: a deadline at or under
     ``api._SSE_HEARTBEAT_SECONDS`` closes healthy /api/events streams on the
-    clock rather than on the peer going away, so a value below it is a setting
-    that breaks live reload, not one that merely retires threads sooner.
+    clock rather than on the peer going away, so a value below the floor is a
+    setting that breaks live reload, not one that merely retires threads
+    sooner.
     """
     value = _int_var("RECOVERAGE_CLIENT_TIMEOUT", DEFAULT_CLIENT_TIMEOUT_SECONDS)
     if not MIN_CLIENT_TIMEOUT_SECONDS <= value <= MAX_CLIENT_TIMEOUT_SECONDS:

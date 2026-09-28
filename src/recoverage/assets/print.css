@@ -11,9 +11,7 @@ body {
   text-shadow: none;
 }
 
-/* The scanline overlay, the controls, and the copy/open affordances are all
- * screen furniture. */
-body::after,
+/* The controls and the copy/open affordances are all screen furniture. */
 .topbar,
 .skip-link,
 .legend .swatch,

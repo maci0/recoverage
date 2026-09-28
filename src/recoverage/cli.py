@@ -1124,8 +1124,8 @@ def serve(
 
     # Warm the SPA shell cache off the request path: the first page load
     # would otherwise pay the asset read + minify + three full-strength
-    # compressions synchronously under INDEX_LOCK.  Daemon thread, started
-    # before the listener accepts; failures are logged and stay lazy.
+    # compressions synchronously.  Daemon thread, started before the listener
+    # accepts; failures are logged and stay lazy.
     from recoverage.ui import warm_index_cache
 
     threading.Thread(target=warm_index_cache, name="recoverage-index-warmup", daemon=True).start()

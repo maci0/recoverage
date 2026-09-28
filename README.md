@@ -172,7 +172,8 @@ this command with its default settings.
 
 #### Environment
 
-Every flag above also reads a `RECOVERAGE_*` variable, used as its default, so
+Every flag above except `--no-open` and `--regen` also reads a `RECOVERAGE_*`
+variable, used as its default, so
 a service can be configured without putting anything in its argv (and, for the
 token, without exposing it in the process listing). A flag on the command line
 always wins over the environment.
@@ -187,7 +188,7 @@ always wins over the environment.
 | `RECOVERAGE_TOKEN` | none | the bearer token; set it empty to run unauthenticated |
 | `RECOVERAGE_LOG_LEVEL` | `INFO` | a `logging` level name, or its number |
 | `RECOVERAGE_MAX_CONNECTIONS` | `128` | integer `1`-`65536`: concurrent client connections admitted, one thread and one descriptor each |
-| `RECOVERAGE_CLIENT_TIMEOUT` | `120` | integer `5`-`86400`: per-connection socket deadline in seconds; must outlast the 15s SSE heartbeat or live reload is cut short |
+| `RECOVERAGE_CLIENT_TIMEOUT` | `120` | integer `16`-`86400`: per-connection socket deadline in seconds; must outlast the 15s SSE heartbeat or live reload is cut short |
 | `RECOVERAGE_DB` | resolved from the working directory | path to the coverage directory (the one holding `coverage-<target>.toml`) |
 | `RECOVERAGE_FUZZ_SEED` | unset | seed for the mutation campaigns (`make fuzz`); read by the test suite, not the server |
 | `RECOVERAGE_FUZZ_ITERATIONS` | unset | round count for those campaigns; same reader |
@@ -322,8 +323,8 @@ recoverage check --min-coverage 60 --json                       # machine-readab
 ```
 
 Exit codes: 0 = gate passed, 1 = coverage below threshold (or a target/section
-that matched nothing), 2 = bad `--min-coverage` value or an unreadable coverage
-document.
+that matched nothing), 2 = bad `--min-coverage` value, an unreadable coverage
+document, or a coverage directory holding no `coverage-*.toml`.
 
 ### `recoverage regen`
 
@@ -358,6 +359,10 @@ the banner that run printed holds.
 | Path | Method | Description |
 |------|--------|-------------|
 | `/` | GET | Main SPA dashboard |
+| `/index.html` | GET | The same document, for a URL that names it |
+| `/src/<filepath:path>` | GET | A file under the target's `src/` tree, for the code panes |
+| `/original/<filepath:path>` | GET | A file under the original binary's tree |
+| `/app.js`, `/style.css`, `/print.css`, `/favicon.svg` | GET | The packaged static assets (`no-cache` with a strong `ETag`) |
 | `/potato` | GET | Potato Mode (pure-HTML fallback) |
 | `/api/health` | GET | Server version, the settings this process resolved, coverage directory info, installed extras, request/regen/stream counters |
 | `/api/targets` | GET | List available targets |
@@ -374,7 +379,10 @@ the banner that run printed holds.
 A regen rebuilds the coverage documents from scratch, so running it twice leaves the
 same state as running it once. Send an `Idempotency-Key` header with the
 request and a repeat of that key is answered with the recorded result
-(`Idempotent-Replay: true`) instead of running the pipeline again; keys are
+(`Idempotent-Replay: true`) instead of running the pipeline again; a repeat that
+lands while the first run is still going is answered `202` with
+`{"ok": true, "in_progress": true}` (`Idempotent-Replay: in-progress`), since
+a regen runs for minutes and a proxy gives up long before it finishes. Keys are
 remembered for 10 minutes (the ledger holds more slots than the rate limit
 admits in that window, so a key is only ever dropped by its own age), and a
 failed run is not remembered.
@@ -619,6 +627,7 @@ recoverage/
 │   ├── test_api.py           # API validation & security tests
 │   ├── test_build.py         # Shipped files and reproducible build bytes
 │   ├── test_cli.py           # CSV export, formatting tests
+│   ├── test_concurrency.py   # Barrier-driven races: single flight, counters, the admission cap
 │   ├── test_config.py        # RECOVERAGE_* parsing, precedence, fail-fast
 │   ├── test_import_graph.py  # The import rules the modules rely on
 │   ├── test_lifecycle.py     # Lifecycle (regen ordering, opener reaping, deadlines)

@@ -415,8 +415,8 @@ class ConnectionStats:
             return self._open
 
     def snapshot(self) -> dict[str, Any]:
-        """A JSON-ready copy.  ``max`` is 0 until the first admission, so a
-        mounted WSGI app that never reached ``serve`` reports no cap rather
+        """A JSON-ready copy.  ``max`` is 0 until the transport is configured, so
+        a mounted WSGI app that never reached ``serve`` reports no cap rather
         than one it is not enforcing."""
         with self._lock:
             return {

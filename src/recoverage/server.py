@@ -874,7 +874,7 @@ def _bucket_row(section: Any) -> dict[str, Any]:
 
 
 def _section_summary(section: Any) -> dict[str, Any]:
-    """The per-section entry `build_db` added to the stored ``summary`` blob.
+    """One section's entry in the ``summary`` blob :func:`_summary` rebuilds.
 
     Rebuilt from the cells rather than read, because the TOML format stores
     facts: every field here is a count or a byte sum over the section's own
@@ -1491,10 +1491,10 @@ BROTLI_STATIC_QUALITY = 11
 # every request; the shell and the static assets are compressed once per
 # encoding and then served from a dict, so they take the same "pay once, keep
 # the effort" trade BROTLI_STATIC_QUALITY already makes.  Measured on the
-# shipped assets: the bundle ~332 KB and style.css ~22 KB
-# 10,468 -> 9,555 (both zstd), for ~20 ms paid once instead of 6 ms per
-# request.  Level 19 is where zstd stops returning a smaller frame on these
-# bodies (level 22 matches it exactly), so this is the knee, not a guess.
+# shipped assets: the bundle is ~131 KB and style.css ~21 KB, and the extra
+# effort is paid once per encoding rather than on every request.  Level 19 is
+# where zstd stops returning a smaller frame on these bodies (level 22 matches
+# it exactly), so this is the knee, not a guess.
 ZSTD_STATIC_LEVEL = 19
 
 # gzip's own maximum.  gzip is the fallback a scripted client lands on
@@ -1538,12 +1538,14 @@ def compress_static_variants(body: bytes, accept_encoding: str) -> tuple[bytes, 
       order and compresses once.
     * zstd runs at :data:`ZSTD_STATIC_LEVEL` rather than the dynamic level 3.
 
-    Measured on the SPA shell: brotli q11 gives 14,075 bytes against zstd's
-    17,056 at the dynamic level and 15,178 even at level 19.  zstd wins on
-    throughput, not on this payload, and a fixed zstd-first preference handed
-    every zstd-capable browser 3 KB more than necessary and pushed the shell
-    past the initial congestion window (14,600), costing a second round trip
-    before the first paint.  Choosing by size puts it back inside the window.
+    Measured on the committed bundle, with the shipped levels
+    (``tools/payload_budget.py`` prints these): the inlined shell is 155,718 B
+    raw, and brotli q11 gives 46,413 B against zstd's 49,606 B at level 19 and
+    gzip's 53,897 B at level 9.  zstd wins on throughput, not on this payload,
+    so choosing by size hands every client the brotli body and hands a
+    zstd-first client 3 KB more than necessary.  The smallest body no longer
+    fits one initial congestion window (14,600 B); ``ui._TCP_CWND_BUDGET``
+    records the size the port accepted.
 
     Returns (body, "") when the client accepts none of the supported
     encodings, so the caller sets Content-Encoding only on a truthy name.

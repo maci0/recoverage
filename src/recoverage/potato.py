@@ -1306,12 +1306,12 @@ def _db_updated_label() -> str:
     return mtime_ns_to_utc(mtime_ns).strftime("%Y-%m-%d %H:%M UTC")
 
 
-# Potato mode re-derived the grid input on EVERY page render: json.loads of
-# the section's multi-MB cells payload plus a full-list merge pass (~120 ms
-# measured at 25k cells) dominated each request even though the SQL beneath
-# them was already memoized — every filter toggle, search, and pager click
-# re-paid it.  Cache the derived (parsed, merged) pair instead, keyed by the
-# WAL-aware snapshot + target + section + column count: a rebuild changes
+# Potato mode re-derived the grid input on EVERY page render: a per-cell JSON
+# projection plus a full-list merge pass (~120 ms measured at 25k cells)
+# dominated each request even though the snapshot beneath them was already
+# memoized — every filter toggle, search, and pager click
+# re-paid it.  Cache the derived (projected, merged) pair instead, keyed by the
+# snapshot fingerprint + target + section + column count: a rebuild changes
 # the fingerprint and misses, so the cache self-invalidates with the same
 # contract as /data's memo.  Entries are read-only after publication (grid,
 # pager, and panel only read them), so sharing across requests/threads is
@@ -1471,9 +1471,9 @@ def _compute_section_stats(
     sections: dict[str, dict[str, Any]],
     data: dict[str, Any],
 ) -> dict[str, dict[str, Any]]:
-    # A non-object summary (valid JSON of another type in a foreign DB) would
-    # crash .get() below with AttributeError — same guard as
-    # server._section_stats applies to its own summary read.
+    # A non-object summary (valid JSON of another type in a document written
+    # by something other than rebrew) would crash .get() below with
+    # AttributeError.
     summary = data.get("summary", {})
     if not isinstance(summary, dict):
         summary = {}
@@ -2043,9 +2043,9 @@ def _render_function_list(
     if search_query:
         # The VA column below is printed by _format_va, which pads to eight
         # digits, so both spellings are matched: an address copied out of this
-        # very table matches when pasted into the search box.  Same fold and
-        # column set as _search_functions, so this list and the grid it sits
-        # beside return the same rows for one term.
+        # very table matches when pasted into the search box.  The VA arms are
+        # this view's own addition, where _search_functions matches
+        # `vaStart` instead because that is the string a .text cell stores.
         needle = fold_needle(search_query)
         rows = [
             fn

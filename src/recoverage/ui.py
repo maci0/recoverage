@@ -155,10 +155,11 @@ def warm_index_cache() -> None:
     """Pre-build the SPA shell payload and every compressed variant.
 
     ``handle_index`` otherwise pays the asset read + minify + three
-    full-strength compressions under INDEX_LOCK on the FIRST client's
-    request; ``serve`` runs this from a daemon thread before the listener
-    starts so every first hit is a pure lookup.  Failures are logged and
-    left lazy: the request path rebuilds whatever is missing.
+    full-strength compressions on the FIRST client's request; the build runs
+    outside INDEX_LOCK, so the cost is not lock contention but a first page
+    load that waits on it.  ``serve`` runs this from a daemon thread before the
+    listener starts so every first hit is a pure lookup.  Failures are logged
+    and left lazy: the request path rebuilds whatever is missing.
     """
     global CACHED_INDEX_PAYLOAD
     try:
@@ -448,7 +449,8 @@ def _repo_file_etag(candidate: Path, raw: bytes, accept_encoding: str) -> str:
 # package upgrade changes the bytes under the same name and a long-lived
 # freshness lifetime would pin the browser to old JS.  Revalidate cheaply
 # instead of guessing.
-#: ``(filename, accepted-encoding key)`` -> ``(etag, body, encoding)``.  The
+#: ``(filename, accepted-encoding key)`` -> ``_Variant(body, encoding, etag)``.
+#: The
 #: key is the whole accepted set, not one token, so the map is bounded by
 #: (route-matched filename) x (server.static_variant_key spellings).  The
 #: encoding rides with the entry because the choice is made per accepted set,

@@ -360,9 +360,8 @@ def _data_cache_checkout(
         # but leaving the dead leader registered is not — every later request
         # for this key would pay the same full wait again, and the entry would
         # outlive the process.  The `is event` guard means a leader that
-        # released (or was superseded by an earlier reclaim) is left alone.
-        # The `is event` guard means a leader that released (or was
-        # superseded by an earlier reclaim) is left alone — and the same guard
+        # released (or was superseded by an earlier reclaim) is left alone —
+        # and the same guard
         # has to decide the install.  A claim registered in between (an
         # earlier follower already reclaimed and a later request became the
         # leader) belongs to a LIVE builder, and overwriting it would

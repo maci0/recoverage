@@ -100,6 +100,11 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `RECOVERAGE_CLIENT_TIMEOUT` now accepts `16` seconds and above, where it
+  accepted `5`. A deadline at or under the 15 s SSE heartbeat closes healthy
+  `/api/events` streams on the clock instead of on the peer going away, so the
+  values in between were accepted configurations that cut live reload short.
+  The default (120) is unchanged.
 - `POST /api/regen` with an `Idempotency-Key` whose run is still going now
   answers `202` with `{"ok": true, "in_progress": true}` and
   `Idempotent-Replay: in-progress`, where it answered `429` before. A regen
