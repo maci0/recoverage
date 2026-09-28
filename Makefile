@@ -1,6 +1,6 @@
 .PHONY: help setup clean build test test-one test-browser fuzz lint format format-check web-lint smoke smoke-fail \
 	shell-lint yaml-lint type-check all ensure-uv ensure-rebrew warn-uv-version clone-rebrew ensure-lint-tools \
-	ensure-bun regen-oxlint
+	ensure-bun regen-oxlint typecheck-web
 
 # Force POSIX sh for recipes (ignore a caller-exported SHELL=bash).  Version
 # compares use ``sort -t. -k…n`` (POSIX), not GNU ``sort -V``.
@@ -87,6 +87,7 @@ help:
 		'  make format             # ruff format (writes)' \
 		'  make format-check       # ruff format --check src/ tests/ tools/ (CI lint job)' \
 		'  make web-lint           # oxlint + Nu Html Checker (CI web-lint job)' \
+		'  make typecheck-web      # tsc --noEmit over web/ (CI web-lint job)' \
 		'  make regen-oxlint       # regenerate tools/oxlint/rikalabs-strict.json after a preset bump' \
 		'  make shell-lint         # shellcheck over tools/*.sh (CI lint job)' \
 		'  make yaml-lint          # yamllint over .github/ (CI lint job)' \
@@ -272,6 +273,16 @@ web-lint: ensure-bun
 	bun install --frozen-lockfile
 	bun run lint
 
+# The TypeScript gate. web/tsconfig.json is strict plus noUncheckedIndexedAccess,
+# exactOptionalPropertyTypes and the rest, so a `bun run lint` that never runs
+# tsc leaves every one of those settings unverified: oxlint runs without type
+# information (the Rika preset is flattened with typeAware: false), so nothing
+# else in the pipeline checks a type. Its own target, run by `make all` and by
+# the CI web-lint job, so a frontend type error blocks a merge.
+typecheck-web: ensure-bun
+	bun install --frozen-lockfile
+	bun run typecheck:web
+
 ensure-bun:
 	@$(SET_STRICT) \
 	if ! command -v bun >/dev/null 2>&1; then \
@@ -295,7 +306,7 @@ smoke-fail: ensure-rebrew
 	$(UV_RUN) python tools/smoke.py --expect-failure
 
 # Everything CI checks, in one local command, so nothing fails only after push.
-all: format-check lint type-check shell-lint yaml-lint test web-lint smoke smoke-fail
+all: format-check lint type-check shell-lint yaml-lint test web-lint typecheck-web smoke smoke-fail
 	@printf '%s\n' 'all checks passed (CI: lint, web-lint, test, smoke)'
 
 clean:

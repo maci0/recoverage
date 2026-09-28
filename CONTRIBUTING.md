@@ -127,6 +127,7 @@ That is the local mirror of CI, and each target is the command CI runs:
 | `make yaml-lint` | lint | `yamllint -c .yamllint.yaml .github/` |
 | `make test` | test | `pytest tests/ -v --ignore=tests/test_playwright.py` |
 | `make web-lint` | web-lint | `bun install --frozen-lockfile && bun run lint` |
+| `make typecheck-web` | web-lint | `bun install --frozen-lockfile && bun run typecheck:web` (`tsc --noEmit`) |
 | `make smoke` | smoke | `python tools/smoke.py` |
 | `make smoke-fail` | smoke | `python tools/smoke.py --expect-failure` |
 

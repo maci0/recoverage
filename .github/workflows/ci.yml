@@ -125,6 +125,12 @@ jobs:
         # runs tools/lint-html.py through the env synced above, which is why
         # this job needs uv at all.
         run: make web-lint
+      - name: "Type-check the frontend (tsc --noEmit over web/tsconfig.json)"
+        # oxlint runs without type information (the Rika preset is flattened
+        # with typeAware: false), so this is the only step that verifies
+        # web/tsconfig.json's strict settings against the sources. Without it a
+        # type error reaches main, and with it the committed bundle.
+        run: make typecheck-web
 
   test:
     runs-on: ${{ matrix.os }}

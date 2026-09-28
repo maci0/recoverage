@@ -139,6 +139,7 @@ make shell-lint             # shellcheck -x tools/*.sh (needs shellcheck on PATH
 make yaml-lint              # yamllint -c .yamllint.yaml .github/ (needs yamllint on PATH)
 make web-build              # bun install --frozen-lockfile && bun run build:web (the dashboard bundle)
 make web-lint               # bun install --frozen-lockfile && bun run lint
+make typecheck-web          # bun install --frozen-lockfile && bun run typecheck:web (tsc --noEmit)
 make smoke                  # uv run --locked --extra dev python tools/smoke.py
 make smoke-fail             # same, against a deliberately corrupt db
 make all                    # every check CI runs, one command
@@ -147,6 +148,7 @@ make all                    # every check CI runs, one command
 bun run lint                # oxlint (Rika-Labs strict preset + vendored anti-slop) + vnu HTML/CSS
 bun run lint:js             # oxlint only
 bun run lint:html           # vnu only: static assets + served pages (SPA shell, Potato Mode)
+bun run typecheck:web       # tsc --noEmit over web/tsconfig.json (strict)
 
 # Runtime (inside the synced env)
 uv sync --extra dev --extra capstone
@@ -553,11 +555,18 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   `tests/test_config.py` pins it: empty means auth off, on purpose, because
   the same spellings would otherwise leave a token-guarded deployment
   unauthenticated in exactly the way the empty allowlist does.
-- The frontend is linted with oxlint (and typechecked by `tsc --noEmit`) under
-  the `@rikalabs/oxlint-standards` strict preset plus the vendored anti-slop
-  rules. Rationale-bearing `oxlint-disable` comments are the sanctioned escape
-  hatch where a Preact idiom or a platform constraint collides with a rule (see
-  `oxlint.config.ts`).
+- The frontend is linted with oxlint under the `@rikalabs/oxlint-standards`
+  strict preset plus the vendored anti-slop rules, and type checked by
+  `tsc --noEmit` over `web/tsconfig.json` (`strict` plus
+  `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes` and the rest). The
+  oxlint preset is flattened with `typeAware: false`, so that `tsc` run is the
+  only thing verifying those type settings, and it is a gate rather than a
+  convenience: `make typecheck-web` is in `make all` and the web-lint CI job,
+  and `tests/test_supply_chain.py` (`TestFrontendAnalysisIsEnforced`) fails
+  when a package.json analysis script has no Makefile target running it, or
+  when the target that runs it is in neither `make all` nor CI. Rationale-bearing
+  `oxlint-disable` comments are the sanctioned escape hatch where a Preact
+  idiom or a platform constraint collides with a rule (see `oxlint.config.ts`).
 - Search compares names through `server.fold_match`, never a hand-written
   comparison: both sides go through `server.fold_text` (NFC composition plus
   `str.casefold`), so a non-ASCII term matches, `ß` matches `ss`, and the NFD

@@ -477,6 +477,75 @@ class TestToolchainPins:
         )
 
 
+class TestFrontendAnalysisIsEnforced:
+    """Every frontend analyzer package.json declares is run by something.
+
+    `bun run typecheck:web` (tsc --noEmit) is the tree's only type check, and
+    oxlint cannot substitute for it: the Rika-Labs preset is flattened with
+    typeAware: false, so strict, noUncheckedIndexedAccess and
+    exactOptionalPropertyTypes are verified by that script alone. A script no
+    target runs is a setting nobody checks, and a type error reaches the
+    committed bundle unremarked.
+    """
+
+    # `lint` chains the other two, so the check follows the references a
+    # script makes rather than assuming the Makefile names each analyzer.
+    _ANALYSIS_SCRIPTS = ("lint:js", "lint:html", "typecheck:web")
+
+    @staticmethod
+    def _target_running(makefile: str, script: str) -> str | None:
+        """The Makefile target whose recipe runs `bun run <script>`, if any."""
+        target = None
+        for line in makefile.splitlines():
+            if not line[:1].isspace():
+                head = re.match(r"^([A-Za-z0-9_.%-]+):", line)
+                if head:
+                    target = head[1]
+            elif f"bun run {script}" in line:
+                return target
+        return None
+
+    @classmethod
+    def _reached(cls, makefile: str, scripts: dict[str, str]) -> dict[str, str]:
+        """Every script the Makefile reaches, and the target that reaches it.
+
+        `bun run lint` chains lint:js and lint:html, so a script counts as run
+        when a target invokes it or a script that target invokes. The walk
+        follows only the scripts a target names, so it terminates on the
+        package.json graph.
+        """
+        direct = {
+            name: target for name in scripts if (target := cls._target_running(makefile, name))
+        }
+        reached = dict(direct)
+        for name in tuple(direct):
+            for chained in re.findall(r"bun run ([\w:-]+)", scripts[name]):
+                reached.setdefault(chained, direct[name])
+        return reached
+
+    def test_every_analysis_script_has_a_target(self) -> None:
+        scripts = json.loads(_PACKAGE_JSON.read_text(encoding="utf-8"))["scripts"]
+        reached = self._reached(_MAKEFILE.read_text(encoding="utf-8"), scripts)
+        for script in self._ANALYSIS_SCRIPTS:
+            assert script in scripts, f"package.json no longer defines a {script} script"
+            assert script in reached, (
+                f"no Makefile target runs `bun run {script}`; it would never gate a merge"
+            )
+
+    def test_the_type_check_runs_in_make_all_and_in_ci(self) -> None:
+        """The gate has to be somewhere a broken type stops a merge."""
+        makefile = _MAKEFILE.read_text(encoding="utf-8")
+        target = self._target_running(makefile, "typecheck:web")
+        assert target is not None, "no Makefile target runs the frontend type check"
+        all_recipe = re.search(r"^all:(.*)$", makefile, re.MULTILINE)
+        assert all_recipe and target in all_recipe[1].split(), (
+            f"`make all` does not depend on {target}, so it is not the local mirror of CI"
+        )
+        assert f"make {target}" in _jobs()["web-lint"], (
+            f"the web-lint job does not run `make {target}`"
+        )
+
+
 class TestNpmLockfile:
     """bun.lock is the JavaScript half of what the sbom job inventories.
 
