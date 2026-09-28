@@ -3329,9 +3329,43 @@ class TestSpaSearchFoldsLikeTheServer:
     def test_both_sides_of_the_search_go_through_the_shared_fold(self) -> None:
         """A needle folded one way and a haystack folded another never match."""
         app = _web("App.tsx")
-        search = app.split("const matchedNames", 1)[1].split("const matchedFns", 1)[0]
+        # The haystack is folded once per index (`foldedIndex`) and the needle
+        # once per keystroke (`matchedNames`); the two together are the whole
+        # comparison, and neither half may reach for a fold of its own.
+        search = app.split("const foldedIndex", 1)[1].split("const matchedFns", 1)[0]
         assert search.count("foldForSearch(") == 2, "the needle and the haystack fold differently"
         assert "toLowerCase()" not in search, "the search folds somewhere other than foldForSearch"
+
+    def test_the_haystack_is_folded_per_index_and_not_per_keystroke(self) -> None:
+        """The fold is the cost, and only the index decides the haystack.
+
+        `foldForSearch` is `normalize` + `toLowerCase` + a full-fold replace,
+        so running it over every function in the target on every character
+        typed is a main-thread task that grows with the target and never gets
+        any cheaper: measured in `bun` over a synthetic index, 90 ms per
+        keystroke at 20k entries against 1.4 ms for a substring test over rows
+        folded once. The memo's dependency list is what keeps the fold off the
+        keystroke path, and the per-keystroke pass has to read the folded rows
+        rather than rebuild them.
+        """
+        app = _web("App.tsx")
+        folded = re.search(
+            r"const foldedIndex = useMemo\(\(\) => \{.*?\}, \[(.*?)\]\);",
+            app,
+            re.DOTALL,
+        )
+        assert folded is not None, "the folded search index is no longer a memo"
+        deps = [dep.strip() for dep in folded.group(1).split(",")]
+        assert deps == ["coverage.searchIndex"], (
+            "the haystack is rebuilt for something other than a new index"
+        )
+        matched = re.search(
+            r"const matchedNames = useMemo\(\(\) => \{.*?\}, \[(.*?)\]\);",
+            app,
+            re.DOTALL,
+        )
+        assert matched is not None, "the match pass is no longer a memo"
+        assert "foldedIndex" in matched.group(1), "the match pass does not read the folded rows"
 
     def test_the_fold_composes_to_nfc(self) -> None:
         """`toLowerCase` alone compares "café" NFD and NFC as different
@@ -3437,6 +3471,45 @@ class TestSpaLayoutAndFeedback:
         binary = _web("hooks/useOriginalBinary.ts")
         assert "sameOriginPath(" in app and "coverage.paths.sourceRoot" in app
         assert "sameOriginPath(" in binary and "documentPath" in binary
+
+    def test_the_remembered_target_seeds_the_selection_before_the_list_lands(self) -> None:
+        """`/data` and `/stats` must not wait a round trip behind `/api/targets`.
+
+        The target id the server will pick is either in the URL or in
+        `localStorage`, and both are readable before the shell mounts. Waiting
+        for the list to say which target to load put a full request round trip
+        between the first paint and the map on every plain reload, which is the
+        visit `recoverage serve` is pointed at. The remembered id is validated
+        against the list either way, and the validation below already replaced a
+        remembered id the server no longer serves, so a stale entry costs the
+        404 it costs today.
+        """
+        app = _web("App.tsx")
+        seeded = re.search(
+            r"const \[target, setTarget\] = useState<string>\(\s*\(\) => (.*?),\s*\)",
+            app,
+            re.DOTALL,
+        )
+        assert seeded is not None, "the target state is no longer a lazy initializer"
+        assert 'params.get("target")' in seeded.group(1), "the URL no longer seeds the selection"
+        assert "readStored(TARGET_KEY)" in seeded.group(1), (
+            "the remembered target is not read until the target list answers"
+        )
+
+    def test_a_superseded_load_clears_the_previous_targets_error(self) -> None:
+        """Seeding from a remembered id can name a target the server has dropped.
+
+        The effect re-runs on every load, and the previous load's refusal is
+        about a document nobody is asking for any more: left up, the red line
+        for a target that was deleted yesterday sits over the real target's map
+        while it loads.
+        """
+        coverage = _web("hooks/useCoverage.ts")
+        start = coverage.index("setLoading(true)")
+        end = coverage.index("void load(section, control.signal);", start)
+        assert "setLoadError(null)" in coverage[start:end], (
+            "a new load keeps the error of the one it replaced"
+        )
 
 
 class TestSpaJumpAndSearch:

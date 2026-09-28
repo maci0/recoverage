@@ -356,10 +356,19 @@ The release policy is not written down anywhere else, so it is stated here and
 Search folds both sides the same way in Python: `server.fold_text` is NFC
 composition plus `str.casefold`, and `server.fold_match` is the substring test
 both the API list, the Potato list and the name lookup run every column
-through. The SPA folds through `format.foldForSearch` (the `matchedNames` memo
-in `web/app/App.tsx`), which is the same NFC composition and, because
-`toLowerCase` has no one-to-many mapping, the `FULL_FOLD` table standing in
-for the expansions `casefold` has and JavaScript does not. This was a SQL split
+through. The SPA folds through `format.foldForSearch` (the `foldedIndex` and
+`matchedNames` memos in `web/app/App.tsx`), which is the same NFC composition
+and, because `toLowerCase` has no one-to-many mapping, the `FULL_FOLD` table
+standing in for the expansions `casefold` has and JavaScript does not. The
+HAYSTACK is folded once per index, not once per keystroke: it depends only on
+`searchIndex`, so `foldedIndex` is keyed on that alone and `matchedNames` runs
+a substring test over the folded rows. Folding per query re-ran `normalize` +
+`toLowerCase` + the full-fold replace over every function in the target on
+every character typed, inside the render the keystroke triggered: 90 ms at 20k
+entries against 1.4 ms, measured. A new search column joins `foldedIndex`
+rather than the per-keystroke pass, and a new fold goes through
+`foldForSearch` (pinned at `tests/test_server.py`, `TestSpaSearchFoldsLikeTheServer`).
+This was a SQL split
 (LIKE folded ASCII, an `rc_fold` disjunct covered the rest) only because the
 comparison happened inside SQLite; one folding over the in-memory rows is both
 simpler and strictly wider.

@@ -97,9 +97,6 @@ export function useCoverage(target: string, section: string): Coverage {
       const token = reloadTokenRef.current;
       try {
         merge(await fetchData(target, name, signal, !indexIsCurrent(target)), name, token);
-        if (!signal.aborted) {
-          setLoadError(null);
-        }
         // oxlint-disable-next-line @rikalabs/no-silent-catch-fallback -- the failure is surfaced as the header's error line, and the map keeps its last good frame
       } catch (error: unknown) {
         if (!signal.aborted) {
@@ -120,6 +117,12 @@ export function useCoverage(target: string, section: string): Coverage {
     }
     const control = new AbortController();
     setLoading(true);
+    // A superseded load's error goes with it. The effect re-runs on a target
+    // switch, a section switch and a rebuild, and each of those starts a
+    // request for a different document: a stale target the server no longer
+    // serves answers 404 here, and without the clear the red line for THAT
+    // target stayed up over the real target's map while it loaded.
+    setLoadError(null);
     void load(section, control.signal);
     return () => control.abort();
   }, [load, reloadToken, section, target]);
