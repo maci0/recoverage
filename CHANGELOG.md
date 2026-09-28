@@ -7,6 +7,12 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- The wheel and the sdist ship `recoverage/py.typed`, so a project that imports
+  `recoverage.server`, `recoverage.config` or `recoverage.metrics` gets the
+  annotations this package ships instead of having them dropped at the package
+  boundary. Importing recoverage from a typed codebase previously checked
+  nothing, because the installed package was unannotated as far as any type
+  checker could tell.
 - `SIGTERM` stops the dashboard the way Ctrl+C does. `systemctl stop`,
   `docker stop` and a pod eviction all send it, and its default disposition
   killed the process where it stood: the accept loop never unwound, the

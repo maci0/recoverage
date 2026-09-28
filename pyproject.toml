@@ -96,7 +96,11 @@ version = {attr = "recoverage.__version__"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-recoverage = ["assets/*"]
+# py.typed is the PEP 561 marker: without it in the wheel every consumer's type
+# checker reads the package as unannotated, so the annotations this tree gates
+# under mypy --strict stop at its own boundary. It ships empty on purpose, which
+# is what declares the package fully typed rather than partially stubbed.
+recoverage = ["assets/*", "py.typed"]
 
 # The console script is the only thing a package index hands a user, so it
 # ships a man page with it. data_files is the only mechanism a wheel has for

@@ -483,6 +483,15 @@ Optional extras:
 
 Dev extra (`.[dev]`, what CI installs): `mypy>=1.14`, `pytest>=9.1.1`, `ruff>=0.16.7`.
 
+`src/recoverage/py.typed` is the PEP 561 marker and ships in both artifacts
+through `[tool.setuptools.package-data]`, so the annotations the mypy gate
+enforces here reach a consumer's type checker instead of stopping at the
+package boundary. It is an empty file on purpose: content in it declares a
+package PARTIALLY typed (stubs only), which this one is not.
+`tests/test_build.py` (`TestTypingMarker`) holds it in the tree and in the
+manifest, because nothing at runtime reads it and a dropped marker is invisible
+until someone else's mypy run goes quiet.
+
 `rebrew` is a *runtime* import, not a regen-only one: `src/recoverage/_paths.py`
 resolves every coverage-directory lookup through `rebrew.workspace`, so the path source
 in `[tool.uv.sources]` must resolve for `uv sync` to work at all. That source is

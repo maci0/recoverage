@@ -94,6 +94,36 @@ class TestManifestCoversShippedFiles:
         assert not missing, f"assets no package-data pattern picks up: {sorted(missing)}"
 
 
+class TestTypingMarker:
+    """The wheel ships a fully annotated package, so it ships the PEP 561
+    marker that says so.
+
+    The marker is invisible from the source tree once it is there and easy to
+    drop: nothing at runtime reads it, and the module passes either way, so the
+    only thing that notices is a consumer's type checker, which then treats
+    every import from `recoverage` as unannotated and stops checking the
+    signatures this tree gates under mypy --strict.
+    """
+
+    @staticmethod
+    def _patterns() -> list[str]:
+        manifest = tomllib.loads((_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        return manifest["tool"]["setuptools"]["package-data"]["recoverage"]
+
+    def test_the_marker_is_in_the_tree(self) -> None:
+        assert (_ROOT / "src" / "recoverage" / "py.typed").is_file(), (
+            "src/recoverage/py.typed is gone, so the installed package reads as untyped"
+        )
+
+    def test_a_package_data_pattern_ships_it(self) -> None:
+        patterns = self._patterns()
+        assert any(
+            fnmatch.fnmatchcase("py.typed", pattern)
+            or fnmatch.fnmatchcase("recoverage/py.typed", pattern)
+            for pattern in patterns
+        ), f"no package-data pattern picks up py.typed: {patterns}"
+
+
 class TestSdistContents:
     """The sdist is what a rebuild machine unpacks, so it has to carry the
     inputs the build reads and nothing it cannot run.
