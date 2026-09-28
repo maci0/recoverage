@@ -1263,15 +1263,24 @@ def _header(name: str, default: str = "") -> str:
     """A request header as text, or *default* when the value is not text.
 
     A WSGI server decodes raw header bytes as latin-1, so a peer can send a
-    byte above 0x7f.  bottle re-reads environ values as UTF-8 and raises
+    byte above 0x7f.  Bottle re-reads environ values as UTF-8 and raises
     UnicodeDecodeError on one, which would turn a junk header into a 500 and a
     traceback in the log on every request.  A header that is not decodable text
     carries no usable value, so it reads as absent — the same answer the
     RFC 9110 grammar gives for a value that is not a valid field value.
+
+    The guard is UnicodeError, not UnicodeDecodeError, because bottle's
+    re-decode fails in both directions: it encodes the environ value back to
+    latin-1 before decoding it as UTF-8, so a value that already holds a
+    character above U+00FF raises UnicodeEncodeError from that encode.  The
+    latin-1 reading the WSGI server hands over cannot produce one, but a
+    harness (or any server that decodes headers as UTF-8) can, and the answer
+    has to be the same "absent" either way: this runs in the before_request
+    hook, so the failure would be a 500 on every path, before the auth hook.
     """
     try:
         return request.headers.get(name, default)
-    except UnicodeDecodeError:
+    except UnicodeError:
         return default
 
 

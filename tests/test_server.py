@@ -1370,6 +1370,41 @@ class TestSecurityHeaders:
         assert headers.get("Etag")
 
 
+class TestUndecodableRequestHeader:
+    """A header the app cannot read as text reads as absent, on every path.
+
+    ``_header`` runs in the before_request hook, ahead of the auth gate, so a
+    header value that raised there was a 500 with a traceback on every request
+    rather than on the one request that carried it.  Bottle re-encodes the
+    environ value to latin-1 before decoding it as UTF-8, so the failure is
+    UnicodeEncodeError as well as UnicodeDecodeError; the guard covers both.
+    """
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "\U0001f600",  # above U+00FF: bottle's latin-1 encode raises
+            "中文",
+            "�",  # not valid UTF-8 once bottle re-decodes
+        ],
+    )
+    @pytest.mark.parametrize("path", ["/api/health", "/api/targets", "/", "/potato"])
+    def test_request_still_served(self, path: str, value: str) -> None:
+        from conftest import wsgi_get
+
+        status, _, _ = wsgi_get(path, {"X-Request-ID": value})
+        assert not status.startswith("5")
+
+    def test_header_reads_as_absent_not_as_the_value(self) -> None:
+        """The value is dropped, not passed through: an unreadable one cannot
+        become the request id, and a well-formed one still can."""
+        from conftest import wsgi_get
+
+        _, headers, _ = wsgi_get("/api/health", {"X-Request-ID": "\U0001f600"})
+        # A minted id is hex; the undecodable value never reaches the header.
+        assert set(headers["X-Request-Id"]) <= set("0123456789abcdef")
+
+
 class TestLogInjection:
     """Request-derived log fields cannot forge multi-line entries: the path
     is percent-decoded by the time it reaches the app, so %0A arrives as a

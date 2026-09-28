@@ -1741,6 +1741,41 @@ class TestPathTraversalGuard:
         assert _panel_fn_source_text(data, "T", {"files": []}) is None
         assert _panel_fn_source_text(data, "T", {}) is None
 
+    def test_source_root_escape_blocked(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A source root that resolves outside the project is refused.
+
+        The second input, and the one the caller controls: ``sourceRoot`` falls
+        back to ``/src/<target>`` built from the request's ``?target=``, and
+        ``?target=../../../..`` moved the root outside the project.  The
+        per-file check then held THAT root as its baseline and passed, so the
+        panel rendered a file from outside the tree.  A file name with no
+        ``..`` in it is enough, which is why the file-name tests above do not
+        catch it.
+        """
+        (tmp_path / "src").mkdir()
+        (tmp_path / "secret.c").write_text("TOP SECRET", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+        for source_root in ("..", "../..", "/../.."):
+            data: dict = {"paths": {"sourceRoot": source_root}}
+            assert _panel_fn_source_text(data, "T", {"files": ["secret.c"]}) is None
+
+    def test_source_root_escape_via_target_blocked(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The same escape with no ``sourceRoot`` in the document.
+
+        ``paths`` without the key takes the ``/src/<target>`` fallback, and
+        *target* is the raw query value, so the traversal needs no document
+        data at all — only a request.
+        """
+        (tmp_path / "src").mkdir()
+        (tmp_path / "secret.c").write_text("TOP SECRET", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+        for paths in ({}, {"paths": {}}, {"paths": []}):
+            assert _panel_fn_source_text(paths, "../../..", {"files": ["secret.c"]}) is None
+
     @pytest.mark.parametrize(
         "name",
         ["main.c", "a/b.c", "a\\b.c", "..foo.c", "foo..c", "./main.c"],

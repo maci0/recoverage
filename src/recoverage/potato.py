@@ -2467,11 +2467,26 @@ def _is_plain_relative(path: PurePath) -> bool:
 def _panel_fn_source_text(data: dict[str, Any], target: str, fn_data: dict[str, Any]) -> str | None:
     """Read the function's C source, or None when unresolvable.
 
-    Path traversal is prevented by resolving and verifying the file stays
-    inside the source tree.  Anchored at the PROJECT dir (cwd) — an older
-    __file__-relative anchor resolved inside the recoverage package and
-    silently failed every C-source load.
+    Two containment checks, because the source root and the file name are
+    separate inputs and either one can leave the tree.  Anchored at the
+    PROJECT dir (cwd) — an older __file__-relative anchor resolved inside the
+    recoverage package and silently failed every C-source load.
+
+    The first is the SOURCE ROOT.  ``sourceRoot`` is document data, and its
+    fallback is built from ``target``, which is the request's ``?target=``
+    verbatim: ``?target=../../../..`` made the root resolve outside the
+    project, and the per-file check below then held that moved root as its
+    own baseline, so it passed.  The panel read a file outside the tree.
+    ``sourceRoot`` is project-relative wherever it comes from — rebrew writes
+    ``/<path relative to the project root>`` — so a root that resolves
+    outside the project names a tree this server does not serve (``/src`` is
+    rooted here too) and the pane is empty for it either way.
+
+    The second is the FILE NAME, the check that was already here: anchored
+    paths and ``..`` are rejected before the resolve, and the resolved path
+    must sit under the root.
     """
+    project_root = Path.cwd().resolve()
     files = fn_data.get("files", [])
     if not files:
         return None
@@ -2486,7 +2501,10 @@ def _panel_fn_source_text(data: dict[str, Any], target: str, fn_data: dict[str, 
         if isinstance(paths, dict)
         else default_source_root
     )
-    base = (Path.cwd().resolve() / source_root.lstrip("/")).resolve()
+    base = (project_root / source_root.lstrip("/")).resolve()
+    if not base.is_relative_to(project_root):
+        _log.debug("Source root %r resolves outside the project", source_root)
+        return None
     raw = files[0]
     # Reject anchored paths and parent traversal before resolve
     if not _is_plain_relative(Path(raw)):
