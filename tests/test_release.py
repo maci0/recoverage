@@ -21,6 +21,13 @@ _MANIFEST = (
     / "pyproject.toml"
 )
 _CHANGELOG = _MANIFEST.parent / "CHANGELOG.md"
+_MAN_PAGE = _MANIFEST.parent / "man" / "recoverage.1"
+
+#: The `.TH` header's version field: `.TH RECOVERAGE 1 "date" "recoverage X.Y.Z" "User Commands"`.
+_TH_VERSION_RE = re.compile(
+    r'^\.TH\s+\S+\s+\d+\s+"[^"]*"\s+"recoverage\s+(?P<version>[^"]+)"', re.MULTILINE
+)
+
 
 # `## [1.6.0] - 2026-09-27` or `## [1.6.0]`, with or without an Unreleased.
 _SECTION_RE = re.compile(r"^## \[(?P<version>[^\]]+)\](?: - (?P<date>[\d-]+))?$", re.MULTILINE)
@@ -137,6 +144,37 @@ class TestChangelogTracksVersion:
             if m["version"] != "Unreleased" and not m["date"]
         ]
         assert undated == []
+
+    def test_no_entry_opens_a_blockquote(self) -> None:
+        """Every entry is a list item, so a reader's parser sees it as one.
+
+        A stray `>` in front of a bullet makes the whole entry quoted prose: it
+        renders as a continuation of the entry above it and disappears from the
+        release notes, which is where a reader looks for what to change.
+        """
+        quoted = [n for n, line in enumerate(_changelog().splitlines(), 1) if line.startswith(">")]
+        assert quoted == [], f"changelog line(s) opening a blockquote: {quoted}"
+
+
+class TestShippedArtifactsNameTheVersion:
+    """The man page carries the version in its `.TH` header, and it is the
+    only documentation a package index hands an installed copy. Nothing kept it
+    with `__version__`, so a release that bumps the package and forgets the
+    header ships a wheel whose man page names the release before it.
+    """
+
+    def test_the_man_page_names_the_package_version(self) -> None:
+        match = _TH_VERSION_RE.match(_MAN_PAGE.read_text(encoding="utf-8"))
+        assert match, "no .TH header naming a version, so man(1) renders none"
+        assert match["version"] == __version__, (
+            f"man page names recoverage {match['version']}, the package is {__version__}"
+        )
+
+    def test_the_gate_fires_on_a_header_one_release_behind(self) -> None:
+        """A guard nothing has seen fail is not known to work."""
+        stale = '.TH RECOVERAGE 1 "2026-09-29" "recoverage 1.0.0" "User Commands"\n.SH NAME\n'
+        assert _TH_VERSION_RE.match(stale)["version"] == "1.0.0"
+        assert _TH_VERSION_RE.match(".SH NAME\n") is None
 
 
 class TestBreakingEntriesMatchTheVersionBump:

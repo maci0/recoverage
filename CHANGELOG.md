@@ -147,6 +147,14 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   instead of being fetched as three separate scripts, so the pane no longer
   has a state where it renders unhighlighted.
 - `NOTICE` credits the libraries compiled into the bundle.
+- `RECOVERAGE_MAX_CONNECTIONS` and `RECOVERAGE_CLIENT_TIMEOUT` make the two
+  serving limits a deployment chooses instead of a constant in the source. The
+  cap is an integer `1`-`65536` defaulting to `128`, the cap this release
+  introduces; the deadline is an integer `5`-`86400` seconds defaulting to `120`
+  and has to outlast the 15s SSE heartbeat, or live reload is cut short. Both
+  resolve at startup like every other `RECOVERAGE_*` setting, so a value
+  outside the range is the exit 2 a deployment finds at boot rather than a
+  refused connection later. `recoverage config` prints the resolved pair.
 
 ### Fixed
 
@@ -276,7 +284,7 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   line the framing does not allow was accepted as a length and the decoded
   body disagreed with what the client sent. It goes through the same
   `parse_ascii_int` as every other request-supplied number.
->- **A request the HTTP layer refused left no trace in the server log.** An
+- **A request the HTTP layer refused left no trace in the server log.** An
   over-long request line, a malformed one, an unsupported version, or headers
   past the limit are all rejected before a route exists, so nothing downstream
   logged them; the stdlib wrote them to stderr in its own format, with no level

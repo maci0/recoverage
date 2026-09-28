@@ -23,7 +23,7 @@ recoverage/
 ├── pyproject.toml          # Package config, entry point: recoverage
 ├── build-constraints.txt   # Exact pin for the PEP 517 backend (uv.lock does not cover it)
 ├── MANIFEST.in             # What the sdist carries: the backend pin, and not the test suite
-├── man/recovery.1         # Man page for the console script; installed by the wheel through
+├── man/recoverage.1       # Man page for the console script; installed by the wheel through
 │                           #   [tool.setuptools.data-files] (share/man/man1)
 ├── README.md               # User-facing docs
 ├── CHANGELOG.md            # Release history
@@ -255,7 +255,11 @@ The release policy is not written down anywhere else, so it is stated here and
 
 - `src/recoverage/__init__.py` `__version__` is the single source of truth;
   `pyproject.toml` reads it via `[tool.setuptools.dynamic]`. Bump it in the
-  release commit, never before, and never in a feature commit.
+  release commit, never before, and never in a feature commit. The man page's
+  `.TH` header is the one place that repeats it, because `man(1)` prints it and
+  no build step rewrites it: the release commit bumps both, and
+  `tests/test_release.py` (`TestShippedArtifactsNameTheVersion`) fails when
+  they disagree.
 - `CHANGELOG.md` follows Keep a Changelog. Every released version gets a
   `## [X.Y.Z] - YYYY-MM-DD` section above `[Unreleased]`, whose entries are
   grouped `Added` / `Breaking` / `Changed` / `Deprecated` / `Fixed` /
