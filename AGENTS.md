@@ -41,7 +41,8 @@ recoverage/
 ├── .yamllint.yaml          # yamllint config for .github/ (document-start, 100 cols)
 ├── oxlint.config.ts        # JS/TS lint config (see the tooling notes below)
 ├── .github/
-│   ├── actions/sibling-rebrew/action.yml  # composite step: runs tools/ci_clone_rebrew.sh
+│   ├── actions/sibling-rebrew/action.yml  # composite step: caches the sibling checkout, runs
+│                           #   tools/ci_clone_rebrew.sh
 │   └── workflows/ci.yml     # lint, web-lint, test matrix, build, smoke, sbom
 ├── docs/                   # Screenshots & design doc
 │   ├── DESIGN.md           # Architecture and design decisions
@@ -229,7 +230,16 @@ job body cannot name a sibling path, and it takes the clone URL as its only
 input: a ref or sha input would be a second place to write the pin. That
 input's default is empty, because the URL is a copy of a value the script
 already owns and a moved repository would leave the two disagreeing; the
-script's `REBREW_URL` default supplies it. The
+script's `REBREW_URL` default supplies it. The action also restores the
+destination from an `actions/cache` entry keyed on
+`hashFiles('tools/ci_clone_rebrew.sh')`, so the eight installing jobs of one run
+share a clone instead of each fetching the same commit, and a pin bump misses
+the key. There is no `restore-keys` fallback: an older rebrew that still
+resolves is the failure the tag-and-commit check exists to catch. A restored
+tree is therefore not trusted on the cache's word; the script keeps a
+destination whose `HEAD` is `REBREW_SHA` and whose tree is clean, and clones
+over anything else, which is also what makes a second `make clone-rebrew` a
+no-op on a tree the first one fetched. The
 script's `REBREW_REF`/`REBREW_SHA` defaults are the whole pin: the clone fails
 unless the tag still resolves to the commit, so a moved tag cannot change the
 dependency silently. Those defaults must keep matching `uv.lock` (checked by

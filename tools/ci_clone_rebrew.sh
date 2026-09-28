@@ -48,11 +48,27 @@ git_safe=(
   -c filter.lfs.required=false
 )
 
+# A destination already holding the pinned commit is left as it is.  Every
+# installing CI job restores it from a cache keyed on this file, and re-running
+# `make clone-rebrew` finds the tree the previous run fetched: re-cloning is a
+# network round trip (and three more, with a retry) for a commit already on
+# disk.  The test is the same one a fresh clone is held to below, so a restored
+# or stale tree is accepted only when it is that exact commit with nothing
+# uncommitted in it; anything else falls through to the clone.
+if [ -e "${dest}/.git" ]; then
+  have_sha="$(git "${git_safe[@]}" -C "${dest}" rev-parse HEAD 2>/dev/null || true)"
+  if [ "${have_sha}" = "${REBREW_SHA}" ] &&
+     [ -z "$(git "${git_safe[@]}" -C "${dest}" status --porcelain)" ]; then
+    exit 0
+  fi
+fi
+
 # The loop below removes the destination before every attempt, which is what
 # makes a retry start from a clean tree.  On a workstation that directory is
 # often a real rebrew checkout someone is working in, so stop rather than
-# throw that work away.  A CI runner never gets here: the destination is
-# outside the workspace and does not exist yet.  The status probe runs under
+# throw that work away.  A CI runner reaches this only through a restored cache
+# that is not the pinned commit, and a workstation through a checkout that has
+# moved off it.  The status probe runs under
 # git_safe so a repository's own core.fsmonitor cannot execute on checkout.
 if [ -e "${dest}/.git" ] && [ -n "$(git "${git_safe[@]}" -C "${dest}" status --porcelain)" ]; then
   if [ "${REBREW_FORCE:-0}" != "1" ]; then

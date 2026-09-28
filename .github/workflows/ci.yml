@@ -5,6 +5,13 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # Re-run the pipeline by hand, off any branch: a flaky runner, a dependency
+  # index that was down, or a build whose diagnostic the diffoscope path only
+  # prints on the run that failed. The alternative is an empty commit, which
+  # lands on the branch and shows up in the history as a change that changed
+  # nothing. The jobs are the same ones a push runs, so a manual run is the
+  # same evidence as an automatic one.
+  workflow_dispatch:
 
 permissions:
   contents: read

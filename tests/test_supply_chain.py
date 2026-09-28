@@ -178,6 +178,62 @@ class TestRbrewPin:
             "the action takes a ref/sha input; that is a second pin"
         )
 
+    def test_the_sibling_checkout_is_cached_on_the_script_that_pins_it(self) -> None:
+        """The destination is restored from a cache the pin invalidates.
+
+        Every job that runs `uv sync` materializes the same commit, so a run
+        cloned it once per job: eight identical network round trips, each with
+        the script's three attempts behind it, for a tree that is the same
+        every time. The key hashes `tools/ci_clone_rebrew.sh`, so the cache
+        holds exactly the commit the script pins and a pin bump misses it.
+
+        There is deliberately no `restore-keys` fallback: an older rebrew that
+        still resolves is the dependency failure the tag-and-commit check
+        exists to catch, and a cache that can serve it reopens exactly that
+        hole. The key is a hash of the script, so it carries no pin of its own.
+        """
+        action = _SIBLING_ACTION.read_text(encoding="utf-8")
+        assert "actions/cache@" in action, "the sibling checkout is not cached"
+        cache = re.search(r"uses: actions/cache@[^\n]*\n(?P<block>(?:\s{4,}[^\n]*\n)+)", action)
+        assert cache, "the action's cache step has no block to read"
+        block = cache.group("block")
+        assert "hashFiles('tools/ci_clone_rebrew.sh')" in block, (
+            "the cache key does not hash the script; a pin bump would restore the old rebrew"
+        )
+        assert "restore-keys" not in block, (
+            "the sibling cache has a fallback key; an older rebrew is the failure the pin catches"
+        )
+        for var in _PINS:
+            assert var not in block, f"the sibling cache key carries {var}; the script owns the pin"
+
+    def test_a_destination_already_at_the_pin_is_kept(self) -> None:
+        """A restored or already-cloned checkout is not re-cloned, and is verified first.
+
+        The cache restore puts the destination on disk before the script runs,
+        so without this the script would delete it and fetch the same commit
+        over the network on every job, cache hit or miss. The accept path is
+        the same test the clone is held to: HEAD has to be the pinned commit
+        and the tree has to be clean, so a stale cache entry falls through to
+        the clone rather than being served as the pin.
+        """
+        script = _CLONE_SCRIPT.read_text(encoding="utf-8")
+        accept = re.search(
+            r'if \[ -e "\$\{dest\}/\.git" \]; then\n(?P<block>(?:(?!^fi$)[^\n]*\n)*)^fi$',
+            script,
+            re.MULTILINE,
+        )
+        assert accept, "the script has no already-at-the-pin path"
+        block = accept.group("block")
+        assert 'have_sha}" = "${REBREW_SHA}"' in block, (
+            "the accept path does not compare HEAD against the pinned commit"
+        )
+        assert "status --porcelain" in block, (
+            "the accept path keeps a checkout with uncommitted changes in it"
+        )
+        assert block.index("have_sha") < block.index("exit 0"), (
+            "the accept path exits before it has checked the commit"
+        )
+
     def test_the_sibling_action_only_runs_the_script(self) -> None:
         """The composite action is a wrapper, not a second pin.
 

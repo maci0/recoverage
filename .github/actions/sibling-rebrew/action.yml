@@ -30,6 +30,18 @@ inputs:
 runs:
   using: composite
   steps:
+    # Every job that runs `uv sync` needs this checkout, so a run cloned it
+    # once per job: eight identical network round trips for one commit, each
+    # with the script's three attempts behind it. The key hashes the script, so
+    # the cache holds exactly the commit the script pins and a pin bump misses
+    # it entirely. There is no restore-keys fallback for the same reason the
+    # clone has no branch fallback: an older rebrew that still resolves is
+    # exactly the dependency failure the pin exists to catch.
+    - name: Restore the sibling rebrew checkout
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ github.workspace }}/../rebrew
+        key: rebrew-${{ runner.os }}-${{ hashFiles('tools/ci_clone_rebrew.sh') }}
     - name: Clone the sibling rebrew checkout
       shell: bash
       # An empty clone-url reaches the script as REBREW_URL="", and the
