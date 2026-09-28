@@ -816,6 +816,20 @@ def _ensure_db_watcher() -> None:
         _DB_WATCHER_THREAD.start()
 
 
+def _db_watcher() -> threading.Thread | None:
+    """The watcher thread, or None when none is registered.
+
+    Read under the lock :func:`_ensure_db_watcher` and :func:`_stop_db_watcher`
+    both take, so a caller reporting the thread's state reads the reference its
+    writers published rather than a bare module global.  The pair
+    ``/api/health`` reports (stream count, watcher liveness) is meant to be one
+    reading; taking one lock for the count and racing the global for the thread
+    is what let the two describe different moments.
+    """
+    with _DB_WATCHER_LOCK:
+        return _DB_WATCHER_THREAD
+
+
 def _stop_db_watcher() -> None:
     """Stop the watcher thread (used by tests).
 
@@ -1151,7 +1165,7 @@ def _stream_stats() -> dict[str, Any]:
     """
     with _SSE_CLIENTS_LOCK:
         clients = len(_SSE_CLIENTS)
-    watcher = _DB_WATCHER_THREAD
+    watcher = _db_watcher()
     if watcher is None:
         alive: bool | None = None
     else:
@@ -1443,11 +1457,25 @@ def handle_api_data(target: str) -> bytes | HTTPResponse:
     if entry is not None:
         accept_enc = _header("Accept-Encoding", "")
         encoding = _best_encoding(accept_enc)
-        body = entry.get(encoding)
+        # The entry is SHARED state, not this request's: a checkout hands the
+        # same dict to more than one thread (a follower the leader answered,
+        # and the unclaimed duplicate build the single-flight deliberately
+        # allows beside a live leader), and every one of them inserts variants
+        # into it under _DATA_CACHE_LOCK.  Reading it outside that lock leaves
+        # the answer to whichever interleaving of another thread's writes this
+        # one lands between.  One hold covers both keys, and "raw" is
+        # guaranteed present under it: _cache_data_insert publishes the entry,
+        # "raw" and the variant together inside one acquisition, so no reader
+        # can observe it half-built.
+        with _DATA_CACHE_LOCK:
+            body = entry.get(encoding)
+            raw = entry["raw"]
         if body is None:
             # First request for this encoding: mint the variant from the
-            # stored raw JSON (queries + json.dumps already paid for).
-            raw = entry["raw"]
+            # stored raw JSON (queries + json.dumps already paid for).  The
+            # compression stays OUTSIDE the lock: brotli at q5 over a
+            # multi-megabyte payload must not hold the lock every other /data
+            # request queues on.
             body, _ = compress_payload(raw, accept_enc)
             with _DATA_CACHE_LOCK:
                 entry[encoding] = body

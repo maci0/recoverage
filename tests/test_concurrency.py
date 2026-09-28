@@ -109,6 +109,70 @@ class TestDataSingleFlight:
         # One build means one body, so every client of the herd is answered
         # from the same bytes.
         assert len(set(bodies)) == 1
+
+    def test_a_herd_minting_variants_never_serves_a_mismatched_body(self) -> None:
+        """Concurrent misses on ONE key, each asking for a different encoding.
+
+        The variant each request reads out of the memo is SHARED state: a
+        checkout hands the same entry to every thread in the herd, and each
+        mints its own encoding into it.  A read that consults the entry outside
+        the lock the writers take is answered from whatever interleaving of
+        another thread's writes it lands between, and the shape of that answer
+        is a body announced under another encoding's name — a brotli payload
+        labelled zstd, which no client can decode.
+
+        The oracle is the response itself rather than the lock: decode each
+        body by the Content-Encoding the server DECLARED for it and require the
+        same JSON every identity client sees.  A mismatch cannot survive that,
+        and a lock that is merely present but wrongly scoped would not fail it
+        either, which is the point.
+        """
+        path = "/api/targets/FAKEDLL/data?section=.text"
+        # A cold memo, so the herd is the FIRST set of requests for this key
+        # and every non-identity worker takes the mint-the-variant branch.  The
+        # memo outlives a test (it is keyed on the coverage fingerprint, which
+        # no test moves), so a leftover entry from an earlier one would make
+        # this a pure read and the branch untested.
+        api._clear_data_cache()
+        # One accepted encoding per worker, cycled, so several threads share
+        # each one and each also races the other two.
+        offered = ["identity", "gzip", "br", "zstd"]
+        _status, headers, body = wsgi_get(path, _IDENTITY)
+        wanted = json.loads(decode_body(body, headers))
+        # The identity request above minted only the unencoded variant, so
+        # every other encoding is still absent and must be minted under the
+        # herd.  Asserted rather than assumed: without it the test would pass
+        # while never reaching the code it is here to guard.
+        key = (api._snapshot_db_mtime(), "FAKEDLL", ".text", True)
+        assert key in api._DATA_CACHE, "the identity request did not populate the memo"
+        assert "gzip" not in api._DATA_CACHE[key]
+
+        answered: list[tuple[str, str]] = []
+        answered_lock = threading.Lock()
+
+        def worker(index: int) -> None:
+            encoding = offered[index % len(offered)]
+            status, headers, body = wsgi_get(
+                path, {"Accept-Encoding": encoding} if encoding != "identity" else _IDENTITY
+            )
+            assert status == "200 OK", f"{status}: {decode_body(body, headers)[:200]!r}"
+            # decode_body dispatches on the DECLARED encoding, so a body
+            # announced under the wrong one raises here rather than parsing.
+            assert json.loads(decode_body(body, headers)) == wanted
+            with answered_lock:
+                answered.append((encoding, headers.get("Content-Encoding", "")))
+
+        _in_parallel(worker)
+
+        assert len(answered) == WORKERS
+        for requested, declared in answered:
+            # The identity client is the only one that may be served
+            # unencoded; every other one asked for a coding and must be told
+            # one, or the shared entry served it the wrong representation.
+            if requested != "identity":
+                assert declared in ("gzip", "br", "zstd"), (
+                    f"asked for {requested}, served as {declared or 'identity'!r}"
+                )
         # The claim is released on the way out, so a later request is a memo
         # hit and not a second build behind a claim nobody will ever release.
         assert not api._DATA_CACHE_BUILDING
