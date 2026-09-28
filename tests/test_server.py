@@ -32,6 +32,7 @@ from recoverage.server import (
     DLL_DATA,
     DLL_LOCK,
     HSTS_MAX_AGE_SECONDS,
+    MIN_COMPRESS_BYTES,
     SUPPORTED_ENCODINGS,
     _best_encoding,
     _db_path,
@@ -211,12 +212,12 @@ class TestCompressPayload:
         assert result == data
 
     def test_brotli_returns_br(self) -> None:
-        data = b"x" * 100
+        data = b"x" * (MIN_COMPRESS_BYTES + 100)
         _, encoding = compress_payload(data, "br")
         assert encoding == "br"
 
     def test_zstd_returns_zstd(self) -> None:
-        data = b"x" * 100
+        data = b"x" * (MIN_COMPRESS_BYTES + 100)
         _, encoding = compress_payload(data, "zstd")
         assert encoding == "zstd"
 
@@ -237,13 +238,23 @@ class TestCompressPayload:
 
     def test_empty_payload(self) -> None:
         compressed, encoding = compress_payload(b"", "gzip")
-        assert encoding == "gzip"
-        assert gzip.decompress(compressed) == b""
+        assert encoding == ""
+        assert compressed == b""
+
+    def test_a_body_under_the_floor_is_served_whole(self) -> None:
+        """Below the floor the frame costs more than the squeeze saves."""
+        data = b"hello world" * 4
+        assert len(data) < MIN_COMPRESS_BYTES
+        for accept in ("gzip", "br", "zstd"):
+            result, encoding = compress_payload(data, accept)
+            assert encoding == "", accept
+            assert result == data, accept
 
     def test_single_byte_payload(self) -> None:
-        compressed, encoding = compress_payload(b"\xff", "br")
+        data = b"\xff" * (MIN_COMPRESS_BYTES + 1)
+        compressed, encoding = compress_payload(data, "br")
         assert encoding == "br"
-        assert brotli.decompress(compressed) == b"\xff"
+        assert brotli.decompress(compressed) == data
 
     def test_binary_payload(self) -> None:
         """Full byte range should compress and decompress correctly."""

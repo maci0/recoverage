@@ -1891,13 +1891,27 @@ def select_static_variant(
     return best
 
 
+#: Below this size the framing costs more than the squeeze saves, so the
+#: response is sent as it is.  Measured: zstd spends 9 bytes on a frame and 13
+#: more building its dictionary, so a 47-byte empty target list came back as 56
+#: on the wire, and every 4xx envelope (the refusal bodies are one short line of
+#: JSON) paid the same tax.  The saving above the floor is real and the CPU is
+#: what compress_payload exists to spend; below it neither is true.  The
+#: repo-file route makes the same trade at its own size
+#: (:data:`recoverage.ui._REPO_MIN_COMPRESS_BYTES`).
+MIN_COMPRESS_BYTES = 256
+
+
 def compress_payload(body: bytes, accept_encoding: str) -> tuple[bytes, str]:
     """Compress body with the best algorithm the client accepts.
 
     Returns (compressed_body, encoding_name). encoding_name is "" if no
     compression was applied, guaranteeing the caller can always set
-    Content-Encoding only when encoding is truthy.
+    Content-Encoding only when encoding is truthy — which includes a body under
+    :data:`MIN_COMPRESS_BYTES`, served whole rather than grown by a frame.
     """
+    if len(body) < MIN_COMPRESS_BYTES:
+        return body, ""
     encoding = _best_encoding(accept_encoding)
     if encoding == "zstd":
         return _get_zstd_compressor().compress(body), "zstd"
