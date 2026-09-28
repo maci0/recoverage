@@ -2339,7 +2339,11 @@ _UNAUTHORIZED_HTML = (
     b'<meta name="viewport" content="width=device-width, initial-scale=1">'
     b"<title>ReCoverage - access token required</title></head>"
     b'<body bgcolor="#0f1216" text="#e7edf4">'
-    b'<table width="100%" height="90%" border="0"><tr><td align="center" valign="middle">'
+    # role="presentation" for the same reason every layout table in potato.py
+    # carries it: a one-cell centring table is announced as a table with no
+    # headers before the message it exists to centre (WCAG 1.3.1).
+    b'<table role="presentation" width="100%" height="90%" border="0">'
+    b'<tr><td align="center" valign="middle">'
     b'<font face="SFMono-Regular, Consolas, Liberation Mono, Courier New, monospace">'
     b'<h1><font size="5" color="#e7edf4"><b>ReCoverage</b></font></h1>'
     b'<font size="3" color="#8b949e">Access token required</font>'

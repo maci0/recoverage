@@ -817,6 +817,27 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   are the retro surface the design asks for, and its `lang`, its skip link,
   its block `alt` text and its function-list `scope="col"` headers are
   deliberate.
+- Potato Mode's `accesskey` letters are CLAIMED, not spelled per control:
+  `potato._accesskey_attr` hands each one out in document order (the search
+  box, the section tabs, the filter pills) and a control whose letter is
+  already held takes none. `.rdata` and `.rsrc` both answer `r`, the Reloc
+  pill's own letter is `r`, and the Stub pill's `S` is the search box's `s`, so
+  writing the attribute per control put two controls on one letter, and a
+  browser resolves that to the first of them while both look identical
+  (WCAG 2.1.4). The footer prints the letters that were actually claimed
+  (`potato._shortcuts_html`) and nothing else, so a shortcut is discoverable
+  and none is listed that does not work. A new control with a shortcut goes
+  through the same claim; a new letter is a change to `FILTER_OPTS` or
+  `_section_tab_data`, and the collision test in `tests/test_potato.py` is
+  what notices a second spelling.
+- A control that CHANGES its visible label changes its accessible name with
+  it: `ui/copy-button.tsx` flashes `Copied!` in place of `Copy`, so a
+  voice-control user saying "click Copied" has a name to match (WCAG 2.5.3).
+  The outcome still repeats into the button's own `role="status"`, because a
+  focused screen reader reads the name and not the text that replaced it.
+  A modal is ONE focusable scroll region: `CodeModal`'s body holds the
+  `role="region"`, and `HighlightedCode`'s `region={false}` keeps the `<pre>`
+  from declaring a second, identically named one over the same content.
 - The listener's socket family comes from the bind address, not from a
   fixed class: `wsgiref`'s `WSGIServer` inherits `http.server.HTTPServer`'s
   `AF_INET` and never changes it, so an IPv6 address `config.validate_bind`

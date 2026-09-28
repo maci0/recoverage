@@ -182,3 +182,31 @@ def test_asm_pane_renders_disassembly(page: Any):
     )
     # highlightInto() adds hljs's class; unhighlighted plain text would not.
     expect(asm.locator("code.hljs")).to_have_count(1, timeout=15000)
+
+
+def test_code_modal_names_one_scroll_region(page: Any):
+    """The modal's body is the pane's scroll container, so it carries the
+    focusable region and its name. The <pre> inside used to declare a second
+    region under the same name over the same content: two tab stops where one
+    scrolls, and a screen reader reading the same line twice."""
+    page.goto(f"{BASE_URL}/?section=.text")
+    page.wait_for_selector(".grid-canvas")
+    page.locator(".tab-btn", has_text=".text").click()
+    page.wait_for_timeout(500)
+
+    canvas = page.locator(".grid-canvas")
+    box = canvas.bounding_box()
+    if box is None:
+        pytest.skip("coverage map canvas did not layout")
+    canvas.click(position={"x": min(12, box["width"] / 2), "y": min(12, box["height"] / 2)})
+
+    opener = page.locator("#panel .section", has_text="C Source").locator("button", has_text="Open")
+    expect(opener).to_be_enabled(timeout=15000)
+    opener.click()
+
+    body = page.locator(".modal-body")
+    expect(body).to_have_attribute("role", "region")
+    expect(body).to_have_attribute("tabindex", "0")
+    # Exactly one focusable region, and it is the one that scrolls.
+    expect(page.locator('.modal-body [role="region"]')).to_have_count(0)
+    expect(page.locator('.modal-body[role="region"]')).to_have_count(1)

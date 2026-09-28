@@ -17,6 +17,7 @@ from recoverage.potato import (
     BG_COLOR,
     BORDER_COLOR,
     TRACK_UNITS,
+    _AccessKey,
     _build_progress,
     _build_url,
     _cell_file_offset,
@@ -962,6 +963,33 @@ def test_accesskey_attributes():
 
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage document")
+def test_no_two_controls_claim_one_accesskey():
+    # The Stub pill's own letter is "S" and the search box's is "s": both were
+    # written before, and a browser resolves a duplicated accesskey to the
+    # first control in document order, so one of them answered to a key that
+    # was on screen as belonging to the other (WCAG 2.1.4).
+    target = require_target()
+    html = render_potato_url(f"/potato?target={target}")
+    letters = re.findall(r'accesskey="([^"]*)"', html)
+    assert letters
+    assert len(letters) == len(set(letters))
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage document")
+def test_every_accesskey_is_listed_in_the_footer():
+    # An accesskey nobody can find is a shortcut only the author knows, so the
+    # footer names every letter the page handed out, and only those.
+    target = require_target()
+    html = render_potato_url(f"/potato?target={target}")
+    legend = re.search(r"Key: ([^<]*)", html)
+    assert legend is not None
+    listed = {part.split()[0] for part in legend.group(1).split(" · ")}
+    assert listed == {
+        f"Alt+{letter.upper()}" for letter in re.findall(r'accesskey="([^"]*)"', html)
+    }
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage document")
 def test_functions_nav_link_is_url_quoted():
     # The header [Functions] href is percent-encoded, so a target or section
     # holding "&" cannot append query parameters to it.  Every other href on
@@ -1457,17 +1485,33 @@ class TestSectionHeadingEscapesTitle:
 
 class TestSectionTabAccesskey:
     """A one-character section name indexes past the end of the string and
-    used to 500 the page; the accesskey falls back to the first character."""
+    used to 500 the page; the accesskey falls back to the first character.
+    Two sections landing on the same letter, and a section landing on one the
+    search box or a filter pill already holds, take no shortcut at all."""
 
     def test_second_character_when_available(self) -> None:
-        assert _section_tab_data("T", ".text", {".text": {}}, None, "") == [
-            (".text", "?target=T&section=.text", True, "t")
+        assert _section_tab_data("T", ".text", {".text": {}}, None, "", set()) == [
+            (".text", "?target=T&section=.text", True, _AccessKey("t", 'accesskey="t"'))
         ]
 
     def test_single_character_name_falls_back_to_first(self) -> None:
-        assert _section_tab_data("T", "x", {"x": {}}, None, "") == [
-            ("x", "?target=T&section=x", True, "x")
+        assert _section_tab_data("T", "x", {"x": {}}, None, "", set()) == [
+            ("x", "?target=T&section=x", True, _AccessKey("x", 'accesskey="x"'))
         ]
+
+    def test_an_already_claimed_letter_is_withheld(self) -> None:
+        assert _section_tab_data("T", ".text", {".text": {}}, None, "", {"s", "t"}) == [
+            (".text", "?target=T&section=.text", True, _AccessKey("", ""))
+        ]
+
+    def test_two_sections_sharing_a_letter_claim_it_once(self) -> None:
+        # .rdata and .rsrc both answer "r", and "r" is the Reloc pill's own
+        # letter: whichever comes first in the document keeps it.
+        first, second = _section_tab_data(
+            "T", ".rdata", {".rdata": {}, ".rsrc": {}}, None, "", {"s"}
+        )
+        assert first[3].letter == "r"
+        assert second[3].letter == ""
 
 
 # ── Index parsing (potato.py idx handling, via the real render) ────
@@ -2701,11 +2745,11 @@ class TestFilterKeysCoverTheLegend:
     def test_every_filter_key_has_a_pill_with_a_title(self) -> None:
         from recoverage.potato import FILTER_STATES, _build_filter_data
 
-        pills = _build_filter_data("SERVER", ".text", set(), "")
+        pills = _build_filter_data("SERVER", ".text", set(), "", {"s"})
         assert len(pills) == len(FILTER_STATES) + 1  # plus "All"
-        keys = {key for _, _, _, _, key, _ in pills}
+        keys = {key for _, _, _, _, key, _, _ in pills}
         assert keys - {"0"} == set(FILTER_STATES)
-        for href, label, _color, _active, _key, title in pills:
+        for href, label, _color, _active, _key, title, _acc in pills:
             assert title, f"pill {label} has no title to explain the letter"
             assert href.startswith("?")
 
@@ -2713,7 +2757,8 @@ class TestFilterKeysCoverTheLegend:
         from recoverage.potato import _build_filter_data
 
         pills = {
-            key: href for href, _, _, _, key, _ in _build_filter_data("S", ".text", {"reloc"}, "")
+            key: href
+            for href, _, _, _, key, _, _ in _build_filter_data("S", ".text", {"reloc"}, "", {"s"})
         }
         # Turning one on keeps the others; turning the active one off clears it,
         # which leaves no filter= at all rather than an empty one, so the link

@@ -103,9 +103,11 @@ export function CodeModal({
             </Button>
           </div>
         </div>
-        {/* The body is a scroll container no other control reaches, so it is
+        {/* The body is the scroll container no other control reaches, so it is
             focusable and names itself: the long disassembly it holds cannot be
-            scrolled from the keyboard otherwise (WCAG 2.1.1). */}
+            scrolled from the keyboard otherwise (WCAG 2.1.1). The pane inside
+            hands the region over to it rather than declaring a second,
+            identically named one over the same content. */}
         <div
           className="modal-body min-h-0 overflow-auto p-3"
           tabIndex={0}
@@ -116,6 +118,7 @@ export function CodeModal({
             text={text}
             language={language}
             label={title === "" ? "Code viewer" : `${title} pane`}
+            region={false}
           />
         </div>
       </div>

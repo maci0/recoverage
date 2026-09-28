@@ -19,6 +19,11 @@ export type HighlightedCodeProps = {
   /** Names the pane for assistive technology, and is required: the pane is a
    * scroll container, so it is focusable and reads as its own region. */
   label: string;
+  /** False when an ancestor already is the scroll container and the focusable
+   * region for this text, which is what `CodeModal`'s body is. Two focusable
+   * regions under one name over one scroll area is a tab stop that scrolls
+   * nothing and an announcement that says the same thing twice (WCAG 2.4.3). */
+  region?: boolean;
   /** Called with the numeric address of a clicked `.asm-link`. */
   onAddressClick?: (address: string) => void;
 };
@@ -28,18 +33,21 @@ export function HighlightedCode({
   language,
   className,
   label,
+  region = true,
   onAddressClick,
 }: HighlightedCodeProps): ComponentChildren {
   const html = useMemo(() => highlightCode(text, language), [language, text]);
   return (
     <pre
-      className={cn("code overflow-auto rounded-hair border border-line bg-code p-3", className)}
+      className={cn("code rounded-hair border border-line bg-code p-3", className, {
+        "overflow-auto": region,
+      })}
       // A scroll container that is not focusable cannot be scrolled from the
       // keyboard, which strands a long disassembly or byte dump off to the
       // right for anyone not using a mouse (WCAG 2.1.1).
-      tabIndex={0}
-      role="region"
-      aria-label={label}
+      tabIndex={region ? 0 : undefined}
+      role={region ? "region" : undefined}
+      aria-label={region ? label : undefined}
     >
       <code
         className="hljs block font-mono text-label leading-[1.45] whitespace-pre"

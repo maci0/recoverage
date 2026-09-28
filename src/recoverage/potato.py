@@ -21,7 +21,7 @@ from collections.abc import Callable, Iterable
 from heapq import nsmallest
 from html import escape as _html_escape
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, NamedTuple, cast
 from urllib.parse import ParseResult, parse_qs, urlparse
 from urllib.parse import quote as _url_quote
 
@@ -869,15 +869,15 @@ _PAGE_SRC = r"""<!DOCTYPE html>
     </td>
     <td valign="middle" width="100%">
       <table role="presentation" id="section-tabs" border="0" cellpadding="0" cellspacing="4"><tr>
-      % for s_name, s_url, s_active, s_key in section_tab_data:
+      % for s_name, s_url, s_active, s_acc in section_tab_data:
         <td valign="middle">
         <!-- The <a> wraps the whole pill table, not just the label.  Wrapping
              only the text made the clickable area the ~20px glyph while the
              32px pill around it looked like the button and did nothing. -->
         % if s_active:
-          <a href="{{s_url}}" accesskey="{{s_key}}" aria-current="page"><table role="presentation" border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{ACTIVE_L}}" width="16" height="32" border="0" alt=""></td><td background="{{ACTIVE_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="#ffffff"><b>{{s_name}}</b></font></td><td><img src="{{ACTIVE_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
+          <a href="{{s_url}}" {{!s_acc}} aria-current="page"><table role="presentation" border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{ACTIVE_L}}" width="16" height="32" border="0" alt=""></td><td background="{{ACTIVE_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="#ffffff"><b>{{s_name}}</b></font></td><td><img src="{{ACTIVE_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
         % else:
-          <a href="{{s_url}}" accesskey="{{s_key}}"><table role="presentation" border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{INACTIVE_L}}" width="16" height="32" border="0" alt=""></td><td background="{{INACTIVE_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="{{MUTED_COLOR}}">{{s_name}}</font></td><td><img src="{{INACTIVE_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
+          <a href="{{s_url}}" {{!s_acc}}><table role="presentation" border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{INACTIVE_L}}" width="16" height="32" border="0" alt=""></td><td background="{{INACTIVE_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="{{MUTED_COLOR}}">{{s_name}}</font></td><td><img src="{{INACTIVE_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
         % end
         </td>
       % end
@@ -923,7 +923,7 @@ _PAGE_SRC = r"""<!DOCTYPE html>
           % if status_filter:
             <input type="hidden" name="status" value="{{status_filter}}">
           % end
-          <label for="search-input"><font size="1" color="{{MUTED_COLOR}}">Search:&nbsp;</font></label><input id="search-input" type="text" name="search" size="14" value="{{search_query}}" placeholder="Search VA or name..." accesskey="s"> <input type="submit" value="Go"></form>
+          <label for="search-input"><font size="1" color="{{MUTED_COLOR}}">Search:&nbsp;</font></label><input id="search-input" type="text" name="search" size="14" value="{{search_query}}" placeholder="Search VA or name..." accesskey="{{search_accesskey}}"> <input type="submit" value="Go"></form>
         </td>
         <!-- Spacer cells, not &nbsp; text: <form> is a block box, so a leading
              text node in the same cell pushed the form onto its own line and
@@ -951,15 +951,15 @@ _PAGE_SRC = r"""<!DOCTYPE html>
         <tr>
         <td valign="middle" colspan="4">
           <table role="presentation" id="filters" border="0" cellpadding="0" cellspacing="4"><tr>
-            % for fb_href, fb_label, fb_color, fb_active, fb_key, fb_title in filter_btn_data:
+            % for fb_href, fb_label, fb_color, fb_active, fb_key, fb_title, fb_acc in filter_btn_data:
               <td valign="middle">
               <!-- Anchor wraps the whole pill: see the section-tab note above.
                    These are the worst case — a single-letter label gave E/R/M/S/P
                    a 10px-wide hit target inside a 32px-wide pill. -->
               % if fb_active:
-                <a href="{{fb_href}}" title="{{fb_title}}" accesskey="{{fb_label[0].lower()}}" aria-label="{{fb_title}}, on" aria-current="true"><table role="presentation" border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{FILTER_ACT_L}}" width="16" height="32" border="0" alt=""></td><td background="{{FILTER_ACT_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="{{fb_color}}"><b>{{fb_label}}</b></font></td><td><img src="{{FILTER_ACT_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
+                <a href="{{fb_href}}" title="{{fb_title}}" {{!fb_acc}} aria-label="{{fb_title}}, on" aria-current="true"><table role="presentation" border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{FILTER_ACT_L}}" width="16" height="32" border="0" alt=""></td><td background="{{FILTER_ACT_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="{{fb_color}}"><b>{{fb_label}}</b></font></td><td><img src="{{FILTER_ACT_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
               % else:
-                <a href="{{fb_href}}" title="{{fb_title}}" accesskey="{{fb_label[0].lower()}}" aria-label="{{fb_title}}, off"><table role="presentation" border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{FILTER_INACT_L}}" width="16" height="32" border="0" alt=""></td><td background="{{FILTER_INACT_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="{{fb_color}}">{{fb_label}}</font></td><td><img src="{{FILTER_INACT_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
+                <a href="{{fb_href}}" title="{{fb_title}}" {{!fb_acc}} aria-label="{{fb_title}}, off"><table role="presentation" border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{FILTER_INACT_L}}" width="16" height="32" border="0" alt=""></td><td background="{{FILTER_INACT_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="{{fb_color}}">{{fb_label}}</font></td><td><img src="{{FILTER_INACT_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
               % end
               </td>
             % end
@@ -1043,6 +1043,7 @@ _PAGE_SRC = r"""<!DOCTYPE html>
  &middot; DB updated {{db_mtime}}
 % end
 </font></td>
+<td align="center"><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">{{!shortcuts_html}}</font></td>
 <td align="right"><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">HTML5</font></td>
 </tr></table>
 </td></tr></table>
@@ -1050,6 +1051,30 @@ _PAGE_SRC = r"""<!DOCTYPE html>
 </font></body></html>"""
 
 _PAGE_TPL = SimpleTemplate(source=_PAGE_SRC)
+
+
+def _shortcuts_html(
+    section_tab_data: list[tuple[str, str, bool, _AccessKey]],
+    filter_btn_data: list[tuple[str, str, str, bool, str, str, _AccessKey]],
+) -> str:
+    """The footer's line naming every accesskey the page handed out.
+
+    An accesskey nobody can discover is a shortcut only the author knows, and
+    the footer's reader is the one person who does not have the source in
+    front of them.  The letters listed here are exactly the ones that were
+    claimed, so a pill whose letter lost a collision is absent from both the
+    markup and this line rather than listed and not working (WCAG 2.1.4).
+    """
+    parts = [f"Alt+{SEARCH_ACCESSKEY.upper()} search"]
+    parts.extend(
+        f"Alt+{acc.letter.upper()} {name}" for name, _, _, acc in section_tab_data if acc.letter
+    )
+    parts.extend(
+        f"Alt+{acc.letter.upper()} {title}"
+        for _, _, _, _, _, title, acc in filter_btn_data
+        if acc.letter
+    )
+    return _esc("Key: " + " · ".join(parts))
 
 
 # ── SimpleTemplate: Detail Panel ────────────────────────────────────
@@ -1615,11 +1640,60 @@ def _search_functions(coverage: CoverageSnapshot, search_query: str) -> set[str]
     return search_matched_fns
 
 
+#: The search box's own accesskey.  Claimed before anything else derives one,
+#: because it is the only shortcut on the page whose control is not a pill.
+SEARCH_ACCESSKEY = "s"
+
+
+class _AccessKey(NamedTuple):
+    """One claimed shortcut: the letter, and the attribute to write.
+
+    Both are carried because the template needs the attribute (a control with
+    no claim writes none at all) and the footer's key legend needs the letter.
+    """
+
+    letter: str
+    attr: str
+
+    def __str__(self) -> str:
+        """The attribute, because that is what ``{{!s_acc}}`` writes.
+
+        A NamedTuple's own ``__str__`` is its repr, and the repr landing in the
+        markup reads as an unknown attribute to the browser and to vnu.
+        """
+        return self.attr
+
+
+def _accesskey_attr(used: set[str], key: str) -> _AccessKey:
+    """Claim *key*'s first character as an accesskey, or nothing if it is taken.
+
+    Two controls claiming one letter is a shortcut the browser resolves to the
+    first of them in document order, so the second is unreachable by key while
+    looking identical to the first (WCAG 2.1.4).  Claiming is one-pass in the
+    order the controls appear: the search box, the section tabs, then the
+    filter pills, so a collision costs the later control its shortcut rather
+    than the one the reader is likelier to be reaching for.
+
+    The attribute is assembled here rather than in the template because an
+    unclaimed control has to write no attribute at all, and it reaches the
+    document through ``{{!s_acc}}`` (unescaped, as the assembled attribute
+    must be).
+    """
+    letter = key[:1].lower()
+    if letter == "" or letter in used:
+        return _AccessKey("", "")
+    used.add(letter)
+    return _AccessKey(letter, f'accesskey="{_esc(letter)}"')
+
+
 #: The filter pills, as ``(state, label letter, title)``.  Module scope
 #: because every row is invariant to the request: the target, the section and
 #: the active set only decide which of them is highlighted, never what they
 #: are.  The state is the filter name a ?filter= spells: it is what the pill
-#: toggles and what FILTER_STATES is keyed on.
+#: toggles and what FILTER_STATES is keyed on, so it is the one field that says
+#: which entry a row stands for.  The label letter is also the pill's
+#: accesskey, resolved through :func:`_accesskey_attr` so a letter another
+#: control already holds is dropped rather than duplicated.
 FILTER_OPTS: tuple[tuple[str, str, str], ...] = (
     ("exact", "E", "Exact match"),
     ("reloc", "R", "Reloc match"),
@@ -1640,11 +1714,14 @@ def _build_filter_data(
     section: str,
     active_filters: set[str],
     search_query: str,
-) -> list[tuple[str, str, str, bool, str, str]]:
+    used_accesskeys: set[str],
+) -> list[tuple[str, str, str, bool, str, str, _AccessKey]]:
     # A pill is a single letter in the state's colour, so it carries the
     # state's full name in its title: a lone V or X is a lookup the legend
     # two hundred pixels away can answer, and a pointer answers instantly.
-    filter_btn_data: list[tuple[str, str, str, bool, str, str]] = [
+    # The "All" pill has no letter of its own to claim: it spells the state
+    # every filter is off, so it takes no shortcut.
+    filter_btn_data: list[tuple[str, str, str, bool, str, str, _AccessKey]] = [
         (
             _build_url(target, section, search=search_query),
             "All",
@@ -1652,6 +1729,7 @@ def _build_filter_data(
             not active_filters,
             "0",
             "Show all statuses",
+            _AccessKey("", ""),
         )
     ]
     # Symmetric difference toggles one filter on or off; an empty result is a
@@ -1659,17 +1737,18 @@ def _build_filter_data(
     # The fifth slot is the filter key, not the pill's letter: it is what
     # names the filter the href toggles, and the template reads it as
     # fb_key. A letter there cannot be matched back to a FILTER_STATES key.
-    filter_btn_data.extend(
-        (
-            _build_url(target, section, active_filters ^ {f}, search=search_query),
-            label,
-            FILTER_COLORS[f],
-            f in active_filters,
-            f,
-            title,
+    for f, label, title in FILTER_OPTS:
+        filter_btn_data.append(
+            (
+                _build_url(target, section, active_filters ^ {f}, search=search_query),
+                label,
+                FILTER_COLORS[f],
+                f in active_filters,
+                f,
+                title,
+                _accesskey_attr(used_accesskeys, label),
+            )
         )
-        for f, label, title in FILTER_OPTS
-    )
     return filter_btn_data
 
 
@@ -2241,14 +2320,18 @@ def _section_tab_data(
     sections: dict[str, dict[str, Any]],
     active_filters: set[str] | None,
     search_query: str,
+    used_accesskeys: set[str],
     status_filter: str = "",
-) -> list[tuple[str, str, bool, str]]:
-    """(name, url, is_active, accesskey) for the section tabs.
+) -> list[tuple[str, str, bool, _AccessKey]]:
+    """(name, url, is_active, accesskey attribute) for the section tabs.
 
     The accesskey is the section name's second character, falling back to the
     first: a one-character section name would otherwise index off the end of
-    the string and 500 the whole page.  ``status_filter`` rides along, so a
-    section switch does not quietly drop the function list's own criterion.
+    the string and 500 the whole page.  Two sections can land on the same one
+    (``.data`` and ``.rdata`` both answer ``d``), so each letter goes through
+    :func:`_accesskey_attr` and the later tab takes none.
+    ``status_filter`` rides along, so a section switch does not quietly drop
+    the function list's own criterion.
     """
     return [
         (
@@ -2257,7 +2340,7 @@ def _section_tab_data(
                 target, s, active_filters or None, search=search_query, status=status_filter
             ),
             s == section,
-            s[1:2] or s[:1],
+            _accesskey_attr(used_accesskeys, s[1:2] or s[:1]),
         )
         for s in sections
     ]
@@ -2372,10 +2455,22 @@ def _render_potato_inner(
     sec_data: dict[str, Any] = sections.get(section, {})
 
     search_matched_fns = _search_functions(coverage, search_query)
-    filter_btn_data = _build_filter_data(target, section, active_filters, search_query)
+    # One pass of accesskey claims in document order: the search box, the
+    # section tabs, then the filter pills.  A letter already claimed is not
+    # offered again, so no two controls on the page answer to the same key.
+    used_accesskeys = {SEARCH_ACCESSKEY}
     progress = _build_progress(section, sec_data, data, sections)
     section_tab_data = _section_tab_data(
-        target, section, sections, active_filters or None, search_query, status_filter
+        target,
+        section,
+        sections,
+        active_filters or None,
+        search_query,
+        used_accesskeys,
+        status_filter,
+    )
+    filter_btn_data = _build_filter_data(
+        target, section, active_filters, search_query, used_accesskeys
     )
 
     # Defaults for whichever view the request selects.
@@ -2467,6 +2562,8 @@ def _render_potato_inner(
         targets=targets,
         section_tab_data=section_tab_data,
         filter_btn_data=filter_btn_data,
+        shortcuts_html=_shortcuts_html(section_tab_data, filter_btn_data),
+        search_accesskey=SEARCH_ACCESSKEY,
         progress=progress,
         progress_bar_png=progress_bar_png_uri,
         ACTIVE_L=ACTIVE_L,

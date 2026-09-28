@@ -45,7 +45,10 @@ export function CopyButton({
   return (
     <Button
       className="copy-btn"
-      aria-label={ariaLabel}
+      // The outcome replaces the visible label, so it joins the accessible name
+      // too: a name that still read only "Copy VA" left a voice-control user
+      // saying "click Copied" with nothing to match (WCAG 2.5.3).
+      aria-label={flashed === null ? ariaLabel : `${flashed} ${ariaLabel}`}
       title={title}
       disabled={disabled === true}
       onClick={copy}

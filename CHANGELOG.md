@@ -272,6 +272,27 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   list the reader had narrowed. Every link inside the function list now carries
   the view, and the clear-search link carries the status criterion like the two
   forms beside it.
+- **Two Potato Mode controls answered to the same keyboard shortcut.** The
+  Stub filter pill and the search box both wrote `accesskey="s"`, and a
+  browser resolves a duplicated letter to the first control in the document,
+  so one of them had no shortcut while showing the same `s` as the other.
+  Every letter is now claimed once, in document order, and a control that
+  loses a claim takes none. The footer also prints the shortcuts the page
+  actually handed out, which were previously on the page only as attributes.
+- **The code modal had two focusable regions under one name.** Its body and
+  the `<pre>` inside it each declared a `region` labelled the same, so
+  keyboard focus stopped twice on the same text and a screen reader read the
+  same line twice. The body keeps the region; the `<pre>` hands it over.
+- **A copy button's outcome was not in its accessible name.** The visible
+  label flashes `Copied!` for a second, so a voice-control user saying "click
+  Copied" had no name to match. The outcome now joins the name as well as
+  the live region.
+- **The 401 page announced a table before its message.** The one-cell table
+  that centres the "access token required" text carried no
+  `role="presentation"`, the one every layout table in Potato Mode already
+  carries.
+- The legend's colour swatch in the SPA is `aria-hidden`, as the identical
+  swatch in the stats strip already was.
 - **A regen was refused on macOS and Windows for a mismatch that did not
   exist.** `RECOVERAGE_DB` and the directory rebrew writes to were compared as
   path strings, and on the two filesystems that ignore case by default

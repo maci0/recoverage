@@ -691,6 +691,7 @@ export function App() {
             {STATE_LABEL.map((label, slot) => (
               <li key={label} className="flex items-center gap-1.5">
                 <span
+                  aria-hidden="true"
                   className={`swatch swatch-${label.replaceAll(" ", "-")}`}
                   style={{ background: `var(${PALETTE_VARS[slot] ?? "--none"})` }}
                 />
