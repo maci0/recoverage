@@ -257,14 +257,24 @@ class TestOpenAndReap:
         POSIX gets start_new_session (passed separately, not here), Windows the
         creation flags, and the flags must stay 0 elsewhere: a stray non-zero
         value makes Popen raise ValueError on every other platform.
+
+        The flags are probed rather than keyed on ``os.name``, because the
+        Windows branch is only reachable on Windows and the two facts below
+        belong to different platforms: on POSIX the flags must be 0, on Windows
+        they must be both creation flags.
         """
         import recoverage.cli as cli
 
-        assert cli._windows_detach_flags() == 0
         new_group = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", None)
         detached = getattr(subprocess, "DETACHED_PROCESS", None)
         if new_group is None or detached is None:
+            # Every non-Windows platform lands here: the flags must not leak
+            # into Popen, which rejects a non-zero creationflags off Windows.
+            assert cli._windows_detach_flags() == 0
             pytest.skip("Windows creation flags are not defined on this platform")
+        # On Windows os.name is already "nt", so the flags come back as-is;
+        # the patched os.name just exercises the same string elsewhere.
+        assert cli._windows_detach_flags() == new_group | detached
         monkeypatch.setattr(cli.os, "name", "nt")
         assert cli._windows_detach_flags() == new_group | detached
 
