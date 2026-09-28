@@ -124,8 +124,20 @@ export function App() {
   });
 
   useEffect(() => {
-    document.title = "ReCoverage";
-  }, []);
+    // The tab is a second surface for the same selection the topbar shows, and
+    // a flat "ReCoverage" left it reading as a marketing page in every state.
+    const parts = ["ReCoverage"];
+    if (target !== "") {
+      parts.push(target);
+    }
+    if (section !== "") {
+      parts.push(section);
+    }
+    if (query !== "") {
+      parts.push(`"${query}"`);
+    }
+    document.title = parts.join(" · ");
+  }, [target, section, query]);
 
   useEffect(() => {
     document.body.classList.toggle("light-mode", theme === "light");

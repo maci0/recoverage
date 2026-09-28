@@ -2404,6 +2404,81 @@ class TestSectionAccentsMatchSpa:
         assert declared - {"ACCENT_COLOR"} == pane_accents
 
 
+def _rgb_triplet(hex_color: str) -> tuple[int, int, int]:
+    """``#06b6d4`` as the ``6, 182, 212`` a CSS ``rgb()`` stop spells."""
+    raw = hex_color.lstrip("#")
+    return (int(raw[0:2], 16), int(raw[2:4], 16), int(raw[4:6], 16))
+
+
+class TestPageIdentityMatchesTheSpa:
+    """The two renderers are one product and carry one mark.
+
+    The SPA serves the phosphor R as ``assets/favicon.svg`` and draws it again
+    in its topbar; Potato Mode embeds the same drawing as ``R_LOGO_SVG`` for
+    its topbar. A third, unrelated glyph on the Potato tab strip meant the same
+    product wore a different icon depending on which view a browser tab was
+    showing, and nothing caught it because both pages rendered.
+    """
+
+    def test_potato_tab_icon_is_the_shared_logo(self) -> None:
+        from recoverage import potato
+
+        assert '<link rel="icon" href="{{R_LOGO_SVG}}">' in potato._PAGE_SRC
+        assert "data:image/svg+xml,%3Csvg" not in potato._PAGE_SRC
+
+    def test_the_shared_logo_is_the_spa_favicon(self) -> None:
+        """R_LOGO_SVG is the same drawing, not a lookalike."""
+        from recoverage import potato
+
+        root = Path(__file__).resolve().parents[1]
+        favicon = (root / "src" / "recoverage" / "assets" / "favicon.svg").read_text(
+            encoding="utf-8"
+        )
+        encoded = base64.b64decode(potato.R_LOGO_SVG.split(",", 1)[1]).decode("utf-8")
+        # The SPA's shell is the one that names the file; the two drawings are
+        # compared by their canonical form, not by byte layout. The data URI
+        # spells its attributes with single quotes, the file with double.
+        canonical = lambda text: re.sub(r"""[\s'"]""", "", text)  # noqa: E731
+        assert canonical(encoded) == canonical(favicon)
+
+
+class TestSelectionIsTheAccent:
+    """Every selected control in both renderers wears ``--c``.
+
+    The SPA's active button and Potato Mode's active pill were blue
+    (``rgba(42, 111, 219, ...)``, ``#2a6fdb``) while the accent beside them was
+    phosphor cyan, so the one state an operator reads at a glance was the one
+    state the theme did not own.
+    """
+
+    @staticmethod
+    def _root_block() -> str:
+        css = (Path(__file__).resolve().parents[1] / "web" / "app" / "index.css").read_text(
+            encoding="utf-8"
+        )
+        return css.split(":root {", 1)[1].split("\n}", 1)[0]
+
+    @pytest.mark.parametrize(
+        "token",
+        ["--btn-active-bg", "--btn-active-border", "--c-shadow-active", "--bg-grad-1"],
+    )
+    def test_dark_active_tokens_are_the_accent_hue(self, token: str) -> None:
+        from recoverage import potato
+
+        match = re.search(rf"{token}:\s*([^;]+);", self._root_block())
+        assert match is not None, token
+        value = match.group(1).lower().replace(" ", "")
+        red, green, blue = _rgb_triplet(potato.ACCENT_COLOR)
+        assert f"{red},{green},{blue}" in value or potato.ACCENT_COLOR in value, token
+
+    def test_potato_active_pills_use_the_accent(self) -> None:
+        from recoverage import potato
+
+        for name in ("FILTER_ACT_L", "FILTER_ACT_R", "FILTER_ACT_MID", "ACTIVE_L", "ACTIVE_R"):
+            svg = base64.b64decode(getattr(potato, name).split(",", 1)[1]).decode("utf-8")
+            assert potato.ACCENT_COLOR in svg, name
+
+
 class TestRenderIsPinnedToOneSnapshot:
     """A Potato page is built from one frozen CoverageSnapshot.
 

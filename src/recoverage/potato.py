@@ -314,10 +314,13 @@ INACTIVE_L, INACTIVE_R = _make_pill_caps(32, "#182230", border_hex="#2a3a4a")
 ACTIVE_MID = _make_pill_mid_tile(32, "#1a3a4a", "#06b6d4")
 INACTIVE_MID = _make_pill_mid_tile(32, "#182230", "#2a3a4a")
 
-# Pre-compute filter pill cap images
-FILTER_ACT_L, FILTER_ACT_R = _make_pill_caps(32, "#162438", border_hex="#2a6fdb")
+# Pre-compute filter pill cap images.  An active filter is a selected section
+# as much as an active tab is, and the SPA paints both from one `--c`-derived
+# pair, so the pills take the same cyan the section tabs above them do: the
+# blue they wore was the one hue in this page that named nothing.
+FILTER_ACT_L, FILTER_ACT_R = _make_pill_caps(32, "#1a3a4a", border_hex="#06b6d4")
 FILTER_INACT_L, FILTER_INACT_R = _make_pill_caps(32, "#182230", border_hex="#2a3a4a")
-FILTER_ACT_MID = _make_pill_mid_tile(32, "#162438", "#2a6fdb")
+FILTER_ACT_MID = _make_pill_mid_tile(32, "#1a3a4a", "#06b6d4")
 FILTER_INACT_MID = _make_pill_mid_tile(32, "#182230", "#2a3a4a")
 
 R_LOGO_SVG = (
@@ -768,7 +771,7 @@ def _build_url(
 
 _PAGE_SRC = r"""<!DOCTYPE html>
 <html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>ReCoverage - Potato Mode</title><link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%20100%20100%27%3E%3Ctext%20y%3D%27.9em%27%20font-size%3D%2790%27%3E%F0%9F%A5%94%3C%2Ftext%3E%3C%2Fsvg%3E"></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>ReCoverage - Potato Mode</title><!-- The same phosphor R the topbar below and the SPA's assets/favicon.svg draw. An emoji in a data URI was this link's first spelling, so a browser tab showed a desktop-computer glyph on one view of the product and the logo on the other. --><link rel="icon" href="{{R_LOGO_SVG}}"></head>
 <body bgcolor="{{BG_COLOR}}" text="{{TEXT_COLOR}}" background="{{SCANLINE_PNG}}" link="{{COLORS['reloc']}}" vlink="{{COLORS['reloc']}}" alink="{{COLORS['exact']}}">
 <font face="{{SANS_FONT}}">
 <a href="#grid-container"><font size="1" color="{{MUTED_COLOR}}">[Skip to grid]</font></a>

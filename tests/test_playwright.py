@@ -51,10 +51,12 @@ except Exception:
 
 
 def test_titles(page: Any):
-    # Original UI
+    # Original UI: the tab names the binary and section the map is showing, so
+    # two open tabs on two sections are distinguishable. The map is what says
+    # the target resolved, and the target is part of the title.
     page.goto(f"{BASE_URL}/")
     page.wait_for_selector(".grid")
-    expect(page).to_have_title("ReCoverage")
+    expect(page).to_have_title(re.compile(r"^ReCoverage · .+ · \S+$"))
 
     # Potato UI
     page.goto(f"{BASE_URL}/potato")
