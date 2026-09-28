@@ -116,6 +116,13 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   match and the dashboard served an empty target list, which reads as a healthy
   zero rather than as a wrong path. A path that does not exist is still
   allowed: a service may start before its first `rebrew build-db`.
+- A request id the server mints for itself is now a per-process counter
+  (`000000000001`, `000000000002`, ...) rather than 12 hex digits of OS
+  entropy. The value is a correlation label on the log line, the
+  `X-Request-ID` header and the RED counters, and nothing is authorized by it;
+  the same sequence of requests now produces the same ids, so two runs of it
+  can be compared field for field. An `X-Request-ID` the caller sends is
+  still used, capped and escaped as before.
 - `RECOVERAGE_CLIENT_TIMEOUT` now accepts `16` seconds and above, where it
   accepted `5`. A deadline at or under the 15 s SSE heartbeat closes healthy
   `/api/events` streams on the clock instead of on the peer going away, so the
@@ -257,6 +264,13 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   match, while the dashboard beside it showed `99.9`. Both now floor, so the
   two views of one function cannot disagree, and a stored value that is not a
   finite number is left alone rather than formatted as `nan%`.
+- A chunked request body whose trailers were cut off mid-section is now refused
+  as a malformed framing instead of being served. The reader treated the end of
+  the input where the trailer section's final CRLF was due as the end of the
+  trailers, so a truncated message was answered `200` with a body whose framing
+  the reader knew was incomplete, and whatever the client sent next was read as
+  the rest of it. Every other read in that reader already refuses a short
+  input; the trailer loop was the one that did not.
 - **A cell's parent link in the dashboard went nowhere.** `parent_function` is
   the NAME rebrew gives the function a data or thunk block belongs to, and the
   panel printed it as if it were an address: the link read `0X_FUNC_A` and
@@ -522,6 +536,12 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Security
 
+- `POST /api/regen` no longer reads an `Origin` header that arrived empty as
+  the header's absence. The same-origin check fails open on an absent Origin
+  because every non-browser client omits one, and a blank value took that same
+  path, admitting a privileged POST on the strength of the one header that
+  should have named it. No browser sends a blank Origin, so a present but
+  empty one is refused with the other cross-origin requests.
 - The batch function-lookup endpoint bounds the request body BEFORE reading
   it. Bottle's own body reader drains the whole declared `Content-Length` into
   memory (and past 100 KiB into a temporary file on tmpfs) before a handler

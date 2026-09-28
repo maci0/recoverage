@@ -28,7 +28,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Any, NamedTuple, cast
+from typing import Any, NamedTuple
 
 REPO_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 PACKAGE_JSON = REPO_ROOT / "package.json"
@@ -92,14 +92,17 @@ class InventoryError(Exception):
     """The tree says something the inventory cannot be built from."""
 
 
+def _as_object(loaded: Any, path: Path) -> dict[str, Any]:
+    """The parsed document, or the failure a caller would otherwise read as a missing key."""
+    if not isinstance(loaded, dict):
+        raise InventoryError(f"{path} is not a JSON object")
+    return loaded
+
+
 def _read_json(path: Path) -> dict[str, Any]:
     if not path.is_file():
         raise InventoryError(f"{path} is missing")
-    # `json.loads` is untyped and returns Any; the cast is the declared
-    # boundary narrowing, the same one every other json reader in the tree
-    # takes. A lockfile or manifest whose top level is not an object raises
-    # KeyError below, which is the InventoryError a reader wants.
-    return cast("dict[str, Any]", json.loads(path.read_text(encoding="utf-8")))
+    return _as_object(json.loads(path.read_text(encoding="utf-8")), path)
 
 
 def _bun_lock() -> dict[str, Any]:
@@ -112,7 +115,7 @@ def _bun_lock() -> dict[str, Any]:
     text = BUN_LOCK.read_text(encoding="utf-8")
     text = re.sub(r"^\s*//.*$", "", text, flags=re.MULTILINE)
     text = re.sub(r",(\s*[}\]])", r"\1", text)
-    return cast("dict[str, Any]", json.loads(text))
+    return _as_object(json.loads(text), BUN_LOCK)
 
 
 def resolve() -> list[tuple[Shipped, str, str]]:

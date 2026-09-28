@@ -53,6 +53,7 @@ from recoverage.server import (
     clear_target_cache,
     compress_payload,
     fold_match_folded,
+    header_present,
     origin_is_this_dashboard,
     path_param,
     query_param,
@@ -2260,6 +2261,19 @@ def handle_regen() -> bytes | HTTPResponse:
         )
 
     origin = _header("Origin", "")
+    if not origin and header_present("Origin"):
+        # An Origin that arrived and arrived empty is not the absence the arm
+        # below is written for. No browser sends one, so it is a value
+        # something between the page and here emptied, and folding it into the
+        # absent case admits a privileged POST on the strength of the one
+        # header that should have named it.
+        return _json_err(
+            403,
+            {
+                "error": "Forbidden: cross-origin",
+                "detail": "Origin is present but empty",
+            },
+        )
     if origin:
         # Same-origin against the request's own Host, not "the origin's
         # hostname is loopback": a page served from any OTHER loopback port is

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import itertools
 import json
 import logging
 from collections.abc import Callable, Iterator
@@ -89,6 +90,29 @@ class TestRequestId:
     def test_long_id_is_capped(self) -> None:
         _status, headers, _ = wsgi_get("/api/health", headers={"X-Request-ID": "x" * 500})
         assert len(_header(headers, "X-Request-ID")) == server._REQUEST_ID_MAX_LEN
+
+    def test_minted_ids_come_from_a_counter(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A replay of the same requests mints the same ids.
+
+        The correlation id is the one per-request value that lands in the log
+        line, the response header and the RED counters, so an id drawn from OS
+        entropy makes two runs of the same sequence differ before any other
+        field is compared.  Minting from a counter keeps a replay diffable;
+        uniqueness within the process is what the id has to give.
+        """
+
+        def mint_twice() -> list[str]:
+            monkeypatch.setattr(server, "_REQUEST_ID_SEQ", itertools.count(1))
+            return [server._mint_request_id(), server._mint_request_id()]
+
+        first = mint_twice()
+        assert first == mint_twice(), "the same sequence minted different ids"
+        assert first[0] != first[1]
+        assert all(len(value) == 12 for value in first)
+
+    def test_minted_ids_are_unique_across_requests(self) -> None:
+        minted = {server._mint_request_id() for _ in range(500)}
+        assert len(minted) == 500
 
     def test_error_log_carries_the_id(
         self, replace_route: Swap, caplog: pytest.LogCaptureFixture

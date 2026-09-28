@@ -214,15 +214,20 @@ def _fuzz(
     A failing round re-runs the check on every intermediate input of that
     round's mutation chain, so the assertion message names the smallest
     corrupt input rather than the mutated blob it grew from.
+
+    The message also names the seed and the round, because the shrinking walk
+    consumes the same stream: without them a failure is reproducible only by
+    reading this module for the constant the environment did not set, and the
+    round is the only handle on where the campaign stood.
     """
     rng = random.Random(seed)
-    for _ in range(iterations):
+    for round_index in range(iterations):
         data = _mutate(
             rng.choice(seeds), rng, seeds, struct_tokens=struct_tokens, num_tokens=num_tokens
         )
         try:
             check(data)
-        except AssertionError:
+        except AssertionError as failure:
             chain = [data]
             for _ in range(6):
                 smaller = _mutate(
@@ -236,8 +241,15 @@ def _fuzz(
                     check(smaller)
                 except AssertionError:
                     chain.append(smaller)
-            return check(min(chain, key=len))
-    return None
+            where = f"seed={seed} round={round_index} of {iterations}"
+            smallest = min(chain, key=len)
+            try:
+                check(smallest)
+            except AssertionError as shrunk:
+                raise AssertionError(
+                    f"{where}: {smallest!r} after shrinking {data!r}\n{shrunk}"
+                ) from shrunk
+            raise AssertionError(f"{where}: {data!r}") from failure
 
 
 # ── invariant checks ────────────────────────────────────────────────

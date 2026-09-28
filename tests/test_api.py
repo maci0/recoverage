@@ -308,6 +308,26 @@ class TestRegenOriginValidation:
         )
         assert status.startswith("403")
 
+    def test_empty_origin_rejected(self) -> None:
+        """An Origin that arrived empty is not the header's absence.
+
+        The same-origin check fails open on an absent Origin because every
+        non-browser client omits it. Folding an empty one into the same case
+        admits a privileged POST on the strength of the one header that should
+        have named it, and no browser ever sends a blank Origin.
+        """
+        status, _, _ = wsgi_request(
+            "POST",
+            "/api/regen",
+            headers={"Origin": "", "Host": "localhost:8001"},
+            remote_addr="127.0.0.1",
+        )
+        assert status.startswith("403")
+
+    def test_absent_origin_still_accepted(self) -> None:
+        """curl and scripts send no Origin at all, and are still served."""
+        assert_regen_accepted(wsgi_request("POST", "/api/regen", remote_addr="127.0.0.1"))
+
     def test_cross_site_fetch_metadata_rejected(self) -> None:
         """Sec-Fetch-Site: cross-site must be rejected even without an Origin.
 
@@ -2965,6 +2985,46 @@ class TestFramedBodyIsReadToItsDeclaredLength:
         )
         assert status.startswith("413"), status
         assert stream.reads == 0
+
+
+class TestChunkedTrailerSection:
+    """The trailer section after the last chunk ends on its final CRLF.
+
+    Reaching the end of the input where that CRLF was due is a truncated
+    message, not the end of the trailers: the framing is still incomplete, so
+    the body is refused rather than served with a connection the next request
+    would be read out of.
+    """
+
+    PATH = "/api/targets/NOPE/functions"
+    BODY = b'{"vas": ["0x1000"]}'  # 19 bytes, 0x13
+    HEADERS: ClassVar[dict[str, str]] = {
+        "Transfer-Encoding": "chunked",
+        "Content-Type": "application/json",
+    }
+
+    def _post(self, framing: bytes) -> tuple[str, dict[str, str], bytes]:
+        return wsgi_request(
+            "POST",
+            self.PATH,
+            headers=self.HEADERS,
+            body=b"",
+            wsgi_input=BytesIO(framing),
+            content_length=None,
+        )
+
+    def test_complete_trailer_section_is_read(self) -> None:
+        # 404 is the missing target, which is past the framing: what matters
+        # is that the reader returned the body instead of refusing it.
+        status, _headers, _body = self._post(b"13\r\n" + self.BODY + b"\r\n0\r\nX-T: v\r\n\r\n")
+        assert not status.startswith(("400", "413")), status
+
+    def test_truncated_trailer_section_is_refused(self) -> None:
+        status, headers, _body = self._post(b"13\r\n" + self.BODY + b"\r\n0\r\nX-T: v\r\n")
+        assert status.startswith("400"), status
+        # The rest of the framing is still in the socket, so a keep-alive
+        # reader would take it as a second request.
+        assert headers.get("Connection") == "close"
 
 
 class TestNormalizeOriginEdges:

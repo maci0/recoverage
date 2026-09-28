@@ -13,11 +13,11 @@ import hashlib
 import hmac
 import importlib.util
 import ipaddress
+import itertools
 import json
 import logging
 import threading
 import unicodedata
-import uuid
 from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
@@ -491,8 +491,15 @@ def _read_chunked_body(limit: int) -> bytes:
             trailer_bytes = 0
             while True:
                 trailer = stream.readline(_CHUNK_LINE_MAX + 1)
-                if trailer in (b"\r\n", b"\n", b""):
+                if trailer in (b"\r\n", b"\n"):
                     break
+                if not trailer:
+                    # End of input where the trailer section's final CRLF was
+                    # due, not the end of it: the message is truncated, and
+                    # answering it 200 would hand the caller a body whose
+                    # framing this reader knows is incomplete, with whatever
+                    # the client sends next read as the rest of it.
+                    raise RequestBodyMalformedError("truncated trailer section")
                 if len(trailer) > _CHUNK_LINE_MAX:
                     raise RequestBodyMalformedError("oversize trailer line")
                 trailer_bytes += len(trailer)
@@ -1494,6 +1501,16 @@ def _header(name: str, default: str = "") -> str:
         return default
 
 
+def header_present(name: str) -> bool:
+    """Whether the request carries *name* at all, whatever its value.
+
+    :func:`_header` cannot answer that: a header sent with an empty value and
+    one not sent are the same ``""`` to it.  A gate that admits the second must
+    not admit the first, so the two are read apart here.
+    """
+    return name in request.headers
+
+
 #: Every encoding this server can produce, most preferred first.  ONE list:
 #: :func:`_best_encoding` walks it in order, and the precompressed static path
 #: (:func:`static_variant_key`, :func:`compress_static_variants`) reads the same
@@ -2315,6 +2332,20 @@ _REQUEST_ID_MAX_LEN = 64
 #: serving threads are per-request, and a background thread (the SSE poller)
 #: simply has none.
 _REQUEST_TLS = threading.local()
+#: The minted ids come from a per-process counter rather than OS entropy, so a
+#: replay of the same request sequence produces the same ids and two runs can be
+#: diffed line for line.  The id is a correlation label, not a credential:
+#: nothing is authorized by it, and every value it can carry from outside comes
+#: from the caller's own ``X-Request-ID`` header.
+_REQUEST_ID_LOCK = threading.Lock()
+_REQUEST_ID_SEQ = itertools.count(1)
+
+
+def _mint_request_id() -> str:
+    """A fresh correlation id: a zero-padded counter, 12 hex digits wide."""
+    with _REQUEST_ID_LOCK:
+        seq = next(_REQUEST_ID_SEQ)
+    return f"{seq:012x}"
 
 
 def _new_request_id() -> str:
@@ -2324,7 +2355,7 @@ def _new_request_id() -> str:
         # Untrusted: capped and control-char escaped so a crafted header
         # cannot forge log lines (same rule as _log_safe) or bloat the log.
         return _log_safe(provided)[:_REQUEST_ID_MAX_LEN]
-    return uuid.uuid4().hex[:12]
+    return _mint_request_id()
 
 
 class _RequestIdFilter(logging.Filter):

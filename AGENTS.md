@@ -545,6 +545,11 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
 - Every request carries an id (`server._REQUEST_TLS`, echoed as
   `X-Request-ID`, stamped on every log record by `server._RequestIdFilter`),
   and every request is counted in `metrics.REQUESTS` under its route rule.
+  A minted id (`server._mint_request_id`) is a counter, not OS entropy: the id
+  is a correlation label nothing authorizes by, and a run replayed from its
+  seed has to produce the same one, so two runs diff field for field instead
+  of diverging on the first value compared. A correlation id that must not be
+  guessable is a different kind of value and gets `secrets`, not this.
   A new failure path that answers 4xx/5xx from outside a handler (bottle
   turns an escaped exception into a 500 only *after* `after_request` has
   filed the request as a 200) must call `server._reclassify_request`, or the
@@ -921,7 +926,12 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   rebuild it starts is one the operator neither asked for nor sees. A new
   privileged operation copies that gate rather than trusting a loopback peer,
   and the fuzz campaign in `tests/test_fuzz.py` (`TestRegenOriginSameOrigin`)
-  judges it against `urlsplit` rather than against the helper.
+  judges it against `urlsplit` rather than against the helper. An `Origin`
+  that ARRIVED and arrived empty is neither of those two: `server._header`
+  reads it as the header's absence, and a gate that admits the absence must
+  not admit the blank value, so the handler asks `server.header_present` for
+  that one case. No browser sends a blank `Origin`, and a new privileged gate
+  treats a present-but-empty header as a refusal.
 - `POST /api/regen` is the package's one retried side effect, and its
   `Idempotency-Key` names the OPERATION, not the request: the SPA mints the
   key once per click (`api.newRegenKey`) and `postRegen` re-sends the same one
@@ -997,7 +1007,11 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   rest of the body in the socket, so the answer must carry `Connection: close`;
   `api._body_rejected` is the one helper that puts it there. A new endpoint
   reading a body calls the helper for both `RequestBodyTooLargeError` and
-  `RequestBodyMalformedError`.
+  `RequestBodyMalformedError`. Every read in that reader refuses a SHORT input
+  rather than completing on it, the trailer section included: the end of the
+  stream where the section's final CRLF was due is a truncated message, and
+  serving it answers 200 with a body whose framing is known to be incomplete
+  and reads the next request's bytes as the rest of it.
 - Connections are capped, not just deadlines. `_CLIENT_SOCKET_TIMEOUT_SECONDS`
   bounds how LONG a handler thread lives and never how MANY there are:
   ThreadingMixIn starts one per accept without asking, and a peer that opens a
@@ -1018,7 +1032,12 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   readers) are fuzzed
   by `tests/test_fuzz.py`: a seeded mutation engine over a
   hand-written corpus, driven by `RECOVERAGE_FUZZ_SEED` / `RECOVERAGE_FUZZ_ITERATIONS`
-  so a failure replays. Each round asserts an invariant, not just a lack of crash: no 5xx,
+  so a failure replays. A failure names the seed and the round it failed in,
+  because the shrink walk consumes the same stream and a campaign that can
+  only be replayed by reading this file for the constant the environment did
+  not set is not a replay; it also raises when the shrunk input stops failing
+  (a stateful endpoint answers the second identical request differently) rather
+  than reporting the campaign as clean. Each round asserts an invariant, not just a lack of crash: no 5xx,
   the JSON error envelope on a 4xx, no traceback in a body, and the contract the
   query asked for (a page within `limit`, a slice within `size`, only requested
   VAs back). The `/potato` and repo-file campaigns pass their own grammar tokens
