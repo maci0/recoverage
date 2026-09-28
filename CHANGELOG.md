@@ -287,6 +287,17 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **`RECOVERAGE_LOG_LEVEL` accepted a number no record clears.** The name arm
+  already refused an unknown level, because it reaches `basicConfig` and leaves
+  the logger quieter than the operator asked for; the numeric arm took any
+  digit run, so `RECOVERAGE_LOG_LEVEL=9999` started a server whose every record
+  sat below the threshold. The start banner, the request lines and the health
+  transitions were all gone, and `recoverage config` printed
+  `log_level=Level 9999` as though the level had been asked for by name. A
+  number is now read through the same `logging.getLevelNamesMapping()` table
+  the names come from, so `0`, `10`, `20`, `30`, `40` and `50` are what the
+  numeric arm accepts, and anything else is a startup error naming the variable.
+
 - **`retry_after` in a 429 body and the `Retry-After` beside it could
   disagree.** Every limit the server reports now puts the header's own whole
   number of seconds in the JSON, and the key is an integer wherever it

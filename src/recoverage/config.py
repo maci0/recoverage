@@ -377,6 +377,15 @@ def parse_log_level(raw: str) -> int:
     level.  Rejecting an unknown name matters: it would otherwise reach
     ``basicConfig`` and leave the logger at WARNING, quieter than the operator
     asked for, with nothing on stderr to say so.
+
+    The numeric arm is held to the same floor as the name arm: a number
+    outside the stdlib's own table (9999, 3, 25) is not a level ``logging``
+    calls one, and it silences the process the same way an unknown name does,
+    only further.  ``RECOVERAGE_LOG_LEVEL=9999`` used to start a server whose
+    every record sits below the threshold, so the start banner, the request
+    lines and the health transitions were all gone, and the banner rendered
+    ``log_level=Level 9999`` as though the operator had asked for a level by
+    name.
     """
     name = raw.strip().upper()
     if name in LOG_LEVELS:
@@ -387,11 +396,15 @@ def parse_log_level(raw: str) -> int:
         # crash.  Its own ConfigError is dropped so the raise below is the one
         # message the caller reads.
         try:
-            return _as_int("log level", raw)
+            value = _as_int("log level", raw)
         except ConfigError:
             pass
+        else:
+            if value in set(LOG_LEVELS.values()):
+                return value
     allowed = ", ".join(sorted(LOG_LEVELS))
-    raise ConfigError(f"{raw!r} is not a log level (use one of: {allowed})")
+    numbers = ", ".join(str(level) for level in sorted(set(LOG_LEVELS.values())))
+    raise ConfigError(f"{raw!r} is not a log level (use one of: {allowed}, or {numbers})")
 
 
 def log_level() -> int:

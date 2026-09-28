@@ -236,6 +236,10 @@ arrive trimmed, so no client could present it.
 .B RECOVERAGE_LOG_LEVEL
 Default for
 .BR \-\-log\-level .
+A level name, or one of the numbers
+.BR 0 ", " 10 ", " 20 ", " 30 ", " 40 ", " 50 .
+Any other number is refused at startup: a threshold no record clears would
+log nothing at all.
 .TP
 .B RECOVERAGE_DB
 The coverage directory to read, instead of resolving rebrew-project.toml from

@@ -195,6 +195,32 @@ class TestLogLevelRejectsBadValues:
             config.log_level()
         assert "DEBUG" in str(excinfo.value) and "WARNING" in str(excinfo.value)
 
+    @pytest.mark.parametrize("raw", ["9999", "3", "25", "100"])
+    def test_a_number_outside_the_table_is_not_a_level(
+        self, monkeypatch: pytest.MonkeyPatch, raw: str
+    ) -> None:
+        """The numeric arm is held to the floor the name arm has.
+
+        `logging` renders a threshold it does not know as `Level 9999` and
+        then drops every record below it, so a valid-digit value the stdlib
+        never calls a level silences the whole process: the start banner, the
+        request lines and the health transitions all disappear, and the only
+        clue is a deployment that got quieter at the moment someone asked it
+        to say more.  The name arm was already refused for exactly this, and
+        `logging.getLevelNamesMapping()` is the one table both arms read.
+        """
+        monkeypatch.setenv("RECOVERAGE_LOG_LEVEL", raw)
+        with pytest.raises(config.ConfigError, match="is not a log level"):
+            config.log_level()
+
+    @pytest.mark.parametrize("raw", ["0", "10", "20", "30", "40", "50"])
+    def test_every_level_the_table_names_is_also_reachable_by_number(
+        self, monkeypatch: pytest.MonkeyPatch, raw: str
+    ) -> None:
+        """The floor is the table, not a hand-written list of accepted numbers."""
+        monkeypatch.setenv("RECOVERAGE_LOG_LEVEL", raw)
+        assert config.log_level() == int(raw)
+
     def test_serve_exits_2_on_a_bad_level(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import typer
 

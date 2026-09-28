@@ -176,7 +176,7 @@ always wins over the environment.
 | `RECOVERAGE_CORS` | `false` | same booleans |
 | `RECOVERAGE_CORS_ORIGIN` | none | comma-separated origin URLs; each must be one a browser could send (`scheme://host[:port]`, no userinfo, path or whitespace) |
 | `RECOVERAGE_TOKEN` | none | the bearer token; set it empty to run unauthenticated, and give it no surrounding or interior whitespace (headers arrive trimmed, so a padded value locks every reader out) |
-| `RECOVERAGE_LOG_LEVEL` | `INFO` | a `logging` level name, or its number |
+| `RECOVERAGE_LOG_LEVEL` | `INFO` | a `logging` level name, or its number (`0`, `10`, `20`, `30`, `40`, `50`; any other number is a startup error, because a threshold no record clears logs nothing at all) |
 | `RECOVERAGE_MAX_CONNECTIONS` | `128` | integer `1`-`65536`: concurrent client connections admitted, one thread and one descriptor each |
 | `RECOVERAGE_CLIENT_TIMEOUT` | `120` | integer `16`-`86400`: per-socket-operation deadline in seconds; a client that cannot absorb a write inside it is cut mid-body |
 | `RECOVERAGE_DB` | resolved from the working directory | path to the coverage directory (the one holding `coverage-<target>.toml`); a path that is a file is a startup error, not an empty dashboard |
