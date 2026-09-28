@@ -31,6 +31,7 @@ so CI runs the identical corpus on every build; ``RECOVERAGE_FUZZ_SEED`` and
 
 from __future__ import annotations
 
+import html
 import ipaddress
 import json
 import os
@@ -56,6 +57,7 @@ from recoverage.api import (
     _MAX_SEARCH_CHARS,
     _REGEN_KEY_MAX_CHARS,
     _REGEN_KEY_RE,
+    _clear_derived_caches,
 )
 from recoverage.server import _best_encoding, _hostname_of, _normalize_origin, _peer_is_loopback
 
@@ -3032,3 +3034,455 @@ class TestConditionalRequestComparison:
             assert int(status.split()[0]) == 200, (
                 f"If-None-Match={raw!r} matched the served etag {etag!r} and answered {status}"
             )
+
+
+# ── coverage-document contents ──────────────────────────────────────
+
+#: The one untrusted input no campaign above crosses: the coverage document
+#: on disk.  Every other surface is bytes a stranger typed into a request;
+#: this is a file a build wrote, and the ways it is wrong are the ways a build
+#: is wrong: an interrupted write, a half-finished regen, a merge, a hand
+#: edit, a document from a newer rebrew.  It is also the largest parser in the
+#: request path, and every field it carries (a name, a label, a section name,
+#: a source path, a similarity) reaches the JSON payloads and the HTML
+#: renderer straight out of the reader, so its blast radius is the whole
+#: dashboard rather than one response.
+
+_DOC_TARGET = "DOCFUZZ"
+
+#: The value the escaping assertions are written against: a name that is
+#: markup, a quote and a scheme at once, so a reader that escapes only ``&``
+#: or only ``<`` still fails them.
+HOSTILE_NAME = '<script>alert("x")</script>'
+
+_DOC_SECTIONS: dict[str, dict[str, Any]] = {
+    ".text": {
+        "va": 0x10001000,
+        "size": 0x40,
+        "fileOffset": 0x200,
+        "unitBytes": 16,
+        "columns": 4,
+        "cells": [
+            cell(0, 16, "exact", functions=("_func_a",)),
+            cell(16, 32, "reloc", functions=("_func_b",), label="jt_10001010"),
+            cell(32, 48, "stub", parent_function="_func_a"),
+            cell(48, 64, "padding"),
+        ],
+    }
+}
+
+_DOC_FUNCTIONS: list[dict[str, Any]] = [
+    {"va": 0x10001000, "name": "_func_a", "size": 16, "status": "EXACT", "similarity": 1.0},
+    {"va": 0x10001010, "name": "_func_b", "size": 16, "status": "RELOC", "similarity": 0.5},
+]
+
+#: The shapes a wrong document actually takes: a value of the wrong type
+#: where the reader expects a number, a container where it expects a scalar,
+#: the non-finite floats TOML spells bare and ``json.dumps`` would then
+#: re-emit as the ``NaN`` / ``Infinity`` tokens no JSON parser accepts, and
+#: the header/key spellings that put a row in the wrong table.
+_DOC_TOKENS: tuple[bytes, ...] = (
+    b"version = 0",
+    b"version = -1",
+    b'version = "1"',
+    b"version = 99999999999999999999",
+    b"target = 1",
+    b'target = "<script>alert(1)</script>"',
+    b"[[sections]]",
+    b'[sections.""]',
+    b"[sections..text]",
+    b"[sections.\x00]",
+    b"cells = 5",
+    b"cells = [1, 2, 3]",
+    b"cells = [{start = 0, end = 0, state = 1}]",
+    b"state = 1",
+    b'state = "<b>x</b>"',
+    b"start = -1",
+    b"end = 0",
+    b"span = 0",
+    b"span = -5",
+    b"size = -1",
+    b"va = 0x",
+    b"columns = 0",
+    b"unitBytes = 0",
+    b"similarity = nan",
+    b"similarity = inf",
+    b"similarity = -inf",
+    b"similarity = 1e400",
+    b"similarity = 'nan'",
+    b"functions = ",
+    b"paths = ",
+    b"[metadata]",
+    b"[[metadata.paths]]",
+    b"[[functions]]",
+    b"[globals]",
+    b"[history]",
+    b"functions = [",
+    b"]",
+    b"\x00",
+    b"\xef\xbb\xbf",
+    b"\xed\xa0\x80",
+)
+
+
+def _document_seeds() -> list[bytes]:
+    """The well-formed document plus the two wrong shapes worth mutating."""
+    from coverage_fixture import render_coverage
+
+    whole = render_coverage(
+        _DOC_TARGET,
+        _DOC_SECTIONS,
+        functions=_DOC_FUNCTIONS,
+        globals_=[{"va": 0x10002000, "name": "g_counter"}],
+        verify_results=[{"va": 0x10001000, "match": True, "similarity": 0.5}],
+        paths={"source_root": "src/DOCFUZZ", "original_root": "orig"},
+    )
+    hostile = render_coverage(
+        _DOC_TARGET,
+        {'.te"xt<script>': {**_DOC_SECTIONS[".text"]}},
+        functions=[{"va": 0, "name": HOSTILE_NAME, "status": "EXACT"}],
+    )
+    return [whole.encode(), hostile.encode(), whole.encode()[: len(whole) // 2]]
+
+
+#: Values a document can carry that a build would never write and a hand edit,
+#: a merge or a rebrew from another release would.  Each pool is drawn per
+#: field, so one round mixes a hostile name with a reversed cell range rather
+#: than changing one field at a time.
+_VA_VALUES: tuple[Any, ...] = (
+    0,
+    1,
+    0x10001000,
+    -1,
+    0xFFFFFFFFFFFFFFFF,
+    1 << 64,
+    1 << 128,
+    0x1000_0000_0000,
+)
+_NAMES: tuple[Any, ...] = (
+    "_func_a",
+    "",
+    "é中文",
+    "A" * 512,
+    HOSTILE_NAME,
+    '"><img src=x onerror=alert(1)>',
+    "back\\slash\"quote'apos",
+    "tab\tnewline\nreturn\r",
+    "\x00\x1b[31m",
+    "\x00\x1f\u202e",
+    123,
+)
+_SIZES: tuple[Any, ...] = (0, 1, 16, -1, -16, 1 << 31, 1 << 64, None)
+_SPANS: tuple[Any, ...] = (0, 1, 16, -1, 1 << 64, None)
+_SIMILARITIES: tuple[Any, ...] = (
+    0.0,
+    1.0,
+    0.5,
+    -0.5,
+    1.5,
+    1e308,
+    -1e308,
+    float("inf"),
+    float("-inf"),
+    float("nan"),
+    None,
+    "0.5",
+)
+_STATUSES: tuple[Any, ...] = (
+    "EXACT",
+    "RELOC",
+    "UNKNOWN",
+    "EXACT",
+    "",
+    "<b>EXACT</b>",
+    "exakt",
+)
+_STATE_VALUES: tuple[Any, ...] = (
+    "exact",
+    "reloc",
+    "stub",
+    "padding",
+    "data",
+    "thunk",
+    "none",
+    "exact",
+    "",
+    "EXACT",
+    "<i>x</i>",
+)
+
+
+def _document_with_drawn_values(rng: random.Random) -> str:
+    """One document whose every field is drawn from the pools above.
+
+    Rendered through the fixture writer, so the result is TOML the reader
+    accepts by construction: the campaign is about the VALUES, and a syntax
+    error would send every round back down the refusal arm.
+    """
+    from coverage_fixture import render_coverage
+
+    def draw(pool: tuple[Any, ...]) -> Any:
+        return rng.choice(pool)
+
+    section_name = rng.choice([".text", ".data", ".bss", ".rdata", 'te"xt', "<script>", ""])
+    cells = []
+    for _ in range(rng.randint(1, 6)):
+        start = draw(_SPANS)
+        end = draw(_SPANS)
+        if isinstance(start, int) and isinstance(end, int) and rng.random() < 0.5:
+            start, end = min(start, end), max(start, end)
+        cells.append(
+            cell(
+                start,
+                end,
+                draw(_STATE_VALUES),
+                span=draw(_SPANS),
+                functions=(draw(_NAMES),),
+                label=draw(_NAMES),
+                parent_function=draw(_NAMES),
+            )
+        )
+    sections = {
+        section_name: {
+            "va": draw(_VA_VALUES),
+            "size": draw(_SIZES),
+            "fileOffset": draw(_SIZES),
+            "unitBytes": draw((1, 2, 16, 0, -1)),
+            "columns": draw((1, 4, 8, 0, -1)),
+            "cells": cells,
+        }
+    }
+    functions = [
+        {
+            "va": draw(_VA_VALUES),
+            "name": draw(_NAMES),
+            "vaStart": draw(_VA_VALUES),
+            "size": draw(_SIZES),
+            "fileOffset": draw(_SIZES),
+            "status": draw(_STATUSES),
+            "module": draw(_NAMES),
+            "cflags": draw(_NAMES),
+            "symbol": draw(_NAMES),
+            "markerType": draw(("FUNCTION", "GLOBAL", "", 7)),
+            "is_thunk": draw((0, 1, -1, True)),
+            "is_export": draw((0, 1, -1, True)),
+            "files": (draw(_NAMES),),
+            "similarity": draw(_SIMILARITIES),
+            "blockerDelta": draw(_SIZES),
+            "textOffset": draw(_SIZES),
+        }
+        for _ in range(rng.randint(1, 4))
+    ]
+    globals_ = [
+        {
+            "va": draw(_VA_VALUES),
+            "name": draw(_NAMES),
+            "decl": draw(_NAMES),
+            "files": (draw(_NAMES),),
+            "size": draw(_SIZES),
+            "status": draw(_STATUSES),
+        }
+        for _ in range(rng.randint(0, 3))
+    ]
+    return render_coverage(
+        _DOC_TARGET,
+        sections,
+        functions=functions,
+        globals_=globals_,
+        verify_results=[
+            {
+                "va": draw(_VA_VALUES),
+                "match": draw((True, False)),
+                "similarity": draw(_SIMILARITIES),
+                "expected": draw(_NAMES),
+                "actual": draw(_NAMES),
+            }
+        ],
+        history=[{"at": draw(_NAMES), "tool": draw(_NAMES)}],
+        paths={"source_root": draw(_NAMES), "original_root": draw(_NAMES)},
+    )
+
+
+def _strict_json(text: str) -> Any:
+    """``json.loads`` with the non-standard constants refused.
+
+    ``json.dumps`` writes ``NaN`` / ``Infinity`` for a float it cannot render,
+    and no JSON parser outside Python accepts those tokens, so a served
+    document carrying a non-finite figure produces a body the SPA's
+    ``JSON.parse`` rejects outright.  ``parse_constant`` is where a fuzzer can
+    see that, and nothing else in the campaign can.
+    """
+
+    def reject(token: str) -> Any:
+        raise AssertionError(f"served JSON carries the non-finite token {token!r}")
+
+    return json.loads(text, parse_constant=reject)
+
+
+class TestCoverageDocumentContents:
+    """A coverage document the reader cannot trust is read on every request.
+
+    The contract is the one ``TestUnreadableDocumentIsNotAnEmptyTarget``
+    states for a whole document, widened to the field: a document either
+    parses, and every endpoint derived from it answers 200 with a payload that
+    is well-formed (no traceback, no non-finite number, HTML closed), or it
+    raises ``CoverageTomlError`` and the endpoint answers the 503
+    ``db_unavailable`` contract.  Anything else is a defect a field-level
+    corruption reached: a 500 is a crash in a handler the campaign just
+    handed an unparseable document, and an empty 200 is the degradation that
+    reads as a healthy zero.
+    """
+
+    PATHS = (
+        "/api/targets",
+        f"/api/targets/{_DOC_TARGET}/stats",
+        f"/api/targets/{_DOC_TARGET}/data",
+        f"/api/targets/{_DOC_TARGET}/functions?limit=5",
+        # The lookup routes carry the document's own numeric columns (a
+        # similarity, a delta) into the payload, which is where a non-finite
+        # figure stored in a document reaches the wire.  The VAs and the name
+        # are the shapes the SPA links with; a document that holds neither
+        # answers 404, which the campaign allows.
+        f"/api/targets/{_DOC_TARGET}/functions/0x1000",
+        f"/api/targets/{_DOC_TARGET}/functions/_func_a",
+        f"/potato?target={_DOC_TARGET}",
+    )
+
+    def _install(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        directory = tmp_path / "db"
+        directory.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+        return directory / f"coverage-{_DOC_TARGET}.toml"
+
+    def _assert_response(
+        self, status: str, headers: dict[str, str], body: bytes, path: str
+    ) -> None:
+        code = int(status.split()[0])
+        text = decode_body(body, headers).decode("utf-8", errors="replace")
+        assert code != 500, f"{path}: handler crashed with {status}: {text[:300]!r}"
+        assert code in (200, 404, 503), f"{path}: unexpected status {status}"
+        for marker in _LEAK_MARKERS:
+            assert marker not in text, f"{path}: {status} leaks {marker!r}: {text[:300]!r}"
+        assert "Traceback" not in text, f"{path}: {status} leaked a traceback"
+        html = not path.startswith("/api/")
+        if code == 503 and html:
+            # Potato Mode answers the same unreadable document with its own 503
+            # page, and it is a rendered document like any other.
+            assert "database unavailable" in text, f"{path}: a 503 that is not the 503 page"
+        elif code == 503:
+            # The reader owns one answer for an unreadable document, and it is
+            # this envelope on every JSON surface: a 503 that is not
+            # db_unavailable is a handler that degraded some other way.
+            payload = _body_json(body, headers, path)
+            assert payload.get("code") in ("db_unavailable", "forbidden"), f"{path}: {payload!r}"
+            return
+        if html:
+            assert code != 404 or "not found" in text.lower(), f"{path}: a bare 404 from {status}"
+            assert text.rstrip().endswith("</html>"), f"{path}: the page is not a closed document"
+        else:
+            _strict_json(text)
+
+    def test_a_corrupt_document_never_crashes_a_reader(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        document = self._install(tmp_path, monkeypatch)
+
+        def check(data: bytes) -> None:
+            document.write_bytes(data)
+            _clear_derived_caches()
+            for path in self.PATHS:
+                status, headers, body = wsgi_request("GET", path)
+                self._assert_response(status, headers, body, path)
+
+        _fuzz(
+            _document_seeds(),
+            check,
+            iterations=250,
+            struct_tokens=_DOC_TOKENS,
+            num_tokens=_DOC_TOKENS,
+        )
+
+    def test_a_parsed_document_with_wrong_values_still_serves(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The arm byte mutation rarely reaches: a document that PARSES.
+
+        Corrupting bytes breaks the TOML itself, so most of the campaign above
+        lands on the refusal path.  The interesting documents are the ones
+        rebrew's writer could produce and a hand edit could mangle: a cell
+        whose ``end`` precedes its ``start``, a span of zero, a similarity
+        outside 0-1, a VA above the 64-bit ceiling, a name carrying markup or
+        a control character.  They parse, so they reach the bucket folds, the
+        percentage helpers, the search index and the HTML renderer, and a
+        defect there is a wrong dashboard rather than a 503.
+
+        Structure-aware by construction: each field is drawn from a pool of
+        real and hostile values and the document is rendered through the same
+        writer the fixtures use, so every round is a document the reader
+        accepts.  The round is named on failure because the stream is seeded
+        from :data:`FUZZ_SEED` and replays identically, and the round count is
+        :data:`FUZZ_ITERATIONS`, so ``make fuzz`` widens this campaign on the
+        same terms as every byte-driven one.
+        """
+        document = self._install(tmp_path, monkeypatch)
+        rng = random.Random(FUZZ_SEED)
+
+        def check(round_index: int) -> None:
+            text = _document_with_drawn_values(rng)
+            document.write_text(text, encoding="utf-8")
+            _clear_derived_caches()
+            for path in self.PATHS:
+                status, headers, body = wsgi_request("GET", path)
+                try:
+                    self._assert_response(status, headers, body, path)
+                except AssertionError as failure:
+                    raise AssertionError(
+                        f"seed={FUZZ_SEED} round={round_index}: {failure}\ndocument was:\n{text}"
+                    ) from failure
+
+        for round_index in range(FUZZ_ITERATIONS):
+            check(round_index)
+
+    def test_fields_survive_the_write_read_boundary_escaped(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The pair assertion, both sides of the persistence boundary.
+
+        A hostile name, label or section name is written into a document and
+        read back through the real reader.  The JSON payloads must carry it
+        byte for byte (the SPA escapes on render, and a payload that mangled a
+        name would misattribute a match), and the HTML surface must carry the
+        escaped spelling with the raw one absent, which is the only thing
+        standing between a hand-edited document and script execution in a
+        reader's browser.
+        """
+        directory = tmp_path / "db"
+        self._install(tmp_path, monkeypatch)
+        name = HOSTILE_NAME
+        section = '.te"xt'
+        write_coverage(
+            directory,
+            _DOC_TARGET,
+            {
+                section: {
+                    **_DOC_SECTIONS[".text"],
+                    "cells": [cell(0, 16, "exact", functions=(name,), label=name)],
+                }
+            },
+            functions=[{"va": 0x10001000, "name": name, "size": 16, "status": "EXACT"}],
+        )
+        _clear_derived_caches()
+
+        status, headers, body = wsgi_request("GET", f"/api/targets/{_DOC_TARGET}/functions")
+        assert status.startswith("200"), f"{status}: {body[:200]!r}"
+        rows = _strict_json(decode_body(body, headers).decode("utf-8"))
+        served = [row.get("name") for row in rows.get("functions", rows.get("items", []))]
+        assert name in served, f"the hostile name did not survive the read: {served!r}"
+
+        status, headers, body = wsgi_request("GET", f"/potato?target={_DOC_TARGET}&view=functions")
+        assert status.startswith("200"), f"{status}: {body[:200]!r}"
+        page = decode_body(body, headers).decode("utf-8", errors="replace")
+        assert name not in page, "the raw name reached the page unescaped"
+        assert html.escape(HOSTILE_NAME) in page, (
+            "the escaped name is missing from the page, so the escaping is not what carries it"
+        )

@@ -16,6 +16,7 @@ import ipaddress
 import itertools
 import json
 import logging
+import math
 import threading
 import unicodedata
 from collections import deque
@@ -1881,11 +1882,21 @@ def _plain(value: Any) -> Any:
     refuses a mapping proxy — so every value travelling into a response is
     thawed here, in one place, rather than at each call site.  Tuples become
     lists, which is what the JSON arrays they replace always were.
+
+    A non-finite float becomes ``None`` here for the same reason: JSON has no
+    spelling for one, ``json.dumps`` writes the ``NaN`` / ``Infinity`` tokens
+    anyway, and every parser outside Python rejects the body, so one figure a
+    hand edit or a divide-by-zero left in a document would take the whole
+    payload down with it.  ``null`` is the answer both renderers already read
+    as "no figure" (``potato._similarity_pct`` leaves it alone, and the SPA
+    tests ``== null``).
     """
     if isinstance(value, Mapping):
         return {key: _plain(item) for key, item in value.items()}
     if isinstance(value, tuple | list):
         return [_plain(item) for item in value]
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
     return value
 
 
@@ -1954,7 +1965,7 @@ def function_json(fn: Function) -> dict[str, Any]:
         "blocker": fn.blocker,
         "blockerDelta": fn.blockerDelta,
         "size_reason": fn.size_reason,
-        "similarity": fn.similarity,
+        "similarity": _plain(fn.similarity),
         "updated_by": fn.updated_by,
         "updated_at": fn.updated_at,
     }
@@ -2108,10 +2119,10 @@ def verify_payload(row: Mapping[str, Any]) -> dict[str, Any]:
     """
     return {
         "verified_at": row.get("verified_at"),
-        "byte_delta": row.get("byte_delta"),
-        "diff_lines": row.get("diff_lines"),
-        "similarity": row.get("similarity"),
-        "reg_delta": row.get("reg_delta"),
+        "byte_delta": _plain(row.get("byte_delta")),
+        "diff_lines": _plain(row.get("diff_lines")),
+        "similarity": _plain(row.get("similarity")),
+        "reg_delta": _plain(row.get("reg_delta")),
         "effective_match": bool(row["effective_match"])
         if row.get("effective_match") is not None
         else None,

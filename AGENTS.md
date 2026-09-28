@@ -415,6 +415,13 @@ simpler and strictly wider.
      the SPA through `format.percent1(sim * 100)`. A bare `"%.1f"` there
      rounded 99.99% up to a "100.0%" the dashboard showed as 99.9, so a new
      surface rendering either column scales and floors rather than formats.
+     The WIRE has its own rule, `server._plain`: a non-finite float read from a
+     document becomes `null`, because `json.dumps` writes `NaN` / `Infinity`
+     and no JSON parser outside Python accepts them, so one such figure would
+     take the whole payload down at the SPA's `JSON.parse`. A document-derived
+     number travelling into a response goes through `_plain`, and a number a
+     new response serves raw does not survive the fuzz campaign in
+     `tests/test_fuzz.py` (`TestCoverageDocumentContents`).
    - The catalog's `summary` blob is NOT stored in the document (the writer
      keeps the facts, not the precomputed answers). `server._summary` rebuilds
      it from the stored cells and functions, and `/stats` and `/data` serve the
