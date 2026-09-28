@@ -183,7 +183,7 @@ here.
   root that imports `api.py`, `ui.py` and `potato.py` so the app has every
   route.
 - Tests live in `tests/`, one module per source module, and reuse the
-  `tests/conftest.py` fixtures for the synthetic database.
+  `tests/conftest.py` fixtures for the synthetic coverage documents.
 - `filterwarnings = ["error"]` in `pyproject.toml` means a new
   `ResourceWarning` (unclosed socket, file, or connection) fails the build.
   Close the resource instead of filtering the warning.

@@ -502,7 +502,7 @@ graph TD
 ### Acceptance Criteria
 - HTML, the built stylesheet and the built bundle inlined into a single response
 - Minified with `rjsmin`/`rcssmin` and compressed with Brotli/Zstd/gzip
-- Total payload 45,495 B brotli, which no longer fits RFC 6928's initial congestion window; the budget in `ui._TCP_CWND_BUDGET` is a 90 KB ceiling over the measurement, `ui._check_payload_budget` warns with the exact overage, and `tests/test_api.py` fails, so crossing the ceiling is a regression rather than a log line. The current winner is brotli, with zstd 48,678 B and gzip 52,996 B. `make payload-budget` re-derives all three from the committed bundle
+- Total payload 45,686 B brotli, which no longer fits RFC 6928's initial congestion window; the budget in `ui._TCP_CWND_BUDGET` is a 90 KB ceiling over the measurement, `ui._check_payload_budget` warns with the exact overage, and `tests/test_api.py` fails, so crossing the ceiling is a regression rather than a log line. The current winner is brotli, with zstd 48,837 B and gzip 53,168 B. `make payload-budget` re-derives all three from the committed bundle
 - The whole frontend is one built bundle inlined into the shell, so a change to the map, the asm pane, the hex dump or the data inspector moves the same measured number, and `tests/test_api.py` fails when it crosses the ceiling
 - Compression algorithm auto-selected from `Accept-Encoding` header
 - Highlight.js is compiled into the bundle rather than fetched on first use, so a code pane never renders unhighlighted and there is no first-use fetch to fail
@@ -514,11 +514,11 @@ graph TD
     A["Browser requests /"] --> B["Server reads<br/>index.html + style.css<br/>+ app.js (built bundle)"]
     B --> C["Inline all into<br/>single HTML document"]
     C --> D["Minify CSS (rcssmin)<br/>+ JS (rjsmin)"]
-    D --> E{"Accept-Encoding?"}
+    D --> E{"Which encodings does<br/>Accept-Encoding accept?"}
     E -->|zstd| F["Zstandard compress"]
     E -->|br| G["Brotli compress"]
     E -->|gzip| H["Gzip compress"]
-    F --> I["Smallest body wins<br/>(45,256 B brotli today)"]
+    F --> I["Smallest accepted body wins<br/>(45,686 B brotli today)"]
     G --> I
     H --> I
     I --> J["Browser parses + renders<br/>UI shell in first paint"]

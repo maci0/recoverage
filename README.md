@@ -41,7 +41,7 @@ closely your C code matches the original compiled output.
 | Light and dark themes | Retro CRT dark mode by default, clean light mode one click away |
 | Clickable cross-references | Hex addresses in the disassembly are live links that jump to that chunk |
 | Interactive progress bar | Segmented by state; click a segment to filter the grid |
-| First draw without a subrequest | HTML, CSS, and the JS bundle inlined and compressed (Brotli/Zstd) to ~45 KB |
+| First draw without a subrequest | HTML, CSS, and the JS bundle inlined and compressed (Brotli/Zstd) to ~46 KB |
 | Potato Mode | Zero-JS server-rendered fallback for constrained environments |
 | Live regen | Re-catalog and rebuild from the browser without restarting the server |
 
@@ -274,6 +274,8 @@ cors_origin=none
 db=auto
 log_level=INFO
 token=set
+max_connections=128
+client_timeout=120
 ```
 
 ### `recoverage stats`
@@ -582,7 +584,7 @@ recoverage/
 ├── CONTRIBUTING.md          # Bootstrap, edit-test loop, local/CI parity
 ├── Makefile                 # Contributor targets (`make help`); wraps the CI commands
 ├── LICENSE                  # MIT
-├── man/recovery.1         # Man page for the console script, installed by the wheel
+├── man/recoverage.1       # Man page for the console script, installed by the wheel
 ├── NOTICE                   # Grants for the third-party code the web build bundles
 ├── docs/                    # Screenshots, mascot & design doc
 │   ├── DESIGN.md            # Detailed architecture & design doc
@@ -635,7 +637,7 @@ recoverage/
     ├── cli.py                # Typer CLI entry point
     ├── server.py             # Bottle app, shared helpers & compression
     ├── disasm.py             # Capstone disassembly (optional extra)
-    ├── regen.py              # In-process rebrew regen (catalog + build-db)
+    ├── regen.py              # In-process rebrew regen (catalog analysis + document writer)
     ├── api.py                # REST API routes (/api/*)
     ├── ui.py                 # UI routes (/, static files)
     ├── potato.py             # Potato Mode renderer + the /potato route

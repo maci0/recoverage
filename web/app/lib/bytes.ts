@@ -1,8 +1,8 @@
 /** The byte panes: the hex dump and the data inspector.
  *
- * Ported from `assets/detail.js` (`formatBytes`, `DataInspector`). Both read
- * the original binary, which arrives as an `ArrayBuffer` sliced per selection,
- * so nothing here touches the network or the DOM. */
+ * `formatBytes` and the `DataInspector` readings both read the original
+ * binary, which arrives as an `ArrayBuffer` sliced per selection, so nothing
+ * here touches the network or the DOM. */
 
 import { hex } from "@/lib/format";
 
