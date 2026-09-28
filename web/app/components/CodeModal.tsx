@@ -123,7 +123,7 @@ export function CodeModal({
           <span id={titleId} className="modal-title font-mono text-sm font-bold">
             {title === "" ? "Code viewer" : title}
           </span>
-          <div className="modal-actions ml-auto flex gap-2">
+          <div className="modal-actions ms-auto flex gap-2">
             <Button className="copy-btn" aria-label="Copy Modal Content" onClick={copy}>
               {copied ?? "Copy"}
             </Button>

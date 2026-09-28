@@ -380,7 +380,7 @@ export function App() {
     <>
       <a
         href="#main-content"
-        className="skip-link sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:z-30 focus:rounded-hair focus:border focus:border-line focus:bg-panel focus:px-2 focus:py-1"
+        className="skip-link sr-only focus:not-sr-only focus:absolute focus:start-2 focus:top-2 focus:z-30 focus:rounded-hair focus:border focus:border-line focus:bg-panel focus:px-2 focus:py-1"
       >
         Skip to main content
       </a>
@@ -418,7 +418,7 @@ export function App() {
             ))}
           </nav>
         </div>
-        <div className="topbar-right ml-auto flex flex-wrap items-center gap-3">
+        <div className="topbar-right ms-auto flex flex-wrap items-center gap-3">
           <div className="search flex flex-col gap-1">
             <div className="search-row flex items-center gap-2">
               <input

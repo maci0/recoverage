@@ -160,7 +160,7 @@ function CodeSection({
     <section className="section mt-3">
       <div className="section-title flex items-center gap-2 border-b border-line pb-1">
         <HexLogo label={logo} color={color} heading={heading} />
-        <div className="section-actions ml-auto flex gap-2">
+        <div className="section-actions ms-auto flex gap-2">
           <CopyButton
             label="Copy"
             value={text}
@@ -418,7 +418,7 @@ export function CoveragePanel({
       <div className="panel-head border-b border-line pb-2">
         <div className="flex items-center gap-2">
           <h2 className="panel-title font-mono text-sm font-bold">{title}</h2>
-          <div className="panel-actions ml-auto flex gap-2">
+          <div className="panel-actions ms-auto flex gap-2">
             <CopyButton
               label="Copy VA"
               value={copyVA ?? ""}
