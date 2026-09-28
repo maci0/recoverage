@@ -16,6 +16,7 @@ Pins:
 from __future__ import annotations
 
 import logging
+import math
 import os
 import socket
 import subprocess
@@ -615,6 +616,48 @@ class TestOpenAndReap:
             cli._open_when_listening(f"http://127.0.0.1:{port}")
 
         assert opened == [], "opened a tab at an address with no listener"
+
+    def test_the_probe_polls_on_the_clock(self, monkeypatch: Any) -> None:
+        """The wait between probes is on ``recoverage.clock`` like the deadline.
+
+        A loop whose every other time access is a patched ``clock.monotonic``
+        but which parks on ``time.sleep`` burns real seconds between attempts,
+        so a run of it is neither fast to drive nor replayable: the same
+        request sequence takes however long the wall clock decided.  Driving
+        both from one patched clock makes the attempts the only thing a
+        simulation has to control, and the count below is the property being
+        pinned: the loop gives up on its own deadline rather than on however
+        long the sleeps summed to.
+        """
+        import recoverage.cli as cli
+        from recoverage import clock
+
+        now = [1_000.0]
+        waits: list[float] = []
+
+        def sleep(seconds: float) -> None:
+            waits.append(seconds)
+            now[0] += seconds
+
+        monkeypatch.setattr(clock, "monotonic", lambda: now[0])
+        monkeypatch.setattr(clock, "sleep", sleep)
+        monkeypatch.setattr(cli, "open_browser", lambda url: pytest.fail("opened a tab"))
+
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]  # bound, never listening: nothing accepts
+            cli._open_when_listening(f"http://127.0.0.1:{port}")
+
+        assert waits, "the probe never parked, so its poll interval went unread"
+        assert all(wait == cli._OPEN_LISTEN_POLL_SECONDS for wait in waits), waits
+        # The loop ran out the clock's budget in whole poll intervals: the wait
+        # that carried it past the deadline is present, and no wait followed it
+        # (the exit is the deadline check, not a fixed attempt count).  A
+        # tolerance of one covers accumulating 0.05 in binary floating point,
+        # which reaches the deadline a hair early or late per hundred adds.
+        budget = math.ceil(cli._OPEN_LISTEN_WAIT_SECONDS / cli._OPEN_LISTEN_POLL_SECONDS)
+        assert budget <= len(waits) <= budget + 1, waits
+        assert now[0] >= 1_000.0 + cli._OPEN_LISTEN_WAIT_SECONDS
 
     def test_a_listener_is_what_releases_the_browser(self, monkeypatch: Any) -> None:
         """The probe is a liveness check, not a way to suppress the opener.

@@ -14,7 +14,6 @@ import socket
 import subprocess
 import sys
 import threading
-import time
 import webbrowser
 from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
@@ -749,7 +748,7 @@ def _open_when_listening(url: str) -> None:
             if clock.monotonic() >= deadline:
                 _log.debug("no listener on %s:%d — not opening a browser", host, port)
                 return
-            time.sleep(_OPEN_LISTEN_POLL_SECONDS)
+            clock.sleep(_OPEN_LISTEN_POLL_SECONDS)
     open_browser(url)
 
 

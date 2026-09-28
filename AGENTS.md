@@ -873,7 +873,14 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   rather than by shrinking `_DATA_CACHE_BUILD_WAIT_SECONDS`, which a follower
   that still parked on real time would pass against. The slice between two reads
   of the clock bounds only how late a dead claim is reclaimed; a live leader
-  wakes its followers on the set. The LOG stamp is on the seam too, and it is
+  wakes its followers on the set. A poll loop's PARKING is on it for the same
+  reason, which is why `clock` carries `sleep` beside its two reads and
+  `cli._open_when_listening` uses it: a loop that reads the deadline through
+  the seam and then parks on `time.sleep` still takes however long the wall
+  clock decided between attempts, so a run of it is neither fast to drive nor
+  replayable (`tests/test_lifecycle.py`,
+  `TestOpenAndReap::test_the_probe_polls_on_the_clock` drives the whole poll
+  from the patched clock). The LOG stamp is on the seam too, and it is
   the one that was not:
   `%(asctime)s` renders `record.created`, which `logging` fills from
   `time.time()`, so a run driven from one clock wrote two instants for the

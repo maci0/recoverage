@@ -323,6 +323,15 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **The deferred browser opener slept on the wall clock, not on `clock`.**
+  `serve --open` probes the listener before it opens a tab, and the loop read
+  its deadline through `recoverage.clock` but parked between attempts on
+  `time.sleep`, so a start whose listener never came up took real seconds the
+  test that drives the probe has to wait out, and two runs of the same request
+  sequence differed by however long the wall clock decided. `clock` carries
+  `sleep` beside its two reads and the loop uses it, so the whole poll is
+  driven from one place. Production behaviour is unchanged: the function is
+  `time.sleep` under another name.
 - **A Potato Mode coverage failure could split the log line that records it.**
   The "coverage unavailable" warning names the coverage directory and the
   parse error that made it unavailable, and it claims to mirror the API's
