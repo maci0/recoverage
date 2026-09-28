@@ -467,6 +467,23 @@ def test_wrap_text():
     assert _wrap_text("line1\nline2", 45) == "line1\nline2"
 
 
+def test_wrap_text_never_opens_a_line_on_a_combining_mark():
+    """A wrap never lands between a character and a combining mark that follows it.
+
+    The NFD spelling of a value (an "e" followed by COMBINING ACUTE ACCENT, what
+    a macOS-side tool writes into a coverage document) is one code point longer
+    than the precomposed one, so a 40-code-point wrap landed between the letter
+    and its mark and the accent moved onto the first character of the next line.
+    Spelled with escapes throughout: the literals are invisible in a diff.
+    """
+    combining_acute = "́"
+    wrapped = _wrap_text("x" * 39 + "e" + combining_acute + "tail", 40)
+    assert not any(line.startswith(combining_acute) for line in wrapped.split("\n"))
+    # The precomposed spelling is the same text in one code point, so it wraps
+    # on width and is not rejoined.
+    assert _wrap_text("x" * 39 + "\u00e9tail", 40) == "\n".join(["x" * 39 + "\u00e9", "tail"])
+
+
 def test_format_hex_dump():
     dump = _format_hex_dump(b"\x48\x65\x6c\x6c\x6f\x00\xff\x01", base_offset=0x1000)
     assert "00001000" in dump

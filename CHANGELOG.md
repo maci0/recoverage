@@ -130,6 +130,13 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **A Potato Mode line could start with a combining mark.** The detail panel
+  and the disassembly pane hard-wrap their text at a fixed column count, and
+  the wrap landed between a character and a combining mark that followed it,
+  moving the accent onto the first character of the next line. A value spelled
+  NFD (what a macOS-side tool writes into a coverage document) is one code
+  point longer than the precomposed spelling and hit it; the wrap now keeps
+  the two together.
 - **`make shell-lint` failed on the tree it was meant to gate.**
   `tools/ci_clone_rebrew.sh` declares its dialect to shellcheck now, so the
   array and `pipefail` below the header stop reading as an unknown shell

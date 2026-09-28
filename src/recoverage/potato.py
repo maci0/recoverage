@@ -15,6 +15,7 @@ import re
 import struct
 import textwrap
 import threading
+import unicodedata
 from collections.abc import Callable, Iterable
 from html import escape as _html_escape
 from pathlib import Path, PurePath
@@ -642,16 +643,40 @@ def _highlight_hex(text: str) -> str:
 
 
 def _wrap_text(text: str, width: int) -> str:
-    """Hard-wrap text to a specific width for HTML display."""
+    """Hard-wrap text to a specific width for HTML display.
+
+    A break never lands between a character and a combining mark that follows
+    it.  ``textwrap`` counts code points, so a detail value whose 41st code
+    point is U+0301 COMBINING ACUTE ACCENT (an NFD-spelled symbol or field
+    name, which is what a macOS-side tool writes into a coverage document)
+    wrapped to a line OPENING with the mark, and the accent then landed on the
+    first character of the next line instead of the one it belongs to.
+
+    The rejoined line is one code point over ``width``, which is the cheaper
+    trade than a character split across two rows.  This is not grapheme
+    segmentation: a ZWJ emoji sequence can still be broken, because counting
+    extended clusters needs a table this package does not depend on, and a
+    reflowed emoji is a cosmetic miss where a reattached accent is wrong text.
+    """
     lines: list[str] = []
     for line in text.splitlines():
         if len(line) > width:
-            lines.extend(
-                textwrap.wrap(line, width, break_long_words=True, replace_whitespace=False)
-            )
+            wrapped = textwrap.wrap(line, width, break_long_words=True, replace_whitespace=False)
+            lines.extend(_rejoin_combining(wrapped))
         else:
             lines.append(line)
     return "\n".join(lines)
+
+
+def _rejoin_combining(wrapped: list[str]) -> list[str]:
+    """*wrapped* with every piece that opens on a combining mark closed back up."""
+    out: list[str] = []
+    for piece in wrapped:
+        if out and piece and unicodedata.combining(piece[0]):
+            out[-1] += piece
+        else:
+            out.append(piece)
+    return out
 
 
 def _esc(text: object) -> str:
