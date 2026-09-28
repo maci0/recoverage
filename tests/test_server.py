@@ -3309,8 +3309,11 @@ class TestSpaTimestampRendering:
         into a value with no offset, and the instant rebrew stored would then
         be read as the reader's noon rather than as UTC noon.
         """
-        match = re.search(r"const DATE_ONLY = /(.+?)/;", _web("lib/format.ts"))
+        match = re.search(r"const DATE_ONLY = /(.+?)/[a-z]*;", _web("lib/format.ts"))
         assert match is not None, "DATE_ONLY is no longer a pattern literal"
+        # Flags ride after the closing delimiter, so only the pattern body is
+        # compared: the `u` flag oxlint's require-unicode-regexp asks for does
+        # not change what this pattern matches (`\d` is ASCII under `u` too).
         assert match.group(1) == r"^\d{4}-\d{2}-\d{2}$", match.group(1)
 
 
@@ -3419,6 +3422,21 @@ class TestSpaLayoutAndFeedback:
         assert "state.pack === pack" in map_source
         assert "state.layWidth === width" in map_source
 
+    def test_the_grid_state_is_rebuilt_on_the_section_alone(self) -> None:
+        """The rebuilt state starts at `focus: 0`, so it is the section's
+        geometry that may drop it and nothing else. `paint` is a function of the
+        selection, the filters and the match set, so listing it in the teardown's
+        deps re-ran the rebuild on every click and every search keystroke, and
+        the roving cursor went back to the first block on the render the click
+        that moved it caused. `geometry` is keyed on `pack` and `declaredColumns`,
+        which is the section, so the section is still the trigger."""
+        map_source = _web("components/CoverageMap.tsx")
+        rebuild = map_source.index("focus: 0,")
+        end = map_source.index("}, [", rebuild)
+        deps = map_source[end : map_source.index("]);", end)]
+        assert "paint" not in deps, deps
+        assert "pack" in deps and "geometry" in deps, deps
+
     def test_selection_scrolls_the_block_into_view(self) -> None:
         map_source = _web("components/CoverageMap.tsx")
         assert "scrollCell" in map_source
@@ -3510,6 +3528,61 @@ class TestSpaLayoutAndFeedback:
         assert "setLoadError(null)" in coverage[start:end], (
             "a new load keeps the error of the one it replaced"
         )
+
+
+class TestSpaTargetScopedState:
+    """Nothing a target's payloads put in state outlives that target.
+
+    A target switch replaces every document behind the dashboard, so the
+    previous target's cells, paths, search index and stats are answers to a
+    question about a different binary: the map paints one target's blocks
+    under another's addresses and the code pane fetches from the previous
+    target's `sourceRoot`. `reload` drops the same state for a rebuild, and a
+    target switch reaches neither, so the target is the invalidation signal.
+    Browser-observable behaviour lives in `tests/test_playwright.py`; these pin
+    the wiring Python cannot otherwise see.
+    """
+
+    def test_a_target_switch_clears_the_accumulated_payloads(self) -> None:
+        coverage = _web("hooks/useCoverage.ts")
+        effect = coverage.index("shownTarget.current === target")
+        effect = coverage.index("}, [target]);", effect)
+        block = coverage[coverage.index("useEffect(", effect - 400) : effect]
+        for reset in (
+            "setSections({})",
+            "setSearchIndex({})",
+            "setPaths({})",
+            "setStats(null)",
+            "setStatsError(null)",
+            "setCellError(null)",
+            "indexed.current = null",
+        ):
+            assert reset in block, f"a target switch keeps {reset} out of its own clear"
+
+    def test_the_clear_runs_before_the_request_the_switch_starts(self) -> None:
+        """A fast response merged into state the clear then emptied is a
+        dashboard that never fills in, so the clear is declared first."""
+        coverage = _web("hooks/useCoverage.ts")
+        assert coverage.index("shownTarget.current === target") < coverage.index(
+            "void load(section, control.signal);"
+        )
+
+    def test_the_clear_aborts_the_previous_target_cell_fetches(self) -> None:
+        """They resolve into the clear, and each abandoned section kept a
+        multi-megabyte /data response downloading to a `merge` nothing reads."""
+        coverage = _web("hooks/useCoverage.ts")
+        start = coverage.index("shownTarget.current === target")
+        end = coverage.index("}, [target]);", start)
+        assert "control.abort();" in coverage[start:end]
+        assert "inflight.current.clear();" in coverage[start:end]
+
+    def test_a_deferred_jump_does_not_outlive_its_target(self) -> None:
+        """The marker is a bare address, and the retry effect keys on
+        `coverage.sections`, which a target switch replaces: a marker left
+        behind resolved against the new target's rows."""
+        app = _web("App.tsx")
+        clear = app.index("deferredJump.current = null;\n  }, [target]);")
+        assert clear < app.index("}, [coverage.sections, jumpToAddress]);")
 
 
 class TestSpaJumpAndSearch:

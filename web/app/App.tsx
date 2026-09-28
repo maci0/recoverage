@@ -431,6 +431,15 @@ export function App() {
     [coverage, flash],
   );
 
+  // A deferred jump is a bare address, so it only means anything for the target
+  // it was issued against. The retry below keys on `coverage.sections`, which a
+  // target switch replaces, so a marker left behind by the previous target
+  // resolved against the new one's rows and selected a block at that address
+  // in a binary the reader never asked about. Declared first so the clear wins.
+  useEffect(() => {
+    deferredJump.current = null;
+  }, [target]);
+
   // A jump deferred for cells that were not loaded: retried when the section
   // the address is in has them. The marker stays until then, so the retry
   // cannot defer itself a second time, and nothing is reported while the

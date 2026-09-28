@@ -40,7 +40,7 @@ export function count(amount: number): string {
 }
 
 /** A bare calendar day, `YYYY-MM-DD`, with no time and no offset. */
-const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/u;
 
 /** A stored timestamp, written the way the reader's locale writes a date and
  * in their own timezone. The documents carry ISO 8601, which is a wire format

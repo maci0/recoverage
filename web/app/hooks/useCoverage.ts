@@ -111,6 +111,37 @@ export function useCoverage(target: string, section: string): Coverage {
     [merge, target],
   );
 
+  // A target switch replaces every document behind the dashboard, so nothing
+  // the previous target's payloads put in state survives it. The map kept
+  // painting the old target's cells (a sibling row with its cells already
+  // merged stays a painted row, so the `pending(...)` overlay never showed),
+  // the code pane fetched from the old target's `sourceRoot` with the new
+  // target's id, and the stats strip stated a figure the map under it was not.
+  // `reload` drops the same state for a rebuild and a section switch reaches
+  // neither, so the target is the invalidation signal and it is dropped here.
+  //
+  // Declared before the load effect so the clear lands before the request the
+  // switch starts, not after it: a fast response merged into state the clear
+  // then emptied is a dashboard that never fills in.
+  const shownTarget = useRef(target);
+  useEffect(() => {
+    if (shownTarget.current === target) {
+      return;
+    }
+    shownTarget.current = target;
+    for (const control of inflight.current.values()) {
+      control.abort();
+    }
+    inflight.current.clear();
+    indexed.current = null;
+    setSections({});
+    setSearchIndex({});
+    setPaths({});
+    setStats(null);
+    setStatsError(null);
+    setCellError(null);
+  }, [target]);
+
   useEffect(() => {
     if (target === "") {
       return;
