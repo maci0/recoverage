@@ -38,7 +38,6 @@ from recoverage.server import (
     HAS_PYGMENTS,
     HTTPResponse,
     _best_encoding,
-    _config_stat_fingerprint,
     _etag_or_304,
     _format_hex_dump,
     _get_targets_config,
@@ -54,6 +53,7 @@ from recoverage.server import (
     app,
     clear_target_cache,
     compress_payload,
+    config_fingerprint,
     fold_match_folded,
     header_present,
     origin_is_this_dashboard,
@@ -993,17 +993,6 @@ class _SSEStream:
         self._release()
 
 
-def _sse_peer() -> str:
-    """Control-char-escaped peer address for a stream's log lines.
-
-    ``REMOTE_ADDR`` is peer-supplied only through a proxy, but a raw value in
-    a log line can carry control bytes either way, so it is escaped with the
-    same helper every other request log argument goes through.  "unknown" when
-    the environ has none (a WSGI harness, a mounted app).
-    """
-    return _server._log_safe(_server.request.environ.get("REMOTE_ADDR", "") or "unknown")
-
-
 @app.get("/api/events")
 def handle_api_events() -> Any:
     """SSE stream: emits a db-updated event when the coverage documents change.
@@ -1020,7 +1009,7 @@ def handle_api_events() -> Any:
     # loopback) could otherwise take a slot each until the wider cap bit too.
     # Read the environ before registering, so the peer that goes in the map is
     # the one every later log line about this stream names.
-    peer = _sse_peer()
+    peer = _server.peer_label()
     with _SSE_CLIENTS_LOCK:
         if len(_SSE_CLIENTS) >= _SSE_MAX_CLIENTS:
             # Refusals reach /api/health's error count, but a health snapshot
@@ -1312,7 +1301,7 @@ def handle_api_targets() -> bytes | HTTPResponse:
     etag = _etag_or_304(
         _snapshot_db_mtime(),
         "targets",
-        _config_stat_fingerprint(_project_dir()),
+        config_fingerprint(_project_dir()),
     )
     if etag is None:
         # An unreadable DB is the case the snapshot cannot fingerprint, so

@@ -662,12 +662,12 @@ class TestApiTargets:
         from recoverage import api as api_mod
 
         before = _header(wsgi_get("/api/targets")[1], "ETag")
-        real = api_mod._config_stat_fingerprint
+        real = api_mod.config_fingerprint
         try:
-            api_mod._config_stat_fingerprint = lambda root: (123, 456)  # type: ignore[assignment]
+            api_mod.config_fingerprint = lambda root: (123, 456)  # type: ignore[assignment]
             moved = _header(wsgi_get("/api/targets")[1], "ETag")
         finally:
-            api_mod._config_stat_fingerprint = real  # type: ignore[assignment]
+            api_mod.config_fingerprint = real  # type: ignore[assignment]
         assert moved != before
         assert real is not None
 

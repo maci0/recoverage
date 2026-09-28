@@ -31,10 +31,18 @@ from recoverage import config
 _DB_PATH_CACHE: tuple[tuple[str, tuple[int, int] | None], Path] | None = None
 
 
-def _config_fingerprint(cfg: Path) -> tuple[int, int] | None:
-    """(mtime_ns, size) of *cfg*, or None when absent/unreadable."""
+def config_fingerprint(root: Path) -> tuple[int, int] | None:
+    """``(mtime_ns, size)`` of ``rebrew-project.toml`` under *root*, None if absent.
+
+    The one change token every config-derived memo keys on: this one, the
+    parsed target config and the DLL byte cache in :mod:`recoverage.server`.
+    Editing the file is a write that reaches no server code and moves no
+    coverage document, so the stat is the only invalidation signal there is,
+    and naming the same token in every key is what keeps those memos from
+    disagreeing about whether the config changed.
+    """
     try:
-        st = cfg.stat()
+        st = (root / CONFIG_NAME).stat()
     except OSError:
         return None
     return (st.st_mtime_ns, st.st_size)
@@ -63,7 +71,7 @@ def _db_path() -> Path:
     if override is not None:
         return override
     cwd = Path.cwd()
-    fingerprint = (str(cwd), _config_fingerprint(cwd / CONFIG_NAME))
+    fingerprint = (str(cwd), config_fingerprint(cwd))
     cached = _DB_PATH_CACHE
     if cached is not None and cached[0] == fingerprint:
         return cached[1]

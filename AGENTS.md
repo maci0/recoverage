@@ -871,13 +871,13 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   from the locale; a log stamp is local time with `%z` attached, because the
   operator comparing it against their own clock needs to see their own clock.
 - The memos derived from `rebrew-project.toml` all key on the file's stat
-  (`server._config_stat_fingerprint`), one token for all of them:
+  (`_paths.config_fingerprint`), one token for all of them:
   `_get_targets_config`, `resolve_targets` (keyed on that stat AND the
   coverage-directory snapshot, its other input), and the `DLL_DATA` byte cache.
   Editing the config is a write that reaches no server code and moves no
   coverage file, so the stat is the only invalidation signal there is, and the
   rebuild broadcast watches the documents alone. A new config-derived memo names
-  `_config_stat_fingerprint` in its key or it will disagree with the other two
+  `_paths.config_fingerprint` in its key or it will disagree with the other two
   (`tests/test_server.py`, `TestConfigDerivedMemosFollowTheConfigStat`).
   Coverage-derived memos key on `server._snapshot_db_mtime`, and the potato ones
   re-check the watermark before publishing, so a payload read from one snapshot

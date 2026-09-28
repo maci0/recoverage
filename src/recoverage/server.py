@@ -52,7 +52,7 @@ from rebrew.workspace import (
 )
 
 from recoverage import clock, metrics
-from recoverage._paths import _db_path
+from recoverage._paths import _db_path, config_fingerprint
 
 # Thread-local compressor — python-zstandard gives ZstdCompressor instances NO
 # thread-safety guarantees ("do not operate on the same instance from different
@@ -1373,6 +1373,18 @@ def _log_safe(value: str) -> str:
     return value.translate(_LOG_CONTROL_CHARS)
 
 
+def peer_label() -> str:
+    """The requesting peer, escaped for a log line, ``unknown peer`` without one.
+
+    ``REMOTE_ADDR`` is peer-supplied only through a proxy, but a raw value in
+    a log line can carry control bytes either way, so it goes through
+    :func:`_log_safe` like every other request log argument.  One definition
+    for the label every request-path record names its peer by, so a log line
+    and the ``peer`` field beside it cannot spell it two ways.
+    """
+    return _log_safe(request.environ.get("REMOTE_ADDR", "") or "unknown peer")
+
+
 #: Name of the record attribute carrying the structured fields, read by
 #: ``cli.StructuredFormatter`` and ignored by a plain one.  ONE name, so the
 #: writer (here) and the reader (the formatter) cannot drift apart.
@@ -1413,24 +1425,6 @@ def request_log_fields(
 _TOML_CACHE_MTIME: tuple[int, int] | None = None
 
 
-def _config_stat_fingerprint(root: Path) -> tuple[int, int] | None:
-    """``(mtime_ns, size)`` of the project config under *root*, None when absent.
-
-    The one definition of the change token every config-derived memo keys on:
-    the parsed config (:func:`_get_targets_config`), the resolved target list
-    (:func:`resolve_targets`), and the DLL byte cache (:func:`_load_dll`).
-    Editing ``rebrew-project.toml`` is a write that reaches no server code, so
-    a stat is the only invalidation signal available; naming the same one in
-    every key is what keeps those memos from disagreeing about whether the
-    config changed.
-    """
-    try:
-        st = (root / CONFIG_NAME).stat()
-    except OSError:
-        return None
-    return (st.st_mtime_ns, st.st_size)
-
-
 def _get_targets_config() -> dict[str, Any]:
     """Load target configuration from rebrew-project.toml (thread-safe, cached).
 
@@ -1441,7 +1435,7 @@ def _get_targets_config() -> dict[str, Any]:
     global _TOML_CONFIG_CACHE, _TOML_CACHE_MTIME
     root = _project_dir()
     toml_path = root / CONFIG_NAME
-    current = _config_stat_fingerprint(root)
+    current = config_fingerprint(root)
     with _RESOLVED_TARGETS_CACHE_LOCK:
         if _TOML_CONFIG_CACHE is not None and current == _TOML_CACHE_MTIME:
             return _TOML_CONFIG_CACHE
@@ -1523,7 +1517,7 @@ def resolve_targets() -> list[dict[str, str]]:
     # next build's target is missing from /api/targets, the dropdown and Potato
     # until the build after that.
     key: _ResolvedTargetsKey = (
-        _config_stat_fingerprint(_project_dir()),
+        config_fingerprint(_project_dir()),
         _snapshot_db_mtime(),
     )
     snapshots = coverage_snapshots()
@@ -1610,11 +1604,11 @@ def _load_dll(target: str) -> bytes | None:
     operator edit to rebrew-project.toml: it reaches no server code, and the
     rebuild broadcast that clears this dict fires on the DB alone.  The memo
     therefore carries the same config stat its path resolution keys on
-    (:func:`_config_stat_fingerprint`) and drops every entry when that moves,
+    (:func:`config_fingerprint`) and drops every entry when that moves,
     the contract :func:`_get_targets_config` already follows.
     """
     global _DLL_CONFIG_MTIME
-    config_fp = _config_stat_fingerprint(_project_dir())
+    config_fp = config_fingerprint(_project_dir())
     with DLL_LOCK:
         if config_fp != _DLL_CONFIG_MTIME:
             _DLL_CONFIG_MTIME = config_fp
@@ -3059,13 +3053,12 @@ def _require_auth() -> None:
     # behind a proxy that folds a header into it, it is as hostile as any
     # other untrusted value and a %0A in it would forge the line below.
     metrics.AUTH.note_failure()
+    logged_peer = peer_label()
     _log.warning(
         "Rejected %s auth token from %s",
         "missing" if not provided else "invalid",
-        _log_safe(request.environ.get("REMOTE_ADDR", "") or "unknown peer"),
-        extra=request_log_fields(
-            401, peer=_log_safe(request.environ.get("REMOTE_ADDR", "") or "unknown peer")
-        ),
+        logged_peer,
+        extra=request_log_fields(401, peer=logged_peer),
     )
     # A browser asking for a page gets a page; API clients keep the JSON
     # error contract.  Someone handed a share URL who dropped the query
@@ -3209,14 +3202,15 @@ def _log_request() -> None:
             # DNS-rebinding attempt signal; without it the 400 leaves no
             # trace for incident investigation.  %r escapes control
             # characters, so the hostile value cannot forge log lines.
+            logged_peer = peer_label()
             _log.warning(
                 "Rejected request with unexpected Host header %r from %s",
                 host,
-                _log_safe(request.environ.get("REMOTE_ADDR", "") or "unknown peer"),
+                logged_peer,
                 extra=request_log_fields(
                     400,
                     host=_log_safe(host),
-                    peer=_log_safe(request.environ.get("REMOTE_ADDR", "") or "unknown peer"),
+                    peer=logged_peer,
                 ),
             )
             raise _json_err(
