@@ -268,6 +268,24 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **The shipped stylesheet did not match `web/`.** `src/recoverage/assets/style.css`
+  is a build output committed to the tree, and the committed copy had drifted from
+  what `make web-build` produces from the same sources under the pinned Tailwind:
+  its theme layer was missing `--font-mono` and `--shadow-glow`, both declared in
+  `web/app/index.css`. `make build` regenerates the file and
+  `make check-bundle-clean` fails on the difference, so the dashboard served CSS
+  that no longer came from the source it is built from. The committed copy is the
+  rebuilt one.
+- **`make build` would have packaged a stray file out of the asset directory.**
+  The wheel's package data is the glob `assets/*` and Vite cannot police that
+  directory (`emptyOutDir` is off, because it also holds the hand-written
+  `index.html`, `print.css` and `favicon.svg`), so anything left in it rides into
+  the wheel. The build now refuses a directory holding anything other than the
+  five shipped assets, and one missing from it, before `uv build` runs.
+- **`make -j all` ran the gates against a half-written tree.** Every target shares
+  one `.venv`, one `node_modules` and one `dist/`, and `all` chains work that
+  writes to all three in the order it declares them, but make orders a
+  prerequisite list under `-j` by nothing. The Makefile is now `.NOTPARALLEL:`.
 - **`recoverage serve` exited on a `TypeError` before it bound a port.** The
   command passed the raw `--cors-origin` flag to the security configuration
   instead of the resolved allowlist, and the flag is `None` whenever it was

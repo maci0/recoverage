@@ -16,6 +16,17 @@ SHELL := /bin/sh
 # /bin/sh on macOS) instead of failing under dash.
 SET_STRICT = set -eu; if (set -o pipefail) 2>/dev/null; then set -o pipefail; fi;
 
+# Every target here shares one .venv, one node_modules and one dist/, and
+# `all` chains work that mutates all three in the order it declares them:
+# `build` rewrites src/recoverage/assets/ and dist/, `check-bundle-clean` is
+# the gate over what `build` just wrote there, and `format` rewrites the
+# sources `test` is reading. Make orders a prerequisite list under `-j` by
+# nothing at all, so `make -j8 all` could run the gate against a bundle
+# mid-write and `format` against a test mid-read, and the answer would depend
+# on the scheduler. Serial for the whole file rather than per target, because
+# the shared state is the reason.
+.NOTPARALLEL:
+
 .DEFAULT_GOAL := help
 
 # Lockfile-pinned deps, exactly as every CI job installs them.  Override with
@@ -195,6 +206,24 @@ setup: ensure-rebrew warn-uv-version
 build: ensure-rebrew ensure-uv web-build
 	@$(SET_STRICT) \
 	export SOURCE_DATE_EPOCH="$(SOURCE_DATE_EPOCH)" LC_ALL=C TZ=UTC; \
+	for f in $(BUNDLE_ASSETS); do \
+	  if [ ! -f "$(BUNDLE_DIR)/$$f" ]; then \
+	    echo "ERROR: $(BUNDLE_DIR)/$$f is missing from the asset directory."; \
+	    echo "Run 'make web-build'; a wheel built from a partial bundle serves nothing."; \
+	    exit 1; \
+	  fi; \
+	done; \
+	for f in "$(BUNDLE_DIR)"/* "$(BUNDLE_DIR)"/.[!.]*; do \
+	  [ -e "$$f" ] || continue; \
+	  base=$${f##*/}; \
+	  case " $(BUNDLE_ASSETS) " in \
+	    *" $$base "*) ;; \
+	    *) echo "ERROR: $(BUNDLE_DIR)/$$base is not one of the shipped assets."; \
+	       echo "pyproject.toml's package data is the glob 'assets/*', so every file that"; \
+	       echo "lands here rides into the wheel. Remove it, or add it to BUNDLE_ASSETS."; \
+	       exit 1;; \
+	  esac; \
+	done; \
 	uv build --out-dir dist --build-constraints build-constraints.txt --clear; \
 	$(UV_RUN) python tools/normalize_sdist.py dist
 
@@ -208,6 +237,16 @@ build: ensure-rebrew ensure-uv web-build
 # job runs this after its first build for the same reason: the two-build
 # comparison would pass on a tree that was already out of date.
 BUNDLE_DIR = src/recoverage/assets
+
+# Exactly what the wheel is allowed to pick up from BUNDLE_DIR. pyproject.toml's
+# package data is the glob `assets/*`, so the directory's contents ARE the
+# shipped file list, and Vite cannot police it: `emptyOutDir` is off (the
+# directory also holds the hand-written index.html, print.css and favicon.svg,
+# which Vite does not emit), so a scratch file, an editor backup or a leftover
+# from a renamed output stays where it was dropped. The `build` recipe refuses a
+# directory holding anything else, and a missing member, so a contaminated
+# bundle fails the build instead of shipping.
+BUNDLE_ASSETS = app.js favicon.svg index.html print.css style.css
 
 check-bundle-clean:
 	@$(SET_STRICT) \

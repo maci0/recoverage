@@ -259,6 +259,41 @@ class TestReproducibleBuild:
         )
         assert 'mkdir -p -- "$first" "$work"' in step, "the cleared trees are not recreated"
 
+    def test_the_build_recipe_refuses_an_asset_it_did_not_declare(self) -> None:
+        """`[tool.setuptools.package-data]` is the glob `assets/*`, so the
+        contents of the bundle directory ARE the wheel's shipped file list, and
+        nothing clears that directory: Vite runs with `emptyOutDir` off because
+        it also holds the hand-written `index.html`, `print.css` and
+        `favicon.svg`. A scratch file, an editor backup or a leftover from a
+        renamed output therefore sits where it was dropped and would ride into
+        the artifact. The recipe checks the directory against the declared list
+        before `uv build` runs, in both directions: a member that is not on the
+        list is contamination, and one that is missing is a wheel serving
+        nothing."""
+        recipe = _MAKEFILE.split("\nbuild:", 1)[1].split("\n\n", 1)[0]
+        assert "BUNDLE_ASSETS" in recipe, "the build recipe no longer checks the bundle directory"
+        assert recipe.index("BUNDLE_ASSETS") < recipe.index("uv build"), (
+            "the bundle directory is checked after the artifact is built, so a "
+            "contaminated asset is already in it"
+        )
+        declared = set(_MAKEFILE.split("BUNDLE_ASSETS =", 1)[1].split("\n", 1)[0].split())
+        assert declared, "BUNDLE_ASSETS is empty, so the check admits nothing and ships nothing"
+        present = {p.name for p in _ASSETS.iterdir() if p.is_file()}
+        assert present == declared, (
+            f"the bundle directory and BUNDLE_ASSETS disagree: "
+            f"only on disk {sorted(present - declared)}, only declared {sorted(declared - present)}"
+        )
+
+    def test_the_makefile_is_not_parallel(self) -> None:
+        """Every target shares one `.venv`, one `node_modules` and one `dist/`,
+        and `all` chains work that writes to all three in the order it declares
+        them: `build` rewrites the bundle `check-bundle-clean` is the gate over.
+        Make orders a prerequisite list under `-j` by nothing, so `make -j all`
+        could run that gate against a file mid-write."""
+        assert ".NOTPARALLEL:" in _MAKEFILE, (
+            "the Makefile is parallel and its targets share the venv, node_modules and dist/"
+        )
+
     def test_the_build_recipe_pins_the_backend_and_clears_stale_artifacts(self) -> None:
         """`uv build` resolves PEP 517 build requirements outside uv.lock, so
         an unconstrained `setuptools>=` is a floor, not a pin: the artifact

@@ -795,7 +795,14 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   reproducibility comparison cannot tell a stale commit from a fresh one,
   because both trees rebuild the same bytes from the same sources. It fails
   when the build changed a tracked file under `src/recoverage/assets`. Never
-  hand-edit them.
+  hand-edit them. `check-bundle-clean` only compares bytes: `emptyOutDir` is off
+  in `web/vite.config.ts` (that directory also holds the hand-written
+  `index.html`, `print.css` and `favicon.svg`), so nothing clears a stray file
+  out of it, and `pyproject.toml`'s `assets/*` glob makes the directory's
+  contents the wheel's shipped file list. `BUNDLE_ASSETS` in the Makefile is
+  that list, and `build` refuses a member that is missing or is not on it
+  before `uv build` runs. A new file under `assets/` joins `BUNDLE_ASSETS` in
+  the same change.
 - The cell-state vocabulary is owned by rebrew (`rebrew.build_db._KNOWN_CELL_STATES`)
   and must be covered on the rendering side: `potato.COLORS` + `LEGEND_ITEMS`,
   and `web/app/grid/pack.ts` `STATE_SLOTS`/`PALETTE_VARS`/`FILTER_KEY`. An unmapped
