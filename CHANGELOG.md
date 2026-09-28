@@ -75,7 +75,7 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   environment each flag defaults from. A system or user prefix puts that
   directory on the man path, so `man recoverage` works on such an installed
   copy; a virtualenv prefix does not, and a reader who installs into one finds
-  the page at `$VIRTUAL_ENV/share/man/man1/recovery.1` and can add that
+  the page at `$VIRTUAL_ENV/share/man/man1/recoverage.1` and can add that
   directory to `MANPATH`. An installed copy previously shipped the entry point
   and no documentation for it at all.
 - The dashboard prints the target's coverage and the section on screen above
