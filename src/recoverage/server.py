@@ -2486,29 +2486,25 @@ def _finish_request() -> None:
     metrics.REQUESTS.finish(route, status, duration_ms, timed=timed, rule_matched=rule is not None)
     _REQUEST_TLS.counted = (route, status)
     if timed and duration_ms >= metrics.SLOW_REQUEST_MS:
-        _log.warning(
-            "Slow request: %s %s -> %d in %.0fms",
-            _log_safe(request.method),
-            _log_safe(request.path),
-            status,
-            duration_ms,
-            extra=request_log_fields(status, duration_ms, route=route),
-        )
+        level, template = logging.WARNING, "Slow request: %s %s -> %d in %.0fms"
+    # `_log_safe` is two `str.translate` calls over the control-character
+    # table, and the arguments are evaluated before logging can discard them:
+    # every request paid it whether or not DEBUG was enabled.  The guard is the
+    # same check logging does internally, hoisted so the escaping is skipped
+    # with it.
+    elif _log.isEnabledFor(logging.DEBUG):
+        level, template = logging.DEBUG, "%s %s -> %d in %.0fms"
     else:
-        # `_log_safe` is two `str.translate` calls over the control-character
-        # table, and the arguments are evaluated before logging can discard
-        # them: every request paid it whether or not DEBUG was enabled.  The
-        # guard is the same check logging does internally, hoisted so the
-        # escaping is skipped with it.
-        if _log.isEnabledFor(logging.DEBUG):
-            _log.debug(
-                "%s %s -> %d in %.0fms",
-                _log_safe(request.method),
-                _log_safe(request.path),
-                status,
-                duration_ms,
-                extra=request_log_fields(status, duration_ms, route=route),
-            )
+        return
+    _log.log(
+        level,
+        template,
+        _log_safe(request.method),
+        _log_safe(request.path),
+        status,
+        duration_ms,
+        extra=request_log_fields(status, duration_ms, route=route),
+    )
 
 
 def _reclassify_request(status: int) -> None:
