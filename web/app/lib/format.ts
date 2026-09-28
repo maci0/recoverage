@@ -39,6 +39,9 @@ export function count(amount: number): string {
   return amount.toLocaleString();
 }
 
+/** A bare calendar day, `YYYY-MM-DD`, with no time and no offset. */
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+
 /** A stored timestamp, written the way the reader's locale writes a date and
  * in their own timezone. The documents carry ISO 8601, which is a wire format
  * and not one anyone reads: a German reader gets `29.09.2026, 14:03` and a
@@ -49,9 +52,18 @@ export function count(amount: number): string {
  * (a naive ISO string is local time to whoever wrote it, and the writer is
  * not the reader). A stamp no engine can parse comes back as it arrived: a
  * coverage document is untrusted input, and an unreadable timestamp is worth
- * showing raw, not worth rendering as "Invalid Date". */
+ * showing raw, not worth rendering as "Invalid Date".
+ *
+ * A DATE-ONLY value names a calendar day, not an instant, and the two forms
+ * `Date` reads them by are not the same: a bare `2026-09-29` is UTC midnight
+ * while a naive `2026-09-29T00:00:00` is the reader's own midnight, so a
+ * day-only stamp rendered as parsed read as the 28th for every reader west of
+ * UTC (UTC-3 through UTC-11, most of the Americas and the Pacific) and as the
+ * 29th only in the zone that wrote it. Appending the time half without an
+ * offset puts the day back on the calendar day it names, which is the only
+ * reading a value carrying no time of day can support. */
 export function dateTime(stamp: string): string {
-  const parsed = new Date(stamp);
+  const parsed = new Date(DATE_ONLY.test(stamp) ? `${stamp}T00:00:00` : stamp);
   if (Number.isNaN(parsed.getTime())) {
     return stamp;
   }

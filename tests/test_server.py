@@ -3245,6 +3245,38 @@ class TestSpaLocaleFormatting:
             assert source.casefold() == folded, source
 
 
+class TestSpaTimestampRendering:
+    """`format.dateTime` renders a document's stamp in the reader's own zone.
+
+    The coverage document's `updated_at` and `last_verify.verified_at` are
+    rebrew-written UTC ISO strings carrying an offset, so they name an instant
+    and the browser reads them correctly on its own. A stamp with no time of
+    day names a CALENDAR DAY instead, and the two ISO forms `Date` reads by
+    are not the same: a bare `2026-09-29` is UTC midnight, a naive
+    `2026-09-29T00:00:00` is the reader's own midnight. Parsed as it arrived,
+    a day-only stamp read as the day before for every reader west of UTC
+    (America/Sao_Paulo, UTC-3, reads "Mon Sep 28" for a stamp that names the
+    29th), which is the date-shift the format's own reading of a naive string
+    is meant to prevent.
+    """
+
+    def test_a_day_only_stamp_is_read_as_a_calendar_day(self) -> None:
+        body = _web("lib/format.ts").split("export function dateTime", 1)[1].split("\n}", 1)[0]
+        assert "DATE_ONLY.test(stamp)" in body, "a day-only stamp has no reader-side anchor"
+        assert "T00:00:00" in body, "the day is not anchored to the reader's midnight"
+
+    def test_the_day_only_form_is_a_whole_date_and_nothing_else(self) -> None:
+        """The pattern must not swallow a stamp that carries a time or an offset.
+
+        A greedy `^\\d{4}-\\d{2}-\\d{2}` would rewrite `2026-09-29T12:00:00Z`
+        into a value with no offset, and the instant rebrew stored would then
+        be read as the reader's noon rather than as UTC noon.
+        """
+        match = re.search(r"const DATE_ONLY = /(.+?)/;", _web("lib/format.ts"))
+        assert match is not None, "DATE_ONLY is no longer a pattern literal"
+        assert match.group(1) == r"^\d{4}-\d{2}-\d{2}$", match.group(1)
+
+
 class TestSpaSearchFoldsLikeTheServer:
     """The search box compares in the same form `server.fold_match` does.
 
