@@ -3595,3 +3595,39 @@ class TestRenderedPageNamesAndStates:
         """A wrong voice on every control: no lang means no speech synthesiser."""
         html = self._render(tmp_path, monkeypatch, "")
         assert '<html lang="en">' in html
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage document")
+class TestCellStateSpellingInTheDetailPanel:
+    """The panel and the list must colour one value the same way.
+
+    ``cell.state`` is free text in the document (rebrew writes the canonical
+    lowercase vocabulary, nothing validates a hand-edited or older document),
+    and the function list already folded it: ``COLORS.get(st.lower(), ...)``.
+    The detail panel looked the same value up unfolded, so a cell spelled
+    ``Exact`` was drawn in the exact-match colour in the grid and in the
+    default text colour in the panel opened from it.
+    """
+
+    def test_a_mixed_case_state_keeps_its_colour_in_the_panel(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from recoverage.potato import COLORS
+
+        _write_doc(
+            tmp_path,
+            monkeypatch,
+            "MIXED",
+            {
+                ".text": {
+                    "va": 0x1000,
+                    "size": 0x10,
+                    "fileOffset": 0x200,
+                    "unitBytes": 16,
+                    "columns": 1,
+                    "cells": [cell(0x1000, 0x1010, "Exact")],
+                }
+            },
+        )
+        html = render_potato_url("/potato?target=MIXED&section=.text&idx=0")
+        assert f'color="{COLORS["exact"]}"><b>EXACT</b>' in html

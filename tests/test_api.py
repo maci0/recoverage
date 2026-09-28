@@ -6500,3 +6500,65 @@ class TestDataSearchIndexOptOut:
             payload = json.loads(decode_body(body, headers))
             assert payload["code"] == "bad_request"
             assert payload["error"] == "invalid index"
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+class TestSectionFilterKeepsDocumentWhitespace:
+    """``?section=`` is trimmed of ASCII whitespace only, like every term here.
+
+    A section name comes out of a PE image, so one carrying a non-breaking
+    space is a real document value.  ``str.strip()`` removes U+00A0, the thin
+    spaces and U+FEFF along with the ASCII runs, so the filter became a name
+    the document does not hold, the request answered with every section's
+    ``cells`` omitted, and the SPA rendered an empty map over a target that
+    has data.  ``server.strip_ascii_whitespace`` is the rule the rest of the
+    package already follows.
+    """
+
+    TARGET = "FAKEDLL"
+    SECTION = ".text\u00a0"
+
+    @pytest.fixture(autouse=True)
+    def _padded_section_db(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        write_coverage(
+            coverage_dir(tmp_path),
+            self.TARGET,
+            {
+                self.SECTION: {
+                    "va": 0x10003000,
+                    "size": 0x20,
+                    "fileOffset": 0x300,
+                    "unitBytes": 16,
+                    "columns": 2,
+                    "cells": [
+                        cell(0x10003000, 0x10003010, "exact"),
+                        cell(0x10003010, 0x10003020, "none"),
+                    ],
+                }
+            },
+        )
+        monkeypatch.setenv("RECOVERAGE_DB", str(coverage_dir(tmp_path)))
+        from recoverage.api import _clear_derived_caches
+
+        _clear_derived_caches()
+
+    def test_the_padded_name_is_its_own_section(self) -> None:
+        from urllib.parse import quote
+
+        status, headers, body = wsgi_get(
+            f"/api/targets/{self.TARGET}/data?section={quote(self.SECTION, safe='')}"
+        )
+        assert status.startswith("200")
+        data = json.loads(decode_body(body, headers))
+        assert list(data["sections"]) == [self.SECTION]
+        assert data["sections"][self.SECTION]["cells"], "the filtered section carries no cells"
+
+    def test_ascii_whitespace_around_the_name_is_still_trimmed(self) -> None:
+        from urllib.parse import quote
+
+        status, headers, body = wsgi_get(
+            f"/api/targets/{self.TARGET}/data?section={quote('  ' + self.SECTION + '  ', safe='')}"
+        )
+        assert status.startswith("200")
+        data = json.loads(decode_body(body, headers))
+        assert data["sections"][self.SECTION]["cells"]

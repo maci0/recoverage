@@ -3290,7 +3290,7 @@ def _render_panel(
             "idx": idx,
             "cell_range": f"{hex(sec_va + cell.get('start', 0))} .. {hex(sec_va + cell.get('end', 0))}",
             "state_upper": state.upper(),
-            "state_color": COLORS.get(state, TEXT_COLOR),
+            "state_color": COLORS.get(state.lower(), TEXT_COLOR),
             "funcs": funcs,
             "cell_label": cell.get("label", ""),
             "parent_function": parent_function,

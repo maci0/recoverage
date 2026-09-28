@@ -1523,7 +1523,13 @@ def handle_api_data(target: str) -> bytes | HTTPResponse:
     different payload never answers 304 for one that did not.
     """
     target = path_param(target)
-    section_filter = query_param("section").strip() or None
+    # ASCII whitespace only, like every other query value this package reads:
+    # a section name comes out of a PE image, so one ending in U+00A0 or
+    # U+FEFF is a real value, and str.strip() removed exactly those along
+    # with the ASCII runs, leaving a filter that matched no section and a
+    # payload with every `cells` key omitted.  `?index=` below is a flag
+    # spelling, not a document value, so it keeps the plain strip.
+    section_filter = _server.strip_ascii_whitespace(query_param("section")) or None
     # `?index=0` is the section-switch request: it arrives for one more
     # section's cells and already holds the target-wide search index, which is
     # the part of this payload that grows with the function count rather than

@@ -324,8 +324,17 @@ def _use_utf8_stdout() -> None:
     UnicodeEncodeError part-way through the output, and for `serve` that is
     before the listener binds, so a checkout under a non-ASCII path is a
     traceback and an exit rather than a dashboard.
+
+    ``replace``, not ``strict``: with the codec pinned to UTF-8 the only text
+    this stream still cannot encode is a lone surrogate, which reaches Python
+    from ``os.fsdecode`` reading a name the filesystem spelled in bytes outside
+    UTF-8 (a coverage directory on a mounted volume, or one extracted from an
+    archive with a mangled entry).  Strict made `recoverage config` raise on the
+    banner line naming that directory, printing nothing at all; replace writes
+    the one name as U+FFFD and the command runs.  No other character is
+    affected, because UTF-8 encodes every code point there is.
     """
-    _pin_utf8(sys.stdout, "strict")
+    _pin_utf8(sys.stdout, "replace")
 
 
 def _use_utf8_stderr() -> None:
@@ -357,7 +366,13 @@ def _utf8_stream(stream: IO[str]) -> IO[str]:
     caller must detach the result, since a wrapper's destructor closes the
     buffer it wraps.
     """
+    # A stream that is ALREADY UTF-8 is the common case on a modern locale, and
+    # it returned here unchanged with whatever error handler it was opened
+    # with, so the replace the docstring promises did not apply to it.  Re-pin
+    # the handler on the one branch that reuses the stream, and leave a stream
+    # that needs re-encoding to the wrapper below, which replaces anyway.
     if "utf" in (getattr(stream, "encoding", None) or "").lower():
+        _pin_utf8(stream, "replace")
         return stream
     buffer = getattr(stream, "buffer", None)
     if buffer is None:
@@ -1507,7 +1522,9 @@ def _section_row(sec: dict[str, Any]) -> list[Any]:
     return [sec.get(field, 0) for field in _SECTION_COLUMNS]
 
 
-def _export_write_failed(exc: OSError, output_format: str, progress: str) -> NoReturn:
+def _export_write_failed(
+    exc: OSError | UnicodeError, output_format: str, progress: str
+) -> NoReturn:
     """Report a failed write on the export's stdout and exit 1.
 
     ONE tail for every ``--format`` arm, so a half-written redirect reads the
@@ -1519,6 +1536,13 @@ def _export_write_failed(exc: OSError, output_format: str, progress: str) -> NoR
     *progress* names how far the arm got ("after 12 of 40 section rows", or
     "while writing the document" for the single-write JSON arm), because the
     file the operator is looking at is the one this ran out of room on.
+
+    ``UnicodeError`` joins ``OSError`` for the same reason: a stream that could
+    not be pinned (a pipe wrapper, a closed stream, a test double without
+    ``reconfigure``) still holds its own error handler, and a target id the
+    filesystem spelled with a byte outside UTF-8 reaches the writer as a lone
+    surrogate that strict encoding refuses.  That is a truncation like any
+    other, so it reads as one instead of escaping as a traceback.
     """
     _secho(
         f"Error: {output_format} export failed {progress} "
@@ -1676,7 +1700,7 @@ def export(
             # `recoverage export | head` is a documented use, and main() owns
             # that contract (devnull, then exit 1).
             raise
-        except OSError as exc:
+        except (OSError, UnicodeError) as exc:
             _export_write_failed(exc, "JSON", "while writing the document")
 
     elif output_format == ExportFormat.csv:
@@ -1704,7 +1728,7 @@ def export(
             # truncation with exit 1. Swallowing it here would export a
             # complete file and exit 0.
             raise
-        except OSError as exc:
+        except (OSError, UnicodeError) as exc:
             _export_write_failed(exc, "CSV", f"after {written} of {total} section rows")
         finally:
             # Detach on EVERY path, not only the successful one: the wrapper
@@ -1751,7 +1775,7 @@ def export(
         except BrokenPipeError:
             # main() owns `export | head`; see the CSV arm above.
             raise
-        except OSError as exc:
+        except (OSError, UnicodeError) as exc:
             _export_write_failed(exc, "Markdown", f"after {written} of {total} section rows")
 
 

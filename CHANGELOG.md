@@ -354,6 +354,24 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   since a silent failure there would leave the next regen refusing against a
   lock no process holds.
 
+- **A section name holding a non-breaking space made `/api/.../data` answer
+  404.** `?section=` was trimmed with `str.strip()`, which removes every
+  character Unicode calls whitespace, so a name ending in U+00A0, a thin space
+  or U+FEFF was compared as a name the document does not hold. The filter is
+  trimmed of ASCII whitespace only now, like every other term in the package.
+
+- **`recoverage config` died on a coverage directory whose name is not
+  UTF-8.** The path is read with `os.fsdecode`'s `surrogateescape`, and stdout
+  was pinned to UTF-8 with `strict` encoding, so one undecodable byte in a
+  mounted or extracted directory name raised `UnicodeEncodeError` before the
+  command printed anything. stdout now uses the same replacing handler the log
+  and the warnings already use.
+
+- **The cell detail panel coloured a state the function list did not.** The
+  list folded the cell's `state` before looking up its colour and the panel did
+  not, so a document spelling a state `Exact` rather than `exact` was drawn in
+  the exact-match colour in one place and the default text colour in the other.
+
 - **`RECOVERAGE_LOG_LEVEL` accepted a number no record clears.** The name arm
   already refused an unknown level, because it reaches `basicConfig` and leaves
   the logger quieter than the operator asked for; the numeric arm took any

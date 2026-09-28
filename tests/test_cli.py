@@ -2314,3 +2314,56 @@ class TestExportStdoutEncoding:
         text = buffer.getvalue().decode("utf-8")
         assert "## café & bar" in text
         assert ".données" in text
+
+
+class TestStdoutWritesAPathTheFilesystemSpelledInBytes:
+    """A coverage directory whose NAME is not UTF-8 must still be printable.
+
+    ``os.environ`` is decoded with ``surrogateescape`` like every filename, so
+    ``RECOVERAGE_DB=/mnt/db\\xff`` (a volume mounted, or an archive extracted,
+    with a byte outside UTF-8 in the name) reaches the CLI holding U+DCFF.  The
+    banner, the db warning and the config check all print that path, and a
+    stdout pinned to UTF-8 with ``strict`` refused it: ``recoverage config``
+    died on a UnicodeEncodeError before printing anything at all.  With the
+    codec pinned, a lone surrogate is the only text UTF-8 cannot encode, so
+    ``replace`` is the handler the other operator-facing streams here already
+    use.
+    """
+
+    @staticmethod
+    def _db_path_with_a_foreign_byte(tmp_path: Path) -> Path:
+        directory = tmp_path / os.fsdecode(b"db\xff")
+        directory.mkdir(parents=True)
+        return directory
+
+    def test_config_reports_a_directory_named_in_bytes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from typer.testing import CliRunner
+
+        from recoverage.cli import app
+
+        directory = self._db_path_with_a_foreign_byte(tmp_path)
+        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+        result = CliRunner().invoke(app, ["config"])
+        assert result.exit_code == 0, result.output
+        assert "no coverage-*.toml" in result.output
+
+    def test_a_utf8_stdout_is_pinned_off_strict(self) -> None:
+        """The already-UTF-8 case is the common one, and it was the unfixed one.
+
+        ``_utf8_stream`` built its ``errors="replace"`` wrapper only for a
+        stream that was NOT already UTF-8, so on a modern locale, where stdout
+        is UTF-8 from the start, the handler its own docstring promises was
+        never installed and the stream kept the strict one it was opened with.
+        """
+        from recoverage.cli import _utf8_stream
+
+        sink = io.BytesIO()
+        stdout = io.TextIOWrapper(sink, encoding="utf-8", errors="strict")
+        pinned = _utf8_stream(stdout)
+        assert pinned is stdout
+        assert pinned.errors == "replace"
+        pinned.write("db\udcff\n")
+        pinned.flush()
+        assert sink.getvalue().decode("utf-8").startswith("db")
