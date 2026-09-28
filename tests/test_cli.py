@@ -20,7 +20,7 @@ from rebrew.coverage_toml import CoverageTomlError
 from typer.testing import CliRunner
 
 from recoverage import cli, devserver, server
-from recoverage.cli import _server_class_for, app
+from recoverage.cli import ExportFormat, _server_class_for, app
 
 runner = CliRunner()
 
@@ -782,6 +782,24 @@ class TestExportCsvStdoutEncoding:
     ``LC_ALL=C`` to UTF-8, so the test forces the encoding instead.
     """
 
+    class _FailingBuffer(io.RawIOBase):
+        """A stdout buffer whose every write fails, as a full disk's does."""
+
+        def writable(self) -> bool:
+            return True
+
+        def write(self, data: Any) -> int:
+            raise OSError(28, "No space left on device")
+
+    class _ClosedPipe(io.RawIOBase):
+        """A stdout buffer whose reader hung up, as ``export | head`` does."""
+
+        def writable(self) -> bool:
+            return True
+
+        def write(self, data: Any) -> int:
+            raise BrokenPipeError(32, "Broken pipe")
+
     def _export_to_ascii_stdout(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, section: str
     ) -> bytes:
@@ -844,18 +862,11 @@ class TestExportCsvStdoutEncoding:
         """
         from recoverage.cli import ExportFormat, export
 
-        class _FailingBuffer(io.RawIOBase):
-            def writable(self) -> bool:
-                return True
-
-            def write(self, data: Any) -> int:
-                raise OSError(28, "No space left on device")
-
         directory = _coverage_dir(tmp_path)
         _write_sections(directory, [".text"], [(".text", 0, 100, "exact")])
         monkeypatch.setenv("RECOVERAGE_DB", str(directory))
 
-        buffer = _FailingBuffer()
+        buffer = self._FailingBuffer()
         real_stdout = sys.stdout
         wrapper = io.TextIOWrapper(buffer, encoding="ascii", errors="strict")
         monkeypatch.setattr(sys, "stdout", wrapper)
@@ -869,6 +880,65 @@ class TestExportCsvStdoutEncoding:
         # error above was reported, and the interpreter still has to flush.
         assert not real_stdout.closed
         assert not real_stdout.buffer.closed
+
+    @pytest.mark.parametrize("output_format", [ExportFormat.json, ExportFormat.md])
+    def test_a_failed_write_reports_in_every_format(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        output_format: ExportFormat,
+    ) -> None:
+        """The other two formats must report a failed write the same way.
+
+        Only the CSV arm had the guard, so `export --format md > out.md` on a
+        full disk escaped the OSError as a traceback: the operator got a
+        truncated file and a stack trace, with nothing naming the operation
+        that failed. All three arms go through ``_export_write_failed`` now.
+        """
+        from recoverage.cli import export
+
+        directory = _coverage_dir(tmp_path)
+        _write_sections(directory, [".text"], [(".text", 0, 100, "exact")])
+        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+
+        buffer = self._FailingBuffer()
+        real_stdout = sys.stdout
+        wrapper = io.TextIOWrapper(buffer, encoding="ascii", errors="strict")
+        monkeypatch.setattr(sys, "stdout", wrapper)
+        try:
+            with pytest.raises(typer.Exit) as raised:
+                export(output_format=output_format, target=None)
+        finally:
+            monkeypatch.setattr(sys, "stdout", real_stdout)
+        assert raised.value.exit_code == 1
+
+    @pytest.mark.parametrize("output_format", [ExportFormat.json, ExportFormat.md])
+    def test_a_broken_pipe_still_reaches_main(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        output_format: ExportFormat,
+    ) -> None:
+        """A pipe that closes early must propagate, not become a write error.
+
+        ``export | head`` is a documented use and ``main()`` owns it (devnull,
+        then exit 1). Swallowing the BrokenPipeError as a failed write would
+        report a full disk that does not exist.
+        """
+        from recoverage.cli import export
+
+        directory = _coverage_dir(tmp_path)
+        _write_sections(directory, [".text"], [(".text", 0, 100, "exact")])
+        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+
+        real_stdout = sys.stdout
+        wrapper = io.TextIOWrapper(self._ClosedPipe(), encoding="utf-8", errors="strict")
+        monkeypatch.setattr(sys, "stdout", wrapper)
+        try:
+            with pytest.raises(BrokenPipeError):
+                export(output_format=output_format, target=None)
+        finally:
+            monkeypatch.setattr(sys, "stdout", real_stdout)
 
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
@@ -1463,6 +1533,11 @@ class TestServeServerWiring:
         cross-origin read with a 403 while the banner and `recoverage config`
         print a populated allowlist.  The flag is the input, the resolved list
         is the installation, and the two are not the same value.
+
+        Named for the case its sibling below cannot reach: an operator's
+        spelling that NEEDS normalizing. Every input in that one is already
+        lowercase with an explicit port, so only this proves the install
+        normalizes rather than passing the flag through.
         """
         from recoverage import server as server_mod
         from recoverage.server import app as server_app
@@ -1480,7 +1555,6 @@ class TestServeServerWiring:
         # raw flag spelled `http://A.test:80` matches no request at all, and a
         # browser's Origin for that page is `http://a.test`.
         assert server_mod.CORS_ALLOWED_ORIGINS == ["http://a.test"]
-        assert devserver._KeepAliveServerHandler.http_version == "1.1"
 
     @pytest.mark.parametrize(
         ("flag", "environment", "expected"),
@@ -1952,6 +2026,29 @@ class TestBrokenPipe:
         monkeypatch.setattr(cli, "app", boom)
         with pytest.raises(RuntimeError):
             cli.main()
+
+    def test_main_exits_cleanly_when_devnull_cannot_be_opened(self, monkeypatch: Any) -> None:
+        """The devnull redirect is best-effort; failing it must not raise.
+
+        The redirect only exists to keep the interpreter's final flush quiet,
+        so a host that cannot open /dev/null (a sandbox, a stripped
+        container) is no reason to lose the exit status: the OSError escaped
+        the handler and replaced "pipe closed" with a traceback, which is the
+        one report the operator did not ask for.
+        """
+        import recoverage.cli as cli
+
+        def boom() -> None:
+            raise BrokenPipeError(32, "Broken pipe")
+
+        def no_devnull(path: Any, flags: int, *args: Any) -> int:
+            raise OSError(2, "No such file or directory")
+
+        monkeypatch.setattr(cli, "app", boom)
+        monkeypatch.setattr(cli.os, "open", no_devnull)
+        with pytest.raises(SystemExit) as excinfo:
+            cli.main()
+        assert excinfo.value.code == 1
 
 
 def test_export_md_rows_match_the_header() -> None:

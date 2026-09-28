@@ -277,6 +277,24 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **`recoverage export --format md` and `--format json` reported a failed
+  write as a traceback.** Only the CSV arm caught the OSError a full disk, a
+  quota or a closed pipe raises, and named how many rows landed before the
+  output was truncated. The other two arms let it escape, so a redirected
+  `export --format md > out.md` on a full disk left the operator with a
+  truncated file and a stack trace and nothing naming the operation that
+  failed. All three formats report it the same way now, and a broken pipe
+  still reaches the `export | head` handling rather than being reported as a
+  disk that is not full.
+
+- **`recoverage export | head` could exit with a traceback instead of 1.** The
+  handler for a closed pipe repoints stdout at `/dev/null` so the
+  interpreter's final flush stays quiet, and the `open` of that file sat
+  outside the suppression that already covered the `dup2` and the `close`
+  beside it. On a host that cannot open `/dev/null` the OSError escaped the
+  handler and replaced the exit status: the one report that existed to be
+  clean was the one that raised.
+
 - **`GET /api/targets/<target>/functions` ordered the whole match set to
   answer one page.** The page is a window on the sorted rows, so the endpoint
   now selects the `offset + limit` rows it serves instead of sorting every

@@ -1385,6 +1385,29 @@ def _section_row(sec: dict[str, Any]) -> list[Any]:
     return [sec.get(field, 0) for field in _SECTION_COLUMNS]
 
 
+def _export_write_failed(exc: OSError, output_format: str, progress: str) -> NoReturn:
+    """Report a failed write on the export's stdout and exit 1.
+
+    ONE tail for every ``--format`` arm, so a half-written redirect reads the
+    same whichever format produced it: ENOSPC, a quota, a closed pipe on a
+    network mount. Without it the failure escapes as an OSError traceback from
+    whichever arm happened to lack the guard, and the operator is left with a
+    truncated file and a stack trace instead of the operation that failed.
+
+    *progress* names how far the arm got ("after 12 of 40 section rows", or
+    "while writing the document" for the single-write JSON arm), because the
+    file the operator is looking at is the one this ran out of room on.
+    """
+    _secho(
+        f"Error: {output_format} export failed {progress} "
+        f"({type(exc).__name__}: {exc}). The output is truncated; free space "
+        "or redirect to another path and retry.",
+        fg=typer.colors.RED,
+        err=True,
+    )
+    raise typer.Exit(1) from None
+
+
 @app.command()
 def stats(
     target: str | None = typer.Option(
@@ -1507,7 +1530,14 @@ def export(
         all_data = [_get_stats(snapshots, tid, json_output=json_output) for tid in targets]
 
     if output_format == ExportFormat.json:
-        typer.echo(json.dumps(all_data, indent=2))
+        try:
+            typer.echo(json.dumps(all_data, indent=2))
+        except BrokenPipeError:
+            # `recoverage export | head` is a documented use, and main() owns
+            # that contract (devnull, then exit 1).
+            raise
+        except OSError as exc:
+            _export_write_failed(exc, "JSON", "while writing the document")
 
     elif output_format == ExportFormat.csv:
         import csv
@@ -1535,19 +1565,7 @@ def export(
             # complete file and exit 0.
             raise
         except OSError as exc:
-            # A failed write is a half-written file, and the redirect the
-            # operator is looking at is exactly that file: ENOSPC, a quota, a
-            # closed pipe on a network mount. Saying so, with the row it
-            # stopped on, is the difference between a truncated export and a
-            # usable one.
-            _secho(
-                f"Error: CSV export failed after {written} of {total} section rows "
-                f"({type(exc).__name__}: {exc}). The output is truncated; free space "
-                "or redirect to another path and retry.",
-                fg=typer.colors.RED,
-                err=True,
-            )
-            raise typer.Exit(1) from None
+            _export_write_failed(exc, "CSV", f"after {written} of {total} section rows")
         finally:
             # Detach on EVERY path, not only the successful one: the wrapper
             # _utf8_stream built owns sys.stdout's buffer, and its destructor
@@ -1566,26 +1584,35 @@ def export(
         def _md_safe(s: str) -> str:
             return s.replace("|", "\\|").replace("\n", " ").replace("\r", "")
 
-        for index, data in enumerate(all_data):
-            # Blank line between targets, never before the first one: a
-            # redirected file must not start with an empty line.
-            if index:
-                typer.echo()
-            typer.echo(f"## {_md_safe(data['target'])}\n")
-            # Same columns as the CSV export, minus the per-target key the
-            # "## <target>" heading above already carries.  Header,
-            # separator, and body must agree on the count or the table
-            # renders ragged.
-            typer.echo("| Section | Size | Cells | Exact | Reloc | Near | Stub | Coverage |")
-            typer.echo("|---------|------|-------|-------|-------|------|------|----------|")
-            for sec_name, sec in sorted(data["sections"].items()):
-                size, cells, exact, reloc, near_match, stub, coverage_pct = _section_row(sec)
-                typer.echo(
-                    f"| {_md_safe(sec_name)}"
-                    f" | {size:,} B | {cells}"
-                    f" | {exact} | {reloc} | {near_match}"
-                    f" | {stub} | {pct_1dp(coverage_pct):.1f}% |"
-                )
+        written = 0
+        total = sum(len(data["sections"]) for data in all_data)
+        try:
+            for index, data in enumerate(all_data):
+                # Blank line between targets, never before the first one: a
+                # redirected file must not start with an empty line.
+                if index:
+                    typer.echo()
+                typer.echo(f"## {_md_safe(data['target'])}\n")
+                # Same columns as the CSV export, minus the per-target key the
+                # "## <target>" heading above already carries.  Header,
+                # separator, and body must agree on the count or the table
+                # renders ragged.
+                typer.echo("| Section | Size | Cells | Exact | Reloc | Near | Stub | Coverage |")
+                typer.echo("|---------|------|-------|-------|-------|------|------|----------|")
+                for sec_name, sec in sorted(data["sections"].items()):
+                    size, cells, exact, reloc, near_match, stub, coverage_pct = _section_row(sec)
+                    typer.echo(
+                        f"| {_md_safe(sec_name)}"
+                        f" | {size:,} B | {cells}"
+                        f" | {exact} | {reloc} | {near_match}"
+                        f" | {stub} | {pct_1dp(coverage_pct):.1f}% |"
+                    )
+                    written += 1
+        except BrokenPipeError:
+            # main() owns `export | head`; see the CSV arm above.
+            raise
+        except OSError as exc:
+            _export_write_failed(exc, "Markdown", f"after {written} of {total} section rows")
 
 
 def _section_verdict(
@@ -1940,6 +1967,11 @@ def main() -> None:
         # "Exception ignored" traceback.  Point stdout's fd at devnull so the
         # final flush succeeds (no-op when stdout has no real fd), then report
         # the truncation with a non-zero status.
+        # The open is inside the suppress because it is as fallible as the dup2
+        # beside it (a sandbox or a stripped container with no /dev/null, a
+        # full descriptor table), and an OSError from it would escape this
+        # handler and replace the exit status with a traceback: the one path
+        # whose whole job is to report a clean truncation.
         with contextlib.suppress(OSError, ValueError):
             fd = os.open(os.devnull, os.O_WRONLY)
             try:
