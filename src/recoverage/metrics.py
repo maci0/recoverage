@@ -338,22 +338,33 @@ class RegenStats:
             self._in_flight += 1
             self._runs += 1
 
-    def finish(self, ok: bool, duration_ms: float) -> None:
-        """Record one finished run. *duration_ms* comes from ``clock.monotonic``."""
+    def finish(self, ok: bool | None, duration_ms: float) -> None:
+        """Record one finished run. *duration_ms* comes from ``clock.monotonic``.
+
+        *ok* is None for a run that was REFUSED rather than attempted (another
+        process holds the tree's regen lock): the gauge closes and the
+        duration is recorded, but the run counts under neither ``failures`` nor
+        a successful finish, because a duplicate that never wrote anything is
+        not a pipeline that broke.  A refused POST that never got this far
+        counts through :meth:`reject` instead.
+        """
         with self._lock:
             self._in_flight -= 1
-            if not ok:
+            if ok is False:
                 self._failures += 1
             self._last_ms = duration_ms
             self._last_ok = ok
 
     def reject(self) -> None:
-        """Record a POST refused by the lock or the cooldown, not by a failure.
+        """Record a POST refused before the pipeline ran.
 
-        A dashboard whose Reload button is being double-clicked reports runs
-        and no failures; the refused attempts are the whole story, and without
-        this counter they are indistinguishable from a pipeline that nobody
-        triggered.
+        Two kinds, both the same event to an operator: the in-process lock or
+        the cooldown turning away a second click (a dashboard whose Reload
+        button is being double-clicked reports runs and no failures; the
+        refused attempts are the whole story), and the endpoint's security
+        gate answering 403 to a peer that is not this dashboard.  Neither is a
+        failure, and without this counter they are indistinguishable from a
+        pipeline that nobody triggered.
         """
         with self._lock:
             self._rejected += 1

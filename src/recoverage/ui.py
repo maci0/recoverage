@@ -292,6 +292,36 @@ def _finalized_shell(variant: _Variant) -> bytes:
 # ── Static file serving ────────────────────────────────────────────
 
 
+def _repo_file_forbidden(reason: str, filepath: str) -> HTTPResponse:
+    """Answer a repo-file containment refusal, and write the audit line.
+
+    A 403 here is a client walking out of the served tree, which is the one
+    event on a file route an operator cannot reconstruct from anything else:
+    the per-request line is DEBUG unless the request was slow, so a scanner
+    running ``/src/../../etc/passwd`` left the log saying nothing at all.
+    The other two security refusals in the package (a bad ``Host`` header, a
+    bad bearer token) each write a line for the same reason.
+
+    The requested path and the peer are escaped: both reach the log straight
+    from the request, and a control byte in either would forge entries.
+    """
+    _log.warning(
+        "Refused %s %s: %s (peer %s)",
+        _server._log_safe(request.method),
+        _server._log_safe(filepath),
+        reason,
+        _server._log_safe(request.environ.get("REMOTE_ADDR", "") or "unknown"),
+        extra=_server.request_log_fields(403),
+    )
+    return _server._json_err(
+        403,
+        {
+            "error": "Forbidden",
+            "detail": "path escapes the project tree",
+        },
+    )
+
+
 @app.get("/src/<filepath:path>")
 @app.get("/original/<filepath:path>")
 def serve_repo_file(filepath: str) -> bytes | HTTPResponse:
@@ -320,13 +350,7 @@ def serve_repo_file(filepath: str) -> bytes | HTTPResponse:
     # but only after the join has already reinterpreted a drive-relative
     # segment as a path of its own, which is the form the rule refuses.
     if not _server.is_plain_relative(PurePath(filepath)):
-        return _server._json_err(
-            403,
-            {
-                "error": "Forbidden",
-                "detail": "path escapes the project tree",
-            },
-        )
+        return _repo_file_forbidden("not plain-relative", filepath)
     # Defense-in-depth: bottle's static_file string-prefix check does NOT
     # resolve symlinks — a symlink inside src/ pointing outside the tree
     # would pass the root check and serve the target.  Resolve and verify
@@ -340,13 +364,7 @@ def serve_repo_file(filepath: str) -> bytes | HTTPResponse:
     filepath = _server.match_filesystem_spelling(root, filepath)
     candidate = (root / filepath).resolve()
     if not candidate.is_relative_to(root):
-        return _server._json_err(
-            403,
-            {
-                "error": "Forbidden",
-                "detail": "path escapes the project tree",
-            },
-        )
+        return _repo_file_forbidden("resolves outside the tree", filepath)
     return _serve_repo_file(filepath, candidate, root)
 
 

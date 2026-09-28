@@ -372,6 +372,43 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   not, so a document spelling a state `Exact` rather than `exact` was drawn in
   the exact-match colour in one place and the default text colour in the other.
 
+- **A refused regenerate was invisible, or filed as a broken pipeline.** The
+  four security arms of `POST /api/regen` (a remote peer, a present-but-empty
+  `Origin`, a foreign origin, `Sec-Fetch-Site: cross-site`) answered 403 and
+  wrote nothing: the request never entered the pipeline, so no regen line was
+  produced, and the per-request line is only logged above the slow-request
+  threshold. A cross-origin attempt against the one privileged operation
+  reached neither the log nor `/api/health`. Each now logs a warning naming
+  the reason and the peer, and counts under `regen.rejected`.
+- A second `rebrew build-db` over the same tree (`RegenBusyError`) was logged
+  as `Regen failed after 0.0s` and counted as a regen failure, so a cron job
+  overlapping the dashboard's own regenerate reported a broken pipeline and
+  put a red line where there was none. It is now a refusal, logged at info and
+  counted under `regen.rejected`; `regen.failures` is the count of runs that
+  ran and failed.
+- The dashboard's error notices and its regenerate notices no longer throw the
+  server's reason away. Every error message a failed request produces carries
+  the server's `X-Request-ID`, and a refused regenerate carries its status,
+  detail and id, so what a reader reports can be found in the server log
+  instead of arriving as one generic "unavailable" line.
+- An unreadable coverage directory wrote one warning per page load for as long
+  as it stayed unreadable: `/api/targets` is the request the dashboard cannot
+  avoid, and the fallback to the config-only list fired the line every time.
+  It now logs the outage once, the recovery once, and stays quiet in between.
+- The log lines that report an unreadable coverage document (`/api/targets`,
+  `/potato`), a source file that cannot be read and a DLL that fails to load
+  interpolated the document's or the project's own text unescaped, so a value
+  carrying a line break split the entry. They are escaped like every other
+  request log argument, and the two that had no fields to pivot from now carry
+  the request's status and route.
+- A connection that ends on the socket deadline or because the peer vanished
+  left no trace at all. Each now writes one debug line naming the peer, so a
+  client holding an admission slot without ever sending a request can be told
+  apart from an idle browser tab.
+- A failed rebuild logged the exception's class and message with no traceback,
+  so a pipeline that died inside rebrew after two minutes left nothing to
+  locate the cause with. The failure line now carries the frames.
+
 - **`RECOVERAGE_LOG_LEVEL` accepted a number no record clears.** The name arm
   already refused an unknown level, because it reaches `basicConfig` and leaves
   the logger quieter than the operator asked for; the numeric arm took any

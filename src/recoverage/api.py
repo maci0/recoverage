@@ -1262,6 +1262,57 @@ def _stream_stats() -> dict[str, Any]:
     }
 
 
+#: Last cause the target-list fallback reported, so it logs a transition and
+#: not one line per request.  ``/api/targets`` is the request the SPA cannot
+#: avoid and the shell preloads, so a broken coverage directory wrote one
+#: WARNING per page load for as long as it stayed broken, which is what
+#: teaches an operator to skip the line.  The same rule
+#: :func:`_log_health_status` follows for the health probe.
+_TARGETS_LOG_LOCK = threading.Lock()
+_targets_fallback_reported: str | None = None
+
+
+def _log_targets_fallback(exc: Exception) -> None:
+    """Log the target-list fallback on the first failure and on the recovery.
+
+    The cause goes in the line: a missing directory and a malformed document
+    both land here, and the operator needs to tell them apart without reading
+    the source.  It is escaped because a coverage document's own parse error
+    is untrusted text and a line break in it would split the entry.
+    """
+    global _targets_fallback_reported
+    reason = f"{type(exc).__name__}: {_server._log_safe(str(exc))}"
+    with _TARGETS_LOG_LOCK:
+        previous = _targets_fallback_reported
+        if previous == reason:
+            return
+        _targets_fallback_reported = reason
+    if previous is None:
+        _log.warning(
+            "Coverage unavailable reading the target list, falling back to the "
+            "config-only list: %s",
+            reason,
+        )
+    else:
+        _log.info("Target list recovered from the config-only list (was: %s)", previous)
+
+
+def _clear_targets_fallback() -> None:
+    """Note that the coverage documents read, closing an open fallback report.
+
+    Called on the success path of the same handler, so the recovery is logged
+    once and the NEXT outage is news again rather than a repeat of a state
+    that has already been reported.
+    """
+    global _targets_fallback_reported
+    with _TARGETS_LOG_LOCK:
+        previous = _targets_fallback_reported
+        if previous is None:
+            return
+        _targets_fallback_reported = None
+    _log.info("Coverage documents read again; target list is no longer config-only")
+
+
 @app.get("/api/targets")
 def handle_api_targets() -> bytes | HTTPResponse:
     """The target list, and the validator that lets a repeat visit skip it.
@@ -1284,19 +1335,15 @@ def handle_api_targets() -> bytes | HTTPResponse:
     try:
         targets_list = resolve_targets()
     except CoverageTomlError as exc:
-        # The cause goes in the line: a missing directory and a malformed
-        # document both land here, and the operator needs to tell them apart
-        # without reading the source.
-        _log.warning(
-            "Coverage unavailable reading the target list, falling back to the "
-            "config-only list: %s: %s",
-            type(exc).__name__,
-            exc,
-        )
+        # The cause goes in the line, once per outage rather than once per
+        # request: see _log_targets_fallback.
+        _log_targets_fallback(exc)
         targets_list = [
             {"id": tid, "name": Path(_target_filename(tid, t_info)).name}
             for tid, t_info in _server._get_targets_config().items()
         ]
+    else:
+        _clear_targets_fallback()
 
     etag = _etag_or_304(
         _snapshot_db_mtime(),
@@ -2430,12 +2477,10 @@ def handle_regen() -> bytes | HTTPResponse:
     # default path (same clean 403 as a missing REMOTE_ADDR, no TypeError).
     remote = request.environ.get("REMOTE_ADDR") or ""
     if not _peer_is_loopback(remote):
-        return _json_err(
-            403,
-            {
-                "error": "Forbidden: localhost only",
-                "detail": f"request came from remote address {remote!r}",
-            },
+        return _regen_forbidden(
+            "not localhost",
+            "Forbidden: localhost only",
+            f"request came from remote address {remote!r}",
         )
 
     origin = _header("Origin", "")
@@ -2445,12 +2490,8 @@ def handle_regen() -> bytes | HTTPResponse:
         # something between the page and here emptied, and folding it into the
         # absent case admits a privileged POST on the strength of the one
         # header that should have named it.
-        return _json_err(
-            403,
-            {
-                "error": "Forbidden: cross-origin",
-                "detail": "Origin is present but empty",
-            },
+        return _regen_forbidden(
+            "empty Origin", "Forbidden: cross-origin", "Origin is present but empty"
         )
     if origin:
         # Same-origin against the request's own Host, not "the origin's
@@ -2459,12 +2500,10 @@ def handle_regen() -> bytes | HTTPResponse:
         # passes a hostname check, and a browser cannot read the reply, so the
         # rebuild it starts is invisible to the operator who started it.
         if not origin_is_this_dashboard(origin, _header("Host", "")):
-            return _json_err(
-                403,
-                {
-                    "error": "Forbidden: cross-origin",
-                    "detail": f"origin {origin!r} is not this dashboard",
-                },
+            return _regen_forbidden(
+                "cross-origin",
+                "Forbidden: cross-origin",
+                f"origin {origin!r} is not this dashboard",
             )
     else:
         # Origin is absent on every non-browser client (curl, scripts), so its
@@ -2475,12 +2514,10 @@ def handle_regen() -> bytes | HTTPResponse:
         # cross-origin POST and reject it.
         fetch_site = _header("Sec-Fetch-Site", "").strip().lower()
         if fetch_site == "cross-site":
-            return _json_err(
-                403,
-                {
-                    "error": "Forbidden: cross-site request",
-                    "detail": f"Sec-Fetch-Site: {fetch_site} is not a same-origin regen",
-                },
+            return _regen_forbidden(
+                "cross-site request",
+                "Forbidden: cross-site request",
+                f"Sec-Fetch-Site: {fetch_site} is not a same-origin regen",
             )
 
     # Idempotency-Key: a client that retries a regen whose response it never
@@ -2635,8 +2672,7 @@ def _do_regen(remote: str) -> bytes | HTTPResponse:
         # answer the in-process lock gives, so a client has one shape for "a
         # regen is already running", and it is counted as the refusal it is
         # rather than a pipeline that broke.
-        _regen_failed(started_at, "%s: %s", type(e).__name__, e)
-        _metrics.REGEN.reject()
+        _regen_rejected(started_at, "%s: %s", type(e).__name__, e)
         return _json_err(
             429,
             {
@@ -2736,18 +2772,78 @@ def _regen_log_fields(outcome: str, elapsed_s: float | None = None) -> dict[str,
     return {_server.LOG_FIELDS_ATTR: fields}
 
 
+def _regen_forbidden(reason: str, error: str, detail: str) -> HTTPResponse:
+    """Answer one security refusal of ``POST /api/regen``, loudly and counted.
+
+    A refused regen is the one event on this endpoint an operator has no
+    other way to see: the request never enters the pipeline, so no regen
+    lifecycle line is written and ``regen.in_flight`` never moved, and the
+    per-request line is DEBUG unless the request was slow.  A cross-origin
+    POST aimed at the one privileged operation therefore left the log saying
+    nothing at all, and the two sibling security refusals in the package (a
+    bad ``Host`` header, a bad bearer token) each write a line for exactly
+    that reason.
+
+    *error* is the wire message the arm already sent and *reason* the short
+    form the log carries; the body a client reads is unchanged.
+
+    The peer is escaped like every other request log argument: it is peer
+    input through a proxy, and a control byte in it would forge entries.
+    """
+    _log.warning(
+        "Refused POST /api/regen (%s) from %s: %s",
+        reason,
+        _sse_peer(),
+        _server._log_safe(detail),
+        extra=_server.request_log_fields(403, target="regen"),
+    )
+    # Counted as a rejection, not a failure: nothing ran, so a peer probing
+    # the privileged endpoint shows up in `/api/health` without the pipeline
+    # reporting a breakage that did not happen.
+    _metrics.REGEN.reject()
+    return _json_err(403, {"error": error, "detail": detail})
+
+
 def _regen_failed(started_at: float, reason: str, *args: object) -> None:
     """Log a failed run with its duration and close out its counters.
 
     Every failure path runs this, so the elapsed time is read once and lands
     in the same place on each: a rebuild that dies after two seconds and one
     that dies after two hundred are told apart by the line, not by the clock.
+    ``exc_info`` is left on so the frames of the exception that brought the
+    run down ride along: the JSON body carries the class name only (a rebrew
+    or OSError message quotes paths from the project tree), so without them
+    the operator has a class name and no way to find the line that raised it.
     """
     elapsed = _elapsed_s(started_at)
     _log.error(
         "Regen failed after %.1fs: " + reason,
         elapsed,
         *args,
+        exc_info=True,
         extra=_regen_log_fields("failed", elapsed),
     )
     _metrics.REGEN.finish(False, _elapsed_ms(started_at))
+
+
+def _regen_rejected(started_at: float, reason: str, *args: object) -> None:
+    """Close out a run that was refused rather than failed.
+
+    The ``RegenBusyError`` arm answers 429, the same shape the in-process
+    lock gives, and running it through :func:`_regen_failed` filed it as a
+    pipeline error: a second process's ``recoverage regen`` (or a cron job
+    over the same tree) wrote a red ``Regen failed after 0.0s`` line every
+    time, which is noise on the one line that does mean the pipeline broke.
+    """
+    elapsed = _elapsed_s(started_at)
+    _log.info(
+        "Regen refused after %.1fs: " + reason,
+        elapsed,
+        *args,
+        extra=_regen_log_fields("rejected", elapsed),
+    )
+    # None, not False: the gauge closes and the elapsed time is recorded, but
+    # nothing was written and nothing broke, so `failures` stays the count of
+    # runs that ran and failed.
+    _metrics.REGEN.finish(None, _elapsed_ms(started_at))
+    _metrics.REGEN.reject()

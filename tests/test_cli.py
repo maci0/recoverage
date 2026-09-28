@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import logging
 import os
 import socket
 import sys
@@ -1732,22 +1733,55 @@ class TestServeServerWiring:
     @pytest.mark.parametrize(
         "error", [TimeoutError("timed out"), ConnectionResetError("peer gone")]
     )
-    def test_a_dead_connection_closes_without_a_traceback(self, error: BaseException) -> None:
+    def test_a_dead_connection_closes_without_a_traceback(
+        self, error: BaseException, caplog: pytest.LogCaptureFixture
+    ) -> None:
         """An idle keep-alive peer must not print a socketserver traceback.
 
         The readline that reads the NEXT request runs under the 15s idle
         deadline, so every browser tab that sat still tripped it, and
         socketserver prints a full traceback for anything escaping ``handle()``.
         The dashboard was working; the log was a dozen lines of noise per tab.
+
+        Swallowed is not silent, though: the same read carries a client that
+        opened a connection, sent no request line and sat on the deadline, and
+        an operator watching ``connections.open`` climb had nothing anywhere
+        that named it.  One DEBUG line per close, naming the peer and which
+        close it was, is the whole cost.
         """
         handler = devserver._KeepAliveRequestHandler.__new__(devserver._KeepAliveRequestHandler)
+        handler.client_address = ("198.51.100.7", 51234)
 
         class _DeadRFile:
             def readline(self, limit: int) -> bytes:
                 raise error
 
         handler.rfile = _DeadRFile()  # type: ignore[assignment]
-        handler.handle()  # must return, not raise
+        with caplog.at_level(logging.DEBUG, logger="recoverage"):
+            handler.handle()  # must return, not raise
+        lines = [r.getMessage() for r in caplog.records if r.levelno == logging.DEBUG]
+        assert len(lines) == 1, lines
+        assert "198.51.100.7" in lines[0]
+
+    def test_a_close_on_a_handler_without_a_peer_still_logs(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The line must not be the thing that raises.
+
+        A handler built without the socket setup (a test, anything reaching
+        ``handle`` directly) has no ``client_address``, and reading it blind
+        turned a close into an ``AttributeError`` out of a log call.
+        """
+        handler = devserver._KeepAliveRequestHandler.__new__(devserver._KeepAliveRequestHandler)
+
+        class _DeadRFile:
+            def readline(self, limit: int) -> bytes:
+                raise TimeoutError("timed out")
+
+        handler.rfile = _DeadRFile()  # type: ignore[assignment]
+        with caplog.at_level(logging.DEBUG, logger="recoverage"):
+            handler.handle()
+        assert any("unknown peer" in r.getMessage() for r in caplog.records)
 
     def test_a_served_request_still_walks_the_loop(self) -> None:
         """The quiet close must not swallow the loop: a real request line is

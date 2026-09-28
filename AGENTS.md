@@ -681,6 +681,16 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   the process. The row is a dataclass, not a dict, so a new per-route
   counter does not widen a union every read has to narrow. The design
   rationale is in `docs/DESIGN.md` (*Request Observability*).
+- A connection that ends on the CLOSE PATH is not a rejection and is not
+  counted: `devserver._KeepAliveRequestHandler.handle` catches the idle
+  keep-alive deadline and a peer that vanished, because `socketserver` prints
+  a full traceback for anything escaping it. It is not silent, though: each
+  arm writes one DEBUG line naming the peer, since the same readline carries a
+  client that opened a connection, sent no request line and sat on the
+  deadline, and nothing else in the log, in `transport_rejected` or in
+  `connections.open` named it. DEBUG because the ordinary case is an idle
+  browser tab; the peer comes from `_peer()`, which tolerates a handler with
+  no `client_address` rather than raising inside a log call.
 - Two counters hold events the per-request ones CANNOT file, because both
   happen outside every hook: a request the HTTP transport refused (over-long
   or malformed request line, oversized headers, a client that stalled past the
@@ -705,9 +715,37 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   handler builds, but `in_flight` is a gauge, so letting it through without
   closing strands the reading at 1 for the rest of the process
   (`test_api.py::TestRegenMetrics`). A POST
-  refused by `_REGEN_LOCK` or the cooldown counts under `rejected`, never
-  `failures`: the SPA throttles Reload clicks, so counting them as failures
-  reports a broken pipeline for a double-clicked button.
+  refused by `_REGEN_LOCK`, by the cooldown, by the endpoint's security gate or
+  by `RegenBusyError` counts under `rejected`, never `failures`: the SPA
+  throttles Reload clicks, so counting them as failures reports a broken
+  pipeline for a double-clicked button, and a cron job overlapping a
+  dashboard's own regenerate is the same event. A refused run still has to
+  close the gauge, which is what `RegenStats.finish(None, ...)` is for: the
+  `None` is "neither ok nor failed", so a refusal records its duration without
+  filing a failure. Each of those refusals also writes a WARNING naming the
+  reason and the peer (`api._regen_forbidden`, `_regen_rejected`), because a
+  request that never enters the pipeline produces no regen lifecycle line at
+  all and the per-request line is DEBUG: the same reason the bad-`Host` and
+  bad-token refusals log. The security arms of `handle_regen` go through
+  `api._regen_forbidden` rather than answering `_json_err(403, ...)` inline, so
+  the wire message, the log line and the counter cannot be added apart.
+- A refused regen is only half the pivot. The browser side has to carry the
+  correlation id too, or the operator has a line in the log and a reader with
+  nothing to hand over: `web/app/api.ts`'s `refusal()` and `postRegen` both
+  render the server's `X-Request-ID` into the message, and a refused regen
+  returns its reason rather than collapsing every cause into one
+  "unavailable" notice. `describeRefusal` is the renderer both share because a
+  `Response` body is a stream and reading it twice throws. A new client-side
+  failure surface quotes a request id the same way.
+- A resource that degrades rather than fails is logged on a TRANSITION, not
+  per request: `api._log_health_status` for the health probe,
+  `api._log_targets_fallback` / `_clear_targets_fallback` for the config-only
+  target list `/api/targets` serves when the coverage documents cannot be read.
+  The second pair exists because `/api/targets` is the request the SPA cannot
+  avoid and the shell preloads, so an unreadable coverage directory wrote one
+  WARNING per page load for as long as it stayed broken, which is what teaches
+  an operator to skip the line. A new degraded-not-failed path joins the same
+  pattern rather than logging per call.
 - The active configuration is rendered ONCE, by `config.active_config`, and the
   result reaches the startup banner and `GET /api/health`'s `config` block
   (`server.configure_startup`, called from `serve` before the listener binds).
@@ -1304,7 +1342,16 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   reads it as the header's absence, and a gate that admits the absence must
   not admit the blank value, so the handler asks `server.header_present` for
   that one case. No browser sends a blank `Origin`, and a new privileged gate
-  treats a present-but-empty header as a refusal.
+  treats a present-but-empty header as a refusal. Every one of the gate's
+  refusals answers through `api._regen_forbidden`, so the wire message, the
+  WARNING that names the reason and the peer, and the `rejected` counter move
+  together; a 403 written inline is a refusal nothing in the log or in
+  `/api/health` can see. The same rule governs the file routes:
+  `ui._repo_file_forbidden` is the one tail for a `/src` or `/original` path
+  that escapes the tree, because the per-request line is DEBUG and a scanner
+  walking `../../` otherwise left no trace at all. A new privileged or
+  file-serving refusal names both the reason and the peer, escaped with
+  `server._log_safe`.
 - `POST /api/regen` is the package's one retried side effect, and its
   `Idempotency-Key` names the OPERATION, not the request: the SPA mints the
   key once per click (`api.newRegenKey`) and `postRegen` re-sends the same one

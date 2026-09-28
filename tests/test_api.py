@@ -227,6 +227,47 @@ class TestRegenOriginValidation:
         data = json.loads(decode_body(body, headers))
         assert data["error"] == "Forbidden: cross-origin"
 
+    @pytest.mark.parametrize(
+        ("headers", "remote", "reason"),
+        [
+            ({}, "192.168.1.100", "not localhost"),
+            ({"Origin": ""}, "127.0.0.1", "empty Origin"),
+            ({"Origin": "http://evil.com:8001"}, "127.0.0.1", "cross-origin"),
+            ({"Sec-Fetch-Site": "cross-site"}, "127.0.0.1", "cross-site request"),
+        ],
+    )
+    def test_every_refusal_is_logged_and_counted(
+        self,
+        headers: dict[str, str],
+        remote: str,
+        reason: str,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A refused regen is the one event on this endpoint with no other trace.
+
+        The request never enters the pipeline, so no regen lifecycle line is
+        written and the per-request line is DEBUG unless it was slow: a
+        cross-origin POST aimed at the one privileged operation left the log
+        saying nothing at all.  Each arm writes a WARNING naming the reason
+        and the peer, and counts a rejection so it shows up in /api/health
+        beside the runs that did happen.
+        """
+        import logging
+
+        from recoverage import metrics
+
+        metrics.REGEN.reset()
+        with caplog.at_level(logging.WARNING, logger="recoverage"):
+            status, _headers, _body = wsgi_request(
+                "POST", "/api/regen", headers=headers, remote_addr=remote
+            )
+        assert status.startswith("403")
+        warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+        assert any("Refused POST /api/regen" in m and reason in m for m in warnings), warnings
+        assert any("192.168.1.100" in m for m in warnings) == (remote == "192.168.1.100")
+        assert metrics.REGEN.snapshot()["rejected"] == 1
+        assert metrics.REGEN.snapshot()["runs"] == 0
+
     def test_localhost_origin_accepted(self) -> None:
         """The dashboard's own localhost page passes and runs the regen.
 
@@ -1441,10 +1482,16 @@ class TestRegenFailureMapping:
         assert "already writing" in data["detail"]
         after = api._metrics.REGEN.snapshot()
         # A refusal, not a pipeline that broke, and the gauge the health
-        # endpoint reads is back where it was.
-        assert after["failures"] - before["failures"] == 1
+        # endpoint reads is back where it was.  Nothing was written and
+        # nothing raised past the lock, so `failures` (the count of runs that
+        # RAN and failed) stays put; the run is counted as the rejection it
+        # is.  Filing it under `failures` put a red "Regen failed" on the one
+        # line that means the pipeline broke every time a cron job overlapped
+        # a dashboard's own regenerate.
+        assert after["failures"] - before["failures"] == 0
         assert after["rejected"] - before["rejected"] == 1
         assert after["in_flight"] == before["in_flight"]
+        assert after["last_ok"] is None
 
 
 class TestRegenIdempotencyKey:
@@ -5064,6 +5111,28 @@ class TestRepoFileServing:
             data = json.loads(decode_body(body, headers))
             assert set(data) >= {"error", "code", "detail"}, path
             assert b"top secret" not in body, path
+
+    def test_a_refusal_is_logged_with_the_peer_and_the_path(
+        self, tmp_path: Path, monkeypatch: Any, caplog: Any
+    ) -> None:
+        """A 403 on a file route writes an audit line, like the other refusals.
+
+        The per-request line is DEBUG unless the request was slow, so a client
+        walking out of the served tree (`/src/../../etc/passwd`) left nothing
+        behind at all.  A bad `Host` header and a bad bearer token each write
+        one; this is the third.  The path and the peer are escaped, so a
+        request carrying a line break cannot forge entries.
+        """
+        import logging
+
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "src").mkdir()
+        with caplog.at_level(logging.WARNING, logger="recoverage"):
+            status, _headers, _body = wsgi_get("/src/..%2Fsecret.txt")
+        assert status.startswith("403")
+        warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+        assert any("Refused GET" in m and "plain-relative" in m for m in warnings), warnings
+        assert not any("\n" in m for m in warnings), warnings
 
     def test_encoded_filename_is_decoded_once(self, tmp_path: Path, monkeypatch: Any) -> None:
         """A source file whose name holds a space or a non-ASCII character.

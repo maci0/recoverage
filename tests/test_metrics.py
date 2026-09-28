@@ -414,6 +414,95 @@ class TestTransportRejectionCount:
         assert after["by_status"] == before["by_status"]
 
 
+class TestRegenOutcomeCounters:
+    """A refused run is neither a success nor a failure.
+
+    `RegenStats.finish(None)` closes the in-flight gauge and records the
+    elapsed time while counting the run under neither bucket. It is the
+    outcome of a regen another process already holds the lock on: nothing was
+    written and nothing broke, and filing it under `failures` put a red
+    "Regen failed" line (and a broken-pipeline reading in /api/health) on
+    every overlap between a cron job and a dashboard's own regenerate.
+    """
+
+    def test_a_refused_run_closes_the_gauge_without_failing(self) -> None:
+        metrics.REGEN.reset()
+        metrics.REGEN.start()
+        metrics.REGEN.finish(None, 12.0)
+        metrics.REGEN.reject()
+        snap = metrics.REGEN.snapshot()
+        assert snap["in_flight"] == 0
+        assert snap["failures"] == 0
+        assert snap["rejected"] == 1
+        assert snap["runs"] == 1
+        assert snap["last_ok"] is None
+        assert snap["last_duration_ms"] == 12.0
+
+
+class TestTargetsFallbackLogging:
+    """/api/targets logs the config-only fallback on a transition, not a poll.
+
+    It is the one request the SPA cannot avoid and the shell preloads, so a
+    broken coverage directory wrote one WARNING per page load for as long as
+    it stayed broken. The same rule `api._log_health_status` follows for the
+    health probe: the outage is the news, the recovery closes it, and the
+    repeats say nothing.
+    """
+
+    def _reason(self, text: str) -> str:
+        from rebrew.coverage_toml import CoverageTomlError
+
+        _api._log_targets_fallback(CoverageTomlError(text))
+        return text
+
+    def test_the_repeat_is_silent_and_the_recovery_is_logged(
+        self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import recoverage.api as api
+
+        monkeypatch.setattr(api, "_targets_fallback_reported", None)
+        with caplog.at_level(logging.WARNING, logger="recoverage"):
+            self._reason("first outage")
+            self._reason("first outage")
+        warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1, warnings
+        assert "first outage" in warnings[0]
+
+        caplog.clear()
+        with caplog.at_level(logging.INFO, logger="recoverage"):
+            api._clear_targets_fallback()
+            api._clear_targets_fallback()
+        infos = [r.getMessage() for r in caplog.records if r.levelno == logging.INFO]
+        assert len(infos) == 1, infos
+        assert "no longer config-only" in infos[0]
+
+        # A second outage after the recovery is news again, not a repeat.
+        caplog.clear()
+        with caplog.at_level(logging.WARNING, logger="recoverage"):
+            self._reason("second outage")
+        assert [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING] == [
+            (
+                "Coverage unavailable reading the target list, falling back to the "
+                "config-only list: CoverageTomlError: second outage"
+            )
+        ]
+
+    def test_the_message_is_escaped(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A coverage document's own parse error is untrusted text.
+
+        `server._db_unavailable_err` escapes the same value for the API; an
+        escaped line is one entry, and a raw one is two, with the operator
+        reading whichever half the attacker chose.
+        """
+        import recoverage.api as api
+
+        api._targets_fallback_reported = None
+        with caplog.at_level(logging.WARNING, logger="recoverage"):
+            self._reason("line one\nINJECTED: pwned")
+        messages = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+        assert messages and not any("\n" in m for m in messages), messages
+
+
 class TestStats:
     def test_in_flight_returns_to_zero(self) -> None:
         metrics.REQUESTS.start()

@@ -1288,6 +1288,7 @@ def render_potato(parsed_url: ParseResult) -> str:
             _log_safe(str(_db_path())),
             type(exc).__name__,
             _log_safe(str(exc)),
+            extra=request_log_fields(503, route="/potato"),
         )
         # Signal failure, not a 200 page: monitoring and scripts must see the
         # outage (same contract as the API's 503 db_unavailable).

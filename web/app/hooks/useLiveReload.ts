@@ -82,7 +82,7 @@ export function useLiveReload({
     const key = newRegenKey();
     void (async () => {
       try {
-        const { ok, inProgress } = await postRegen(key);
+        const { ok, inProgress, reason } = await postRegen(key);
         // A regen runs for minutes behind a button that says "Regenerating...".
         // Saying nothing when it ends leaves the reader to tell a finished
         // rebuild from a failed one out of the map's own repaint, so the
@@ -93,7 +93,10 @@ export function useLiveReload({
         if (ok) {
           onDone(MSG.REGEN_DONE);
         } else if (!inProgress) {
-          onNotice(MSG.REGEN_UNAVAILABLE);
+          // A refusal carries the server's own words and the request id, so
+          // the reader is left with something an operator can look up rather
+          // than one line covering every way this can fail.
+          onNotice(reason ?? MSG.REGEN_UNAVAILABLE);
         }
         // oxlint-disable-next-line @rikalabs/no-silent-catch-fallback -- a failed regen is reported to the reader as REGEN_UNAVAILABLE, and the refresh still runs
       } catch {

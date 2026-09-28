@@ -406,9 +406,35 @@ class _KeepAliveRequestHandler(_QuietTimeoutRequestHandler):
         that idled past the deadline.  Nothing is lost by swallowing them: the
         connection is being closed either way, and a real fault in a handler
         arrives through the app, not through the request-line read.
+
+        They are not swallowed SILENTLY, though.  The same read carries a peer
+        that opened a connection, sent no request line at all and sat on the
+        deadline: an operator holding an admission slot saw ``connections.open``
+        climb and never learned why, and nothing in the log, in
+        ``requests.transport_rejected`` or anywhere else named it.  So each arm
+        writes one DEBUG line naming the peer and which close it was.  DEBUG
+        because the ordinary case is an idle browser tab, and a line per tab
+        at WARNING is the noise the suppression exists to avoid; a reader
+        chasing a connection that never served anything raises the level or
+        counts it, and both of those are absent here by design.
         """
-        with contextlib.suppress(TimeoutError, ConnectionError):
+        try:
             self._serve_requests()
+        except TimeoutError:
+            _log.debug("Connection from %s closed on the socket deadline", self._peer())
+        except ConnectionError:
+            _log.debug("Connection from %s went away mid-request", self._peer())
+
+    def _peer(self) -> str:
+        """The peer address, or a stand-in when the handler has none yet.
+
+        ``client_address`` is set by the base class before ``handle`` runs, but
+        a handler built by a test (or by anything that reaches ``handle``
+        without the socket setup) has none, and a logging line must not be the
+        thing that raises.
+        """
+        client = getattr(self, "client_address", None)
+        return str(client[0]) if client else "unknown peer"
 
     def _serve_requests(self) -> None:
         self.raw_requestline = self.rfile.readline(_MAX_REQUEST_LINE + 1)

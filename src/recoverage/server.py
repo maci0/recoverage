@@ -1651,7 +1651,11 @@ def _load_dll(target: str) -> bytes | None:
             _log_safe(target),
             _log_safe(str(dll_path)),
             type(exc).__name__,
-            exc,
+            # An OSError message quotes the path that failed, which here comes
+            # from rebrew-project.toml; escaped so a project file carrying a
+            # control byte cannot split the line.
+            _log_safe(str(exc)),
+            extra=request_log_fields(500),
         )
         return None
     with DLL_LOCK:

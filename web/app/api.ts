@@ -240,18 +240,41 @@ type ErrorEnvelope = { error?: string; detail?: string };
  * the only thing left to read, and the caller already has it. */
 const NO_ENVELOPE: ErrorEnvelope = {};
 
+/** The regen POST's own body shape, and the error envelope's: one response
+ * carries one of them, and a caller reading a refusal needs both the status
+ * and the words that came with it. */
+type RegenEnvelope = ErrorEnvelope & { ok?: boolean; in_progress?: boolean };
+
 /** The reason a JSON endpoint refused, read as the pane states it.
  *
  * `server._json_err` sends `{error, code, detail}` for every failure, so the
  * reason is in the body rather than in the status alone. */
 async function refusal(res: Response): Promise<string> {
-  const status = `${res.status} ${res.statusText}`;
   // SAFETY: this origin's own JSON, whose shape `recoverage.server._json_err`
   // pins. A body outside that contract (a proxy's HTML error page) parses to
   // nothing to read, which is the empty envelope, not a wrong answer.
-  const payload: ErrorEnvelope = await res.json().catch(() => NO_ENVELOPE);
-  const reason = payload.error ?? status;
-  return payload.detail ? `${reason}: ${payload.detail}` : reason;
+  return describeRefusal(res, await res.json().catch(() => NO_ENVELOPE));
+}
+
+/** Render a refusal from a body that has already been read.
+ *
+ * Split from `refusal` because a `Response` body is a stream: reading it
+ * twice throws, so a caller that needs the envelope for its own decision
+ * (the regen POST) and the message for the reader has to read once and render
+ * from what it read. */
+function describeRefusal(res: Response, payload: ErrorEnvelope): string {
+  const status = `${res.status} ${res.statusText}`;
+  const headline = payload.error ?? status;
+  const reason = payload.detail ? `${headline}: ${payload.detail}` : headline;
+  // The server mints a correlation id on every response and stamps it on
+  // every log line it writes (`server._RequestIdFilter`). Carrying it in the
+  // message is what lets a reader who reports "the map failed to load" hand
+  // the operator something they can grep: without it the browser holds the
+  // error and the server holds the line, and nothing joins them. Absent only
+  // when something between here and the app answered (a proxy's own error
+  // page), where the header is not the one this dashboard minted.
+  const id = res.headers.get("X-Request-ID");
+  return id === null ? reason : `${reason} [request ${id}]`;
 }
 
 export async function fetchFunction(
@@ -336,7 +359,12 @@ export async function fetchArrayBufferSafe(
   }
 }
 
-export type RegenResult = { ok: boolean; inProgress: boolean };
+/** The outcome of one regenerate action.
+ *
+ * `reason` is set only when the server refused the POST: it carries the
+ * envelope's own words and the request id, so the notice the reader is left
+ * looking at is the one an operator can grep in the server log. */
+export type RegenResult = { ok: boolean; inProgress: boolean; reason?: string };
 
 /** The ledger key for one regenerate action. */
 export type RegenKey = string;
@@ -380,7 +408,23 @@ export async function postRegen(key: RegenKey): Promise<RegenResult> {
   const res = await sendRegen(key).catch(() => sendRegen(key));
   // SAFETY: this origin's own JSON; `handle_regen` answers `{"ok": bool}` and,
   // for a retry of a run still going, `{"ok": true, "in_progress": true}`.
-  const payload = (await res.json()) as { ok?: boolean; in_progress?: boolean };
+  // Guarded, because a refusal is not that body: a 401 page from an expired
+  // share link, a proxy's 502 HTML, or the endpoint's own 403/429/500
+  // envelope. An unguarded `res.json()` threw a SyntaxError out of this
+  // function, and every one of those reached the reader as the same
+  // "regeneration unavailable" line with no status, no reason and no id.
+  const payload: RegenEnvelope = await res.json().catch(() => NO_ENVELOPE);
+  if (!res.ok) {
+    // The reason rides along in the notice rather than being dropped: a 429
+    // means somebody else's run is going, a 403 means this page was not
+    // allowed to ask, and a 500 names the failure the server logged. The
+    // request id is what turns any of them into a line in the server log.
+    return {
+      ok: false,
+      inProgress: res.status === 202,
+      reason: describeRefusal(res, payload),
+    };
+  }
   // `in_progress` is not `ok`: the run was accepted and has not finished, so
   // reporting it as done would claim documents the pipeline has not written.
   return { ok: payload.ok === true && payload.in_progress !== true, inProgress: payload.in_progress === true };
