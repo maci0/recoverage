@@ -374,6 +374,10 @@ def _resolve_serve_config(
         # the server will run with rather than in a second pass beside it.
         resolved_cors = config.cors() if cors is None else cors
         requested_origins = config.cors_origins() if cors_origin is None else list(cors_origin)
+        # A RECOVERAGE_DB that is not a directory is a startup error, not a
+        # resolved path: the coverage glob matches nothing, and the dashboard
+        # then serves an empty target list that reads as a healthy zero.
+        config.check_db_override()
         resolved = _ServeConfig(
             port=config.port() if port is None else _checked_port(port),
             # validate_bind, not the raw flag: one setting, two sources, and
@@ -383,8 +387,15 @@ def _resolve_serve_config(
             cors=resolved_cors,
             cors_origins=_allowed_origins(resolved_cors, requested_origins),
             cors_origins_requested=requested_origins,
-            token=(config.token() or None) if token is None else token,
+            token=(
+                (config.token() or None)
+                if token is None
+                else config.validate_token(token, "--token")
+            ),
             # Read for validation only; _db_path() resolves the value again.
+            # check_db_override, not db_override alone: a RECOVERAGE_DB naming
+            # a file resolves to a path no glob can match, which serves an
+            # empty target list rather than an error.
             db=config.db_override(),
             log_level=(
                 config.log_level() if log_level is None else config.parse_log_level(log_level)
@@ -437,7 +448,7 @@ def _check_env_or_exit() -> None:
     """
     try:
         config.check_unknown_vars()
-        config.db_override()
+        config.check_db_override()
     except config.ConfigError as exc:
         _secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(2) from None
@@ -844,6 +855,54 @@ def _cors_warnings(cors: bool, requested: list[str]) -> list[str]:
     return warnings
 
 
+def _db_warnings(db: Path | None) -> list[str]:
+    """The coverage directory this process will read nothing from, as warnings.
+
+    Not fatal, and deliberately not the same rule as
+    :func:`config.check_db_override`: a directory that does not exist yet is a
+    normal state for a checkout that has not been built, while one that is a
+    file can never hold documents and is refused before the listener binds.
+    What both share is the consequence, and it is silent: ``db_target_ids``
+    answers an empty list for an absent or empty directory, so the dashboard
+    renders zero targets and every served figure reads as a healthy zero. The
+    likeliest cause is a service started from a directory that is not the
+    project root (``RECOVERAGE_DB`` names the right one), and the only clue
+    today is a map with nothing on it.
+
+    Returned rather than printed so ``serve`` and ``recoverage config`` warn
+    from one rule, and so a preflight reports what ``serve`` will do.
+
+    A path the project config cannot resolve to is not warned about here: the
+    request path already answers it as a 503 naming the file, and this runs
+    before any of that.
+    """
+    from rebrew.workspace import WorkspaceConfigError
+
+    from recoverage._paths import _db_path
+
+    try:
+        path = db if db is not None else _db_path()
+    except (OSError, WorkspaceConfigError):
+        return []
+    if not path.exists():
+        state = f"the coverage directory {path} does not exist"
+    elif not path.is_dir():
+        # config.check_db_override refuses this one at startup; a warning here
+        # would only repeat a refusal `serve` has already exited on.
+        return []
+    elif any(path.glob("coverage-*.toml")):
+        return []
+    else:
+        state = f"no coverage-*.toml in {path}"
+    return [
+        (
+            f"warning: {state}; the dashboard will list no targets until 'rebrew build-db' "
+            "writes one. If this is a service, check RECOVERAGE_DB and the directory serve "
+            "was started from."
+        )
+    ]
+
+
 def _configure_logging(level: int) -> None:
     """Route the root logger to stderr at *level*, with the request-id format.
 
@@ -954,7 +1013,8 @@ def serve(
         help="Require this bearer token for every request (Authorization: Bearer <token>, "
         "?token=, or open the dashboard as /?token=<token> (or /potato?token=<token>) "
         "to set the browser cookie; env: RECOVERAGE_TOKEN, which keeps the token out "
-        "of the process listing)",
+        "of the process listing). An empty value turns auth off; one carrying "
+        "whitespace is refused, because a trimmed request header cannot present it",
     ),
     log_level: str | None = typer.Option(
         None,
@@ -1035,6 +1095,8 @@ def serve(
             err=True,
         )
     for warning in _cors_warnings(cors, resolved.cors_origins_requested):
+        _secho(warning, fg=typer.colors.YELLOW, err=True)
+    for warning in _db_warnings(resolved.db):
         _secho(warning, fg=typer.colors.YELLOW, err=True)
     # IPv6 hosts need brackets in any URL spelling (::1 bare is parsed as
     # host "" port ::8001).
@@ -1723,6 +1785,8 @@ def config_cmd(
         for key, value in settings.items():
             typer.echo(f"{key}={value}")
     for warning in _cors_warnings(resolved.cors, resolved.cors_origins_requested):
+        _secho(warning, fg=typer.colors.YELLOW, err=True)
+    for warning in _db_warnings(resolved.db):
         _secho(warning, fg=typer.colors.YELLOW, err=True)
     refusal = _remote_bind_gate(resolved.bind, resolved.allow_remote)
     if refusal is not None:

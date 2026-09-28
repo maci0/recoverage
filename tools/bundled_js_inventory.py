@@ -28,7 +28,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, cast
 
 REPO_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 PACKAGE_JSON = REPO_ROOT / "package.json"
@@ -95,7 +95,7 @@ class InventoryError(Exception):
 def _read_json(path: Path) -> dict[str, Any]:
     if not path.is_file():
         raise InventoryError(f"{path} is missing")
-    return json.loads(path.read_text(encoding="utf-8"))
+    return cast("dict[str, Any]", json.loads(path.read_text(encoding="utf-8")))
 
 
 def _bun_lock() -> dict[str, Any]:
@@ -108,7 +108,7 @@ def _bun_lock() -> dict[str, Any]:
     text = BUN_LOCK.read_text(encoding="utf-8")
     text = re.sub(r"^\s*//.*$", "", text, flags=re.MULTILINE)
     text = re.sub(r",(\s*[}\]])", r"\1", text)
-    return json.loads(text)
+    return cast("dict[str, Any]", json.loads(text))
 
 
 def resolve() -> list[tuple[Shipped, str, str]]:

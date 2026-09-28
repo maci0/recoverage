@@ -185,11 +185,11 @@ always wins over the environment.
 | `RECOVERAGE_ALLOW_REMOTE` | `false` | `1`/`0`, `true`/`false`, `yes`/`no`, `on`/`off` |
 | `RECOVERAGE_CORS` | `false` | same booleans |
 | `RECOVERAGE_CORS_ORIGIN` | none | comma-separated origin URLs; each must be one a browser could send (`scheme://host[:port]`, no userinfo, path or whitespace) |
-| `RECOVERAGE_TOKEN` | none | the bearer token; set it empty to run unauthenticated |
+| `RECOVERAGE_TOKEN` | none | the bearer token; set it empty to run unauthenticated, and give it no surrounding or interior whitespace (headers arrive trimmed, so a padded value locks every reader out) |
 | `RECOVERAGE_LOG_LEVEL` | `INFO` | a `logging` level name, or its number |
 | `RECOVERAGE_MAX_CONNECTIONS` | `128` | integer `1`-`65536`: concurrent client connections admitted, one thread and one descriptor each |
 | `RECOVERAGE_CLIENT_TIMEOUT` | `120` | integer `16`-`86400`: per-socket-operation deadline in seconds; a client that cannot absorb a write inside it is cut mid-body |
-| `RECOVERAGE_DB` | resolved from the working directory | path to the coverage directory (the one holding `coverage-<target>.toml`) |
+| `RECOVERAGE_DB` | resolved from the working directory | path to the coverage directory (the one holding `coverage-<target>.toml`); a path that is a file is a startup error, not an empty dashboard |
 | `RECOVERAGE_FUZZ_SEED` | unset | seed for the mutation campaigns (`make fuzz`); read by the test suite, not the server |
 | `RECOVERAGE_FUZZ_ITERATIONS` | unset | round count for those campaigns; same reader |
 
@@ -236,15 +236,17 @@ them agree, point `[project].db_dir` at the same directory, or leave
 Every value is validated at startup. An out-of-range port, a non-boolean flag,
 an unknown log level, an empty value where one is required, a bind address no
 resolver can answer (`0.0.0.0 `, `host:8001`), a CORS origin no browser could
-send, or a misspelled `RECOVERAGE_*` name (`RECOVERAGE_PRT`) exits 2 with the
+send, a token carrying whitespace a trimmed header could never present, a
+`RECOVERAGE_DB` that is a file rather than the coverage directory, or a
+misspelled `RECOVERAGE_*` name (`RECOVERAGE_PRT`) exits 2 with the
 variable named, instead of starting with a default you did not ask for. The
 same check runs for every command that reads the environment (`stats`,
 `export`, `check`, `open`, `regen`), so a typo cannot quietly leave those on
-their defaults. The `--port` and `--min-coverage` flags are held to the floor
-their variables get, so a non-ASCII digit or a `1_0` spelling is the same exit
-2 whichever source it came through. `RECOVERAGE_PORT=0` binds a free port, and
-the banner, `/api/health` and the browser URL all report the one that was
-bound rather than the 0.
+their defaults. The `--port`, `--min-coverage` and `--token` flags are held to
+the floor their variables get, so a non-ASCII digit, a `1_0` spelling or a
+padded token is the same exit 2 whichever source it came through.
+`RECOVERAGE_PORT=0` binds a free port, and the banner, `/api/health` and the
+browser URL all report the one that was bound rather than the 0.
 The two `RECOVERAGE_FUZZ_*` variables are the test suite's, not the server's;
 they carry the prefix so an operator who exported one to drive a campaign is
 not stopped by the unknown-name check, and they change nothing `serve` does.
@@ -252,8 +254,8 @@ not stopped by the unknown-name check, and they change nothing `serve` does.
 reported as `token=set`. `recoverage config` prints the same settings without
 binding a port, as `key=value` lines or `--json`, and ends the way `serve`
 ends: a non-loopback bind without `RECOVERAGE_ALLOW_REMOTE` exits 1, the CORS
-warnings go to stderr, and the token is never printed. Use it as the preflight
-a unit file can gate on.
+and empty-coverage-directory warnings go to stderr, and the token is never
+printed. Use it as the preflight a unit file can gate on.
 
 The running server answers the same question over HTTP: `GET /api/health`
 carries a `config` block with the settings that process resolved (`db` is left

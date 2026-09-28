@@ -99,6 +99,23 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `serve` and `recoverage config` now warn when the coverage directory holds
+  no `coverage-*.toml`, or does not exist. Both serve an empty target list,
+  which reads as a healthy zero on every figure the dashboard shows; the
+  likeliest cause is a service started from a directory that is not the project
+  root, and the only clue used to be a map with nothing on it.
+- A `RECOVERAGE_TOKEN` (or `--token`) carrying surrounding whitespace, an
+  interior space or a control character is now a startup error, where it
+  started a server that answered 401 to every reader. Request headers arrive
+  trimmed and the gate compares the extracted credential byte for byte, so such
+  a value is one no client can present, and the banner still read `token=set`.
+  The message names the problem, never the value. An empty token is unchanged:
+  it is the documented way to run unauthenticated.
+- `RECOVERAGE_DB` naming something that exists and is not a directory is now a
+  startup error, where it resolved to a path no `coverage-*.toml` glob can
+  match and the dashboard served an empty target list, which reads as a healthy
+  zero rather than as a wrong path. A path that does not exist is still
+  allowed: a service may start before its first `rebrew build-db`.
 - `RECOVERAGE_CLIENT_TIMEOUT` now accepts `16` seconds and above, where it
   accepted `5`. A deadline at or under the 15 s SSE heartbeat closes healthy
   `/api/events` streams on the clock instead of on the peer going away, so the

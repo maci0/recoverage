@@ -80,6 +80,57 @@ class TestScalarParsing:
         assert config.db_override() == Path("~/proj/db/coverage.db").expanduser()
 
     @pytest.mark.parametrize(
+        "raw", ["s3cret ", " s3cret", "s3cret\n", "  ", "two words", "tok\x01en", "tok\x7fen"]
+    )
+    def test_token_a_client_cannot_present_is_refused(
+        self, monkeypatch: pytest.MonkeyPatch, raw: str
+    ) -> None:
+        """A token with whitespace or a control byte locks every reader out.
+
+        The gate compares the extracted credential byte for byte and every
+        carrier arrives stripped, so such a value starts a server that answers
+        401 to everyone while the banner still reads ``token=set``.
+        """
+        monkeypatch.setenv("RECOVERAGE_TOKEN", raw)
+        with pytest.raises(config.ConfigError) as excinfo:
+            config.token()
+        assert "RECOVERAGE_TOKEN" in str(excinfo.value)
+
+    def test_token_refusal_does_not_echo_the_value(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The message reaches stderr verbatim, so it must not carry the secret."""
+        monkeypatch.setenv("RECOVERAGE_TOKEN", "s3cret-value ")
+        with pytest.raises(config.ConfigError) as excinfo:
+            config.token()
+        assert "s3cret" not in str(excinfo.value)
+
+    def test_db_override_naming_a_file_is_refused(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """The SQLite-era spelling: a file where the documents' directory goes.
+
+        The glob for ``coverage-*.toml`` then matches nothing and the dashboard
+        serves an empty target list, which reads as a healthy zero rather than
+        as a wrong path.
+        """
+        db_file = tmp_path / "coverage.db"
+        db_file.write_text("not a directory")
+        monkeypatch.setenv("RECOVERAGE_DB", str(db_file))
+        with pytest.raises(config.ConfigError) as excinfo:
+            config.check_db_override()
+        assert "not a directory" in str(excinfo.value)
+
+    def test_db_override_that_does_not_exist_is_allowed(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """A service may start before the first ``rebrew build-db``."""
+        monkeypatch.setenv("RECOVERAGE_DB", str(tmp_path / "not-built-yet"))
+        config.check_db_override()
+
+    def test_db_override_unset_is_allowed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("RECOVERAGE_DB", raising=False)
+        config.check_db_override()
+
+    @pytest.mark.parametrize(
         "raw,expected", [("DEBUG", logging.DEBUG), ("warning", logging.WARNING), ("30", 30)]
     )
     def test_log_level_from_env(
@@ -525,6 +576,44 @@ class TestServeStartup:
         assert result.exit_code == 2
         assert "RECOVERAGE_PORT" in result.output
 
+    def test_env_token_no_client_can_present_never_binds(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A token that cannot travel is refused before the listener, not after."""
+        from typer.testing import CliRunner
+
+        from recoverage.cli import app
+
+        monkeypatch.setenv("RECOVERAGE_TOKEN", "s3cret ")
+        result = CliRunner().invoke(app, ["serve", "--no-open"])
+        assert result.exit_code == 2
+        assert "RECOVERAGE_TOKEN" in result.output
+        assert "s3cret" not in result.output
+
+    def test_the_token_flag_gets_the_same_floor(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """One setting, two sources, one validator, as --bind has."""
+        import typer
+
+        from recoverage.cli import _resolve_serve_config
+
+        with pytest.raises(typer.Exit) as excinfo:
+            _resolve_serve_config(token="s3cret\n")
+        assert excinfo.value.exit_code == 2
+
+    def test_env_db_naming_a_file_never_binds(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        from typer.testing import CliRunner
+
+        from recoverage.cli import app
+
+        db_file = tmp_path / "coverage.db"
+        db_file.write_text("not a directory")
+        monkeypatch.setenv("RECOVERAGE_DB", str(db_file))
+        result = CliRunner().invoke(app, ["serve", "--no-open"])
+        assert result.exit_code == 2
+        assert "RECOVERAGE_DB" in result.output
+
 
 class TestConfigCommand:
     """`recoverage config` reports what `serve` would resolve, without binding."""
@@ -770,6 +859,55 @@ class TestConfigCommand:
         result = CliRunner().invoke(app, ["config"])
         assert result.exit_code == 0, result.output
         assert "--cors-origin has no effect without --cors" in result.output
+
+
+class TestCoverageDirectoryWarnings:
+    """A coverage directory with nothing in it serves an empty target list,
+    which every rendered figure reads as a healthy zero. `serve` and
+    `recoverage config` say so from one rule rather than leaving the operator
+    to infer it from a blank map."""
+
+    def test_a_directory_with_documents_warns_about_nothing(self, tmp_path: Path) -> None:
+        from recoverage.cli import _db_warnings
+
+        (tmp_path / "coverage-demo.toml").write_text("[target]\n")
+        assert _db_warnings(tmp_path) == []
+
+    def test_an_empty_directory_warns_and_names_it(self, tmp_path: Path) -> None:
+        from recoverage.cli import _db_warnings
+
+        warnings = _db_warnings(tmp_path)
+        assert len(warnings) == 1
+        assert str(tmp_path) in warnings[0]
+        assert "rebrew build-db" in warnings[0]
+
+    def test_a_missing_directory_warns_too(self, tmp_path: Path) -> None:
+        """The service-started-in-the-wrong-directory case: the resolved
+        default is a directory that was never created."""
+        from recoverage.cli import _db_warnings
+
+        warnings = _db_warnings(tmp_path / "never-created")
+        assert len(warnings) == 1
+        assert "does not exist" in warnings[0]
+
+    def test_a_path_that_is_a_file_is_left_to_the_startup_refusal(self, tmp_path: Path) -> None:
+        from recoverage.cli import _db_warnings
+
+        db_file = tmp_path / "coverage.db"
+        db_file.write_text("not a directory")
+        assert _db_warnings(db_file) == []
+
+    def test_the_config_command_reports_it(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        from typer.testing import CliRunner
+
+        from recoverage.cli import app
+
+        monkeypatch.setenv("RECOVERAGE_DB", str(tmp_path))
+        result = CliRunner().invoke(app, ["config"])
+        assert result.exit_code == 0, result.output
+        assert "RECOVERAGE_DB" in result.output
 
 
 class TestCorsOriginIsWhatABrowserCouldSend:

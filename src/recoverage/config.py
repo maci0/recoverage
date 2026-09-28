@@ -275,13 +275,56 @@ def allow_remote() -> bool:
     return _bool_var("RECOVERAGE_ALLOW_REMOTE", False)
 
 
+def validate_token(value: str | None, name: str = "RECOVERAGE_TOKEN") -> str | None:
+    """Return *value* when a client could actually present it, else raise.
+
+    The one secret read here, so the error names the problem and never the
+    value: a token that cannot travel is still a token in the operator's
+    configuration file, and the message is printed verbatim to stderr.
+
+    An empty value is untouched: it is the documented "auth off" spelling, and
+    :func:`token` turns it into "no token" rather than into a gate nothing can
+    pass.
+
+    Everything else is refused, because the gate compares the extracted
+    credential for byte equality (``server._auth_token_matches``) and every
+    carrier arrives stripped:
+
+    * leading or trailing whitespace (``RECOVERAGE_TOKEN="$(cat token_file)"``
+      on a file with a trailing space, a paste into a unit file) survives this
+      check and is matched against a header the HTTP parser has already
+      trimmed, so the server comes up reporting ``token=set`` and answers 401
+      to every reader including the operator's own browser;
+    * an interior space, tab, newline or control character is the same lockout,
+      and a C0/DEL/C1 byte additionally cannot appear in a header at all.
+
+    Both configurations start a server that no client can authenticate to, and
+    the only clue is a 401 in a browser.  Refusing them at startup is the same
+    rule the CORS allowlist and the bind address already follow.
+    """
+    if value is None or not value:
+        return value
+    if value != value.strip():
+        raise ConfigError(
+            f"{name}: leading or trailing whitespace; a request header is trimmed "
+            "before it is compared, so no client could present this value"
+        )
+    if any(ch.isspace() or ord(ch) < 32 or 127 <= ord(ch) <= 159 for ch in value):
+        raise ConfigError(
+            f"{name}: contains whitespace or a control character, which no request "
+            "header, query value or cookie can carry"
+        )
+    return value
+
+
 def token() -> str | None:
     """Bearer token, or None when no token is configured.
 
-    The value is returned, never inspected: there is no format to validate and
-    nothing derived from it may be logged.
+    The value is never logged, never rendered and never interpolated into an
+    error: :func:`validate_token` reports what is wrong with it by class, not
+    by content.
     """
-    return _raw("RECOVERAGE_TOKEN")
+    return validate_token(_raw("RECOVERAGE_TOKEN"))
 
 
 def cors() -> bool:
@@ -373,6 +416,34 @@ def db_override() -> Path | None:
     if not raw:
         raise ConfigError("RECOVERAGE_DB: set but empty (unset it, or give it a path)")
     return Path(raw).expanduser()
+
+
+def check_db_override() -> None:
+    """Refuse a coverage-directory override that cannot hold documents.
+
+    A path that does not exist is left alone: a service may be started before
+    the first ``rebrew build-db``, and the resolved directory is a default for
+    the next run.  A path that exists and is NOT a directory has no such
+    reading.  The likeliest spelling is the one the SQLite era taught:
+    ``RECOVERAGE_DB=/srv/coverage.db`` pointing at the old database FILE after
+    the documents moved beside it.  The glob for ``coverage-*.toml`` then
+    matches nothing, the dashboard serves an empty target list forever, and
+    every served number reads as a healthy zero rather than as a wrong path.
+
+    One stat, at startup only: :func:`db_override` is on the request path
+    (through ``_paths._db_path``) and must stay a bare environment read.
+    """
+    override = db_override()
+    if override is None:
+        return
+    try:
+        if override.exists() and not override.is_dir():
+            raise ConfigError(
+                f"RECOVERAGE_DB: {override} is not a directory; the variable names the "
+                "directory holding the coverage-<target>.toml documents"
+            )
+    except OSError as exc:
+        raise ConfigError(f"RECOVERAGE_DB: {override} is not readable ({exc.strerror})") from None
 
 
 def check_unknown_vars() -> None:

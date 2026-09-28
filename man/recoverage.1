@@ -191,7 +191,9 @@ Default for
 .B RECOVERAGE_TOKEN
 Default for
 .BR \-\-token .
-Empty means authentication is off.
+Empty means authentication is off. A value carrying surrounding whitespace,
+an interior space or a control character is refused at startup: request headers
+arrive trimmed, so no client could present it.
 .TP
 .B RECOVERAGE_LOG_LEVEL
 Default for
@@ -199,7 +201,9 @@ Default for
 .TP
 .B RECOVERAGE_DB
 The coverage directory to read, instead of resolving rebrew-project.toml from
-the working directory. rebrew resolves what a regen
+the working directory. A path that exists and is not a directory is refused at
+startup rather than resolving to a directory holding no coverage documents.
+rebrew resolves what a regen
 .B writes
 from rebrew-project.toml alone, so a regen under an override naming another
 directory is refused rather than run.

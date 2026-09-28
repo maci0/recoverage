@@ -575,7 +575,15 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   `cli._remote_bind_gate` and `cli._cors_warnings`, and both `serve` and
   `recoverage config` run it. `config` is the preflight a deployment gates on:
   a check that exits 0 for a configuration `serve` exits 1 on is a deployment
-  that finds out at boot instead of at the check.
+  that finds out at boot instead of at the check. `cli._db_warnings` joins
+  them: a coverage directory that does not exist, or exists and holds no
+  `coverage-*.toml`, serves an empty target list, and every figure the
+  dashboard renders then reads as a healthy zero. It is a warning and not
+  `config.check_db_override`'s refusal because an unbuilt checkout is a normal
+  state, and because the file case is already a startup error (a warning there
+  would only repeat a refusal `serve` exited on). It reads the override
+  `_ServeConfig.db` carries when there is one, so the banner, the check and
+  the request path name the same directory.
 - Saturation that answers 503 is a log line and a health field, not a bare
   status code: `/api/events` refuses past `_SSE_MAX_CLIENTS` and logs the count
   that caused it, and `/api/health` reports `streams` (clients, max, whether
@@ -802,10 +810,28 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   holds for a value that is SET but EMPTY, which is how a unit file, a
   container env and a CI job all spell "not configured" — an empty
   `RECOVERAGE_CORS_ORIGIN` starts a server with CORS on and an allowlist of
-  nothing. `RECOVERAGE_TOKEN` is the one deliberate exception, and
-  `tests/test_config.py` pins it: empty means auth off, on purpose, because
-  the same spellings would otherwise leave a token-guarded deployment
-  unauthenticated in exactly the way the empty allowlist does.
+  nothing. `RECOVERAGE_TOKEN` is the one deliberate exception to the
+  SET-but-EMPTY rule, and `tests/test_config.py` pins it: empty means auth
+  off, on purpose, because the same spellings would otherwise leave a
+  token-guarded deployment unauthenticated in exactly the way the empty
+  allowlist does. It is still validated, by `config.validate_token`, which
+  `--token` calls too: the gate compares the extracted credential byte for byte
+  and every carrier arrives stripped, so a value carrying surrounding
+  whitespace, an interior space or a control character starts a server that
+  answers 401 to every reader while the banner reads `token=set`. The error
+  names the class of problem and never the value, because it is printed
+  verbatim to stderr.
+- `RECOVERAGE_DB` is resolved on the request path (`_paths._db_path`), so
+  `config.db_override` stays a bare environment read and `config.
+  check_db_override` is the startup-only check that stats the path. A value
+  that exists and is not a directory (the SQLite-era `coverage.db` FILE, which
+  sat beside the documents rather than holding them) resolves to a path no
+  `coverage-*.toml` glob can match, and the dashboard then serves an empty
+  target list that reads as a healthy zero rather than as a wrong path. A value
+  that does not exist is allowed, because a service may start before its first
+  `rebrew build-db`; only a non-directory is a misconfiguration. `serve` and
+  `recoverage config` reach it through `_resolve_serve_config`, the sibling
+  commands through `_check_env_or_exit`.
 - The frontend is linted with oxlint under the `@rikalabs/oxlint-standards`
   strict preset plus the vendored anti-slop rules, and type checked by
   `tsc --noEmit` over `web/tsconfig.json` (`strict` plus
