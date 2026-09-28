@@ -55,6 +55,7 @@ from recoverage.server import (
     lookup_global,
     mtime_ns_to_utc,
     parse_ascii_int,
+    pct_1dp,
     request,
     resolve_targets,
     response,
@@ -881,7 +882,7 @@ _PAGE_SRC = r"""<!DOCTYPE html>
           <table role="presentation" id="progress-bar" width="100%" border="0" cellpadding="0" cellspacing="1"><tr>
             <td align="center" height="14"><img src="{{progress_bar_png}}" width="100%" height="14" border="0" alt=""></td>
           </tr><tr>
-            <td align="center"><font face="{{MONO_FONT}}" size="2" color="{{TEXT_COLOR}}"><b>{{progress['sec_size']}}</b>b &middot; <b>{{progress['matched_fn']}}/{{progress['total_fn']}}</b> matched &middot; <b>{{"%.1f" % progress['coverage_pct']}}%</b></font></td>
+            <td align="center"><font face="{{MONO_FONT}}" size="2" color="{{TEXT_COLOR}}"><b>{{progress['sec_size']}}</b>b &middot; <b>{{progress['matched_fn']}}/{{progress['total_fn']}}</b> matched &middot; <b>{{"%.1f" % progress['coverage_pct_1dp']}}%</b></font></td>
           </tr></table>
         </td></tr>
         % end
@@ -1692,6 +1693,11 @@ def _build_progress(
     return {
         "sec_size": sec_size,
         "coverage_pct": coverage_pct(covered_bytes, sec_size) if sec_size > 0 else 0,
+        # The 1dp rendering of the figure above, for the header. "%.1f" of the
+        # 2dp value rounds 99.99 up to 100.0 and reads a section one byte short
+        # of complete as complete, which is the one thing the flooring in
+        # server.coverage_pct exists to prevent.
+        "coverage_pct_1dp": pct_1dp(coverage_pct(covered_bytes, sec_size) if sec_size > 0 else 0),
         "total_fn": total_fn,
         "matched_fn": matched_fn,
         "segments": [

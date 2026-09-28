@@ -892,6 +892,25 @@ def coverage_pct(covered: int, total: int) -> float:
     return floor_pct(covered, total, 2)
 
 
+def pct_1dp(value: float) -> float:
+    """*value* (a :func:`coverage_pct` figure) at 1dp, floored like it was.
+
+    The narrow surfaces — `recoverage stats`, the Markdown export, the Potato
+    map header — print one decimal, and formatting the 2dp value with
+    ``%.1f`` rounded it back UP: 99.999% of 100_000 bytes floors to 99.99 and
+    then printed as ``100.0%`` in all three, while ``check --min-coverage
+    100`` failed the same section on the unrounded ratio.  Flooring once more
+    is what keeps "one byte short of complete" from reading as complete in
+    every surface that shows the number, which is why
+    :func:`coverage_pct` floors at all.
+
+    Takes the percentage, not the counts: the callers hold the 2dp figure
+    :func:`coverage_pct` already produced, and a second division here would be
+    a second rounding of the same ratio.
+    """
+    return floor_pct(value, 100, 1)
+
+
 def _summary(snap: CoverageSnapshot) -> dict[str, Any]:
     """The ``summary`` blob ``build_db`` stored, rebuilt from the snapshot.
 

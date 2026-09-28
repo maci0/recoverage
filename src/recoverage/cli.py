@@ -1217,6 +1217,8 @@ def stats(
     from rich.console import Console
     from rich.table import Table
 
+    from recoverage.server import pct_1dp
+
     with _open_targets(target, json_output=json_output) as (snapshots, targets):
         if json_output:
             typer.echo(
@@ -1271,7 +1273,7 @@ def stats(
                     str(reloc),
                     str(near_match),
                     str(stub),
-                    f"{coverage_pct:.1f}%",
+                    f"{pct_1dp(coverage_pct):.1f}%",
                 )
 
             console.print(table)
@@ -1304,6 +1306,9 @@ def export(
     """
     _use_utf8_stdout()
     json_output = output_format is ExportFormat.json
+
+    from recoverage.server import pct_1dp
+
     with _open_targets(target, json_output=json_output) as (snapshots, targets):
         all_data = [_get_stats(snapshots, tid, json_output=json_output) for tid in targets]
 
@@ -1351,7 +1356,7 @@ def export(
                     f"| {_md_safe(sec_name)}"
                     f" | {size:,} B | {cells}"
                     f" | {exact} | {reloc} | {near_match}"
-                    f" | {stub} | {coverage_pct:.1f}% |"
+                    f" | {stub} | {pct_1dp(coverage_pct):.1f}% |"
                 )
 
 

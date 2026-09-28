@@ -2078,6 +2078,25 @@ class TestCoveragePercentIsFloored:
         assert srv.coverage_pct(999_999, 1_000_000) == 99.99
         assert srv.coverage_pct(875, 1_000) == 87.5
 
+    def test_the_1dp_rendering_floors_rather_than_rounds_back_up(self) -> None:
+        """``pct_1dp`` is what the one-decimal surfaces print.
+
+        ``"%.1f" % coverage_pct(999_999, 1_000_000)`` is ``"100.0"``: the 2dp
+        value is 99.99 and the format rounds it back over the line the
+        flooring drew, so a section three bytes short of complete reads as
+        complete in the stats table, the Markdown export and the Potato header.
+        """
+        import recoverage.server as srv
+
+        assert f"{srv.pct_1dp(srv.coverage_pct(999_999, 1_000_000)):.1f}" == "99.9"
+        # 99.999% of 100_000 bytes floors to 99.99 the same way.
+        assert f"{srv.pct_1dp(srv.coverage_pct(99_999, 100_000)):.1f}" == "99.9"
+        # A complete section, and one already at 1dp, pass through unchanged.
+        assert srv.pct_1dp(100.0) == 100.0
+        assert srv.pct_1dp(0.0) == 0.0
+        assert srv.pct_1dp(87.5) == 87.5
+        assert srv.pct_1dp(87.45) == 87.4
+
 
 class TestEveryDeclaredSectionIsServed:
     """A section the directory declares must never be dropped from the response.
