@@ -4,7 +4,7 @@
 # is the one step that keeps the committed assets matching web/.
 .PHONY: help setup clean build check-bundle-clean web-build web-dev test test-one test-browser fuzz lint format format-check web-lint smoke smoke-fail \
 	shell-lint yaml-lint type-check all ensure-uv ensure-rebrew warn-uv-version clone-rebrew ensure-lint-tools \
-	ensure-bun regen-oxlint typecheck-web payload-budget browser-sbom python-sbom license-inventory
+	ensure-bun regen-oxlint typecheck-web payload-budget browser-sbom browser-sbom-spdx python-sbom license-inventory
 
 # Force POSIX sh for recipes (ignore a caller-exported SHELL=bash).  Version
 # compares use ``sort -t. -k…n`` (POSIX), not GNU ``sort -V``.
@@ -127,6 +127,7 @@ help:
 		'  make smoke-fail         # the same probe against a corrupt db: must degrade, not lie' \
 		'  make payload-budget     # re-derive the inlined shell size at each static encoding' \
 		'  make browser-sbom       # list the npm packages compiled into the shipped browser assets' \
+		'  make browser-sbom-spdx  # the same list as an SPDX 2.3 document a scanner reads' \
 		'  make python-sbom        # print the resolved Python tree (uv.lock, every extra, hashed)' \
 		'  make license-inventory  # the license every resolved Python package is under, and refuse the rest' \
 		'  make all                # every check CI runs, in one command' \
@@ -476,6 +477,17 @@ payload-budget: ensure-rebrew
 # without CI, and it needs no network and no environment, only bun.lock.
 browser-sbom: ensure-rebrew
 	$(UV_RUN) python tools/bundled_js_inventory.py
+
+# The same rows as an SPDX 2.3 document, which is the shape a vulnerability
+# scanner takes. The line-per-package text above is the one a reader opens;
+# this is the one a tool ingests, and it is uploaded beside it as
+# recoverage-browser-spdx. SOURCE_DATE_EPOCH is exported for the same reason
+# `build` does: the document carries a `created` stamp, and an artifact that
+# differs between two runs of one commit cannot be diffed.
+browser-sbom-spdx: ensure-rebrew
+	@$(SET_STRICT) \
+	export SOURCE_DATE_EPOCH="$(SOURCE_DATE_EPOCH)"; \
+	$(UV_RUN) python tools/bundled_js_inventory.py --format spdx
 
 # The other half of the sbom job's output: the resolved Python tree, every
 # extra, with the hashes a scanner needs. `browser-sbom` is the same job's

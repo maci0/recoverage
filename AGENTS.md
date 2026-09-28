@@ -182,6 +182,9 @@ make smoke-fail             # same, against a deliberately corrupt db
 make browser-sbom           # the npm packages compiled into the shipped browser
                             #   assets, with the version and digest bun.lock pinned
                             #   (the sbom job uploads this as recoverage-browser-sbom)
+make browser-sbom-spdx      # the same rows as an SPDX 2.3 document, which is the
+                            #   shape a vulnerability scanner ingests
+                            #   (recoverage-browser-spdx)
 make python-sbom            # the resolved Python tree (uv.lock, every extra, hashed)
                             #   plus the rebrew pin: the sbom job's other artifact
 make license-inventory      # the license every package the resolved tree
@@ -278,6 +281,23 @@ Tailwind version in the committed `style.css` and `NOTICE`'s credit list, and
 `make browser-sbom` prints the same inventory without CI. A dependency that
 starts reaching the bundle joins that list, `NOTICE` and the test class in the
 same change; one that stops reaching it leaves all three.
+
+That text inventory is a line per package, which answers a reader and not a
+scanner: `recoverage-python-sbom` is a hashed requirements.txt, and the browser
+half had no standard shape, so the code running in a consumer's browser was
+described to nobody but this project. The same rows are therefore exported as
+an SPDX 2.3 JSON document (`--format spdx`, uploaded as
+`recoverage-browser-spdx`), and the grant each entry declares lives on the
+`Shipped` record beside the reason it ships, because a package with a version
+and a digest and no license is an entry nobody can act on. `created` is read
+from `SOURCE_DATE_EPOCH`, the same stamp `make build` exports and the sbom job
+sets from the commit's own time, because the job uploads this file and two runs
+of one commit have to produce the same bytes; the wall clock is the fallback,
+and a `SOURCE_DATE_EPOCH` that is not a timestamp is refused rather than
+ignored. `tests/test_supply_chain.py` (`TestBrowserSpdxExport`) holds the
+document to the fields an SPDX reader requires, the versions `bun.lock`
+resolved, the digests it pinned, the licenses `NOTICE` credits, and the
+reproducible stamp.
 
 The interpreter is pinned in `.python-version` (3.13), which is what uv builds
 the local venv from and what the lint, web-lint and smoke jobs run: their

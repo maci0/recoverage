@@ -459,8 +459,20 @@ jobs:
       - name: Export the browser-bundle inventory
         run: |
           set -euo pipefail
+          # The commit's own timestamp, the same stamp `make build` exports, so
+          # the SPDX document's `created` is a function of the commit rather
+          # than of the minute the job ran: this artifact is uploaded, and two
+          # runs of one commit have to produce the same bytes to be diffable.
+          export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
           python tools/bundled_js_inventory.py --output recoverage-browser-sbom.txt
           test -s recoverage-browser-sbom.txt
+          # The same rows as an SPDX 2.3 document, which is the shape a
+          # vulnerability scanner ingests. The text file above is the one a
+          # reader opens; without this one, the browser half of the tree is
+          # described in a format no tool reads.
+          python tools/bundled_js_inventory.py --format spdx \
+            --output recoverage-browser-spdx.json
+          test -s recoverage-browser-spdx.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: recoverage-python-sbom
@@ -477,5 +489,14 @@ jobs:
           # Same reason as the Python inventory: warn would leave the job green
           # with no artifact, and the browser half is the half nothing else
           # records.
+          if-no-files-found: error
+          retention-days: 30
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: recoverage-browser-spdx
+          path: recoverage-browser-spdx.json
+          # Same reason as the two above: the machine-readable half of the
+          # browser inventory is what a scanner consumes, so an absent upload
+          # is the same silent gap this job exists to close.
           if-no-files-found: error
           retention-days: 30

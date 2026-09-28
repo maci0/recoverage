@@ -19,12 +19,22 @@ is as auditable as the Python it serves.
 Reads the tree, writes nothing unless asked. The versions and digests come from
 bun.lock, never from package.json, so the inventory describes the resolved
 bytes rather than a declared range.
+
+Two shapes of the same rows: the text inventory above, and `--format spdx`, an
+SPDX 2.3 JSON document. The text one is for a reader; the JSON one is for a
+tool, because a vulnerability scanner pointed at the wheel takes a standard
+document and not a list of lines, so without it the browser half of the tree
+is described to nobody but this project.
 """
 
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
+import datetime
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -34,6 +44,7 @@ REPO_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.
 PACKAGE_JSON = REPO_ROOT / "package.json"
 BUN_LOCK = REPO_ROOT / "bun.lock"
 NOTICE = REPO_ROOT / "NOTICE"
+PACKAGE_INIT = REPO_ROOT / "src" / "recoverage" / "__init__.py"
 
 #: The wheel carries the browser code, so this inventory is about the wheel's
 #: contents, not the developer's node_modules.  `make all` runs it next to
@@ -58,6 +69,13 @@ class Shipped(NamedTuple):
     #: removed from this list in the same change, and tests/test_supply_chain.py
     #: fails when a listed package is no longer declared.
     because: str
+    #: The SPDX id of the grant covering it, and the upstream that grant comes
+    #: from. They sit beside the package rather than in a second table because
+    #: NOTICE credits each of these packages and a license nobody recorded is
+    #: a grant a consumer cannot trace, which is what the SPDX document claims
+    #: about every package it lists.
+    license_id: str
+    homepage: str
 
 
 APP_JS = "src/recoverage/assets/app.js"
@@ -73,17 +91,43 @@ SHIPPED = (
         "preact",
         APP_JS,
         "every component imports preact/hooks; preact/compat aliases the React API",
+        "MIT",
+        "https://github.com/preactjs/preact",
     ),
-    Shipped("highlight.js", APP_JS, "the code panes import the c and x86asm grammars"),
-    Shipped("clsx", APP_JS, "the shadcn/ui class helper in web/app/lib/cn.ts"),
-    Shipped("tailwind-merge", APP_JS, "web/app/lib/cn.ts merges class lists with it"),
+    Shipped(
+        "highlight.js",
+        APP_JS,
+        "the code panes import the c and x86asm grammars",
+        "BSD-3-Clause",
+        "https://highlightjs.org",
+    ),
+    Shipped(
+        "clsx",
+        APP_JS,
+        "the shadcn/ui class helper in web/app/lib/cn.ts",
+        "MIT",
+        "https://github.com/lukeed/clsx",
+    ),
+    Shipped(
+        "tailwind-merge",
+        APP_JS,
+        "web/app/lib/cn.ts merges class lists with it",
+        "MIT",
+        "https://github.com/dcastil/tailwind-merge",
+    ),
     Shipped(
         "class-variance-authority",
         APP_JS,
         "the variant maps in web/app/components/ui/button.tsx",
+        "MIT",
+        "https://github.com/joe-bell/cva",
     ),
     Shipped(
-        "tailwindcss", STYLE_CSS, "@tailwindcss/vite compiles the utility classes into style.css"
+        "tailwindcss",
+        STYLE_CSS,
+        "@tailwindcss/vite compiles the utility classes into style.css",
+        "MIT",
+        "https://github.com/tailwindlabs/tailwindcss",
     ),
 )
 
@@ -158,6 +202,116 @@ def render(rows: list[tuple[Shipped, str, str]]) -> str:
     return "\n".join(lines) + "\n"
 
 
+#: The SPDX tag a bun.lock digest spells itself with, and the algorithm name
+#: the same digest has in a document. bun writes `<algorithm>-<base64>`, SPDX
+#: writes the bare hex, so one is decoded into the other rather than filed as a
+#: checksum a validator rejects.
+_DIGEST_ALGORITHMS = {"sha512": "SHA512", "sha256": "SHA256", "sha1": "SHA1"}
+
+
+def _checksum(digest: str) -> dict[str, str]:
+    """The bun.lock integrity string as an SPDX checksum."""
+    algorithm, _, encoded = digest.partition("-")
+    name = _DIGEST_ALGORITHMS.get(algorithm)
+    if name is None or not encoded:
+        raise InventoryError(f"{digest!r} is not a digest this document can carry")
+    try:
+        raw = base64.b64decode(encoded, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise InventoryError(f"{digest!r} is not base64") from exc
+    return {"algorithm": name, "checksumValue": raw.hex()}
+
+
+def created() -> str:
+    """The document timestamp, in the UTC form SPDX requires.
+
+    `SOURCE_DATE_EPOCH` is the same stamp `make build` exports, and the sbom
+    job's own comment asks for two runs of one commit to produce the same
+    bytes: an SPDX document whose `created` reads the wall clock cannot be
+    diffed against the run it repeats, so the stamp comes from the environment
+    when it is there and from the clock only when it is not.
+    """
+    raw = os.environ.get("SOURCE_DATE_EPOCH", "")
+    try:
+        stamp = int(raw)
+    except ValueError:
+        if raw:
+            raise InventoryError(f"SOURCE_DATE_EPOCH={raw!r} is not a Unix timestamp") from None
+        stamp = int(datetime.datetime.now(tz=datetime.UTC).timestamp())
+    return datetime.datetime.fromtimestamp(stamp, tz=datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _version() -> str:
+    """The version this build is, read off the one place it is written."""
+    match = re.search(
+        r'^__version__ = "([^"]+)"',
+        PACKAGE_INIT.read_text(encoding="utf-8"),
+        flags=re.MULTILINE,
+    )
+    if match is None:
+        raise InventoryError(f"{PACKAGE_INIT.name} declares no __version__")
+    return match.group(1)
+
+
+def spdx_document(rows: list[tuple[Shipped, str, str]]) -> dict[str, Any]:
+    """The same rows as an SPDX 2.3 document, which is what a scanner reads.
+
+    `documentNamespace` has to be unique per document and `created` is the
+    stamp above, so one commit at one instant names one document: the same
+    input renders the same namespace, and two different builds cannot collide.
+    """
+    timestamp = created()
+    version = _version()
+    name = f"recoverage-{version}-browser-bundle"
+    return {
+        "spdxVersion": "SPDX-2.3",
+        "dataLicense": "CC0-1.0",
+        "SPDXID": "SPDXRef-DOCUMENT",
+        "name": name,
+        "documentNamespace": f"https://spdx.org/spdxdocs/{name}-{timestamp}",
+        "creationInfo": {
+            "created": timestamp,
+            "creators": ["Tool: recoverage-tools/bundled_js_inventory.py"],
+            "comment": (
+                "The third-party code compiled into src/recoverage/assets/ and shipped in "
+                "the wheel. The Python half of the tree is the recoverage-python-sbom "
+                "artifact; the grants in full are in NOTICE."
+            ),
+        },
+        "packages": [
+            {
+                "SPDXID": f"SPDXRef-Package-{_spdx_id(entry.package)}",
+                "name": entry.package,
+                "versionInfo": spec.rsplit("@", 1)[1],
+                "downloadLocation": "NOASSERTION",
+                "filesAnalyzed": False,
+                "primaryPackagePurpose": "LIBRARY",
+                "supplier": "NOASSERTION",
+                "licenseConcluded": entry.license_id,
+                "licenseDeclared": entry.license_id,
+                "copyrightText": "NOASSERTION",
+                "homepage": entry.homepage,
+                "checksums": [_checksum(digest)],
+                "comment": f"bun.lock integrity {digest}; compiled into {entry.asset}",
+            }
+            for entry, spec, digest in rows
+        ],
+        "relationships": [
+            {
+                "spdxElementId": "SPDXRef-DOCUMENT",
+                "relatedSpdxElement": f"SPDXRef-Package-{_spdx_id(entry.package)}",
+                "relationshipType": "DESCRIBES",
+            }
+            for entry, _spec, _digest in rows
+        ],
+    }
+
+
+def _spdx_id(package: str) -> str:
+    """An SPDXRef element id, whose alphabet is `[A-Za-z0-9.-]+`."""
+    return re.sub(r"[^A-Za-z0-9.-]", "-", package)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -165,10 +319,23 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         help="write the inventory here instead of to stdout",
     )
+    parser.add_argument(
+        "--format",
+        choices=("text", "spdx"),
+        default="text",
+        help=(
+            "text is the line per shipped package a reader takes; "
+            "spdx is the same rows as an SPDX 2.3 JSON document a scanner takes"
+        ),
+    )
     args = parser.parse_args(argv)
 
     try:
-        body = render(resolve())
+        rows = resolve()
+        if args.format == "spdx":
+            body = json.dumps(spdx_document(rows), indent=2) + "\n"
+        else:
+            body = render(rows)
     except InventoryError as exc:
         print(exc, file=sys.stderr)
         return 1

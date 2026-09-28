@@ -692,7 +692,7 @@ recoverage/
 │   ├── flatten_rikalabs_strict.py  # Regenerates tools/oxlint/rikalabs-strict.json (MIT) from @rikalabs/oxlint-standards 0.8.1
 │   ├── vendor_manifest.py    # Inventories the vendored anti-slop tree file by file
 │   ├── payload_budget.py     # Re-derives the inlined shell size at each static encoding (make payload-budget)
-│   ├── bundled_js_inventory.py  # The browser-bundle half of the SBOM, from bun.lock (make browser-sbom)
+│   ├── bundled_js_inventory.py  # The browser-bundle half of the SBOM, from bun.lock (make browser-sbom, make browser-sbom-spdx)
 │   ├── license_inventory.py   # The license every resolved Python package is under, and the refusal (make license-inventory)
 │   ├── check_wheel_assets.py  # Reads BUNDLE_ASSETS back off the built wheel
 │   └── oxlint/               # Vendored anti-slop rules + the flattened strict preset
@@ -761,7 +761,7 @@ check.
 | `test` | ubuntu 3.13 + 3.14, macos 3.13, windows 3.13 | `pytest tests/`, warnings-as-errors. Browser tests (`tests/test_playwright.py`) stay out of the default run and are not run in CI |
 | `build` | ubuntu, Python 3.13 | `make build` twice, the second time from a copy of the tree under a different path, locale and timezone, and fails when the two archives differ. Uploads the wheel and sdist |
 | `smoke` | ubuntu, Python 3.13 | boots `recoverage serve` against synthetic coverage documents and probes the SPA shell, health, target data/stats/functions and Potato Mode, then repeats with a corrupt document to prove it reports `degraded` instead of healthy |
-| `sbom` | ubuntu | Two build artifacts: `make python-sbom` (`uv export --frozen --all-extras --hashes`) for the exact resolved Python tree behind a given build plus the rebrew tag and commit the path dependency was pinned at, and `make browser-sbom` for the npm packages `make web-build` compiles into the shipped browser assets, each with the version and tarball digest `bun.lock` pinned. The `lint` job runs `make license-inventory`, which reads the licenses off the resolved tree's own metadata and refuses anything that is not permissive |
+| `sbom` | ubuntu | Three build artifacts: `make python-sbom` (`uv export --frozen --all-extras --hashes`) for the exact resolved Python tree behind a given build plus the rebrew tag and commit the path dependency was pinned at, and `make browser-sbom` for the npm packages `make web-build` compiles into the shipped browser assets, each with the version and tarball digest `bun.lock` pinned, plus the same browser half as an SPDX 2.3 document (`recoverage-browser-spdx`) a vulnerability scanner ingests, which carries the resolved versions, the digests and the grants `NOTICE` credits. The `lint` job runs `make license-inventory`, which reads the licenses off the resolved tree's own metadata and refuses anything that is not permissive |
 
 Every job but `sbom` installs with `uv sync --locked --extra dev` and then runs
 tools through `uv run --locked`. `--locked` never rewrites `uv.lock` and also

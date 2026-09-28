@@ -44,7 +44,11 @@ Full dependency inventory per release: the `recoverage-python-sbom` and
 .github/workflows/ci.yml. The second is this file's list with the exact version
 and tarball digest of each package as bun.lock resolved it, since the browser
 code above ships compiled and the Python export cannot see it. `make
-browser-sbom` prints the same inventory without CI.
+browser-sbom` prints the same inventory without CI. The same rows are published
+beside it as `recoverage-browser-spdx`, an SPDX 2.3 document naming each
+package's license identifier and upstream alongside its version and digest, so
+a vulnerability scanner reads this half of the tree in the shape it takes
+rather than as prose. `make browser-sbom-spdx` prints that document too.
 
 The Python packages a consumer INSTALLS are not listed above, because nothing
 is redistributed inside the wheel: they are resolved beside it, each under its

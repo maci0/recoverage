@@ -13,6 +13,7 @@ of a third-party preset whose license and origin are no longer recorded.
 from __future__ import annotations
 
 import ast
+import base64
 import importlib.metadata
 import importlib.util
 import json
@@ -1716,6 +1717,165 @@ class TestBrowserBundleInventory:
 def _locked_version(package: str) -> str:
     """The version bun.lock resolves, which is the only one a build can ship."""
     return _bun_lock()["packages"][package][0].split("@", 1)[1]
+
+
+class TestBrowserSpdxExport:
+    """The browser inventory in the shape a vulnerability scanner ingests.
+
+    `TestBrowserBundleInventory` covers the text one, which is a line per
+    shipped package and readable by a person. A scanner takes a standard
+    document, so the text file is no answer to "what shipped": the same rows
+    are exported as SPDX 2.3 JSON, and these hold that document to the fields a
+    validator reads, to the versions bun.lock resolved, to the grants NOTICE
+    credits, and to the one thing that made it awkward to add at all, which is
+    that a `created` stamp taken from the wall clock would make two runs of one
+    commit differ in every byte a consumer diffs.
+    """
+
+    def test_the_document_carries_the_fields_a_spdx_reader_requires(self) -> None:
+        """The 2.3 document header, and a namespace that is unique per stamp."""
+        module = _js_inventory_module()
+        document = module.spdx_document(module.resolve())
+        assert document["spdxVersion"] == "SPDX-2.3"
+        assert document["dataLicense"] == "CC0-1.0"
+        assert document["SPDXID"] == "SPDXRef-DOCUMENT"
+        created = document["creationInfo"]["created"]
+        assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", created), (
+            f"created is not the UTC form SPDX requires: {created!r}"
+        )
+        assert document["creationInfo"]["creators"], "a document with no creator names no producer"
+        assert document["documentNamespace"].startswith("https://")
+        assert document["name"].endswith("-browser-bundle")
+        assert _ROOT.name in document["name"] or "recoverage" in document["name"], (
+            "the document is not named after the build it describes"
+        )
+
+    def test_every_shipped_package_is_described_by_its_resolved_version(self) -> None:
+        """One package per shipped entry, at the version bun.lock pinned.
+
+        A package read from package.json would carry a range, and a range is
+        not an inventory entry: a scanner resolving it later answers about a
+        version this build never shipped.
+        """
+        module = _js_inventory_module()
+        document = module.spdx_document(module.resolve())
+        packages = {pkg["name"]: pkg for pkg in document["packages"]}
+        assert set(packages) == {entry.package for entry in module.SHIPPED}
+        for entry in module.SHIPPED:
+            package = packages[entry.package]
+            assert package["versionInfo"] == _locked_version(entry.package), (
+                f"the SPDX document names {entry.package} {package['versionInfo']}, "
+                f"bun.lock pins {_locked_version(entry.package)}"
+            )
+            assert package["filesAnalyzed"] is False
+            assert entry.asset in package["comment"], (
+                f"the SPDX entry for {entry.package} does not name the asset it lands in"
+            )
+        described = {
+            rel["relatedSpdxElement"]
+            for rel in document["relationships"]
+            if rel["spdxElementId"] == "SPDXRef-DOCUMENT"
+        }
+        assert described == {pkg["SPDXID"] for pkg in document["packages"]}, (
+            "a shipped package has no DESCRIBES relationship, so a reader never reaches it"
+        )
+
+    def test_every_package_carries_the_digest_bun_lock_pinned(self) -> None:
+        """The tarball digest, in the hex spelling a checksum field takes."""
+        module = _js_inventory_module()
+        document = module.spdx_document(module.resolve())
+        for entry, spec, digest in module.resolve():
+            package = next(pkg for pkg in document["packages"] if pkg["name"] == entry.package)
+            algorithm, _, encoded = digest.partition("-")
+            assert package["checksums"] == [
+                {
+                    "algorithm": {"sha512": "SHA512", "sha256": "SHA256"}[algorithm],
+                    "checksumValue": base64.b64decode(encoded).hex(),
+                }
+            ], f"the SPDX entry for {spec} does not carry the digest bun.lock pinned"
+            assert digest in package["comment"], (
+                f"the SPDX entry for {spec} does not record the bun.lock integrity string"
+            )
+
+    def test_every_package_carries_the_grant_notice_credits(self) -> None:
+        """The license a consumer may act on, and the one NOTICE prints.
+
+        The document says what may be done with the compiled code in the
+        reader's browser, so a package with no `licenseDeclared` is an entry
+        that names a grant nobody can trace. NOTICE is the record the wheel
+        ships, so the two cannot name different licenses for one package.
+        """
+        module = _js_inventory_module()
+        document = module.spdx_document(module.resolve())
+        notice = (_ROOT / "NOTICE").read_text(encoding="utf-8")
+        for entry in module.SHIPPED:
+            package = next(pkg for pkg in document["packages"] if pkg["name"] == entry.package)
+            assert package["licenseConcluded"] == entry.license_id
+            assert package["licenseDeclared"] == entry.license_id
+            assert entry.homepage.startswith("https://")
+            credited = notice[notice.index(entry.package) :][:400]
+            assert entry.license_id in credited, (
+                f"NOTICE credits {entry.package} without the {entry.license_id} grant the "
+                "SPDX document declares"
+            )
+
+    def test_the_stamp_comes_from_the_environment_not_the_clock(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """One commit renders one document, byte for byte.
+
+        The sbom job uploads this file and asks for the same bytes across runs,
+        so `created` is read from SOURCE_DATE_EPOCH, the stamp `make build`
+        already exports, and the wall clock is the fallback rather than the
+        default. A SOURCE_DATE_EPOCH that is not a timestamp is refused rather
+        than silently ignored: the alternative is a document that claims to be
+        reproducible and is not.
+        """
+        module = _js_inventory_module()
+        monkeypatch.setenv("SOURCE_DATE_EPOCH", "1700000000")
+        first = tmp_path / "a.json"
+        second = tmp_path / "b.json"
+        assert module.main(["--format", "spdx", "--output", str(first)]) == 0
+        assert module.main(["--format", "spdx", "--output", str(second)]) == 0
+        assert first.read_bytes() == second.read_bytes(), (
+            "two runs at one stamp rendered different documents"
+        )
+        document = json.loads(first.read_text(encoding="utf-8"))
+        assert document["creationInfo"]["created"] == "2023-11-14T22:13:20Z", (
+            "SOURCE_DATE_EPOCH is ignored, so the document is stamped from the wall clock"
+        )
+        monkeypatch.setenv("SOURCE_DATE_EPOCH", "not-a-timestamp")
+        with pytest.raises(module.InventoryError, match="SOURCE_DATE_EPOCH"):
+            module.spdx_document(module.resolve())
+
+    def test_the_sbom_job_uploads_the_document(self) -> None:
+        """CI produces the machine-readable half, or the gap reopens silently.
+
+        The text export this adds beside is what a person reads; a scanner
+        pointed at the release needs the other one, and nothing in the tree
+        would produce it if the job stopped naming it.
+        """
+        job = _jobs()["sbom"]
+        assert "--format spdx" in job, "the sbom job no longer exports the SPDX document"
+        assert "recoverage-browser-spdx" in job, (
+            "the SPDX document is written but not uploaded as an artifact"
+        )
+        assert "SOURCE_DATE_EPOCH" in job, (
+            "the document is stamped from the wall clock, so two runs of one commit differ"
+        )
+
+    def test_a_digest_this_document_cannot_carry_stops_the_export(self) -> None:
+        """An algorithm outside SPDX's checksum vocabulary is a refusal.
+
+        bun may add a digest the document has no field for, and writing it
+        into `checksums` anyway produces a file a validator rejects with no
+        line naming the package that caused it.
+        """
+        module = _js_inventory_module()
+        with pytest.raises(module.InventoryError, match="sha999"):
+            module._checksum("sha999-not-a-digest")
+        with pytest.raises(module.InventoryError, match="base64"):
+            module._checksum("sha512-not base64!")
 
 
 class TestVendoredLintPlugin:

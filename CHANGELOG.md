@@ -20,6 +20,14 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `.text` and `.rdata` alike, and two rows in different sections read
   identically, with the pick switching tabs as a surprise. The section on
   screen is still the one marked in the accent, as "in <section>".
+- The `sbom` job publishes the browser half of the dependency tree as an SPDX
+  2.3 document (`recoverage-browser-spdx`) beside the text inventory. The
+  Python half was already a hashed export a vulnerability scanner reads, and
+  the browser half was a line per package, so the Preact and highlight.js that
+  run compiled inside the wheel were described in a shape no tool ingests. The
+  document names each shipped package's resolved version, its `bun.lock`
+  tarball digest, and the license `NOTICE` credits. `make browser-sbom-spdx`
+  prints it without CI.
 - `GET /api/health` reports an `auth` block (`failures`, `throttled`,
   `locked_peers`) and a `requests.transport_rejected` counter. A peer working
   through the `--token` gate is answered 401 and then 429, neither of which is
