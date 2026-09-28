@@ -2564,13 +2564,22 @@ def _panel_fn_attach_verify(coverage: CoverageSnapshot, fn_data: dict[str, Any])
         fn_data["last_verify_delta"] = f"{fields['byte_delta']}B"
     if fields["diff_lines"] is not None:
         fn_data["last_verify_diff_lines"] = fields["diff_lines"]
-    if fields["similarity"] is not None:
+    similarity = fields["similarity"]
+    if isinstance(similarity, int | float) and not isinstance(similarity, bool):
         # verify_results.similarity is a 0-1 fraction (rebrew's verify import
         # divides its percent scale by 100), same unit as functions.similarity
         # below.  Rendered unscaled it read 100x low: a 87.3% match showed as
-        # "0.9%".  A non-finite fraction leaves the row out rather than
-        # printing a fabricated figure (see _similarity_pct).
-        rendered = _similarity_pct(fields["similarity"])
+        # "0.9%".
+        #
+        # The isinstance test above is _fn_val's, applied here too: a document
+        # that carries a string for this field made `* 100` a 100-fold
+        # repetition of it and `:.1f` raise ValueError, which took the whole
+        # detail panel down over one bad cell, and a bool would have rendered as
+        # a real 100.0%.  A field this panel cannot scale is a row it omits, the
+        # same answer the functions view gives for the same value, and so is a
+        # non-finite fraction rather than a fabricated figure (see
+        # _similarity_pct).
+        rendered = _similarity_pct(similarity)
         if rendered is not None:
             fn_data["last_verify_similarity"] = rendered
     if fields["reg_delta"] is not None:

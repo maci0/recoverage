@@ -2489,6 +2489,33 @@ class TestDbUnavailableContract:
         _panel_fn_attach_verify(snap, absent)
         assert "last_verify_similarity" not in absent
 
+    @pytest.mark.parametrize("value", ["0.5", True, [0.5]])
+    def test_a_similarity_this_panel_cannot_scale_is_omitted(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: Any
+    ) -> None:
+        """A non-numeric similarity omits the row instead of failing the panel.
+
+        The scaling is a multiplication and a ``:.1f`` on the value, so a
+        document carrying a string made the first a hundred-fold repetition of
+        it and the second a ValueError that escaped as a 500: one bad cell in
+        one verify row cost the reader the whole function.  A bool is the quieter
+        version of the same hole (``True * 100`` is 100, so it rendered as a
+        real 100.0% match), and it is why the test is not a bool-free one.  The
+        functions view already guards the same field this way; both do now.
+        """
+        from recoverage.potato import _panel_fn_attach_verify
+
+        snap = _write_doc(
+            tmp_path,
+            monkeypatch,
+            "T",
+            {".text": {"size": 16, "cells": [cell(0, 16, "exact")]}},
+            verify_results=[{"va": 0x1000, "similarity": value}],
+        )
+        fn_data: dict[str, Any] = {"va": 0x1000}
+        _panel_fn_attach_verify(snap, fn_data)
+        assert "last_verify_similarity" not in fn_data
+
 
 class TestDefaultTargetMatchesSpa:
     """Potato and the SPA must open on the same target.

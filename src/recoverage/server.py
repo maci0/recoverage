@@ -2491,41 +2491,71 @@ def _reclassify_request(status: int) -> None:
 
 # Failed-token-attempt throttle: without it, a network-reachable server
 # (--allow-remote + --token) accepts unlimited online guesses at the bearer
-# token.  Global (per-process), not per-source-IP — behind NAT every client
-# shares one address anyway, and the dashboard's threat model is "someone on
-# the LAN is guessing", not "multi-tenant fairness".  A success clears the
-# counter so the operator never trips their own limit.
+# token.  PER PEER, not one window for the process: a single global window
+# handed two unrelated parties the same lever in both directions.  Ten failures
+# from anyone locked EVERYONE out for the rest of the window, so an
+# unauthenticated peer could deny the operator the dashboard indefinitely by
+# never stopping, and any one successful request emptied the window, so the
+# operator's own page loads handed a guesser on another host an unbounded supply
+# of attempts.  Keyed on the socket peer, which a client cannot forge.
+#
+# A success clears its OWN peer's window and no other, so the operator who
+# mistypes and retypes is forgiven without the guesser next to them being reset.
 _AUTH_FAIL_WINDOW_SECONDS = 60.0
 _AUTH_FAIL_MAX = 10
-_auth_failures: deque[float] = deque()
+#: How many peers the map holds.  It is bounded because the key is a peer
+#: address: a server accepting connections from a wide range cannot grow it
+#: without limit, and each entry is a deque bounded by :data:`_AUTH_FAIL_MAX`
+#: anyway.  Far above the number of machines on the LAN this is deployed on;
+#: over it, the oldest entry goes (see :func:`_evict_oldest`).
+_AUTH_FAIL_MAX_PEERS = 1024
+#: The throttle key for a request that carries no REMOTE_ADDR.  ONE bucket for
+#: every such client, so an environ that never names a peer degrades to the one
+#: shared window this used to be, rather than to no throttle at all (a fresh key
+#: per request would hand every guesser a full window of its own).
+_UNKNOWN_PEER = ""
+_auth_failures: dict[str, deque[float]] = {}
 _AUTH_FAILURES_LOCK = threading.Lock()
 
 
-def _auth_throttle(now: float, reserve_slot: bool) -> bool:
+def _auth_throttle(peer: str, now: float, reserve_slot: bool) -> bool:
     """Prune expired failures, enforce the window cap, optionally take a slot.
 
     The prune, the cap check, and *reserve_slot*'s append must share ONE
     critical section: as separate steps, a burst of concurrent bad-token
-    requests all observe ``len < max`` before any of them records, and every
-    one of them slips past the cap (check-then-act TOCTOU).  The slot is
-    therefore taken BEFORE the token is verified; a verified request releases
-    everything again via :func:`_clear_auth_failures`.
+    requests from one peer all observe ``len < max`` before any of them records,
+    and every one of them slips past the cap (check-then-act TOCTOU).  The slot
+    is therefore taken BEFORE the token is verified; a verified request releases
+    its peer's window again via :func:`_clear_auth_failures`.
 
-    Returns True when the window is full — the caller answers 429.
+    Returns True when that peer's window is full — the caller answers 429.
     """
     with _AUTH_FAILURES_LOCK:
-        while _auth_failures and now - _auth_failures[0] > _AUTH_FAIL_WINDOW_SECONDS:
-            _auth_failures.popleft()
-        if len(_auth_failures) >= _AUTH_FAIL_MAX:
+        window = _auth_failures.get(peer)
+        if window is None:
+            window = deque()
+            _evict_oldest(_auth_failures, _AUTH_FAIL_MAX_PEERS)
+            _auth_failures[peer] = window
+        while window and now - window[0] > _AUTH_FAIL_WINDOW_SECONDS:
+            window.popleft()
+        if len(window) >= _AUTH_FAIL_MAX:
             return True
         if reserve_slot:
-            _auth_failures.append(now)
+            window.append(now)
         return False
 
 
-def _clear_auth_failures() -> None:
+def _clear_auth_failures(peer: str) -> None:
+    """Forget *peer*'s failures, and only that peer's.
+
+    Called on a verified request, so a mistyped-then-retyped token does not
+    count twice against the person who owns the token.  It is keyed by peer
+    precisely so it is not a reset button for anyone else: emptying the one
+    shared window on every success is what let a guesser riding alongside the
+    operator's own traffic guess without a bound.
+    """
     with _AUTH_FAILURES_LOCK:
-        _auth_failures.clear()
+        _auth_failures.pop(peer, None)
 
 
 #: The two headers a browser sends on a CORS preflight and on no other
@@ -2562,9 +2592,19 @@ def _require_auth() -> None:
     preflight and the ``--cors`` + ``--token`` combination the API documents
     could never send a request at all.  Only the handshake is exempt; the
     request it precedes is authenticated by this same gate.
+
+    The throttle window is the requesting peer's alone (see
+    :func:`_auth_throttle`), so one client exhausting its guesses cannot
+    answer 429 to the operator, and one operator's traffic cannot reset
+    another client's count.
     """
     if not _AUTH_TOKEN or _is_cors_preflight():
         return
+
+    # The peer key for the throttle. REMOTE_ADDR is the socket peer here (the
+    # same value the regen gate trusts), and the fallback keeps a harness that
+    # omits it in one shared window rather than minting a fresh one per request.
+    peer = request.environ.get("REMOTE_ADDR") or _UNKNOWN_PEER
 
     provided = _header("Authorization", "")
     if provided.startswith("Bearer "):
@@ -2574,11 +2614,11 @@ def _require_auth() -> None:
         if not provided:
             provided = request.get_cookie(AUTH_COOKIE_NAME, default="")
     if _auth_token_matches(provided):
-        _clear_auth_failures()
+        _clear_auth_failures(peer)
         return
 
     now = clock.monotonic()
-    if _auth_throttle(now, reserve_slot=True):
+    if _auth_throttle(peer, now, reserve_slot=True):
         raise _json_err(
             429,
             {"error": "rate limited", "detail": "too many failed token attempts; retry later"},
@@ -2782,6 +2822,37 @@ _CSP = (
     "frame-ancestors 'none'"
 )
 
+#: The two route prefixes whose responses are files out of the PROJECT tree
+#: rather than the dashboard's own documents (see ``recoverage.ui.serve_repo_file``).
+_REPO_FILE_PREFIXES: tuple[str, ...] = ("/src/", "/original/")
+
+#: Policy for a served project file.  It exists because those files carry a
+#: content type guessed from their own suffix, so an ``.html`` or an ``.svg``
+#: anywhere under ``src/`` or ``original/`` is rendered AS a document by the
+#: browser, at this origin, under the policy above — and that policy allows
+#: inline script.  A file the project tree picked up (a vendored page, a
+#: generated report) would then run with the dashboard's own authority: it can
+#: read every ``/api/*`` response, and when ``--token`` is on, the auth cookie
+#: rides along on those requests even though the script cannot read it.
+#:
+#: ``sandbox`` puts the document in an opaque origin with scripting, forms and
+#: plugins off, and ``default-src 'none'`` denies everything it could still ask
+#: for.  The files stay readable — the code panes fetch them, and a reader who
+#: opens one sees the text, which is what a source file under a coverage
+#: dashboard is for.
+_INERT_CSP = "default-src 'none'; sandbox; base-uri 'none'; form-action 'none'"
+
+
+def csp_for_path(path: str) -> str:
+    """The Content-Security-Policy *path* is answered under.
+
+    ONE place, so the hook cannot answer a project file with the dashboard's own
+    policy while the constant beside it says otherwise.
+    """
+    if path.startswith(_REPO_FILE_PREFIXES):
+        return _INERT_CSP
+    return _CSP
+
 
 def _merge_vary(origin: str) -> None:
     """Add "Origin" to the response's Vary without dropping what is there.
@@ -2799,7 +2870,7 @@ def _merge_vary(origin: str) -> None:
 def _security_headers() -> None:
     response.set_header("X-Content-Type-Options", "nosniff")
     response.set_header("X-Frame-Options", "DENY")
-    response.set_header("Content-Security-Policy", _CSP)
+    response.set_header("Content-Security-Policy", csp_for_path(request.path))
     # Tokens travel in URLs (?token= share links); never let them leak to a
     # third party via Referer if the dashboard ever navigates off-host.
     response.set_header("Referrer-Policy", "no-referrer")

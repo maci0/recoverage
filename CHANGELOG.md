@@ -271,6 +271,27 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the reader knew was incomplete, and whatever the client sent next was read as
   the rest of it. Every other read in that reader already refuses a short
   input; the trailer loop was the one that did not.
+- **One client could lock every other client out of a token-protected
+  dashboard, and a verified request handed a guesser a fresh allowance.** The
+  failed-token window behind the 429 was one deque for the whole process, and
+  any successful authentication emptied it. Ten wrong tokens from anyone
+  answered 429 to the operator for the rest of the window, so an unauthenticated
+  peer could keep the dashboard unreachable by never stopping, and on a network
+  bind the operator's own page loads reset a guesser's count on another host
+  without bound. The window is keyed on the requesting peer now, and a verified
+  request clears only that peer's.
+- **A file in the project tree could run as a page on the dashboard's own
+  origin.** `/src/*` and `/original/*` are served with the content type guessed
+  from the file's own suffix, so an `.html` or `.svg` anywhere under `src/` was a
+  document the browser rendered at the dashboard's origin, under a policy that
+  allows inline script, with the auth cookie riding along on its same-origin
+  requests. Both paths are answered under a `sandbox`ed, `default-src 'none'`
+  policy now; the files are otherwise unchanged.
+- **One bad cell in a verify row took the whole Potato Mode detail panel down.**
+  A `similarity` that was not a number made the `× 100` and the one-decimal
+  format raise, which escaped as a 500; a boolean there rendered as a real
+  100.0% match. The row is omitted instead, which is what the functions view
+  already did with the same value.
 - **A cell's parent link in the dashboard went nowhere.** `parent_function` is
   the NAME rebrew gives the function a data or thunk block belongs to, and the
   panel printed it as if it were an address: the link read `0X_FUNC_A` and

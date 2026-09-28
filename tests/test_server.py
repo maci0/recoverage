@@ -20,6 +20,7 @@ from typing import IO, Any, ClassVar
 import brotli
 import pytest
 import zstandard as zstd
+from conftest import WSGI_PEER
 from coverage_fixture import TOML_VERSION, cell, coverage_dir, write_coverage
 from rebrew.coverage_toml import CoverageSnapshot, CoverageTomlError, load_coverage
 
@@ -1027,7 +1028,7 @@ class TestTokenAuthEndpoint:
 
         monkeypatch.setattr(srv, "_AUTH_TOKEN", "unit-test-token")
         yield
-        srv._clear_auth_failures()
+        srv._clear_auth_failures(WSGI_PEER)
 
     def test_missing_token_is_401(self) -> None:
         from conftest import wsgi_get
@@ -1180,7 +1181,7 @@ class TestEveryRouteIsBehindTheTokenGate:
 
         monkeypatch.setattr(srv, "_AUTH_TOKEN", "unit-test-token")
         yield
-        srv._clear_auth_failures()
+        srv._clear_auth_failures(WSGI_PEER)
 
     def test_no_route_serves_an_unauthenticated_request(self) -> None:
         from conftest import wsgi_request
@@ -1245,7 +1246,7 @@ class TestCorsPreflightBypassesTheTokenGate:
         monkeypatch.setattr(srv, "CORS_ENABLED", True)
         monkeypatch.setattr(srv, "CORS_ALLOWED_ORIGINS", ["http://localhost:5173"])
         yield
-        srv._clear_auth_failures()
+        srv._clear_auth_failures(WSGI_PEER)
 
     def test_preflight_without_credentials_is_answered(self) -> None:
         from conftest import wsgi_request
@@ -1346,15 +1347,15 @@ class TestAuthFailureLimiter:
         monkeypatch.setattr(srv, "_AUTH_TOKEN", "tok")
         try:
             for _ in range(srv._AUTH_FAIL_MAX):
-                srv._auth_throttle(time.monotonic(), reserve_slot=True)
+                srv._auth_throttle(WSGI_PEER, time.monotonic(), reserve_slot=True)
             # The window is full, so the next failure is a 429 ...
-            assert srv._auth_throttle(time.monotonic(), reserve_slot=False)
+            assert srv._auth_throttle(WSGI_PEER, time.monotonic(), reserve_slot=False)
             status, _, _ = wsgi_get("/api/health?token=tok")
             assert status.startswith("200")
             # ... and the verified request wiped the slate.
-            assert not srv._auth_throttle(time.monotonic(), reserve_slot=False)
+            assert not srv._auth_throttle(WSGI_PEER, time.monotonic(), reserve_slot=False)
         finally:
-            srv._clear_auth_failures()
+            srv._clear_auth_failures(WSGI_PEER)
 
     def test_old_entries_expire_from_window(self, monkeypatch: Any) -> None:
         import recoverage.server as srv
@@ -1362,10 +1363,10 @@ class TestAuthFailureLimiter:
         try:
             old = time.monotonic() - srv._AUTH_FAIL_WINDOW_SECONDS * 2
             for _ in range(srv._AUTH_FAIL_MAX):
-                srv._auth_throttle(old, reserve_slot=True)
-            assert not srv._auth_throttle(time.monotonic(), reserve_slot=False)
+                srv._auth_throttle(WSGI_PEER, old, reserve_slot=True)
+            assert not srv._auth_throttle(WSGI_PEER, time.monotonic(), reserve_slot=False)
         finally:
-            srv._clear_auth_failures()
+            srv._clear_auth_failures(WSGI_PEER)
 
     def test_concurrent_reserves_never_exceed_cap(self, monkeypatch: Any) -> None:
         """A burst of simultaneous bad-token requests must not slip past the
@@ -1389,7 +1390,7 @@ class TestAuthFailureLimiter:
 
         def worker(finished: threading.Event) -> None:
             barrier.wait(timeout=self._WORKER_TIMEOUT_SECONDS)
-            got = srv._auth_throttle(time.monotonic(), reserve_slot=True)
+            got = srv._auth_throttle(WSGI_PEER, time.monotonic(), reserve_slot=True)
             with lock:
                 reserved.append(got)
             finished.set()
@@ -1401,7 +1402,7 @@ class TestAuthFailureLimiter:
             for t in threads:
                 t.join(timeout=self._WORKER_TIMEOUT_SECONDS)
         finally:
-            srv._clear_auth_failures()
+            srv._clear_auth_failures(WSGI_PEER)
 
         assert [t for t in threads if t.is_alive()] == [], "worker thread wedged"
         assert all(ev.is_set() for ev in done)
@@ -1679,6 +1680,45 @@ class TestSecurityHeaders:
         csp = headers.get("Content-Security-Policy", "")
         assert "'unsafe-inline'" in csp
         assert "connect-src 'self'" in csp
+
+    @pytest.mark.parametrize("path", ["/src/foo.c", "/original/target.dll"])
+    def test_project_files_are_answered_inert(self, path: str) -> None:
+        """A file out of the project tree must not be a same-origin document.
+
+        ``/src`` and ``/original`` are served with the content type guessed from
+        the file's own suffix, so an ``.html`` or ``.svg`` there is a document
+        the browser renders at the dashboard's origin, under a policy that allows
+        inline script.  The hook answers those two prefixes with a policy that
+        scripts nothing and denies every subresource, so a file the project tree
+        happens to carry cannot run with the dashboard's authority (or ride the
+        auth cookie onto /api/*).  The path is enough here: the answer is the
+        same for the 200 a real file gets and the 404 a missing one gets, so the
+        wiring is pinned without depending on a fixture file existing.
+        """
+        from conftest import wsgi_get
+
+        from recoverage.server import _CSP
+
+        _, headers, _ = wsgi_get(path)
+        csp = headers.get("Content-Security-Policy", "")
+        assert csp != _CSP
+        assert "default-src 'none'" in csp
+        assert "sandbox" in csp
+        assert "script-src" not in csp
+        # The rest of the hardening set is unchanged: this is a stricter
+        # policy on one path, not a different header set.
+        assert headers.get("X-Frame-Options") == "DENY"
+        assert headers.get("X-Content-Type-Options") == "nosniff"
+
+    def test_the_dashboard_documents_keep_the_owning_policy(self) -> None:
+        """The narrower policy is scoped to the two file routes: the SPA shell,
+        Potato Mode and the API are the documents the dashboard's own scripts run
+        in, so a change that reached them would break the app rather than harden
+        it."""
+        from recoverage.server import csp_for_path
+
+        for path in ("/", "/index.html", "/potato", "/api/health", "/app.js"):
+            assert "connect-src 'self'" in csp_for_path(path), path
 
     def test_potato_page_forces_revalidation(self) -> None:
         """Potato Mode is the one DB-derived response that used to carry no
@@ -3062,7 +3102,7 @@ class TestClockSeam:
             now[0] += srv._AUTH_FAIL_WINDOW_SECONDS + 1
             assert attempt().startswith("401")
         finally:
-            srv._clear_auth_failures()
+            srv._clear_auth_failures(WSGI_PEER)
             api._REGEN_COMPLETED_KEYS.clear()
 
     def test_db_updated_stamp_reads_the_clock(self, monkeypatch: Any) -> None:

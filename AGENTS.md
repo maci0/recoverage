@@ -634,7 +634,16 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   every accepting thread sees room and the cap admits more than it is
   configured to hold. Both are pinned at `tests/test_concurrency.py`
   (`TestAdmissionCap`, `TestAuthThrottle`), which drive them from threads
-  released by one barrier.
+  released by one barrier. The auth window is keyed on the REQUESTING PEER,
+  not shared process-wide: one client exhausting its guesses must not answer
+  429 to the operator (a denial of service any unauthenticated peer could
+  repeat forever), and a verified request clears only its own peer's window,
+  because emptying one shared window on every success handed a guesser riding
+  alongside the operator's traffic an unbounded supply of attempts. The map is
+  bounded by `_AUTH_FAIL_MAX_PEERS` through the same `_evict_oldest` every other
+  memo here uses, since the key is a peer address, and a request with no
+  `REMOTE_ADDR` shares one `_UNKNOWN_PEER` bucket rather than getting a fresh
+  window each time.
 - Every memo and every conditional GET is counted on `metrics.CACHES`, at the
   read the handler actually served from: the `/data` checkout (its follower
   path included, since the memo the leader published is the hit it was

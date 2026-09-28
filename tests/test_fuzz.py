@@ -45,7 +45,7 @@ from typing import Any
 from urllib.parse import unquote, urlsplit
 
 import pytest
-from conftest import HAS_DB, decode_body, get_first_target, wsgi_request
+from conftest import HAS_DB, WSGI_PEER, decode_body, get_first_target, wsgi_request
 from coverage_fixture import cell, write_coverage
 from rebrew.coverage_toml import CoverageSnapshot, Function, load_coverage
 
@@ -1446,12 +1446,12 @@ class TestAuthCredentialPresentation:
     def _token_gate(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(srv, "_AUTH_TOKEN", _AUTH_TOKEN)
         yield
-        srv._clear_auth_failures()
+        srv._clear_auth_failures(WSGI_PEER)
 
     def _check(self, carriers: list[tuple[str, str | None, str, bool]]) -> None:
         """Drive every carrier and hold each to its own accept oracle."""
         for label, header, path, accepts in carriers:
-            srv._clear_auth_failures()
+            srv._clear_auth_failures(WSGI_PEER)
             status, headers, body = wsgi_request("GET", path, headers=header)
             code = int(status.split()[0])
             assert code in _AUTH_STATUSES, f"{label}: unexpected status {status}"
@@ -1509,7 +1509,7 @@ class TestAuthCredentialPresentation:
 
         def check(data: bytes) -> None:
             raw = data.decode("latin-1")
-            srv._clear_auth_failures()
+            srv._clear_auth_failures(WSGI_PEER)
             status, headers, body = wsgi_request(
                 "GET", "/", headers={"Accept": "text/html", "Authorization": raw}
             )

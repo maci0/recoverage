@@ -201,12 +201,18 @@ if not _IN_REAL_PROJECT:
 
 HAS_DB = _DB_FILE.exists() and not _IN_REAL_PROJECT
 
+#: The peer :data:`wsgi_request` addresses by default, named because the auth
+#: failure window is keyed on it (``server._auth_throttle``): a test that
+#: reserves or clears that window has to say which peer it means, or it is
+#: clearing a bucket no request will ever land in.
+WSGI_PEER = "127.0.0.1"
+
 
 def wsgi_request(
     method: str,
     path: str,
     headers: dict[str, str] | None = None,
-    remote_addr: str = "127.0.0.1",
+    remote_addr: str = WSGI_PEER,
     body: bytes | str = b"",
     wsgi_input: BytesIO | None = None,
     content_length: str | None = "",

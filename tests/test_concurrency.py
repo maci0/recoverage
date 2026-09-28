@@ -379,6 +379,8 @@ class TestAdmissionCap:
 class TestAuthThrottle:
     """``server._auth_throttle``, the offline-guessing window."""
 
+    PEER = "127.0.0.1"
+
     def test_exactly_the_window_is_handed_out(self) -> None:
         """A burst of concurrent guesses gets exactly ``_AUTH_FAIL_MAX`` slots.
 
@@ -395,24 +397,66 @@ class TestAuthThrottle:
             nonlocal granted
             local = 0
             for _ in range(5):
-                if not _server._auth_throttle(now, reserve_slot=True):
+                if not _server._auth_throttle(self.PEER, now, reserve_slot=True):
                     local += 1
             with grant_lock:
                 granted += local
 
         try:
-            _server._clear_auth_failures()
+            _server._clear_auth_failures(self.PEER)
             _in_parallel(worker)
             assert granted == _server._AUTH_FAIL_MAX
             # The window is full, so even a check that reserves nothing is
             # refused until it ages out.
-            assert _server._auth_throttle(now, reserve_slot=False)
+            assert _server._auth_throttle(self.PEER, now, reserve_slot=False)
             # A verified request clears it, so an operator never trips their
             # own limit.
-            _server._clear_auth_failures()
-            assert not _server._auth_throttle(now, reserve_slot=True)
+            _server._clear_auth_failures(self.PEER)
+            assert not _server._auth_throttle(self.PEER, now, reserve_slot=True)
         finally:
-            _server._clear_auth_failures()
+            _server._clear_auth_failures(self.PEER)
+
+    def test_one_peer_exhausting_its_window_does_not_refuse_another(self) -> None:
+        """The window is per peer, and a success forgives only its own.
+
+        One shared window was a lever in both directions: ten failures from
+        anyone answered 429 to the operator for the rest of the window (so an
+        unauthenticated peer could deny the dashboard by never stopping), and
+        any one successful request emptied it (so the operator's own page loads
+        refilled a guesser's allowance on another host without bound).  The
+        window is keyed on the socket peer, so neither reaches across.
+        """
+        now = 1_000.0
+        attacker = "192.0.2.10"
+        operator = "192.0.2.20"
+        try:
+            for _ in range(_server._AUTH_FAIL_MAX):
+                assert not _server._auth_throttle(attacker, now, reserve_slot=True)
+            assert _server._auth_throttle(attacker, now, reserve_slot=False)
+
+            # The operator is unaffected by the attacker's full window, and by
+            # the attacker's own verified request, which must not clear it.
+            assert not _server._auth_throttle(operator, now, reserve_slot=True)
+            _server._clear_auth_failures(operator)
+            assert _server._auth_throttle(attacker, now, reserve_slot=False)
+        finally:
+            _server._clear_auth_failures(attacker)
+            _server._clear_auth_failures(operator)
+
+    def test_the_peer_map_is_bounded(self) -> None:
+        """The key is a peer address, so the map is capped rather than open.
+
+        Bounded by the same oldest-first eviction every other memo here uses, so
+        a server reachable from a wide range of addresses cannot grow one entry
+        per guest for the life of the process.
+        """
+        now = 1_000.0
+        try:
+            for index in range(_server._AUTH_FAIL_MAX_PEERS + 50):
+                _server._auth_throttle(f"198.51.100.{index % 256}-{index}", now, reserve_slot=True)
+            assert len(_server._auth_failures) <= _server._AUTH_FAIL_MAX_PEERS
+        finally:
+            _server._auth_failures.clear()
 
 
 class TestSnapshotIndex:
