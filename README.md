@@ -152,10 +152,16 @@ directory for `man` to find the page there.
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--version` | | Print the version and exit |
+| `-h`, `--help` | | Show the help and exit; accepted on the command group and on every subcommand |
+| `-V`, `--version` | | Print the version and exit |
 | `--no-color` | off | Disable colored output; also disabled by `NO_COLOR` or `TERM=dumb`. Accepted before or after the subcommand |
 | `--install-completion` | | Install shell completion for bash, zsh, fish or PowerShell |
 | `--show-completion` | | Print the completion script instead of installing it |
+
+The per-command tables below give the long spelling; each of these also has a
+short form: `--port`/`-p` (`serve`, `open`), `--target`/`-t` (`stats`,
+`export`, `check`), `--format`/`-f` (`export`), `--min-coverage`/`-m`
+(`check`) and `--section`/`-s` (`check`).
 
 Errors, warnings, and gate verdicts are colored on a terminal and plain
 everywhere else (a pipe, a file, `NO_COLOR`, `TERM=dumb`), the `stats` table

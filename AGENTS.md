@@ -149,7 +149,7 @@ CI runs; `make all` is the local mirror of the whole pipeline.
 make clone-rebrew           # clone the pinned rebrew into ../rebrew (pin: tools/ci_clone_rebrew.sh)
 make setup                  # uv sync --locked --extra dev
 make build                  # wheel + sdist into dist/, reproducibly
-uv sync --extra playwright   # browser tests: playwright, pytest-playwright
+uv sync --locked --extra dev --extra playwright   # browser tests: playwright, pytest-playwright
 
 # Checks. Every recipe runs the tool as a module of the locked interpreter
 # with the dev extra synced (`uv run --locked --extra dev python -m <tool>`),
@@ -165,6 +165,9 @@ uv sync --extra playwright   # browser tests: playwright, pytest-playwright
 make test                   # uv run --locked --extra dev python -m pytest tests/ -v --ignore=tests/test_playwright.py
 make test-one T=tests/test_api.py  # one file or pytest node id (FLAGS="-k name" narrows it)
 make fuzz                  # wider seeded campaign (SEED=, ITERATIONS= override)
+make test-browser          # uv sync --locked --extra dev --extra playwright, the
+                            #   chromium install, then pytest tests/test_playwright.py
+make check-bundle-clean    # rebuild web/ and fail if a tracked asset changed
 make lint                   # uv run --locked --extra dev python -m ruff check src/ tests/ tools/
 make type-check             # uv run --locked --extra dev python -m mypy (src/ + tools/ + the annotated test modules, strict)
 make format-check           # uv run --locked --extra dev python -m ruff format --check src/ tests/ tools/
@@ -215,8 +218,8 @@ uv run recoverage export --format csv  # export coverage data
 uv run recoverage check --min-coverage 60  # CI gate
 
 # Browser tests
-uv sync --extra playwright && uv run playwright install chromium
-uv run python -m pytest tests/test_playwright.py
+uv sync --locked --extra dev --extra playwright && uv run playwright install chromium
+uv run --locked --extra dev python -m pytest tests/test_playwright.py
 ```
 
 `tools/ci_clone_rebrew.sh` backs `make clone-rebrew` and the CI jobs: it pins
@@ -439,10 +442,10 @@ HAYSTACK is folded once per index, not once per keystroke: it depends only on
 `searchIndex`, so `foldedIndex` is keyed on that alone and `matchedNames` runs
 a substring test over the folded rows. Folding per query re-ran `normalize` +
 `toLowerCase` + the full-fold replace over every function in the target on
-every character typed, inside the render the keystroke triggered: 90 ms at 20k
-entries against 1.4 ms, measured. A new search column joins `foldedIndex`
-rather than the per-keystroke pass, and a new fold goes through
-`foldForSearch` (pinned at `tests/test_server.py`, `TestSpaSearchFoldsLikeTheServer`).
+every character typed, inside the render the keystroke triggered. A new search
+column joins `foldedIndex` rather than the per-keystroke pass, and a new fold
+goes through `foldForSearch` (pinned at `tests/test_server.py`,
+`TestSpaSearchFoldsLikeTheServer`).
 This was a SQL split
 (LIKE folded ASCII, an `rc_fold` disjunct covered the rest) only because the
 comparison happened inside SQLite; one folding over the in-memory rows is both
@@ -1194,8 +1197,9 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   `_section_tab_data`, and the collision test in `tests/test_potato.py` is
   what notices a second spelling.
 - A control that CHANGES its visible label changes its accessible name with
-  it: `ui/copy-button.tsx` flashes `Copied!` in place of `Copy`, so a
-  voice-control user saying "click Copied" has a name to match (WCAG 2.5.3).
+  it: `web/app/components/ui/copy-button.tsx` flashes `Copied!` in place of
+  `Copy`, so a voice-control user saying "click Copied" has a name to match
+  (WCAG 2.5.3).
   The outcome still repeats into the button's own `role="status"`, because a
   focused screen reader reads the name and not the text that replaced it.
   A modal is ONE focusable scroll region: `CodeModal`'s body holds the
