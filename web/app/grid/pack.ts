@@ -67,7 +67,16 @@ export function packSection(section: Section): Packed {
     // 65535, so the one cell claimed the whole map. Both ends are the SAME
     // store, so a document value the walk must never see is clamped here,
     // beside the range, rather than after it in `forEachPlacement`.
-    spans[i] = Math.min(Math.max(Math.floor(cell.span ?? 1), 1), MAX_SPAN);
+    // A NaN is the one value neither bound catches: Math.max and Math.min both
+    // hand it straight back, and a Uint16Array holds it as zero, so the cell
+    // was laid out over no dots at all, missing from the map and from every hit
+    // test over it. The reader's own default is what an unreadable span means
+    // everywhere else here, and an infinite one still saturates through the
+    // ceiling, which is the answer for a span no lattice can hold.
+    const rawSpan = cell.span ?? 1;
+    spans[i] = Number.isNaN(rawSpan)
+      ? 1
+      : Math.min(Math.max(Math.floor(rawSpan), 1), MAX_SPAN);
     states[i] = stateSlot(cell.state);
     ground[i] = cell.state === "none" ? 1 : 0;
     fns[i] = cell.functions?.[0] ?? "";
@@ -174,6 +183,16 @@ export function layoutSection(
 ): Geometry {
   const usableWidth = Math.max(0, usable - PAD * 2);
   const min = minCellPx(viewportWidth);
+  // A declared count that is not a finite number is the same document value as
+  // none declared, and it has to be answered here rather than at the call site:
+  // Math.max and Math.min both RETURN a NaN, so a NaN declared count replaced
+  // the whole expression below with itself, and every later term was computed
+  // from it: `new Int32Array(Math.max(1, rows) * NaN)` is a zero-length array
+  // and the section renders as a blank canvas rather than a wrong one. An
+  // infinite one saturates to the same ceiling the caller clamps to.
+  const declared = Number.isFinite(declaredColumns)
+    ? Math.min(declaredColumns, MAX_GRID_COLUMNS)
+    : DEFAULT_GRID_COLUMNS;
   // Never render fewer columns than the section declares: shrinking the
   // lattice below that count re-wraps cells onto extra rows and leaves a blank
   // band under a short canvas. Narrow screens shrink the cells to `min`.
@@ -183,7 +202,7 @@ export function layoutSection(
   // (a hidden tab measures 0 wide). A zero-column lattice makes
   // forEachPlacement's `take = min(left, cols - col)` zero on every pass, so
   // `left` never reaches 0 and the walk spins forever in the render.
-  const cols = Math.max(1, declaredColumns, Math.floor((usableWidth + GAP) / (TARGET_CELL_PX + GAP)));
+  const cols = Math.max(1, declared, Math.floor((usableWidth + GAP) / (TARGET_CELL_PX + GAP)));
   const cell = Math.max(min, (usableWidth - GAP * (cols - 1)) / cols);
   const { parts, rows } = forEachPlacement(pack, cols);
   const map = new Int32Array(Math.max(1, rows) * cols);

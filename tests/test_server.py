@@ -3348,7 +3348,7 @@ class TestSpaNumericBoundaries:
         """`spans` is a `Uint16Array` and `span` is unbounded in the reader, so
         a stored span above 65535 wrapped to `span % 65536` and the cell was
         laid out over the wrong number of dots."""
-        stored = re.search(r"spans\[i\] = (.*);", _web("grid/pack.ts"))
+        stored = re.search(r"spans\[i\] = (.*?);\n", _web("grid/pack.ts"), re.DOTALL)
         assert stored is not None, "packSection no longer fills spans[i]"
         assert "Math.min(" in stored.group(1), (
             f"spans[i] = {stored.group(1)}: a span past 65535 wraps silently"
@@ -3380,6 +3380,34 @@ class TestSpaNumericBoundaries:
         panel = _web("components/CoveragePanel.tsx")
         assert "similarityPct(" in panel
         assert "similarity * 100" not in panel
+
+    def test_a_span_the_bounds_cannot_catch_does_not_vanish(self) -> None:
+        """A NaN span stored 0, and a cell laid out over no dots is a cell the
+        map never draws and no click ever reaches.
+
+        `Math.max` and `Math.min` both RETURN a NaN rather than passing it
+        through an argument, so neither the floor of 1 nor the ceiling caught
+        it, and the Uint16Array store turned it into a 0 that
+        `forEachPlacement`'s `while (left > 0)` skipped whole."""
+        pack = _web("grid/pack.ts")
+        stored = re.search(r"Number\.isNaN\(rawSpan\)(.*?);\n", pack, re.DOTALL)
+        assert stored is not None, "packSection no longer narrows a NaN span"
+        assert "MAX_SPAN" in stored.group(1), (
+            "a NaN span falls through to the reader's default instead of the bounded store"
+        )
+
+    def test_a_non_finite_column_count_cannot_size_the_lattice(self) -> None:
+        """`columns` is document data, and a NaN beats every bound it meets:
+        `Math.min(NaN, 256)` is NaN, `Math.max(1, NaN, n)` is NaN, and
+        `new Int32Array(rows * NaN)` is a zero-length array, so the section
+        rendered as a blank canvas instead of a merely narrow one."""
+        layout = _web("grid/pack.ts").split("export function layoutSection", 1)[1]
+        narrowed = re.search(r"const declared = (.*?);\n", layout, re.DOTALL)
+        assert narrowed is not None, "layoutSection no longer narrows declaredColumns"
+        assert "Number.isFinite(declaredColumns)" in narrowed.group(1)
+        assert "DEFAULT_GRID_COLUMNS" in narrowed.group(1)
+        # The narrowed value is the one the lattice is measured from.
+        assert "Math.max(1, declared," in layout
 
 
 class TestCellFillsAreDrawnPerTheme:
