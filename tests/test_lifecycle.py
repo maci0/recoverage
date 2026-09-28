@@ -448,6 +448,32 @@ class TestBindAddressFamily:
             server.server_close()
 
 
+class TestListenerReuseOption:
+    """SO_REUSEADDR is on POSIX and must be off on Windows.
+
+    wsgiref leaves ``allow_reuse_address = 1`` on the class it hands down, and
+    the two platforms read that flag as opposite things: on POSIX it waives a
+    TIME_WAIT so a restart binds at once, on Windows it lets a second socket
+    bind an address a live socket already holds, splitting the traffic between
+    them.  A Windows operator who starts a second ``serve`` on a busy port
+    would watch the new one take half the requests, and the "another instance is
+    already running" handler would never run because bind() succeeded.
+    """
+
+    def test_reuse_is_off_on_windows_and_on_everywhere_else(self) -> None:
+        import recoverage.devserver as ds
+        from recoverage.cli import _ThreadingWSGIServer6
+
+        # The Windows half of the answer is asserted by the windows-latest
+        # entry in the CI matrix, which runs this file; the POSIX half is what
+        # the rest of the matrix asserts.  The IPv6 class serve() also returns
+        # inherits the flag, and a redefinition there would put two listeners
+        # on one setting with different answers.
+        expected = os.name != "nt"
+        assert ds._ThreadingWSGIServer.allow_reuse_address is expected
+        assert _ThreadingWSGIServer6.allow_reuse_address is expected
+
+
 class TestClientConnectionDeadline:
     """Every accepted client connection's handler thread must have a release
     deadline.

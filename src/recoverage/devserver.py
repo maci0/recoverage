@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import os
 import socket
 from http.client import HTTPMessage
 from socketserver import ThreadingMixIn
@@ -118,6 +119,21 @@ class _ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
     """
 
     daemon_threads = True
+
+    # wsgiref sets allow_reuse_address = 1, which is SO_REUSEADDR, and that
+    # option means opposite things on the two families this dashboard runs on.
+    # On POSIX (and BSD) it waives a lingering TIME_WAIT from a previous run, so
+    # a restart right after a stop binds immediately.  On Windows SO_REUSEADDR
+    # lets a second socket bind an address another socket is already bound to,
+    # and traffic is then split between the two by whoever bound last: a second
+    # `recoverage serve` on a busy port would come up as if it owned it, and
+    # serve's OSError handler ("is another instance already running?") could
+    # never fire, because bind() did not fail.  Windows expresses the
+    # do-not-hijack rule as SO_EXCLUSIVEADDRUSE, which socketserver does not
+    # expose, so the portable spelling of it is to leave the option off there.
+    # The cost is one failed bind after a crash in the kernel's hands, which
+    # serve already reports with the address in the message.
+    allow_reuse_address = os.name != "nt"
 
     @property
     def _connections_open(self) -> int:

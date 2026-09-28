@@ -202,6 +202,20 @@ export RECOVERAGE_TOKEN="$(cat /run/secrets/recoverage_token)"
 recoverage serve --no-open
 ```
 
+The same service in PowerShell, where `export` is not how a variable is set
+and there is no `/run/secrets`:
+
+```powershell
+$env:RECOVERAGE_DB = "D:\project\db"
+$env:RECOVERAGE_BIND = "0.0.0.0"
+$env:RECOVERAGE_ALLOW_REMOTE = "1"
+$env:RECOVERAGE_TOKEN = (Get-Content C:\secrets\recoverage_token -Raw).Trim()
+recoverage serve --no-open
+```
+
+`RECOVERAGE_DB` is read through `Path.expanduser()`, so a leading `~` and the
+`USERPROFILE` it resolves against on Windows work as they do on POSIX.
+
 `RECOVERAGE_ALLOW_REMOTE` is still yours to set: a non-loopback bind without
 it exits 1, whether the address came from the flag or the environment.
 
