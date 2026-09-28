@@ -19,7 +19,7 @@ import threading
 import unicodedata
 import uuid
 from collections import deque
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import MappingProxyType
@@ -1530,7 +1530,30 @@ def fold_match(haystack: str | None, needle: str) -> bool:
     string, which no non-empty term matches — the answer ``COALESCE`` gave a
     nullable ``symbol``.
     """
-    return cast(str, fold_text(needle)) in (fold_text(haystack) or "")
+    return fold_match_folded(haystack, fold_needle(needle))
+
+
+def fold_needle(needle: str) -> str:
+    """:func:`fold_text` of *needle*, for the loop arms of :func:`fold_match`.
+
+    A search term is loop-invariant across every column of every row, and
+    NFC composition plus ``casefold`` is not free: folding it once per call
+    made a filtered list pay four normalizations of the same string per
+    function.  Callers that test a whole collection fold once and pass the
+    result to :func:`fold_match_folded`.
+    """
+    return cast(str, fold_text(needle))
+
+
+def fold_match_folded(haystack: str | None, folded_needle: str) -> bool:
+    """:func:`fold_match` against a needle :func:`fold_needle` already folded.
+
+    Same comparison, same NULL answer: a caller holding a folded term must
+    not reach for :func:`fold_text` itself, because a second fold of an
+    already-folded string is not guaranteed to be a fixed point for every
+    input.
+    """
+    return folded_needle in (fold_text(haystack) or "")
 
 
 # ── Snapshot projections ───────────────────────────────────────────
@@ -1690,16 +1713,76 @@ def lookup_function(snap: CoverageSnapshot, value: str) -> Function | None:
 
 
 def lookup_global(snap: CoverageSnapshot, value: str) -> Global | None:
-    """:func:`lookup_function` over the globals array.
-
-    Globals have no by-VA index: nothing reads them by VA at request rate (the
-    batch lookup walks a few hundred rows), so the VA arm is a linear scan.
-    """
+    """:func:`lookup_function` over the globals array."""
+    index = globals_by_va(snap)
     for candidate in parse_va_candidates(value):
-        for gl in snap.globals:
-            if gl.va == candidate:
-                return gl
+        found = index.get(candidate)
+        if found is not None:
+            return found
     return _name_match(snap.globals, value)
+
+
+#: The by-VA indices a snapshot does not carry, keyed by its identity.
+#: rebrew's snapshot has ``functions_by_va`` and nothing for globals or
+#: ``verify_results``, and the batch endpoint and the cell-detail panel both
+#: walk those arrays per request: a 500-VA batch against 50k globals was
+#: 25M comparisons, and one cell click was a full scan of the verify rows.
+#: Entries hold the snapshot they were built from, which is what makes
+#: ``id()`` a sound key: the object is pinned, so its id cannot be reused by
+#: a later one while the entry lives.  The bound is therefore a memory bound
+#: as well as a cache bound — 4 entries is at most two retained snapshots,
+#: the same order as Potato's per-snapshot grid memo.  A snapshot is
+#: ``slots=True`` and its fields are mapping proxies, so a ``WeakKeyDictionary``
+#: cannot key it and a field-derived hash cannot be computed; holding the
+#: object is the only sound alternative.
+_SNAPSHOT_INDEX_LOCK = threading.Lock()
+_SNAPSHOT_INDEX: dict[tuple[int, str], tuple[CoverageSnapshot, dict[int, Any]]] = {}
+_SNAPSHOT_INDEX_MAX = 4
+
+
+def _snapshot_index(
+    snap: CoverageSnapshot, kind: str, build: Callable[[], dict[int, Any]]
+) -> dict[int, Any]:
+    """The memo for *kind* over *snap*, building it on the first call."""
+    key = (id(snap), kind)
+    with _SNAPSHOT_INDEX_LOCK:
+        hit = _SNAPSHOT_INDEX.get(key)
+    if hit is not None:
+        return hit[1]
+    index = build()
+    with _SNAPSHOT_INDEX_LOCK:
+        _evict_oldest(_SNAPSHOT_INDEX, _SNAPSHOT_INDEX_MAX)
+        _SNAPSHOT_INDEX[key] = (snap, index)
+    return index
+
+
+def globals_by_va(snap: CoverageSnapshot) -> Mapping[int, Global]:
+    """``globals`` indexed by VA, one entry per snapshot.
+
+    A repeated VA keeps the FIRST row, which is what the linear scan this
+    replaced returned.
+    """
+
+    def build() -> dict[int, Any]:
+        index: dict[int, Any] = {}
+        for gl in snap.globals:
+            index.setdefault(gl.va, gl)
+        return index
+
+    return _snapshot_index(snap, "globals_by_va", build)
+
+
+def verify_by_va(snap: CoverageSnapshot) -> Mapping[int, Mapping[str, Any]]:
+    """``verify_results`` indexed by VA, one entry per snapshot.
+
+    A row whose ``va`` is not an int cannot be a match for an int VA, so it is
+    skipped here exactly as the per-request builds did.
+    """
+
+    def build() -> dict[int, Any]:
+        return {row["va"]: row for row in snap.verify_results if isinstance(row.get("va"), int)}
+
+    return _snapshot_index(snap, "verify_by_va", build)
 
 
 def verify_payload(row: Mapping[str, Any]) -> dict[str, Any]:

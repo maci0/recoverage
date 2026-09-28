@@ -9,11 +9,11 @@ import math
 import queue
 import re
 import threading
-from collections.abc import Generator, Sequence
+from collections.abc import Generator, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from rebrew.coverage_toml import CoverageSnapshot, CoverageTomlError, Function
+from rebrew.coverage_toml import CoverageSnapshot, CoverageTomlError, Function, Global
 from rebrew.workspace import KNOWN_STATUSES, VA_MAX, parse_va_candidates
 
 from recoverage import __version__, clock
@@ -51,7 +51,7 @@ from recoverage.server import (
     app,
     clear_target_cache,
     compress_payload,
-    fold_match,
+    fold_match_folded,
     origin_is_this_dashboard,
     path_param,
     query_param,
@@ -393,13 +393,14 @@ def _filtered_functions(
     if status_filter is not None:
         rows = [fn for fn in rows if fn.status == status_filter]
     if search:
+        needle = _server.fold_needle(search)
         rows = [
             fn
             for fn in rows
-            if fold_match(fn.name, search)
-            or fold_match(fn.symbol, search)
-            or fold_match(str(fn.va), search)
-            or fold_match(fn.vaStart, search)
+            if fold_match_folded(fn.name, needle)
+            or fold_match_folded(fn.symbol, needle)
+            or fold_match_folded(str(fn.va), needle)
+            or fold_match_folded(fn.vaStart, needle)
         ]
     return rows
 
@@ -1611,20 +1612,23 @@ def handle_api_functions_batch(target: str) -> bytes | HTTPResponse:
         # Functions first (parity with GET /functions/<va>), then globals, and
         # every row comes from the same frozen snapshot — the build's function
         # rows and the `last_verify` attached to them cannot describe two builds.
-        verify_by_va = {
-            row["va"]: row for row in coverage.verify_results if isinstance(row.get("va"), int)
-        }
+        verify_rows = _server.verify_by_va(coverage)
+        global_rows: Mapping[int, Global] | None = None
         results: list[dict[str, Any]] = []
         for wanted in unique_vas:
             fn = coverage.functions_by_va.get(wanted)
             if fn is not None:
                 payload = _server.function_json(fn)
-                record = verify_by_va.get(fn.va)
+                record = verify_rows.get(fn.va)
                 if record is not None:
                     payload["last_verify"] = _server.verify_payload(record)
                 results.append(payload)
                 continue
-            found = next((gl for gl in coverage.globals if gl.va == wanted), None)
+            # The globals arm is indexed on its first miss: a batch of function
+            # VAs, which is what the SPA sends, never pays for it.
+            if global_rows is None:
+                global_rows = _server.globals_by_va(coverage)
+            found = global_rows.get(wanted)
             if found is not None:
                 results.append(_server.global_json(found))
 
@@ -1652,7 +1656,7 @@ def handle_api_function(target: str, va: str) -> bytes | HTTPResponse:
         if isinstance(found_fn, Function):
             fn_json = _server.function_json(found_fn)
             # Attach the last `rebrew verify -o` record for this function.
-            record = next((r for r in coverage.verify_results if r.get("va") == found_fn.va), None)
+            record = _server.verify_by_va(coverage).get(found_fn.va)
             if record is not None:
                 fn_json["last_verify"] = _server.verify_payload(record)
             return _json_ok(json.dumps(fn_json).encode("utf-8"), Cache_Control=CACHE_NO_STORE)

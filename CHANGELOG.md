@@ -20,6 +20,11 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Batch VA lookups (`POST /api/targets/<target>/functions`) and the
+  cell-detail panel's verify rows resolve through a per-snapshot index instead
+  of scanning the globals and `verify_results` arrays per requested VA, and a
+  search term is folded once per query rather than once per row and column.
+  Answers are unchanged, including which global wins a repeated VA.
 - `make all` now also builds the distribution and checks the committed
   dashboard bundle against `web/`, so the two CI jobs it did not mirror
   (`build`) fail on a workstation instead of after a push. The new

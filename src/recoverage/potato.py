@@ -43,7 +43,8 @@ from recoverage.server import (
     _snapshot_db_mtime,
     app,
     coverage_for,
-    fold_match,
+    fold_match_folded,
+    fold_needle,
     function_json,
     global_json,
     load_metadata,
@@ -55,6 +56,7 @@ from recoverage.server import (
     resolve_targets,
     response,
     set_auth_cookie,
+    verify_by_va,
     verify_payload,
 )
 
@@ -1137,6 +1139,7 @@ def render_potato(parsed_url: ParseResult) -> str:
         coverage,
         target,
         section,
+        targets=targets,
         snap=snap,
         active_filters=active_filters,
         idx_str=idx_str,
@@ -1501,12 +1504,13 @@ def _search_functions(coverage: CoverageSnapshot, search_query: str) -> set[str]
     if not search_query:
         return search_matched_fns
 
+    needle = fold_needle(search_query)
     fn_rows = [
         fn
         for fn in coverage.functions
-        if fold_match(fn.name, search_query)
-        or fold_match(fn.vaStart, search_query)
-        or fold_match(fn.symbol, search_query)
+        if fold_match_folded(fn.name, needle)
+        or fold_match_folded(fn.vaStart, needle)
+        or fold_match_folded(fn.symbol, needle)
     ]
     fn_rows.sort(key=lambda fn: (fn.name, fn.vaStart))
     for fn in fn_rows[:_SEARCH_ROW_LIMIT]:
@@ -1520,9 +1524,9 @@ def _search_functions(coverage: CoverageSnapshot, search_query: str) -> set[str]
     gl_rows = [
         gl
         for gl in coverage.globals
-        if fold_match(gl.name, search_query)
-        or fold_match(f"0x{gl.va:08x}", search_query)
-        or fold_match(f"0x{gl.va:x}", search_query)
+        if fold_match_folded(gl.name, needle)
+        or fold_match_folded(f"0x{gl.va:08x}", needle)
+        or fold_match_folded(f"0x{gl.va:x}", needle)
     ]
     gl_rows.sort(key=lambda gl: gl.name)
     search_matched_fns.update(gl.name for gl in gl_rows[:_SEARCH_ROW_LIMIT])
@@ -1990,13 +1994,14 @@ def _render_function_list(
         # very table matches when pasted into the search box.  Same fold and
         # column set as _search_functions, so this list and the grid it sits
         # beside return the same rows for one term.
+        needle = fold_needle(search_query)
         rows = [
             fn
             for fn in rows
-            if fold_match(fn.name, search_query)
-            or fold_match(fn.symbol, search_query)
-            or fold_match(f"0x{fn.va:08x}", search_query)
-            or fold_match(f"0x{fn.va:x}", search_query)
+            if fold_match_folded(fn.name, needle)
+            or fold_match_folded(fn.symbol, needle)
+            or fold_match_folded(f"0x{fn.va:08x}", needle)
+            or fold_match_folded(f"0x{fn.va:x}", needle)
         ]
     # The rendered list is capped (same bound as the search above) so a large
     # project's ?view=functions page doesn't build a multi-MB HTML document on
@@ -2195,6 +2200,7 @@ def _render_potato_inner(
     coverage: CoverageSnapshot,
     target: str,
     section: str,
+    targets: list[dict[str, str]],
     active_filters: set[str],
     idx_str: str,
     search_query: str,
@@ -2205,9 +2211,9 @@ def _render_potato_inner(
     *,
     snap: tuple[int, int] | None,
 ) -> str:
-    # The default target was resolved by render_potato, from the same read that
-    # produced *coverage*, so this is the memoized answer and not a second one.
-    targets = resolve_targets()
+    # *targets* came from render_potato, from the same read that produced
+    # *coverage*: calling resolve_targets() again would answer the same list and
+    # pay its directory scan and fingerprint a second time per render.
 
     sections, data = _load_section_data(coverage)
     if not sections:
@@ -2430,7 +2436,7 @@ def _panel_fn_attach_verify(coverage: CoverageSnapshot, fn_data: dict[str, Any])
         # A VA in a form this lookup cannot bind is a panel with no verify row,
         # not a failed request.
         return
-    record = next((row for row in coverage.verify_results if row.get("va") == wanted), None)
+    record = verify_by_va(coverage).get(wanted)
     if record is None:
         return
     fields = verify_payload(record)

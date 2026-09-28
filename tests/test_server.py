@@ -37,10 +37,15 @@ from recoverage.server import (
     compress_payload,
     compress_static_bodies,
     fold_match,
+    fold_match_folded,
+    fold_needle,
     fold_text,
+    globals_by_va,
+    lookup_global,
     origin_is_this_dashboard,
     select_static_variant,
     static_variant_key,
+    verify_by_va,
 )
 
 
@@ -606,6 +611,73 @@ class TestSearchFolding:
     def test_fold_text_passes_an_absent_column_through(self) -> None:
         assert fold_text(None) is None
         assert fold_text("_Func_A") == "_func_a"
+
+    def test_the_prefolded_needle_answers_as_the_whole_needle_does(self) -> None:
+        """A collection scan folds the term once; the answers must not move."""
+        for haystack, needle in (
+            ("_func_a", "FUNC"),
+            ("straße", "STRASSE"),
+            ("100%", "%"),
+            ("日本語", "日本語"),
+            (None, "x"),
+            (None, ""),
+        ):
+            assert fold_match_folded(haystack, fold_needle(needle)) == fold_match(haystack, needle)
+
+
+class TestSnapshotVaIndices:
+    """The by-VA indices a snapshot does not carry answer as the scan did.
+
+    rebrew's snapshot has ``functions_by_va`` and nothing for ``globals`` or
+    ``verify_results``, so the batch endpoint and the detail panel built their
+    own index per request or walked the array outright.  These pin the two
+    answers that must not move: the FIRST global for a repeated VA, and a
+    verify row whose ``va`` is not an int being unmatchable.
+    """
+
+    def test_globals_resolve_by_va(self) -> None:
+        snap = _snapshot_for(
+            {},
+            globals_=[
+                {"va": 0x2000, "name": "g_first"},
+                {"va": 0x2004, "name": "g_second"},
+            ],
+        )
+        index = globals_by_va(snap)
+        assert index[0x2000].name == "g_first"
+        assert index[0x2004].name == "g_second"
+        assert lookup_global(snap, "0x2004").name == "g_second"
+        assert 0x2008 not in index
+
+    def test_a_repeated_global_va_keeps_the_first_row(self) -> None:
+        """The linear scan this index replaced returned the first match."""
+        snap = _snapshot_for(
+            {},
+            globals_=[
+                {"va": 0x2000, "name": "g_first"},
+                {"va": 0x2000, "name": "g_second"},
+            ],
+        )
+        assert globals_by_va(snap)[0x2000].name == "g_first"
+        assert lookup_global(snap, "0x2000").name == "g_first"
+
+    def test_verify_rows_index_by_va_and_repeat_calls_reuse_the_memo(self) -> None:
+        snap = _snapshot_for(
+            {},
+            functions=[{"va": 0x1000, "name": "f"}],
+            verify_results=[{"va": 0x1000, "byte_delta": 3}, {"va": "0x1004", "byte_delta": 9}],
+        )
+        index = verify_by_va(snap)
+        assert index[0x1000]["byte_delta"] == 3
+        assert "0x1004" not in index
+        assert verify_by_va(snap) is index
+        assert globals_by_va(snap) is globals_by_va(snap)
+
+    def test_two_snapshots_do_not_share_one_index(self) -> None:
+        first = _snapshot_for({}, globals_=[{"va": 0x2000, "name": "g_first"}])
+        second = _snapshot_for({}, globals_=[{"va": 0x2000, "name": "g_other"}])
+        assert globals_by_va(first)[0x2000].name == "g_first"
+        assert globals_by_va(second)[0x2000].name == "g_other"
 
 
 class TestCoverageDocumentShapeGuard:
