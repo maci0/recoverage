@@ -63,6 +63,16 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `POST /api/regen` with an `Idempotency-Key` whose run is still going now
+  answers `202` with `{"ok": true, "in_progress": true}` and
+  `Idempotent-Replay: in-progress`, where it answered `429` before. A regen
+  runs for minutes and a proxy gives up long before that, so the client's
+  retry reaches the server while the first run still holds it: the 429 read as
+  a failed regenerate, the Reload button said regeneration was unavailable,
+  and the next click started a second full pipeline. The 202 says the work is
+  under way, and the dashboard holds its in-progress line. A key that has
+  completed still replays its recorded result, a run that failed is still
+  retried for real, and a request carrying no key still re-runs.
 - Every command's `--help` names the value a flag takes (`--port PORT`,
   `--target TARGET`, `--min-coverage MIN_COVERAGE`, `--log-level LEVEL`,
   `--bind ADDRESS`, `--cors-origin ORIGIN`, `--token TOKEN`, `--section

@@ -2030,9 +2030,25 @@ def _compressed(body: bytes, content_type: str, **headers: str) -> bytes:
 
 
 def _json_ok(data: dict[str, Any] | list[Any] | bytes, **headers: str) -> bytes:
-    """Return compressed JSON 200."""
+    """Return compressed JSON 200.
+
+    A 2xx that is not 200 is a different status, not an error body, so it
+    arrives as an :class:`HTTPResponse` from the caller: the one the regen
+    route needs is "your retry names the run happening right now" (202).
+    """
     body = data if isinstance(data, bytes) else json.dumps(data).encode("utf-8")
     return _compressed(body, "application/json", **headers)
+
+
+def _json_accepted(data: dict[str, Any], **headers: str) -> HTTPResponse:
+    """Return compressed JSON 202: accepted, the work is not done yet."""
+    body = json.dumps(data).encode("utf-8")
+    accept_enc = _header("Accept-Encoding", "")
+    body, encoding = compress_payload(body, accept_enc)
+    resp = HTTPResponse(status=202)
+    _finalized(resp, body, "application/json", encoding, **headers)
+    resp.body = body
+    return resp
 
 
 def _json_ok_precompressed(body: bytes, encoding: str, **headers: str) -> bytes:

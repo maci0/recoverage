@@ -79,7 +79,7 @@ export function useLiveReload({
     const key = newRegenKey();
     void (async () => {
       try {
-        const { ok } = await postRegen(key);
+        const { ok, inProgress } = await postRegen(key);
         // A regen runs for minutes behind a button that says "Regenerating...".
         // Saying nothing when it ends leaves the reader to tell a finished
         // rebuild from a failed one out of the map's own repaint, so the
@@ -87,6 +87,11 @@ export function useLiveReload({
         // replaced, which is what the two callbacks are for.
         if (ok) {
           onDone(MSG.REGEN_DONE);
+        } else if (inProgress) {
+          // The re-send reached a run already under way.  It is not a failure
+          // and the pipeline is not this reader's to start again: the line
+          // stays, and the documents land when that run writes them.
+          onNotice(MSG.REGEN_IN_PROGRESS);
         } else {
           onNotice(MSG.REGEN_UNAVAILABLE);
         }

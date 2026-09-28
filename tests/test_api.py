@@ -1279,6 +1279,7 @@ class TestRegenIdempotencyKey:
 
         api._regen_last_attempt = 0.0
         api._REGEN_COMPLETED_KEYS.clear()
+        api._REGEN_ACTIVE_KEYS.clear()
 
     teardown_method = setup_method
 
@@ -1314,13 +1315,14 @@ class TestRegenIdempotencyKey:
         assert headers.get("Idempotent-Replay") == "true"
         assert len(runs) == 1
 
-    def test_a_duplicate_arriving_mid_run_neither_waits_nor_reruns(
+    def test_a_duplicate_arriving_mid_run_is_told_it_is_still_running(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """The same key arriving while its run is in flight must not start a
-        second pipeline, and must not be answered as a replay either: nothing
-        has completed, so the honest answer is the 429 the lock gives, and the
-        client's retry after the first run ends is what the ledger absorbs.
+        second pipeline, and must not be answered as a completed replay either:
+        nothing has finished.  It is answered 202 with ``in_progress``, which is
+        the state the client has to act on, where a 429 reads as a failed
+        regenerate and sends the reader back to the button for a second run.
         """
         import recoverage.api as api
 
@@ -1341,17 +1343,19 @@ class TestRegenIdempotencyKey:
         worker.start()
         assert started.wait(timeout=10), "first regen never reached run_regen"
 
-        # Backdate the cooldown so it cannot be what rejects the duplicate:
-        # a 429 here is the run lock, which is the only thing that keeps a
-        # concurrent duplicate off the pipeline.
+        # Backdate the cooldown so it cannot be what answers the duplicate: the
+        # in-flight key is read before the throttle, exactly as the completed
+        # ledger is.
         monkeypatch.setattr(
             api,
             "_regen_last_attempt",
             api.clock.monotonic() - api._REGEN_COOLDOWN_SECONDS - 1,
         )
         status, headers, body = self._post("click-1")
-        assert status.startswith("429")
-        assert json.loads(decode_body(body, headers))["code"] == "rate_limited"
+        assert status.startswith("202")
+        payload = json.loads(decode_body(body, headers))
+        assert payload == {"ok": True, "in_progress": True}
+        assert headers.get("Idempotent-Replay") == "in-progress"
         assert len(runs) == 1
         assert not api._regen_replayed("click-1")
 
@@ -1369,6 +1373,90 @@ class TestRegenIdempotencyKey:
         assert headers.get("Idempotent-Replay") == "true"
         assert json.loads(decode_body(body, headers)) == {"ok": True}
         assert len(runs) == 1
+        # The run ended, so the key is no longer the run in flight: a marker
+        # left behind would answer every later request 202 with nothing behind
+        # it, and a second POST with it would never start a run again.
+        assert not api._regen_in_progress("click-1")
+
+    def test_another_key_mid_run_is_still_refused(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The 202 names the run in flight, so a DIFFERENT key keeps the 429.
+
+        A second regenerate during a run is somebody's second regenerate, not a
+        retry of the first, and it must not be answered as though its work were
+        under way.
+        """
+        import recoverage.api as api
+
+        runs: list[Path] = []
+        started = threading.Event()
+        release = threading.Event()
+
+        def run(root: Path) -> None:
+            runs.append(root)
+            started.set()
+            assert release.wait(timeout=10), "test never released the regen"
+
+        monkeypatch.setattr(api, "run_regen", run)
+        monkeypatch.setattr(api, "_project_dir", lambda: Path("/nonexistent"))
+
+        first: list[Any] = []
+        worker = threading.Thread(target=lambda: first.append(self._post("click-1")))
+        worker.start()
+        assert started.wait(timeout=10), "first regen never reached run_regen"
+        monkeypatch.setattr(
+            api,
+            "_regen_last_attempt",
+            api.clock.monotonic() - api._REGEN_COOLDOWN_SECONDS - 1,
+        )
+
+        status, headers, body = self._post("click-2")
+        assert status.startswith("429")
+        assert json.loads(decode_body(body, headers))["code"] == "rate_limited"
+        assert len(runs) == 1
+
+        release.set()
+        worker.join(timeout=10)
+        assert not worker.is_alive()
+        assert len(runs) == 1
+
+    def test_a_failed_run_frees_the_key_for_a_real_retry(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A run that ends is over in progress too.
+
+        A marker left set by a failure would answer the client's re-send 202
+        for a pipeline that stopped, and the retry that should have re-run it
+        would never run it again.
+        """
+        import recoverage.api as api
+
+        self._counting_regen(monkeypatch, fail=True)
+        status, _, _ = self._post("click-1")
+        assert status.startswith("500")
+        assert not api._regen_in_progress("click-1")
+
+        api._regen_last_attempt = 0.0
+        status, _, _ = self._post("click-1")
+        assert status.startswith("500")
+
+    def test_the_in_flight_markers_are_bounded(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Markers past the retention window expire on their own.
+
+        A run abandoned by a dead process would otherwise hold its key for the
+        life of the server, answering every later request 202 with nothing
+        behind it.
+        """
+        import recoverage.api as api
+
+        now = [api.clock.monotonic()]
+        monkeypatch.setattr(api.clock, "monotonic", lambda: now[0])
+        for i in range(api._REGEN_LEDGER_MAX_ENTRIES + 5):
+            api._record_active_key(f"click-{i}")
+        assert len(api._REGEN_ACTIVE_KEYS) <= api._REGEN_LEDGER_MAX_ENTRIES
+
+        now[0] += api._REGEN_KEY_TTL_SECONDS + 1
+        assert not api._regen_in_progress("click-0")
+        assert api._REGEN_ACTIVE_KEYS == {}
 
     def test_a_fresh_key_reruns(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import recoverage.api as api

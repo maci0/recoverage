@@ -259,7 +259,7 @@ export async function fetchArrayBufferSafe(
   }
 }
 
-export type RegenResult = { ok: boolean };
+export type RegenResult = { ok: boolean; inProgress: boolean };
 
 /** The ledger key for one regenerate action. */
 export type RegenKey = string;
@@ -293,15 +293,19 @@ function sendRegen(key: RegenKey): Promise<Response> {
  * A `fetch` that throws never got an answer, and the answer is the only thing
  * that says whether the pipeline ran: the run is minutes long, the response
  * can be lost on the way back, and the documents on disk are already the new
- * ones.  The re-send is answered from the ledger when the first run completed
- * and runs the pipeline once when the first request never arrived.  It never
- * re-sends an answered request, because re-sending a refusal the server gave
- * on purpose would turn a 429 into a second pipeline.
+ * ones.  The re-send is answered from the ledger when the first run completed,
+ * answered 202 when the first run is still going, and runs the pipeline once
+ * when the first request never arrived.  It never re-sends an answered
+ * request, because re-sending a refusal the server gave on purpose would turn
+ * a 429 into a second pipeline.
  */
 export async function postRegen(key: RegenKey): Promise<RegenResult> {
   // oxlint-disable-next-line @rikalabs/no-silent-catch-fallback -- the fallback is the re-send itself, and a second failure propagates to the caller, which reports it
   const res = await sendRegen(key).catch(() => sendRegen(key));
-  // SAFETY: this origin's own JSON; `handle_api_regen` answers `{"ok": bool}`.
-  const payload = (await res.json()) as { ok?: boolean };
-  return { ok: payload.ok === true };
+  // SAFETY: this origin's own JSON; `handle_regen` answers `{"ok": bool}` and,
+  // for a retry of a run still going, `{"ok": true, "in_progress": true}`.
+  const payload = (await res.json()) as { ok?: boolean; in_progress?: boolean };
+  // `in_progress` is not `ok`: the run was accepted and has not finished, so
+  // reporting it as done would claim documents the pipeline has not written.
+  return { ok: payload.ok === true && payload.in_progress !== true, inProgress: payload.in_progress === true };
 }

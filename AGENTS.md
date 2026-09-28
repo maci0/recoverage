@@ -830,7 +830,19 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   to `api._REGEN_COMPLETED_KEYS` and a lost response then costs a second full
   pipeline. A new client of that endpoint takes the key from its action site,
   not from inside the send helper, and re-sends on a lost response rather than
-  leaving the reader to click again. The other in-flight marker, the `/data`
+  leaving the reader to click again. A key has three states, not two: a run
+  that COMPLETED replays from `_REGEN_COMPLETED_KEYS`, and a run still going is
+  marked in `api._REGEN_ACTIVE_KEYS` and answered 202 with `in_progress`, which
+  is the retry that lands while the first run still holds `_REGEN_LOCK` (a
+  regen is minutes long, a proxy gives up far sooner). The 429 the lock gives
+  was true and useless there: the SPA reads it as a failed regenerate, and the
+  reader's next click mints a new key and pays for a second pipeline. A 202
+  for someone else's key would be a lie, so the marker is per key, and it is
+  cleared in the handler's `finally` and past `_REGEN_KEY_TTL_SECONDS`, because
+  a run abandoned by a dead process would otherwise hold its key for the life
+  of the server. `_REGEN_LOCK`, not either map, is what keeps two pipelines
+  from running. Pinned at `tests/test_api.py` (`TestRegenIdempotencyKey`).
+  The other in-flight marker, the `/data`
   single-flight claim in `api._DATA_CACHE_BUILDING`, follows the same rule: an
   in-flight marker whose owner was killed is reclaimed on its deadline
   (`_DATA_CACHE_BUILD_WAIT_SECONDS`), never left registered for a waiter that

@@ -158,6 +158,53 @@ _REGEN_KEY_RE = re.compile(rf"[A-Za-z0-9._:-]{{1,{_REGEN_KEY_MAX_CHARS}}}")
 _REGEN_COMPLETED_KEYS: dict[str, float] = {}
 _REGEN_COMPLETED_KEYS_LOCK = threading.Lock()
 
+# The IN-FLIGHT half of the same key space.  A key whose run is still going is
+# a retry that arrived before its answer existed, which is the common case: a
+# regen runs for minutes while the proxy or the browser gives up long before
+# that, so the client's re-send lands while the first run still holds the lock.
+# The 429 the lock gives is true (this server is busy) and useless (it reads as
+# "your regenerate failed", and the reader's next click mints a NEW key and
+# pays for a second full pipeline), so a key that matches the run in flight is
+# answered with that run's own state instead of a refusal.
+#
+# Key -> monotonic start.  Bounded by the same count cap as the completed
+# ledger and past the same retention window, so it cannot grow without limit: a
+# marker abandoned by a run that died with the process expires on its own and
+# the key is free again.  That expiry can never let two pipelines run, because
+# _REGEN_LOCK (not this dict) is what serializes the runs.
+_REGEN_ACTIVE_KEYS: dict[str, float] = {}
+
+
+def _prune_active_keys(now: float) -> None:
+    """Drop in-flight markers past the retention window. Caller holds the lock."""
+    for key, started_at in list(_REGEN_ACTIVE_KEYS.items()):
+        if now - started_at >= _REGEN_KEY_TTL_SECONDS:
+            del _REGEN_ACTIVE_KEYS[key]
+
+
+def _regen_in_progress(key: str) -> bool:
+    """True when *key* is the run happening right now."""
+    now = clock.monotonic()
+    with _REGEN_COMPLETED_KEYS_LOCK:
+        _prune_active_keys(now)
+        return key in _REGEN_ACTIVE_KEYS
+
+
+def _record_active_key(key: str) -> None:
+    """Remember that *key*'s regen is running; cleared when the run ends."""
+    now = clock.monotonic()
+    with _REGEN_COMPLETED_KEYS_LOCK:
+        _prune_active_keys(now)
+        _REGEN_ACTIVE_KEYS.pop(key, None)
+        _server._evict_oldest(_REGEN_ACTIVE_KEYS, _REGEN_LEDGER_MAX_ENTRIES)
+        _REGEN_ACTIVE_KEYS[key] = now
+
+
+def _clear_active_key(key: str) -> None:
+    """Forget a run that has ended, completed or failed."""
+    with _REGEN_COMPLETED_KEYS_LOCK:
+        _REGEN_ACTIVE_KEYS.pop(key, None)
+
 
 def _prune_completed_keys(now: float) -> None:
     """Drop completed keys past the retention window. Caller holds the lock."""
@@ -2071,8 +2118,11 @@ def handle_regen() -> bytes | HTTPResponse:
     for the retention window and ``_REGEN_LEDGER_MAX_ENTRIES`` for the ledger's
     cap) and a later request
     carrying it is answered from the ledger with ``Idempotent-Replay: true``
-    instead of re-running.  A run that failed is not recorded, so retrying a
-    failure retries for real.  Without the header, every POST re-runs.
+    instead of re-running.  A key whose run is still going is answered 202 with
+    ``in_progress``, which is the retry that lands before the first answer
+    exists: it is told the operation is under way, not that it failed.  A run
+    that failed is not recorded, so retrying a failure retries for real.
+    Without the header, every POST re-runs.
     """
     global _regen_last_attempt
 
@@ -2137,6 +2187,18 @@ def handle_regen() -> bytes | HTTPResponse:
     if key and _regen_replayed(key):
         _log.info("Regen %s already completed — answering the retry without re-running", key)
         return _json_ok({"ok": True}, Idempotent_Replay="true")
+    if key and _regen_in_progress(key):
+        # The retry of a run still going, not a second regenerate: answer with
+        # the operation's own state.  202 says the request was accepted and the
+        # work is not done, which is what a client needs to tell apart from a
+        # regeneration that failed and from a 429 that means "somebody else's
+        # run" — the latter is the only one that leaves a key free to re-run.
+        _log.info("Regen %s is still running — answering the retry as in progress", key)
+        return _server._json_accepted(
+            {"ok": True, "in_progress": True},
+            Idempotent_Replay="in-progress",
+            Retry_After=str(int(_REGEN_COOLDOWN_SECONDS)),
+        )
 
     # Server-side cooldown + serialization: the cooldown check and the regen
     # run must be atomic — two concurrent POSTs could otherwise both pass the
@@ -2173,6 +2235,12 @@ def handle_regen() -> bytes | HTTPResponse:
                 Retry_After=str(math.ceil(remaining)),
             )
         _regen_last_attempt = now
+        # From here to the release the key names THIS run, so a retry arriving
+        # mid-flight is answered as in progress rather than refused.  Recorded
+        # only once the run is certain to start: a request turned away above
+        # (cooldown, or a key already in flight) must leave the key free.
+        if key:
+            _record_active_key(key)
         result = _do_regen(remote)
         # _do_regen answers the success body as bytes and a mapped failure as
         # an HTTPResponse.  Only a completed run is recorded, so a client that
@@ -2181,6 +2249,11 @@ def handle_regen() -> bytes | HTTPResponse:
             _record_completed_key(key)
         return result
     finally:
+        # Both outcomes, and the exceptions: the marker describes a run, and
+        # the run is over in every case, so a key left marked in flight would
+        # answer every later request with 202 and no pipeline behind it.
+        if key:
+            _clear_active_key(key)
         _REGEN_LOCK.release()
 
 
