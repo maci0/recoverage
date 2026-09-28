@@ -955,6 +955,41 @@ def test_the_status_filter_is_named_and_survives_navigation():
 
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage document")
+def test_the_active_filters_survive_navigation_into_and_out_of_the_list():
+    # The filter pills are drawn on the function list as well as the grid (they
+    # keep `view=functions`), so a reader who narrows the map and opens the list
+    # sees controls that read as set. Every link in that view has to carry them
+    # the way it already carries `?status=`, or the way back to the grid lands on
+    # an unfiltered map with the pills still painted as on.
+    target = require_target()
+    html = render_potato_url(f"/potato?target={target}&section=.text&filter=exact,reloc")
+    functions_link = re.search(r'href="(\?[^"]*view=functions)"', html)
+    assert functions_link is not None, html[:400]
+    assert "filter=exact%2Creloc" in functions_link.group(1)
+
+    listed = render_potato_url(
+        f"/potato?target={target}&section=.text&view=functions&filter=exact,reloc"
+    )
+    # The [Grid View] link, a row's function link, a sort header and a section tab
+    # are the ways out of the list that have to keep them. The "All" pill is the
+    # one link that must not: it is the reader turning them off, and it is the
+    # only href on the page carrying neither a filter nor a search.
+    hrefs = _hrefs(listed)
+    clearing = [href for href in hrefs if "filter=" not in href and "search=" not in href]
+    assert len(clearing) == 1, clearing
+    for href in hrefs:
+        # A toggle pill carries the other six-set, the rest carry the pair
+        # itself; what no link may do is drop the criterion and land on an
+        # unfiltered grid.
+        if href not in clearing:
+            assert "filter=" in href, href
+
+
+def _hrefs(html: str) -> list[str]:
+    return re.findall(r'href="(\?[^"]*)"', html)
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage document")
 def test_function_list_reports_the_row_cap(monkeypatch):
     # The list is capped so a large target's page stays a sane size. A header
     # reading the capped length as the total tells the reader the page is the
@@ -1865,7 +1900,7 @@ class TestFunctionListLinks:
                 },
             ],
         )
-        html = _render_function_list(snap, "T", ".text", "", "va", "")
+        html = _render_function_list(snap, "T", ".text", None, "", "va", "")
         assert f'<a href="?target=T&section=.text&search={quote("sub_401000")}">' in html
         spaced = f'<a href="?target=T&section=.text&search={quote("a name/with?chars")}">'
         assert spaced in html
@@ -2366,7 +2401,7 @@ class TestFunctionListOrdering:
         # cap has to be deterministic), so the shared key is what the rendered
         # order is non-decreasing on, and the API's page order is the same key
         # applied to the same rows.
-        html = _render_function_list(snap, "T", ".text", "", field, "")
+        html = _render_function_list(snap, "T", ".text", None, "", field, "")
         rendered = [
             unquote(match) for match in re.findall(r"&section=\.text&search=([^\"]+)", html)
         ]
@@ -2411,7 +2446,7 @@ class TestSearchAddressSpelling:
         from recoverage.potato import _render_function_list
 
         snap = self._snapshot(tmp_path, monkeypatch)
-        assert "sub_401000" in _render_function_list(snap, "T", ".text", query, "va", "")
+        assert "sub_401000" in _render_function_list(snap, "T", ".text", None, query, "va", "")
 
     @pytest.mark.parametrize("query", ["0x00402000", "0x402000"])
     def test_padded_and_bare_global_va_both_match(
@@ -2465,7 +2500,7 @@ class TestFunctionListSearchFolding:
         from recoverage.potato import _render_function_list
 
         snap = self._snapshot(tmp_path, monkeypatch)
-        assert "Café_Render" in _render_function_list(snap, "T", ".text", query, "va", "")
+        assert "Café_Render" in _render_function_list(snap, "T", ".text", None, query, "va", "")
 
     def test_grid_and_list_agree_on_the_same_term(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -2474,7 +2509,7 @@ class TestFunctionListSearchFolding:
 
         snap = self._snapshot(tmp_path, monkeypatch)
         assert _search_functions(snap, "CAFÉ") == {"Café_Render"}
-        assert "Café_Render" in _render_function_list(snap, "T", ".text", "CAFÉ", "va", "")
+        assert "Café_Render" in _render_function_list(snap, "T", ".text", None, "CAFÉ", "va", "")
 
 
 class TestCellsCacheInvalidation:

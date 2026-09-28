@@ -2291,11 +2291,20 @@ def _render_function_list(
     coverage: CoverageSnapshot,
     target: str,
     section: str,
+    active_filters: set[str] | None,
     search_query: str,
     sort_key: str,
     status_filter: str,
 ) -> str:
     order_by = sort_key if sort_key in FUNCTION_LIST_COLUMNS else "va"
+
+    # `active_filters` rides along through every link below for the reason
+    # `status_filter` does: the filter pills are drawn on this view too (they
+    # keep `view=functions`, see `_build_filter_data`), so a reader who narrows
+    # the map and opens the list has pills that read as set, and every link
+    # that leaves the list used to land on a map with all of them cleared.
+    # The spelling is the one `_build_url` emits for the same value.
+    filter_arg = f"&filter={_url_quote(','.join(sorted(active_filters)))}" if active_filters else ""
 
     # Base filter: GLOBAL/DATA marker rows live in the functions array but are
     # data markers, not functions — same exclusion as the API list endpoint and
@@ -2347,7 +2356,7 @@ def _render_function_list(
         status_note = (
             f'<font size="1" color="{MUTED_COLOR}">Status: </font>'
             f'<font size="1" color="{ACCENT_COLOR}"><b>{_esc(status_filter)}</b></font> '
-            f'<a href="{_build_url(target, section, search=search_query, view="functions")}">'
+            f'<a href="{_build_url(target, section, active_filters, search=search_query, view="functions")}">'
             f'<font size="1" color="{ACCENT_COLOR}">[Clear]</font></a> '
         )
     cap_note = ""
@@ -2357,7 +2366,9 @@ def _render_function_list(
             f"{_SEARCH_ROW_LIMIT} rows. Narrow the search above to reach the rest.</font>"
         )
 
-    prefix = f"?target={_url_quote(target)}&section={_url_quote(section)}&view=functions"
+    prefix = (
+        f"?target={_url_quote(target)}&section={_url_quote(section)}{filter_arg}&view=functions"
+    )
     base = prefix
     if search_query:
         base += f"&search={_url_quote(search_query)}"
@@ -2371,7 +2382,7 @@ def _render_function_list(
             f'<font color="{MUTED_COLOR}" size="2"><b>Functions</b></font> '
             f'<font size="1" color="{MUTED_COLOR}">({count_label})</font> '
             + status_note
-            + f'<a href="{_build_url(target, section, search=search_query, status=status_filter)}"><font size="1" color="{ACCENT_COLOR}">[Grid View]</font></a>'
+            + f'<a href="{_build_url(target, section, active_filters, search=search_query, status=status_filter)}"><font size="1" color="{ACCENT_COLOR}">[Grid View]</font></a>'
             + cap_note
             + "</td></tr>"
         ),
@@ -2424,7 +2435,7 @@ def _render_function_list(
         # here opened the panel in the wrong section for every other list.
         # The status criterion rides along beside them, so opening a function's
         # panel and stepping back to the list finds the same list.
-        link_prefix = f"?target={_url_quote(target)}&section={_url_quote(section)}"
+        link_prefix = f"?target={_url_quote(target)}&section={_url_quote(section)}{filter_arg}"
         if status_filter:
             link_prefix += f"&status={_url_quote(status_filter)}"
         link_prefix += "&search="
@@ -2628,6 +2639,7 @@ def _render_potato_inner(
             coverage,
             target,
             section,
+            active_filters or None,
             search_query=search_query,
             sort_key=sort_key,
             status_filter=status_filter,
@@ -2672,7 +2684,14 @@ def _render_potato_inner(
     # `{{section}}` in the template: those get HTML-escaped only, so a target
     # or section holding "&" would append attacker-chosen query parameters to
     # this one href.  Every other href in the page goes through _build_url.
-    functions_nav_url = f"?target={_url_quote(target)}&section={_url_quote(section)}&view=functions"
+    functions_nav_url = f"?target={_url_quote(target)}&section={_url_quote(section)}"
+    if active_filters:
+        # The pills a reader set on the grid travel into the list with them, the
+        # same way the criterion below does: the list draws those pills, so a
+        # [Functions] link that dropped them landed on a page whose controls read
+        # as unset over a grid that had been narrowed.
+        functions_nav_url += "&filter=" + _url_quote(",".join(sorted(active_filters)))
+    functions_nav_url += "&view=functions"
     if status_filter:
         # The criterion the list is narrowed by travels with the link into it,
         # so leaving for the grid and coming back does not quietly widen it.
