@@ -13,7 +13,7 @@ import { useLiveReload } from "@/hooks/useLiveReload";
 import { originalDllPath, useOriginalBinary } from "@/hooks/useOriginalBinary";
 import { cellIndexForVa, useSelection } from "@/hooks/useSelection";
 import { cn } from "@/lib/cn";
-import { MSG, count, foldForSearch, hex, sameOriginPath, toVa, trimSearch } from "@/lib/format";
+import { MSG, count, errorMessage, foldForSearch, hex, sameOriginPath, toVa, trimSearch } from "@/lib/format";
 import { readStored, writeStored } from "@/lib/storage";
 
 /** The dashboard shell: the document, the topbar's controls, and the map.
@@ -232,7 +232,7 @@ export function App() {
         // oxlint-disable-next-line @rikalabs/no-silent-catch-fallback -- the failure is surfaced in the header's error line, and the dashboard still renders its empty state
       } catch (error: unknown) {
         if (!control.signal.aborted) {
-          setLoadError(error instanceof Error ? error.message : String(error));
+          setLoadError(errorMessage(error));
           setTargetReady(true);
         }
       }
@@ -330,7 +330,11 @@ export function App() {
     if (matchedNames === null) {
       return null;
     }
-    const matched = new Set<string | number>(matchedNames);
+    // Set<string>, not Set<string | number>: every member is added as a
+    // string (a name, or a VA run through String), and every lookup below
+    // passes a String of a cell's `functions[0]`, so the number arm was a
+    // type wider than any call site could satisfy.
+    const matched = new Set<string>(matchedNames);
     for (const name of matchedNames) {
       const va = coverage.searchIndex[name]?.va;
       if (va !== undefined) {

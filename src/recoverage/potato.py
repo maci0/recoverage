@@ -1624,9 +1624,11 @@ def _search_functions(coverage: CoverageSnapshot, search_query: str) -> set[str]
         return search_matched_fns
 
     needle = fold_needle(search_query)
-    # A term no hex address can hold cannot match either address spelling, so
-    # the two formats and folds per global are built only when it can
-    # (server.fold_can_match_hex).
+    # A term no hex address can hold cannot match an address spelling, so every
+    # hex column here is folded only when it can: the two formats and folds per
+    # global, and a function's `vaStart` (server.fold_can_match_hex).  That is
+    # the same guard _functions_table_html puts on its own two VA arms, and the
+    # common case, a name the reader typed, stops folding one string per row.
     match_hex = fold_can_match_hex(needle)
     # The cap takes the FIRST rows of the sorted match set, so only that many
     # have to be ordered: nsmallest is the documented equivalent of
@@ -1639,7 +1641,7 @@ def _search_functions(coverage: CoverageSnapshot, search_query: str) -> set[str]
             fn
             for fn in coverage.functions
             if fold_match_folded(fn.name, needle)
-            or fold_match_folded(fn.vaStart, needle)
+            or (match_hex and fold_match_folded(fn.vaStart, needle))
             or fold_match_folded(fn.symbol, needle)
         ),
         key=lambda fn: (fn.name, fn.vaStart),

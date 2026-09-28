@@ -5,7 +5,22 @@
  * `foldForSearch` are the locale-aware spellings the numbers, the timestamps
  * and the search read through; `MSG` is the one vocabulary the shell
  * and the detail panes share, so a loading pane and a loading overlay read the
- * same way. */
+ * same way; `errorMessage` is the one narrowing a `catch (error: unknown)`
+ * reads through. */
+
+/** The message a caught failure is reported by.
+ *
+ * A `catch` binding is `unknown`, so every call site has to narrow it before
+ * it can render, and the narrowings drift: one wrote the message and four
+ * wrote a different form of it, and `isPaneMessage` decides whether a pane
+ * holds a resting message or a failure by the `Error: ` prefix alone. ONE
+ * narrowing, so a site cannot spell it a second way. A thrown non-Error (a
+ * `fetch` rejection carries a `TypeError`, a `throw "..."` from a caller does
+ * not) reads as its own text, which is what the previous copies rendered. */
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- a `catch` binding IS the boundary this narrows, and narrowing it once here is what stops five call sites narrowing it five ways
+export function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 export function hex(address: number, width: number): string {
   return `0x${address.toString(16).toUpperCase().padStart(width, "0")}`;

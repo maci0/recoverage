@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "preact/compat";
 
 import { fetchData, fetchStats, type DataPayload, type SearchEntry, type Section, type StatsPayload } from "@/api";
+import { errorMessage } from "@/lib/format";
 
 /** The dashboard's coverage data.
  *
@@ -103,7 +104,7 @@ export function useCoverage(target: string, section: string): Coverage {
         // oxlint-disable-next-line @rikalabs/no-silent-catch-fallback -- the failure is surfaced as the header's error line, and the map keeps its last good frame
       } catch (error: unknown) {
         if (!signal.aborted) {
-          setLoadError(error instanceof Error ? error.message : String(error));
+          setLoadError(errorMessage(error));
         }
       } finally {
         if (!signal.aborted) {
@@ -143,7 +144,7 @@ export function useCoverage(target: string, section: string): Coverage {
       } catch (error: unknown) {
         if (!control.signal.aborted) {
           setStats(null);
-          setStatsError(error instanceof Error ? error.message : String(error));
+          setStatsError(errorMessage(error));
         }
       }
     })();
@@ -174,7 +175,7 @@ export function useCoverage(target: string, section: string): Coverage {
           }
           setCellError({
             section: name,
-            detail: error instanceof Error ? error.message : String(error),
+            detail: errorMessage(error),
           });
         } finally {
           // Only this request's own claim: a reload aborts and clears the map,

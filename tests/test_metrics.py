@@ -402,6 +402,38 @@ class TestStats:
     def test_percentile_of_an_empty_sample_is_zero(self) -> None:
         assert metrics.percentile([], 0.95) == 0.0
 
+    def test_percentile_of_an_even_window_takes_the_upper_middle(self) -> None:
+        """The p50 of six samples is the fourth, not the third.
+
+        `round` is banker's rounding, so the scaled position of a p50 over an
+        even-length window lands on exactly .5 and it answered 2 where the
+        median is 3. Banker's rounding also put the p95 a full sample low on
+        a window whose length makes its position odd, which reads as "the tail
+        is fine" on a window that is one request short of it.
+        """
+        samples = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+        assert metrics.percentile(samples, 0.50) == 4.0
+        # 0.95 * 5 = 4.75: a half-up floor lands on the last sample, where
+        # banker's rounding read 4.0 and reported the second-slowest request
+        # as the 95th percentile.
+        assert metrics.percentile(samples, 0.95) == 6.0
+        assert metrics.percentile(samples, 0.0) == 1.0
+        assert metrics.percentile(samples, 1.0) == 6.0
+
+    def test_percentile_clamps_a_fraction_outside_the_unit_range(self) -> None:
+        """An out-of-range share indexes an end rather than raising."""
+        samples = [1.0, 2.0, 3.0, 4.0]
+        assert metrics.percentile(samples, -1.0) == 1.0
+        assert metrics.percentile(samples, 2.0) == 4.0
+
+    def test_a_median_over_an_even_window_is_the_upper_middle_sample(self) -> None:
+        """The snapshot's own p50 over an even window agrees with percentile()."""
+        for duration in (1.0, 2.0, 3.0, 4.0, 5.0, 6.0):
+            metrics.REQUESTS.finish("/api/targets", 200, duration)
+        snap = metrics.REQUESTS.snapshot()
+        assert snap["latency_window"] == 6
+        assert snap["p50_ms"] == 4.0
+
     def test_the_slow_route_is_named_by_its_own_p95(self) -> None:
         """A process-wide p95 is only half a diagnosis.
 
