@@ -580,6 +580,23 @@ class TestToolchainPins:
             f"the matrix tests {sorted(tested)}, pyproject.toml claims {sorted(claimed)}"
         )
 
+    def test_every_shell_script_declares_its_interpreter(self) -> None:
+        """Every tools/*.sh names the shell it is written for.
+
+        shellcheck reports a script with neither a shebang nor a
+        `# shellcheck shell=` directive as SC2148, which is what `make
+        shell-lint` runs. It is an optional host tool, so on a checkout
+        without it the only gate is the CI lint job, one push after the
+        edit; the suite is not optional and runs in the edit-test loop.
+        """
+        scripts = sorted((_ROOT / "tools").glob("*.sh"))
+        assert scripts, "tools/*.sh is empty; the clone script is gone?"
+        without = [p.name for p in scripts if not p.read_text(encoding="utf-8").startswith("#!")]
+        assert not without, (
+            f"tools/{', tools/'.join(without)} has no shebang: "
+            "SC2148 fails 'make shell-lint' and the CI lint job"
+        )
+
 
 class TestFrontendAnalysisIsEnforced:
     """Every frontend analyzer package.json declares is run by something.
