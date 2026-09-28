@@ -676,7 +676,7 @@ and amend when a dependency is added to `web/`:
 | [Preact](https://github.com/preactjs/preact) (and `preact/compat`) | `assets/app.js` | MIT |
 | [Highlight.js](https://highlightjs.org) (core plus the `c` and `x86asm` grammars) | `assets/app.js` | BSD-3-Clause |
 | [Tailwind CSS](https://github.com/tailwindlabs/tailwindcss) | `assets/style.css` | MIT |
-| `clsx`, `tailwind-merge`, `class-variance-authority`, `lucide-react` (the shadcn/ui primitives' own dependencies) | `assets/app.js` | MIT |
+| `clsx`, `tailwind-merge`, `class-variance-authority` (the shadcn/ui primitives' own dependencies) | `assets/app.js` | MIT |
 
 Nothing is fetched from a CDN at runtime, so the dashboard works air-gapped.
 The remaining npm packages in `package.json` (vite, typescript, oxlint,

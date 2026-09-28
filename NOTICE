@@ -24,11 +24,10 @@ Tailwind CSS
   License: MIT, https://github.com/tailwindlabs/tailwindcss/blob/main/LICENSE
   Compiled into style.css.
 
-clsx, tailwind-merge, class-variance-authority, lucide-react
+clsx, tailwind-merge, class-variance-authority
   Upstream: https://github.com/lukeed/clsx,
             https://github.com/dcastil/tailwind-merge,
-            https://github.com/joe-bell/cva,
-            https://github.com/lucide-icons/lucide
+            https://github.com/joe-bell/cva
   License: MIT
   Bundled into app.js.
 

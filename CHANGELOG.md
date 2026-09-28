@@ -37,6 +37,13 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `lucide-react` is no longer a devDependency. Nothing imported it: the
+  dashboard runs on preact/compat and draws no icon from the package, so the
+  only thing it did was pull `react` into `bun.lock` for every contributor and
+  CI runner. NOTICE and the README's bundled-library table drop it for the same
+  reason, and `tests/test_supply_chain.py` now holds the npm half of the
+  reachability rule the Python side already had: a devDependency that no source
+  imports and no gate runs has to name the mechanism that still needs it.
 - Batch VA lookups (`POST /api/targets/<target>/functions`) and the
   cell-detail panel's verify rows resolve through a per-snapshot index instead
   of scanning the globals and `verify_results` arrays per requested VA, and a

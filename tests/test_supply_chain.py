@@ -49,6 +49,27 @@ _CLI_ONLY = {
     "pytest-playwright": "a pytest plugin, loaded by entry point, that only supplies fixtures",
 }
 
+# The same for devDependencies, which reach the build without an import: a bin
+# on a script's command line, a `types` entry the type checker resolves, or a
+# file under node_modules a build step names. Same rule, same reason each.
+_JS_CLI_ONLY = {
+    "oxlint": "the `oxlint` binary the lint:js script runs",
+    "vite": "the `vite` binary the build:web and dev:web scripts run",
+    "typescript": "the `tsc` binary the typecheck:web script runs",
+    "@types/node": "the `node` entry in web/tsconfig.json's `types` array",
+    "vnu-jar": "tools/lint_html.py runs node_modules/vnu-jar/build/dist/vnu.jar under java",
+    "@rikalabs/oxlint-standards": (
+        "tools/flatten_rikalabs_strict.py reads its preset, and oxlint.config.ts "
+        "names the plugin under node_modules"
+    ),
+}
+
+# A module specifier in a JS, TS or CSS source: `from "x"`, `import "x"`,
+# `import("x")`, `require("x")`, or a stylesheet's `@import "x"`.
+_JS_SPECIFIER_RE = re.compile(
+    r"""(?:\bfrom|\bimport|\brequire)\s*\(?\s*["'](?P<module>[^"']+)["']|@import\s+["'](?P<css>[^"']+)["']"""
+)
+
 # A CI job header: two spaces, a name, a colon, and nothing else on the line.
 _JOB_RE = re.compile(r"^  (?P<name>[a-z][a-z0-9-]*):$", re.MULTILINE)
 # A job step that reaches the pinned script: the composite action, which
@@ -859,6 +880,40 @@ def _declared_distributions() -> dict[str, str]:
     return names
 
 
+def _js_sources() -> list[Path]:
+    """Every first-party JS, TS, TSX and CSS source a gate compiles or bundles.
+
+    `web/` is what `vite build` reads, `oxlint.config.ts` is the lint config,
+    and the vendored anti-slop plugin is TypeScript the lint gate compiles, so
+    its imports are the tree's too.
+    """
+    sources = [
+        path
+        for pattern in ("*.ts", "*.tsx", "*.js", "*.css")
+        for path in sorted((_ROOT / "web").rglob(pattern))
+    ]
+    return [*sources, _ROOT / "oxlint.config.ts", *sorted(_VENDOR_TREE.rglob("*.ts"))]
+
+
+def _imported_js_packages() -> set[str]:
+    """The npm package names those sources name as a module specifier.
+
+    A relative specifier is first-party, a `node:`-prefixed one is the
+    platform, and the tsconfig `@/` alias is the first-party `web/app` tree;
+    everything else names a package, and only the first segment (two under a
+    scope) is the name the manifest declares.
+    """
+    packages: set[str] = set()
+    for path in _js_sources():
+        for match in _JS_SPECIFIER_RE.finditer(path.read_text(encoding="utf-8")):
+            specifier = match.group("module") or match.group("css")
+            if specifier.startswith((".", "/", "@/", "node:")):
+                continue
+            head = specifier.split("/")
+            packages.add("/".join(head[:2]) if specifier.startswith("@") else head[0])
+    return packages
+
+
 class TestDeclaredDependencies:
     def test_type_checking_only_imports_are_not_runtime_dependencies(self) -> None:
         """A guarded import never executes, so it needs no distribution.
@@ -933,6 +988,40 @@ if not TYPE_CHECKING:
         assert not undeclared, f"imported but not declared in pyproject.toml: {sorted(undeclared)}"
 
 
+class TestDeclaredFrontendDependencies:
+    """The npm half of the reachability rule `TestDeclaredDependencies` holds.
+
+    A devDependency nothing imports and no gate runs is installed on every
+    contributor's machine and on every CI runner, and its own dependencies
+    with it, for a build that never calls it. `lucide-react` sat there for
+    months: the tree uses preact/compat and imports no icon, so the only
+    thing it did was drag `react` into the lockfile.
+    """
+
+    def test_every_dev_dependency_is_reachable(self) -> None:
+        """No devDependency is dead weight.
+
+        Reachability is an import from a source a gate reads, or a recorded
+        invocation: a bin on a script, a `types` entry, or a node_modules file
+        a build step names. Every exemption carries the mechanism, because an
+        unexplained one is how the next stale declaration survives.
+        """
+        declared = set(json.loads(_PACKAGE_JSON.read_text(encoding="utf-8"))["devDependencies"])
+        used = _imported_js_packages()
+        unreachable = {
+            name: "no import, or no recorded invocation"
+            for name in declared
+            if name not in used and name not in _JS_CLI_ONLY
+        }
+        assert not unreachable, f"declared but never used: {sorted(unreachable)}"
+        for name, reason in _JS_CLI_ONLY.items():
+            assert name in declared, (
+                f"_JS_CLI_ONLY lists {name!r}, which package.json no longer declares; "
+                "its exemption has outlived the dependency"
+            )
+            assert reason.strip(), f"_JS_CLI_ONLY[{name!r}] needs the reason it is exempt"
+
+
 class TestBundledThirdPartyAssets:
     """The wheel ships vendored browser blobs, so their grants have to ship too.
 
@@ -959,7 +1048,7 @@ class TestBundledThirdPartyAssets:
         "Preact (and preact/compat)",
         "highlight.js",
         "Tailwind CSS",
-        "clsx, tailwind-merge, class-variance-authority, lucide-react",
+        "clsx, tailwind-merge, class-variance-authority",
     )
 
     def test_every_bundled_library_is_credited(self) -> None:
