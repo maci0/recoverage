@@ -116,6 +116,26 @@ make test-browser
 Without either, the module skips with the command it wants rather than
 failing.
 
+### The frontend loop
+
+`web/` has a dev server of its own, and it is the fast way to see a change:
+`bun run dev:web` serves `web/index.html` on `127.0.0.1:5173` and proxies
+`/api`, `/src` and `/original` to a running dashboard on
+`http://127.0.0.1:8001` (`RECOVERAGE_DEV_API` points it elsewhere). It needs
+`bun install` first, which `make web-lint` and `make web-build` both do, and a
+`recoverage serve` in another shell for the API half:
+
+```bash
+uv run recoverage serve --no-open   # 127.0.0.1:8001, the proxy's default
+bun run dev:web                     # http://127.0.0.1:5173
+```
+
+Without the dev server a `web/` change is only visible after `make web-build`
+rewrites the committed `app.js` and `style.css`, because the Python server
+inlines those two files rather than serving the sources. `make web-lint` and
+`make typecheck-web` are the gates a frontend change still has to pass either
+way.
+
 ## Before you push
 
 ```bash

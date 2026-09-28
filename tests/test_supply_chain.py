@@ -469,13 +469,10 @@ class TestEnvironmentInstalls:
         """A recipe that spells `uv sync` out is covered, not just the two
         variables every other recipe reads.
 
-        `test-browser` runs its own `uv sync --frozen` for the playwright
-        extra, and the declaration checks above never saw it. `--frozen`
-        installs uv.lock even when pyproject.toml no longer matches it, so a
-        dependency edit that skipped `uv lock` left the browser tests passing
-        against a package the manifest does not describe. A recipe that goes
-        through `$(UV_SYNC_FLAGS)` or `$(UV_RUN)` is covered by those
-        declarations; only a spelled-out invocation needs the flag here.
+        `test-browser` runs its own `uv sync` for the playwright extra, and
+        the declaration checks above never saw it. A recipe that goes through
+        `$(UV_SYNC_FLAGS)` or `$(UV_RUN)` is covered by those declarations;
+        only a spelled-out invocation needs the flag here.
         """
         makefile = _MAKEFILE.read_text(encoding="utf-8")
         commands = [
@@ -492,6 +489,31 @@ class TestEnvironmentInstalls:
             flags = " ".join(line.split())
             assert "--locked" in flags, f"Makefile installs without --locked: {flags}"
             assert "--frozen" not in flags, f"Makefile installs with --frozen: {flags}"
+
+    def test_every_package_json_uv_run_keeps_the_dev_extra(self) -> None:
+        """A `uv run` outside the Makefile re-syncs the environment, so it
+        has to name the same extras the environment was built with.
+
+        `lint:html` runs a Python tool from a bun script, so it is outside
+        every Makefile recipe and the checks above never saw it. `uv run`
+        syncs `.venv` to what its own flags ask for and uninstalls the rest,
+        so the invocation without `--extra dev` left `make web-lint` ending
+        with pytest, ruff and mypy removed from the environment, and the next
+        `make test` or `make lint` reinstalling them before it ran a line.
+        """
+        scripts = json.loads(_PACKAGE_JSON.read_text(encoding="utf-8"))["scripts"]
+        commands = [
+            f"{name}: {command}" for name, command in scripts.items() if "uv run" in command
+        ]
+        assert commands, "package.json runs no uv command; this check would pass vacuously"
+        for line in commands:
+            flags = " ".join(line.split())
+            assert "--locked" in flags, f"package.json runs uv without --locked: {flags}"
+            assert "--frozen" not in flags, f"package.json runs uv with --frozen: {flags}"
+            assert "--extra dev" in flags, (
+                f"package.json runs uv without --extra dev, so it re-syncs the "
+                f"environment and uninstalls the dev tools: {flags}"
+            )
 
 
 class TestToolchainPins:
