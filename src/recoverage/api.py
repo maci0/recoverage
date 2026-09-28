@@ -1375,10 +1375,12 @@ def _build_data_raw(
     if include_search_index:
         data["search_index"] = _build_search_index(snap)
 
-    # The accepted format-version set travels with the payload: the SPA's
-    # empty-state message needs it to tell "no section rows yet" from "this
-    # build does not understand the document", and a second copy hardcoded in
-    # app.js would drift as rebrew advances the format.
+    # The format version travels with the payload so the client learns it from
+    # the server; a second copy hardcoded in app.js would drift as rebrew
+    # advances the format. It is the version of the documents THIS build read
+    # (server.known_schema_versions documents why that is not the same thing
+    # as the set the reader accepts), so it is a constant while rebrew reads
+    # exactly one version.
     data["known_schema"] = _server.known_schema_versions()
 
     # Per-section cell stats, through the same reader /stats and the Potato map

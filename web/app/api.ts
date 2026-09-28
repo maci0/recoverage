@@ -101,9 +101,11 @@ export type StatsPayload = {
 };
 
 export type SearchEntry = {
-  /** The entry's address as the server spells it: a hex string for every
-   * entry (`api._build_search_index` writes `vaStart` and `hex(va)`), read
-   * through `toVa` rather than used as a number. */
+  /** The entry's address as the server spells it, and the two spellings are
+   * NOT the same: `api._build_search_index` writes `vaStart` (a number) for a
+   * function entry and `hex(va)` (a string) for a global one, so this is
+   * `string | number` rather than either. Read through `toVa`; `hex(entry.va)`
+   * on the number arm hands back `0X0X10001000` and matches nothing. */
   va: string | number;
   symbol?: string;
   name?: string;

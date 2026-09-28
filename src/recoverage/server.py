@@ -906,13 +906,27 @@ def coverage_version(snap: CoverageSnapshot) -> str:
 
 
 def known_schema_versions() -> list[str]:
-    """Every coverage format version this server can read, sorted.
+    """The format versions of the coverage documents this server just read, sorted.
 
-    The served ``known_schema`` list, which the SPA's empty-state message uses to
-    tell "no section rows yet" from "this build does not understand the file".
-    It is read off the snapshots rather than from a constant: a version this
-    server cannot read never becomes a snapshot, so the list can only ever name
-    versions it does serve.
+    The served ``known_schema`` list, so the format version reaches the client
+    from the server rather than from a copy hardcoded in the bundle, which
+    would drift as rebrew advances the format.
+
+    Read off the snapshots, NOT off what the reader supports, and that is a
+    tautology today: ``rebrew.coverage_toml`` raises on any document whose
+    ``version`` is not the one it reads, so every snapshot that exists carries
+    that single version and this list can only ever name it. An empty list means
+    no readable document, which is the 503 ``db_unavailable`` contract the
+    caller answers before a payload is ever serialized. The field therefore
+    cannot tell a client "this build does not understand the file" — that
+    document is never readable, so it never reaches a client. Making it carry
+    that meaning needs the reader's ACCEPTED set, which rebrew does not export.
+    Both ``/data`` and ``/potato`` answer the unreadable case with the 503
+    ``db_unavailable`` contract instead, which is where the reader's own
+    message naming the file surfaces.
+
+    Pinned by ``tests/test_server.py::TestCoverageVersionGate``, which fails if
+    a version the reader refuses can ever reach this list.
     """
     return sorted({str(snap.version) for snap in load_all_coverage_from(_db_path()).values()})
 
