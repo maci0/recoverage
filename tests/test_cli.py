@@ -6,6 +6,7 @@ import csv
 import io
 import json
 import os
+import socket
 import sys
 from collections.abc import Iterator
 from pathlib import Path
@@ -1054,6 +1055,48 @@ class TestCheckExplicitUntrackedSectionVerdict:
         assert payload["error"] == "no tracked sections — nothing was checked"
 
 
+class TestEphemeralPort:
+    """``--port 0`` asks the OS for a free port, so nothing may print the 0.
+
+    The banner, the config block, ``/api/health`` and the URL the browser is
+    handed are read by a person or a script rather than fed back into
+    ``bind()``: naming port 0 there produces a tab that cannot connect and a
+    health report whose port is not one the listener answers on.
+    """
+
+    def test_a_named_port_is_left_alone(self) -> None:
+        assert devserver.resolve_listen_port(8123, "127.0.0.1") == 8123
+
+    def test_zero_resolves_to_a_port_this_host_can_bind(self) -> None:
+        port = devserver.resolve_listen_port(0, "127.0.0.1")
+        assert port > 0
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", port))
+
+    def test_banner_and_config_name_the_bound_port(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        class _StubApp:
+            @staticmethod
+            def run(**_kwargs: Any) -> None:
+                raise KeyboardInterrupt
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("recoverage.webapp.app", _StubApp)
+        monkeypatch.setattr(cli, "open_browser", lambda _url: None)
+        monkeypatch.setattr(sys, "argv", ["recoverage", "serve", "--port", "0", "--no-open"])
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+        assert exc.value.code == 0
+        out = capsys.readouterr().out
+        assert ":0" not in out
+        bound = int(out.split("Listening on: http://127.0.0.1:")[1].split()[0])
+        assert bound > 0
+        # The config block is the other reader of the value (/api/health
+        # serves it), and it has to be the same number.
+        assert f"port={bound}" in out
+
+
 class TestServePortRange:
     def test_out_of_range_port_rejected_cleanly(self) -> None:
         """--port 99999 must be a clean CLI validation error, not an
@@ -1097,6 +1140,25 @@ class TestOpenPort:
         result = runner.invoke(app, ["open"])
         assert result.exit_code == 2
         assert "RECOVERAGE_PORT" in result.output
+
+    def test_port_zero_is_refused(self, monkeypatch: Any) -> None:
+        """`--port 0` is a request for an ephemeral port, not an address.
+
+        `open` has no way to learn which one the server bound, so opening
+        http://127.0.0.1:0 would pop a tab that cannot connect and report
+        success. The refusal is a usage error and says where the real port is.
+        """
+        opened: list[str] = []
+        monkeypatch.setattr("recoverage.cli.open_browser", lambda url: opened.append(url) or True)
+        result = runner.invoke(app, ["open", "--port", "0"])
+        assert result.exit_code == 2
+        assert opened == []
+        assert "banner" in result.stderr
+
+    def test_env_port_zero_is_refused(self, monkeypatch: Any) -> None:
+        monkeypatch.setenv("RECOVERAGE_PORT", "0")
+        result = runner.invoke(app, ["open"])
+        assert result.exit_code == 2
 
     def test_no_browser_exits_1(self, monkeypatch: Any) -> None:
         """Nothing was launched, so exit 0 would be a false success.

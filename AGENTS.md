@@ -507,6 +507,14 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   directory by basename only and a second, absolute spelling of it here would
   undo that. A new setting `serve` resolves joins the same rendering; a second
   place that formats a setting is a second answer to "what is it running with".
+  The port reaching that rendering is the one the listener will hold:
+  `devserver.resolve_listen_port` turns the documented `--port 0` ("bind a
+  free port") into a concrete number before either surface renders, because
+  every reader of it (the banner, health, the URL `open_browser` is handed) is
+  printed rather than fed back into `bind()`. `recoverage config` deliberately
+  does NOT resolve it: it reports the configured value, and the free port a
+  later `serve` picks is a different one. `open` refuses port 0 for the same
+  reason, with a message naming the banner that holds the real number.
 - The network-bind acknowledgment and the CORS warnings are ONE rule, in
   `cli._remote_bind_gate` and `cli._cors_warnings`, and both `serve` and
   `recoverage config` run it. `config` is the preflight a deployment gates on:

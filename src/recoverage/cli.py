@@ -30,6 +30,7 @@ from recoverage.devserver import (
     _KeepAliveRequestHandler,
     _ThreadingWSGIServer,
     configure_transport,
+    resolve_listen_port,
 )
 
 app = typer.Typer(
@@ -914,11 +915,14 @@ def serve(
         None,
         "--port",
         "-p",
-        help=f"Port to serve on, 0-65535 (default: {config.DEFAULT_PORT}; env: RECOVERAGE_PORT)",
+        metavar="PORT",
+        help=f"Port to serve on, 0-65535 (0 binds a free port the OS picks and "
+        f"reports in the banner; default: {config.DEFAULT_PORT}; env: RECOVERAGE_PORT)",
     ),
     bind: str | None = typer.Option(
         None,
         "--bind",
+        metavar="ADDRESS",
         help=f"Interface to bind to (default: {config.DEFAULT_BIND}; use 0.0.0.0 for LAN; "
         "env: RECOVERAGE_BIND)",
     ),
@@ -939,12 +943,14 @@ def serve(
     cors_origin: list[str] | None = typer.Option(
         None,
         "--cors-origin",
+        metavar="ORIGIN",
         help="Origin URL allowed to read the API cross-origin (repeatable, "
         "e.g. http://localhost:5173; env: RECOVERAGE_CORS_ORIGIN, comma-separated)",
     ),
     token: str | None = typer.Option(
         None,
         "--token",
+        metavar="TOKEN",
         help="Require this bearer token for every request (Authorization: Bearer <token>, "
         "?token=, or open the dashboard as /?token=<token> (or /potato?token=<token>) "
         "to set the browser cookie; env: RECOVERAGE_TOKEN, which keeps the token out "
@@ -953,6 +959,7 @@ def serve(
     log_level: str | None = typer.Option(
         None,
         "--log-level",
+        metavar="LEVEL",
         help=f"Log threshold (default: {logging.getLevelName(config.DEFAULT_LOG_LEVEL)}; any name "
         "or number logging knows, e.g. DEBUG, INFO, WARN, WARNING, ERROR, CRITICAL; "
         "env: RECOVERAGE_LOG_LEVEL)",
@@ -976,6 +983,12 @@ def serve(
     name is a startup error, and so is a value that is not a valid port,
     boolean, log level, non-empty string, or a CORS origin a browser could
     send.
+
+    Exits 2 for any of those, before the listener binds. Exits 1 when --bind
+    names a non-loopback address without --allow-remote (the refusal and the
+    firewall warning go to stderr) or when the port is already taken, and 0 on
+    Ctrl+C. `recoverage config` runs the same checks and ends the same way,
+    so a deployment can preflight this configuration.
     """
     import recoverage.server as _server
     from recoverage.server import (
@@ -996,6 +1009,11 @@ def serve(
     )
     listen_port = resolved.port
     bind = resolved.bind
+    # --port 0 asks the OS for a free port. Resolve it here, before anything
+    # prints or binds, so the banner, the config block, /api/health and the
+    # browser URL all name the port that is actually bound rather than the 0
+    # that was asked for.
+    listen_port = resolve_listen_port(listen_port, bind)
     allow_remote = resolved.allow_remote
     cors = resolved.cors
     cors_origin = list(resolved.cors_origins)
@@ -1182,11 +1200,18 @@ def _section_row(sec: dict[str, Any]) -> list[Any]:
 
 @app.command()
 def stats(
-    target: str | None = typer.Option(None, "--target", "-t", help="Target ID (default: all)"),
+    target: str | None = typer.Option(
+        None, "--target", "-t", metavar="TARGET", help="Target ID (default: all)"
+    ),
     json_output: bool = typer.Option(False, "--json", help="Output results as JSON"),
     no_color: bool = _no_color_option(),
 ) -> None:
-    """Print coverage stats as a table (or JSON with --json)."""
+    """Print coverage stats as a table (or JSON with --json).
+
+    Exits 1 when the coverage directory holds no document, or when --target
+    names a target no build has written; the errors go to stderr, or to
+    stdout as a JSON object under --json.
+    """
     _use_utf8_stdout()
 
     from rich.console import Console
@@ -1260,7 +1285,9 @@ def export(
         "-f",
         help="Output format (choose json, csv, or md)",
     ),
-    target: str | None = typer.Option(None, "--target", "-t", help="Target ID (default: all)"),
+    target: str | None = typer.Option(
+        None, "--target", "-t", metavar="TARGET", help="Target ID (default: all)"
+    ),
     no_color: bool = _no_color_option(),
 ) -> None:
     """Export coverage data to stdout.
@@ -1269,6 +1296,11 @@ def export(
     character are prefixed with an apostrophe, and rows end with a single
     newline so Windows stdout does not double it. Markdown cells escape pipes
     and newlines.
+
+    The rows are the only thing on stdout, so a redirect or a pipe gets clean
+    data. Exits 1 when the coverage directory holds no document or --target
+    names a target no build has written, and the report goes to stderr (to
+    stdout as a JSON object under --format json).
     """
     _use_utf8_stdout()
     json_output = output_format is ExportFormat.json
@@ -1413,10 +1445,18 @@ def _checked_min_coverage(value: str, json_output: bool) -> float:
 @app.command()
 def check(
     min_coverage: str = typer.Option(
-        ..., "--min-coverage", "-m", help="Minimum coverage percentage (0-100)"
+        ...,
+        "--min-coverage",
+        "-m",
+        metavar="MIN_COVERAGE",
+        help="Minimum coverage percentage (0-100)",
     ),
-    target: str | None = typer.Option(None, "--target", "-t", help="Target ID (default: all)"),
-    section: str | None = typer.Option(None, "--section", "-s", help="Section name (default: all)"),
+    target: str | None = typer.Option(
+        None, "--target", "-t", metavar="TARGET", help="Target ID (default: all)"
+    ),
+    section: str | None = typer.Option(
+        None, "--section", "-s", metavar="SECTION", help="Section name (default: all)"
+    ),
     json_output: bool = typer.Option(False, "--json", help="Output results as JSON"),
     no_color: bool = _no_color_option(),
 ) -> None:
@@ -1520,7 +1560,14 @@ def check(
 
 @app.command()
 def regen(no_color: bool = _no_color_option()) -> None:
-    """Re-run rebrew catalog + build-db to regenerate the coverage documents."""
+    """Re-run rebrew catalog + build-db to regenerate the coverage documents.
+
+    Writes no data to stdout, only progress, so a caller can read the report
+    from the exit code alone. Exits 2 when RECOVERAGE_DB names a directory
+    rebrew would not write to (the mismatch is refused rather than reported
+    as a done regen that left the dashboard stale), 1 when rebrew fails, and
+    0 when it succeeds, whether or not it had a built target to write.
+    """
     from recoverage.server import _project_dir
 
     _check_env_or_exit()
@@ -1543,6 +1590,7 @@ def open_cmd(
         None,
         "--port",
         "-p",
+        metavar="PORT",
         help=f"Port of the running server (default: {config.DEFAULT_PORT}; env: RECOVERAGE_PORT)",
     ),
     no_color: bool = _no_color_option(),
@@ -1551,7 +1599,9 @@ def open_cmd(
 
     The port falls back to RECOVERAGE_PORT, the same default [bold]serve[/bold]
     uses, so a deployment that moved the server off 8001 does not need every
-    operator to remember the new port as well.
+    operator to remember the new port as well.  A port of 0 is refused: it
+    names the free port the server picked, which is in the banner
+    [bold]serve[/bold] printed and is not something this command can know.
 
     Exits 1 when no browser could be launched, so a script or a container
     entrypoint that runs this and finds nothing open learns why.
@@ -1561,6 +1611,15 @@ def open_cmd(
         resolved_port = config.port() if port is None else _checked_port(port)
     except config.ConfigError as exc:
         _secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(2) from None
+    if resolved_port == config.MIN_PORT:
+        _secho(
+            "Error: --port 0 is not an address: it asks the server for a free "
+            "port of the OS's choosing. Open the URL from the serve banner, or "
+            "pass the port it printed.",
+            fg=typer.colors.RED,
+            err=True,
+        )
         raise typer.Exit(2) from None
     url = f"http://127.0.0.1:{resolved_port}"
     typer.echo(f"Opening {url}")
@@ -1591,6 +1650,10 @@ def config_cmd(
     network-bind refusal (exit 1) and the same CORS warnings, after the
     values.  A check that exited 0 for a configuration `serve` refuses is a
     deployment that finds out at boot instead of at the check.
+
+    A port of 0 prints as 0: it is the configured value, and the free port
+    `serve` binds in its place is a different one on every run.  The banner
+    that run prints is where the real number is.
     """
     resolved = _resolve_serve_config()
     settings = config.active_config(

@@ -56,6 +56,14 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Every command's `--help` names the value a flag takes (`--port PORT`,
+  `--target TARGET`, `--min-coverage MIN_COVERAGE`, `--log-level LEVEL`,
+  `--bind ADDRESS`, `--cors-origin ORIGIN`, `--token TOKEN`, `--section
+  SECTION`) instead of the `<str>` a text option defaults to, and every
+  command now states the exit codes it can end on. `check`, `open` and
+  `config` documented theirs; `serve`, `stats`, `export` and `regen` did not,
+  so the contract a script depends on was readable from three of seven
+  commands.
 - `GET /api/targets/<target>/data` treats `?index=` as the flag it is: `0`,
   `1` or absent. Any other value is a 400 naming the accepted spellings, the
   same contract `?format=` and `?status=` already had. `?index=false` used to
@@ -141,6 +149,15 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   left the rest of the stream to the next request on a keep-alive socket. The
   size line takes the same ASCII-only parse as every other request-supplied
   number, and anything else is refused as malformed with the connection closed.
+- **`serve --port 0` reported port 0 everywhere it printed the port.** Port 0
+  is the documented floor and means "bind a free port", but the banner, the
+  `config` block and the URL handed to the browser all named the 0 that was
+  asked for, so the browser opened a tab nothing answers on and
+  `/api/health`'s `config.port` was not a port the listener held. The port is
+  now resolved from the OS before the listener binds, and every reader of the
+  value reports the one that was bound. `recoverage open --port 0` is refused
+  with exit 2 instead, naming the banner that holds it: the command has no way
+  to know which free port a server running elsewhere picked.
 - **A Potato Mode line could start with a combining mark.** The detail panel
   and the disassembly pane hard-wrap their text at a fixed column count, and
   the wrap landed between a character and a combining mark that followed it,

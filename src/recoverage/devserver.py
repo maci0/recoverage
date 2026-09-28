@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import socket
 from http.client import HTTPMessage
 from socketserver import ThreadingMixIn
 from typing import IO, TYPE_CHECKING, Any, cast
@@ -68,6 +69,34 @@ def configure_transport(*, max_connections: int, client_timeout_seconds: int) ->
     # So /api/health's `connections.max` names the enforced cap before the
     # first accept rather than reading 0 until one lands.
     metrics.CONNECTIONS.set_limit(max_connections)
+
+
+def resolve_listen_port(port: int, host: str) -> int:
+    """The port to actually bind: *port*, or one the OS picks when it is 0.
+
+    ``--port 0`` is the documented way to say "any free port" (port 0 is the
+    floor ``config.MIN_PORT`` sets), but the number the caller asked for is not
+    the number that gets bound, and every consumer of the value is printed
+    rather than read: the banner, ``recoverage config``'s port line,
+    ``/api/health`` and the URL the browser is handed.  Resolving it here, once,
+    before the listener binds, is what keeps those four from naming port 0,
+    which is not an address anything can connect to.
+
+    The socket is bound to *host* and closed again, so the port comes from the
+    family and the interface the server will use rather than from a second
+    guess at them; a host that does not resolve keeps the 0 the OS would have
+    given the listener itself, and ``bind()`` fails there with the resolver's
+    own error, as it always has.
+    """
+    if port != config.MIN_PORT:
+        return port
+    try:
+        infos = socket.getaddrinfo(host, config.MIN_PORT, type=socket.SOCK_STREAM)
+    except socket.gaierror:
+        return port
+    with socket.socket(infos[0][0]) as probe:
+        probe.bind((host, config.MIN_PORT))
+        return int(probe.getsockname()[1])
 
 
 class _ThreadingWSGIServer(ThreadingMixIn, WSGIServer):

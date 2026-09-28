@@ -160,7 +160,7 @@ this command with its default settings.
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--port` | `8001` | HTTP port to serve on |
+| `--port` | `8001` | HTTP port to serve on; `0` binds a free port and prints the one it got |
 | `--bind` | `127.0.0.1` | Interface to bind to (use `0.0.0.0` for LAN access) |
 | `--allow-remote` | off | Required with a non-loopback `--bind`: acknowledge the API is reachable on the network |
 | `--token` | off | Require this token for every request (`Authorization: Bearer`, `?token=`, or open `/?token=<token>` or `/potato?token=<token>` to set the browser cookie) |
@@ -221,7 +221,9 @@ same check runs for every command that reads the environment (`stats`,
 `export`, `check`, `open`, `regen`), so a typo cannot quietly leave those on
 their defaults. The `--port` and `--min-coverage` flags are held to the floor
 their variables get, so a non-ASCII digit or a `1_0` spelling is the same exit
-2 whichever source it came through.
+2 whichever source it came through. `RECOVERAGE_PORT=0` binds a free port, and
+the banner, `/api/health` and the browser URL all report the one that was
+bound rather than the 0.
 The two `RECOVERAGE_FUZZ_*` variables are the test suite's, not the server's;
 they carry the prefix so an operator who exported one to drive a campaign is
 not stopped by the unknown-name check, and they change nothing `serve` does.
@@ -323,7 +325,9 @@ recoverage open --port 8001
 ```
 
 `--port` defaults to `RECOVERAGE_PORT`, the same port `serve` uses, so a
-deployment that moved off `8001` needs no second place to configure.
+deployment that moved off `8001` needs no second place to configure. A port of
+`0` is refused with exit 2: it names the free port `serve` picked, which only
+the banner that run printed holds.
 
 ---
 
