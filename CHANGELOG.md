@@ -50,6 +50,14 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **A deeply nested batch lookup body no longer answers 500.**
+  `POST /api/targets/<target>/functions` caught the two ways a body fails to
+  parse (bad UTF-8, bad JSON) and reported them as a 400, but `json.loads`
+  also raises `RecursionError` on nesting, one frame per bracket. The 64 KiB
+  read cap bounds the body, not the depth inside it: `{"vas": [[[...` nests
+  past the limit in a body under a kilobyte. The decoder running out of stack
+  became an unhandled exception and a 500. It is a parse failure like the
+  other two and now answers the same 400.
 - **`--no-color` is accepted after the subcommand too.** It was declared only
   on the root group, so `recoverage stats --no-color` died with "No such
   option" (exit 2) while `recoverage --no-color stats` worked. Every command

@@ -392,7 +392,7 @@ def _requested_vas(seed: bytes) -> list[int]:
     """The VAs a body asks for, in the order ``_batch_request_vas`` keeps."""
     try:
         payload = json.loads(seed.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
         return []
     if not isinstance(payload, dict) or not isinstance(payload.get("vas"), list):
         return []
@@ -413,6 +413,154 @@ def _requested_vas(seed: bytes) -> list[int]:
         else:
             return []
     return list(dict.fromkeys(out))
+
+
+# Depth is a decoder input the byte cap does not bound: the C scanner spends a
+# frame per bracket, so a body two bytes wide nests as deep as one the size
+# check admits. Byte mutation never produces it, so the campaign carries its
+# own tokens, straddling the interpreter's recursion limit from both sides.
+def _nesting_body(depth: int) -> bytes:
+    return b'{"vas": ' + b"[" * depth + b"]" * depth + b"}"
+
+
+_NESTING_TOKENS = tuple(
+    _nesting_body(depth) for depth in (1, 2, 8, 64, 200, 480, 496, 512, 1000, 20000)
+)
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+class TestBatchBodyNesting:
+    """POST bodies whose *nesting* is the payload, not their bytes."""
+
+    def _path(self) -> str:
+        return f"/api/targets/{_pct(get_first_target())}/functions"
+
+    def test_nested_body_never_crashes(self) -> None:
+        path = self._path()
+
+        def check(data: bytes) -> None:
+            status, headers, body = wsgi_request("POST", path, body=data)
+            code = int(status.split()[0])
+            payload = _assert_ok(status, headers, body, path)
+            if code >= 400:
+                _assert_envelope(payload, status, path)
+
+        _fuzz(BATCH_SEEDS, check, struct_tokens=_NESTING_TOKENS)
+
+    def test_every_depth_answers_a_documented_status(self) -> None:
+        """The exhaustive half: a refusal must be a refusal a client can read,
+        not a decoder stack exhaustion surfacing as a 500."""
+        path = self._path()
+        for depth in (0, 1, 100, 400, 490, 495, 500, 505, 1000, 5000, 20000):
+            for tail in (b"", b"0x10001000"):
+                close = b", " + tail if tail else b""
+                depth_body = b'{"vas": ' + b"[" * depth + b"]" * depth + close + b"}"
+                status, headers, body = wsgi_request("POST", path, body=depth_body)
+                code = int(status.split()[0])
+                payload = _assert_ok(status, headers, body, path)
+                if code >= 400:
+                    _assert_envelope(payload, status, path)
+                else:
+                    assert isinstance(payload, list), f"{path}: depth {depth} answered {payload!r}"
+
+
+# The media types a batch POST can declare, and the malformed spellings a
+# client, a proxy or a hand-rolled curl produces.  ``application/json`` with
+# parameters is the only accepted form besides a missing header; everything
+# else is a 415 and the body must go unread.
+_CONTENT_TYPE_SEEDS = (
+    b"application/json",
+    b"application/json; charset=utf-8",
+    b"application/json;charset=UTF-16",
+    b"APPLICATION/JSON",
+    b"  application/json  ",
+    b"application/json ",
+    b"text/plain",
+    b"application/x-www-form-urlencoded",
+    b"text/xml",
+    b"application/xml",
+    b"application/octet-stream",
+    b"multipart/form-data; boundary=x",
+    b"application/vnd.api+json",
+    b"text/plain, application/json",
+    b"application/json, text/plain",
+    b";",
+    b"json",
+    b"application/",
+    b"application/json\x00",
+    b"\x00application/json",
+    b"application/json\t",
+    b"a" * 200,
+    b"",
+)
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+class TestBatchContentType:
+    """A declared media type decides whether the body is read at all, so it
+    is an input surface in its own right: a wrong answer is either a body
+    parsed under the wrong format or a refusal that never happened."""
+
+    def _path(self) -> str:
+        return f"/api/targets/{_pct(get_first_target())}/functions"
+
+    def _post(self, path: str, media_type: str, body: bytes) -> tuple[int, Any, bytes]:
+        status, headers, raw = wsgi_request(
+            "POST", path, headers={"Content-Type": media_type}, body=body
+        )
+        return int(status.split()[0]), _assert_ok(status, headers, raw, path), raw
+
+    def test_media_type_never_crashes(self) -> None:
+        path = self._path()
+        body = b'{"vas": ["0x10001000"]}'
+
+        def check(data: bytes) -> None:
+            # latin-1 keeps every mutated byte a value the WSGI environ can
+            # carry, so the campaign covers a non-ASCII header too.
+            code, payload, _raw = self._post(path, data.decode("latin-1"), body)
+            if code >= 400:
+                _assert_envelope(payload, code, path)
+            if code == 415 and b"0x10001000" not in data:
+                assert "0x10001000" not in json.dumps(payload), (
+                    f"{path}: 415 echoed a VA from a body it refused to read: {payload!r}"
+                )
+
+        _fuzz(list(_CONTENT_TYPE_SEEDS), check, struct_tokens=_CONTENT_TYPE_SEEDS)
+
+    def test_an_accepted_media_type_answers_exactly_as_no_header(self) -> None:
+        """Pair assertion across the header boundary: the header may only
+        decide whether the body is read, never what is read out of it."""
+        path = self._path()
+        bodies = (b'{"vas": ["0x10001000"]}', b'{"vas": []}', b"{}", b"not json", b"")
+        for seed in _CONTENT_TYPE_SEEDS:
+            media_type = seed.decode("latin-1")
+            for body in bodies:
+                code, _payload, raw = self._post(path, media_type, body)
+                plain_status, headers, plain_raw = wsgi_request("POST", path, body=body)
+                if code == 415:
+                    assert int(plain_status.split()[0]) != 415, (
+                        f"{path}: {media_type!r} refused a body the server reads happily"
+                    )
+                    continue
+                assert code == int(plain_status.split()[0]), (
+                    f"{path}: {media_type!r} answered {code}, no header {plain_status}"
+                )
+                assert decode_body(raw, {"Content-Encoding": ""}) == decode_body(
+                    plain_raw, headers
+                ), f"{path}: {media_type!r} changed the parsed answer for {body!r}"
+
+    def test_a_refusal_carries_no_control_byte(self) -> None:
+        """The media type is echoed in the 415 detail; a header value carrying
+        a line break must not put one in the response."""
+        path = self._path()
+        for media_type in ("text/plain\r\nX: y", "text/plain\n", "text/plain\x00x"):
+            code, payload, raw = self._post(path, media_type, b'{"vas": ["0x10001000"]}')
+            assert code == 415, f"{path}: {media_type!r} answered {code}"
+            for byte in decode_body(raw, {"Content-Encoding": ""}):
+                assert byte >= 0x20 or byte == 0x09, (
+                    f"{path}: {media_type!r} put a control byte in the body"
+                )
+            _assert_envelope(payload, str(code), path)
 
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
