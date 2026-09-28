@@ -30,6 +30,7 @@ from recoverage.server import (
     _BUCKET_FOLD,
     DLL_DATA,
     DLL_LOCK,
+    HSTS_MAX_AGE_SECONDS,
     SUPPORTED_ENCODINGS,
     _best_encoding,
     _db_path,
@@ -1806,6 +1807,94 @@ class TestSecurityHeaders:
         assert headers.get("Cache-Control") == "no-cache, must-revalidate"
         # bottle normalizes header names to Title-Case ("Etag").
         assert headers.get("Etag")
+
+
+class TestTransportSecurityFollowsTheConnection:
+    """Secure and HSTS are properties of how the request arrived, not constants.
+
+    The bundled listener speaks no TLS, so a fixed `Secure` on the auth cookie
+    would stop it being stored on the loopback install it serves; a fixed
+    absence of it would hand the token to whoever was on the wire the moment a
+    reader followed an http:// link to a host that also answers https://.  Both
+    are answered off the request, so each is driven here from the two sources
+    ``server.request_is_https`` reads.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _token(self, monkeypatch: Any) -> None:
+        import recoverage.server as srv
+
+        monkeypatch.setattr(srv, "_AUTH_TOKEN", "unit-test-token")
+        yield
+        srv._clear_auth_failures(WSGI_PEER)
+
+    def test_no_transport_headers_over_plaintext(self) -> None:
+        """A request that arrived over http gets neither: an HSTS header over
+        http is discarded by every browser, and a Secure cookie there is a
+        cookie the reader's browser will not send back."""
+        from conftest import wsgi_request
+
+        status, headers, _ = wsgi_request("GET", "/?token=unit-test-token")
+        assert status.startswith("200")
+        assert "Strict-Transport-Security" not in headers
+        assert "Secure" not in headers.get("Set-Cookie", "")
+
+    def test_scheme_from_the_wsgi_environ(self) -> None:
+        from conftest import wsgi_request
+
+        _, headers, _ = wsgi_request(
+            "GET",
+            "/?token=unit-test-token",
+            environ_extra={"wsgi.url_scheme": "https"},
+        )
+        assert headers.get("Strict-Transport-Security") == f"max-age={HSTS_MAX_AGE_SECONDS}"
+        assert "Secure" in headers.get("Set-Cookie", "")
+
+    def test_scheme_from_a_tls_terminating_proxy(self) -> None:
+        """A reverse proxy in front of this process leaves ``wsgi.url_scheme``
+        at http, so without the forwarded header a TLS deployment is
+        indistinguishable from a plaintext one."""
+        from conftest import wsgi_request
+
+        _, headers, _ = wsgi_request(
+            "GET",
+            "/?token=unit-test-token",
+            headers={"X-Forwarded-Proto": "HTTPS"},
+        )
+        assert headers.get("Strict-Transport-Security") == f"max-age={HSTS_MAX_AGE_SECONDS}"
+        assert "Secure" in headers.get("Set-Cookie", "")
+
+    def test_every_response_carries_hsts_where_the_request_was_secure(self) -> None:
+        """Not just the page routes: an API response is the one a cross-origin
+        reader holds a cached copy of, and HSTS is what stops the next request
+        for it leaving over plaintext."""
+        from conftest import wsgi_request
+
+        _, headers, _ = wsgi_request(
+            "GET",
+            "/api/health",
+            environ_extra={"wsgi.url_scheme": "https"},
+        )
+        assert headers.get("Strict-Transport-Security") == f"max-age={HSTS_MAX_AGE_SECONDS}"
+
+    def test_the_flag_cannot_relax_anything(self) -> None:
+        """A client that claims https over plaintext gets a STRICTER answer, not
+        a weaker one: the cookie it is handed is one its own browser will not
+        send over the connection it is on, and the HSTS header is discarded."""
+        from conftest import wsgi_request
+
+        _, headers, _ = wsgi_request(
+            "GET",
+            "/?token=unit-test-token",
+            headers={"X-Forwarded-Proto": "https"},
+            environ_extra={"wsgi.url_scheme": "http"},
+        )
+        cookie = headers.get("Set-Cookie", "")
+        assert cookie
+        # The hardening set is unchanged; only the two transport additions
+        # are present, and both are additive.
+        assert headers.get("X-Frame-Options") == "DENY"
+        assert headers.get("Content-Security-Policy")
 
 
 class TestUndecodableRequestHeader:

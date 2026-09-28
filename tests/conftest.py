@@ -216,16 +216,21 @@ def wsgi_request(
     body: bytes | str = b"",
     wsgi_input: BytesIO | None = None,
     content_length: str | None = "",
+    environ_extra: dict[str, str] | None = None,
 ) -> tuple[str, dict[str, str], bytes]:
     """Issue a WSGI request against the Bottle app and return (status, headers, body).
 
     *wsgi_input* replaces the ``wsgi.input`` stream (a test that needs to watch
     whether the handler read at all passes its own), and *content_length*
     overrides the ``CONTENT_LENGTH`` entry: None omits it entirely, which is
-    what a chunked request looks like to a WSGI app.
+    what a chunked request looks like to a WSGI app.  *environ_extra* sets
+    further WSGI entries verbatim (``wsgi.url_scheme`` for a request that
+    reached the app over TLS), which no header spelling can express.
     """
     environ: dict[str, str | BytesIO] = {}
     setup_testing_defaults(environ)
+    if environ_extra:
+        environ.update(environ_extra)
     url_path, _, query = path.partition("?")
     environ["REQUEST_METHOD"] = method
     environ["PATH_INFO"] = url_path

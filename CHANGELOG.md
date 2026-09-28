@@ -617,6 +617,15 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Security
 
+- The auth cookie is now `Secure` on any request that arrived over TLS, and
+  every response to one carries `Strict-Transport-Security`. The cookie was
+  written without the flag whatever the connection was, so on a deployment
+  that answers both `http://` and `https://` the token rode along with every
+  plaintext request to the same host, and a browser was never told to prefer
+  TLS for the next one. Both are read off the request (`wsgi.url_scheme`, or
+  `X-Forwarded-Proto` behind a TLS-terminating proxy), so the loopback install
+  the bundled listener serves is unaffected: a fixed `Secure` there would stop
+  the cookie being stored at all.
 - `POST /api/regen` no longer reads an `Origin` header that arrived empty as
   the header's absence. The same-origin check fails open on an absent Origin
   because every non-browser client omits one, and a blank value took that same

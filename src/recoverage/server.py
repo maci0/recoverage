@@ -1541,6 +1541,39 @@ def header_present(name: str) -> bool:
     return name in request.headers
 
 
+#: How long a browser is told to reach this dashboard over HTTPS only.
+#: One year, the value the preload list expects, and deliberately WITHOUT
+#: ``includeSubDomains``: a deployment that serves this dashboard from a
+#: subdomain of a host running other services would otherwise pin THOSE to
+#: HTTPS for a year over a decision taken here, where the operator cannot see
+#: it.  The dashboard's own name is what this response protects.
+HSTS_MAX_AGE_SECONDS = 31_536_000
+
+
+def request_is_https() -> bool:
+    """Whether this request reached the process over TLS.
+
+    Two sources, and neither is trusted for anything but this one answer.
+    ``wsgi.url_scheme`` is what the server itself saw, which is the whole
+    truth for the bundled ``wsgiref`` listener (always ``http``, it speaks no
+    TLS) and for a mount behind a TLS-terminating server that sets it.  A
+    reverse proxy that terminates TLS in front of this process and forwards
+    plain HTTP leaves it ``http``, so ``X-Forwarded-Proto`` is read as well:
+    without it a TLS deployment is indistinguishable from a plaintext one and
+    never gets the transport rules below.
+
+    A client can send ``X-Forwarded-Proto: https`` over plaintext, and that is
+    harmless rather than a bypass: both answers here make a response STRICTER
+    (a ``Secure`` cookie the plaintext client then cannot use, an HSTS header a
+    browser ignores because it arrived over ``http``).  Nothing is relaxed by
+    believing the header, and a deployment that strips it at the edge is the
+    deployment that already terminates TLS itself and sets the scheme.
+    """
+    if request.environ.get("wsgi.url_scheme", "http").lower() == "https":
+        return True
+    return _header("X-Forwarded-Proto", "").strip().lower() == "https"
+
+
 #: Every encoding this server can produce, most preferred first.  ONE list:
 #: :func:`_best_encoding` walks it in order, and the precompressed static path
 #: (:func:`static_variant_key`, :func:`compress_static_variants`) reads the same
@@ -2400,10 +2433,20 @@ def set_auth_cookie() -> None:
     # reader authenticated for exactly one request and 401 on every link they
     # follow after it, which reads as a broken server and is diagnosable only
     # from this line.  The value is the server's own token, never the request's.
+    #
+    # Secure rides along only where the request arrived over TLS
+    # (:func:`request_is_https`), because the cookie without it rides along
+    # with every plaintext request to the same host: a reader who followed an
+    # http:// link to a host that also answers https:// had their token handed
+    # to whoever was on that connection.  The bundled listener speaks no TLS
+    # and is reached over http on a loopback bind, where the flag would only
+    # stop the cookie from ever being stored, so it is a property of the
+    # request, not a fixed spelling.
+    secure = "; Secure" if request_is_https() else ""
     try:
         response.set_header(
             "Set-Cookie",
-            f"{AUTH_COOKIE_NAME}={_AUTH_TOKEN}; Path=/; HttpOnly; SameSite=Strict",
+            f"{AUTH_COOKIE_NAME}={_AUTH_TOKEN}; Path=/; HttpOnly; SameSite=Strict{secure}",
         )
     except Exception:
         _log.warning(
@@ -2956,6 +2999,12 @@ def _security_headers() -> None:
     # Tokens travel in URLs (?token= share links); never let them leak to a
     # third party via Referer if the dashboard ever navigates off-host.
     response.set_header("Referrer-Policy", "no-referrer")
+    if request_is_https():
+        # Only where the request arrived over TLS: an HSTS header delivered
+        # over http is discarded by every browser, so sending it
+        # unconditionally buys nothing, and a browser that honours it is
+        # asserting a fact about the connection this response came in on.
+        response.set_header("Strict-Transport-Security", f"max-age={HSTS_MAX_AGE_SECONDS}")
     origin = _header("Origin", "")
     if CORS_ENABLED and origin and _normalize_origin(origin) in CORS_ALLOWED_ORIGINS:
         response.set_header("Access-Control-Allow-Origin", origin)

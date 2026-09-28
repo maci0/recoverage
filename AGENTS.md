@@ -994,7 +994,18 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   `/potato`. Both pages link with relative URLs, so the cookie is what carries
   the credential past the first click; a page route that skips it renders once
   and answers the 401 page on every link the reader follows. The cookie's name
-  is `server.AUTH_COOKIE_NAME`, which `_require_auth` reads it back under.
+  is `server.AUTH_COOKIE_NAME`, which `_require_auth` reads it back under. Its
+  `Secure` attribute, and the `Strict-Transport-Security` the after_request
+  hook sends beside it, are read off the request through
+  `server.request_is_https` (`wsgi.url_scheme`, or `X-Forwarded-Proto` behind a
+  TLS-terminating proxy) rather than fixed: the bundled listener speaks no TLS
+  and serves a loopback bind over http, where a constant `Secure` would stop
+  the cookie being stored at all, and a constant absence of one hands the token
+  to whoever was on the wire the moment a reader followed an http link to a host
+  that also answers https. Neither is a bypass when a client claims https over
+  plaintext: both answers only ever make a response stricter. A new response
+  header that depends on the transport asks the same helper rather than the
+  environ directly.
 - The authorization model is two principals and no per-object ACL, so a new
   handler does not repeat a check: `server._require_auth` is a `before_request`
   hook, so every route (pages, `/api/*`, `/potato`, static, the `/src` and
