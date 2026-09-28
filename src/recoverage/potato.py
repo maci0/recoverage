@@ -2160,6 +2160,19 @@ def _build_grid_html(
     return "".join(grid_html_parts)
 
 
+def _order_key(field: str) -> Callable[[Function], Any]:
+    """``(column, ascending va)`` order, the table's whole ordering.
+
+    The secondary key is what makes a capped list deterministic: the API page
+    breaks a tie on the sorted column with the document order a stable sort
+    keeps, and the two agree only when document order IS ascending va.  The
+    column is resolved once for the list rather than per row, for the reason
+    :func:`server.function_sort_key` documents.
+    """
+    column = function_sort_key(field)
+    return lambda fn: (column(fn), fn.va)
+
+
 def _render_function_list(
     coverage: CoverageSnapshot,
     target: str,
@@ -2204,12 +2217,11 @@ def _render_function_list(
     # to throw most away costs O(n log n) on every keystroke.
     total = len(rows)
     truncated = total > _SEARCH_ROW_LIMIT
+    order_key = _order_key(order_by)
     if truncated:
-        rows = nsmallest(
-            _SEARCH_ROW_LIMIT, rows, key=lambda fn: (function_sort_key(fn, order_by), fn.va)
-        )
+        rows = nsmallest(_SEARCH_ROW_LIMIT, rows, key=order_key)
     else:
-        rows.sort(key=lambda fn: (function_sort_key(fn, order_by), fn.va))
+        rows.sort(key=order_key)
     count_label = f"first {len(rows)} of {total} results" if truncated else f"{total} results"
     # `?status=` narrows this list and nothing else on the page says so: the
     # header count and the search box both read as if the list were the whole
@@ -2457,7 +2469,7 @@ def _render_potato_inner(
 
     sec_data: dict[str, Any] = sections.get(section, {})
 
-    search_matched_fns = _search_functions(coverage, search_query)
+    search_matched_fns: set[str] = set()
     # One pass of accesskey claims in document order: the search box, the
     # section tabs, then the filter pills.  A letter already claimed is not
     # offered again, so no two controls on the page answer to the same key.
@@ -2492,6 +2504,12 @@ def _render_potato_inner(
             status_filter=status_filter,
         )
     else:
+        # The highlight set is the GRID's own: it is what dims the cells whose
+        # function matched, and the functions table below prints the matched
+        # rows in full. Folding every function to build it is a per-keystroke
+        # pass over the whole list (measured 13 ms on a 6000-function target),
+        # and the functions view renders none of it.
+        search_matched_fns = _search_functions(coverage, search_query)
         grid_html, block_count, panel_html, sec_stats = _render_grid_view(
             coverage,
             target,

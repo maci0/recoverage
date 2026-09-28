@@ -13,7 +13,9 @@ import time
 import unicodedata
 from datetime import UTC, datetime
 from io import BytesIO
+from operator import attrgetter
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, ClassVar
 from wsgiref.util import setup_testing_defaults
 
@@ -3967,6 +3969,100 @@ class TestFunctionListTotalMemo:
         body = json.loads(api.handle_api_functions_list("GAME"))
         assert body["total"] == 2
         assert len(api._LIST_TOTAL_CACHE) == 1
+
+
+class TestFunctionListPaging:
+    """A page is a window on the sorted set, and the window is all that is served.
+
+    The endpoint selects the rows the page needs rather than ordering the whole
+    match set, so a 200 carrying plausible names no longer proves the ordering:
+    the window has to be the one a full sort would have produced, for every
+    column, both directions, and at every offset including one past the end.
+    The fixture ties on ``name`` and on ``size`` throughout, so a selection
+    that broke a tie differently from the stable sort is visible here.
+    """
+
+    ROWS = 40
+    PAGE = 5
+
+    @staticmethod
+    def _rows() -> list[dict[str, Any]]:
+        """The document's rows, in the document's own (ascending va) order."""
+        return [
+            {
+                "va": 0x1000 + i * 0x10,
+                "name": f"fn_{i % 5:02d}",
+                "status": "exact" if i % 2 else "stub",
+                "size": None if i % 7 == 0 else 16 + (i % 3) * 8,
+            }
+            for i in range(TestFunctionListPaging.ROWS)
+        ]
+
+    @classmethod
+    def _sortable(cls) -> list[SimpleNamespace]:
+        """The same rows shaped like the ``Function`` the sort key reads."""
+        return [SimpleNamespace(**row) for row in cls._rows()]
+
+    def _page(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, query: str) -> list[str]:
+        import recoverage.api as api
+
+        directory = _game_coverage(tmp_path, functions=tuple(self._rows()))
+        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+        api._clear_list_total_cache()
+        status, headers, body = wsgi_get(f"/api/targets/GAME/functions?{query}")
+        assert status.startswith("200")
+        data = json.loads(decode_body(body, headers))
+        assert data["total"] == self.ROWS
+        return [str(fn["name"]) for fn in data["functions"]]
+
+    @pytest.mark.parametrize("field", ["va", "name", "status", "size"])
+    @pytest.mark.parametrize("direction", ["asc", "desc"])
+    @pytest.mark.parametrize("offset", [0, 1, 7, 30, 39, 40])
+    def test_the_window_is_the_one_a_full_sort_gives(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        field: str,
+        direction: str,
+        offset: int,
+    ) -> None:
+        from recoverage.server import function_sort_key
+
+        served = self._page(
+            monkeypatch, tmp_path, f"sort={field}:{direction}&limit={self.PAGE}&offset={offset}"
+        )
+        ordered = sorted(
+            self._sortable(), key=function_sort_key(field), reverse=direction == "desc"
+        )
+        expected = [row.name for row in ordered[offset : offset + self.PAGE]]
+        assert served == expected
+        assert len(served) == max(0, min(self.PAGE, self.ROWS - offset))
+
+    def test_an_offset_past_the_end_is_an_empty_page(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        assert self._page(monkeypatch, tmp_path, "sort=va&limit=5&offset=100") == []
+
+    def test_a_filtered_page_is_windowed_over_the_match_set(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """The selection runs over the FILTERED rows, so the set the total
+        counts and the order the page is windowed in have to be the same one."""
+        import recoverage.api as api
+
+        directory = _game_coverage(tmp_path, functions=tuple(self._rows()))
+        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+        api._clear_list_total_cache()
+        status, headers, body = wsgi_get(
+            "/api/targets/GAME/functions?search=fn_0&sort=name:desc&limit=3&offset=2"
+        )
+        assert status.startswith("200")
+        data = json.loads(decode_body(body, headers))
+        matched = [row for row in self._sortable() if "fn_0" in row.name]
+        assert data["total"] == len(matched)
+        assert [fn["name"] for fn in data["functions"]] == [
+            row.name for row in sorted(matched, key=attrgetter("name"), reverse=True)[2:5]
+        ]
 
 
 def _header(headers: dict[str, str], name: str) -> str | None:

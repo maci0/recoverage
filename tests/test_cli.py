@@ -1449,6 +1449,35 @@ class TestServeServerWiring:
         """
 
         assert devserver._KeepAliveRequestHandler.protocol_version == "HTTP/1.1"
+
+    def test_the_installed_cors_allowlist_is_the_resolved_one(self, monkeypatch: Any) -> None:
+        """The request-path allowlist is what `_allowed_origins` installed.
+
+        `serve` resolved the operator's spelling into `resolved.cors_origins`
+        and then installed the `--cors-origin` flag beside it, so the entry the
+        matcher compared against was the one the operator typed rather than the
+        one that was validated, and it was None outright whenever the origins
+        came from RECOVERAGE_CORS_ORIGIN: a server that answers every
+        cross-origin read with a 403 while the banner and `recoverage config`
+        print a populated allowlist.  The flag is the input, the resolved list
+        is the installation, and the two are not the same value.
+        """
+        from recoverage import server as server_mod
+        from recoverage.server import app as server_app
+
+        monkeypatch.setattr("recoverage.api._ensure_db_watcher", lambda: None)
+        monkeypatch.setattr(type(server_app), "run", lambda self, **kwargs: None)
+        result = runner.invoke(
+            app,
+            ["serve", "--no-open", "--port", "8123", "--cors", "--cors-origin", "http://A.test:80"],
+        )
+        assert result.exit_code == 0, result.output
+        assert server_mod.CORS_ENABLED is True
+        # The stored entry is compared as a request's Origin is normalized, so
+        # it must be the normalized spelling of what the operator wrote: the
+        # raw flag spelled `http://A.test:80` matches no request at all, and a
+        # browser's Origin for that page is `http://a.test`.
+        assert server_mod.CORS_ALLOWED_ORIGINS == ["http://a.test"]
         assert devserver._KeepAliveServerHandler.http_version == "1.1"
 
     @pytest.mark.parametrize(

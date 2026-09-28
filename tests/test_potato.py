@@ -2250,9 +2250,7 @@ class TestFunctionListOrdering:
         rendered = [
             unquote(match) for match in re.findall(r"&section=\.text&search=([^\"]+)", html)
         ]
-        api_order = [
-            fn.name for fn in sorted(snap.functions, key=lambda f: function_sort_key(f, field))
-        ]
+        api_order = [fn.name for fn in sorted(snap.functions, key=function_sort_key(field))]
         assert rendered == api_order, f"{field}: the two surfaces disagree"
 
     def test_an_unknown_size_sorts_before_every_known_one(
@@ -2261,7 +2259,7 @@ class TestFunctionListOrdering:
         from recoverage.server import function_sort_key
 
         snap = self._snapshot(tmp_path, monkeypatch)
-        keys = [function_sort_key(fn, "size") for fn in snap.functions]
+        keys = [function_sort_key("size")(fn) for fn in snap.functions]
         assert keys.index((0, 0)) == 1, "the unsized row must sort first"
         assert keys[0] == keys[2] == (1, 40)
 

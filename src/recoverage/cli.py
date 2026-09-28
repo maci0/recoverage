@@ -1170,9 +1170,6 @@ def serve(
     listen_port = resolve_listen_port(resolved.port, bind)
     allow_remote = resolved.allow_remote
     cors = resolved.cors
-    # The installed allowlist, already normalized: what the banner, the security
-    # config and the request-path matcher all read.
-    allowed_origins = resolved.cors_origins
     token = resolved.token
 
     # Every warning in this block goes to stderr, so a deployment that
@@ -1210,15 +1207,20 @@ def serve(
         )
     # Loopback binds validate the Host header (DNS-rebinding guard); remote
     # binds (user opted in via --allow-remote) skip validation.
+    #
+    # The INSTALLED allowlist, never the `--cors-origin` flag it was resolved
+    # from: the flag is the operator's spelling, `resolved.cors_origins` is what
+    # `_allowed_origins` validated and normalized, and a request's Origin is
+    # normalized again before it is matched. Installing the raw list is the
+    # dropped-entry failure `_is_browser_origin` exists to prevent, and a
+    # spelling the operator never wrote is the one the matcher then refuses. The
+    # flag is also None whenever the origins came from RECOVERAGE_CORS_ORIGIN,
+    # which installed an empty allowlist over the list the banner and
+    # `recoverage config` render. `recoverage config` reads the resolved list,
+    # so the preflight and the process answer the same question.
     _server.configure_security(
         cors_enabled=cors,
-        # The INSTALLED allowlist, not the raw --cors-origin option: the option
-        # is None whenever the flag is absent (the default, and every
-        # RECOVERAGE_CORS_ORIGIN-only deployment), and configure_security does
-        # list() on what it is handed, so passing it terminated `serve` with a
-        # TypeError before the listener bound. The resolved list is also the
-        # one the banner and the request-path matcher read.
-        cors_allowed_origins=allowed_origins,
+        cors_allowed_origins=resolved.cors_origins,
         auth_token=token or "",
         allowed_hosts=None if is_remote else set(LOOPBACK_HOSTS),
     )
@@ -1247,8 +1249,7 @@ def serve(
         bind=bind,
         allow_remote=allow_remote,
         cors=cors,
-        # The installed allowlist, for the reason configure_security got above.
-        cors_origin=allowed_origins,
+        cors_origin=resolved.cors_origins,
         token=token,
         db=resolved.db,
         log_level=resolved.log_level,

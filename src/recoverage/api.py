@@ -10,6 +10,7 @@ import queue
 import re
 import threading
 from collections.abc import Generator, Mapping, Sequence
+from heapq import nlargest, nsmallest
 from pathlib import Path
 from typing import Any
 
@@ -556,6 +557,32 @@ def _filtered_functions(
             or fold_match_folded(fn.vaStart, needle)
         ]
     return rows
+
+
+def _function_page(
+    rows: list[Function], sort_field: str, sort_dir: str, offset: int, limit: int
+) -> list[Function]:
+    """The *offset*..*offset*+*limit* window of *rows* in their sorted order.
+
+    A page is a window on the ORDERED match set, and the window is the only
+    part that is served, so the set is selected rather than sorted: ordering
+    6000 rows to answer a page of 50 costs the O(n log n) comparisons of the
+    whole set on every keystroke, and `heapq` is the documented equivalent of
+    ``sorted(rows)[:k]`` (stable, ties in document order) at O(n log k).  The
+    key is built for every row either way; only the comparison count falls.
+
+    The `nlargest` arm is the descending half: `nsmallest` has no reverse
+    spelling, and reversing the key to select the largest would break the
+    ordering on the very column the reader asked to reverse.  A window that
+    reaches past the end of the set has nothing to select, and sorts.
+    """
+    key = _server.function_sort_key(sort_field)
+    wanted = offset + limit
+    if wanted >= len(rows):
+        rows.sort(key=key, reverse=sort_dir == "DESC")
+        return rows[offset : offset + limit]
+    select = nlargest if sort_dir == "DESC" else nsmallest
+    return select(wanted, rows, key=key)[offset:]
 
 
 def _target_not_found(target: str) -> HTTPResponse:
@@ -1732,10 +1759,6 @@ def handle_api_functions_list(target: str) -> bytes | HTTPResponse:
         # deferred read transaction.
         rows = _filtered_functions(coverage.functions, status_filter, search)
         total = _function_total(snap, target, status_filter, search, rows)
-        rows.sort(
-            key=lambda fn: _server.function_sort_key(fn, sort_field),
-            reverse=sort_dir == "DESC",
-        )
         # Enumerate exactly the response fields, in the order the SELECT did.
         items = [
             {
@@ -1748,7 +1771,7 @@ def handle_api_functions_list(target: str) -> bytes | HTTPResponse:
                 "symbol": fn.symbol,
                 "markerType": fn.markerType,
             }
-            for fn in rows[offset : offset + limit]
+            for fn in _function_page(rows, sort_field, sort_dir, offset, limit)
         ]
 
         return _json_ok(

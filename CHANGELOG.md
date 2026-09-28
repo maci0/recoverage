@@ -268,6 +268,17 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **`GET /api/targets/<target>/functions` ordered the whole match set to
+  answer one page.** The page is a window on the sorted rows, so the endpoint
+  now selects the `offset + limit` rows it serves instead of sorting every
+  match and discarding all but the page, and the sort column is resolved once
+  for the list rather than per row. A search keystroke against a 6000-function
+  target went from 3.3 ms to 2.1 ms, and an unfiltered page from 1.5 ms to
+  0.7 ms. Potato Mode's function table takes the same resolved key.
+- **Potato Mode folded every function to build a highlight set the functions
+  view never renders.** The grid is what dims the cells whose function
+  matched; `?view=functions` prints the matched rows in full, so the pass was
+  pure waste on the one view that does not draw a grid.
 - **The shipped stylesheet did not match `web/`.** `src/recoverage/assets/style.css`
   is a build output committed to the tree, and the committed copy had drifted from
   what `make web-build` produces from the same sources under the pinned Tailwind:
