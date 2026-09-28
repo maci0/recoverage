@@ -526,8 +526,11 @@ def _load_coverage_or_exit(
     try:
         return coverage_snapshots()
     except CoverageTomlError as exc:
+        # rebrew's own message can already end with the advice; the hint is
+        # ours to add only where the reader would not get it twice.
+        hint = "" if _REBUILD_HINT in str(exc) else f" {_REBUILD_HINT}"
         _fail(
-            f"Error: cannot read coverage at {p}: {exc} {_REBUILD_HINT}",
+            f"Error: cannot read coverage at {p}: {exc}{hint}",
             f"cannot read coverage: {exc}",
             2,
             json_output,
@@ -1119,7 +1122,7 @@ def serve(
     ),
     allow_remote: bool | None = typer.Option(
         None,
-        "--allow-remote",
+        "--allow-remote/--no-allow-remote",
         help="Required with --bind 0.0.0.0: acknowledge that the unauthenticated "
         "API (including raw binary bytes) is exposed on the network "
         "(env: RECOVERAGE_ALLOW_REMOTE)",
@@ -1128,7 +1131,7 @@ def serve(
     regen: bool = typer.Option(False, "--regen", help="Regenerate DB before starting"),
     cors: bool | None = typer.Option(
         None,
-        "--cors",
+        "--cors/--no-cors",
         help="Enable CORS processing (allowlisted origins only; env: RECOVERAGE_CORS)",
     ),
     cors_origin: list[str] | None = typer.Option(
@@ -1997,6 +2000,11 @@ def config_cmd(
         raise typer.Exit(1)
 
 
+# Group flags that answer the invocation themselves, so ``recoverage --help``
+# must not grow a subcommand behind them.
+_GROUP_TERMINAL_FLAGS = frozenset({"-h", "--help", "--version", "-V", "--show-completion"})
+
+
 def _argv_with_default_command(argv: list[str]) -> list[str]:
     """Bare ``recoverage`` runs ``serve``.
 
@@ -2005,11 +2013,19 @@ def _argv_with_default_command(argv: list[str]) -> list[str]:
     ``rebrew`` itself runs its action when no subcommand is named.  The
     subcommand stays the only spelling with flags (``recoverage serve
     --port 9000``), because the flags belong to ``serve`` and a group that
-    declared them too would carry two option tables that can disagree.  Any
-    argument at all — a subcommand or a group flag — is left exactly as it
-    came, so ``recoverage --help`` still prints the help and not a server.
+    declared them too would carry two option tables that can disagree.  Every
+    group flag is a boolean, so a command line carrying only those has a
+    subcommand appended after them (click parses the two in either order) and
+    ``recoverage --no-color`` serves the dashboard.  A flag that ends the
+    invocation on its own, and any non-flag token at all, is left exactly as
+    it came, so ``recoverage --help`` still prints the help and not a server.
     """
-    return argv if len(argv) > 1 else [*argv, "serve"]
+    args = argv[1:]
+    if any(arg in _GROUP_TERMINAL_FLAGS for arg in args):
+        return argv
+    if any(not arg.startswith("-") for arg in args):
+        return argv
+    return [*argv, "serve"]
 
 
 def main() -> None:

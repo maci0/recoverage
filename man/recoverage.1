@@ -109,6 +109,9 @@ it acknowledges nothing, and both
 and
 .B config
 say so on stderr.
+.B \-\-no\-allow\-remote
+cancels an exported
+.BR RECOVERAGE_ALLOW_REMOTE .
 .TP
 .B \-\-no\-open
 Do not open a browser automatically.
@@ -119,6 +122,9 @@ Regenerate the coverage documents before starting.
 .B \-\-cors
 Enable CORS processing, for allowlisted origins only (env:
 .BR RECOVERAGE_CORS ).
+.B \-\-no\-cors
+cancels an exported
+.BR RECOVERAGE_CORS .
 .TP
 .BI \-\-cors\-origin " ORIGIN"
 Origin allowed to read the API cross-origin. Repeatable, and comma-separated

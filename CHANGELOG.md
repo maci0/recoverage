@@ -317,6 +317,26 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   refused as a malformed body with the connection closed, the same answer a
   bad chunk-size line or a body cut short of its declared size already gets.
 
+- **`recoverage --no-color` exited 2 with `Missing command` instead of serving
+  the dashboard.** The group flags are documented as accepted before the
+  subcommand, but the default-command rewrite only fired on a bare argv, so the
+  flag alone had no subcommand to attach to. A command line carrying nothing
+  but group flags now serves, while `--help`, `--version` and every spelling
+  that names a subcommand keep click's own answer.
+- **`--allow-remote` and `--cors` could not be switched off from the command
+  line.** Both read a `RECOVERAGE_*` variable as their default, and the
+  documented precedence is that a flag on the command line always wins, but
+  neither had a spelling that passed `False`. `--no-allow-remote` and
+  `--no-cors` turn them back off against an exported variable.
+- **A static asset fetched with no shared encoding carried no validator.**
+  `app.js`, `style.css`, `print.css` and `favicon.svg` are documented as
+  `no-cache` with a strong `ETag`, and a client sending `Accept-Encoding:
+  identity` (or naming no encoding the server offers) is answered by bottle's
+  `static_file`, which sends neither header: it got heuristic freshness and a
+  full body on every load. That path now mints the `identity` tag, answers a
+  matching `If-None-Match` with a 304, and sends `Vary: Accept-Encoding`.
+- **The rebuild advice was printed twice in the database error of `stats`,
+  `export` and `check`** when rebrew's own message already ended with it.
 - **`recoverage export --format md` and `--format json` reported a failed
   write as a traceback.** Only the CSV arm caught the OSError a full disk, a
   quota or a closed pipe raises, and named how many rows landed before the

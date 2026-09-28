@@ -543,16 +543,27 @@ def serve_static_asset(filename: str) -> bytes | HTTPResponse:
     variant_key = static_variant_key(accept_encoding)
     if not variant_key:
         # No shared encoding: hand off to bottle, which still does Range and
-        # If-Modified-Since on the raw file.  The revalidation header is set
-        # here rather than left to bottle: the documented contract for these
-        # four assets is `no-cache` with a strong ETag, and bottle's
-        # `static_file` sends no Cache-Control at all, so a client that
-        # negotiates no shared encoding (or sends `identity`, which
-        # `accepted_encodings` counts as accepting nothing) got heuristic
-        # freshness instead of a revalidate.
+        # If-Modified-Since on the raw file.  The validator is minted here
+        # rather than left to bottle, which sends neither ETag nor
+        # Cache-Control: the documented contract for these four assets is
+        # `no-cache` with a strong ETag, and a client that negotiates no
+        # shared encoding (or sends `identity`, which `accepted_encodings`
+        # counts as accepting nothing) got heuristic freshness instead of a
+        # revalidate.  `identity` is the tag's encoding, because the raw file
+        # is the representation those clients are being served.
+        try:
+            identity_bytes = (_assets_dir() / filename).read_bytes()
+        except OSError:
+            # Missing/unreadable asset: let bottle produce the 404, don't 500.
+            return static_file(filename, root=str(_assets_dir()))
+        etag = _asset_etag(filename, "identity", identity_bytes)
+        if _if_none_match_matches(_header("If-None-Match", ""), etag):
+            return _not_modified(etag)
         raw = static_file(filename, root=str(_assets_dir()))
         if isinstance(raw, HTTPResponse):
             raw.set_header("Cache-Control", CACHE_REVALIDATE)
+            raw.set_header("ETag", etag)
+            raw.set_header("Vary", "Accept-Encoding")
         return raw
 
     key = (filename, variant_key)

@@ -243,6 +243,20 @@ class TestBareInvocationServes:
     def test_any_argument_is_left_alone(self, argv: list[str]) -> None:
         assert cli._argv_with_default_command(argv) == argv
 
+    @pytest.mark.parametrize(
+        "argv",
+        [
+            ["recoverage", "--no-color"],
+            ["recoverage", "--version", "--no-color"],
+        ],
+    )
+    def test_a_group_flag_alone_still_serves(self, argv: list[str]) -> None:
+        # The group flags are documented as accepted before the subcommand,
+        # so the bare form reaches `serve` too.  `--version` is eager and
+        # ends the invocation, appended token or not.
+        expected = argv if "--version" in argv else [*argv, "serve"]
+        assert cli._argv_with_default_command(argv) == expected
+
     def test_bare_run_reaches_the_server(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
@@ -257,6 +271,25 @@ class TestBareInvocationServes:
         monkeypatch.setattr("recoverage.webapp.app", _StubApp)
         monkeypatch.setattr(cli, "open_browser", lambda _url: None)
         monkeypatch.setattr(sys, "argv", ["recoverage"])
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+        assert exc.value.code == 0
+        out = capsys.readouterr().out
+        assert "Serving coverage dashboard at" in out
+        assert "Missing command" not in out
+
+    def test_a_group_flag_before_the_subcommand_reaches_the_server(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        class _StubApp:
+            @staticmethod
+            def run(**_kwargs: Any) -> None:
+                raise KeyboardInterrupt
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("recoverage.webapp.app", _StubApp)
+        monkeypatch.setattr(cli, "open_browser", lambda _url: None)
+        monkeypatch.setattr(sys, "argv", ["recoverage", "--no-color"])
         with pytest.raises(SystemExit) as exc:
             cli.main()
         assert exc.value.code == 0

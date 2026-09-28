@@ -152,11 +152,11 @@ this command with its default settings.
 |------|---------|-------------|
 | `--port` | `8001` | HTTP port to serve on; `0` binds a free port and prints the one it got |
 | `--bind` | `127.0.0.1` | Interface to bind to (use `0.0.0.0` for LAN access) |
-| `--allow-remote` | off | Required with a non-loopback `--bind`: acknowledge the API is reachable on the network |
+| `--allow-remote` / `--no-allow-remote` | off | Required with a non-loopback `--bind`: acknowledge the API is reachable on the network |
 | `--token` | off | Require this token for every request (`Authorization: Bearer`, `?token=`, or open `/?token=<token>` or `/potato?token=<token>` to set the browser cookie) |
 | `--no-open` | off | Don't auto-open the browser |
 | `--regen` | off | Re-run rebrew's catalog analysis and rewrite the documents before starting |
-| `--cors` | off | Enable CORS processing (allowlisted origins only; the wildcard is never emitted) |
+| `--cors` / `--no-cors` | off | Enable CORS processing (allowlisted origins only; the wildcard is never emitted) |
 | `--cors-origin` | none | Origin URL allowed to read the API cross-origin (repeatable; without it `--cors` allows no cross-origin reads) |
 | `--log-level` | `INFO` | Log threshold: `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` (case-insensitive) |
 

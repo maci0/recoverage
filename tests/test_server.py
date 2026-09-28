@@ -1618,6 +1618,25 @@ class TestStaticAssetRevalidation:
         assert headers["Etag"]
         assert body
 
+    def test_identity_encoding_carries_the_same_contract(self) -> None:
+        """The `no-cache` + strong ETag contract is the asset's, not the
+        negotiated encoding's: a client that names no shared encoding gets
+        bottle's static_file, and it sends no validator at all."""
+        from conftest import wsgi_get
+
+        status, headers, body = wsgi_get("/app.js", headers={"Accept-Encoding": "identity"})
+        assert status == "200 OK"
+        assert body
+        etag = headers["Etag"]
+        assert etag
+        assert "no-cache" in headers["Cache-Control"]
+        status_304, headers_304, body_304 = wsgi_get(
+            "/app.js", headers={"Accept-Encoding": "identity", "If-None-Match": etag}
+        )
+        assert status_304 == "304 Not Modified"
+        assert body_304 == b""
+        assert headers_304["Etag"] == etag
+
     def test_matching_if_none_match_returns_empty_304(self) -> None:
         from conftest import wsgi_get
 
