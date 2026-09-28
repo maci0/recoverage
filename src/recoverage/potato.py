@@ -18,7 +18,7 @@ import threading
 import unicodedata
 from collections.abc import Callable, Iterable
 from html import escape as _html_escape
-from pathlib import Path, PurePath
+from pathlib import Path
 from typing import Any, cast
 from urllib.parse import ParseResult, parse_qs, urlparse
 from urllib.parse import quote as _url_quote
@@ -50,6 +50,7 @@ from recoverage.server import (
     function_json,
     function_sort_key,
     global_json,
+    is_plain_relative,
     load_metadata,
     lookup_function,
     lookup_global,
@@ -2513,19 +2514,6 @@ def _panel_fn_attach_verify(coverage: CoverageSnapshot, fn_data: dict[str, Any])
         fn_data["last_verify_effective"] = True
 
 
-def _is_plain_relative(path: PurePath) -> bool:
-    """Whether *path* is a plain relative name, safe to join onto a source root.
-
-    ``anchor`` rather than ``is_absolute()``: on Windows a drive-relative
-    name (``C:foo.c``) is not absolute, and joining one onto the source root
-    silently reinterprets it as ``<drive>:/foo.c`` instead of the file the
-    database named.  An anchor covers every such form — the drive, the
-    leading separator, and a UNC share — and is empty for a plain name on
-    both path flavours.
-    """
-    return not path.anchor and ".." not in path.parts
-
-
 def _panel_fn_source_text(data: dict[str, Any], target: str, fn_data: dict[str, Any]) -> str | None:
     """Read the function's C source, or None when unresolvable.
 
@@ -2576,13 +2564,13 @@ def _panel_fn_source_text(data: dict[str, Any], target: str, fn_data: dict[str, 
     # An empty root is refused for the same reason: base would become the whole
     # project directory, and any files[0] would be read out of it.
     source_root = str(source_root).lstrip("/")
-    if not source_root or not _is_plain_relative(Path(source_root)):
+    if not source_root or not is_plain_relative(Path(source_root)):
         _log.debug("Source root %r is not contained in the project", source_root)
         return None
     base = (project_root / source_root).resolve()
     raw = files[0]
     # Reject anchored paths and parent traversal before resolve
-    if not _is_plain_relative(Path(raw)):
+    if not is_plain_relative(Path(raw)):
         return None
     c_path = (base / raw).resolve()
     if not c_path.is_relative_to(base):

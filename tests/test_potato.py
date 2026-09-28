@@ -27,7 +27,6 @@ from recoverage.potato import (
     _format_data_inspector,
     _format_hex_dump,
     _format_va,
-    _is_plain_relative,
     _load_grid_cells,
     _panel_fn_source_text,
     _progress_svg,
@@ -37,7 +36,7 @@ from recoverage.potato import (
     _wrap_text,
     render_potato,
 )
-from recoverage.server import _snapshot_db_mtime
+from recoverage.server import _snapshot_db_mtime, is_plain_relative
 
 
 def render_potato_url(url: str) -> str:
@@ -1872,7 +1871,7 @@ class TestPathTraversalGuard:
         """Both flavours read a name as plain when the host agrees; a POSIX
         host cannot see a Windows drive-relative name at all, so the
         cross-platform rule is pinned through PureWindowsPath below."""
-        assert _is_plain_relative(PurePosixPath(name))
+        assert is_plain_relative(PurePosixPath(name))
 
     @pytest.mark.parametrize(
         ("name", "why"),
@@ -1892,7 +1891,7 @@ class TestPathTraversalGuard:
         PureWindowsPath so the rule is tested on every host, not only where
         the flavour is the native one."""
         assert why  # the case table documents intent, not behaviour
-        assert not _is_plain_relative(PureWindowsPath(name))
+        assert not is_plain_relative(PureWindowsPath(name))
 
     def test_symlink_escape_blocked(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Symlink pointing outside the source tree must be caught by resolve()."""

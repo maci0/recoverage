@@ -2542,6 +2542,24 @@ class TestRepoFileRoute:
             assert int(status.split()[0]) == 404, f"{prefix}{segment}: {status}"
             assert b"Traceback" not in body
 
+    @pytest.mark.parametrize("segment", ["%2fetc%2fpasswd", "%2Fetc%2Fpasswd"])
+    def test_anchored_segment_is_refused_before_the_join(self, segment: str) -> None:
+        """``server.is_plain_relative`` gates the join, not the check after it.
+
+        A resolve-then-compare check answers for the host it runs on, so the
+        rule has to refuse an anchored segment before the join can
+        reinterpret it.  Only the flavours every host agrees on are pinned
+        here: ``C%3Afoo.c`` is a drive-relative name on Windows and an
+        ordinary (absent) filename on POSIX, and the rule's cross-platform
+        spelling is pinned through ``PureWindowsPath`` in
+        ``test_potato.py``.
+        """
+        for prefix in self.PREFIXES:
+            status, headers, body = wsgi_request("GET", f"{prefix}{segment}")
+            assert int(status.split()[0]) == 403, f"{prefix}{segment}: {status}"
+            data = json.loads(decode_body(body, headers))
+            assert data["code"] == "forbidden", f"{prefix}{segment}: {data}"
+
 
 # ── chunked body framing ───────────────────────────────────────────
 

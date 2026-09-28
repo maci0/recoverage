@@ -21,7 +21,7 @@ import uuid
 from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
+from pathlib import Path, PurePath
 from types import MappingProxyType
 from typing import Any, Final, cast
 from urllib.parse import unquote, urlsplit
@@ -307,6 +307,22 @@ def path_param(value: str) -> str:
         return unquote(value, encoding="utf-8", errors="strict")
     except UnicodeDecodeError:
         return value
+
+
+def is_plain_relative(path: PurePath) -> bool:
+    """Whether *path* is a plain relative name, safe to join onto a base directory.
+
+    ``anchor`` rather than ``is_absolute()``: on Windows a drive-relative name
+    (``C:foo.c``) is not absolute, and joining one onto a base silently
+    reinterprets it as ``<drive>:/foo.c`` instead of the file the caller named.
+    An anchor covers every such form (the drive, the leading separator, and a
+    UNC share) and is empty for a plain name on both path flavours.
+
+    The one definition for every path that crosses into the filesystem from a
+    request or from a coverage document, so a second spelling of the rule
+    cannot answer for a different host than the one the guard was written for.
+    """
+    return not path.anchor and ".." not in path.parts
 
 
 def decode_query_value(raw: str) -> str:

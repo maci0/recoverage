@@ -14,7 +14,8 @@ Module map (dependencies point one way, left to right):
 - ``regen``       — in-process rebrew regen: imports rebrew's catalog/build-db
   lazily and runs both under one call (no in-package deps)
 - ``server``      — Bottle app, hooks/auth, shared helpers (snapshot access,
-  compression, stats, DLL cache); defines ``app`` plus its
+  compression, stats, DLL cache, the ``is_plain_relative`` path-containment
+  rule every route and the C-source reader share); defines ``app`` plus its
   cross-cutting wiring (auth/log/security-header hooks, 500 handler,
   OPTIONS preflight catch-all) but no content routes; configured at
   startup via ``configure_security()``

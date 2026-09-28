@@ -6,7 +6,7 @@ import hashlib
 import logging
 import mimetypes
 import threading
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePath, PurePosixPath
 from typing import NamedTuple
 
 import rcssmin
@@ -285,6 +285,18 @@ def serve_repo_file(filepath: str) -> bytes | HTTPResponse:
             {
                 "error": "Not found",
                 "detail": "no such file: the path holds a NUL byte",
+            },
+        )
+    # The plain-relative rule, the one the C-source reader applies to the same
+    # `src/` tree: the resolve check below catches an escaped path either way,
+    # but only after the join has already reinterpreted a drive-relative
+    # segment as a path of its own, which is the form the rule refuses.
+    if not _server.is_plain_relative(PurePath(filepath)):
+        return _server._json_err(
+            403,
+            {
+                "error": "Forbidden",
+                "detail": "path escapes the project tree",
             },
         )
     # Defense-in-depth: bottle's static_file string-prefix check does NOT
