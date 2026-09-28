@@ -1,4 +1,4 @@
-import { createPortal, useEffect, useRef } from "preact/compat";
+import { createPortal, useEffect, useRef, useState } from "preact/compat";
 
 import type { ComponentChildren } from "preact";
 
@@ -30,8 +30,10 @@ export type CodeModalProps = {
   text: string;
   language: HighlightLanguage;
   onClose: () => void;
-  onCopy: () => void;
 };
+
+/** How long the copied label holds before the button returns to "Copy". */
+const COPIED_FLASH_MS = 1000;
 
 export function CodeModal({
   open,
@@ -39,10 +41,34 @@ export function CodeModal({
   text,
   language,
   onClose,
-  onCopy,
 }: CodeModalProps): ComponentChildren {
   const closeRef = useRef<HTMLButtonElement | null>(null);
   const lastFocused = useRef<HTMLElement | null>(null);
+  const [copied, setCopied] = useState<string | null>(null);
+
+  // The component stays mounted between opens, so a label left flashing on the
+  // previous view would greet the next one.
+  useEffect(() => {
+    if (open) {
+      setCopied(null);
+    }
+  }, [open]);
+
+  // The same outcome label every Copy button in the panel shows: a copy with
+  // no confirmation is the one action the reader cannot tell succeeded.
+  const copy = (): void => {
+    void (async () => {
+      try {
+        await navigator.clipboard.writeText(text);
+        setCopied("Copied!");
+        // oxlint-disable-next-line @rikalabs/no-silent-catch-fallback -- a refused clipboard is reported on the button itself ("Failed")
+      } catch {
+        setCopied("Failed");
+      } finally {
+        window.setTimeout(() => setCopied(null), COPIED_FLASH_MS);
+      }
+    })();
+  };
 
   useEffect(() => {
     const regions = document.querySelectorAll(".skip-link, .topbar, .layout");
@@ -87,8 +113,8 @@ export function CodeModal({
         <div className="modal-header flex items-center gap-2 border-b border-line bg-modal-header px-3 py-2">
           <span className="modal-title font-mono text-sm font-bold">{title}</span>
           <div className="modal-actions ml-auto flex gap-2">
-            <Button className="copy-btn" aria-label="Copy Modal Content" onClick={onCopy}>
-              Copy
+            <Button className="copy-btn" aria-label="Copy Modal Content" onClick={copy}>
+              {copied ?? "Copy"}
             </Button>
             <Button ref={closeRef} className="modal-close" aria-label="Close Modal" onClick={onClose}>
               Close

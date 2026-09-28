@@ -14,6 +14,9 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   container spec. The token is reported as `set`/`unset` as everywhere else,
   the coverage directory stays in the endpoint's own basename-only `db` block,
   and the block is `null` in a process that never ran `serve`.
+- The dashboard toolbar carries an **HTML** link to Potato Mode carrying the
+  current target, section, search and filters. Potato already linked back to the
+  SPA; the SPA had no way out to it.
 
 ### Changed
 
@@ -25,6 +28,17 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The README documents every `/api/` query parameter (default, accepted range,
   what is rejected) and a real `/functions` response, and names the SSE
   connection-cap 503 as one of the errors carrying `retry_after`.
+- The detail panel stacks under the map below 1024px instead of taking a fixed
+  460px beside it, which squeezed the map to an unusable column on a phone.
+- The Reload button reads "Regenerating..." while a regen is in flight, and the
+  code viewer's Copy button reports "Copied!" or "Failed" like every other Copy
+  button. It was the one copy control that gave no sign of having run.
+- The Potato Mode function list says "first N of M results" and names the cap
+  when the list is truncated. It read the capped row count as the total, so a
+  truncated page looked complete.
+- The "database unavailable" page and the 503 `detail` string tell the reader to
+  run `rebrew build-db`, which runs the catalog itself, rather than a
+  two-command sequence with no first step to run.
 
 ### Fixed
 

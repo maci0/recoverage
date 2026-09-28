@@ -5,12 +5,13 @@ import type { ComponentChildren, TargetedKeyboardEvent } from "preact";
 import { fetchTargets, type Section, type TargetInfo } from "@/api";
 import { CoverageMap } from "@/components/CoverageMap";
 import { CoveragePanel } from "@/components/CoveragePanel";
-import { Button } from "@/components/ui/button";
+import { Button, controlVariants } from "@/components/ui/button";
 import { LEGEND, PALETTE_VARS } from "@/grid/pack";
 import { useCoverage, type Coverage } from "@/hooks/useCoverage";
 import { useLiveReload } from "@/hooks/useLiveReload";
 import { originalDllPath, useOriginalBinary } from "@/hooks/useOriginalBinary";
 import { cellIndexForVa, useSelection } from "@/hooks/useSelection";
+import { cn } from "@/lib/cn";
 import { MSG, hex, sameOriginPath, toVa } from "@/lib/format";
 import { readStored, writeStored } from "@/lib/storage";
 
@@ -57,6 +58,31 @@ function initialTheme(): "dark" | "light" {
     return saved;
   }
   return window.matchMedia?.("(prefers-color-scheme: light)").matches === true ? "light" : "dark";
+}
+
+/** The Potato Mode link for the current view. Potato reads `search` for the
+ * query and a comma-joined `filter`, so both are translated rather than
+ * appended verbatim, and an empty value is left out. */
+function potatoUrl(state: {
+  target: string;
+  section: string;
+  search: string;
+  filters: ReadonlySet<string>;
+}): string {
+  const params = new URLSearchParams();
+  for (const [key, value] of [
+    ["target", state.target],
+    ["section", state.section],
+    ["search", state.search],
+  ] as const) {
+    if (value !== "") {
+      params.set(key, value);
+    }
+  }
+  if (state.filters.size > 0) {
+    params.set("filter", [...state.filters].toSorted().join(","));
+  }
+  return `/potato?${params.toString()}`;
 }
 
 export function App() {
@@ -316,6 +342,13 @@ export function App() {
 
   const noTargets = targetReady && targets.length === 0;
 
+  // Potato Mode reads `search` and a comma-joined `filter`, so the link carries
+  // the reader's position across instead of dropping them on the default view.
+  const potatoHref = useMemo(
+    () => potatoUrl({ target, section, search: query, filters }),
+    [filters, query, section, target],
+  );
+
   return (
     <>
       <a
@@ -431,8 +464,15 @@ export function App() {
               disabled={busy}
               onClick={reload}
             >
-              Reload
+              {busy ? MSG.REGEN_IN_PROGRESS : "Reload"}
             </Button>
+            <a
+              className={cn(controlVariants({ size: "md" }), "potato-link")}
+              href={potatoHref}
+              title="Open this view in Potato Mode (server-rendered HTML)"
+            >
+              HTML
+            </a>
             <Button
               className="icon-btn"
               aria-label={theme === "light" ? "Switch to Dark Mode" : "Switch to Light Mode"}
@@ -448,7 +488,7 @@ export function App() {
         </div>
       </header>
 
-      <main className="layout mx-auto flex max-w-[1600px] gap-4 px-4 py-4" id="main-content">
+      <main className="layout mx-auto flex max-w-[1600px] flex-col gap-4 px-4 py-4 lg:flex-row" id="main-content">
         <div className="grid-area min-w-0 flex-1">
           {notice !== null && (
             <p

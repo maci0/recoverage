@@ -1058,7 +1058,7 @@ def _db_unavailable_page() -> HTTPResponse:
             '<table width="100%" height="90%" border="0"><tr><td align="center" valign="middle">'
             "<h1>Database unavailable</h1>"
             f'<p><font color="{MUTED_COLOR}">Run '
-            "'rebrew catalog &amp;&amp; rebrew build-db' to create or rebuild it,"
+            "'rebrew build-db' to create or rebuild it,"
             ' then <a href="/potato">retry Potato Mode</a> or '
             '<a href="/">open the SPA</a>.</font></p>'
             "</td></tr></table></font></body></html>"
@@ -2021,9 +2021,21 @@ def _render_function_list(
         ]
     # The rendered list is capped (same bound as the search above) so a large
     # project's ?view=functions page doesn't build a multi-MB HTML document on
-    # every request.  The secondary `va` key keeps the cap deterministic.
+    # every request.  The secondary `va` key keeps the cap deterministic.  The
+    # count is read before the cap: a header reading "(500 results)" on a
+    # target with thousands tells the reader the list is complete when the page
+    # they are looking at is a slice.
     rows.sort(key=lambda fn: (_function_list_key(fn, order_by), fn.va))
+    total = len(rows)
+    truncated = total > _SEARCH_ROW_LIMIT
     rows = rows[:_SEARCH_ROW_LIMIT]
+    count_label = f"first {len(rows)} of {total} results" if truncated else f"{total} results"
+    cap_note = ""
+    if truncated:
+        cap_note = (
+            f'<br><font size="1" color="{MUTED_COLOR}">This list is capped at '
+            f"{_SEARCH_ROW_LIMIT} rows. Narrow the search above to reach the rest.</font>"
+        )
 
     prefix = f"?target={_url_quote(target)}&section={_url_quote(section)}&view=functions"
     base = prefix
@@ -2037,9 +2049,10 @@ def _render_function_list(
         (
             f'<tr><td background="{PANEL_HDR_PNG}" cellpadding="8">'
             f'<font color="{MUTED_COLOR}" size="2"><b>Functions</b></font> '
-            f'<font size="1" color="{MUTED_COLOR}">({len(rows)} results)</font> '
+            f'<font size="1" color="{MUTED_COLOR}">({count_label})</font> '
             f'<a href="{_build_url(target, section, search=search_query)}"><font size="1" color="{ACCENT_COLOR}">[Grid View]</font></a>'
-            f"</td></tr>"
+            + cap_note
+            + "</td></tr>"
         ),
         "<tr><td>",
         f'<table width="100%" border="1" cellpadding="6" cellspacing="0" bordercolor="{BORDER_COLOR}">',

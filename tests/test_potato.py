@@ -879,6 +879,22 @@ def test_function_list_status_filter():
 
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage document")
+def test_function_list_reports_the_row_cap(monkeypatch):
+    # The list is capped so a large target's page stays a sane size. A header
+    # reading the capped length as the total tells the reader the page is the
+    # whole result set, and the rows they cannot see are unreachable.
+    import recoverage.potato as potato_module
+
+    monkeypatch.setattr(potato_module, "_SEARCH_ROW_LIMIT", 1)
+    target = get_first_target()
+    html = render_potato_url(f"/potato?target={target}&section=.text&view=functions")
+    found = re.search(r"\(first 1 of (\d+) results\)", html)
+    assert found is not None, html[:400]
+    assert int(found.group(1)) > 1
+    assert "capped at 1 rows" in html
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage document")
 def test_prev_next_navigation():
     target = get_first_target()
     html = render_potato_url(f"/potato?target={target}&section=.text&idx=5")

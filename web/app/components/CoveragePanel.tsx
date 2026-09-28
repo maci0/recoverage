@@ -411,7 +411,7 @@ export function CoveragePanel({
 
   return (
     <aside
-      className="panel w-[460px] max-w-[45vw] shrink-0 self-start rounded-control border border-line bg-panel p-3"
+      className="panel w-full shrink-0 self-start rounded-control border border-line bg-panel p-3 lg:w-[460px] lg:max-w-[45vw]"
       id="panel"
     >
       <div className="panel-head border-b border-line pb-2">
@@ -495,9 +495,6 @@ export function CoveragePanel({
         text={modal?.text ?? ""}
         language={modal?.language ?? "c"}
         onClose={() => setModal(null)}
-        onCopy={() => {
-          void navigator.clipboard.writeText(modal?.text ?? "");
-        }}
       />
     </aside>
   );

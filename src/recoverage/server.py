@@ -2099,7 +2099,7 @@ def _db_unavailable_err(exc: Exception) -> HTTPResponse:
         {
             "error": "Database unavailable",
             "detail": f"{type(exc).__name__} — "
-            "run 'rebrew catalog && rebrew build-db' to create or rebuild it; "
+            "run 'rebrew build-db' to create or rebuild it; "
             "the server log has the full cause",
         },
     )
