@@ -43,6 +43,12 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `GET /api/targets/<target>/data` treats `?index=` as the flag it is: `0`,
+  `1` or absent. Any other value is a 400 naming the accepted spellings, the
+  same contract `?format=` and `?status=` already had. `?index=false` used to
+  read as "on" and answered with the whole search index the flag exists to
+  omit. The README's query-parameter table lists `index`, which the endpoint
+  took and the table did not.
 - `lucide-react` is no longer a devDependency. Nothing imported it: the
   dashboard runs on preact/compat and draws no icon from the package, so the
   only thing it did was pull `react` into `bun.lock` for every contributor and

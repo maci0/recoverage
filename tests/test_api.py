@@ -5278,3 +5278,27 @@ class TestDataSearchIndexOptOut:
         _, full, _ = wsgi_get(f"/api/targets/{target}/data?section=.text")
         _, bare, _ = wsgi_get(f"/api/targets/{target}/data?section=.text&index=0")
         assert full["Etag"] != bare["Etag"]
+
+    def test_index_one_and_an_absent_index_both_carry_it(self) -> None:
+        api._clear_data_cache()
+        target = get_first_target()
+        for query in ("", "?index=1", "?index=%201%20"):
+            status, headers, body = wsgi_get(f"/api/targets/{target}/data{query}")
+            assert status.startswith("200"), status
+            assert "search_index" in json.loads(decode_body(body, headers))
+
+    def test_an_unrecognised_index_is_a_400(self) -> None:
+        """The flag is an enum, and an unknown one is refused like ?format=.
+
+        `?index=false` used to read as "on", so a client spelling the flag the
+        way its own language spells booleans got the whole search index back
+        with nothing in the answer to say the opt-out was ignored.
+        """
+        api._clear_data_cache()
+        target = get_first_target()
+        for value in ("false", "no", "2", "00"):
+            status, headers, body = wsgi_get(f"/api/targets/{target}/data?index={value}")
+            assert status.startswith("400"), value
+            payload = json.loads(decode_body(body, headers))
+            assert payload["code"] == "bad_request"
+            assert payload["error"] == "invalid index"

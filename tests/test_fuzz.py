@@ -304,6 +304,33 @@ QUERY_SEEDS = [
     b"status=" + b"A" * 200,
 ]
 
+DATA_QUERY_SEEDS = [
+    b"section=.text",
+    b"section=.text&index=0",
+    b"section=.text&index=1",
+    b"index=0",
+    b"section=.text&index=1&section=.data",
+    b"section=%2e%2e%2f%2e%2e",
+    b"index=false",
+    b"index=" + b"0" * 40,
+    b"section=" + b"A" * 300,
+]
+
+#: Grammar tokens for /data's own query: byte mutation alone never spells
+#: ``index=0`` or a percent-encoded traversal, the way ``idx=99999999999`` had
+#: to be seeded for the Potato campaign.
+_DATA_QUERY_TOKENS = (
+    b"section=.text",
+    b"section=",
+    b"index=0",
+    b"index=1",
+    b"index=",
+    b"index=false",
+    b"%2e%2e%2f",
+    b"&",
+    b"=",
+)
+
 SLICE_SEEDS = [
     b"va=0x10001000&size=16",
     b"va=0x10001000&size=0",
@@ -586,6 +613,53 @@ class TestListQuery:
                 assert len(items) <= limit, f"{path}: {len(items)} rows exceed limit {limit}"
 
         _fuzz(QUERY_SEEDS, check)
+
+
+def _query_value(query: bytes, key: str) -> str:
+    """The last value *key* carries in *query*, or "" when it carries none."""
+    found = ""
+    for pair in query.decode("latin-1").split("&"):
+        name, _, value = pair.partition("=")
+        if name == key:
+            found = value
+    return found
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
+class TestDataQuery:
+    """GET /data — `section` names a row and `index` is a two-spelling flag.
+
+    Differential rather than crash-only: a 200 is the only answer that can
+    hide a misread flag, because the payload without `search_index` is a
+    perfectly well-formed object either way.
+    """
+
+    def test_query_never_crashes(self) -> None:
+        path = f"/api/targets/{_pct(get_first_target())}/data"
+
+        def check(data: bytes) -> None:
+            query = data.decode("latin-1")
+            status, headers, body = wsgi_request("GET", f"{path}?{query}")
+            code = int(status.split()[0])
+            payload = _assert_ok(status, headers, body, f"{path}?{data!r}")
+            index = _query_value(data, "index").strip()
+            if index not in ("", "0", "1"):
+                # The flag is validated before the document is read, so an
+                # unrecognised spelling is the same 400 whatever section
+                # it arrived beside.
+                assert code == 400, f"{path}: index {index!r} answered {status}"
+                assert payload["error"] == "invalid index", f"{path}: {payload!r}"
+                return
+            if code >= 400:
+                _assert_envelope(payload, status, path)
+                return
+            assert isinstance(payload, dict), f"{path}: 200 body is not an object"
+            if index == "0":
+                assert "search_index" not in payload, f"{path}: ?index=0 carried the index"
+            else:
+                assert "search_index" in payload, f"{path}: the index went missing"
+
+        _fuzz(DATA_QUERY_SEEDS, check, struct_tokens=_DATA_QUERY_TOKENS)
 
 
 def _limit_of(query: bytes) -> int | None:

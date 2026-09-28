@@ -1192,7 +1192,21 @@ def handle_api_data(target: str) -> bytes | HTTPResponse:
     # the part of this payload that grows with the function count rather than
     # with the section. Omitted rather than emptied, the same signal `cells`
     # already uses, so one absence convention covers both.
-    include_search_index = query_param("index").strip() != "0"
+    # Same contract as `?format=` and `?status=`: a value outside the flag's
+    # two spellings is a 400, not a silent full payload.  `?index=false` and
+    # `?index=no` used to read as "on" and cost the caller the very payload
+    # size the flag exists to save, with nothing in the answer to say so.
+    index_flag = query_param("index").strip()
+    if index_flag not in ("", "0", "1"):
+        return _json_err(
+            400,
+            {
+                "error": "invalid index",
+                "detail": f"index {index_flag!r} is not supported; "
+                "expected 0 (omit search_index) or 1 (include it, the default)",
+            },
+        )
+    include_search_index = index_flag != "0"
 
     # ETag caching based on DB modification time + target + section.
     # Uses the WAL-aware snapshot (mtime_ns-precision) so two rebuilds

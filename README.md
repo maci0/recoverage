@@ -322,7 +322,7 @@ deployment that moved off `8001` needs no second place to configure.
 | `/api/health` | GET | Server version, the settings this process resolved, coverage directory info, installed extras, request/regen/stream counters |
 | `/api/targets` | GET | List available targets |
 | `/api/targets/<target>/stats` | GET | Per-section coverage stats with percentages |
-| `/api/targets/<target>/data` | GET | Section + cell data (`?section=.text` for partial) |
+| `/api/targets/<target>/data` | GET | Section + cell data (`?section=.text` for partial, `?index=0` to omit the search index) |
 | `/api/targets/<target>/functions` | GET | Paginated list (`?status=&search=&sort=&limit=&offset=`; a `status` outside rebrew's vocabulary is a 400) |
 | `/api/targets/<target>/functions` | POST | Batch lookup: `{"vas": [...]}` → function/global details in input order |
 | `/api/targets/<target>/functions/<va>` | GET | Single function/global detail |
@@ -347,6 +347,7 @@ else in the query string is ignored.
 | Endpoint | Parameter | Default | Accepted | Rejected with 400 |
 |----------|-----------|---------|----------|------------------|
 | `/api/targets/<target>/data` | `section` | all sections | one section name | an unknown name is a 404 |
+| `/api/targets/<target>/data` | `index` | `1` | `0` omits `search_index`, `1` includes it | any other value |
 | `/api/targets/<target>/functions` | `status` | no filter | rebrew's function-status vocabulary, matched case-sensitively | any other value |
 | `/api/targets/<target>/functions` | `search` | no filter | up to 500 characters | anything longer |
 | `/api/targets/<target>/functions` | `sort` | `va` | `va`, `name`, `size`, `status`, `symbol`, `module`, each optionally suffixed `:desc` | never; an unknown field ignores the whole parameter |
@@ -359,7 +360,7 @@ else in the query string is ignored.
 | `/api/targets/<target>/sections/<section>/bytes` | `offset` | `0` | decimal or `0x`-prefixed hex | negative or unparseable |
 | `/api/targets/<target>/sections/<section>/bytes` | `size` | `256` | 1..4096, decimal or `0x`-prefixed hex | zero, negative or unparseable |
 
-An enum the server does not have (`status`, `format`) is a 400: the caller
+An enum the server does not have (`status`, `format`, `index`) is a 400: the caller
 asked for a value the server cannot honour, and answering 200 with an empty
 or differently-shaped body reads as "there are none". A numeric parameter
 that only bounds the page (`limit`, `offset`) falls back to its default
