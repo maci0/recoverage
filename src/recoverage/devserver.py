@@ -262,10 +262,19 @@ class _QuietTimeoutRequestHandler(WSGIRequestHandler):
 
         The peer address is included because these never reach a route: it is
         the only thing that separates one misbehaving client from a scanner.
-        The message is escaped for the same reason the request log escapes the
-        path (``send_error`` quotes the request version it rejected, which is
-        attacker-controlled).  There is no request id to carry: the id is
-        minted in ``before_request``, which a transport rejection never
+        ``send_error`` quotes the request line, the method and the version it
+        rejected, all of which are attacker-controlled, so a line-breaking
+        byte in one of them would forge log entries.  What keeps that out of
+        the log is upstream: every such message reaches here through a ``%r``
+        (and the one ``%s``, the version number, is digits by the time
+        ``parse_request`` reports it).  This module does not escape the text
+        itself, and cannot without reaching up into ``server`` for
+        ``_log_safe`` — an edge the level order forbids a transport leaf to
+        take.  So the guarantee rests on the stdlib's formatting, not on this
+        code: a caller that passes a raw string as *args* would put unescaped
+        request bytes in the log, and a new one has to keep passing the
+        request's bytes through a repr.  There is no request id to carry: the
+        id is minted in ``before_request``, which a transport rejection never
         reaches.
         """
         _log.warning(
