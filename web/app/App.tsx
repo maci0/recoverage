@@ -388,12 +388,12 @@ export function App() {
         <div className="topbar-left flex flex-wrap items-center gap-3">
           <div className="title-container flex items-center gap-2">
             <div
-              className="logo-r inline-flex items-center justify-center rounded-hair border-2 border-accent bg-accent/5 px-2 py-0.5 font-mono text-xl font-extrabold text-accent shadow-glow"
+              className="logo-r inline-flex items-center justify-center rounded-hair border-2 border-accent bg-accent/5 px-2 py-0.5 font-mono text-mark font-extrabold text-accent shadow-glow"
               aria-hidden="true"
             >
               R
             </div>
-            <h1 className="title font-mono text-lg font-bold tracking-wide">ReCoverage</h1>
+            <h1 className="title font-mono text-wordmark font-bold tracking-wide">ReCoverage</h1>
           </div>
           <nav className="tabs flex flex-wrap gap-1" aria-label="Sections">
             {names.map((name) => (
@@ -420,7 +420,7 @@ export function App() {
             <div className="search-row flex items-center gap-2">
               <input
                 type="search"
-                className="input-el rounded-hair border border-line bg-btn px-2 py-1 font-mono text-xs text-text"
+                className="input-el rounded-hair border border-line bg-btn px-2 py-1 font-mono text-label text-text"
                 placeholder="Search function name or VA..."
                 aria-label="Search functions"
                 value={query}
@@ -440,7 +440,7 @@ export function App() {
             </div>
             {query !== "" && matchedNames !== null && (
               <div
-                className="search-status font-mono text-[11px] text-muted"
+                className="search-status font-mono text-micro text-muted"
                 role="status"
                 aria-live="polite"
               >
@@ -473,7 +473,7 @@ export function App() {
           <div className="actions flex items-center gap-2">
             {targets.length > 0 && (
               <select
-                className="input-el target-select rounded-hair border border-line bg-btn px-2 py-1 font-mono text-xs text-text"
+                className="input-el target-select rounded-hair border border-line bg-btn px-2 py-1 font-mono text-label text-text"
                 aria-label="Select target binary"
                 value={target}
                 onChange={(event) => onTarget(event.currentTarget.value)}
@@ -520,7 +520,7 @@ export function App() {
         <div className="grid-area min-w-0 flex-1">
           {notice !== null && (
             <p
-              className="nav-notice mb-2 rounded-hair border border-line bg-panel px-3 py-2 font-mono text-xs"
+              className="nav-notice mb-2 rounded-hair border border-line bg-panel px-3 py-2 font-mono text-label"
               role="status"
               aria-live="polite"
             >
@@ -529,7 +529,7 @@ export function App() {
           )}
           {(loadError ?? coverage.error) !== null && (
             <p
-              className="grid-error mb-2 rounded-hair border border-line bg-panel px-3 py-2 font-mono text-xs text-badge-stub-text"
+              className="grid-error mb-2 rounded-hair border border-line bg-panel px-3 py-2 font-mono text-label text-badge-stub-text"
               role="alert"
             >
               {loadError ?? coverage.error}
@@ -550,7 +550,7 @@ export function App() {
               gridFocus.current = focus;
             }}
           />
-          <ul className="legend mt-3 flex flex-wrap gap-3 font-mono text-[11px] text-muted">
+          <ul className="legend mt-3 flex flex-wrap gap-3 font-mono text-micro text-muted">
             {LEGEND.map(([slot, label]) => (
               <li key={label} className="flex items-center gap-1.5">
                 <span
@@ -604,7 +604,7 @@ function MapArea({
 }): ComponentChildren {
   if (noTargets) {
     return (
-      <div className="empty-state rounded-control border border-line bg-panel p-6 text-center font-mono text-xs text-muted">
+      <div className="empty-state rounded-control border border-line bg-panel p-6 text-center font-mono text-label text-muted">
         <p className="font-bold text-text">No coverage database</p>
         <p>Run rebrew build-db to create db/coverage-*.toml, then reload this page.</p>
       </div>
@@ -619,7 +619,7 @@ function MapArea({
     }
     return (
       <div
-        className="grid-error rounded-control border border-line bg-panel p-4 font-mono text-xs"
+        className="grid-error rounded-control border border-line bg-panel p-4 font-mono text-label"
         role="status"
       >
         <p>
@@ -649,7 +649,7 @@ function MapArea({
 function pending(text: string): ComponentChildren {
   return (
     <div
-      className="loading-overlay rounded-control border border-line bg-panel p-6 text-center font-mono text-xs text-muted"
+      className="loading-overlay rounded-control border border-line bg-panel p-6 text-center font-mono text-label text-muted"
       role="status"
       aria-live="polite"
     >

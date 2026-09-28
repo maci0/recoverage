@@ -93,7 +93,7 @@ export function CodeModal({
     >
       <div className="modal-content flex max-h-[85vh] w-[min(1200px,95vw)] flex-col overflow-hidden rounded-control border border-line bg-panel">
         <div className="modal-header flex items-center gap-2 border-b border-line bg-modal-header px-3 py-2">
-          <span id={titleId} className="modal-title font-mono text-sm font-bold">
+          <span id={titleId} className="modal-title font-mono text-title font-bold">
             {title === "" ? "Code viewer" : title}
           </span>
           <div className="modal-actions ms-auto flex gap-2">

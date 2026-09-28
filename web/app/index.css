@@ -105,6 +105,25 @@
   --radius-hair: 2px;
   --radius: 4px;
   --radius-pill: 6px;
+
+  /* Five sizes, in the order the interface reads them. There was no scale here
+   * before: the app took Tailwind's stock sizes ad hoc, which left the
+   * wordmark at 18px, every panel title at 14px, the workhorse label at 12px
+   * and two places on a hardcoded 11px that was no step in any series. The
+   * wordmark was then the same size as the section tabs beside it, so the
+   * page's one heading did not read as a heading. Potato Mode already had the
+   * hierarchy this was missing, in its `<font size="1|2|3|5">`; these are the
+   * same four rungs for a screen, plus the mark above the wordmark.
+   *
+   * A phosphor instrument is dense and the map is the reading, so the scale
+   * opens a whole step at the wordmark and stays tight below it. Nothing here
+   * is below 11px and the two micro labels keep the size they already had, so
+   * no text gets smaller than it reads today. */
+  --text-micro: 11px;
+  --text-label: 12px;
+  --text-title: 14px;
+  --text-wordmark: 20px;
+  --text-mark: 24px;
 }
 
 .light-mode {
@@ -224,6 +243,12 @@
   --radius-hair: var(--radius-hair);
   --radius-control: var(--radius);
   --radius-pill: var(--radius-pill);
+
+  --text-micro: var(--text-micro);
+  --text-label: var(--text-label);
+  --text-title: var(--text-title);
+  --text-wordmark: var(--text-wordmark);
+  --text-mark: var(--text-mark);
 
   --shadow-glow: var(--c-shadow);
   --shadow-glow-active: var(--c-shadow-active);

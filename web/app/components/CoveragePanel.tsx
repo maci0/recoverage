@@ -89,7 +89,7 @@ function HexLogo({
           </text>
         </svg>
       </span>
-      <h3 className="section-title-text font-mono text-xs font-bold">{heading}</h3>
+      <h3 className="section-title-text font-mono text-label font-bold">{heading}</h3>
     </div>
   );
 }
@@ -359,7 +359,7 @@ export function CoveragePanel({
     >
       <div className="panel-head border-b border-line pb-2">
         <div className="flex items-center gap-2">
-          <h2 className="panel-title font-mono text-sm font-bold">{title}</h2>
+          <h2 className="panel-title font-mono text-title font-bold">{title}</h2>
           <div className="panel-actions ms-auto flex gap-2">
             <CopyButton
               label="Copy VA"

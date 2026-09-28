@@ -42,7 +42,7 @@ export function HighlightedCode({
       aria-label={label}
     >
       <code
-        className="hljs block font-mono text-xs leading-[1.45] whitespace-pre"
+        className="hljs block font-mono text-label leading-[1.45] whitespace-pre"
         onClick={(event) => {
           const { target } = event;
           if (!(target instanceof HTMLElement) || onAddressClick === undefined) {

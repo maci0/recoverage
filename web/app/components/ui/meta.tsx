@@ -2,7 +2,7 @@ import type { ComponentChildren } from "preact";
 
 /** The two-column metadata grid the detail panel and the data inspector draw. */
 export const META_GRID =
-  "meta-grid grid grid-cols-2 gap-x-3 gap-y-1 font-mono text-xs";
+  "meta-grid grid grid-cols-2 gap-x-3 gap-y-1 font-mono text-label";
 
 /** One label/value row inside a `META_GRID` list. */
 export function MetaItem({

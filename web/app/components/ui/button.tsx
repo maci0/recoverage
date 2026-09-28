@@ -13,7 +13,7 @@ import { cn } from "@/lib/cn";
 export const controlVariants = cva(
   [
     "inline-flex items-center gap-2 rounded-hair border border-line",
-    "px-2.5 py-1 font-mono text-xs",
+    "px-2.5 py-1 font-mono text-label",
     "cursor-pointer select-none whitespace-nowrap",
     "transition-colors",
     "disabled:cursor-not-allowed disabled:opacity-50",
