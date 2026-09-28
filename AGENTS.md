@@ -321,9 +321,10 @@ The release policy is not written down anywhere else, so it is stated here and
 Search folds both sides the same way in Python: `server.fold_text` is NFC
 composition plus `str.casefold`, and `server.fold_match` is the substring test
 both the API list, the Potato list and the name lookup run every column
-through. The SPA folds in JS (the `matchedNames` memo in `web/app/App.tsx`)
-with `toLowerCase` where the server uses `casefold`, so a case-fold expansion
-such as `ß` → `ss` matches through the API and not in the SPA. This was a SQL split
+through. The SPA folds through `format.foldForSearch` (the `matchedNames` memo
+in `web/app/App.tsx`), which is the same NFC composition and, because
+`toLowerCase` has no one-to-many mapping, the `FULL_FOLD` table standing in
+for the expansions `casefold` has and JavaScript does not. This was a SQL split
 (LIKE folded ASCII, an `rc_fold` disjunct covered the rest) only because the
 comparison happened inside SQLite; one folding over the in-memory rows is both
 simpler and strictly wider.
@@ -369,7 +370,14 @@ simpler and strictly wider.
      its own counts, so a fourth rendering cannot round its way to a different
      number beside the same map; its per-state counts are the `STATE_FILTERS`
      table in `web/app/grid/pack.ts`, which the toolbar's pills are built from,
-     and each one is a filter toggle rather than a second vocabulary.
+     and each one is a filter toggle rather than a second vocabulary. Every
+     number the SPA prints goes through `format.percent1` or `format.count`
+     (`web/app/lib/format.ts`): `percent1` is the JS half of `pct_1dp`, and
+     `toFixed` there undid the same flooring the Python helper exists for.
+     Both hand the digits to `toLocaleString`, so a served figure reads in the
+     reader's own decimal separator and grouping rather than a `.` and a `,`
+     that no non-English locale writes. A new served number in a component calls
+     the helper rather than `toFixed` or a bare `String(...)`.
    - The catalog's `summary` blob is NOT stored in the document (the writer
      keeps the facts, not the precomputed answers). `server._summary` rebuilds
      it from the stored cells and functions, and `/stats` and `/data` serve the
@@ -772,10 +780,11 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   `str.casefold`), so a non-ASCII term matches, `ß` matches `ss`, and the NFD
   spelling a user pastes matches the NFC one rebrew stored. A NULL column folds
   as the empty string, which no non-empty term matches — the answer
-  `COALESCE(col, '')` gave a nullable `symbol`. The SPA folds in
-  `web/app/App.tsx` (`matchedNames`) with `toLowerCase` where the server uses
-  `casefold`, so a case-fold expansion such as `ß` → `ss` matches through the API
-  and not in the SPA. Name resolution folds the same way:
+  `COALESCE(col, '')` gave a nullable `symbol`. The SPA folds both sides of a
+  search through `format.foldForSearch`, which mirrors `server.fold_text` as
+  far as JavaScript can (`toLowerCase` plus the `FULL_FOLD` expansions), so a
+  case-fold expansion such as `ß` → `ss` matches on both sides. Name resolution
+  folds the same way:
   `server.lookup_function` /
   `server.lookup_global` try the VA arm first, then byte equality on the name,
   then the folded comparison — so the row the search highlighted opens by

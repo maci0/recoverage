@@ -3,6 +3,7 @@ import type { ComponentChildren } from "preact";
 import type { StatsPayload } from "@/api";
 import { Button } from "@/components/ui/button";
 import { STATE_FILTERS, paletteVarForFilter } from "@/grid/pack";
+import { count, percent1 } from "@/lib/format";
 
 /** The numbers above the map: how much of the target is covered, and how the
  * section on screen breaks down.
@@ -25,11 +26,6 @@ const BUCKET_KEY = {
   proven: "proven",
   problem: "other",
 } as const satisfies Record<string, string>;
-
-/** A block or function count, grouped the way a reader scans one. */
-function tally(amount: number): string {
-  return amount.toLocaleString();
-}
 
 export type StatsStripProps = {
   stats: StatsPayload | null;
@@ -59,8 +55,8 @@ export function StatsStrip({
   return (
     <div className="stats font-mono text-micro text-muted flex flex-wrap items-center gap-x-4 gap-y-1">
       <span className="stats-target">
-        <b className="text-label text-text">{stats.summary.coveragePercent.toFixed(1)}%</b>{" "}
-        covered · {tally(stats.summary.matchedFunctions)}/{tally(stats.summary.totalFunctions)}{" "}
+        <b className="text-label text-text">{percent1(stats.summary.coveragePercent)}%</b>{" "}
+        covered · {count(stats.summary.matchedFunctions)}/{count(stats.summary.totalFunctions)}{" "}
         functions matched
       </span>
       {row === undefined ? null : (
@@ -86,11 +82,11 @@ export function StatsStrip({
                   style={{ background: `var(${paletteVarForFilter(entry.key)})` }}
                 />
                 {entry.label}
-                <span className="text-text">{tally(blocks)}</span>
+                <span className="text-text">{count(blocks)}</span>
               </Button>
             );
           })}
-          <span>{row.coverage_pct.toFixed(1)}% covered</span>
+          <span>{percent1(row.coverage_pct)}% covered</span>
         </span>
       )}
     </div>

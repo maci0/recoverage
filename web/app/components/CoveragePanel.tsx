@@ -12,7 +12,7 @@ import { META_GRID, MetaItem } from "@/components/ui/meta";
 import { STATE_LABEL, stateSlot } from "@/grid/pack";
 import type { Panes } from "@/hooks/useSelection";
 import type { HighlightLanguage } from "@/lib/highlight";
-import { MSG, hex, toVa } from "@/lib/format";
+import { MSG, count, hex, percent1, toVa } from "@/lib/format";
 
 /** The selected block's detail.
  *
@@ -243,12 +243,12 @@ function FunctionMeta({
       {fn.last_verify == null ? null : (
         <MetaItem label="Verified">
           {`${fn.last_verify.verified_at ?? ""}${
-            fn.last_verify.byte_delta == null ? "" : ` (Δ${fn.last_verify.byte_delta}B)`
+            fn.last_verify.byte_delta == null ? "" : ` (Δ${count(fn.last_verify.byte_delta)}B)`
           }`}
         </MetaItem>
       )}
       {fn.last_verify?.similarity == null ? null : (
-        <MetaItem label="Code Sim">{`${(fn.last_verify.similarity * 100).toFixed(1)}%`}</MetaItem>
+        <MetaItem label="Code Sim">{`${percent1(fn.last_verify.similarity * 100)}%`}</MetaItem>
       )}
       {fn.last_verify?.diff_lines == null ? null : (
         <MetaItem label="Diff Lines">{String(fn.last_verify.diff_lines)}</MetaItem>
@@ -265,7 +265,7 @@ function FunctionMeta({
         </MetaItem>
       )}
       {fn.similarity == null ? null : (
-        <MetaItem label="Similarity">{`${(fn.similarity * 100).toFixed(1)}%`}</MetaItem>
+        <MetaItem label="Similarity">{`${percent1(fn.similarity * 100)}%`}</MetaItem>
       )}
       {fn.is_thunk === true ? <MetaItem label="Type">IAT thunk (not reversible)</MetaItem> : null}
       {fn.is_export === true ? <MetaItem label="Type">Exported function</MetaItem> : null}
@@ -318,7 +318,7 @@ function PanelMeta({
       <MetaItem label="Range">
         {hex((section?.va ?? 0) + cell.start, 8)}..{hex((section?.va ?? 0) + cell.end, 8)}
       </MetaItem>
-      <MetaItem label="Size">{`${cell.span} bytes`}</MetaItem>
+      <MetaItem label="Size">{`${count(cell.span)} bytes`}</MetaItem>
       {/* A data or thunk cell carries no function of its own: `parent_function`
        * is the link to the function that owns it, and `label` the name rebrew
        * gave it. Both are on the cell the server sends and on the Potato panel

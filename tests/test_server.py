@@ -2389,6 +2389,13 @@ def _array_items(source: str, name: str) -> list[str]:
     return [item for item in re.findall(r'"([^"]+)"', match.group(1)) if item != ""]
 
 
+def _full_fold_pairs() -> list[tuple[str, str]]:
+    """The entries of `FULL_FOLD` in `lib/format.ts`, as (key, folded) pairs."""
+    source = _web("lib/format.ts")
+    body = source.split("const FULL_FOLD = new Map", 1)[1].split("]);", 1)[0]
+    return re.findall(r'\["([^"]+)", "([^"]+)"\]', body)
+
+
 def _filter_keys() -> list[str]:
     """`FILTER_KEY` from `grid/pack.ts`, empty first slot included.
 
@@ -2539,6 +2546,55 @@ class TestSpaStateVocabulary:
         assert "Block ${index}" in map_source
         assert "STATE_LABEL[pack.states[index]" in map_source
         assert "no function" in map_source
+
+
+class TestSpaLocaleFormatting:
+    """The numbers and the search fold the dashboard prints, not `toFixed`.
+
+    The server has one rule for both: a coverage figure is floored rather than
+    rounded, so a project one byte short of complete never reads as complete.
+    `format.percent1` is that rule in the browser, and it hands the digits to
+    `toLocaleString`, so a served 99.99 reads as "99,9" to a reader whose
+    locale writes a comma rather than as "100.0" to everyone. A component that
+    formats its own figure undoes both halves of it.
+    """
+
+    def test_no_component_formats_a_number_itself(self) -> None:
+        offenders = sorted(
+            str(path.relative_to(REPO_ROOT))
+            for path in WEB_APP.rglob("*")
+            if path.suffix in {".ts", ".tsx"}
+            and path.name != "format.ts"
+            and (".toFixed(" in path.read_text(encoding="utf-8"))
+        )
+        assert offenders == [], f"toFixed outside lib/format.ts: {offenders}"
+
+    def test_the_served_figures_go_through_the_helpers(self) -> None:
+        strip = _web("components/StatsStrip.tsx")
+        assert "percent1(stats.summary.coveragePercent)" in strip
+        assert "percent1(row.coverage_pct)" in strip
+        assert "count(stats.summary.totalFunctions)" in strip
+
+    def test_percent1_floors_and_localizes(self) -> None:
+        """The helper is the flooring and the locale, not a bare `toFixed`."""
+        fmt = _web("lib/format.ts")
+        body = fmt.split("export function percent1", 1)[1].split("\n}", 1)[0]
+        assert "Math.floor(" in body
+        assert "toLocaleString(" in body
+        assert "toFixed(" not in body
+
+    def test_the_spa_fold_expansions_are_the_servers_casefold(self) -> None:
+        """Every entry of `FULL_FOLD` is what `str.casefold` does to that key.
+
+        The map is the SPA's stand-in for the one-to-many mappings JavaScript
+        has no operator for. A spelling Python folds differently leaves the two
+        sides of a search disagreeing, which is the bug the table exists to
+        close, so the table is checked against the server's own fold rather
+        than against a list of expectations.
+        """
+        assert _full_fold_pairs(), "FULL_FOLD is no longer a map literal"
+        for source, folded in _full_fold_pairs():
+            assert source.casefold() == folded, source
 
 
 class TestSpaLayoutAndFeedback:

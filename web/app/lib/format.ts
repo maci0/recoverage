@@ -1,12 +1,72 @@
 /** Formatting helpers and the shared user-facing strings.
  *
  * `hex` upper-cases and zero-pads, which is the spelling every address, byte
- * offset and size in the dashboard uses; `MSG` is the one vocabulary the shell
+ * offset and size in the dashboard uses; `percent1`, `count` and
+ * `foldForSearch` are the locale-aware spellings the numbers and the search
+ * read through; `MSG` is the one vocabulary the shell
  * and the detail panes share, so a loading pane and a loading overlay read the
  * same way. */
 
 export function hex(address: number, width: number): string {
   return `0x${address.toString(16).toUpperCase().padStart(width, "0")}`;
+}
+
+/** Decimal places every percentage is printed at, and the scale that floors it. */
+const PERCENT_DECIMALS = 1;
+const PERCENT_SCALE = 10 ** PERCENT_DECIMALS;
+
+/** The slack `server.pct_1dp` gets from `"%.1f"` in C: multiplying by the
+ * scale and flooring has to absorb the binary error, or 0.7 arrives as
+ * 6.999999999999999 and the last digit drops. One part in 10^9 of a percentage
+ * point is below anything the server can serve (it floors to 2dp first), so it
+ * cannot turn a real 99.99 into 100.0. */
+const PERCENT_SLACK = 1e-9;
+
+/** A served percentage, floored and written the way the reader's locale writes
+ * a decimal. `toFixed` would do neither: it rounds 99.99 up to "100.0", which
+ * is the figure `server.coverage_pct` exists to keep off the page, and it emits
+ * a `.` decimal separator to a reader whose locale writes a `,`. */
+export function percent1(percentage: number): string {
+  const floored = Math.floor(percentage * PERCENT_SCALE + PERCENT_SLACK) / PERCENT_SCALE;
+  return floored.toLocaleString(undefined, {
+    minimumFractionDigits: PERCENT_DECIMALS,
+    maximumFractionDigits: PERCENT_DECIMALS,
+  });
+}
+
+/** A count, grouped the way the reader's locale groups digits. */
+export function count(amount: number): string {
+  return amount.toLocaleString();
+}
+
+/** The case fold `server.fold_text` performs, as far as JavaScript can. NFC
+ * composition and `toLowerCase` cover every one-code-point-to-one mapping;
+ * full case folding also has the one-to-many ones, and `toLowerCase` has no
+ * operator for those, so `straße` and a search for `ss` never meet. The map is
+ * the Latin, Greek and punctuation set a PE symbol name can carry, and both
+ * sides of a search go through it, so the SPA agrees with the API on which
+ * rows a term matches. */
+const FULL_FOLD = new Map<string, string>([
+  ["ß", "ss"],
+  ["ŉ", "ʼn"],
+  ["ς", "σ"],
+  ["ﬀ", "ff"],
+  ["ﬁ", "fi"],
+  ["ﬂ", "fl"],
+  ["ﬃ", "ffi"],
+  ["ﬄ", "ffl"],
+  ["ﬅ", "st"],
+  ["ﬆ", "st"],
+]);
+
+const FULL_FOLD_PATTERN = /[ßŉςﬀ-ﬆ]/gu;
+
+/** The one form a name is searched in, on both sides of the comparison. */
+export function foldForSearch(text: string): string {
+  return text
+    .normalize("NFC")
+    .toLowerCase()
+    .replace(FULL_FOLD_PATTERN, (character) => FULL_FOLD.get(character) ?? character);
 }
 
 /** VAs cross the API boundary as hex strings ("0x10001000") or plain numbers

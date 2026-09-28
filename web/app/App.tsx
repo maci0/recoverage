@@ -13,7 +13,7 @@ import { useLiveReload } from "@/hooks/useLiveReload";
 import { originalDllPath, useOriginalBinary } from "@/hooks/useOriginalBinary";
 import { cellIndexForVa, useSelection } from "@/hooks/useSelection";
 import { cn } from "@/lib/cn";
-import { MSG, hex, sameOriginPath, toVa } from "@/lib/format";
+import { MSG, foldForSearch, hex, sameOriginPath, toVa } from "@/lib/format";
 import { readStored, writeStored } from "@/lib/storage";
 
 /** The dashboard shell: the document, the topbar's controls, and the map.
@@ -273,16 +273,18 @@ export function App() {
 
   // Names first, then the VA spellings: `.text` cells store the function's name
   // in `cell.functions`, while a search hit is keyed by name and carries the VA
-  // — the dimming test compares against both, so both go in the set.
+  // — the dimming test compares against both, so both go in the set. Both sides
+  // fold through `foldForSearch`, the SPA's half of `server.fold_text`, so a
+  // term and a symbol agree on `ß`/`ss` and on an NFD spelling alike.
   const matchedNames = useMemo(() => {
-    const needle = query.trim().toLowerCase();
+    const needle = foldForSearch(query.trim());
     if (needle === "") {
       return null;
     }
     const matched = new Set<string>();
     for (const [name, entry] of Object.entries(coverage.searchIndex)) {
       const haystack = `${name} ${entry.symbol ?? ""} ${entry.name ?? ""} ${hex(entry.va, 8)}`;
-      if (haystack.toLowerCase().includes(needle)) {
+      if (foldForSearch(haystack).includes(needle)) {
         matched.add(name);
       }
     }
