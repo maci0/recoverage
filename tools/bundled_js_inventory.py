@@ -95,6 +95,10 @@ class InventoryError(Exception):
 def _read_json(path: Path) -> dict[str, Any]:
     if not path.is_file():
         raise InventoryError(f"{path} is missing")
+    # `json.loads` is untyped and returns Any; the cast is the declared
+    # boundary narrowing, the same one every other json reader in the tree
+    # takes. A lockfile or manifest whose top level is not an object raises
+    # KeyError below, which is the InventoryError a reader wants.
     return cast("dict[str, Any]", json.loads(path.read_text(encoding="utf-8")))
 
 

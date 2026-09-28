@@ -2269,6 +2269,36 @@ class TestBucketVocabularyIsShared:
         assert stats["summary"]["textSize"] == text.size
         assert stats["summary"]["coveredBytes"] == text.covered_bytes
 
+    def test_the_summary_s_covered_bytes_are_the_section_s_own(self) -> None:
+        """Every section's summary entry carries the reader's covered bytes.
+
+        ``coveredBytes`` is the one figure a section shows in three places at
+        once: the summary entry, ``/stats``'s ``covered_bytes``, and Potato's
+        header.  rebrew's ``Section`` derives it once, in ``__post_init__``,
+        and this package used to re-derive it twice more from the raw cell
+        states — with the "every state but ``none`` counts as covered" rule
+        spelled out as a literal each time.  A cell state rebrew moved into or
+        out of the uncovered set then left the summary and the stats entry
+        disagreeing inside a single response, with no test able to see it,
+        because the fixture vocabulary is fixed.  The `.data` fixture here is
+        half covered, so a fold that dropped its ``none`` cell is caught.
+        """
+        import recoverage.server as srv
+
+        snap = self._snap()
+        summary = srv._summary(snap)
+        for name, section in snap.sections.items():
+            entry = summary[name] if name != ".text" else summary
+            assert entry["coveredBytes"] == section.covered_bytes, name
+            # And it is the non-``none`` bytes, not the whole section: .data is
+            # one exact cell of two, so reading the total would pass the
+            # equality above for .text and fail here.
+        data = snap.sections[".data"]
+        assert summary[".data"]["coveredBytes"] == sum(
+            cell.size for cell in data.cells if cell.state != "none"
+        )
+        assert summary[".data"]["coveredBytes"] < data.size
+
 
 class TestUnreadableDocumentIsNotAnEmptyTarget:
     """A document that cannot be read must surface, never degrade to empty.

@@ -399,7 +399,15 @@ simpler and strictly wider.
    - The catalog's `summary` blob is NOT stored in the document (the writer
      keeps the facts, not the precomputed answers). `server._summary` rebuilds
      it from the stored cells and functions, and `/stats` and `/data` serve the
-     rebuild; a change there is a change to a served payload.
+     rebuild; a change there is a change to a served payload. The byte
+     figures are the exception and take `Section.buckets` /
+     `Section.covered_bytes`, which rebrew derives in `__post_init__`: a
+     re-derivation of "every state but `none` counts as covered" here is a
+     third copy of a rule rebrew owns, and it drifts silently, because the two
+     answers land in the SAME response (`summary.coveredBytes` beside
+     `sections[..].covered_bytes`) with a fixed fixture vocabulary to hide it.
+     The same holds for a vocabulary: `server.DATA_MARKER_TYPES` is read off
+     rebrew's `DATA_MARKERS`, not re-spelled, for the same reason.
    - A target the project config declares but no build has written is served
      from an EMPTY snapshot (`server.coverage_for`), which is what the SQLite
      reader got from an empty table set. A document that exists but does not

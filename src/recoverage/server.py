@@ -29,6 +29,7 @@ from urllib.parse import unquote, urlsplit
 import brotli
 import zstandard as zstd
 from bottle import Bottle, HTTPResponse, request, response
+from rebrew.annotation import DATA_MARKERS
 from rebrew.coverage_toml import (
     Cell,
     CoverageSnapshot,
@@ -845,7 +846,18 @@ def _etag_or_304(snap: tuple[int, int] | None, *parts: object) -> str | None:
 #: widened the set past GLOBAL/DATA).  ONE definition: the SPA function list,
 #: the Potato function list, and the by-status counts all filter on it, and
 #: three copies of the literal is three chances to disagree.
-DATA_MARKER_TYPES: tuple[str, ...] = ("GLOBAL", "DATA", "VTABLE", "STRING")
+#:
+#: Read off rebrew's ``DATA_MARKERS`` rather than re-spelled, because that
+#: constant is rebrew's declared single home for the set and rebrew says so
+#: next to it ("do not re-spell the tuple at call sites").  A copy here was
+#: correct at the moment it was written and silently wrong the day rebrew
+#: widened the marker vocabulary again: ``/stats``' ``by_status`` would then
+#: count a new data marker as a function, while ``summary.totalFunctions`` —
+#: derived by rebrew from ``FUNCTION_MARKERS``, and served in the same
+#: response — would not, so one payload would answer "how many functions" two
+#: ways.  Sorted, so the name is stable in a traceback; a set would answer the
+#: same and read worse.
+DATA_MARKER_TYPES: tuple[str, ...] = tuple(sorted(DATA_MARKERS))
 
 
 def _is_data_marker(fn: Any) -> bool:
@@ -856,6 +868,18 @@ def _is_data_marker(fn: Any) -> bool:
     stored marker crosses the TOML boundary as text, so an absent one arrives
     as ``""`` and lands on the function side, which is the same verdict the
     SQL's ``markerType IS NULL OR`` arm gave a nullable column.
+
+    That is the complement of rebrew's ``FUNCTION_MARKERS`` rule only over
+    rebrew's VALID_MARKERS; outside it the two disagree on purpose, and the
+    disagreement is this package's.  rebrew's ``function_stats`` counts a row
+    as a function when its marker is in ``FUNCTION_MARKERS``, so a NULL or
+    out-of-vocabulary marker is dropped from ``summary.totalFunctions`` and
+    kept here.  Recoverage keeps it because the SQL did (an unmarked row used
+    to vanish from the function lists entirely, which is a worse wrong answer
+    than a row counted that the producer did not count).  The two numbers are
+    therefore not the same quantity and are not formatted as though they were;
+    rebrew's writer validates every marker against ``VALID_MARKERS``, so a
+    document that parses can only reach the disagreement through an absent one.
     """
     return fn.markerType in DATA_MARKER_TYPES
 
@@ -919,17 +943,23 @@ def _section_summary(section: Any) -> dict[str, Any]:
     cells, which is exactly how the producer computed it.  Non-``none`` cells
     only; ``totalFunctions`` counts the function names those cells carry, which
     is the `totalFunctions` the progress bars divide by.
+
+    ``coveredBytes`` is :attr:`~rebrew.coverage_toml.Section.covered_bytes`,
+    the owner's own derivation, not a third accumulation of this loop.  The
+    rule it encodes — every state but ``none`` counts as covered — belongs to
+    rebrew's cell-state vocabulary, and rebrew already applies it once in
+    ``Section.__post_init__``.  Two copies of it here meant a state rebrew
+    added to the uncovered set (or withdrew from it) changed the summary
+    without changing the ``sections[..].covered_bytes`` of the same response.
     """
     counts = {"exact": 0, "reloc": 0, "near_match": 0, "stub": 0, "padding": 0}
     sizes = {"exact": 0, "reloc": 0, "near_match": 0, "stub": 0, "padding": 0}
-    covered_bytes = 0
     total_functions = 0
     for cell in section.cells:
         if cell.state == "none":
             continue
         names = len(cell.functions)
         size = cell.size
-        covered_bytes += size
         total_functions += names
         name = _STATE_TO_BUCKET.get(cell.state)
         # Only the five named buckets have a count; data, thunk, none, proven
@@ -948,7 +978,7 @@ def _section_summary(section: Any) -> dict[str, Any]:
         "nearMatchBytes": sizes["near_match"],
         "stubBytes": sizes["stub"],
         "paddingBytes": sizes["padding"],
-        "coveredBytes": covered_bytes,
+        "coveredBytes": section.covered_bytes,
         "totalFunctions": total_functions,
         "size": section.size,
     }
@@ -997,16 +1027,23 @@ def _summary(snap: CoverageSnapshot) -> dict[str, Any]:
     ``.text`` fallback the SPA and Potato read) and the section entries are
     :func:`_section_summary`, so a client sees the keys and the values it always
     did.
+
+    The `.text` byte figures are read off the section rather than recomputed
+    here: ``Section.__post_init__`` already folds the cells into ``buckets`` and
+    ``covered_bytes``, and folding them a second time (with the ``"none"`` rule
+    spelled out as a literal a third time) is a copy that moves when rebrew's
+    cell-state vocabulary moves, and it moved silently — this blob and the
+    ``sections[".text"].covered_bytes`` of the same ``/data`` response are two
+    answers to one question.  ``textSize`` stays the section's DECLARED size,
+    not its cell bytes, because that is the denominator the producer used and
+    the number the served key has always carried.
     """
     stats = snap.function_stats
     by_status = stats["by_status"]
     text = snap.sections.get(".text")
     text_size = text.size if text is not None else 0
-    text_buckets: dict[str, int] = {}
-    if text is not None:
-        for cell in text.cells:
-            text_buckets[cell.state] = text_buckets.get(cell.state, 0) + cell.size
-    covered = sum(size for state, size in text_buckets.items() if state != "none")
+    text_buckets = text.buckets if text is not None else {}
+    covered = text.covered_bytes if text is not None else 0
     matched = sum(count for status, count in by_status.items() if status in MATCHED_STATUSES)
     summary: dict[str, Any] = {
         "totalFunctions": stats["total"],
