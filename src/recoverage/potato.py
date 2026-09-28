@@ -75,7 +75,7 @@ from recoverage.server import (
 
 _log = logging.getLogger("recoverage")
 
-# --- UI Constants ---
+# ── UI Constants ────────────────────────────────────────────────────────────────────────
 # Every state rebrew's build_db can write to cells.state needs a key here, or
 # the grid falls back to COLORS["none"] and paints the cell as an undocumented
 # gap.  That fallback is a data-fidelity bug, not a cosmetic one: build_db
@@ -391,7 +391,7 @@ LEGEND_ITEMS = [
 ]
 
 
-# --- HTML Helpers ---
+# ── HTML Helpers ────────────────────────────────────────────────────────────────────────
 
 
 def _hex_logo_svg(label: str, color: str) -> str:
@@ -470,7 +470,7 @@ def _detail_rows(
     return "".join(rows)
 
 
-# --- Pygments Highlighting ---
+# ── Pygments Highlighting ───────────────────────────────────────────────────────────────
 
 
 def _highlight_tokens(tokens: Iterable[tuple[Any, str]], color_map: dict[Any, str]) -> str:
@@ -664,7 +664,7 @@ def _highlight_hex(text: str) -> str:
     return "\n".join(result_lines)
 
 
-# --- Data Helpers ---
+# ── Data Helpers ────────────────────────────────────────────────────────────────────────
 
 
 def _wrap_text(text: str, width: int) -> str:
@@ -1661,20 +1661,30 @@ def _function_rows(coverage: CoverageSnapshot) -> tuple[Function, ...]:
     return rows
 
 
+def _va_matches(va: int, needle: str, match_hex: bool) -> bool:
+    """Whether *needle* matches *va* in either hex spelling this page prints.
+
+    ``0x%08x`` and ``0x%x`` are both matched because both spellings reach the
+    reader: the padded form is what the cell panel and the functions table
+    print, and the bare form is what a target's ``vaStart`` spells below
+    0x10000000, so a reader who pasted back the address the page had just
+    shown matched nothing when only one arm ran.  *match_hex* is the caller's
+    :func:`server.fold_can_match_hex` answer, hoisted out of the row loop: a
+    term no hex address can hold skips both formats, and neither string is
+    built for it.
+    """
+    return match_hex and (
+        fold_match_folded(f"0x{va:08x}", needle) or fold_match_folded(f"0x{va:x}", needle)
+    )
+
+
 def _search_functions(coverage: CoverageSnapshot, search_query: str) -> set[str]:
     """Names the grid should highlight for *search_query*.
 
     Both sides fold through :func:`server.fold_match`, so a non-ASCII term
     matches and the grid highlights exactly what the API's ``?search=``
-    returns.
-    A global's address is matched in both spellings ``0x%08x`` and ``0x%x``
-    can produce, so an address copied out of a Potato global row matches when
-    pasted into the search box.  A function's address is matched the same way
-    in both spellings, for the same reason: the cell panel prints the padded
-    form, which is not what ``vaStart`` spells below 0x10000000, so matching
-    ``vaStart`` alone highlighted nothing for a reader who pasted the address
-    the page had just shown.  ``vaStart`` is still matched, because it is the
-    spelling a ``.text`` cell stores.
+    returns.  Addresses go through :func:`_va_matches`, and ``vaStart`` is
+    matched as well because it is the spelling a ``.text`` cell stores.
 
     The row cap applies to the rows selected, not to the returned set: a
     project with more matches than the cap still dims every name it found.
@@ -1684,9 +1694,6 @@ def _search_functions(coverage: CoverageSnapshot, search_query: str) -> set[str]
         return search_matched_fns
 
     needle = fold_needle(search_query)
-    # A term no hex address can hold cannot match either address spelling, so
-    # the two formats and folds per global are built only when it can
-    # (server.fold_can_match_hex).
     match_hex = fold_can_match_hex(needle)
     # The cap takes the FIRST rows of the sorted match set, so only that many
     # have to be ordered: nsmallest is the documented equivalent of
@@ -1701,18 +1708,7 @@ def _search_functions(coverage: CoverageSnapshot, search_query: str) -> set[str]
             if fold_match_folded(fn.name, needle)
             or fold_match_folded(fn.vaStart, needle)
             or fold_match_folded(fn.symbol, needle)
-            # The address the reader copied out of this page, in both spellings
-            # ``0x%08x`` and ``0x%x`` can produce — the two the globals arm
-            # below and the functions view (``_render_function_list``) already
-            # match.  ``vaStart`` alone is the string a ``.text`` cell stores,
-            # which is not the string the cell panel PRINTS for an address below
-            # 0x10000000: a target whose functions sit at 0x401000 spells that
-            # ``vaStart`` as 0x401000 and the panel as 0x00401000, so pasting the
-            # address the page showed highlighted nothing while the functions
-            # view found the row.  Gated on match_hex for the same reason as the
-            # globals arm: a term no hex address can hold skips both formats.
-            or (match_hex and fold_match_folded(f"0x{fn.va:08x}", needle))
-            or (match_hex and fold_match_folded(f"0x{fn.va:x}", needle))
+            or _va_matches(fn.va, needle, match_hex)
         ),
         key=lambda fn: (fn.name, fn.vaStart),
     ):
@@ -1728,9 +1724,7 @@ def _search_functions(coverage: CoverageSnapshot, search_query: str) -> set[str]
         (
             gl
             for gl in coverage.globals
-            if fold_match_folded(gl.name, needle)
-            or (match_hex and fold_match_folded(f"0x{gl.va:08x}", needle))
-            or (match_hex and fold_match_folded(f"0x{gl.va:x}", needle))
+            if fold_match_folded(gl.name, needle) or _va_matches(gl.va, needle, match_hex)
         ),
         key=lambda gl: gl.name,
     )
@@ -2306,11 +2300,9 @@ def _render_function_list(
     if status_filter:
         rows = [fn for fn in rows if fn.status == status_filter]
     if search_query:
-        # The VA column below is printed by _format_va, which pads to eight
-        # digits, so both spellings are matched: an address copied out of this
-        # very table matches when pasted into the search box.  The VA arms are
-        # this view's own addition, where _search_functions matches
-        # `vaStart` instead because that is the string a .text cell stores.
+        # The VA arms are this view's own addition, where _search_functions
+        # matches `vaStart` instead because that is the string a .text cell
+        # stores.
         needle = fold_needle(search_query)
         match_hex = fold_can_match_hex(needle)
         rows = [
@@ -2318,8 +2310,7 @@ def _render_function_list(
             for fn in rows
             if fold_match_folded(fn.name, needle)
             or fold_match_folded(fn.symbol, needle)
-            or (match_hex and fold_match_folded(f"0x{fn.va:08x}", needle))
-            or (match_hex and fold_match_folded(f"0x{fn.va:x}", needle))
+            or _va_matches(fn.va, needle, match_hex)
         ]
     # The rendered list is capped (same bound as the search above) so a large
     # project's ?view=functions page doesn't build a multi-MB HTML document on

@@ -2725,7 +2725,7 @@ def set_auth_cookie() -> None:
         )
 
 
-# -- Request instrumentation ------------------------------------------------
+# ── Request instrumentation ─────────────────────────────────────────────────────────────
 # One correlation id per request, carried on the log line, the response
 # header, and the RED counters.  Without it a report of "the export was slow"
 # can only be matched against a wall of undated, unlabelled lines, because

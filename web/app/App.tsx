@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "preact/compat
 import type { ComponentChildren, TargetedKeyboardEvent } from "preact";
 
 import { fetchTargets, type Section, type TargetInfo } from "@/api";
-import { CoverageMap } from "@/components/CoverageMap";
+import { CoverageMap, type CoverageMapProps } from "@/components/CoverageMap";
 import { CoveragePanel } from "@/components/CoveragePanel";
 import { StatsStrip } from "@/components/StatsStrip";
 import { Button, controlVariants } from "@/components/ui/button";
@@ -785,7 +785,22 @@ export function App() {
 
 /** What the map area shows: the lattice, a loading line, a failure with a
  * retry, or the empty state. A component rather than a chain of ternaries in
- * the shell's own JSX, which is where the reader has to look for the data flow. */
+ * the shell's own JSX, which is where the reader has to look for the data flow.
+ *
+ * The grid's own props come from `CoverageMapProps` rather than a second copy of
+ * the table: this component forwards them unchanged, so a field the map gains
+ * reaches it through the type instead of through a spelling kept in step by
+ * hand. `section` is narrowed to the row the map area resolved, and
+ * `onGridReady` is required here because the shell always supplies it. */
+type MapAreaProps = Omit<CoverageMapProps, "section" | "onGridReady"> & {
+  noTargets: boolean;
+  target: string;
+  coverage: Coverage;
+  active: Section | null;
+  sectionEmpty: boolean;
+  onGridReady: (focus: (index: number) => void) => void;
+};
+
 function MapArea({
   noTargets,
   target,
@@ -799,20 +814,7 @@ function MapArea({
   theme,
   onSelect,
   onGridReady,
-}: {
-  noTargets: boolean;
-  target: string;
-  coverage: Coverage;
-  active: Section | null;
-  sectionEmpty: boolean;
-  filters: ReadonlySet<string>;
-  matchedFns: ReadonlySet<string | number> | null;
-  selectedIndex: number | null;
-  activeFn: string | number | null;
-  theme: "dark" | "light";
-  onSelect: (index: number) => void;
-  onGridReady: (focus: (index: number) => void) => void;
-}): ComponentChildren {
+}: MapAreaProps): ComponentChildren {
   if (noTargets) {
     return (
       <div className="empty-state rounded-control border border-line bg-panel p-6 text-center font-mono text-label text-muted">

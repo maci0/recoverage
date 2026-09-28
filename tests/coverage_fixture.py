@@ -211,7 +211,7 @@ def write_coverage(
     return path
 
 
-# -- The shared synthetic document set --------------------------------------
+# ── The shared synthetic document set ───────────────────────────────────────────────────
 # Kept here rather than in ``conftest`` so a tool that needs the same documents
 # (``tools/_serve_harness.build_sample_db``, behind smoke and the HTML lint)
 # imports a module with no pytest wiring and no import-time side effect.

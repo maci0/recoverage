@@ -9,7 +9,7 @@ import pytest
 
 from recoverage._paths import _db_path
 
-# ---------------------------------------------------------------------------
+# ────────────────────────────────────────────────────────────────────────────────────────
 
 # The memo key is (mtime_ns, size), so a rewrite only invalidates it when the
 # mtime actually moves.  Two writes can land in the same timestamp tick on a

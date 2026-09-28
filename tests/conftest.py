@@ -81,7 +81,7 @@ def _clean_derived_caches() -> None:
     _clear_derived_caches()
 
 
-# -- Synthetic coverage documents ------------------------------------------
+# ── Synthetic coverage documents ────────────────────────────────────────────────────────
 # The document-gated tests below read the directory `_db_path()` resolves, and
 # CI has no real rebrew project — so they silently never ran.  Write a minimal
 # set of coverage documents matching rebrew's schema so those tests execute
