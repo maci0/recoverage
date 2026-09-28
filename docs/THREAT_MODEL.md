@@ -8,7 +8,7 @@ later pass can re-verify it. Last reviewed: 2026-09-29, against
 What ReCoverage is: a read-mostly web dashboard over the clear-text coverage
 documents (`db/coverage-<target>.toml`) that rebrew's pipeline prints, served by
 Bottle on a threaded `wsgiref` whose transport half lives in `devserver.py`
-(`devserver.py:46-370`, wired at `cli.py:989-996`). The intended audience is a
+(`devserver.py:73-402`, wired at `cli.py:1114-1121`). The intended audience is a
 single developer on their own machine, viewing a decompilation project they
 control. Everything below is scoped to that deployment, plus the explicitly
 supported LAN case (`--allow-remote`).
@@ -17,17 +17,17 @@ supported LAN case (`--allow-remote`).
 
 | # | Risk | Where | Mitigation in code |
 |---|------|-------|--------------------|
-| 1 | Default deployment is unauthenticated: on `--allow-remote` without `--token` every host on the network reads project sources, original binaries, hex bytes and disassembly | `cli.py:889-892`, `server.py:2273-2336`, `api.py:1701`, `api.py:1870` | Acknowledgement only: a red message and `typer.Exit(1)` without `--allow-remote`; `--token` is opt-in and never required alongside a remote bind |
-| 2 | No request rate limit on the expensive read endpoints; a multi-MB grid build plus brotli/zstd compression is CPU- and memory-bound per request | `api.py:1187` (`/data`), `potato.py:1179` (`/potato`), `api.py:1701` (`/asm`) | Bounded per-process memos with oldest-entry eviction (`server.py:1874-1888`; caps at `api.py:210`, `api.py:306`, `api.py:323`); the only per-route cap below the process-wide connection cap is on `/api/events` (`api.py:550`). The static-asset memo `ui._STATIC_CACHE` (`ui.py:330`) has no count cap; it is bounded structurally by the route-matched filename and encoding variant instead |
-| 3 | Global auth throttle: 10 failures per 60 s per process, not per source, so any one client can 429 the operator and every other client | `server.py:2219-2222`, `server.py:2225-2244` | The cap is intentional and the window is a documented module constant; the check, the cap and the slot reservation share one lock, so a burst of concurrent bad tokens cannot slip past it |
-| 4 | No transport security. The token travels as `?token=` in a URL and in a cookie, in cleartext on any non-loopback bind | `ui.py:199-230`, `potato.py:1179-1185`, `server.py:2053-2088` | `Referrer-Policy: no-referrer` (`server.py:2509`), `HttpOnly; SameSite=Strict` cookie (`server.py:2077-2079`), constant-time compare (`server.py:2036-2044`) |
-| 5 | `rebrew-project.toml` is trusted input: it decides which coverage directory is read, which binaries are disassembled, and which directories `/src` and `/original` serve from | `_paths.py:34-73`, `server.py:1045-1080`, `ui.py:264-266` | None beyond TOML parsing; the file is assumed to come from the operator's own checkout |
-| 6 | Thread exhaustion: `ThreadingMixIn` runs one daemon thread per connection, so a flood of ordinary requests, or a set of idle keep-alive connections, spends a thread each while they are held | `devserver.py:46-159`, `devserver.py:171`, `devserver.py:180` | Connections are admitted against `_MAX_CONNECTIONS` (128, `devserver.py:43`) and refused at the cap with a 503 and a `Retry-After`, before a thread is created (`devserver.py:76-132`); a 120 s per-socket deadline on every read and write in flight (`devserver.py:171`, `devserver.py:200`, `devserver.py:305`) and a 15 s idle deadline between requests (`devserver.py:180`, `devserver.py:309`); `/api/events` carries its own lower cap (`api.py:550`) |
-| 7 | Any local process can trigger a full re-catalog and coverage rebuild (disk and CPU), repeatedly within the cooldown | `api.py:1952-2073` | Loopback peer check, same-origin (`server.origin_is_this_dashboard`) and `Sec-Fetch-Site: cross-site` rejection, single-flight lock, `_REGEN_COOLDOWN_SECONDS`, and an `Idempotency-Key` ledger (`api.py:142-186`) |
-| 8 | Response `detail` fields carry raw exception and request text (filesystem paths, TOML parser messages, echoed user input) to the client | `server.py:1977-2002`, `server.py:2369-2396`, `api.py:1968-2010` | Tracebacks never reach a response body (`server.py:2417-2434`); only the one-line exception class and a rebuild hint do |
-| 9 | Untrusted native binary is parsed in-process by capstone and by the DLL reader, and the size cap is enforced only *after* an unbounded `read_bytes()` | `server.py:1197-1270`, `api.py:1701-1866` | `_MAX_DLL_SIZE` (512 MiB, `server.py:987`) checked on `stat()` (`server.py:1232-1240`) and again post-read (`server.py:1242-1251`); a file that grows inside that window is fully read into RAM first |
-| 10 | No per-client identity: every action is attributable only to a shared token, and only to the socket peer | `server.py:2273-2336` | Rejected-token and rejected-Host events are logged with the peer address (`server.py:2314-2317`, `server.py:2453-2460`); regen start, replay, completion and failure are logged (`api.py:2086`, `api.py:2026`, `api.py:2140`, `api.py:2149`) |
-| 11 | Twelve `RECOVERAGE_*` environment variables select the bind address, the token, the coverage directory, the log level, the CORS allowlist and the transport bounds, so a compromised parent environment silently republishes the project. `RECOVERAGE_TOKEN=` (set but empty) reads as unset rather than rejected, and two of the twelve (`RECOVERAGE_FUZZ_SEED`, `RECOVERAGE_FUZZ_ITERATIONS`) are accepted under the prefix but consumed only by the test suite | `config.py:45-58`, `config.py:103-110`, `config.py:153-303`, `cli.py:360` | Every value is validated at startup before the listener binds, and an unrecognised `RECOVERAGE_*` name is a hard startup error (`config.py:305-318`); a SET-but-empty value is an error everywhere except `RECOVERAGE_TOKEN`, where it means "auth off" on purpose |
+| 1 | Default deployment is unauthenticated: on `--allow-remote` without `--token` every host on the network reads project sources, original binaries, hex bytes and disassembly | `cli.py:1003-1006`, `server.py:2337-2403`, `api.py:1771`, `api.py:1940` | Acknowledgement only: a red message and `typer.Exit(1)` without `--allow-remote`; `--token` is opt-in and never required alongside a remote bind |
+| 2 | No request rate limit on the expensive read endpoints; a multi-MB grid build plus brotli/zstd compression is CPU- and memory-bound per request | `api.py:1243` (`/data`), `potato.py:1187` (`/potato`), `api.py:1771` (`/asm`) | Bounded per-process memos with oldest-entry eviction (`server.py:1844-1861`; caps at `api.py:210`, `api.py:363`, `api.py:380`); the only per-route cap below the process-wide connection cap is on `/api/events` (`api.py:607`). The static-asset memo `ui._STATIC_CACHE` (`ui.py:330`) has no count cap; it is bounded structurally by the route-matched filename and encoding variant instead |
+| 3 | Global auth throttle: 10 failures per 60 s per process, not per source, so any one client can 429 the operator and every other client | `server.py:2283-2284`, `server.py:2289-2309` | The cap is intentional and the window is a documented module constant; the check, the cap and the slot reservation share one lock, so a burst of concurrent bad tokens cannot slip past it |
+| 4 | No transport security. The token travels as `?token=` in a URL and in a cookie, in cleartext on any non-loopback bind | `ui.py:199-207`, `potato.py:1188-1193`, `server.py:2115-2150` | `Referrer-Policy: no-referrer` (`server.py:2588`), `HttpOnly; SameSite=Strict` cookie (`server.py:2141`), constant-time compare (`server.py:2098-2106`) |
+| 5 | `rebrew-project.toml` is trusted input: it decides which coverage directory is read, which binaries are disassembled, and which directories `/src` and `/original` serve from | `_paths.py:34-73`, `server.py:1106-1141`, `ui.py:264-266` | None beyond TOML parsing; the file is assumed to come from the operator's own checkout |
+| 6 | Thread exhaustion: `ThreadingMixIn` runs one daemon thread per connection, so a flood of ordinary requests, or a set of idle keep-alive connections, spends a thread each while they are held | `devserver.py:73-186`, `devserver.py:337`, `devserver.py:341` | Connections are admitted against `_MAX_CONNECTIONS` (128, `devserver.py:50`) and refused at the cap with a 503 and a `Retry-After`, before a thread is created (`devserver.py:103-159`); a 120 s per-socket deadline on every read and write in flight (`devserver.py:337`, `devserver.py:232`, `devserver.py:325`) and a 15 s idle deadline between requests (`devserver.py:341`, `devserver.py:342`); `/api/events` carries its own lower cap (`api.py:607`) |
+| 7 | Any local process can trigger a full re-catalog and coverage rebuild (disk and CPU), repeatedly within the cooldown | `api.py:2023-2144` | Loopback peer check, same-origin (`server.origin_is_this_dashboard`) and `Sec-Fetch-Site: cross-site` rejection, single-flight lock, `_REGEN_COOLDOWN_SECONDS`, and an `Idempotency-Key` ledger (`api.py:142-186`) |
+| 8 | Response `detail` fields carry raw exception and request text (filesystem paths, TOML parser messages, echoed user input) to the client | `server.py:2039-2064`, `server.py:2436-2468`, `api.py:2162-2199` | Tracebacks never reach a response body (`server.py:2498-2507`); only the one-line exception class and a rebuild hint do |
+| 9 | Untrusted native binary is parsed in-process by capstone and by the DLL reader, and the size cap is enforced only *after* an unbounded `read_bytes()` | `server.py:1258-1331`, `api.py:1772-1938` | `_MAX_DLL_SIZE` (512 MiB, `server.py:1011`) checked on `stat()` (`server.py:1293-1302`) and again post-read (`server.py:1304-1312`); a file that grows inside that window is fully read into RAM first |
+| 10 | No per-client identity: every action is attributable only to a shared token, and only to the socket peer | `server.py:2337-2403` | Rejected-token and rejected-Host events are logged with the peer address (`server.py:2378-2385`, `server.py:2530-2539`); regen start, replay, completion and failure are logged (`api.py:2157`, `api.py:2098`, `api.py:2229`, `api.py:2255`) |
+| 11 | Twelve `RECOVERAGE_*` environment variables select the bind address, the token, the coverage directory, the log level, the CORS allowlist and the transport bounds, so a compromised parent environment silently republishes the project. `RECOVERAGE_TOKEN=` (set but empty) reads as unset rather than rejected, and two of the twelve (`RECOVERAGE_FUZZ_SEED`, `RECOVERAGE_FUZZ_ITERATIONS`) are accepted under the prefix but consumed only by the test suite | `config.py:45-60`, `config.py:103-107`, `config.py:151-313`, `cli.py:424` | Every value is validated at startup before the listener binds, and an unrecognised `RECOVERAGE_*` name is a hard startup error (`config.py:368-381`); a SET-but-empty value is an error everywhere except `RECOVERAGE_TOKEN`, where it means "auth off" on purpose |
 
 Owner and review cadence: not stated in the repository.
 
@@ -35,20 +35,20 @@ Owner and review cadence: not stated in the repository.
 
 Transport, before any route runs:
 
-- `cli._server_class_for` (`cli.py:120-137`) picks the socket family from the
+- `cli._server_class_for` (`cli.py:121-148`) picks the socket family from the
   bind address through `getaddrinfo`, and `cli._ThreadingWSGIServer6`
-  (`cli.py:104-117`) is the `AF_INET6` class. On Linux a wildcard `AF_INET6`
+  (`cli.py:105-119`) is the `AF_INET6` class. On Linux a wildcard `AF_INET6`
   socket also accepts IPv4-mapped peers, which is the case
   `server._peer_is_loopback` (`server.py:99-122`) has to answer correctly for
   `POST /api/regen`.
-- `devserver._ThreadingWSGIServer` (`devserver.py:46-159`): one daemon thread
+- `devserver._ThreadingWSGIServer` (`devserver.py:73-186`): one daemon thread
   per connection, admitted against `_MAX_CONNECTIONS` and refused with a 503
   above it.
-- `devserver._KeepAliveRequestHandler` (`devserver.py:246-328`): HTTP/1.1
+- `devserver._KeepAliveRequestHandler` (`devserver.py:278-360`): HTTP/1.1
   keep-alive, so one connection carries many requests. The 65537-byte request
-  line read (`devserver.py:293`, `devserver.py:310`) and the 414 on overflow
-  (`devserver.py:295-300`) are the only framing limits.
-- `devserver._KeepAliveServerHandler` (`devserver.py:331-370`): a response with
+  line read (`devserver.py:325`, `devserver.py:342`) and the 414 on overflow
+  (`devserver.py:331`) are the only framing limits.
+- `devserver._KeepAliveServerHandler` (`devserver.py:363-402`): a response with
   no `Content-Length` and no `Transfer-Encoding` is sent with `Connection:
   close`, which is what keeps the unframed `/api/events` stream from
   misframing the next response on the socket.
@@ -58,87 +58,99 @@ Network (all on the single Bottle app, all threaded):
 - `GET /` and `GET /index.html` - `ui.py:199-201`. Inlines and compresses the
   whole SPA; sets the auth cookie from `?token=` (`ui.py:207`,
   `server.set_auth_cookie`).
-- `GET /potato` - `potato.py:1179-1180`, which owns both the route and the
-  renderer (`render_potato`, `potato.py:1095`). Full server-side HTML of the
+- `GET /potato` - `potato.py:1187-1188`, which owns both the route and the
+  renderer (`render_potato`, `potato.py:1103`). Full server-side HTML of the
   entire coverage map.
 - `GET /src/<path>`, `GET /original/<path>` - `ui.py:264-266`. Proxies the
   project's source tree and original binaries to the browser.
-- `GET /<asset>` (allowlist regex) - `ui.py:369-370`. Package-shipped
+- `GET /<asset>` (allowlist regex) - `ui.py:369`. Package-shipped
   JS/CSS/SVG.
-- `GET /api/health` `api.py:846`, `GET /api/targets` `api.py:995`.
+- `GET /api/health` `api.py:902`, `GET /api/targets` `api.py:1051`.
 - `GET /api/targets/<t>/stats|data|functions|functions/<va>|asm|sections/<s>/bytes`
-  - `api.py:1019-1020`, `api.py:1187`, `api.py:1370`, `api.py:1664`, `api.py:1701`,
-  `api.py:1870`.
-- `POST /api/targets/<t>/functions` - `api.py:1623`, the only body-carrying
+  - `api.py:1076`, `api.py:1243`, `api.py:1440`, `api.py:1734`, `api.py:1771`,
+  `api.py:1940`.
+- `POST /api/targets/<t>/functions` - `api.py:1693`, the only body-carrying
   endpoint.
-- `GET /api/events` - `api.py:754`, Server-Sent Events, long-lived.
-- `POST /api/regen` - `api.py:1952`, the only state-changing endpoint.
-- `OPTIONS <path>` - `server.py:2535-2538`, CORS preflight catch-all.
-- `@app.error(500)` - `server.py:2399`. The response surface for every
+- `GET /api/events` - `api.py:810`, Server-Sent Events, long-lived.
+- `POST /api/regen` - `api.py:2023`, the only state-changing endpoint.
+- `OPTIONS <path>` - `server.py:2618-2619`, CORS preflight catch-all.
+- `@app.error(500)` - `server.py:2471`. The response surface for every
   unhandled exception, and the only place `_reclassify_request` is called
-  (`server.py:2419`, `server.py:2426`).
-- `GET|POST|PUT|DELETE|PATCH <path>` catch-all - `webapp.py:112-121`, 404/405.
-- `@app.error(404)` / `@app.error(405)` - `webapp.py:128-138`, the JSON/HTML
+  (`server.py:2497`, `server.py:2489`).
+- `GET|POST|PUT|DELETE|PATCH <path>` catch-all - `webapp.py:112-113`, 404/405.
+- `@app.error(404)` / `@app.error(405)` - `webapp.py:128-139`, the JSON/HTML
   split by `/api/` prefix.
+
+The one body-carrying endpoint parses the message framing as well as the
+payload, and the framing is the part a client chooses freely:
+`server.read_request_body` (`server.py:474`), its chunked arm
+`server._read_chunked_body` (`server.py:431`), its declared-length arm
+`server._declared_content_length` (`server.py:408`) and the `Transfer-Encoding`
+sniff `server._body_is_chunked` (`server.py:426`). So `Content-Length`,
+`Transfer-Encoding`, `Content-Type` and the chunk-size lines are entry points
+in their own right, and the framing errors they produce
+(`server.RequestBodyError` and its two subclasses, `server.py:379-393`) are
+one of the answers a client can elicit before the payload is ever parsed.
 
 Request-controlled values that matter: `Host`, `Origin`, `Sec-Fetch-Site`,
 `Authorization`, `Cookie`, `X-Request-ID`, `Accept-Encoding`,
-`If-None-Match` are headers; `token`, `target`, `va`, `section`, `status`,
-`search`, `sort`, `limit`, `offset`, `size`, `offset`, `format` are query
-values; `{"vas": [...]}` is the only request body.
+`If-None-Match`, `Content-Length`, `Transfer-Encoding`, `Content-Type` are
+headers; `token`, `target`, `va`, `section`, `status`, `search`, `sort`,
+`limit`, `offset`, `size`, `offset`, `format` are query values;
+`{"vas": [...]}` is the only request body.
 
 Non-network entry points:
 
 - CLI: `serve`, `stats`, `export`, `check`, `regen`, `open`, `config`
-  (`cli.py:790`, `cli.py:1057`, `cli.py:1129`, `cli.py:1251`, `cli.py:1358`,
-  `cli.py:1368`, `cli.py:1405`), plus the global `--no-color` / `--version`
-  callback (`cli.py:153-177`). The operator's shell is the trust source.
+  (`cli.py:901`, `cli.py:1181`, `cli.py:1253`, `cli.py:1411`, `cli.py:1519`,
+  `cli.py:1538`, `cli.py:1575`), plus the global `--no-color` / `--version`
+  callback (`cli.py:195-215`). The operator's shell is the trust source.
   `recoverage config` prints every resolved setting including whether a token
-  is set (`cli.py:1405-1443`), so it reaches the same secret-presence question as
+  is set (`cli.py:1576-1617`), so it reaches the same secret-presence question as
   `serve`.
 - Environment: `RECOVERAGE_PORT`, `RECOVERAGE_BIND`, `RECOVERAGE_ALLOW_REMOTE`,
   `RECOVERAGE_CORS`, `RECOVERAGE_CORS_ORIGIN`, `RECOVERAGE_TOKEN`,
   `RECOVERAGE_DB`, `RECOVERAGE_LOG_LEVEL`, `RECOVERAGE_MAX_CONNECTIONS`,
   `RECOVERAGE_CLIENT_TIMEOUT`, `RECOVERAGE_FUZZ_SEED`,
-  `RECOVERAGE_FUZZ_ITERATIONS` (`config.py:45-58`). Flags win over the
+  `RECOVERAGE_FUZZ_ITERATIONS` (`config.py:45-60`). Flags win over the
   environment, values are validated before the listener binds, an unknown
-  prefixed name is a startup error (`config.py:305-318`). `RECOVERAGE_TOKEN`
+  prefixed name is a startup error (`config.py:368-381`). `RECOVERAGE_TOKEN`
   is the only secret; `RECOVERAGE_LOG_LEVEL` is the only one that changes what
   an operator can see, since at DEBUG the per-request lines
-  (`server.py:2180-2190`) reach the log. `NO_COLOR` and `TERM`
-  (`cli.py:68-73`) are the only non-prefixed environment reads and are
+  (`server.py:2245-2259`) reach the log. `NO_COLOR` and `TERM`
+  (`cli.py:69-75`) are the only non-prefixed environment reads and are
   cosmetic.
 - `rebrew-project.toml` in the working directory, re-read on mtime+size change
-  (`_paths.py:34-73`, `server.py:1045-1080`).
+  (`_paths.py:34-73`, `server.py:1106-1141`).
 - The target binary named by `[targets.*].filename`, resolved by
-  `_target_filename` / `_find_dll_path` (`server.py:1091-1101`,
-  `server.py:1151-1167`).
+  `_target_filename` / `_find_dll_path` (`server.py:1152-1161`,
+  `server.py:1212-1228`).
 - Filesystem: `db/coverage-<target>.toml` (read as UTF-8 text through
-  `rebrew.coverage_toml`, `rebrew/coverage_toml.py:1197-1214`, reached at
-  `server.py:618-632`; nothing is held open between requests), `<project>/src`,
+  `rebrew.coverage_toml`, `rebrew/coverage_toml.py:1218-1230`, reached at
+  `server.py:636-650`; nothing is held open between requests), `<project>/src`,
   `<project>/original`, and the function source files Potato Mode reads directly
-  through its own resolve-and-contain check (`potato.py:2472-2563`).
+  through its own resolve-and-contain check (`potato.py:2499-2559`).
 - Browser opener subprocess `xdg-open` / `open` / `cmd /c start`
-  (`cli.py:635-644`), argv list, own session, killed and reaped on a 10 s
-  timeout (`cli.py:519`, `cli.py:536-572`).
+  (`cli.py:705-714`), argv list, own session, killed and reaped on a 10 s
+  timeout (`cli.py:589`, `cli.py:606-642`).
 - Startup threads, all daemon and none joined: the coverage watcher
-  (`api._ensure_db_watcher`, `cli.py:976-978`) and the SPA shell warm-up
-  (`ui.warm_index_cache`, `cli.py:984-986`, which builds 8 compression
+  (`api._ensure_db_watcher`, `cli.py:1101-1103`) and the SPA shell warm-up
+  (`ui.warm_index_cache`, `cli.py:1109-1111`, which builds 8 compression
   variants before the listener accepts). Both are started before the bind, so
   either can fail after a port is chosen but before anything answers; each logs
   and stays lazy rather than aborting the start.
 
 Dependency and deployment surface: `wsgiref`'s threading mixin (no TLS, no
 connection cap), Bottle, and rebrew, which is imported in-process by
-`regen.py:44-79` for `recoverage regen`, `serve --regen` and
+`regen.py:87-126` for `recoverage regen`, `serve --regen` and
 `POST /api/regen`.
 
 `recoverage serve` is not the only way in: `python -m recoverage` reaches the
 same Typer app (`__main__.py:5-8`), and every command validates the
 `RECOVERAGE_*` environment before consuming a setting, not just `serve`
-(`cli.py:360-374`). The in-process capstone parse behind `/asm` lives in
-`disasm.py`, reached from the route at `api.py:1701` and called at
-`api.py:1849`; the JSON branch in the route itself is the only disassembly it
+(`cli.py:424-440`). The in-process capstone parse behind `/asm` lives in
+`disasm.py`, reached from the route at `api.py:1771` and called at
+`api.py:1927`; the JSON branch in the route itself is the only disassembly it
 performs.
 
 ## Trust boundaries
@@ -146,10 +158,15 @@ performs.
 1. **Browser or LAN client to the app.** Everything in the request above is
    untrusted. Validation point: the `before_request` hooks in registration
    order - `_start_request`, `_require_auth`, then the Host allowlist
-   (installed from `cli.py:918-923`) - then per-handler
-   bounds (`_MAX_BATCH_LOOKUP` / `_MAX_BATCH_BODY_BYTES` at `api.py:1247-1253`;
-   `_MAX_PAGE_OFFSET` at `api.py:1259`; `_MAX_SLICE_SIZE` at `api.py:1264`;
-   `_MAX_SEARCH_CHARS` at `api.py:1269`). Auth runs before the Host check, so
+   (installed from `cli.py:1032-1037`) - then per-handler
+   bounds (`_MAX_BATCH_LOOKUP` / `_MAX_BATCH_BODY_BYTES` at `api.py:1318-1324`;
+   `_MAX_PAGE_OFFSET` at `api.py:1330`; `_MAX_SLICE_SIZE` at `api.py:1335`;
+   `_MAX_SEARCH_CHARS` at `api.py:1340`). The body cap is enforced where the
+   body is read, not in the handler: `api._batch_request_vas` calls
+   `server.read_request_body(_MAX_BATCH_BODY_BYTES)` (`api.py:1584`), which
+   compares the declared `Content-Length` before a byte is read, reads a
+   framed body to its declared length and no further, and bounds a chunked
+   body on the DECODED bytes (`server.py:474-527`). Auth runs before the Host check, so
    a request with neither is answered 401 and a bad Host on an unauthenticated
    deployment is answered 400.
    The one request `_require_auth` passes without a credential is a browser CORS
@@ -164,8 +181,8 @@ performs.
    clear the failed-token window (only a verified token does).
 2. **App to coverage documents.** `db/coverage-<target>.toml` is printed by
    `rebrew build-db` and read here, never written (`server.coverage_snapshots`,
-   `server.py:618-632`; the reader is `rebrew.coverage_toml`,
-   `rebrew/coverage_toml.py:1197-1214`). The documents are attacker-supplied in
+   `server.py:636-650`; the reader is `rebrew.coverage_toml`,
+   `rebrew/coverage_toml.py:1218-1230`). The documents are attacker-supplied in
    the same sense the database file was: whoever can write into the coverage
    directory decides what every dashboard shows, and the values are trusted as
    data, never as code. Parsing is `tomllib`, so a malformed document raises
@@ -174,9 +191,9 @@ performs.
    and every failure is one `CoverageTomlError`.
    Unreadable is not empty, and the two answers stay distinguishable. A document
    that exists and does not parse raises `CoverageTomlError`, which is the 503
-   `db_unavailable` contract (`server._db_unavailable_err`, `server.py:2369-2396`);
+   `db_unavailable` contract (`server._db_unavailable_err`, `server.py:2436-2468`);
    a target `rebrew-project.toml` declares that no build has written is served
-   from an empty snapshot (`server.coverage_for`, `server.py:647-678`), which is
+   from an empty snapshot (`server.coverage_for`, `server.py:665-696`), which is
    what the SQLite reader got from an empty table set. Collapsing the first into
    the second would show a truncated or hostile document as a project with no
    sections, with nothing in the response or the log to say the read had failed
@@ -187,15 +204,15 @@ performs.
    project's own pipeline wrote.
    The documents are also liveness: a rewritten one is picked up live (the
    snapshot memo keys on the directory's own stat), and the SSE watcher
-   (`api.py:604-647`) pushes `db-updated` so the SPA re-reads it.
+   (`api.py:661-703`) pushes `db-updated` so the SPA re-reads it.
 3. **App to project filesystem.** `/src` and `/original` are served from the
    project directory with an explicit resolve-and-contain check, because
    Bottle's own prefix check does not resolve symlinks (`ui.py:266-300`).
    Potato Mode's source panel repeats the containment check independently
-   (`potato.py:2520-2545`).
+   (`potato.py:2548-2559`).
 4. **App to local process (regen).** The only privilege transition: a POST makes
    the server import rebrew and rebuild the coverage documents, with the
-   process's own filesystem authority (`regen.py:44-79`).
+   process's own filesystem authority (`regen.py:87-126`).
 5. **Config to runtime.** `rebrew-project.toml` and the `RECOVERAGE_*`
    environment select the coverage directory, the target binary path, the served
    trees, the log level and the bind address, with no signature or allowlist.
@@ -215,32 +232,86 @@ performs.
 - The integrity of the coverage documents: a wrong or stale map misdirects hours
   of decompilation work, which is the reputation-shaped asset here.
 
+## Secrets
+
+One secret exists, the bearer token, and it has exactly three carriers:
+
+- **Enters** as `--token` on the command line or `RECOVERAGE_TOKEN` in the
+  environment (`cli.py`, `config.py`). The command-line form is world-readable
+  in the process table for the life of the process; the environment form is
+  visible to anything that can read the parent environment, which is the same
+  trust as every other `RECOVERAGE_*` value.
+- **Lives** in `_AUTH_TOKEN`, a module-level string set once by
+  `server.configure_security` (`server.py:2076`, assigned at `server.py:141-147`,
+  called from `cli.py:1032`) and held for the process lifetime. It is never
+  written to disk by this package. It is echoed in neither direction: a
+  successful compare and a failed one both answer the same 401
+  (`server._require_auth`, `server.py:2337`), and the log records the peer
+  address, never the value (`server.py:2378-2385`).
+- **Leaves** in three forms, all of them places the value is recoverable
+  rather than exchanged: the `?token=` query parameter on a share link
+  (`ui.py:199-207`), the `recoverage_token` cookie
+  (`server.AUTH_COOKIE_NAME`, `server.py:2112`, set `HttpOnly; SameSite=Strict`
+  and without `Secure`, `server.py:2141`), and the `Authorization: Bearer`
+  header. A wrong value is rate-limited but the value itself is not protected
+  in transit on a non-loopback bind.
+
+Rotation is a restart: `configure_security` is called once from `serve` and
+nothing reloads `_AUTH_TOKEN` afterwards, so a rotated token is the new
+process's, and the old one stays valid until every client has been given the
+new one. The set/unset rendering (`config.active_config`,
+`config.py:384-415`, surfaced by `recoverage config` and by the `config` block
+of `GET /api/health`, `api.py:1010`) confirms presence to anyone who can reach
+those, and nothing else about the value.
+
 ## Threats per boundary
 
 **Client to app.** Spoofing: a page on any origin can drive a loopback browser
 at the dashboard; mitigated by the Host allowlist on loopback binds
-(`server.py:90`, `server.py:96`, `server.py:2437-2468`, installed at
-`cli.py:918-923`) and by the `Sec-Fetch-Site` rejection on regen
-(`api.py:2002-2010`). Tampering: only regen writes, and only from loopback.
+(`server.py:90`, `server.py:96`, `server.py:2519-2546`, installed at
+`cli.py:1032-1037`) and by the `Sec-Fetch-Site` rejection on regen
+(`api.py:2073-2081`). Tampering: only regen writes, and only from loopback.
 Information disclosure: `/src` and `/original` proxy the whole project tree,
 and the byte and asm endpoints serve arbitrary offsets of the original binary
-(`api.py:1870`, `api.py:1701`) with no per-resource authorization. Denial of
+(`api.py:1940`, `api.py:1771`) with no per-resource authorization.
+`GET /api/health` additionally hands any authenticated client the process's
+resolved deployment: bind address, `allow_remote`, the CORS allowlist, log
+level, connection and timeout caps, and whether a token is set
+(`api.py:1010`, `config.py:384-415`). Every field is a setting the operator
+chose and none is the token's value, so this is a configuration-disclosure
+read and a `token: set` / `unset` oracle for a client that does not already
+know the answer. Denial of
 service: no per-client quota anywhere; only `/api/events` and the auth window
 are bounded. Repudiation: every action is attributable only to a shared token
 and a socket peer, never to a client. Elevation of privilege: an
 unauthenticated remote peer reaching a non-loopback bind gets every read the
 operator gets, which is the whole asset set.
 
+**Client to app, message framing.** Tampering and denial of service both
+live here, before the payload exists. A client controls `Content-Length`,
+`Transfer-Encoding` and the chunk-size lines, and a naive reader of either is
+a request-smuggling primitive; the two answers a second HTTP hop would give
+for one connection are the whole prize, and this listener is a
+single-`wsgiref` process with no proxy in front of it by default, so a smuggle
+has no second parser to disagree with here. A declared length that never
+arrives is a handler parked in `read()` until the 120 s in-flight socket
+deadline (`devserver.py:337`) takes it, and the read is bounded by the frame,
+not by EOF, precisely so that stall cannot run to the client. The residual
+gap is that the cap is a length comparison and a byte count, not a
+concurrent-bytes-per-connection budget: `_MAX_BATCH_BODY_BYTES` is per request
+(`api.py:1324`), so `_MAX_CONNECTIONS` requests of the maximum size are
+admitted at once.
+
 **Client to transport.** HTTP/1.1 keep-alive means a client that opens
 connections without closing them holds a thread each until the 15 s idle
 deadline, which is longer than a slow page load and much shorter than the 120 s
-in-flight one (`devserver.py:171-180`, `devserver.py:246-328`). A connection
+in-flight one (`devserver.py:337-341`, `devserver.py:324-342`). A connection
 past the cap is refused before it gets a thread, with a 503, a `Retry-After`
-and a WARNING line naming the count (`devserver.py:76-132`, `_MAX_CONNECTIONS`
-at `devserver.py:43`), so the ceiling on live threads is that cap and the
+and a WARNING line naming the count (`devserver.py:103-159`, `_MAX_CONNECTIONS`
+at `devserver.py:50`), so the ceiling on live threads is that cap and the
 refusal is visible to the operator rather than a silent stall. A
 request line over 65536 bytes is answered 414 and the connection dropped
-(`devserver.py:295-300`), which is the only framing resource bound.
+(`devserver.py:325-332`), which is the only framing resource bound.
 
 **App to coverage documents.** Tampering is bounded by the direction of the
 dependency: this server only reads, and the only writer is `rebrew build-db`,
@@ -248,11 +319,11 @@ which replaces each document whole through a temporary sibling and an atomic
 rename (`rebrew/coverage_toml.py:697-700`), so a reader sees the previous
 document or the new one and never a torn write. A document the reader cannot use
 is answered 503 rather than half-served. Denial of service remains: a large
-function list with a `search` term is walked per request (`api.py:383-413`,
-`api.py:1436-1437`), bounded only by a 64-entry memo (`api.py:321-323`).
+function list with a `search` term is walked per request (`api.py:440-469`,
+`api.py:1507`), bounded only by a 64-entry memo (`api.py:378-380`).
 
 **App to filesystem.** Traversal and symlink escape are handled explicitly
-(`ui.py:283-300`, `potato.py:2520-2545`); what remains is that the trees are
+(`ui.py:275-300`, `potato.py:2548-2559`); what remains is that the trees are
 served in full, so a `.env` or a key committed under `src/` is published to
 every client.
 
@@ -268,41 +339,43 @@ refused). Regen runs with no timeout by design (`regen.py:13-17`).
 or a `RECOVERAGE_DB` / `RECOVERAGE_BIND` inherited from a parent environment,
 silently redirects the served trees, the coverage directory or the listener.
 There is no prompt and no warning when a config changes under a running server;
-the memoized path just recomputes (`_paths.py:34-73`, `server.py:1103-1149`).
+the memoized path just recomputes (`_paths.py:34-73`, `server.py:1106-1141`).
 
 ## Mitigations present, mapped
 
 | Control | File | Covers |
 |---------|------|--------|
-| Optional bearer token, constant-time compare, three credential sources | `server.py:2006-2014`, `server.py:2237-2300` | Spoofing, unauthorized read |
-| Global failure throttle with 429 + `Retry-After`, check and reservation under one lock | `server.py:1922-1947`, `server.py:2266-2271` | Online token guessing, check-then-act races under concurrency, and audit logging of each failure |
-| Host header allowlist on loopback binds | `server.py:90`, `server.py:96`, `server.py:2401-2432` | DNS rebinding |
-| Remote-bind acknowledgement, hard exit 1 without `--allow-remote` | `cli.py:885-890` | Accidental LAN exposure |
-| Every request-supplied integer goes through `server.parse_ascii_int` — ASCII digits in the stated base and nothing else — with `api._parse_byte_count` and `api._page_int` on top | `server.py:361`, `api.py:1270`, `api.py:1289` | Digit-set smuggling: `int(x, base)` also accepts the whole Unicode Nd/Nl/No sets and the `_` separator, so `?size=٤٠٩٦` served a 4096-byte slice and `?page=1_0` opened page 10; a chunked body took the same route for its chunk size line, so `1_0` read 16 bytes of a connection it had no framing for |
-| Startup validation of every `RECOVERAGE_*`, unknown name rejected | `config.py:305-319`, `config.py:153-302`, `cli.py:360-376` | Misconfigured deployment, misspelled env var |
-| `Sec-Fetch-Site: cross-site` and same-origin `Origin` gate on regen | `api.py:1960-1990` | Cross-site POST |
-| Single-flight lock + cooldown on regen | `api.py:120`, `api.py:126`, `api.py:2016-2053` | Concurrent torn rebuilds, regen flood |
-| `Idempotency-Key` ledger: charset-validated, 600 s TTL, 128-slot eviction, replay answered before the cooldown | `api.py:142-186`, `api.py:1997-2008` | Duplicated pipeline runs from retries, double-clicks, proxy replay |
-| CSP, `nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` | `server.py:2441-2452`, `server.py:2467-2474` | Injection, framing, token leak via Referer |
-| CORS allowlist, no wildcard ever emitted, `Vary: Origin` on every response | `server.py:2455-2496`, `cli.py:650-681` | Cross-origin reads |
-| Symlink-resolving containment plus NUL rejection on `/src`, `/original` | `ui.py:288-308` | Path traversal |
-| Independent containment check on Potato Mode's source panel | `potato.py:2526-2537` | Path traversal through a second reader |
-| Allowlist regex for package assets | `ui.py:376` | Arbitrary file read from the assets dir |
-| Bounded request body, VA list, page offset, slice size, search length | `api.py:1226-1247`, `api.py:1366-1385`, `api.py:1457-1596` | Memory and CPU exhaustion per request |
-| A request body is read through `server.read_request_body` (declared `Content-Length` compared against the cap first, a chunked body decoded under the same cap) and every refusal answers `Connection: close` through `api._body_rejected` | `server.py:431-523`, `api.py:1562` | A declared length that is never allocated, an unbounded chunked decode, and a refused body left in a keep-alive socket where the next request would be parsed out of it |
-| `sort` field and direction whitelisted against `_ALLOWED_SORT` and applied as an in-memory sort key | `api.py:373`, `api.py:1387-1416` | Arbitrary field access through the sort parameter. The SQLite-era `ORDER BY` interpolation this row used to name is gone with the query builder: the rows are Python objects, so there is no statement for a sort value to reach |
-| Search is a folded substring test in Python (`server.fold_match`) | `server.py:1515-1548`, `api.py:395-404` | Wildcard abuse and non-ASCII misses in search. There is no SQL `LIKE` pattern any more, so the escape helper and the `rc_fold` disjunct beside the ASCII `LIKE` are gone with the SQL |
-| `SSE_MAX_CLIENTS` cap, bounded per-client queue, idempotent unregistering | `api.py:547-560`, `api.py:696-749` | Thread exhaustion via event streams, slow-client memory growth |
-| Connection cap: `_MAX_CONNECTIONS` slots taken before the thread, refused with a hand-written 503 plus `Retry-After` above it, released on every exit including thread-creation failure | `devserver.py:42`, `devserver.py:70-147` | Thread and descriptor exhaustion from a flood of stalled peers. Refusing at accept rather than in the handler keeps the bound on the resource: a connection that never got a thread cannot pin one. The refusal is a `WARNING` naming the count, so the ceiling is legible to the operator |
-| Per-socket 120 s in-flight deadline and 15 s keep-alive idle deadline | `devserver.py:169`, `devserver.py:178`, `devserver.py:237-271` | Threads pinned by half-open or non-reading peers, and by idle keep-alive connections |
-| 65536-byte request-line cap, answered 414 | `devserver.py:254-261` | Unbounded per-connection read |
-| Documents are read as UTF-8 text and never written by this server; the only writer is `rebrew build-db`, which replaces each document whole through an atomic rename | `server.py:618-670`, `rebrew/coverage_toml.py:574-587` | Accidental writes, and a torn read of a document being rebuilt |
-| Document gate: the format `version` must be the one this build reads, every array and table must have its documented shape, and the document's `target` must match its filename; a failure is answered 503 | `server.py:2333-2382`, `rebrew/coverage_toml.py:1181-1188` | A truncated, foreign or hand-edited document reading as an empty target, and query-time 500s from a document the reader cannot use |
-| Basename-only coverage-directory name in health and SSE payloads | `api.py:859`, `api.py:585` | Home-directory layout disclosure |
-| JSON error contract, `Cache-Control: no-store` on errors, no tracebacks in bodies, control-char-escaped logs | `server.py:1924-1972`, `server.py:2363-2398`, `server.py:1011-1021` | Information disclosure, stale cached errors, log forgery |
-| ETag revalidation and `no-store` on the 401 page | `server.py:704-744`, `server.py:2288-2296` | Serving stale data, replaying a pre-auth body from a shared cache |
-| `X-Request-ID` on every request and response, capped and log-escaped when client-supplied | `server.py:2067-2082`, `server.py:2134-2135` | Untraceable incidents; forged log lines |
-| Status reclassification inside the 500 handler | `server.py:2162-2174`, `server.py:2389`, `server.py:2381` | An error rate that silently reads zero. Note the scope: the two call sites are the 503 (coverage documents unavailable) and the 500 itself, both inside `@app.error(500)`; there is no 4xx reclassification path |
+| Optional bearer token, constant-time compare, three credential sources | `server.py:2098-2106`, `server.py:2337-2403` | Spoofing, unauthorized read |
+| Global failure throttle with 429 + `Retry-After`, check and reservation under one lock | `server.py:2289-2309`, `server.py:2366-2371` | Online token guessing, check-then-act races under concurrency, and audit logging of each failure |
+| Host header allowlist on loopback binds | `server.py:90`, `server.py:96`, `server.py:2519-2546` | DNS rebinding |
+| Remote-bind acknowledgement, hard exit 1 without `--allow-remote` | `cli.py:1003-1006` | Accidental LAN exposure |
+| Every request-supplied integer goes through `server.parse_ascii_int`: ASCII digits in the stated base and nothing else, with `api._parse_byte_count` and `api._page_int` on top | `server.py:361`, `api.py:1363`, `api.py:1382` | Digit-set smuggling: `int(x, base)` also accepts the whole Unicode Nd/Nl/No sets and the `_` separator, so `?size=٤٠٩٦` served a 4096-byte slice and `?page=1_0` opened page 10 |
+| Startup validation of every `RECOVERAGE_*`, unknown name rejected | `config.py:368-381`, `config.py:151-313`, `cli.py:424-440` | Misconfigured deployment, misspelled env var |
+| `Sec-Fetch-Site: cross-site` and same-origin `Origin` gate on regen | `api.py:2051-2081` | Cross-site POST |
+| Single-flight lock + cooldown on regen | `api.py:120`, `api.py:126`, `api.py:2107-2135` | Concurrent torn rebuilds, regen flood |
+| `Idempotency-Key` ledger: charset-validated, 600 s TTL, 128-slot eviction, replay answered before the cooldown | `api.py:142-186`, `api.py:2088-2099` | Duplicated pipeline runs from retries, double-clicks, proxy replay |
+| CSP, `nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` | `server.py:2555-2566`, `server.py:2581-2588` | Injection, framing, token leak via Referer |
+| CORS allowlist, no wildcard ever emitted, `Vary: Origin` on every response | `server.py:2589-2615`, `cli.py:720-759` | Cross-origin reads |
+| Symlink-resolving containment plus NUL rejection on `/src`, `/original` | `ui.py:275-300` | Path traversal |
+| Independent containment check on Potato Mode's source panel | `potato.py:2548-2559` | Path traversal through a second reader |
+| Allowlist regex for package assets | `ui.py:369` | Arbitrary file read from the assets dir |
+| Bounded request body, VA list, page offset, slice size, search length | `api.py:1318-1340`, `api.py:1393-1429`, `api.py:1440-1538` | Memory and CPU exhaustion per request |
+| Body read through `server.read_request_body`, never `request.body`: the declared `Content-Length` is compared before a byte is read, a framed body is read to its declared length and no further, a chunked body is bounded on the DECODED bytes, a chunk-size line is capped at 1 KiB and read through `parse_ascii_int` | `server.py:400-527`, `api.py:1584` | A declared 4 GB body allocated before the endpoint's own cap could look at it; a `read()` to EOF parking the handler until the client hangs up; a chunk line smuggling a length through a non-ASCII digit set or the `_` separator. Bottle's `request.body` drains the whole declared body into a `BytesIO` and spills past 100 KiB into a `NamedTemporaryFile`, so the resource the cap exists to bound was allocated first |
+| Every body refusal answers `Connection: close` through `api._body_rejected`, the one helper that puts the header there | `api.py:1540-1550` | Request smuggling: the reader stops at its cap, so the bytes after the stop point are still in the socket and a keep-alive handler would parse them as the next request |
+| Chunked and unframed framing refused rather than guessed: a non-hex chunk size, an unterminated chunk, a missing CRLF or an oversize trailer line is `RequestBodyMalformedError` | `server.py:431-469` | A framing this reader cannot account for, silently accepted as a shorter body |
+| `sort` field and direction whitelisted against `_ALLOWED_SORT` and applied as an in-memory sort key | `api.py:437`, `api.py:1480-1512` | Arbitrary field access through the sort parameter. The SQLite-era `ORDER BY` interpolation this row used to name is gone with the query builder: the rows are Python objects, so there is no statement for a sort value to reach |
+| Search is a folded substring test in Python (`server.fold_match`) | `server.py:1576-1609`, `api.py:440-469` | Wildcard abuse and non-ASCII misses in search. There is no SQL `LIKE` pattern any more, so the escape helper and the `rc_fold` disjunct beside the ASCII `LIKE` are gone with the SQL |
+| `SSE_MAX_CLIENTS` cap, bounded per-client queue, idempotent unregistering | `api.py:607`, `api.py:754-808` | Thread exhaustion via event streams, slow-client memory growth |
+| Connection cap: `_MAX_CONNECTIONS` slots taken before the thread, refused with a hand-written 503 plus `Retry-After` above it, released on every exit including thread-creation failure | `devserver.py:50`, `devserver.py:103-186` | Thread and descriptor exhaustion from a flood of stalled peers. Refusing at accept rather than in the handler keeps the bound on the resource: a connection that never got a thread cannot pin one. The refusal is a `WARNING` naming the count, so the ceiling is legible to the operator |
+| Per-socket 120 s in-flight deadline and 15 s keep-alive idle deadline | `devserver.py:337`, `devserver.py:341`, `devserver.py:324-342` | Threads pinned by half-open or non-reading peers, and by idle keep-alive connections |
+| 65536-byte request-line cap, answered 414 | `devserver.py:325-332` | Unbounded per-connection read |
+| Documents are read as UTF-8 text and never written by this server; the only writer is `rebrew build-db`, which replaces each document whole through an atomic rename | `server.py:636-650`, `rebrew/coverage_toml.py:574-587` | Accidental writes, and a torn read of a document being rebuilt |
+| Document gate: the format `version` must be the one this build reads, every array and table must have its documented shape, and the document's `target` must match its filename; a failure is answered 503 | `server.py:2436-2468`, `rebrew/coverage_toml.py:1181-1188` | A truncated, foreign or hand-edited document reading as an empty target, and query-time 500s from a document the reader cannot use |
+| Basename-only coverage-directory name in health and SSE payloads | `api.py:917`, `api.py:632` | Home-directory layout disclosure |
+| JSON error contract, `Cache-Control: no-store` on errors, no tracebacks in bodies, control-char-escaped logs | `server.py:2039-2064`, `server.py:2471-2507`, `server.py:1035-1049` | Information disclosure, stale cached errors, log forgery |
+| ETag revalidation and `no-store` on the 401 page | `server.py:722-767`, `server.py:2389-2399` | Serving stale data, replaying a pre-auth body from a shared cache |
+| `X-Request-ID` on every request and response, capped and log-escaped when client-supplied | `server.py:2167-2174`, `server.py:2226-2227` | Untraceable incidents; forged log lines |
+| Status reclassification inside the 500 handler | `server.py:2262-2274`, `server.py:2489`, `server.py:2497` | An error rate that silently reads zero. Note the scope: the two call sites are the 503 (coverage documents unavailable) and the 500 itself, both inside `@app.error(500)`; there is no 4xx reclassification path |
 
 ## Unmitigated, ranked
 
@@ -322,25 +395,25 @@ the memoized path just recomputes (`_paths.py:34-73`, `server.py:1103-1149`).
    operator for the rest of the 60 s window.
 5. No TLS and no token transport hardening; the token is a URL parameter by
    design, which puts it in browser history, shell history and any proxy log.
-   The auth cookie is set without `Secure` (`server.py:2077-2079`), so it crosses a
+   The auth cookie is set without `Secure` (`server.py:2141`), so it crosses a
    plaintext non-loopback bind intact.
 6. Trusted-by-assumption `rebrew-project.toml` and `RECOVERAGE_*`; the served
    trees follow them with no confirmation.
-7. `_MAX_DLL_SIZE` does not bound the read it guards: `server.py:1241`
+7. `_MAX_DLL_SIZE` does not bound the read it guards: `server.py:1303`
    performs an unbounded `read_bytes()` and only checks the length afterwards
-   (`server.py:1242-1251`). A target binary that grows between the `stat()` at
-   `server.py:1232` and the read is fully loaded into memory.
+   (`server.py:1304-1312`). A target binary that grows between the `stat()` at
+   `server.py:1293` and the read is fully loaded into memory.
 8. No per-resource authorization anywhere: the token is all-or-nothing, so a
    read-only viewer and the operator have identical reach.
 9. No audit persistence: the only trail is stderr at INFO and above, request
-   logging is DEBUG (`server.py:2180-2190`), and nothing distinguishes one
+   logging is DEBUG (`server.py:2245-2259`), and nothing distinguishes one
    holder of the shared token from another. The in-process RED counters
    (`metrics.py`) are a live gauge, not a record, and are lost on restart.
 10. Capstone and the DLL reader parse attacker-shaped binaries in-process; a
     crafted target is a worker-level availability and memory-safety risk that
     only the size cap touches, and that cap is post-read.
 11. `CSP` allows `'unsafe-inline'` for scripts and styles
-    (`server.py:2477-2488`), which the inlined SPA shell requires, so an
+    (`server.py:2555-2566`), which the inlined SPA shell requires, so an
     injection sink in the shell would execute. No such sink is known; the
     policy is the weak link if one appears.
 12. `ui._STATIC_CACHE` (`ui.py:330`) has no count cap and no eviction, unlike
@@ -348,7 +421,7 @@ the memoized path just recomputes (`_paths.py:34-73`, `server.py:1103-1149`).
     and the accepted-encoding set rather than by a constant, so it is a
     structural bound today and an unguarded dict if the regex ever widens.
 13. Two daemon threads start before the listener binds and are never joined
-    (`cli.py:976-986`). A failure in either is logged and the start continues,
+    (`cli.py:1101-1111`). A failure in either is logged and the start continues,
     so a server can be serving with a dead coverage watcher, which reads `healthy`
     while no SSE client refreshes.
 
@@ -365,38 +438,38 @@ the memoized path just recomputes (`_paths.py:34-73`, `server.py:1103-1149`).
   *retry* of one key, not a caller that mints a fresh key per attempt, which is
   bounded only by the 5 s cooldown and the single-flight 429.
 - Any webpage a developer visits can hold 32 `/api/events` connections to their
-  own loopback dashboard (`api.py:550`) without any credential, because the
+  own loopback dashboard (`api.py:607`) without any credential, because the
   SPA's EventSource is same-origin and no-cors from a cross-site page. A
   sixth of the process-wide connection budget goes to it, the socket deadlines
-  (`devserver.py:171`, `devserver.py:180`) reclaim each slot eventually, and
+  (`devserver.py:337`, `devserver.py:341`) reclaim each slot eventually, and
   the rest of the budget stays open to the operator's own browser.
 - The same page can hold the threads without any stream at all: a keep-alive
   connection that sends one cheap request and then goes quiet holds its thread
   for 15 s, and a page that opens a few hundred of them in that window meets
-  the connection cap and gets 503s for the rest (`devserver.py:87-132`).
+  the connection cap and gets 503s for the rest (`devserver.py:103-130`).
 - Client-side enforcement is trusted nowhere except the grid's filter toggles;
   every filter is re-derived server-side in `/data` and `/functions`, so the
   client cannot widen its own view. The server-side `status` and `search`
   filters are the real boundary, and they are unfiltered when the request omits
   them.
 - A caller who sets `X-Request-ID` picks its own correlation id
-  (`server.py:2105-2112`), so the log line's id is attacker-chosen. It is
+  (`server.py:2169-2174`), so the log line's id is attacker-chosen. It is
   capped at 64 characters and control-char escaped, which bounds forgery, but
   two different clients can share an id.
 
 ## Response readiness
 
 - Security-relevant events that reach the log: rejected token (peer address
-  only, never the value, `server.py:2314-2317`), rejected Host header
-  (`server.py:2453-2460`), unhandled errors with a request id and traceback
-  (`server.py:2417-2434`), coverage-document unavailability (`server.py:2369-2396`), oversized
-  or unconfigured target binary (`server.py:1170-1194`), regen start, replay,
-  completion and failure (`api.py:2086`, `api.py:2026`, `api.py:2140`,
-  `api.py:2149`), slow requests at WARNING (`server.py:2174-2179`), and
-  health-state transitions (`api.py:823-842`). Everything else is DEBUG and
+  only, never the value, `server.py:2378-2385`), rejected Host header
+  (`server.py:2530-2539`), unhandled errors with a request id and traceback
+  (`server.py:2498-2504`), coverage-document unavailability (`server.py:2436-2468`), oversized
+  or unconfigured target binary (`server.py:1284-1312`), regen start, replay,
+  completion and failure (`api.py:2157`, `api.py:2098`, `api.py:2229`,
+  `api.py:2255`), slow requests at WARNING (`server.py:2236-2244`), and
+  health-state transitions (`api.py:880-899`). Everything else is DEBUG and
   off by default.
 - Every request carries an `X-Request-ID` from the client or a minted one
-  (`server.py:2097-2112`), echoed on the response (`server.py:2163-2164`), so a
+  (`server.py:2167-2174`), echoed on the response (`server.py:2226-2227`), so a
   report of "the export was slow" is matchable to a specific line.
 - `SECURITY.md` records the supported version line and the fact that no
   reporting address is defined in the repository.
