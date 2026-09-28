@@ -189,6 +189,7 @@ That is the local mirror of CI, and each target is the command CI runs:
 | `make smoke-fail` | smoke | `python tools/smoke.py --expect-failure` |
 | `make browser-sbom` | sbom | `python tools/bundled_js_inventory.py` |
 | `make python-sbom` | sbom | `uv export --frozen --all-extras --hashes`, then the rebrew tag and commit the job appends |
+| `make license-inventory` | lint | `python tools/license_inventory.py` |
 
 The `sbom` job is the only one that reads a lockfile without installing from
 it: the Python half comes from `uv export` over `uv.lock` and the browser half

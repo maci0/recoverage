@@ -85,6 +85,13 @@ jobs:
       # non-Python source sets ruff does not see (tools/*.sh, .github/*.yml).
       - run: make shell-lint
       - run: make yaml-lint
+      # The license half of the Python inventory: NOTICE and
+      # tools/bundled_js_inventory.py cover what the wheel BUNDLES and
+      # `make python-sbom` covers the resolved tree's hashes, and nothing read
+      # what a consumer may do with the packages it INSTALLS. The sbom job has
+      # no environment and no sibling rebrew, which is why this runs here, in
+      # the job that has already synced the dev extra.
+      - run: make license-inventory
 
   web-lint:
     runs-on: ubuntu-24.04

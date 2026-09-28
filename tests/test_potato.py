@@ -1155,6 +1155,16 @@ class TestDbUpdatedLabel:
         os.utime(path, ns=(mtime_ns, mtime_ns))
         return path
 
+    @staticmethod
+    def _patch_db(monkeypatch: pytest.MonkeyPatch, directory: Path) -> None:
+        """Point the coverage-directory resolution at *directory*.
+
+        The footer's read goes through the same `RECOVERAGE_DB` the rest of the
+        suite redirects, so a test counting that read has to redirect it too or
+        it counts a walk of the checkout's own db directory.
+        """
+        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+
     def test_missing_db_renders_empty(self) -> None:
         assert _db_updated_label(None) == ""
 

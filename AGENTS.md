@@ -183,6 +183,9 @@ make browser-sbom           # the npm packages compiled into the shipped browser
                             #   (the sbom job uploads this as recoverage-browser-sbom)
 make python-sbom            # the resolved Python tree (uv.lock, every extra, hashed)
                             #   plus the rebrew pin: the sbom job's other artifact
+make license-inventory      # the license every package the resolved tree
+                            #   installs is under, and a refusal for anything
+                            #   not permissive (tools/license_inventory.py)
 make all                    # every check CI runs, one command
 
 # Frontend lint detail (requires bun and java on PATH)

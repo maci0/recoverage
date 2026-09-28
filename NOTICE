@@ -45,3 +45,13 @@ Full dependency inventory per release: the `recoverage-python-sbom` and
 and tarball digest of each package as bun.lock resolved it, since the browser
 code above ships compiled and the Python export cannot see it. `make
 browser-sbom` prints the same inventory without CI.
+
+The Python packages a consumer INSTALLS are not listed above, because nothing
+is redistributed inside the wheel: they are resolved beside it, each under its
+own license, and recoverage's MIT grant does not extend to them. `make
+license-inventory` reads those licenses off the installed distributions and
+refuses any that is not permissive, so the record is a gate rather than a
+claim. The tree is wider than the eight names pyproject.toml declares, because
+`rebrew` is a runtime import and brings certifi (MPL-2.0, file-level copyleft),
+lief, numpy, tree-sitter and python-flirt with it; the walk follows
+`Requires-Dist` so all of them are read rather than assumed.

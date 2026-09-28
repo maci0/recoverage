@@ -13,6 +13,7 @@ of a third-party preset whose license and origin are no longer recorded.
 from __future__ import annotations
 
 import ast
+import importlib.metadata
 import importlib.util
 import json
 import re
@@ -1832,3 +1833,137 @@ class TestUpdateBots:
             if (_ROOT / name).exists()
         ]
         assert not found, f"a second JavaScript lockfile is committed beside bun.lock: {found}"
+
+
+def _license_inventory_module() -> ModuleType:
+    """`tools/license_inventory.py`, imported so the tree has one definition
+    of what a license is read from and what counts as allowed.
+
+    `tools/` is a script directory rather than a package, so the loader is how
+    a test reaches in, the same one `TestVendoredLintPlugin` uses for
+    `tools/vendor_manifest.py`.
+    """
+    path = _ROOT / "tools" / "license_inventory.py"
+    spec = importlib.util.spec_from_file_location("license_inventory", path)
+    assert spec and spec.loader, "tools/license_inventory.py is not importable"
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class TestPythonDependencyLicenses:
+    """The Python half of the third-party license record.
+
+    NOTICE and `tools/bundled_js_inventory.py` cover the code the wheel
+    BUNDLES, and `make python-sbom` covers the resolved Python tree's
+    versions and hashes. Nothing covered what a consumer may do with the
+    packages recoverage INSTALLS, and that tree is much wider than the eight
+    names pyproject.toml spells out: rebrew is a runtime import, and it brings
+    certifi, lief, numpy, tree-sitter, python-flirt and five more with it. A
+    gate that read only the declared names would have called all of those
+    clean without reading one of them.
+    """
+
+    def test_the_resolved_tree_is_under_a_permissive_license(self) -> None:
+        """Every distribution recoverage resolves is redistributable here.
+
+        The refusal is a hard copyleft license, an id the allowlist does not
+        hold, and a package that declares none at all: each is a question about
+        what this project may ship, which is a decision rather than something
+        the tree can infer from a hash.
+        """
+        module = _license_inventory_module()
+        refused = module._refused(module.inventory())
+        assert not refused, "licenses outside the permissive set, or undeclared:\n  " + "\n  ".join(
+            refused
+        )
+
+    def test_the_closure_is_wider_than_the_declared_dependencies(self) -> None:
+        """The gate has to be reading a tree, not eight names.
+
+        A walk that stopped at `[project].dependencies` would answer the same
+        way for a runtime dependency that pulled in a copyleft package, which
+        is the failure this exists to catch. Transitives are named here so the
+        next one to arrive is a test that fails rather than a widened allowlist
+        that passes.
+        """
+        module = _license_inventory_module()
+        resolved = {entry.name.lower() for entry in module.inventory()}
+        declared = {name.lower() for name in module.declared_roots()}
+        assert declared < resolved, (
+            "nothing outside pyproject.toml resolved, so the walk is not reaching the "
+            "transitive tree and the license check is narrower than it reads"
+        )
+        for name in ("certifi", "markdown-it-py", "mdurl"):
+            assert name in resolved, (
+                f"{name} is no longer in the resolved tree; if rebrew dropped it, this is "
+                f"the list to update rather than a gap in the gate"
+            )
+
+    def test_a_copyleft_or_unknown_license_is_refused(self) -> None:
+        """The gate can fail.
+
+        A check that only ever sees permissive licenses passes on the strength
+        of the tree rather than the strength of the rule, and a copyleft
+        dependency would then ship through it. The synthetic entries are what
+        prove the refusal is reachable at all.
+        """
+        module = _license_inventory_module()
+        entry = module.Entry
+        assert module._refused([entry("x", "1", "GPL-3.0")]), "a copyleft license was allowed"
+        assert module._refused([entry("x", "1", "AGPL-3.0")]), "a copyleft license was allowed"
+        assert module._refused([entry("x", "1", "Nonexistent-1.0")]), "an unknown id was allowed"
+        assert module._refused([entry("x", "1", "")]), "an undeclared license was allowed"
+        assert module._refused([entry("x", "1", "BSD-3-Clause AND GPL-3.0")]), (
+            "a compound expression hiding a copyleft license was allowed"
+        )
+        assert not module._refused([entry("x", "1", "MIT")])
+        assert not module._refused([entry("x", "1", "(MIT OR Apache-2.0)")]), (
+            "parentheses are in the vocabulary; numpy's expression form is not"
+        )
+
+    def test_every_recorded_license_names_a_file_that_is_still_there(self) -> None:
+        """`_UNDECLARED_METADATA` is a claim about a file, so the file is checked.
+
+        Five distributions name no license in their METADATA, and the record
+        is what the gate reads for them. A bump that moves or renames a LICENSE
+        file would otherwise leave a claim standing that nobody re-reads, so
+        the recorded path is resolved against what the distribution actually
+        ships and a stale entry refuses the run.
+        """
+        module = _license_inventory_module()
+        recorded = module._UNDECLARED_METADATA
+        assert recorded, (
+            "the table is empty, so the packages without a METADATA license are unchecked"
+        )
+        for name, (license_id, path) in recorded.items():
+            assert license_id in module._ALLOWED, (
+                f"{name} records {license_id}, which is not on the allowlist"
+            )
+            try:
+                dist = importlib.metadata.distribution(name)
+            except importlib.metadata.PackageNotFoundError:
+                continue
+            tails = {module._after_dist_info(str(f)) for f in dist.files or ()}
+            assert module._after_dist_info(path) in tails, (
+                f"{name} no longer ships {path}; the license it is under has to be re-read "
+                f"from the file it now does ship"
+            )
+
+    def test_the_gate_is_reachable_without_ci(self) -> None:
+        """The inventory is a local command, not something only a job can run.
+
+        `make python-sbom` exists for the same reason: the artifact a release
+        ships has to be reproducible by the person who changed the tree, or
+        nobody reads it before the tag.
+        """
+        makefile = _MAKEFILE.read_text(encoding="utf-8")
+        assert "license-inventory" in makefile, "no Makefile target runs the license gate"
+        assert "tools/license_inventory.py" in makefile, "the target does not name the tool it runs"
+        for doc in (
+            _README.read_text(encoding="utf-8"),
+            (_ROOT / "NOTICE").read_text(encoding="utf-8"),
+        ):
+            assert "license-inventory" in doc, (
+                "the license record of the Python half is unreachable from the documentation"
+            )

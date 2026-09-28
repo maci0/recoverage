@@ -4,7 +4,7 @@
 # is the one step that keeps the committed assets matching web/.
 .PHONY: help setup clean build check-bundle-clean web-build web-dev test test-one test-browser fuzz lint format format-check web-lint smoke smoke-fail \
 	shell-lint yaml-lint type-check all ensure-uv ensure-rebrew warn-uv-version clone-rebrew ensure-lint-tools \
-	ensure-bun regen-oxlint typecheck-web payload-budget browser-sbom python-sbom
+	ensure-bun regen-oxlint typecheck-web payload-budget browser-sbom python-sbom license-inventory
 
 # Force POSIX sh for recipes (ignore a caller-exported SHELL=bash).  Version
 # compares use ``sort -t. -k…n`` (POSIX), not GNU ``sort -V``.
@@ -128,6 +128,7 @@ help:
 		'  make payload-budget     # re-derive the inlined shell size at each static encoding' \
 		'  make browser-sbom       # list the npm packages compiled into the shipped browser assets' \
 		'  make python-sbom        # print the resolved Python tree (uv.lock, every extra, hashed)' \
+		'  make license-inventory  # the license every resolved Python package is under, and refuse the rest' \
 		'  make all                # every check CI runs, in one command' \
 		'  make check-bundle-clean # fail when the committed web bundle is stale (make all runs it)' \
 		'  make clean              # remove caches and build artifacts' \
@@ -502,9 +503,21 @@ python-sbom:
 	fi; \
 	printf '\n# rebrew path-dependency pin\n# rebrew==%s @ %s\n' "$$ref" "$$sha"
 
+# The license the resolved Python tree is under, which `python-sbom`'s hashes
+# do not say. Unlike that target this one reads the INSTALLED environment
+# rather than uv.lock alone, because the licenses live in the distributions'
+# own metadata: the walk starts at [project].dependencies and follows
+# Requires-Dist, so it covers the transitive tree, which is much wider than the
+# eight declared names (rebrew alone brings certifi, lief, numpy, tree-sitter
+# and python-flirt). It exits 1 naming any license that is not permissive or
+# is undeclared, so a copyleft package reaching the tree is a decision somebody
+# makes rather than one the run waves through.
+license-inventory: ensure-rebrew
+	$(UV_RUN) python tools/license_inventory.py
+
 # Everything CI checks, in one local command, so nothing fails only after push.
 all: format-check lint type-check shell-lint yaml-lint test web-lint typecheck-web \
-	build check-bundle-clean browser-sbom python-sbom smoke smoke-fail
+	build check-bundle-clean browser-sbom python-sbom license-inventory smoke smoke-fail
 	@printf '%s\n' 'all checks passed (CI: lint, web-lint, test, build, smoke)'
 
 clean:
