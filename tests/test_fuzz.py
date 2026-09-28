@@ -31,7 +31,11 @@ tests enumerate:
   arrives in the checkout rather than over a socket, and it names the coverage
   directory, the target ids the dashboard offers, and the binary whose bytes
   ``/asm`` and ``/bytes`` serve. It gets both arms the documents get, and the
-  pair assertion the reader itself is the far side of.
+  pair assertion the reader itself is the far side of;
+* the request line and header block, which the campaigns above never reach
+  because every one of them starts from a WSGI environ. Those bytes arrive
+  before an environ exists, on a socket, and the transport decides there
+  whether a request reaches a route at all.
 
 No coverage-guided fuzzer is available offline, so the harness is a seeded
 mutation engine: a hand-written corpus of real-shaped seeds (the spellings the
@@ -49,9 +53,11 @@ import html
 import io
 import ipaddress
 import json
+import logging
 import os
 import random
 import re
+import socket
 import unicodedata
 from collections.abc import Callable
 from http.cookies import SimpleCookie
@@ -66,7 +72,7 @@ from coverage_fixture import build_synthetic_coverage, cell, write_coverage
 from rebrew.coverage_toml import CoverageSnapshot, Function, load_coverage
 from typer.testing import CliRunner
 
-from recoverage import cli, config
+from recoverage import cli, config, devserver
 from recoverage import server as srv
 from recoverage.api import (
     _MAX_BATCH_BODY_BYTES,
@@ -4146,3 +4152,241 @@ def _escapes(candidate: Path, project_root: Path) -> bool:
     except (OSError, ValueError):
         return True
     return not resolved.is_relative_to(project_root.resolve())
+
+
+# ── the wire, before a WSGI environ exists ──────────────────────────
+
+#: Real request streams, as a browser, the SPA and a scanner put them on the
+#: socket.  The first two are what the dashboard actually sends (two requests
+#: on one connection is the keep-alive case the handler exists for); the rest
+#: are the shapes that decide whether a request reaches a route at all.
+REQUEST_WIRE_SEEDS: list[bytes] = [
+    b"GET /api/health HTTP/1.1\r\nHost: localhost:8001\r\n\r\n",
+    (
+        b"GET /api/health HTTP/1.1\r\nHost: localhost:8001\r\n\r\n"
+        b"GET /api/targets HTTP/1.1\r\nHost: localhost:8001\r\n\r\n"
+    ),
+    (
+        b"POST /api/targets/w/functions HTTP/1.1\r\nHost: h\r\n"
+        b"Content-Type: application/json\r\nContent-Length: 20\r\n\r\n"
+        b'{"vas":["0x1000"]}    '
+    ),
+    b"GET / HTTP/1.0\r\n\r\n",
+    b"GET /potato?search=main&idx=3 HTTP/1.1\r\nHost: h\r\n\r\n",
+    b"GET / HTTP/1.1\r\nHost: h\r\nConnection: close\r\n\r\n",
+    b"GET\r\n\r\n",
+    b"\r\n\r\n",
+    b" \t \r\n\r\n",
+    b"GET / HTTP/9.9\r\n\r\n",
+    b"GET / HTTP/1.1\r\n" + b"X-Pad: " + b"a" * 400 + b"\r\n\r\n",
+    b"GET / HTTP/1.1\r\nHost: h\r\nX-Fold: a\r\n b\r\n\r\n",
+    b"\x00\x01\x02\x03\r\n\r\n",
+    b"GET /\xff\xfe HTTP/1.1\r\nHost: h\r\n\r\n",
+    # A line one byte past the read's cap, the arm _serve_requests answers 414.
+    b"GET /" + b"a" * (devserver._MAX_REQUEST_LINE + 8) + b" HTTP/1.1\r\n\r\n",
+]
+
+#: Tokens the engine splices into a request stream: the framing the stdlib
+#: parser branches on, plus the line-breaking bytes whose handling the log
+#: guarantee rests on.
+REQUEST_WIRE_TOKENS: tuple[bytes, ...] = (
+    b"GET",
+    b"POST",
+    b"HEAD",
+    b"HTTP/1.0",
+    b"HTTP/1.1",
+    b"HTTP/9.9",
+    b"\r\n",
+    b"\n",
+    b"\r",
+    b" ",
+    b"\t",
+    b"\x00",
+    b"\x0b",
+    b"\x1f",
+    b"\xff",
+    b"Host: h\r\n",
+    b"Content-Length: 0\r\n",
+    b"Connection: close\r\n",
+    b"Transfer-Encoding: chunked\r\n",
+    b"%%%",
+    b"../",
+)
+
+
+class _RecordingRequestHandler(devserver._KeepAliveRequestHandler):
+    """The production request handler with the WSGI dispatch recorded.
+
+    Everything that reads client bytes is the production code: the capped
+    request-line read, the 414 refusal, ``http.server``'s own
+    ``parse_request`` and the keep-alive loop.  Only the application dispatch
+    is replaced, because the campaign is about the wire, and a bottle app per
+    round would make it measure the app instead.
+    """
+
+    def __init__(self, connection: socket.socket) -> None:
+        self.dispatched: list[dict[str, Any]] = []
+        self.request = connection
+        self.client_address = ("127.0.0.1", 0)
+        self.connection = connection
+        self.rfile: Any = connection.makefile("rb", -1)
+        self.wfile: Any = connection.makefile("wb", 0)
+
+    def _run_wsgi(self) -> None:
+        self.dispatched.append(
+            {
+                "command": self.command,
+                "path": self.path,
+                "version": self.request_version,
+                "headers": sorted(self.headers.items()),
+            }
+        )
+        self.wfile.write(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+
+
+def _serve_wire(data: bytes) -> tuple[list[dict[str, Any]], bytes]:
+    """Put *data* on a socket the way a client would, and read the answer back.
+
+    A socketpair, not a ``BytesIO``: the handler calls ``connection.settimeout``
+    between requests and catches ``TimeoutError`` on the close path, so a fake
+    connection would have to reproduce the deadline the code under test reads.
+    The client end is shut down before the handler starts, so every read the
+    malformed request provokes ends at EOF instead of parking the campaign.
+    """
+    server_side, client_side = socket.socketpair()
+    client_side.settimeout(10)
+    try:
+        client_side.sendall(data)
+        client_side.shutdown(socket.SHUT_WR)
+        handler = _RecordingRequestHandler(server_side)
+        try:
+            handler.handle()
+        finally:
+            handler.wfile.flush()
+            handler.rfile.close()
+            # wfile holds its own reference to the socket, so the client end
+            # never sees EOF while it is open.
+            handler.wfile.close()
+            server_side.close()
+        chunks: list[bytes] = []
+        while True:
+            try:
+                part = client_side.recv(65536)
+            except ConnectionResetError:
+                # A reset is what a client really sees when the server closes
+                # a connection whose request bytes it never read, which is most
+                # of a malformed stream.  Whatever was already written is the
+                # answer; the rest never leaves the socket.
+                break
+            if not part:
+                break
+            chunks.append(part)
+        return handler.dispatched, b"".join(chunks)
+    finally:
+        client_side.close()
+
+
+class TestRequestLineParser:
+    """The request line and the header block, as the SOCKET carries them.
+
+    Every other campaign here starts from a WSGI environ, which means the
+    request-line read, the over-long-line refusal and the keep-alive loop have
+    no harness at all: those run before an environ exists, on bytes no WSGI
+    test can spell.  They decide whether a request reaches a route, so a
+    campaign over them asserts the properties rather than a status code:
+
+    * nothing escapes ``handle``.  It catches ``TimeoutError`` and
+      ``ConnectionError`` and nothing else, so an exception from the parser is
+      a traceback printed by ``socketserver`` and a handler thread lost, which
+      is a failure the campaign cannot report as an assertion unless the check
+      does not let it out;
+    * the answer is framed: a status line, then a header block, then the end of
+      the headers, with no bare CR or LF splitting a line of its own;
+    * a line over the cap is refused with 414 and never reaches the app;
+    * nothing attacker-chosen reaches the log as a line break.  The transport
+      quotes the request with ``%r`` and the module says so; the campaign is
+      what holds that claim, because a log line a caller can forge is an
+      operator reading a line a stranger wrote;
+    * a parsed request line yields a method, a path and a version, and each is
+      free of the framing bytes, so nothing downstream concatenates a request
+      into a second one.
+    """
+
+    def test_wire_bytes_never_crash_and_stay_framed(self, caplog: pytest.LogCaptureFixture) -> None:
+        def check(data: bytes) -> None:
+            with caplog.at_level(logging.WARNING, logger="recoverage"):
+                dispatched, answer = _serve_wire(data)
+            for record in caplog.records:
+                message = record.getMessage()
+                assert "\n" not in message and "\r" not in message, (
+                    f"a transport log line carries a line break: {message!r} from {data!r}"
+                )
+            for request in dispatched:
+                fields: dict[str, Any] = request
+                for field in ("command", "path", "version"):
+                    value = fields[field]
+                    assert value, f"a dispatched request has no {field}: {data!r}"
+                    assert "\n" not in value and "\r" not in value, (
+                        f"a dispatched {field} carries a line break: {value!r}"
+                    )
+                assert set(request) == {"command", "path", "version", "headers"}
+            if len(data.split(b"\r\n", 1)[0]) > devserver._MAX_REQUEST_LINE:
+                assert not dispatched, f"an over-long request line reached the app: {data[:80]!r}"
+                assert answer.startswith(b"HTTP/1.1 414"), (
+                    f"an over-long request line answered {answer[:40]!r}"
+                )
+            if answer:
+                head, _, _rest = answer.partition(b"\r\n\r\n")
+                assert head, f"an empty response head for {data[:80]!r}"
+                assert head.startswith(b"HTTP/1.1 "), f"unframed status line: {head[:60]!r}"
+                for line in head.split(b"\r\n"):
+                    assert b"\r" not in line and b"\n" not in line, (
+                        f"a response header line carries a break: {line[:60]!r}"
+                    )
+
+        _fuzz(
+            REQUEST_WIRE_SEEDS,
+            check,
+            iterations=150,
+            struct_tokens=REQUEST_WIRE_TOKENS,
+            num_tokens=REQUEST_WIRE_TOKENS,
+        )
+
+    def test_a_well_formed_request_reaches_the_app_intact(self) -> None:
+        """The pair assertion across the parse boundary: what the client wrote
+        is what the route is handed, headers included, so a parser that lost or
+        reordered a field cannot pass the campaign above."""
+        dispatched, answer = _serve_wire(
+            b"GET /api/targets/win/asm?va=0x1000 HTTP/1.1\r\n"
+            b"Host: localhost:8001\r\nX-Request-ID: abc123\r\n\r\n"
+        )
+        assert len(dispatched) == 1, f"{len(dispatched)} requests dispatched for one request line"
+        request = dispatched[0]
+        assert request["command"] == "GET"
+        assert request["path"] == "/api/targets/win/asm?va=0x1000"
+        assert request["version"] == "HTTP/1.1"
+        assert ("Host", "localhost:8001") in request["headers"]
+        assert ("X-Request-ID", "abc123") in request["headers"]
+        assert answer.startswith(b"HTTP/1.1 200 "), f"{answer[:60]!r}"
+
+    def test_two_requests_share_one_connection_and_a_malformed_one_ends_it(
+        self,
+    ) -> None:
+        """The keep-alive loop's two arms, on one socket: a well-formed
+        request is answered and the next one on the same connection is served
+        too, while a request line the parser refuses ends the connection
+        rather than the next line on it being read as a request of its own."""
+        dispatched, _answer = _serve_wire(
+            b"GET / HTTP/1.1\r\nHost: h\r\n\r\nGET /potato HTTP/1.1\r\nHost: h\r\n\r\n"
+        )
+        assert [request["path"] for request in dispatched] == ["/", "/potato"], (
+            f"keep-alive served {[r['path'] for r in dispatched]}"
+        )
+
+        dispatched, answer = _serve_wire(b"GET / HTTP/1.1\r\nHost: h\r\n\r\nNOT-A-REQUEST\r\n\r\n")
+        assert [request["path"] for request in dispatched] == ["/"], (
+            "a malformed request line was served"
+        )
+        assert answer.count(b"HTTP/1.1 ") == 2, (
+            f"expected one answer and one refusal, got {answer[:120]!r}"
+        )

@@ -1598,7 +1598,22 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   plus a restatement of the four arms of `server.lookup_function` rather than
   the handler itself; and the CLI (`TestCliRendersHostileDocumentValues`), which
   renders a document's own section and target names into a table, a JSON
-  document, a CSV file and a Markdown file. The CLI campaign draws from value
+  document, a CSV file and a Markdown file. One campaign is not a request at
+  all: the request line and header block (`TestRequestLineParser`), which
+  arrive on a socket before a WSGI environ exists, so every campaign above
+  starts past them. It drives the production
+  `devserver._KeepAliveRequestHandler` over a `socket.socketpair` with only
+  `_run_wsgi` replaced by a recorder, so the capped read, the 414 refusal,
+  `http.server`'s `parse_request` and the keep-alive loop are the code under
+  test, and it asserts what a status code cannot show: nothing escapes
+  `handle` (which catches only `TimeoutError` and `ConnectionError`), the
+  answer is framed, an over-long line is refused with 414 and never reaches the
+  app, no attacker byte reaches the log as a line break (the guarantee
+  `devserver.log_error` documents), and a well-formed line reaches the route
+  with its method, path, version and headers intact. A socketpair, not a
+  `BytesIO`: the handler calls `connection.settimeout` between requests, and a
+  fake connection would have to reproduce the deadline the code reads.
+  The CLI campaign draws from value
   pools and writes through the fixture writer, so every round is a document the
   reader accepts, and it reads `result.output_bytes` rather than
   `result.output`: CliRunner decodes its capture with universal newlines, so a
