@@ -250,6 +250,9 @@ function FunctionMeta({
       {fn.last_verify?.similarity == null ? null : (
         <MetaItem label="Code Sim">{`${(fn.last_verify.similarity * 100).toFixed(1)}%`}</MetaItem>
       )}
+      {fn.last_verify?.diff_lines == null ? null : (
+        <MetaItem label="Diff Lines">{String(fn.last_verify.diff_lines)}</MetaItem>
+      )}
       {fn.last_verify?.reg_delta == null ? null : (
         <MetaItem label="Reg Delta">{String(fn.last_verify.reg_delta)}</MetaItem>
       )}

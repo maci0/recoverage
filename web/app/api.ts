@@ -141,6 +141,7 @@ export type FunctionDetail = {
   last_verify?: {
     verified_at?: string;
     byte_delta?: number | null;
+    diff_lines?: number | null;
     similarity?: number | null;
     reg_delta?: number | null;
     effective_match?: boolean;
