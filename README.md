@@ -365,6 +365,11 @@ recoverage calls rebrew's catalog and build-db functions as a library, in
 process, rather than spawning the `rebrew` console script.  The run has no
 timeout, so it always runs to completion.
 
+Nothing reaches stdout: the progress line, the completion line and every error
+are status, and they go to stderr, so a script reads the outcome from the exit
+code.  `serve --regen` runs the same pipeline, so its progress stays off the
+stdout the startup banner is written to.
+
 Exit codes: 0 = the documents were written (or rebrew had no built target to
 write for), 1 = rebrew failed or another regen of the same project already
 holds its lock, 2 = `RECOVERAGE_DB` names a directory rebrew

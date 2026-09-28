@@ -155,6 +155,11 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `recoverage regen` writes nothing to stdout. Its progress line and its
+  "Done — N coverage document(s) written to ..." completion line are status,
+  and they now go to stderr with the errors that were already there, so a
+  script reads the outcome from the exit code and `serve --regen` keeps the
+  startup banner alone on stdout.
 - The dashboard's rebuild button reads "Regenerate" rather than "Reload". It
   runs rebrew's catalog analysis for minutes, which is not what "Reload", the
   browser's own word for a page refresh, told a reader to expect. The empty

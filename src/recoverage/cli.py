@@ -637,10 +637,13 @@ def _open_targets(
     snapshots = _load_coverage_or_exit(missing_exit_code=missing_exit_code, json_output=json_output)
     targets = _select_targets(target, json_output=json_output)
     if not targets:
+        # Same class as "no document": the coverage set is there and yields no
+        # target, so it is the infrastructure error *missing_exit_code* names,
+        # not the gate verdict the siblings report as 1.
         _fail(
             "No targets found in coverage.",
             "no targets in coverage",
-            1,
+            missing_exit_code,
             json_output,
             fg=typer.colors.YELLOW,
         )
@@ -675,7 +678,10 @@ def _run_regen(root: Path) -> list[Path]:
         run_regen,
     )
 
-    typer.echo("Running rebrew catalog + build-db...")
+    # Progress, not data: stderr, like every failure this function reports, so
+    # `recoverage regen` in a pipeline and `serve --regen`'s banner keep stdout
+    # for the data they do carry.
+    _secho("Running rebrew catalog + build-db...", err=True)
     try:
         return run_regen(root)
     except RegenDbMismatchError as e:
@@ -1982,7 +1988,8 @@ def check(
 def regen(no_color: bool = _no_color_option()) -> None:
     """Re-run rebrew catalog + build-db to regenerate the coverage documents.
 
-    Writes no data to stdout, only progress, so a caller can read the report
+    Writes nothing to stdout: the progress line, the completion line and every
+    error are status, and status goes to stderr, so a caller reads the report
     from the exit code alone. Exits 2 when RECOVERAGE_DB names a directory
     rebrew would not write to (the mismatch is refused rather than reported
     as a done regen that left the dashboard stale), 1 when rebrew fails or
@@ -2002,11 +2009,13 @@ def regen(no_color: bool = _no_color_option()) -> None:
         _secho(
             f"Done — {len(written)} coverage document(s) written to {written[0].parent}.",
             fg=typer.colors.GREEN,
+            err=True,
         )
     else:
         _secho(
             "Done — rebrew wrote no coverage documents (no built targets).",
             fg=typer.colors.GREEN,
+            err=True,
         )
 
 

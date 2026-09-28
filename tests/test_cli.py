@@ -659,6 +659,34 @@ class TestStatsCommand:
         assert "not found" in result.output or "not found" in result.stderr_bytes.decode()
 
 
+# ── Regen command ─────────────────────────────────────────────────
+
+
+class TestRegenCommand:
+    """`regen`'s stdout is empty, because its exit code is the report.
+
+    The command documents that it writes nothing to stdout so a caller reads
+    the outcome from the exit code, and rebrew itself writes documents rather
+    than a report a script can parse. Progress and the completion line are
+    status, and status is what stderr carries everywhere else in this CLI.
+    """
+
+    @pytest.mark.parametrize("written", [True, False])
+    def test_nothing_reaches_stdout(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, written: bool
+    ) -> None:
+        from recoverage import regen
+
+        documents = [tmp_path / "db" / "coverage-T.toml"] if written else []
+        monkeypatch.setattr(regen, "run_regen", lambda root: documents)
+        result = runner.invoke(app, ["regen"])
+        assert result.exit_code == 0
+        assert result.stdout_bytes == b""
+        err = result.stderr_bytes.decode()
+        assert "Running rebrew catalog" in err
+        assert "Done" in err
+
+
 # ── Check command ─────────────────────────────────────────────────
 
 

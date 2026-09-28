@@ -57,6 +57,9 @@ Check coverage against a threshold (CI gate).
 .TP
 .B regen
 Re-run rebrew catalog + build\-db to regenerate the coverage documents.
+Writes nothing to stdout: the progress line, the completion line and every
+error are status and go to stderr, so a script reads the outcome from the exit
+code.
 Exits 1 without running when another regen of the same project is already
 under way, in this process or another: two writers of one coverage document
 interleave rather than converge.
