@@ -127,17 +127,17 @@ sequenceDiagram
 - Filters are set-based toggles (multiple can be active simultaneously)
 - Non-matching cells are dimmed (opacity 0.15), not hidden, preserving spatial layout
 - Filtering is a second alpha pass over precomputed cell rects (no per-cell DOM, no CSS class toggling)
-- Progress bar segments are clickable to quick-filter by status; a segment below 0.5% is not rendered
+- The one pill per cell state in the stats strip is the same toggle as the toolbar button, reachable by keyboard and carrying `aria-pressed`. There is no second control and no bar segment to click: the strip is text plus buttons, so nothing is measured, clipped or laid out from JavaScript
 
 ```mermaid
 graph TD
-    A["Click filter button<br/>or progress bar segment"] --> B["Toggle status in<br/>the filters Set"]
+    A["Click a filter button<br/>or the matching pill in the stats strip"] --> B["Toggle status in<br/>the filters Set"]
     B --> C["Repaint from cached cell rects<br/>with globalAlpha 0.15"]
 
     E["Click 'All' button"] --> F["Clear all filters"]
     F --> C
 
-    G["Click progress bar<br/>'Stub' segment"] --> H["Set filter = {Stub}"]
+    G["Click the strip's<br/>'Stub' pill"] --> H["Toggle filter = stub"]
     H --> C
 
     C --> I["Grid preserves spatial<br/>layout (dimmed, not removed)"]
@@ -235,30 +235,30 @@ graph TD
 
 ---
 
-## 8. Reading the Progress Bar
+## 8. Reading the Coverage Summary
 
-> **As a Project Lead**, I want an at-a-glance progress bar showing coverage percentages by status so that I can track decompilation progress without counting cells.
+> **As a Project Lead**, I want the coverage figures and the per-status breakdown in one row above the map so that I can track decompilation progress without counting cells.
 
 ### Acceptance Criteria
-- Segmented progress bar with Exact (green), Reloc (blue), Near-match (yellow), Stub (red), Padding (silver). All segments of a bar share one denominator: `.text` counts functions, every other section counts bytes, and Padding (a cell state) is a segment only on the byte-counted bars
-- Coverage stats rendered as a text row above the bar (never inside it): total section bytes, matched cells, coverage %
-- "Matched" counts exact + reloc cells only: a near-match is a miss and a stub is a stand-in
-- Each segment is clickable to filter the grid by that status, and reachable by keyboard with `aria-pressed`
-- Coverage stats are derived at load from the stored cells and functions and served via API
+- The row above the map is a text strip, not a drawn bar: a target-level `<coverage %> covered · <matched>/<total> functions matched`, then the section on screen, one pill per cell state with its count, and that section's `<coverage %> covered`
+- Every figure is the one `/stats` serves, so the strip cannot disagree with the map beside it; nothing in it is measured, clipped or laid out from JavaScript. Potato Mode prints the same two lines from the same payload
+- "Matched" counts exact + reloc functions only: a near-match is a miss and a stub is a stand-in. `PROVEN` is a semantic-equivalence promotion, so it counts as covered but not as byte-matched
+- Each per-state pill is the filter toggle for that state, reachable by keyboard and carrying `aria-pressed`. There is no bar segment and no second vocabulary
+- Coverage stats are derived at load from the stored cells and functions and served via API; while a rebuild is in flight the row says the numbers are on their way rather than vanishing
 
 ```mermaid
 graph LR
-    subgraph "Progress Bar"
-        E["Exact<br/>42%"]
-        R["Reloc<br/>18%"]
-        M["Near-match<br/>15%"]
-        S["Stub<br/>25%"]
+    subgraph "Coverage summary row"
+        E["Exact 42%"]
+        R["Reloc 18%"]
+        M["Near-match 15%"]
+        S["Stub 25%"]
     end
 
-    E -->|Click| FE["Filter: Exact only"]
-    R -->|Click| FR["Filter: Reloc only"]
-    M -->|Click| FM["Filter: Near-match only"]
-    S -->|Click| FS["Filter: Stub only"]
+    E -->|Click| FE["Toggle filter: exact"]
+    R -->|Click| FR["Toggle filter: reloc"]
+    M -->|Click| FM["Toggle filter: near_match"]
+    S -->|Click| FS["Toggle filter: stub"]
 
     style E fill:#33ff00,stroke:#059669,color:#000
     style R fill:#0284c7,stroke:#0369a1,color:#fff
@@ -266,7 +266,7 @@ graph LR
     style S fill:#ff0000,stroke:#dc2626,color:#fff
 ```
 
-> Padding is also a segment and filter button; it is left out of the diagram above only because the example percentages show the four dominant states.
+> The counts above stand in for the four dominant states; the strip carries one pill for every state the map can paint, Padding and Problem among them. Potato Mode keeps the drawn segmented bar its retro constraints allow, from the same `/stats` payload.
 
 ---
 
@@ -275,7 +275,7 @@ graph LR
 > **As a Contributor**, I want to toggle between dark and light themes so that I can use the dashboard comfortably in any lighting condition.
 
 ### Acceptance Criteria
-- Dark mode (default): retro CRT aesthetic with scanline overlay and cyan glow
+- Dark mode (default): retro CRT aesthetic, carried by phosphor glow on the tokens that earn it. There is no page-wide scanline overlay: at 0.05 opacity it repainted on every scroll frame for a texture no one could name. The only scanlines in the package are drawn into `assets/favicon.svg`
 - Light mode: softer grays for reduced eye strain
 - Toggle via sun/moon icon button in the topbar
 - Preference persisted to `localStorage` (`recoverage_theme`)
@@ -416,7 +416,7 @@ graph TD
 
 ### Acceptance Criteria
 - Each code block (C Source, ASM, Hex) has an "Open" button
-- Modal is centered with backdrop blur and smooth scale/fade animation
+- Modal is centered over a dimmed backdrop. There is no `backdrop-filter`: over a near-black ground a blur shows nothing and re-filters on every frame, and the theme cross-fade is the only page-wide animation in the package
 - Copy button available inside the modal
 - Close via button, Escape key, or clicking outside
 - Custom-built dialog portaled into `document.body`, with `inert` on the page behind it, so focus is contained by the platform rather than a hand-rolled Tab handler, and with the shadcn/ui `Button` primitive for its controls
@@ -444,15 +444,14 @@ graph TD
 > **As a Contributor**, I want the dashboard to adapt to narrow screens so that I can use it on a laptop without horizontal scrolling.
 
 ### Acceptance Criteria
-- Two-column layout (grid + panel) on wide screens (≥1300px)
-- Single-column stacked layout on narrow screens (<1300px)
+- Two-column layout (grid + panel) on wide screens, at Tailwind's `lg:` breakpoint (64rem, 1024px by default). Below it the panes stack: `flex-col` becomes `flex-row`, and the panel takes a fixed 460px capped at 45vw
 - Grid cells remain square regardless of viewport width
-- Custom scrollbars styled to match the active theme
-- `scrollbar-gutter: stable` prevents layout shifts on code blocks
+- Cells shrink rather than re-wrap: a section's declared column count never drops, and narrow viewports raise the cell floor from 6px to 12px below 700px
+- Every scrolling region gets the thin scrollbar the theme's `--scroll-thumb` token names, so both scrollbar families follow the palette
 
 ```mermaid
 graph TD
-    A["Browser viewport"] --> B{"Width ≥ 1300px?"}
+    A["Browser viewport"] --> B{"Width ≥ lg (64rem)?"}
     B -->|Yes| C["Two-column layout<br/>Grid | Panel"]
     B -->|No| D["Single-column layout<br/>Grid above Panel"]
     C --> E["ResizeObserver<br/>relayouts cell size"]
@@ -502,7 +501,7 @@ graph TD
 ### Acceptance Criteria
 - HTML, the built stylesheet and the built bundle inlined into a single response
 - Minified with `rjsmin`/`rcssmin` and compressed with Brotli/Zstd/gzip
-- Total payload 46,264 B brotli, which no longer fits RFC 6928's initial congestion window; the budget in `ui._TCP_CWND_BUDGET` is a 90 KB ceiling over the measurement, `ui._check_payload_budget` warns with the exact overage, and `tests/test_api.py` fails, so crossing the ceiling is a regression rather than a log line. The current winner is brotli, with zstd 49,582 B and gzip 53,865 B. `make payload-budget` re-derives all three from the committed bundle
+- Total payload 47,429 B brotli, which no longer fits RFC 6928's initial congestion window; the budget in `ui._TCP_CWND_BUDGET` is a 90 KB ceiling over the measurement, `ui._check_payload_budget` warns with the exact overage, and `tests/test_api.py` fails, so crossing the ceiling is a regression rather than a log line. The current winner is brotli, with zstd 50,842 B and gzip 55,219 B. `make payload-budget` re-derives all three from the committed bundle
 - The whole frontend is one built bundle inlined into the shell, so a change to the map, the asm pane, the hex dump or the data inspector moves the same measured number, and `tests/test_api.py` fails when it crosses the ceiling
 - Compression algorithm auto-selected from `Accept-Encoding` header
 - Highlight.js is compiled into the bundle rather than fetched on first use, so a code pane never renders unhighlighted and there is no first-use fetch to fail
@@ -518,7 +517,7 @@ graph TD
     E -->|zstd| F["Zstandard compress"]
     E -->|br| G["Brotli compress"]
     E -->|gzip| H["Gzip compress"]
-    F --> I["Smallest accepted body wins<br/>(45,686 B brotli today)"]
+    F --> I["Smallest accepted body wins<br/>(47,429 B brotli today)"]
     G --> I
     H --> I
     I --> J["Browser parses + renders<br/>UI shell in first paint"]
