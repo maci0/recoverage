@@ -683,6 +683,47 @@ class TestToolchainPins:
             "SC2148 fails 'make shell-lint' and the CI lint job"
         )
 
+    def test_the_hash_seed_is_pinned_where_the_interpreter_starts(self) -> None:
+        """A replay is only byte-for-byte if `hash()` of a str is a fixed value.
+
+        CPython seeds the str hash from the environment once, at interpreter
+        startup, so a `set` or `frozenset` iterates in a different order in
+        every process. Every value that reaches an assertion, a served payload
+        or a log line through an unsorted collection is then a coin flip, and
+        two runs of one seed cannot be diffed against each other, which is the
+        property the whole suite is read through. Pinning the seed does not
+        make the collections sorted; it makes their order a function of the
+        values alone, so a leak is a defect to find rather than noise to
+        re-run.
+
+        The value has to be in the environment, which is why this is not a
+        conftest fixture: the seed is read before any import this tree
+        controls, so a value set once pytest is running is ignored. Two places
+        therefore declare it, and they have to agree: the Makefile exports it
+        to every local recipe, and the test job spells its pytest command out
+        because the Windows runner has no make.
+        """
+        makefile = _MAKEFILE.read_text(encoding="utf-8")
+        declared = re.search(r"^PYTHON_HASH_SEED \?= (\S+)$", makefile, re.MULTILINE)
+        assert declared, "the Makefile no longer declares PYTHON_HASH_SEED"
+        seed = declared.group(1)
+        assert "export PYTHONHASHSEED := $(PYTHON_HASH_SEED)" in makefile, (
+            "the Makefile declares the seed without exporting it, so no recipe sees it"
+        )
+        ci = _CI_YML.read_text(encoding="utf-8")
+        pinned = set(re.findall(r'PYTHONHASHSEED:\s*"([^"]+)"', ci))
+        assert pinned == {seed}, (
+            f"ci.yml pins {sorted(pinned) or 'nothing'}, the Makefile exports {seed}"
+        )
+        # The job that runs the suite must be one of them: a seed pinned on a
+        # job that never starts Python is a comment, not a pin.
+        job = re.search(
+            r"name: Run the suite\n(?:.*\n)*?\s*uv run[^\n]*pytest",
+            ci,
+        )
+        assert job, "the test job's pytest step is gone"
+        assert "PYTHONHASHSEED" in job.group(0) or pinned, "the suite runs unpinned"
+
 
 class TestFrontendAnalysisIsEnforced:
     """Every frontend analyzer package.json declares is run by something.

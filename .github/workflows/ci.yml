@@ -194,6 +194,13 @@ jobs:
         # this matrix runs on the Windows runner, where make is not part of the
         # image's guaranteed toolchain, and a missing make would fail a job
         # before it ran a test.
+        # PYTHONHASHSEED matches the Makefile's PYTHON_HASH_SEED, which exports
+        # the same default to every local recipe.  It has to be set here
+        # because this job does not go through make, and CPython reads the seed
+        # at interpreter startup, so a value set inside the test session is
+        # too late.  tests/test_supply_chain.py fails when the two disagree.
+        env:
+          PYTHONHASHSEED: "0"
         run: >-
           uv run --locked --extra dev python -m pytest tests/ -v
           --ignore=tests/test_playwright.py

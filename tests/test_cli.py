@@ -334,6 +334,96 @@ class TestLogStamp:
         assert tokyo.startswith("2023-11-15 07:13:20+0900 ")
 
 
+class TestClockStampedFilter:
+    """The stamp on a served log line comes from `clock`, not from `time`.
+
+    `logging` fills `record.created` from `time.time()` when the record is
+    built, and `%(asctime)s` renders that field, so the stamp was the one
+    wall-clock reading under `src/recovery/` that bypassed the `clock` seam
+    while every other one read `clock.wall_time()`. A run driven from a single
+    patched clock therefore wrote two different instants for the same event,
+    and a replay could not be diffed against the run it replays.
+
+    The tests drive the filter rather than the formatter: the formatter only
+    ever renders `record.created`, which is what `TestLogStamp` above pins, so
+    the seam under test is the one that fills the field.
+    """
+
+    @staticmethod
+    def _filtered(monkeypatch: pytest.MonkeyPatch, when: float) -> float:
+        import logging
+
+        from recoverage import clock
+
+        monkeypatch.setattr(clock, "wall_time", lambda: when)
+        record = logging.LogRecord("recoverage", logging.INFO, __file__, 1, "hello", (), None)
+        # logging's own stamp, which the filter must not be reading.
+        record.created = 0.0
+        assert cli.ClockStampedFilter().filter(record) is True
+        return record.created
+
+    def test_the_stamp_is_the_clock_reading(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        assert self._filtered(monkeypatch, 1_700_000_000.0) == 1_700_000_000.0
+
+    def test_the_stamp_ignores_the_instant_logging_chose(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The point of the filter: logging's own `time.time()` is not the source."""
+        assert self._filtered(monkeypatch, 1_700_000_000.0) != 0.0
+
+    def test_two_runs_of_one_seed_write_the_same_line(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The replay property: one patched clock, one line, byte for byte.
+
+        Two records built a moment apart under a frozen clock carry the same
+        stamp, so the diff of two replays is empty. This is the whole claim the
+        filter exists to make, asserted on the formatted line rather than on
+        the field, because the line is what a replay is diffed against.
+        """
+        import logging
+
+        from recoverage import clock
+
+        monkeypatch.setattr(clock, "wall_time", lambda: 1_700_000_000.0)
+        formatter = cli.StructuredFormatter(
+            cli.LOG_FORMAT, datefmt=cli.LOG_DATEFMT, defaults={"request_id": "-"}
+        )
+        stamp_filter = cli.ClockStampedFilter()
+
+        def one_line(message: str) -> str:
+            record = logging.LogRecord("recoverage", logging.INFO, __file__, 1, message, (), None)
+            stamp_filter.filter(record)
+            return formatter.format(record)
+
+        assert one_line("GET /api/health 200") == one_line("GET /api/health 200")
+
+    def test_configured_handler_carries_the_filter(self) -> None:
+        """`_configure_logging` is the one place a record enters stderr.
+
+        A filter nothing attaches is a class no run reaches: the field would
+        keep logging's stamp in production while the tests above passed against
+        a seam nothing uses. Driven through the real entry point, asserting
+        the handler the root logger ends up with.
+        """
+        import logging
+
+        root = logging.getLogger()
+        previous_handlers = root.handlers[:]
+        previous_level = root.level
+        try:
+            root.handlers.clear()
+            cli._configure_logging(logging.WARNING)
+            assert any(isinstance(f, cli.ClockStampedFilter) for f in root.handlers[0].filters), [
+                type(f).__name__ for f in root.handlers[0].filters
+            ]
+        finally:
+            for handler in root.handlers[:]:
+                root.removeHandler(handler)
+            root.handlers[:] = previous_handlers
+            root.setLevel(previous_level)
+
+
 class TestStructuredFormatter:
     """A record's named fields must render as fields, not only as prose.
 

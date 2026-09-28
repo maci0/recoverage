@@ -155,6 +155,39 @@ LOG_FORMAT = "%(asctime)s %(levelname)s [%(name)s] [rid=%(request_id)s] %(messag
 LOG_DATEFMT = "%Y-%m-%d %H:%M:%S%z"
 
 
+class ClockStampedFilter(logging.Filter):
+    """Re-stamp each record from :mod:`recoverage.clock` as it is handled.
+
+    :mod:`logging` fills ``record.created`` from :func:`time.time` when the
+    record is built, and ``%(asctime)s`` renders that field, so the stamp a
+    human reads came from outside the :mod:`recoverage.clock` seam — the one
+    read under ``src/recoverage/`` that :mod:`time` made on its own.  Every
+    other wall-clock stamp the package publishes reads ``clock.wall_time()``,
+    so a run driven from one patched clock produced two different instants for
+    the same event and a replay of it could not be diffed against the run it
+    replays, line for line.
+
+    The filter is where the re-stamp belongs, not ``formatTime``: it leaves
+    ``%(asctime)s`` rendering ``record.created`` as the format string says it
+    does, so a test that sets ``created`` by hand and formats a bare
+    ``logging.Formatter`` still reads back the instant it set (the
+    ``TestLogStamp`` fixture in ``tests/test_cli.py`` is one).  Only the records
+    this handler actually writes are touched, which is every record the
+    operator sees: the ones from loggers this package does not own (bottle,
+    rebrew) arrive on the same handler and are stamped the same way.
+
+    The stamp is the instant the handler reached the record, not the instant
+    the caller built it, which is the same reading to within the emit for the
+    unqueued :class:`logging.StreamHandler` this is attached to.  Nothing in
+    the package orders, expires or rate-limits on ``created``; it is read for
+    display and nothing else.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.created = clock.wall_time()
+        return True
+
+
 class StructuredFormatter(logging.Formatter):
     """:data:`LOG_FORMAT` plus whatever named fields a record carries.
 
@@ -1026,6 +1059,10 @@ def _configure_logging(level: int) -> None:
     handler.setFormatter(
         StructuredFormatter(LOG_FORMAT, datefmt=LOG_DATEFMT, defaults={"request_id": "-"})
     )
+    # The stamp comes from `clock`, not from logging's own `time.time()`, so
+    # every wall-clock reading this process writes is one a test can drive and
+    # a replay reproduces. See ClockStampedFilter.
+    handler.addFilter(ClockStampedFilter())
     logging.basicConfig(handlers=[handler], level=level)
 
 

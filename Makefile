@@ -47,6 +47,21 @@ UV_SYNC_FLAGS ?= --locked --extra dev
 # still mean the same thing.
 UV_RUN := uv run --locked --extra dev
 
+# The hash seed every Python process in this tree starts with.  CPython
+# randomizes `hash()` of a str per process, so `set` and `frozenset` iterate in
+# a different order in every run: a value that reaches an assertion, a served
+# payload or a log line through an unsorted collection is then a coin flip, and
+# two runs of one seed cannot be diffed against each other.  Pinning it to 0
+# makes the order a function of the values alone, so a replayed run produces
+# the same bytes.  It has to be in the ENVIRONMENT of the interpreter, not in
+# conftest.py: the seed is read once, at startup, before any import this tree
+# controls.  The value is overridable so a developer chasing an
+# order-dependent failure can re-run under a different seed; the default is
+# what CI uses, so a local run and a CI run agree.
+PYTHON_HASH_SEED ?= 0
+export PYTHONHASHSEED := $(PYTHON_HASH_SEED)
+
+
 # uv floor the local toolchain is checked against; warn (do not fail) when the
 # installed one is older, matching the sibling rebrew checkout's policy.  CI
 # installs the same version: setup-uv has no version-file input, so ci.yml

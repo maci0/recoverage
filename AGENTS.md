@@ -720,7 +720,30 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   throttle and the `db-updated` stamp from one patched clock, and
   `tests/test_metrics.py` drives the per-request duration window the same
   way, so the slow-request threshold is crossed on the clock rather than on
-  a sleep. A `st_mtime_ns` becomes an instant through
+  a sleep. The LOG stamp is on the seam too, and it is the one that was not:
+  `%(asctime)s` renders `record.created`, which `logging` fills from
+  `time.time()`, so a run driven from one clock wrote two instants for the
+  same event and a replay of it could not be diffed against the run it
+  replays. `cli.ClockStampedFilter` re-stamps it from `clock.wall_time()` as
+  the handler takes the record, attached in `_configure_logging`; it is a
+  filter rather than a `formatTime` override so `%(asctime)s` keeps
+  rendering `record.created` exactly as the format string says. A new
+  surface that stamps a record, or a second handler on the stack, takes the
+  filter with it (`tests/test_cli.py`, `TestClockStampedFilter`).
+- Every process in this tree starts with `PYTHONHASHSEED` pinned. CPython
+  seeds `hash()` of a `str` from the environment once, at startup, so a `set`
+  or `frozenset` iterates in a different order in every process: a value
+  reaching an assertion, a served payload or a log line through an unsorted
+  collection is a coin flip, and two runs of one seed cannot be diffed. It
+  cannot be a fixture (the seed is read before any import this tree
+  controls), so two places declare it and must agree: the Makefile's
+  exported `PYTHON_HASH_SEED` and the test job's `env:` in ci.yml, which
+  spells its pytest command out because the Windows runner has no make
+  (`tests/test_supply_chain.py`, `TestToolchainPins`). Pinning the seed is
+  NOT a substitute for sorting: it makes set order a function of the values
+  alone, so an unsorted collection reaching output stays a defect to find
+  rather than becoming noise to re-run. A new one still gets `sorted()`.
+  A `st_mtime_ns` becomes an instant through
   `server.mtime_ns_to_utc`, never `fromtimestamp(ns / 1e9)`: a float second
   cannot hold a nanosecond, so that conversion rounds and reports a rebuild
   up to half a second (and Potato's footer a whole minute) before it
