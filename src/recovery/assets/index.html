@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>ReCoverage</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/print.css" media="print">
+    <!-- The app cannot know the target id until /api/targets answers, so the
+         coverage map is otherwise two serialized round trips after the shell
+         lands. Preloading it as a fetch starts that request during the preload
+         scan instead; the plain same-origin fetch() then reuses the preloaded
+         response rather than issuing a second one. -->
+    <link rel="preload" href="/api/targets" as="fetch">
+    <!-- The first paint. The app mounts only after this document's own inline
+         bundle has been parsed and run, and the dashboard it draws is
+         serialized behind /api/targets and /data, so an empty #root paints a
+         blank page for the whole of that. The boot line below is in the HTML
+         for that reason: it is the first thing a reader sees, and main.tsx
+         removes it before the app mounts. Its own rules are here rather than
+         in the injected stylesheet because the injected sheet is the built
+         Tailwind output, which carries no class for markup that never went
+         through the bundler.
+
+         It is the app's first paint, so it wears the app: the mark, the
+         wordmark and the terminal face from the topbar, at the sizes the
+         type scale already names, in the accent hue. It used to be a centred
+         system-ui line, the one surface in the product in a face the rest of
+         it never uses, and the swap from it to the live dashboard was a change
+         of typeface as well as of content. Every value is a token with a
+         literal fallback, because this markup paints before the injected
+         sheet has loaded (and before it exists at all under `vite dev`). -->
+    <style>
+      #boot, .boot {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        min-height: 60vh;
+        color: var(--muted, #8b949e);
+        font-family: var(--font-mono, ui-monospace, "SFMono-Regular", Menlo, monospace);
+        font-size: var(--text-label, 12px);
+        line-height: 1.5;
+      }
+      .boot p {
+        max-width: 40em;
+        margin: 0;
+        text-align: center;
+      }
+      .boot-mark {
+        display: inline-flex;
+        align-items: center;
+        padding: 2px 10px;
+        border: 2px solid var(--c, #06b6d4);
+        color: var(--c, #06b6d4);
+        font-size: var(--text-mark, 24px);
+        font-weight: 800;
+        box-shadow: var(--shadow-glow, none);
+      }
+      .boot-word {
+        color: var(--text, #e7edf4);
+        font-size: var(--text-wordmark, 20px);
+        font-weight: 700;
+      }
+    </style>
+    <!-- INJECT_CSS -->
+  </head>
+  <body>
+    <div id="root">
+      <div id="boot">
+        <span class="boot-mark" aria-hidden="true">R</span>
+        <p class="boot-word">ReCoverage</p>
+        <p role="status">Loading coverage…</p>
+      </div>
+    </div>
+    <!-- The dashboard IS the inlined bundle below, so a reader whose browser
+         has scripting off never gets past the boot line above. Potato Mode
+         renders the same coverage as server-side HTML, so the way in is named
+         here rather than left for them to find. Browsers do not render
+         <noscript> content when scripting is on, so this costs the reader who
+         can use the dashboard nothing. -->
+    <noscript>
+      <div class="boot">
+        <p>The interactive coverage map needs JavaScript, which this browser has turned off.</p>
+        <p><a href="/potato">Open Potato Mode</a> for the same coverage as plain server-rendered HTML.</p>
+      </div>
+    </noscript>
+    <!-- INJECT_JS -->
+  </body>
+</html>

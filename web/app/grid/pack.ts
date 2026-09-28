@@ -173,11 +173,16 @@ export function packSection(section: Section): Packed {
     starts[i] = cell.start ?? 0;
     ends[i] = cell.end ?? 0;
     // `spans` is a Uint16Array and `span` comes off the document as a plain int
-    // (rebrew.coverage_toml._cell reads it with no ceiling), so storing a span
-    // past 65535 wrapped it to `span % 65536` and the cell was laid out over
-    // the wrong number of dots, silently. Saturate instead: a span past the
-    // lattice width is clamped by the walk below anyway.
-    spans[i] = Math.min(cell.span === 0 ? 1 : (cell.span ?? 1), MAX_SPAN);
+    // (rebrew.coverage_toml._cell reads it with no ceiling, and a document may
+    // spell it negative or fractional), so storing a span past 65535 wrapped it
+    // to `span % 65536` and the cell was laid out over the wrong number of
+    // dots, silently. Saturate instead: a span past the lattice width is
+    // clamped by the walk below anyway. The lower bound is the same wrap from
+    // the other side, and the ceiling alone does not catch it: a -1 stores as
+    // 65535, so the one cell claimed the whole map. Both ends are the SAME
+    // store, so a document value the walk must never see is clamped here,
+    // beside the range, rather than after it in `forEachPlacement`.
+    spans[i] = Math.min(Math.max(Math.floor(cell.span ?? 1), 1), MAX_SPAN);
     states[i] = stateSlot(cell.state);
     ground[i] = cell.state === "none" ? 1 : 0;
     fns[i] = cell.functions?.[0] ?? "";

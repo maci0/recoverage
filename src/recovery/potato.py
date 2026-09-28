@@ -75,7 +75,7 @@ from recoverage.server import (
 
 _log = logging.getLogger("recoverage")
 
-# ── UI Constants ────────────────────────────────────────────────────────────────────────
+# --- UI Constants ---
 # Every state rebrew's build_db can write to cells.state needs a key here, or
 # the grid falls back to COLORS["none"] and paints the cell as an undocumented
 # gap.  That fallback is a data-fidelity bug, not a cosmetic one: build_db
@@ -338,14 +338,20 @@ def _make_pill_mid_tile(height: int, fill_hex: str, border_hex: str) -> str:
     return _svg_uri(svg)
 
 
-# Pill cap images.  A section tab and a filter pill are the same widget, so
-# the pills take the cyan the tabs do: the blue they wore was the one hue in
-# this page that named nothing.  The SPA paints both from one `--c`-derived
-# pair.
+# Pre-compute section tab pill cap images
 ACTIVE_L, ACTIVE_R = _make_pill_caps(32, "#1a3a4a", border_hex="#06b6d4")
 INACTIVE_L, INACTIVE_R = _make_pill_caps(32, "#182230", border_hex="#2a3a4a")
 ACTIVE_MID = _make_pill_mid_tile(32, "#1a3a4a", "#06b6d4")
 INACTIVE_MID = _make_pill_mid_tile(32, "#182230", "#2a3a4a")
+
+# Pre-compute filter pill cap images.  An active filter is a selected section
+# as much as an active tab is, and the SPA paints both from one `--c`-derived
+# pair, so the pills take the same cyan the section tabs above them do: the
+# blue they wore was the one hue in this page that named nothing.
+FILTER_ACT_L, FILTER_ACT_R = _make_pill_caps(32, "#1a3a4a", border_hex="#06b6d4")
+FILTER_INACT_L, FILTER_INACT_R = _make_pill_caps(32, "#182230", border_hex="#2a3a4a")
+FILTER_ACT_MID = _make_pill_mid_tile(32, "#1a3a4a", "#06b6d4")
+FILTER_INACT_MID = _make_pill_mid_tile(32, "#182230", "#2a3a4a")
 
 R_LOGO_SVG = (
     "data:image/svg+xml;base64,"
@@ -385,7 +391,7 @@ LEGEND_ITEMS = [
 ]
 
 
-# ── HTML Helpers ────────────────────────────────────────────────────────────────────────
+# --- HTML Helpers ---
 
 
 def _hex_logo_svg(label: str, color: str) -> str:
@@ -458,17 +464,13 @@ def _detail_rows(
         rows.append(
             f'<tr><th bgcolor="{PANEL_COLOR}" width="28%">'
             f'<font size="1" color="{MUTED_COLOR}"><b>{_esc(k)}</b></font></th>'
-            # dir="auto" reads the value's own first strong character, so a
-            # symbol, module name or Ghidra label written right to left fills
-            # the cell the way its author wrote it, and the ASCII values (a VA,
-            # a size) keep the left-to-right cell they had.
-            f'<td bgcolor="{PANEL_COLOR}" dir="auto">'
+            f'<td bgcolor="{PANEL_COLOR}">'
             f'<font face="Courier New, monospace" size="1">{val}</font></td></tr>'
         )
     return "".join(rows)
 
 
-# ── Pygments Highlighting ───────────────────────────────────────────────────────────────
+# --- Pygments Highlighting ---
 
 
 def _highlight_tokens(tokens: Iterable[tuple[Any, str]], color_map: dict[Any, str]) -> str:
@@ -662,7 +664,7 @@ def _highlight_hex(text: str) -> str:
     return "\n".join(result_lines)
 
 
-# ── Data Helpers ────────────────────────────────────────────────────────────────────────
+# --- Data Helpers ---
 
 
 def _wrap_text(text: str, width: int) -> str:
@@ -896,9 +898,9 @@ _PAGE_SRC = r"""<!DOCTYPE html>
              only the text made the clickable area the ~20px glyph while the
              32px pill around it looked like the button and did nothing. -->
         % if s_active:
-          <a href="{{s_url}}" {{!s_acc}} aria-current="page"><table role="presentation" border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{ACTIVE_L}}" width="16" height="32" border="0" alt=""></td><td background="{{ACTIVE_MID}}" height="32" nowrap dir="auto"><font face="{{MONO_FONT}}" size="3" color="#ffffff"><b>{{s_name}}</b></font></td><td><img src="{{ACTIVE_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
+          <a href="{{s_url}}" {{!s_acc}} aria-current="page"><table role="presentation" border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{ACTIVE_L}}" width="16" height="32" border="0" alt=""></td><td background="{{ACTIVE_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="#ffffff"><b>{{s_name}}</b></font></td><td><img src="{{ACTIVE_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
         % else:
-          <a href="{{s_url}}" {{!s_acc}}><table role="presentation" border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{INACTIVE_L}}" width="16" height="32" border="0" alt=""></td><td background="{{INACTIVE_MID}}" height="32" nowrap dir="auto"><font face="{{MONO_FONT}}" size="3" color="{{MUTED_COLOR}}">{{s_name}}</font></td><td><img src="{{INACTIVE_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
+          <a href="{{s_url}}" {{!s_acc}}><table role="presentation" border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{INACTIVE_L}}" width="16" height="32" border="0" alt=""></td><td background="{{INACTIVE_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="{{MUTED_COLOR}}">{{s_name}}</font></td><td><img src="{{INACTIVE_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
         % end
         </td>
       % end
@@ -978,9 +980,9 @@ _PAGE_SRC = r"""<!DOCTYPE html>
                    These are the worst case — a single-letter label gave E/R/M/S/P
                    a 10px-wide hit target inside a 32px-wide pill. -->
               % if fb_active:
-                <a href="{{fb_href}}" title="{{fb_title}}" {{!fb_acc}} aria-label="{{fb_title}}, on" aria-current="true"><table role="presentation" border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{ACTIVE_L}}" width="16" height="32" border="0" alt=""></td><td background="{{ACTIVE_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="{{fb_color}}"><b>{{fb_label}}</b></font></td><td><img src="{{ACTIVE_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
+                <a href="{{fb_href}}" title="{{fb_title}}" {{!fb_acc}} aria-label="{{fb_title}}, on" aria-current="true"><table role="presentation" border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{FILTER_ACT_L}}" width="16" height="32" border="0" alt=""></td><td background="{{FILTER_ACT_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="{{fb_color}}"><b>{{fb_label}}</b></font></td><td><img src="{{FILTER_ACT_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
               % else:
-                <a href="{{fb_href}}" title="{{fb_title}}" {{!fb_acc}} aria-label="{{fb_title}}, off"><table role="presentation" border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{INACTIVE_L}}" width="16" height="32" border="0" alt=""></td><td background="{{INACTIVE_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="{{fb_color}}">{{fb_label}}</font></td><td><img src="{{INACTIVE_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
+                <a href="{{fb_href}}" title="{{fb_title}}" {{!fb_acc}} aria-label="{{fb_title}}, off"><table role="presentation" border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{FILTER_INACT_L}}" width="16" height="32" border="0" alt=""></td><td background="{{FILTER_INACT_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="{{fb_color}}">{{fb_label}}</font></td><td><img src="{{FILTER_INACT_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
               % end
               </td>
             % end
@@ -1061,7 +1063,7 @@ _PAGE_SRC = r"""<!DOCTYPE html>
 <table role="presentation" id="footer" width="100%" border="0" cellpadding="8" cellspacing="0"><tr>
 <td><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">recoverage v{{version}}
 % if db_mtime:
- &middot; DB updated <time datetime="{{db_mtime_iso}}">{{db_mtime}}</time>
+ &middot; DB updated {{db_mtime}}
 % end
 </font></td>
 <td align="center"><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">{{!shortcuts_html}}</font></td>
@@ -1114,10 +1116,10 @@ _PANEL_SRC = r"""
 </td></tr></table>
 <table role="presentation" width="100%" border="0" cellpadding="3" cellspacing="1" bgcolor="{{BORDER_COLOR}}"><tr><td bgcolor="{{PANEL_COLOR}}"><font size="1" color="{{MUTED_COLOR}}"><b>Range:</b></font></td><td bgcolor="{{PANEL_COLOR}}"><font face="Courier New, monospace" size="1">{{cell_range}}</font></td></tr><tr><td bgcolor="{{PANEL_COLOR}}"><font size="1" color="{{MUTED_COLOR}}"><b>State:</b></font></td><td bgcolor="{{PANEL_COLOR}}"><font face="Courier New, monospace" size="1" color="{{state_color}}"><b>{{state_upper}}</b></font></td></tr>
 % if cell_label:
-<tr><td bgcolor="{{PANEL_COLOR}}"><font size="1" color="{{MUTED_COLOR}}"><b>Label:</b></font></td><td bgcolor="{{PANEL_COLOR}}" dir="auto"><font face="Courier New, monospace" size="1">{{cell_label}}</font></td></tr>
+<tr><td bgcolor="{{PANEL_COLOR}}"><font size="1" color="{{MUTED_COLOR}}"><b>Label:</b></font></td><td bgcolor="{{PANEL_COLOR}}"><font face="Courier New, monospace" size="1">{{cell_label}}</font></td></tr>
 % end
 % if parent_function:
-<tr><td bgcolor="{{PANEL_COLOR}}"><font size="1" color="{{MUTED_COLOR}}"><b>Parent:</b></font></td><td bgcolor="{{PANEL_COLOR}}" dir="auto"><font face="Courier New, monospace" size="1"><a href="{{parent_url}}"><font color="{{ACCENT_COLOR}}">{{parent_function}}</font></a></font></td></tr>
+<tr><td bgcolor="{{PANEL_COLOR}}"><font size="1" color="{{MUTED_COLOR}}"><b>Parent:</b></font></td><td bgcolor="{{PANEL_COLOR}}"><font face="Courier New, monospace" size="1"><a href="{{parent_url}}"><font color="{{ACCENT_COLOR}}">{{parent_function}}</font></a></font></td></tr>
 % end
 </table>
   % if not funcs:
@@ -1197,16 +1199,11 @@ def _db_unavailable_page() -> HTTPResponse:
             f'<body bgcolor="{BG_COLOR}" text="{TEXT_COLOR}">'
             f'<font face="{MONO_FONT}">'
             '<table role="presentation" width="100%" height="90%" border="0"><tr><td align="center" valign="middle">'
-            # The main landmark, as the page this one stands in for has: a
-            # screen reader walking either document finds the content in the
-            # same place (WCAG 1.3.1 / 2.4.1).
-            "<main>"
             "<h1>Database unavailable</h1>"
             f'<p><font color="{MUTED_COLOR}">Run '
             "'rebrew build-db' to create or rebuild it,"
             ' then <a href="/potato">retry Potato Mode</a> or '
             '<a href="/">open the SPA</a>.</font></p>'
-            "</main>"
             "</td></tr></table></font></body></html>"
         ),
         headers={"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store"},
@@ -1400,33 +1397,11 @@ def _db_updated_label() -> str:
     rounding (see server.mtime_ns_to_utc), together mean the stamp never runs
     ahead of the served data: a rebuild landing in the last microsecond of a
     minute reads as the minute it started in, not the one it has not reached.
-
-    The visible text is a fixed pattern on purpose: this page carries its own
-    English copy in the markup and is served to a reader whose locale the
-    server never learns (``Accept-Language`` names a preference, not a format,
-    and Python has no locale-aware formatter in the stdlib). :func:`
-    _db_updated_iso` carries the same instant in a form a reader's own tooling
-    can re-render, which the footer's ``<time datetime>`` publishes.
     """
     mtime_ns = _newest_mtime_ns()
     if mtime_ns is None:
         return ""
     return mtime_ns_to_utc(mtime_ns).strftime("%Y-%m-%d %H:%M UTC")
-
-
-def _db_updated_iso() -> str:
-    """The same instant as :func:`_db_updated_label`, in ISO 8601 ("" with no DB).
-
-    Truncated to the minute for the same reason and through the same read of
-    the same documents, so the two cannot disagree: the footer's ``<time>``
-    element carries this as its machine-readable value beside the label a
-    reader sees, and a consumer that re-renders the instant in a locale gets
-    the one the truncation names rather than one recovered from the text.
-    """
-    mtime_ns = _newest_mtime_ns()
-    if mtime_ns is None:
-        return ""
-    return mtime_ns_to_utc(mtime_ns).replace(second=0, microsecond=0).isoformat()
 
 
 # Potato mode re-derived the grid input on EVERY page render: a per-cell JSON
@@ -1686,30 +1661,20 @@ def _function_rows(coverage: CoverageSnapshot) -> tuple[Function, ...]:
     return rows
 
 
-def _va_matches(va: int, needle: str, match_hex: bool) -> bool:
-    """Whether *needle* matches *va* in either hex spelling this page prints.
-
-    ``0x%08x`` and ``0x%x`` are both matched because both spellings reach the
-    reader: the padded form is what the cell panel and the functions table
-    print, and the bare form is what a target's ``vaStart`` spells below
-    0x10000000, so a reader who pasted back the address the page had just
-    shown matched nothing when only one arm ran.  *match_hex* is the caller's
-    :func:`server.fold_can_match_hex` answer, hoisted out of the row loop: a
-    term no hex address can hold skips both formats, and neither string is
-    built for it.
-    """
-    return match_hex and (
-        fold_match_folded(f"0x{va:08x}", needle) or fold_match_folded(f"0x{va:x}", needle)
-    )
-
-
 def _search_functions(coverage: CoverageSnapshot, search_query: str) -> set[str]:
     """Names the grid should highlight for *search_query*.
 
     Both sides fold through :func:`server.fold_match`, so a non-ASCII term
     matches and the grid highlights exactly what the API's ``?search=``
-    returns.  Addresses go through :func:`_va_matches`, and ``vaStart`` is
-    matched as well because it is the spelling a ``.text`` cell stores.
+    returns.
+    A global's address is matched in both spellings ``0x%08x`` and ``0x%x``
+    can produce, so an address copied out of a Potato global row matches when
+    pasted into the search box.  A function's address is matched the same way
+    in both spellings, for the same reason: the cell panel prints the padded
+    form, which is not what ``vaStart`` spells below 0x10000000, so matching
+    ``vaStart`` alone highlighted nothing for a reader who pasted the address
+    the page had just shown.  ``vaStart`` is still matched, because it is the
+    spelling a ``.text`` cell stores.
 
     The row cap applies to the rows selected, not to the returned set: a
     project with more matches than the cap still dims every name it found.
@@ -1719,6 +1684,9 @@ def _search_functions(coverage: CoverageSnapshot, search_query: str) -> set[str]
         return search_matched_fns
 
     needle = fold_needle(search_query)
+    # A term no hex address can hold cannot match either address spelling, so
+    # the two formats and folds per global are built only when it can
+    # (server.fold_can_match_hex).
     match_hex = fold_can_match_hex(needle)
     # The cap takes the FIRST rows of the sorted match set, so only that many
     # have to be ordered: nsmallest is the documented equivalent of
@@ -1733,7 +1701,18 @@ def _search_functions(coverage: CoverageSnapshot, search_query: str) -> set[str]
             if fold_match_folded(fn.name, needle)
             or fold_match_folded(fn.vaStart, needle)
             or fold_match_folded(fn.symbol, needle)
-            or _va_matches(fn.va, needle, match_hex)
+            # The address the reader copied out of this page, in both spellings
+            # ``0x%08x`` and ``0x%x`` can produce — the two the globals arm
+            # below and the functions view (``_render_function_list``) already
+            # match.  ``vaStart`` alone is the string a ``.text`` cell stores,
+            # which is not the string the cell panel PRINTS for an address below
+            # 0x10000000: a target whose functions sit at 0x401000 spells that
+            # ``vaStart`` as 0x401000 and the panel as 0x00401000, so pasting the
+            # address the page showed highlighted nothing while the functions
+            # view found the row.  Gated on match_hex for the same reason as the
+            # globals arm: a term no hex address can hold skips both formats.
+            or (match_hex and fold_match_folded(f"0x{fn.va:08x}", needle))
+            or (match_hex and fold_match_folded(f"0x{fn.va:x}", needle))
         ),
         key=lambda fn: (fn.name, fn.vaStart),
     ):
@@ -1749,7 +1728,9 @@ def _search_functions(coverage: CoverageSnapshot, search_query: str) -> set[str]
         (
             gl
             for gl in coverage.globals
-            if fold_match_folded(gl.name, needle) or _va_matches(gl.va, needle, match_hex)
+            if fold_match_folded(gl.name, needle)
+            or (match_hex and fold_match_folded(f"0x{gl.va:08x}", needle))
+            or (match_hex and fold_match_folded(f"0x{gl.va:x}", needle))
         ),
         key=lambda gl: gl.name,
     )
@@ -2331,20 +2312,11 @@ def _render_function_list(
     coverage: CoverageSnapshot,
     target: str,
     section: str,
-    active_filters: set[str] | None,
     search_query: str,
     sort_key: str,
     status_filter: str,
 ) -> str:
     order_by = sort_key if sort_key in FUNCTION_LIST_COLUMNS else "va"
-
-    # `active_filters` rides along through every link below for the reason
-    # `status_filter` does: the filter pills are drawn on this view too (they
-    # keep `view=functions`, see `_build_filter_data`), so a reader who narrows
-    # the map and opens the list has pills that read as set, and every link
-    # that leaves the list used to land on a map with all of them cleared.
-    # The spelling is the one `_build_url` emits for the same value.
-    filter_arg = f"&filter={_url_quote(','.join(sorted(active_filters)))}" if active_filters else ""
 
     # Base filter: GLOBAL/DATA marker rows live in the functions array but are
     # data markers, not functions — same exclusion as the API list endpoint and
@@ -2354,9 +2326,11 @@ def _render_function_list(
     if status_filter:
         rows = [fn for fn in rows if fn.status == status_filter]
     if search_query:
-        # The VA arms are this view's own addition, where _search_functions
-        # matches `vaStart` instead because that is the string a .text cell
-        # stores.
+        # The VA column below is printed by _format_va, which pads to eight
+        # digits, so both spellings are matched: an address copied out of this
+        # very table matches when pasted into the search box.  The VA arms are
+        # this view's own addition, where _search_functions matches
+        # `vaStart` instead because that is the string a .text cell stores.
         needle = fold_needle(search_query)
         match_hex = fold_can_match_hex(needle)
         rows = [
@@ -2364,7 +2338,8 @@ def _render_function_list(
             for fn in rows
             if fold_match_folded(fn.name, needle)
             or fold_match_folded(fn.symbol, needle)
-            or _va_matches(fn.va, needle, match_hex)
+            or (match_hex and fold_match_folded(f"0x{fn.va:08x}", needle))
+            or (match_hex and fold_match_folded(f"0x{fn.va:x}", needle))
         ]
     # The rendered list is capped (same bound as the search above) so a large
     # project's ?view=functions page doesn't build a multi-MB HTML document on
@@ -2396,7 +2371,7 @@ def _render_function_list(
         status_note = (
             f'<font size="1" color="{MUTED_COLOR}">Status: </font>'
             f'<font size="1" color="{ACCENT_COLOR}"><b>{_esc(status_filter)}</b></font> '
-            f'<a href="{_build_url(target, section, active_filters, search=search_query, view="functions")}">'
+            f'<a href="{_build_url(target, section, search=search_query, view="functions")}">'
             f'<font size="1" color="{ACCENT_COLOR}">[Clear]</font></a> '
         )
     cap_note = ""
@@ -2406,9 +2381,7 @@ def _render_function_list(
             f"{_SEARCH_ROW_LIMIT} rows. Narrow the search above to reach the rest.</font>"
         )
 
-    prefix = (
-        f"?target={_url_quote(target)}&section={_url_quote(section)}{filter_arg}&view=functions"
-    )
+    prefix = f"?target={_url_quote(target)}&section={_url_quote(section)}&view=functions"
     base = prefix
     if search_query:
         base += f"&search={_url_quote(search_query)}"
@@ -2422,7 +2395,7 @@ def _render_function_list(
             f'<font color="{MUTED_COLOR}" size="2"><b>Functions</b></font> '
             f'<font size="1" color="{MUTED_COLOR}">({count_label})</font> '
             + status_note
-            + f'<a href="{_build_url(target, section, active_filters, search=search_query, status=status_filter)}"><font size="1" color="{ACCENT_COLOR}">[Grid View]</font></a>'
+            + f'<a href="{_build_url(target, section, search=search_query, status=status_filter)}"><font size="1" color="{ACCENT_COLOR}">[Grid View]</font></a>'
             + cap_note
             + "</td></tr>"
         ),
@@ -2475,7 +2448,7 @@ def _render_function_list(
         # here opened the panel in the wrong section for every other list.
         # The status criterion rides along beside them, so opening a function's
         # panel and stepping back to the list finds the same list.
-        link_prefix = f"?target={_url_quote(target)}&section={_url_quote(section)}{filter_arg}"
+        link_prefix = f"?target={_url_quote(target)}&section={_url_quote(section)}"
         if status_filter:
             link_prefix += f"&status={_url_quote(status_filter)}"
         link_prefix += "&search="
@@ -2486,7 +2459,7 @@ def _render_function_list(
             name_link = link_prefix + _url_quote(name)
             parts.append(
                 "<tr>"
-                f'<td dir="auto"><a href="{name_link}"><font color="{ACCENT_COLOR}">{_esc(name)}</font></a></td>'
+                f'<td><a href="{name_link}"><font color="{ACCENT_COLOR}">{_esc(name)}</font></a></td>'
                 f'<td><font face="Courier New, monospace" size="2">{_esc(_format_va(va))}</font></td>'
                 f'<td><font face="Courier New, monospace" size="2">{_esc(size or "")}</font></td>'
                 f'<td><font color="{color}" face="Courier New, monospace" size="2"><b>{_esc(st.upper())}</b></font></td>'
@@ -2634,12 +2607,9 @@ def _render_potato_inner(
             f'<body bgcolor="{BG_COLOR}" text="{TEXT_COLOR}">'
             f'<font face="{MONO_FONT}">'
             '<table role="presentation" width="100%" height="90%" border="0"><tr><td align="center" valign="middle">'
-            # As above: the main landmark the page this stands in for carries.
-            "<main>"
             f"<h1>No data for target {_esc(target)}</h1>"
             f'<p><font color="{MUTED_COLOR}">Pick a built target from '
             '<a href="/potato">Potato Mode</a> or <a href="/">the SPA</a>.</font></p>'
-            "</main>"
             "</td></tr></table></font></body></html>"
         )
 
@@ -2679,7 +2649,6 @@ def _render_potato_inner(
             coverage,
             target,
             section,
-            active_filters or None,
             search_query=search_query,
             sort_key=sort_key,
             status_filter=status_filter,
@@ -2724,14 +2693,7 @@ def _render_potato_inner(
     # `{{section}}` in the template: those get HTML-escaped only, so a target
     # or section holding "&" would append attacker-chosen query parameters to
     # this one href.  Every other href in the page goes through _build_url.
-    functions_nav_url = f"?target={_url_quote(target)}&section={_url_quote(section)}"
-    if active_filters:
-        # The pills a reader set on the grid travel into the list with them, the
-        # same way the criterion below does: the list draws those pills, so a
-        # [Functions] link that dropped them landed on a page whose controls read
-        # as unset over a grid that had been narrowed.
-        functions_nav_url += "&filter=" + _url_quote(",".join(sorted(active_filters)))
-    functions_nav_url += "&view=functions"
+    functions_nav_url = f"?target={_url_quote(target)}&section={_url_quote(section)}&view=functions"
     if status_filter:
         # The criterion the list is narrowed by travels with the link into it,
         # so leaving for the grid and coming back does not quietly widen it.
@@ -2740,7 +2702,6 @@ def _render_potato_inner(
     progress_bar_png_uri = _progress_svg(tuple(progress["segments"])) if progress else ""
 
     db_mtime_str = _db_updated_label()
-    db_mtime_iso = _db_updated_iso()
 
     rendered = _PAGE_TPL.render(
         # Constants
@@ -2782,13 +2743,18 @@ def _render_potato_inner(
         INACTIVE_L=INACTIVE_L,
         INACTIVE_R=INACTIVE_R,
         INACTIVE_MID=INACTIVE_MID,
+        FILTER_ACT_L=FILTER_ACT_L,
+        FILTER_ACT_R=FILTER_ACT_R,
+        FILTER_ACT_MID=FILTER_ACT_MID,
+        FILTER_INACT_L=FILTER_INACT_L,
+        FILTER_INACT_R=FILTER_INACT_R,
+        FILTER_INACT_MID=FILTER_INACT_MID,
         sec_stats=sec_stats,
         block_count=block_count,
         grid_html=grid_html,
         functions_html=functions_html,
         panel_html=panel_html,
         db_mtime=db_mtime_str,
-        db_mtime_iso=db_mtime_iso,
         version=__version__,
     )
 

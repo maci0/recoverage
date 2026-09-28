@@ -1775,6 +1775,57 @@ class TestMergeCellsInvariant:
 
         assert _merge_cells([], 64) == []
 
+    def test_a_non_positive_span_is_floored_at_one_column(self) -> None:
+        """A document may spell `span` zero or negative, and both are arithmetic
+        here: `curr_col += span` walks the column cursor backwards, and the
+        renderer emits the value as a `colspan` and a pixel width. The reader
+        passes an int through with no floor (rebrew.coverage_toml._cell), so
+        this is a value a hand-edited document really can carry. `packSection`
+        applies the same floor on the SPA side, and both surfaces draw one
+        document at one lattice."""
+        from recoverage.potato import _cell_span, _merge_cells
+
+        assert _cell_span({"span": -3}) == 1
+        assert _cell_span({"span": 0}) == 1
+        assert _cell_span({"span": 7}) == 7
+        assert _cell_span({}) == 1
+
+        cells = [
+            {"state": "exact", "span": 4, "functions": ["a"]},
+            {"state": "exact", "span": -2, "functions": ["a"]},
+            {"state": "exact", "span": 1, "functions": ["a"]},
+        ]
+        merged = _merge_cells([dict(cell) for cell in cells], 64)
+        spans = [_cell_span(cell) for cell in merged]
+        assert sum(spans) == 6, spans
+        assert all(span >= 1 for span in spans), spans
+
+    def test_a_negative_span_never_reaches_the_rendered_colspan(self) -> None:
+        """The no-merge fast path hands the parsed cells back by reference, so
+        the renderer reads the document's own `span` for every row the walk did
+        not touch. A negative one rendered `colspan="-2"` and a negative image
+        width, and walked the cursor back so the rest of the row was laid out
+        from the wrong column."""
+        from recoverage.potato import _build_grid_html
+
+        cells = [
+            {"state": "exact", "span": -2, "start": 0, "end": 0, "functions": ["a"]},
+            {"state": "exact", "span": 1, "start": 2, "end": 3, "functions": ["b"]},
+        ]
+        html = _build_grid_html(
+            merged_cells=cells,
+            sec_data={"va": 0x1000, "fileOffset": 0},
+            grid_columns=4,
+            active_filters=set(),
+            search_query="",
+            search_matched_fns=set(),
+            idx_str="",
+            target="t",
+            section=".text",
+        )
+        assert 'colspan="-2"' not in html
+        assert 'colspan="1"' in html
+
     def test_matches_the_closure_reference(self) -> None:
         """The inlined emit must agree with the original ``flush()`` closure.
 

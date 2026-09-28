@@ -2353,6 +2353,27 @@ class TestGetDisassemblyNoNegativeCache:
         assert bumped.is_set()
         assert before + 1 == disasm._DISASSEMBLY_GENERATION
 
+    def test_a_negative_file_offset_does_not_slice_from_the_end(self, monkeypatch: Any) -> None:
+        """A negative index counts back from the END of the buffer.
+
+        `data[-10:-5]` is five bytes near the tail of the binary, and the
+        length check below it passes, so a document carrying a negative
+        `fileOffset` answered the Potato panel with the disassembly of
+        unrelated bytes at the requested VA. api.py's /asm and /bytes both
+        refuse a negative file offset for this reason; the panel hands this
+        function the document's own value, so the refusal belongs where both
+        paths arrive.
+        """
+        import recoverage.disasm as disasm
+
+        binary = b"MZ" + bytes(range(64))
+        monkeypatch.setattr(disasm, "_load_dll", lambda target: binary)
+        try:
+            assert disasm._disassemble_loaded(0x1000, 5, -10, "__neg_offset__") == ""
+            assert disasm._disassemble_loaded(0x1000, -5, 0, "__neg_size__") == ""
+        finally:
+            disasm._disassemble_loaded.cache_clear()
+
 
 class TestBucketReconciliation:
     """total_cells must equal the sum of the counted buckets.
