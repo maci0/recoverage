@@ -30,7 +30,7 @@ if TYPE_CHECKING:
     # _typeshed ships with mypy, not with CPython: the annotations below are
     # strings (from __future__ import annotations) and the casts are string
     # literals, so nothing here is evaluated at runtime.
-    from _typeshed.wsgi import InputStream, WSGIApplication
+    from _typeshed.wsgi import InputStream
 
 
 _log = logging.getLogger("recoverage")
@@ -215,21 +215,6 @@ class _ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
         finally:
             metrics.CONNECTIONS.release()
 
-    def app(self) -> WSGIApplication:
-        """The WSGI app, or a loud failure if none was installed.
-
-        ``wsgiref.simple_server.make_server`` calls ``set_app`` before the
-        listener binds, so a request cannot arrive without one; the typeshed
-        stub types ``get_app`` as possibly-None, and every request path here
-        needs the application rather than a check.  Naming the failure beats
-        passing ``None`` into ``BaseHandler.run``, which would raise from
-        inside wsgiref with no reference to this server.
-        """
-        application = self.get_app()
-        if application is None:
-            raise RuntimeError("no WSGI application installed on the server")
-        return application
-
 
 # Hard deadline for every socket operation on a client connection (the request
 # read and each response write).  Without it a half-open TCP peer (crashed
@@ -286,16 +271,6 @@ class _QuietTimeoutRequestHandler(WSGIRequestHandler):
 
     def log_request(self, code: int | str = "-", size: int | str = "-") -> None:
         pass
-
-    def log_message(self, format: str, *args: Any) -> None:
-        """Swallow ``log_request``'s share of the stdlib path, keep errors.
-
-        ``http.server`` funnels both access logging and error reporting
-        through this one method, so it is the single seam: the per-request
-        line the app already emits with a request id replaces the access half,
-        and :meth:`log_error` takes the error half.
-        """
-        return
 
     def log_error(self, format: str, *args: Any) -> None:
         """Report a request the transport rejected, through the app's logger.

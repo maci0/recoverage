@@ -506,9 +506,6 @@ class TestClientConnectionDeadline:
         # test would otherwise have to wait 120 s for.  A private stub
         # handler would pass here even with the deadline removed from serve.
         monkeypatch.setattr(devserver._QuietTimeoutRequestHandler, "timeout", 0.5)
-        monkeypatch.setattr(
-            devserver._QuietTimeoutRequestHandler, "log_message", lambda *a, **k: None
-        )
 
         server = devserver._ThreadingWSGIServer(
             ("127.0.0.1", 0), devserver._QuietTimeoutRequestHandler
@@ -553,9 +550,6 @@ class TestClientConnectionDeadline:
         import threading
 
         monkeypatch.setattr(devserver._QuietTimeoutRequestHandler, "timeout", 5)
-        monkeypatch.setattr(
-            devserver._QuietTimeoutRequestHandler, "log_message", lambda *a, **k: None
-        )
         monkeypatch.setattr(devserver, "_MAX_CONNECTIONS", 2)
 
         server = devserver._ThreadingWSGIServer(
