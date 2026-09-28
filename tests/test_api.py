@@ -1666,6 +1666,62 @@ class TestRegenIdempotencyKey:
         assert len(reads) >= 2, "the ledger was read once, so no claim was made under the lock"
         assert len(runs) == 1
 
+    def test_a_duplicate_racing_its_own_predecessor_is_answered_in_progress(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Two requests with ONE key arriving together: the loser is a retry.
+
+        The in-flight read happens before the lock is taken, so a duplicate sent
+        in the same instant as the request it retries sees no marker and comes
+        up against the held _REGEN_LOCK.  Answering 429 there is the failure the
+        202 exists to prevent: the SPA reads it as a failed regenerate, mints a
+        NEW key and pays for a second full pipeline.  The marker is read again
+        on the far side of the failed acquire, so the duplicate is absorbed.
+        """
+        import recoverage.api as api
+
+        runs, started, release = self._blocking_regen(monkeypatch)
+
+        # The duplicate's read of the in-flight map lands before the
+        # predecessor has recorded its key, which is the race being pinned.
+        # Only the reads that happen once the first run is under way are
+        # affected: the first read after that point is the duplicate's, the
+        # one before the lock is taken, and the second is the re-read on the
+        # far side of the failed acquire.
+        real_in_progress = api._regen_in_progress
+        reads: list[str] = []
+
+        def in_progress(key: str) -> bool:
+            if not started.is_set():
+                return real_in_progress(key)
+            reads.append(key)
+            return False if len(reads) == 1 else real_in_progress(key)
+
+        monkeypatch.setattr(api, "_regen_in_progress", in_progress)
+        monkeypatch.setattr(
+            api,
+            "_regen_last_attempt",
+            api.clock.monotonic() - api._REGEN_COOLDOWN_SECONDS - 1,
+        )
+
+        first: list[Any] = []
+        worker = threading.Thread(target=lambda: first.append(self._post("click-1")))
+        worker.start()
+        assert started.wait(timeout=10), "first regen never reached run_regen"
+
+        status, headers, body = self._post("click-1")
+        assert status.startswith("202")
+        assert json.loads(decode_body(body, headers)) == {"ok": True, "in_progress": True}
+        assert headers.get("Idempotent-Replay") == "in-progress"
+        assert len(reads) >= 2, "the marker was read once, so nothing was re-read on the lock"
+        assert len(runs) == 1
+
+        release.set()
+        worker.join(timeout=10)
+        assert not worker.is_alive()
+        assert first[0][0].startswith("200")
+        assert len(runs) == 1
+
     def test_another_key_mid_run_is_still_refused(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The 202 names the run in flight, so a DIFFERENT key keeps the 429.
 

@@ -247,6 +247,23 @@ def _regen_replay_response(key: str) -> bytes:
     return _json_ok({"ok": True}, Idempotent_Replay="true")
 
 
+def _regen_in_progress_response(key: str) -> HTTPResponse:
+    """The answer a retry of the run already in flight for *key* gets.
+
+    One function because the check runs twice: once before the lock is taken,
+    and once on the far side of a failed acquire, where the duplicate that
+    raced its own predecessor arrives.  A key in the in-flight map means a run
+    for that key holds the lock, so the 202 cannot be a lie about work that is
+    not under way.
+    """
+    _log.info("Regen %s is still running — answering the retry as in progress", key)
+    return _server._json_accepted(
+        {"ok": True, "in_progress": True},
+        Idempotent_Replay="in-progress",
+        Retry_After=str(int(_REGEN_COOLDOWN_SECONDS)),
+    )
+
+
 def _record_completed_key(key: str) -> None:
     """Remember that *key*'s regen completed, so its retry is answered, not re-run."""
     now = clock.monotonic()
@@ -2584,12 +2601,7 @@ def handle_regen() -> bytes | HTTPResponse:
         # work is not done, which is what a client needs to tell apart from a
         # regeneration that failed and from a 429 that means "somebody else's
         # run" — the latter is the only one that leaves a key free to re-run.
-        _log.info("Regen %s is still running — answering the retry as in progress", key)
-        return _server._json_accepted(
-            {"ok": True, "in_progress": True},
-            Idempotent_Replay="in-progress",
-            Retry_After=str(int(_REGEN_COOLDOWN_SECONDS)),
-        )
+        return _regen_in_progress_response(key)
 
     # Server-side cooldown + serialization: the cooldown check and the regen
     # run must be atomic — two concurrent POSTs could otherwise both pass the
@@ -2598,6 +2610,15 @@ def handle_regen() -> bytes | HTTPResponse:
     # runs gets an immediate 429 instead of blocking on the lock for the whole
     # run.
     if not _REGEN_LOCK.acquire(blocking=False):
+        # The read above ran without the lock, so a duplicate that arrived in
+        # the same instant as the request it retries saw no in-flight key and
+        # came here: the run holding _REGEN_LOCK IS the one this key names.
+        # Answering 429 to it is what the 202 above exists to prevent, because
+        # the SPA reads a 429 as a failed regenerate, mints a NEW key and pays
+        # for a second full pipeline.  Re-read under the loss, so a duplicate
+        # racing its own predecessor is absorbed rather than refused.
+        if key and _regen_in_progress(key):
+            return _regen_in_progress_response(key)
         _metrics.REGEN.reject()
         return _json_err(
             429,

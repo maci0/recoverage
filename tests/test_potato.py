@@ -1240,7 +1240,7 @@ class TestDbUpdatedLabel:
 
         directory = tmp_path / "db"
         self._doc(directory, "ONCE", 1_700_000_000_000_000_000)
-        self._patch_db(monkeypatch, directory)
+        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
 
         scans = 0
         real = _potato._newest_mtime_ns
@@ -1278,7 +1278,7 @@ class TestDbUpdatedLabel:
         monkeypatch.setattr(_potato, "_newest_mtime_ns", counting)
         directory = tmp_path / "db"
         self._doc(directory, "PAGE", 1_700_000_000_000_000_000)
-        self._patch_db(monkeypatch, directory)
+        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
         page = render_potato_url("/potato?target=PAGE")
         assert "DB updated" in page
         assert scans == 1
