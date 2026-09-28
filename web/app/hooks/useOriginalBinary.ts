@@ -41,6 +41,14 @@ export function useOriginalBinary(path: string, enabled: boolean): OriginalBinar
       return;
     }
     let cancelled = false;
+    // The buffer belongs to the path it was fetched for, so a target switch
+    // puts the hook back in the waiting state. The in-flight guard above only
+    // stops the previous download from landing: it does not retract bytes that
+    // already landed, and a consumer that reads `buffer !== null` as "the bytes
+    // for the current path are here" would slice the previous target's binary
+    // at this target's offsets for as long as the download takes.
+    setBuffer(null);
+    setFailed(false);
     setLoading(true);
     const promise = fetchArrayBufferSafe(path);
     inflight.current = { path, promise };

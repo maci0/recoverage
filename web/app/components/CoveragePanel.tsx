@@ -319,6 +319,27 @@ function PanelMeta({
         {hex((section?.va ?? 0) + cell.start, 8)}..{hex((section?.va ?? 0) + cell.end, 8)}
       </MetaItem>
       <MetaItem label="Size">{`${cell.span} bytes`}</MetaItem>
+      {/* A data or thunk cell carries no function of its own: `parent_function`
+       * is the link to the function that owns it, and `label` the name rebrew
+       * gave it. Both are on the cell the server sends and on the Potato panel
+       * beside this one; a block without a function is exactly the case they
+       * exist for, so the branch that has no function panel is the branch that
+       * needs them. */}
+      {cell.label === undefined ? null : <MetaItem label="Label">{cell.label}</MetaItem>}
+      {cell.parent_function === undefined ? null : (
+        <MetaItem label="Parent">
+          <a
+            className="meta-value asm-link"
+            href="#"
+            onClick={(event) => {
+              event.preventDefault();
+              onJumpToAddress(cell.parent_function ?? 0);
+            }}
+          >
+            {hex(cell.parent_function, 1)}
+          </a>
+        </MetaItem>
+      )}
     </dl>
   );
 }

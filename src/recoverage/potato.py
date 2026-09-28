@@ -2811,6 +2811,11 @@ def _render_panel(
         if found_gl is not None:
             gl_data = global_json(found_gl)
             ctx["gl_data"] = gl_data
-            ctx["gl_detail_rows"] = _detail_rows(gl_data, skip_fields={"files"}, hex_fields=set())
+            # A global's `va` is an address, and the function panel one line
+            # above renders the same field through _format_va; without it here
+            # the same address reads as a decimal in the global panel and as
+            # hex everywhere else on the page (the function list, the search
+            # box, the functions detail table).
+            ctx["gl_detail_rows"] = _detail_rows(gl_data, skip_fields={"files"}, hex_fields={"va"})
 
     return _PANEL_TPL.render(**ctx)

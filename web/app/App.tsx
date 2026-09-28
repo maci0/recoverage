@@ -6,7 +6,7 @@ import { fetchTargets, type Section, type TargetInfo } from "@/api";
 import { CoverageMap } from "@/components/CoverageMap";
 import { CoveragePanel } from "@/components/CoveragePanel";
 import { Button, controlVariants } from "@/components/ui/button";
-import { LEGEND, PALETTE_VARS } from "@/grid/pack";
+import { FILTER_KEY, LEGEND, PALETTE_VARS } from "@/grid/pack";
 import { useCoverage, type Coverage } from "@/hooks/useCoverage";
 import { useLiveReload } from "@/hooks/useLiveReload";
 import { originalDllPath, useOriginalBinary } from "@/hooks/useOriginalBinary";
@@ -99,9 +99,15 @@ export function App() {
   const [targetReady, setTargetReady] = useState(false);
   const [section, setSection] = useState<string>(() => params.get("section") ?? ".text");
   const [query, setQuery] = useState<string>(() => params.get("q") ?? "");
-  const [filters, setFilters] = useState<ReadonlySet<string>>(
-    () => new Set(params.getAll("filter")),
-  );
+  const [filters, setFilters] = useState<ReadonlySet<string>>(() => {
+    // A `?filter=` seeds the same closed set the toolbar toggles, so a name no
+    // pill offers is dropped rather than kept: an unknown key matches no packed
+    // state, so keeping it dims every painted block and lights no pill. Potato
+    // Mode draws the same line (`potato._parse_filters`), so a link copied
+    // between the two surfaces lands in the same state on both.
+    const known = new Set(FILTER_KEY.filter((key) => key !== ""));
+    return new Set(params.getAll("filter").filter((key) => known.has(key)));
+  });
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const [theme, setTheme] = useState<"dark" | "light">(initialTheme);
   const [notice, setNotice] = useState<string | null>(null);

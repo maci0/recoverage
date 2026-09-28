@@ -40,10 +40,14 @@ export type HighlightLanguage = "c" | "x86asm" | "hex";
  * after the highlight pass, exactly as the VanJS code did, because escaping
  * would otherwise turn the inserted markup into text. */
 export function highlightCode(text: string, language: HighlightLanguage): string {
+  // Registration comes first: it is what puts the grammar in hljs's table, so
+  // a guard that asked whether the language is known before registering
+  // answered "no" for the first pane of every language and rendered it
+  // unhighlighted, whatever the caller's own check said afterwards.
+  register();
   if (text === "" || !hljs.getLanguage(language)) {
     return escapeHtml(text);
   }
-  register();
   const html = hljs.highlight(text, { language, ignoreIllegals: true }).value;
   if (language !== "x86asm") {
     return html;

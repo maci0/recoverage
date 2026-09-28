@@ -955,7 +955,13 @@ def _section_stats(snap: CoverageSnapshot) -> dict[str, Any]:
     for fn in snap.functions:
         if _is_data_marker(fn):
             continue
-        key = fn.status or "unknown"
+        # "UNKNOWN" is the spelling the rest of the package uses for an
+        # absent status: rebrew's writer canonicalizes to it
+        # (`rebrew.coverage_toml`), its reader derives these counts with the
+        # same default, and `api._FUNCTION_STATUSES` — the vocabulary
+        # `?status=` filters on — has no lowercase "unknown" in it, so a
+        # lowercase key here would be a bucket the API cannot select.
+        key = fn.status or "UNKNOWN"
         by_status[key] = by_status.get(key, 0) + 1
 
     return {"summary": _summary(snap), "sections": sections, "by_status": by_status}
@@ -1835,9 +1841,10 @@ def verify_payload(row: Mapping[str, Any]) -> dict[str, Any]:
     ONE definition shared by the single-VA and batch endpoints so the two
     response shapes cannot drift apart.  ``similarity`` is passed through as the
     0-1 fraction the writer stores, like ``functions.similarity``; the percent
-    scaling belongs to the renderers.  ``reg_delta``/``effective_match`` are
-    omitted rather than null when the document does not carry them, which is the
-    shape the optional-column probe produced.
+    scaling belongs to the renderers.  Every key is always present and null when
+    the document does not carry the value, which is the shape Potato Mode's
+    verify rows read (``fields["reg_delta"] is not None``) and the shape the
+    SPA's ``== null`` tests are written against.
     """
     return {
         "verified_at": row.get("verified_at"),
@@ -2513,19 +2520,24 @@ def _security_headers() -> None:
         response.set_header("Access-Control-Allow-Origin", origin)
         _merge_vary("Origin")
         response.set_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        # The two credential/validator headers the API itself documents.
-        # Without Authorization in this list a --cors frontend cannot use the
+        # The credential/validator headers the API itself documents.  Without
+        # Authorization in this list a --cors frontend cannot use the
         # --token auth the README advertises (the preflight fails, so the
-        # request is never sent), and without If-None-Match it cannot do the
+        # request is never sent), without If-None-Match it cannot do the
         # conditional GET that every ETag-bearing endpoint (/data, /asm,
-        # /bytes, /potato) is built around.
+        # /bytes, /potato) is built around, and without Idempotency-Key the
+        # retry POST /api/regen documents never reaches the handler that
+        # reads it.
         response.set_header(
-            "Access-Control-Allow-Headers", "Content-Type, Authorization, If-None-Match"
+            "Access-Control-Allow-Headers",
+            "Content-Type, Authorization, If-None-Match, Idempotency-Key",
         )
         # ETag and Retry-After are response headers a cross-origin client
         # cannot read unless they are exposed; without this the validator the
-        # server sends is invisible to the client that needs it.
-        response.set_header("Access-Control-Expose-Headers", "ETag, Retry-After")
+        # server sends is invisible to the client that needs it, and so is the
+        # `Idempotent-Replay: true` that is the whole answer to a replayed
+        # Idempotency-Key.
+        response.set_header("Access-Control-Expose-Headers", "ETag, Retry-After, Idempotent-Replay")
         response.set_header("Access-Control-Allow-Credentials", "true")
     elif origin:
         # Ensure caches key on Origin even when not allowed.
