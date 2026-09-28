@@ -40,3 +40,11 @@ coverage.db.lock
 .bun-tmp/
 web/dist/
 .uv-cache/
+
+# The sbom job's two artifacts, by the names it uploads them under. The job
+# writes them on the runner, where nothing reads the tree afterwards, but
+# `make python-sbom > recoverage-python-sbom.txt` is the documented way to
+# reproduce one on a workstation, and a root file an ignore list does not name
+# is one `git add .` picks up.
+recoverage-python-sbom.txt
+recoverage-browser-sbom.txt

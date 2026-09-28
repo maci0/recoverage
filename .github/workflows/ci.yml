@@ -403,12 +403,12 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     # PYTHONHASHSEED matches the Makefile's PYTHON_HASH_SEED, which every
-    # local recipe exports. It is spelled out here because this job is the one
-    # that starts a Python interpreter without going through make: no make on
-    # the path exports the seed, and CPython reads it at interpreter startup,
-    # so a value set inside the tool would be too late. The browser inventory
-    # below is an uploaded artifact, so two runs of one commit have to produce
-    # the same bytes for it to be diffable.
+    # local recipe exports. It is spelled out here for the one step that
+    # starts a Python interpreter without going through make: the browser
+    # inventory below runs `python tools/bundled_js_inventory.py` directly, and
+    # CPython reads the seed at interpreter startup, so a value set inside the
+    # tool would be too late. That inventory is an uploaded artifact, so two
+    # runs of one commit have to produce the same bytes for it to be diffable.
     env:
       PYTHONHASHSEED: "0"
     steps:
@@ -438,26 +438,18 @@ jobs:
       # Hash-pinned inventory of the full resolved tree (runtime deps plus
       # every extra) so consumers and vuln scanners can see exactly what a
       # given build was made from.
+      # `make python-sbom` is the one command that produces this artifact: the
+      # uv export plus the two rebrew pin lines read out of
+      # tools/ci_clone_rebrew.sh. The job redirects it into a file rather than
+      # spelling the same export and the same two sed patterns again, because a
+      # second copy of the pin reading is a second answer to "which rebrew was
+      # this built from" that a change to the script would leave disagreeing
+      # with the artifact a contributor prints locally. That target is the one
+      # recipe here with no `ensure-rebrew` and no `uv run`, so it needs neither
+      # the sibling checkout nor a synced environment: --frozen reads uv.lock
+      # alone, which is what lets the job that has no ../rebrew run it.
       - name: Export hashed dependency inventory
-        # --frozen, not the --locked every other job uses: this job is the one
-        # that does not clone the sibling, and --locked re-resolves the graph,
-        # which means reading ../rebrew off the runner where it does not
-        # exist. Reading the lock alone is the whole point of this job.
-        run: |
-          set -euo pipefail
-          uv export --frozen --all-extras --format requirements-txt --hashes \
-            --output-file recoverage-python-sbom.txt
-          # uv export renders the rebrew path dependency as an unversioned
-          # `-e ../rebrew` line, so the export alone does not say which rebrew
-          # a build was made from. Record the tag and commit from the single
-          # pin in tools/ci_clone_rebrew.sh, the same one `make clone-rebrew`
-          # and every other job read.
-          ref="$(sed -n 's/^REBREW_REF="${REBREW_REF:-\(.*\)}"$/\1/p' tools/ci_clone_rebrew.sh)"
-          sha="$(sed -n 's/^REBREW_SHA="${REBREW_SHA:-\(.*\)}"$/\1/p' tools/ci_clone_rebrew.sh)"
-          [ -n "$ref" ] && [ -n "$sha" ]
-          printf '\n# rebrew path-dependency pin\n# rebrew==%s @ %s\n' "$ref" "$sha" \
-            >> recoverage-python-sbom.txt
-          test -s recoverage-python-sbom.txt
+        run: make python-sbom > recoverage-python-sbom.txt && test -s recoverage-python-sbom.txt
       # The export above is the Python half of the tree and the whole of what
       # uv.lock knows. The other half ships in the wheel: `make web-build`
       # compiles six npm devDependencies into src/recoverage/assets/, so a

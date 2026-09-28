@@ -560,15 +560,26 @@ class TestEnvironmentInstalls:
         Reading the lock alone is the point of that job: the path dependency
         `../rebrew` does not exist on the runner that runs it, so the one
         invocation that has to stay `--frozen` is pinned here rather than
-        left to a reader to work out.
+        left to a reader to work out. The job reaches the export through
+        `make python-sbom`, so the flag lives in the Makefile, and the one
+        `uv export` in the tree is the Makefile's.
         """
+        makefile = _MAKEFILE.read_text(encoding="utf-8")
         exports = [
+            " ".join(line.split())
+            for line in makefile.splitlines()
+            if re.match(r"\s*uv export\b", line)
+        ]
+        assert len(exports) == 1, f"expected one uv export, found {exports}"
+        assert "--frozen" in exports[0] and "--locked" not in exports[0], exports[0]
+        exports_in_ci = [
             " ".join(line.split())
             for line in _CI_YML.read_text(encoding="utf-8").splitlines()
             if "uv export" in line and not line.lstrip().startswith("#")
         ]
-        assert len(exports) == 1, f"expected one uv export, found {exports}"
-        assert "--frozen" in exports[0] and "--locked" not in exports[0], exports[0]
+        assert not exports_in_ci, (
+            f"ci.yml spells its own uv export beside the Makefile's: {exports_in_ci}"
+        )
 
     def test_the_makefile_installs_the_same_way(self) -> None:
         """`make all` is the local mirror of CI, down to the uv flag."""
@@ -610,8 +621,9 @@ class TestEnvironmentInstalls:
         `make browser-sbom` is the local mirror of one of the two artifacts the
         job uploads; without a target for the other, the resolved Python tree
         behind a release could only be reproduced by the job that produced it.
-        The export the target runs is the job's, down to `--frozen`: reading
-        the lock alone is what lets it run where the job runs, without the
+        The job runs that target rather than a second copy of its export, so
+        the artifact a release ships and the one a contributor prints are one
+        command. `--frozen` is what lets it run where the job runs, without the
         sibling checkout a `--locked` re-resolve would need.
         """
         makefile = _MAKEFILE.read_text(encoding="utf-8")
@@ -623,15 +635,17 @@ class TestEnvironmentInstalls:
         assert len(exports) == 1, f"expected one uv export in the Makefile, found {exports}"
         assert "--frozen" in exports[0] and "--locked" not in exports[0], exports[0]
         assert "--all-extras" in exports[0] and "--hashes" in exports[0], exports[0]
-        job = _jobs()["sbom"]
-        assert all(flag in job for flag in ("--frozen", "--all-extras", "--hashes")), (
-            "the sbom job no longer exports what make python-sbom prints"
-        )
         assert re.search(r"^python-sbom:", makefile, re.MULTILINE), (
             "the Makefile no longer defines the target that runs the export"
         )
         assert re.search(r"^all:.*\bpython-sbom\b", makefile, re.MULTILINE | re.DOTALL), (
             "`make all` does not depend on python-sbom, so it is not the local mirror of CI"
+        )
+        job = _jobs()["sbom"]
+        assert "make python-sbom" in job, (
+            "the sbom job no longer produces its artifact through `make python-sbom`, so "
+            "the file a release ships and the file `make python-sbom` prints are two "
+            "commands that can drift"
         )
 
     def test_every_package_json_uv_run_keeps_the_dev_extra(self) -> None:

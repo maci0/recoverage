@@ -487,11 +487,11 @@ browser-sbom: ensure-rebrew
 # what the job has no checkout of. So this target needs no environment and no
 # sibling either, which is why it is the only target here with no
 # `ensure-rebrew` and no UV_RUN. It prints to stdout rather than writing a
-# file: the job names its own artifact, and a file left in the tree by a local
-# run would be a second thing to ignore. The two rebrew pin lines are the
-# same export the job appends, read from the one script that owns the pin, so
-# the artifact a release ships and the one a contributor prints name the same
-# rebrew.
+# file, and the sbom job redirects it: the job names its own artifact, and a
+# file written here would be a second thing to ignore in a local run. The two
+# rebrew pin lines the export alone does not carry are appended here, read
+# from the one script that owns the pin, so the artifact a release ships and
+# the one a contributor prints name the same rebrew.
 python-sbom:
 	@$(SET_STRICT) \
 	uv export --frozen --all-extras --format requirements-txt --hashes; \
