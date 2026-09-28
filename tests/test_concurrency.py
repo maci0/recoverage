@@ -197,9 +197,26 @@ class TestDataSingleFlight:
         """
         # The claim is registered with its full deadline ahead of it, so the
         # prune does not take it: the reclaim is the branch under test, not
-        # the pruning it shadows.  The wait itself is shortened so the test
-        # reaches the expired-Event path without the production 30 s.
-        monkeypatch.setattr(api, "_DATA_CACHE_BUILD_WAIT_SECONDS", 0.05)
+        # the pruning it shadows.  The follower's wait ends on the clock seam,
+        # so the test reaches the expired-Event path by advancing that clock
+        # past the wait rather than by shortening the production 30 s: a test
+        # that had to shrink the constant to reach this branch would pass just
+        # as well against a follower that parked on wall-clock time.
+        now = [1_000.0]
+
+        def window_per_read() -> float:
+            """One read of the clock spends the whole follower window.
+
+            The wait ends the moment a read comes back at or past its deadline,
+            so a clock that jumps a window at a time ends it in one slice
+            instead of the 600 a real one would take.  A clock frozen instead
+            would never end it, which is why this one advances.
+            """
+            value = now[0]
+            now[0] += api._DATA_CACHE_BUILD_WAIT_SECONDS
+            return value
+
+        monkeypatch.setattr(api.clock, "monotonic", window_per_read)
         key: tuple[Any, ...] = (("fingerprint", 1), "dead-target", None, True)
         event = threading.Event()  # never set: this is the killed leader
         with api._DATA_CACHE_LOCK:

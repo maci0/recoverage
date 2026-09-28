@@ -294,6 +294,33 @@ _DATA_CACHE_BUILDING: dict[_DataKey, _DataClaim] = {}
 #: a large target, so a follower that gives up here has genuinely lost its
 #: leader, and a live leader is never mistaken for a dead one.
 _DATA_CACHE_BUILD_WAIT_SECONDS = 30.0
+#: How long the follower parks between two reads of the clock that ends its
+#: wait (see :func:`_await_build_event`).  It bounds nothing about the leader:
+#: the wait still ends the instant the leader's finally sets the Event, so this
+#: only decides how late a reclaim of a DEAD leader's claim lands past its
+#: deadline, and a live build wakes its followers on the set, not on the slice.
+_DATA_BUILD_WAIT_SLICE_SECONDS = 0.05
+
+
+def _await_build_event(event: threading.Event, deadline: float) -> bool:
+    """Wait for the leader's *event*, bounded by *deadline* read from the clock.
+
+    The bound comes from :func:`recoverage.clock.monotonic`, the seam every
+    other elapsed-time read in the package uses, so the wait is answerable
+    without the wall-clock seconds it used to park for: a test (or a
+    simulation driving one clock) reaches the expired-Event branch by advancing
+    the clock past *deadline* rather than by shrinking the production constant,
+    and a run replayed from its seed waits exactly as long as the first did.
+
+    A patched clock must advance, or a leader that never comes back never ends
+    the wait: real time advances on its own and this does not.
+    """
+    while True:
+        remaining = deadline - clock.monotonic()
+        if remaining <= 0:
+            return event.is_set()
+        if event.wait(timeout=min(remaining, _DATA_BUILD_WAIT_SLICE_SECONDS)):
+            return True
 
 
 def _prune_stale_claims(now: float) -> None:
@@ -359,7 +386,7 @@ def _data_cache_checkout(
     # event — success, error, or 404 short-circuit alike — and only then
     # releases the claim, so a set event is the leader's own answer and
     # whatever it published (or did not) is what this request reads.
-    released = event.wait(timeout=_DATA_CACHE_BUILD_WAIT_SECONDS)
+    released = _await_build_event(event, now + _DATA_CACHE_BUILD_WAIT_SECONDS)
     with _DATA_CACHE_LOCK:
         if released:
             # A follower the leader's build answered: the memo miss above was

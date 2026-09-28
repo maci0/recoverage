@@ -748,7 +748,17 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   throttle and the `db-updated` stamp from one patched clock, and
   `tests/test_metrics.py` drives the per-request duration window the same
   way, so the slow-request threshold is crossed on the clock rather than on
-  a sleep. The LOG stamp is on the seam too, and it is the one that was not:
+  a sleep. A blocking wait is on the seam too, not just a read of one:
+  `api._await_build_event` ends the /data single-flight follower's wait on
+  `clock.monotonic()` rather than handing `threading.Event.wait` a timeout,
+  because that wait is the one place a request thread parks on wall-clock time,
+  and the reclaim of a KILLED leader's claim is therefore reachable by advancing
+  the clock (`tests/test_concurrency.py`, `TestDataSingleFlight::test_a_reclaim_releases_the_claim_it_took_over`)
+  rather than by shrinking `_DATA_CACHE_BUILD_WAIT_SECONDS`, which a follower
+  that still parked on real time would pass against. The slice between two reads
+  of the clock bounds only how late a dead claim is reclaimed; a live leader
+  wakes its followers on the set. The LOG stamp is on the seam too, and it is
+  the one that was not:
   `%(asctime)s` renders `record.created`, which `logging` fills from
   `time.time()`, so a run driven from one clock wrote two instants for the
   same event and a replay of it could not be diffed against the run it
