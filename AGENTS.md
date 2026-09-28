@@ -1268,12 +1268,20 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   cannot show is one a reader has nothing to check it against). The attribute
   map beside it, `server.FUNCTION_SORT_FIELDS`, is every column but `size`,
   which has a key arm of its own because its NULL needs a tuple. A stale
-  spelling of the column list is invisible rather than loud: a surface that no
-  longer carries a column answers its reader the default order for it, so
-  `?sort=symbol` on the Potato table reads as va order with nothing saying so.
+  spelling of the column list is invisible rather than loud, which is why the
+  API list REFUSES one: `?sort=` is validated against `_ALLOWED_SORT` and
+  `_SORT_DIRECTIONS` and answers 400 naming both vocabularies, the same
+  contract `?status=`, `?format=` and `?index=` give, because a typo'd column
+  used to answer 200 with a full page in an order the caller never asked for
+  and nothing in the answer to say so. A bare column, an empty `?sort=` and an
+  absent one are the default rather than a bad value. The Potato table keeps
+  the fallback (it renders a page, and its own header links are the only way a
+  reader reaches it), so a surface that no longer carries a column answers that
+  surface's reader the default order for it.
   Pinned at `tests/test_server.py` (`TestSortColumnVocabularyIsShared`), which
   holds the two surfaces against the package's list and every column against a
-  key that resolves.
+  key that resolves, and at `tests/test_api.py`
+  (`TestApiFunctions::test_invalid_sort_field_is_a_400`).
 - `_log_safe` escapes the characters that end a log line, which is C0, DEL,
   the C1 controls, and U+2028/U+2029 (a header value carries those literally,
   and every viewer that breaks on `\n` breaks on them). It deliberately leaves

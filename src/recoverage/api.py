@@ -564,9 +564,19 @@ def _function_total(
 
 #: The columns the list endpoint can sort by: the package's one vocabulary
 #: (`server.FUNCTION_SORT_COLUMNS`), which this endpoint takes whole, since it
-#: carries every one of them.  An unknown field ignores the whole sort parameter
-#: rather than applying a direction to a column the response does not carry.
+#: carries every one of them.  A field outside it is a rejected query, like the
+#: `?status=`, `?format=` and `?index=` values the sibling endpoints refuse.
 _ALLOWED_SORT = _server.FUNCTION_SORT_COLUMNS
+
+#: The directions `?sort=field:dir` accepts, empty included: a bare field
+#: carries none, and that is the ascending default rather than a bad value.
+_SORT_DIRECTIONS = frozenset({"", "asc", "desc"})
+
+#: What the refusal names, so the answer tells a caller which spellings work
+#: instead of only that the one they sent does not.
+_SORT_SYNTAX_HINT = (
+    f"{', '.join(sorted(_ALLOWED_SORT))}, each optionally suffixed with ':asc' or ':desc'"
+)
 
 
 def _filtered_functions(
@@ -1849,18 +1859,31 @@ def handle_api_functions_list(target: str) -> bytes | HTTPResponse:
     except ValueError:
         offset = 0
 
+    # Same contract as ?status= above, ?format= on /asm and ?index= on /data:
+    # the parameter is an enum the server owns, so a value outside it is a
+    # rejected query rather than a silent va-order page.  A typo (?sort=namee,
+    # ?sort=name:sideways) answered 200 with a full page in an order the caller
+    # never asked for and nothing in the answer to say so, which is the exact
+    # answer ?status=?EXACT used to give.  An ABSENT ?sort= and an empty one
+    # are still the default: those spell "no preference", not a bad value.
     sort_field = "va"
     sort_dir = "ASC"
-    if ":" in sort_param:
-        sf, sd = sort_param.split(":", 1)
-        if sf in _ALLOWED_SORT:
-            sort_field = sf
-            # Every direction but "desc" — "asc", empty, and anything else —
-            # sorts ascending, which is the default.  An unknown sort_field
-            # ignores the whole sort_param rather than applying its sort_dir.
-            sort_dir = "DESC" if sd.lower() == "desc" else "ASC"
-    elif sort_param in _ALLOWED_SORT:
-        sort_field = sort_param
+    if sort_param:
+        # A `field` or `field:direction` spelling; a bare field has no
+        # direction, which is the default.
+        sf, _, sd = sort_param.partition(":")
+        direction = sd.lower()
+        if sf not in _ALLOWED_SORT or direction not in _SORT_DIRECTIONS:
+            return _json_err(
+                400,
+                {
+                    "error": "invalid sort",
+                    "detail": f"sort {sort_param!r} is not a column and direction "
+                    f"this list orders by; expected {_SORT_SYNTAX_HINT}",
+                },
+            )
+        sort_field = sf
+        sort_dir = "DESC" if direction == "desc" else "ASC"
 
     # The change token the total is memoized on is stat'ed BEFORE the read
     # snapshot is loaded, the same order api.handle_api_stats,

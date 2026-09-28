@@ -34,7 +34,7 @@ the next restart.
 
 ## [Unreleased]
 
-The next major. Six changes break a consumer; everything else in the
+The next major. Seven changes break a consumer; everything else in the
 `[Unreleased]` section of the changelog is additive or a fix. When this ships,
 the release commit renames the heading to the version it ships as.
 
@@ -57,6 +57,23 @@ scraped the served HTML for a value has to read `/api/targets` instead. The
 inlined shell is about 46 KB brotli rather than about 14 KB, so the server's
 own congestion-window ceiling (`ui._TCP_CWND_BUDGET`) rose to 90 KB; a proxy
 with a small response header buffer may need the same.
+
+### `?sort=` on `/api/targets/<target>/functions` is checked
+
+Before: a column the list does not carry, or a direction other than `desc`,
+answered `200` with a full page in the default `va` order and nothing in the
+answer to say so. A client that had its own column list, or spelled the
+direction its UI label showed, got data in an order it never asked for.
+
+After: the parameter is validated like `?status=`, `?format=` and `?index=`.
+An unknown column or a direction outside `:asc`/`:desc` is a `400` with
+`{"code": "bad_request", "error": "invalid sort"}` and a `detail` naming every
+accepted spelling. A bare column, an empty `?sort=` and an absent parameter are
+still the default. Columns are matched case-sensitively; the direction is not.
+
+Do: read the accepted columns from the 400's `detail`, or from the table in
+the README, and spell the direction `:asc` or `:desc`. A client passing
+`?sort=` through from a user-supplied field name has to check it first.
 
 ### `?index=` on `/api/targets/<target>/data` takes `0`, `1` or nothing
 

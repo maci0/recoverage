@@ -132,6 +132,15 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   back with nothing in the answer saying so. They now get the same 400
   `?format=` and `?status=` already answer. Send `?index=1` for the old
   behavior, or drop the parameter.
+- **`?sort=` on `GET /api/targets/<target>/functions` is checked.** A column
+  the list does not carry, or a direction other than `:asc`/`:desc`, answered
+  `200` with a full page in the default `va` order and nothing in the answer
+  to say so, so a client that had its own column list, or spelled the direction
+  its own UI label showed, silently got data in an order it never asked for. It
+  is now a 400 with `{"code": "bad_request", "error": "invalid sort"}` and a
+  `detail` naming every accepted spelling, the contract `?status=`, `?format=`
+  and `?index=` already had. A bare column, an empty `?sort=` and an absent
+  parameter are still the default.
 - **The 503 an unreadable `rebrew-project.toml` answers now reads
   `error: "Database unavailable"`, the string every other coverage-read 503
   already carried.** Its `code` was `db_unavailable` and is unchanged, so a

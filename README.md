@@ -409,7 +409,7 @@ the banner that run printed holds.
 | `/api/targets` | GET | List available targets. Revalidates: an `ETag` over the coverage snapshot and the project config's stat, so a repeat is a 304 |
 | `/api/targets/<target>/stats` | GET | Per-section coverage stats with percentages (no query parameters) |
 | `/api/targets/<target>/data` | GET | Section + cell data (`?section=.text` for partial, `?index=0` to omit the search index) |
-| `/api/targets/<target>/functions` | GET | Paginated list (`?status=&search=&sort=&limit=&offset=`; a `status` outside rebrew's vocabulary is a 400). Revalidates: an `ETag` over the snapshot and every parameter, so a repeat is a 304 |
+| `/api/targets/<target>/functions` | GET | Paginated list (`?status=&search=&sort=&limit=&offset=`; a `status` outside rebrew's vocabulary, or a `sort` column the list does not carry, is a 400). Revalidates: an `ETag` over the snapshot and every parameter, so a repeat is a 304 |
 | `/api/targets/<target>/functions` | POST | Batch lookup: `{"vas": [...]}` → function/global details in input order |
 | `/api/targets/<target>/functions/<va>` | GET | Single function/global detail. Revalidates like the list: the tag names the snapshot, the target and the requested spelling |
 | `/api/targets/<target>/asm` | GET | Disassembly (`?format=json` for structured output) |
@@ -445,7 +445,7 @@ else in the query string is ignored.
 | `/api/targets/<target>/data` | `index` | `1` | `0` omits `search_index`, `1` includes it | any other value |
 | `/api/targets/<target>/functions` | `status` | no filter | rebrew's function-status vocabulary, matched case-sensitively | any other value |
 | `/api/targets/<target>/functions` | `search` | no filter | up to 500 characters | anything longer |
-| `/api/targets/<target>/functions` | `sort` | `va` | `va`, `name`, `size`, `status`, `symbol`, `module`, each optionally suffixed `:desc` | never; an unknown field ignores the whole parameter |
+| `/api/targets/<target>/functions` | `sort` | `va` | `va`, `name`, `size`, `status`, `symbol`, `module`, each optionally suffixed `:asc` or `:desc` | an unknown column or direction |
 | `/api/targets/<target>/functions` | `limit` | `50` | clamped to 1..500 | never; an unparseable value falls back to the default |
 | `/api/targets/<target>/functions` | `offset` | `0` | clamped to 0..10000000 | never; an unparseable value falls back to the default |
 | `/api/targets/<target>/asm` | `va` | required | hex with or without `0x`, or a decimal address | unparseable or outside the section |
@@ -455,17 +455,20 @@ else in the query string is ignored.
 | `/api/targets/<target>/sections/<section>/bytes` | `offset` | `0` | decimal or `0x`-prefixed hex | negative or unparseable |
 | `/api/targets/<target>/sections/<section>/bytes` | `size` | `256` | 1..4096, decimal or `0x`-prefixed hex | zero, negative or unparseable |
 
-An enum the server does not have (`status`, `format`, `index`) is a 400: the caller
-asked for a value the server cannot honour, and answering 200 with an empty
-or differently-shaped body reads as "there are none". A numeric parameter
-that only bounds the page (`limit`, `offset`) falls back to its default
-instead, because the response shape and its meaning are the same either way.
+An enum the server does not have (`status`, `sort`, `format`, `index`) is a
+400: the caller asked for a value the server cannot honour, and answering 200
+with an empty, differently-shaped or differently-ordered body reads as "there
+are none". A numeric parameter that only bounds the page (`limit`, `offset`)
+falls back to its default instead, because the response shape and its meaning
+are the same either way.
 
 `status` is matched case-sensitively against rebrew's vocabulary, which is
 spelled in upper case: `EXACT` filters, `exact` is a 400. The set is read
 from rebrew rather than restated here, so it tracks whatever the installed
 rebrew writes; `GET /api/targets/<target>/functions` answers 400 naming every
 accepted value. `format` is the exception, lowercased before it is matched.
+`sort` columns are case-sensitive too, and its direction is not: `:asc` and
+`:desc` either case, and a bare column sorts ascending.
 
 `va` is spelled two ways by design: `GET /functions/<va>` and `/asm` read an
 all-digit string as decimal first, while the `POST /functions` batch body

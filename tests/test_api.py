@@ -18,6 +18,7 @@ from operator import attrgetter
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, ClassVar
+from urllib.parse import quote
 from wsgiref.util import setup_testing_defaults
 
 import pytest
@@ -741,23 +742,33 @@ class TestApiFunctions:
         assert names == sorted(names, reverse=True)
         assert data["total"] == 3
 
-    def test_invalid_sort_field_falls_back(self) -> None:
-        """SQL injection in sort field should be rejected by whitelist."""
+    def test_invalid_sort_field_is_a_400(self) -> None:
+        """An unknown sort field is a rejected query, not a silent va-order page.
+
+        The whitelist is still what refuses it, so the SQL-injection spelling
+        gets the same answer a typo does, and the answer is the standard error
+        envelope: `code` from the status mapping and a `detail` that names the
+        columns the list does have.
+        """
         target = require_target()
-        # Should still return 200 — invalid sort falls back to default "va"
-        status, headers, body = wsgi_get(
-            f"/api/targets/{target}/functions?sort=DROP%20TABLE%20functions"
-        )
-        assert status.startswith("200")
-        data = json.loads(decode_body(body, headers))
-        # The fallback must actually apply: results come back va-ascending,
-        # identical to the default sort (a whitelist regression that passed
-        # raw SQL through would 500 or reorder here).
-        _default_status, _, default_body = wsgi_get(f"/api/targets/{target}/functions")
-        assert [fn["va"] for fn in data["functions"]] == [
-            fn["va"] for fn in json.loads(decode_body(default_body, headers))["functions"]
-        ]
-        assert data["total"] >= 1
+        for value in ("DROP TABLE functions", "vaStart", ":desc", "name:desc:extra"):
+            status, headers, body = wsgi_get(f"/api/targets/{target}/functions?sort={quote(value)}")
+            assert status.startswith("400"), value
+            data = json.loads(decode_body(body, headers))
+            assert data["code"] == "bad_request", value
+            for column in api._ALLOWED_SORT:
+                assert column in data["detail"], value
+
+    def test_an_absent_or_empty_sort_is_the_default(self) -> None:
+        """No preference is spelled by leaving the parameter out or empty."""
+        target = require_target()
+        pages = []
+        for query in ("", "?sort=", "?sort=va", "?sort=va:asc", "?sort=va:ASC"):
+            status, headers, body = wsgi_get(f"/api/targets/{target}/functions{query}")
+            assert status.startswith("200"), query
+            pages.append([fn["va"] for fn in json.loads(decode_body(body, headers))["functions"]])
+        assert pages[0], "the fixture target holds no functions"
+        assert all(page == pages[0] for page in pages)
 
     def test_pagination(self) -> None:
         target = require_target()
