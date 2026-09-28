@@ -236,6 +236,23 @@ class RequestStats:
         with self._lock:
             mean = self._sum_ms / self._timed if self._timed else 0.0
             window = sorted(self._recent_ms)
+            by_route: dict[str, Any] = {}
+            for route, row in sorted(self._by_route.items()):
+                # One sort of this route's window, read twice: every
+                # request's `finish` waits on this lock.
+                route_window = sorted(row.recent_ms)
+                by_route[route] = {
+                    "requests": row.requests,
+                    "errors": row.errors,
+                    "max_ms": round(row.max_ms, 3),
+                    # Quantiles of this route's own window, so a
+                    # process-wide p95 that moved can be attributed
+                    # without a second request: the row whose p95 sits
+                    # at SLOW_REQUEST_MS is the endpoint that moved.
+                    "latency_window": len(route_window),
+                    "p50_ms": round(percentile(route_window, 0.50), 3),
+                    "p95_ms": round(percentile(route_window, 0.95), 3),
+                }
             return {
                 "total": self._total,
                 "errors": self._errors,
@@ -249,21 +266,7 @@ class RequestStats:
                 "p50_ms": round(percentile(window, 0.50), 3),
                 "p95_ms": round(percentile(window, 0.95), 3),
                 "by_status": dict(self._by_status),
-                "by_route": {
-                    route: {
-                        "requests": row.requests,
-                        "errors": row.errors,
-                        "max_ms": round(row.max_ms, 3),
-                        # Quantiles of this route's own window, so a
-                        # process-wide p95 that moved can be attributed
-                        # without a second request: the row whose p95 sits
-                        # at SLOW_REQUEST_MS is the endpoint that moved.
-                        "latency_window": len(row.recent_ms),
-                        "p50_ms": round(percentile(sorted(row.recent_ms), 0.50), 3),
-                        "p95_ms": round(percentile(sorted(row.recent_ms), 0.95), 3),
-                    }
-                    for route, row in sorted(self._by_route.items())
-                },
+                "by_route": by_route,
             }
 
     def reset(self) -> None:

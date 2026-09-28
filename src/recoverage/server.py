@@ -25,7 +25,7 @@ from datetime import UTC, datetime, timedelta
 from operator import attrgetter
 from pathlib import Path, PurePath
 from types import MappingProxyType
-from typing import Any, Final, cast
+from typing import Any, Final, NamedTuple, cast
 from urllib.parse import unquote, urlsplit
 
 import brotli
@@ -2257,26 +2257,66 @@ def global_json(gl: Global) -> dict[str, Any]:
 
 
 def _name_match[NamedRow: (Function, Global)](
-    rows: Sequence[NamedRow], value: str
+    index: NameIndex[NamedRow], value: str
 ) -> NamedRow | None:
     """The first row whose ``name`` equals *value*, else the first folded match.
 
-    One pass for both arrays, so a function and a global cannot resolve a name
-    two different ways.
+    One definition for both arrays, so a function and a global cannot resolve a
+    name two different ways.
 
     Byte equality first, then the folded comparison, which is the order the SQL
     lookup used: the exact spelling resolves without paying the fold, and only a
     miss falls through to the NFC + case fold that makes the NFD spelling a user
-    pastes open the row the search matched.
+    pastes open the row the search matched.  Both arms are dict lookups into
+    :func:`_name_index`; walking the rows instead folded every name on the
+    target on a miss, which a 404 paid in full on both arrays.
     """
-    for row in rows:
-        if row.name == value:
-            return row
-    folded = fold_text(value)
-    for row in rows:
-        if fold_text(row.name) == folded:
-            return row
-    return None
+    found = index.exact.get(value)
+    if found is not None:
+        return found
+    return index.folded.get(fold_text(value))
+
+
+#: The two maps a name lookup reads, built once per snapshot: the exact
+#: spelling, and the folded one.  A repeated name keeps the FIRST row, which is
+#: what the linear scan this replaced returned.
+class NameIndex[NamedRow: (Function, Global)](NamedTuple):
+    exact: Mapping[str, NamedRow]
+    #: Keyed by :func:`fold_text` of the name, which is ``None`` only for an
+    #: absent name; a NULL key can never be looked up (the query value is a
+    #: ``str`` that folds to a ``str``), so it is unreachable rather than a
+    #: silently-wrong answer.
+    folded: Mapping[str | None, NamedRow | None]
+
+
+def _name_index[NamedRow: (Function, Global)](
+    snap: CoverageSnapshot, kind: str, rows: Sequence[NamedRow]
+) -> NameIndex[NamedRow]:
+    """The :class:`NameIndex` over *rows*, memoized per snapshot and kind.
+
+    Bounded by :data:`_SNAPSHOT_INDEX_MAX` and dropped with the other
+    snapshot indices, so a name lookup cannot pin a snapshot of its own.
+    """
+
+    def build() -> NameIndex[NamedRow]:
+        exact: dict[str, NamedRow] = {}
+        folded: dict[str | None, NamedRow | None] = {}
+        for row in rows:
+            exact.setdefault(row.name, row)
+            folded.setdefault(fold_text(row.name), row)
+        return NameIndex(exact, folded)
+
+    return _snapshot_index(snap, kind, build)
+
+
+def functions_by_name(snap: CoverageSnapshot) -> NameIndex[Function]:
+    """``functions`` indexed by name, one index per snapshot."""
+    return _name_index(snap, "functions_by_name", snap.functions)
+
+
+def globals_by_name(snap: CoverageSnapshot) -> NameIndex[Global]:
+    """``globals`` indexed by name, one index per snapshot."""
+    return _name_index(snap, "globals_by_name", snap.globals)
 
 
 def lookup_function(snap: CoverageSnapshot, value: str) -> Function | None:
@@ -2288,15 +2328,15 @@ def lookup_function(snap: CoverageSnapshot, value: str) -> Function | None:
     falls through to the name lookup, so the route and the panels cannot
     disagree about what a value names.
 
-    The VA arm is an index hit on the snapshot; the name arms walk the target's
-    rows, which is acceptable because nearly every cell carries a VA and a
-    name-form lookup is a user click rather than a request-rate path.
+    The VA arm is an index hit on the snapshot; the name arms are index hits
+    too (:func:`functions_by_name`), so neither costs a walk of the target's
+    rows.
     """
     for candidate in parse_va_candidates(value):
         found = snap.functions_by_va.get(candidate)
         if found is not None:
             return found
-    return _name_match(snap.functions, value)
+    return _name_match(functions_by_name(snap), value)
 
 
 def lookup_global(snap: CoverageSnapshot, value: str) -> Global | None:
@@ -2306,7 +2346,7 @@ def lookup_global(snap: CoverageSnapshot, value: str) -> Global | None:
         found = index.get(candidate)
         if found is not None:
             return found
-    return _name_match(snap.globals, value)
+    return _name_match(globals_by_name(snap), value)
 
 
 #: The by-VA indices a snapshot does not carry, keyed by its identity.
@@ -2323,19 +2363,22 @@ def lookup_global(snap: CoverageSnapshot, value: str) -> Global | None:
 #: cannot key it and a field-derived hash cannot be computed; holding the
 #: object is the only sound alternative.
 _SNAPSHOT_INDEX_LOCK = threading.Lock()
-_SNAPSHOT_INDEX: dict[tuple[int, str], tuple[CoverageSnapshot, dict[int, Any]]] = {}
+#: The derived value of any kind, so one bounded store holds the by-VA
+#: mappings and the name indices alike; :func:`_snapshot_index` casts it back
+#: to the type its builder produced.
+_SNAPSHOT_INDEX: dict[tuple[int, str], tuple[CoverageSnapshot, Any]] = {}
 _SNAPSHOT_INDEX_MAX = 4
 
 
-def _snapshot_index(
-    snap: CoverageSnapshot, kind: str, build: Callable[[], dict[int, Any]]
-) -> dict[int, Any]:
+def _snapshot_index[IndexT](
+    snap: CoverageSnapshot, kind: str, build: Callable[[], IndexT]
+) -> IndexT:
     """The memo for *kind* over *snap*, building it on the first call."""
     key = (id(snap), kind)
     with _SNAPSHOT_INDEX_LOCK:
         hit = _SNAPSHOT_INDEX.get(key)
     if hit is not None:
-        return hit[1]
+        return cast(IndexT, hit[1])
     index = build()
     with _SNAPSHOT_INDEX_LOCK:
         _evict_oldest(_SNAPSHOT_INDEX, _SNAPSHOT_INDEX_MAX)

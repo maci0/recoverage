@@ -48,7 +48,10 @@ from recoverage.server import (
     fold_match_folded,
     fold_needle,
     fold_text,
+    functions_by_name,
+    globals_by_name,
     globals_by_va,
+    lookup_function,
     lookup_global,
     mtime_ns_to_utc,
     origin_is_this_dashboard,
@@ -789,6 +792,55 @@ class TestSnapshotVaIndices:
         )
         assert globals_by_va(snap)[0x2000].name == "g_first"
         assert lookup_global(snap, "0x2000").name == "g_first"
+
+    def test_a_name_resolves_by_exact_spelling_then_by_folded_match(self) -> None:
+        """Both name arms are index hits, in the order the SQL lookup used.
+
+        The exact spelling wins outright, and a case that differs only in case
+        still resolves, which is the fold the scan used to apply per row.
+        """
+        snap = _snapshot_for(
+            {},
+            functions=[{"va": 0x1000, "name": "Straße"}, {"va": 0x1004, "name": "other"}],
+        )
+        index = functions_by_name(snap)
+        assert index.exact["Straße"].va == 0x1000
+        assert lookup_function(snap, "Straße").va == 0x1000
+        assert lookup_function(snap, "STRASSE").va == 0x1000
+        assert lookup_function(snap, "nope") is None
+
+    def test_the_folded_arm_matches_the_composed_form_of_a_decomposed_name(self) -> None:
+        """A decomposed name is found by either spelling, as the scan found it."""
+        snap = _snapshot_for(
+            {},
+            functions=[{"va": 0x1000, "name": "café"}, {"va": 0x1004, "name": "x"}],
+        )
+        assert lookup_function(snap, "café").va == 0x1000
+        assert lookup_function(snap, "café").va == 0x1000
+
+    def test_a_repeated_name_keeps_the_first_row_on_both_arms(self) -> None:
+        """First-row-wins is the semantics the linear scan this index replaced had."""
+        snap = _snapshot_for(
+            {},
+            functions=[
+                {"va": 0x1000, "name": "dup"},
+                {"va": 0x1004, "name": "dup"},
+            ],
+        )
+        assert functions_by_name(snap).exact["dup"].va == 0x1000
+        assert lookup_function(snap, "dup").va == 0x1000
+        assert lookup_function(snap, "DUP").va == 0x1000
+
+    def test_a_repeated_global_name_keeps_the_first_row(self) -> None:
+        snap = _snapshot_for(
+            {},
+            globals_=[
+                {"va": 0x2000, "name": "dup"},
+                {"va": 0x2004, "name": "dup"},
+            ],
+        )
+        assert globals_by_name(snap).exact["dup"].va == 0x2000
+        assert lookup_global(snap, "dup").va == 0x2000
 
     def test_verify_rows_index_by_va_and_repeat_calls_reuse_the_memo(self) -> None:
         snap = _snapshot_for(

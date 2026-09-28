@@ -169,6 +169,20 @@ def _state_survives_filter(state: str, active_filters: set[str]) -> bool:
     return any(state in FILTER_STATES.get(f, ()) for f in active_filters)
 
 
+def _lit_states(active_filters: set[str]) -> set[str] | None:
+    """The union of the active filters' states, or None when none is active.
+
+    :func:`_state_survives_filter` asks this of one cell; the grid asks it of
+    every cell on a page, so the union is resolved once here rather than per
+    cell. ``None`` (rather than an empty set) is the "no filter" answer: an
+    undocumented cell is never dimmed by a status filter, which an empty set
+    would dim.
+    """
+    if not active_filters:
+        return None
+    return set().union(*(FILTER_STATES[f] for f in active_filters))
+
+
 def _parse_filters(filter_str: str) -> set[str]:
     """The filter keys named by a ``?filter=`` value, minus the ones no pill offers.
 
@@ -1417,6 +1431,8 @@ def clear_cells_cache() -> None:
         _PARENT_INDEX.clear()
     with _POTATO_STATS_CACHE_LOCK:
         _POTATO_STATS_CACHE.clear()
+    with _FUNCTION_ROWS_LOCK:
+        _FUNCTION_ROWS.clear()
 
 
 def _load_grid_cells(
@@ -1603,6 +1619,40 @@ def _section_pct(summary: dict[str, Any], sections: dict[str, dict[str, Any]], n
 #: keystroke can cause on a large project; rows are taken in the order the
 #: snapshot holds them, so which rows those are stays deterministic.
 _SEARCH_ROW_LIMIT = 500
+
+
+#: The functions that are not data markers, one entry per snapshot.  The
+#: exclusion reads only frozen rows, so it is a pure function of the snapshot
+#: and is memoized beside :func:`server.functions_by_name` in the same bounded
+#: store: the functions view re-derived it on every request, and a search
+#: keystroke is a request.
+_FUNCTION_ROWS_MAX = 4
+_FUNCTION_ROWS_LOCK = threading.Lock()
+_FUNCTION_ROWS: dict[int, tuple[CoverageSnapshot, tuple[Function, ...]]] = {}
+
+
+def _function_rows(coverage: CoverageSnapshot) -> tuple[Function, ...]:
+    """``coverage.functions`` without the data-marker rows, memoized per snapshot.
+
+    GLOBAL/DATA/VTABLE/STRING marker rows live in the functions array but are
+    data, not functions, and both the functions view and the API list endpoint
+    drop them: the two surfaces list the same rows.
+
+    A tuple, because the callers sort in place and the cached rows are shared
+    by every request that reads the snapshot.
+    """
+    key = id(coverage)
+    with _FUNCTION_ROWS_LOCK:
+        cached = _FUNCTION_ROWS.get(key)
+    if cached is not None:
+        return cached[1]
+    # The entry holds the snapshot, so `id` cannot name a newer object while
+    # this one is still referenced by it: the id is sound for the entry's life.
+    rows = tuple(fn for fn in coverage.functions if not _is_data_marker(fn))
+    with _FUNCTION_ROWS_LOCK:
+        _evict_oldest(_FUNCTION_ROWS, _FUNCTION_ROWS_MAX)
+        _FUNCTION_ROWS[key] = (coverage, rows)
+    return rows
 
 
 def _search_functions(coverage: CoverageSnapshot, search_query: str) -> set[str]:
@@ -2132,6 +2182,11 @@ def _build_grid_html(
     )
     link_suffix = f"&search={_url_quote(search_query)}" if search_query else ""
 
+    # The union of the active filters' states, resolved once for the page
+    # rather than per cell: the grid asks the same question of each of the
+    # ~2k cells, and _state_survives_filter is the per-cell form of it.
+    lit_states = _lit_states(active_filters)
+
     # Selection target parsed ONCE for the whole page: comparing each cell's
     # orig_idx against it replaces a per-cell int() (up to ~2k parses/render).
     try:
@@ -2156,7 +2211,7 @@ def _build_grid_html(
 
         state = cell.get("state", "none")
 
-        dimmed = (active_filters and not _state_survives_filter(state, active_filters)) or (
+        dimmed = (lit_states is not None and state != "none" and state not in lit_states) or (
             search_query and not any(fn in search_matched_fns for fn in cell.get("functions", []))
         )
         bgcolor = BG_COLOR if dimmed else COLORS.get(state, COLORS["none"])
@@ -2239,8 +2294,9 @@ def _render_function_list(
 
     # Base filter: GLOBAL/DATA marker rows live in the functions array but are
     # data markers, not functions — same exclusion as the API list endpoint and
-    # server._section_stats, so both surfaces list the same rows.
-    rows = [fn for fn in coverage.functions if not _is_data_marker(fn)]
+    # server._section_stats, so both surfaces list the same rows.  Memoized per
+    # snapshot, so a search keystroke no longer re-walks the whole array.
+    rows = list(_function_rows(coverage))
     if status_filter:
         rows = [fn for fn in rows if fn.status == status_filter]
     if search_query:

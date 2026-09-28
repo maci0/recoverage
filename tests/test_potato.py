@@ -2318,6 +2318,41 @@ class TestFunctionListOrdering:
             functions=self.FUNCTIONS,
         )
 
+    def test_the_memoized_row_filter_matches_the_per_request_pass(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The memo answers the same rows the walk did, and hands back a copy.
+
+        The render sorts in place, so a shared list would be reordered by one
+        request for every other: the memo returns a tuple, and the render
+        copies before it sorts.
+        """
+        from recoverage.potato import _function_rows, _is_data_marker
+
+        snap = _write_doc(
+            tmp_path,
+            monkeypatch,
+            "T",
+            {".text": {"size": 64, "cells": [cell(0, 64, "exact")]}},
+            functions=[
+                *self.FUNCTIONS,
+                {
+                    "va": 0x401030,
+                    "name": "g_marker",
+                    "vaStart": "0x401030",
+                    "size": 4,
+                    "status": "EXACT",
+                    "markerType": "GLOBAL",
+                },
+            ],
+        )
+        expected = [fn.name for fn in snap.functions if not _is_data_marker(fn)]
+        rows = _function_rows(snap)
+        assert [fn.name for fn in rows] == expected
+        assert "g_marker" not in expected, "the fixture must exercise a real marker row"
+        assert _function_rows(snap) is rows, "a second call must hit the memo"
+        assert isinstance(rows, tuple), "the render sorts, so a shared list would be mutated"
+
     @pytest.mark.parametrize("field", ["va", "name", "status", "size"])
     def test_both_surfaces_produce_one_order(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, field: str
@@ -2875,6 +2910,18 @@ class TestFilterKeysCoverTheLegend:
         assert _parse_filters("bogus") == set()
         assert _parse_filters("exact,bogus") == {"exact"}
         assert _state_survives_filter("exact", _parse_filters("bogus"))
+
+    def test_the_per_page_lit_set_answers_what_the_per_cell_test_answers(self) -> None:
+        """The grid resolves the filter union once; it must not drift from the
+        per-cell form, which the SPA parity tests read as the spec."""
+        from recoverage.potato import COLORS, _lit_states, _state_survives_filter
+
+        for active in ({}, {"exact"}, {"problem"}, {"exact", "near_match"}, {"stub"}):
+            lit = _lit_states(active)
+            for state in COLORS:
+                expected = _state_survives_filter(state, active)
+                actual = True if lit is None else state == "none" or state in lit
+                assert actual is expected, (state, active)
 
     def test_every_filter_key_has_a_pill_with_a_title(self) -> None:
         from recoverage.potato import FILTER_STATES, _build_filter_data
