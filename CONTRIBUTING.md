@@ -26,6 +26,25 @@ The script removes `../rebrew` before cloning. When that directory is a rebrew
 checkout with uncommitted changes it stops instead of discarding the work; run
 `REBREW_FORCE=1 make clone-rebrew` to overwrite it knowingly.
 
+Windows is a supported host and part of the test matrix, and `make` is not part
+of a stock Windows toolchain, so the two `make` lines above are a Linux and
+macOS bootstrap only. Everything after the clone is the same `uv` command on
+both; the clone goes through the same script, under the Git-for-Windows bash
+that `git` already installed:
+
+```powershell
+& "C:\Program Files\Git\bin\bash.exe" tools/ci_clone_rebrew.sh ../rebrew
+uv sync --locked --extra dev
+uv run recoverage serve
+```
+
+The suite is spelled out for the same reason the Windows CI job spells its
+pytest command out rather than calling `make test`:
+
+```powershell
+uv run --locked --extra dev python -m pytest tests/ --ignore=tests/test_playwright.py
+```
+
 The sibling checkout is not optional. `pyproject.toml` pins rebrew to
 `path = "../rebrew"`, and recoverage imports `rebrew.workspace` for
 `rebrew-project.toml` / coverage-directory resolution plus rebrew's coverage

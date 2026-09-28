@@ -76,6 +76,11 @@ make test           # or: make test-one T=tests/test_api.py
 uv run recoverage serve
 ```
 
+`make` is not part of a stock Windows toolchain, and Windows is a supported
+host, so the two lines there are the Linux and macOS bootstrap. On Windows the
+clone runs under the Git-for-Windows bash and the rest is the same `uv`; see
+the bootstrap section of `CONTRIBUTING.md` for the PowerShell spelling.
+
 CONTRIBUTING.md covers the rest of the contributor bootstrap, and
 `[tool.uv.sources]` in `pyproject.toml` points the dependency at a rebrew you
 already have.
