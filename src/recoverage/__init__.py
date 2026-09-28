@@ -28,4 +28,4 @@ Route modules register on import; there are no cycles.
 acyclicity, so a new module has to declare where it sits.
 """
 
-__version__ = "4.0.0"
+__version__ = "3.0.0"

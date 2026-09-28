@@ -3,7 +3,7 @@
 Scope: the `recoverage` package as shipped (`src/recoverage/`) and the way it is
 started (`recoverage serve`). Every claim below carries a file reference so a
 later pass can re-verify it. Last reviewed: 2026-09-29, against
-`__version__ = "4.0.0"` (`src/recoverage/__init__.py:31`).
+`__version__ = "3.0.0"` (`src/recoverage/__init__.py:31`).
 
 What ReCoverage is: a read-mostly web dashboard over the clear-text coverage
 documents (`db/coverage-<target>.toml`) that rebrew's pipeline prints, served by

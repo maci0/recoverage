@@ -92,6 +92,20 @@ def _breaking_in_non_major(sections: list[tuple[str, str]]) -> list[str]:
     ]
 
 
+def _groups_are_canonical(body: str) -> bool:
+    """Keep a Changelog group headings: known names, once each, in impact order.
+
+    A repeated heading splits one group in two, and a reader's tool, and the
+    `Breaking` marker a release is gated on, only see the first one.
+    """
+    headings = re.findall(r"^### (.+)$", body, re.MULTILINE)
+    if any(h not in _CANONICAL_GROUPS for h in headings):
+        return False
+    if len(headings) != len(set(headings)):
+        return False
+    return headings == sorted(headings, key=_CANONICAL_GROUPS.index)
+
+
 class TestChangelogTracksVersion:
     def test_unreleased_is_the_newest_section(self) -> None:
         """Unreleased sits above the shipped notes, so a pending entry is findable."""
@@ -230,3 +244,28 @@ class TestDeclaredFloorsAreRecorded:
         duplicates = sorted({h for h in headings if headings.count(h) > 1})
         assert duplicates == [], f"repeated changelog group(s): {duplicates}"
         assert headings == sorted(headings, key=_CANONICAL_GROUPS.index)
+
+
+class TestShippedSectionsUseCanonicalGroups:
+    """A release moves the Unreleased entries into a section; that is the step
+    that can drop a group name, repeat one, or reorder them, and it is the only
+    place the move happens. Nothing checked the result: the two Unreleased
+    checks above read the block a release is about to empty.
+    """
+
+    def test_shipped_sections_group_their_entries_the_same_way(self) -> None:
+        offenders = [
+            version for version, body in _release_sections() if not _groups_are_canonical(body)
+        ]
+        assert offenders == [], f"non-canonical group headings in: {offenders}"
+
+    def test_the_gate_fires_on_a_split_and_a_misordered_group(self) -> None:
+        """A guard nothing has seen fail is not known to work."""
+        good = "\n\n### Added\n\n- a.\n\n### Breaking\n\n- b.\n\n### Fixed\n\n- c.\n"
+        assert _groups_are_canonical(good) is True
+        split = "\n\n### Changed\n\n- a.\n\n### Changed\n\n- b.\n"
+        assert _groups_are_canonical(split) is False
+        misordered = "\n\n### Fixed\n\n- a.\n\n### Added\n\n- b.\n"
+        assert _groups_are_canonical(misordered) is False
+        unknown = "\n\n### Miscellaneous\n\n- a.\n"
+        assert _groups_are_canonical(unknown) is False

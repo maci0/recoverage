@@ -18,6 +18,23 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   current target, section, search and filters. Potato already linked back to the
   SPA; the SPA had no way out to it.
 
+### Breaking
+
+- **The dashboard frontend is a Preact + Tailwind bundle.** The VanJS SPA is
+  gone: `app.js` and `detail.js` are replaced by one built bundle, `style.css`
+  is compiled by Tailwind, and the vendored `van.min.js`, `hljs*.js` and
+  `hljs.css` assets are no longer shipped. Anyone serving or caching those URLs
+  by name has to update: only `/app.js`, `/style.css`, `/print.css` and
+  `/favicon.svg` are still answered from the assets directory.
+- **The inlined shell is ~45 KB brotli, not ~14 KB.** It cannot fit RFC 6928's
+  initial congestion window, so `ui._TCP_CWND_BUDGET` is now a 90 KB ceiling
+  with headroom over the measurement rather than the protocol constant. The
+  shell still paints without a render-blocking subresource request, and
+  highlight.js is inside the bundle instead of being fetched on first use.
+- **`/` carries `<div id="root">` and no static markup.** The shell markup a
+  scraper or a stylesheet hook matched before is gone with the script that built
+  it.
+
 ### Changed
 
 - Batch VA lookups (`POST /api/targets/<target>/functions`) and the
@@ -29,7 +46,7 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   dashboard bundle against `web/`, so the two CI jobs it did not mirror
   (`build`) fail on a workstation instead of after a push. The new
   `make check-bundle-clean` is the check on its own: `make build` regenerates
-  `src/recovery/assets/app.js` and `style.css` before packaging, so a commit
+  `src/recoverage/assets/app.js` and `style.css` before packaging, so a commit
   carrying a stale bundle still produced a good artifact and passed every other
   gate. The CI `build` job runs it too, because the two-build reproducibility
   comparison cannot tell a stale commit from a fresh one.
@@ -66,6 +83,17 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   had a socket deadline, which bounds how long a handler thread lives but not
   how many exist; past the cap a connection is refused with a 503 and a log
   line instead of taking a thread and a descriptor for the full deadline.
+- The dashboard is built from `web/` with Vite, Preact (through
+  `preact/compat`), TypeScript, Tailwind CSS 4 and shadcn/ui primitives, all
+  themed from the same token layer the VanJS stylesheet carried. `make web-build` produces
+  `src/recoverage/assets/app.js` and `style.css`; `make build` runs it first,
+  and the CI build job rebuilds in both trees to prove the committed bundle
+  matches its sources.
+- Syntax highlighting is compiled in from the `highlight.js` npm package (core
+  plus the `c` and `x86asm` grammars and the dashboard's own `hex` language)
+  instead of being fetched as three separate scripts, so the pane no longer
+  has a state where it renders unhighlighted.
+- `NOTICE` credits the libraries compiled into the bundle.
 
 ### Fixed
 
@@ -116,6 +144,10 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the pre-rebuild count filed under the post-rebuild fingerprint, and every
   later `/functions` request answered that number until the next rebuild.
 
+### Removed
+
+- VanJS, the deferred `detail.js` split, and the vendored Highlight.js blobs.
+
 ### Security
 
 - The batch function-lookup endpoint bounds the request body BEFORE reading
@@ -125,43 +157,6 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the endpoint's 64 KiB cap could apply. The declared length is now compared
   first, a chunked body is decoded under the same cap, and every refusal
   answers `Connection: close`.
-
-## [4.0.0] - 2026-09-28
-
-### Breaking
-
-- **The dashboard frontend is a Preact + Tailwind bundle.** The VanJS SPA is
-  gone: `app.js` and `detail.js` are replaced by one built bundle, `style.css`
-  is compiled by Tailwind, and the vendored `van.min.js`, `hljs*.js` and
-  `hljs.css` assets are no longer shipped. Anyone serving or caching those URLs
-  by name has to update: only `/app.js`, `/style.css`, `/print.css` and
-  `/favicon.svg` are still answered from the assets directory.
-- **The inlined shell is ~45 KB brotli, not ~14 KB.** It cannot fit RFC 6928's
-  initial congestion window, so `ui._TCP_CWND_BUDGET` is now a 90 KB ceiling
-  with headroom over the measurement rather than the protocol constant. The
-  shell still paints without a render-blocking subresource request, and
-  highlight.js is inside the bundle instead of being fetched on first use.
-- **`/` carries `<div id="root">` and no static markup.** The shell markup a
-  scraper or a stylesheet hook matched before is gone with the script that built
-  it.
-
-### Changed
-
-- The dashboard is built from `web/` with Vite, Preact (through
-  `preact/compat`), TypeScript, Tailwind CSS 4 and shadcn/ui primitives, all
-  themed from the same token layer the VanJS stylesheet carried. `make web-build` produces
-  `src/recoverage/assets/app.js` and `style.css`; `make build` runs it first,
-  and the CI build job rebuilds in both trees to prove the committed bundle
-  matches its sources.
-- Syntax highlighting is compiled in from the `highlight.js` npm package (core
-  plus the `c` and `x86asm` grammars and the dashboard's own `hex` language)
-  instead of being fetched as three separate scripts, so the pane no longer
-  has a state where it renders unhighlighted.
-- `NOTICE` credits the libraries compiled into the bundle.
-
-### Removed
-
-- VanJS, the deferred `detail.js` split, and the vendored Highlight.js blobs.
 
 ## [3.0.0] - 2026-09-28
 
@@ -1063,16 +1058,6 @@ Requires `rebrew>=2.4.0`: the cell projection, the `cells_zstd` codec and the
 v7 schema objects all ship from `rebrew.workspace`, and `server.py` imports
 `CELLS_JSON_OBJECT_SQL` at module scope.
 
-### Fixed
-
-- **Potato Mode and the SPA now open the same target.** `resolve_targets`
-  returns two differently-ordered lists — `target_ids` (raw DB order) and
-  `targets` (config-declared first) — and Potato rendered its dropdown from the
-  second while defaulting from `target_ids[0]`.  On a project whose config order
-  differs from its metadata order the two surfaces disagreed, and Potato's
-  selected target was not even its own dropdown's first entry.  Potato now
-  defaults from the same list the SPA's `/api/targets` serves.
-
 ### Changed
 
 - **Static assets are compressed and memoized.** `detail.js`, `app.js`,
@@ -1116,6 +1101,16 @@ v7 schema objects all ship from `rebrew.workspace`, and `server.py` imports
   205 and the document starts 58 nodes smaller.  Selecting a block, a
   function, or a `?fn=` deep link renders the panes as before.
 
+### Fixed
+
+- **Potato Mode and the SPA now open the same target.** `resolve_targets`
+  returns two differently-ordered lists — `target_ids` (raw DB order) and
+  `targets` (config-declared first) — and Potato rendered its dropdown from the
+  second while defaulting from `target_ids[0]`.  On a project whose config order
+  differs from its metadata order the two surfaces disagreed, and Potato's
+  selected target was not even its own dropdown's first entry.  Potato now
+  defaults from the same list the SPA's `/api/targets` serves.
+
 ## [1.4.1] - 2026-09-16
 
 ### Fixed
@@ -1144,12 +1139,6 @@ v7 schema objects all ship from `rebrew.workspace`, and `server.py` imports
 
 ## [1.4.0] - 2026-09-15
 
-### Fixed
-
-- Python floor is now 3.13 (was 3.12): the required `rebrew` dependency
-  raised its own floor, and fresh installs on 3.12 could no longer resolve.
-  CI matrix and classifiers follow.
-
 ### Changed
 
 - **Coverage map paints on a canvas.**  The SPA no longer builds one DOM node
@@ -1177,6 +1166,12 @@ v7 schema objects all ship from `rebrew.workspace`, and `server.py` imports
   `/original` download moved from `loadData` to first cell selection, cutting
   first-load transfer ~3.2 MB → ~0.35 MB on a real target; the bytes pane
   shows loading state until the slice arrives.
+
+### Fixed
+
+- Python floor is now 3.13 (was 3.12): the required `rebrew` dependency
+  raised its own floor, and fresh installs on 3.12 could no longer resolve.
+  CI matrix and classifiers follow.
 
 ## [1.3.0] - 2026-09-13
 
@@ -1221,6 +1216,12 @@ v7 schema objects all ship from `rebrew.workspace`, and `server.py` imports
 
 ## [1.1.0] - 2026-09-13
 
+### Added
+
+- `/api/targets/<target>/data` carries `known_schema`: the schema versions this
+  build understands (the server's `KNOWN_SCHEMA_VERSIONS`).  The addition is
+  additive; the existing fields are unchanged.
+
 ### Changed
 
 - Recoverage resolves `rebrew-project.toml`, the `db/coverage.db` path, the
@@ -1233,12 +1234,6 @@ v7 schema objects all ship from `rebrew.workspace`, and `server.py` imports
   (about 500 compressed bytes).  Nothing changes visually: the Assembly pane
   fills in as soon as `detail.js` lands, the way the hex and data panes already
   did, and asm operand links still jump to their address.
-
-### Added
-
-- `/api/targets/<target>/data` carries `known_schema`: the schema versions this
-  build understands (the server's `KNOWN_SCHEMA_VERSIONS`).  The addition is
-  additive; the existing fields are unchanged.
 
 ### Fixed
 
