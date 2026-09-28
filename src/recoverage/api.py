@@ -502,8 +502,8 @@ def _target_snapshot(target: str) -> Generator[CoverageSnapshot]:
     yield _server.coverage_for(target)
 
 
-def _file_backed_section(snap: CoverageSnapshot, section: str, *fields: str) -> dict[str, Any]:
-    """Fetch *snapshot*'s *section* row and require int-typed *fields*, else raise.
+def _file_backed_section(snap: CoverageSnapshot, section: str) -> dict[str, Any]:
+    """Fetch *snapshot*'s *section* row and require the three file-backed ints, else raise.
 
     ONE shared guard for the endpoints that do pointer arithmetic on a
     section (asm, bytes): an unknown section raises the shared JSON 404,
@@ -527,12 +527,12 @@ def _file_backed_section(snap: CoverageSnapshot, section: str, *fields: str) -> 
         "size": found.size,
         "fileOffset": found.file_offset,
     }
-    if any(not isinstance(sec[f], int) for f in fields):
+    if any(not isinstance(value, int) for value in sec.values()):
         raise _json_err(
             422,
             {
                 "error": "section has no file backing",
-                "detail": f"section {section!r} has no {'/'.join(fields)} — "
+                "detail": f"section {section!r} has no va/size/fileOffset — "
                 "raw bytes are only served for file-backed sections",
             },
         )
@@ -1750,7 +1750,7 @@ def handle_api_asm(target: str) -> bytes | HTTPResponse:
     asm_etag = _etag_or_304(_snapshot_db_mtime(), target, section, raw_va, size, fmt)
 
     with _target_snapshot(target) as coverage:
-        sec = _file_backed_section(coverage, section, "va", "size", "fileOffset")
+        sec = _file_backed_section(coverage, section)
 
         # Resolve among the decimal/hex candidate spellings: whichever lands
         # inside the section wins (decimal-first when both fit, matching
@@ -1875,7 +1875,7 @@ def handle_api_bytes(target: str, section: str) -> bytes | HTTPResponse:
     bytes_etag = _etag_or_304(_snapshot_db_mtime(), target, section, req_offset, req_size)
 
     with _target_snapshot(target) as coverage:
-        sec = _file_backed_section(coverage, section, "va", "size", "fileOffset")
+        sec = _file_backed_section(coverage, section)
         if req_offset >= sec["size"]:
             return _json_err(
                 400,

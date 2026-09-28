@@ -270,8 +270,7 @@ def parse_log_level(raw: str) -> int:
         try:
             return _as_int("log level", raw)
         except ConfigError:
-            allowed = ", ".join(sorted(LOG_LEVELS))
-            raise ConfigError(f"{raw!r} is not a log level (use one of: {allowed})") from None
+            pass
     allowed = ", ".join(sorted(LOG_LEVELS))
     raise ConfigError(f"{raw!r} is not a log level (use one of: {allowed})")
 

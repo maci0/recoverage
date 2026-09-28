@@ -1,4 +1,3 @@
-#!/usr/bin/env bash
 # Clone the sibling rebrew path dependency.
 #
 # [tool.uv.sources] in pyproject.toml resolves rebrew from ../rebrew, so a

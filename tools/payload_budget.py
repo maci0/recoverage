@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Print the inlined SPA shell's compressed size at each static encoding.
 
 docs/DESIGN.md quotes these three numbers to justify smallest-wins static

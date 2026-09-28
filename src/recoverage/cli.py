@@ -390,7 +390,7 @@ def _db_path_or_exit(*, json_output: bool = False) -> Path:
 
 
 def _load_coverage_or_exit(
-    *, missing_exit_code: int = 1, json_output: bool = False
+    *, missing_exit_code: int, json_output: bool
 ) -> Mapping[str, CoverageSnapshot]:
     """Load every coverage document, exiting the process on failure.
 
@@ -427,7 +427,7 @@ def _list_targets() -> list[str]:
     return db_target_ids()
 
 
-def _select_targets(target: str | None, *, json_output: bool = False) -> list[str]:
+def _select_targets(target: str | None, *, json_output: bool) -> list[str]:
     """Return the targets to operate on, validating a requested --target.
 
     Named apart from ``server.resolve_targets`` (the webapp's coverage+config
@@ -571,7 +571,7 @@ def _kill_and_reap(proc: subprocess.Popen[bytes]) -> None:
         _log.warning("Browser opener pid %s could not be reaped: %s", proc.pid, exc)
 
 
-def _open_and_reap(url: str, args: list[str], shell: bool = False) -> bool:
+def _open_and_reap(url: str, args: list[str]) -> bool:
     """Launch the opener for *url* fire-and-forget and still reap it.
 
     Returns whether a browser was actually launched: True once Popen has
@@ -596,8 +596,9 @@ def _open_and_reap(url: str, args: list[str], shell: bool = False) -> bool:
             args,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            # Windows 'start' needs cmd.exe; args are internally generated
-            shell=shell,
+            # No shell: every argv here is the platform's own opener, and the
+            # Windows one carries `cmd /c start` itself.
+            shell=False,
             start_new_session=(os.name == "posix"),
             creationflags=_windows_detach_flags(),
         )

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Recoverage server — coverage dashboard for binary-matching projects.
 
 Bottle WSGI app serving the dashboard over rebrew's clear-text coverage
@@ -789,7 +788,6 @@ _BUCKET_FOLD: dict[str, tuple[str, ...]] = {
 _STATE_TO_BUCKET: dict[str, str] = {
     state: name for name, states in _BUCKET_FOLD.items() for state in states
 }
-_KNOWN_BUCKET_STATES: frozenset[str] = frozenset(_STATE_TO_BUCKET)
 
 
 def _bucket_row(section: Any) -> dict[str, Any]:
@@ -1639,26 +1637,19 @@ def global_json(gl: Global) -> dict[str, Any]:
     }
 
 
-def _name_match_functions(rows: Sequence[Function], value: str) -> Function | None:
-    """The first function whose ``name`` equals *value*, else the first folded match.
+def _name_match[NamedRow: (Function, Global)](
+    rows: Sequence[NamedRow], value: str
+) -> NamedRow | None:
+    """The first row whose ``name`` equals *value*, else the first folded match.
+
+    One pass for both arrays, so a function and a global cannot resolve a name
+    two different ways.
 
     Byte equality first, then the folded comparison, which is the order the SQL
     lookup used: the exact spelling resolves without paying the fold, and only a
     miss falls through to the NFC + case fold that makes the NFD spelling a user
     pastes open the row the search matched.
     """
-    for row in rows:
-        if row.name == value:
-            return row
-    folded = fold_text(value)
-    for row in rows:
-        if fold_text(row.name) == folded:
-            return row
-    return None
-
-
-def _name_match_globals(rows: Sequence[Global], value: str) -> Global | None:
-    """:func:`_name_match_functions` over the globals array."""
     for row in rows:
         if row.name == value:
             return row
@@ -1686,7 +1677,7 @@ def lookup_function(snap: CoverageSnapshot, value: str) -> Function | None:
         found = snap.functions_by_va.get(candidate)
         if found is not None:
             return found
-    return _name_match_functions(snap.functions, value)
+    return _name_match(snap.functions, value)
 
 
 def lookup_global(snap: CoverageSnapshot, value: str) -> Global | None:
@@ -1699,7 +1690,7 @@ def lookup_global(snap: CoverageSnapshot, value: str) -> Global | None:
         for gl in snap.globals:
             if gl.va == candidate:
                 return gl
-    return _name_match_globals(snap.globals, value)
+    return _name_match(snap.globals, value)
 
 
 def verify_payload(row: Mapping[str, Any]) -> dict[str, Any]:
@@ -1759,7 +1750,7 @@ def _evict_oldest(cache: dict[Any, Any], max_size: int) -> None:
             cache.pop(old_key, None)
 
 
-def _format_hex_dump(raw_bytes: bytes, base_offset: int = 0, max_bytes: int | None = 256) -> str:
+def _format_hex_dump(raw_bytes: bytes, base_offset: int, max_bytes: int | None = 256) -> str:
     """Format bytes as the canonical 16-bytes-per-line hex dump.
 
     ONE definition shared by the /bytes endpoint's ``hex`` payload and

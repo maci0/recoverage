@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Validate the dashboard's HTML and CSS with the Nu Html Checker (vnu.jar).
 
 Two passes, one vnu runner:

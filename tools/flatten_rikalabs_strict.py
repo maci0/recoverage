@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Regenerate tools/oxlint/rikalabs-strict.json from the installed
 @rikalabs/oxlint-standards package.
 

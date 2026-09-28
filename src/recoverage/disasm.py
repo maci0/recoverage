@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Disassembly of a target's original binary, via the optional capstone extra.
 
 One capability, one module: the availability probe, the thread-local

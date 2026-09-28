@@ -620,7 +620,7 @@ def _highlight_hex(text: str) -> str:
 # --- Data Helpers ---
 
 
-def _wrap_text(text: str, width: int = 45) -> str:
+def _wrap_text(text: str, width: int) -> str:
     """Hard-wrap text to a specific width for HTML display."""
     lines: list[str] = []
     for line in text.splitlines():
@@ -710,7 +710,7 @@ def _format_data_inspector(raw_bytes: bytes | None) -> str:
     return "".join(parts)
 
 
-def _cell_file_offset(cell: dict[str, Any], sec_data: dict[str, Any] | None) -> int | None:
+def _cell_file_offset(cell: dict[str, Any], sec_data: dict[str, Any]) -> int | None:
     """Calculate file offset for a cell from its section metadata.
 
     None means "no file backing", which is a NULL fileOffset — the .bss shape
@@ -1246,27 +1246,20 @@ def _function_list_key(fn: Function, order_by: str) -> Any:
     return (fn.va,)
 
 
-def _db_updated_mtime_ns() -> int | None:
-    """Newest mtime_ns across the coverage documents, or None when there are none.
-
-    A rebuild rewrites one document per target, so the footer's "DB updated"
-    stamp reads the newest of them; reading any single one would display a
-    stale instant for a target that did not move (same contract as
-    _snapshot_db_mtime, rendered as wall-clock time instead of folded into an
-    opaque change token).
-    """
-    return _newest_mtime_ns()
-
-
 def _db_updated_label() -> str:
-    """Render _db_updated_mtime_ns() as "YYYY-MM-DD HH:MM UTC" ("" when no DB).
+    """The newest coverage-document mtime as "YYYY-MM-DD HH:MM UTC" ("" with no DB).
+
+    A rebuild rewrites one document per target, so the footer reads the newest
+    of them; reading any single one would display a stale instant for a target
+    that did not move (same contract as _snapshot_db_mtime, rendered as
+    wall-clock time instead of folded into an opaque change token).
 
     Truncating to the minute, and the conversion truncating rather than
     rounding (see server.mtime_ns_to_utc), together mean the stamp never runs
     ahead of the served data: a rebuild landing in the last microsecond of a
     minute reads as the minute it started in, not the one it has not reached.
     """
-    mtime_ns = _db_updated_mtime_ns()
+    mtime_ns = _newest_mtime_ns()
     if mtime_ns is None:
         return ""
     return mtime_ns_to_utc(mtime_ns).strftime("%Y-%m-%d %H:%M UTC")
@@ -2400,7 +2393,7 @@ def _render_original_bytes(raw_bytes: bytes, file_offset: int) -> str:
 def _panel_empty_cell_bytes(
     ctx: dict[str, Any],
     cell: dict[str, Any],
-    sec_data: dict[str, Any] | None,
+    sec_data: dict[str, Any],
     target: str,
 ) -> None:
     """Fill hex dump + data inspector context for a cell with no functions."""
@@ -2663,9 +2656,9 @@ def _render_panel(
     target: str,
     section: str,
     data: dict[str, Any],
-    sec_data: dict[str, Any] | None = None,
-    active_filters: set[str] | None = None,
-    search_query: str = "",
+    sec_data: dict[str, Any],
+    active_filters: set[str],
+    search_query: str,
     grid_key: _GridKey | None = None,
 ) -> str:
     """Render the detail panel HTML (the block below the map).
@@ -2695,7 +2688,7 @@ def _render_panel(
     # NULL va (file-unbacked .bss) falls back to 0: same guard as the grid
     # builder, so the panel's range row renders relative offsets instead of
     # raising TypeError on None + int.
-    sec_va = (sec_data or {}).get("va") or 0
+    sec_va = sec_data.get("va") or 0
 
     prev_url = (
         _build_url(target, section, active_filters, idx=max(0, idx - 1), search=search_query)

@@ -491,7 +491,7 @@ export function App() {
               {busy ? MSG.REGEN_IN_PROGRESS : "Reload"}
             </Button>
             <a
-              className={cn(controlVariants({ size: "md" }), "potato-link")}
+              className={cn(controlVariants(), "potato-link")}
               href={potatoHref}
               title="Open this view in Potato Mode (server-rendered HTML)"
             >

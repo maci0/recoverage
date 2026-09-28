@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Regenerate tools/oxlint/anti-slop.manifest.json for the vendored plugin.
 
 `tools/oxlint/anti-slop/` is a copy of dmmulroy/anti-slop's oxlint plugin,
