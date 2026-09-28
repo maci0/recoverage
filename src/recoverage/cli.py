@@ -268,6 +268,26 @@ _VERDICT_COLORS: dict[str, str] = {
 # or control sequences when a CSV cell starts with them.
 _CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
 
+# Line terminators a Markdown reader breaks on and `str.splitlines` splits on,
+# beyond the CR and LF the table's own rows are made of.  A section name or
+# target id carrying U+2028 or U+2029 came from a PE image, so it is a value a
+# hostile sample plants, and it turns one table row into two: the export
+# renders ragged and the row after it reads as a section that does not exist.
+# Folding them to a space is what the CR/LF arms already do, and it keeps the
+# value recognisable, which an escape sequence would not.
+_MD_LINE_BREAKS = str.maketrans(
+    {
+        "\r": " ",
+        "\n": " ",
+        "\u2028": " ",
+        "\u2029": " ",
+    }
+)
+
+# The one character a pipe inside a table cell ends, and the escape the export
+# writes in its place (GFM's own spelling, so the file stays readable).
+_MD_PIPE = "\\|"
+
 # ONE spelling of the operator-facing rebuild advice so it cannot drift
 # between the commands that embed it in their database-error messages.
 _REBUILD_HINT = "(run 'rebrew build-db' to rebuild it)"
@@ -1647,7 +1667,7 @@ def export(
     elif output_format == ExportFormat.md:
 
         def _md_safe(s: str) -> str:
-            return s.replace("|", "\\|").replace("\n", " ").replace("\r", "")
+            return s.replace("|", _MD_PIPE).translate(_MD_LINE_BREAKS)
 
         written = 0
         total = sum(len(data["sections"]) for data in all_data)

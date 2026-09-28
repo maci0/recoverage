@@ -309,6 +309,14 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   address off the page highlighted nothing. It now matches both spellings, as
   the functions view and the API's `?search=` already did.
 
+- **A section name carrying a Unicode line separator broke the Markdown
+  export's table.** `recoverage export --format md` escaped `|`, CR and LF in a
+  section or target name, but not U+2028 or U+2029, which are the line
+  terminators a Markdown reader breaks on. One such name turned a single table
+  row into two, so the export rendered ragged and the second row read as a
+  section that does not exist. Those two are folded to a space now, beside the
+  CR and LF they were missed by.
+
 - **A malformed `Content-Length` was read as no `Content-Length` at all.** A
   header the ASCII parse refuses (`1_0`, a non-ASCII digit run, a negative or
   a non-numeric value) fell through to the unframed read, so the request was

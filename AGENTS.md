@@ -1116,6 +1116,15 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   message reaches the same treatment: a coverage document is untrusted input
   like a request path, and its parse error is read precisely when a line must
   stay one line.
+- The Markdown export folds the same line terminators, through
+  `cli._MD_LINE_BREAKS` (`\r`, `\n`, U+2028 and U+2029 to a space) and escapes
+  the cell separator through `cli._MD_PIPE`. A section name or target id comes
+  out of a PE image, so it is a value a hostile sample plants, and U+2028 in one
+  turned a single table row into two: the export rendered ragged and the second
+  row read as a section that does not exist. `cli._md_safe` handled only CR and
+  LF, which is why the fuzz campaign in `tests/test_fuzz.py`
+  (`TestCliRendersHostileDocumentValues`) is the thing that found it. A new
+  format the CLI emits folds that table and not a hand-written `.replace`.
 - A log line about a request carries the counters as fields, not only as
   prose: `server.request_log_fields` builds the `extra=` for the request-path
   records (per-request line, 500, 503 `db_unavailable`, the two security
@@ -1306,7 +1315,19 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   VAs back). The `/potato` and repo-file campaigns pass their own grammar tokens
   to `_fuzz(struct_tokens=..., num_tokens=...)`, because byte mutation alone
   never produces `idx=99999999999999999999` or `%2e%2e%2f`; a new surface with
-  its own grammar needs its token tuple the same way. HTML-escaping assertions
+  its own grammar needs its token tuple the same way. Two surfaces sit outside
+  the request campaigns and have their own: the `<va>` segment of
+  `/functions/<va>` (`TestFunctionVaSegment`), the one path segment that IS the
+  thing the route resolves, so its oracle is rebrew's `parse_va_candidates`
+  plus a restatement of the four arms of `server.lookup_function` rather than
+  the handler itself; and the CLI (`TestCliRendersHostileDocumentValues`), which
+  renders a document's own section and target names into a table, a JSON
+  document, a CSV file and a Markdown file. The CLI campaign draws from value
+  pools and writes through the fixture writer, so every round is a document the
+  reader accepts, and it reads `result.output_bytes` rather than
+  `result.output`: CliRunner decodes its capture with universal newlines, so a
+  CR inside a quoted CSV cell is gone before the round-trip assertion sees it
+  and the assertion would be pinning the test runner. HTML-escaping assertions
   come in pairs: the grid view escapes through SimpleTemplate, the functions
   view's empty-result message through `potato._esc`, and a regression in either
   one has to be visible from the response alone. The access-gating headers

@@ -19,7 +19,14 @@ tests enumerate:
   REMOTE_ADDR, X-Request-ID, Idempotency-Key) and the RECOVERAGE_* readers
   answer their security contract: a rejection stays a rejection, a match
   means what it claims, and nothing raised escapes into a traceback. A wrong
-  answer from any of them is a bypass, which no status code can show.
+  answer from any of them is a bypass, which no status code can show;
+* the two path and rendering surfaces the query campaigns do not reach: the
+  ``<va>`` segment of ``/functions/<va>``, which is the thing the route looks
+  up rather than a key beside it, and the CLI, which renders a document's own
+  section and target names into a table, a JSON document, a CSV file and a
+  Markdown file, each with its own escaping rule. A wrong answer from either
+  is a reader shown the wrong function or a spreadsheet executing a formula,
+  neither of which a status code can show.
 
 No coverage-guided fuzzer is available offline, so the harness is a seeded
 mutation engine: a hand-written corpus of real-shaped seeds (the spellings the
@@ -31,7 +38,10 @@ so CI runs the identical corpus on every build; ``RECOVERAGE_FUZZ_SEED`` and
 
 from __future__ import annotations
 
+import copy
+import csv
 import html
+import io
 import ipaddress
 import json
 import os
@@ -49,8 +59,9 @@ import pytest
 from conftest import HAS_DB, WSGI_PEER, decode_body, get_first_target, wsgi_request
 from coverage_fixture import cell, write_coverage
 from rebrew.coverage_toml import CoverageSnapshot, Function, load_coverage
+from typer.testing import CliRunner
 
-from recoverage import config
+from recoverage import cli, config
 from recoverage import server as srv
 from recoverage.api import (
     _MAX_BATCH_BODY_BYTES,
@@ -3485,4 +3496,323 @@ class TestCoverageDocumentContents:
         assert name not in page, "the raw name reached the page unescaped"
         assert html.escape(HOSTILE_NAME) in page, (
             "the escaped name is missing from the page, so the escaping is not what carries it"
+        )
+
+
+# ── the <va> path segment ──────────────────────────────────────────────
+#
+# The one path segment the target-segment campaign above holds fixed.  It
+# reaches `server.lookup_function`, which hands the raw spelling to rebrew's
+# `parse_va_candidates` before falling back to a name comparison, so it is a
+# parser on an untrusted string whose base choice (16 for a `0x` prefix or any
+# a-f, otherwise decimal-then-bare-hex) changes which row a request resolves
+# to.  A wrong answer here is not a bad render: it is a reader shown another
+# function's disassembly and its verify record.
+
+VA_FUNCTIONS: list[dict[str, Any]] = [
+    {"va": 0x10001000, "name": "_func_a", "size": 16, "status": "EXACT"},
+    {"va": 0x10001010, "name": "_func_b", "size": 16, "status": "RELOC"},
+    # A name whose case fold is not identity, so the folded arm of the
+    # resolution order has something the byte-equality arm cannot answer.
+    {"va": 0x10001020, "name": "Straße", "size": 16, "status": "EXACT"},
+]
+
+VA_GLOBALS: list[dict[str, Any]] = [{"va": 0x10002000, "name": "g_counter"}]
+
+VA_SEEDS: list[bytes] = [
+    b"0x10001000",
+    b"10001000",
+    b"0x10001010",
+    b"0X10001020",
+    b"0x10002000",
+    b"_func_a",
+    b"_func_b",
+    b"g_counter",
+    b"STRASSE",
+    b"stra\xc3\x9fe",
+    b" 0x10001000 ",
+    b"0x",
+    b"0x0",
+    b"-1",
+    b"0x10001000ff",
+    b"0x" + b"f" * 300,
+    b"99999999999999999999999999",
+    b"0b1010",
+    b"0o17",
+    b"1_0",
+    b"..",
+    b"%2e%2e%2f%2e%2e",
+    b"\xff\xfe",
+    b"\x00null",
+    b"' OR 1=1 --",
+    b"a" * 300,
+]
+
+
+def _expected_va_row(value: str) -> tuple[str, int] | None:
+    """The ``(kind, va)`` the route's documented resolution order lands on.
+
+    Independent of the handler: the four arms are restated from
+    ``handle_api_function`` and applied over the two fixed tables above, so a
+    route that resolved a spelling to some other row fails the campaign rather
+    than agreeing with itself.  ``parse_va_candidates`` is rebrew's parser and
+    is the oracle for the VA arm, not the code under test; the name arms are
+    restated because they are the two lines most likely to drift.
+    """
+    from rebrew.workspace import parse_va_candidates
+
+    for table, kind in ((VA_FUNCTIONS, "function"), (VA_GLOBALS, "global")):
+        for candidate in parse_va_candidates(value):
+            for row in table:
+                if row["va"] == candidate:
+                    return (kind, candidate)
+    for table, kind in ((VA_FUNCTIONS, "function"), (VA_GLOBALS, "global")):
+        for row in table:
+            if row["name"] == value:
+                return (kind, row["va"])
+    folded = srv.fold_text(value)
+    for table, kind in ((VA_FUNCTIONS, "function"), (VA_GLOBALS, "global")):
+        for row in table:
+            if srv.fold_text(row["name"]) == folded:
+                return (kind, row["va"])
+    return None
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage document")
+class TestFunctionVaSegment:
+    """``GET /api/targets/<t>/functions/<va>`` — the only route whose PATH is
+    the thing it looks up.  Fuzzed here over the segment itself, not over the
+    target beside it."""
+
+    @pytest.fixture(autouse=True)
+    def _document(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        directory = tmp_path / "db"
+        write_coverage(
+            directory,
+            "VAFUZZ",
+            {".text": {**_DOC_SECTIONS[".text"], "va": 0x10001000, "size": 0x40}},
+            functions=VA_FUNCTIONS,
+            globals_=VA_GLOBALS,
+            verify_results=[{"va": 0x10001000, "match": True, "similarity": 0.5}],
+        )
+        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+        _clear_derived_caches()
+
+    def test_a_va_spelling_resolves_to_the_documented_row(self) -> None:
+        def check(data: bytes) -> None:
+            spelling = data.decode("utf-8", "replace")
+            path = f"/api/targets/VAFUZZ/functions/{_pct(spelling)}"
+            status, headers, body = wsgi_request("GET", path)
+            code = int(status.split()[0])
+            assert code != 500, f"{path}: handler crashed with {status}"
+            assert code in (200, 404), f"{path}: unexpected status {status}"
+            payload = _strict_json(decode_body(body, headers).decode("utf-8", "replace"))
+            expected = _expected_va_row(spelling.strip())
+            if expected is None:
+                assert code == 404, f"{path}: {status} for a spelling that names nothing"
+                _assert_envelope(payload, status, path)
+                return
+            assert code == 200, f"{path}: {status} for a spelling naming {expected!r}"
+            assert isinstance(payload, dict), f"{path}: 200 body is not an object: {payload!r}"
+            kind, va = expected
+            assert payload.get("va") == va, (
+                f"{path}: resolved to va {payload.get('va')!r}, the order says {va:#x} "
+                f"({kind}): {payload!r}"
+            )
+            # The pair assertion: the row the document holds is the row the
+            # wire carries, spelled the way the document spells it.
+            names = [row["name"] for row in VA_FUNCTIONS] + [row["name"] for row in VA_GLOBALS]
+            assert payload.get("name") in names, (
+                f"{path}: served a name the document does not hold: {payload.get('name')!r}"
+            )
+
+        _fuzz(VA_SEEDS, check, iterations=600)
+
+
+# ── the CLI ───────────────────────────────────────────────────────────
+#
+# The one API surface in the package that no campaign above reaches.  The
+# commands parse nothing a stranger typed, but they RENDER what a coverage
+# document holds into a table, a JSON document, a CSV file and a Markdown
+# file, and those four formats each have their own escaping rule
+# (`cli._csv_safe`, `cli._md_safe`, `json.dumps`, Rich's markup parser).  An
+# escaped value that arrives at the file mangled, or an unescaped one that
+# lands in it, is a defect no HTTP status code can show, and the CSV and
+# Markdown arms are the two a reader opens in a spreadsheet.
+
+#: Section names a build would never write and a hand edit, a merge or a
+#: hostile sample would.  No lone surrogate: TOML has no escape for one, so
+#: such a document is a parse error, and the reader refusing it is the
+#: contract the document campaigns above already pin.
+CLI_SECTION_NAMES: tuple[str, ...] = (
+    ".text",
+    '=HYPERLINK("http://evil.example","click")',
+    "@SUM(1+1)",
+    "-1+1",
+    "\t=1+1",
+    "\r=1+1",
+    "=1+1\t=2+2",
+    ".te|xt",
+    "sec\ntion",
+    "sec\r\nction",
+    "sec\ttion",
+    "sec\x00tion",
+    "  =x",
+    '"quoted"',
+    "\\backslash\\",
+    "\u2028line-sep\u2029para-sep",
+    "<script>alert(1)</script>",
+    "démo",
+    "x" * 4000,
+)
+
+#: Target ids, which arrive as a filename.  No separator and no NUL, for the
+#: reasons a filename has: the point of the pool is the escaping rules, not
+#: the filesystem's.
+CLI_TARGET_NAMES: tuple[str, ...] = (
+    "EXPORTFUZZ",
+    "=cmd|' calc'!A0",
+    "target with spaces",
+    'target"quote',
+    "démo",
+    "t" * 200,
+)
+
+CLI_COMMANDS: tuple[tuple[str, ...], ...] = (
+    ("export", "--format", "json"),
+    ("export", "--format", "csv"),
+    ("export", "--format", "md"),
+    ("stats",),
+    ("check", "--min-coverage", "0"),
+)
+
+
+def _md_cells(row: str) -> int:
+    """How many cells a rendered Markdown table row carries.
+
+    A pipe the export escaped is data inside a cell, not a cell boundary, which
+    is the format's own rule: counting the raw characters would call the
+    escaped spelling ragged and pass the unescaped one.
+    """
+    return row.replace("\\|", "").count("|")
+
+
+class TestCliRendersHostileDocumentValues:
+    """``recoverage stats`` / ``export`` / ``check`` over a document whose
+    section and target names are hostile, in every format they render.
+
+    Structure-aware by construction: the name is drawn from the pools above and
+    the document is written through the same writer the fixtures use, so every
+    round is a document the reader accepts and the campaign lands on the
+    escaping rules instead of on the parse refusal.
+    """
+
+    def _install(self, directory: Path, target: str, section: str) -> None:
+        # The directory holds exactly the round's document: a second round
+        # drawing a different target name would otherwise leave the previous
+        # document beside it, and the export would carry both.
+        directory.mkdir(parents=True, exist_ok=True)
+        for stale in directory.glob("coverage-*.toml"):
+            stale.unlink()
+        write_coverage(
+            directory,
+            target,
+            {section: {**copy.deepcopy(_DOC_SECTIONS[".text"]), "va": 0x10001000}},
+            functions=[{"va": 0x10001000, "name": "_func_a", "size": 16, "status": "EXACT"}],
+        )
+        _clear_derived_caches()
+
+    def test_every_format_renders_a_hostile_name(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        runner = CliRunner()
+        rng = random.Random(FUZZ_SEED)
+        directory = tmp_path / "db"
+        for round_index in range(FUZZ_ITERATIONS):
+            target = rng.choice(CLI_TARGET_NAMES)
+            section = rng.choice(CLI_SECTION_NAMES)
+            monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+            self._install(directory, target, section)
+            for argv in CLI_COMMANDS:
+                try:
+                    self._assert_command(runner, argv, target, section)
+                except AssertionError as failure:
+                    raise AssertionError(
+                        f"seed={FUZZ_SEED} round={round_index}: {argv}\n"
+                        f"target={target!r} section={section!r}\n{failure}"
+                    ) from failure
+
+    def _assert_command(
+        self,
+        runner: CliRunner,
+        argv: tuple[str, ...],
+        target: str,
+        section: str,
+    ) -> None:
+        result = runner.invoke(cli.app, list(argv))
+        assert result.exit_code == 0, (
+            f"{argv}: exit {result.exit_code}: "
+            f"{type(result.exception).__name__}: {result.exception}"
+        )
+        assert "Traceback" not in result.output, f"{argv}: a traceback reached the terminal"
+        assert "cannot read coverage" not in result.output, (
+            f"{argv}: refused a document the reader accepts: {result.output[:200]!r}"
+        )
+        # The bytes, not ``result.output``: CliRunner decodes its capture with
+        # universal newlines, so a CR inside a quoted CSV cell is gone before a
+        # reader ever sees it, and a round-trip assertion over the decoded
+        # string would be pinning the test runner rather than the export.
+        text = (result.output_bytes or b"").decode("utf-8", "replace")
+        if argv[:2] == ("export", "--format"):
+            fmt = argv[2]
+            if fmt == "json":
+                self._assert_json(text, target, section)
+            elif fmt == "csv":
+                self._assert_csv(text, target, section)
+            else:
+                self._assert_markdown(text, section)
+
+    def _assert_json(self, text: str, target: str, section: str) -> None:
+        payload = _strict_json(text)
+        entries = payload if isinstance(payload, list) else [payload]
+        matching = [
+            entry
+            for entry in entries
+            if isinstance(entry, dict) and section in entry.get("sections", {})
+        ]
+        assert matching, f"the section name did not survive the JSON export: {text[:300]!r}"
+        assert any(entry.get("target") == target for entry in matching), (
+            f"the target name was mangled on the wire: {text[:300]!r}"
+        )
+
+    def _assert_csv(self, text: str, target: str, section: str) -> None:
+        rows = list(csv.reader(io.StringIO(text, newline="")))
+        assert len(rows) == 2, f"expected a header and one section row, got {len(rows)}"
+        header, row = rows
+        assert header[:2] == ["target", "section"], f"header changed: {header!r}"
+        assert len(header) == len(row), f"ragged row: {header!r} / {row!r}"
+        # The pair assertion across the write boundary: what the reader reads
+        # back is what the writer was handed, and the two string cells are the
+        # ones the formula guard is responsible for.
+        assert row[0] == cli._csv_safe(target), f"target cell mangled: {row[0]!r}"
+        assert row[1] == cli._csv_safe(section), f"section cell mangled: {row[1]!r}"
+        assert section in cli._csv_safe(section), "the guard prefixed a name it should not have"
+        if section.startswith(cli._CSV_FORMULA_PREFIXES):
+            assert row[1].startswith("'"), f"a formula cell reached the file unprefixed: {row[1]!r}"
+
+    def _assert_markdown(self, text: str, section: str) -> None:
+        lines = [line for line in text.splitlines() if line.startswith("|")]
+        assert len(lines) >= 2, f"no Markdown table in the export: {text[:300]!r}"
+        header, separator, body = lines[0], lines[1], lines[2]
+        assert set(separator) <= set("|-: "), f"malformed separator row: {separator!r}"
+        # One rule for every cell count: a name carrying a raw pipe is a
+        # ragged table, and a name carrying a line break is two rows for one
+        # section.  Both are what the escaping exists to prevent.  An escaped
+        # pipe does not count, which is the format's own rule, so it is
+        # counted after the escapes are removed.
+        assert _md_cells(body) == _md_cells(header), (
+            f"ragged Markdown row ({_md_cells(body)} vs {_md_cells(header)} cells): {body!r}"
+        )
+        assert section.replace("|", cli._MD_PIPE).translate(cli._MD_LINE_BREAKS) in body, (
+            f"the section name did not survive the Markdown export: {body!r}"
         )
