@@ -806,7 +806,7 @@ _PAGE_SRC = r"""<!DOCTYPE html>
              only the text made the clickable area the ~20px glyph while the
              32px pill around it looked like the button and did nothing. -->
         % if s_active:
-          <a href="{{s_url}}" accesskey="{{s_key}}"><table border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{ACTIVE_L}}" width="16" height="32" border="0" alt=""></td><td background="{{ACTIVE_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="#ffffff"><b>{{s_name}}</b></font></td><td><img src="{{ACTIVE_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
+          <a href="{{s_url}}" accesskey="{{s_key}}" aria-current="page"><table border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{ACTIVE_L}}" width="16" height="32" border="0" alt=""></td><td background="{{ACTIVE_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="#ffffff"><b>{{s_name}}</b></font></td><td><img src="{{ACTIVE_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
         % else:
           <a href="{{s_url}}" accesskey="{{s_key}}"><table border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{INACTIVE_L}}" width="16" height="32" border="0" alt=""></td><td background="{{INACTIVE_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="{{MUTED_COLOR}}">{{s_name}}</font></td><td><img src="{{INACTIVE_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
         % end
@@ -872,9 +872,9 @@ _PAGE_SRC = r"""<!DOCTYPE html>
                    These are the worst case — a single-letter label gave E/R/M/S/P
                    a 10px-wide hit target inside a 32px-wide pill. -->
               % if fb_active:
-                <a href="{{fb_href}}" title="{{fb_title}}" accesskey="{{fb_label[0].lower()}}"><table border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{FILTER_ACT_L}}" width="16" height="32" border="0" alt=""></td><td background="{{FILTER_ACT_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="{{fb_color}}"><b>{{fb_label}}</b></font></td><td><img src="{{FILTER_ACT_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
+                <a href="{{fb_href}}" title="{{fb_title}}" accesskey="{{fb_label[0].lower()}}" aria-label="{{fb_title}}, on" aria-current="true"><table border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{FILTER_ACT_L}}" width="16" height="32" border="0" alt=""></td><td background="{{FILTER_ACT_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="{{fb_color}}"><b>{{fb_label}}</b></font></td><td><img src="{{FILTER_ACT_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
               % else:
-                <a href="{{fb_href}}" title="{{fb_title}}" accesskey="{{fb_label[0].lower()}}"><table border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{FILTER_INACT_L}}" width="16" height="32" border="0" alt=""></td><td background="{{FILTER_INACT_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="{{fb_color}}">{{fb_label}}</font></td><td><img src="{{FILTER_INACT_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
+                <a href="{{fb_href}}" title="{{fb_title}}" accesskey="{{fb_label[0].lower()}}" aria-label="{{fb_title}}, off"><table border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{FILTER_INACT_L}}" width="16" height="32" border="0" alt=""></td><td background="{{FILTER_INACT_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="{{fb_color}}">{{fb_label}}</font></td><td><img src="{{FILTER_INACT_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
               % end
               </td>
             % end
@@ -934,7 +934,7 @@ _PAGE_SRC = r"""<!DOCTYPE html>
                It deliberately does NOT repeat the panel header directly above
                ("Coverage Map - {{section}} ({{block_count}} blocks)") — rendered
                back to back, the two read as the same heading printed twice. -->
-          <caption align="left"><font size="1" color="{{MUTED_COLOR}}">Click a block to inspect it.</font></caption>
+          <caption align="left"><font size="1" color="{{MUTED_COLOR}}">Click a block, or move to one with Tab and press Enter, to inspect it. Each block's link reads out its address range and state.</font></caption>
           <tr><td>
           <font size="1"><center>{{!grid_html}}</center></font>
           </td></tr></table>
@@ -2042,11 +2042,13 @@ def _render_function_list(
         f'<table width="100%" border="1" cellpadding="6" cellspacing="0" bordercolor="{BORDER_COLOR}">',
         (
             f'<tr bgcolor="{PANEL_COLOR}">'
-            f'<th><a href="{base}&sort=name"><font color="{MUTED_COLOR}">Name</font></a></th>'
-            f'<th><a href="{base}&sort=va"><font color="{MUTED_COLOR}">VA</font></a></th>'
-            f'<th><a href="{base}&sort=size"><font color="{MUTED_COLOR}">Size</font></a></th>'
-            f'<th><a href="{base}&sort=status"><font color="{MUTED_COLOR}">Status</font></a></th>'
-            f'<th><font color="{MUTED_COLOR}">Origin</font></th></tr>'
+            # scope="col" is what tells a screen reader that these header cells
+            # head the column below them rather than the row they sit in.
+            f'<th scope="col"><a href="{base}&sort=name"><font color="{MUTED_COLOR}">Name</font></a></th>'
+            f'<th scope="col"><a href="{base}&sort=va"><font color="{MUTED_COLOR}">VA</font></a></th>'
+            f'<th scope="col"><a href="{base}&sort=size"><font color="{MUTED_COLOR}">Size</font></a></th>'
+            f'<th scope="col"><a href="{base}&sort=status"><font color="{MUTED_COLOR}">Status</font></a></th>'
+            f'<th scope="col"><font color="{MUTED_COLOR}">Origin</font></th></tr>'
         ),
     ]
 

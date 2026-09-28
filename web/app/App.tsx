@@ -398,12 +398,16 @@ export function App() {
             </div>
             <h1 className="title font-mono text-lg font-bold tracking-wide">ReCoverage</h1>
           </div>
-          <div className="tabs flex flex-wrap gap-1" aria-label="sections">
+          <nav className="tabs flex flex-wrap gap-1" aria-label="Sections">
             {names.map((name) => (
               <Button
                 key={name}
                 className="tab-btn"
                 active={name === section}
+                // The active tab is painted, not announced: without the state
+                // the screen reader reads eight identical buttons and nothing
+                // says which section the map below is showing.
+                aria-pressed={name === section}
                 onClick={() => {
                   setSection(name);
                   setSelectedIndex(null);
@@ -412,7 +416,7 @@ export function App() {
                 {name}
               </Button>
             ))}
-          </div>
+          </nav>
         </div>
         <div className="topbar-right ml-auto flex flex-wrap items-center gap-3">
           <div className="search flex flex-col gap-1">
@@ -527,7 +531,10 @@ export function App() {
             </p>
           )}
           {(loadError ?? coverage.error) !== null && (
-            <p className="grid-error mb-2 rounded-hair border border-line bg-panel px-3 py-2 font-mono text-xs text-badge-stub-text">
+            <p
+              className="grid-error mb-2 rounded-hair border border-line bg-panel px-3 py-2 font-mono text-xs text-badge-stub-text"
+              role="alert"
+            >
               {loadError ?? coverage.error}
             </p>
           )}

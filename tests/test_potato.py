@@ -2647,3 +2647,67 @@ class TestRenderIsPinnedToOneSnapshot:
             assert not potato._POTATO_STATS_CACHE, "stats from before the rebuild were memoized"
         finally:
             potato.clear_cells_cache()
+
+
+class TestRenderedPageNamesAndStates:
+    """What the rendered page tells a screen reader, not just what it paints.
+
+    Every one of these controls draws its state (the active image pair, the
+    bold label, the on-color), so a sighted reader sees the current section and
+    the current filter while assistive technology is told neither. The names
+    and the current-state attributes are what close that gap (WCAG 4.1.2,
+    2.4.4).
+    """
+
+    def _render(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, query: str) -> str:
+        import recoverage.potato as potato_mod
+
+        _write_doc(
+            tmp_path,
+            monkeypatch,
+            "T",
+            {".text": {"size": 32, "va": 0x1000, "cells": [cell(0, 32, "exact")]}},
+            functions=[{"va": 0x1000, "name": "sub_401000", "vaStart": "0x1000", "size": 32}],
+        )
+        monkeypatch.setattr(potato_mod, "resolve_targets", lambda: [{"id": "T", "name": "a"}])
+        return render_potato_url(f"/potato?target=T&section=.text{query}")
+
+    def test_every_filter_link_names_its_filter_and_its_state(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        html = self._render(tmp_path, monkeypatch, "&filter=exact")
+        assert 'aria-label="Exact match, on"' in html
+        assert 'aria-label="Stub, off"' in html
+        # Exactly one pill is current: the one the query selected.
+        assert html.count('aria-current="true"') == 1
+
+    def test_no_filter_current_without_one(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        html = self._render(tmp_path, monkeypatch, "")
+        assert 'aria-current="true"' in html  # the "All" pill
+        assert 'aria-label="Show all statuses, on"' in html
+
+    def test_active_section_tab_is_marked_current(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        html = self._render(tmp_path, monkeypatch, "")
+        assert html.count('aria-current="page"') == 1
+
+    def test_function_list_headers_scope_their_column(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        html = self._render(tmp_path, monkeypatch, "&view=functions")
+        assert html.count('<th scope="col">') >= 5
+
+    def test_grid_caption_names_the_keyboard_path(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Every block is a real link, so Enter works; the caption said click."""
+        html = self._render(tmp_path, monkeypatch, "")
+        assert "press Enter" in html
+
+    def test_page_declares_its_language(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        """A wrong voice on every control: no lang means no speech synthesiser."""
+        html = self._render(tmp_path, monkeypatch, "")
+        assert '<html lang="en">' in html

@@ -1,5 +1,5 @@
 import type { JSX } from "preact";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "preact/compat";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/compat";
 
 import type { Section } from "@/api";
 import {
@@ -92,11 +92,33 @@ export function CoverageMap({
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const stateRef = useRef<GridState | null>(null);
+  const hintId = `grid-hint-${section.name.replaceAll(".", "")}`;
+  // What the roving cursor is on, as text. A canvas has no accessible
+  // children, so this is the only thing a screen reader can read about the
+  // cell the arrow keys walked to (WCAG 4.1.2, 1.1.1).
+  const [cursor, setCursor] = useState<string>("");
 
   // The pack is keyed on the section object, exactly like the VanJS memo: a
   // rebuild hands a fresh section object, and lazy cell loads replace it, so
   // identity is "the cells changed" and a stale hit map cannot survive it.
   const pack = useMemo(() => packSection(section), [section]);
+
+  const describe = useCallback(
+    (index: number): string => {
+      if (index < 0 || index >= pack.n) {
+        return "";
+      }
+      const base = section.va ?? 0;
+      const name = pack.fns[index];
+      return [
+        `Block ${index}`,
+        `${hex(base + (pack.starts[index] ?? 0), 8)} to ${hex(base + (pack.ends[index] ?? 0), 8)}`,
+        STATE_LABEL[pack.states[index] ?? 0],
+        name === "" ? "no function" : String(name),
+      ].join(", ");
+    },
+    [pack, section.va],
+  );
 
   const declaredColumns = section.columns === 0 ? 64 : (section.columns ?? 64);
 
@@ -241,17 +263,27 @@ export function CoverageMap({
     if (wrap === null || state?.geometry == null) {
       return;
     }
+    // Every cursor move scrolls the page, so the animation is motion the user
+    // did not ask for and cannot switch off per move: `prefers-reduced-motion`
+    // is the one place that answers it (WCAG 2.3.3).
+    const smooth = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches !== true;
     const geo = state.geometry;
     const y = geo.pad + (geo.cellRow[index] ?? 0) * (geo.cell + geo.gap);
     const top = wrap.getBoundingClientRect().top + window.scrollY + y;
-    window.scrollTo({ top: Math.max(0, top - window.innerHeight / 3), behavior: "smooth" });
+    window.scrollTo({
+      top: Math.max(0, top - window.innerHeight / 3),
+      behavior: smooth ? "smooth" : "auto",
+    });
     // Vertically the lattice is as tall as the page, so the window is the
     // scrollport; horizontally it is the wrapper, which on a narrow viewport is
     // narrower than the lattice.
     const x = geo.cellX[index] ?? 0;
     const right = x + (geo.cellW[index] ?? 0);
     if (x < wrap.scrollLeft || right > wrap.scrollLeft + wrap.clientWidth) {
-      wrap.scrollTo({ left: Math.max(0, x - wrap.clientWidth / 3), behavior: "smooth" });
+      wrap.scrollTo({
+        left: Math.max(0, x - wrap.clientWidth / 3),
+        behavior: smooth ? "smooth" : "auto",
+      });
     }
   }, []);
 
@@ -266,10 +298,11 @@ export function CoverageMap({
       if (wrap !== null && wrap.contains(document.activeElement)) {
         wrap.focus();
       }
+      setCursor(describe(index));
       paint();
       scrollCell(index);
     });
-  }, [onGridReady, paint, scrollCell]);
+  }, [describe, onGridReady, paint, scrollCell]);
 
   useEffect(() => {
     const wrap = wrapRef.current;
@@ -300,20 +333,13 @@ export function CoverageMap({
     }
     if (!select) {
       wrap.style.cursor = "pointer";
-      const base = section.va ?? 0;
-      wrap.title = [
-        `Block ${index}`,
-        `${hex(base + (pack.starts[index] ?? 0), 8)}..${hex(base + (pack.ends[index] ?? 0), 8)}`,
-        STATE_LABEL[pack.states[index] ?? 0],
-        pack.fns[index] === "" ? "no function" : String(pack.fns[index]),
-      ]
-        .filter(Boolean)
-        .join("  ");
+      wrap.title = describe(index);
       return;
     }
     state.focus = index;
     onSelect(index);
     wrap.focus();
+    setCursor(`${describe(index)}, selected`);
     paint();
   };
 
@@ -334,6 +360,7 @@ export function CoverageMap({
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
       onSelect(index);
+      setCursor(`${describe(index)}, selected`);
       paint();
       return;
     }
@@ -344,6 +371,7 @@ export function CoverageMap({
     event.preventDefault();
     state.focus = Math.max(0, Math.min(last, target));
     wrapRef.current?.focus();
+    setCursor(describe(state.focus));
     paint();
     scrollCell(state.focus);
   };
@@ -356,9 +384,15 @@ export function CoverageMap({
       className="grid max-w-full overflow-x-auto rounded-hair border border-line bg-grid"
       id={`grid-${section.name.replaceAll(".", "")}`}
       data-cols={declaredColumns}
-      role="listbox"
-      tabIndex={0}
+      // A canvas carries no accessible children, so this is an application
+      // region with a roving cursor rather than the listbox it used to claim:
+      // a listbox with no options announces an empty widget and nothing about
+      // the cell the arrow keys are on. The status paragraph below is the
+      // value, the hint paragraph is how to move it.
+      role="application"
       aria-label={`${section.name} coverage map`}
+      aria-describedby={hintId}
+      tabIndex={0}
       onPointerMove={(event) => onPointer(event.clientX, event.clientY, false)}
       onPointerLeave={() => {
         const wrap = wrapRef.current;
@@ -370,7 +404,14 @@ export function CoverageMap({
       onClick={(event) => onPointer(event.clientX, event.clientY, true)}
       onKeyDown={onKeyDown}
     >
-      <canvas ref={canvasRef} className="grid-canvas block" />
+      <canvas ref={canvasRef} className="grid-canvas block" aria-hidden="true" />
+      <p id={hintId} className="sr-only">
+        Arrow keys move between blocks, Home and End jump to the first and last, Enter or Space
+        selects the block under the cursor.
+      </p>
+      <p className="sr-only" role="status" aria-live="polite">
+        {cursor}
+      </p>
     </div>
   );
 }

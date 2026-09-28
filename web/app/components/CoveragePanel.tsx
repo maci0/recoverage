@@ -182,6 +182,7 @@ function CodeSection({
       <HighlightedCode
         text={text}
         language={language}
+        label={`${heading} pane`}
         {...(onAddressClick === undefined ? {} : { onAddressClick })}
       />
     </section>

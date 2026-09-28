@@ -1,4 +1,4 @@
-import { createPortal, useEffect, useRef, useState } from "preact/compat";
+import { createPortal, useCallback, useEffect, useRef, useState } from "preact/compat";
 
 import type { ComponentChildren } from "preact";
 
@@ -14,16 +14,6 @@ import type { HighlightLanguage } from "@/lib/highlight";
  * background from the tab order and the accessibility tree, which a hand-rolled
  * Tab handler can only approximate. */
 
-/** Escape closes the dialog. One function, so the listener added and the one
- * removed are the same reference. */
-function closeOnEscape(onClose: () => void): (event: KeyboardEvent) => void {
-  return (event) => {
-    if (event.key === "Escape") {
-      onClose();
-    }
-  };
-}
-
 export type CodeModalProps = {
   open: boolean;
   title: string;
@@ -35,6 +25,10 @@ export type CodeModalProps = {
 /** How long the copied label holds before the button returns to "Copy". */
 const COPIED_FLASH_MS = 1000;
 
+/** One id per dialog instance: the header text is the dialog's name, so the
+ * visible title and the announced one cannot drift apart. */
+let dialogSeq = 0;
+
 export function CodeModal({
   open,
   title,
@@ -43,8 +37,23 @@ export function CodeModal({
   onClose,
 }: CodeModalProps): ComponentChildren {
   const closeRef = useRef<HTMLButtonElement | null>(null);
+  const [titleId] = useState(() => {
+    dialogSeq += 1;
+    return `code-modal-title-${dialogSeq}`;
+  });
   const lastFocused = useRef<HTMLElement | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
+  // Escape is one listener for the life of the component, not one per open:
+  // `addEventListener` and `removeEventListener` match on the function
+  // identity, so a handler rebuilt on each open left the previous one attached
+  // and every reopen stacked another.
+  const latestClose = useRef(onClose);
+  latestClose.current = onClose;
+  const onEscape = useCallback((event: KeyboardEvent): void => {
+    if (event.key === "Escape") {
+      latestClose.current();
+    }
+  }, []);
 
   // The component stays mounted between opens, so a label left flashing on the
   // previous view would greet the next one.
@@ -89,9 +98,9 @@ export function CodeModal({
       (region as HTMLElement).inert = true;
     }
     closeRef.current?.focus();
-    document.addEventListener("keydown", closeOnEscape(onClose));
-    return () => document.removeEventListener("keydown", closeOnEscape(onClose));
-  }, [onClose, open]);
+    document.addEventListener("keydown", onEscape);
+    return () => document.removeEventListener("keydown", onEscape);
+  }, [onEscape, open]);
 
   if (!open) {
     return null;
@@ -102,7 +111,7 @@ export function CodeModal({
       className="modal show fixed inset-0 z-40 flex items-center justify-center bg-black/80 p-6"
       role="dialog"
       aria-modal="true"
-      aria-label={title === "" ? "Code viewer" : title}
+      aria-labelledby={titleId}
       onClick={(event) => {
         if (event.target === event.currentTarget) {
           onClose();
@@ -111,7 +120,9 @@ export function CodeModal({
     >
       <div className="modal-content flex max-h-[85vh] w-[min(1200px,95vw)] flex-col overflow-hidden rounded-control border border-line bg-panel">
         <div className="modal-header flex items-center gap-2 border-b border-line bg-modal-header px-3 py-2">
-          <span className="modal-title font-mono text-sm font-bold">{title}</span>
+          <span id={titleId} className="modal-title font-mono text-sm font-bold">
+            {title === "" ? "Code viewer" : title}
+          </span>
           <div className="modal-actions ml-auto flex gap-2">
             <Button className="copy-btn" aria-label="Copy Modal Content" onClick={copy}>
               {copied ?? "Copy"}
@@ -122,7 +133,11 @@ export function CodeModal({
           </div>
         </div>
         <div className="modal-body min-h-0 overflow-auto p-3">
-          <HighlightedCode text={text} language={language} />
+          <HighlightedCode
+            text={text}
+            language={language}
+            label={title === "" ? "Code viewer" : `${title} pane`}
+          />
         </div>
       </div>
     </div>,

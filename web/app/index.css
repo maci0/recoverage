@@ -253,7 +253,15 @@
     font-family: var(--font-ui);
     overflow-x: clip;
     overflow-y: scroll;
-    transition: background-color 0.3s ease, color 0.3s ease;
+  }
+
+  /* The theme switch is the only page-wide animation, and it is a cross-fade
+   * of the whole viewport: motion nobody asked for, so the reduced-motion
+   * setting turns it off rather than shortening it (WCAG 2.3.3). */
+  @media (prefers-reduced-motion: no-preference) {
+    body {
+      transition: background-color 0.3s ease, color 0.3s ease;
+    }
   }
 
   a {
@@ -267,6 +275,26 @@
   :focus-visible {
     outline: 2px solid var(--c);
     outline-offset: 2px;
+  }
+}
+
+/* Forced colors: the token layer is replaced wholesale by the system's own
+ * palette, so the one selected control in a row (the active section tab, a
+ * pressed filter) loses the background, border and text colors that were the
+ * whole of its appearance. Highlight is the system color for "this one is
+ * current", and it survives the replacement. */
+@media (forced-colors: active) {
+  [data-active] {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+
+  .grid,
+  .modal-content,
+  .panel,
+  .empty-state,
+  .loading-overlay {
+    border-color: CanvasText;
   }
 }
 

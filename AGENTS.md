@@ -573,6 +573,30 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   is counted there as an exact match. Tests in `test_potato.py`
   (`TestCellStateVocabularyCoverage`) and `test_server.py` (`TestSpaStateVocabulary`)
   fail on a gap; extend all of them together when rebrew adds a state.
+- The coverage map is a canvas, so the accessibility of the whole map is
+  carried by three things in `CoverageMap.tsx` and one stylesheet rule, and a
+  change to any of them is a change to all of them. The wrapper is
+  `role="application"` with `aria-label` (section) and `aria-describedby` (the
+  key map, in the hidden hint paragraph); it is NOT a listbox, which promises
+  `option` descendants a canvas cannot have and announces an empty widget. The
+  value lives in the hidden `role="status"` paragraph, written by
+  `describe` on every cursor move, selection and jump, so a screen reader
+  hears the same block, address range, state and function name the hover
+  `title` shows. A new way to move the cursor calls `setCursor` with
+  `describe`; a new cell field worth announcing goes in `describe`
+  alone, so the tooltip and the announcement cannot drift. A scroll container
+  that holds content no other control reaches (the code panes, the modal body)
+  carries `tabIndex={0}` and `role="region"`, because an unfocusable scroll
+  container is unreachable from the keyboard. Every page-wide animation is
+  behind `prefers-reduced-motion`: the cursor's `scrollTo` and the body's
+  theme transition, the latter by wrapping it in a `no-preference` media query
+  rather than shortening it. Potato's equivalent names are on the pills
+  (`aria-label` naming the filter and on/off, `aria-current` on the selected
+  one) and its section tabs (`aria-current="page"`), pinned by
+  `tests/test_potato.py` (`TestRenderedPageNamesAndStates`); its layout tables
+  are the retro surface the design asks for, and its `lang`, its skip link,
+  its block `alt` text and its function-list `scope="col"` headers are
+  deliberate.
 - The listener's socket family comes from the bind address, not from a
   fixed class: `wsgiref`'s `WSGIServer` inherits `http.server.HTTPServer`'s
   `AF_INET` and never changes it, so an IPv6 address `config.validate_bind`
