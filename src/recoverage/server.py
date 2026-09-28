@@ -607,6 +607,20 @@ def _snapshot_db_mtime() -> tuple[int, int] | None:
 _NS_PER_SECOND = 1_000_000_000
 _NS_PER_MICROSECOND = 1_000
 
+#: The first and last instants :class:`datetime` can represent, as whole
+#: seconds since the epoch.  An mtime is attacker-adjacent input: it comes off
+#: the filesystem, so a restored tree, a bad RTC, a ``touch -d`` or a
+#: filesystem whose own clock runs ahead can carry a value outside this range
+#: (a year-10000 stamp is reachable with ``os.utime`` on any Linux box, and
+#: FAT's own 2-byte year field tops out in 2107).  ``fromtimestamp`` raises
+#: ``ValueError`` on one, which took ``/api/health`` and Potato's footer down
+#: with it -- a freshness stamp is never worth a 500 over a stamp the clock
+#: cannot name.  Clamping reports the extreme instead, and the extremes are
+#: the right answer: both surfaces are rendering "as far from now as a
+#: timestamp can say", which is what an unrepresentable mtime means.
+_MIN_MTIME_SECONDS = -62_135_596_800  # 0001-01-01T00:00:00Z
+_MAX_MTIME_SECONDS = 253_402_300_799  # 9999-12-31T23:59:59Z
+
 
 def mtime_ns_to_utc(mtime_ns: int) -> datetime:
     """The instant *mtime_ns* names, as an aware UTC datetime.
@@ -621,8 +635,16 @@ def mtime_ns_to_utc(mtime_ns: int) -> datetime:
     happened yet.  Splitting into whole seconds plus a microsecond remainder
     truncates instead, which is the only direction a freshness stamp may
     err in: the served data never lags the stamp.
+
+    The seconds are clamped to the range :class:`datetime` spans before the
+    conversion, because the value comes off the filesystem and an mtime
+    outside that range raises rather than rendering (see
+    :data:`_MIN_MTIME_SECONDS`).  The clamp lands on the last representable
+    second, so the microsecond remainder is dropped at the ceiling rather
+    than added past it.
     """
     seconds, nanoseconds = divmod(mtime_ns, _NS_PER_SECOND)
+    seconds = min(max(seconds, _MIN_MTIME_SECONDS), _MAX_MTIME_SECONDS)
     return datetime.fromtimestamp(seconds, tz=UTC) + timedelta(
         microseconds=nanoseconds // _NS_PER_MICROSECOND
     )

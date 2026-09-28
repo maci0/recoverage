@@ -578,6 +578,30 @@ class TestHealthDbMtime:
         assert data["mtime_utc"] == "2023-11-14T22:13:59.999999+00:00"
         assert data["mtime_utc"] == datetime.fromtimestamp(data["mtime"], tz=UTC).isoformat()
 
+    def test_an_mtime_outside_the_calendar_answers_rather_than_raising(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A file mtime past year 9999 is still a freshness stamp, not a 500.
+
+        The mtime comes off the filesystem, so a restored tree, a bad RTC or
+        a `touch -d` can carry a value `datetime` cannot represent.  Raising
+        took the whole health probe down with it, which reports a perfectly
+        readable coverage directory as a broken server; the probe has to
+        answer, with the extreme stamp the clock can name.
+        """
+        directory = self._point_at(tmp_path, monkeypatch)
+        doc = directory / "coverage-FRESH.toml"
+        # 10000-01-01T00:00:00Z: representable to `os.utime`, not to datetime.
+        unrepresentable_ns = 253_402_300_800 * 1_000_000_000
+        os.utime(doc, ns=(unrepresentable_ns, unrepresentable_ns))
+
+        status, headers, body = wsgi_get("/api/health")
+        assert status.startswith("200")
+        data = json.loads(decode_body(body, headers))["db"]
+        # Clamped to the last second datetime spans, not a traceback.
+        assert data["mtime_utc"] == "9999-12-31T23:59:59+00:00"
+        assert data["mtime_utc"] == datetime.fromtimestamp(data["mtime"], tz=UTC).isoformat()
+
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
 class TestApiTargets:

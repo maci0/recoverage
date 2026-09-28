@@ -294,12 +294,15 @@ class TestTransportBounds:
         assert config.max_connections() == 1
 
     @pytest.mark.parametrize("raw", ["0", "1", "4", "-30"])
-    def test_a_deadline_under_the_sse_heartbeat_is_rejected(
+    def test_a_deadline_under_the_floor_is_rejected(
         self, monkeypatch: pytest.MonkeyPatch, raw: str
     ) -> None:
-        """A deadline at or under the heartbeat closes healthy /api/events
-        streams on the clock instead of on the peer going away, so it breaks
-        live reload rather than merely retiring threads sooner."""
+        """A deadline below the floor cuts a slow-but-live reader's response
+        mid-body, so it is a setting that breaks large payloads rather than
+        one that merely retires threads sooner.  Nothing here is about the
+        SSE heartbeat: the socket deadline is per operation and an idle
+        stream blocks on its queue, so a low value does not close a healthy
+        /api/events stream (see config.client_timeout)."""
         monkeypatch.setenv("RECOVERAGE_CLIENT_TIMEOUT", raw)
         with pytest.raises(config.ConfigError, match="RECOVERAGE_CLIENT_TIMEOUT"):
             config.client_timeout()

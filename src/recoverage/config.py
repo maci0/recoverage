@@ -87,10 +87,9 @@ MAX_PORT: Final = 65535
 #: the dashboard: the same binary serves one developer on a laptop and a team
 #: behind a reverse proxy on a container with a 512 MiB limit, and each of
 #: those admits a different number of connections and wants a different stall
-#: deadline.  The floor on the deadline is one second PAST the SSE heartbeat it
-#: must outlast (``api._SSE_HEARTBEAT_SECONDS``): a deadline at or under the
-#: heartbeat closes a healthy /api/events stream on the clock rather than on
-#: the peer going away.
+#: deadline.  The deadline is a per-socket-operation bound, not a budget for a
+#: connection's life (see ``client_timeout``), and its floor is a slow-but-live
+#: reader that cannot absorb a large payload inside one operation.
 MIN_CLIENT_TIMEOUT_SECONDS: Final = 16
 MAX_CLIENT_TIMEOUT_SECONDS: Final = 24 * 60 * 60
 DEFAULT_CLIENT_TIMEOUT_SECONDS: Final = 120
@@ -208,12 +207,20 @@ def max_connections() -> int:
 def client_timeout() -> int:
     """Per-connection socket deadline, in seconds.
 
-    Bounds how LONG one handler thread lives on a half-open peer.  The floor
-    is past the SSE heartbeat it must outlast: a deadline at or under
-    ``api._SSE_HEARTBEAT_SECONDS`` closes healthy /api/events streams on the
-    clock rather than on the peer going away, so a value below the floor is a
-    setting that breaks live reload, not one that merely retires threads
-    sooner.
+    Bounds how LONG one handler thread lives on a half-open peer.
+
+    The floor is not a relationship to the SSE heartbeat.  A socket timeout
+    is PER OPERATION, not a budget for the connection's life, and an idle
+    ``/api/events`` stream blocks on its event queue rather than on the
+    socket, so the heartbeat interval never enters it: a deadline under the
+    15s heartbeat still serves the stream for as long as the client reads
+    (verified against the real handler stack).  What a deadline too low does
+    cost is a slow client: a response the peer cannot absorb in that window
+    is cut mid-body, and a wedged SSE reader's queue is drained into a
+    socket that will not take it.  So the floor is "long enough to write a
+    large payload to a slow-but-live reader", and nothing about live reload
+    depends on it.
+
     """
     value = _int_var("RECOVERAGE_CLIENT_TIMEOUT", DEFAULT_CLIENT_TIMEOUT_SECONDS)
     if not MIN_CLIENT_TIMEOUT_SECONDS <= value <= MAX_CLIENT_TIMEOUT_SECONDS:

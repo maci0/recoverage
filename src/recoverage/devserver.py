@@ -222,9 +222,13 @@ class _ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
 # handler thread forever: ThreadingMixIn caps neither threads nor connections,
 # so wedged peers silently accumulate until process exit.  With the deadline,
 # socket.timeout unwinds the stalled op and the thread exits, releasing the
-# connection and (for /api/events) its bounded SSE slot.  Generous multiples
-# of the 15s SSE heartbeat (_SSE_HEARTBEAT_SECONDS) so only a genuinely
-# stalled peer can trip it — healthy streams write far more often.
+# connection and (for /api/events) its bounded SSE slot.
+#
+# It is a per-OPERATION deadline, not a budget for the connection's life, so
+# it says nothing about how long a stream may run: an idle /api/events
+# response blocks on its event queue, not on the socket, and a deadline well
+# under the SSE heartbeat serves it indefinitely.  What the value does decide
+# is how slow a client may be before a write is cut mid-body.
 #
 # Also a DEFAULT rather than a constant: the same dashboard sits behind a
 # direct connection on a workstation and behind a slow reverse proxy in a

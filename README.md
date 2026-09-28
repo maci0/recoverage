@@ -188,7 +188,7 @@ always wins over the environment.
 | `RECOVERAGE_TOKEN` | none | the bearer token; set it empty to run unauthenticated |
 | `RECOVERAGE_LOG_LEVEL` | `INFO` | a `logging` level name, or its number |
 | `RECOVERAGE_MAX_CONNECTIONS` | `128` | integer `1`-`65536`: concurrent client connections admitted, one thread and one descriptor each |
-| `RECOVERAGE_CLIENT_TIMEOUT` | `120` | integer `16`-`86400`: per-connection socket deadline in seconds; must outlast the 15s SSE heartbeat or live reload is cut short |
+| `RECOVERAGE_CLIENT_TIMEOUT` | `120` | integer `16`-`86400`: per-socket-operation deadline in seconds; a client that cannot absorb a write inside it is cut mid-body |
 | `RECOVERAGE_DB` | resolved from the working directory | path to the coverage directory (the one holding `coverage-<target>.toml`) |
 | `RECOVERAGE_FUZZ_SEED` | unset | seed for the mutation campaigns (`make fuzz`); read by the test suite, not the server |
 | `RECOVERAGE_FUZZ_ITERATIONS` | unset | round count for those campaigns; same reader |

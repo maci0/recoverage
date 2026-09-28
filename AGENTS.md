@@ -635,7 +635,18 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   up to half a second (and Potato's footer a whole minute) before it
   happened. Both freshness surfaces render through the one helper, and
   `tests/test_api.py` (`TestHealthDbMtime`) plus `tests/test_potato.py`
-  (`TestDbUpdatedLabel`) pin the truncation. An instant published to a client
+  (`TestDbUpdatedLabel`) pin the truncation. That helper also clamps the
+  seconds to the range `datetime` spans before converting, because an mtime
+  is filesystem input (a restored tree, a bad RTC, `touch -d`) and
+  `fromtimestamp` raises on one: an unrepresentable stamp must render as the
+  extreme, never take a health probe or a Potato render down with it. A
+  socket deadline is per OPERATION and bounds no connection's lifetime, so
+  it has no relationship to the SSE heartbeat; an idle stream blocks on its
+  queue, not the socket, which is what
+  `tests/test_lifecycle.py`
+  (`TestClientConnectionDeadline::test_a_deadline_under_the_heartbeat_does_not_close_a_healthy_stream`)
+  drives against the real handler stack. Do not reintroduce a floor stated
+  as "must outlast the heartbeat". An instant published to a client
   is UTC with the offset spelled out, never a fixed offset or a zone guessed
   from the locale; a log stamp is local time with `%z` attached, because the
   operator comparing it against their own clock needs to see their own clock.

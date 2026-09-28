@@ -244,6 +244,14 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `0X0X10001000`. The box now folds the decimal and the hex spelling, the two
   columns `/api/targets/<target>/functions?search=` folds beside the name and
   the symbol, so a term that lists a row through the API highlights it here too.
+- **A coverage document with an mtime outside the calendar took the freshness
+  surfaces down with it.** The mtime is filesystem input, so a restored tree, a
+  bad RTC, a `touch -d` or a FAT volume can carry a stamp past the last year
+  `datetime` can name (`os.utime` writes a year-10000 stamp on any Linux host).
+  Converting one raised `ValueError`, which turned `/api/health` and Potato
+  Mode's footer into a 500 over a perfectly readable coverage directory. The
+  stamp is now clamped to the representable range, and the extreme renders as
+  the extreme.
 - **The dashboard's copy of the target binary survived a rebuild.** The byte
   panes download the original DLL once per target and slice it locally, and the
   download was remembered by path alone. A `rebrew build-db` after a recompile

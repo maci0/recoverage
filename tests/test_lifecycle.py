@@ -495,7 +495,7 @@ class TestClientConnectionDeadline:
         timeout = devserver._QuietTimeoutRequestHandler.timeout
         assert isinstance(timeout, (int, float)), "no socket deadline on the handler"
         assert 0 < timeout <= _SSE_HEARTBEAT_SECONDS * 10, (
-            f"deadline {timeout}s must be bounded and well clear of the SSE heartbeat"
+            f"deadline {timeout}s must be bounded, and generous next to a slow client's write"
         )
 
     def test_silent_peer_releases_handler_thread(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -536,6 +536,61 @@ class TestClientConnectionDeadline:
                 assert threading.active_count() <= baseline, (
                     "silent-peer handler thread never released (unbounded thread pinning)"
                 )
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_a_deadline_under_the_heartbeat_does_not_close_a_healthy_stream(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The socket deadline is per OPERATION, not a budget for the stream.
+
+        config.client_timeout's floor, the README and .env.example all once
+        claimed a deadline under the SSE heartbeat closes a healthy
+        /api/events stream, and a config validation test was named for it.
+        The claim is false: an idle stream blocks on its event queue rather
+        than on the socket, so nothing about the heartbeat interval reaches
+        the deadline.  Driven against the real handler stack, with the
+        deadline set well under the heartbeat.
+        """
+        import threading
+        from wsgiref.simple_server import make_server
+
+        from recoverage import api
+        from recoverage.webapp import app
+
+        monkeypatch.setattr(api, "_SSE_HEARTBEAT_SECONDS", 3.0)
+        monkeypatch.setattr(devserver, "_CLIENT_SOCKET_TIMEOUT_SECONDS", 1)
+        monkeypatch.setattr(devserver._QuietTimeoutRequestHandler, "timeout", 1)
+        monkeypatch.setattr(
+            devserver._QuietTimeoutRequestHandler, "log_message", lambda *a, **k: None
+        )
+
+        server = make_server(
+            "127.0.0.1",
+            0,
+            app,
+            server_class=_server_class_for("127.0.0.1"),
+            handler_class=devserver._QuietTimeoutRequestHandler,
+        )
+        server.block_on_close = False
+        accept_thread = threading.Thread(target=server.serve_forever, daemon=True)
+        accept_thread.start()
+        try:
+            conn = socket.create_connection(("127.0.0.1", server.server_address[1]), timeout=30)
+            conn.settimeout(30)
+            conn.sendall(
+                b"GET /api/events HTTP/1.1\r\nHost: 127.0.0.1\r\nAccept: text/event-stream\r\n\r\n"
+            )
+            received = b""
+            # Two pings at a 3s heartbeat with a 1s socket deadline: the
+            # stream has outlived the deadline several times over, so a
+            # deadline read as a connection-lifetime budget would have cut it.
+            while received.count(b": ping") < 2:
+                chunk = conn.recv(4096)
+                assert chunk, "server closed a healthy /api/events stream on the clock"
+                received += chunk
+            conn.close()
         finally:
             server.shutdown()
             server.server_close()

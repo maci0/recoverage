@@ -1028,6 +1028,21 @@ class TestDbUpdatedLabel:
         )
         assert _db_updated_label() == expected
 
+    def test_label_with_an_unrepresentable_mtime_renders_the_extreme(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A footer stamp past year 9999 is a stamp, not a failed render.
+
+        The mtime is filesystem input, so a restored tree or a bad RTC can
+        carry one `datetime` cannot represent.  The label is read on the page
+        every render, so raising there took Potato Mode down over a stamp the
+        clock cannot name.
+        """
+        directory = tmp_path / "db"
+        self._doc(directory, "FUTURE", 253_402_300_800 * 1_000_000_000)
+        self._patch_db(monkeypatch, directory)
+        assert _db_updated_label() == "9999-12-31 23:59 UTC"
+
     def test_label_truncates_rather_than_rounds_the_minute(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
