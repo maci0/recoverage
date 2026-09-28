@@ -120,7 +120,7 @@ class _ThreadingWSGIServer6(_ThreadingWSGIServer):
     ``wsgiref``'s ``WSGIServer`` inherits ``http.server.HTTPServer``'s
     ``AF_INET`` and never changes it, so an IPv6 bind address that
     ``config.validate_bind`` deliberately accepts (``::1``, ``::``) dies in
-    ``socket.bind()`` with EADDRNOTAVAIL on every platform, and the OSError
+    ``socket.bind()`` (EAFNOSUPPORT here), and the OSError
     handler below then reports "is another instance already running?" for what
     is an address-family mismatch.  On Linux an ``AF_INET6`` socket bound to
     ``::`` also accepts IPv4-mapped peers, which is the case
@@ -325,7 +325,9 @@ def _csv_safe(value: Any) -> Any:
     malicious sample can plant a section named ``=HYPERLINK(...)`` or
     ``@SUM(...)`` that Excel executes when the exported file is opened.
     Prefixing with an apostrophe forces text interpretation (the standard
-    OWASP mitigation); numeric and ordinary fields pass through untouched.
+    OWASP mitigation); a non-string cell (the numbers the rows carry) passes
+    through untouched.  A string that merely looks numeric is prefixed like any
+    other, because ``-`` and ``+`` are formula prefixes too.
     """
     if isinstance(value, str) and value.startswith(_CSV_FORMULA_PREFIXES):
         return f"'{value}"
@@ -1099,9 +1101,12 @@ def _echo_banner(
 
 @app.command()
 def serve(
-    # Every option defaults to None so "not passed on the command line" stays
-    # distinguishable from a passed value, and the RECOVERAGE_* environment
-    # supplies the default for it.  A flag always wins over the environment.
+    # Every option backed by a RECOVERAGE_* variable defaults to None so "not
+    # passed on the command line" stays distinguishable from a passed value,
+    # and the environment supplies the default for it.  A flag always wins over
+    # the environment.  (The three that default to False are the flags with no
+    # variable: --no-open, --regen and --no-color, whose "off" is the absence
+    # of a pass.)
     # (min/max moved into the config module: the range check has to run for
     # an env-provided port too, or an out-of-range value reaches socket.bind()
     # and surfaces as a raw OverflowError after the banner has printed.)
@@ -1170,14 +1175,16 @@ def serve(
     instead of resolving rebrew-project.toml from the working directory), plus
     RECOVERAGE_MAX_CONNECTIONS and RECOVERAGE_CLIENT_TIMEOUT, which size the
     transport rather than select a behavior and so have no flag.
-    [bold]--no-open[/bold] and [bold]--regen[/bold] are the two flags with no
-    variable, because a service that wants the browser or a rebuild asks for
-    it in argv, not in the environment.
+    [bold]--no-open[/bold], [bold]--regen[/bold] and [bold]--no-color[/bold] are
+    the three flags with no variable, because a service that wants the browser
+    or a rebuild asks for it in argv, not in the environment, and the colour
+    opt-out is the unprefixed NO_COLOR convention rather than a RECOVERAGE_*
+    name.
 
     A flag always wins over the environment; an unrecognised RECOVERAGE_*
     name is a startup error, and so is a value that is not a valid port,
-    boolean, log level, non-empty string, or a CORS origin a browser could
-    send.
+    boolean, log level, CORS origin a browser could send, or (for every
+    setting but the token) a non-empty string.
 
     Exits 2 for any of those, before the listener binds. Exits 1 when --bind
     names a non-loopback address without --allow-remote (the refusal and the
@@ -1233,8 +1240,8 @@ def serve(
         _secho(warning, fg=typer.colors.YELLOW, err=True)
     for warning in _db_warnings(resolved.db):
         _secho(warning, fg=typer.colors.YELLOW, err=True)
-    # IPv6 hosts need brackets in any URL spelling (::1 bare is parsed as
-    # host "" port ::8001).
+    # IPv6 hosts need brackets in any URL spelling (a bare "::1" leaves
+    # urlsplit with no hostname and a ".port" that raises).
     display_host = f"[{bind}]" if ":" in bind else bind
 
     _configure_logging(resolved.log_level)
@@ -1928,8 +1935,9 @@ def open_cmd(
         _secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(2) from None
     if resolved_port == config.MIN_PORT:
+        source = "RECOVERAGE_PORT" if port is None else "--port"
         _secho(
-            "Error: --port 0 is not an address: it asks the server for a free "
+            f"Error: {source} 0 is not an address: it asks the server for a free "
             "port of the OS's choosing. Open the URL from the serve banner, or "
             "pass the port it printed.",
             fg=typer.colors.RED,

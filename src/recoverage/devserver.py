@@ -105,10 +105,12 @@ def resolve_listen_port(port: int, host: str) -> int:
     ``--port 0`` is the documented way to say "any free port" (port 0 is the
     floor ``config.MIN_PORT`` sets), but the number the caller asked for is not
     the number that gets bound, and every consumer of the value is printed
-    rather than read: the banner, ``recoverage config``'s port line,
-    ``/api/health`` and the URL the browser is handed.  Resolving it here, once,
-    before the listener binds, is what keeps those four from naming port 0,
-    which is not an address anything can connect to.
+    rather than read: the banner, ``/api/health`` and the URL the browser is
+    handed.  Resolving it here, once, before the listener binds, is what keeps
+    those three from naming port 0, which is not an address anything can
+    connect to.  ``recoverage config`` deliberately does not call this: it
+    reports the configured value, and the free port ``serve`` binds in its
+    place is a different one on every run.
 
     The socket is bound to *host* on the family :func:`listen_family` names,
     which is the family the listener itself will hold, and closed again, so the
@@ -326,9 +328,11 @@ class _QuietTimeoutRequestHandler(WSGIRequestHandler):
         ``send_error`` quotes the request line, the method and the version it
         rejected, all of which are attacker-controlled, so a line-breaking
         byte in one of them would forge log entries.  What keeps that out of
-        the log is upstream: every such message reaches here through a ``%r``
-        (and the one ``%s``, the version number, is digits by the time
-        ``parse_request`` reports it).  This module does not escape the text
+        the log is upstream: ``parse_request`` builds those messages with a
+        ``%r``, so the attacker bytes are already quoted by the time
+        ``send_error`` logs the text with its own ``%s`` (the version number,
+        the one unquoted value, is digits by the time it gets there).  This
+        module does not escape the text
         itself, and cannot without reaching up into ``server`` for
         ``_log_safe`` — an edge the level order forbids a transport leaf to
         take.  So the guarantee rests on the stdlib's formatting, not on this

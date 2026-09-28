@@ -60,13 +60,13 @@ LATENCY_WINDOW: Final = 512
 
 
 def percentile(samples: list[float], fraction: float) -> float:
-    """The *fraction* quantile of the SORTED *samples*, nearest-rank.
+    """The *fraction* quantile of the SORTED *samples*, by order statistic.
 
     Zero samples answer 0.0 rather than raising: the snapshot is read while a
     process may have served nothing yet, and a health probe that raises is a
     probe that reports a fault the operator has to diagnose in the metrics
-    code.  Nearest-rank (no interpolation) because every reported figure is a
-    request an operator can then look for in the slow-request log.
+    code.  No interpolation, and no nearest-rank ``ceil(f*n)-1`` either: the
+    figure is always a sample the slow-request log can then name.
     """
     if not samples:
         return 0.0

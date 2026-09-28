@@ -696,7 +696,7 @@ def _file_backed_section(snap: CoverageSnapshot, section: str) -> dict[str, Any]
 
     The absence test is any of the three ints the arithmetic below needs: a
     section the catalog could not place in the image has no VA, and a `.bss`
-    has no file offset at all, so a section carrying neither has nothing on
+    has no file offset at all, so a section missing any of them has nothing on
     disk to slice and both endpoints answer their JSON 422 contract instead of
     letting the addition raise TypeError into an HTML 500.  The document
     spells an absent value as ``""`` and the reader keeps it as ``None`` — a
@@ -987,9 +987,10 @@ def handle_api_events() -> Any:
     :meth:`_SSEStream.close`, which the server calls on every exit path.
     """
     # Cap concurrent SSE clients: each connection pins a server thread for
-    # the life of the stream (minutes/hours), and wsgiref has no connection
-    # limit.  A LAN client (or a cross-origin EventSource from any webpage
-    # a victim visits — no-cors, loopback) could otherwise exhaust threads.
+    # the life of the stream (minutes/hours), and the connection cap admits
+    # them, so this is the tighter of the two bounds.  A LAN client (or a
+    # cross-origin EventSource from any webpage a victim visits — no-cors,
+    # loopback) could otherwise take a slot each until the wider cap bit too.
     # Read the environ before registering, so the peer that goes in the map is
     # the one every later log line about this stream names.
     peer = _sse_peer()
@@ -1094,7 +1095,8 @@ def handle_api_health() -> bytes:
     # Freshness is the newest mtime across the directory's documents: a rebuild
     # rewrites one document per target, so reading any single one would report a
     # target that did not move.  Every other coverage-freshness surface (ETags,
-    # memos, the SSE watcher, Potato Mode's footer) reads the same stamp.
+    # memos, the SSE watcher, Potato Mode's footer) folds the same `mtime_ns`
+    # values into its own token.
     # ONE scan answers both the stamp and the sizes: the same list
     # `_newest_mtime_ns` folds, so asking for each walked the coverage
     # directory twice per probe, and a rebuild landing between the two walks
@@ -1110,8 +1112,10 @@ def handle_api_health() -> bytes:
         stamp = _server.mtime_ns_to_utc(mtime_ns)
         db_info["mtime"] = stamp.timestamp()
         db_info["mtime_utc"] = stamp.isoformat()
-    # Counted from the same read the target list uses, so the health number and
-    # the dropdown can never disagree about which targets the last build wrote.
+    # Counted from the built ids rather than the target list, so the health
+    # number answers "how many targets did the last build write" and stays
+    # narrower than the dropdown: `db_target_ids` omits a target the config
+    # declares and no build has written, which `/api/targets` still serves.
     target_count = len(_server.db_target_ids())
     if documents:
         db_info["size_bytes"] = sum(size for _name, _mtime, size in documents)
@@ -1594,8 +1598,8 @@ _MAX_PAGE_OFFSET = 10_000_000
 _MAX_SLICE_SIZE = 4096
 
 # Longest ?search= the list endpoint accepts.  A longer term is compared
-# against every row of every function and global, and names nothing a user
-# types; rejecting it keeps the work per request finite.
+# against every row of every function, and names nothing a user types;
+# rejecting it keeps the work per request finite.
 _MAX_SEARCH_CHARS = 500
 
 #: Statuses ``functions.status`` can carry: rebrew's own vocabulary
@@ -1665,7 +1669,7 @@ def _slice_size(raw_size: str, parse_error: str) -> tuple[int, HTTPResponse | No
     value itself goes in the detail either way.
 
     Returns ``(size, None)`` on success, ``(0, error_response)`` when the value
-    is unparseable or clamps to zero.
+    is unparseable, negative or clamps to zero.
     """
     try:
         parsed = _parse_byte_count(raw_size)
@@ -1807,7 +1811,8 @@ def handle_api_functions_list(target: str) -> bytes | HTTPResponse:
         # deferred read transaction.
         rows = _filtered_functions(coverage.functions, status_filter, search)
         total = _function_total(snap, target, status_filter, search, rows)
-        # Enumerate exactly the response fields, in the order the SELECT did.
+        # Enumerate exactly the response fields, in order: the SPA reads
+        # these keys by name, so the shape is the contract.
         items = [
             {
                 "va": fn.va,
@@ -1855,8 +1860,8 @@ def _batch_request_vas() -> tuple[list[int], HTTPResponse | None]:
     endpoint is reachable off-loopback, and bottle's own body reader drains
     the whole declared body before any endpoint cap can see it), a JSON object
     with a non-empty "vas" array capped at _MAX_BATCH_LOOKUP, and entries
-    that are integers or hex strings (base-16 with or without 0x prefix,
-    matching rebrew's parse_va — bare hex like "10001000" is valid here).
+    that are integers or hex strings (base-16 with or without 0x prefix, so
+    bare hex like "10001000" is valid here).
 
     This is the only base-16-only spelling: GET /functions/<va> and /asm run
     rebrew's parse_va_candidates, which reads an all-digit string as decimal

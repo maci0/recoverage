@@ -97,8 +97,10 @@ def _check_writes_where_the_dashboard_reads(root: Path) -> None:
     try:
         written_to = db_dir(root).resolve()
     except (OSError, LookupError, ValueError, TypeError, KeyError):
-        # The config is present but unusable. load_config raises on exactly
-        # this with a message naming the key, and that is the better report.
+        # A path rebrew resolved but this process could not (a symlink loop, a
+        # permission error on a parent).  A config that does not parse is NOT
+        # this arm: `db_dir` raises WorkspaceConfigError, which none of these
+        # catch, so it propagates to the caller as rebrew's own message.
         return
     if _same_directory(written_to, override.expanduser().resolve()):
         return

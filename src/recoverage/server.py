@@ -311,10 +311,11 @@ def fs_text_bytes(text: str) -> bytes:
 
 
 #: What separates one length-prefixed :func:`_safe_etag` part from the next.
-#: A NUL cannot occur inside a part (a section name, a target id, a status word
-#: and a search term are all text a document or a query can hold, and a NUL ends
-#: a request line), so the framing is unambiguous in a way a printable
-#: delimiter is not.
+#: The length prefix is what makes the framing unambiguous, since a part can
+#: carry a NUL: a search term reaches the validator percent-decoded, and
+#: ``?search=%00`` is one.  A printable delimiter would not survive a part
+#: holding the same byte, so the separator is one a document and a query cannot
+#: spell at all.
 _ETAG_PART_SEP = "\0"
 
 
@@ -495,7 +496,7 @@ def query_param(name: str, default: str = "") -> str:
 
 
 #: The digits every integer a request may spell is written in.  ``int()``
-#: accepts whatever ``str.isdigit()`` calls a digit, so ``?size=٤٠٩٦`` served a
+#: accepts any Unicode Nd digit, so ``?size=٤٠٩٦`` served a
 #: 4096-byte slice and ``?page=1_0`` opened page 10: spellings no client sends
 #: and no response documents, drawn from a repertoire the operator's locale
 #: picks.  ASCII only, the same rule ``config._ASCII_INT`` holds every
@@ -519,7 +520,7 @@ def parse_ascii_int(text: str, base: int = 10) -> int:
     The one integer parse for every request-supplied number: ``?size=``,
     ``?offset=``, ``?limit=``, the batch VA list, and Potato Mode's ``?page=``
     and ``?idx=``.  ``int(text, base)`` is not that check on its own: it takes
-    digits from the whole Unicode Nd/Nl/No sets plus the ``_`` separator, so a
+    digits from the whole Unicode Nd set plus the ``_`` separator, so a
     request could name a byte count, a page or a VA in a spelling the endpoint
     never documented and that no other surface accepts.  Callers already turn
     :class:`ValueError` into their own 400 or their own default, so the reason
@@ -1862,9 +1863,9 @@ def compress_static_variants(body: bytes, accept_encoding: str) -> tuple[bytes, 
     * zstd runs at :data:`ZSTD_STATIC_LEVEL` rather than the dynamic level 3.
 
     Measured on the committed bundle, with the shipped levels
-    (``tools/payload_budget.py`` prints these): the inlined shell is 160,585 B
-    raw, and brotli q11 gives 47,977 B against zstd's 51,289 B at level 19 and
-    gzip's 55,707 B at level 9.  zstd wins on throughput, not on this payload,
+    (``tools/payload_budget.py`` prints these): the inlined shell is 161,826 B
+    raw, and brotli q11 gives 48,244 B against zstd's 51,614 B at level 19 and
+    gzip's 56,048 B at level 9.  zstd wins on throughput, not on this payload,
     so choosing by size hands every client the brotli body and hands a
     zstd-first client 3 KB more than necessary.  The smallest body no longer
     fits one initial congestion window (14,600 B); ``ui._TCP_CWND_BUDGET``
@@ -2443,9 +2444,10 @@ def load_metadata(snap: CoverageSnapshot) -> dict[str, Any]:
 
     ``build_db`` wrote four metadata rows per target — ``db_version``, the
     derived ``function_stats``, the catalog's ``summary`` blob and ``paths`` —
-    and the TOML writer stores the facts instead, so three of the four are
-    recomputed here (:func:`_summary`, :func:`coverage_version`) and the fourth
-    (``paths``) is read straight off the document.
+    and the TOML writer stores the facts instead, so two of the four are
+    recomputed here (:func:`_summary`, :func:`coverage_version`) and the other
+    two (``function_stats``, which rebrew derives at load, and ``paths``) are
+    read straight off the document.
     """
     return {
         "db_version": coverage_version(snap),

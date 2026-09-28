@@ -852,14 +852,17 @@ def _build_url(
 
 # ── SimpleTemplate: Page Layout ─────────────────────────────────────
 
-# Every <table> in this page except two carries role="presentation".
+# Every <table> in this page except three carries role="presentation".
 #
 # The retro look is nested layout tables, and a screen reader walking the page
 # in table-navigation mode is read the chrome: a twenty-deep table of one-cell
 # wrappers around the content, which is the WCAG 1.3.1 failure of presenting
-# layout as structure. The two that keep the table role are `#grid-container`,
-# whose <caption> names the target the "[Skip to grid]" link lands on, and the
-# function list, whose <th scope="col"> headers relate its columns.
+# layout as structure. The two that keep the table role because they have
+# structure to relate are `#grid-container`, whose <caption> names the target
+# the "[Skip to grid]" link lands on, and the function list's inner table,
+# whose <th scope="col"> headers head its columns.  The third is the Data
+# Inspector's label/value table in the detail panel, which has neither a
+# caption nor a header row.
 _PAGE_SRC = r"""<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>ReCoverage - Potato Mode</title><!-- The same phosphor R the topbar below and the SPA's assets/favicon.svg draw. An emoji in a data URI was this link's first spelling, so a browser tab showed a desktop-computer glyph on one view of the product and the logo on the other. --><link rel="icon" href="{{R_LOGO_SVG}}"></head>
@@ -1458,8 +1461,10 @@ def _load_grid_cells(
     instead would read the post-rebuild value on both sides of that comparison
     and cache the stale rows under the key that supersedes them.
 
-    *key* is the memo key the pair was filed under (None when the DB snapshot
-    is unreadable and nothing was memoized).  It travels with the cells so a
+    *key* is the memo key the pair was filed under, which is ``None`` when the
+    caller passed no change token.  The render path always has one: an
+    unreadable document answers 503 before this is reached.  It travels with
+    the cells so a
     caller deriving anything else from them — the panel's parent index, see
     :func:`_parent_index` — files its own memo under the SAME key rather than
     re-deriving one from a fresh stat, which a rebuild landing in between would
@@ -1616,8 +1621,9 @@ def _section_pct(summary: dict[str, Any], sections: dict[str, dict[str, Any]], n
 
 
 #: Rows each search may match.  The cap bounds the work a single search box
-#: keystroke can cause on a large project; rows are taken in the order the
-#: snapshot holds them, so which rows those are stays deterministic.
+#: keystroke can cause on a large project; the rows are the first
+#: _SEARCH_ROW_LIMIT of the sort-key order, which is what keeps the selection
+#: deterministic (the snapshot's own order plays no part in it).
 _SEARCH_ROW_LIMIT = 500
 
 
@@ -2336,8 +2342,10 @@ def _render_function_list(
     # header count and the search box both read as if the list were the whole
     # one, so a reader who set it (or followed a link carrying it) sees a
     # shorter list with no sign of the criterion and no way back off it here.
-    # Clearing it stays in the list, like every other link on this page: the
-    # `[Grid View]` link below is the one that leaves it on purpose.
+    # Clearing it stays in the list, as do the sort headers and `[Clear
+    # search]`: each is built from `base`, which carries `view=functions`.  The
+    # `[Grid View]` link leaves it on purpose, and so does a row's function
+    # link, whose `link_prefix` below drops `view` and lands on the grid.
     status_note = ""
     if status_filter:
         status_note = (

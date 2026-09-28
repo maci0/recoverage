@@ -20,8 +20,9 @@ reaches UP into ``server`` for the DLL byte cache.  It holds no route and
 imports none of them, which ``tests/test_import_graph.py`` pins as a named
 exception so a second capability module cannot spread the same reach.
 
-``regen`` (an in-process rebrew catalog/build-db wrapper with no in-package
-dependencies) is a leaf both ``api`` and ``cli`` import; rebrew's heavy imports
+``regen`` (an in-process rebrew catalog/build-db wrapper that imports
+``config`` lazily, from inside its one write-path check) is a leaf both ``api``
+and ``cli`` import; rebrew's heavy imports
 stay off the dashboard's start path.  ``cli`` imports ``api`` and ``ui``
 directly as well as through here, for their startup hooks
 (``_ensure_db_watcher``, ``warm_index_cache``) — those run after this module is

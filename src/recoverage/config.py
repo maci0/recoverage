@@ -214,7 +214,10 @@ def client_timeout() -> int:
     ``/api/events`` stream blocks on its event queue rather than on the
     socket, so the heartbeat interval never enters it: a deadline under the
     15s heartbeat still serves the stream for as long as the client reads
-    (verified against the real handler stack).  What a deadline too low does
+    (verified against the real handler stack).  A configured value cannot
+    reach that case, since this reader's floor is 16s; the test drives the
+    handler stack with the deadline set below the floor.  What a deadline too
+    low does
     cost is a slow client: a response the peer cannot absorb in that window
     is cut mid-body, and a wedged SSE reader's queue is drained into a
     socket that will not take it.  So the floor is "long enough to write a
@@ -381,8 +384,8 @@ def parse_log_level(raw: str) -> int:
     if name.isascii() and name.isdigit():
         # _as_int, not int(): a run of digits past CPython's conversion limit
         # fails the conversion, not the parse, and that is a bad value, not a
-        # crash.  Re-raised in this module's own wording, so the caller wraps
-        # one message rather than two.
+        # crash.  Its own ConfigError is dropped so the raise below is the one
+        # message the caller reads.
         try:
             return _as_int("log level", raw)
         except ConfigError:
@@ -430,7 +433,7 @@ def check_db_override() -> None:
     matches nothing, the dashboard serves an empty target list forever, and
     every served number reads as a healthy zero rather than as a wrong path.
 
-    One stat, at startup only: :func:`db_override` is on the request path
+    Two stats, at startup only: :func:`db_override` is on the request path
     (through ``_paths._db_path``) and must stay a bare environment read.
     """
     override = db_override()
@@ -475,7 +478,11 @@ def active_config(
     max_connections: int,
     client_timeout: int,
 ) -> dict[str, str]:
-    """Render the settings `serve` runs with, for the startup banner.
+    """Render the settings `serve` runs with.
+
+    The one rendering, read by the startup banner, by `recoverage config` and
+    by ``/api/health``'s config block, so a second place formatting a setting
+    is a second answer to "what is it running with".
 
     Takes the ALREADY RESOLVED values rather than re-reading the environment,
     so the banner reports what the flags overrode and cannot drift from the
