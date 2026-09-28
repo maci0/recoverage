@@ -284,6 +284,15 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   lock, the event-stream cap) puts `retry_after` in the JSON envelope as well,
   so a client reading the documented error contract gets the same field
   whichever limit it hit, with one value in both places.
+- **The dashboard printed timestamps as the wire spells them.** `updated_at`
+  and `verified_at` were shown as the raw ISO string the coverage document
+  carries, which is a wall time in the writer's format and zone; they are now
+  rendered in the reader's own locale and timezone, and a stamp no date engine
+  can parse comes back unchanged rather than as "Invalid Date".
+- **Several served counts were printed with `String()`**, where the rest of the
+  dashboard groups digits the reader's locale groups them: the integer readings
+  in the data inspector, a function's size and blocker delta, the verify diff
+  line and register deltas, and the search-status match count.
 - **`make build` stamped a sdist with the wrong date, or crashed, when
   `SOURCE_DATE_EPOCH` was not plain ASCII digits.** The value was checked with
   `str.isdigit`, which accepts every Unicode decimal digit and every

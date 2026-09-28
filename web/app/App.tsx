@@ -13,7 +13,7 @@ import { useLiveReload } from "@/hooks/useLiveReload";
 import { originalDllPath, useOriginalBinary } from "@/hooks/useOriginalBinary";
 import { cellIndexForVa, useSelection } from "@/hooks/useSelection";
 import { cn } from "@/lib/cn";
-import { MSG, foldForSearch, hex, sameOriginPath, toVa } from "@/lib/format";
+import { MSG, count, foldForSearch, hex, sameOriginPath, toVa } from "@/lib/format";
 import { readStored, writeStored } from "@/lib/storage";
 
 /** The dashboard shell: the document, the topbar's controls, and the map.
@@ -564,7 +564,7 @@ export function App() {
             >
               {query !== "" && matchedNames !== null && (
                 <>
-                Searching: "{query}" ({matchedNames.size}{" "}
+                Searching: "{query}" ({count(matchedNames.size)}{" "}
                 {matchedNames.size === 1 ? "match" : "matches"})
                 {searchHint(matchedNames.size, sectionMatches, active?.name ?? null)}
                 </>

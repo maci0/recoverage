@@ -1,9 +1,9 @@
 /** Formatting helpers and the shared user-facing strings.
  *
  * `hex` upper-cases and zero-pads, which is the spelling every address, byte
- * offset and size in the dashboard uses; `percent1`, `count` and
- * `foldForSearch` are the locale-aware spellings the numbers and the search
- * read through; `MSG` is the one vocabulary the shell
+ * offset and size in the dashboard uses; `percent1`, `count`, `dateTime` and
+ * `foldForSearch` are the locale-aware spellings the numbers, the timestamps
+ * and the search read through; `MSG` is the one vocabulary the shell
  * and the detail panes share, so a loading pane and a loading overlay read the
  * same way. */
 
@@ -37,6 +37,25 @@ export function percent1(percentage: number): string {
 /** A count, grouped the way the reader's locale groups digits. */
 export function count(amount: number): string {
   return amount.toLocaleString();
+}
+
+/** A stored timestamp, written the way the reader's locale writes a date and
+ * in their own timezone. The documents carry ISO 8601, which is a wire format
+ * and not one anyone reads: a German reader gets `29.09.2026, 14:03` and a
+ * Japanese one `2026/09/29 14:03`, where the raw string is the same wall time
+ * in the writer's zone for both. `Date` parses the string the document holds
+ * and `toLocaleString` renders it, so a document that spells the stamp
+ * without an offset is read in the reader's zone rather than in the server's
+ * (a naive ISO string is local time to whoever wrote it, and the writer is
+ * not the reader). A stamp no engine can parse comes back as it arrived: a
+ * coverage document is untrusted input, and an unreadable timestamp is worth
+ * showing raw, not worth rendering as "Invalid Date". */
+export function dateTime(stamp: string): string {
+  const parsed = new Date(stamp);
+  if (Number.isNaN(parsed.getTime())) {
+    return stamp;
+  }
+  return parsed.toLocaleString();
 }
 
 /** The case fold `server.fold_text` performs, as far as JavaScript can. NFC

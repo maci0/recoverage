@@ -12,7 +12,7 @@ import { META_GRID, MetaItem } from "@/components/ui/meta";
 import { STATE_LABEL, stateSlot } from "@/grid/pack";
 import type { Panes } from "@/hooks/useSelection";
 import type { HighlightLanguage } from "@/lib/highlight";
-import { MSG, count, hex, percent1, sourceFileUrl, toVa } from "@/lib/format";
+import { MSG, count, dateTime, hex, percent1, sourceFileUrl, toVa } from "@/lib/format";
 
 /** The selected block's detail.
  *
@@ -216,7 +216,7 @@ function FunctionMeta({
           {String(address)}
         </a>
       </MetaItem>
-      <MetaItem label="Size">{`${fn.size ?? 0} bytes`}</MetaItem>
+      <MetaItem label="Size">{`${count(fn.size ?? 0)} bytes`}</MetaItem>
       <MetaItem label="Offset">{hex(fn.fileOffset ?? 0, 1)}</MetaItem>
       <MetaItem label="Symbol">{fn.symbol ?? MSG.NA}</MetaItem>
       <MetaItem label="Status">
@@ -234,7 +234,7 @@ function FunctionMeta({
       )}
       {fn.blockerDelta == null ? null : (
         <MetaItem label="Delta">
-          <span className="meta-value delta-value">{`${fn.blockerDelta} bytes`}</span>
+          <span className="meta-value delta-value">{`${count(fn.blockerDelta)} bytes`}</span>
         </MetaItem>
       )}
       {fn.ghidra_name != null && fn.ghidra_name !== fn.name ? (
@@ -246,7 +246,7 @@ function FunctionMeta({
       {fn.size_reason == null ? null : <MetaItem label="Size Source">{fn.size_reason}</MetaItem>}
       {fn.last_verify == null ? null : (
         <MetaItem label="Verified">
-          {`${fn.last_verify.verified_at ?? ""}${
+          {`${fn.last_verify.verified_at == null ? "" : dateTime(fn.last_verify.verified_at)}${
             fn.last_verify.byte_delta == null ? "" : ` (Δ${count(fn.last_verify.byte_delta)}B)`
           }`}
         </MetaItem>
@@ -255,17 +255,17 @@ function FunctionMeta({
         <MetaItem label="Code Sim">{`${percent1(fn.last_verify.similarity * 100)}%`}</MetaItem>
       )}
       {fn.last_verify?.diff_lines == null ? null : (
-        <MetaItem label="Diff Lines">{String(fn.last_verify.diff_lines)}</MetaItem>
+        <MetaItem label="Diff Lines">{count(fn.last_verify.diff_lines)}</MetaItem>
       )}
       {fn.last_verify?.reg_delta == null ? null : (
-        <MetaItem label="Reg Delta">{String(fn.last_verify.reg_delta)}</MetaItem>
+        <MetaItem label="Reg Delta">{count(fn.last_verify.reg_delta)}</MetaItem>
       )}
       {fn.last_verify?.effective_match === true ? (
         <MetaItem label="Effective">register-only delta — prove candidate</MetaItem>
       ) : null}
       {fn.updated_by == null ? null : (
         <MetaItem label="Updated By">
-          {`${fn.updated_by}${fn.updated_at == null ? "" : ` (${fn.updated_at})`}`}
+          {`${fn.updated_by}${fn.updated_at == null ? "" : ` (${dateTime(fn.updated_at)})`}`}
         </MetaItem>
       )}
       {fn.similarity == null ? null : (

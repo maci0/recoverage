@@ -2,9 +2,11 @@
  *
  * `formatBytes` and the `DataInspector` readings both read the original
  * binary, which arrives as an `ArrayBuffer` sliced per selection, so nothing
- * here touches the network or the DOM. */
+ * here touches the network or the DOM. The integer readings go through
+ * `format.count`, because a `uint32` is ten digits wide and `String` spells
+ * those the same for every reader. */
 
-import { hex } from "@/lib/format";
+import { count, hex } from "@/lib/format";
 
 export type InspectorItem = { label: string; value: string; fullWidth?: boolean };
 
@@ -30,40 +32,34 @@ export function formatBytes(buffer: ArrayBuffer, baseOffset = 0): string {
 export function inspectBytes(buffer: ArrayBuffer): Array<InspectorItem> {
   const view = new DataView(buffer);
   const length = buffer.byteLength;
-  const read = <T>(size: number, reader: () => T | string): T | string | "N/A" =>
+  const read = (size: number, reader: () => string): string =>
     length >= size ? reader() : "N/A";
   const items: Array<InspectorItem> = [
-    { label: "int8", value: String(read(1, () => view.getInt8(0))) },
-    { label: "uint8", value: String(read(1, () => view.getUint8(0))) },
-    { label: "int16", value: String(read(2, () => view.getInt16(0, true))) },
-    { label: "uint16", value: String(read(2, () => view.getUint16(0, true))) },
-    { label: "int32", value: String(read(4, () => view.getInt32(0, true))) },
+    { label: "int8", value: read(1, () => count(view.getInt8(0))) },
+    { label: "uint8", value: read(1, () => count(view.getUint8(0))) },
+    { label: "int16", value: read(2, () => count(view.getInt16(0, true))) },
+    { label: "uint16", value: read(2, () => count(view.getUint16(0, true))) },
+    { label: "int32", value: read(4, () => count(view.getInt32(0, true))) },
     {
       label: "uint32",
-      value: String(
-        read(4, () => {
-          const value = view.getUint32(0, true);
-          return `${value} (${hex(value, 8)})`;
-        }),
-      ),
+      value: read(4, () => {
+        const value = view.getUint32(0, true);
+        return `${count(value)} (${hex(value, 8)})`;
+      }),
     },
     {
       label: "float32",
-      value: String(
-        read(4, () => {
-          const value = view.getFloat32(0, true);
-          return Number.isFinite(value) ? value.toPrecision(7) : value;
-        }),
-      ),
+      value: read(4, () => {
+        const value = view.getFloat32(0, true);
+        return Number.isFinite(value) ? value.toPrecision(7) : String(value);
+      }),
     },
     {
       label: "float64",
-      value: String(
-        read(8, () => {
-          const value = view.getFloat64(0, true);
-          return Number.isFinite(value) ? value.toPrecision(15) : value;
-        }),
-      ),
+      value: read(8, () => {
+        const value = view.getFloat64(0, true);
+        return Number.isFinite(value) ? value.toPrecision(15) : String(value);
+      }),
     },
   ];
   let text = "";
