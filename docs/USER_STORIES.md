@@ -5,7 +5,7 @@ User stories for the **recoverage** coverage dashboard, organized by persona and
 What the dashboard must do, one story per workflow, each with acceptance criteria
 that the shipped code satisfies. How it is built is [DESIGN.md](DESIGN.md); the
 attack surface is [THREAT_MODEL.md](THREAT_MODEL.md). Last verified against the
-code: 2026-09-28.
+code: 2026-09-29.
 
 ---
 
@@ -36,10 +36,9 @@ graph TD
     A["Project directory<br/>with rebrew-project.toml"] --> B{"coverage-*.toml<br/>present?"}
     B -->|Yes| C["recoverage serve --port 8001"]
     B -->|No| D["recoverage serve --regen"]
-    D --> E["rebrew catalog"]
-    E --> F["rebrew build-db"]
-    F --> G["db/coverage-*.toml created"]
-    G --> C
+    D --> E["rebrew build-db<br/>(catalog analysis runs in-process)"]
+    E --> F["db/coverage-*.toml written<br/>atomically"]
+    F --> C
     C --> H["Dashboard opens at<br/>http://localhost:8001"]
 
     style A fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
@@ -124,7 +123,7 @@ sequenceDiagram
 > **As a Project Lead**, I want to filter the grid to show only specific match statuses so that I can focus on stubs that need work or celebrate exact matches.
 
 ### Acceptance Criteria
-- Filter buttons: All, E (Exact), R (Reloc), M (Near-match), S (Stub), P (Padding)
+- Filter buttons: All, E (Exact), R (Reloc), M (Near-match), S (Stub), P (Padding), V (Proven), X (Problem)
 - Filters are set-based toggles (multiple can be active simultaneously)
 - Non-matching cells are dimmed (opacity 0.15), not hidden, preserving spatial layout
 - Filtering is a second alpha pass over precomputed cell rects (no per-cell DOM, no CSS class toggling)
@@ -132,7 +131,7 @@ sequenceDiagram
 
 ```mermaid
 graph TD
-    A["Click filter button<br/>or progress bar segment"] --> B["Toggle status in<br/>activeFilters Set"]
+    A["Click filter button<br/>or progress bar segment"] --> B["Toggle status in<br/>the filters Set"]
     B --> C["Repaint from cached cell rects<br/>with globalAlpha 0.15"]
 
     E["Click 'All' button"] --> F["Clear all filters"]
@@ -157,34 +156,33 @@ graph TD
 
 ### Acceptance Criteria
 - Search matches against function name, VA (hex), and symbol (case-insensitive)
-- Search is debounced (250ms) to avoid excessive re-renders
+- Matching is derived on each render from the payload's `search_index`, so a keystroke updates the map without a round trip
 - Non-matching cells are dimmed, matching cells highlighted
 - The search row reports the live match count, names the query, and says what
-  to do when nothing matched; a Clear button empties the input and the filter
-- Enter jumps to the first match, Escape clears the search
+  to do when nothing matched; a Clear button empties the input
+- Enter jumps to the first match, selecting the cell or jumping to its VA when the match is not in the active section
 - Clearing the search restores all cells to normal
 
 ```mermaid
 graph TD
-    A["Type in search box"] --> B["Debounce 250ms"]
-    B --> C["Build filteredFnNames Set<br/>(match name, VA, symbol)"]
-    C --> D{"Any matches?"}
-    D -->|Yes| E["Dim unmatched cells<br/>highlight matched cells"]
-    D -->|No| F["All cells dimmed"]
+    A["Type in search box"] --> B["Derive the matching name set<br/>(name, VA, symbol)"]
+    B --> C{"Any matches?"}
+    C -->|Yes| D["Dim unmatched cells<br/>highlight matched cells"]
+    C -->|No| F["Status line: no matches,<br/>search by VA"]
 
-    G["Clear search"] --> H["Remove dimming<br/>restore all cells"]
+    G["Click Clear"] --> H["Empty the query<br/>restore all cells"]
 
     style A fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
     style E fill:#d1fae5,stroke:#059669,color:#065f46
     style H fill:#d1fae5,stroke:#059669,color:#065f46
-    style D fill:#fef3c7,stroke:#d97706,color:#92400e
+    style C fill:#fef3c7,stroke:#d97706,color:#92400e
 ```
 
 ---
 
-## 6. Navigating Cross-References
+## 6. Following Addresses
 
-> **As an RE Dev**, I want to click hex addresses in the disassembly to jump to the referenced function so that I can trace call chains without manual lookups.
+> **As an RE Dev**, I want to click a hex address in the disassembly to jump to the block that address names so that I can walk a call chain without a second lookup. (A data-segment cross-reference view, which is what a call graph is, is not built; see [DESIGN.md](DESIGN.md#future-ideas--todos).)
 
 ### Acceptance Criteria
 - Hex addresses in ASM (e.g. `0x10003DA0`) are rendered as clickable `<a>` links
@@ -363,9 +361,10 @@ sequenceDiagram
     Server->>Server: Verify localhost origin
 
     Server->>Rebrew: run_catalog
-    Rebrew-->>Server: db/data_*.json updated
     Server->>Rebrew: build_db
-    Rebrew-->>Server: db/coverage-*.toml updated
+    Rebrew-->>Server: db/coverage-*.toml replaced whole,
+    Note over Server: one document per target,
+    Note over Server: temporary sibling + atomic rename
 
     Server-->>UI: 200 OK
     UI->>Server: GET /api/targets/<target>/data
@@ -420,7 +419,7 @@ graph TD
 - Modal is centered with backdrop blur and smooth scale/fade animation
 - Copy button available inside the modal
 - Close via button, Escape key, or clicking outside
-- Custom-built with plain VanJS divs (no external UI library)
+- Custom-built dialog portaled into `document.body`, with the shadcn/ui `Button` primitive for its controls
 
 ```mermaid
 graph TD
@@ -474,7 +473,7 @@ graph TD
 ### Acceptance Criteria
 - Source links in the panel point at `paths.sourceRoot` from the document, falling back to `/src/<target>/<file>.c`
 - Server proxies `/src/*` and `/original/*` from the project directory (path-traversal safe)
-- Original DLL bytes are fetched from `paths.originalDll`, falling back to `/original/<target>.dll`, as an ArrayBuffer cached in `data.originalDll`
+- Original DLL bytes are fetched from `paths.originalDll`, falling back to `/original/<target>.dll`, as an ArrayBuffer cached by `useOriginalBinary` against the resolved path
 - A section with no file backing (or a `.bss` cell) has no bytes to slice, and the hex pane says so rather than showing unrelated bytes
 - File offset calculated from VA using section metadata
 
@@ -501,12 +500,12 @@ graph TD
 > **As an AI Operator**, I want the dashboard to render on the first TCP packet so that even over high-latency connections the UI shell appears instantly.
 
 ### Acceptance Criteria
-- HTML, CSS, JS, and VanJS library inlined into a single response
+- HTML, the built stylesheet and the built bundle inlined into a single response
 - Minified with `rjsmin`/`rcssmin` and compressed with Brotli/Zstd/gzip
-- Total payload 14,075 B brotli, against a 14,600-byte budget (the TCP initial congestion window), so 525 bytes of headroom remain; `ui._check_payload_budget` warns with the exact overage and `tests/test_api.py` fails, so crossing the window is a regression rather than a log line
+- Total payload 45,256 B brotli, against the 90,000-byte ceiling in `ui._TCP_CWND_BUDGET`; the current winner is brotli, with zstd 48,327 B and gzip 52,602 B. `make payload-budget` re-derives all three from the committed bundle, `ui._check_payload_budget` warns with the exact overage, and `tests/test_api.py` fails, so crossing the ceiling is a regression rather than a log line
 - The whole frontend is one built bundle inlined into the shell, so a change to the map, the asm pane, the hex dump or the data inspector moves the same measured number, and `tests/test_api.py` fails when it crosses the ceiling
 - Compression algorithm auto-selected from `Accept-Encoding` header
-- Deferred Highlight.js loading: fetched from this origin (vendored in `assets/`) only on first code block click
+- highlight.js is compiled into the bundle rather than fetched on first use, so a code pane never renders unhighlighted
 - `AbortController` cancels in-flight requests when clicking rapidly between cells
 - ETag caching returns `304 Not Modified` when the coverage documents are unchanged
 
@@ -519,13 +518,10 @@ graph TD
     E -->|zstd| F["Zstandard compress"]
     E -->|br| G["Brotli compress"]
     E -->|gzip| H["Gzip compress"]
-    F --> I["14,075 B response<br/>(brotli is the smallest)"]
+    F --> I["Smallest body wins<br/>(45,256 B brotli today)"]
     G --> I
     H --> I
     I --> J["Browser parses + renders<br/>UI shell in first paint"]
-
-    J --> K["User clicks code block"]
-    K --> L["Dynamically load<br/>Highlight.js from this origin"]
 
     style A fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
     style J fill:#d1fae5,stroke:#059669,color:#065f46
@@ -576,13 +572,12 @@ Planned work (Minimap, data-segment XREFs, Diff View) is tracked in [DESIGN.md](
 ```mermaid
 graph LR
     subgraph "Phase 1: Data Generation"
-        A["rebrew catalog"] --> B["db/data_*.json"]
-        B --> C["rebrew build-db"]
-        C --> D["db/coverage-*.toml"]
+        A["rebrew build-db"] --> B["catalog analysis, then<br/>one document per target"]
+        B --> C["db/coverage-*.toml"]
     end
 
     subgraph "Phase 2: Dashboard Launch"
-        D --> E["recoverage serve"]
+        C --> E["recoverage serve"]
         E --> F["SPA dashboard<br/>or /potato"]
     end
 
@@ -590,7 +585,7 @@ graph LR
         F --> G["Browse grid"]
         G --> H["Click cell"]
         H --> I["Inspect function"]
-        I --> J["Follow XREFs"]
+        I --> J["Follow an address link<br/>in the disassembly"]
         J --> H
     end
 

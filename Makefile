@@ -1,6 +1,6 @@
 .PHONY: help setup clean build test test-one test-browser fuzz lint format format-check web-lint smoke smoke-fail \
 	shell-lint yaml-lint type-check all ensure-uv ensure-rebrew warn-uv-version clone-rebrew ensure-lint-tools \
-	ensure-bun regen-oxlint typecheck-web
+	ensure-bun regen-oxlint typecheck-web payload-budget
 
 # Force POSIX sh for recipes (ignore a caller-exported SHELL=bash).  Version
 # compares use ``sort -t. -k…n`` (POSIX), not GNU ``sort -V``.
@@ -92,6 +92,7 @@ help:
 		'  make shell-lint         # shellcheck over tools/*.sh (CI lint job)' \
 		'  make yaml-lint          # yamllint over .github/ (CI lint job)' \
 		'  make smoke              # boot the dashboard against a sample db and probe it' \
+		'  make payload-budget     # re-derive the inlined shell size at each static encoding' \
 		'  make all                # every check CI runs, in one command' \
 		'  make clean              # remove caches and build artifacts' \
 		'' \
@@ -306,6 +307,12 @@ smoke: ensure-rebrew
 
 smoke-fail: ensure-rebrew
 	$(UV_RUN) python tools/smoke.py --expect-failure
+
+# The numbers docs/DESIGN.md and docs/USER_STORIES.md quote about the inlined
+# shell move with every bundle rebuild, so the document points here rather than
+# at a hand-copied figure.
+payload-budget: ensure-rebrew
+	$(UV_RUN) python tools/payload_budget.py
 
 # Everything CI checks, in one local command, so nothing fails only after push.
 all: format-check lint type-check shell-lint yaml-lint test web-lint typecheck-web smoke smoke-fail

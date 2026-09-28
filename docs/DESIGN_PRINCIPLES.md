@@ -4,13 +4,13 @@ This document outlines the core architectural and operational philosophies that 
 
 How the dashboard is built is [DESIGN.md](DESIGN.md); the requirements these
 principles serve are [USER_STORIES.md](USER_STORIES.md). Last verified against
-the code: 2026-09-28.
+the code: 2026-09-29.
 
-## 1. Lightweight & Dependency-Free Stack
-The UI is built to be as light and fast as possible. We avoid heavy frontend frameworks, relying instead on VanJS (a ~2 kB reactive library) and Vanilla CSS. The backend uses the minimal Bottle framework to serve data. The goal is uncompromising speed and low maintenance overhead.
+## 1. A Lightweight Frontend and a Minimal Backend
+The UI is built to be as light and fast as possible. The frontend is one built bundle, Preact (through `preact/compat`) with Tailwind over a CSS-variable token layer, compiled by Vite into `assets/app.js` and `assets/style.css` and inlined into the shell; Preact rather than React is most of why it is small. The backend uses the minimal Bottle framework to serve data. The goal is uncompromising speed and low maintenance overhead.
 
 ## 2. First Draw in First TCP Packet
-Initial page load time is critical. The entire Single Page Application (SPA) shell — `index.html` with `style.css` and `app.js` inlined, minified and aggressively compressed (Brotli, Zstd or gzip, smallest wins) — is one response, so the first paint needs no render-blocking subresource request. Since the frontend became one Preact + Tailwind bundle the shell measures ~96 KB compressed, which cannot fit RFC 6928's initial congestion window; the budget in `ui._TCP_CWND_BUDGET` is therefore a checked ceiling with headroom over that measurement rather than the protocol constant. `ui._check_payload_budget` prints the overage on every start and `tests/test_api.py` fails when the shipped shell crosses the ceiling, so unbounded growth is still a regression.
+Initial page load time is critical. The entire Single Page Application (SPA) shell — `index.html` with `style.css` and `app.js` inlined, minified and aggressively compressed (Brotli, Zstd or gzip, smallest wins) — is one response, so the first paint needs no render-blocking subresource request. Since the frontend became one Preact + Tailwind bundle the shell measures ~45 KB brotli, which cannot fit RFC 6928's initial congestion window; the budget in `ui._TCP_CWND_BUDGET` is therefore a 90,000-byte checked ceiling with headroom over that measurement rather than the protocol constant. `ui._check_payload_budget` prints the overage on every start and `tests/test_api.py` fails when the shipped shell crosses the ceiling, so unbounded growth is still a regression. The three compressed sizes behind that claim are re-derived by `make payload-budget`.
 
 ## 3. Decoupled Architecture
 Recoverage is a pure data consumer. Its serving path never links the `rebrew` matching tools: it reads rebrew's clear-text coverage documents (`db/coverage-<target>.toml`) and never writes them. `rebrew` is a runtime dependency only for the shared, stdlib-only workspace resolution (`rebrew.workspace`), the document reader (`rebrew.coverage_toml`), and the in-process regen commands. This one-way data flow guarantees that the dashboard never interferes with the underlying decompilation pipeline.
@@ -27,7 +27,8 @@ Rendering grids with thousands of cells (e.g., `.text` or `.bss` sections) requi
 ## 6. On-Demand Hydration & Lazy Loading
 Memory and bandwidth are preserved by fetching heavy assets only when explicitly needed:
 - Detailed function metadata (`/api/targets/<target>/functions/<va>`) and assembly (`/api/targets/<target>/asm`) are fetched only when a cell is clicked.
-- Heavy libraries like `highlight.js` are deferred and loaded from this origin (vendored in `assets/`, so the dashboard works air-gapped) only upon the first code block interaction.
+- Section cells are fetched only when a section tab is first opened: every `/data` payload carries all section rows but only the requested one's cells, so a tab is one request rather than four up front.
+- highlight.js is compiled into the bundle rather than deferred to a first-use fetch. It is core plus the two grammars the dashboard shows and the custom `hex` language, so the deferred scripts that cost a second round trip (and a pane that renders unhighlighted before they land) are gone.
 - Assembly generation (via Capstone) is performed on-demand and cached in memory using LRU caching.
 
 ## 7. Graceful Degradation (Potato Mode)

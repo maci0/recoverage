@@ -3,17 +3,17 @@
 How the dashboard is built. The requirements it implements are
 [USER_STORIES.md](USER_STORIES.md), the operating philosophies are
 [DESIGN_PRINCIPLES.md](DESIGN_PRINCIPLES.md), and the attack surface is
-[THREAT_MODEL.md](THREAT_MODEL.md). Last verified against the code: 2026-09-28.
+[THREAT_MODEL.md](THREAT_MODEL.md). Last verified against the code: 2026-09-29.
 
 ## Overview
 ReCoverage is a reactive, high-performance web dashboard for visualizing binary reverse-engineering progress. It maps compiled C functions and data segments (`.text`, `.rdata`, `.data`, `.bss`) to their original binary offsets, providing a visual "defrag" style grid of the decompilation status.
 
 ## Architecture
-The UI is built using a lightweight, dependency-free stack to ensure fast load times and easy maintainability:
-* **Frontend Framework**: [VanJS](https://vanjs.org/) (a ~2 kB reactive UI framework).
-* **Styling**: Vanilla CSS with CSS Variables for theming.
+The UI is built to keep first paint cheap while carrying a canvas grid and a three-pane detail view:
+* **Frontend Framework**: [Preact](https://preactjs.com/) through `preact/compat` (hooks and `createPortal`, React-shaped so shadcn/ui primitives work), authored in TypeScript under `web/app/` and built by Vite into the single `assets/app.js` bundle. Preact rather than React is most of why the inlined shell is ~45 KB brotli.
+* **Styling**: Tailwind CSS 4 compiled into `assets/style.css`, over a CSS-variable token layer (`--bg`, `--panel`, `--border`, the per-state fills) defined in `web/app/index.css`, which is what the light-mode overrides re-ground.
 * **Backend/Data**: [Bottle](https://bottlepy.org/) web framework serving rebrew's clear-text coverage documents (`db/coverage-<target>.toml`).
-* **Syntax Highlighting**: Highlight.js (C, x86 ASM, custom Hex language), vendored in `assets/` and served from this origin so the dashboard works air-gapped.
+* **Syntax Highlighting**: Highlight.js (C, x86 ASM, custom Hex language) imported from the npm package in `web/app/lib/highlight.ts` and compiled into the bundle, so the dashboard needs no network fetch to highlight and works air-gapped.
 
 ## Data Pipeline
 1. `rebrew catalog` parses the target binary (`target.dll`) and C source annotations (`// FUNCTION:`, `// GLOBAL:`).
@@ -31,35 +31,30 @@ The UI is built using a lightweight, dependency-free stack to ensure fast load t
    * With `--token`, an unauthenticated request is answered by content type: browsers asking for `text/html` get a short page explaining that `?token=` must be appended (it never echoes the token), and API clients keep the `{error, code, detail}` JSON contract. A run of failed tokens inside `_AUTH_FAIL_WINDOW_SECONDS` is throttled to `429` with `Retry-After`, which bounds online guessing on a network bind. A share link (`?token=`) authenticates once and `server.set_auth_cookie` writes the HttpOnly cookie both page routes need: every link on `/` and on `/potato` is relative, so without it the reader lost the credential on their first click.
    * Proxied paths: `/src/*` → `project_dir/src/`, `/original/*` → `project_dir/original/`
 
-## State Management (VanJS)
-The application state is managed using VanJS reactive primitives (`van.state`):
-* `data`: Holds the fetched snapshot (sections, globals, functions, summary).
-* `originalDll`: The original DLL's raw ArrayBuffer for byte slicing, stored as `{path, buf}` so a target switch mid-download cannot install the previous target's bytes.  Fetched from `paths.originalDll` when the document carries that metadata, otherwise from `/original/<target>.dll`, which the server proxies anyway; when neither exists the hex pane says so instead of failing silently.
-* `activeSection`: Tracks the currently selected PE section (`.text`, `.rdata`, `.data`, `.bss`).
-* `activeFilters`: A `Set` tracking which match statuses are currently visible (exact, reloc, near_match, stub, padding, proven, problem).
-* `searchQuery`: The current text in the search input (debounced 250ms).
-* `currentFn` / `currentCellIndex`: Tracks the currently selected block in the grid.
-* `isLightMode`: Tracks the current theme (persisted to `localStorage` as `recoverage_theme`).
-* `showModal` / `modalTitle` / `modalContent` / `modalLang`: Modal dialog state for expanded code viewing.
-* `isLoading`: Tracks network request states to show a pulsing loading overlay.
-* `activeTarget`: Current target ID (e.g., "SERVER", "Europa1400Gold").
-* `availableTargets`: List of available targets fetched from `/api/targets`.
-* `filteredFnNames`: Derived state for search filtering (Set of function names matching search query).
-* `emptyState`: `{title, detail}` when there is no map to draw — no coverage documents, no sections, an unreadable format version, or a failed fetch.  The map area renders it in place of the grid and suppresses the legend, hint, and progress bar, all of which describe a grid that is not there.  Every load path clears `isLoading`, including the early return when no target is selected: leaving it set was what produced a spinner that never stopped on first run.
+## State Management (Preact hooks)
+`web/app/App.tsx` is the shell and owns the state the chrome needs; the rest
+lives in hooks under `web/app/hooks/`. Preact `useState`/`useMemo`/`useRef`,
+not a global store: the shell is the only subscriber, and the four data hooks
+are the only things that fetch.
+* `useCoverage(target, section)` (`hooks/useCoverage.ts`): the fetched snapshot as `sections`, `searchIndex` and `paths`, plus `loading`, `loadError`, a per-section `cellError` with an `ensureCells` lazy fetch, and `reload`. Every payload carries all section rows but only the requested one's cells, so a sibling tab fetches its cells on first visit; a tab that silently painted nothing would be unusable, so a failed fetch is remembered with the reason.
+* `useOriginalBinary(path, enabled)` (`hooks/useOriginalBinary.ts`): the original DLL's raw ArrayBuffer, keyed on the resolved path so a target switch mid-download cannot install the previous target's bytes. Fetched from `paths.originalDll` when the document carries that metadata, otherwise from `/original/<target>.dll`, which the server proxies anyway; when neither exists the hex pane says so instead of failing silently.
+* `useSelection(...)` (`hooks/useSelection.ts`): the selected cell, its panes' fetch state, and the modal's `showModal` / `title` / `content` / `lang` state.
+* `useLiveReload(...)` (`hooks/useLiveReload.ts`): the `/api/events` subscription, the Reload/Regenerate action, and its 5 s cooldown (`busy` while a run is in flight).
+* Shell-local state in `App.tsx`: `targets` and the current `target` (persisted to URL `?target=XXX` and `localStorage`), `section`, the search `query` and its debounce, the `filters` `Set`, the selected cell index, the `theme` (`recoverage_theme` in `localStorage`, falling back to `prefers-color-scheme`), the nav `notice`, and the `loadError` banner. `matchedNames` / `matchedFns` are `useMemo` derivations of the query against `searchIndex`, not stored state.
 
-  Note for future bindings: these render an empty `div()` rather than `null` when they have nothing to show.  A VanJS binding whose first result is `null` never renders again — van keeps no node to replace, so later updates are dropped.
+When there is no map to draw (no coverage documents, no sections, an unreadable format version, or a failed fetch), `useCoverage` reports it as `loadError` or `cellError` and the map area renders that message in place of the grid, suppressing the legend, hint, and progress bar, all of which describe a grid that is not there. Every load path clears `loading`, including the early return when no target is selected: leaving it set was what produced a spinner that never stopped on first run.
 
 ### Async writes are generation-guarded
 
-`loadData` has four independent triggers (first paint, target switch, SSE `db-updated`, regen) and fetches a multi-MB payload, so two calls routinely overlap.  The browser does not resolve them in issue order, so without a guard a slow response for the previous target lands after the new one and the map shows one target's data under another's name.
+`useCoverage.load` has four independent triggers (first paint, target switch, SSE `db-updated`, regen) and fetches a multi-MB payload, so two calls routinely overlap. The browser does not resolve them in issue order, so without a guard a slow response for the previous target lands after the new one and the map shows one target's data under another's name.
 
-Each call therefore takes a generation number and an `AbortController`.  Only the call whose generation is still current may write `data`, `summaryData`, `activeSection`, the error panel, or `isLoading`; a superseded call writes nothing and lets the call that replaced it report the outcome.  `selectFunction` uses the same rule through its controller's `signal.aborted`.  Every state write made after an `await` belongs behind one of these two checks.
+Each call therefore takes its own `AbortController`, and every state write made after an `await` sits behind that controller's `signal.aborted` check. A superseded call writes nothing and lets the call that replaced it report the outcome. `useSelection` uses the same rule, one controller per selection, because a newer selection supersedes an older one. Every state write after an `await` in `web/app/` belongs behind one of these two checks.
 
 ## Components
-The UI is broken down into functional VanJS components. `app.js` builds the
-shell (topbar, progress bar, and the containers for the grid and the panel);
-the grid, the panel's body, and the modal are defined in `web/app/` and
-mounted by the shell once it has loaded, as each section below marks.
+The UI is broken down into functional components. `web/app/App.tsx` is the
+shell (topbar, search, filters, actions, and the containers for the grid, the
+panel and the modal); each section below names the `web/app/components/` module
+it is mounted from.
 
 ### 1. Topbar (`header.topbar`)
 * **Logo & Title**: Retro-futuristic "R" logo with CRT scanline effects.
@@ -67,7 +62,7 @@ mounted by the shell once it has loaded, as each section below marks.
 * **Tabs**: Dynamic segment selectors generated from the active target's sections, ordered by ascending VA so PE load order (`.text`, `.rdata`, `.data`, `.bss`) holds and the section carrying the work leads, instead of an alphabetical row ending in `.text`.
 * **ProgressBar**: A stats row (`size · matched · coverage %`) above a slim 14px segmented bar. The stats live outside the bar as plain text so they can never clip; the bar itself is a pure segment strip. **Every segment is a share of one denominator**: `.text` divides function counts by `totalFunctions` (its `matched` stat is a function count), every other section divides cell bytes by the section size. Padding is a cell state with no function counterpart, so it is a segment only on the byte-denominated bars; on `.text` those bytes are already inside the unmatched remainder, and adding them as a byte share of a function bar pushed the total past 100%. **Each segment is a filter toggle**, reachable by keyboard and carrying `aria-pressed`; segments under 0.5% are not rendered at all, since a zero-width toggle is a focus stop with nothing to point at.
 * **Target Selector**: Dropdown to switch between targets (e.g., `SERVER`, `GOLD`, `GOLDTL`). Persists selection to URL (`?target=XXX`) and localStorage.
-* **Search & Filters**: Debounced search input and toggleable filter buttons (All, E, R, M, S, P, V, X). V isolates `proven` cells and X the problem states, so every row the legend prints is reachable as a filter instead of only through a pixel. The set is written to the URL as `?filter=` (the parameter Potato Mode already used) on every toggle, so a filtered map survives a reload and can be shared; a name outside the set is dropped, since it would dim every painted cell and light no button.
+* **Search & Filters**: A search input and toggleable filter buttons (All, E, R, M, S, P, V, X). V isolates `proven` cells and X the problem states, so every row the legend prints is reachable as a filter instead of only through a pixel. The set is written to the URL as `?filter=` (the parameter Potato Mode already used) on every toggle, so a filtered map survives a reload and can be shared; a name outside the set is dropped, since it would dim every painted cell and light no button.
 * **Actions**: Theme toggle (sun/moon icons) and Reload data buttons with a 5-second cooldown to prevent spam.
 
 ### 2. Grid (`.map`, mounted by `components/CoverageMap.tsx`)
@@ -109,12 +104,13 @@ mounted by the shell once it has loaded, as each section below marks.
 * **Documentation**: Extracts annotation comments from C source (`// FUNCTION:`, `// STATUS:`, `// NOTE:`, `// BLOCKER:`, etc.) and displays them in the metadata grid.
 
 ### 4. Modal (`modal`, mounted by `components/CodeModal.tsx`)
-* Custom-built modal using plain VanJS divs (no external UI library)
-* Focus moves to the Close button on open, retried across frames because the class that reveals the dialog is applied by van's batched update and `focus()` on a still-hidden element is a no-op
+* Rendered through `createPortal` into `document.body`, not into the panel: the modal makes the page behind it `inert`, and a dialog inside an inert region could not be focused
+* Focus moves to the Close button on open, retried across frames because the class that reveals the dialog is applied by the batched update and `focus()` on a still-hidden element is a no-op
 * Everything outside the dialog is marked `inert` while it is open, which removes the background from both the tab order and the accessibility tree
+* Escape closes it, through one `closeOnEscape` handler so the listener added and the one removed are the same reference
 * Centered, floating dialog with backdrop blur
 * Displays expanded C source, ASM, or hex bytes
-* Copy button and Close button
+* Copy button and Close button (the shadcn/ui `Button` primitive in `components/ui/button.tsx`)
 * Smooth scale/fade animation on open/close
 
 ### 5. Legend & Hint
@@ -130,7 +126,7 @@ mounted by the shell once it has loaded, as each section below marks.
   * **Exact**: Green (`rgba(16, 185, 129, 0.75)`)
   * **Reloc**: Blue/Teal (`rgba(2, 132, 199, 0.65)`)
   * **Near-match**: Yellow/Amber (`rgba(255, 200, 0, 0.65)`)
-  * **Size mismatch**: Yellow/Amber, the same hue as near-match (the SPA's `STATE_ID` packs both to slot 3)
+  * **Size mismatch**: Yellow/Amber, the same hue as near-match (the SPA's `STATE_SLOTS` in `web/app/grid/pack.ts` packs both to slot 3)
   * **Proven**: Bold Cyan (`rgba(6, 182, 212, 0.65)`, `--proven-bg`)
   * **Stub**: Red (`rgba(255, 0, 0, 0.65)`)
   * **Padding**: Silver (`rgba(200, 200, 220, 0.55)`)
@@ -163,8 +159,8 @@ mounted by the shell once it has loaded, as each section below marks.
 * **Instants are published in UTC with the offset spelled out.** `mtime_utc` is always `+00:00` regardless of the host's `TZ`, so a client never has to guess a zone, and a server moved between regions renders the same instant.  The log stamp is the exception, deliberately: it is local time with its numeric offset attached (`%z`), because an operator comparing it against their own wall clock needs to see their own clock, and the offset is what makes that comparison unambiguous across a DST change.
 
 ### Performance Optimizations
-* **First Draw Without a Render-Blocking Request**: `ui.py` intercepts requests to `/` and inlines `index.html`, the built `style.css` and the built `app.js` into a single response. That response is minified (`rjsmin`, `rcssmin`) and compressed to the smallest representation the client accepts (see *Smallest-Wins Static Compression* below): ~45 KB brotli today.  It is one Preact + Tailwind bundle rather than the ~14 KB VanJS shell it replaced, so it no longer fits RFC 6928's initial congestion window, and `ui._TCP_CWND_BUDGET` is a 90 KB ceiling over the measurement rather than the protocol constant. `ui._check_payload_budget` prints the exact overage if the shell outgrows it while `tests/test_api.py` fails on it, so crossing the ceiling is a regression and not only a log line.
-* **Smallest-Wins Static Compression**: The precompressed responses (the inlined shell and the packaged assets) are not served under a fixed encoding preference.  Every encoding the client accepts is produced at maximum effort and the smallest body wins, because those bytes are compressed once per accepted set and then served from a dict, so the extra passes cost nothing per request and guarantee the winner is the real minimum.  This matters on the wire: measured on the shell, brotli q11 gives 14,075 B against zstd's 15,178 B at level 19 and 17,056 B at the level the dynamic path uses.  A fixed `zstd`-first preference therefore handed every zstd-capable browser 1,103 B more than necessary and pushed the shell 578 B *past* the congestion window, costing a whole extra round trip before the first paint to buy decoding speed on a one-off document.  Static zstd runs at level 19 (where it stops returning a smaller frame on these bodies) and static gzip at 9.  The dynamic path keeps its fixed order and its cheap settings, because there a preference avoids compressing one multi-megabyte request body two or three ways per request.  Brotli is what buys the budget on this shell: zstd is 15,178 B and gzip 15,686 B, both past the window, so a client accepting neither needs a second round trip whatever the server does. Every browser that has zstd also has brotli, so no browser shipping today is in that position.
+* **First Draw Without a Render-Blocking Request**: `ui.py` intercepts requests to `/` and inlines `index.html`, the built `style.css` and the built `app.js` into a single response. That response is minified (`rjsmin`, `rcssmin`) and compressed to the smallest representation the client accepts (see *Smallest-Wins Static Compression* below): ~45 KB brotli today.  It is one Preact + Tailwind bundle rather than the ~14 KB shell it replaced, so it no longer fits RFC 6928's initial congestion window, and `ui._TCP_CWND_BUDGET` is a 90 KB ceiling over the measurement rather than the protocol constant. `ui._check_payload_budget` prints the exact overage if the shell outgrows it while `tests/test_api.py` fails on it, so crossing the ceiling is a regression and not only a log line.
+* **Smallest-Wins Static Compression**: The precompressed responses (the inlined shell and the packaged assets) are not served under a fixed encoding preference.  Every encoding the client accepts is produced at maximum effort and the smallest body wins, because those bytes are compressed once per accepted set and then served from a dict, so the extra passes cost nothing per request and guarantee the winner is the real minimum.  This matters on the wire: measured on the current shell, brotli q11 gives 45,256 B against zstd's 48,327 B at level 19 and gzip's 52,602 B at level 9, so a fixed `zstd`-first preference would hand every zstd-capable browser 3,071 B more than necessary.  Static zstd runs at level 19 (where it stops returning a smaller frame on these bodies) and static gzip at 9.  The dynamic path keeps its fixed order and its cheap settings, because there a preference avoids compressing one multi-megabyte request body two or three ways per request.  Brotli is what buys the budget on this shell: every browser that has zstd also has brotli, so no browser shipping today is served the larger pair.  Re-derive the three numbers with `make payload-budget`; measured 2026-09-29 against the committed bundle.
 * **Advanced Compression**: Dynamic responses compress brotli at quality 5, not the default 11: measured on a 5.6 MB coverage payload, q=11 costs 5.9 s of CPU for 334 KB while q=5 costs 68 ms for 444 KB, and that cost is paid per request because API responses are not cached compressed.  Clients without zstd (Safari) would otherwise stall about six seconds on every load and every live reload.
 * **Shell Revalidation**: The shell is built once from the package's own assets and cannot change under a running server, so it carries a strong `ETag` (from the source bytes and the chosen encoding) and answers `If-None-Match` with a 304.  It used to be the one response served `no-store` with no validator, which made it the only response in a dashboard visit that a repeat load could never skip: every reload re-downloaded the whole ~96 KB document while the bundle and the rest answered 304.  `max-age` stays off for the same reason as on the assets below.
 * **HTTP/1.1 Keep-Alive, Threaded Connections**: The server is wsgiref on a `ThreadingMixIn` server class, so each connection gets its own daemon thread — without that, the long-lived `/api/events` SSE stream would stall every other request. wsgiref itself is HTTP/1.0 and serves exactly one request per connection, so `devserver._KeepAliveRequestHandler` restores the stock `BaseHTTPRequestHandler` request loop and `devserver._KeepAliveServerHandler` announces 1.1. Measured over one connection: `/`, `favicon.svg`, `/api/targets` and `/potato` all answered on a single socket, where each used to pay its own TCP handshake. Two rules keep the framing honest: a response with neither `Content-Length` nor `Transfer-Encoding` — the streamed `/api/events` and nothing else, since bottle sets `Content-Length` on every body it returns — is sent with `Connection: close`, because under 1.1 a client would otherwise read into the next response; and a connection idle between requests falls back to a 15 s deadline instead of the 120 s per-request one, so an open tab does not pin a handler thread.
@@ -271,7 +267,7 @@ A target that `rebrew-project.toml` declares but no build has written is served 
 
 # Potato Mode
 
-Potato Mode is a pure HTML 5 alternative UI that works **without any CSS or JavaScript**. It's designed to work on severely constrained environments while providing near-visual-parity with the main VanJS dark-mode UI.
+Potato Mode is a pure HTML 5 alternative UI that works **without any CSS or JavaScript**. It's designed to work on severely constrained environments while providing near-visual-parity with the main SPA's dark theme.
 
 ## Constraints
 - **NO CSS** - All styling uses only HTML attributes (`bgcolor`, `cellpadding`, `cellspacing`, `border`, `background`, etc.)
@@ -286,7 +282,7 @@ Potato Mode is a pure HTML 5 alternative UI that works **without any CSS or Java
 - **Multi-select filters** (toggle multiple filters simultaneously)
 - **Search functionality** (matches function name, VA, and symbol)
 - **Segmented progress bar** (coverage breakdown by status)
-- **A color and a legend row for every cell state** `build_db` can write, shared with the SPA's `STATE_ID` vocabulary.  A legend row covers every state that shares it, so a state with no row of its own still has a color and a filter
+- **A color and a legend row for every cell state** `build_db` can write, shared with the SPA's `STATE_SLOTS` vocabulary in `web/app/grid/pack.ts`.  A legend row covers every state that shares it, so a state with no row of its own still has a color and a filter
 - **Cell selection with detail panel**
 - **Target selector**
 - **Data Inspector** for `.data`, `.rdata`, and `.bss` sections

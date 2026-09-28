@@ -43,9 +43,10 @@ recoverage/
 │   ├── THREAT_MODEL.md     # Attack surface, trust boundaries, risk ranking
 │   ├── ideas.md            # Future improvement ideas
 │   └── *.png               # Screenshots for the README
-├── tools/                  # lint_html.py, smoke.py, _serve_harness.py, oxlint/,
-│                           # ci_clone_rebrew.sh, flatten_rikalabs_strict.py,
-│                           # normalize_sdist.py, vendor_manifest.py
+├── tools/                  # lint_html.py, smoke.py, payload_budget.py,
+│                           # _serve_harness.py, oxlint/, ci_clone_rebrew.sh,
+│                           # flatten_rikalabs_strict.py, normalize_sdist.py,
+│                           # vendor_manifest.py
 ├── tests/
 │   ├── conftest.py           # Shared fixtures (synthetic coverage TOML)
 │   ├── coverage_fixture.py   # Builders for synthetic coverage documents
@@ -142,6 +143,8 @@ make web-build              # bun install --frozen-lockfile && bun run build:web
 make web-lint               # bun install --frozen-lockfile && bun run lint
 make typecheck-web          # bun install --frozen-lockfile && bun run typecheck:web (tsc --noEmit)
 make smoke                  # uv run --locked --extra dev python tools/smoke.py
+make payload-budget         # the inlined shell's size at each static encoding, which the
+                            #   payload budget in docs/DESIGN.md quotes
 make smoke-fail             # same, against a deliberately corrupt db
 make all                    # every check CI runs, one command
 

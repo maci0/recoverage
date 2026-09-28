@@ -2,9 +2,8 @@
 
 Scope: the `recoverage` package as shipped (`src/recoverage/`) and the way it is
 started (`recoverage serve`). Every claim below carries a file reference so a
-later pass can re-verify it. Last reviewed: 2026-09-28, against
-`__version__ = "2.1.0"` (`src/recoverage/__init__.py:31`) with the storage
-migration to clear-text coverage documents in `CHANGELOG.md` still unreleased.
+later pass can re-verify it. Last reviewed: 2026-09-29, against
+`__version__ = "4.0.0"` (`src/recoverage/__init__.py:31`).
 
 What ReCoverage is: a read-mostly web dashboard over the clear-text coverage
 documents (`db/coverage-<target>.toml`) that rebrew's pipeline prints, served by
@@ -21,8 +20,8 @@ supported LAN case (`--allow-remote`).
 | 1 | Default deployment is unauthenticated: on `--allow-remote` without `--token` every host on the network reads project sources, original binaries, hex bytes and disassembly | `cli.py:751-760`, `server.py:1955-1964`, `api.py:1593`, `api.py:1762` | Acknowledgement only: a red message and `typer.Exit(1)` without `--allow-remote`; `--token` is opt-in and never required alongside a remote bind |
 | 2 | No request rate limit on the expensive read endpoints; a multi-MB grid build plus brotli/zstd compression is CPU- and memory-bound per request | `api.py:1124` (`/data`), `potato.py:1153` (`/potato`), `api.py:1593` (`/asm`) | Bounded per-process memos with oldest-entry eviction (`server.py:1583`; caps at `api.py:207`, `api.py:307`, `api.py:325`); the only hard connection cap is on `/api/events` (`api.py:553`). The static-asset memo `ui._STATIC_CACHE` (`ui.py:337`) has no count cap; it is bounded structurally by the route-matched filename and encoding variant instead |
 | 3 | Global auth throttle: 10 failures per 60 s per process, not per source, so any one client can 429 the operator and every other client | `server.py:1922-1923`, `server.py:1928-1947` | The cap is intentional and the window is a documented module constant; the check, the cap and the slot reservation share one lock, so a burst of concurrent bad tokens cannot slip past it |
-| 4 | No transport security. The token travels as `?token=` in a URL and in a cookie, in cleartext on any non-loopback bind | `ui.py:205-211`, `potato.py:1159`, `server.py:1762-1797` | `Referrer-Policy: no-referrer` (`server.py:2184`), `HttpOnly; SameSite=Strict` cookie (`server.py:1788`), constant-time compare (`server.py:1745-1753`) |
-| 5 | `rebrew-project.toml` is trusted input: it decides which coverage directory is read, which binaries are disassembled, and which directories `/src` and `/original` serve from | `_paths.py:34-73`, `server.py:851-882`, `ui.py:268-270` | None beyond TOML parsing; the file is assumed to come from the operator's own checkout |
+| 4 | No transport security. The token travels as `?token=` in a URL and in a cookie, in cleartext on any non-loopback bind | `ui.py:206-214`, `potato.py:1159`, `server.py:1762-1797` | `Referrer-Policy: no-referrer` (`server.py:2184`), `HttpOnly; SameSite=Strict` cookie (`server.py:1788`), constant-time compare (`server.py:1745-1753`) |
+| 5 | `rebrew-project.toml` is trusted input: it decides which coverage directory is read, which binaries are disassembled, and which directories `/src` and `/original` serve from | `_paths.py:34-73`, `server.py:851-882`, `ui.py:271-273` | None beyond TOML parsing; the file is assumed to come from the operator's own checkout |
 | 6 | Thread exhaustion: `ThreadingMixIn` runs one daemon thread per connection with no connection cap, so a flood of ordinary requests, or a set of idle keep-alive connections, spawns unbounded threads | `devserver.py:31-39`, `devserver.py:66`, `devserver.py:75` | A 120 s per-socket deadline on every read and write in flight (`devserver.py:66`, `devserver.py:95`, `devserver.py:163`) and a 15 s idle deadline between requests (`devserver.py:75`, `devserver.py:167`); only `/api/events` is capped (`api.py:553`) |
 | 7 | Any local process can trigger a full re-catalog and coverage rebuild (disk and CPU), repeatedly within the cooldown | `api.py:1845-1966` | Loopback peer check, same-origin (`server.origin_is_this_dashboard`) and `Sec-Fetch-Site: cross-site` rejection, single-flight lock, `_REGEN_COOLDOWN_SECONDS`, and an `Idempotency-Key` ledger (`api.py:121-187`) |
 | 8 | Response `detail` fields carry raw exception and request text (filesystem paths, TOML parser messages, echoed user input) to the client | `server.py:1686-1711`, `server.py:2043-2092`, `api.py:1865-1903` | Tracebacks never reach a response body (`server.py:2099-2108`); only the one-line exception class and a rebuild hint do |
@@ -55,13 +54,13 @@ Transport, before any route runs:
 
 Network (all on the single Bottle app, all threaded):
 
-- `GET /` and `GET /index.html` - `ui.py:203-205`. Inlines and compresses the
-  whole SPA; sets the auth cookie from `?token=` (`ui.py:211`,
+- `GET /` and `GET /index.html` - `ui.py:206-208`. Inlines and compresses the
+  whole SPA; sets the auth cookie from `?token=` (`ui.py:214`,
   `server.set_auth_cookie`).
 - `GET /potato` - `potato.py:1153-1154`, which owns both the route and the
   renderer (`render_potato`, `potato.py:1070`). Full server-side HTML of the
   entire coverage map.
-- `GET /src/<path>`, `GET /original/<path>` - `ui.py:268-270`. Proxies the
+- `GET /src/<path>`, `GET /original/<path>` - `ui.py:271-273`. Proxies the
   project's source tree and original binaries to the browser.
 - `GET /<asset>` (allowlist regex) - `ui.py:376-379`. Package-shipped
   JS/CSS/SVG.
@@ -144,7 +143,7 @@ performs.
 
 1. **Browser or LAN client to the app.** Everything in the request above is
    untrusted. Validation point: the `before_request` hooks in registration
-   order - `_start_request` (`server.py:1839`), `_require_auth` (installed at
+   order - `_start_request` (`server.py:1840`), `_require_auth` (installed at
    `server.py:2015`, body `server.py:1955-2012`), then the Host allowlist
    (`server.py:2111-2142`, installed from `cli.py:826-831`) - then per-handler
    bounds (`_MAX_BATCH_LOOKUP` / `_MAX_BATCH_BODY_BYTES` at `api.py:1174-1180`;
@@ -180,7 +179,7 @@ performs.
    (`api.py:565-579`) pushes `db-updated` so the SPA re-reads it.
 3. **App to project filesystem.** `/src` and `/original` are served from the
    project directory with an explicit resolve-and-contain check, because
-   Bottle's own prefix check does not resolve symlinks (`ui.py:272-304`).
+   Bottle's own prefix check does not resolve symlinks (`ui.py:273-305`).
    Potato Mode's source panel repeats the containment check independently
    (`potato.py:2497-2504`).
 4. **App to local process (regen).** The only privilege transition: a POST makes
@@ -239,7 +238,7 @@ function list with a `search` term is walked per request (`api.py:334-361`,
 `api.py:1354-1356`), bounded only by a 64-entry memo (`api.py:323-325`).
 
 **App to filesystem.** Traversal and symlink escape are handled explicitly
-(`ui.py:283-304`, `potato.py:2497-2504`); what remains is that the trees are
+(`ui.py:285-305`, `potato.py:2497-2504`); what remains is that the trees are
 served in full, so a `.env` or a key committed under `src/` is published to
 every client.
 
@@ -272,7 +271,7 @@ the memoized path just recomputes (`_paths.py:34-73`, `server.py:851-882`).
 | `Idempotency-Key` ledger: charset-validated, 600 s TTL, 128-slot eviction, replay answered before the cooldown | `api.py:143-187`, `api.py:1910-1921` | Duplicated pipeline runs from retries, double-clicks, proxy replay |
 | CSP, `nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` | `server.py:2151-2162`, `server.py:2177-2184` | Injection, framing, token leak via Referer |
 | CORS allowlist, no wildcard ever emitted, `Vary: Origin` on every response | `server.py:2165-2206`, `cli.py:618-649` | Cross-origin reads |
-| Symlink-resolving containment plus NUL rejection on `/src`, `/original` | `ui.py:278-304` | Path traversal |
+| Symlink-resolving containment plus NUL rejection on `/src`, `/original` | `ui.py:285-305` | Path traversal |
 | Independent containment check on Potato Mode's source panel | `potato.py:2497-2504` | Path traversal through a second reader |
 | Allowlist regex for package assets | `ui.py:376-379` | Arbitrary file read from the assets dir |
 | Bounded request body, VA list, page offset, slice size, search length | `api.py:1174-1195`, `api.py:1314-1333`, `api.py:1385-1512` | Memory and CPU exhaustion per request |
