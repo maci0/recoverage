@@ -249,6 +249,90 @@ class TestUnknownVars:
             assert name.startswith(config.ENV_PREFIX)
 
 
+class TestTransportBounds:
+    """The admission cap and the per-connection deadline are deployment-sized,
+    so they are validated settings rather than constants in the transport."""
+
+    def test_defaults(self) -> None:
+        assert config.max_connections() == config.DEFAULT_MAX_CONNECTIONS
+        assert config.client_timeout() == config.DEFAULT_CLIENT_TIMEOUT_SECONDS
+
+    def test_read_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("RECOVERAGE_MAX_CONNECTIONS", "512")
+        monkeypatch.setenv("RECOVERAGE_CLIENT_TIMEOUT", "300")
+        assert config.max_connections() == 512
+        assert config.client_timeout() == 300
+
+    @pytest.mark.parametrize("raw", ["0", "-1", "999999"])
+    def test_an_unusable_cap_is_rejected(self, monkeypatch: pytest.MonkeyPatch, raw: str) -> None:
+        """A cap of 0 refuses every connection including the first; a negative
+        one refuses every connection too, silently, since every accept is past
+        it.  A value past the ceiling is a typo, not a deployment."""
+        monkeypatch.setenv("RECOVERAGE_MAX_CONNECTIONS", raw)
+        with pytest.raises(config.ConfigError, match="RECOVERAGE_MAX_CONNECTIONS"):
+            config.max_connections()
+
+    def test_a_cap_of_one_is_the_lowest_usable_value(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("RECOVERAGE_MAX_CONNECTIONS", "1")
+        assert config.max_connections() == 1
+
+    @pytest.mark.parametrize("raw", ["0", "1", "4", "-30"])
+    def test_a_deadline_under_the_sse_heartbeat_is_rejected(
+        self, monkeypatch: pytest.MonkeyPatch, raw: str
+    ) -> None:
+        """A deadline at or under the heartbeat closes healthy /api/events
+        streams on the clock instead of on the peer going away, so it breaks
+        live reload rather than merely retiring threads sooner."""
+        monkeypatch.setenv("RECOVERAGE_CLIENT_TIMEOUT", raw)
+        with pytest.raises(config.ConfigError, match="RECOVERAGE_CLIENT_TIMEOUT"):
+            config.client_timeout()
+
+    def test_a_non_numeric_bound_is_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("RECOVERAGE_CLIENT_TIMEOUT", "forever")
+        with pytest.raises(config.ConfigError, match="RECOVERAGE_CLIENT_TIMEOUT"):
+            config.client_timeout()
+
+    def test_serve_installs_the_resolved_bounds_on_the_transport(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A cap validated and then not installed is a config the banner lies
+        about, so the resolved values reach the module the accept path reads."""
+        import recoverage.devserver as devserver
+        from recoverage.cli import _resolve_serve_config
+
+        monkeypatch.setenv("RECOVERAGE_MAX_CONNECTIONS", "7")
+        monkeypatch.setenv("RECOVERAGE_CLIENT_TIMEOUT", "300")
+        resolved = _resolve_serve_config()
+        devserver.configure_transport(
+            max_connections=resolved.max_connections,
+            client_timeout_seconds=resolved.client_timeout,
+        )
+        try:
+            assert devserver._MAX_CONNECTIONS == 7
+            assert devserver._CLIENT_SOCKET_TIMEOUT_SECONDS == 300
+            # http.server reads `timeout` at handler construction.
+            assert devserver._QuietTimeoutRequestHandler.timeout == 300
+            # So /api/health names the enforced cap before the first accept.
+            assert devserver.metrics.CONNECTIONS.snapshot()["max"] == 7
+        finally:
+            devserver.configure_transport(
+                max_connections=config.DEFAULT_MAX_CONNECTIONS,
+                client_timeout_seconds=config.DEFAULT_CLIENT_TIMEOUT_SECONDS,
+            )
+
+    def test_a_bad_bound_exits_2_like_every_other_setting(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import typer
+
+        from recoverage.cli import _resolve_serve_config
+
+        monkeypatch.setenv("RECOVERAGE_MAX_CONNECTIONS", "0")
+        with pytest.raises(typer.Exit) as excinfo:
+            _resolve_serve_config()
+        assert excinfo.value.exit_code == 2
+
+
 class TestActiveConfig:
     def test_reports_resolved_values_not_the_environment(
         self, monkeypatch: pytest.MonkeyPatch
@@ -264,11 +348,15 @@ class TestActiveConfig:
             token=None,
             db=None,
             log_level=logging.INFO,
+            max_connections=config.DEFAULT_MAX_CONNECTIONS,
+            client_timeout=config.DEFAULT_CLIENT_TIMEOUT_SECONDS,
         )
         assert rendered["port"] == "8001"
         assert rendered["db"] == "auto"
         assert rendered["cors_origin"] == "none"
         assert rendered["log_level"] == "INFO"
+        assert rendered["max_connections"] == str(config.DEFAULT_MAX_CONNECTIONS)
+        assert rendered["client_timeout"] == str(config.DEFAULT_CLIENT_TIMEOUT_SECONDS)
 
     def test_token_is_reported_as_set_without_its_value(self) -> None:
         rendered = config.active_config(
@@ -285,8 +373,12 @@ class TestActiveConfig:
             # asserted below is the string this object carries.
             db=PurePosixPath("/tmp/x.db"),
             log_level=logging.WARNING,
+            max_connections=512,
+            client_timeout=45,
         )
         assert rendered["log_level"] == "WARNING"
+        assert rendered["max_connections"] == "512"
+        assert rendered["client_timeout"] == "45"
         assert rendered["token"] == "set"
         assert "s3cret-value" not in " ".join(rendered.values())
         assert rendered["cors_origin"] == "http://a.test"
@@ -473,6 +565,8 @@ class TestConfigCommand:
             "db": "auto",
             "log_level": "INFO",
             "token": "unset",
+            "max_connections": str(config.DEFAULT_MAX_CONNECTIONS),
+            "client_timeout": str(config.DEFAULT_CLIENT_TIMEOUT_SECONDS),
         }
 
     def test_the_text_form_carries_every_field_the_json_form_does(

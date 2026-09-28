@@ -22,7 +22,7 @@ from typing import IO, TYPE_CHECKING, Any, cast
 from wsgiref.simple_server import ServerHandler, WSGIRequestHandler, WSGIServer
 from wsgiref.types import InputStream
 
-from recoverage import metrics
+from recoverage import config, metrics
 
 if TYPE_CHECKING:
     # _typeshed ships with mypy, not with CPython: the annotations below are
@@ -40,7 +40,34 @@ _log = logging.getLogger("recoverage")
 #: a thread per accept until the process cannot make one.  Refusing is loud (the
 #: client gets a 503, the operator gets a log line), which is the point: a
 #: server that has stopped accepting should say so rather than look slow.
-_MAX_CONNECTIONS = 128
+#:
+#: A DEFAULT, not a constant: the admitted count is a thread and a descriptor
+#: each, so it is sized by the deployment's memory and traffic rather than by
+#: the protocol.  :func:`configure_transport` replaces both of these from
+#: ``RECOVERAGE_MAX_CONNECTIONS`` / ``RECOVERAGE_CLIENT_TIMEOUT`` before the
+#: listener binds, and :func:`recoverage.config.active_config` reports the
+#: values the process runs with.
+_MAX_CONNECTIONS = config.DEFAULT_MAX_CONNECTIONS
+
+
+def configure_transport(*, max_connections: int, client_timeout_seconds: int) -> None:
+    """Install the admission cap and the per-connection deadline.
+
+    Called once by ``serve``, with the values it resolved from the
+    environment, before the listener binds: the cap is read on every accept and
+    the deadline is read on every request, so neither can be a value that was
+    validated and then not installed.  The deadline is also pushed onto the
+    handler class, because ``http.server`` reads ``timeout`` at instance
+    construction and the per-request reset in
+    :meth:`_KeepAliveRequestHandler._serve_requests` reads the module global.
+    """
+    global _MAX_CONNECTIONS, _CLIENT_SOCKET_TIMEOUT_SECONDS
+    _MAX_CONNECTIONS = max_connections
+    _CLIENT_SOCKET_TIMEOUT_SECONDS = client_timeout_seconds
+    _QuietTimeoutRequestHandler.timeout = client_timeout_seconds
+    # So /api/health's `connections.max` names the enforced cap before the
+    # first accept rather than reading 0 until one lands.
+    metrics.CONNECTIONS.set_limit(max_connections)
 
 
 class _ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
@@ -168,7 +195,12 @@ class _ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
 # connection and (for /api/events) its bounded SSE slot.  Generous multiples
 # of the 15s SSE heartbeat (_SSE_HEARTBEAT_SECONDS) so only a genuinely
 # stalled peer can trip it — healthy streams write far more often.
-_CLIENT_SOCKET_TIMEOUT_SECONDS = 120
+#
+# Also a DEFAULT rather than a constant: the same dashboard sits behind a
+# direct connection on a workstation and behind a slow reverse proxy in a
+# container, and the deadline that protects the first wedges the second.
+# :func:`configure_transport` installs the resolved value.
+_CLIENT_SOCKET_TIMEOUT_SECONDS = config.DEFAULT_CLIENT_TIMEOUT_SECONDS
 
 #: How long an idle keep-alive connection waits for its next request before the
 #: handler thread gives up and the socket closes.  The per-connection deadline

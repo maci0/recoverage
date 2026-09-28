@@ -281,6 +281,8 @@ class _ServeConfig(NamedTuple):
     token: str | None
     db: Path | None
     log_level: int
+    max_connections: int
+    client_timeout: int
 
 
 def _resolve_serve_config(
@@ -326,6 +328,12 @@ def _resolve_serve_config(
             log_level=(
                 config.log_level() if log_level is None else config.parse_log_level(log_level)
             ),
+            # The transport bounds have no flag: they size a process rather
+            # than select a behavior, and the flag table is the one place a
+            # reader looks for what can be set, so the environment names them.
+            # Read HERE so a bad value is the same exit 2 as any other.
+            max_connections=config.max_connections(),
+            client_timeout=config.client_timeout(),
         )
     except config.ConfigError as exc:
         _secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
@@ -849,7 +857,9 @@ def serve(
     its default: RECOVERAGE_PORT, RECOVERAGE_BIND, RECOVERAGE_ALLOW_REMOTE,
     RECOVERAGE_CORS, RECOVERAGE_CORS_ORIGIN, RECOVERAGE_TOKEN,
     RECOVERAGE_LOG_LEVEL and RECOVERAGE_DB (an explicit coverage directory,
-    instead of resolving rebrew-project.toml from the working directory).
+    instead of resolving rebrew-project.toml from the working directory), plus
+    RECOVERAGE_MAX_CONNECTIONS and RECOVERAGE_CLIENT_TIMEOUT, which size the
+    transport rather than select a behavior and so have no flag.
     [bold]--no-open[/bold] and [bold]--regen[/bold] are the two flags with no
     variable, because a service that wants the browser or a rebuild asks for
     it in argv, not in the environment.
@@ -950,8 +960,19 @@ def serve(
         token=token,
         db=resolved.db,
         log_level=resolved.log_level,
+        max_connections=resolved.max_connections,
+        client_timeout=resolved.client_timeout,
     )
     _server.configure_startup(active)
+    # Install the transport bounds the same values report, before the listener
+    # binds: a cap validated and then not installed is a config the banner
+    # lies about.
+    from recoverage.devserver import configure_transport
+
+    configure_transport(
+        max_connections=resolved.max_connections,
+        client_timeout_seconds=resolved.client_timeout,
+    )
     _echo_banner(
         url=url,
         listen_url=listen_url,
@@ -1429,6 +1450,8 @@ def config_cmd(
         token=resolved.token,
         db=resolved.db,
         log_level=resolved.log_level,
+        max_connections=resolved.max_connections,
+        client_timeout=resolved.client_timeout,
     )
     if as_json:
         typer.echo(json.dumps(settings, indent=2))

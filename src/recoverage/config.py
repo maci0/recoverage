@@ -46,16 +46,19 @@ KNOWN_VARS: Final[frozenset[str]] = frozenset(
     {
         "RECOVERAGE_ALLOW_REMOTE",
         "RECOVERAGE_BIND",
+        "RECOVERAGE_CLIENT_TIMEOUT",
         "RECOVERAGE_CORS",
         "RECOVERAGE_CORS_ORIGIN",
         "RECOVERAGE_DB",
         "RECOVERAGE_FUZZ_ITERATIONS",
         "RECOVERAGE_FUZZ_SEED",
         "RECOVERAGE_LOG_LEVEL",
+        "RECOVERAGE_MAX_CONNECTIONS",
         "RECOVERAGE_PORT",
         "RECOVERAGE_TOKEN",
     }
 )
+
 
 # Command-line defaults, the single definition the environment defaults and
 # the CLI --help strings share: each of those renders its default from the
@@ -78,6 +81,30 @@ LOG_LEVELS: Final[Mapping[str, int]] = logging.getLevelNamesMapping()
 #: socket.bind() enforces, checked here so a bad value is a startup error.
 MIN_PORT: Final = 0
 MAX_PORT: Final = 65535
+
+#: Concurrent client connections the listener admits, and the per-connection
+#: socket deadline.  Both are deployment-sized quantities, not properties of
+#: the dashboard: the same binary serves one developer on a laptop and a team
+#: behind a reverse proxy on a container with a 512 MiB limit, and each of
+#: those admits a different number of connections and wants a different stall
+#: deadline.  The floor on the deadline is the SSE heartbeat it must outlast
+#: (``api._SSE_HEARTBEAT_SECONDS``), or a healthy stream is cut mid-life.
+MIN_CLIENT_TIMEOUT_SECONDS: Final = 5
+MAX_CLIENT_TIMEOUT_SECONDS: Final = 24 * 60 * 60
+DEFAULT_CLIENT_TIMEOUT_SECONDS: Final = 120
+
+#: The default admission cap.  Generous next to what a real client needs (a
+#: browser tab holds one, a page loading assets and polling holds a handful,
+#: and every open /api/events stream holds one for its whole life) and low
+#: enough that a flood of stalled peers is refused rather than spawning a
+#: thread per accept until the process cannot make one.
+DEFAULT_MAX_CONNECTIONS: Final = 128
+
+#: An upper bound on the admission cap, so a typo reads as a rejection rather
+#: than as a server that admits four billion connections and is killed by the
+#: first flood.  It bounds nothing real: a thread costs stack and a
+#: descriptor, so a cap past this is a typo, not a deployment.
+MAX_MAX_CONNECTIONS: Final = 65_536
 
 _TRUE_VALUES: Final[frozenset[str]] = frozenset({"1", "true", "yes", "on"})
 _FALSE_VALUES: Final[frozenset[str]] = frozenset({"0", "false", "no", "off"})
@@ -155,6 +182,42 @@ def port() -> int:
     value = _int_var("RECOVERAGE_PORT", DEFAULT_PORT)
     if not MIN_PORT <= value <= MAX_PORT:
         raise ConfigError(f"RECOVERAGE_PORT: {value} is not in the range {MIN_PORT}-{MAX_PORT}")
+    return value
+
+
+def max_connections() -> int:
+    """Concurrent client connections the listener admits.
+
+    One thread and one descriptor per admitted connection, so this is the
+    process's largest single cost and the one an operator most often has to
+    change: a container with a small memory limit needs a lower cap than a
+    workstation, and a team sharing one dashboard needs a higher one than the
+    default.  A cap of 0 would refuse every connection including the first, so
+    the floor is 1.
+    """
+    value = _int_var("RECOVERAGE_MAX_CONNECTIONS", DEFAULT_MAX_CONNECTIONS)
+    if not 1 <= value <= MAX_MAX_CONNECTIONS:
+        raise ConfigError(
+            f"RECOVERAGE_MAX_CONNECTIONS: {value} is not in the range 1-{MAX_MAX_CONNECTIONS}"
+        )
+    return value
+
+
+def client_timeout() -> int:
+    """Per-connection socket deadline, in seconds.
+
+    Bounds how LONG one handler thread lives on a half-open peer.  The floor
+    is the SSE heartbeat it must outlast: a deadline at or under
+    ``api._SSE_HEARTBEAT_SECONDS`` closes healthy /api/events streams on the
+    clock rather than on the peer going away, so a value below it is a setting
+    that breaks live reload, not one that merely retires threads sooner.
+    """
+    value = _int_var("RECOVERAGE_CLIENT_TIMEOUT", DEFAULT_CLIENT_TIMEOUT_SECONDS)
+    if not MIN_CLIENT_TIMEOUT_SECONDS <= value <= MAX_CLIENT_TIMEOUT_SECONDS:
+        raise ConfigError(
+            f"RECOVERAGE_CLIENT_TIMEOUT: {value} is not in the range "
+            f"{MIN_CLIENT_TIMEOUT_SECONDS}-{MAX_CLIENT_TIMEOUT_SECONDS} seconds"
+        )
     return value
 
 
@@ -328,6 +391,8 @@ def active_config(
     token: str | None,
     db: Path | None,
     log_level: int,
+    max_connections: int,
+    client_timeout: int,
 ) -> dict[str, str]:
     """Render the settings `serve` runs with, for the startup banner.
 
@@ -345,4 +410,6 @@ def active_config(
         "db": str(db) if db is not None else "auto",
         "log_level": logging.getLevelName(log_level),
         "token": "set" if token else "unset",
+        "max_connections": str(max_connections),
+        "client_timeout": str(client_timeout),
     }

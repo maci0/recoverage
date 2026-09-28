@@ -27,7 +27,7 @@ supported LAN case (`--allow-remote`).
 | 8 | Response `detail` fields carry raw exception and request text (filesystem paths, TOML parser messages, echoed user input) to the client | `server.py:1924-1972`, `server.py:2333-2382`, `api.py:1950-1990` | Tracebacks never reach a response body (`server.py:2389-2399`); only the one-line exception class and a rebuild hint do |
 | 9 | Untrusted native binary is parsed in-process by capstone and by the DLL reader, and the size cap is enforced only *after* an unbounded `read_bytes()` | `server.py:1197-1270`, `api.py:1680-1846` | `_MAX_DLL_SIZE` (512 MiB, `server.py:987`) checked on `stat()` (`server.py:1232-1240`) and again post-read (`server.py:1242-1251`); a file that grows inside that window is fully read into RAM first |
 | 10 | No per-client identity: every action is attributable only to a shared token, and only to the socket peer | `server.py:2237-2300` | Rejected-token and rejected-Host events are logged with the peer address (`server.py:2278-2282`, `server.py:2421-2425`); regen start, replay, completion and failure are logged (`api.py:2066`, `api.py:2007`, `api.py:2107`, `api.py:2124`) |
-| 11 | Ten `RECOVERAGE_*` environment variables select the bind address, the token, the coverage directory, the log level and the CORS allowlist, so a compromised parent environment silently republishes the project. `RECOVERAGE_TOKEN=` (set but empty) reads as unset rather than rejected, and two of the ten (`RECOVERAGE_FUZZ_SEED`, `RECOVERAGE_FUZZ_ITERATIONS`) are accepted under the prefix but consumed only by the test suite | `config.py:45-58`, `config.py:103-111`, `config.py:153-302`, `cli.py:360` | Every value is validated at startup before the listener binds, and an unrecognised `RECOVERAGE_*` name is a hard startup error (`config.py:305-319`); a SET-but-empty value is an error everywhere except `RECOVERAGE_TOKEN`, where it means "auth off" on purpose |
+| 11 | Twelve `RECOVERAGE_*` environment variables select the bind address, the token, the coverage directory, the log level, the CORS allowlist and the transport bounds, so a compromised parent environment silently republishes the project. `RECOVERAGE_TOKEN=` (set but empty) reads as unset rather than rejected, and two of the twelve (`RECOVERAGE_FUZZ_SEED`, `RECOVERAGE_FUZZ_ITERATIONS`) are accepted under the prefix but consumed only by the test suite | `config.py:45-58`, `config.py:103-111`, `config.py:153-302`, `cli.py:360` | Every value is validated at startup before the listener binds, and an unrecognised `RECOVERAGE_*` name is a hard startup error (`config.py:305-319`); a SET-but-empty value is an error everywhere except `RECOVERAGE_TOKEN`, where it means "auth off" on purpose |
 
 Owner and review cadence: not stated in the repository.
 
@@ -98,7 +98,8 @@ Non-network entry points:
   `serve`.
 - Environment: `RECOVERAGE_PORT`, `RECOVERAGE_BIND`, `RECOVERAGE_ALLOW_REMOTE`,
   `RECOVERAGE_CORS`, `RECOVERAGE_CORS_ORIGIN`, `RECOVERAGE_TOKEN`,
-  `RECOVERAGE_DB`, `RECOVERAGE_LOG_LEVEL`, `RECOVERAGE_FUZZ_SEED`,
+  `RECOVERAGE_DB`, `RECOVERAGE_LOG_LEVEL`, `RECOVERAGE_MAX_CONNECTIONS`,
+  `RECOVERAGE_CLIENT_TIMEOUT`, `RECOVERAGE_FUZZ_SEED`,
   `RECOVERAGE_FUZZ_ITERATIONS` (`config.py:45-58`). Flags win over the
   environment, values are validated before the listener binds, an unknown
   prefixed name is a startup error (`config.py:305-319`). `RECOVERAGE_TOKEN`

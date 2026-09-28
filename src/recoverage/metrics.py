@@ -305,6 +305,18 @@ class ConnectionStats:
         self._max = 0
         self._refused = 0
 
+    def set_limit(self, limit: int) -> None:
+        """Record the cap this process enforces, before the first accept.
+
+        Called from ``devserver.configure_transport`` so ``max`` answers "what
+        is the cap" from the moment the listener is configured, rather than
+        only once a connection has been admitted.  A process that never
+        reached ``serve`` leaves it 0, which is what that is: no cap is being
+        enforced there.
+        """
+        with self._lock:
+            self._max = limit
+
     def admit(self, limit: int) -> bool:
         """Take a slot if the map of connections has room; answer whether it did.
 

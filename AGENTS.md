@@ -73,7 +73,8 @@ recoverage/
     ├── __main__.py          # python -m recoverage
     ├── _paths.py            # Coverage directory resolution (RECOVERAGE_DB, db_dir)
     ├── config.py            # RECOVERAGE_* env: flag defaults, validation, startup banner
-    ├── devserver.py         # WSGI serving stack serve() binds: threading server, keep-alive handlers
+    ├── devserver.py         # WSGI serving stack serve() binds: threading server, keep-alive handlers,
+    │                        #   admission cap + socket deadline (RECOVERAGE_MAX_CONNECTIONS/CLIENT_TIMEOUT)
     ├── clock.py             # The one time source (monotonic / wall-clock) the request path reads
     ├── metrics.py           # In-process counters: RED requests (REQUESTS) + regen (REGEN), read by /api/health
     ├── cli.py               # Typer CLI entry point (serve, stats, export, check, regen, open)
