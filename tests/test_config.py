@@ -83,6 +83,39 @@ class TestLogLevelRejectsBadValues:
         with pytest.raises(config.ConfigError, match="RECOVERAGE_LOG_LEVEL"):
             config.log_level()
 
+    def test_a_run_of_digits_past_the_int_limit_is_a_bad_level(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A value that looks like a number but cannot be converted is rejected.
+
+        CPython's `int()` refuses a run of digits past its conversion limit,
+        and that is a bad level, not a crash. The refusal is re-raised in this
+        module's own wording, so the reader wraps ONE message naming the
+        variable rather than nesting `RECOVERAGE_LOG_LEVEL:` inside itself.
+        """
+        monkeypatch.setenv("RECOVERAGE_LOG_LEVEL", "9" * 5000)
+        with pytest.raises(config.ConfigError) as excinfo:
+            config.log_level()
+        message = str(excinfo.value)
+        assert message.startswith("RECOVERAGE_LOG_LEVEL:"), message[:80]
+        assert "is not a log level" in message
+        assert "WARNING" in message
+        assert message.count("RECOVERAGE_LOG_LEVEL") == 1, message
+
+    @pytest.mark.parametrize("raw", ["-1", "0x10", "1_0", "30.0", "٤٠"])
+    def test_a_numeric_lookalike_is_not_a_level(
+        self, monkeypatch: pytest.MonkeyPatch, raw: str
+    ) -> None:
+        """Only a bare ASCII digit run converts; int()'s wider grammar does not.
+
+        `int()` takes signs, underscores, a base prefix and the whole Unicode
+        Nd set, so a level spelled with one of those would reach `basicConfig`
+        as a number the operator never asked for.
+        """
+        monkeypatch.setenv("RECOVERAGE_LOG_LEVEL", raw)
+        with pytest.raises(config.ConfigError, match="is not a log level"):
+            config.log_level()
+
     def test_error_lists_the_accepted_names(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("RECOVERAGE_LOG_LEVEL", "chatty")
         with pytest.raises(config.ConfigError) as excinfo:
@@ -441,6 +474,34 @@ class TestConfigCommand:
             "log_level": "INFO",
             "token": "unset",
         }
+
+    def test_the_text_form_carries_every_field_the_json_form_does(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The two spellings are one rendering, so neither may drop a setting.
+
+        Substring assertions on the text form (`"port=9000" in output`) pass
+        just as happily over a banner that silently lost `log_level` or
+        `cors_origin`, which is the field an operator reads to learn why their
+        cross-origin read is refused. Parsed and compared as a mapping, the
+        text form is held to the same key set the `--json` form is.
+        """
+        import json
+
+        from typer.testing import CliRunner
+
+        from recoverage.cli import app
+
+        monkeypatch.setenv("RECOVERAGE_CORS", "1")
+        monkeypatch.setenv("RECOVERAGE_CORS_ORIGIN", "http://localhost:5173")
+        runner = CliRunner()
+        text = runner.invoke(app, ["config"])
+        as_json = runner.invoke(app, ["config", "--json"])
+        assert text.exit_code == 0
+        assert as_json.exit_code == 0
+
+        pairs = dict(line.split("=", 1) for line in text.output.splitlines() if "=" in line.strip())
+        assert pairs == json.loads(as_json.output)
 
     def test_allowlist_is_reported_normalized(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The checked value is the value the server matches: a default port

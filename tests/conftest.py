@@ -29,6 +29,24 @@ def _clean_recovery_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _clean_startup_policy() -> None:
+    """Restore the startup request policy to its module defaults before each test.
+
+    `cli.serve` calls `server.configure_security` once per run, so a test that
+    drives `serve` (the CLI suite does) leaves the process-wide CORS flag, the
+    origin allowlist, the bearer token and the Host allowlist installed for the
+    rest of the session.  The leak is silent in file order and fatal in any
+    other: with a loopback `ALLOWED_HOSTS` left over, the regen origin
+    validation's `Host: box:80` case answers 400 where it means to answer 202.
+    `configure_security` with no arguments IS the default state, so one call
+    resets all four through the module's own entry point.
+    """
+    from recoverage import server
+
+    server.configure_security()
+
+
+@pytest.fixture(autouse=True)
 def _clean_derived_caches() -> None:
     """Drop every coverage.db-derived cache before each test.
 

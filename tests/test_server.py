@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gzip
+import itertools
 import json
 import logging
 import queue
@@ -26,6 +27,7 @@ from recoverage import clock
 from recoverage.server import (
     DLL_DATA,
     DLL_LOCK,
+    SUPPORTED_ENCODINGS,
     _best_encoding,
     _db_path,
     _find_dll_path,
@@ -33,9 +35,12 @@ from recoverage.server import (
     _project_dir,
     clear_target_cache,
     compress_payload,
+    compress_static_bodies,
     fold_match,
     fold_text,
     origin_is_this_dashboard,
+    select_static_variant,
+    static_variant_key,
 )
 
 
@@ -271,6 +276,86 @@ class TestCompressPayload:
             compressed, encoding = res
             assert encoding == "zstd"
             assert dctx.decompress(compressed) == data, f"thread {idx} payload corrupted"
+
+
+# ── Precompressed static variants ───────────────────────────────────
+
+
+class TestStaticVariantSelection:
+    """A precompressed body is chosen by SIZE among what the client accepts.
+
+    Handing a client a body in an encoding it did not advertise is the failure
+    this exists to prevent, and a fixed preference is what caused it: every
+    zstd-capable browser was served 3 KB more than the shell needed.
+    """
+
+    #: Shorter wins; the lengths are arbitrary, only their order is the test.
+    _CANDIDATES: ClassVar[dict[str, bytes]] = {
+        "zstd": b"z" * 10,
+        "br": b"b" * 20,
+        "gzip": b"g" * 30,
+    }
+
+    def test_smallest_accepted_wins(self) -> None:
+        body, encoding = select_static_variant(self._CANDIDATES, "gzip, br, zstd", b"identity")
+        assert encoding == "zstd"
+        assert body == self._CANDIDATES["zstd"]
+
+    def test_a_smaller_body_the_client_did_not_accept_is_never_served(self) -> None:
+        """zstd is the smallest candidate; a gzip-only client must not get it."""
+        body, encoding = select_static_variant(self._CANDIDATES, "gzip", b"identity")
+        assert encoding == "gzip"
+        assert body == self._CANDIDATES["gzip"]
+
+    def test_a_tie_goes_to_the_earlier_supported_encoding(self) -> None:
+        """Equal lengths are served under one name, so the cache stays keyed."""
+        tied = {"zstd": b"z" * 16, "br": b"b" * 16, "gzip": b"g" * 40}
+        assert select_static_variant(tied, "br, zstd", b"identity") == (tied["zstd"], "zstd")
+        assert select_static_variant(tied, "gzip, br", b"identity") == (tied["br"], "br")
+
+    @pytest.mark.parametrize("header", ["", "identity", "deflate", "*"])
+    def test_nothing_accepted_returns_the_identity_body(self, header: str) -> None:
+        """An empty encoding name is the caller's signal to set no header."""
+        body, encoding = select_static_variant(self._CANDIDATES, header, b"identity")
+        assert (body, encoding) == (b"identity", "")
+
+    def test_static_variant_key_names_the_accepted_subset_in_a_fixed_order(self) -> None:
+        """The key is itself a valid Accept-Encoding, so a cache can pre-build it."""
+        assert static_variant_key("br, gzip") == "br, gzip"
+        assert static_variant_key("gzip, br") == "br, gzip"
+        assert static_variant_key("deflate") == ""
+        assert static_variant_key("") == ""
+
+    def test_static_variant_key_is_bounded_by_the_supported_alphabets(self) -> None:
+        """Whatever the client sends, at most 2**3 keys can exist.
+
+        The header is attacker-controlled and the key is what precompressed
+        bodies are cached and pre-built under, so an unbounded key space is an
+        unbounded cache and an unbounded set of compressions.
+        """
+        keys = {
+            static_variant_key(header)
+            for header in itertools.chain(
+                ("gzip", "br", "zstd", "gzip, br", "br, zstd", "gzip, zstd"),
+                (
+                    ", ".join(subset)
+                    for subset in itertools.chain.from_iterable(
+                        itertools.combinations(SUPPORTED_ENCODINGS, n) for n in range(4)
+                    )
+                ),
+            )
+        }
+        assert len(keys) == 2 ** len(SUPPORTED_ENCODINGS)
+        assert static_variant_key(", ".join(SUPPORTED_ENCODINGS)) in keys
+
+    def test_every_supported_encoding_decompresses_to_the_same_body(self) -> None:
+        """The precompressed set is one body in three encodings, not three bodies."""
+        body = b"the quick brown fox jumps over the lazy dog " * 64
+        bodies = compress_static_bodies(body)
+        assert set(bodies) == set(SUPPORTED_ENCODINGS)
+        assert zstd.ZstdDecompressor().decompress(bodies["zstd"]) == body
+        assert brotli.decompress(bodies["br"]) == body
+        assert gzip.decompress(bodies["gzip"]) == body
 
 
 # ── Path helpers ───────────────────────────────────────────────────
