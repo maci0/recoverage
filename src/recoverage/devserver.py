@@ -169,16 +169,6 @@ class _ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
     # serve already reports with the address in the message.
     allow_reuse_address = os.name != "nt"
 
-    @property
-    def _connections_open(self) -> int:
-        """Live connections, read from the gauge ``/api/health`` publishes.
-
-        The counter itself is :data:`recoverage.metrics.CONNECTIONS`, shared
-        with the health endpoint, so the admission decision and the saturation
-        gauge cannot be two numbers that disagree.
-        """
-        return metrics.CONNECTIONS.open
-
     def process_request(self, request: Any, client_address: Any) -> None:
         """Admit the connection, or answer 503 and close it at the cap.
 
@@ -232,7 +222,9 @@ class _ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
         _log.warning(
             "Refusing a connection from %s: %d/%d already open",
             (client_address[0] if client_address else "") or "unknown peer",
-            self._connections_open,
+            # The same gauge /api/health publishes, so the admission decision
+            # and the saturation reading cannot be two numbers that disagree.
+            metrics.CONNECTIONS.open,
             _MAX_CONNECTIONS,
         )
         self.shutdown_request(request)

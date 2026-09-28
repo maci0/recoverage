@@ -3191,7 +3191,7 @@ class TestSelectionIsTheAccent:
     def test_potato_active_pills_use_the_accent(self) -> None:
         from recoverage import potato
 
-        for name in ("FILTER_ACT_L", "FILTER_ACT_R", "FILTER_ACT_MID", "ACTIVE_L", "ACTIVE_R"):
+        for name in ("ACTIVE_L", "ACTIVE_R", "ACTIVE_MID"):
             svg = base64.b64decode(getattr(potato, name).split(",", 1)[1]).decode("utf-8")
             assert potato.ACCENT_COLOR in svg, name
 

@@ -840,6 +840,8 @@ class TestClientConnectionDeadline:
         import socket
         import threading
 
+        from recoverage import metrics
+
         monkeypatch.setattr(devserver._QuietTimeoutRequestHandler, "timeout", 5)
         monkeypatch.setattr(devserver, "_MAX_CONNECTIONS", 2)
 
@@ -857,21 +859,21 @@ class TestClientConnectionDeadline:
                 sock = socket.create_connection(("127.0.1", port), timeout=5)
                 held.append(sock)
             deadline = time.monotonic() + 5
-            while time.monotonic() < deadline and server._connections_open < 2:
+            while time.monotonic() < deadline and metrics.CONNECTIONS.open < 2:
                 time.sleep(0.02)
-            assert server._connections_open == 2
+            assert metrics.CONNECTIONS.open == 2
 
             # The third is past the cap: refused with a 503, not served.
             with socket.create_connection(("127.0.1", port), timeout=5) as extra:
                 extra.settimeout(5)
                 reply = extra.recv(64)
             assert reply.startswith(b"HTTP/1.1 503"), reply
-            assert server._connections_open == 2, "a refused connection took a slot"
+            assert metrics.CONNECTIONS.open == 2, "a refused connection took a slot"
 
             # Freeing one slot admits the next connection again.
             held.pop().close()
             deadline = time.monotonic() + 5
-            while time.monotonic() < deadline and server._connections_open > 0:
+            while time.monotonic() < deadline and metrics.CONNECTIONS.open > 0:
                 time.sleep(0.02)
             with socket.create_connection(("127.0.1", port), timeout=5) as again:
                 again.settimeout(5)

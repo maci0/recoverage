@@ -165,10 +165,10 @@ def _str_var(name: str, default: str) -> str:
     return raw
 
 
-def _bool_var(name: str, default: bool) -> bool:
+def _bool_var(name: str) -> bool:
     raw = _raw(name)
     if raw is None:
-        return default
+        return False
     lowered = raw.strip().lower()
     if lowered in _TRUE_VALUES:
         return True
@@ -275,7 +275,7 @@ def bind() -> str:
 
 def allow_remote() -> bool:
     """Whether the operator acknowledged a network-exposed API."""
-    return _bool_var("RECOVERAGE_ALLOW_REMOTE", False)
+    return _bool_var("RECOVERAGE_ALLOW_REMOTE")
 
 
 def validate_token(value: str | None, name: str = "RECOVERAGE_TOKEN") -> str | None:
@@ -332,7 +332,7 @@ def token() -> str | None:
 
 def cors() -> bool:
     """Whether cross-origin requests are processed at all."""
-    return _bool_var("RECOVERAGE_CORS", False)
+    return _bool_var("RECOVERAGE_CORS")
 
 
 def cors_origins() -> list[str]:

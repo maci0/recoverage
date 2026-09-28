@@ -338,20 +338,14 @@ def _make_pill_mid_tile(height: int, fill_hex: str, border_hex: str) -> str:
     return _svg_uri(svg)
 
 
-# Pre-compute section tab pill cap images
+# Pill cap images.  A section tab and a filter pill are the same widget, so
+# the pills take the cyan the tabs do: the blue they wore was the one hue in
+# this page that named nothing.  The SPA paints both from one `--c`-derived
+# pair.
 ACTIVE_L, ACTIVE_R = _make_pill_caps(32, "#1a3a4a", border_hex="#06b6d4")
 INACTIVE_L, INACTIVE_R = _make_pill_caps(32, "#182230", border_hex="#2a3a4a")
 ACTIVE_MID = _make_pill_mid_tile(32, "#1a3a4a", "#06b6d4")
 INACTIVE_MID = _make_pill_mid_tile(32, "#182230", "#2a3a4a")
-
-# Pre-compute filter pill cap images.  An active filter is a selected section
-# as much as an active tab is, and the SPA paints both from one `--c`-derived
-# pair, so the pills take the same cyan the section tabs above them do: the
-# blue they wore was the one hue in this page that named nothing.
-FILTER_ACT_L, FILTER_ACT_R = _make_pill_caps(32, "#1a3a4a", border_hex="#06b6d4")
-FILTER_INACT_L, FILTER_INACT_R = _make_pill_caps(32, "#182230", border_hex="#2a3a4a")
-FILTER_ACT_MID = _make_pill_mid_tile(32, "#1a3a4a", "#06b6d4")
-FILTER_INACT_MID = _make_pill_mid_tile(32, "#182230", "#2a3a4a")
 
 R_LOGO_SVG = (
     "data:image/svg+xml;base64,"
@@ -984,9 +978,9 @@ _PAGE_SRC = r"""<!DOCTYPE html>
                    These are the worst case — a single-letter label gave E/R/M/S/P
                    a 10px-wide hit target inside a 32px-wide pill. -->
               % if fb_active:
-                <a href="{{fb_href}}" title="{{fb_title}}" {{!fb_acc}} aria-label="{{fb_title}}, on" aria-current="true"><table role="presentation" border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{FILTER_ACT_L}}" width="16" height="32" border="0" alt=""></td><td background="{{FILTER_ACT_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="{{fb_color}}"><b>{{fb_label}}</b></font></td><td><img src="{{FILTER_ACT_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
+                <a href="{{fb_href}}" title="{{fb_title}}" {{!fb_acc}} aria-label="{{fb_title}}, on" aria-current="true"><table role="presentation" border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{ACTIVE_L}}" width="16" height="32" border="0" alt=""></td><td background="{{ACTIVE_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="{{fb_color}}"><b>{{fb_label}}</b></font></td><td><img src="{{ACTIVE_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
               % else:
-                <a href="{{fb_href}}" title="{{fb_title}}" {{!fb_acc}} aria-label="{{fb_title}}, off"><table role="presentation" border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{FILTER_INACT_L}}" width="16" height="32" border="0" alt=""></td><td background="{{FILTER_INACT_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="{{fb_color}}">{{fb_label}}</font></td><td><img src="{{FILTER_INACT_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
+                <a href="{{fb_href}}" title="{{fb_title}}" {{!fb_acc}} aria-label="{{fb_title}}, off"><table role="presentation" border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{INACTIVE_L}}" width="16" height="32" border="0" alt=""></td><td background="{{INACTIVE_MID}}" height="32" nowrap><font face="{{MONO_FONT}}" size="3" color="{{fb_color}}">{{fb_label}}</font></td><td><img src="{{INACTIVE_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
               % end
               </td>
             % end
@@ -2768,12 +2762,6 @@ def _render_potato_inner(
         INACTIVE_L=INACTIVE_L,
         INACTIVE_R=INACTIVE_R,
         INACTIVE_MID=INACTIVE_MID,
-        FILTER_ACT_L=FILTER_ACT_L,
-        FILTER_ACT_R=FILTER_ACT_R,
-        FILTER_ACT_MID=FILTER_ACT_MID,
-        FILTER_INACT_L=FILTER_INACT_L,
-        FILTER_INACT_R=FILTER_INACT_R,
-        FILTER_INACT_MID=FILTER_INACT_MID,
         sec_stats=sec_stats,
         block_count=block_count,
         grid_html=grid_html,

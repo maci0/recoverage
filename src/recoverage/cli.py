@@ -586,12 +586,6 @@ def _load_coverage_or_exit(
         )
 
 
-def _list_targets() -> list[str]:
-    from recoverage.server import db_target_ids
-
-    return db_target_ids()
-
-
 def _select_targets(target: str | None, *, json_output: bool) -> list[str]:
     """Return the targets to operate on, validating a requested --target.
 
@@ -600,7 +594,9 @@ def _select_targets(target: str | None, *, json_output: bool) -> list[str]:
     choice.  A requested target that was never built exits 1 with a clear
     error — sibling commands must not silently succeed on a typo'd target.
     """
-    known = _list_targets()
+    from recoverage.server import db_target_ids
+
+    known = db_target_ids()
     if target is None:
         return known
     if target not in known:
