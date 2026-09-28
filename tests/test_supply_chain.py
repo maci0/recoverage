@@ -183,6 +183,61 @@ class TestRbrewPin:
         for var, expected in _PINS.items():
             assert _default(script, var) == expected, f"tools/ci_clone_rebrew.sh: {var} moved"
 
+    def test_the_declared_floor_is_the_version_the_script_clones(self) -> None:
+        """The floor in the dependency metadata, the tag the script clones and
+        the number the Makefile names in its preflight are the same version.
+
+        `[project].dependencies` is what every install of the wheel reads, the
+        script's `REBREW_REF` is what fills the path dependency it resolves to,
+        and `REBREW_FLOOR` is what `make setup` tells a contributor the missing
+        checkout has to be. The tag/commit pair is pinned by `_PINS` above, but
+        the version the floor names was written in three places and nothing
+        compared them: a rebrew release that raised the module this package
+        needs raised the wheel's floor and left the Makefile naming a version
+        whose preflight would then accept a checkout that has no
+        `coverage_toml.py`, or the reverse.
+        """
+        declared = tomllib.loads(_MANIFEST.read_text(encoding="utf-8"))["project"]["dependencies"]
+        floors = [d.removeprefix("rebrew>=") for d in declared if d.startswith("rebrew>=")]
+        assert len(floors) == 1, f"expected one rebrew floor in the dependencies, got {floors}"
+        floor = floors[0]
+        assert floor == _default(_CLONE_SCRIPT.read_text(encoding="utf-8"), "REBREW_REF").lstrip(
+            "v"
+        ), f"pyproject.toml needs rebrew>={floor}, the script clones a different tag"
+        makefile_floor = _default(_MAKEFILE.read_text(encoding="utf-8"), "REBREW_FLOOR")
+        assert floor == makefile_floor, (
+            f"pyproject.toml declares rebrew>={floor}, the Makefile preflight names "
+            f"{makefile_floor}"
+        )
+
+    def test_the_readme_install_section_carries_the_path_dependency(self) -> None:
+        """The install a reader is told to run is one this tree can actually
+        satisfy.
+
+        `[tool.uv.sources]` resolves rebrew from a sibling checkout, so
+        nothing an index can serve satisfies the wheel's `rebrew` dependency,
+        and `pip install recoverage` stops at resolution. An install section
+        that leads with it sends every reader to a resolver error, and the
+        error names a distribution rather than the sibling checkout that is
+        the actual fix. The section is what the packaged dependency points at,
+        so the two are read together here.
+        """
+        manifest = tomllib.loads(_MANIFEST.read_text(encoding="utf-8"))
+        sources = manifest["tool"]["uv"]["sources"]
+        path_deps = {name for name, spec in sources.items() if "path" in spec}
+        assert path_deps, "no dependency resolves from a path, so the check would pass vacuously"
+        section = _README.read_text(encoding="utf-8").split("\n## Installation\n", 1)[1]
+        section = section.split("\n## ", 1)[0]
+        for name in path_deps:
+            assert name in section, (
+                f"the README install section does not mention {name}, the dependency it "
+                f"resolves from {'/'.join(sources[name]['path'])}"
+            )
+        assert not re.search(r"^\s*(uv run )?pip install recoverage", section, re.MULTILINE), (
+            "the install section offers `pip install recoverage` as a command, which cannot "
+            f"resolve {sorted(path_deps)} while they resolve from a path"
+        )
+
     def test_pinned_commit_is_a_full_sha(self) -> None:
         """A ref that is not a full object id cannot be checked for a moved tag."""
         sha = _default(_CLONE_SCRIPT.read_text(encoding="utf-8"), "REBREW_SHA")

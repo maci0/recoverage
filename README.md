@@ -72,12 +72,15 @@ glance without loading the full SPA.
 
 ## Installation
 
-```bash
-pip install recoverage
-```
-
-For development, see [CONTRIBUTING.md](CONTRIBUTING.md) — recoverage depends on
-a sibling rebrew checkout, so the bootstrap is two commands:
+> [!IMPORTANT]
+> The wheel declares `rebrew>=2.16.0` as a hard runtime dependency, and rebrew
+> is not on the package index yet, so `pip install recoverage` stops at
+> resolution with "No matching distribution found for rebrew>=2.16.0". The
+> commands below are the install that works today: recoverage resolves rebrew
+> from a sibling checkout, so the tree must sit beside one. `git clone`
+> recoverage on its own, or any git worktree of it, leaves `uv sync` failing
+> with `Distribution not found at file:///.../rebrew`. This section becomes
+> `pip install recoverage` when rebrew is published.
 
 ```bash
 make clone-rebrew   # the sibling rebrew into ../rebrew, at the pin in tools/ci_clone_rebrew.sh
@@ -86,19 +89,13 @@ make test           # or: make test-one T=tests/test_api.py
 uv run recoverage serve
 ```
 
-> [!IMPORTANT]
-> `rebrew` is a path dependency resolved to `../rebrew`
-> (`[tool.uv.sources]` in `pyproject.toml`), so recoverage must sit beside a
-> rebrew checkout. `git clone` recoverage on its own, or any git worktree of
-> it, leaves `uv sync` failing with
-> `Distribution not found at file:///.../rebrew`. Put the two side by side
-> (or point that source at a rebrew you already have) before running
-> anything.
+CONTRIBUTING.md covers the rest of the contributor bootstrap, and
+`[tool.uv.sources]` in `pyproject.toml` points the dependency at a rebrew you
+already have.
 
 ### Optional runtime extras
 
-Install an extra to enable its feature: `pip install 'recoverage[<extra>]'`
-(or `uv sync --extra <extra>` in a workspace).
+Add an extra to enable its feature: `uv sync --extra <extra>`.
 
 | Extra | Package | What it does |
 |-------|---------|--------------|

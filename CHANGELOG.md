@@ -42,6 +42,12 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   of scanning the globals and `verify_results` arrays per requested VA, and a
   search term is folded once per query rather than once per row and column.
   Answers are unchanged, including which global wins a repeated VA.
+- The README no longer opens its install section with `pip install recoverage`.
+  The wheel declares `rebrew>=2.16.0` as a runtime dependency and rebrew is
+  resolved from a sibling checkout, so that command stops at resolution with an
+  error naming a distribution rather than the checkout that fixes it. The
+  section now leads with the bootstrap that works and says what the one-line
+  install becomes.
 - `make all` now also builds the distribution and checks the committed
   dashboard bundle against `web/`, so the two CI jobs it did not mirror
   (`build`) fail on a workstation instead of after a push. The new
