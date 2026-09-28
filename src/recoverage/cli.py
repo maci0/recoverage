@@ -595,7 +595,7 @@ def _run_regen(root: Path) -> list[Path]:
 # ── Browser opener ─────────────────────────────────────────────────
 
 # Openers exit in well under a second; the bound only guards a wedged one.
-_BROWSER_OPEN_TIMEOUT = 10
+_BROWSER_OPEN_TIMEOUT_SECONDS = 10
 
 
 def _windows_detach_flags() -> int:
@@ -640,12 +640,12 @@ def _kill_and_reap(proc: subprocess.Popen[bytes]) -> None:
         except OSError as exc:
             _log.warning("Browser opener pid %s could not be killed: %s", proc.pid, exc)
     try:
-        proc.wait(timeout=_BROWSER_OPEN_TIMEOUT)
+        proc.wait(timeout=_BROWSER_OPEN_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
         _log.warning(
             "Browser opener pid %s did not exit within %.1fs of SIGKILL — leaving it unreaped",
             proc.pid,
-            float(_BROWSER_OPEN_TIMEOUT),
+            float(_BROWSER_OPEN_TIMEOUT_SECONDS),
         )
     except OSError as exc:
         _log.warning("Browser opener pid %s could not be reaped: %s", proc.pid, exc)
@@ -697,7 +697,7 @@ def _open_and_reap(url: str, args: list[str]) -> bool:
             return False
         return True
     try:
-        proc.wait(timeout=_BROWSER_OPEN_TIMEOUT)
+        proc.wait(timeout=_BROWSER_OPEN_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
         _kill_and_reap(proc)
     except (OSError, subprocess.SubprocessError) as exc:
@@ -1060,16 +1060,17 @@ def serve(
         token=token,
         log_level=log_level,
     )
-    listen_port = resolved.port
     bind = resolved.bind
     # --port 0 asks the OS for a free port. Resolve it here, before anything
     # prints or binds, so the banner, the config block, /api/health and the
     # browser URL all name the port that is actually bound rather than the 0
     # that was asked for.
-    listen_port = resolve_listen_port(listen_port, bind)
+    listen_port = resolve_listen_port(resolved.port, bind)
     allow_remote = resolved.allow_remote
     cors = resolved.cors
-    cors_origin = list(resolved.cors_origins)
+    # The installed allowlist, already normalized: what the banner, the security
+    # config and the request-path matcher all read.
+    allowed_origins = resolved.cors_origins
     token = resolved.token
 
     # Every warning in this block goes to stderr, so a deployment that
@@ -1097,7 +1098,6 @@ def serve(
 
     _configure_logging(resolved.log_level)
 
-    allowed_origins = cors_origin
     if token:
         _secho(
             f"token auth enabled — requests need Authorization: Bearer <token> "

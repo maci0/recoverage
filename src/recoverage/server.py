@@ -176,11 +176,23 @@ def configure_startup(settings: Mapping[str, str]) -> None:
     ACTIVE_CONFIG = dict(settings)
 
 
+def _origin_candidate(value: str) -> str:
+    """*value* in the spelling :func:`urlsplit` parses as an authority.
+
+    Origins carry a scheme (``http://localhost:5173``); a bare Host header
+    (``localhost:8001``) is a network-path reference, so the ``//`` prefix is
+    what tells urlsplit to read the host out of it rather than treating the
+    whole value as a path.  ONE spelling for all three header readers below
+    (:func:`_hostname_of`, :func:`_normalize_origin`, :func:`_authority_of`):
+    a change to how a bare authority is read has to reach all of them or they
+    stop agreeing on which host a request was addressed to.
+    """
+    return value if "://" in value else f"//{value}"
+
+
 def _hostname_of(origin: str) -> str:
     """Lowercased hostname of an Origin/Host header value ("" if unparsable).
 
-    Origins carry a scheme (``http://localhost:5173``); bare Host headers
-    (``localhost:8001``) get a synthetic scheme so urlsplit parses both.
     Values containing userinfo/escape characters (``evil@host``, backslash,
     percent-encoding, control bytes, whitespace) are rejected — browsers never
     emit them in Host/Origin, so their presence means the value is not a plain
@@ -196,8 +208,7 @@ def _hostname_of(origin: str) -> str:
     ):
         return ""
     try:
-        candidate = origin if "://" in origin else f"//{origin}"
-        return (urlsplit(candidate).hostname or "").lower()
+        return (urlsplit(_origin_candidate(origin)).hostname or "").lower()
     except ValueError:
         return ""
 
@@ -214,7 +225,7 @@ def _normalize_origin(origin: str) -> str:
     if _hostname_of(origin) == "":
         return ""
     try:
-        u = urlsplit(origin if "://" in origin else f"//{origin}")
+        u = urlsplit(_origin_candidate(origin))
         host = (u.hostname or "").lower()
         port = u.port
         scheme = u.scheme or "http"
@@ -239,7 +250,7 @@ def _authority_of(value: str) -> str:
     if _hostname_of(value) == "":
         return ""
     try:
-        parsed = urlsplit(value if "://" in value else f"//{value}")
+        parsed = urlsplit(_origin_candidate(value))
         host = (parsed.hostname or "").lower()
         port = parsed.port
     except ValueError:
@@ -470,17 +481,26 @@ def _read_chunked_body(limit: int) -> bytes:
         if not line or len(line) > _CHUNK_LINE_MAX or not line.endswith(b"\r\n"):
             raise RequestBodyMalformedError("unterminated chunk size line")
         size_field = line[:-2].split(b";", 1)[0].strip()
+        if not size_field:
+            # An empty size field is not the terminating chunk: a chunk-size
+            # line is 1*HEXDIG (RFC 9112 7.1), so a bare CRLF or a line that is
+            # only chunk extensions (";ext=1") carries no size at all. Reading
+            # it as 0 ended the body here and answered 200 with whatever had
+            # been accumulated so far, framing a truncated message as a
+            # complete one.
+            raise RequestBodyMalformedError("chunk size line carries no size")
         try:
             # parse_ascii_int, not int(x, 16): the latter takes digits from the
             # whole Unicode Nd set and accepts "_" as a separator, so a chunk
             # size of "1_0" declared 16 bytes where the client sent 2 and the
             # reader consumed the next 16 bytes of the connection, bytes
             # belonging to whatever request follows this one on a keep-alive
-            # socket.
-            size = parse_ascii_int(size_field.decode("ascii"), 16) if size_field else 0
+            # socket.  It also rejects every character outside the base's own
+            # digit set, so the size is never negative and needs no sign check.
+            size = parse_ascii_int(size_field.decode("ascii"), 16)
         except (UnicodeDecodeError, ValueError) as exc:
             raise RequestBodyMalformedError(f"not a hex chunk size: {size_field!r}") from exc
-        if size < 0 or size > limit - len(body):
+        if size > limit - len(body):
             raise RequestBodyTooLargeError(f"body over the {limit}-byte limit")
         if size == 0:
             # The terminating chunk, then optional trailers to the final CRLF.

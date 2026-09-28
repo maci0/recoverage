@@ -1499,9 +1499,16 @@ def handle_api_data(target: str) -> bytes | HTTPResponse:
             _data_cache_build_done(fingerprint, building)
 
 
-# The per-page cap the function list clamps ?limit= to, and the number of VAs
-# one batch lookup accepts.
+# How many VAs one batch lookup accepts.  A COUNT OF REQUESTS, bounding a
+# request body's list, so it is named for that rather than for the page it is
+# not.
 _MAX_BATCH_LOOKUP = 500
+
+# The per-page cap the function list clamps ?limit= to.  A COUNT OF ROWS IN A
+# RESPONSE, a different quantity from the batch cap above that happens to be
+# the same number today; one constant serving both would make a change to
+# either silently move the other.
+_MAX_PAGE_LIMIT = 500
 
 # Page size the function list serves when ?limit= is absent or unparseable:
 # one constant, so the two answers cannot drift apart.
@@ -1599,7 +1606,7 @@ def _slice_size(raw_size: str, parse_error: str) -> tuple[int, HTTPResponse | No
     is unparseable or clamps to zero.
     """
     try:
-        size = min(max(_parse_byte_count(raw_size), 0), _MAX_SLICE_SIZE)
+        parsed = _parse_byte_count(raw_size)
     except ValueError:
         return 0, _json_err(
             400,
@@ -1609,6 +1616,18 @@ def _slice_size(raw_size: str, parse_error: str) -> tuple[int, HTTPResponse | No
                 f"(decimal, or 0x-prefixed hex; 1..{_MAX_SLICE_SIZE})",
             },
         )
+    # The sign is checked before the clamp, as /bytes' ?offset= does it: a
+    # negative count clamped to zero answered "requests an empty slice", which
+    # describes a value the client never sent.
+    if parsed < 0:
+        return 0, _json_err(
+            400,
+            {
+                "error": "size must be positive",
+                "detail": f"size {raw_size!r} is negative; expected 1..{_MAX_SLICE_SIZE}",
+            },
+        )
+    size = min(parsed, _MAX_SLICE_SIZE)
     if size == 0:
         return 0, _json_err(
             400,
@@ -1661,7 +1680,7 @@ def handle_api_functions_list(target: str) -> bytes | HTTPResponse:
     try:
         limit = min(
             max(_page_int(query_param("limit", str(_DEFAULT_PAGE_LIMIT))), 1),
-            _MAX_BATCH_LOOKUP,
+            _MAX_PAGE_LIMIT,
         )
     except ValueError:
         limit = _DEFAULT_PAGE_LIMIT
@@ -1979,7 +1998,7 @@ def handle_api_function(target: str, va: str) -> bytes | HTTPResponse:
             404,
             {
                 "error": "not found",
-                "detail": f"no function or global matching {va!r} for target {target!r}",
+                "detail": f"no function or global matching {value!r} for target {target!r}",
             },
         )
 

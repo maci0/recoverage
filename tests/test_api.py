@@ -2271,6 +2271,27 @@ class TestBatchFunctionLookup:
         assert status.startswith("400")
         assert headers.get("Connection") == "close"
 
+    def test_batch_refuses_a_chunk_size_line_carrying_no_size(self) -> None:
+        """A chunk-size line is 1*HEXDIG, so a line with no digits frames nothing.
+
+        Read as size 0, a bare CRLF or an extensions-only line (";ext=1") is the
+        terminating chunk: the body ended there and the request was answered 200
+        with whatever had been accumulated, a truncated message framed as a
+        complete one. Refused as malformed instead, and the connection closed
+        with it."""
+        target = require_target()
+        for size_line in (b"\r\n", b";ext=1\r\n", b"   \r\n"):
+            status, headers, _body = wsgi_request(
+                "POST",
+                f"/api/targets/{target}/functions",
+                {"Transfer-Encoding": "chunked"},
+                body=size_line + b'{"vas":["0x10"]}' + b"\r\n0\r\n\r\n",
+                wsgi_input=None,
+                content_length=None,
+            )
+            assert status.startswith("400"), f"{size_line!r} was not refused"
+            assert headers.get("Connection") == "close"
+
     def test_batch_refuses_unbounded_chunk_trailers(self) -> None:
         """The trailer section is the one part of a chunked body with no cap.
 

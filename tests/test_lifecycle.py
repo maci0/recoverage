@@ -26,7 +26,7 @@ import pytest
 
 from recoverage import devserver
 from recoverage.cli import (
-    _BROWSER_OPEN_TIMEOUT,
+    _BROWSER_OPEN_TIMEOUT_SECONDS,
     _open_and_reap,
     _server_class_for,
 )
@@ -382,13 +382,13 @@ class TestOpenAndReap:
 
         # The wait bound the opener actually sees is the module global read at
         # call time, so shortening it here is what shrinks the wall clock.
-        monkeypatch.setattr(cli, "_BROWSER_OPEN_TIMEOUT", 0.3)
+        monkeypatch.setattr(cli, "_BROWSER_OPEN_TIMEOUT_SECONDS", 0.3)
         start = time.monotonic()
         _open_and_reap(
             "http://127.0.0.1:8001", [sys.executable, "-c", "import time; time.sleep(60)"]
         )
         elapsed = time.monotonic() - start
-        assert _BROWSER_OPEN_TIMEOUT > 0, "production opener wait must stay bounded"
+        assert _BROWSER_OPEN_TIMEOUT_SECONDS > 0, "production opener wait must stay bounded"
         assert elapsed >= 0.3, f"waited {elapsed:.2f}s: the bound was not applied"
         assert elapsed < 5, f"hung opener blocked {elapsed:.1f}s (unbounded wait)"
 
@@ -452,7 +452,7 @@ class TestOpenAndReap:
             def wait(self, timeout: float | None = None) -> int:
                 raise subprocess.TimeoutExpired(cmd="opener", timeout=timeout or 0)
 
-        monkeypatch.setattr(cli, "_BROWSER_OPEN_TIMEOUT", 0.1)
+        monkeypatch.setattr(cli, "_BROWSER_OPEN_TIMEOUT_SECONDS", 0.1)
         monkeypatch.setattr(cli.os, "name", "nt")
         start = time.monotonic()
         cli._kill_and_reap(_StuckProc())  # type: ignore[arg-type]
