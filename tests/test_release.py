@@ -7,6 +7,7 @@ the reverse), and a raised dependency floor nobody wrote down.
 
 from __future__ import annotations
 
+import json
 import re
 import tomllib
 from itertools import pairwise
@@ -207,6 +208,29 @@ class TestBreakingEntriesMatchTheVersionBump:
         assert _breaking_in_non_major([("1.6.1", breaking), ("1.6.0", fixed)]) == ["1.6.1"]
         assert _breaking_in_non_major([("2.0.0", breaking), ("1.6.0", fixed)]) == []
         assert _breaking_in_non_major([("1.7.0", fixed), ("1.6.0", fixed)]) == []
+
+
+class TestSingleVersionSource:
+    """`__version__` is the one place a recoverage version is written.
+
+    A second declaration is a second answer: `package.json` carried
+    `1.0.0` beside a package at `3.0.0`, and nothing read it, so it stayed
+    behind through every release. The root manifest is private tooling that is
+    never published, so it declares no version at all rather than one that can
+    only drift.
+    """
+
+    def test_the_python_manifest_takes_its_version_from_the_package(self) -> None:
+        project = tomllib.loads(_MANIFEST.read_text(encoding="utf-8"))["project"]
+        assert project.get("dynamic") == ["version"], "pyproject no longer reads __version__"
+        assert "version" not in project, "a literal version in pyproject is a second source"
+
+    def test_the_frontend_manifest_declares_no_version(self) -> None:
+        manifest = json.loads((_MANIFEST.parent / "package.json").read_text(encoding="utf-8"))
+        assert "version" not in manifest, (
+            f"package.json declares version {manifest.get('version')!r}, which the wheel "
+            f"does not carry: __version__ is {__version__}"
+        )
 
 
 class TestDeclaredFloorsAreRecorded:

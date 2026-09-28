@@ -60,6 +60,23 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **`/` carries `<div id="root">` and no static markup.** The shell markup a
   scraper or a stylesheet hook matched before is gone with the script that built
   it.
+- **`?index=` on `GET /api/targets/<target>/data` is `0`, `1` or absent, and
+  anything else is a 400.** `?index=false` and `?index=no` used to read as
+  "on", so a caller asking for the omitted payload got the whole `search_index`
+  back with nothing in the answer saying so. They now get the same 400
+  `?format=` and `?status=` already answer. Send `?index=1` for the old
+  behavior, or drop the parameter.
+- **The 503 an unreadable `rebrew-project.toml` answers now reads
+  `error: "Database unavailable"`, the string every other coverage-read 503
+  already carried.** Its `code` was `db_unavailable` and is unchanged, so a
+  client matching on `code` is unaffected; one matching the human-readable
+  `error` text has to compare the new string.
+- **A server refuses connections past 128 concurrent ones with a 503 and a log
+  line.** Every accepted connection already had a socket deadline, which bounds
+  how long a handler thread lives but not how many exist. A deployment that
+  held more than 128 (SSE clients, browser connections, a crawler) is now
+  refused past the cap; `RECOVERAGE_MAX_CONNECTIONS` raises it, and
+  `/api/health`'s `connections` block reports the reading.
 
 ### Changed
 
@@ -81,12 +98,6 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `config` documented theirs; `serve`, `stats`, `export` and `regen` did not,
   so the contract a script depends on was readable from three of seven
   commands.
-- `GET /api/targets/<target>/data` treats `?index=` as the flag it is: `0`,
-  `1` or absent. Any other value is a 400 naming the accepted spellings, the
-  same contract `?format=` and `?status=` already had. `?index=false` used to
-  read as "on" and answered with the whole search index the flag exists to
-  omit. The README's query-parameter table lists `index`, which the endpoint
-  took and the table did not.
 - `lucide-react` is no longer a devDependency. Nothing imported it: the
   dashboard runs on preact/compat and draws no icon from the package, so the
   only thing it did was pull `react` into `bun.lock` for every contributor and
@@ -123,9 +134,6 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   target in its URL, in parallel with `/api/targets` instead of behind it, so a
   reload or a shared link spends one round trip less before the map appears. A
   target the server no longer serves falls back the way it always did.
-- The 503 an unreadable `rebrew-project.toml` answers now spells its
-  human-readable `error` as `Database unavailable`, the same as every other
-  coverage-read 503. Its `code` was already `db_unavailable` and is unchanged.
 - An empty `vas` array on `POST /api/targets/<target>/functions` now carries
   the `detail` field every other API error does.
 - The README documents every `/api/` query parameter (default, accepted range,
@@ -142,10 +150,6 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The "database unavailable" page and the 503 `detail` string tell the reader to
   run `rebrew build-db`, which runs the catalog itself, rather than a
   two-command sequence with no first step to run.
-- Concurrent connections are capped at 128. Every accepted connection already
-  had a socket deadline, which bounds how long a handler thread lives but not
-  how many exist; past the cap a connection is refused with a 503 and a log
-  line instead of taking a thread and a descriptor for the full deadline.
 - The dashboard is built from `web/` with Vite, Preact (through
   `preact/compat`), TypeScript, Tailwind CSS 4 and shadcn/ui primitives, all
   themed from the same token layer the VanJS stylesheet carried. `make web-build` produces
@@ -165,6 +169,17 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   resolve at startup like every other `RECOVERAGE_*` setting, so a value
   outside the range is the exit 2 a deployment finds at boot rather than a
   refused connection later. `recoverage config` prints the resolved pair.
+- `/src/<file>` and `/original/<file>` negotiate their encoding like every other
+  body in the package. A text file over 1 KB answers brotli, zstd or gzip
+  according to the request's `Accept-Encoding`, carries a strong `ETag` hashed
+  from the file's bytes and its accepted-encoding key, and
+  `Cache-Control: no-cache, must-revalidate`, so a conditional request answers
+  304. The code panes download a whole `src/<target>` file on a selection and
+  the tree is text, so the transfer is where the time was. A `Range` request, a
+  file under the floor, a suffix that is not text, and a client that cannot
+  decode any of the three are still bottle's `static_file` answer, headers and
+  404 included. The dashboard also stops fetching `/original/<target>.dll`
+  with the page and defers it to the first selection that needs it.
 
 ### Fixed
 

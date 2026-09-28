@@ -15,9 +15,9 @@ description = "Coverage dashboard for binary-matching decompilation projects"
 readme = "README.md"
 requires-python = ">=3.13"
 license = "MIT"
-# NOTICE carries the grants for the third-party browser blobs under
-# src/recoverage/assets, which ship inside the wheel. Without it here a wheel
-# consumer gets the MIT license and no way back to VanJS or Highlight.js.
+# NOTICE carries the grants for the third-party code `make web-build` compiles
+# into the browser assets, which ship inside the wheel. Without it here a wheel
+# consumer gets the MIT license and no way back to Preact or Highlight.js.
 license-files = ["LICENSE", "NOTICE"]
 keywords = ["reverse-engineering", "decompilation", "code-coverage", "binary-matching"]
 classifiers = [
