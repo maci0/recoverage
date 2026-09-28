@@ -14,6 +14,14 @@ from recoverage import config
 # message compared across two widths has to be unwrapped first.
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
+# The deployment copy of the configuration surface. Nothing in the package
+# reads it, so nothing keeps it true: a setting added to config.KNOWN_VARS
+# lands in the man page and the README table and misses the one file an
+# operator copies into a unit file or a container spec.
+_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
+_ENV_EXAMPLE = _ROOT / ".env.example"
+_ASSIGNMENT = re.compile(r"\A#?\s*(?P<name>[A-Za-z_][A-Za-z0-9_]*)=(?P<value>.*)\Z")
+
 
 def _plain(text: str) -> str:
     """The message text of a boxed CliRunner result, unwrapped."""
@@ -884,3 +892,61 @@ class TestEnvValidatedByEveryCommand:
         assert result.exit_code == 2
         assert "RECOVERAGE_DB" in result.output
         assert "Traceback" not in result.output
+
+
+class TestEnvExample:
+    """`.env.example` is a deployment artifact, so it is pinned like one.
+
+    It is the file an operator diffs against a running unit: every line names
+    one setting and its stock value, an uncommented line is a change from that
+    value, and the file's own header says a name it does not carry is a
+    startup error. Nothing in the package reads it, so nothing else would
+    notice a setting that reached config.KNOWN_VARS and never reached here.
+    """
+
+    @staticmethod
+    def _documented() -> dict[str, str]:
+        """Every ``NAME=value`` line in the example, commented or not."""
+        documented: dict[str, str] = {}
+        for line in _ENV_EXAMPLE.read_text(encoding="utf-8").splitlines():
+            match = _ASSIGNMENT.match(line.strip())
+            if match:
+                documented[match["name"]] = match["value"].strip()
+        return documented
+
+    def test_it_names_every_known_variable_and_nothing_else(self) -> None:
+        named = {name for name in self._documented() if name.startswith(config.ENV_PREFIX)}
+        assert named == config.KNOWN_VARS
+
+    def test_no_line_actually_sets_a_variable(self) -> None:
+        """A checked-in value is a value every deployment starts from.
+
+        The header states nothing in the file is read automatically, and an
+        uncommented line contradicts that: a sourced EnvironmentFile would
+        apply the example's stock value, or its placeholder token, to every
+        host that copied it.
+        """
+        for line in _ENV_EXAMPLE.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                assert line.lstrip().startswith("#"), line
+
+    def test_the_stated_defaults_are_the_defaults_the_server_uses(self) -> None:
+        # The settings with a default the module owns a constant for. The
+        # three with none (DB, CORS_ORIGIN, TOKEN) are absent or a
+        # placeholder there, which is the same statement: unset means the
+        # stock behavior.
+        documented = self._documented()
+        assert documented["RECOVERAGE_PORT"] == str(config.DEFAULT_PORT)
+        assert documented["RECOVERAGE_BIND"] == config.DEFAULT_BIND
+        assert documented["RECOVERAGE_MAX_CONNECTIONS"] == str(config.DEFAULT_MAX_CONNECTIONS)
+        assert documented["RECOVERAGE_CLIENT_TIMEOUT"] == str(config.DEFAULT_CLIENT_TIMEOUT_SECONDS)
+        assert documented["RECOVERAGE_LOG_LEVEL"] == logging.getLevelName(config.DEFAULT_LOG_LEVEL)
+        assert documented["RECOVERAGE_CORS"] == "false"
+        assert documented["RECOVERAGE_ALLOW_REMOTE"] == "false"
+
+    def test_the_token_is_a_placeholder_rather_than_a_value(self) -> None:
+        # The one secret the file names. A placeholder an operator replaces is
+        # the contract; a token that looks usable is a credential in version
+        # control that every reader of the repository holds.
+        token = self._documented()["RECOVERAGE_TOKEN"]
+        assert "replace" in token.lower(), token

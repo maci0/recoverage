@@ -32,6 +32,10 @@ recoverage/
 ├── LICENSE                  # MIT
 ├── NOTICE                   # Grants for the third-party browser assets bundled in the wheel
 ├── package.json            # bun scripts: lint, build:web, dev:web, typecheck:web
+├── .env.example            # Every RECOVERAGE_* setting, commented, with the default the
+│                           #   server uses. The deployment copy of the surface, drafted from for a
+│                           #   unit file or a container spec; pinned to config.KNOWN_VARS and the
+│                           #   module's defaults by tests/test_config.py (TestEnvExample)
 ├── web/                    # frontend sources: vite.config.ts + app/ (Preact + Tailwind)
 ├── .yamllint.yaml          # yamllint config for .github/ (document-start, 100 cols)
 ├── oxlint.config.ts        # JS/TS lint config (see the tooling notes below)
@@ -706,7 +710,11 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   browser opener are already running. The CLI's `--bind` calls the same
   function with `--bind` as the name in the error, because the flag and the
   variable are one setting with one floor. A new string-valued setting takes
-  the same treatment: validated in `config.py`, reached by both sources. An
+  the same treatment: validated in `config.py`, reached by both sources. A new
+  setting joins `config.KNOWN_VARS`, the README's environment table and
+  `.env.example` in the same change, the last being what an operator drafts a
+  unit file or a container spec from and the one no gate otherwise kept true
+  (`tests/test_config.py`, `TestEnvExample`). An
   INTEGER flag reaches the variable's floor by being declared `str` and parsed
   by `config`'s own reader: click's `INT`/`FLOAT` run the value through
   `int()`/`float()`, which take digits from every Unicode Nd set, read `_` as a

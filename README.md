@@ -213,6 +213,12 @@ $env:RECOVERAGE_TOKEN = (Get-Content C:\secrets\recoverage_token -Raw).Trim()
 recoverage serve --no-open
 ```
 
+`.env.example` carries the same surface in a copy-pasteable form: every
+variable above, commented out, each with the stock value beside it and a note
+on what it accepts. It is what a `systemd` `EnvironmentFile` or a container
+spec is drafted from, and `tests/test_config.py` fails when a variable reaches
+this table and misses it.
+
 `RECOVERAGE_DB` is read through `Path.expanduser()`, so a leading `~` and the
 `USERPROFILE` it resolves against on Windows work as they do on POSIX.
 
