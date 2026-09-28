@@ -287,15 +287,40 @@ def origin_is_this_dashboard(origin: str, host: str) -> bool:
     return _authority_of(origin) == request_host
 
 
+def fs_text_bytes(text: str) -> bytes:
+    """*text* as the bytes the filesystem named it in, for hashing.
+
+    Python reads a filename with ``os.fsdecode``, which is ``surrogateescape``:
+    a name Linux holds as raw bytes outside UTF-8 (``coverage-ca\\xff.toml``,
+    legal on ext4 and produced by a checkout, an archive or a copy from a
+    Windows tool) reaches Python carrying U+DCFF, and ``str.encode("utf-8")``
+    raises ``UnicodeEncodeError`` on it.  Every digest in this package is built
+    from filenames or from values the documents derived from them, so the
+    strict encode turned one such file in the coverage directory into a 500
+    with a traceback on every request: the snapshot token, and every ETag
+    derived from it, are computed before the handler can answer.
+
+    ``surrogateescape`` on the way out is the exact inverse of ``os.fsdecode``,
+    so the two distinct files stay distinct in the digest (the token still
+    moves when either is rewritten or removed) and the round trip is lossless.
+    A surrogate from anywhere else — a document cannot hold one, ``tomllib``
+    rejects ``\\uD800`` — still raises, because only the filesystem's own
+    spelling is recoverable.
+    """
+    return text.encode("utf-8", "surrogateescape")
+
+
 def _safe_etag(*parts: object) -> str:
     """Deterministic ETag from arbitrary parts.
 
     Parts include request-controlled strings (VA, section, format) — they
     are hashed so no raw request data can ever reach a response header
     (bottle rejects control characters, but that is a library property,
-    not the app's contract).
+    not the app's contract).  Hashed through :func:`fs_text_bytes`, so a target
+    id that came off the filesystem as a surrogate-escaped name is a value
+    rather than a 500.
     """
-    digest = hashlib.sha256("|".join(str(p) for p in parts).encode("utf-8")).hexdigest()[:32]
+    digest = hashlib.sha256(fs_text_bytes("|".join(str(p) for p in parts))).hexdigest()[:32]
     return f'"{digest}"'
 
 
@@ -339,6 +364,63 @@ def is_plain_relative(path: PurePath) -> bool:
     return not path.anchor and ".." not in path.parts
 
 
+def _existing_spelling(directory: Path, name: str) -> str:
+    """*name* under *directory* as the filesystem itself spells it."""
+    try:
+        if (directory / name).exists():
+            return name
+    except OSError:
+        return name
+    other = unicodedata.normalize("NFD", name)
+    if other == name:
+        other = unicodedata.normalize("NFC", name)
+    if other == name:
+        # No combining mark: the same string in both forms, so there is no
+        # other spelling to try.
+        return name
+    try:
+        return other if (directory / other).exists() else name
+    except OSError:
+        return name
+
+
+def match_filesystem_spelling(base: Path, relative: str) -> str:
+    """*relative* re-spelled the way the tree under *base* actually spells it.
+
+    macOS stores what a checkout or a decompiler wrote in the DECOMPOSED form
+    of any filename carrying combining marks, and hands the decomposed bytes
+    back from a directory listing: ``café.c`` lands as ``cafe`` + U+0301 +
+    ``.c``.  A coverage document holds the COMPOSED spelling rebrew wrote, and
+    a composed path does not open a decomposed file, so the code panes 404 for
+    a source file that is sitting there and the Potato source panel comes back
+    empty.  Byte equality is the wrong test for a path on a filesystem that
+    normalizes the bytes it stores.
+
+    Each segment is probed in turn and the one that exists wins, so a tree
+    that mixes the two forms resolves segment by segment instead of needing
+    the whole path in one form.  A segment that exists under the spelling it
+    was given is kept as it is, and a name that exists in neither form is
+    returned unchanged, so a genuinely missing file still reads as missing and
+    the caller still 404s.
+
+    Callers run this AFTER :func:`is_plain_relative`, never before: the
+    containment rule is checked on the spelling the request (or the document)
+    supplied, and normalization only re-spells combining marks, so a path that
+    was refused stays refused and one that was allowed can only become a name
+    that exists inside the same root.
+    """
+    parts = PurePath(relative).parts
+    if not parts:
+        return relative
+    spelled: list[str] = []
+    current = base
+    for part in parts:
+        chosen = _existing_spelling(current, part)
+        spelled.append(chosen)
+        current = current / chosen
+    return str(PurePath(*spelled))
+
+
 def decode_query_value(raw: str) -> str:
     """Recover the UTF-8 a client sent for one already-decoded query value.
 
@@ -355,6 +437,26 @@ def decode_query_value(raw: str) -> str:
         return raw.encode("latin-1").decode("utf-8")
     except (UnicodeEncodeError, UnicodeDecodeError):
         return raw
+
+
+#: The characters a reader types around a search term by accident.  Not
+#: ``str.strip``'s set: that removes every character Unicode calls whitespace,
+#: so a term made of a non-breaking space (U+00A0), a thin space or U+FEFF
+#: became the empty term and the search answered with every row instead of the
+#: rows whose name carries that space.  The SPA's ``format.trimSearch`` removes
+#: exactly this run, so both sides of one search drop the same characters.
+_ASCII_SPACE: Final = " \t\n\r\f\v"
+
+
+def strip_ascii_whitespace(value: str) -> str:
+    """*value* without its leading and trailing ASCII spaces.
+
+    ``str.strip`` is not that: it strips every code point ``str.isspace``
+    accepts, which on the search term silently changed the question being
+    asked.  Every character outside this run is part of the term, including
+    the Unicode spaces a symbol name can carry.
+    """
+    return value.strip(_ASCII_SPACE)
 
 
 def query_param(name: str, default: str = "") -> str:
@@ -644,7 +746,11 @@ def _snapshot_db_mtime() -> tuple[int, int] | None:
     if not entries:
         return None
     payload = "\0".join(f"{name}:{mtime_ns}:{size}" for name, mtime_ns, size in entries)
-    digest = hashlib.sha256(payload.encode("utf-8")).digest()
+    # fs_text_bytes, not encode("utf-8"): a name the filesystem spelled as raw
+    # bytes outside UTF-8 reaches this as a surrogate-escaped str and the
+    # strict encode raised, so one such file in the coverage directory turned
+    # every endpoint that keys on this token into a 500.
+    digest = hashlib.sha256(fs_text_bytes(payload)).digest()
     return int.from_bytes(digest[:8], "big"), sum(size for _n, _m, size in entries)
 
 

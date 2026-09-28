@@ -784,6 +784,35 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   Pinned at `tests/test_potato.py` (`TestPathTraversalGuard`) and
   `tests/test_fuzz.py` (`TestRepoFileRoute`); a new path taken from a coverage
   document or from a URL goes through the same guard.
+- A filename is not a byte string, on either side. `server.
+  match_filesystem_spelling` re-spells a requested path the way the tree
+  actually spells it, one segment at a time, because macOS stores the DECOMPOSED
+  form of any name carrying combining marks whatever the creating program
+  passed: the document (and the SPA link built from it) spells NFC, the
+  composed path opens no file, and the code pane 404s a source file that is
+  sitting on disk. It runs AFTER `is_plain_relative`, never before it, so the
+  containment rule still judges the spelling the request supplied. Pinned at
+  `tests/test_api.py` (`test_decomposed_filename_is_found_from_the_composed_spelling`)
+  and `tests/test_potato.py` (`test_decomposed_source_name_found_from_the_composed_spelling`).
+- A filename is also not necessarily valid text. Python reads one with
+  `os.fsdecode`, which is `surrogateescape`, so `coverage-ca\xff.toml` (legal on
+  ext4, and produced by a checkout, an archive or a Windows tool) reaches Python
+  holding U+DCFF. Every digest built from a filename goes through `server.
+  fs_text_bytes`, whose `surrogateescape` is the exact inverse: one such file
+  used to raise `UnicodeEncodeError` out of `_snapshot_db_mtime`, and the token
+  is computed before a handler can answer, so it 500'd every snapshot-keyed
+  route. Two names differing only in an undecodable byte still hash apart.
+  Pinned at `tests/test_server.py` (`TestDbEtag`).
+- A search term is trimmed of ASCII whitespace only, through `server.
+  strip_ascii_whitespace` (`/functions?search=`, Potato's `?search=`) and
+  `format.trimSearch` (the SPA box), which remove the same run on both sides.
+  `str.strip` and `String.prototype.trim` also remove U+00A0, U+2000-U+200A,
+  U+3000 and U+FEFF, so a term made of a non-breaking space became the EMPTY
+  term and the search answered with every row instead of the rows whose name
+  carries that space. A new surface that reads a term trims through the helper
+  rather than the method. Pinned at `tests/test_server.py`
+  (`TestSearchColumnGuards`) and `tests/test_api.py`
+  (`test_a_unicode_space_is_a_search_term_not_an_empty_one`).
 - One response, one snapshot. A snapshot is frozen — every collection is a
   tuple or a `MappingProxyType` — and `server.load_all_coverage` memoizes on the
   documents' own stat, so an unchanged directory returns THE SAME snapshot

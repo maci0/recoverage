@@ -13,7 +13,7 @@ import { useLiveReload } from "@/hooks/useLiveReload";
 import { originalDllPath, useOriginalBinary } from "@/hooks/useOriginalBinary";
 import { cellIndexForVa, useSelection } from "@/hooks/useSelection";
 import { cn } from "@/lib/cn";
-import { MSG, count, foldForSearch, hex, sameOriginPath, toVa } from "@/lib/format";
+import { MSG, count, foldForSearch, hex, sameOriginPath, toVa, trimSearch } from "@/lib/format";
 import { readStored, writeStored } from "@/lib/storage";
 
 /** The dashboard shell: the document, the topbar's controls, and the map.
@@ -293,7 +293,7 @@ export function App() {
   // fold through `foldForSearch`, the SPA's half of `server.fold_text`, so a
   // term and a symbol agree on `ß`/`ss` and on an NFD spelling alike.
   const matchedNames = useMemo(() => {
-    const needle = foldForSearch(query.trim());
+    const needle = foldForSearch(trimSearch(query));
     if (needle === "") {
       return null;
     }

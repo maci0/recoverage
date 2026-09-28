@@ -6,6 +6,7 @@ import gzip
 import itertools
 import json
 import logging
+import os
 import queue
 import re
 import shutil
@@ -53,6 +54,9 @@ from recoverage.server import (
     select_static_variant,
     static_variant_key,
     verify_by_va,
+)
+from recoverage.server import (
+    strip_ascii_whitespace as srv_strip,
 )
 
 
@@ -470,6 +474,39 @@ class TestDbEtag:
         assert after is not None
         assert after != before
 
+    def test_a_filename_outside_utf8_still_yields_a_token(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A legal Linux filename must not 500 every endpoint that keys on it.
+
+        ``coverage-ca\\xff.toml`` is a name ext4 holds and a checkout, an
+        archive or a copy from a Windows tool produces.  Python reads it as
+        U+DCFF (os.fsdecode is surrogateescape), and the strict ``encode`` the
+        token was built with raised, so one such file turned /potato and every
+        other snapshot-keyed route into a 500 with a traceback.
+        """
+        import recoverage.server as srv
+
+        directory = _coverage_dir(tmp_path, monkeypatch)
+        self._doc(directory, "FAKEDLL")
+        body = (directory / "coverage-FAKEDLL.toml").read_bytes()
+        raw = directory / os.fsdecode(b"coverage-ca\xffx.toml")
+        raw.write_bytes(body)
+
+        token = srv._snapshot_db_mtime()
+        assert token is not None
+        # Still a fingerprint of the DIRECTORY: removing the odd file moves it.
+        raw.unlink()
+        assert srv._snapshot_db_mtime() != token
+
+    def test_two_filenames_differing_only_in_an_undecodable_byte_differ(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The escape is lossless, so surrogateescape keeps the two apart."""
+        import recoverage.server as srv
+
+        assert srv.fs_text_bytes("a\udcffb") != srv.fs_text_bytes("a\udcfe b")
+
     def test_etag_none_when_the_directory_is_empty(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -561,6 +598,20 @@ class TestSearchFolding:
 
     def test_match_is_case_insensitive(self) -> None:
         assert fold_match("_func_a", "FUNC")
+
+    @pytest.mark.parametrize("space", ["\u00a0", "\u2009", "\u3000", "\ufeff"])
+    def test_a_unicode_space_is_part_of_the_term(self, space: str) -> None:
+        """``str.strip`` is not the trim, and a term is not whitespace.
+
+        Stripping every code point Unicode calls whitespace turned a search for
+        a non-breaking space into an EMPTY search, which answers with every row
+        instead of the one whose name carries the space.  Only the ASCII run
+        comes off.
+        """
+        assert srv_strip(space) == space
+        assert srv_strip(f"{space}func_a{space}") == f"{space}func_a{space}"
+        assert fold_match(f"sub{space}name", space)
+        assert srv_strip("  func_a\t") == "func_a"
 
     def test_percent_is_a_literal(self) -> None:
         assert fold_match("100%", "%")

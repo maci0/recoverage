@@ -832,6 +832,20 @@ class TestApiFunctions:
         data = json.loads(decode_body(body, headers))
         assert [fn["name"] for fn in data["functions"]] == ["_func_b"]
 
+    def test_a_unicode_space_is_a_search_term_not_an_empty_one(self) -> None:
+        """`?search=` holding a non-breaking space is a term, not no filter.
+
+        `str.strip` removed it, the query became the empty term, and the
+        endpoint answered with every row: a search for a space returned the
+        whole table.
+        """
+        target = require_target()
+        status, headers, body = wsgi_get(f"/api/targets/{target}/functions?search=%C2%A0")
+        assert status.startswith("200")
+        data = json.loads(decode_body(body, headers))
+        assert data["total"] == 0
+        assert data["functions"] == []
+
     def test_search_like_wildcards_match_literally(self) -> None:
         """% in the search must be escaped, not act as a LIKE wildcard —
         an unescaped pattern would return every row (or inject a pattern)."""
@@ -4854,6 +4868,33 @@ class TestRepoFileServing:
         status, _headers, body = wsgi_get("/src/donn%C3%A9es/na%C3%AFve%20name.c")
         assert status.startswith("200")
         assert b"int x;" in body
+
+    def test_decomposed_filename_is_found_from_the_composed_spelling(
+        self, tmp_path: Path, monkeypatch: Any
+    ) -> None:
+        """macOS stores the NFD spelling; the document and the SPA spell NFC.
+
+        A tree written on macOS holds ``cafe`` + U+0301 + ``.c`` whatever the
+        program that created it passed, so the composed path the request
+        carries opens nothing and the code pane 404s a file that is on disk.
+        """
+        monkeypatch.chdir(tmp_path)
+        src = tmp_path / "src"
+        directory = src / unicodedata.normalize("NFD", "données")
+        directory.mkdir(parents=True)
+        leaf = unicodedata.normalize("NFD", "naïve name.c")
+        (directory / leaf).write_text("int x;", encoding="utf-8")
+        # The composed spelling is what reaches the route, percent-encoded.
+        status, _headers, body = wsgi_get("/src/donn%C3%A9es/na%C3%AFve%20name.c")
+        assert status.startswith("200")
+        assert b"int x;" in body
+
+    def test_a_name_in_neither_form_still_404s(self, tmp_path: Path, monkeypatch: Any) -> None:
+        """The spelling probe does not turn a missing file into a served one."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "src").mkdir()
+        status, _headers, _body = wsgi_get("/src/na%C3%AFve%20name.c")
+        assert status.startswith("404")
 
     def test_double_encoded_traversal_blocked(self, tmp_path: Path, monkeypatch: Any) -> None:
         """%252e%252e decodes once to the text "%2e%2e", never to "..".

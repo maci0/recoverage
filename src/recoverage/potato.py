@@ -58,6 +58,7 @@ from recoverage.server import (
     load_metadata,
     lookup_function,
     lookup_global,
+    match_filesystem_spelling,
     mtime_ns_to_utc,
     parse_ascii_int,
     pct_1dp,
@@ -66,6 +67,7 @@ from recoverage.server import (
     resolve_targets,
     response,
     set_auth_cookie,
+    strip_ascii_whitespace,
     verify_by_va,
     verify_payload,
 )
@@ -1199,7 +1201,7 @@ def render_potato(parsed_url: ParseResult) -> str:
     filter_str = ",".join(qs.get("filter", [""]))
     active_filters = _parse_filters(filter_str)
     idx_str = qs.get("idx", [""])[0]
-    search_query = qs.get("search", [""])[0].strip()
+    search_query = strip_ascii_whitespace(qs.get("search", [""])[0])
     view = qs.get("view", [""])[0]
     sort_key = qs.get("sort", ["va"])[0]
     status_filter = qs.get("status", [""])[0]
@@ -2840,6 +2842,11 @@ def _panel_fn_source_text(data: dict[str, Any], target: str, fn_data: dict[str, 
     # Reject anchored paths and parent traversal before resolve
     if not is_plain_relative(Path(raw)):
         return None
+    # After the refusal, never before it: the document spells the source path
+    # composed and a macOS tree holds it decomposed, so the composed path
+    # opened no file at all and the panel rendered empty beside a source file
+    # that was on disk the whole time.
+    raw = match_filesystem_spelling(base, raw)
     c_path = (base / raw).resolve()
     if not c_path.is_relative_to(base):
         return None
@@ -2849,7 +2856,7 @@ def _panel_fn_source_text(data: dict[str, Any], target: str, fn_data: dict[str, 
         # blanks the whole panel over one 0x92.  The undecodable byte
         # renders as U+FFFD in place and the rest of the file stays readable.
         with c_path.open(encoding="utf-8", errors="replace") as f:
-            return cast(str, f.read())
+            return f.read()
     except (OSError, UnicodeError) as exc:
         # UnicodeError covers a path the filesystem encoding cannot encode
         # (a lone surrogate out of a foreign DB), which open() raises before

@@ -99,6 +99,21 @@ export function foldForSearch(text: string): string {
     .replace(FULL_FOLD_PATTERN, (character) => FULL_FOLD.get(character) ?? character);
 }
 
+/** The spaces a search box rounds off, and only those.
+ *
+ * `String.prototype.trim` removes every character Unicode calls whitespace:
+ * U+00A0, U+2000-U+200A, U+3000 and U+FEFF among them. A term made of a
+ * non-breaking space is a real term, not an empty one, and trimming it away
+ * made the box search for everything instead of the rows whose name carries
+ * that space. Only the space and the six ASCII controls are what a reader
+ * types around a term by accident, and they are what
+ * `server.strip_ascii_whitespace` removes on the API and Potato side. */
+const ASCII_SPACE = /^[ \t\n\r\f\v]+|[ \t\n\r\f\v]+$/gu;
+
+export function trimSearch(text: string): string {
+  return text.replace(ASCII_SPACE, "");
+}
+
 /** VAs cross the API boundary as hex strings ("0x10001000") or plain numbers
  * (/functions/<va> emits a decimal number). Parse only strings as hex: routing
  * a number through parseInt(x, 16) reads its decimal digits as base-16. */

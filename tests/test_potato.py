@@ -3,6 +3,7 @@ import functools
 import os
 import re
 import subprocess
+import unicodedata
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, ClassVar
@@ -2065,6 +2066,26 @@ class TestPathTraversalGuard:
         for source_root in ("..", "../..", "/../.."):
             data: dict = {"paths": {"sourceRoot": source_root}}
             assert _panel_fn_source_text(data, "T", {"files": ["secret.c"]}) is None
+
+    def test_decomposed_source_name_found_from_the_composed_spelling(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A macOS tree holds the NFD name; the document spells it composed.
+
+        The document records the path rebrew saw, the panel joined that string
+        onto the root, and a decomposed file was not found by its composed
+        name, so the source pane rendered empty beside a file that was there.
+        """
+        monkeypatch.chdir(tmp_path)
+        directory = tmp_path / "src" / unicodedata.normalize("NFD", "données")
+        directory.mkdir(parents=True)
+        leaf = unicodedata.normalize("NFD", "naïve.c")
+        (directory / leaf).write_text("int main(void) { return 0; }", encoding="utf-8")
+        composed = f"{unicodedata.normalize('NFC', 'données')}/{unicodedata.normalize('NFC', leaf)}"
+        data: dict = {"paths": {"sourceRoot": "src"}}
+        text = _panel_fn_source_text(data, "T", {"files": [composed]})
+        assert text is not None
+        assert "int main(void)" in text
 
     def test_source_root_escape_via_target_blocked(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

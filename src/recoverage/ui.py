@@ -302,6 +302,13 @@ def serve_repo_file(filepath: str) -> bytes | HTTPResponse:
     # resolve symlinks — a symlink inside src/ pointing outside the tree
     # would pass the root check and serve the target.  Resolve and verify
     # containment ourselves.
+    #
+    # Re-spelled first, and only here: a macOS tree holds the decomposed form
+    # of a name carrying combining marks, the document spells it composed, and
+    # the composed path misses a file that is on disk (match_filesystem_spelling).
+    # The containment check below then judges the path actually opened, and
+    # bottle's own static_file fallback gets the same spelling.
+    filepath = _server.match_filesystem_spelling(root, filepath)
     candidate = (root / filepath).resolve()
     if not candidate.is_relative_to(root):
         return _server._json_err(

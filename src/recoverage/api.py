@@ -1688,7 +1688,7 @@ def handle_api_functions_list(target: str) -> bytes | HTTPResponse:
                 f"expected one of {', '.join(sorted(_FUNCTION_STATUSES))}",
             },
         )
-    search = query_param("search").strip() or None
+    search = _server.strip_ascii_whitespace(query_param("search")) or None
     if search is not None and len(search) > _MAX_SEARCH_CHARS:
         return _json_err(
             400,
