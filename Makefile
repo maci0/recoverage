@@ -205,10 +205,12 @@ test-one: ensure-rebrew
 # chromium build that extra pins, and a server on the port BASE_URL names.
 # `make all` and CI leave them out, so the three steps live in one target
 # rather than in prose a contributor has to reassemble.
-# `--frozen` on the uv calls: the extra is declared in pyproject.toml and
-# locked, so this installs what the lockfile says instead of re-resolving.
+# `--locked`, like every other install here: the extra is declared in
+# pyproject.toml and locked, and `--frozen` would install uv.lock even after a
+# playwright dependency edit skipped `uv lock`, so the browser tests would
+# pass against a package the manifest does not describe.
 test-browser: ensure-uv
-	uv sync --frozen --extra dev --extra playwright
+	uv sync --locked --extra dev --extra playwright
 	$(UV_RUN) playwright install chromium
 	$(UV_RUN) python -m pytest tests/test_playwright.py -v --tb=short
 

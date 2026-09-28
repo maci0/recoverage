@@ -9,6 +9,10 @@ build-backend = "setuptools.build_meta"
 name = "recoverage"
 dynamic = ["version"]
 description = "Coverage dashboard for binary-matching decompilation projects"
+# Without this the wheel METADATA carries a one-line summary and no body, so
+# the published page shows the bare description. setuptools ships README.md in
+# the sdist either way; this is what puts it in the metadata.
+readme = "README.md"
 requires-python = ">=3.13"
 license = "MIT"
 # NOTICE carries the grants for the third-party browser blobs under

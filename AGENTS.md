@@ -22,6 +22,7 @@ compiler toolchain, only a readable coverage document.
 recoverage/
 ├── pyproject.toml          # Package config, entry point: recoverage
 ├── build-constraints.txt   # Exact pin for the PEP 517 backend (uv.lock does not cover it)
+├── MANIFEST.in             # What the sdist carries: the backend pin, and not the test suite
 ├── README.md               # User-facing docs
 ├── CHANGELOG.md            # Release history
 ├── CONTRIBUTING.md         # Bootstrap, edit-test loop, local/CI parity table
@@ -378,7 +379,12 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   own, so `setuptools>=84.0.0` is a floor and the artifact bytes would follow
   whatever the index served that day. `build-constraints.txt` is that file, one
   exact `==` per backend, and `tests/test_build.py` fails when a pin stops
-  being exact or drops below the floor in `pyproject.toml`. The second because
+  being exact or drops below the floor in `pyproject.toml`. `MANIFEST.in` puts
+  that file in the sdist, because an archive that does not carry the pin is
+  rebuilt against the index rather than the version its bytes were verified
+  under, and it prunes `tests/`, because distutils otherwise ships
+  `test_*.py` without `conftest.py` and `coverage_fixture.py`: a suite that
+  fails on collection, in a published artifact. The second because
   `uv build` writes into `dist/` without clearing it: a wheel left by the
   previous version sits beside the new one and both get published. `make build`
   also depends on `ensure-rebrew`, because its last step is a `uv run` that

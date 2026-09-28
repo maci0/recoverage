@@ -389,6 +389,34 @@ class TestEnvironmentInstalls:
             assert "--locked" in declaration.group(0), declaration.group(0)
             assert "--frozen" not in declaration.group(0), declaration.group(0)
 
+    def test_every_makefile_uv_install_is_locked(self) -> None:
+        """A recipe that spells `uv sync` out is covered, not just the two
+        variables every other recipe reads.
+
+        `test-browser` runs its own `uv sync --frozen` for the playwright
+        extra, and the declaration checks above never saw it. `--frozen`
+        installs uv.lock even when pyproject.toml no longer matches it, so a
+        dependency edit that skipped `uv lock` left the browser tests passing
+        against a package the manifest does not describe. A recipe that goes
+        through `$(UV_SYNC_FLAGS)` or `$(UV_RUN)` is covered by those
+        declarations; only a spelled-out invocation needs the flag here.
+        """
+        makefile = _MAKEFILE.read_text(encoding="utf-8")
+        commands = [
+            line
+            # Anchored at the start of the line: an invocation is what a recipe
+            # runs, while `help` and the preflight's `echo` only name one.
+            for line in makefile.splitlines()
+            if re.match(r"\s*uv (sync|run)\b", line)
+            and "$(UV_SYNC_FLAGS)" not in line
+            and "$(UV_RUN)" not in line
+        ]
+        assert commands, "Makefile runs no uv command; this check would pass vacuously"
+        for line in commands:
+            flags = " ".join(line.split())
+            assert "--locked" in flags, f"Makefile installs without --locked: {flags}"
+            assert "--frozen" not in flags, f"Makefile installs with --frozen: {flags}"
+
 
 class TestToolchainPins:
     """The runner toolchain CI installs is read from the file that owns it.

@@ -90,6 +90,49 @@ class TestManifestCoversShippedFiles:
         assert not missing, f"assets no package-data pattern picks up: {sorted(missing)}"
 
 
+class TestSdistContents:
+    """The sdist is what a rebuild machine unpacks, so it has to carry the
+    inputs the build reads and nothing it cannot run.
+
+    Both directions were wrong and neither is visible from the git checkout:
+    distutils' default sdist picks up `tests/test_*.py` and nothing else from
+    `tests/`, so the archive carried sixteen modules whose `conftest.py` and
+    `coverage_fixture.py` were absent, and it did not carry
+    `build-constraints.txt`, so a wheel rebuilt from the published archive
+    resolved setuptools against the index instead of the pin the bytes were
+    verified under. Read through the file, not by running a build: a test that
+    shells out to `uv build` is a test that needs the sibling rebrew checkout
+    to have run at all.
+    """
+
+    @staticmethod
+    def _rules() -> list[str]:
+        return (_ROOT / "MANIFEST.in").read_text(encoding="utf-8").splitlines()
+
+    def test_the_backend_pin_ships_in_the_sdist(self) -> None:
+        assert "include build-constraints.txt" in self._rules(), (
+            "build-constraints.txt pins setuptools, which uv resolves outside uv.lock; "
+            "an sdist without it cannot be rebuilt under the pin"
+        )
+
+    def test_the_unrunnable_test_suite_is_pruned(self) -> None:
+        assert "prune tests" in self._rules(), (
+            "distutils ships tests/test_*.py without their conftest.py and "
+            "coverage_fixture.py, so the sdist carries a suite that cannot collect"
+        )
+
+    def test_the_suite_is_more_than_its_own_fixtures(self) -> None:
+        """`prune tests` is only worth having while the default sdist would
+        pick up test modules the archive cannot run. A suite reduced to a
+        single file is a signal to drop the rule rather than keep it on faith.
+        """
+        modules = sorted(p.name for p in (_ROOT / "tests").glob("test_*.py"))
+        assert len(modules) > 1, (
+            f"tests/ holds {modules} and nothing else; `prune tests` in MANIFEST.in "
+            "has no reason to exist and neither does the test asserting it"
+        )
+
+
 class TestReproducibleBuild:
     def test_the_build_recipe_pins_time_locale_and_timezone(self) -> None:
         """Without all three the artifact carries the build host's clock,

@@ -1,0 +1,17 @@
+# The sdist is what a downstream packager or a rebuild machine unpacks, so it
+# has to carry the inputs the build depends on and nothing it cannot run.
+#
+# build-constraints.txt pins setuptools, which uv resolves in a build
+# environment uv.lock does not describe. Without it in the archive, a wheel
+# rebuilt from this sdist installs whatever backend the index serves that day,
+# and the bytes move under a fixed SOURCE_DATE_EPOCH: reproducible from a git
+# checkout, not from what it publishes. `make build` passes the same file, so
+# the pin ships with the tree it pins.
+include build-constraints.txt
+
+# distutils' default sdist picks up tests/test_*.py and nothing else from
+# tests/, so the archive carried sixteen modules whose conftest.py and
+# coverage_fixture.py were absent: a suite that fails on collection, and
+# dev-only files in a published artifact. `make test` needs the sibling rebrew
+# checkout too, so it is not a test the sdist could run either way.
+prune tests
