@@ -3505,6 +3505,31 @@ class TestRegenMetrics:
         assert regen["last_ok"] is False
         assert regen["in_flight"] == 0
 
+    def test_interrupted_run_closes_the_in_flight_gauge(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A BaseException out of the pipeline must not strand the gauge.
+
+        ``in_flight`` is a gauge, so an arm that lets a non-Exception through
+        (Ctrl+C at the terminal running ``serve``, a SystemExit from inside
+        rebrew) leaves it reading 1 for the rest of the process: /api/health
+        then reports a rebuild that is not running, and every later reading is
+        one ahead of the truth.
+        """
+        import recoverage.api as api
+        from recoverage import metrics
+
+        def interrupted(root: Path) -> None:
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(api, "run_regen", interrupted)
+        monkeypatch.setattr(api, "_project_dir", lambda: Path("/nonexistent"))
+        with pytest.raises(KeyboardInterrupt):
+            api._do_regen("127.0.0.1")
+        assert metrics.REGEN.snapshot()["in_flight"] == 0
+        assert metrics.REGEN.snapshot()["last_ok"] is False
+        assert self._health_regen()["in_flight"] == 0
+
     def test_cooldown_rejection_is_counted_separately_from_a_failure(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

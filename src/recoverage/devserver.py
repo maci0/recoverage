@@ -157,16 +157,6 @@ class _ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
         return application
 
 
-#: Concurrent connections the dashboard admits.  Generous next to what a real
-#: client needs — a browser tab holds one connection, a page with assets and
-#: polling holds a handful, and ``_SSE_MAX_CLIENTS`` streams can be open on
-#: top — and low enough that a flood of stalled peers is refused instead of
-#: spawning threads until the process cannot make one.  Refusing is loud (the
-#: client gets a 503 and the operator gets a log line), which is the point: a
-#: server that has stopped accepting should say so rather than look slow.
-_MAX_CONNECTIONS = 128
-
-
 # Hard deadline for every socket operation on a client connection (the request
 # read and each response write).  Without it a half-open TCP peer (crashed
 # laptop, dropped NAT mapping) or an SSE client that stops reading pins its

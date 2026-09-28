@@ -125,6 +125,25 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   lower bound, so a negative count (or a wrapper too narrow to fit one cell)
   produced a zero-column grid whose cell-by-cell walk never advanced, freezing
   the tab. The lattice is now at least one column wide.
+- **`serve` no longer opens a browser tab at a port nothing is listening on.**
+  The deferred opener is now cancelled on every way out of the listener, not
+  just a bind failure and a Ctrl+C: any other exit (an out-of-range address, a
+  server with no application installed) left the timer armed, so half a second
+  after the failure the opener fired on its own.
+- **`/api/health` no longer reports a rebuild that is not running.** A
+  `KeyboardInterrupt` (or any other `BaseException`) out of the regen pipeline
+  unwound past the arms that close the `regen` counters, and `in_flight` is a
+  gauge nothing closes again, so the block read 1 for the rest of the process.
+  The run now closes its own counters on that path and the interruption is
+  logged with the elapsed time.
+- **A broken Pygments install no longer takes the Potato page down with it.**
+  Only the `find_spec` probe was guarded, so a distribution present on the path
+  but unloadable raised out of the import and answered a raw 500 for a page
+  that renders perfectly well without colour. The pane now renders plain and
+  one warning names the install to fix.
+- A dropped `db-updated` frame is a WARNING rather than a debug line. It is the
+  only notice a client gets that the coverage documents moved, and the client
+  it was dropped for goes on rendering the previous build.
 - **The committed dashboard bundle matches `web/` again.** `style.css` still
   carried the pre-phosphor `--bg-grad-1`/`--bg-grad-2` values and `app.js` a
   Highlight.js grammar from before the accent change, so `make build` (and any

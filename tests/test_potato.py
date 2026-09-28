@@ -1269,6 +1269,48 @@ class TestHtmlEscaping:
         assert ">" not in escaped
 
 
+class TestPygmentsLoadFailure:
+    """A pygments that is installed but cannot be imported is UNAVAILABLE.
+
+    ``find_spec`` answers "is there a distribution", the import is what loads
+    it, and only the probe was guarded: a half-unpacked install raised out of
+    the import and took the whole render with it, because ImportError is no
+    OSError and handle_potato's except tuple did not catch it either.  A code
+    pane without colour is a page that renders; a raw 500 is not.
+    """
+
+    @pytest.fixture
+    def _broken_pygments(self, monkeypatch: pytest.MonkeyPatch) -> Any:
+        import sys
+
+        import recoverage.potato as potato
+
+        def boom(name: str) -> Any:
+            if name == "pygments.lexers":
+                return object()
+            raise AssertionError(name)
+
+        monkeypatch.setattr(potato.importlib.util, "find_spec", boom)
+        # A None entry makes the import raise ImportError, which is what a
+        # distribution present on the path but unloadable raises.
+        monkeypatch.setitem(sys.modules, "pygments.lexers", None)
+        monkeypatch.setitem(sys.modules, "pygments.lexers.lexers", None)
+        potato._pygments.cache_clear()
+        yield
+        potato._pygments.cache_clear()
+
+    @pytest.mark.usefixtures("_broken_pygments")
+    def test_the_pane_still_renders_unhighlighted(self, caplog: pytest.LogCaptureFixture) -> None:
+        import recoverage.potato as potato
+
+        with caplog.at_level("WARNING", logger="recoverage"):
+            assert potato._pygments() is None
+            assert potato._highlight_c("int main(void) { return 0; }") == (
+                "int main(void) { return 0; }"
+            )
+        assert any("pygments is installed but unusable" in r.message for r in caplog.records)
+
+
 class TestSectionHeadingEscapesTitle:
     """_section_heading builds element content by concatenation, so it owns
     the escape: a DB-sourced section or file name must not become live markup

@@ -472,24 +472,41 @@ def _pygments() -> tuple[Any, dict[Any, str], Any, dict[Any, str]] | None:
     ONE lazy loader for the optional pygments stack: the availability probe,
     both lexers, and both color maps share one import gate and one lifetime,
     so they share one cache.
+
+    The IMPORT shares that gate, not just the probe.  ``find_spec`` answers
+    "is there a pygments distribution", and the import is what actually loads
+    it: a half-unpacked install, or a package that raises while it initializes,
+    either of which used to escape the probe and take the whole /potato render
+    with it (ImportError is no OSError, so the render handler's except tuple
+    did not catch it either) — a raw 500 for a page that renders perfectly well
+    without colour.  The answer is None, the code pane renders as plain text,
+    and one warning names the install that needs fixing.  This is the contract
+    ``disasm.capstone_unavailable_reason`` already keeps for capstone.
     """
-    # find_spec imports only the parent package; a missing pygments raises
-    # ModuleNotFoundError, an ImportError, which the guard below catches.
     try:
         if importlib.util.find_spec("pygments.lexers") is None:
             return None
-    except ImportError:
+        from pygments.lexers import CLexer, NasmLexer  # type: ignore[import-untyped]
+        from pygments.token import (  # type: ignore[import-untyped]
+            Comment,
+            Keyword,
+            Name,
+            Number,
+            Operator,
+            Punctuation,
+            String,
+        )
+    except Exception as exc:
+        # find_spec imports only the parent package, so a missing pygments
+        # raises ModuleNotFoundError here too.  lru_cache does not cache an
+        # exception, so returning None is also what keeps a broken install
+        # costing one attempt per process instead of one per rendered pane.
+        _log.warning(
+            "pygments is installed but unusable — Potato code panes render unhighlighted (%s: %s)",
+            type(exc).__name__,
+            exc,
+        )
         return None
-    from pygments.lexers import CLexer, NasmLexer  # type: ignore[import-untyped]
-    from pygments.token import (  # type: ignore[import-untyped]
-        Comment,
-        Keyword,
-        Name,
-        Number,
-        Operator,
-        Punctuation,
-        String,
-    )
 
     base = {
         Comment: "#6a9955",
@@ -2542,11 +2559,16 @@ def _panel_fn_source_text(data: dict[str, Any], target: str, fn_data: dict[str, 
         # renders as U+FFFD in place and the rest of the file stays readable.
         with c_path.open(encoding="utf-8", errors="replace") as f:
             return f.read()
-    except (OSError, UnicodeError):
+    except (OSError, UnicodeError) as exc:
         # UnicodeError covers a path the filesystem encoding cannot encode
         # (a lone surrogate out of a foreign DB), which open() raises before
-        # it ever reaches the read.
-        _log.debug("Source file unreadable: %s", c_path)
+        # it ever reaches the read.  DEBUG keeps the panel-without-source
+        # answer (a cell whose file was deleted is not a failure), but the line
+        # carries the class and the message: a panel that renders empty because
+        # the file is unreadable is otherwise indistinguishable from one whose
+        # file is simply gone, and only the former is a permissions or encoding
+        # problem somebody can fix.
+        _log.debug("Source file unreadable: %s: %s", c_path, f"{type(exc).__name__}: {exc}")
         return None
 
 

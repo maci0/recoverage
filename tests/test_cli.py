@@ -1247,6 +1247,32 @@ class TestServeKeyboardInterrupt:
         time.sleep(0.7)  # past the timer's 0.5s deadline
         assert opened == [], "cancelled opener still fired after Ctrl+C"
 
+    def test_an_unexpected_exit_cancels_the_deferred_browser_opener(self, monkeypatch: Any) -> None:
+        """The one exit path the two handlers above missed.
+
+        Anything else out of the listener (an OverflowError from socket.bind()
+        on an address outside the port range, the RuntimeError a server with no
+        WSGI app installed raises) unwinds with the deferred opener still
+        armed, so half a second after the traceback a tab opens on a port
+        nothing is listening on.
+        """
+        import time
+
+        from recoverage.server import app as server_app
+
+        monkeypatch.setattr("recoverage.api._ensure_db_watcher", lambda: None)
+        opened: list[str] = []
+        monkeypatch.setattr("recoverage.cli.open_browser", lambda url: opened.append(url) or True)
+
+        def blow_up(self: Any, **kwargs: Any) -> None:
+            raise OverflowError("port too large")
+
+        monkeypatch.setattr(type(server_app), "run", blow_up)
+        result = runner.invoke(app, ["serve", "--port", "8123"])
+        assert result.exit_code != 0
+        time.sleep(0.7)  # past the timer's 0.5s deadline
+        assert opened == [], "cancelled opener still fired after the listener failed"
+
 
 class TestRegenFailures:
     def test_failing_in_process_regen_exits_cleanly(self, monkeypatch: Any) -> None:

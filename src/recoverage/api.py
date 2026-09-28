@@ -597,7 +597,18 @@ def _broadcast_db_updated(snapshot: tuple[int, int] | None) -> None:
         try:
             client.put_nowait(frame)
         except queue.Full:
-            _log.debug("SSE client queue full — dropping db-updated event")
+            # A dropped frame is not recoverable for that client: it is the
+            # only notice that the documents moved, so the tab goes on
+            # rendering the previous build with nothing to say why.  The queue
+            # is full because the client stopped reading, which is a wedged
+            # stream an operator can act on (the socket deadline reaps it), so
+            # the line is a warning rather than a debug breadcrumb.  One per
+            # wedged client per rebuild, bounded by _SSE_MAX_CLIENTS.
+            _log.warning(
+                "SSE client queue full (%d frames) — dropping db-updated event; "
+                "that dashboard will not refresh until it is reloaded",
+                _SSE_QUEUE_MAX,
+            )
 
 
 def _db_watcher_loop(stop: threading.Event) -> None:
@@ -2093,6 +2104,19 @@ def _do_regen(remote: str) -> bytes | HTTPResponse:
                 "detail": f"{type(e).__name__} — the server log has the full cause",
             },
         )
+    except BaseException as e:
+        # A BaseException — Ctrl+C at the terminal running `serve`, a
+        # SystemExit from somewhere inside rebrew — unwinds past both arms
+        # above, and the in_flight gauge is a gauge: nothing ever closes it,
+        # so /api/health would answer `regen.in_flight: 1` for the rest of the
+        # process and every later reading would be one regen ahead of the
+        # truth.  Close the counters with the same elapsed the other arms
+        # record, then let the exception through: it is the server's exit, not
+        # this handler's to swallow.
+        elapsed = _elapsed_s(started_at)
+        _metrics.REGEN.finish(False, elapsed * 1000.0)
+        _log.error("Regen interrupted after %.1fs: %s", elapsed, type(e).__name__)
+        raise
     finally:
         # A FAILED run invalidates too, and that is the case the post-run
         # clear used to miss: the writer replaces the documents before it can fail

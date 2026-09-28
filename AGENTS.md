@@ -458,7 +458,12 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   while it is in flight, and nothing in them says the in-flight request is a
   rebuild. Every `_do_regen` outcome closes the counters through
   `api._regen_failed` (or the success tail), so the elapsed time in the log
-  line and the one in `/api/health`'s `regen` block are the same read. A POST
+  line and the one in `/api/health`'s `regen` block are the same read. A
+  `BaseException` out of the pipeline (Ctrl+C at the terminal running
+  `serve`) is the arm that needs one of its own: it is not a response this
+  handler builds, but `in_flight` is a gauge, so letting it through without
+  closing strands the reading at 1 for the rest of the process
+  (`test_api.py::TestRegenMetrics`). A POST
   refused by `_REGEN_LOCK` or the cooldown counts under `rejected`, never
   `failures`: the SPA throttles Reload clicks, so counting them as failures
   reports a broken pipeline for a double-clicked button.

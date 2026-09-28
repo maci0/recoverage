@@ -963,8 +963,9 @@ def serve(
     browser_timer: threading.Timer | None = None
     if not no_open:
         # Daemon + kept reference: a hung opener must never delay interpreter
-        # exit, and the bind-failure path below cancels the timer so a failed
-        # start does not pop a browser tab pointing at a dead port.
+        # exit, and the finally below cancels the timer, so a start that
+        # never got as far as accepting does not pop a browser tab pointing at
+        # a dead port.
         browser_timer = threading.Timer(0.5, open_browser, args=(url,))
         browser_timer.daemon = True
         browser_timer.start()
@@ -996,16 +997,14 @@ def serve(
     except KeyboardInterrupt:
         # Ctrl+C is the documented way to stop the dashboard; wsgiref's
         # accept loop unwinds with KeyboardInterrupt — exit quietly instead
-        # of dumping a traceback.  Cancel the deferred browser opener like
-        # the bind-failure path: a Ctrl+C inside the 0.5s scheduling window
-        # is also a failed start and must not pop a tab at a dead port.
-        if browser_timer is not None:
-            browser_timer.cancel()
+        # of dumping a traceback.  The deferred opener is cancelled by the
+        # finally below, like every other way out of this block: a Ctrl+C
+        # inside the 0.5s scheduling window is a failed start and must not pop
+        # a tab at a dead port.
+        _log.debug("serve stopped on Ctrl+C")
     except OSError as e:
         # EADDRINUSE is the most common failure for a dashboard tool — a
         # second instance or another dev server on the same port.
-        if browser_timer is not None:
-            browser_timer.cancel()
         _secho(
             f"Failed to start server on {listen_url}: {e.strerror or e} "
             "(is another instance already running?)",
@@ -1013,6 +1012,17 @@ def serve(
             err=True,
         )
         raise typer.Exit(1) from None
+    finally:
+        # Once bottle_app.run has returned there is no listener left, so the
+        # deferred opener has nothing to open: a start that failed (EADDRINUSE,
+        # Ctrl+C) and one that ran and stopped both pop a browser tab at a
+        # dead port if the timer is still armed.  One place covers every exit,
+        # including the unexpected one — an OverflowError out of socket.bind()
+        # or a RuntimeError from a server with no app installed used to leave
+        # the timer to fire half a second after the traceback, which is the one
+        # exit path nobody had covered.
+        if browser_timer is not None:
+            browser_timer.cancel()
 
 
 #: Per-section values the table, CSV and Markdown renders all print, in the
