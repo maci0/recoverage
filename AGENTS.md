@@ -704,7 +704,21 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   the C1 controls, and U+2028/U+2029 (a header value carries those literally,
   and every viewer that breaks on `\n` breaks on them). It deliberately leaves
   bidi controls alone: those reorder a line rather than split it, so escaping
-  them is a log-injection question, not a line-splitting one.
+  them is a log-injection question, not a line-splitting one. An exception
+  message reaches the same treatment: a coverage document is untrusted input
+  like a request path, and its parse error is read precisely when a line must
+  stay one line.
+- A log line about a request carries the counters as fields, not only as
+  prose: `server.request_log_fields` builds the `extra=` for the request-path
+  records (per-request line, 500, 503 `db_unavailable`, the two security
+  rejections) and `api._regen_log_fields` for the regen lifecycle, and
+  `cli.StructuredFormatter` renders them as sorted `key=JSON` pairs after the
+  message. The request id names the request, the counters say how many, and
+  the fields are what make one pivot into the other without a regular
+  expression over prose. A record that carries no fields renders exactly as
+  the plain format did (every record from bottle or rebrew). A new log line
+  whose values an operator would filter on names the helper; a new formatter
+  is not the place to add a second rendering.
 - `server.set_auth_cookie` is the one place the `?token=` share-link cookie is
   written, and every page route a share link can land on calls it: `/` and
   `/potato`. Both pages link with relative URLs, so the cookie is what carries

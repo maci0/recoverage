@@ -7,6 +7,14 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- The server log's request and regen lines now carry their counters as named
+  fields (`method`, `path`, `status`, `duration_ms`, `route` on a request;
+  `event=regen`, `outcome`, `duration_s` on a rebuild), rendered as
+  `key=JSON` pairs after the message. The prose is unchanged, so reading the
+  terminal is unaffected, but a log aggregator can now filter on a status or
+  an outcome and pivot from a `/api/health` anomaly to the requests behind it
+  without a regular expression. Lines that carry no fields, including every
+  record from bottle and rebrew, render exactly as before.
 - `GET /api/health` carries a `connections` block (open, max, refused) for the
   connection cap, the same saturation reading `streams` already gave for the
   event-stream cap. A server at that cap answers 503 to every new request

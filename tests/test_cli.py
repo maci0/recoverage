@@ -304,6 +304,62 @@ class TestLogStamp:
         assert tokyo.startswith("2023-11-15 07:13:20+0900 ")
 
 
+class TestStructuredFormatter:
+    """A record's named fields must render as fields, not only as prose.
+
+    The request line reads the same either way; what the fields buy is that an
+    aggregator can filter on a status or a route without parsing the message.
+    A record carrying none renders exactly as the plain format did, because
+    loggers this package does not own (bottle, rebrew) and the CLI's own lines
+    have no fields and must not grow invented ones.
+    """
+
+    @staticmethod
+    def _formatted(fields: dict[str, object] | None) -> str:
+        import logging
+
+        formatter = cli.StructuredFormatter(
+            cli.LOG_FORMAT, datefmt=cli.LOG_DATEFMT, defaults={"request_id": "-"}
+        )
+        record = logging.LogRecord("recoverage", logging.WARNING, __file__, 1, "boom", (), None)
+        if fields is not None:
+            record.__dict__.update(fields)
+        return formatter.format(record)
+
+    def test_fields_render_as_key_value_pairs(self) -> None:
+        line = self._formatted(
+            {"log_fields": {"method": "GET", "path": "/api/health", "status": 200}}
+        )
+        assert 'method="GET"' in line
+        assert 'path="/api/health"' in line
+        assert "status=200" in line
+        assert "boom method=" in line
+
+    def test_a_value_with_a_quote_stays_one_field(self) -> None:
+        """JSON encoding, so a quoted value cannot forge a second field.
+
+        Without the quotes a path carrying `x=` would be read as its own field
+        by any aggregator that splits the line on spaces.
+        """
+        line = self._formatted({"log_fields": {"reason": 'broken "x" and y'}})
+        tail = line.split("boom ", 1)[1]
+        assert tail.count("=") == 1
+        assert json.loads(tail.split("=", 1)[1]) == 'broken "x" and y'
+
+    def test_a_record_without_fields_is_unchanged(self) -> None:
+        line = self._formatted(None)
+        assert line.endswith("boom")
+
+    def test_a_foreign_loggers_record_is_unchanged(self) -> None:
+        import logging
+
+        formatter = cli.StructuredFormatter(
+            cli.LOG_FORMAT, datefmt=cli.LOG_DATEFMT, defaults={"request_id": "-"}
+        )
+        record = logging.LogRecord("bottle", logging.INFO, __file__, 1, "hello", (), None)
+        assert formatter.format(record).endswith("hello")
+
+
 # ── Export command (actual CLI) ───────────────────────────────────
 
 

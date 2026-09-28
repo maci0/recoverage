@@ -2154,7 +2154,7 @@ def _do_regen(remote: str) -> bytes | HTTPResponse:
     _clear_derived_caches_logged("before regen")
 
     root = _project_dir()
-    _log.info("Regen started from %s", remote)
+    _log.info("Regen started from %s", remote, extra=_regen_log_fields("started"))
     started_at = clock.monotonic()
     _metrics.REGEN.start()
     try:
@@ -2195,7 +2195,12 @@ def _do_regen(remote: str) -> bytes | HTTPResponse:
         # this handler's to swallow.
         elapsed = _elapsed_s(started_at)
         _metrics.REGEN.finish(False, elapsed * 1000.0)
-        _log.error("Regen interrupted after %.1fs: %s", elapsed, type(e).__name__)
+        _log.error(
+            "Regen interrupted after %.1fs: %s",
+            elapsed,
+            type(e).__name__,
+            extra=_regen_log_fields("interrupted", elapsed),
+        )
         raise
     finally:
         # A FAILED run invalidates too, and that is the case the post-run
@@ -2208,13 +2213,30 @@ def _do_regen(remote: str) -> bytes | HTTPResponse:
         _clear_derived_caches_logged("after regen")
     elapsed = _elapsed_s(started_at)
     _metrics.REGEN.finish(True, elapsed * 1000.0)
-    _log.info("Regen completed successfully in %.1fs", elapsed)
+    _log.info(
+        "Regen completed successfully in %.1fs", elapsed, extra=_regen_log_fields("ok", elapsed)
+    )
     return _json_ok({"ok": True})
 
 
 def _elapsed_s(started_at: float) -> float:
     """Seconds since *started_at* on the injectable clock."""
     return clock.monotonic() - started_at
+
+
+def _regen_log_fields(outcome: str, elapsed_s: float | None = None) -> dict[str, dict[str, object]]:
+    """The ``extra=`` for a regen lifecycle line.
+
+    A regen is the one operation that runs for minutes and the one an
+    operator needs to correlate with ``/api/health``'s ``regen`` block, so its
+    lines carry the outcome and the elapsed time as fields: the counter says
+    three runs failed, the fields say which three and how long each took,
+    without reading the prose.
+    """
+    fields: dict[str, object] = {"event": "regen", "outcome": outcome}
+    if elapsed_s is not None:
+        fields["duration_s"] = round(elapsed_s, 1)
+    return {_server.LOG_FIELDS_ATTR: fields}
 
 
 def _regen_failed(started_at: float, reason: str, *args: object) -> None:
@@ -2225,5 +2247,10 @@ def _regen_failed(started_at: float, reason: str, *args: object) -> None:
     that dies after two hundred are told apart by the line, not by the clock.
     """
     elapsed = _elapsed_s(started_at)
-    _log.error("Regen failed after %.1fs: " + reason, elapsed, *args)
+    _log.error(
+        "Regen failed after %.1fs: " + reason,
+        elapsed,
+        *args,
+        extra=_regen_log_fields("failed", elapsed),
+    )
     _metrics.REGEN.finish(False, elapsed * 1000.0)

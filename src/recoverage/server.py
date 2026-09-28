@@ -1027,6 +1027,43 @@ def _log_safe(value: str) -> str:
     return value.translate(_LOG_CONTROL_CHARS)
 
 
+#: Name of the record attribute carrying the structured fields, read by
+#: ``cli.StructuredFormatter`` and ignored by a plain one.  ONE name, so the
+#: writer (here) and the reader (the formatter) cannot drift apart.
+LOG_FIELDS_ATTR = "log_fields"
+
+
+def request_log_fields(
+    status: int,
+    duration_ms: float | None = None,
+    **fields: object,
+) -> dict[str, dict[str, object]]:
+    """The ``extra=`` for a record about the request being served.
+
+    The request id is the pivot from a log line to a client, but on its own it
+    only says WHICH request; an operator pivoting from a metric anomaly ("three
+    slow reads on /data", "a 5xx in the status buckets") has to read the
+    rendered message to learn the method, path, status and duration, and a
+    log aggregator cannot index what it has to parse out of prose.  The same
+    values ride on the record as named fields, rendered as JSON scalars after
+    the message (``cli.StructuredFormatter``), so one grep over the fields
+    answers "which requests" without reading a line.
+
+    Untrusted values are escaped exactly as they are in the message, and
+    *fields* is for the extra context a particular call site has (a route, a
+    target) and is not escaped here: every caller passes literals it owns.
+    """
+    context: dict[str, object] = {
+        "method": _log_safe(request.method),
+        "path": _log_safe(request.path),
+        "status": status,
+    }
+    if duration_ms is not None:
+        context["duration_ms"] = round(duration_ms, 1)
+    context.update(fields)
+    return {LOG_FIELDS_ATTR: context}
+
+
 _TOML_CACHE_MTIME: tuple[int, int] | None = None
 
 
@@ -2185,6 +2222,7 @@ def _finish_request() -> None:
             _log_safe(request.path),
             status,
             duration_ms,
+            extra=request_log_fields(status, duration_ms, route=route),
         )
     else:
         # `_log_safe` is two `str.translate` calls over the control-character
@@ -2199,6 +2237,7 @@ def _finish_request() -> None:
                 _log_safe(request.path),
                 status,
                 duration_ms,
+                extra=request_log_fields(status, duration_ms, route=route),
             )
 
 
@@ -2322,6 +2361,9 @@ def _require_auth() -> None:
         "Rejected %s auth token from %s",
         "missing" if not provided else "invalid",
         request.environ.get("REMOTE_ADDR", "") or "unknown peer",
+        extra=request_log_fields(
+            401, peer=request.environ.get("REMOTE_ADDR", "") or "unknown peer"
+        ),
     )
     # A browser asking for a page gets a page; API clients keep the JSON
     # error contract.  Someone handed a share URL who dropped the query
@@ -2390,7 +2432,12 @@ def _db_unavailable_err(exc: Exception) -> HTTPResponse:
         _log_safe(request.method),
         _log_safe(request.path),
         type(exc).__name__,
-        exc,
+        # The cause comes from a document on disk, which is as untrusted as a
+        # request path: a malformed file whose error text carries a newline
+        # would otherwise split this one line into two, and the split is
+        # exactly what an operator is reading to find the broken document.
+        _log_safe(str(exc)),
+        extra=request_log_fields(503),
     )
     return _json_err(
         503,
@@ -2435,6 +2482,7 @@ def _handle_unexpected_error(error: Any) -> HTTPResponse:
         _log_safe(request.method),
         _log_safe(request.path),
         exc_info=exc or error,
+        extra=request_log_fields(500),
     )
     if request.path.startswith("/api/"):
         return _json_err(500, {"error": "Internal server error"})
@@ -2465,6 +2513,11 @@ def _log_request() -> None:
                 "Rejected request with unexpected Host header %r from %s",
                 host,
                 request.environ.get("REMOTE_ADDR", "") or "unknown peer",
+                extra=request_log_fields(
+                    400,
+                    host=_log_safe(host),
+                    peer=request.environ.get("REMOTE_ADDR", "") or "unknown peer",
+                ),
             )
             raise _json_err(
                 400,

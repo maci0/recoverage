@@ -23,6 +23,7 @@ from coverage_fixture import cell, coverage_dir, write_coverage
 from rebrew.coverage_toml import CoverageSnapshot, CoverageTomlError, load_coverage
 
 from recoverage import api, webapp
+from recoverage import server as _server
 
 # Typer 0.27 help paints option names with ANSI even under CliRunner
 # isolation on CI (FORCE_COLOR / a detected tty). Strip before matching
@@ -3710,6 +3711,15 @@ class TestRegenMetrics:
         regen = self._health_regen()
         assert regen["last_duration_ms"] % 3000.0 == 0.0
         assert any("Regen completed successfully in" in r.getMessage() for r in caplog.records)
+        # The counter says how many runs failed; the fields say which run and
+        # how long it took, so the two can be pivoted between.
+        done = next(
+            r for r in caplog.records if "Regen completed successfully in" in r.getMessage()
+        )
+        fields = getattr(done, _server.LOG_FIELDS_ATTR)
+        assert fields["event"] == "regen"
+        assert fields["outcome"] == "ok"
+        assert fields["duration_s"] > 0.0
 
     def test_in_flight_is_visible_while_the_run_holds_the_lock(
         self, monkeypatch: pytest.MonkeyPatch

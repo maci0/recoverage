@@ -183,6 +183,55 @@ class TestRedCounters:
         max_ms = max(float(row["max_ms"]) for row in requests["by_route"].values())
         assert max_ms % (step * 1000.0) == 0.0
 
+    def test_slow_request_carries_the_counters_as_fields(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """The slow line is pivotable, not just readable.
+
+        The counters name a route and a duration; the line naming WHICH requests
+        were slow has to carry the same values as fields, or an operator pivots
+        from the counter to a wall of prose.
+        """
+        step = 2.0
+        reads = [0]
+
+        def _fake_monotonic() -> float:
+            reads[0] += 1
+            return 1.0 + step * reads[0]
+
+        monkeypatch.setattr(clock, "monotonic", _fake_monotonic)
+        with caplog.at_level(logging.WARNING, logger="recoverage"):
+            wsgi_get("/api/health")
+        slow = [r for r in caplog.records if "Slow request" in r.getMessage()]
+        assert slow, "the slow request was not logged"
+        fields = getattr(slow[0], server.LOG_FIELDS_ATTR)
+        assert fields["method"] == "GET"
+        assert fields["path"] == "/api/health"
+        assert fields["status"] == 200
+        assert fields["route"] == "/api/health"
+        assert fields["duration_ms"] >= metrics.SLOW_REQUEST_MS
+
+    def test_fields_are_escaped_like_the_message(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A hostile path cannot forge a line through the fields either.
+
+        The fields are rendered as JSON after the message, so an unescaped
+        newline would break the same parsers the message escaping protects.
+        """
+        with caplog.at_level(logging.DEBUG, logger="recoverage"):
+            wsgi_get("/api/health\nX-Forged: yes")
+        records = [r for r in caplog.records if r.name == "recoverage"]
+        assert records, "request was not logged at all"
+        for record in records:
+            fields = getattr(record, server.LOG_FIELDS_ATTR, None)
+            if fields is None:
+                continue
+            assert "\n" not in fields["path"] and "\r" not in fields["path"]
+
 
 class TestStats:
     def test_in_flight_returns_to_zero(self) -> None:

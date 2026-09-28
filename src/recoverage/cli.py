@@ -150,6 +150,39 @@ LOG_FORMAT = "%(asctime)s %(levelname)s [%(name)s] [rid=%(request_id)s] %(messag
 LOG_DATEFMT = "%Y-%m-%d %H:%M:%S%z"
 
 
+class StructuredFormatter(logging.Formatter):
+    """:data:`LOG_FORMAT` plus whatever named fields a record carries.
+
+    A record that passes ``extra={"log_fields": {...}}`` (``server.
+    request_log_fields`` writes it) renders those fields after the message as
+    ``key=JSON`` pairs.  The message stays prose for a human reading the
+    terminal; the fields are what an aggregator indexes, so pivoting from a
+    metric anomaly to the requests behind it is a filter over a field rather
+    than a regular expression over prose.  JSON-encoding the value keeps a
+    space, a quote or a backslash from splitting the field, and escapes
+    non-ASCII by default, matching the ``backslashreplace`` the stderr handler
+    applies to the stream.
+
+    A record without the attribute renders exactly as the plain format did:
+    loggers this package does not own (bottle, rebrew) and the CLI's own lines
+    carry no fields, and the formatter must not invent any.
+    """
+
+    def formatMessage(self, record: logging.LogRecord) -> str:  # noqa: N802 - logging's own name
+        # Imported here, not at module scope: the CLI deliberately reaches for
+        # the server lazily so `recoverage stats` does not import bottle.  By
+        # the time a record is formatted, ``serve`` has already imported it, so
+        # this is a sys.modules lookup on a path that is writing to stderr.
+        from recoverage.server import LOG_FIELDS_ATTR
+
+        message = super().formatMessage(record)
+        fields = getattr(record, LOG_FIELDS_ATTR, None)
+        if not fields:
+            return message
+        rendered = " ".join(f"{key}={json.dumps(value)}" for key, value in sorted(fields.items()))
+        return f"{message} {rendered}"
+
+
 def _version_callback(value: bool) -> None:
     if value:
         from importlib.metadata import version
@@ -761,7 +794,7 @@ def _configure_logging(level: int) -> None:
         with contextlib.suppress(ValueError, OSError):
             reconfigure(errors="backslashreplace")
     handler.setFormatter(
-        logging.Formatter(LOG_FORMAT, datefmt=LOG_DATEFMT, defaults={"request_id": "-"})
+        StructuredFormatter(LOG_FORMAT, datefmt=LOG_DATEFMT, defaults={"request_id": "-"})
     )
     logging.basicConfig(handlers=[handler], level=level)
 
