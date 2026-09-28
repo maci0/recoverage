@@ -8,17 +8,17 @@ older versions receive no backports.
 
 | Version | Supported |
 |---------|-----------|
-| 3.x (current, `src/recoverage/__init__.py:31`) | yes |
+| 3.x (current, `__version__` at `src/recoverage/__init__.py:39`; `3.0.0` is tagged `v3.0.0`) | yes |
 | < 3.0.0 | no |
 
 ## Reporting a vulnerability
 
 No reporting address is recorded in this repository. Until one is, a report
 belongs on the project's GitHub issue tracker
-(`https://github.com/maci0/recoverage`), which is the only contact channel the
-repository names. Do not open a public issue for a vulnerability that is
-already exploited or that discloses private project material until a private
-channel exists.
+(`https://github.com/relumea/recoverage`, the `Repository` URL in
+`pyproject.toml`), which is the only contact channel the repository names. Do
+not open a public issue for a vulnerability that is already exploited or that
+discloses private project material until a private channel exists.
 
 There is no documented path from a report to a shipped fix, and no security
 owner or review cadence is recorded either. Those are gaps, not policy, and
