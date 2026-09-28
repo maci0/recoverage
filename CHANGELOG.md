@@ -137,6 +137,15 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   NFD (what a macOS-side tool writes into a coverage document) is one code
   point longer than the precomposed spelling and hit it; the wrap now keeps
   the two together.
+- **A dropped `db-updated` event was logged identically for every wedged
+  dashboard.** The warning named the queue depth and nothing else, so N stalled
+  event-stream clients produced N indistinguishable lines and no way to tell
+  which tab to reload. The line names the peer the frame was dropped for.
+- **The rejected-`Host` and rejected-token audit lines interpolated
+  `REMOTE_ADDR` raw** while every other untrusted argument in the package's log
+  calls is control-char escaped. A reverse proxy that folds a header into
+  `REMOTE_ADDR` made it as forgeable as `Host` on the very lines an incident
+  investigation reads.
 - **`make shell-lint` failed on the tree it was meant to gate.**
   `tools/ci_clone_rebrew.sh` declares its dialect to shellcheck now, so the
   array and `pipefail` below the header stop reading as an unknown shell

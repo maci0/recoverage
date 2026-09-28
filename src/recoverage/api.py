@@ -606,7 +606,11 @@ _SSE_QUEUE_POLL_SECONDS = 1.0
 _SSE_QUEUE_MAX = 32  # per-client buffer; slow clients drop events, not memory
 _SSE_MAX_CLIENTS = 32  # cap on concurrent /api/events streams (thread DoS guard)
 
-_SSE_CLIENTS: set[queue.Queue[bytes]] = set()
+#: Connected streams, queue -> peer that opened it.  A MAP, not a set: a
+#: dropped frame is only diagnosable if the line names the dashboard it was
+#: dropped for, and the peer is known once, where the stream is registered.
+#: Membership, ``len`` and the cap all read the same way off a dict.
+_SSE_CLIENTS: dict[queue.Queue[bytes], str] = {}
 _SSE_CLIENTS_LOCK = threading.Lock()
 _DB_WATCHER_THREAD: threading.Thread | None = None
 _DB_WATCHER_STOP = threading.Event()
@@ -639,8 +643,8 @@ def _broadcast_db_updated(snapshot: tuple[int, int] | None) -> None:
         payload["db"]["size_bytes"] = snapshot[1]
     frame = f"event: db-updated\ndata: {json.dumps(payload)}\n\n".encode()
     with _SSE_CLIENTS_LOCK:
-        clients = list(_SSE_CLIENTS)
-    for client in clients:
+        clients = list(_SSE_CLIENTS.items())
+    for client, peer in clients:
         try:
             client.put_nowait(frame)
         except queue.Full:
@@ -650,10 +654,13 @@ def _broadcast_db_updated(snapshot: tuple[int, int] | None) -> None:
             # is full because the client stopped reading, which is a wedged
             # stream an operator can act on (the socket deadline reaps it), so
             # the line is a warning rather than a debug breadcrumb.  One per
-            # wedged client per rebuild, bounded by _SSE_MAX_CLIENTS.
+            # wedged client per rebuild, bounded by _SSE_MAX_CLIENTS.  The peer
+            # is on it because without it N wedged streams produce N identical
+            # lines and no way to tell which dashboard to go reload.
             _log.warning(
-                "SSE client queue full (%d frames) — dropping db-updated event; "
+                "SSE client %s queue full (%d frames) — dropping db-updated event; "
                 "that dashboard will not refresh until it is reloaded",
+                peer,
                 _SSE_QUEUE_MAX,
             )
 
@@ -766,8 +773,9 @@ class _SSEStream:
     :meth:`_release` instead, and :meth:`close` is safe to call twice.
     """
 
-    def __init__(self, client_queue: queue.Queue[bytes]) -> None:
+    def __init__(self, client_queue: queue.Queue[bytes], peer: str = "unknown") -> None:
         self._queue = client_queue
+        self._peer = peer
         self._gen: Generator[bytes] | None = None
         self._released = False
 
@@ -776,7 +784,7 @@ class _SSEStream:
             return
         self._released = True
         with _SSE_CLIENTS_LOCK:
-            _SSE_CLIENTS.discard(self._queue)
+            _SSE_CLIENTS.pop(self._queue, None)
 
     def __iter__(self) -> Generator[bytes]:
         # One generator for the object's life, so a second iter()/next() sees
@@ -807,6 +815,17 @@ class _SSEStream:
         self._release()
 
 
+def _sse_peer() -> str:
+    """Control-char-escaped peer address for a stream's log lines.
+
+    ``REMOTE_ADDR`` is peer-supplied only through a proxy, but a raw value in
+    a log line can carry control bytes either way, so it is escaped with the
+    same helper every other request log argument goes through.  "unknown" when
+    the environ has none (a WSGI harness, a mounted app).
+    """
+    return _server._log_safe(_server.request.environ.get("REMOTE_ADDR", "") or "unknown")
+
+
 @app.get("/api/events")
 def handle_api_events() -> Any:
     """SSE stream: emits a db-updated event when the coverage documents change.
@@ -820,6 +839,9 @@ def handle_api_events() -> Any:
     # the life of the stream (minutes/hours), and wsgiref has no connection
     # limit.  A LAN client (or a cross-origin EventSource from any webpage
     # a victim visits — no-cors, loopback) could otherwise exhaust threads.
+    # Read the environ before registering, so the peer that goes in the map is
+    # the one every later log line about this stream names.
+    peer = _sse_peer()
     with _SSE_CLIENTS_LOCK:
         if len(_SSE_CLIENTS) >= _SSE_MAX_CLIENTS:
             # Refusals reach /api/health's error count, but a health snapshot
@@ -846,7 +868,7 @@ def handle_api_events() -> Any:
                 Retry_After=str(int(_SSE_POLL_INTERVAL_SECONDS)),
             )
         client_queue: queue.Queue[bytes] = queue.Queue(maxsize=_SSE_QUEUE_MAX)
-        _SSE_CLIENTS.add(client_queue)
+        _SSE_CLIENTS[client_queue] = peer
     # Start the poller on the first registered client; ``serve`` already
     # started it at startup, so this is the idempotent call.  A failed start
     # (e.g. RuntimeError under thread exhaustion) must not leave the queue
@@ -856,13 +878,13 @@ def handle_api_events() -> Any:
         _ensure_db_watcher()
     except BaseException:
         with _SSE_CLIENTS_LOCK:
-            _SSE_CLIENTS.discard(client_queue)
+            _SSE_CLIENTS.pop(client_queue, None)
         raise
 
     response.content_type = "text/event-stream"
     response.set_header("Cache-Control", CACHE_NO_STORE)
     response.set_header("X-Accel-Buffering", "no")
-    return _SSEStream(client_queue)
+    return _SSEStream(client_queue, peer)
 
 
 #: Last (status, reason) ``/api/health`` reported, so the probe logs a

@@ -2374,13 +2374,15 @@ def _require_auth() -> None:
     # (--allow-remote --token) the throttle bounds guessing, but a silent 401
     # gives the operator no way to see the attempt happened.  The provided
     # value is never logged (it may be someone's near-miss guess at a
-    # secret); REMOTE_ADDR comes from the socket peer.
+    # secret); REMOTE_ADDR comes from the socket peer and is escaped, because
+    # behind a proxy that folds a header into it, it is as hostile as any
+    # other untrusted value and a %0A in it would forge the line below.
     _log.warning(
         "Rejected %s auth token from %s",
         "missing" if not provided else "invalid",
-        request.environ.get("REMOTE_ADDR", "") or "unknown peer",
+        _log_safe(request.environ.get("REMOTE_ADDR", "") or "unknown peer"),
         extra=request_log_fields(
-            401, peer=request.environ.get("REMOTE_ADDR", "") or "unknown peer"
+            401, peer=_log_safe(request.environ.get("REMOTE_ADDR", "") or "unknown peer")
         ),
     )
     # A browser asking for a page gets a page; API clients keep the JSON
@@ -2530,11 +2532,11 @@ def _log_request() -> None:
             _log.warning(
                 "Rejected request with unexpected Host header %r from %s",
                 host,
-                request.environ.get("REMOTE_ADDR", "") or "unknown peer",
+                _log_safe(request.environ.get("REMOTE_ADDR", "") or "unknown peer"),
                 extra=request_log_fields(
                     400,
                     host=_log_safe(host),
-                    peer=request.environ.get("REMOTE_ADDR", "") or "unknown peer",
+                    peer=_log_safe(request.environ.get("REMOTE_ADDR", "") or "unknown peer"),
                 ),
             )
             raise _json_err(

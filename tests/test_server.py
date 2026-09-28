@@ -2499,12 +2499,12 @@ class TestClockSeam:
 
         monkeypatch.setattr(clock, "wall_time", lambda: 1_234.5)
         client: queue.Queue[bytes] = queue.Queue()
-        api._SSE_CLIENTS.add(client)
+        api._SSE_CLIENTS[client] = "test-peer"
         try:
             api._broadcast_db_updated(None)
             frame = client.get_nowait().decode()
         finally:
-            api._SSE_CLIENTS.discard(client)
+            api._SSE_CLIENTS.pop(client, None)
         payload = json.loads(frame.split("data: ", 1)[1])
         assert payload["timestamp"] == 1_234.5
 
@@ -2529,7 +2529,7 @@ class TestClockSeam:
         monkeypatch.setattr(api, "_SSE_HEARTBEAT_SECONDS", 1.0)
         monkeypatch.setattr(api, "_SSE_QUEUE_POLL_SECONDS", 0.01)
         client: queue.Queue[bytes] = queue.Queue()
-        api._SSE_CLIENTS.add(client)
+        api._SSE_CLIENTS[client] = "test-peer"
         stream = api._SSEStream(client)
         frames = stream._frames()
         try:

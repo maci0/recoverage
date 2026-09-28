@@ -1642,7 +1642,7 @@ class TestSseEvents:
         import recoverage.api as api
 
         q: queue.Queue[bytes] = queue.Queue()
-        api._SSE_CLIENTS.add(q)
+        api._SSE_CLIENTS[q] = "test-peer"
         try:
             api._broadcast_db_updated((987654321, 512))
             frame = q.get_nowait()
@@ -1654,7 +1654,33 @@ class TestSseEvents:
             assert payload["db"]["size_bytes"] == 512
             assert q.empty()
         finally:
-            api._SSE_CLIENTS.discard(q)
+            api._SSE_CLIENTS.pop(q, None)
+
+    def test_a_dropped_frame_names_the_client_it_was_dropped_for(self, caplog: Any) -> None:
+        """A full queue means one dashboard stops refreshing; the line must say which.
+
+        Two wedged clients produce two lines, and without the peer they are the
+        same line twice: the operator has no way to tell which tab to reload.
+        """
+        import recoverage.api as api
+
+        wedged: queue.Queue[bytes] = queue.Queue(maxsize=1)
+        wedged.put_nowait(b"already full")
+        healthy: queue.Queue[bytes] = queue.Queue()
+        api._SSE_CLIENTS[wedged] = "10.0.0.7"
+        api._SSE_CLIENTS[healthy] = "10.0.0.8"
+        try:
+            with caplog.at_level(logging.WARNING, logger="recoverage"):
+                api._broadcast_db_updated((1, 2))
+            dropped = [r.getMessage() for r in caplog.records if "dropping" in r.getMessage()]
+            assert len(dropped) == 1
+            assert "10.0.0.7" in dropped[0]
+            assert "10.0.0.8" not in dropped[0]
+            # The client that is reading still got the frame.
+            assert healthy.get_nowait().startswith(b"event: db-updated")
+        finally:
+            api._SSE_CLIENTS.pop(wedged, None)
+            api._SSE_CLIENTS.pop(healthy, None)
 
     def test_snapshot_reads_real_db(self) -> None:
         import recoverage.api as api
@@ -2433,6 +2459,33 @@ class TestHostHeaderValidation:
         # The hostile value may appear (repr-escaped), but the peer address
         # must be there for investigation.
         assert any("127.0.0.1" in r.getMessage() for r in caplog.records)
+
+    def test_a_forged_peer_cannot_split_the_audit_line(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """REMOTE_ADDR is escaped on both audit lines, like every other untrusted
+        argument in this package's log calls.
+
+        A proxy that folds a header into REMOTE_ADDR makes it as hostile as
+        ``Host``, and the two lines that name it are the ones an incident
+        investigation reads.
+        """
+        import logging
+
+        self._set_allowed({"127.0.0.1", "localhost", "::1"})
+        forged = "10.0.0.9\x1b[2K\rX-Request-ID: 000000000000 forged\nWARN forged"
+        with caplog.at_level(logging.WARNING, logger="recoverage"):
+            wsgi_request(
+                "GET", "/api/health", headers={"Host": "evil.example.com"}, remote_addr=forged
+            )
+        assert any("unexpected Host header" in r.getMessage() for r in caplog.records)
+        for record in caplog.records:
+            message = record.getMessage()
+            if "unexpected Host header" in message:
+                assert forged not in message
+                assert "\x1b" not in message
+                assert "\r" not in message
+                assert "\n" not in message
 
     def test_no_validation_when_remote_bind(self) -> None:
         # --allow-remote binds leave ALLOWED_HOSTS None → any Host passes.
@@ -3871,7 +3924,7 @@ class TestHealthStreams:
         import recoverage.api as api
 
         with api._SSE_CLIENTS_LOCK:
-            api._SSE_CLIENTS.add(queue.Queue(maxsize=api._SSE_QUEUE_MAX))
+            api._SSE_CLIENTS[queue.Queue(maxsize=api._SSE_QUEUE_MAX)] = "test-peer"
         try:
             monkeypatch.setattr(api, "_DB_WATCHER_THREAD", _DeadThread(), raising=False)
             status, headers, body = wsgi_get("/api/health")
@@ -3938,7 +3991,7 @@ class TestSseClientCap:
             pytest.skip("No targets in DB")
         with api._SSE_CLIENTS_LOCK:
             for _ in range(api._SSE_MAX_CLIENTS):
-                api._SSE_CLIENTS.add(queue.Queue(maxsize=api._SSE_QUEUE_MAX))
+                api._SSE_CLIENTS[queue.Queue(maxsize=api._SSE_QUEUE_MAX)] = "test-peer"
         try:
             status, _, _ = wsgi_get("/api/events")
             assert status.startswith("503")
@@ -3954,7 +4007,7 @@ class TestSseClientCap:
 
         with api._SSE_CLIENTS_LOCK:
             for _ in range(api._SSE_MAX_CLIENTS):
-                api._SSE_CLIENTS.add(queue.Queue(maxsize=api._SSE_QUEUE_MAX))
+                api._SSE_CLIENTS[queue.Queue(maxsize=api._SSE_QUEUE_MAX)] = "test-peer"
         try:
             status, headers, body = wsgi_get("/api/events")
             assert status.startswith("503")
