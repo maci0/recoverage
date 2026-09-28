@@ -70,11 +70,11 @@ def _install_fake_rebrew(
 ) -> None:
     """Put fake rebrew modules in sys.modules for run_regen's lazy imports."""
     package = types.ModuleType("rebrew")
-    package.__path__ = []  # type: ignore[attr-defined]
+    package.__path__ = []
     config = types.ModuleType("rebrew.config")
     config.load_config = load_config  # type: ignore[attr-defined]
     catalog = types.ModuleType("rebrew.catalog")
-    catalog.__path__ = []  # type: ignore[attr-defined]
+    catalog.__path__ = []
     catalog_cli = types.ModuleType("rebrew.catalog.cli")
     catalog_cli.run_catalog = run_catalog  # type: ignore[attr-defined]
     writer = types.ModuleType("rebrew.coverage_toml")

@@ -86,6 +86,30 @@ _PINS = {"REBREW_REF": "v2.16.0", "REBREW_SHA": "c9064a4dd5f23aa7a82ac96ca2a70c5
 # How a job names the composite action that fetches the sibling checkout.
 _SIBLING_ACTION_STEP = "uses: ./.github/actions/sibling-rebrew"
 
+# The test modules [tool.mypy] `files` does not name, and what each one is
+# waiting on. This is the deferral list, not an approval: a module is here
+# because it does not pass the gate yet, and the reason says which finding
+# keeps it out. Every entry is one a `make test-one` pass can retire, and
+# retiring one means deleting its line here. A new test module cannot join
+# tests/ without a decision, because this dict and the gate have to agree
+# (TestPythonAnalysisIsEnforced::test_a_new_test_module_cannot_join_untyped).
+_UNTYPED_TEST_MODULES = {
+    "test_api.py": "untyped WSGI request helpers and a read that cannot be narrowed",
+    "test_build.py": "sdist and wheel helpers that hand back untyped values",
+    "test_cli.py": "stub buffers passed where the stdlib declares a concrete buffer type",
+    "test_config.py": "a PurePosixPath handed to a reader declared to take a Path",
+    "test_fuzz.py": "a campaign whose token lists and status arguments vary per surface",
+    "test_lifecycle.py": "monkeypatched attributes on rebrew's modules, which carry no py.typed",
+    "test_metrics.py": "hand-built log records and counter dicts standing in for the real ones",
+    "test_perf.py": "counting stand-ins installed over module-level functions",
+    "test_playwright.py": "playwright ships no py.typed, so every page object is Any",
+    "test_potato.py": "direct writes into the private grid cache and unannotated helpers",
+    "test_release.py": "re.Match results indexed without the None arm",
+    "test_serve_harness.py": "a tools/ module imported off sys.path, whose return is Any",
+    "test_server.py": "the largest module in the suite; its fixtures are not annotated yet",
+    "test_supply_chain.py": "TOML and JSON documents read into bare dicts, which strict rejects",
+}
+
 
 def _bun_lock() -> dict:
     """bun.lock parsed, which is JSONC rather than the JSON bun.lock claims to be.
@@ -1023,6 +1047,39 @@ class TestPythonAnalysisIsEnforced:
         assert ignoring == ["tests/*"], (
             f"S101 is ignored for {ignoring}; only the suite asserts by design, so an "
             "ignore anywhere else is a path that opted out of the check"
+        )
+
+    def test_a_new_test_module_cannot_join_untyped(self) -> None:
+        """`files` is a gate with a hole in it, and the hole is the whole
+        point of the exercise: the modules it does not name are unchecked, and
+        nothing stopped a new one from being written that way.
+
+        Every module under tests/ is therefore either in the gate or named in
+        `_UNTYPED_TEST_MODULES` below, with the reason it is still out. A new
+        test file is untyped by default, so without this the gate would ratchet
+        the wrong way: each module added to the list is work, and a module
+        added without it is silence. The list is checked both ways, so a
+        module that joins the gate has to leave it here.
+        """
+        gated = {
+            Path(entry).name
+            for entry in self._mypy().get("files", [])
+            if str(entry).startswith("tests/")
+        }
+        present = {path.name for path in (_ROOT / "tests").glob("*.py")}
+        assert present - gated == set(_UNTYPED_TEST_MODULES), (
+            "the test modules outside the mypy gate and the recorded remainder "
+            f"disagree: {sorted(present - gated ^ set(_UNTYPED_TEST_MODULES))}; add the "
+            "module to [tool.mypy] files, or record it below with its reason"
+        )
+        assert not gated - present, (
+            f"[tool.mypy] files names test modules that are not in the tree: "
+            f"{sorted(gated - present)}"
+        )
+        unreasoned = sorted(name for name, reason in _UNTYPED_TEST_MODULES.items() if not reason)
+        assert not unreasoned, (
+            f"these modules are outside the gate with no recorded reason: {unreasoned}; an "
+            "unexplained entry is how a genuinely stale deferral survives"
         )
 
     def test_the_type_check_runs_in_the_lint_job(self) -> None:

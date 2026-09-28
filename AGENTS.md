@@ -165,7 +165,7 @@ make test                   # uv run --locked --extra dev python -m pytest tests
 make test-one T=tests/test_api.py  # one file or pytest node id (FLAGS="-k name" narrows it)
 make fuzz                  # wider seeded campaign (SEED=, ITERATIONS= override)
 make lint                   # uv run --locked --extra dev python -m ruff check src/ tests/ tools/
-make type-check             # uv run --locked --extra dev python -m mypy (src/ + tools/ + the shared fixtures, strict)
+make type-check             # uv run --locked --extra dev python -m mypy (src/ + tools/ + the annotated test modules, strict)
 make format-check           # uv run --locked --extra dev python -m ruff format --check src/ tests/ tools/
 make format                 # uv run --locked --extra dev python -m ruff format (writes)
 make shell-lint             # shellcheck -x tools/*.sh (needs shellcheck on PATH)
@@ -643,13 +643,22 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   runtime deps ship no `py.typed`, so they are covered tree-wide by
   `ignore_missing_imports` rather than by a per-import
   `# type: ignore[import-untyped]`, which would be redundant under that
-  setting and reported as stale. `tests/conftest.py` and
-  `tests/coverage_fixture.py` are under the gate (the slice whose annotations
-  the rest of the suite is built on); the other test files are outside it until
-  their fixtures carry annotations, so a suppression added there belongs with
-  the first mypy run that covers it, and the existing
+  setting and reported as stale. `tests/conftest.py`,
+  `tests/coverage_fixture.py` and the test modules that build no fixture and
+  passed the same settings on the day they joined
+  (`test_concurrency`, `test_frontend_import_graph`, `test_import_graph`,
+  `test_lint_html`, `test_paths`) are under the gate; the remaining test files
+  are outside it until their fixtures carry annotations, so a suppression added
+  there belongs with the first mypy run that covers it, and the existing
   `# type: ignore[...]` comments there are still the record of what needed
-  silencing. The selected rule
+  silencing. That remainder is a named deferral list rather than a per-file
+  relaxation, and it is read in both directions:
+  `tests/test_supply_chain.py` (`TestPythonAnalysisIsEnforced::
+  test_a_new_test_module_cannot_join_untyped`) fails when a module under
+  `tests/` is neither in `[tool.mypy] files` nor named with its reason in
+  `_UNTYPED_TEST_MODULES`, and fails when an entry names no reason, so a new
+  test file cannot join the suite untyped by default and a module that retires
+  its finding leaves that dict in the same change. The selected rule
   groups, the bandit/pylint codes that are named individually instead of by
   prefix, the two ignores (PT006, PT018) and each per-file-ignore set all
   carry their reason next to them in `[tool.ruff.lint]` and

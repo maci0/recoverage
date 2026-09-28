@@ -151,11 +151,25 @@ target-version = "py313"
 line-length = 100
 
 [tool.mypy]
-# The gate covers src/, tools/ and the two shared fixture modules. The rest of
-# tests/ stays out until its fixtures carry the annotations; make test-one is
-# the loop that grows them, and conftest.py plus coverage_fixture.py are the
-# slice that had them (every other test file builds on those two).
-files = ["src/recoverage", "tools", "tests/conftest.py", "tests/coverage_fixture.py"]
+# The gate covers src/, tools/ and the test modules that already pass it. The
+# rest of tests/ stays out until its fixtures carry the annotations; make
+# test-one is the loop that grows them, and conftest.py plus
+# coverage_fixture.py are the slice that had them (every other test file builds
+# on those two). The graph/lint/concurrency modules joined next: none of them
+# builds a fixture, so each was clean under the same settings on the day it was
+# added here, and tests/test_supply_chain.py holds the remainder out by NAME,
+# so a NEW test module cannot join tests/ untyped without failing the suite.
+files = [
+    "src/recoverage",
+    "tools",
+    "tests/conftest.py",
+    "tests/coverage_fixture.py",
+    "tests/test_concurrency.py",
+    "tests/test_frontend_import_graph.py",
+    "tests/test_import_graph.py",
+    "tests/test_lint_html.py",
+    "tests/test_paths.py",
+]
 python_version = "3.13"
 # Strict, minus the two checks this tree cannot pass:
 #   disallow_untyped_decorators — every route handler carries @app.route /

@@ -264,7 +264,11 @@ class TestDataSingleFlight:
                 r.getMessage() for r in caplog.records
             ]
         finally:
-            api._data_cache_build_done(key, owned)
+            # The guard is what the assert above already established, repeated
+            # because a narrowing from the try body does not reach the finally
+            # block: a claim the checkout refused has nothing to release.
+            if owned is not None:
+                api._data_cache_build_done(key, owned)
 
 
 class TestConcurrentInvalidation:
@@ -295,7 +299,7 @@ class TestConcurrentInvalidation:
 
         clearer = threading.Thread(target=churn, daemon=True)
         clearer.start()
-        failures: list[tuple[str, str, str]] = []
+        failures: list[tuple[str, str, bytes]] = []
         fail_lock = threading.Lock()
         try:
 
