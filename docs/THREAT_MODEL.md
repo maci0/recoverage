@@ -143,14 +143,23 @@ performs.
 
 1. **Browser or LAN client to the app.** Everything in the request above is
    untrusted. Validation point: the `before_request` hooks in registration
-   order - `_start_request` (`server.py:1840`), `_require_auth` (installed at
-   `server.py:2015`, body `server.py:1955-2012`), then the Host allowlist
-   (`server.py:2111-2142`, installed from `cli.py:826-831`) - then per-handler
+   order - `_start_request`, `_require_auth`, then the Host allowlist
+   (installed from `cli.py:826-831`) - then per-handler
    bounds (`_MAX_BATCH_LOOKUP` / `_MAX_BATCH_BODY_BYTES` at `api.py:1174-1180`;
    `_MAX_PAGE_OFFSET` at `api.py:1185`; `_MAX_SLICE_SIZE` at `api.py:1190`;
    `_MAX_SEARCH_CHARS` at `api.py:1195`). Auth runs before the Host check, so
    a request with neither is answered 401 and a bad Host on an unauthenticated
    deployment is answered 400.
+   The one request `_require_auth` passes without a credential is a browser CORS
+   preflight (`server._is_cors_preflight`: `OPTIONS` carrying both `Origin` and
+   `Access-Control-Request-Method`), because a browser sends no credential on
+   the handshake and the gate otherwise answered 401 to every one of them,
+   leaving the documented `--cors` + `--token` combination unable to send a
+   request. It reads nothing: the preflight answers from the same
+   `OPTIONS <path>` catch-all that returns an empty body for every path. A bare
+   `OPTIONS` carries no `Origin` and stays gated, the request the preflight
+   precedes is authenticated by the same hook, and an exempt preflight does not
+   clear the failed-token window (only a verified token does).
 2. **App to coverage documents.** `db/coverage-<target>.toml` is printed by
    `rebrew build-db` and read here, never written (`server.coverage_snapshots`,
    `server.py:461-513`; the reader is `rebrew.coverage_toml`,

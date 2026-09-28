@@ -1096,6 +1096,107 @@ class TestTokenAuthEndpoint:
             srv._AUTH_TOKEN = original
 
 
+class TestCorsPreflightBypassesTheTokenGate:
+    """A CORS preflight carries no credentials, so the gate must not apply.
+
+    A browser sends ``Origin`` and ``Access-Control-Request-Method`` on the
+    preflight and withholds every credential, so a token-gated server that
+    answered 401 killed the ``--cors`` + ``--token`` combination the API
+    documents: the browser aborted at the handshake and never sent the
+    request.  Only the handshake is exempt; the request it precedes is
+    authenticated by the same gate, which is what these tests pin.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _cors(self, monkeypatch: Any) -> None:
+        import recoverage.server as srv
+
+        monkeypatch.setattr(srv, "_AUTH_TOKEN", "unit-test-token")
+        monkeypatch.setattr(srv, "CORS_ENABLED", True)
+        monkeypatch.setattr(srv, "CORS_ALLOWED_ORIGINS", ["http://localhost:5173"])
+        yield
+        srv._clear_auth_failures()
+
+    def test_preflight_without_credentials_is_answered(self) -> None:
+        from conftest import wsgi_request
+
+        status, headers, _ = wsgi_request(
+            "OPTIONS",
+            "/api/health",
+            headers={
+                "Origin": "http://localhost:5173",
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+        assert status.startswith("200")
+        assert headers.get("Access-Control-Allow-Origin") == "http://localhost:5173"
+
+    def test_the_request_the_preflight_precedes_is_still_gated(self) -> None:
+        """The exemption covers the handshake, not the work it authorises."""
+        from conftest import wsgi_get
+
+        status, _, _ = wsgi_get("/api/health", headers={"Origin": "http://localhost:5173"})
+        assert status.startswith("401")
+
+    def test_bare_options_is_not_a_preflight_and_stays_gated(self) -> None:
+        """Without the Origin/A-C-R-M pair this is a plain OPTIONS request.
+
+        A client that can name both headers gets the empty preflight body; it
+        must not thereby read anything, so the gate holds for a request that
+        merely shares the verb.
+        """
+        from conftest import wsgi_request
+
+        status, _, _ = wsgi_request("OPTIONS", "/api/health")
+        assert status.startswith("401")
+
+    def test_the_exemption_does_not_leak_a_privileged_route(self) -> None:
+        """A preflight for the one state-changing route reveals nothing.
+
+        ``/api/regen`` answers a preflight from the same catch-all that
+        answers every path, so the verb a cross-origin page asks about is not
+        a capability it can then exercise.
+        """
+        from conftest import wsgi_request
+
+        status, _headers, body = wsgi_request(
+            "OPTIONS",
+            "/api/regen",
+            headers={
+                "Origin": "http://localhost:5173",
+                "Access-Control-Request-Method": "POST",
+            },
+        )
+        assert status.startswith("200")
+        assert body == b""
+        assert "regen" not in body.decode("utf-8", "replace")
+
+    def test_exempt_preflight_does_not_clear_the_failure_window(self) -> None:
+        """An unauthenticated preflight must not count as a good credential.
+
+        ``_clear_auth_failures`` runs only on a verified token; if the
+        exemption reached it, any client could reset the brute-force window
+        with a header pair it controls.
+        """
+        from conftest import wsgi_request
+
+        import recoverage.server as srv
+
+        wsgi_request(
+            "OPTIONS",
+            "/api/health",
+            headers={
+                "Origin": "http://localhost:5173",
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+        assert len(srv._auth_failures) == 0
+        # A real bad credential still records, so the window still fills.
+        status, _, _ = wsgi_request("GET", "/api/health")
+        assert status.startswith("401")
+        assert len(srv._auth_failures) == 1
+
+
 class TestAuthFailureLimiter:
     """Unit behavior of the failure window."""
 

@@ -2199,6 +2199,27 @@ def _clear_auth_failures() -> None:
         _auth_failures.clear()
 
 
+#: The two headers a browser sends on a CORS preflight and on no other
+#: request.  ``Origin`` names the page asking, ``Access-Control-Request-Method``
+#: the verb it wants to use next; the actual request follows with its
+#: credentials, this handshake carries none.
+_PREFLIGHT_ORIGIN_HEADER = "Origin"
+_PREFLIGHT_METHOD_HEADER = "Access-Control-Request-Method"
+
+
+def _is_cors_preflight() -> bool:
+    """Whether this request is a browser CORS preflight.
+
+    Both headers are required, so a bare ``OPTIONS`` (which carries no
+    ``Origin``) is not one and stays behind the token gate.  The preflight
+    itself reaches no handler that reads coverage: it answers from
+    :func:`_cors_preflight`, which returns an empty body for every path.
+    """
+    return request.method == "OPTIONS" and bool(
+        _header(_PREFLIGHT_ORIGIN_HEADER, "") and _header(_PREFLIGHT_METHOD_HEADER, "")
+    )
+
+
 def _require_auth() -> None:
     """Enforce the configured bearer token, or pass when none is set.
 
@@ -2206,8 +2227,14 @@ def _require_auth() -> None:
     ``recoverage_token`` cookie.  A page request (Accept: text/html, non-/api
     path) gets the 401 HTML page; every other client gets the JSON 401
     contract, or the 429 once the fail window is full.
+
+    A CORS preflight is exempt (:func:`_is_cors_preflight`): a browser sends
+    no credential on it, so a token-gated server answered 401 to every
+    preflight and the ``--cors`` + ``--token`` combination the API documents
+    could never send a request at all.  Only the handshake is exempt; the
+    request it precedes is authenticated by this same gate.
     """
-    if not _AUTH_TOKEN:
+    if not _AUTH_TOKEN or _is_cors_preflight():
         return
 
     provided = _header("Authorization", "")

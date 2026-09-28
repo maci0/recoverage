@@ -117,6 +117,14 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   clone. Both files are regenerated from the current sources; the rebuild is
   byte-identical across runs, so the staleness was a missed commit rather than
   a drifting build.
+- **A CORS preflight no longer 401s on a `--token` server.** A browser sends
+  no credential on the preflight handshake, so the token gate answered 401 to
+  every one of them and a browser aborted before sending the request: the
+  `--cors` + `--token` combination the API documents could not be used at all.
+  The handshake now passes the gate. It reads nothing (it answers from the
+  empty `OPTIONS <path>` catch-all), a bare `OPTIONS` stays gated, the request
+  the preflight precedes is still authenticated, and an exempt preflight does
+  not clear the failed-token window.
 - **A deeply nested batch lookup body no longer answers 500.**
   `POST /api/targets/<target>/functions` caught the two ways a body fails to
   parse (bad UTF-8, bad JSON) and reported them as a 400, but `json.loads`
