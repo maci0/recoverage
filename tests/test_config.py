@@ -10,6 +10,15 @@ import pytest
 
 from recoverage import config
 
+# Rich wraps a CliRunner's stderr output in a box and pads every line, so a
+# message compared across two widths has to be unwrapped first.
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _plain(text: str) -> str:
+    """The message text of a boxed CliRunner result, unwrapped."""
+    return " ".join(_ANSI_RE.sub("", text).replace("│", " ").split())
+
 
 class TestDefaults:
     def test_defaults_match_the_flag_help(self) -> None:
@@ -736,6 +745,108 @@ class TestConfigCommand:
         result = CliRunner().invoke(app, ["config"])
         assert result.exit_code == 0
         assert "--cors without --cors-origin" in result.output
+
+    def test_cors_origin_without_cors_warns(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The entry that has no effect without --cors is the one
+        _allowed_origins did not install, so the warning has to be driven by
+        what the operator wrote.  Reading the installed list instead made the
+        arm unreachable and the warning silent."""
+        from typer.testing import CliRunner
+
+        from recoverage.cli import app
+
+        monkeypatch.setenv("RECOVERAGE_CORS_ORIGIN", "http://localhost:5173")
+        result = CliRunner().invoke(app, ["config"])
+        assert result.exit_code == 0, result.output
+        assert "--cors-origin has no effect without --cors" in result.output
+
+
+class TestCorsOriginIsWhatABrowserCouldSend:
+    """RECOVERAGE_CORS_ORIGIN is validated as an Origin header, not merely as
+    something _normalize_origin can reduce.  That reducer exists to READ
+    whatever arrives on a request: it drops a path and synthesizes a scheme,
+    so through it the allowlist would hold a different entry than the operator
+    wrote, and the refusal they get comes from a browser instead of from
+    startup."""
+
+    @pytest.mark.parametrize(
+        "origin",
+        [
+            "http://localhost:5173/foo",
+            "http://localhost:5173/",
+            "https://box/app",
+            "http://box?x=1",
+            "http://box#f",
+            "notaurl",
+            "ftp://box",
+            "http://user:pw@box",
+            "http://box:notaport",
+            "http://local host:5173",
+        ],
+    )
+    def test_refused_with_exit_2(self, monkeypatch: pytest.MonkeyPatch, origin: str) -> None:
+        from typer.testing import CliRunner
+
+        from recoverage.cli import app
+
+        monkeypatch.setenv("RECOVERAGE_CORS", "1")
+        monkeypatch.setenv("RECOVERAGE_CORS_ORIGIN", origin)
+        result = CliRunner().invoke(app, ["config"])
+        assert result.exit_code == 2, (origin, result.output)
+        assert "not a URL the browser could send" in _plain(result.output)
+
+    @pytest.mark.parametrize(
+        "origin", ["http://localhost:5173", "https://box", "http://box:80", "http://[::1]:8001"]
+    )
+    def test_accepted(self, monkeypatch: pytest.MonkeyPatch, origin: str) -> None:
+        from typer.testing import CliRunner
+
+        from recoverage.cli import app
+
+        monkeypatch.setenv("RECOVERAGE_CORS", "1")
+        monkeypatch.setenv("RECOVERAGE_CORS_ORIGIN", origin)
+        result = CliRunner().invoke(app, ["config"])
+        assert result.exit_code == 0, (origin, result.output)
+
+
+class TestFlagIntegersGetTheEnvironmentFloor:
+    """--port and --min-coverage are text at the parser for the same reason
+    RECOVERAGE_PORT is: click's INT/FLOAT run the value through int()/float(),
+    which read every Unicode Nd digit, the "_" separator, and inf/nan.  One
+    setting, two sources, one floor."""
+
+    @pytest.mark.parametrize("value", ["1_0", "٤٠٩٦", "0x10", "", " ", "8 0"])
+    def test_port_rejected(self, value: str) -> None:
+        from recoverage.cli import _checked_port
+
+        with pytest.raises(config.ConfigError, match="--port"):
+            _checked_port(value)
+
+    def test_port_accepts_plain_digits_and_an_int(self) -> None:
+        from recoverage.cli import _checked_port
+
+        assert _checked_port("9001") == 9001
+        assert _checked_port(9001) == 9001
+        assert _checked_port("0") == 0
+
+    @pytest.mark.parametrize("value", ["1_0", "inf", "nan", "٤٠", "1.2.3", "", "5%"])
+    def test_min_coverage_rejected(self, monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+        from typer.testing import CliRunner
+
+        from recoverage.cli import app
+
+        result = CliRunner().invoke(app, ["check", "--min-coverage", value])
+        assert result.exit_code == 2, (value, result.output)
+        assert "--min-coverage" in _plain(result.output)
+
+    def test_min_coverage_range_still_reported(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from typer.testing import CliRunner
+
+        from recoverage.cli import app
+
+        for value in ("200", "-1", "0.0.0"):
+            result = CliRunner().invoke(app, ["check", "--min-coverage", value])
+            assert result.exit_code == 2, (value, result.output)
 
 
 class TestEnvValidatedByEveryCommand:

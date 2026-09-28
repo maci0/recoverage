@@ -18,6 +18,7 @@ import webbrowser
 from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import IO, Any, NamedTuple, NoReturn
+from urllib.parse import urlsplit
 
 import typer
 from rebrew.coverage_toml import CoverageSnapshot, CoverageTomlError
@@ -294,13 +295,30 @@ def _csv_safe(value: Any) -> Any:
     return value
 
 
-def _checked_port(value: int) -> int:
-    """Return *value* if it is in the port range, else raise config.ConfigError."""
-    if not config.MIN_PORT <= value <= config.MAX_PORT:
+def _checked_port(value: int | str) -> int:
+    """Return *value* as a port, or raise config.ConfigError naming ``--port``.
+
+    Two rules, and ``RECOVERAGE_PORT`` gets both, so the flag gets both too:
+    one setting, two sources.  The value must be ASCII digits (typer hands the
+    flag over as text for this reason — click's ``INT`` runs it through
+    ``int()``, which takes digits from every Unicode Nd set and reads ``_`` as a
+    separator, so ``--port 1_0`` would otherwise become port 10), and it must
+    be in the port range.
+    """
+    from recoverage.server import parse_ascii_int
+
+    if isinstance(value, str):
+        try:
+            port = parse_ascii_int(value)
+        except ValueError as exc:
+            raise config.ConfigError(f"--port: {exc}") from None
+    else:
+        port = value
+    if not config.MIN_PORT <= port <= config.MAX_PORT:
         raise config.ConfigError(
-            f"--port: {value} is not in the range {config.MIN_PORT}-{config.MAX_PORT}"
+            f"--port: {port} is not in the range {config.MIN_PORT}-{config.MAX_PORT}"
         )
-    return value
+    return port
 
 
 class _ServeConfig(NamedTuple):
@@ -311,6 +329,11 @@ class _ServeConfig(NamedTuple):
     allow_remote: bool
     cors: bool
     cors_origins: list[str]
+    #: What the operator actually wrote, before ``_allowed_origins`` dropped the
+    #: whole list for CORS being off.  ``_cors_warnings`` needs this, not
+    #: ``cors_origins``: the entry that has no effect is precisely the one that
+    #: is not installed.
+    cors_origins_requested: list[str]
     token: str | None
     db: Path | None
     log_level: int
@@ -320,7 +343,7 @@ class _ServeConfig(NamedTuple):
 
 def _resolve_serve_config(
     *,
-    port: int | None = None,
+    port: int | str | None = None,
     bind: str | None = None,
     allow_remote: bool | None = None,
     cors: bool | None = None,
@@ -345,6 +368,7 @@ def _resolve_serve_config(
         # _allowed_origins), so it has to be resolved with the same cors value
         # the server will run with rather than in a second pass beside it.
         resolved_cors = config.cors() if cors is None else cors
+        requested_origins = config.cors_origins() if cors_origin is None else list(cors_origin)
         resolved = _ServeConfig(
             port=config.port() if port is None else _checked_port(port),
             # validate_bind, not the raw flag: one setting, two sources, and
@@ -352,9 +376,8 @@ def _resolve_serve_config(
             bind=config.bind() if bind is None else config.validate_bind(bind, "--bind"),
             allow_remote=config.allow_remote() if allow_remote is None else allow_remote,
             cors=resolved_cors,
-            cors_origins=_allowed_origins(
-                resolved_cors, config.cors_origins() if cors_origin is None else cors_origin
-            ),
+            cors_origins=_allowed_origins(resolved_cors, requested_origins),
+            cors_origins_requested=requested_origins,
             token=(config.token() or None) if token is None else token,
             # Read for validation only; _db_path() resolves the value again.
             db=config.db_override(),
@@ -533,13 +556,19 @@ def _get_stats(
         )
 
 
-def _run_regen(root: Path) -> None:
+def _run_regen(root: Path) -> list[Path]:
     """Regenerate the coverage documents by calling rebrew's pipeline in-process."""
-    from recoverage.regen import RegenError, run_regen
+    from recoverage.regen import RegenDbMismatchError, RegenError, run_regen
 
     typer.echo("Running rebrew catalog + build-db...")
     try:
-        run_regen(root)
+        return run_regen(root)
+    except RegenDbMismatchError as e:
+        # A setting this package reads and rebrew cannot honour. Exit 2, the
+        # misconfiguration code `config` uses, not the regen-failed 1: rebrew
+        # never ran and the operator has to change something first.
+        _secho(f"Error: {e}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(2) from None
     except RegenError:
         # rebrew's error_exit reported the failure itself; run_regen carried
         # that across as RegenError.  Keep the exit-1 contract.
@@ -712,6 +741,11 @@ def _allowed_origins(cors: bool, requested: list[str]) -> list[str]:
 
     allowed: list[str] = []
     for origin_url in requested:
+        if not _is_browser_origin(origin_url):
+            raise config.ConfigError(
+                f"origin {origin_url!r} is not a URL the browser could send: "
+                "expected scheme://host[:port], with no userinfo, path or whitespace"
+            )
         normalized = _normalize_origin(origin_url)
         if not normalized:
             raise config.ConfigError(
@@ -720,6 +754,37 @@ def _allowed_origins(cors: bool, requested: list[str]) -> list[str]:
             )
         allowed.append(normalized)
     return allowed
+
+
+#: Schemes an Origin header can carry.  A browser serializes the origin's scheme
+#: verbatim, so anything else is a value no browser sends.
+_ORIGIN_SCHEMES = frozenset({"http", "https"})
+
+
+def _is_browser_origin(value: str) -> bool:
+    """Whether *value* is shaped like an Origin header a browser would send.
+
+    Stricter than :func:`recoverage.server._normalize_origin`, which is built to
+    READ whatever arrives on a request: it drops a path, drops a query, and
+    synthesizes a scheme for a bare host, so it accepts values no browser can
+    emit.  Validating an operator's allowlist through it would store a different
+    entry than the one written, and the operator would not learn that until a
+    request they expected to be allowed was refused.
+    """
+    if not value or any(ch.isspace() for ch in value):
+        return False
+    parts = urlsplit(value)
+    if parts.scheme not in _ORIGIN_SCHEMES:
+        return False
+    if parts.path or parts.query or parts.fragment:
+        return False
+    if not parts.netloc or parts.username is not None or parts.password is not None:
+        return False
+    try:
+        parts.port  # noqa: B018  -- raises ValueError on a non-numeric port
+    except ValueError:
+        return False
+    return bool(parts.hostname)
 
 
 def _remote_bind_gate(bind: str, allow_remote: bool) -> str | None:
@@ -745,25 +810,31 @@ def _remote_bind_gate(bind: str, allow_remote: bool) -> str | None:
     )
 
 
-def _cors_warnings(cors: bool, cors_origin: list[str]) -> list[str]:
+def _cors_warnings(cors: bool, requested: list[str]) -> list[str]:
     """The CORS settings that will not do what was written, as warnings.
 
     Neither is fatal: both combinations start a server, and each is a
     configuration the operator can only discover from a browser that refuses
     the read.  Returned rather than printed so `serve` and
     `recoverage config` warn from one rule.
+
+    *requested* is what the operator wrote, not the installed allowlist: the
+    entry that has no effect without ``--cors`` is by definition the one
+    ``_allowed_origins`` did not install, so passing the installed list would
+    make this warning unreachable.
     """
     warnings: list[str] = []
-    if cors and not cors_origin:
+    if cors and not requested:
         warnings.append(
             "warning: --cors without --cors-origin allows no cross-origin reads "
             "(Access-Control-Allow-Origin: * is no longer emitted). "
             "Add --cors-origin URL for each origin you want to allow."
         )
-    if cors_origin and not cors:
+    if requested and not cors:
         warnings.append(
             "warning: --cors-origin has no effect without --cors — "
-            "CORS processing is disabled. Pass --cors to enable it."
+            f"CORS processing is disabled, so {len(requested)} origin(s) were "
+            "dropped. Pass --cors to enable it."
         )
     return warnings
 
@@ -835,7 +906,7 @@ def serve(
     # (min/max moved into the config module: the range check has to run for
     # an env-provided port too, or an out-of-range value reaches socket.bind()
     # and surfaces as a raw OverflowError after the banner has printed.)
-    port: int | None = typer.Option(
+    port: str | None = typer.Option(
         None,
         "--port",
         "-p",
@@ -919,7 +990,7 @@ def serve(
         token=token,
         log_level=log_level,
     )
-    port = resolved.port
+    listen_port = resolved.port
     bind = resolved.bind
     allow_remote = resolved.allow_remote
     cors = resolved.cors
@@ -941,7 +1012,7 @@ def serve(
             fg=typer.colors.YELLOW,
             err=True,
         )
-    for warning in _cors_warnings(cors, cors_origin):
+    for warning in _cors_warnings(cors, resolved.cors_origins_requested):
         _secho(warning, fg=typer.colors.YELLOW, err=True)
     # IPv6 hosts need brackets in any URL spelling (::1 bare is parsed as
     # host "" port ::8001).
@@ -953,7 +1024,7 @@ def serve(
     if token:
         _secho(
             f"token auth enabled — requests need Authorization: Bearer <token> "
-            f"(SPA: open as http://{display_host}:{port}/?token=<token>)",
+            f"(SPA: open as http://{display_host}:{listen_port}/?token=<token>)",
             fg=typer.colors.GREEN,
         )
     # Loopback binds validate the Host header (DNS-rebinding guard); remote
@@ -967,17 +1038,17 @@ def serve(
 
     root = _project_dir()
     assets = _assets_dir()
-    listen_url = f"http://{display_host}:{port}"
+    listen_url = f"http://{display_host}:{listen_port}"
     # The browser opens against the bound loopback interface: --bind ::1
     # listens on IPv6 loopback only, so the hard-coded http://127.0.0.1 (IPv4)
     # would open a tab that refuses to connect.  Remote binds keep 127.0.0.1 —
     # a wildcard/external address also answers on IPv4 loopback.
-    url = listen_url if not is_remote else f"http://127.0.0.1:{port}"
+    url = listen_url if not is_remote else f"http://127.0.0.1:{listen_port}"
 
     if regen:
         _run_regen(root)
 
-    _log.info("Starting recoverage server on %s (port=%d, cors=%s)", listen_url, port, cors)
+    _log.info("Starting recoverage server on %s (port=%d, cors=%s)", listen_url, listen_port, cors)
 
     # The full active configuration, resolved from flags and the environment,
     # so an operator can confirm what the process is actually running with.
@@ -985,7 +1056,7 @@ def serve(
     # process's answer are the same values, so they cannot drift.  The token is
     # reported as set/unset, never by value.
     active = config.active_config(
-        port=port,
+        port=listen_port,
         bind=bind,
         allow_remote=allow_remote,
         cors=cors,
@@ -1042,7 +1113,7 @@ def serve(
     try:
         bottle_app.run(
             host=bind,
-            port=port,
+            port=listen_port,
             quiet=True,
             server="wsgiref",
             server_class=_server_class_for(bind),
@@ -1301,9 +1372,45 @@ def _section_verdict(
     )
 
 
+def _checked_min_coverage(value: str, json_output: bool) -> float:
+    """*value* as a coverage percentage, or exit 2 through ``_fail``.
+
+    The flag is text for the same reason ``--port`` is: click's ``FLOAT`` runs
+    the value through ``float()``, which accepts ``inf``, ``nan``, Unicode
+    digits and the ``_`` separator, so a CI gate could be handed a threshold
+    that is not the number that was typed.  A leading sign is allowed (a
+    negative gate is a usage error the range check reports, not a parse error);
+    everything after it must be ASCII digits and one ASCII dot.
+    """
+    from recoverage.server import parse_ascii_int
+
+    text = value.strip()
+    sign = ""
+    if text[:1] in ("+", "-"):
+        sign, text = text[0], text[1:]
+    whole, dot, frac = text.partition(".")
+    if not whole or (dot and not frac) or "." in frac:
+        _fail(
+            f"Error: --min-coverage is not a number: {value!r}.",
+            "--min-coverage is not a number",
+            2,
+            json_output,
+        )
+    try:
+        parsed = float(f"{sign}{parse_ascii_int(whole)}.{parse_ascii_int(frac) if frac else 0}")
+    except ValueError:
+        _fail(
+            f"Error: --min-coverage is not a number: {value!r}.",
+            "--min-coverage is not a number",
+            2,
+            json_output,
+        )
+    return parsed
+
+
 @app.command()
 def check(
-    min_coverage: float = typer.Option(
+    min_coverage: str = typer.Option(
         ..., "--min-coverage", "-m", help="Minimum coverage percentage (0-100)"
     ),
     target: str | None = typer.Option(None, "--target", "-t", help="Target ID (default: all)"),
@@ -1319,11 +1426,12 @@ def check(
     named it, which FAILs.
     """
     _use_utf8_stdout()
-    if not 0.0 <= min_coverage <= 100.0:
+    threshold = _checked_min_coverage(min_coverage, json_output)
+    if not 0.0 <= threshold <= 100.0:
         # A flag value outside its own documented range is a usage error, the
         # same exit 2 a non-numeric value gets from the parser.
         _fail(
-            f"Error: --min-coverage must be between 0 and 100, got {min_coverage!r}.",
+            f"Error: --min-coverage must be between 0 and 100, got {threshold!r}.",
             "--min-coverage must be between 0 and 100",
             2,
             json_output,
@@ -1367,7 +1475,7 @@ def check(
                 # never reads pct, so no fallback value can reach a comparison.
                 total_bytes = sec.get("total_bytes") or 0
                 pct = covered / total_bytes * 100 if total_bytes else 0.0
-                status, extra, human = _section_verdict(pct, untracked, bool(section), min_coverage)
+                status, extra, human = _section_verdict(pct, untracked, bool(section), threshold)
                 if status == "FAIL":
                     failed = True
                 verdicts.append({"target": tid, "section": sec_name, "status": status, **extra})
@@ -1398,7 +1506,7 @@ def check(
             json.dumps(
                 {
                     "passed": not failed,
-                    "min_coverage": min_coverage,
+                    "min_coverage": threshold,
                     "results": verdicts,
                 },
                 indent=2,
@@ -1414,13 +1522,22 @@ def regen(no_color: bool = _no_color_option()) -> None:
     from recoverage.server import _project_dir
 
     _check_env_or_exit()
-    _run_regen(_project_dir())
-    _secho("Done — coverage documents regenerated.", fg=typer.colors.GREEN)
+    written = _run_regen(_project_dir())
+    if written:
+        _secho(
+            f"Done — {len(written)} coverage document(s) written to {written[0].parent}.",
+            fg=typer.colors.GREEN,
+        )
+    else:
+        _secho(
+            "Done — rebrew wrote no coverage documents (no built targets).",
+            fg=typer.colors.GREEN,
+        )
 
 
 @app.command("open")
 def open_cmd(
-    port: int | None = typer.Option(
+    port: str | None = typer.Option(
         None,
         "--port",
         "-p",
@@ -1491,7 +1608,7 @@ def config_cmd(
     else:
         for key, value in settings.items():
             typer.echo(f"{key}={value}")
-    for warning in _cors_warnings(resolved.cors, resolved.cors_origins):
+    for warning in _cors_warnings(resolved.cors, resolved.cors_origins_requested):
         _secho(warning, fg=typer.colors.YELLOW, err=True)
     refusal = _remote_bind_gate(resolved.bind, resolved.allow_remote)
     if refusal is not None:

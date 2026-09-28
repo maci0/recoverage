@@ -202,6 +202,13 @@ recoverage serve --no-open
 `RECOVERAGE_ALLOW_REMOTE` is still yours to set: a non-loopback bind without
 it exits 1, whether the address came from the flag or the environment.
 
+`RECOVERAGE_DB` moves what is *read*, and rebrew resolves what a regen
+*writes* from `rebrew-project.toml` alone. A regen with the two pointing at
+different directories is refused with exit 2 rather than run: it would report
+success while the dashboard kept serving the documents it already had. To make
+them agree, point `[project].db_dir` at the same directory, or leave
+`RECOVERAGE_DB` unset and run from the project root.
+
 Every value is validated at startup. An out-of-range port, a non-boolean flag,
 an unknown log level, an empty value where one is required, a bind address no
 resolver can answer (`0.0.0.0 `, `host:8001`), a CORS origin no browser could
@@ -209,7 +216,9 @@ send, or a misspelled `RECOVERAGE_*` name (`RECOVERAGE_PRT`) exits 2 with the
 variable named, instead of starting with a default you did not ask for. The
 same check runs for every command that reads the environment (`stats`,
 `export`, `check`, `open`, `regen`), so a typo cannot quietly leave those on
-their defaults.
+their defaults. The `--port` and `--min-coverage` flags are held to the floor
+their variables get, so a non-ASCII digit or a `1_0` spelling is the same exit
+2 whichever source it came through.
 The two `RECOVERAGE_FUZZ_*` variables are the test suite's, not the server's;
 they carry the prefix so an operator who exported one to drive a campaign is
 not stopped by the unknown-name check, and they change nothing `serve` does.

@@ -27,7 +27,7 @@ from recoverage.disasm import (
     get_capstone_md,
     get_disassembly,
 )
-from recoverage.regen import RegenError, run_regen
+from recoverage.regen import RegenDbMismatchError, RegenError, run_regen
 from recoverage.server import (
     CACHE_NO_STORE,
     CACHE_REVALIDATE,
@@ -2159,6 +2159,19 @@ def _do_regen(remote: str) -> bytes | HTTPResponse:
     _metrics.REGEN.start()
     try:
         run_regen(root)
+    except RegenDbMismatchError as e:
+        # A setting this package reads and rebrew cannot honour: the regen was
+        # refused before it ran, so the operator has to change configuration
+        # before a rebuild can mean anything. 500 would read as a broken
+        # pipeline; the message is a path pair the operator has to see.
+        _regen_failed(started_at, "%s: %s", type(e).__name__, e)
+        return _json_err(
+            500,
+            {
+                "error": "Regen refused",
+                "detail": str(e),
+            },
+        )
     except RegenError as e:
         # rebrew's error_exit reported the failure and its status is carried
         # here.  Map it to the JSON 500 contract instead of letting it escape

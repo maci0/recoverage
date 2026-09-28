@@ -2691,6 +2691,80 @@ class TestPostResolveReadFailure:
         assert data["code"] == "db_unavailable"
 
 
+class _ExactStream(BytesIO):
+    """A ``wsgi.input`` that refuses to read past the frame it was given.
+
+    Stands in for the socket's buffered reader under the serving stack, where
+    ``read(n)`` blocks until n bytes arrive or the peer goes away.  Every other
+    body test uses a plain ``BytesIO``, which short-reads at once and so cannot
+    tell a read-to-the-declared-length from a read-to-EOF.
+    """
+
+    reads = 0
+    overshoot: ClassVar[list[int]] = []
+
+    def __init__(self, frame: bytes, trailer: bytes = b"") -> None:
+        super().__init__(frame + trailer)
+        self._frame_end = len(frame)
+
+    def read(self, size: int = -1) -> bytes:  # type: ignore[override]
+        self.reads += 1
+        if self.tell() >= self._frame_end:
+            # A read this size would run off the end of the frame: on a socket
+            # it blocks until the client hangs up.
+            self.overshoot.append(size)
+            raise AssertionError("read past the declared Content-Length")
+        return super().read(min(size, self._frame_end - self.tell()))
+
+    def readline(self, size: int = -1) -> bytes:  # type: ignore[override]
+        self.reads += 1
+        if self.tell() >= self._frame_end:
+            self.overshoot.append(size)
+            raise AssertionError("readline past the declared Content-Length")
+        return super().readline(min(size, self._frame_end - self.tell()))
+
+
+class TestFramedBodyIsReadToItsDeclaredLength:
+    """A Content-Length body is read to that length, never to EOF.
+
+    Under the serving stack ``wsgi.input`` is the socket's buffered reader,
+    whose ``read(n)`` returns only once n bytes have arrived or the peer has
+    gone away.  A reader that drains to EOF therefore parks the handler until
+    the client's socket deadline, while the client waits for the response: a
+    batch lookup over a real connection never returns.
+    """
+
+    #: Bytes a read-to-EOF loop would swallow past the frame.
+    TRAILER = b"x" * 40
+
+    def test_read_stops_at_the_declared_length(self) -> None:
+        payload = b'{"vas": ["0x1000"]}'
+        stream = _ExactStream(payload, self.TRAILER)
+        status, _headers, _body = wsgi_request(
+            "POST",
+            "/api/targets/NOPE/functions",
+            headers={"Content-Type": "application/json"},
+            body=payload,
+            wsgi_input=stream,
+        )
+        assert not status.startswith("5xx"), status
+        assert stream.overshoot == []
+        assert stream.tell() == len(payload)
+
+    def test_oversize_declaration_reads_nothing(self) -> None:
+        stream = _ExactStream(b"x" * 10)
+        status, _headers, _body = wsgi_request(
+            "POST",
+            "/api/targets/NOPE/functions",
+            headers={"Content-Type": "application/json"},
+            body=b"x" * 10,
+            wsgi_input=stream,
+            content_length="999999999",
+        )
+        assert status.startswith("413"), status
+        assert stream.reads == 0
+
+
 class TestNormalizeOriginEdges:
     def test_default_port_dropped(self) -> None:
         from recoverage.server import _normalize_origin

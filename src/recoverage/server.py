@@ -443,7 +443,10 @@ def _read_chunked_body(limit: int) -> bytes:
             raise RequestBodyMalformedError("unterminated chunk size line")
         size_field = line[:-2].split(b";", 1)[0].strip()
         try:
-            size = int(size_field, 16) if size_field else 0
+            # parse_ascii_int, not int(x, 16): the latter takes digits from the
+            # whole Unicode Nd set and accepts "_" as a separator, so a chunk
+            # line the framing does not allow would be read as a length.
+            size = parse_ascii_int(size_field.decode("latin-1"), 16) if size_field else 0
         except ValueError as exc:
             raise RequestBodyMalformedError(f"not a hex chunk size: {size_field!r}") from exc
         if size < 0 or size > limit - len(body):
@@ -485,6 +488,12 @@ def read_request_body(limit: int) -> bytes:
     request costs one header comparison, and the read itself stops within one
     chunk of *limit* whatever the client sends after that.
 
+    A framed body is read to its DECLARED length and no further.  Under the
+    serving stack ``wsgi.input`` is the socket's buffered reader, and a
+    ``read(n)`` on it returns only once *n* bytes have arrived or the peer has
+    gone away: reading to EOF would park the handler until the client's socket
+    deadline, while the client is itself waiting for the response.
+
     Raises :class:`RequestBodyTooLargeError` past *limit* and
     :class:`RequestBodyMalformedError` on framing this will not accept; see
     :class:`RequestBodyError` for what the caller owes the connection.
@@ -496,9 +505,18 @@ def read_request_body(limit: int) -> bytes:
     stream = request.environ["wsgi.input"]
     if chunked:
         return _read_chunked_body(limit)
+    body = bytearray()
+    if declared is not None:
+        while len(body) < declared:
+            part = stream.read(min(_BODY_READ_CHUNK, declared - len(body)))
+            if not part:
+                # The peer closed mid-body: hand back what arrived and let the
+                # caller reject it as the unparseable payload it is.
+                break
+            body += part
+        return bytes(body)
     # No Content-Length to compare: read up to the cap and one byte, so an
     # unframed oversize body is detectable rather than read to its end.
-    body = bytearray()
     while len(body) <= limit:
         part = stream.read(min(_BODY_READ_CHUNK, limit + 1 - len(body)))
         if not part:

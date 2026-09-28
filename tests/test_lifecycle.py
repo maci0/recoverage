@@ -213,6 +213,55 @@ class TestRunRegen:
 
         assert events == one_run * 2
 
+    def test_refuses_a_db_override_rebrew_would_not_write_to(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """RECOVERAGE_DB set to a directory rebrew will not write to is refused.
+
+        rebrew resolves its coverage directory from rebrew-project.toml alone.
+        A regen that ignored the override would write documents no served
+        directory reads and still report success, which is worse than failing:
+        the dashboard would look refreshed and be exactly as stale.
+        """
+        from recoverage.regen import RegenDbMismatchError
+
+        events: list[tuple[str, Any]] = []
+        _record_rebrew_calls(monkeypatch, events)
+        _install_fake_workspace(monkeypatch, tmp_path / "db")
+
+        monkeypatch.setenv("RECOVERAGE_DB", str(tmp_path / "elsewhere"))
+        with pytest.raises(RegenDbMismatchError) as excinfo:
+            run_regen(tmp_path)
+
+        assert "RECOVERAGE_DB" in str(excinfo.value)
+        assert str(tmp_path / "elsewhere") in str(excinfo.value)
+        # Refused before rebrew ran: no catalog, no write.
+        assert events == []
+
+    def test_db_override_matching_rebrews_directory_runs(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        events: list[tuple[str, Any]] = []
+        _record_rebrew_calls(monkeypatch, events)
+        _install_fake_workspace(monkeypatch, tmp_path / "db")
+
+        monkeypatch.setenv("RECOVERAGE_DB", str(tmp_path / "db"))
+        run_regen(tmp_path)
+
+        assert [name for name, *_ in events] == ["load_config", "run_catalog", "build_db"]
+
+
+def _install_fake_workspace(monkeypatch: pytest.MonkeyPatch, db_dir: Path) -> None:
+    """Fake ``rebrew.workspace`` with *db_dir* as the resolved coverage directory.
+
+    Only the two names ``_check_writes_where_the_dashboard_reads`` imports; the
+    real module is a sibling checkout this suite does not control.
+    """
+    workspace = types.ModuleType("rebrew.workspace")
+    workspace.CONFIG_NAME = "rebrew-project.toml"  # type: ignore[attr-defined]
+    workspace.db_dir = lambda root: db_dir  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "rebrew.workspace", workspace)
+
 
 class TestRebrewSurface:
     """Pins the rebrew call shape run_regen depends on.

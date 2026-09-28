@@ -167,7 +167,46 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   message the server logs for a coverage directory with no document told an
   operator to run `rebrew catalog && rebrew build-db` first. All three now name
   `rebrew build-db` alone, which is what writes `db/coverage-<target>.toml`.
-- **A request the HTTP layer refused left no trace in the server log.** An
+- **`POST /api/targets/<target>/functions` never answered over a real
+  connection.** The body reader drained the request to EOF whatever
+  `Content-Length` said, and under the serving stack `wsgi.input` is the
+  socket's buffered reader, so a read past the last declared byte blocked until
+  the client hung up. A client that sent its body and waited, which is every
+  HTTP client, waited for the socket deadline (120 s) and then got its answer.
+  A framed body is now read to its declared length.
+- **`recoverage regen` wrote to a directory the dashboard never reads.**
+  rebrew resolves the coverage directory from `rebrew-project.toml` alone and
+  has no environment override, so with `RECOVERAGE_DB` set the regen rewrote
+  documents under `./db` and then reported `Done` while `stats`, `export`,
+  `check` and `serve` read the other directory. A regen whose output the
+  served directory would not pick up is now refused with exit 2, naming both
+  directories. `regen` also names the directory it wrote into, and how many
+  documents that was, rather than reporting a bare `Done`.
+- **`RECOVERAGE_CORS_ORIGIN` accepted entries no browser could send.** The
+  allowlist validated through the same reducer that reads a request `Origin`,
+  and that reducer drops a path and synthesizes a missing scheme: the operator
+  wrote `http://localhost:5173/foo` or a bare `notaurl`, the server stored
+  `http://localhost:5173` and `http://notaurl`, and the mismatch surfaced as a
+  browser refusing a read rather than as startup refusing an origin. A path, a
+  query, a fragment, a non-HTTP scheme, userinfo, whitespace or a non-numeric
+  port is now the exit 2 the documentation already promised.
+- **The "`--cors-origin` has no effect without `--cors`" warning was
+  unreachable.** Both `serve` and `recoverage config` passed the installed
+  allowlist, which is empty whenever CORS is off, so the arm that needed it
+  could never fire. Both now pass what the operator wrote.
+- **`--port` and `--min-coverage` accepted spellings their environment
+  variables refuse.** Click's `INT`/`FLOAT` run the value through `int()` and
+  `float()`, so `--port 1_0` opened port 10, `--port ٤٠٩٦` opened 4096, and
+  `--min-coverage inf` was a threshold no percentage satisfies. Both flags are
+  now held to the floor `RECOVERAGE_PORT` already had, so a non-ASCII digit,
+  a `_` separator, `inf` and `nan` are the same exit 2 whichever source the
+  number came through.
+- **A chunked request size line was read with `int(x, 16)`.** That takes
+  digits from every Unicode Nd set and reads `_` as a separator, so a chunk
+  line the framing does not allow was accepted as a length and the decoded
+  body disagreed with what the client sent. It goes through the same
+  `parse_ascii_int` as every other request-supplied number.
+>- **A request the HTTP layer refused left no trace in the server log.** An
   over-long request line, a malformed one, an unsupported version, or headers
   past the limit are all rejected before a route exists, so nothing downstream
   logged them; the stdlib wrote them to stderr in its own format, with no level

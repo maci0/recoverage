@@ -41,12 +41,58 @@ class RegenError(RuntimeError):
         self.exit_code = exit_code
 
 
-def run_regen(root: Path) -> None:
+class RegenDbMismatchError(RuntimeError):
+    """``RECOVERAGE_DB`` names a directory rebrew would not write to.
+
+    A distinct type from :class:`RegenError` because it is not rebrew failing:
+    it is this package's own configuration refusing, and the callers map it to
+    exit 2 (misconfiguration) rather than exit 1 (a regen that ran and failed).
+    """
+
+
+def _check_writes_where_the_dashboard_reads(root: Path) -> None:
+    """Refuse a regen whose output no served directory would pick up.
+
+    rebrew resolves the coverage directory from ``rebrew-project.toml`` under
+    *root* alone; it has no environment override.  ``RECOVERAGE_DB`` is this
+    package's override, and every reader here honours it (``_paths._db_path``).
+    So with the variable set, a regen writes documents into a directory that
+    ``stats``/``export``/``check``/``serve`` never look at, and reports success
+    while the dashboard stays exactly as stale as it was.  That is the one
+    outcome worse than a failed regen, so it is refused before rebrew runs.
+    """
+    from rebrew.workspace import CONFIG_NAME, db_dir
+
+    from recoverage.config import db_override
+
+    override = db_override()
+    if override is None:
+        return
+    try:
+        written_to = db_dir(root).resolve()
+    except (OSError, LookupError, ValueError, TypeError, KeyError):
+        # The config is present but unusable. load_config raises on exactly
+        # this with a message naming the key, and that is the better report.
+        return
+    if written_to == override.expanduser().resolve():
+        return
+    raise RegenDbMismatchError(
+        f"RECOVERAGE_DB names {override}, but rebrew writes its coverage "
+        f"documents to {written_to} (from {root / CONFIG_NAME}, or {root / 'db'} "
+        f"when it has none). Point [project].db_dir at {override} or unset "
+        f"RECOVERAGE_DB; a regen would not reach the dashboard otherwise."
+    )
+
+
+def run_regen(root: Path) -> list[Path]:
     """Regenerate *root*'s coverage documents with rebrew's catalog + writer.
 
     Loads rebrew-project.toml once, then runs both pipeline steps in this
     process.  Failures propagate as themselves; only rebrew's ``typer.Exit``
     is translated, to :class:`RegenError`.
+
+    Returns the paths written, in dataset order, so a caller can report where
+    the documents landed.
 
     ``run_catalog`` is imported from ``rebrew.catalog.cli``. The
     ``rebrew.catalog`` package does not re-export it.
@@ -71,9 +117,10 @@ def run_regen(root: Path) -> None:
     from rebrew.config import load_config
     from rebrew.coverage_toml import write_coverage_toml
 
+    _check_writes_where_the_dashboard_reads(root)
     cfg = load_config(root)
     try:
         run_catalog(cfg)
-        write_coverage_toml(root, force=True)
+        return write_coverage_toml(root, force=True)
     except typer.Exit as e:
         raise RegenError(e.exit_code) from None

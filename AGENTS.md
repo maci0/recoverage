@@ -658,12 +658,38 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   browser opener are already running. The CLI's `--bind` calls the same
   function with `--bind` as the name in the error, because the flag and the
   variable are one setting with one floor. A new string-valued setting takes
-  the same treatment: validated in `config.py`, reached by both sources.
+  the same treatment: validated in `config.py`, reached by both sources. An
+  INTEGER flag reaches the variable's floor by being declared `str` and parsed
+  by `config`'s own reader: click's `INT`/`FLOAT` run the value through
+  `int()`/`float()`, which take digits from every Unicode Nd set, read `_` as a
+  separator and accept `inf`/`nan`, so `--port 1_0` opened port 10 and
+  `--min-coverage inf` was a threshold no percentage satisfies. `--port` goes
+  through `_checked_port` and `--min-coverage` through `_checked_min_coverage`;
+  a new numeric flag parses its own text the same way.
+- `RECOVERAGE_DB` moves what is READ, and rebrew resolves what a regen WRITES
+  from `rebrew-project.toml` alone (it has no environment override), so the two
+  can name different directories. A regen in that state is refused rather than
+  run: it would rewrite documents no served directory reads and report `Done`
+  while the dashboard stayed exactly as stale, which is worse than a regen that
+  failed loudly. `regen._check_writes_where_the_dashboard_reads` compares
+  `rebrew.workspace.db_dir(root)` against `config.db_override()` before rebrew
+  runs and raises `RegenDbMismatchError`; the CLI exits 2 (misconfiguration,
+  and rebrew never ran) and the API answers the JSON 500 with the refusal. A
+  new consumer of the override is on the read side and inherits the refusal.
 - A setting whose value is only meaningful in a narrower form is REJECTED
-  there, never dropped: `cli._allowed_origins` refuses a CORS origin the
-  normalizer cannot store, and the refusal is a `ConfigError` from inside
+  there, never dropped: `cli._allowed_origins` refuses a CORS origin that is
+  not one a browser could send, and the refusal is a `ConfigError` from inside
   `_resolve_serve_config`, so `serve` and `recoverage config` exit 2 on it and
   the banner, `recoverage config` and the request-path allowlist are one list.
+  That check is `cli._is_browser_origin` (`scheme://host[:port]` and nothing
+  else), NOT `server._normalize_origin`: the reducer exists to READ whatever
+  arrives on a request and drops a path, a query and a missing scheme, so
+  validating an operator's allowlist through it stores a different entry than
+  the one written, and the mismatch surfaces as a browser refusing a read
+  rather than as startup refusing an origin. `_cors_warnings` is driven by
+  `_ServeConfig.cors_origins_requested`, the list as written, and never by
+  `cors_origins`: the installed list is empty whenever CORS is off, which is
+  what made the "no effect without --cors" arm unreachable.
   A dropped entry is the worst outcome available: the server comes up an entry
   short and refuses precisely the reads the entry was written for. The same
   holds for a value that is SET but EMPTY, which is how a unit file, a
@@ -774,12 +800,21 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   spills past `MEMFILE_MAX` (100 KiB) into a `NamedTemporaryFile` — on a tmpfs
   `/tmp`, so RAM — so the endpoint's own cap ran long after the resource it
   exists to bound was allocated. `read_request_body` compares the declared
-  length first (a 4 GB request costs one header comparison), decodes a chunked
-  body under the same cap on the DECODED bytes, and stops within one chunk of
-  the limit otherwise. Every refusal it raises leaves the rest of the body in
-  the socket, so the answer must carry `Connection: close`; `api._body_rejected`
-  is the one helper that puts it there. A new endpoint reading a body calls
-  the helper for both `RequestBodyTooLargeError` and `RequestBodyMalformedError`.
+  length first (a 4 GB request costs one header comparison), reads a framed
+  body to its DECLARED length and no further, decodes a chunked body under the
+  same cap on the DECODED bytes, and stops within one chunk of the limit
+  otherwise. The declared length bounds the read, not only the refusal, because
+  under the serving stack `wsgi.input` is the socket's buffered reader: a read
+  past the last declared byte blocks until the client hangs up, while the
+  client is waiting for the response. A `BytesIO` short-reads, so a test over
+  one cannot catch a drain to EOF — the read is pinned against a stream that
+  refuses to run off the end of the frame (`tests/test_api.py`,
+  `TestFramedBodyIsReadToItsDeclaredLength`). A chunk-size line is read through
+  `server.parse_ascii_int`, not `int(x, 16)`. Every refusal it raises leaves the
+  rest of the body in the socket, so the answer must carry `Connection: close`;
+  `api._body_rejected` is the one helper that puts it there. A new endpoint
+  reading a body calls the helper for both `RequestBodyTooLargeError` and
+  `RequestBodyMalformedError`.
 - Connections are capped, not just deadlines. `_CLIENT_SOCKET_TIMEOUT_SECONDS`
   bounds how LONG a handler thread lives and never how MANY there are:
   ThreadingMixIn starts one per accept without asking, and a peer that opens a
