@@ -155,13 +155,19 @@ Section name. Only
 takes it.
 .TP
 .B \-\-json
-Emit JSON instead of a table. Only
+Emit JSON instead of a table.
 .B stats
 and
 .B check
-write the coverage report;
+write the coverage report,
 .B config
-writes its resolved settings.
+writes its resolved settings, and
+.B export
+takes it as the shorthand for
+.BR "\-\-format json" .
+Combining it with a
+.B \-\-format
+that is not json is a usage error.
 .TP
 .BI \-\-port " PORT" "\fR, \fP" \-p " PORT"
 Port of the running server.

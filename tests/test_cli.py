@@ -500,6 +500,20 @@ class TestExportCommand:
         assert set(data[0]["sections"]) == {".text", ".data"}
         assert data[0]["sections"][".text"]["total_cells"] == 8
 
+    def test_export_json_flag_matches_the_format_it_shorthands(self) -> None:
+        """`--json` is the spelling stats/check/config take; it must be the
+        same export, not a second path that can drift from --format json."""
+        flagged = runner.invoke(app, ["export", "--json"])
+        spelled = runner.invoke(app, ["export", "--format", "json"])
+        assert flagged.exit_code == 0
+        assert json.loads(flagged.output) == json.loads(spelled.output)
+
+    def test_export_json_flag_with_another_format_is_a_usage_error(self) -> None:
+        """Two flags asking for two formats has no winner worth guessing."""
+        result = runner.invoke(app, ["export", "--json", "--format", "csv"])
+        assert result.exit_code == 2
+        assert "--format csv" in result.output
+
     def test_export_csv_format(self) -> None:
         result = runner.invoke(app, ["export", "--format", "csv"])
         assert result.exit_code == 0
@@ -905,7 +919,7 @@ class TestExportCsvStdoutEncoding:
         wrapper = io.TextIOWrapper(sink, encoding="ascii", errors="strict")
         monkeypatch.setattr(sys, "stdout", wrapper)
         try:
-            export(output_format=ExportFormat.csv, target=None)
+            export(output_format=ExportFormat.csv, json_flag=False, target=None)
         finally:
             wrapper.flush()
             monkeypatch.setattr(sys, "stdout", real_stdout)
@@ -962,7 +976,7 @@ class TestExportCsvStdoutEncoding:
         monkeypatch.setattr(sys, "stdout", wrapper)
         try:
             with pytest.raises(typer.Exit) as raised:
-                export(output_format=ExportFormat.csv, target=None)
+                export(output_format=ExportFormat.csv, json_flag=False, target=None)
         finally:
             monkeypatch.setattr(sys, "stdout", real_stdout)
         assert raised.value.exit_code == 1
@@ -997,7 +1011,7 @@ class TestExportCsvStdoutEncoding:
         monkeypatch.setattr(sys, "stdout", wrapper)
         try:
             with pytest.raises(typer.Exit) as raised:
-                export(output_format=output_format, target=None)
+                export(output_format=output_format, json_flag=False, target=None)
         finally:
             monkeypatch.setattr(sys, "stdout", real_stdout)
         assert raised.value.exit_code == 1
@@ -1026,7 +1040,7 @@ class TestExportCsvStdoutEncoding:
         monkeypatch.setattr(sys, "stdout", wrapper)
         try:
             with pytest.raises(BrokenPipeError):
-                export(output_format=output_format, target=None)
+                export(output_format=output_format, json_flag=False, target=None)
         finally:
             monkeypatch.setattr(sys, "stdout", real_stdout)
 
@@ -2196,7 +2210,7 @@ class TestExportStdoutEncoding:
         buffer = self._ascii_stdout(monkeypatch)
         # Called directly, not through CliRunner: the runner swaps in its own
         # UTF-8 stdout, which is exactly the codec under test.
-        cli.export(output_format=cli.ExportFormat.csv, target=None)
+        cli.export(output_format=cli.ExportFormat.csv, json_flag=False, target=None)
         sys.stdout.flush()
         assert ".données" in buffer.getvalue().decode("utf-8")
 
@@ -2206,7 +2220,7 @@ class TestExportStdoutEncoding:
         directory = _unicode_dir(tmp_path)
         monkeypatch.setenv("RECOVERAGE_DB", str(directory))
         buffer = self._ascii_stdout(monkeypatch)
-        cli.export(output_format=cli.ExportFormat.md, target=None)
+        cli.export(output_format=cli.ExportFormat.md, json_flag=False, target=None)
         sys.stdout.flush()
         text = buffer.getvalue().decode("utf-8")
         assert "## café & bar" in text

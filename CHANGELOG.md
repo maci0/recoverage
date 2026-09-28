@@ -13,6 +13,10 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   boundary. Importing recoverage from a typed codebase previously checked
   nothing, because the installed package was unannotated as far as any type
   checker could tell.
+- `recoverage export --json` is the shorthand for `--format json`, the
+  spelling `stats`, `check` and `config` already take. Naming both, with a
+  `--format` that is not `json`, is a usage error (exit 2) rather than a flag
+  silently winning.
 - `SIGTERM` stops the dashboard the way Ctrl+C does. `systemctl stop`,
   `docker stop` and a pod eviction all send it, and its default disposition
   killed the process where it stood: the accept loop never unwound, the

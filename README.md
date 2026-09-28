@@ -309,6 +309,7 @@ Export coverage data to stdout.
 
 ```bash
 recoverage export --format json     # JSON (default)
+recoverage export --json            # same, the spelling stats/check/config take
 recoverage export --format csv      # CSV
 recoverage export --format md       # Markdown table
 ```
@@ -317,7 +318,8 @@ The rows are the only thing on stdout, so `> coverage.csv` and a pipe get clean
 data. Exit codes: 0 = the rows were written, 1 = the coverage directory holds
 no document, or `--target` names a target no build has written, 2 = an invalid
 flag or `RECOVERAGE_*` value. Under `--format json` the failure envelope goes
-to stdout, as it does for `stats --json`.
+to stdout, as it does for `stats --json`. `--json` with a `--format` that is
+not `json` is a usage error (exit 2), not a silent winner.
 
 ### `recoverage check`
 

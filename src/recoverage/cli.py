@@ -1541,6 +1541,9 @@ def export(
         "-f",
         help="Output format (choose json, csv, or md)",
     ),
+    json_flag: bool = typer.Option(
+        False, "--json", help="Output JSON (shorthand for --format json)"
+    ),
     target: str | None = typer.Option(
         None, "--target", "-t", metavar="TARGET", help="Target ID (default: all)"
     ),
@@ -1557,8 +1560,23 @@ def export(
     data. Exits 1 when the coverage directory holds no document or --target
     names a target no build has written, and the report goes to stderr (to
     stdout as a JSON object under --format json).
+
+    --json is the spelling every other reporting command takes
+    ([bold]stats[/bold], [bold]check[/bold], [bold]config[/bold]), and it means
+    --format json.  Naming both, with a --format that is not json, is a usage
+    error rather than a silent winner.
     """
     _use_utf8_stdout()
+    if json_flag and output_format is not ExportFormat.json:
+        _secho(
+            f"Error: --json and --format {output_format.value} cannot be "
+            "combined: --json is shorthand for --format json.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(2)
+    if json_flag:
+        output_format = ExportFormat.json
     json_output = output_format is ExportFormat.json
 
     from recoverage.server import pct_1dp
