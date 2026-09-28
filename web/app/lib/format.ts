@@ -66,7 +66,6 @@ export const MSG = {
     `No block covers ${address} in this target, so there is nothing to select.`,
   NO_DECL: "(no declaration found)",
   DETAIL_UNAVAILABLE: "(detail view failed to load — reload the page)",
-  HIGHLIGHT_UNAVAILABLE: "(syntax highlighting unavailable — the code below is unhighlighted)",
 } as const;
 
 /** `paths.sourceRoot` and `paths.originalDll` come out of the coverage

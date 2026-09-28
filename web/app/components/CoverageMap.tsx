@@ -76,7 +76,6 @@ type GridState = {
   palette: Array<string>;
   accent: string;
   focus: number;
-  frame: number;
 };
 
 export function CoverageMap({
@@ -239,7 +238,6 @@ export function CoverageMap({
       palette: [],
       accent: "",
       focus: 0,
-      frame: 0,
     };
     geometry(true);
     paint();

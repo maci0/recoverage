@@ -94,9 +94,7 @@ export function App() {
   // the path every reload and every shared link takes. It is still validated
   // against the list below, and a name the server no longer serves falls back
   // the same way a stale remembered one does.
-  const [urlTarget] = useState<string>(
-    () => new URLSearchParams(window.location.search).get("target") ?? "",
-  );
+  const [urlTarget] = useState<string>(() => params.get("target") ?? "");
   const [target, setTarget] = useState<string>(urlTarget);
   const [targetReady, setTargetReady] = useState(false);
   const [section, setSection] = useState<string>(() => params.get("section") ?? ".text");
@@ -289,7 +287,6 @@ export function App() {
     noticeTimer.current = window.setTimeout(() => setNotice(null), NAV_NOTICE_MS);
   }, []);
 
-  const flashTimer = noticeTimer;
   const jumpToAddress = useCallback(
     (address: number) => {
       // Every loaded section is a candidate: an asm operand or a VA link can
@@ -312,12 +309,12 @@ export function App() {
         return;
       }
       setNotice(MSG.JUMP_NO_BLOCK(hex(address, 8)));
-      if (flashTimer.current !== null) {
-        window.clearTimeout(flashTimer.current);
+      if (noticeTimer.current !== null) {
+        window.clearTimeout(noticeTimer.current);
       }
-      flashTimer.current = window.setTimeout(() => setNotice(null), NAV_NOTICE_MS);
+      noticeTimer.current = window.setTimeout(() => setNotice(null), NAV_NOTICE_MS);
     },
-    [coverage.sections, flashTimer],
+    [coverage.sections],
   );
 
   const onSearchKeyDown = (event: TargetedKeyboardEvent<HTMLInputElement>): void => {

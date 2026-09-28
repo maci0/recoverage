@@ -567,7 +567,7 @@ Planned work (Minimap, data-segment XREFs, Diff View) is tracked in [DESIGN.md](
 
 ## End-to-End Dashboard Workflow
 
-> **As an RE Dev**, I want to go from project setup to visual coverage tracking in a single streamlined workflow.
+> **As an RE Dev**, I want to go from project setup to visual coverage tracking in a single workflow.
 
 ```mermaid
 graph LR

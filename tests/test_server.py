@@ -20,7 +20,7 @@ from typing import IO, Any, ClassVar
 import brotli
 import pytest
 import zstandard as zstd
-from coverage_fixture import TOML_VERSION, cell, write_coverage
+from coverage_fixture import TOML_VERSION, cell, coverage_dir, write_coverage
 from rebrew.coverage_toml import CoverageSnapshot, CoverageTomlError, load_coverage
 
 from recoverage import clock
@@ -52,14 +52,10 @@ from recoverage.server import (
 def _coverage_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Point the server at a test-local coverage directory and return it.
 
-    ``RECOVERAGE_DB`` names the DIRECTORY holding the ``coverage-*.toml``
-    documents now, and its parent is the root ``rebrew.coverage_toml`` resolves
-    that directory from — so the directory has to be spelled ``db`` for the two
-    resolutions to agree.  Every test that serves its own documents goes through
-    this, rather than setting the variable and hoping the two readers land in
-    the same place.
+    Every test that serves its own documents goes through this, rather than
+    setting the variable and hoping the two readers land in the same place.
     """
-    directory = tmp_path / "db"
+    directory = coverage_dir(tmp_path)
     monkeypatch.setenv("RECOVERAGE_DB", str(directory))
     return directory
 

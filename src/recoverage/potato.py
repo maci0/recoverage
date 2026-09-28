@@ -47,6 +47,7 @@ from recoverage.server import (
     fold_match_folded,
     fold_needle,
     function_json,
+    function_sort_key,
     global_json,
     load_metadata,
     lookup_function,
@@ -1252,21 +1253,6 @@ def _load_section_data(
     return sections, data
 
 
-def _function_list_key(fn: Function, order_by: str) -> Any:
-    """Sort key for the Potato function list, with SQLite's NULL ordering.
-
-    SQLite orders NULL before every value ascending, so an unknown size sorts
-    first there; a bare ``None`` key would raise comparing against an int.
-    """
-    if order_by == "name":
-        return (fn.name,)
-    if order_by == "size":
-        return (0, 0) if fn.size is None else (1, fn.size)
-    if order_by == "status":
-        return (fn.status,)
-    return (fn.va,)
-
-
 def _db_updated_label() -> str:
     """The newest coverage-document mtime as "YYYY-MM-DD HH:MM UTC" ("" with no DB).
 
@@ -1422,13 +1408,13 @@ def _section_stats_cached(
     *,
     snap: tuple[int, int] | None,
 ) -> dict[str, dict[str, Any]]:
-    """:func:`_compute_section_stats`, memoized per WAL-aware snapshot + target.
+    """:func:`_compute_section_stats`, memoized per snapshot + target.
 
-    Costs a query per call, yet the result changes only when the DB does, and
-    every pager/filter click used to re-pay it.  All three inputs derive from
-    the same DB state, so the snapshot alone keys the memo (same
-    self-invalidating contract as _GRID_CACHE), and *snap* is the render's own
-    token for the reason :func:`_load_grid_cells` documents.
+    Walks every cell of every section, yet the result changes only when the
+    documents do, and every pager/filter click used to re-pay it.  All three
+    inputs derive from the same state, so the snapshot alone keys the memo
+    (same self-invalidating contract as _GRID_CACHE), and *snap* is the
+    render's own token for the reason :func:`_load_grid_cells` documents.
 
     Entries are small — one dict per section — so the cap is generous.
     """
@@ -1500,9 +1486,9 @@ def _section_pct(summary: dict[str, Any], sections: dict[str, dict[str, Any]], n
     return coverage_pct(covered, size) if size > 0 else 0
 
 
-#: Rows each search query may scan.  The cap bounds the work a single search
-#: box keystroke can cause on a large project; ORDER BY keeps which rows those
-#: are deterministic, since SQLite's scan order is otherwise arbitrary.
+#: Rows each search may match.  The cap bounds the work a single search box
+#: keystroke can cause on a large project; rows are taken in the order the
+#: snapshot holds them, so which rows those are stays deterministic.
 _SEARCH_ROW_LIMIT = 500
 
 
@@ -1510,8 +1496,8 @@ def _search_functions(coverage: CoverageSnapshot, search_query: str) -> set[str]
     """Names the grid should highlight for *search_query*.
 
     Both sides fold through :func:`server.fold_match`, so a non-ASCII term
-    matches (the SQLite ``LIKE`` beside the ``rc_fold`` disjunct folded ASCII
-    alone) and the grid highlights exactly what the API's ``?search=`` returns.
+    matches and the grid highlights exactly what the API's ``?search=``
+    returns.
     The address column is matched in both spellings ``_format_va`` can produce
     (``0x%08x`` and ``0x%x``) so an address copied out of a Potato table
     matches when pasted into the search box.
@@ -2028,7 +2014,7 @@ def _render_function_list(
     # count is read before the cap: a header reading "(500 results)" on a
     # target with thousands tells the reader the list is complete when the page
     # they are looking at is a slice.
-    rows.sort(key=lambda fn: (_function_list_key(fn, order_by), fn.va))
+    rows.sort(key=lambda fn: (function_sort_key(fn, order_by), fn.va))
     total = len(rows)
     truncated = total > _SEARCH_ROW_LIMIT
     rows = rows[:_SEARCH_ROW_LIMIT]

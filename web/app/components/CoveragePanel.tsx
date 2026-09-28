@@ -7,6 +7,8 @@ import { CodeModal } from "@/components/CodeModal";
 import { DataInspector } from "@/components/DataInspector";
 import { HighlightedCode } from "@/components/HighlightedCode";
 import { Button } from "@/components/ui/button";
+import { CopyButton } from "@/components/ui/copy-button";
+import { META_GRID, MetaItem } from "@/components/ui/meta";
 import { STATE_LABEL, stateSlot } from "@/grid/pack";
 import type { Panes } from "@/hooks/useSelection";
 import type { HighlightLanguage } from "@/lib/highlight";
@@ -49,52 +51,6 @@ function isEmptyMessage(text: string): boolean {
     text === MSG.DETAIL_UNAVAILABLE ||
     text.startsWith(MSG.ERROR_PREFIX) ||
     text.startsWith("(failed to load:")
-  );
-}
-
-/** A button that flashes the outcome of a copy, then restores its label. */
-function CopyButton({
-  label,
-  value,
-  ariaLabel,
-  title,
-  disabled,
-}: {
-  label: string;
-  value: string;
-  ariaLabel: string;
-  title?: string;
-  disabled?: boolean;
-}): ComponentChildren {
-  const [flashed, setFlashed] = useState<string | null>(null);
-  const copy = (): void => {
-    if (value === "") {
-      setFlashed("Nothing");
-      window.setTimeout(() => setFlashed(null), 1000);
-      return;
-    }
-    void (async () => {
-      try {
-        await navigator.clipboard.writeText(value);
-        setFlashed("Copied!");
-        // oxlint-disable-next-line @rikalabs/no-silent-catch-fallback -- a refused clipboard is reported on the button itself ("Failed")
-      } catch {
-        setFlashed("Failed");
-      } finally {
-        window.setTimeout(() => setFlashed(null), 1000);
-      }
-    })();
-  };
-  return (
-    <Button
-      className="copy-btn"
-      aria-label={ariaLabel}
-      title={title}
-      disabled={disabled === true}
-      onClick={copy}
-    >
-      {flashed ?? label}
-    </Button>
   );
 }
 
@@ -189,23 +145,6 @@ function CodeSection({
   );
 }
 
-function MetaItem({
-  label,
-  children,
-  fullWidth,
-}: {
-  label: string;
-  children: ComponentChildren;
-  fullWidth?: boolean;
-}): ComponentChildren {
-  return (
-    <div className={fullWidth === true ? "meta-item col-span-2 flex gap-2" : "meta-item flex gap-2"}>
-      <dt className="meta-label text-muted">{label}</dt>
-      <dd className="meta-value wrap-anywhere">{children}</dd>
-    </div>
-  );
-}
-
 function FunctionMeta({
   fn,
   sourceRoot,
@@ -238,7 +177,7 @@ function FunctionMeta({
 
   if (fn.isGlobal === true) {
     return (
-      <dl className="meta-grid grid grid-cols-2 gap-x-3 gap-y-1 font-mono text-xs">
+      <dl className={META_GRID}>
         <MetaItem label="VA">
           <a
             className="meta-value asm-link"
@@ -260,7 +199,7 @@ function FunctionMeta({
   const address = fn.vaStart ?? fn.va;
   const status = fn.status ?? "?";
   return (
-    <dl className="meta-grid grid grid-cols-2 gap-x-3 gap-y-1 font-mono text-xs">
+    <dl className={META_GRID}>
       <MetaItem label="VA">
         <a
           className="meta-value asm-link"
@@ -371,7 +310,7 @@ function PanelMeta({
     return null;
   }
   return (
-    <dl className="meta-grid grid grid-cols-2 gap-x-3 gap-y-1 font-mono text-xs">
+    <dl className={META_GRID}>
       <MetaItem label="State">{STATE_LABEL[stateSlot(cell.state)]}</MetaItem>
       <MetaItem label="Range">
         {hex((section?.va ?? 0) + cell.start, 8)}..{hex((section?.va ?? 0) + cell.end, 8)}
@@ -403,7 +342,7 @@ export function CoveragePanel({
     setModal({ title: `${heading}: ${fn?.name ?? subject}`, text, language });
   };
   let copyVA: string | null = null;
-  if (fn !== null && fn !== undefined) {
+  if (fn !== null) {
     copyVA = String(fn.vaStart ?? fn.va);
   } else if (cell !== undefined) {
     const base = section?.va ?? 0;

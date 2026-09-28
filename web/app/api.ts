@@ -7,6 +7,8 @@
  * lazy-load signal, not an empty grid), and `?index=0` omits `search_index` the
  * same way, for the caller that already holds it. */
 
+import { MSG } from "@/lib/format";
+
 /** One coverage cell, in spatial order. Optional keys are omitted by the
  * server rather than sent as null (`server._cell_json`). */
 export type Cell = {
@@ -184,7 +186,7 @@ export async function fetchAsm(
     // generic fallback, which would blame the wrong cause.
     return `(${payload.error}${payload.detail === undefined ? "" : `: ${payload.detail}`})`;
   }
-  return "(no disassembly for this block)";
+  return MSG.ASM_PLACEHOLDER;
 }
 
 /** C source and the original binary are not API routes: they are the project's
@@ -192,12 +194,12 @@ export async function fetchAsm(
  * message, not an exception, because both panes render their own state. */
 export async function fetchTextSafe(url: string | null, signal?: AbortSignal): Promise<string> {
   if (url === null) {
-    return "(no C implementation for this function yet)";
+    return MSG.NO_C_SOURCE;
   }
   try {
     const res = await fetch(url, init(signal));
     if (!res.ok) {
-      return `(failed to load: ${url})`;
+      return MSG.FETCH_FAILED(url);
     }
     return await res.text();
     // oxlint-disable-next-line @rikalabs/no-silent-catch-fallback -- a missing source file renders as the pane's own "(failed to load: …)" text; only an abort is re-thrown
@@ -205,7 +207,7 @@ export async function fetchTextSafe(url: string | null, signal?: AbortSignal): P
     if (signal?.aborted === true) {
       throw error;
     }
-    return `(failed to load: ${url})`;
+    return MSG.FETCH_FAILED(url);
   }
 }
 

@@ -4,6 +4,7 @@ import type { ComponentChildren } from "preact";
 
 import { HighlightedCode } from "@/components/HighlightedCode";
 import { Button } from "@/components/ui/button";
+import { CopyButton } from "@/components/ui/copy-button";
 import type { HighlightLanguage } from "@/lib/highlight";
 
 /** The expanded code viewer.
@@ -22,9 +23,6 @@ export type CodeModalProps = {
   onClose: () => void;
 };
 
-/** How long the copied label holds before the button returns to "Copy". */
-const COPIED_FLASH_MS = 1000;
-
 /** One id per dialog instance: the header text is the dialog's name, so the
  * visible title and the announced one cannot drift apart. */
 let dialogSeq = 0;
@@ -42,7 +40,6 @@ export function CodeModal({
     return `code-modal-title-${dialogSeq}`;
   });
   const lastFocused = useRef<HTMLElement | null>(null);
-  const [copied, setCopied] = useState<string | null>(null);
   // Escape is one listener for the life of the component, not one per open:
   // `addEventListener` and `removeEventListener` match on the function
   // identity, so a handler rebuilt on each open left the previous one attached
@@ -54,30 +51,6 @@ export function CodeModal({
       latestClose.current();
     }
   }, []);
-
-  // The component stays mounted between opens, so a label left flashing on the
-  // previous view would greet the next one.
-  useEffect(() => {
-    if (open) {
-      setCopied(null);
-    }
-  }, [open]);
-
-  // The same outcome label every Copy button in the panel shows: a copy with
-  // no confirmation is the one action the reader cannot tell succeeded.
-  const copy = (): void => {
-    void (async () => {
-      try {
-        await navigator.clipboard.writeText(text);
-        setCopied("Copied!");
-        // oxlint-disable-next-line @rikalabs/no-silent-catch-fallback -- a refused clipboard is reported on the button itself ("Failed")
-      } catch {
-        setCopied("Failed");
-      } finally {
-        window.setTimeout(() => setCopied(null), COPIED_FLASH_MS);
-      }
-    })();
-  };
 
   useEffect(() => {
     const regions = document.querySelectorAll(".skip-link, .topbar, .layout");
@@ -124,9 +97,7 @@ export function CodeModal({
             {title === "" ? "Code viewer" : title}
           </span>
           <div className="modal-actions ms-auto flex gap-2">
-            <Button className="copy-btn" aria-label="Copy Modal Content" onClick={copy}>
-              {copied ?? "Copy"}
-            </Button>
+            <CopyButton label="Copy" value={text} ariaLabel="Copy Modal Content" />
             <Button ref={closeRef} className="modal-close" aria-label="Close Modal" onClick={onClose}>
               Close
             </Button>

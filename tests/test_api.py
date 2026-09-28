@@ -19,7 +19,7 @@ from wsgiref.util import setup_testing_defaults
 
 import pytest
 from conftest import HAS_DB, decode_body, get_first_target, wsgi_get, wsgi_post, wsgi_request
-from coverage_fixture import cell, write_coverage
+from coverage_fixture import cell, coverage_dir, write_coverage
 from rebrew.coverage_toml import CoverageSnapshot, CoverageTomlError, load_coverage
 
 from recoverage import api, webapp
@@ -68,17 +68,6 @@ def _plain(text: str) -> str:
 # variable that points the server at it.
 
 
-def _coverage_dir(root: Path) -> Path:
-    """The coverage directory a test-local fixture lives in.
-
-    Spelled ``db`` beneath *root* on purpose: ``RECOVERAGE_DB`` names the
-    directory itself, while rebrew's reader takes the project ROOT and resolves
-    the configured ``db_dir`` (``<root>/db`` by default) beneath it, so the two
-    only agree on the same directory when it is named this way.
-    """
-    return root / "db"
-
-
 def _snapshot_mapping(
     root: Path, target: str, sections: dict[str, dict[str, Any]], **kwargs: Any
 ) -> dict[str, CoverageSnapshot]:
@@ -88,7 +77,7 @@ def _snapshot_mapping(
     through the real reader so the test asserts against what the server would
     have read.
     """
-    write_coverage(_coverage_dir(root), target, sections, **kwargs)
+    write_coverage(coverage_dir(root), target, sections, **kwargs)
     return {target: load_coverage(root, target)}
 
 
@@ -469,7 +458,7 @@ class TestHealthDbMtime:
         import recoverage.api as api
         import recoverage.server as server_mod
 
-        directory = _coverage_dir(tmp_path)
+        directory = coverage_dir(tmp_path)
         write_coverage(
             directory,
             "FRESH",
@@ -653,7 +642,7 @@ class TestApiFunctions:
             {".text": {"va": 0x1000, "size": 16, "cells": [cell(0x1000, 0x1010, "exact")]}},
             functions=[{"va": 0x1000, "name": "_only", "vaStart": "0x1000", "size": 16}],
         )
-        monkeypatch.setenv("RECOVERAGE_DB", str(_coverage_dir(tmp_path / "one")))
+        monkeypatch.setenv("RECOVERAGE_DB", str(coverage_dir(tmp_path / "one")))
         _alternating_reader(monkeypatch, [first, second])
         api._clear_list_total_cache()
 
@@ -1002,7 +991,7 @@ class TestApiBytes:
     ) -> None:
         """Point the app at a one-section document whose section row carries an
         offset shape rebrew never writes (no VA, or a negative fileOffset)."""
-        directory = _coverage_dir(tmp_path)
+        directory = coverage_dir(tmp_path)
         write_coverage(directory, "T", {name: {**definition, "cells": []}})
         monkeypatch.setenv("RECOVERAGE_DB", str(directory))
 
@@ -1671,7 +1660,7 @@ class TestSseEvents:
         """
         import recoverage.api as api
 
-        directory = _coverage_dir(tmp_path)
+        directory = coverage_dir(tmp_path)
         write_coverage(
             directory,
             "GAME",
@@ -2720,7 +2709,7 @@ def _game_coverage(
     for section_name, start, end, state in cells:
         row = built.setdefault(section_name, {"va": start, "size": end - start, "cells": []})
         row["cells"].append(cell(start, end, state))
-    directory = _coverage_dir(tmp_path)
+    directory = coverage_dir(tmp_path)
     write_coverage(
         directory,
         "GAME",
@@ -3819,7 +3808,7 @@ class TestServedCellsComeFromTheSnapshot:
     def _doc(tmp_path: Path) -> Path:
         """Two sections with a mix of cell states, so a dropped or re-encoded
         cell is visible in the payload."""
-        directory = _coverage_dir(tmp_path)
+        directory = coverage_dir(tmp_path)
         write_coverage(
             directory,
             "GAME",
@@ -4770,7 +4759,7 @@ class TestUnicodeUrlComponents:
     @pytest.fixture(autouse=True)
     def _unicode_db(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         write_coverage(
-            _coverage_dir(tmp_path),
+            coverage_dir(tmp_path),
             self.TARGET,
             {
                 self.SECTION: {
@@ -4795,7 +4784,7 @@ class TestUnicodeUrlComponents:
                 }
             ],
         )
-        monkeypatch.setenv("RECOVERAGE_DB", str(_coverage_dir(tmp_path)))
+        monkeypatch.setenv("RECOVERAGE_DB", str(coverage_dir(tmp_path)))
         from recoverage.api import _clear_derived_caches
 
         _clear_derived_caches()
@@ -4865,7 +4854,7 @@ class TestSearchCaseFolding:
     @pytest.fixture(autouse=True)
     def _fold_db(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         write_coverage(
-            _coverage_dir(tmp_path),
+            coverage_dir(tmp_path),
             self.TARGET,
             {
                 self.SECTION: {
@@ -4922,7 +4911,7 @@ class TestSearchCaseFolding:
                 }
             ],
         )
-        monkeypatch.setenv("RECOVERAGE_DB", str(_coverage_dir(tmp_path)))
+        monkeypatch.setenv("RECOVERAGE_DB", str(coverage_dir(tmp_path)))
         from recoverage.api import _clear_derived_caches
 
         _clear_derived_caches()
@@ -5060,7 +5049,7 @@ class TestLookupSnapshotsArePinned:
         return {tuple(build[key] for key in ("name", "size", "byte_delta")) for build in cls.BUILDS}
 
     def test_single_lookup_reads_one_snapshot(self, tmp_path: Path, monkeypatch: Any) -> None:
-        monkeypatch.setenv("RECOVERAGE_DB", str(_coverage_dir(tmp_path / "build0")))
+        monkeypatch.setenv("RECOVERAGE_DB", str(coverage_dir(tmp_path / "build0")))
         _alternating_reader(monkeypatch, self._mappings(tmp_path))
 
         status, headers, body = wsgi_get("/api/targets/GAME/functions/0x1000")
@@ -5072,7 +5061,7 @@ class TestLookupSnapshotsArePinned:
         assert served in self._expected(), served
 
     def test_batch_lookup_reads_one_snapshot(self, tmp_path: Path, monkeypatch: Any) -> None:
-        monkeypatch.setenv("RECOVERAGE_DB", str(_coverage_dir(tmp_path / "build0")))
+        monkeypatch.setenv("RECOVERAGE_DB", str(coverage_dir(tmp_path / "build0")))
         _alternating_reader(monkeypatch, self._mappings(tmp_path))
 
         status, headers, body = wsgi_post(

@@ -1570,6 +1570,36 @@ def fold_match_folded(haystack: str | None, folded_needle: str) -> bool:
     return folded_needle in (fold_text(haystack) or "")
 
 
+# ── Function list ordering ─────────────────────────────────────────
+#
+# ONE key table for both function lists (the API page and the Potato table),
+# because a page boundary is a page boundary: the two surfaces must not be able
+# to order the same rows differently and hand a reader a different row 1.
+
+#: The columns a function list may sort by, mapped to the attribute each reads.
+#: An unknown field is the caller's to reject, not this table's.
+FUNCTION_SORT_FIELDS: dict[str, str] = {
+    "va": "va",
+    "name": "name",
+    "status": "status",
+    "symbol": "symbol",
+    "module": "module",
+}
+
+
+def function_sort_key(fn: Function, field: str) -> Any:
+    """Sort key for *field*, with the NULL ordering both lists have always had.
+
+    An unknown size sorts before every known one, so a global whose size rebrew
+    could not determine stays where it was rather than raising a comparison
+    against an int.  Every other column is a non-optional attribute, so it needs
+    no such arm.
+    """
+    if field == "size":
+        return (0, 0) if fn.size is None else (1, fn.size)
+    return (getattr(fn, FUNCTION_SORT_FIELDS.get(field, "va")),)
+
+
 # ── Snapshot projections ───────────────────────────────────────────
 #
 # Every served object is built here from the snapshot, in the order and with

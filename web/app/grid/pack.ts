@@ -42,14 +42,8 @@ const STATE_SLOTS = new Map<string, number>([
   ["unchecked", 7],
 ]);
 
-/** The palette slot a raw cell state paints as.
- *
- * Every state rebrew can write is listed: an unlisted one must not fall through
- * to 0, because `build_db` counts `verified` as an exact match and covered
- * bytes cover every state except `none`, so painting one as an undocumented gap
- * contradicts the number beside it. The tooling-failure states share slot 7
- * ("other"): distinguishable from a gap without spending a palette entry each,
- * and the fallback for a state a newer producer wrote. */
+/** The palette slot a raw cell state paints as, slot 7 for a state a newer
+ * producer wrote. */
 export function stateSlot(state: string): number {
   return STATE_SLOTS.get(state) ?? 7;
 }
@@ -194,7 +188,6 @@ export type Geometry = {
   cellFirst: Int32Array;
   cellRow: Int32Array;
   cellX: Float32Array;
-  cellY: Float32Array;
   cellW: Float32Array;
   pCell: Int32Array;
   pX: Float32Array;
@@ -208,9 +201,13 @@ const PAD = 8;
  * is the floor, not the target: a 64-column section in a wide wrapper would
  * otherwise draw blocks too large to read a function's shape from. */
 const TARGET_CELL_PX = 10;
+/** Narrow viewports draw wider cells so a block is still tappable. */
+const NARROW_VIEWPORT_PX = 700;
+const NARROW_CELL_PX = 12;
+const WIDE_CELL_PX = 6;
 
 function minCellPx(viewportWidth: number): number {
-  return viewportWidth < 700 ? 12 : 6;
+  return viewportWidth < NARROW_VIEWPORT_PX ? NARROW_CELL_PX : WIDE_CELL_PX;
 }
 
 export function layoutSection(
@@ -239,7 +236,6 @@ export function layoutSection(
   cellFirst.fill(-1);
   const cellRow = new Int32Array(pack.n);
   const cellX = new Float32Array(pack.n);
-  const cellY = new Float32Array(pack.n);
   const cellW = new Float32Array(pack.n);
   const pCell = new Int32Array(parts);
   const pX = new Float32Array(parts);
@@ -258,7 +254,6 @@ export function layoutSection(
       cellFirst[i] = placed;
       cellRow[i] = row;
       cellX[i] = x;
-      cellY[i] = y;
       cellW[i] = w;
     }
     pCell[placed] = i;
@@ -280,7 +275,6 @@ export function layoutSection(
     cellFirst,
     cellRow,
     cellX,
-    cellY,
     cellW,
     pCell,
     pX,

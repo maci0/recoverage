@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 from conftest import HAS_DB
-from coverage_fixture import cell, write_coverage
+from coverage_fixture import cell, coverage_dir, write_coverage
 from rebrew.coverage_toml import CoverageTomlError
 from typer.testing import CliRunner
 
@@ -423,15 +423,8 @@ FIXTURE_TARGET = "T"
 
 
 def _coverage_dir(tmp_path: Path, *parts: str) -> Path:
-    """A directory a throwaway coverage document can be written into.
-
-    ``RECOVERAGE_DB`` names the coverage directory itself, but the readers
-    resolve it back to a project root (rebrew's ``<root>/db``), so a fixture
-    directory has to be called ``db`` for the read to land where the write did.
-    Extra *parts* give one test several independent roots, so a second fixture
-    cannot be read through the first one's override.
-    """
-    directory = tmp_path.joinpath(*parts, "db")
+    """A created directory a throwaway coverage document can be written into."""
+    directory = coverage_dir(tmp_path, *parts)
     directory.mkdir(parents=True)
     return directory
 

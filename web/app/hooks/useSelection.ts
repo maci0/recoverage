@@ -21,7 +21,6 @@ export type Panes = {
   fn: FunctionDetail | null;
   /** The selected cell's function name (or VA spelling), for the map outline. */
   fnKey: string | number | null;
-  loading: boolean;
   source: string;
   docs: string | null;
   asm: string;
@@ -32,7 +31,6 @@ export type Panes = {
 const IDLE: Panes = {
   fn: null,
   fnKey: null,
-  loading: false,
   source: MSG.SELECT_FUNCTION,
   docs: null,
   asm: MSG.ASM_PLACEHOLDER,
@@ -139,7 +137,6 @@ export function useSelection({
         setPanes({
           fn: null,
           fnKey: null,
-          loading: false,
           source: MSG.NO_C_FOR_BLOCK,
           docs: MSG.UNDOCUMENTED_BLOCK,
           asm: section === ".text" ? MSG.ASM_LOADING : MSG.DATA_SECTION_NO_ASM,
@@ -169,7 +166,6 @@ export function useSelection({
       setPanes({
         fn: null,
         fnKey: firstFn,
-        loading: true,
         source: MSG.LOADING,
         docs: MSG.LOADING,
         asm: global ? MSG.DATA_SECTION_NO_ASM : MSG.ASM_LOADING,
@@ -192,7 +188,6 @@ export function useSelection({
           setPanes({
             fn: { ...detail, isGlobal: true },
             fnKey: firstFn,
-            loading: false,
             source: detail.decl ?? MSG.NO_DECL,
             docs: MSG.GLOBAL_VAR,
             asm: MSG.DATA_SECTION_NO_ASM,
@@ -222,7 +217,6 @@ export function useSelection({
         setPanes({
           fn: detail,
           fnKey: firstFn,
-          loading: false,
           source,
           docs: extractDocs(source) ?? MSG.NO_DOCS,
           asm: MSG.ASM_LOADING,
@@ -240,7 +234,6 @@ export function useSelection({
         setPanes({
           fn: null,
           fnKey: firstFn,
-          loading: false,
           source: MSG.ERROR_PREFIX + (error instanceof Error ? error.message : String(error)),
           docs: MSG.NO_DOCS,
           asm: global ? MSG.DATA_SECTION_NO_ASM : MSG.ASM_PLACEHOLDER,

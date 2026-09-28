@@ -187,18 +187,17 @@ def _record_completed_key(key: str) -> None:
 
 
 # Memoized /api/targets/<t>/data payloads: the endpoint materializes every
-# cell for the target (the cached section_cells_json payload, re-aggregated
-# from `cells` where that object is missing) plus every function/global for
-# the search index on each cache-missing request.
+# cell for the target plus every function/global for the search index on each
+# cache-missing request.
 # The ETag gives 304s to repeat clients, but N fresh clients each rebuilt
-# the multi-MB payload.  Keyed by the WAL-aware db snapshot + target +
-# section so a rebuild (which the SSE watcher detects and funnels through
+# the multi-MB payload.  Keyed by the document snapshot + target + section so
+# a rebuild (which the SSE watcher detects and funnels through
 # clear_target_cache) invalidates it.
 # Each value maps encoding name ("zstd"/"br"/"gzip"/"" for identity) to the
 # FINAL response body for that encoding, plus "raw" (the uncompressed JSON)
 # so a first request with an unseen Accept-Encoding can mint its variant
-# without re-running the queries or json.dumps.  Compressing the multi-MB
-# payload on every memo hit dominated repeat-request cost (~30-70 ms CPU).
+# without re-serializing.  Compressing the multi-MB payload on every memo hit
+# dominated repeat-request cost (~30-70 ms CPU).
 #
 # The section filter and the search-index opt-out are both part of the key, so
 # the two payload shapes never share a memo entry (and, further down, a
@@ -210,10 +209,9 @@ _DATA_CACHE_LOCK = threading.Lock()
 # must not accumulate one multi-MB payload per fingerprint forever.
 _DATA_CACHE_MAX = 8
 # Single-flight build coordination: fingerprint -> Event set while one thread
-# runs the queries/serialization for that key.  A rebuild broadcast clears the
-# memo and wakes every connected SSE client, which all refetch /data at once;
-# without this, each of those cold misses materializes its own multi-MB
-# payload (full-table json_group_array + search index + json.dumps).
+# serializes that key.  A rebuild broadcast clears the memo and wakes every
+# connected SSE client, which all refetch /data at once; without this, each of
+# those cold misses materializes its own multi-MB payload.
 _DATA_CACHE_BUILDING: dict[_DataKey, threading.Event] = {}
 #: How long a follower waits on the leader's build Event.  The leader's finally
 #: always sets it, so this only bounds the case where it does not (a thread
@@ -279,14 +277,14 @@ def _cache_data_insert(
     """Insert a memoized payload (raw + this request's encoded form), evicting
     the oldest entries past the cap.
 
-    *key*'s snapshot was taken before the queries ran, so a rebuild that
-    committed in between leaves the cursor reading the PRE-rebuild DB while
-    the key names the POST-rebuild fingerprint.  Publishing that payload
-    poisons the memo: the db-updated broadcast has already cleared the cache
-    and nothing clears it again until the next rebuild, so the refetch herd
-    behind the broadcast would be served the data it was woken to replace.
-    Re-stat the DB and drop the write when the watermark moved (same contract
-    as ``potato._load_grid_cells``).
+    *key*'s snapshot was taken before the payload was built, so a rebuild
+    that committed in between leaves the PRE-rebuild rows under a key naming
+    the POST-rebuild fingerprint.  Publishing that payload poisons the memo:
+    the db-updated broadcast has already cleared the cache and nothing clears
+    it again until the next rebuild, so the refetch herd behind the broadcast
+    would be served the data it was woken to replace.  Re-stat the documents
+    and drop the write when the watermark moved (same contract as
+    ``potato._load_grid_cells``).
     """
     if key[0] is not None and _snapshot_db_mtime() != key[0]:
         return
@@ -297,13 +295,12 @@ def _cache_data_insert(
         entry[encoding] = body
 
 
-# Memoized /stats results, keyed by the WAL-aware DB snapshot + target.
-# handle_api_stats re-runs the full-cells-table SECTION_STATS_SQL aggregation
-# plus four more queries on every miss; a polling consumer must not re-pay
-# that scan while the DB is unchanged.  Same self-invalidation contract as the
-# /data payload memo: a rebuild changes the snapshot, so stale entries miss.
-# Lives HERE, not in server._section_stats, because only this module knows
-# which database its connections come from (the CLI passes its own cursor).
+# Memoized /stats results, keyed by the document snapshot + target.
+# handle_api_stats re-walks every cell of the target on every miss; a polling
+# consumer must not re-pay that walk while the documents are unchanged.  Same
+# self-invalidation contract as the /data payload memo: a rebuild changes the
+# snapshot, so stale entries miss.  Lives HERE, not in server._section_stats,
+# because only this module knows which documents the answer was built from.
 _STATS_CACHE: dict[tuple[tuple[int, int] | None, str], dict[str, Any]] = {}
 _STATS_CACHE_LOCK = threading.Lock()
 _STATS_CACHE_MAX = 16
@@ -315,13 +312,12 @@ def _clear_stats_cache() -> None:
         _STATS_CACHE.clear()
 
 
-# Memoized `total` for the paginated function list.  COUNT(*) over `functions`
-# is a full row scan of a wide table (measured 7.2 ms on a 20k-function
-# target with no filter, 8.2 ms once a search LIKE joins it) and the SPA
-# re-requests the list on every filter, status and page change, paying it
-# again for a number the DB has not changed.  Keyed by the same WAL-aware
-# snapshot as the other memos plus the exact filter triple the count depends
-# on, so a rebuild or a different filter misses; capped like the rest.
+# Memoized `total` for the paginated function list.  The count is a pass over
+# every row of the target's functions, and the SPA re-requests the list on
+# every filter, status and page change, paying it again for a number the
+# documents have not changed.  Keyed by the same snapshot as the other memos
+# plus the exact filter triple the count depends on, so a rebuild or a
+# different filter misses; capped like the rest.
 _LIST_TOTAL_CACHE: dict[tuple[tuple[int, int] | None, str, str | None, str | None], int] = {}
 _LIST_TOTAL_CACHE_LOCK = threading.Lock()
 _LIST_TOTAL_CACHE_MAX = 64
@@ -403,27 +399,6 @@ def _filtered_functions(
             or fold_match_folded(fn.vaStart, needle)
         ]
     return rows
-
-
-def _function_sort_key(fn: Function, field: str) -> Any:
-    """Sort key for *field*, with SQLite's NULL ordering.
-
-    SQLite orders NULL before every value ascending (it is the smallest
-    value), so an unknown size on a 4-byte pointer global sorts first there.
-    Reproducing it keeps a page boundary where the served page list always had
-    it; a plain ``None`` key would raise comparing against an int.
-    """
-    if field == "va":
-        return (fn.va,)
-    if field == "size":
-        return (0, 0) if fn.size is None else (1, fn.size)
-    if field == "status":
-        return (fn.status,)
-    if field == "module":
-        return (fn.module,)
-    if field == "symbol":
-        return (fn.symbol,)
-    return (fn.name,)
 
 
 def _target_not_found(target: str) -> HTTPResponse:
@@ -1156,10 +1131,10 @@ def _dumps_with_cells(data: dict[str, Any], cells_json: dict[str, str | None]) -
             parts.append(",")
         sec_json = json.dumps(sec, separators=(",", ":"))
         cells = cells_json.get(name, "[]")
-        # String splice, not a JSON encoder: cells is already a JSON array
-        # (json_group_array) and re-parsing it through Python dominated the
-        # cold /data build.  A non-JSON cells encoding would need a real
-        # encoder here.
+        # String splice, not a JSON encoder: cells already holds a serialized
+        # JSON array, and re-parsing it through Python dominated the cold
+        # /data build.  A non-JSON cells encoding would need a real encoder
+        # here.
         if cells is None:
             spliced = "{}" if sec_json == "{}" else sec_json
         elif sec_json == "{}":
@@ -1242,9 +1217,10 @@ _MAX_BATCH_LOOKUP = 500
 # is detectable without a second read.
 _MAX_BATCH_BODY_BYTES = 64 * 1024
 
-# Pagination offset ceiling: real function tables are orders of magnitude
-# smaller, so clamping here changes no legitimate page while keeping OFFSET
-# inside sqlite3's INTEGER range.
+# Pagination offset ceiling: a real target holds orders of magnitude fewer
+# functions, so clamping here changes no legitimate page while keeping the
+# offset arithmetic far from a value that would overflow the loops that step
+# through rows.
 _MAX_PAGE_OFFSET = 10_000_000
 
 # Upper bound for a binary-slice request (?size= on /asm and /bytes): both
@@ -1252,9 +1228,9 @@ _MAX_PAGE_OFFSET = 10_000_000
 # different window sizes.
 _MAX_SLICE_SIZE = 4096
 
-# Longest ?search= the list endpoint accepts.  A longer pattern is a bounded
-# LIKE over a wide table, not a useful query; rejecting it keeps the work per
-# request finite.
+# Longest ?search= the list endpoint accepts.  A longer term is compared
+# against every row of every function and global, and names nothing a user
+# types; rejecting it keeps the work per request finite.
 _MAX_SEARCH_CHARS = 500
 
 #: Statuses ``functions.status`` can carry: rebrew's own vocabulary
@@ -1389,8 +1365,8 @@ def handle_api_functions_list(target: str) -> bytes | HTTPResponse:
     except ValueError:
         limit = 50
     try:
-        # Upper bound keeps a giant ?offset= from overflowing sqlite3's
-        # signed-64-bit INTEGER conversion (OverflowError -> raw 500).
+        # Upper bound keeps a giant ?offset= from naming a page the row loop
+        # would have to walk to before it discovered there is nothing there.
         offset = min(max(_page_int(query_param("offset", "0")), 0), _MAX_PAGE_OFFSET)
     except ValueError:
         offset = 0
@@ -1424,7 +1400,10 @@ def handle_api_functions_list(target: str) -> bytes | HTTPResponse:
         # deferred read transaction.
         total = _function_total(coverage.functions, snap, target, status_filter, search)
         rows = _filtered_functions(coverage.functions, status_filter, search)
-        rows.sort(key=lambda fn: _function_sort_key(fn, sort_field), reverse=sort_dir == "DESC")
+        rows.sort(
+            key=lambda fn: _server.function_sort_key(fn, sort_field),
+            reverse=sort_dir == "DESC",
+        )
         # Enumerate exactly the response fields, in the order the SELECT did.
         items = [
             {
@@ -1651,15 +1630,10 @@ def handle_api_function(target: str, va: str) -> bytes | HTTPResponse:
     target = path_param(target)
     va = path_param(va)
     with _target_snapshot(target) as coverage:
-        # One shared resolution order (server.lookup_function): VA
-        # candidates first, then the exact name and then the folded one.  The
-        # value comes from the path, and the stripped spelling is used for
-        # both, so a URL carrying a padded name resolves the same way the name
-        # is spelled in the document.
-        #
-        # The row and its `last_verify` come from ONE frozen snapshot, so a
-        # rebuild between the two reads cannot report a size and a diff for a
-        # payload that no longer carries them — the pin `read_snapshot` took.
+        # One shared resolution order (server.lookup_function): VA candidates
+        # first, then the exact name and then the folded one.  Both arms read
+        # the stripped spelling, so a URL carrying a padded name resolves the
+        # same way the name is spelled in the document.
         value = va.strip()
 
         # Functions win over globals (parity with the batch endpoint).

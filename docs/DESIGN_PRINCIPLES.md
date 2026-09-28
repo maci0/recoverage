@@ -32,8 +32,6 @@ Memory and bandwidth are preserved by fetching heavy payloads only when explicit
 - highlight.js is compiled into the bundle rather than deferred to a first-use fetch. It is core plus the two grammars the dashboard shows and the custom `hex` language, so the deferred scripts that cost a second round trip (and a pane that renders unhighlighted before they land) are gone.
 - Assembly generation (via Capstone) is performed on-demand and cached in memory using LRU caching.
 
-Highlight.js is the one exception to "deferred": it is compiled into the bundle, so a code pane never has a state where it renders unhighlighted.
-
 ## 7. Graceful Degradation (Potato Mode)
 The dashboard must remain accessible even in the most constrained environments. "Potato Mode" is a first-class citizen—a pure HTML5/Table fallback requiring **zero JavaScript and zero CSS**. It provides near-visual-parity with the main SPA, ensuring the coverage data can be viewed on old setups, restricted browsers, or via terminal browsers.
 

@@ -5,12 +5,12 @@ import re
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import Any
-from urllib.parse import quote, urlparse
+from typing import Any, ClassVar
+from urllib.parse import quote, unquote, urlparse
 
 import pytest
 from conftest import HAS_DB, get_first_target, wsgi_get
-from coverage_fixture import cell, write_coverage
+from coverage_fixture import cell, coverage_dir, write_coverage
 from rebrew.coverage_toml import CoverageSnapshot, load_coverage
 
 from recoverage.potato import (
@@ -50,17 +50,6 @@ def render_potato_url(url: str) -> str:
 # variable that points the server at it.
 
 
-def _coverage_dir(root: Path) -> Path:
-    """The coverage directory a test-local fixture lives in.
-
-    Spelled ``db`` beneath *root* on purpose: ``RECOVERAGE_DB`` names the
-    directory itself, while rebrew's reader takes the project ROOT and resolves
-    the configured ``db_dir`` (``<root>/db`` by default) beneath it, so the two
-    only agree on the same directory when it is named this way.
-    """
-    return root / "db"
-
-
 def _write_doc(
     root: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -75,7 +64,7 @@ def _write_doc(
     Each caller names its own *target* so one fixture's snapshot cannot be
     confused with another's.
     """
-    directory = _coverage_dir(root)
+    directory = coverage_dir(root)
     write_coverage(directory, target, sections, **kwargs)
     monkeypatch.setenv("RECOVERAGE_DB", str(directory))
     return load_coverage(root, target)
@@ -1973,6 +1962,67 @@ class TestSearchLimit:
         assert result == set(sorted(names)[:500])
 
 
+class TestFunctionListOrdering:
+    """The API page and the Potato table order the same rows the same way.
+
+    Both go through ``server.function_sort_key``, so a row copied from one
+    surface is where the other surface says it is.  An unknown size sorts
+    before every known one (the ordering both lists have always had), and the
+    `va` tiebreak keeps the Potato table stable where the API reverses.
+    """
+
+    # Declared in ascending va, which is the order the document holds them in:
+    # the API breaks a tie on the sorted column with Python's stable sort (so
+    # with document order) and the Potato table breaks it with an explicit
+    # ascending va, and the two agree only when document order IS that.
+    FUNCTIONS: ClassVar[list[dict[str, Any]]] = [
+        {"va": 0x401000, "name": "sized_too", "vaStart": "0x401000", "size": 40, "status": "EXACT"},
+        {"va": 0x401010, "name": "unsized", "vaStart": "0x401010", "size": None, "status": "STUB"},
+        {"va": 0x401020, "name": "sized", "vaStart": "0x401020", "size": 40, "status": "EXACT"},
+    ]
+
+    def _snapshot(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> CoverageSnapshot:
+        return _write_doc(
+            tmp_path,
+            monkeypatch,
+            "T",
+            {".text": {"size": 64, "cells": [cell(0, 64, "exact")]}},
+            functions=self.FUNCTIONS,
+        )
+
+    @pytest.mark.parametrize("field", ["va", "name", "status", "size"])
+    def test_both_surfaces_produce_one_order(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, field: str
+    ) -> None:
+        from recoverage.potato import _render_function_list
+        from recoverage.server import function_sort_key
+
+        snap = self._snapshot(tmp_path, monkeypatch)
+        # The Potato table's rendered row order, read back out of its row links
+        # in document order.  Ties on the sorted column break by va there (the
+        # cap has to be deterministic), so the shared key is what the rendered
+        # order is non-decreasing on, and the API's page order is the same key
+        # applied to the same rows.
+        html = _render_function_list(snap, "T", ".text", "", field, "")
+        rendered = [
+            unquote(match) for match in re.findall(r"&section=\.text&search=([^\"]+)", html)
+        ]
+        api_order = [
+            fn.name for fn in sorted(snap.functions, key=lambda f: function_sort_key(f, field))
+        ]
+        assert rendered == api_order, f"{field}: the two surfaces disagree"
+
+    def test_an_unknown_size_sorts_before_every_known_one(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from recoverage.server import function_sort_key
+
+        snap = self._snapshot(tmp_path, monkeypatch)
+        keys = [function_sort_key(fn, "size") for fn in snap.functions]
+        assert keys.index((0, 0)) == 1, "the unsized row must sort first"
+        assert keys[0] == keys[2] == (1, 40)
+
+
 class TestSearchAddressSpelling:
     """Both address spellings _format_va can print must match.
 
@@ -2609,7 +2659,7 @@ class TestRenderIsPinnedToOneSnapshot:
 
         def _doc(state: str, size: int, end: int) -> None:
             write_coverage(
-                _coverage_dir(tmp_path),
+                coverage_dir(tmp_path),
                 target,
                 {
                     ".text": {
@@ -2620,7 +2670,7 @@ class TestRenderIsPinnedToOneSnapshot:
                 },
             )
 
-        monkeypatch.setenv("RECOVERAGE_DB", str(_coverage_dir(tmp_path)))
+        monkeypatch.setenv("RECOVERAGE_DB", str(coverage_dir(tmp_path)))
         _doc("exact", 16, 16)
 
         # One snapshot per render: the target is resolved once and the document
