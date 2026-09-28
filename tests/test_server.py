@@ -1502,6 +1502,42 @@ class TestGetDisassemblyNoNegativeCache:
                 srv.DLL_DATA.pop(key, None)
         _prime.cache_clear()
 
+    def test_invalidation_bumps_the_generation_under_its_lock(self) -> None:
+        """The generation is a read-modify-write, so it needs a lock.
+
+        ``clear_disassembly_cache`` is reached from the SSE watcher thread (the
+        db-updated broadcast) and from the regen request thread (both ends of
+        ``_do_regen``), so two threads bump this counter at once and ``g += 1``
+        is not atomic under the GIL.  A lost update moves the counter once
+        where two invalidations happened, and the counter is the only thing
+        that retracts a memo entry a build stored after an invalidation: the
+        build compares the generation it read with the one it sees on return,
+        and a build that overlaps a lost update is told the wrong thing.
+
+        Pinned by holding the lock and asserting the bump cannot land through
+        it, which is the property a lost update breaks and which a thread
+        barrier cannot demonstrate deterministically.
+        """
+        import threading
+
+        import recoverage.disasm as disasm
+
+        before = disasm._DISASSEMBLY_GENERATION
+        bumped = threading.Event()
+
+        def bump() -> None:
+            disasm.clear_disassembly_cache()
+            bumped.set()
+
+        with disasm._GENERATION_LOCK:
+            thread = threading.Thread(target=bump)
+            thread.start()
+            assert not bumped.wait(0.2)
+            assert before == disasm._DISASSEMBLY_GENERATION
+        thread.join(timeout=5)
+        assert bumped.is_set()
+        assert before + 1 == disasm._DISASSEMBLY_GENERATION
+
 
 class TestBucketReconciliation:
     """total_cells must equal the sum of the counted buckets.

@@ -115,9 +115,25 @@ def get_capstone_md() -> Any:
 #: before a rebuild and stores its result after the clear leaves a stale entry
 #: nothing will invalidate again.  The counter is that build's check: a build
 #: whose generation changed by the time it returns drops what it just stored.
-#: Plain global read/write — the value is a single int, and _paths._DB_PATH_CACHE
-#: relies on the same atomicity.
+#: Its lock is what makes the bump one step rather than three: the broadcast
+#: runs on the SSE watcher thread and the regen invalidation on the request
+#: thread, so two invalidations can land at once, and ``g += 1`` alone loses
+#: one of them — a build overlapping the lost update compares two generations
+#: that differ only because the counter moved at all, which is the whole of
+#: what this counter has to say.
+_GENERATION_LOCK = threading.Lock()
 _DISASSEMBLY_GENERATION = 0
+
+
+def _disassembly_generation() -> int:
+    """The current generation, read under the lock that moves it.
+
+    :func:`get_disassembly` reads this twice per request and compares; both
+    reads take the lock, so the pair it compares is two states of the counter
+    rather than a half-applied bump.
+    """
+    with _GENERATION_LOCK:
+        return _DISASSEMBLY_GENERATION
 
 
 def get_disassembly(va: int, size: int, file_offset: int, target: str) -> str:
@@ -130,9 +146,9 @@ def get_disassembly(va: int, size: int, file_offset: int, target: str) -> str:
     """
     if _load_dll(target) is None:
         return ""
-    generation = _DISASSEMBLY_GENERATION
+    generation = _disassembly_generation()
     text = _disassemble_loaded(va, size, file_offset, target)
-    if generation == _DISASSEMBLY_GENERATION:
+    if generation == _disassembly_generation():
         return text
     # A rebuild's invalidation overtook this build: the bytes just memoized
     # came from the binary the clear was meant to drop, and lru_cache has no
@@ -188,7 +204,14 @@ def clear_disassembly_cache() -> None:
     Bumps :data:`_DISASSEMBLY_GENERATION` first: a build already in flight
     cannot be stopped, so it has to learn that what it is about to store is
     stale (see :func:`get_disassembly`).
+
+    The bump is one critical section and the ``cache_clear`` that follows it is
+    not: a build that reads the generation while the memo is still being
+    emptied sees the new value, decides an invalidation overtook it, and clears
+    again itself, which is the path that closes the window anyway. Holding the
+    lock across the lru sweep would only make every other build wait for it.
     """
     global _DISASSEMBLY_GENERATION
-    _DISASSEMBLY_GENERATION += 1
+    with _GENERATION_LOCK:
+        _DISASSEMBLY_GENERATION += 1
     _disassemble_loaded.cache_clear()
