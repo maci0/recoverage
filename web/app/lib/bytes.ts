@@ -10,6 +10,19 @@ import { count, hex } from "@/lib/format";
 
 export type InspectorItem = { label: string; value: string; fullWidth?: boolean };
 
+/** The ASCII the dump's gutter and the string prefix print as themselves, and
+ * what stands in for everything else. Both panes read the same range, so it is
+ * named once here rather than spelled twice. */
+const PRINTABLE_LOW = 0x20;
+const PRINTABLE_HIGH = 0x7E;
+const UNPRINTABLE = ".";
+
+function asciiChar(byte: number): string {
+  return byte >= PRINTABLE_LOW && byte <= PRINTABLE_HIGH
+    ? String.fromCodePoint(byte)
+    : UNPRINTABLE;
+}
+
 /** A classic 16-byte-per-row dump: offset, two hex columns, ASCII gutter. */
 export function formatBytes(buffer: ArrayBuffer, baseOffset = 0): string {
   const bytes = new Uint8Array(buffer);
@@ -20,9 +33,7 @@ export function formatBytes(buffer: ArrayBuffer, baseOffset = 0): string {
     const parts = Array.from({ length: 16 }, (_, j) =>
       j < slice.length ? (slice[j] ?? 0).toString(16).toUpperCase().padStart(2, "0") : "  ",
     );
-    const ascii = Array.from(slice, (byte) =>
-      byte >= 32 && byte <= 126 ? String.fromCodePoint(byte) : ".",
-    ).join("");
+    const ascii = Array.from(slice, asciiChar).join("");
     out += `${offset}  ${parts.slice(0, 8).join(" ")}  ${parts.slice(8, 16).join(" ")}  |${ascii}|\n`;
   }
   return out.trimEnd();
@@ -68,7 +79,7 @@ export function inspectBytes(buffer: ArrayBuffer): Array<InspectorItem> {
     if (code === 0) {
       break;
     }
-    text += code >= 32 && code <= 126 ? String.fromCodePoint(code) : ".";
+    text += asciiChar(code);
   }
   items.push({ label: "string (ascii)", value: `"${text}"`, fullWidth: true });
   return items;
