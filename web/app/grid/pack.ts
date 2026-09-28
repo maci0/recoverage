@@ -63,16 +63,7 @@ export const STATE_LABEL = [
 
 /** Legend rows: the words the UI uses for each slot, in the order the stylesheet
  * swatches them. */
-export const LEGEND: Array<[number, string]> = [
-  [0, "undocumented"],
-  [1, "exact match"],
-  [2, "reloc match"],
-  [3, "near-match"],
-  [4, "stub"],
-  [5, "padding"],
-  [6, "proven"],
-  [7, "problem"],
-];
+export const LEGEND: Array<[number, string]> = STATE_LABEL.map((label, slot) => [slot, label]);
 
 /** The palette variables, in slot order. The canvas reads them off the wrapper
  * so a theme switch is a token swap rather than a repaint from literals. */

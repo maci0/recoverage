@@ -33,7 +33,6 @@ export function useOriginalBinary(path: string, enabled: boolean): OriginalBinar
   const [buffer, setBuffer] = useState<ArrayBuffer | null>(null);
   const [failed, setFailed] = useState(false);
   const [loading, setLoading] = useState(false);
-  const inflight = useRef<{ path: string; promise: Promise<ArrayBuffer | null> } | null>(null);
   const loadedPath = useRef<string | null>(null);
 
   useEffect(() => {
@@ -51,12 +50,10 @@ export function useOriginalBinary(path: string, enabled: boolean): OriginalBinar
     setFailed(false);
     setLoading(true);
     const promise = fetchArrayBufferSafe(path);
-    inflight.current = { path, promise };
     void promise.then((result) => {
       if (cancelled) {
         return;
       }
-      inflight.current = null;
       setLoading(false);
       if (result === null) {
         setFailed(true);

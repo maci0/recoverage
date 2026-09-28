@@ -2355,15 +2355,16 @@ class TestSpaStateVocabulary:
         assert "--color-other: var(--other-bg);" in css
 
     def test_legend_names_every_painted_slot(self) -> None:
-        """Every slot the map can paint needs a legend row."""
-        legend = _web("grid/pack.ts")
-        block = re.search(r"export const LEGEND[^=]*= \[(.*?)\];", legend, re.DOTALL).group(1)
-        rows = re.findall(r'\[(\d+), "[^"]+"\]', block)
-        named = {int(slot) for slot in rows}
-        assert named == set(_packed_slots().values()), (
-            f"legend rows name slots {sorted(named)}; the map paints "
-            f"{sorted(set(_packed_slots().values()))}"
-        )
+        """Every slot the map can paint needs a legend row.
+
+        LEGEND is derived from STATE_LABEL, so the rows are its indices: a
+        state the map paints into a slot the label table does not reach has no
+        word to show in the legend or the hover title.
+        """
+        pack = _web("grid/pack.ts")
+        assert "STATE_LABEL.map(" in pack.split("export const LEGEND", 1)[1]
+        labels = len(_array_items(pack, "STATE_LABEL"))
+        assert set(_packed_slots().values()) <= set(range(labels))
 
     def test_the_status_filter_agrees_with_potato_mode_cell_for_cell(self) -> None:
         """One filter rule in both renderers, not two that happened to match once.

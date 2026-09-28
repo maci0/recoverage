@@ -657,14 +657,35 @@ class TestApiFunctions:
             (1, ["_only"]),
         )
 
-    def test_limit_capped_at_500(self) -> None:
+    @pytest.mark.parametrize(
+        ("query", "field", "expected"),
+        [
+            ("limit=9999", "limit", 500),
+            ("limit=abc", "limit", 50),
+            ("limit=0", "limit", 1),
+            ("offset=-10", "offset", 0),
+        ],
+        ids=[
+            "limit-capped-at-500",
+            "limit-invalid-defaults",
+            "limit-zero-clamped",
+            "offset-negative-clamped",
+        ],
+    )
+    def test_paging_bounds_are_normalized(self, query: str, field: str, expected: int) -> None:
+        """A paging value the endpoint cannot use is corrected, not refused.
+
+        The four spellings are the ways a client gets the value wrong: past the
+        cap, not a number, zero, and negative. Each is answered 200 with the
+        field the server actually used.
+        """
         target = get_first_target()
         if not target:
             pytest.skip("No targets in DB")
-        status, headers, body = wsgi_get(f"/api/targets/{target}/functions?limit=9999")
+        status, headers, body = wsgi_get(f"/api/targets/{target}/functions?{query}")
         assert status.startswith("200")
         data = json.loads(decode_body(body, headers))
-        assert data["limit"] == 500
+        assert data[field] == expected
 
     def test_status_filter_narrows_results(self) -> None:
         target = get_first_target()
@@ -722,33 +743,6 @@ class TestApiFunctions:
         data = json.loads(decode_body(body, headers))
         assert data["total"] == 0
         assert data["functions"] == []
-
-    def test_invalid_limit_falls_back_to_default(self) -> None:
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
-        status, headers, body = wsgi_get(f"/api/targets/{target}/functions?limit=abc")
-        assert status.startswith("200")
-        data = json.loads(decode_body(body, headers))
-        assert data["limit"] == 50
-
-    def test_limit_zero_clamped_to_one(self) -> None:
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
-        status, headers, body = wsgi_get(f"/api/targets/{target}/functions?limit=0")
-        assert status.startswith("200")
-        data = json.loads(decode_body(body, headers))
-        assert data["limit"] == 1
-
-    def test_negative_offset_clamped_to_zero(self) -> None:
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
-        status, headers, body = wsgi_get(f"/api/targets/{target}/functions?offset=-10")
-        assert status.startswith("200")
-        data = json.loads(decode_body(body, headers))
-        assert data["offset"] == 0
 
 
 class TestFunctionStatusVocabulary:
@@ -2226,39 +2220,28 @@ class TestBatchFunctionLookup:
             assert set(data) >= {"error", "code", "detail"}, url
             assert data["error"] and data["code"] and data["detail"], url
 
-    def test_batch_non_json_body_400(self) -> None:
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
-        status, _, _ = self._post(target, "not json at all")
-        assert status.startswith("400")
+    @pytest.mark.parametrize(
+        "body",
+        [
+            "not json at all",
+            "",
+            json.dumps([1, 2, 3]),
+            json.dumps({}),
+            json.dumps({"vas": "0x10001000"}),
+        ],
+        ids=["non-json", "empty", "not-an-object", "no-vas-key", "vas-not-a-list"],
+    )
+    def test_batch_body_shapes_that_are_not_a_va_list_400(self, body: str) -> None:
+        """Every body that is not `{"vas": [...]}` is a 400, not a 500.
 
-    def test_batch_empty_body_400(self) -> None:
+        A client that posts the wrong shape gets the error envelope, whether
+        it is unparsable, empty, an array, an object without `vas`, or one
+        whose `vas` is a string rather than a list.
+        """
         target = get_first_target()
         if not target:
             pytest.skip("No targets in DB")
-        status, _, _ = self._post(target, "")
-        assert status.startswith("400")
-
-    def test_batch_body_not_object_400(self) -> None:
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
-        status, _, _ = self._post(target, json.dumps([1, 2, 3]))
-        assert status.startswith("400")
-
-    def test_batch_missing_vas_key_400(self) -> None:
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
-        status, _, _ = self._post(target, json.dumps({}))
-        assert status.startswith("400")
-
-    def test_batch_vas_not_list_400(self) -> None:
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
-        status, _, _ = self._post(target, json.dumps({"vas": "0x10001000"}))
+        status, _, _ = self._post(target, body)
         assert status.startswith("400")
 
     def test_batch_malformed_va_400(self) -> None:

@@ -26,7 +26,11 @@ from rebrew.utils import floor_pct
 
 from recoverage import config
 from recoverage._paths import _db_path
-from recoverage.devserver import _KeepAliveRequestHandler, _ThreadingWSGIServer
+from recoverage.devserver import (
+    _KeepAliveRequestHandler,
+    _ThreadingWSGIServer,
+    configure_transport,
+)
 
 app = typer.Typer(
     help="Coverage dashboard for binary-matching decompilation projects.",
@@ -1071,8 +1075,6 @@ def serve(
     # Install the transport bounds the same values report, before the listener
     # binds: a cap validated and then not installed is a config the banner
     # lies about.
-    from recoverage.devserver import configure_transport
-
     configure_transport(
         max_connections=resolved.max_connections,
         client_timeout_seconds=resolved.client_timeout,

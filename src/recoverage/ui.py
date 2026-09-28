@@ -348,16 +348,6 @@ def _asset_etag(filename: str, encoding: str, raw: bytes) -> str:
     return _safe_etag("static", filename, encoding, hashlib.sha256(raw).hexdigest())
 
 
-def _client_has_asset(etag: str) -> bool:
-    """Whether the request's If-None-Match already covers *etag* (RFC 9110 13.1.2).
-
-    Weak comparison, which is what If-None-Match calls for: a browser holding
-    the asset as W/"..." still gets its 304.  The accepted spellings come from
-    the shared matcher, so static assets and DB-derived responses cannot drift.
-    """
-    return _if_none_match_matches(_header("If-None-Match", ""), etag)
-
-
 def _not_modified(etag: str) -> HTTPResponse:
     """The 304 both revalidating surfaces answer: the shell and the static assets."""
     return HTTPResponse(
@@ -394,7 +384,7 @@ def serve_static_asset(filename: str) -> bytes | HTTPResponse:
             )
 
     body, encoding, etag = entry
-    if _client_has_asset(etag):
+    if _if_none_match_matches(_header("If-None-Match", ""), etag):
         return _not_modified(etag)
 
     suffix = PurePosixPath(filename).suffix.lower()

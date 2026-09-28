@@ -1408,20 +1408,17 @@ def _parent_index(key: _GridKey | None, cells: list[dict[str, Any]]) -> dict[str
     FIRST occurrence, matching the linear walk this replaced: a name listed by
     several cells links to the earliest one.
     """
-    if key is None:
-        index: dict[str, int] = {}
-        for i, cell in enumerate(cells):
-            for name in cell.get("functions") or ():
-                index.setdefault(name, i)
-        return index
-    with _PARENT_INDEX_LOCK:
-        cached = _PARENT_INDEX.get(key)
-    if cached is not None:
-        return cached
-    index = {}
+    if key is not None:
+        with _PARENT_INDEX_LOCK:
+            cached = _PARENT_INDEX.get(key)
+        if cached is not None:
+            return cached
+    index: dict[str, int] = {}
     for i, cell in enumerate(cells):
         for name in cell.get("functions") or ():
             index.setdefault(name, i)
+    if key is None:
+        return index
     with _PARENT_INDEX_LOCK:
         _evict_oldest(_PARENT_INDEX, _PARENT_INDEX_MAX)
         _PARENT_INDEX[key] = index
@@ -2281,7 +2278,7 @@ def _render_potato_inner(
             "</td></tr></table></font></body></html>"
         )
 
-    if section not in sections and sections:
+    if section not in sections:
         section = next(iter(sections))
 
     sec_data: dict[str, Any] = sections.get(section, {})
