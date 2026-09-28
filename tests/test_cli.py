@@ -62,6 +62,31 @@ class TestColorOptOut:
         assert result.exit_code == 0
         assert "\x1b[" not in result.output
 
+    @pytest.mark.parametrize(
+        "argv",
+        [
+            ["check", "--min-coverage", "200"],
+            ["stats"],
+            ["export", "--format", "csv"],
+            ["config"],
+            ["open", "--port", "99999"],
+        ],
+    )
+    def test_no_color_after_the_subcommand(self, argv: list[str]) -> None:
+        """The flag is declared on every command, not only on the group.
+
+        A flag that can only be spelled before the subcommand is a usage
+        error in the position a user reaches for first, and that position is
+        where every other flag goes.  `check` with an out-of-range threshold
+        is the command that prints without a coverage database, so it also
+        carries the color assertion; the rest only have to parse.
+        """
+        result = runner.invoke(app, [*argv, "--no-color"], color=True)
+        assert "No such option" not in result.output
+        if argv[0] == "check":
+            assert result.exit_code == 2
+            assert "\x1b[" not in result.stderr
+
     def test_dumb_terminal(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("TERM", "dumb")
         result = runner.invoke(app, ["check", "--min-coverage", "0"], color=True)
@@ -980,7 +1005,7 @@ class TestOpenPort:
     def test_env_port_is_the_default(self, monkeypatch: Any) -> None:
         opened: list[str] = []
         monkeypatch.setenv("RECOVERAGE_PORT", "9100")
-        monkeypatch.setattr("recoverage.cli.open_browser", lambda url: opened.append(url))
+        monkeypatch.setattr("recoverage.cli.open_browser", lambda url: opened.append(url) or True)
         result = runner.invoke(app, ["open"])
         assert result.exit_code == 0
         assert opened == ["http://127.0.0.1:9100"]
@@ -988,7 +1013,7 @@ class TestOpenPort:
     def test_flag_beats_env(self, monkeypatch: Any) -> None:
         opened: list[str] = []
         monkeypatch.setenv("RECOVERAGE_PORT", "9100")
-        monkeypatch.setattr("recoverage.cli.open_browser", lambda url: opened.append(url))
+        monkeypatch.setattr("recoverage.cli.open_browser", lambda url: opened.append(url) or True)
         result = runner.invoke(app, ["open", "--port", "9200"])
         assert result.exit_code == 0
         assert opened == ["http://127.0.0.1:9200"]
@@ -998,6 +1023,18 @@ class TestOpenPort:
         result = runner.invoke(app, ["open"])
         assert result.exit_code == 2
         assert "RECOVERAGE_PORT" in result.output
+
+    def test_no_browser_exits_1(self, monkeypatch: Any) -> None:
+        """Nothing was launched, so exit 0 would be a false success.
+
+        The headless case is the one a script hits: a container entrypoint
+        runs `recoverage open`, no opener exists, and the exit code is the only
+        thing it gets.
+        """
+        monkeypatch.setattr("recoverage.cli.open_browser", lambda url: False)
+        result = runner.invoke(app, ["open"])
+        assert result.exit_code == 1
+        assert "no browser available" in result.stderr
 
 
 class TestServeServerWiring:
@@ -1147,7 +1184,7 @@ class TestServeBindFailure:
 
         monkeypatch.setattr("recoverage.api._ensure_db_watcher", lambda: None)
         opened: list[str] = []
-        monkeypatch.setattr("recoverage.cli.open_browser", lambda url: opened.append(url))
+        monkeypatch.setattr("recoverage.cli.open_browser", lambda url: opened.append(url) or True)
 
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.bind(("127.0.0.1", 0))
@@ -1195,7 +1232,7 @@ class TestServeKeyboardInterrupt:
 
         monkeypatch.setattr("recoverage.api._ensure_db_watcher", lambda: None)
         opened: list[str] = []
-        monkeypatch.setattr("recoverage.cli.open_browser", lambda url: opened.append(url))
+        monkeypatch.setattr("recoverage.cli.open_browser", lambda url: opened.append(url) or True)
 
         def raise_interrupt(self: Any, **kwargs: Any) -> None:
             raise KeyboardInterrupt

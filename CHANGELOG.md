@@ -5,6 +5,16 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`--no-color` is accepted after the subcommand too.** It was declared only
+  on the root group, so `recoverage stats --no-color` died with "No such
+  option" (exit 2) while `recoverage --no-color stats` worked. Every command
+  now carries the flag, in the position all the other flags use.
+- **`recoverage open` exits 1 when no browser could be launched.** It reported
+  success on a headless machine where `xdg-open` is missing and the fallback
+  found nothing, which is the run a container entrypoint does.
+
 ## [4.0.0] - 2026-09-28
 
 ### Breaking

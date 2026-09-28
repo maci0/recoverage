@@ -145,7 +145,7 @@ recoverage
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--version` | | Print the version and exit |
-| `--no-color` | off | Disable colored output; also disabled by `NO_COLOR` or `TERM=dumb` |
+| `--no-color` | off | Disable colored output; also disabled by `NO_COLOR` or `TERM=dumb`. Accepted before or after the subcommand |
 | `--install-completion` | | Install shell completion for bash, zsh, fish or PowerShell |
 | `--show-completion` | | Print the completion script instead of installing it |
 

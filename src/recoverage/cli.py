@@ -44,7 +44,8 @@ app = typer.Typer(
         "[bold]Prerequisites:[/bold]\n\n"
         "  Run [dim]rebrew catalog && rebrew build-db[/dim] first to create "
         "db/coverage-*.toml.\n\n"
-        f"[dim]Reads db/coverage-*.toml. Serves SPA at "
+        f"[dim]Reads db/coverage-*.toml (RECOVERAGE_DB overrides the directory, "
+        f"for every command). Serves SPA at "
         f"http://localhost:{config.DEFAULT_PORT}.[/dim]"
     ),
 )
@@ -73,6 +74,30 @@ def _color_off() -> bool:
 
 def _secho(message: str, **styles: Any) -> None:
     typer.secho(message, color=False if _color_off() else None, **styles)
+
+
+def _no_color_callback(value: bool) -> bool:
+    """Turn the opt-out on at parse time, wherever the flag was spelled.
+
+    Every command declares the option, so ``recoverage --no-color stats`` and
+    ``recoverage stats --no-color`` are the same run.  A parse-time callback is
+    what makes that true: the command body has not run yet, and the first
+    colored line of ``stats`` is printed from inside it.
+    """
+    global _color_disabled
+    if value:
+        _color_disabled = True
+    return value
+
+
+def _no_color_option() -> Any:
+    """The ``--no-color`` option, one spelling for the group and each command."""
+    return typer.Option(
+        False,
+        "--no-color",
+        help="Disable colored output (overrides NO_COLOR and TERM=dumb).",
+        callback=_no_color_callback,
+    )
 
 
 class _ThreadingWSGIServer6(_ThreadingWSGIServer):
@@ -134,11 +159,7 @@ def _version_callback(value: bool) -> None:
 
 @app.callback()
 def _app_callback(
-    no_color: bool = typer.Option(
-        False,
-        "--no-color",
-        help="Disable colored output (overrides NO_COLOR and TERM=dumb).",
-    ),
+    no_color: bool = _no_color_option(),
     version: bool = typer.Option(
         False,
         "--version",
@@ -148,6 +169,9 @@ def _app_callback(
         is_eager=True,
     ),
 ) -> None:
+    # The group runs before its subcommand, so this is the per-invocation
+    # reset: the flag's own callback (and the subcommand's copy of it, parsed
+    # later) turns the opt-out back on, and the next run starts clean.
     global _color_disabled
     _color_disabled = no_color
 
@@ -548,8 +572,13 @@ def _kill_and_reap(proc: subprocess.Popen[bytes]) -> None:
         _log.warning("Browser opener pid %s could not be reaped: %s", proc.pid, exc)
 
 
-def _open_and_reap(url: str, args: list[str], shell: bool = False) -> None:
+def _open_and_reap(url: str, args: list[str], shell: bool = False) -> bool:
     """Launch the opener for *url* fire-and-forget and still reap it.
+
+    Returns whether a browser was actually launched: True once Popen has
+    returned (the child exists), and otherwise whatever the webbrowser
+    fallback reported, so the caller with an exit code to set (`open`) does
+    not report success on a headless box where nothing was launched.
 
     Detaching (setsid, or the Windows creation flags) does NOT keep a child
     from becoming a zombie —
@@ -585,7 +614,8 @@ def _open_and_reap(url: str, args: list[str], shell: bool = False) -> None:
         )
         if not webbrowser.open(url):
             _log.warning("webbrowser.open(%s): no usable browser found", url)
-        return
+            return False
+        return True
     try:
         proc.wait(timeout=_BROWSER_OPEN_TIMEOUT)
     except subprocess.TimeoutExpired:
@@ -598,18 +628,19 @@ def _open_and_reap(url: str, args: list[str], shell: bool = False) -> None:
             exc,
         )
         _kill_and_reap(proc)
+    return True
 
 
-def open_browser(url: str) -> None:
+def open_browser(url: str) -> bool:
+    """Hand *url* to the platform opener; return whether one was launched."""
     system = platform.system()
     if system == "Linux":
-        _open_and_reap(url, ["xdg-open", url])
-    elif system == "Darwin":
-        _open_and_reap(url, ["open", url])
-    elif system == "Windows":
-        _open_and_reap(url, ["cmd", "/c", "start", "", url])
-    else:
-        webbrowser.open(url)
+        return _open_and_reap(url, ["xdg-open", url])
+    if system == "Darwin":
+        return _open_and_reap(url, ["open", url])
+    if system == "Windows":
+        return _open_and_reap(url, ["cmd", "/c", "start", "", url])
+    return webbrowser.open(url)
 
 
 # ── Commands ───────────────────────────────────────────────────────
@@ -704,6 +735,7 @@ def serve(
         "or number logging knows, e.g. DEBUG, INFO, WARN, WARNING, ERROR, CRITICAL; "
         "env: RECOVERAGE_LOG_LEVEL)",
     ),
+    no_color: bool = _no_color_option(),
 ) -> None:
     """Start the recoverage dashboard server.
 
@@ -959,6 +991,7 @@ def _section_row(sec: dict[str, Any]) -> list[Any]:
 def stats(
     target: str | None = typer.Option(None, "--target", "-t", help="Target ID (default: all)"),
     json_output: bool = typer.Option(False, "--json", help="Output results as JSON"),
+    no_color: bool = _no_color_option(),
 ) -> None:
     """Print coverage stats as a table (or JSON with --json)."""
     _use_utf8_stdout()
@@ -1032,6 +1065,7 @@ def export(
         help="Output format (choose json, csv, or md)",
     ),
     target: str | None = typer.Option(None, "--target", "-t", help="Target ID (default: all)"),
+    no_color: bool = _no_color_option(),
 ) -> None:
     """Export coverage data to stdout.
 
@@ -1147,6 +1181,7 @@ def check(
     target: str | None = typer.Option(None, "--target", "-t", help="Target ID (default: all)"),
     section: str | None = typer.Option(None, "--section", "-s", help="Section name (default: all)"),
     json_output: bool = typer.Option(False, "--json", help="Output results as JSON"),
+    no_color: bool = _no_color_option(),
 ) -> None:
     """Check coverage against a threshold (CI gate).
 
@@ -1246,7 +1281,7 @@ def check(
 
 
 @app.command()
-def regen() -> None:
+def regen(no_color: bool = _no_color_option()) -> None:
     """Re-run rebrew catalog + build-db to regenerate the coverage documents."""
     from recoverage.server import _project_dir
 
@@ -1263,12 +1298,16 @@ def open_cmd(
         "-p",
         help=f"Port of the running server (default: {config.DEFAULT_PORT}; env: RECOVERAGE_PORT)",
     ),
+    no_color: bool = _no_color_option(),
 ) -> None:
     """Open the dashboard in a browser.
 
     The port falls back to RECOVERAGE_PORT, the same default [bold]serve[/bold]
     uses, so a deployment that moved the server off 8001 does not need every
     operator to remember the new port as well.
+
+    Exits 1 when no browser could be launched, so a script or a container
+    entrypoint that runs this and finds nothing open learns why.
     """
     _check_env_or_exit()
     try:
@@ -1278,7 +1317,14 @@ def open_cmd(
         raise typer.Exit(2) from None
     url = f"http://127.0.0.1:{resolved_port}"
     typer.echo(f"Opening {url}")
-    open_browser(url)
+    if not open_browser(url):
+        _secho(
+            f"Error: no browser available to open {url}. Open the URL by hand, "
+            "or check that a desktop opener (xdg-open, open) is installed.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(1)
 
 
 @app.command("config")
@@ -1286,6 +1332,7 @@ def config_cmd(
     as_json: bool = typer.Option(
         False, "--json", help="Emit the resolved settings as a JSON object"
     ),
+    no_color: bool = _no_color_option(),
 ) -> None:
     """Print the configuration `serve` would start with, without binding a port.
 
