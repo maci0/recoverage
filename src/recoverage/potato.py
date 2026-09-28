@@ -1199,11 +1199,16 @@ def _db_unavailable_page() -> HTTPResponse:
             f'<body bgcolor="{BG_COLOR}" text="{TEXT_COLOR}">'
             f'<font face="{MONO_FONT}">'
             '<table role="presentation" width="100%" height="90%" border="0"><tr><td align="center" valign="middle">'
+            # The main landmark, as the page this one stands in for has: a
+            # screen reader walking either document finds the content in the
+            # same place (WCAG 1.3.1 / 2.4.1).
+            "<main>"
             "<h1>Database unavailable</h1>"
             f'<p><font color="{MUTED_COLOR}">Run '
             "'rebrew build-db' to create or rebuild it,"
             ' then <a href="/potato">retry Potato Mode</a> or '
             '<a href="/">open the SPA</a>.</font></p>'
+            "</main>"
             "</td></tr></table></font></body></html>"
         ),
         headers={"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store"},
@@ -2578,9 +2583,12 @@ def _render_potato_inner(
             f'<body bgcolor="{BG_COLOR}" text="{TEXT_COLOR}">'
             f'<font face="{MONO_FONT}">'
             '<table role="presentation" width="100%" height="90%" border="0"><tr><td align="center" valign="middle">'
+            # As above: the main landmark the page this stands in for carries.
+            "<main>"
             f"<h1>No data for target {_esc(target)}</h1>"
             f'<p><font color="{MUTED_COLOR}">Pick a built target from '
             '<a href="/potato">Potato Mode</a> or <a href="/">the SPA</a>.</font></p>'
+            "</main>"
             "</td></tr></table></font></body></html>"
         )
 

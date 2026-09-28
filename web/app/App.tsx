@@ -43,6 +43,18 @@ function sectionNames(sections: Record<string, { va: number | null }>): Array<st
   );
 }
 
+/** One navigation key of the section tab row, mapped to the index it moves
+ * to. A key the row does not own is absent, which is how the handler tells a
+ * navigation key from a key it should leave alone. */
+type SectionTabStep = (at: number, last: number) => number;
+
+const SECTION_TAB_STEP = new Map<string, SectionTabStep>([
+  ["ArrowRight", (at, last) => (at + 1) % (last + 1)],
+  ["ArrowLeft", (at, last) => (at + last) % (last + 1)],
+  ["Home", () => 0],
+  ["End", (_at, last) => last],
+]);
+
 function initialTheme(): "dark" | "light" {
   const saved = readStored(THEME_KEY);
   if (saved === "light" || saved === "dark") {
@@ -139,6 +151,7 @@ export function App() {
   // The address a jump is waiting on: a sibling section's cells are fetched
   // before the map can say which block covers it.
   const deferredJump = useRef<number | null>(null);
+  const sectionTabRef = useRef<HTMLDivElement | null>(null);
 
   // A notice that is a result rather than a state: a jump that found no
   // block, a regen that finished. It expires on its own. A notice that IS the
@@ -297,6 +310,35 @@ export function App() {
   const { sections } = coverage;
   const names = useMemo(() => sectionNames(sections), [sections]);
   const active = sections[section] ?? sections[names[0] ?? ""] ?? null;
+
+  /** The arrow keys move the section selection, as a tablist promises: they
+   * wrap, skip nothing, and land the focus on the tab they selected, which is
+   * the only way a keyboard user learns the tab row moved at all. Home and
+   * End are the row's own ends. */
+  const onSectionTabKeyDown = (
+    event: TargetedKeyboardEvent<HTMLButtonElement>,
+    name: string,
+  ): void => {
+    if (names.length === 0) {
+      return;
+    }
+    const at = names.indexOf(name);
+    const last = names.length - 1;
+    const next = SECTION_TAB_STEP.get(event.key)?.(at, last);
+    if (next === undefined) {
+      return;
+    }
+    const chosen = names[next];
+    if (chosen === undefined) {
+      return;
+    }
+    event.preventDefault();
+    setSection(chosen);
+    setSelectedIndex(null);
+    sectionTabRef.current
+      ?.querySelector<HTMLButtonElement>(`#${CSS.escape(`section-tab-${chosen}`)}`)
+      ?.focus();
+  };
 
   // A section's cells arrive lazily, so switching tabs asks for them.
   useEffect(() => {
@@ -557,6 +599,12 @@ export function App() {
     [filters, query, section, target],
   );
 
+  /** What the map area is doing, for the live region above it. A section
+   * switch and a lazy cell load both replace the canvas with no focusable
+   * element, so without this the only signal that anything happened is the
+   * pixels changing. */
+  const mapStatus = describeMapArea(noTargets, active, coverage.cellError, filters);
+
   return (
     <>
       <a
@@ -583,34 +631,65 @@ export function App() {
             </div>
             <h1 className="title font-mono text-wordmark font-bold tracking-wide">ReCoverage</h1>
           </div>
-          <nav className="tabs flex flex-wrap gap-1" aria-label="Sections">
-            {names.map((name) => (
-              <Button
-                key={name}
-                className="tab-btn"
-                active={name === section}
-                // The active tab is painted, not announced: without the state
-                // the screen reader reads eight identical buttons and nothing
-                // says which section the map below is showing.
-                aria-pressed={name === section}
-                onClick={() => {
-                  setSection(name);
-                  setSelectedIndex(null);
-                }}
-              >
-                {name}
-              </Button>
-            ))}
-          </nav>
+          {/* A tablist, not a row of toggle buttons: the section tabs select
+              what the ONE panel below them shows, which is what `tablist` is
+              for, and the pattern pairs the active tab's state with the
+              `tabpanel` the map is. `aria-pressed` announced the state but not
+              the relationship, and read as eight independent toggles. */}
+          <div
+            ref={sectionTabRef}
+            className="tabs flex flex-wrap gap-1"
+            role="tablist"
+            aria-label="Sections"
+            aria-orientation="horizontal"
+          >
+            {names.map((name) => {
+              const current = name === section;
+              return (
+                <Button
+                  key={name}
+                  className="tab-btn"
+                  active={current}
+                  role="tab"
+                  id={`section-tab-${name}`}
+                  aria-selected={current}
+                  // Roving tabindex: one stop for the whole row, and the arrow
+                  // keys move within it, which is what a tablist promises.
+                  // Without it Tab walks all eight and the arrow keys do
+                  // nothing (WCAG 2.1.1).
+                  tabIndex={current ? 0 : -1}
+                  aria-controls="section-panel"
+                  onClick={() => {
+                    setSection(name);
+                    setSelectedIndex(null);
+                  }}
+                  onKeyDown={(event) => onSectionTabKeyDown(event, name)}
+                >
+                  {name}
+                </Button>
+              );
+            })}
+          </div>
         </div>
         <div className="topbar-right ms-auto flex flex-wrap items-center gap-3">
           <div className="search flex flex-col gap-1">
             <div className="search-row flex items-center gap-2">
+              {/* A real <label> element rather than the input's own hint
+                  attribute: that hint is the field's only visible name and it
+                  disappears the moment a reader types, which is the
+                  hint-as-label antipattern (WCAG 3.3.2). It is visually
+                  hidden so the topbar keeps its one-row shape, and
+                  `aria-label` is dropped so the accessible name is this
+                  element's own text and the two cannot drift apart
+                  (WCAG 2.5.3). */}
+              <label className="sr-only" for="search-input">
+                Search functions by name or address
+              </label>
               <input
+                id="search-input"
                 type="search"
                 className="input-el rounded-hair border border-line bg-btn px-2 py-1 font-mono text-label text-text"
                 placeholder="Search function name or VA..."
-                aria-label="Search functions"
                 value={query}
                 onChange={(event) => setQuery(event.currentTarget.value)}
                 onKeyDown={onSearchKeyDown}
@@ -680,7 +759,13 @@ export function App() {
               // (WCAG 2.5.3).
               aria-label={busy ? MSG.REGEN_IN_PROGRESS : "Reload coverage data"}
               title={busy ? MSG.REGEN_IN_PROGRESS : "Regenerate coverage data"}
-              disabled={busy}
+              // `aria-disabled`, not `disabled`: a disabled button leaves the
+              // tab order, so the reader who just activated it is dropped to
+              // <body> and has to walk the whole page back to find where they
+              // were, for the minutes the regen runs (WCAG 2.4.3).
+              // `aria-disabled` keeps the control focusable and announced as
+              // unavailable, and `useLiveReload.reload` refuses the click.
+              aria-disabled={busy ? "true" : undefined}
               onClick={reload}
             >
               {busy ? MSG.REGEN_IN_PROGRESS : "Reload"}
@@ -709,7 +794,15 @@ export function App() {
       </header>
 
       <main className="layout mx-auto flex max-w-[1600px] flex-col gap-4 px-4 py-4 lg:flex-row" id="main-content">
-        <div className="grid-area min-w-0 flex-1">
+        {/* The tabpanel the section tabs control: the map and everything that
+            describes it. The tab row is outside it so the panel is the one
+            thing a tab switch replaces. */}
+        <div
+          className="grid-area min-w-0 flex-1"
+          id="section-panel"
+          role="tabpanel"
+          aria-labelledby={`section-tab-${active?.name ?? section}`}
+        >
           <StatsStrip
             stats={coverage.stats}
             error={coverage.statsError}
@@ -741,6 +834,17 @@ export function App() {
               {loadError ?? coverage.error}
             </p>
           )}
+          {/* The map area's own live region, mounted for the life of the shell
+              like the notice above it. A section switch, a lazy cell load and a
+              cell load that failed each replace the map, and a `role="status"`
+              inserted together with its text is announced by some screen
+              readers and dropped by others; this region exists before the
+              write (WCAG 4.1.3). Empty and visible, it is a line of text
+              naming the section the map is showing, which is the one thing a
+              reader who cannot see the tab row cannot work out. */}
+          <p className="map-status sr-only" role="status" aria-live="polite">
+            {mapStatus}
+          </p>
           <MapArea
             noTargets={noTargets}
             target={target}
@@ -847,7 +951,7 @@ function MapArea({
     return (
       <div
         className="grid-error rounded-control border border-line bg-panel p-4 font-mono text-label"
-        role="status"
+        aria-busy="true"
       >
         <p>
           Could not load the {active.name} map: {coverage.cellError.detail}
@@ -873,12 +977,43 @@ function MapArea({
   );
 }
 
+/** What the map area is doing, as one sentence for its live region. The
+ * loading arms name the section so a reader following a jump into a sibling
+ * hears which one landed; the loaded arm names the block count, which is the
+ * figure the map header shows beside it. */
+function describeMapArea(
+  noTargets: boolean,
+  active: Section | null,
+  cellError: { section: string; detail: string } | null,
+  filters: ReadonlySet<string>,
+): string {
+  if (noTargets) {
+    return "No coverage database.";
+  }
+  if (active === null) {
+    return "Loading coverage data.";
+  }
+  if (active.cells === undefined) {
+    if (cellError?.section === active.name) {
+      return `Could not load the ${active.name} map.`;
+    }
+    return `Loading ${active.name}.`;
+  }
+  const filtered =
+    filters.size > 0 ? ` Filtered by ${[...filters].toSorted().join(", ")}.` : "";
+  return `${active.name} map, ${count(active.cells.length)} blocks.${filtered}`;
+}
+
 function pending(text: string): ComponentChildren {
+  // The live region is the map area's own, which stays mounted across a
+  // section switch: a `role="status"` element inserted together with the text
+  // it carries is announced by some screen readers and dropped by others, and
+  // this is the one place a section change lands with nothing else to say
+  // (WCAG 4.1.3). `aria-busy` marks the map as replacing itself instead.
   return (
     <div
       className="loading-overlay rounded-control border border-line bg-panel p-6 text-center font-mono text-label text-muted"
-      role="status"
-      aria-live="polite"
+      aria-busy="true"
     >
       {text}
     </div>

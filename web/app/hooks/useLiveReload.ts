@@ -63,6 +63,9 @@ export function useLiveReload({
   }, [enabled, onDbUpdated]);
 
   const reload = useCallback((): void => {
+    if (busy) {
+      return;
+    }
     const now = performance.now();
     const since = lastRegen.current === null ? Number.POSITIVE_INFINITY : now - lastRegen.current;
     if (since < REGEN_COOLDOWN_MS) {
@@ -100,7 +103,7 @@ export function useLiveReload({
         onDbUpdated();
       }
     })();
-  }, [onDbUpdated, onDone, onNotice]);
+  }, [busy, onDbUpdated, onDone, onNotice]);
 
   return { reload, busy };
 }

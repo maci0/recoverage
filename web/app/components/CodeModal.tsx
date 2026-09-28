@@ -72,7 +72,16 @@ export function CodeModal({
     }
     closeRef.current?.focus();
     document.addEventListener("keydown", onEscape);
-    return () => document.removeEventListener("keydown", onEscape);
+    return () => {
+      document.removeEventListener("keydown", onEscape);
+      // Unmounting while open (the panel is unmounted when the target or the
+      // section changes under a dialog) used to leave the page regions inert,
+      // and an inert page is a page no keyboard user can reach at all.
+      for (const region of regions) {
+        // SAFETY: as above: the page regions this dashboard renders are elements.
+        (region as HTMLElement).inert = false;
+      }
+    };
   }, [onEscape, open]);
 
   if (!open) {
