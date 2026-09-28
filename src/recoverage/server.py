@@ -149,6 +149,33 @@ def configure_security(
     ALLOWED_HOSTS = allowed_hosts
 
 
+# The settings the process started with, exactly as ``config.active_config``
+# rendered them for the startup banner, with the token as set/unset and
+# never by value.  None until ``configure_startup`` runs, which only a real
+# ``serve`` does: a WSGI harness that mounts the app reports None rather
+# than a configuration it never resolved.
+#
+# Published so the RUNNING process can be asked what it is running with
+# (``GET /api/health``).  ``recoverage config`` re-resolves the environment of
+# the shell that runs it, which under a unit file or a container spec is not
+# the server's environment: same flags, different answer.  This is the
+# reading that cannot drift, and it is behind the auth hook like every other
+# route.
+ACTIVE_CONFIG: dict[str, str] | None = None
+
+
+def configure_startup(settings: Mapping[str, str]) -> None:
+    """Publish the resolved startup settings for /api/health to report.
+
+    Takes the ALREADY RENDERED banner mapping rather than the individual
+    flags, so the banner and the health report are the same rendering of the
+    same values and cannot disagree.  Call it once at startup, before the
+    listener binds.
+    """
+    global ACTIVE_CONFIG
+    ACTIVE_CONFIG = dict(settings)
+
+
 def _hostname_of(origin: str) -> str:
     """Lowercased hostname of an Origin/Host header value ("" if unparsable).
 

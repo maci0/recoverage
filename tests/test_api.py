@@ -388,6 +388,52 @@ class TestApiHealth:
         assert "mtime" not in data["db"]
 
 
+class TestHealthActiveConfig:
+    """/api/health reports the settings the RUNNING process resolved."""
+
+    def test_reports_the_published_settings(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import recoverage.server as server_mod
+
+        monkeypatch.setattr(
+            server_mod,
+            "ACTIVE_CONFIG",
+            {
+                "bind": "0.0.0.0",
+                "port": "9000",
+                "allow_remote": "true",
+                "cors": "false",
+                "cors_origin": "none",
+                "db": "/srv/secret-project/db",
+                "log_level": "WARNING",
+                "token": "set",
+            },
+            raising=False,
+        )
+        status, headers, body = wsgi_get("/api/health")
+        assert status.startswith("200")
+        data = json.loads(decode_body(body, headers))
+        assert data["config"]["bind"] == "0.0.0.0"
+        assert data["config"]["port"] == "9000"
+        assert data["config"]["log_level"] == "WARNING"
+        # The token is reported as set/unset, never by value.
+        assert data["config"]["token"] == "set"
+        # db is the basename-only block's business: the absolute path is not
+        # published on a polled endpoint.
+        assert "db" not in data["config"]
+        assert "/srv/secret-project/db" not in decode_body(body, headers).decode()
+
+    def test_no_config_before_serve_starts(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A mounted WSGI app never resolved a configuration; null says that,
+        where a re-resolved default would be a value nobody set."""
+        import recoverage.server as server_mod
+
+        monkeypatch.setattr(server_mod, "ACTIVE_CONFIG", None, raising=False)
+        status, headers, body = wsgi_get("/api/health")
+        assert status.startswith("200")
+        data = json.loads(decode_body(body, headers))
+        assert data["config"] is None
+
+
 @pytest.mark.skipif(not HAS_DB, reason="No coverage database")
 class TestHealthDbMtime:
     """/api/health's freshness stamp names the newest coverage document.

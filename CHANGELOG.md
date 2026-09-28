@@ -5,6 +5,16 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `GET /api/health` carries a `config` block with the settings the running
+  process resolved at startup, so a deployment can ask the server itself what it
+  is running with. `recoverage config` re-resolves the environment of the shell
+  that runs it, which is not the server's environment under a unit file or a
+  container spec. The token is reported as `set`/`unset` as everywhere else,
+  the coverage directory stays in the endpoint's own basename-only `db` block,
+  and the block is `null` in a process that never ran `serve`.
+
 ### Changed
 
 - The 503 an unreadable `rebrew-project.toml` answers now spells its
@@ -25,6 +35,10 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **`recoverage open` exits 1 when no browser could be launched.** It reported
   success on a headless machine where `xdg-open` is missing and the fallback
   found nothing, which is the run a container entrypoint does.
+- `recoverage config` now ends the way `serve` ends: a non-loopback
+  `RECOVERAGE_BIND` without `RECOVERAGE_ALLOW_REMOTE` exits 1, and the CORS
+  warnings go to stderr after the settings. A preflight that exited 0 for a
+  configuration `serve` refuses is a deployment that finds out at boot.
 
 ## [4.0.0] - 2026-09-28
 

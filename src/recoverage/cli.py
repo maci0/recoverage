@@ -679,6 +679,52 @@ def _allowed_origins(cors: bool, requested: list[str]) -> list[str]:
     return allowed
 
 
+def _remote_bind_gate(bind: str, allow_remote: bool) -> str | None:
+    """The refusal a network bind earns without the acknowledgment, else None.
+
+    Shared by `serve` and `recoverage config`, because a preflight that
+    answered "this configuration is fine" for a bind `serve` exits 1 on is
+    worse than no preflight: the operator deploys on the strength of the
+    green run and the server never comes up.
+
+    NOTE: "::" is the IPv6 wildcard (binds every interface) and must NOT be
+    treated as loopback, or `--bind ::` would silently expose the
+    unauthenticated API without the acknowledgment.
+    """
+    from recoverage.server import LOOPBACK_HOSTS
+
+    if bind in LOOPBACK_HOSTS or allow_remote:
+        return None
+    return (
+        f"--bind {bind} exposes the unauthenticated recoverage API (including raw "
+        "binary bytes and disassembly) to every reachable host on the network. "
+        "Pass --allow-remote (or RECOVERAGE_ALLOW_REMOTE=1) to confirm you want this."
+    )
+
+
+def _cors_warnings(cors: bool, cors_origin: list[str]) -> list[str]:
+    """The CORS settings that will not do what was written, as warnings.
+
+    Neither is fatal: both combinations start a server, and each is a
+    configuration the operator can only discover from a browser that refuses
+    the read.  Returned rather than printed so `serve` and
+    `recoverage config` warn from one rule.
+    """
+    warnings: list[str] = []
+    if cors and not cors_origin:
+        warnings.append(
+            "warning: --cors without --cors-origin allows no cross-origin reads "
+            "(Access-Control-Allow-Origin: * is no longer emitted). "
+            "Add --cors-origin URL for each origin you want to allow."
+        )
+    if cors_origin and not cors:
+        warnings.append(
+            "warning: --cors-origin has no effect without --cors — "
+            "CORS processing is disabled. Pass --cors to enable it."
+        )
+    return warnings
+
+
 @app.command()
 def serve(
     # Every option defaults to None so "not passed on the command line" stays
@@ -776,19 +822,14 @@ def serve(
     cors_origin = list(resolved.cors_origins)
     token = resolved.token
 
-    # NOTE: "::" is the IPv6 wildcard (binds every interface) — it must NOT
-    # be treated as loopback, or --bind :: would silently expose the
-    # unauthenticated API without the --allow-remote acknowledgment.
-    is_remote = bind not in LOOPBACK_HOSTS
-    if is_remote and not allow_remote:
-        _secho(
-            f"--bind {bind} exposes the unauthenticated recoverage API (including raw "
-            "binary bytes and disassembly) to every reachable host on the network. "
-            "Pass --allow-remote to confirm you want this.",
-            fg=typer.colors.RED,
-            err=True,
-        )
+    # Every warning in this block goes to stderr, so a deployment that
+    # captures stdout for the banner (tools/smoke.py, the harness) still
+    # sees the half of the configuration that will not work.
+    refusal = _remote_bind_gate(bind, allow_remote)
+    if refusal is not None:
+        _secho(refusal, fg=typer.colors.RED, err=True)
         raise typer.Exit(1)
+    is_remote = bind not in LOOPBACK_HOSTS
     if is_remote:
         _secho(
             "warning: serving unauthenticated binary data on the network — "
@@ -796,26 +837,8 @@ def serve(
             fg=typer.colors.YELLOW,
             err=True,
         )
-    if cors and not cors_origin:
-        # Every warning in this block goes to stderr, so a deployment that
-        # captures stdout for the banner (tools/smoke.py, the harness) still
-        # sees the half of the configuration that will not work.
-        _secho(
-            "warning: --cors without --cors-origin allows no cross-origin reads "
-            "(Access-Control-Allow-Origin: * is no longer emitted). "
-            "Add --cors-origin URL for each origin you want to allow.",
-            fg=typer.colors.YELLOW,
-            err=True,
-        )
-    if cors_origin and not cors:
-        # cors_origin alone has no effect (CORS processing stays off): a
-        # user who passed it must not discover that from silent behavior.
-        _secho(
-            "warning: --cors-origin has no effect without --cors — "
-            "CORS processing is disabled. Pass --cors to enable it.",
-            fg=typer.colors.YELLOW,
-            err=True,
-        )
+    for warning in _cors_warnings(cors, cors_origin):
+        _secho(warning, fg=typer.colors.YELLOW, err=True)
     # IPv6 hosts need brackets in any URL spelling (::1 bare is parsed as
     # host "" port ::8001).
     display_host = f"[{bind}]" if ":" in bind else bind
@@ -881,23 +904,21 @@ def serve(
     typer.echo(f"  DB: {_db_path_or_exit()}")
     # The full active configuration, resolved from flags and the environment,
     # so an operator can confirm what the process is actually running with.
-    # The token is reported as set/unset, never by value.
-    typer.echo(
-        "  Config: "
-        + " ".join(
-            f"{key}={value}"
-            for key, value in config.active_config(
-                port=port,
-                bind=bind,
-                allow_remote=allow_remote,
-                cors=cors,
-                cors_origin=allowed_origins,
-                token=token,
-                db=resolved.db,
-                log_level=resolved.log_level,
-            ).items()
-        )
+    # Rendered ONCE and published to /api/health: the banner and the running
+    # process's answer are the same values, so they cannot drift.  The token is
+    # reported as set/unset, never by value.
+    active = config.active_config(
+        port=port,
+        bind=bind,
+        allow_remote=allow_remote,
+        cors=cors,
+        cors_origin=allowed_origins,
+        token=token,
+        db=resolved.db,
+        log_level=resolved.log_level,
     )
+    _server.configure_startup(active)
+    typer.echo("  Config: " + " ".join(f"{key}={value}" for key, value in active.items()))
     if cors:
         typer.echo("  CORS: enabled")
     typer.echo("  Regen: POST /api/regen or click Reload in UI")
@@ -1338,6 +1359,11 @@ def config_cmd(
     The values come from the same merge and validation `serve` runs, so a
     deployment can confirm its environment before the listener opens.  The
     token is reported as `set` or `unset`; its value is never printed.
+
+    It is a preflight, so it also ends the way `serve` ends: the same
+    network-bind refusal (exit 1) and the same CORS warnings, after the
+    values.  A check that exited 0 for a configuration `serve` refuses is a
+    deployment that finds out at boot instead of at the check.
     """
     resolved = _resolve_serve_config()
     settings = config.active_config(
@@ -1352,9 +1378,15 @@ def config_cmd(
     )
     if as_json:
         typer.echo(json.dumps(settings, indent=2))
-        return
-    for key, value in settings.items():
-        typer.echo(f"{key}={value}")
+    else:
+        for key, value in settings.items():
+            typer.echo(f"{key}={value}")
+    for warning in _cors_warnings(resolved.cors, resolved.cors_origins):
+        _secho(warning, fg=typer.colors.YELLOW, err=True)
+    refusal = _remote_bind_gate(resolved.bind, resolved.allow_remote)
+    if refusal is not None:
+        _secho(refusal, fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
 
 
 def _argv_with_default_command(argv: list[str]) -> list[str]:

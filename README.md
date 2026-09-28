@@ -188,6 +188,8 @@ always wins over the environment.
 | `RECOVERAGE_TOKEN` | none | the bearer token; set it empty to run unauthenticated |
 | `RECOVERAGE_LOG_LEVEL` | `INFO` | a `logging` level name, or its number |
 | `RECOVERAGE_DB` | resolved from the working directory | path to the coverage directory (the one holding `coverage-<target>.toml`) |
+| `RECOVERAGE_FUZZ_SEED` | unset | seed for the mutation campaigns (`make fuzz`); read by the test suite, not the server |
+| `RECOVERAGE_FUZZ_ITERATIONS` | unset | round count for those campaigns; same reader |
 
 ```bash
 # A service that is not run from the project root, on a LAN interface,
@@ -210,8 +212,22 @@ variable named, instead of starting with a default you did not ask for. The
 same check runs for every command that reads the environment (`stats`,
 `export`, `check`, `open`, `regen`), so a typo cannot quietly leave those on
 their defaults.
+The two `RECOVERAGE_FUZZ_*` variables are the test suite's, not the server's;
+they carry the prefix so an operator who exported one to drive a campaign is
+not stopped by the unknown-name check, and they change nothing `serve` does.
 `recoverage serve` prints the settings it resolved on startup, with the token
-reported as `token=set`.
+reported as `token=set`. `recoverage config` prints the same settings without
+binding a port, as `key=value` lines or `--json`, and ends the way `serve`
+ends: a non-loopback bind without `RECOVERAGE_ALLOW_REMOTE` exits 1, the CORS
+warnings go to stderr, and the token is never printed. Use it as the preflight
+a unit file can gate on.
+
+The running server answers the same question over HTTP: `GET /api/health`
+carries a `config` block with the settings that process resolved (`db` is left
+to the endpoint's own basename-only `db` block). Unlike `recoverage config`, it
+reads the server's environment, not the shell's, which under a unit file or a
+container spec are not the same thing. It is `null` in a process that never ran
+`serve`, and it is behind the token when one is set.
 
 ### `recoverage config`
 
@@ -308,7 +324,7 @@ deployment that moved off `8001` needs no second place to configure.
 |------|--------|-------------|
 | `/` | GET | Main SPA dashboard |
 | `/potato` | GET | Potato Mode (pure-HTML fallback) |
-| `/api/health` | GET | Server version, coverage directory info, installed extras, request/regen/stream counters |
+| `/api/health` | GET | Server version, the settings this process resolved, coverage directory info, installed extras, request/regen/stream counters |
 | `/api/targets` | GET | List available targets |
 | `/api/targets/<target>/stats` | GET | Per-section coverage stats with percentages |
 | `/api/targets/<target>/data` | GET | Section + cell data (`?section=.text` for partial) |

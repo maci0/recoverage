@@ -531,6 +531,57 @@ class TestConfigCommand:
         assert "RECOVERAGE_PORT" in result.output
         assert "Traceback" not in result.output
 
+    def test_remote_bind_without_ack_exits_1(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A preflight that exits 0 for a bind `serve` exits 1 on is a
+        deployment that finds out at boot, not at the check.  The settings are
+        still printed, so the operator sees which bind was refused."""
+        from typer.testing import CliRunner
+
+        from recoverage.cli import app
+
+        monkeypatch.setenv("RECOVERAGE_BIND", "0.0.0.0")
+        result = CliRunner().invoke(app, ["config"])
+        assert result.exit_code == 1
+        assert "bind=0.0.0.0" in result.output
+        assert "allow-remote" in result.output
+        assert "Traceback" not in result.output
+
+    def test_remote_bind_with_acknowledgment_exits_0(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from typer.testing import CliRunner
+
+        from recoverage.cli import app
+
+        monkeypatch.setenv("RECOVERAGE_BIND", "0.0.0.0")
+        monkeypatch.setenv("RECOVERAGE_ALLOW_REMOTE", "1")
+        result = CliRunner().invoke(app, ["config", "--json"])
+        assert result.exit_code == 0
+        assert "allow-remote" not in result.output
+
+    def test_ipv6_wildcard_is_not_loopback(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """`::` binds every interface, so it is refused exactly like
+        0.0.0.0; reading it as loopback is the silent exposure."""
+        from typer.testing import CliRunner
+
+        from recoverage.cli import app
+
+        monkeypatch.setenv("RECOVERAGE_BIND", "::")
+        result = CliRunner().invoke(app, ["config"])
+        assert result.exit_code == 1
+        assert "Traceback" not in result.output
+
+    def test_cors_without_an_allowlist_warns(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The same warning `serve` prints, so the check reports a setting
+        that will refuse every cross-origin read rather than only the one
+        that would not start at all."""
+        from typer.testing import CliRunner
+
+        from recoverage.cli import app
+
+        monkeypatch.setenv("RECOVERAGE_CORS", "1")
+        result = CliRunner().invoke(app, ["config"])
+        assert result.exit_code == 0
+        assert "--cors without --cors-origin" in result.output
+
 
 class TestEnvValidatedByEveryCommand:
     """`serve` is not the only consumer of the environment."""

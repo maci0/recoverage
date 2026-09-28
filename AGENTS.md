@@ -159,7 +159,7 @@ uv run recoverage serve --port 9000 # custom port
 uv run recoverage serve --regen     # re-run rebrew catalog + build-db first
 uv run recoverage serve --no-open   # don't auto-open browser
 uv run recoverage serve --cors      # enable CORS processing (allowlist origins with --cors-origin)
-uv run recoverage config            # print the RECOVERAGE_* settings serve resolves, no listener
+uv run recoverage config            # print the RECOVERAGE_* settings serve resolves, no listener (same gate as serve)
 uv run recoverage regen             # re-run rebrew catalog + build-db, no server
 uv run recoverage open              # open the dashboard in a browser
 uv run recoverage --install-completion  # shell completion for the CLI
@@ -269,7 +269,7 @@ The release policy is not written down anywhere else, so it is stated here and
 |------|--------|-------------|
 | `/` | GET | Main SPA dashboard |
 | `/potato` | GET | Potato Mode (pure-HTML fallback) |
-| `/api/health` | GET | Server version, DB info, installed extras, request/regen/stream counters |
+| `/api/health` | GET | Server version, the settings the process resolved, DB info, installed extras, request/regen/stream counters |
 | `/api/targets` | GET | List available targets |
 | `/api/targets/<target>/stats` | GET | Per-section coverage stats (ETag-revalidating) |
 | `/api/targets/<target>/data` | GET | Full section + cell data |
@@ -445,6 +445,22 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   refused by `_REGEN_LOCK` or the cooldown counts under `rejected`, never
   `failures`: the SPA throttles Reload clicks, so counting them as failures
   reports a broken pipeline for a double-clicked button.
+- The active configuration is rendered ONCE, by `config.active_config`, and the
+  result reaches the startup banner and `GET /api/health`'s `config` block
+  (`server.configure_startup`, called from `serve` before the listener binds).
+  `recoverage config` re-resolves the environment of the shell that runs it,
+  which under a unit file or a container spec is not the server's environment:
+  same flags, different answer. The health block is the reading that cannot
+  drift, and it is `null` in a process that never ran `serve` rather than a
+  default nobody set. It drops `db`, because health names the coverage
+  directory by basename only and a second, absolute spelling of it here would
+  undo that. A new setting `serve` resolves joins the same rendering; a second
+  place that formats a setting is a second answer to "what is it running with".
+- The network-bind acknowledgment and the CORS warnings are ONE rule, in
+  `cli._remote_bind_gate` and `cli._cors_warnings`, and both `serve` and
+  `recoverage config` run it. `config` is the preflight a deployment gates on:
+  a check that exits 0 for a configuration `serve` exits 1 on is a deployment
+  that finds out at boot instead of at the check.
 - Saturation that answers 503 is a log line and a health field, not a bare
   status code: `/api/events` refuses past `_SSE_MAX_CLIENTS` and logs the count
   that caused it, and `/api/health` reports `streams` (clients, max, whether

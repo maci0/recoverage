@@ -899,6 +899,12 @@ def handle_api_health() -> bytes:
             },
             "targets_count": target_count,
             "cors": _server.CORS_ENABLED,
+            # The settings THIS process started with, so the answer to "what
+            # is it running with" comes from the server rather than from a
+            # shell that re-resolves the environment.  None in a process that
+            # never ran `serve` (a mounted WSGI app), which is not a value to
+            # guess at.
+            "config": _active_config(),
             # RED counters for this process: request rate, error rate, and
             # latency extremes, so the operator can tell "one slow request"
             # from "the dashboard got slow" without a metrics backend.
@@ -914,6 +920,24 @@ def handle_api_health() -> bytes:
         },
         Cache_Control=CACHE_NO_STORE,
     )
+
+
+def _active_config() -> dict[str, str] | None:
+    """The startup settings of the running process, for ``/api/health``.
+
+    ``recoverage config`` re-resolves the environment of the shell that runs
+    it, which under a unit file or a container spec is not the server's
+    environment: the same flags, a different answer, and an operator who
+    checks the wrong one.  This reads what the process actually resolved.
+
+    ``db`` is dropped: this endpoint names the coverage directory by its
+    basename only, and the ``db`` block beside it already answers the
+    question the absolute path was for.
+    """
+    active = _server.ACTIVE_CONFIG
+    if active is None:
+        return None
+    return {key: value for key, value in active.items() if key != "db"}
 
 
 def _stream_stats() -> dict[str, Any]:
