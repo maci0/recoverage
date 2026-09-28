@@ -1279,6 +1279,7 @@ def stats(
     """
     _use_utf8_stdout()
 
+    from rich import box
     from rich.console import Console
     from rich.table import Table
 
@@ -1318,7 +1319,13 @@ def stats(
                 pct = floor_pct(matched_fn, total_fn, 1)
                 console.print(f"  Functions: {matched_fn}/{total_fn} matched ({pct}%)")
 
-            table = Table(show_header=True, header_style="bold")
+            # box.SIMPLE_HEAD, not Rich's stock HEAVY_HEAD: the rest of this
+            # product draws a hairline and square corners (--radius-hair, the
+            # Potato tables' bordercolor), and a heavy double rule around eight
+            # right-aligned numbers is the library's demo look, not a readout.
+            # One rule under the header is all a table of figures needs to be
+            # read down a column.
+            table = Table(show_header=True, header_style="bold", box=box.SIMPLE_HEAD)
             table.add_column("Section", style="cyan")
             table.add_column("Size", justify="right")
             table.add_column("Cells", justify="right")

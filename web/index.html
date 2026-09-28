@@ -14,23 +14,49 @@
     <style>
       #boot, .boot {
         display: flex;
+        flex-direction: column;
         align-items: center;
         justify-content: center;
+        gap: 10px;
         min-height: 60vh;
-        color: var(--muted);
-        font: 14px/1.5 system-ui, sans-serif;
+        color: var(--muted, #8b949e);
+        font-family: var(--font-mono, ui-monospace, "SFMono-Regular", Menlo, monospace);
+        font-size: var(--text-label, 12px);
+        line-height: 1.5;
       }
       .boot p {
         max-width: 40em;
+        margin: 0;
         text-align: center;
+      }
+      .boot-mark {
+        display: inline-flex;
+        align-items: center;
+        padding: 2px 10px;
+        border: 2px solid var(--c, #06b6d4);
+        color: var(--c, #06b6d4);
+        font-size: var(--text-mark, 24px);
+        font-weight: 800;
+        box-shadow: var(--shadow-glow, none);
+      }
+      .boot-word {
+        color: var(--text, #e7edf4);
+        font-size: var(--text-wordmark, 20px);
+        font-weight: 700;
       }
     </style>
   </head>
   <body>
-    <div id="root"><p id="boot" role="status">Loading coverage…</p></div>
-    <!-- The served shell carries the same fallback: see the note in
-         src/recoverage/assets/index.html, which is the document a reader
-         actually gets. -->
+    <div id="root">
+      <div id="boot">
+        <span class="boot-mark" aria-hidden="true">R</span>
+        <p class="boot-word">ReCoverage</p>
+        <p role="status">Loading coverage…</p>
+      </div>
+    </div>
+    <!-- The served shell carries the same first paint and the same fallback:
+         see the note in src/recoverage/assets/index.html, which is the
+         document a reader actually gets. -->
     <noscript>
       <div class="boot">
         <p>The interactive coverage map needs JavaScript, which this browser has turned off.</p>

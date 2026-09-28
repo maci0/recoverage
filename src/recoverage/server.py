@@ -2299,18 +2299,35 @@ _AUTH_TOKEN: str = ""
 
 # Deliberately does not echo the expected token, and carries no CSS of its own
 # beyond the handful of attributes needed to be readable on a dark background.
+#
+# It is also a page of this product, not a generic error screen: it is the
+# first thing a locked-out operator sees, and it used to be the one surface
+# that spoke no common language with the rest of the interface (a system-ui
+# stack, an <h1> in whatever serif the browser picked, and an accent that
+# appears in no brand asset). The values below are the SPA's own token layer
+# (--bg, --panel, --text, --muted, --c, --link), the same face Potato Mode
+# prints its wordmark in, and the same size rungs (<font size="5|3|1">) the
+# rest of the product uses, so the reader is looking at ReCoverage before they
+# ever authenticate. TestUnauthorizedPageMatchesTheTokenLayer holds the values
+# against web/app/index.css, the way the two renderers' section accents are held
+# together.
 _UNAUTHORIZED_HTML = (
     b'<!doctype html><html lang="en"><head><meta charset="utf-8">'
     b'<meta name="viewport" content="width=device-width, initial-scale=1">'
     b"<title>ReCoverage - access token required</title></head>"
     b'<body bgcolor="#0f1216" text="#e7edf4">'
     b'<table width="100%" height="90%" border="0"><tr><td align="center" valign="middle">'
-    b'<font face="system-ui, sans-serif">'
-    b"<h1>Access token required</h1>"
-    b"<p>This dashboard was started with <tt>--token</tt>. Open it with the token"
-    b" appended to the URL:</p>"
-    b'<p><tt bgcolor="#151a21">?token=YOUR_TOKEN</tt></p>'
-    b'<p><font color="#8b949e" size="2">The person who started the server has the token.'
+    b'<font face="SFMono-Regular, Consolas, Liberation Mono, Courier New, monospace">'
+    b'<h1><font size="5" color="#e7edf4"><b>ReCoverage</b></font></h1>'
+    b'<font size="3" color="#8b949e">Access token required</font>'
+    b"<p>This dashboard was started with"
+    b' <font size="3" color="#06b6d4">--token</font>. Open it with the token appended'
+    b" to the URL:</p>"
+    b'<table border="1" bordercolor="#1c2a38" cellpadding="4" cellspacing="0"'
+    b' align="center" bgcolor="#151a21"><tr><td>'
+    b'<font size="3" color="#7dd3fc"><tt>?token=YOUR_TOKEN</tt></font>'
+    b"</td></tr></table>"
+    b'<p><font color="#8b949e" size="1">The person who started the server has the token.'
     b" It is stored in a cookie afterwards, so you only need the URL once.</font></p>"
     b"</font></td></tr></table></body></html>"
 )

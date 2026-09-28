@@ -1229,6 +1229,57 @@ class TestEveryRouteIsBehindTheTokenGate:
             )
 
 
+class TestUnauthorizedPageMatchesTheTokenLayer:
+    """The 401 page is painted from the SPA's tokens, not a private palette.
+
+    It is a page of this product, served before anyone has authenticated, and
+    it is written as a byte string because it has to answer with no stylesheet
+    and no bundle. A color hand-typed into it is therefore a color nothing
+    else in the project can find, which is how a lockout page ends up a
+    different brand from the dashboard that serves it. Each literal here has
+    to be a value the token layer already publishes, and the page has to print
+    the terminal face the rest of the product uses.
+    """
+
+    @staticmethod
+    def _page() -> str:
+        from recoverage.server import _UNAUTHORIZED_HTML
+
+        return _UNAUTHORIZED_HTML.decode("utf-8")
+
+    @staticmethod
+    def _spa_colors() -> set[str]:
+        css = (Path(__file__).resolve().parents[1] / "web" / "app" / "index.css").read_text(
+            encoding="utf-8"
+        )
+        return {value.lower() for value in re.findall(r"#[0-9a-fA-F]{6}\b", css)}
+
+    def test_every_color_on_the_page_is_a_token_value(self) -> None:
+        published = self._spa_colors()
+        used = {value.lower() for value in re.findall(r"#[0-9a-fA-F]{6}\b", self._page())}
+        assert used, "the 401 page painted no color at all"
+        # Potato Mode's border is a flattened stand-in for --border (an alpha
+        # composited onto --bg), so it is named rather than matched.
+        stand_ins = {"#1c2a38"}
+        assert used - stand_ins <= published, (
+            f"401 page colors not in the token layer: {sorted(used - stand_ins - published)}"
+        )
+
+    def test_the_page_prints_the_product_face_and_rungs(self) -> None:
+        from recoverage.potato import MONO_FONT
+
+        page = self._page()
+        assert f'face="{MONO_FONT}"' in page
+        assert "system-ui" not in page
+        for rung in ('size="5"', 'size="3"', 'size="1"'):
+            assert rung in page, f"the 401 page has no {rung} step"
+
+    def test_the_page_still_explains_the_share_link(self) -> None:
+        page = self._page()
+        assert "Access token required" in page
+        assert "?token=YOUR_TOKEN" in page
+
+
 class TestCorsPreflightBypassesTheTokenGate:
     """A CORS preflight carries no credentials, so the gate must not apply.
 
@@ -1567,18 +1618,41 @@ class TestStaticAssetRevalidation:
         Nothing is visible until the inline bundle has been parsed and run, and
         the dashboard it draws is serialized behind `/api/targets` and `/data`,
         so an empty `#root` holds a blank screen for the whole of that. The
-        boot line is in the HTML for that reason, and it is a status region
-        so it is announced rather than merely shown."""
+        boot block is in the HTML for that reason, and its status line is a
+        status region so it is announced rather than merely shown."""
         from conftest import decode_body, wsgi_get
 
         _, headers, body = wsgi_get("/", headers={"Accept-Encoding": "gzip"})
         html = decode_body(body, headers).decode("utf-8")
-        assert '<div id="root"><p id="boot" role="status">' in html
+        assert '<div id="boot">' in html
+        assert 'role="status">Loading coverage' in html
         # The bundle clears the host before mounting (preact/hooks#render
         # appends rather than replaces), so the boot line cannot survive
         # above a live dashboard.
         bundle = html.split("<script>", 1)[1]
         assert "replaceChildren" in bundle
+
+    def test_the_boot_block_wears_the_product(self) -> None:
+        """The first paint is the dashboard's own face, not a system default.
+
+        The boot block is what a reader sees between the shell landing and the
+        bundle mounting, and it used to be a centred line in a hand-typed
+        `system-ui` stack at a hardcoded size: a typeface swap on the way into
+        an interface that is mono throughout. It reads the type scale, the
+        accent and the terminal face from the token layer, with literal
+        fallbacks for the paint that happens before the stylesheet loads."""
+        from conftest import decode_body, wsgi_get
+
+        _, headers, body = wsgi_get("/", headers={"Accept-Encoding": "gzip"})
+        html = decode_body(body, headers).decode("utf-8")
+        boot = html.split('<div id="boot">', 1)[1].split("</div>", 1)[0]
+        assert "ReCoverage" in boot
+        assert 'class="boot-mark" aria-hidden="true"' in boot
+        # The shell's own rules, which is where a hand-typed stack would live.
+        rules = html.split("<style>", 1)[1].split("</style>", 1)[0]
+        assert "system-ui" not in rules
+        for token in ("--font-mono", "--text-mark", "--text-wordmark"):
+            assert token in rules, f"the boot block hardcodes {token} instead of reading it"
 
     def test_index_preloads_the_target_list(self) -> None:
         """The target list is on the first-paint path and cannot be discovered
