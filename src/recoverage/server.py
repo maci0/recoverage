@@ -1149,8 +1149,7 @@ def _section_stats(snap: CoverageSnapshot) -> dict[str, Any]:
 
 
 def _assets_dir() -> Path:
-    """Return the directory containing recoverage UI files (HTML/CSS/JS).
-    These ship as package data inside the recoverage package."""
+    """The UI files, which ship as package data inside the recoverage package."""
     return Path(__file__).resolve().parent / "assets"
 
 
@@ -2815,8 +2814,6 @@ def _log_request() -> None:
     (The method/path line for every request, with its status and duration,
     is emitted once by the after_request hook.)
     """
-    # Method/path are attacker-controlled (the path is percent-decoded), so
-    # control characters are escaped to keep the log line-per-request.
     if ALLOWED_HOSTS is not None:
         # DNS-rebinding guard for loopback installs: the Host header must name
         # a loopback host.  Requests without a Host header (non-HTTP/1.1

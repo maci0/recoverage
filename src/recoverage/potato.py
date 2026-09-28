@@ -1611,12 +1611,8 @@ def _search_functions(coverage: CoverageSnapshot, search_query: str) -> set[str]
 #: The filter pills, as ``(state, label letter, title)``.  Module scope
 #: because every row is invariant to the request: the target, the section and
 #: the active set only decide which of them is highlighted, never what they
-#: are.  (state, label letter, title).  The key is the filter name a ?filter=
-#: spells: it is what the pill toggles and what FILTER_STATES is keyed on,
-#: so it is the one field that says which entry a row stands for.  The
-#: accesskey is not a field: the template derives it from the label
-#: (``fb_label[0].lower()``), so a lowercase letter carried in this slot
-#: was never read by anything.
+#: are.  The state is the filter name a ?filter= spells: it is what the pill
+#: toggles and what FILTER_STATES is keyed on.
 FILTER_OPTS: tuple[tuple[str, str, str], ...] = (
     ("exact", "E", "Exact match"),
     ("reloc", "R", "Reloc match"),
@@ -1729,14 +1725,15 @@ def _build_progress(
     # total (a foreign or hand-edited DB); it is not what keeps a mixed
     # denominator inside the track.
     seg_none = max(0, 100 - seg_exact - seg_reloc - seg_near_match - seg_stub - seg_padding)
+    section_pct = coverage_pct(covered_bytes, sec_size) if sec_size > 0 else 0
     return {
         "sec_size": sec_size,
-        "coverage_pct": coverage_pct(covered_bytes, sec_size) if sec_size > 0 else 0,
+        "coverage_pct": section_pct,
         # The 1dp rendering of the figure above, for the header. "%.1f" of the
         # 2dp value rounds 99.99 up to 100.0 and reads a section one byte short
         # of complete as complete, which is the one thing the flooring in
         # server.coverage_pct exists to prevent.
-        "coverage_pct_1dp": pct_1dp(coverage_pct(covered_bytes, sec_size) if sec_size > 0 else 0),
+        "coverage_pct_1dp": pct_1dp(section_pct),
         "total_fn": total_fn,
         "matched_fn": matched_fn,
         "segments": [

@@ -170,3 +170,10 @@ export function sameOriginPath(rawPath: string, fallback: string): string {
   }
   return rawPath;
 }
+
+/** The URL of one file under an accepted `sourceRoot`. Each segment is
+ * encoded on its own, so a file name carrying a slash or a space survives
+ * the round trip and a separator stays a separator. */
+export function sourceFileUrl(sourceRoot: string, file: string): string {
+  return `${sourceRoot}/${file.split("/").map((segment) => encodeURIComponent(segment)).join("/")}`;
+}

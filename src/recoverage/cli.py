@@ -750,12 +750,7 @@ def _allowed_origins(cors: bool, requested: list[str]) -> list[str]:
 
     allowed: list[str] = []
     for origin_url in requested:
-        if not _is_browser_origin(origin_url):
-            raise config.ConfigError(
-                f"origin {origin_url!r} is not a URL the browser could send: "
-                "expected scheme://host[:port], with no userinfo, path or whitespace"
-            )
-        normalized = _normalize_origin(origin_url)
+        normalized = _normalize_origin(origin_url) if _is_browser_origin(origin_url) else ""
         if not normalized:
             raise config.ConfigError(
                 f"origin {origin_url!r} is not a URL the browser could send: "
@@ -1108,7 +1103,7 @@ def serve(
     # binds (user opted in via --allow-remote) skip validation.
     _server.configure_security(
         cors_enabled=cors,
-        cors_allowed_origins=allowed_origins,
+        cors_allowed_origins=cors_origin,
         auth_token=token or "",
         allowed_hosts=None if is_remote else set(LOOPBACK_HOSTS),
     )
@@ -1137,7 +1132,7 @@ def serve(
         bind=bind,
         allow_remote=allow_remote,
         cors=cors,
-        cors_origin=allowed_origins,
+        cors_origin=cors_origin,
         token=token,
         db=resolved.db,
         log_level=resolved.log_level,
@@ -1534,16 +1529,13 @@ def _checked_min_coverage(value: str, json_output: bool) -> float:
     if text[:1] in ("+", "-"):
         sign, text = text[0], text[1:]
     whole, dot, frac = text.partition(".")
-    if not whole or (dot and not frac) or "." in frac:
-        _fail(
-            f"Error: --min-coverage is not a number: {value!r}.",
-            "--min-coverage is not a number",
-            2,
-            json_output,
-        )
-    try:
-        parsed = float(f"{sign}{parse_ascii_int(whole)}.{parse_ascii_int(frac) if frac else 0}")
-    except ValueError:
+    parsed: float | None = None
+    if whole and not (dot and not frac) and "." not in frac:
+        try:
+            parsed = float(f"{sign}{parse_ascii_int(whole)}.{parse_ascii_int(frac) if frac else 0}")
+        except ValueError:
+            parsed = None
+    if parsed is None:
         _fail(
             f"Error: --min-coverage is not a number: {value!r}.",
             "--min-coverage is not a number",
@@ -1596,8 +1588,8 @@ def check(
     ):
         failed = False
         checked = 0
-        compared = 0  # sections actually evaluated against the threshold
-        verdicts: list[dict[str, Any]] = []  # captured for --json output
+        compared = 0
+        verdicts: list[dict[str, Any]] = []
         for tid in targets:
             data = _get_stats(snapshots, tid, json_output=json_output)
             sections_to_check = data["sections"]

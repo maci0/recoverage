@@ -84,15 +84,12 @@ export function useLiveReload({
         // Saying nothing when it ends leaves the reader to tell a finished
         // rebuild from a failed one out of the map's own repaint, so the
         // success is stated; the failure still holds the line until it is
-        // replaced, which is what the two callbacks are for.
+        // replaced, which is what the two callbacks are for. A re-send that
+        // reached a run already under way is neither: the line stays as it is
+        // and the documents land when that run writes them.
         if (ok) {
           onDone(MSG.REGEN_DONE);
-        } else if (inProgress) {
-          // The re-send reached a run already under way.  It is not a failure
-          // and the pipeline is not this reader's to start again: the line
-          // stays, and the documents land when that run writes them.
-          onNotice(MSG.REGEN_IN_PROGRESS);
-        } else {
+        } else if (!inProgress) {
           onNotice(MSG.REGEN_UNAVAILABLE);
         }
         // oxlint-disable-next-line @rikalabs/no-silent-catch-fallback -- a failed regen is reported to the reader as REGEN_UNAVAILABLE, and the refresh still runs

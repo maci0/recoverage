@@ -125,15 +125,17 @@ def _unmatched_route(path: str) -> Any:
 # owns) is rejected by bottle's router before any handler runs, so it lands on
 # bottle's HTML error page.  /api/* consumers get the JSON envelope every other
 # failure uses; browser paths keep the HTML page.
-@app.error(405)
-def _handle_method_not_allowed(error: Any) -> Any:
+def _api_error(status: int, error: Any) -> Any:
     if not request.path.startswith("/api/"):
         return app.default_error_handler(error)
-    return _method_not_allowed()
+    return _method_not_allowed() if status == 405 else _not_found()
+
+
+@app.error(405)
+def _handle_method_not_allowed(error: Any) -> Any:
+    return _api_error(405, error)
 
 
 @app.error(404)
 def _handle_not_found(error: Any) -> Any:
-    if not request.path.startswith("/api/"):
-        return app.default_error_handler(error)
-    return _not_found()
+    return _api_error(404, error)

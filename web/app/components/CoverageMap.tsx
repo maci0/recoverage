@@ -243,17 +243,15 @@ export function CoverageMap({
     paint();
   }, [declaredColumns, geometry, pack, paint, section]);
 
-  // A theme switch changes the tokens, not the geometry.
+  // A theme switch changes the tokens, not the geometry. `paint` is also a
+  // function of the filters, the match set and the selection, so this is the
+  // one effect that repaints on every change of those too.
   useEffect(() => {
     if (stateRef.current !== null) {
       stateRef.current.palette = [];
     }
     paint();
   }, [paint, theme]);
-
-  useEffect(() => {
-    paint();
-  }, [filters, matchedFns, paint, selectedIndex]);
 
   const scrollCell = useCallback((index: number) => {
     const wrap = wrapRef.current;

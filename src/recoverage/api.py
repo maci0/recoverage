@@ -178,18 +178,18 @@ _REGEN_COMPLETED_KEYS_LOCK = threading.Lock()
 _REGEN_ACTIVE_KEYS: dict[str, float] = {}
 
 
-def _prune_active_keys(now: float) -> None:
-    """Drop in-flight markers past the retention window. Caller holds the lock."""
-    for key, started_at in list(_REGEN_ACTIVE_KEYS.items()):
-        if now - started_at >= _REGEN_KEY_TTL_SECONDS:
-            del _REGEN_ACTIVE_KEYS[key]
+def _prune_expired(ledger: dict[str, float], now: float) -> None:
+    """Drop *ledger* entries past the retention window. Caller holds the lock."""
+    for key, stamp in list(ledger.items()):
+        if now - stamp >= _REGEN_KEY_TTL_SECONDS:
+            del ledger[key]
 
 
 def _regen_in_progress(key: str) -> bool:
     """True when *key* is the run happening right now."""
     now = clock.monotonic()
     with _REGEN_COMPLETED_KEYS_LOCK:
-        _prune_active_keys(now)
+        _prune_expired(_REGEN_ACTIVE_KEYS, now)
         return key in _REGEN_ACTIVE_KEYS
 
 
@@ -197,7 +197,7 @@ def _record_active_key(key: str) -> None:
     """Remember that *key*'s regen is running; cleared when the run ends."""
     now = clock.monotonic()
     with _REGEN_COMPLETED_KEYS_LOCK:
-        _prune_active_keys(now)
+        _prune_expired(_REGEN_ACTIVE_KEYS, now)
         _REGEN_ACTIVE_KEYS.pop(key, None)
         _server._evict_oldest(_REGEN_ACTIVE_KEYS, _REGEN_LEDGER_MAX_ENTRIES)
         _REGEN_ACTIVE_KEYS[key] = now
@@ -209,18 +209,11 @@ def _clear_active_key(key: str) -> None:
         _REGEN_ACTIVE_KEYS.pop(key, None)
 
 
-def _prune_completed_keys(now: float) -> None:
-    """Drop completed keys past the retention window. Caller holds the lock."""
-    for key, done_at in list(_REGEN_COMPLETED_KEYS.items()):
-        if now - done_at >= _REGEN_KEY_TTL_SECONDS:
-            del _REGEN_COMPLETED_KEYS[key]
-
-
 def _regen_replayed(key: str) -> bool:
     """True when *key* already completed a regen inside the retention window."""
     now = clock.monotonic()
     with _REGEN_COMPLETED_KEYS_LOCK:
-        _prune_completed_keys(now)
+        _prune_expired(_REGEN_COMPLETED_KEYS, now)
         return key in _REGEN_COMPLETED_KEYS
 
 
@@ -228,7 +221,7 @@ def _record_completed_key(key: str) -> None:
     """Remember that *key*'s regen completed, so its retry is answered, not re-run."""
     now = clock.monotonic()
     with _REGEN_COMPLETED_KEYS_LOCK:
-        _prune_completed_keys(now)
+        _prune_expired(_REGEN_COMPLETED_KEYS, now)
         # Re-insert (rather than refresh in place) so the eviction order stays
         # completion order.
         _REGEN_COMPLETED_KEYS.pop(key, None)

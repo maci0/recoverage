@@ -330,18 +330,17 @@ class CacheStats:
         self._by_cache: dict[str, list[int]] = {}
 
     def hit(self, name: str) -> None:
-        with self._lock:
-            row = self._by_cache.get(name)
-            if row is None:
-                row = self._by_cache[name] = [0, 0]
-            row[0] += 1
+        self._count(name, 0)
 
     def miss(self, name: str) -> None:
+        self._count(name, 1)
+
+    def _count(self, name: str, column: int) -> None:
         with self._lock:
             row = self._by_cache.get(name)
             if row is None:
                 row = self._by_cache[name] = [0, 0]
-            row[1] += 1
+            row[column] += 1
 
     def snapshot(self) -> dict[str, dict[str, int]]:
         """A JSON-ready copy, one row per cache that has been read from."""

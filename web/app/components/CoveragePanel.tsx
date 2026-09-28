@@ -12,7 +12,7 @@ import { META_GRID, MetaItem } from "@/components/ui/meta";
 import { STATE_LABEL, stateSlot } from "@/grid/pack";
 import type { Panes } from "@/hooks/useSelection";
 import type { HighlightLanguage } from "@/lib/highlight";
-import { MSG, count, hex, percent1, toVa } from "@/lib/format";
+import { MSG, count, hex, percent1, sourceFileUrl, toVa } from "@/lib/format";
 
 /** The selected block's detail.
  *
@@ -168,7 +168,7 @@ function FunctionMeta({
             {index > 0 ? ", " : ""}
             <a
               className="source-link"
-              href={`${sourceRoot}/${file.split("/").map((segment) => encodeURIComponent(segment)).join("/")}`}
+              href={sourceFileUrl(sourceRoot, file)}
               target="_blank"
               rel="noopener noreferrer"
             >

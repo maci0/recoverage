@@ -7,7 +7,7 @@ import { CoverageMap } from "@/components/CoverageMap";
 import { CoveragePanel } from "@/components/CoveragePanel";
 import { StatsStrip } from "@/components/StatsStrip";
 import { Button, controlVariants } from "@/components/ui/button";
-import { FILTER_KEY, LEGEND, PALETTE_VARS, STATE_FILTERS } from "@/grid/pack";
+import { FILTER_KEY, PALETTE_VARS, STATE_FILTERS, STATE_LABEL } from "@/grid/pack";
 import { useCoverage, type Coverage } from "@/hooks/useCoverage";
 import { useLiveReload } from "@/hooks/useLiveReload";
 import { originalDllPath, useOriginalBinary } from "@/hooks/useOriginalBinary";
@@ -688,7 +688,7 @@ export function App() {
             }}
           />
           <ul className="legend mt-3 flex flex-wrap gap-3 font-mono text-micro text-muted">
-            {LEGEND.map(([slot, label]) => (
+            {STATE_LABEL.map((label, slot) => (
               <li key={label} className="flex items-center gap-1.5">
                 <span
                   className={`swatch swatch-${label.replaceAll(" ", "-")}`}

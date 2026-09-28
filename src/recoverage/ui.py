@@ -495,8 +495,7 @@ def _repo_file_etag(candidate: Path, raw: bytes, accept_encoding: str) -> str:
 # freshness lifetime would pin the browser to old JS.  Revalidate cheaply
 # instead of guessing.
 #: ``(filename, accepted-encoding key)`` -> ``_Variant(body, encoding, etag)``.
-#: The
-#: key is the whole accepted set, not one token, so the map is bounded by
+#: The key is the whole accepted set, not one token, so the map is bounded by
 #: (route-matched filename) x (server.static_variant_key spellings).  The
 #: encoding rides with the entry because the choice is made per accepted set,
 #: not once per file: it is what Content-Encoding must name, and the cache hit

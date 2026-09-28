@@ -7,7 +7,7 @@ import { useEffect, useState } from "preact/compat";
 import { fetchAsm, fetchFunction, fetchTextSafe, type FunctionDetail, type Section } from "@/api";
 import type { OriginalBinary } from "@/hooks/useOriginalBinary";
 import { formatBytes, inspectBytes, type InspectorItem } from "@/lib/bytes";
-import { MSG, extractDocs, hex, toVa } from "@/lib/format";
+import { MSG, extractDocs, hex, sourceFileUrl, toVa } from "@/lib/format";
 
 /** The selected block's detail panes.
  *
@@ -209,7 +209,7 @@ export function useSelection({
         const sourceUrl =
           file === undefined
             ? null
-            : `${sourceRoot}/${file.split("/").map((segment) => encodeURIComponent(segment)).join("/")}`;
+            : sourceFileUrl(sourceRoot, file);
         const address = detail.vaStart ?? detail.va;
         const size = detail.size ?? 0;
 
