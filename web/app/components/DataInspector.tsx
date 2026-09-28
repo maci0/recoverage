@@ -4,6 +4,12 @@ import type { InspectorItem } from "@/lib/bytes";
 import { MSG } from "@/lib/format";
 import { META_GRID, MetaItem } from "@/components/ui/meta";
 
+/** The readings as the text every other pane hands to Copy and Open. One
+ * spelling, so what a reader pastes is what the pane shows. */
+export function inspectorText(items: Array<InspectorItem> | null): string {
+  return (items ?? []).map((item) => `${item.label}: ${item.value}`).join("\n");
+}
+
 /** The little-endian readings of a .data or .bss block's first bytes, which is
  * what a data section has instead of disassembly. */
 export function DataInspector({ items }: { items: Array<InspectorItem> | null }): ComponentChildren {

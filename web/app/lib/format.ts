@@ -246,6 +246,8 @@ export const MSG = {
   NA: "(n/a)",
   REGEN_USING_CACHE: (remaining: number) => `Using cached data. Regeneration available in ${remaining}s...`,
   REGEN_IN_PROGRESS: "Regenerating...",
+  REGEN_ALREADY_RUNNING:
+    "This regeneration is already running. The map refreshes by itself when it finishes.",
   REGEN_DONE: "Coverage data regenerated.",
   REGEN_UNAVAILABLE: "Regeneration unavailable",
   FETCH_FAILED: (url: string) => `(failed to load: ${url})`,

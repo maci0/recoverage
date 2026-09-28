@@ -61,9 +61,24 @@ export function SearchResults({
                 </span>
               )}
               <span className="shrink-0 text-muted">{hex(result.va, 8)}</span>
-              {section !== null && result.section === section ? (
-                <span className="shrink-0 text-accent">in {isolate(section)}</span>
-              ) : null}
+              {/* Which section each hit is in, on every row that has one. A
+                  target-wide term matches `.rdata` and `.text` alike, and the
+                  rows that were not in the section on screen carried nothing at
+                  all, so two rows in different sections read identically and the
+                  pick silently switched tabs. The current section is marked in
+                  the accent and says "in", so a row that needs a tab switch is
+                  the one that looks like it. */}
+              {result.section === null ? null : (
+                <span
+                  className={
+                    result.section === section
+                      ? "shrink-0 text-accent"
+                      : "shrink-0 text-muted opacity-70"
+                  }
+                >
+                  {result.section === section ? `in ${isolate(section)}` : isolate(result.section)}
+                </span>
+              )}
             </button>
           </li>
         ))}

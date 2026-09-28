@@ -4,7 +4,7 @@ import type { ComponentChildren } from "preact";
 
 import type { Cell, FunctionDetail, Section } from "@/api";
 import { CodeModal } from "@/components/CodeModal";
-import { DataInspector } from "@/components/DataInspector";
+import { DataInspector, inspectorText } from "@/components/DataInspector";
 import { HighlightedCode } from "@/components/HighlightedCode";
 import { Button } from "@/components/ui/button";
 import { CopyButton } from "@/components/ui/copy-button";
@@ -283,7 +283,14 @@ function FunctionMeta({
       {fn.is_thunk === true ? <MetaItem label="Type">IAT thunk (not reversible)</MetaItem> : null}
       {fn.is_export === true ? <MetaItem label="Type">Exported function</MetaItem> : null}
       {fn.sha256 == null ? null : (
-        <MetaItem label="SHA256">{`${fn.sha256.slice(0, 16)}...`}</MetaItem>
+        // The row shows enough of the digest to recognise it beside another
+        // report, and the rest is one hover away: a digest truncated with no
+        // way to read or take the whole of it is a value the reader cannot
+        // use, and the panel head's Copy button is how the rest of this panel
+        // hands over a value verbatim.
+        <MetaItem label="SHA256">
+          <span title={fn.sha256}>{`${fn.sha256.slice(0, 16)}...`}</span>
+        </MetaItem>
       )}
       {sourceItem}
       {docs === null || docs === MSG.SELECT_FUNCTION || docs === MSG.NO_DOCS ? null : (
@@ -399,6 +406,17 @@ export function CoveragePanel({
     const base = section?.va ?? 0;
     copyVA = `${hex(base + cell.start, 8)}..${hex(base + cell.end, 8)}`;
   }
+  // The whole digest behind the abbreviated SHA256 row, or null when the
+  // function carries none. Shown beside the other two copy controls because a
+  // digest the panel abbreviates is otherwise a value no reader can take
+  // anywhere: it is the one row whose full text is longer than the row.
+  const copySha = fn?.sha256 ?? null;
+  // The Data Inspector's readings as text, for the Copy and Open its pane
+  // carries. Empty when the section is `.text` (no inspector) and when the
+  // block has no file-backed bytes, which is the same empty message the pane
+  // itself draws.
+  const inspector = inspectorText(panes.inspector);
+  const inspectorEmpty = inspector === "";
 
   return (
     <aside
@@ -419,7 +437,7 @@ export function CoveragePanel({
           >
             {title}
           </h2>
-          <div className="panel-actions ms-auto flex shrink-0 gap-2">
+          <div className="panel-actions ms-auto flex shrink-0 flex-wrap justify-end gap-2">
             <CopyButton
               label="Copy VA"
               value={copyVA ?? ""}
@@ -434,6 +452,14 @@ export function CoveragePanel({
               title="Copy the function's symbol"
               disabled={fn?.symbol == null}
             />
+            {copySha === null ? null : (
+              <CopyButton
+                label="Copy SHA"
+                value={copySha}
+                ariaLabel="Copy SHA256"
+                title="Copy the function's full SHA256 digest"
+              />
+            )}
           </div>
         </div>
         <div className="panel-meta mt-2">
@@ -478,8 +504,35 @@ export function CoveragePanel({
               />
             ) : (
               <section className="section mt-3">
-                <div className="section-title border-b border-line pb-1">
+                {/* The same head and the same two controls the three text panes
+                    carry: a reader who copies a block's disassembly can copy
+                    its interpreted values the same way, and a data block's
+                    readings are the ones most often wanted as text (into a
+                    note, a diff, a review). A pane the pattern skipped is a
+                    pane a reader has to read off the screen. A block with no
+                    file-backed bytes leaves nothing to take, so both controls
+                    go off with them, as they do on a text pane that holds only
+                    a message. */}
+                <div className="section-title flex items-center gap-2 border-b border-line pb-1">
                   <HexLogo label="{}" color="var(--accent-data)" heading="Data Inspector" />
+                  <div className="section-actions ms-auto flex gap-2">
+                    <CopyButton
+                      label="Copy"
+                      value={inspector}
+                      ariaLabel="Copy Data Inspector"
+                      title={inspectorEmpty ? "Select a block first" : ""}
+                      disabled={inspectorEmpty}
+                    />
+                    <Button
+                      className="copy-btn"
+                      aria-label="Open Data Inspector in a larger view"
+                      title={inspectorEmpty ? "Select a block first" : ""}
+                      disabled={inspectorEmpty}
+                      onClick={() => openModal("Data Inspector", inspector, "hex")}
+                    >
+                      Open
+                    </Button>
+                  </div>
                 </div>
                 <DataInspector items={panes.inspector} />
               </section>

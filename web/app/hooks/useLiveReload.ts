@@ -92,7 +92,17 @@ export function useLiveReload({
         // and the documents land when that run writes them.
         if (ok) {
           onDone(MSG.REGEN_DONE);
-        } else if (!inProgress) {
+        } else if (inProgress) {
+          // The run this key named is still going: a re-send that reached the
+          // run its own first send started. Neither a success nor a refusal,
+          // and the line left as it stood said neither: "Regenerating..."
+          // beside a button already back to "Regenerate" is a run nothing
+          // owns, so the reader clicks again and asks for a second pipeline.
+          // The documents land on their own and `db-updated` refreshes the
+          // map, so the line says that instead of holding a claim nothing
+          // will ever complete.
+          onNotice(MSG.REGEN_ALREADY_RUNNING);
+        } else {
           // A refusal carries the server's own words and the request id, so
           // the reader is left with something an operator can look up rather
           // than one line covering every way this can fail.

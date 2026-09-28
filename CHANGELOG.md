@@ -7,6 +7,19 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- The dashboard's detail panel carries a `Copy SHA` control for the SHA256 the
+  panel abbreviates to 16 characters. The abbreviated row is enough to
+  recognise a digest beside another report, and there was no way to read or
+  take the rest of it; the full digest is now also on the row's tooltip.
+- The Data Inspector pane in the detail panel carries the same `Copy` and
+  `Open` controls the three text panes carry. A data block's readings (the
+  int/uint columns, the string prefix) were the one pane a reader could only
+  read off the screen, and a copy now hands over one `label: value` per line.
+- Every row of the search result list names the section its match is in, not
+  only the rows already in the section on screen. A target-wide term matches
+  `.text` and `.rdata` alike, and two rows in different sections read
+  identically, with the pick switching tabs as a surprise. The section on
+  screen is still the one marked in the accent, as "in <section>".
 - `GET /api/health` reports an `auth` block (`failures`, `throttled`,
   `locked_peers`) and a `requests.transport_rejected` counter. A peer working
   through the `--token` gate is answered 401 and then 429, neither of which is
@@ -346,6 +359,13 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- A regeneration the server answers 202 for (a re-send that reached the run its
+  own first request started) left the dashboard's notice line reading
+  "Regenerating..." with nothing running behind it and the button already back
+  to "Regenerate", so the only move left was to ask for a second pipeline. The
+  line now says the regeneration is already under way and that the map
+  refreshes by itself when it finishes, which is what the `db-updated` event
+  then does.
 - **A refused `POST /api/regen` raised `NameError` and answered 500.** Every
   arm of the endpoint's security gate (a peer that is not loopback, an `Origin`
   that is not this dashboard, a failed token) routes through the one helper
