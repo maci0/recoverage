@@ -924,6 +924,14 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Removed
 
 - VanJS, the deferred `detail.js` split, and the vendored Highlight.js blobs.
+- The six duplicate pill-cap images in `recoverage.potato`
+  (`FILTER_ACT_L`, `FILTER_ACT_R`, `FILTER_ACT_MID`, `FILTER_INACT_L`,
+  `FILTER_INACT_R`, `FILTER_INACT_MID`). A filter pill and a section tab are
+  the same widget painted from the same palette pair, and the two sets were
+  byte-identical strings built twice, so the filter pills take the section
+  tabs' `ACTIVE_L` / `ACTIVE_R` / `ACTIVE_MID` and `INACTIVE_*` instead. A
+  rendered page is unchanged. Anything importing the `FILTER_*` names reaches
+  for `FILTER_OPTS`, which is now the one place the pills are spelled.
 
 ### Security
 

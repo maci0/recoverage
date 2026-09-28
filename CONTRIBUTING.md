@@ -226,6 +226,14 @@ here.
   test and a doc change do not. `tests/test_release.py` fails on a group
   outside that set, on a group that repeats, and on a `Breaking` marker the
   release has to answer with a major.
+- A refactor that deletes a public module-level name is not a refactor as far
+  as the changelog is concerned: anything importing it gets an `ImportError`,
+  which is a release note. `tests/public_surface.txt` is the package's public
+  surface as of the last release that shipped with no unrecorded removal, and
+  `tests/test_release.py`
+  (`TestPublicSurfaceChangesAreRecorded`) fails when a name in it is gone and
+  no `Removed` or `Breaking` entry records the removal. Adding a name needs no
+  entry and no baseline edit; removing one is legal once it is written down.
 - `filterwarnings = ["error"]` in `pyproject.toml` means a new
   `ResourceWarning` (unclosed socket, file, or connection) fails the build.
   Close the resource instead of filtering the warning.

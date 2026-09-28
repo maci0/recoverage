@@ -7,6 +7,7 @@ the reverse), and a raised dependency floor nobody wrote down.
 
 from __future__ import annotations
 
+import ast
 import json
 import re
 import tomllib
@@ -24,6 +25,11 @@ _MANIFEST = (
 _CHANGELOG = _MANIFEST.parent / "CHANGELOG.md"
 _MAN_PAGE = _MANIFEST.parent / "man" / "recoverage.1"
 _INIT = _MANIFEST.parent / "src" / "recoverage" / "__init__.py"
+_PACKAGE = _MANIFEST.parent / "src" / "recoverage"
+
+#: The public module-level surface as of the last release that shipped with no
+#: unrecorded removal, read by `TestPublicSurfaceChangesAreRecorded`.
+_PUBLIC_SURFACE = _MANIFEST.parent / "tests" / "public_surface.txt"
 
 #: The documents that restate the shipped version: the supported-versions table
 #: in `SECURITY.md` and the scope line in `docs/THREAT_MODEL.md`. Both name a
@@ -454,3 +460,115 @@ def _upgrade_guide_sections() -> list[str]:
     let a heading that names no release satisfy the gate.
     """
     return re.findall(r"^## \[([^\]]+)\]$", _upgrade_guide(), re.MULTILINE)
+
+
+def _recorded_public_surface() -> set[str]:
+    """The `module::NAME` lines of the checked-in baseline, comments dropped."""
+    return {
+        line
+        for line in _PUBLIC_SURFACE.read_text(encoding="utf-8").splitlines()
+        if line and not line.startswith("#")
+    }
+
+
+def _defined_public_surface() -> set[str]:
+    """Every module-level name in the package that does not start with `_`.
+
+    Read from the sources with `ast` rather than imported, so it answers for a
+    tree the suite has not imported yet and for one an editable install points
+    elsewhere. Functions, classes and module-level assignments count: those are
+    what another module reaches by importing them, so a name that vanishes from
+    one of them is a consumer's `ImportError`.
+    """
+    defined: set[str] = set()
+    for path in sorted(_PACKAGE.rglob("*.py")):
+        parts = list(path.relative_to(_PACKAGE.parent).with_suffix("").parts)
+        if parts[-1] == "__init__":
+            parts.pop()
+        module = ".".join(parts)
+        for node in ast.parse(path.read_text(encoding="utf-8")).body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                if not node.name.startswith("_"):
+                    defined.add(f"{module}::{node.name}")
+                continue
+            targets: list[ast.expr]
+            if isinstance(node, ast.Assign):
+                targets = list(node.targets)
+            elif isinstance(node, ast.AnnAssign):
+                targets = [node.target]
+            else:
+                continue
+            for target in targets:
+                for name in ast.walk(target):
+                    if isinstance(name, ast.Name) and not name.id.startswith("_"):
+                        defined.add(f"{module}::{name.id}")
+    return defined
+
+
+def _unrecorded_removals(baseline: set[str], changelog: str) -> list[str]:
+    """Baseline names the package no longer defines, if the changelog is silent.
+
+    A `Removed` or `Breaking` group anywhere in the file is the record: its
+    entries name the symbols, and no test here has to guess which line of
+    prose covers which name. The gate reads the whole file rather than the
+    pending block, so a release that has already recorded its removals keeps
+    passing afterwards without the baseline being rewritten under it.
+    """
+    if "### Removed" in changelog or "### Breaking" in changelog:
+        return []
+    return sorted(baseline - _defined_public_surface())
+
+
+class TestPublicSurfaceChangesAreRecorded:
+    """A public name that leaves the package is a release-note question.
+
+    `CONTRIBUTING.md` asks for a changelog entry for a change a user of the
+    dashboard or the CLI can see, and says a refactor does not get one. That
+    is the rule that hid a removal: six module-level constants in
+    `recoverage.potato` were deleted as duplicates of the section tabs' own,
+    the commit read as a refactor, and nothing recorded that an importer of
+    `recoverage.potato` now gets an `AttributeError`. `tests/public_surface.txt`
+    is the surface as of the last release that shipped with no unrecorded
+    removal, and this class is the gate: the removal is legal, and it is not
+    legal to ship it unwritten.
+    """
+
+    def test_a_removed_public_name_is_written_down(self) -> None:
+        unrecorded = _unrecorded_removals(_recorded_public_surface(), _changelog())
+        assert unrecorded == [], (
+            "public name(s) removed from the package with no `Removed` or "
+            f"`Breaking` entry in CHANGELOG.md: {unrecorded}"
+        )
+
+    def test_an_added_public_name_is_not_a_removal(self) -> None:
+        """Adding to the surface is what a minor release does, so it is silent.
+
+        The gate reads one direction on purpose: a baseline that also had to
+        carry every new name would fail on each addition and stop being read.
+        """
+        added = _defined_public_surface() - _recorded_public_surface()
+        assert added, (
+            "the package defines nothing the baseline predates, so this test can "
+            "no longer tell an addition from a removal"
+        )
+        reported = _unrecorded_removals(_recorded_public_surface(), "")
+        assert not set(reported) & added, f"an addition was reported as a removal: {reported}"
+
+    def test_the_baseline_claims_no_private_name(self) -> None:
+        """A baseline naming everything would gate nothing.
+
+        A leading underscore is the spelling that says a name is not part of
+        the surface, so a baseline line carrying one is a line that would
+        never be able to report a removal.
+        """
+        private = {
+            name for name in _recorded_public_surface() if name.split("::")[1].startswith("_")
+        }
+        assert private == set(), f"private name(s) in the baseline: {sorted(private)}"
+
+    def test_the_gate_fires_on_an_unrecorded_removal(self) -> None:
+        """A guard nothing has seen fail is not known to work."""
+        gone = "recoverage.potato::FILTER_ACT_MID"
+        assert gone not in _defined_public_surface(), "the self-test needs a name the package lacks"
+        assert _unrecorded_removals({gone}, "") == [gone]
+        assert _unrecorded_removals({gone}, "### Removed\n\n- the six pill caps.\n") == []

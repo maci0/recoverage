@@ -73,7 +73,10 @@ recoverage/
 │   ├── test_perf.py          # Deterministic perf gates (work counters, not wall clock)
 │   ├── test_metrics.py       # Request id, RED counters, slow-request log line
 │   ├── test_release.py       # Release contract: version, changelog, declared floors,
-│   │                         #   the upgrade guide's coverage of the breaking majors
+│   │                         #   the upgrade guide's coverage of the breaking majors,
+│   │                         #   the public-surface baseline the removals are read against
+│   ├── public_surface.txt    # The package's public module-level surface at the last
+│   │                         #   release that shipped with no unrecorded removal
 │   ├── test_supply_chain.py  # Pin contracts: rebrew tag/SHA, one clone mechanism, preset
 │   │                         #   license, declared-vs-imported deps, npm lock pin + integrity,
 │   │                         #   bundled-asset grants
@@ -350,6 +353,22 @@ The release policy is not written down anywhere else, so it is stated here and
   under `Changed`, and the entry there says so now. Nothing in the Unreleased
   section is release bookkeeping; it is published verbatim under the version,
   so a "tag this as 2.0.0" note would ship to the reader.
+- The one break the changelog cannot see is one that leaves no prose behind:
+  a module-level name deleted in a commit the tree calls a refactor, which
+  `CONTRIBUTING.md` says gets no entry. Six constants in `potato.py` went that
+  way, and an importer of `recoverage.potato` got an `AttributeError` the
+  release notes did not mention. `tests/public_surface.txt` is the package's
+  public module-level surface (functions, classes and module-level assignments
+  without a leading underscore) as of the last release that shipped with no
+  unrecorded removal, and
+  `tests/test_release.py::TestPublicSurfaceChangesAreRecorded` fails when a
+  name in it is gone and no `Removed` or `Breaking` group records the removal.
+  Adding a name needs neither an entry nor a baseline edit, which is why the
+  gate reads one direction: a baseline carried forward on every addition would
+  fail constantly and stop being read. Rewriting the baseline is the release
+  commit's move, made beside the entry that records what it dropped. A name
+  that only this tree imports is private whatever its spelling, so it is
+  renamed with a leading underscore rather than recorded.
 - The release commit is `chore: release X.Y.Z` and the tag is `vX.Y.Z`;
   both land together, and neither is re-cut.
 - `rebrew` is a hard runtime dependency and is not on the package index, so
