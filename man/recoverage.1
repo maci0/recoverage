@@ -27,6 +27,14 @@ and
 .B "recoverage serve \-\-regen"
 also run.
 .PP
+.B serve
+stops on
+.B SIGINT
+(Ctrl+C) or
+.BR SIGTERM ,
+the signal a service manager or a container runtime sends: both unwind the
+listener, cancel the deferred browser opener and exit 0.
+.PP
 Run
 .B recoverage config
 to print the settings
@@ -94,6 +102,13 @@ Required with
 acknowledges that the unauthenticated API, including raw binary bytes, is
 exposed on the network (env:
 .BR RECOVERAGE_ALLOW_REMOTE ).
+Set with a loopback
+.BR \-\-bind ,
+it acknowledges nothing, and both
+.B serve
+and
+.B config
+say so on stderr.
 .TP
 .B \-\-no\-open
 Do not open a browser automatically.

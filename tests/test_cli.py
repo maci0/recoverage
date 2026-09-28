@@ -1311,6 +1311,65 @@ class TestOpenPort:
 
 
 class TestServeServerWiring:
+    def test_the_installed_allowlist_is_what_the_server_is_configured_with(
+        self, monkeypatch: Any
+    ) -> None:
+        """The CORS allowlist reaches the server as the RESOLVED list.
+
+        The flag is ``None`` whenever ``--cors-origin`` is absent, which is the
+        default and every ``RECOVERAGE_CORS_ORIGIN``-only deployment, and both
+        ``configure_security`` (``list(...)``) and ``active_config``
+        (``",".join(...)``) iterate what they are handed: passing the raw
+        option terminated ``serve`` with a TypeError before the listener ever
+        bound.  The resolved list is the normalized one the request-path
+        matcher compares against, so anything else installs a different
+        allowlist than the banner reports.
+        """
+        from recoverage.server import app as server_app
+
+        captured: list[dict[str, Any]] = []
+        monkeypatch.setattr("recoverage.api._ensure_db_watcher", lambda: None)
+        monkeypatch.setattr(
+            "recoverage.server.configure_security",
+            lambda **kwargs: captured.append(kwargs),
+        )
+        monkeypatch.setattr(type(server_app), "run", lambda self, **kwargs: None)
+
+        result = runner.invoke(
+            app,
+            [
+                "serve",
+                "--no-open",
+                "--port",
+                "8123",
+                "--cors",
+                "--cors-origin",
+                "http://EXAMPLE.com:5173",
+            ],
+        )
+        assert result.exit_code == 0
+        assert captured[-1]["cors_allowed_origins"] == ["http://example.com:5173"]
+        assert "cors_origin=http://example.com:5173" in result.output
+
+    def test_no_cors_origin_leaves_an_empty_allowlist_not_none(self, monkeypatch: Any) -> None:
+        """CORS off is the default and must install an empty LIST: the matcher
+        is handed None for the flag's absence today, which nothing downstream
+        can iterate."""
+        from recoverage.server import app as server_app
+
+        captured: list[dict[str, Any]] = []
+        monkeypatch.setattr("recoverage.api._ensure_db_watcher", lambda: None)
+        monkeypatch.setattr(
+            "recoverage.server.configure_security",
+            lambda **kwargs: captured.append(kwargs),
+        )
+        monkeypatch.setattr(type(server_app), "run", lambda self, **kwargs: None)
+
+        result = runner.invoke(app, ["serve", "--no-open", "--port", "8123"])
+        assert result.exit_code == 0
+        assert captured[-1]["cors_allowed_origins"] == []
+        assert "cors_origin=none" in result.output
+
     def test_run_gets_threaded_server_and_bounded_handler(self, monkeypatch: Any) -> None:
         """serve must wire the threaded server class AND the request handler
         carrying the per-connection socket deadline.  ThreadingMixIn caps
@@ -1651,6 +1710,137 @@ class TestServeKeyboardInterrupt:
         assert result.exit_code != 0
         time.sleep(0.7)  # past the timer's 0.5s deadline
         assert opened == [], "cancelled opener still fired after the watcher failed to start"
+
+
+class TestServeStopSignal:
+    """SIGTERM is how a deployment stops the server; Ctrl+C is not.
+
+    ``systemctl stop``, ``docker stop`` and a pod eviction all send SIGTERM,
+    whose default disposition kills the process where it stands: the accept
+    loop never unwinds, ``serve``'s ``finally`` never runs, and every
+    request in flight is cut mid-body.  The stop handler turns it into the
+    same path the keystroke already takes.
+    """
+
+    def test_sigterm_handler_is_installed_while_serving(self, monkeypatch: Any) -> None:
+        import signal
+
+        from recoverage.server import app as server_app
+
+        monkeypatch.setattr("recoverage.api._ensure_db_watcher", lambda: None)
+        installed: list[Any] = []
+
+        def record_and_interrupt(self: Any, **kwargs: Any) -> None:
+            installed.append(signal.getsignal(signal.SIGTERM))
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(type(server_app), "run", record_and_interrupt)
+        result = runner.invoke(app, ["serve", "--no-open", "--port", "8123"])
+
+        assert result.exit_code == 0
+        assert installed and installed[0] is not signal.getsignal(signal.SIGTERM), (
+            "serve ran with the inherited SIGTERM disposition"
+        )
+
+    def test_the_handler_raises_the_path_serve_already_handles(self) -> None:
+        """The handler's whole contract: the stop unwinds like Ctrl+C.
+
+        Judged against KeyboardInterrupt, the exception ``serve`` already
+        catches, rather than against the exit code: the point is that it
+        reaches the existing cleanup and not that it invents a new exit.
+        """
+        import signal
+
+        from recoverage import cli
+
+        previous = signal.getsignal(signal.SIGTERM)
+        restore = cli._stop_on_sigterm()
+        try:
+            handler = signal.getsignal(signal.SIGTERM)
+            assert callable(handler)
+            with pytest.raises(KeyboardInterrupt):
+                handler(signal.SIGTERM, None)  # type: ignore[operator]
+        finally:
+            restore()
+
+        assert signal.getsignal(signal.SIGTERM) is previous, "handler not restored"
+
+    def test_sigterm_cancels_deferred_browser_opener(self, monkeypatch: Any) -> None:
+        """Same as the Ctrl+C case: a stop must not leave the armed opener to
+        fire half a second later at a port that is no longer served.
+
+        The signal is really delivered (``os.kill`` to this process while the
+        stubbed listener stands in for the accept loop), so the test covers
+        the whole path: disposition, handler, ``except KeyboardInterrupt``,
+        ``finally``.  The handler is process-wide for the duration, and
+        ``serve``'s finally restores it.
+        """
+        import signal
+        import time
+
+        from recoverage.server import app as server_app
+
+        monkeypatch.setattr("recoverage.api._ensure_db_watcher", lambda: None)
+        opened: list[str] = []
+        monkeypatch.setattr("recoverage.cli.open_browser", lambda url: opened.append(url) or True)
+
+        def stop(self: Any, **kwargs: Any) -> None:
+            os.kill(os.getpid(), signal.SIGTERM)
+
+        monkeypatch.setattr(type(server_app), "run", stop)
+        result = runner.invoke(app, ["serve", "--port", "8123"])
+        assert result.exit_code == 0
+        time.sleep(0.7)  # past the timer's 0.5s deadline
+        assert opened == [], "cancelled opener still fired after the stop signal"
+
+    def test_sigterm_restores_the_previous_handler(self, monkeypatch: Any) -> None:
+        """The restore runs on the way out of every exit, so a handler is never
+        left installed on a process that has stopped serving."""
+        import signal
+
+        from recoverage.server import app as server_app
+
+        monkeypatch.setattr("recoverage.api._ensure_db_watcher", lambda: None)
+        before = signal.getsignal(signal.SIGTERM)
+        monkeypatch.setattr(type(server_app), "run", lambda self, **kwargs: None)
+        result = runner.invoke(app, ["serve", "--no-open", "--port", "8123"])
+
+        assert result.exit_code == 0
+        assert signal.getsignal(signal.SIGTERM) is before
+
+
+class TestAllowRemoteWithoutRemoteBind:
+    """The acknowledgment that does nothing.
+
+    A loopback bind is refused without it and accepts it silently, so an
+    operator who exported ``RECOVERAGE_ALLOW_REMOTE=1`` expecting a reachable
+    dashboard gets one only this machine can reach.  The only clue otherwise
+    is a connection refused from the machine they were serving.
+    """
+
+    def test_a_loopback_bind_with_the_acknowledgment_warns(self, monkeypatch: Any) -> None:
+        monkeypatch.setenv("RECOVERAGE_ALLOW_REMOTE", "1")
+        result = runner.invoke(app, ["config"])
+
+        assert result.exit_code == 0
+        assert "allow-remote is set but --bind 127.0.0.1" in result.output
+
+    def test_a_remote_bind_with_the_acknowledgment_does_not_warn(self, monkeypatch: Any) -> None:
+        monkeypatch.setenv("RECOVERAGE_ALLOW_REMOTE", "1")
+        monkeypatch.setenv("RECOVERAGE_BIND", "0.0.0.0")
+        result = runner.invoke(app, ["config"])
+
+        assert result.exit_code == 0
+        assert "is set but --bind" not in result.output
+
+    def test_a_loopback_bind_without_the_acknowledgment_does_not_warn(
+        self, monkeypatch: Any
+    ) -> None:
+        monkeypatch.delenv("RECOVERAGE_ALLOW_REMOTE", raising=False)
+        result = runner.invoke(app, ["config"])
+
+        assert result.exit_code == 0
+        assert "is set but --bind" not in result.output
 
 
 class TestRegenFailures:

@@ -211,7 +211,14 @@ this table and misses it.
 `USERPROFILE` it resolves against on Windows work as they do on POSIX.
 
 `RECOVERAGE_ALLOW_REMOTE` is still yours to set: a non-loopback bind without
-it exits 1, whether the address came from the flag or the environment.
+it exits 1, whether the address came from the flag or the environment. Set
+against a loopback bind it does the opposite of what it says, so both `serve`
+and `recoverage config` warn: the dashboard stays reachable only from that
+machine, and a `systemctl stop` or `docker stop` reaches it.
+
+Stopping is `SIGINT` or `SIGTERM`; both unwind the accept loop, cancel the
+deferred browser opener and exit 0, so a unit file's `TimeoutStopSec` drains
+instead of cutting the requests in flight.
 
 `RECOVERAGE_DB` moves what is *read*, and rebrew resolves what a regen
 *writes* from `rebrew-project.toml` alone. A regen with the two pointing at

@@ -7,6 +7,13 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `SIGTERM` stops the dashboard the way Ctrl+C does. `systemctl stop`,
+  `docker stop` and a pod eviction all send it, and its default disposition
+  killed the process where it stood: the accept loop never unwound, the
+  deferred browser opener was not cancelled, and every request in flight was
+  cut mid-body. A stop signal now takes the same path the keystroke takes and
+  exits 0.
+
 - `GET /api/health` carries a `caches` block: hits and misses for the `/data`
   payload memo, the `/stats` memo and the `If-None-Match` revalidation every
   cacheable endpoint answers. A dashboard whose response time grew used to
@@ -293,6 +300,11 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   dashboard groups digits the reader's locale groups them: the integer readings
   in the data inspector, a function's size and blocker delta, the verify diff
   line and register deltas, and the search-status match count.
+- `RECOVERAGE_ALLOW_REMOTE` set against a loopback `RECOVERAGE_BIND` does
+  nothing, and said so nowhere: an operator who exported it expecting a
+  reachable dashboard got one only that machine reaches, and the only clue was
+  a refused connection. `serve` and `recoverage config` now warn, beside the
+  CORS warnings they already print.
 - **`make build` stamped a sdist with the wrong date, or crashed, when
   `SOURCE_DATE_EPOCH` was not plain ASCII digits.** The value was checked with
   `str.isdigit`, which accepts every Unicode decimal digit and every

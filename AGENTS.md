@@ -619,7 +619,11 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   reason, with a message naming the banner that holds the real number.
 - The network-bind acknowledgment and the CORS warnings are ONE rule, in
   `cli._remote_bind_gate` and `cli._cors_warnings`, and both `serve` and
-  `recoverage config` run it. `config` is the preflight a deployment gates on:
+  `recoverage config` run it. `cli._ack_warnings` is the other direction of
+  the first one, and a warning for the same reason: the acknowledgment SET
+  against a loopback bind is a no-op, so an operator who exported it expecting
+  a reachable dashboard has one only this machine reaches. `config` is the
+  preflight a deployment gates on:
   a check that exits 0 for a configuration `serve` exits 1 on is a deployment
   that finds out at boot instead of at the check. `cli._db_warnings` joins
   them: a coverage directory that does not exist, or exists and holds no
@@ -995,6 +999,20 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   wildcard bind address is not connectable. A startup that defers work on a
   timer does not treat `cancel()` as a join
   (`tests/test_lifecycle.py`, `TestOpenAndReap`).
+- The way a deployment stops the dashboard is SIGTERM, not Ctrl+C:
+  `systemctl stop`, `docker stop` and a pod eviction all send it, and its
+  default disposition kills the process where it stands, so the accept loop
+  never unwinds and `serve`'s `finally` never runs. `cli._stop_on_sigterm`
+  arms the handler for the length of the listener and raises
+  `KeyboardInterrupt` from it, which is what puts a signal on the path
+  `except KeyboardInterrupt` already covers rather than a second cleanup
+  beside it; the callable it returns is the one restore, and `serve`'s
+  `finally` calls it. It is installed BEFORE the `try` and not inside it, so
+  a `serve()` run from a non-main thread fails the way it did before rather
+  than through an unbound name in the cleanup. SIGINT is left to the
+  interpreter. Pinned by `tests/test_cli.py` (`TestServeStopSignal`), which
+  delivers a real signal to the test process with `os.kill` while the stubbed
+  listener stands in for the accept loop.
 - `server.set_auth_cookie` is the one place the `?token=` share-link cookie is
   written, and every page route a share link can land on calls it: `/` and
   `/potato`. Both pages link with relative URLs, so the cookie is what carries

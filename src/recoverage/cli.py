@@ -16,7 +16,7 @@ import sys
 import threading
 import time
 import webbrowser
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 from typing import IO, Any, NamedTuple, NoReturn
 from urllib.parse import urlsplit
@@ -936,6 +936,68 @@ def _db_warnings(db: Path | None) -> list[str]:
     ]
 
 
+def _ack_warnings(bind: str, allow_remote: bool) -> list[str]:
+    """The network acknowledgment that will not do what was written.
+
+    The counterpart of :func:`_remote_bind_gate`, which refuses a remote bind
+    nobody acknowledged. This is the other direction, and it cannot be fatal:
+    a loopback bind is the safe one, so the server still starts and still
+    serves. But the operator who exported the acknowledgment expected a
+    reachable dashboard and has a loopback-only one, and the only clue is a
+    connection refused from the machine they were serving.
+
+    Returned rather than printed so ``serve`` and ``recoverage config`` warn
+    from one rule, and so the preflight says what ``serve`` will say.
+    """
+    from recoverage.server import LOOPBACK_HOSTS
+
+    if allow_remote and bind in LOOPBACK_HOSTS:
+        return [
+            (
+                f"warning: --allow-remote is set but --bind {bind} is a loopback address, "
+                "so the dashboard is reachable only from this machine. Bind an interface "
+                "address (0.0.0.0 for every interface) to serve the network."
+            )
+        ]
+    return []
+
+
+def _stop_on_sigterm() -> Callable[[], None]:
+    """Stop on SIGTERM the way Ctrl+C stops; return the restore callable.
+
+    Ctrl+C is the documented way to stop the dashboard, but a deployment does
+    not press it: ``systemctl stop``, ``docker stop`` and a pod eviction all
+    send SIGTERM, whose default disposition terminates the process where it
+    stands. The accept loop never unwinds, the ``finally`` in ``serve`` never
+    runs, and every request in flight is cut mid-body with no log line and no
+    stop record.
+
+    Raising :class:`KeyboardInterrupt` from the handler is the whole fix. A
+    signal is delivered on the main thread, which is the thread inside
+    ``bottle_app.run``, so ``serve``'s existing ``except KeyboardInterrupt``
+    and ``finally`` cover the stop exactly as they cover the keystroke: the
+    same quiet exit, the same cancelled deferred opener.
+
+    SIGINT is left to the interpreter, which already raises here. The
+    returned callable puts back whatever handler was installed before, so a
+    test or an embedding caller is not left running under this one.
+    """
+    if not hasattr(signal, "SIGTERM"):
+        return lambda: None
+    previous = signal.getsignal(signal.SIGTERM)
+
+    def raise_interrupt(signum: int, frame: object) -> NoReturn:
+        raise KeyboardInterrupt
+
+    def restore() -> None:
+        # signal.signal returns the handler it displaced; the callable handed
+        # back says nothing, and serve's finally only calls it.
+        signal.signal(signal.SIGTERM, previous)
+
+    signal.signal(signal.SIGTERM, raise_interrupt)
+    return restore
+
+
 def _configure_logging(level: int) -> None:
     """Route the root logger to stderr at *level*, with the request-id format.
 
@@ -992,7 +1054,7 @@ def _echo_banner(
     if cors:
         typer.echo("  CORS: enabled")
     typer.echo("  Regen: POST /api/regen or click Reload in UI")
-    typer.echo("  Stop: Ctrl+C")
+    typer.echo("  Stop: Ctrl+C, or SIGTERM (systemctl stop, docker stop)")
 
 
 @app.command()
@@ -1130,6 +1192,8 @@ def serve(
         )
     for warning in _cors_warnings(cors, resolved.cors_origins_requested):
         _secho(warning, fg=typer.colors.YELLOW, err=True)
+    for warning in _ack_warnings(bind, allow_remote):
+        _secho(warning, fg=typer.colors.YELLOW, err=True)
     for warning in _db_warnings(resolved.db):
         _secho(warning, fg=typer.colors.YELLOW, err=True)
     # IPv6 hosts need brackets in any URL spelling (::1 bare is parsed as
@@ -1148,6 +1212,12 @@ def serve(
     # binds (user opted in via --allow-remote) skip validation.
     _server.configure_security(
         cors_enabled=cors,
+        # The INSTALLED allowlist, not the raw --cors-origin option: the option
+        # is None whenever the flag is absent (the default, and every
+        # RECOVERAGE_CORS_ORIGIN-only deployment), and configure_security does
+        # list() on what it is handed, so passing it terminated `serve` with a
+        # TypeError before the listener bound. The resolved list is also the
+        # one the banner and the request-path matcher read.
         cors_allowed_origins=allowed_origins,
         auth_token=token or "",
         allowed_hosts=None if is_remote else set(LOOPBACK_HOSTS),
@@ -1177,6 +1247,7 @@ def serve(
         bind=bind,
         allow_remote=allow_remote,
         cors=cors,
+        # The installed allowlist, for the reason configure_security got above.
         cors_origin=allowed_origins,
         token=token,
         db=resolved.db,
@@ -1229,6 +1300,11 @@ def serve(
     # was listening on half a second later, which is the exact outcome the
     # finally's own comment claims to cover.  A startup step that fails this
     # way is a failed start, whichever step it was.
+    # Armed before the try, so the finally below always finds the callable
+    # bound: signal.signal only raises off the main thread, and a serve() run
+    # from a test thread must fail the way it did before rather than through
+    # a NameError in the cleanup.
+    restore_stop_handler = _stop_on_sigterm()
     try:
         _ensure_db_watcher()
 
@@ -1275,6 +1351,7 @@ def serve(
         # Cancel alone cannot be the whole answer: it returns before the timer
         # thread has stopped, so a callback already past its own check runs
         # anyway — hence the listener probe inside the opener.
+        restore_stop_handler()
         if browser_timer is not None:
             browser_timer.cancel()
 
@@ -1826,6 +1903,8 @@ def config_cmd(
         for key, value in settings.items():
             typer.echo(f"{key}={value}")
     for warning in _cors_warnings(resolved.cors, resolved.cors_origins_requested):
+        _secho(warning, fg=typer.colors.YELLOW, err=True)
+    for warning in _ack_warnings(resolved.bind, resolved.allow_remote):
         _secho(warning, fg=typer.colors.YELLOW, err=True)
     for warning in _db_warnings(resolved.db):
         _secho(warning, fg=typer.colors.YELLOW, err=True)
