@@ -909,7 +909,12 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   one cannot catch a drain to EOF — the read is pinned against a stream that
   refuses to run off the end of the frame (`tests/test_api.py`,
   `TestFramedBodyIsReadToItsDeclaredLength`). A chunk-size line is read through
-  `server.parse_ascii_int`, not `int(x, 16)`. Every refusal it raises leaves the
+  `server.parse_ascii_int`, not `int(x, 16)`. Every read in the chunked reader
+  stops at a named bound, the trailer section included
+  (`server._TRAILER_MAX_BYTES`, on the running total): the loop consuming
+  trailers ended only on the final CRLF, so a peer streaming short trailer
+  lines held its handler thread and its admission slot for the whole socket
+  deadline, one request per slot. Every refusal it raises leaves the
   rest of the body in the socket, so the answer must carry `Connection: close`;
   `api._body_rejected` is the one helper that puts it there. A new endpoint
   reading a body calls the helper for both `RequestBodyTooLargeError` and

@@ -404,6 +404,17 @@ _BODY_READ_CHUNK = 64 * 1024
 #: this reader is going to finish parsing.
 _CHUNK_LINE_MAX = 1024
 
+#: Total bytes a chunked body's TRAILER section may occupy before the body is
+#: refused.  RFC 9112 7.1.2 allows trailers, and no client this dashboard talks
+#: to sends one, but the loop that consumes them had no bound of its own: it
+#: ended only on the final CRLF or on the socket deadline, so a peer streaming
+#: 1 KiB trailer lines held its handler thread and its admission slot for the
+#: whole :data:`devserver._CLIENT_SOCKET_TIMEOUT_SECONDS` — the one part of a
+#: chunked body that outlived every other cap in this reader.  Bounded on the
+#: running total rather than on a line count, so the bound is bytes of input
+#: rather than bytes of a parse this does not perform.
+_TRAILER_MAX_BYTES = 8 * 1024
+
 
 def _declared_content_length() -> int | None:
     """The request's declared body length in bytes, or None when it has none.
@@ -456,12 +467,22 @@ def _read_chunked_body(limit: int) -> bytes:
             raise RequestBodyTooLargeError(f"body over the {limit}-byte limit")
         if size == 0:
             # The terminating chunk, then optional trailers to the final CRLF.
+            # The accumulated length is the bound: one trailer line under
+            # _CHUNK_LINE_MAX can be read in a loop forever, and every line it
+            # reads is another moment this handler thread and its connection
+            # slot are held against a peer that will never finish.
+            trailer_bytes = 0
             while True:
                 trailer = stream.readline(_CHUNK_LINE_MAX + 1)
                 if trailer in (b"\r\n", b"\n", b""):
                     break
                 if len(trailer) > _CHUNK_LINE_MAX:
                     raise RequestBodyMalformedError("oversize trailer line")
+                trailer_bytes += len(trailer)
+                if trailer_bytes > _TRAILER_MAX_BYTES:
+                    raise RequestBodyMalformedError(
+                        f"chunk trailers over the {_TRAILER_MAX_BYTES}-byte limit"
+                    )
             return bytes(body)
         remaining = size
         while remaining:

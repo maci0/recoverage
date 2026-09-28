@@ -2223,6 +2223,37 @@ class TestBatchFunctionLookup:
         assert status.startswith("400")
         assert headers.get("Connection") == "close"
 
+    def test_batch_refuses_unbounded_chunk_trailers(self) -> None:
+        """The trailer section is the one part of a chunked body with no cap.
+
+        Every other read in the chunked reader stops at a limit: the size line
+        at _CHUNK_LINE_MAX, the data at the caller's cap, the declared length
+        before a byte is read. The trailer loop ended only on the final CRLF, so
+        a peer streaming short trailer lines held its handler thread and its
+        admission slot for the whole socket deadline — one request per slot,
+        for as long as the client cared to keep writing. Refused past the
+        trailer bound, with the read count asserted so a future cap that only
+        moved the status code cannot pass for one that moved the read."""
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        trailer = b"x" * 64 + b"\r\n"
+        stream = _CountingStream(b"0\r\n" + trailer * 1024)
+        status, headers, _body = wsgi_request(
+            "POST",
+            f"/api/targets/{target}/functions",
+            {"Transfer-Encoding": "chunked"},
+            wsgi_input=stream,
+            content_length=None,
+        )
+        assert status.startswith("400")
+        assert headers.get("Connection") == "close"
+        # 1 read for the terminating chunk's size line, then one per trailer
+        # line up to the bound — nowhere near the 1024 the peer offered.
+        offered = 1024
+        reads_after_one_trailer_line = 1 + _server._TRAILER_MAX_BYTES // len(trailer)
+        assert reads_after_one_trailer_line < stream.reads < offered
+
     def test_batch_omits_unknown_vas(self) -> None:
         target = require_target()
         status, headers, body = self._post(
