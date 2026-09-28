@@ -124,13 +124,14 @@ it is mounted from.
 * **Phosphor Glow, Not a Scanline Overlay**: the CRT effect is light, not a texture. Cyan text-shadows and box-shadows on the tokens that earn them, dropped in light mode; the only scanlines in the package are drawn into `assets/favicon.svg`, where a repaint per frame is not paid. An overlay across the whole page was dropped: at `0.05` opacity it was a repaint on every scroll frame for a texture no one could name.
 * **Match Status Colors**:
   * **Exact**: Green (`rgba(16, 185, 129, 0.75)`)
-  * **Reloc**: Blue/Teal (`rgba(2, 132, 199, 0.65)`)
+  * **Reloc**: Blue/Teal (`rgba(2, 132, 199, 0.8)`)
   * **Near-match**: Yellow/Amber (`rgba(255, 200, 0, 0.65)`)
   * **Size mismatch**: Yellow/Amber, the same hue as near-match (the SPA's `STATE_SLOTS` in `web/app/grid/pack.ts` packs both to slot 3)
   * **Proven**: Bold Cyan (`rgba(6, 182, 212, 0.65)`, `--proven-bg`)
-  * **Stub**: Red (`rgba(255, 0, 0, 0.65)`)
+  * **Stub**: Red (`rgba(255, 0, 0, 0.8)`)
   * **Padding**: Silver (`rgba(200, 200, 220, 0.55)`)
-  * **Problem**: Violet (`--other-bg`, `rgba(168, 85, 247, 0.55)`, the same `#a855f7` Potato Mode uses)
+  * **Problem**: Violet (`--other-bg`, `rgba(168, 85, 247, 0.55)` dark and `#6a3bc7` light, the same hue Potato Mode paints at `#a855f7`)
+* **Cell fills are drawn per theme, not tinted per theme**: the eight fills above are alpha colours tuned to composite over a near-black ground. Over the light ground they washed out: a 0.65-alpha near-match landed at 1.0:1 against the map background, so an exact cell and a near-match cell read as the same pale wash and the map stopped being the signal. `.light-mode` therefore declares its own eight, deeper steps of the same hues, opaque rather than translucent, because a tint's value is whatever is behind it. Every one clears 3:1 against the surface a cell is painted on (`--grid-bg` over `--bg`, `#bdc6ca`), and the light text tokens are steps of these same hues.
 * **One palette, not two**: every other color is drawn from the same source. Status badges tint their fill with the state hue at 0.2 alpha (border 0.4) and take their text from the same hue, lightened where 4.5:1 needs it. Links use the cyan family (`--link`), not a stock blue. The highlight.js theme in `web/app/index.css` reads the app tokens by `var()` rather than restating their hexes — `--text`, `--muted`, `--link`, `--badge-stub-text` for keywords, `--badge-near-text` for strings, `--badge-exact-text` for names, `--c` for section markers — so a code pane follows a palette change instead of trailing one release behind it. Four values are the deliberate exception, a lightened step of a status hue that clears 4.5:1 as 12px text where the cell fill's own value does not; the file says which. Potato Mode derives its own colors from its module constants (`BG_COLOR`, `PANEL_COLOR`, `TRACK_COLOR`, `BORDER_COLOR`); no hex literal in `potato.py` is a stock framework neutral.
 * **Transitions**: Smooth `0.3s ease` transitions on background colors, borders, and opacities ensure fluid theme switching and filter toggling.
 * **Scrollbars**: every scrolling region gets the standard thin scrollbar the theme's `--scroll-thumb` token names (`scrollbar-width`/`scrollbar-color`), so both engine families follow the palette.
@@ -139,7 +140,7 @@ it is mounted from.
 * **Favicon**: `assets/favicon.svg`, matching the retro-futuristic "R" logo with a cyan glow and scanline pattern.  It is a served file rather than an inline data URI so it stays out of the first-packet budget.
 * **Responsive**: there are no breakpoints and no `pointer` media queries. The topbar is a single flex row that wraps, the map takes the width it is given, and the two panes stack by their own grid rules rather than by a viewport width.
 * **Reduced motion**: the theme cross-fade is the only page-wide animation, and it sits inside a `prefers-reduced-motion: no-preference` wrapper, so a reader who asked for less motion gets the instant switch.
-* **Contrast**: text-bearing tokens clear 4.5:1 on the surface they sit on, in both themes.  `--c` doubles as the focus-ring colour, so its light-mode value is tuned for text contrast rather than the 3:1 non-text floor.
+* **Contrast**: text-bearing tokens clear 4.5:1 on the surface they sit on, in both themes.  `--c` doubles as the focus-ring colour, so its light-mode value is tuned for text contrast rather than the 3:1 non-text floor. The cell fills are the 3:1 arm: they are graphics, they are the map, and each theme has its own set rather than one alpha set read over two grounds.
 
 ## Key Implementation Details
 

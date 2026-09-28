@@ -2567,6 +2567,104 @@ class TestSpaStateVocabulary:
         assert "no function" in map_source
 
 
+class TestCellFillsAreDrawnPerTheme:
+    """A cell fill is a graphic, so it owes 3:1 against what it is painted on.
+
+    The dark fills are alpha colours tuned to composite over a near-black
+    ground. Inheriting them into light mode composited them over a mid one and
+    took the map's signal with it: a near-match cell landed at 1.0:1 against
+    the light map background, indistinguishable from an exact cell, and the
+    grid stopped being the thing a reader looks at. Each theme therefore
+    declares its own fills, and light mode's are the steps that hold the
+    contrast rather than a tint of the dark ones.
+    """
+
+    FILLS = (
+        "--exact-bg",
+        "--reloc-bg",
+        "--near-match-bg",
+        "--stub-bg",
+        "--proven-bg",
+        "--other-bg",
+        "--padding-bg",
+    )
+    NON_TEXT_FLOOR = 3.0
+    # The map's own ground, per theme: `--grid-bg` composited over `--bg`. The
+    # cell fills are declared next to both, so a theme change moves the three
+    # together and this reads whatever the file now says.
+    GRIDS: ClassVar[dict[str, tuple[str, str]]] = {
+        ":root": ("#0f1216", "rgba(0, 0, 0, 0.22)"),
+        ".light-mode": ("#c3ccd0", "rgba(0, 0, 0, 0.03)"),
+    }
+
+    @staticmethod
+    def _declarations(selector: str) -> dict[str, str]:
+        css = _web("index.css")
+        body = css.split(f"{selector} {{", 1)[1].split("\n}", 1)[0]
+        return dict(re.findall(r"(--[a-z0-9-]+):\s*([^;]+);", body))
+
+    @staticmethod
+    def _parse(value: str) -> tuple[tuple[float, float, float], float]:
+        """A CSS colour as `(channels, alpha)`, for `#rrggbb` and `rgba(r, g, b, a)`."""
+        text = value.strip()
+        literal = re.fullmatch(r"#([0-9a-fA-F]{6})", text)
+        if literal is not None:
+            digits = literal.group(1)
+            return (tuple(int(digits[index : index + 2], 16) / 255 for index in (0, 2, 4)), 1.0)  # type: ignore[return-value]
+        parts = [float(part) for part in text[text.index("(") + 1 : text.index(")")].split(",")]
+        channels = tuple(part / 255 for part in parts[:3])
+        return channels, parts[3] if len(parts) == 4 else 1.0  # type: ignore[return-value]
+
+    @classmethod
+    def _over(cls, value: str, ground: tuple[float, float, float]) -> tuple[float, float, float]:
+        """The colour as painted: a translucent fill composited over its ground."""
+        channels, alpha = cls._parse(value)
+        return tuple(  # type: ignore[return-value]
+            channel * alpha + base * (1 - alpha)
+            for channel, base in zip(channels, ground, strict=True)
+        )
+
+    @staticmethod
+    def _luminance(rgb: tuple[float, float, float]) -> float:
+        def linear(channel: float) -> float:
+            return channel / 12.92 if channel <= 0.04045 else ((channel + 0.055) / 1.055) ** 2.4
+
+        red, green, blue = (linear(channel) for channel in rgb)
+        return 0.2126 * red + 0.7152 * green + 0.0722 * blue
+
+    @classmethod
+    def _contrast(
+        cls, left: tuple[float, float, float], right: tuple[float, float, float]
+    ) -> float:
+        darker, lighter = sorted((cls._luminance(left), cls._luminance(right)))
+        return (lighter + 0.05) / (darker + 0.05)
+
+    def test_light_mode_declares_every_fill(self) -> None:
+        """A fill light mode inherits is a fill the light ground erases."""
+        light = self._declarations(".light-mode")
+        for token in self.FILLS:
+            assert token in light, f".light-mode never redraws {token}"
+
+    @pytest.mark.parametrize("token", FILLS)
+    def test_fill_clears_the_non_text_floor_against_its_own_ground(self, token: str) -> None:
+        for selector, (background, grid) in self.GRIDS.items():
+            declarations = self._declarations(selector)
+            ground = self._over(grid, self._parse(background)[0])
+            ratio = self._contrast(self._over(declarations[token], ground), ground)
+            assert ratio >= self.NON_TEXT_FLOOR, (
+                f"{selector} {token} ({declarations[token]}) sits at {ratio:.2f}:1 "
+                "on its own map ground"
+            )
+
+    def test_dark_and_light_fills_are_not_the_same_value(self) -> None:
+        """The two themes draw the map, so the two sets cannot be one set read
+        over two grounds."""
+        dark = self._declarations(":root")
+        light = self._declarations(".light-mode")
+        for token in self.FILLS:
+            assert dark[token].strip() != light[token].strip(), token
+
+
 class TestSpaLocaleFormatting:
     """The numbers and the search fold the dashboard prints, not `toFixed`.
 

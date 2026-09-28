@@ -1,20 +1,12 @@
 # recoverage
 
-<p align="center">
-  <img src="docs/mascot.png" alt="recoverage mascot — a raccoon detective investigating code coverage" width="200">
-  <br>
-  <strong>Coverage dashboard for binary-matching decompilation projects.</strong>
-  <br>
-  <em>See every byte. Track every match. Ship the decomp.</em>
-</p>
+![recoverage mascot: a raccoon detective reading a coverage grid](docs/mascot.png)
 
-<p align="center">
-  <a href="#installation">Install</a> ·
-  <a href="#quick-start">Quick Start</a> ·
-  <a href="#screenshots">Screenshots</a> ·
-  <a href="#potato-mode">Potato Mode</a> ·
-  <a href="#continuous-integration">CI</a>
-</p>
+Coverage dashboard for binary-matching decompilation projects, for the person
+whose decomp stopped matching the original binary and has to find out which part.
+
+[Install](#installation) · [Quick Start](#quick-start) · [Screenshots](#screenshots) ·
+[Potato Mode](#potato-mode) · [CI](#continuous-integration)
 
 ---
 
@@ -22,17 +14,12 @@
 
 **recoverage** serves a local web dashboard that visualises per-byte match
 status across `.text`, `.data`, `.bss`, and other PE sections of a
-decompilation project. Think of it as a **defrag map for your decomp** —
-every byte of the original binary is a cell in a grid, colored by how
-closely your C code matches the original compiled output.
-
-### Features
-
-- **Byte comparison**: See where your C matches the original compiled output, byte for byte, and where it drifts.
-- **Divergence triage**: Find the part of a function that stopped matching, whether that is register allocation, instruction reordering, or padding.
-- **Source next to output**: Click any block to read its C, its disassembly, and the raw bytes side by side.
-
-### Details
+decompilation project. Think of it as a **defrag map for your decomp**: every
+byte of the original binary is a cell in a grid, colored by how closely your C
+matches the original compiled output, and the blocks that stopped matching are
+the ones you fix next. Click a block to read its C, its disassembly and its raw
+bytes side by side, and a search or an address in the disassembly jumps to the
+block that covers it.
 
 | What | How |
 |---|---|
