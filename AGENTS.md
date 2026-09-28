@@ -66,6 +66,7 @@ recoverage/
 │   │                         #   license, declared-vs-imported deps, npm lock pin + integrity,
 │   │                         #   bundled-asset grants
 │   ├── test_fuzz.py          # Seeded mutation campaigns over the untrusted-input surfaces
+│   ├── test_import_graph.py  # In-package import graph: level order + acyclicity
 │   └── test_playwright.py    # Browser integration tests
 └── src/recoverage/
     ├── __init__.py
@@ -159,11 +160,11 @@ uv sync --extra dev --extra capstone
 uv run recoverage                     # same as `serve` (main() appends the subcommand to a bare argv)
 uv run recoverage serve             # start dashboard on :8001
 uv run recoverage serve --port 9000 # custom port
-uv run recoverage serve --regen     # re-run rebrew catalog + build-db first
+uv run recoverage serve --regen     # re-run rebrew's catalog analysis first
 uv run recoverage serve --no-open   # don't auto-open browser
 uv run recoverage serve --cors      # enable CORS processing (allowlist origins with --cors-origin)
 uv run recoverage config            # print the RECOVERAGE_* settings serve resolves, no listener (same gate as serve)
-uv run recoverage regen             # re-run rebrew catalog + build-db, no server
+uv run recoverage regen             # re-run rebrew's catalog analysis + build-db, no server
 uv run recoverage open              # open the dashboard in a browser
 uv run recoverage --install-completion  # shell completion for the CLI
 uv run recoverage stats             # print coverage stats
@@ -287,9 +288,9 @@ The release policy is not written down anywhere else, so it is stated here and
 Search folds both sides the same way in Python: `server.fold_text` is NFC
 composition plus `str.casefold`, and `server.fold_match` is the substring test
 both the API list, the Potato list and the name lookup run every column
-through. The SPA folds in JS (`matchesSearch` in `assets/app.js`) with
-`toLowerCase` where the server uses `casefold`, so a case-fold expansion such
-as `ß` → `ss` matches through the API and not in the SPA. This was a SQL split
+through. The SPA folds in JS (the `matchedNames` memo in `web/app/App.tsx`)
+with `toLowerCase` where the server uses `casefold`, so a case-fold expansion
+such as `ß` → `ss` matches through the API and not in the SPA. This was a SQL split
 (LIKE folded ASCII, an `rc_fold` disjunct covered the rest) only because the
 comparison happened inside SQLite; one folding over the in-memory rows is both
 simpler and strictly wider.
@@ -601,10 +602,11 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   `str.casefold`), so a non-ASCII term matches, `ß` matches `ss`, and the NFD
   spelling a user pastes matches the NFC one rebrew stored. A NULL column folds
   as the empty string, which no non-empty term matches — the answer
-  `COALESCE(col, '')` gave a nullable `symbol`. The SPA folds in `app.js`
-  (`foldForSearch`) with `toLowerCase` where the server uses `casefold`, so a
-  case-fold expansion such as `ß` → `ss` matches through the API and not in the
-  SPA. Name resolution folds the same way: `server.lookup_function` /
+  `COALESCE(col, '')` gave a nullable `symbol`. The SPA folds in
+  `web/app/App.tsx` (`matchedNames`) with `toLowerCase` where the server uses
+  `casefold`, so a case-fold expansion such as `ß` → `ss` matches through the API
+  and not in the SPA. Name resolution folds the same way:
+  `server.lookup_function` /
   `server.lookup_global` try the VA arm first, then byte equality on the name,
   then the folded comparison — so the row the search highlighted opens by
   name. A lookup added beside them (globals, labels, anything compared for

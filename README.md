@@ -112,12 +112,9 @@ Install an extra to enable its feature: `pip install 'recoverage[<extra>]'`
 
 ```bash
 # 1. Generate the coverage documents (from your project directory)
-uv run rebrew catalog
-# Analyzes the target binary, parses your annotations, and dumps raw match data to db/data_*.json
-
 uv run rebrew build-db
-# Consumes the JSON files and writes one clear-text coverage document per target
-# (db/coverage-<target>.toml) for the dashboard
+# Analyzes the target binary and writes one clear-text coverage document per
+# target (db/coverage-<target>.toml) for the dashboard
 
 # 2. Start the dashboard
 recoverage
@@ -166,7 +163,7 @@ this command with its default settings.
 | `--allow-remote` | off | Required with a non-loopback `--bind`: acknowledge the API is reachable on the network |
 | `--token` | off | Require this token for every request (`Authorization: Bearer`, `?token=`, or open `/?token=<token>` or `/potato?token=<token>` to set the browser cookie) |
 | `--no-open` | off | Don't auto-open the browser |
-| `--regen` | off | Run `rebrew catalog` + `rebrew build-db` before starting |
+| `--regen` | off | Re-run rebrew's catalog analysis and rewrite the documents before starting |
 | `--cors` | off | Enable CORS processing (allowlisted origins only; the wildcard is never emitted) |
 | `--cors-origin` | none | Origin URL allowed to read the API cross-origin (repeatable; without it `--cors` allows no cross-origin reads) |
 | `--log-level` | `INFO` | Log threshold: `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` (case-insensitive) |
@@ -293,8 +290,7 @@ document.
 
 ### `recoverage regen`
 
-Re-run `rebrew catalog` + `rebrew build-db` to regenerate the coverage
-documents.
+Re-run the catalog analysis to regenerate the coverage documents.
 
 ```bash
 recoverage regen
@@ -520,14 +516,13 @@ body key.
 **recoverage** is designed as a standalone **consumer** of the data that [rebrew](../rebrew) produces — the two packages are intentionally decoupled.
 
 ```text
-rebrew catalog                 rebrew build-db           recoverage (Bottle)
-       │                             │                       │
-  db/data_*.json  ──────────▶  db/coverage-<target>.toml ──▶  VanJS Dashboard
+rebrew build-db (catalog in-process)  recoverage (Bottle)
+              │                             │
+  db/coverage-<target>.toml  ─────────────▶  Preact dashboard
 ```
 
-1. **`rebrew catalog`**: Scans your project's source annotations and writes intermediate `db/data_*.json` files containing coverage metrics. Jump table / switch data bytes are absorbed into their parent function's size. Use `--export-ghidra-labels` to generate `ghidra_data_labels.json` for round-trip Ghidra sync.
-2. **`rebrew build-db`**: Consumes those JSON files and writes one clear-text TOML document per target, `db/coverage-<target>.toml` (`version = 1`), holding the facts: the sections with their cells, the functions (`detected_by`, `size_by_tool`, `textOffset`, …), the globals (`module`, `size`), the verify results, the history, and `[metadata].paths`.  Nothing derivable is stored: the per-section buckets, the per-section byte totals, the coverage percentages, the function-stats summary and the by-VA index are all computed at load by `rebrew.coverage_toml`, the same reader rebrew's own dashboard uses.  Every run replaces each document whole, so `--force` has nothing to migrate.  See [DB_FORMAT.md](../rebrew/docs/DB_FORMAT.md) for the full document shape.
-3. **`recoverage`**: Starts a **Bottle** web server. The backend serves API endpoints built from the parsed coverage documents, while the frontend is a zero-build Single Page Application (SPA) powered by **VanJS**, rendering the interactive defrag grid.
+1. **`rebrew build-db`**: Scans your project's source annotations, runs the catalog analysis in process (jump table / switch data bytes are absorbed into their parent function's size) and writes one clear-text TOML document per target, `db/coverage-<target>.toml` (`version = 1`), holding the facts: the sections with their cells, the functions (`detected_by`, `size_by_tool`, `textOffset`, …), the globals (`module`, `size`), the verify results, the history, and `[metadata].paths`.  Nothing derivable is stored: the per-section buckets, the per-section byte totals, the coverage percentages, the function-stats summary and the by-VA index are all computed at load by `rebrew.coverage_toml`, the same reader rebrew's own dashboard uses.  There is no intermediate snapshot between the analysis and the document, so a document cannot describe an older tree than the one that produced it.  Every run replaces each document whole, so `--force` has nothing to migrate.  See [DB_FORMAT.md](../rebrew/docs/DB_FORMAT.md) for the full document shape.  `rebrew catalog --export-ghidra-labels` remains a separate command for Ghidra round-trip sync.
+2. **`recoverage`**: Starts a **Bottle** web server. The backend serves API endpoints built from the parsed coverage documents, while the frontend is a **Preact** + Tailwind Single Page Application built by `make web-build` into `assets/app.js` and `assets/style.css`, rendering the interactive defrag grid.
 
 You can run `recoverage` independently on any machine (or even host it remotely, see the caveat below) as long as it has access to a readable `coverage-<target>.toml` document.  rebrew is a required dependency (it provides the shared workspace/config resolution, the document reader, and the in-process regen), but no project workspace or compiler toolchain is required to serve the dashboard.
 
@@ -551,14 +546,20 @@ cover, is in [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md).
 recoverage/
 ├── pyproject.toml
 ├── README.md
-├── CONTRIBUTING.md           # Bootstrap, edit-test loop, local/CI parity
+├── CHANGELOG.md             # Release history
+├── CONTRIBUTING.md          # Bootstrap, edit-test loop, local/CI parity
 ├── Makefile                 # Contributor targets (`make help`); wraps the CI commands
-├── docs/                     # Screenshots, mascot & design doc
-│   ├── DESIGN.md             # Detailed architecture & design doc
-│   ├── DESIGN_PRINCIPLES.md  # Core operational philosophies
-│   ├── USER_STORIES.md       # User stories with acceptance criteria
-│   ├── THREAT_MODEL.md       # Attack surface, trust boundaries, risks
-│   └── ideas.md              # Future improvement ideas
+├── LICENSE                  # MIT
+├── NOTICE                   # Grants for the third-party code the web build bundles
+├── docs/                    # Screenshots, mascot & design doc
+│   ├── DESIGN.md            # Detailed architecture & design doc
+│   ├── DESIGN_PRINCIPLES.md # Core operational philosophies
+│   ├── USER_STORIES.md      # User stories with acceptance criteria
+│   ├── THREAT_MODEL.md      # Attack surface, trust boundaries, risks
+│   └── ideas.md             # Future improvement ideas
+├── web/                     # Frontend sources built into the assets (Vite + Preact + Tailwind)
+│   ├── vite.config.ts       # The build that emits src/recoverage/assets/app.js and style.css
+│   └── app/                 # SPA components, hooks, grid rendering
 ├── tools/                    # Lint and CI harness scripts
 │   ├── lint_html.py          # Nu Html Checker over the static and served assets
 │   ├── smoke.py              # End-to-end server smoke run
@@ -566,9 +567,11 @@ recoverage/
 │   ├── ci_clone_rebrew.sh    # Clones the ../rebrew path dep at a pinned commit
 │   ├── normalize_sdist.py     # Pins the sdist's mtimes/order/header for a reproducible build
 │   ├── flatten_rikalabs_strict.py  # Regenerates tools/oxlint/rikalabs-strict.json (MIT) from @rikalabs/oxlint-standards 0.8.1
+│   ├── vendor_manifest.py    # Inventories the vendored anti-slop tree file by file
 │   └── oxlint/               # Vendored anti-slop rules + the flattened strict preset
 ├── tests/
 │   ├── conftest.py           # Shared fixtures (synthetic coverage TOML)
+│   ├── coverage_fixture.py   # Builders for synthetic coverage documents
 │   ├── test_api.py           # API validation & security tests
 │   ├── test_build.py         # Shipped files and reproducible build bytes
 │   ├── test_cli.py           # CSV export, formatting tests
@@ -594,6 +597,7 @@ recoverage/
     ├── metrics.py            # In-process RED counters, read by /api/health
     ├── cli.py                # Typer CLI entry point
     ├── server.py             # Bottle app, shared helpers & compression
+    ├── devserver.py          # WSGI serving stack: threading server, keep-alive handlers
     ├── disasm.py             # Capstone disassembly (optional extra)
     ├── regen.py              # In-process rebrew regen (catalog + build-db)
     ├── api.py                # REST API routes (/api/*)
@@ -602,16 +606,10 @@ recoverage/
     ├── webapp.py             # Composition root: imports api+ui+potato so app has every route
     └── assets/
         ├── index.html        # SPA shell
-        ├── style.css         # All styles
+        ├── style.css         # built Tailwind output
         ├── print.css         # Print stylesheet
-        ├── app.js            # VanJS frontend
-        ├── detail.js         # Deferred panel logic (hex dump, metadata grid, modal, live reload)
-        ├── van.min.js        # VanJS library (~2 KB)
-        ├── favicon.svg       # Retro "R" logo favicon
-        ├── hljs.min.js       # Highlight.js core
-        ├── hljs-c.min.js     # Highlight.js C grammar
-        ├── hljs-x86asm.min.js # Highlight.js x86 asm grammar (hex lang is in detail.js)
-        └── hljs.css          # Highlight.js theme
+        ├── app.js            # built Preact bundle
+        └── favicon.svg       # Retro "R" logo favicon
 ```
 
 ---
@@ -658,23 +656,15 @@ the sibling and bump `REBREW_REF`/`REBREW_SHA` in the script.
 
 ---
 
-## Vendored third-party assets
+## Third-party browser assets
 
-The browser libraries under `src/recoverage/assets/` are vendored so the
-dashboard works air-gapped (see `docs/DESIGN.md`); nothing is fetched from a
-CDN at runtime. Licenses and versions are recorded here because the minified
-blobs themselves carry little provenance:
-
-| File | Upstream | Version | License |
-|------|----------|---------|---------|
-| `van.min.js` | [VanJS](https://github.com/vanjs-org/van) core, classic-script build (`window.van`) | not embedded in the blob | MIT ([upstream license](https://github.com/vanjs-org/van/blob/main/LICENSE)) |
-| `hljs.min.js` | [Highlight.js](https://highlightjs.org) core | 11.11.1 (in-file banner) | BSD-3-Clause |
-| `hljs-c.min.js` | Highlight.js `c` grammar | compiled for 11.11.1 | BSD-3-Clause |
-| `hljs-x86asm.min.js` | Highlight.js `x86asm` grammar | compiled for 11.11.1 | BSD-3-Clause |
-
-`hljs.css` is a first-party theme (not upstream Highlight.js CSS). When
-re-vendoring any of these files, keep the upstream license banner in the
-minified output so this table stays verifiable against the blobs.
+The dashboard ships no vendored blob under `src/recoverage/assets/`: the
+`app.js` and `style.css` it serves are built by `make web-build` from the npm
+dependencies declared in `package.json`, and nothing is fetched from a CDN at
+runtime, so the dashboard works air-gapped. The grants for what the build
+folds into those two files (Preact, Highlight.js, Tailwind, and the
+shadcn/ui primitives) are recorded in [NOTICE](NOTICE), which is the file to
+read and amend when a dependency is added to `web/`.
 
 The npm dev dependencies (`oxlint`, `@oxlint/plugins`,
 `@rikalabs/oxlint-standards`, `vnu-jar`) are not vendored: they are declared in
