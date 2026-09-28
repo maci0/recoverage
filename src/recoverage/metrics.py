@@ -3,8 +3,9 @@
 The server is a single process serving one operator (or one team behind a
 shared coverage read).  There is no metrics backend to push to, so the
 numbers live in memory and are read back through ``/api/health``: request
-count, error count, slow-request count, and the latency extremes needed to
-tell "one slow request" from "every request got slower".
+count, error count, slow-request count, and the latency figures needed to
+tell "one slow request" from "every request got slower" (a max, and the
+p50/p95 of a bounded window of the most recent timed requests).
 
 Cardinality is bounded on purpose.  Routes are bucketed by their Bottle rule
 (``/api/targets/<target>/data``), never by the raw path, so a caller cannot
@@ -16,6 +17,8 @@ without a rule falls back to its first path segment, and
 from __future__ import annotations
 
 import threading
+from collections import deque
+from dataclasses import dataclass, field
 from typing import Any, Final
 
 #: A request slower than this is counted separately and logged at WARNING.
@@ -45,6 +48,50 @@ UNBOUNDED_ROUTES: Final = frozenset({"/api/events"})
 #: request still counts in the process-wide totals and in ``by_status``.
 ROUTE_LABEL_MAX: Final = 64
 
+#: Timed durations kept for the percentile figures in the snapshot.  A fixed
+#: window of the most recent requests, not the whole run: ``p50_ms`` and
+#: ``p95_ms`` answer "is every request slow RIGHT NOW", which is the question an
+#: operator has while a dashboard is slow, and a window bounds both the memory
+#: (a deque of 512 floats, dropped oldest-first) and the work (one append per
+#: timed request, and the sort happens only when ``/api/health`` is polled).
+#: A lifetime histogram would answer the other question, "was the process ever
+#: slow", which ``max_ms`` already answers, and would grow without limit.
+LATENCY_WINDOW: Final = 512
+
+
+def percentile(samples: list[float], fraction: float) -> float:
+    """The *fraction* quantile of the SORTED *samples*, nearest-rank.
+
+    Zero samples answer 0.0 rather than raising: the snapshot is read while a
+    process may have served nothing yet, and a health probe that raises is a
+    probe that reports a fault the operator has to diagnose in the metrics
+    code.  Nearest-rank (no interpolation) because every reported figure is a
+    request an operator can then look for in the slow-request log.
+    """
+    if not samples:
+        return 0.0
+    rank = min(len(samples) - 1, round(fraction * (len(samples) - 1)))
+    return samples[rank]
+
+
+@dataclass
+class _RouteRow:
+    """One row of the per-route breakdown.
+
+    A dataclass rather than a dict of mixed values: the row holds a counter, a
+    counter, a float and a deque, and a dict spelling them is a union every
+    read has to narrow.
+    """
+
+    requests: int = 0
+    errors: int = 0
+    max_ms: float = 0.0
+    #: This route's own bounded window, behind its p50/p95.  The same
+    #: LATENCY_WINDOW the process-wide figures use, so the per-route memory is
+    #: bounded by ROUTE_LABEL_MAX * LATENCY_WINDOW samples and a route that
+    #: goes quiet forgets its own history on the same terms.
+    recent_ms: deque[float] = field(default_factory=lambda: deque(maxlen=LATENCY_WINDOW))
+
 
 class RequestStats:
     """Per-route request counters, guarded by one lock.
@@ -63,9 +110,9 @@ class RequestStats:
         self._timed = 0
         self._in_flight = 0
         self._stale_claims = 0
-        # int | float: the counters are ints, "max_ms" a float, and every read
-        # below copies through float() where the width matters.
-        self._by_route: dict[str, dict[str, int | float]] = {}
+        # The bounded window behind p50_ms / p95_ms; see LATENCY_WINDOW.
+        self._recent_ms: deque[float] = deque(maxlen=LATENCY_WINDOW)
+        self._by_route: dict[str, _RouteRow] = {}
         self._by_status: dict[str, int] = {}
 
     def start(self) -> None:
@@ -105,6 +152,7 @@ class RequestStats:
                 self._timed += 1
                 self._sum_ms += duration_ms
                 self._max_ms = max(self._max_ms, duration_ms)
+                self._recent_ms.append(duration_ms)
             bucket = f"{status // 100}xx"
             self._by_status[bucket] = self._by_status.get(bucket, 0) + 1
             if route in self._by_route:
@@ -114,12 +162,13 @@ class RequestStats:
             else:
                 while len(self._by_route) >= ROUTE_LABEL_MAX:
                     del self._by_route[next(iter(self._by_route))]
-                route_row = self._by_route[route] = {"requests": 0, "errors": 0, "max_ms": 0.0}
-            route_row["requests"] += 1
+                route_row = self._by_route[route] = _RouteRow()
+            route_row.requests += 1
             if status >= 500:
-                route_row["errors"] += 1
+                route_row.errors += 1
             if timed:
-                route_row["max_ms"] = max(float(route_row["max_ms"]), duration_ms)
+                route_row.max_ms = max(route_row.max_ms, duration_ms)
+                route_row.recent_ms.append(duration_ms)
 
     def reclassify(self, route: str, from_status: int, to_status: int) -> None:
         """Re-bucket a finished request under its real status.
@@ -149,7 +198,7 @@ class RequestStats:
             self._errors += delta
             row = self._by_route.get(route)
             if row is not None:
-                row["errors"] += delta
+                row.errors += delta
 
     def note_stale_claim(self) -> None:
         """Record one single-flight claim that outlived the thread that took it.
@@ -173,14 +222,20 @@ class RequestStats:
         count, not by ``total``, so a connection held open by an
         :data:`UNBOUNDED_ROUTES` route is counted in ``total`` and absent
         from the sum, and drags neither figure down.  ``max_ms`` is the
-        worst single timed request since start.  Neither is a percentile:
-        keeping every sample to compute one would cost more than the number
-        is worth here.  ``in_flight`` counts requests currently inside a
+        worst single timed request since start, and ``p50_ms``/``p95_ms``
+        are quantiles of the last :data:`LATENCY_WINDOW` timed requests:
+        the mean of a mostly-fast window hides a tail, and the max alone
+        cannot tell "one slow request" from "every request got slower",
+        which is the distinction a p95 carries.  ``latency_window`` says how
+        many samples the two quantiles were taken from, so a figure read off
+        a quiet server is not read as a verdict on a busy one.
+        ``in_flight`` counts requests currently inside a
         handler, so a snapshot taken from ``/api/health`` includes the
         request asking.
         """
         with self._lock:
             mean = self._sum_ms / self._timed if self._timed else 0.0
+            window = sorted(self._recent_ms)
             return {
                 "total": self._total,
                 "errors": self._errors,
@@ -190,12 +245,22 @@ class RequestStats:
                 "slow_threshold_ms": SLOW_REQUEST_MS,
                 "mean_ms": round(mean, 3),
                 "max_ms": round(self._max_ms, 3),
+                "latency_window": len(window),
+                "p50_ms": round(percentile(window, 0.50), 3),
+                "p95_ms": round(percentile(window, 0.95), 3),
                 "by_status": dict(self._by_status),
                 "by_route": {
                     route: {
-                        "requests": row["requests"],
-                        "errors": row["errors"],
-                        "max_ms": round(float(row["max_ms"]), 3),
+                        "requests": row.requests,
+                        "errors": row.errors,
+                        "max_ms": round(row.max_ms, 3),
+                        # Quantiles of this route's own window, so a
+                        # process-wide p95 that moved can be attributed
+                        # without a second request: the row whose p95 sits
+                        # at SLOW_REQUEST_MS is the endpoint that moved.
+                        "latency_window": len(row.recent_ms),
+                        "p50_ms": round(percentile(sorted(row.recent_ms), 0.50), 3),
+                        "p95_ms": round(percentile(sorted(row.recent_ms), 0.95), 3),
                     }
                     for route, row in sorted(self._by_route.items())
                 },
@@ -216,6 +281,7 @@ class RequestStats:
             self._timed = 0
             self._max_ms = 0.0
             self._stale_claims = 0
+            self._recent_ms.clear()
             self._by_route.clear()
             self._by_status.clear()
 

@@ -336,7 +336,14 @@ class TestStats:
         metrics.REQUESTS.finish("/api/y", 200, 1.0)
         metrics.REQUESTS.reclassify("/api/x", 200, 503)
         snap = metrics.REQUESTS.snapshot()
-        assert snap["by_route"]["/api/x"] == {"requests": 1, "errors": 1, "max_ms": 5.0}
+        assert snap["by_route"]["/api/x"] == {
+            "requests": 1,
+            "errors": 1,
+            "max_ms": 5.0,
+            "latency_window": 1,
+            "p50_ms": 5.0,
+            "p95_ms": 5.0,
+        }
         assert sum(r["requests"] for r in snap["by_route"].values()) == snap["total"]
         assert sum(r["errors"] for r in snap["by_route"].values()) == snap["errors"]
 
@@ -346,6 +353,82 @@ class TestStats:
         assert snap["total"] == 1
         assert snap["max_ms"] == 0.0
         assert snap["slow"] == 0
+        assert snap["latency_window"] == 0
+        assert snap["p95_ms"] == 0.0
+
+    def test_percentiles_separate_a_slow_tail_from_a_fast_window(self) -> None:
+        """p50/p95 answer "is every request slow now", the mean cannot.
+
+        One slow request in a window of fast ones moves the mean a little and
+        the max all the way, so neither separates a single slow read from a
+        server where every read got slower. The p95 sits on the slow side of
+        that line and the p50 does not, which is the pair an operator reads
+        while the dashboard is slow.
+        """
+        for _ in range(90):
+            metrics.REQUESTS.finish("/api/targets", 200, 10.0)
+        for _ in range(10):
+            metrics.REQUESTS.finish("/api/targets", 200, 5_000.0)
+        snap = metrics.REQUESTS.snapshot()
+        assert snap["max_ms"] == 5_000.0
+        assert snap["mean_ms"] < 1_000.0
+        assert snap["p50_ms"] == 10.0
+        assert snap["p95_ms"] == 5_000.0
+        assert snap["latency_window"] == 100
+
+    def test_every_recent_request_slow_raises_the_median(self) -> None:
+        for _ in range(10):
+            metrics.REQUESTS.finish("/api/targets", 200, 4_000.0)
+        snap = metrics.REQUESTS.snapshot()
+        assert snap["p50_ms"] == 4_000.0
+        assert snap["p95_ms"] == 4_000.0
+
+    def test_the_window_is_bounded_and_drops_the_oldest(self) -> None:
+        """The quantiles describe the most recent requests, not the whole run.
+
+        A slow burst an hour ago must not read as the current latency, and an
+        unbounded list of every sample would grow for the life of the process.
+        """
+        for _ in range(metrics.LATENCY_WINDOW):
+            metrics.REQUESTS.finish("/api/targets", 200, 9_000.0)
+        for _ in range(metrics.LATENCY_WINDOW):
+            metrics.REQUESTS.finish("/api/targets", 200, 1.0)
+        snap = metrics.REQUESTS.snapshot()
+        assert snap["latency_window"] == metrics.LATENCY_WINDOW
+        assert snap["p95_ms"] == 1.0
+        assert snap["max_ms"] == 9_000.0
+        assert snap["mean_ms"] > 1_000.0
+
+    def test_percentile_of_an_empty_sample_is_zero(self) -> None:
+        assert metrics.percentile([], 0.95) == 0.0
+
+    def test_the_slow_route_is_named_by_its_own_p95(self) -> None:
+        """A process-wide p95 is only half a diagnosis.
+
+        The operator's next question is which endpoint moved, and reading it
+        off a lifetime max per route cannot answer it: one slow /data read
+        makes /data look like the slow route for the rest of the process. Each
+        row carries the quantiles of its own window, so the route whose p95
+        sits at the slow threshold is the one to look at.
+        """
+        for _ in range(20):
+            metrics.REQUESTS.finish("/api/targets", 200, 8.0)
+        for _ in range(20):
+            metrics.REQUESTS.finish("/api/targets/<target>/data", 200, 900.0)
+        snap = metrics.REQUESTS.snapshot()
+        assert snap["by_route"]["/api/targets"]["p95_ms"] == 8.0
+        assert snap["by_route"]["/api/targets/<target>/data"]["p95_ms"] == 900.0
+        assert snap["by_route"]["/api/targets"]["latency_window"] == 20
+
+    def test_a_dropped_fallback_label_keeps_no_window(self) -> None:
+        """A row refused for want of room is not admitted with stale figures."""
+        for i in range(metrics.ROUTE_LABEL_MAX):
+            metrics.REQUESTS.finish(f"/unknown{i}", 404, 1.0, rule_matched=False)
+        metrics.REQUESTS.finish("/unknown-again", 404, 1.0, rule_matched=False)
+        snap = metrics.REQUESTS.snapshot()
+        assert len(snap["by_route"]) == metrics.ROUTE_LABEL_MAX
+        assert "/unknown-again" not in snap["by_route"]
+        assert snap["total"] == metrics.ROUTE_LABEL_MAX + 1
 
     def test_held_open_route_does_not_dilute_the_mean(self) -> None:
         """mean_ms averages the timed requests only.

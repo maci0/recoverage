@@ -471,8 +471,10 @@ duration; a request slower than a second is one `WARNING` line at any level.
   "requests": {
     "total": 412, "errors": 1, "slow": 0, "in_flight": 1,
     "slow_threshold_ms": 1000.0, "mean_ms": 4.812, "max_ms": 91.204,
+    "latency_window": 96, "p50_ms": 4.102, "p95_ms": 91.204,
     "by_status": {"2xx": 409, "4xx": 2, "5xx": 1},
-    "by_route": {"/api/targets/<target>/data": {"requests": 12, "errors": 0, "max_ms": 91.2}}
+    "by_route": {"/api/targets/<target>/data": {"requests": 12, "errors": 0,
+      "max_ms": 91.2, "latency_window": 12, "p50_ms": 62.1, "p95_ms": 91.2}}
   },
   "regen": {
     "runs": 3, "failures": 0, "rejected": 1, "in_flight": 0,

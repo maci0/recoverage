@@ -13,7 +13,12 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   deferred browser opener was not cancelled, and every request in flight was
   cut mid-body. A stop signal now takes the same path the keystroke takes and
   exits 0.
-
+- `GET /api/health` reports `p50_ms` and `p95_ms` beside the existing
+  `mean_ms` and `max_ms`, taken over the most recent 512 timed requests
+  (`latency_window` says how many). A mean over a mostly-fast window and a
+  worst-since-start maximum cannot tell one slow request from every request
+  getting slower, which is the question an operator has while the dashboard
+  is slow.
 - `GET /api/health` carries a `caches` block: hits and misses for the `/data`
   payload memo, the `/stats` memo and the `If-None-Match` revalidation every
   cacheable endpoint answers. A dashboard whose response time grew used to

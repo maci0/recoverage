@@ -42,6 +42,7 @@ from recoverage.server import (
     _format_hex_dump,
     _is_data_marker,
     _load_dll,
+    _log_safe,
     _newest_mtime_ns,
     _snapshot_db_mtime,
     app,
@@ -61,6 +62,7 @@ from recoverage.server import (
     parse_ascii_int,
     pct_1dp,
     request,
+    request_log_fields,
     resolve_targets,
     response,
     set_auth_cookie,
@@ -1304,12 +1306,25 @@ def handle_potato() -> bytes | Any:
         # A directory whose documents cannot be read is the same
         # db_unavailable condition render_potato's load guard reports as
         # 503 — not an application bug.  One contract (and one page) for
-        # both surfaces.
-        _log.exception("Potato mode coverage read failed")
+        # both surfaces.  The line names the request and carries the request
+        # fields, exactly as server._db_unavailable_err does for the API:
+        # a Potato failure reaching only the log with no path is a line an
+        # operator cannot pivot from a /potato 503 on.
+        _log.exception(
+            "Potato mode coverage read failed serving %s %s",
+            _log_safe(request.method),
+            _log_safe(request.path),
+            extra=request_log_fields(503),
+        )
         return _db_unavailable_page()
     # json.JSONDecodeError needs no entry: it subclasses ValueError.
     except (OSError, ValueError, KeyError):
-        _log.exception("Potato mode render failed")
+        _log.exception(
+            "Potato mode render failed serving %s %s",
+            _log_safe(request.method),
+            _log_safe(request.path),
+            extra=request_log_fields(500),
+        )
         return HTTPResponse(
             status=500,
             body="<html><body>Internal server error</body></html>",

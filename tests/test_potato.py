@@ -2546,6 +2546,44 @@ class TestDbUnavailableContract:
         assert status.startswith("503")
         assert b"Database unavailable" in body
 
+    def test_the_failure_lines_name_the_request_and_carry_its_fields(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A render failure is pivotable, like the API's.
+
+        Potato answers a 503 (or a 500) to the one client that asked, so the
+        log is the only record of it. A line reading "render failed" with no
+        path and no fields cannot be matched to a /potato failure in a scan of
+        the log, which is the same defect server._db_unavailable_err avoids by
+        naming the request and carrying method/path/status as fields.
+        """
+        from rebrew.coverage_toml import CoverageTomlError
+
+        from recoverage import potato as potato_mod
+
+        def unreadable(url: Any) -> str:
+            raise CoverageTomlError("synthetic unreadable document")
+
+        monkeypatch.setattr(potato_mod, "render_potato", unreadable)
+        with caplog.at_level("ERROR", logger="recoverage"):
+            status, _, _ = wsgi_get("/potato?target=FAKEDLL")
+        assert status.startswith("503")
+        line = next(r for r in caplog.records if "coverage read failed" in r.message)
+        assert "/potato" in line.message
+        assert line.log_fields["method"] == "GET"
+        assert line.log_fields["path"] == "/potato"
+        assert line.log_fields["status"] == 503
+
+        def broken(url: Any) -> str:
+            raise ValueError("synthetic render failure")
+
+        monkeypatch.setattr(potato_mod, "render_potato", broken)
+        with caplog.at_level("ERROR", logger="recoverage"):
+            status, _, _ = wsgi_get("/potato?target=FAKEDLL")
+        assert status.startswith("500")
+        line = next(r for r in caplog.records if "render failed" in r.message)
+        assert line.log_fields["status"] == 500
+
     def test_verify_panel_attaches_the_snapshot_record(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

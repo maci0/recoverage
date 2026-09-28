@@ -582,8 +582,21 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   are shared state every request thread mutates, so their balance under
   concurrent requests is pinned separately at `tests/test_concurrency.py`
   (`TestRequestCounters`): a lost update shows up as a total that disagrees
-  with the sum of its own buckets, or an `in_flight` that never returns. The
-  design rationale is in `docs/DESIGN.md` (*Request Observability*).
+  with the sum of its own buckets, or an `in_flight` that never returns.
+  `p50_ms`/`p95_ms` come from a bounded window of the most recent
+  `metrics.LATENCY_WINDOW` timed requests (a deque, one append per request),
+  never from an unbounded sample list: a lifetime mean and a lifetime max
+  cannot tell one slow request from every request getting slower, and the
+  window is what bounds the memory. `latency_window` reports how many samples
+  the two figures were taken from, so a quiet server's p95 is not read as a
+  verdict on a busy one; a new latency figure in a snapshot names the window
+  it was taken over. Every `by_route` row carries the same figures over its
+  own window (`_RouteRow.recent_ms`), because a process-wide p95 that moved
+  has to name the endpoint that moved it, and a lifetime per-route `max_ms`
+  cannot: one slow `/data` read made `/data` the slow route for the rest of
+  the process. The row is a dataclass, not a dict, so a new per-route
+  counter does not widen a union every read has to narrow. The design
+  rationale is in `docs/DESIGN.md` (*Request Observability*).
 - The regen pipeline is counted in `metrics.REGEN`, not in `REQUESTS`: a regen
   runs for minutes, so the per-request numbers are one sample and none at all
   while it is in flight, and nothing in them says the in-flight request is a
