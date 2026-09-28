@@ -31,6 +31,17 @@ The UI is built to keep first paint cheap while carrying a canvas grid and a thr
    * With `--token`, an unauthenticated request is answered by content type: browsers asking for `text/html` get a short page explaining that `?token=` must be appended (it never echoes the token), and API clients keep the `{error, code, detail}` JSON contract. A run of failed tokens inside `_AUTH_FAIL_WINDOW_SECONDS` is throttled to `429` with `Retry-After`, which bounds online guessing on a network bind. The window is per requesting peer: a shared one would let any unauthenticated client lock the operator out by never stopping, and would let the operator's own successful requests refill a guesser's allowance, so a verified request clears only the peer's own window. A share link (`?token=`) authenticates once and `server.set_auth_cookie` writes the HttpOnly cookie both page routes need: every link on `/` and on `/potato` is relative, so without it the reader lost the credential on their first click.
    * Proxied paths: `/src/*` → `project_dir/src/`, `/original/*` → `project_dir/original/`. Both are answered under a `sandbox`ed, `default-src 'none'` policy rather than the dashboard's own, because the content type is guessed from the file's suffix: an `.html` or `.svg` in the project tree would otherwise be a document at the dashboard's origin, under a policy that allows inline script.
 
+## Frontend layering
+`web/app/` is four levels, and every import runs downward: `lib/`, `grid/` and
+`api.ts` are leaves (formatting and search folding, cell geometry, the fetch
+surface), `hooks/` sits above them and is the only thing that fetches,
+`components/` sits above that, `App.tsx` composes and `main.tsx` mounts. A
+component takes what it needs from a hook as a prop or a type, never by calling
+it, and nothing under `lib/` knows a hook exists. The bundler accepts any of
+these directions, so `tests/test_frontend_import_graph.py` holds the order and
+the acyclicity, the same rule `tests/test_import_graph.py` holds for the Python
+package.
+
 ## State Management (Preact hooks)
 `web/app/App.tsx` is the shell and owns the state the chrome needs; the rest
 lives in hooks under `web/app/hooks/`. Preact `useState`/`useMemo`/`useRef`,

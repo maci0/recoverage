@@ -1,16 +1,15 @@
 """Shared harness for booting the dashboard against synthetic coverage documents.
 
 Used by tools/smoke.py and tools/lint_html.py: both build the synthetic
-coverage through ``build_sample_db`` (which calls ``tests/conftest``'s builder
-directly), start ``recoverage serve`` on a free local port, probe documents over
-HTTP, and always stop the server process.
+coverage through ``build_sample_db`` (which calls ``tests/coverage_fixture``'s
+builder directly), start ``recoverage serve`` on a free local port, probe
+documents over HTTP, and always stop the server process.
 """
 
 from __future__ import annotations
 
 import contextlib
 import http.client
-import os
 import socket
 import subprocess
 import sys
@@ -41,7 +40,7 @@ def scratch_project_dir() -> Iterator[Path]:
 
 
 def build_sample_db(project_dir: Path) -> Path:
-    """Build the sample coverage documents in *project_dir*/db.
+    """Build the sample coverage documents in *project_dir*/db; return their path.
 
     Re-runnable: any number of calls, in any order, against the same or a
     different *project_dir*, in one process or across processes, all end with
@@ -49,28 +48,20 @@ def build_sample_db(project_dir: Path) -> Path:
     directory, and the ``tests`` entry added to ``sys.path`` for that import is
     removed again, so no call leaves a copy behind.
 
-    The chdir still happens, because conftest's own import-time side effect
-    creates the documents under the cwd: confining it to *project_dir* keeps
-    them out of whatever directory the tool was launched from.  A sentinel
-    document is written first so that side effect skips, and the documents are
-    then written exactly once, by the call below.
+    The builder is ``coverage_fixture``'s, not ``conftest``'s: importing
+    conftest to reach it ran the suite's import-time fixture write, which lands
+    under the cwd the tool was launched from, so the call had to chdir and
+    plant a sentinel document to suppress it.
     """
-    db_dir = project_dir / "db"
-    db_dir.mkdir(parents=True, exist_ok=True)
-    sentinel = db_dir / "coverage-FAKEDLL.toml"
-    sentinel.write_text("version = 1\n", encoding="utf-8")
     tests_dir = str(REPO_ROOT / "tests")
-    old_cwd = Path.cwd()
     sys.path.insert(0, tests_dir)
     try:
-        os.chdir(project_dir)
-        import conftest
+        from coverage_fixture import build_synthetic_coverage
     finally:
-        os.chdir(old_cwd)
         with contextlib.suppress(ValueError):
             sys.path.remove(tests_dir)
-    conftest.build_synthetic_coverage(db_dir)
-    return sentinel
+    # tests/ is outside the type gate, so the imported builder is untyped here.
+    return cast(Path, build_synthetic_coverage(project_dir / "db"))
 
 
 def free_port() -> int:

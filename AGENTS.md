@@ -55,8 +55,9 @@ recoverage/
 │                           # flatten_rikalabs_strict.py, normalize_sdist.py,
 │                           # vendor_manifest.py, bundled_js_inventory.py
 ├── tests/
-│   ├── conftest.py           # Shared fixtures (synthetic coverage TOML)
-│   ├── coverage_fixture.py   # Builders for synthetic coverage documents
+│   ├── conftest.py           # Shared fixtures (WSGI request helpers, session document build)
+│   ├── coverage_fixture.py   # Builders for synthetic coverage documents, and the shared
+│   │                         #   document set `build_synthetic_coverage` writes
 │   ├── test_build.py          # Artifact build: shipped files, the man page, reproducible bytes
 │   ├── test_api.py           # API validation, security, SQL injection tests
 │   ├── test_cli.py           # CSV export, formatting, edge case tests
@@ -76,6 +77,7 @@ recoverage/
 │   ├── test_concurrency.py   # Barrier-driven races: /data single flight, cache invalidation
 │   │                         #   under load, counter balance, the admission cap, the auth window
 │   ├── test_import_graph.py  # In-package import graph: level order + acyclicity
+│   ├── test_frontend_import_graph.py  # web/app import graph: directory levels + acyclicity
 │   └── test_playwright.py    # Browser integration tests
 └── src/recoverage/
     ├── __init__.py

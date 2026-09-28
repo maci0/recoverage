@@ -211,6 +211,125 @@ def write_coverage(
     return path
 
 
+# -- The shared synthetic document set --------------------------------------
+# Kept here rather than in ``conftest`` so a tool that needs the same documents
+# (``tools/_serve_harness.build_sample_db``, behind smoke and the HTML lint)
+# imports a module with no pytest wiring and no import-time side effect.
+
+TARGET = "FAKEDLL"
+
+SECTIONS: dict[str, dict[str, Any]] = {
+    ".text": {
+        "va": 0x10001000,
+        "size": 0x1000,
+        "fileOffset": 0x200,
+        "unitBytes": 16,
+        "columns": 8,
+        "cells": [
+            cell(0, 16, "exact", functions=("_func_a",)),
+            cell(16, 32, "reloc", functions=("_func_b",)),
+            cell(32, 48, "stub", functions=("_func_c",)),
+            cell(48, 64, "padding"),
+            cell(64, 80, "data", label="jt_10001060"),
+            cell(80, 96, "thunk", parent_function="_func_a"),
+            cell(96, 112, "none"),
+            cell(112, 128, "exact"),
+        ],
+    },
+    ".data": {
+        "va": 0x10002000,
+        "size": 0x400,
+        "fileOffset": 0x1200,
+        "unitBytes": 16,
+        "columns": 8,
+        "cells": [cell(0, 16, "data", functions=("g_counter",), label="g_counter")],
+    },
+}
+
+#: The three functions and one global every fixture-driven assertion is written
+#: against.  Kept as module data so a test that needs a different shape can
+#: write its own document rather than editing the shared one.
+FUNCTIONS: list[dict[str, Any]] = [
+    {
+        "va": 0x10001000,
+        "name": "_func_a",
+        "vaStart": "0x10001000",
+        "size": 48,
+        "fileOffset": 0x200,
+        "status": "EXACT",
+        "module": "T",
+        "cflags": "/O2",
+        "symbol": "_func_a",
+    },
+    {
+        "va": 0x10001010,
+        "name": "_func_b",
+        "vaStart": "0x10001010",
+        "size": 16,
+        "fileOffset": 0x210,
+        "status": "RELOC",
+        "module": "T",
+        "cflags": "/O2",
+        "symbol": "_func_b",
+    },
+    {
+        "va": 0x10001030,
+        "name": "_func_c",
+        "vaStart": "0x10001030",
+        "size": 32,
+        "fileOffset": 0x230,
+        "status": "STUB",
+        "module": "T",
+        "cflags": "",
+        "symbol": "_func_c",
+    },
+]
+
+GLOBALS: list[dict[str, Any]] = [
+    {
+        "va": 0x10002000,
+        "name": "g_counter",
+        "decl": "int g_counter",
+        "module": "T",
+        "size": 4,
+    },
+]
+
+VERIFY_RESULTS: list[dict[str, Any]] = [
+    {
+        "va": 0x10001000,
+        "verified_at": "2026-01-01T00:00:00+00:00",
+        "byte_delta": 0,
+        "diff_lines": 0,
+        # 0.873, the unit-interval fraction rebrew's verify import stores
+        # (its schema CHECKs 0..1); 87.3 would be 8730%.
+        "similarity": 0.873,
+    }
+]
+
+
+def build_synthetic_coverage(directory: Path) -> Path:
+    """Write the shared synthetic documents into *directory*.
+
+    Rebuilds unconditionally: every file is removed first, so a second run over
+    the same directory produces the same documents as the first instead of
+    leaving one from a previous run behind.  *directory* is a parameter rather
+    than a fixed ``<cwd>/db`` so a caller that imports this module once can
+    still build coverage somewhere else.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    for stale in directory.glob("coverage-*.toml"):
+        stale.unlink()
+    return write_coverage(
+        directory,
+        TARGET,
+        SECTIONS,
+        functions=FUNCTIONS,
+        globals_=GLOBALS,
+        verify_results=VERIFY_RESULTS,
+    )
+
+
 def coverage_dir(root: Path, *parts: str) -> Path:
     """The coverage directory a fixture's documents belong in, beneath *root*.
 
