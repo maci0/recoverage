@@ -2599,6 +2599,40 @@ class TestErrorResponseShape:
         # has one place to read the wait from regardless of which limit hit.
         assert int(_header(headers, "Retry-After") or 0) >= 1
 
+    def test_every_429_carries_the_wait_in_the_envelope(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A client reading the JSON contract gets the wait from every limit,
+        not just the regen cooldown.
+
+        The 429 family spans two gates (the regen cooldown/lock and the
+        failed-token throttle) and each answers with its own wait; the
+        throttle's used to be header-only, so a client parsing the documented
+        error envelope read ``rate_limited`` with no way to act on it. Both
+        places carry the same number.
+        """
+        import recoverage.api as api
+        import recoverage.server as server_mod
+
+        api._regen_last_attempt = None
+        monkeypatch.setattr(api, "_do_regen", lambda remote: api._json_ok({"ok": True}))
+        wsgi_request("POST", "/api/regen", remote_addr="127.0.0.1")
+        status, headers, body = wsgi_request("POST", "/api/regen", remote_addr="127.0.0.1")
+        cooldown = self._check(status, headers, body, "rate_limited")
+        assert int(cooldown["retry_after"]) == int(_header(headers, "Retry-After"))
+
+        monkeypatch.setattr(server_mod, "_AUTH_TOKEN", "unit-test-token")
+        bad = {"Authorization": "Bearer wrong", "Accept": "application/json"}
+        try:
+            for _ in range(server_mod._AUTH_FAIL_MAX):
+                assert wsgi_request("GET", "/api/health", headers=bad)[0].startswith("401")
+            status, headers, body = wsgi_request("GET", "/api/health", headers=bad)
+            throttled = self._check(status, headers, body, "rate_limited")
+            assert throttled["retry_after"] == int(server_mod._AUTH_FAIL_WINDOW_SECONDS)
+            assert int(throttled["retry_after"]) == int(_header(headers, "Retry-After"))
+        finally:
+            server_mod._clear_auth_failures("127.0.0.1")
+
     def test_501_not_implemented(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import recoverage.api as api
 
@@ -3995,6 +4029,50 @@ class TestApiEtagContract:
             assert tag, suffix
             tags.add(tag)
         assert len(tags) == len(variants), "two different pages share one validator"
+
+    def test_function_detail_etag_roundtrip(self) -> None:
+        """The single-function read is a pure function of the snapshot, the
+        target and the requested spelling, so it revalidates like every other
+        DB-derived read. It used to be the one that could only answer no-store:
+        a client watching a cell re-downloaded the row on every poll."""
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        path = f"/api/targets/{target}/functions/0x10001000"
+        status, headers, _ = wsgi_get(path)
+        assert status.startswith("200")
+        etag = _header(headers, "ETag")
+        assert etag and etag.startswith('"') and etag.endswith('"')
+        assert "no-store" not in _header(headers, "Cache-Control")
+        status, headers, body = wsgi_get(path, headers={"If-None-Match": etag})
+        assert status == "304 Not Modified"
+        assert body == b""
+
+    def test_function_detail_etag_differs_per_spelling(self) -> None:
+        """The tag is over the requested spelling, not the row it resolves to:
+        two URLs that answer the same function stay separate identities, and a
+        tag from one can never 304 a body the client never received."""
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        base = f"/api/targets/{target}/functions"
+        tags = set()
+        for va in ("0x10001000", str(0x10001000), "0x10001030", "_func_a"):
+            _, headers, _ = wsgi_get(f"{base}/{va}")
+            tag = _header(headers, "ETag")
+            assert tag, va
+            tags.add(tag)
+        assert len(tags) == 4, "two spellings of one row share a validator"
+
+    def test_function_detail_etag_differs_from_the_list(self) -> None:
+        """Same snapshot, different route: a client that revalidated the list
+        page must not cache the detail row under the list's validator."""
+        target = get_first_target()
+        if not target:
+            pytest.skip("No targets in DB")
+        _, list_headers, _ = wsgi_get(f"/api/targets/{target}/functions?limit=1")
+        _, detail_headers, _ = wsgi_get(f"/api/targets/{target}/functions/0x10001000")
+        assert _header(list_headers, "ETag") != _header(detail_headers, "ETag")
 
     def test_304_carries_the_vary_of_the_body_it_stands_in_for(self) -> None:
         """Every revalidating body here is content-negotiated, so the 304

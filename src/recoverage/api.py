@@ -1964,12 +1964,24 @@ def handle_api_functions_batch(target: str) -> bytes | HTTPResponse:
 def handle_api_function(target: str, va: str) -> bytes | HTTPResponse:
     target = path_param(target)
     va = path_param(va)
+    value = va.strip()
+    # Same validator contract as /stats, /data, the function list, /asm and
+    # /bytes: the row is a pure function of the coverage snapshot, the target
+    # and the requested spelling (the `last_verify` attachment comes from the
+    # same frozen snapshot), so a client polling a cell revalidates instead of
+    # re-downloading.  It used to be sent `no-store` with no ETag, the one
+    # DB-derived GET in the family that could not answer 304.  The raw
+    # spelling keys the tag, exactly as /asm's does: a name and a VA that
+    # resolve to the same row stay separate revalidation identities, and the
+    # value never reaches a header (it is hashed).
+    snap = _snapshot_db_mtime()
+    etag = _etag_or_304(snap, target, "function", value)
+    headers = _revalidate_headers(etag)
     with _target_snapshot(target) as coverage:
         # One shared resolution order (server.lookup_function): VA candidates
         # first, then the exact name and then the folded one.  Both arms read
         # the stripped spelling, so a URL carrying a padded name resolves the
         # same way the name is spelled in the document.
-        value = va.strip()
 
         # Functions win over globals (parity with the batch endpoint).
         found_fn = _server.lookup_function(coverage, value)
@@ -1979,13 +1991,13 @@ def handle_api_function(target: str, va: str) -> bytes | HTTPResponse:
             record = _server.verify_by_va(coverage).get(found_fn.va)
             if record is not None:
                 fn_json["last_verify"] = _server.verify_payload(record)
-            return _json_ok(json.dumps(fn_json).encode("utf-8"), Cache_Control=CACHE_NO_STORE)
+            return _json_ok(json.dumps(fn_json).encode("utf-8"), **headers)
 
         found_gl = _server.lookup_global(coverage, value)
         if found_gl is not None:
             return _json_ok(
                 json.dumps(_server.global_json(found_gl)).encode("utf-8"),
-                Cache_Control=CACHE_NO_STORE,
+                **headers,
             )
 
         return _json_err(

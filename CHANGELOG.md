@@ -99,6 +99,12 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `GET /api/targets/<target>/functions/<va>` revalidates. It was the one
+  DB-derived read served `no-store` with no validator, so a client watching a
+  cell re-downloaded the whole row on every poll while `/stats`, `/data`, the
+  function list, `/asm` and `/bytes` all answered 304. The tag covers the
+  coverage snapshot, the target and the requested spelling, and the response
+  body is unchanged.
 - `serve` and `recoverage config` now warn when the coverage directory holds
   no `coverage-*.toml`, or does not exist. Both serve an empty target list,
   which reads as a healthy zero on every figure the dashboard shows; the
@@ -273,6 +279,11 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   an entry no browser ever emits. `serve` now installs the resolved,
   normalized allowlist, the same one `recoverage config` and the startup
   banner already reported, so all three name the list the matcher holds.
+- The failed-token throttle's 429 carried the wait only in the `Retry-After`
+  header. Every other refusal the server rate-limits (the regen cooldown and
+  lock, the event-stream cap) puts `retry_after` in the JSON envelope as well,
+  so a client reading the documented error contract gets the same field
+  whichever limit it hit, with one value in both places.
 - **`make build` stamped a sdist with the wrong date, or crashed, when
   `SOURCE_DATE_EPOCH` was not plain ASCII digits.** The value was checked with
   `str.isdigit`, which accepts every Unicode decimal digit and every

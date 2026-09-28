@@ -2746,9 +2746,17 @@ def _require_auth() -> None:
 
     now = clock.monotonic()
     if _auth_throttle(peer, now, reserve_slot=True):
+        # `retry_after` in the body as well as the header: the two 429s the
+        # regen route sends and the 503 the SSE cap sends both put the wait in
+        # the envelope, so a client reading the documented JSON contract gets
+        # the same field whichever limit it hit.  One value in both places.
         raise _json_err(
             429,
-            {"error": "rate limited", "detail": "too many failed token attempts; retry later"},
+            {
+                "error": "rate limited",
+                "detail": "too many failed token attempts; retry later",
+                "retry_after": int(_AUTH_FAIL_WINDOW_SECONDS),
+            },
             Retry_After=str(int(_AUTH_FAIL_WINDOW_SECONDS)),
         )
 
