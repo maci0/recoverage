@@ -118,6 +118,40 @@ class TestManifestCoversShippedFiles:
         assert not missing, f"assets no package-data pattern picks up: {sorted(missing)}"
 
 
+class TestOnePackageShips:
+    """The wheel installs importable top-level packages, and a stale directory
+    under src/ becomes one without anybody editing the manifest.
+
+    `src/recovery/` — this application before the rename — sat beside
+    `src/recoverage/` in the tree, and bare `where = ["src"]` discovered it, so
+    every wheel carried two copies of the dashboard: the patched one, and one
+    three commits of auth, path-traversal and coverage-span work behind, with
+    its own token gate, CORS allowlist and CSP, reachable as `import recovery`.
+    Nothing else in the suite reached that copy, so a fix landed on
+    `recoverage/` never touched it and a consumer importing the old name got
+    the unpatched server. The `include` in pyproject.toml is the fix; these
+    two tests hold it, from the directory listing and from the manifest that
+    decides what a build is allowed to pick up.
+    """
+
+    def test_src_holds_one_package(self) -> None:
+        found = sorted(
+            p.name
+            for p in (_ROOT / "src").iterdir()
+            if p.is_dir() and (p / "__init__.py").is_file()
+        )
+        assert found == ["recoverage"], f"a second package under src/ ships: {found}"
+
+    def test_package_discovery_names_the_one_package(self) -> None:
+        find = tomllib.loads((_ROOT / "pyproject.toml").read_text(encoding="utf-8"))["tool"][
+            "setuptools"
+        ]["packages"]["find"]
+        assert find.get("include") == ["recoverage*"], (
+            "package discovery is unbounded, so the next directory under src/ is "
+            f"packaged without review: {find.get('include')}"
+        )
+
+
 class TestShippedAssetsReachTheWheel:
     """The bundle DIRECTORY is what `make build` checks before packaging, and
     the wheel is what a consumer installs. Three lists sit between them: the

@@ -93,7 +93,18 @@ recoverage = "recoverage.cli:main"
 version = {attr = "recoverage.__version__"}
 
 [tool.setuptools.packages.find]
+# `include` is not a tidy-up, it is a packaging boundary. Bare `where` with no
+# `include` discovers EVERY package under src/, so the tree once carried a
+# leftover src/recovery/ — the pre-rename copy of this same application — and
+# every wheel installed it as an importable `recovery` beside `recoverage`:
+# three commits of auth, path-traversal and coverage-span fixes behind, with its
+# own CORS, CSP and token gate, and no test reaching it. A patch landed on
+# recoverage/ leaves that copy serving the old code to whoever imports it, and
+# the drift is invisible because both are "the project". Naming the one package
+# that ships makes a second top-level directory a build-time error rather than a
+# silent second copy of the security-sensitive code.
 where = ["src"]
+include = ["recoverage*"]
 
 [tool.setuptools.package-data]
 # py.typed is the PEP 561 marker: without it in the wheel every consumer's type
