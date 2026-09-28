@@ -873,21 +873,38 @@ class TestApiAsmVaBoundaries:
         assert data["error"] == "DLL not found"
 
     def test_decimal_and_hex_spellings_agree(self) -> None:
+        """The two spellings must name the same address, not merely fail alike.
+
+        Equality of the status alone would be satisfied by both arms 500ing, so
+        the comparison runs over the decoded payload and both are pinned to
+        the resolved-then-404 answer `test_decimal_va_spelling_accepted`
+        establishes for 0x10001000.
+        """
         target = get_first_target()
         if not target:
             pytest.skip("No targets in DB")
-        dec_status, _, _ = self._asm(target, "va=268439552&size=1")
-        hex_status, _, _ = self._asm(target, "va=0x10001000&size=1")
-        assert dec_status == hex_status
+        dec_status, dec_headers, dec_body = self._asm(target, "va=268439552&size=1")
+        hex_status, hex_headers, hex_body = self._asm(target, "va=0x10001000&size=1")
+        assert dec_status == hex_status == "404 Not Found", (dec_status, hex_status)
+        assert dec_status.startswith("404")
+        assert json.loads(decode_body(dec_body, dec_headers))["error"] == "DLL not found"
+        assert decode_body(dec_body, dec_headers) == decode_body(hex_body, hex_headers)
 
     def test_bare_hex_legacy_caller_still_resolves(self) -> None:
         """All-digit '10001060': decimal spelling sits below section start, so
-        the bare-hex fallback candidate must be the one resolved."""
+        the bare-hex fallback candidate must be the one resolved.
+
+        A 404 on its own is the same answer a rejected query gives, so the
+        error text is what separates "resolved, then the DLL is missing" from
+        "no such VA".
+        """
         target = get_first_target()
         if not target:
             pytest.skip("No targets in DB")
-        status, _, _ = self._asm(target, "va=10001060&size=16")
+        status, headers, body = self._asm(target, "va=10001060&size=16")
         assert status.startswith("404")
+        data = json.loads(decode_body(body, headers))
+        assert data["error"] == "DLL not found"
 
     def test_unparseable_va_rejected(self) -> None:
         target = get_first_target()
