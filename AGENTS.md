@@ -264,6 +264,13 @@ the tag it came from, and `tests/test_supply_chain.py`
 (`TestActionsArePinned`) fails a mutable `@v7` or a bare SHA: a tag is a moving
 target, so two runs of one commit could execute different code. Dependabot
 rewrites the ref and leaves the comment, so it is what makes a bump reviewable.
+Two bots update this tree and each ecosystem has exactly one of them:
+`renovate.json` reads `pyproject.toml` and `bun.lock` (Dependabot aborts on
+both, the `bun.lock` with no `package-lock.json` beside it and the
+`[tool.uv.sources]` sibling path), and `.github/dependabot.yml` owns the
+actions. `tests/test_supply_chain.py` (`TestUpdateBots`) holds the split from
+both sides, because the overlap costs two PRs against one pin and whichever
+merges first makes the other stale.
 The same class requires `persist-credentials: false` on every
 `actions/checkout`, because checkout otherwise leaves the job's token in
 `.git/config` and every step in these workflows runs project code, and no job

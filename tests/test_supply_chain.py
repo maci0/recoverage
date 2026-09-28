@@ -33,6 +33,10 @@ _PACKAGE_JSON = _ROOT / "package.json"
 _BUN_LOCK = _ROOT / "bun.lock"
 _MANIFEST = _ROOT / "pyproject.toml"
 _TSCONFIG = _ROOT / "web" / "tsconfig.json"
+# The two update bots. Renovate reads the Python and JavaScript manifests,
+# Dependabot the action pins; tests/test_supply_chain.py holds the split.
+_RENOVATE = _ROOT / "renovate.json"
+_DEPENDABOT = _ROOT / ".github" / "dependabot.yml"
 _PYTHON_VERSION = _ROOT / ".python-version"
 _FLATTEN = _ROOT / "tools" / "flatten_rikalabs_strict.py"
 _DERIVED_PRESET = _ROOT / "tools" / "oxlint" / "rikalabs-strict.json"
@@ -1569,3 +1573,70 @@ class TestVendoredLintPlugin:
                 f"no reference to {_VENDOR_MANIFEST.name}, so the record of the vendored copy "
                 f"is unreachable from the documentation"
             )
+
+
+class TestUpdateBots:
+    """Two bots update this tree, and each ecosystem has exactly one of them.
+
+    `renovate.json` reads `pyproject.toml` and `bun.lock`; Dependabot reads the
+    action pins and cannot read either of the other two (a `bun.lock` with no
+    `package-lock.json` beside it, and a `[tool.uv.sources]` path pointing at a
+    sibling checkout, are both errors it aborts on).  The overlap is what
+    costs: two PRs against the same pinned action SHA, whichever merges first
+    making the other stale, and a reviewer reading two claims about one
+    version.  Nothing else in the tree reads either file, so the split is what
+    these hold.
+    """
+
+    @staticmethod
+    def _renovate() -> dict:
+        config = _RENOVATE
+        assert config.is_file(), f"{config.name} is missing, so nothing updates uv.lock or bun.lock"
+        return json.loads(config.read_text(encoding="utf-8"))
+
+    @staticmethod
+    def _dependabot_ecosystems() -> list[str]:
+        """The `package-ecosystem` values, which is the whole of Dependabot's scope."""
+        text = _DEPENDABOT.read_text(encoding="utf-8")
+        return re.findall(r'^\s*-\s*package-ecosystem:\s*"([^"]+)"', text, re.MULTILINE)
+
+    def test_renovate_does_not_own_the_actions(self) -> None:
+        """The action pins have one owner, and it is Dependabot.
+
+        `config:recommended` does not restrict managers, so dropping the
+        `enabledManagers` list is what keeps the second bot out; a rule added
+        there later would reopen the same pin to both.
+        """
+        assert "enabledManagers" in self._renovate(), (
+            "renovate.json names no managers, so its default list covers "
+            "github-actions and it opens a PR against every pin Dependabot owns"
+        )
+        assert "github-actions" not in self._renovate()["enabledManagers"], (
+            "renovate.json claims github-actions, which .github/dependabot.yml already owns"
+        )
+
+    def test_dependabot_owns_the_actions_and_nothing_else(self) -> None:
+        """One ecosystem per bot, both directions.
+
+        The other half of the split: an `npm` or `uv` entry here aborts that
+        Dependabot job (see the header of the file), which leaves the pin it
+        was to raise with no updater at all.
+        """
+        assert self._dependabot_ecosystems() == ["github-actions"], (
+            "dependabot.yml claims an ecosystem renovate.json owns; the two would "
+            "open a PR each against the same lockfile"
+        )
+
+    def test_bun_lock_is_the_only_javascript_lockfile(self) -> None:
+        """No second lockfile beside bun.lock.
+
+        Dependabot keys its npm manager off `package-lock.json` and resolves
+        against it, so a file that appears beside bun.lock is a second,
+        unreviewed statement of which version builds.
+        """
+        found = [
+            name
+            for name in ("package-lock.json", "yarn.lock", "pnpm-lock.yaml", "npm-shrinkwrap.json")
+            if (_ROOT / name).exists()
+        ]
+        assert not found, f"a second JavaScript lockfile is committed beside bun.lock: {found}"
