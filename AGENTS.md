@@ -444,9 +444,13 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   pinned by rebrew's reader, not by the checker), and
   `no_implicit_reexport` (api.py, ui.py and potato.py import the shared
   `request`/`response`/`HTTPResponse` from `recoverage.server` on purpose).
-  `warn_unused_ignores` is off because `ignore_missing_imports` makes every
-  `# type: ignore[import-untyped]` redundant, and the annotations were
-  written when those imports did error. `tests/` is outside the gate until
+  `warn_unused_ignores` is ON, which makes every `type: ignore` in
+  `src/recoverage` and `tools/` a checked claim: one whose error is gone
+  fails `make type-check` instead of outliving the finding it silences. The
+  runtime deps ship no `py.typed`, so they are covered tree-wide by
+  `ignore_missing_imports` rather than by a per-import
+  `# type: ignore[import-untyped]`, which would be redundant under that
+  setting and reported as stale. `tests/` is outside the gate until
   its fixtures carry annotations; a suppression added there belongs with
   the first mypy run that covers it, and the existing
   `# type: ignore[...]` comments there are still the record of what needed

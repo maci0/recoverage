@@ -134,11 +134,19 @@ disallow_untyped_decorators = false
 warn_return_any = false
 no_implicit_reexport = false
 # The runtime deps (bottle, brotli, rcssmin, rjsmin) ship no py.typed, so
-# every import of them is an error mypy cannot see past. Each carries its own
-# `# type: ignore[import-untyped]`, which this setting would then report as
-# unused: silencing the imports silences the annotation of the silence.
+# every import of them is an error mypy cannot see past. ignore_missing_imports
+# is what covers them, tree-wide rather than per import site: a per-site
+# `# type: ignore[import-untyped]` would be redundant under this setting, and
+# warn_unused_ignores below would then report each one as a stale suppression.
+# The setting is therefore one tree-wide statement about these four packages,
+# and every `type: ignore` left in the tree is one a reader can trust to be
+# silencing a real error.
 ignore_missing_imports = true
-warn_unused_ignores = false
+# A `type: ignore` is a claim about code that is not checked; nothing keeps it
+# true. warn_unused_ignores turns the claim into a gate: a suppression whose
+# error is gone (the annotation moved, the dependency shipped py.typed, the
+# line was deleted) fails the run instead of outliving the finding it silences.
+warn_unused_ignores = true
 # tools/ scripts are one-off build helpers: their mains take argv from the
 # caller and are annotated as the work grows, so the signature check is off
 # there only.

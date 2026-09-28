@@ -63,12 +63,12 @@ def build_sample_db(project_dir: Path) -> Path:
     sys.path.insert(0, tests_dir)
     try:
         os.chdir(project_dir)
-        import conftest  # type: ignore[import-not-found]
+        import conftest
     finally:
         os.chdir(old_cwd)
         with contextlib.suppress(ValueError):
             sys.path.remove(tests_dir)
-    conftest.build_synthetic_coverage(db_dir)  # type: ignore[attr-defined]
+    conftest.build_synthetic_coverage(db_dir)
     return sentinel
 
 

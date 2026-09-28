@@ -29,7 +29,7 @@ from __future__ import annotations
 
 from typing import Any
 
-import bottle  # type: ignore[import-untyped]
+import bottle
 
 import recoverage.api  # mounts /api/* routes on server.app
 import recoverage.potato  # mounts /potato on server.app

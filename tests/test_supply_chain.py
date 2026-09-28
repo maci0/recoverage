@@ -702,6 +702,51 @@ class TestFrontendAnalysisIsEnforced:
         )
 
 
+class TestPythonAnalysisIsEnforced:
+    """The Python gates are configured strict AND the run is what enforces it.
+
+    `TestFrontendAnalysisIsEnforced` covers the frontend half; this is the
+    Python half, and it exists because a strict setting that is only described
+    in a comment is one edit away from being off. Turning `strict` or
+    `warn_unused_ignores` off does not fail a run: it stops reporting, which
+    reads exactly like a clean tree. The reason each setting is on belongs in
+    [tool.mypy]; the fact that it is still on belongs here.
+    """
+
+    @staticmethod
+    def _mypy() -> dict:
+        return tomllib.loads(_MANIFEST.read_text(encoding="utf-8"))["tool"]["mypy"]
+
+    def test_mypy_stays_strict(self) -> None:
+        assert self._mypy().get("strict") is True, (
+            "`strict` is off in [tool.mypy]; the tree passes it, so a new module "
+            "would silently inherit a weaker gate"
+        )
+
+    def test_a_type_ignore_that_silences_nothing_fails_the_run(self) -> None:
+        """`warn_unused_ignores` is what keeps a suppression a checked claim.
+
+        Without it a `# type: ignore` outlives the error it silenced: the
+        annotation moves, the dependency ships `py.typed`, and the comment
+        still hides whatever the line reports next.
+        """
+        assert self._mypy().get("warn_unused_ignores") is True, (
+            "`warn_unused_ignores` is off in [tool.mypy], so a stale `type: "
+            "ignore` never fails the gate"
+        )
+
+    def test_the_type_check_runs_in_the_lint_job(self) -> None:
+        assert "make type-check" in _jobs()["lint"], (
+            "the lint job does not run `make type-check`; a type error would reach main"
+        )
+
+    def test_the_lint_and_format_gates_run_in_the_lint_job(self) -> None:
+        """A configured linter nothing runs is a missing linter."""
+        job = _jobs()["lint"]
+        for target in ("make lint", "make format-check", "make shell-lint", "make yaml-lint"):
+            assert target in job, f"the lint job does not run `{target}`"
+
+
 class TestCommittedBundleIsVerified:
     """The committed dashboard bundle is rebuilt by every packaging run.
 

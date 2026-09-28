@@ -23,7 +23,7 @@ from typing import Any
 from urllib.parse import ParseResult, parse_qs, urlparse
 from urllib.parse import quote as _url_quote
 
-from bottle import HTTPResponse, SimpleTemplate  # type: ignore[import-untyped]
+from bottle import HTTPResponse, SimpleTemplate
 from rebrew.coverage_toml import CoverageSnapshot, CoverageTomlError, Function
 
 from recoverage import __version__
@@ -488,8 +488,8 @@ def _pygments() -> tuple[Any, dict[Any, str], Any, dict[Any, str]] | None:
     try:
         if importlib.util.find_spec("pygments.lexers") is None:
             return None
-        from pygments.lexers import CLexer, NasmLexer  # type: ignore[import-untyped]
-        from pygments.token import (  # type: ignore[import-untyped]
+        from pygments.lexers import CLexer, NasmLexer
+        from pygments.token import (
             Comment,
             Keyword,
             Name,

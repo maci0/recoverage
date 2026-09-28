@@ -66,7 +66,7 @@ def capstone_unavailable_reason() -> str | None:
     with _probe_lock:
         if not _probed:
             try:
-                import capstone as _capstone  # type: ignore[import-not-found]
+                import capstone as _capstone
 
                 _capstone.Cs(_capstone.CS_ARCH_X86, _capstone.CS_MODE_32)
             except Exception as exc:
@@ -101,7 +101,7 @@ def get_capstone_md() -> Any:
         reason = capstone_unavailable_reason()
         if reason is not None:
             raise CapstoneUnavailableError(reason)
-        import capstone as _capstone  # type: ignore[import-not-found]
+        import capstone as _capstone
 
         md = _capstone.Cs(_capstone.CS_ARCH_X86, _capstone.CS_MODE_32)
         md.detail = False

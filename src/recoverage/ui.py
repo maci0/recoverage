@@ -8,9 +8,9 @@ import threading
 from pathlib import PurePosixPath
 from typing import NamedTuple
 
-import rcssmin  # type: ignore[import-untyped]
-import rjsmin  # type: ignore[import-untyped]
-from bottle import static_file  # type: ignore[import-untyped]
+import rcssmin
+import rjsmin
+from bottle import static_file
 
 import recoverage.server as _server
 from recoverage.server import (

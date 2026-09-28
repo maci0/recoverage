@@ -26,9 +26,9 @@ from types import MappingProxyType
 from typing import Any, Final, cast
 from urllib.parse import unquote, urlsplit
 
-import brotli  # type: ignore[import-untyped]
+import brotli
 import zstandard as zstd
-from bottle import Bottle, HTTPResponse, request, response  # type: ignore[import-untyped]
+from bottle import Bottle, HTTPResponse, request, response
 from rebrew.coverage_toml import (
     Cell,
     CoverageSnapshot,
