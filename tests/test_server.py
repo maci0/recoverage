@@ -715,7 +715,11 @@ class TestSnapshotVaIndices:
         assert index[0x1000]["byte_delta"] == 3
         assert "0x1004" not in index
         assert verify_by_va(snap) is index
-        assert globals_by_va(snap) is globals_by_va(snap)
+        # Compared against a held reference, not against a second call:
+        # `f() is f()` is satisfied by any deterministic function, so it
+        # would hold for a memo that rebuilt the index on every read.
+        globals_index = globals_by_va(snap)
+        assert globals_by_va(snap) is globals_index
 
     def test_two_snapshots_do_not_share_one_index(self) -> None:
         first = _snapshot_for({}, globals_=[{"va": 0x2000, "name": "g_first"}])
@@ -1214,20 +1218,28 @@ class TestEveryRouteIsBehindTheTokenGate:
         """The sweep above is only evidence because each route also works.
 
         Without it, a table of rules the router never dispatches would pass
-        the 401 assertion by 404ing everything.
+        the 401 assertion by 404ing everything. The status is pinned to 2xx
+        rather than merely "not refused": a route that raised on every
+        request answers 500, and a gate that turned into a blanket refusal
+        answers 401, and both say nothing about the route behind it. 405
+        counts as dispatchable for the same reason: the router matched the
+        rule and declined the method, which a 404 does not do.
         """
         from conftest import wsgi_request
 
         from recoverage.server import app
 
         auth = {"Authorization": "Bearer unit-test-token"}
+        served: list[str] = []
         for route in app.routes:
             path = _concrete_path(route.rule)
             method = next(iter(route.method))
             status, _, _ = wsgi_request(method, path, headers=auth)
-            assert not status.startswith(("401", "403", "404")), (
-                f"{method} {path} is unroutable ({status}) but registered"
+            served.append(f"{method} {path}")
+            assert status.startswith(("2", "405")), (
+                f"{method} {path} is unroutable or broken ({status}) but registered"
             )
+        assert len(served) >= 20, f"route sweep covered only {sorted(served)}"
 
 
 class TestUnauthorizedPageMatchesTheTokenLayer:
@@ -2503,12 +2515,13 @@ class TestEveryDeclaredSectionIsServed:
         assert [entry["state"] for entry in payload] == ["exact", "none"]
         assert [entry["start"] for entry in payload] == [0, 1]
 
-    def test_a_section_with_no_cells_serves_an_empty_grid(self) -> None:
+    def test_a_section_with_no_cells_serves_no_bucket_row_and_an_empty_grid(self) -> None:
         """A declared section with no cells is not a section of `none` bytes.
 
-        The old ``GROUP BY section_name`` produced no row for it, and the cell
-        payload is empty rather than absent, so the grid renders nothing instead
-        of inventing a section-wide miss.
+        The old ``GROUP BY section_name`` produced no row for it, and that is
+        the answer pinned here: no bucket row to count, an empty cell payload
+        rather than an absent one, so the grid renders nothing instead of
+        inventing a section-wide miss.
         """
         import recoverage.server as srv
 

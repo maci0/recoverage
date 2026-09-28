@@ -26,7 +26,6 @@ import pytest
 
 from recoverage import devserver
 from recoverage.cli import (
-    _BROWSER_OPEN_TIMEOUT_SECONDS,
     _open_and_reap,
     _server_class_for,
 )
@@ -382,13 +381,16 @@ class TestOpenAndReap:
 
         # The wait bound the opener actually sees is the module global read at
         # call time, so shortening it here is what shrinks the wall clock.
+        # Read the production value FIRST: after the patch the name resolves
+        # to 0.3, so asserting on it afterwards restates what the test wrote.
+        production_bound = cli._BROWSER_OPEN_TIMEOUT_SECONDS
+        assert 0 < production_bound < 30, f"production opener wait is {production_bound}s"
         monkeypatch.setattr(cli, "_BROWSER_OPEN_TIMEOUT_SECONDS", 0.3)
         start = time.monotonic()
         _open_and_reap(
             "http://127.0.0.1:8001", [sys.executable, "-c", "import time; time.sleep(60)"]
         )
         elapsed = time.monotonic() - start
-        assert _BROWSER_OPEN_TIMEOUT_SECONDS > 0, "production opener wait must stay bounded"
         assert elapsed >= 0.3, f"waited {elapsed:.2f}s: the bound was not applied"
         assert elapsed < 5, f"hung opener blocked {elapsed:.1f}s (unbounded wait)"
 
@@ -480,10 +482,19 @@ class TestOpenAndReap:
         monkeypatch.setattr(cli.os, "name", "nt")  # the direct-kill branch
         cli._kill_and_reap(_BrokenProc())  # type: ignore[arg-type]
 
-    def test_reap_wait_is_bounded(self, monkeypatch: Any) -> None:
+    def test_reap_wait_is_bounded(self, monkeypatch: Any, caplog: pytest.LogCaptureFixture) -> None:
         """A SIGKILL that never lands must not trade a hung opener for a
-        thread blocked in wait() forever: the reap carries the same bound."""
+        thread blocked in wait() forever: the reap carries the same bound.
+
+        The stub's ``wait`` raises the moment it is called, so wall clock
+        proves nothing here. What the property actually is — the bound is
+        handed to ``wait`` at all, and it is the opener's — is pinned by
+        recording the timeout argument and by the abandonment warning that
+        names the child.
+        """
         import recoverage.cli as cli
+
+        seen: list[float | None] = []
 
         class _StuckProc:
             pid = 4242
@@ -492,13 +503,17 @@ class TestOpenAndReap:
                 return None
 
             def wait(self, timeout: float | None = None) -> int:
+                seen.append(timeout)
                 raise subprocess.TimeoutExpired(cmd="opener", timeout=timeout or 0)
 
         monkeypatch.setattr(cli, "_BROWSER_OPEN_TIMEOUT_SECONDS", 0.1)
         monkeypatch.setattr(cli.os, "name", "nt")
-        start = time.monotonic()
-        cli._kill_and_reap(_StuckProc())  # type: ignore[arg-type]
-        assert time.monotonic() - start < 5
+        with caplog.at_level(logging.WARNING, logger="recoverage"):
+            cli._kill_and_reap(_StuckProc())  # type: ignore[arg-type]
+        assert seen == [0.1], f"the reap waited on {seen}, not on the opener's bound"
+        assert any("4242" in record.getMessage() for record in caplog.records), (
+            "the unreaped opener was left without a line naming it"
+        )
 
     @pytest.mark.skipif(not HAS_PROC, reason="the zombie scan reads /proc, which only Linux has")
     def test_exiting_child_is_reaped_no_zombie(self) -> None:

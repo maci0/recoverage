@@ -909,13 +909,19 @@ class TestApiAsmVaBoundaries:
 
     def test_va_one_past_end_rejected(self) -> None:
         target = require_target()
-        status, _, _ = self._asm(target, "va=0x10002001&size=16")
+        status, headers, body = self._asm(target, "va=0x10002001&size=16")
         assert status.startswith("400")
+        # The message, not the 400: a guard that refused for the wrong
+        # reason answers the same status code.
+        data = json.loads(decode_body(body, headers))
+        assert data["error"] == "va is beyond section end"
 
     def test_va_far_beyond_end_rejected(self) -> None:
         target = require_target()
-        status, _, _ = self._asm(target, "va=0xFFFFFFFF&size=16")
+        status, headers, body = self._asm(target, "va=0xFFFFFFFF&size=16")
         assert status.startswith("400")
+        data = json.loads(decode_body(body, headers))
+        assert data["error"] == "va is beyond section end"
 
     def test_last_valid_va_passes_boundary_guard(self) -> None:
         """va = section end - 1 must NOT trip either boundary check; the
@@ -928,10 +934,19 @@ class TestApiAsmVaBoundaries:
         assert data["error"] == "DLL not found"
 
     def test_zero_size_still_rejected_at_boundary_class(self) -> None:
-        """size clamps/validates before the VA checks: size=0 is its own 400."""
+        """size clamps/validates before the VA checks: size=0 is its own 400.
+
+        The second arm pairs the bad size with an UNPARSEABLE va, so the
+        error it reports is the ordering itself: `size` is read and refused
+        before `va` is resolved, and a handler that validated the address
+        first answered "invalid va or size" here instead.
+        """
         target = require_target()
-        status, _, _ = self._asm(target, "va=0x10001000&size=0")
-        assert status.startswith("400")
+        for query in ("va=0x10001000&size=0", "va=zzz&size=0"):
+            status, headers, body = self._asm(target, query)
+            assert status.startswith("400"), query
+            data = json.loads(decode_body(body, headers))
+            assert data["error"] == "size must be positive", query
 
     def test_decimal_va_spelling_accepted(self) -> None:
         """The SPA interpolates JS numbers into ?va= — decimal digits.
@@ -979,8 +994,13 @@ class TestApiAsmVaBoundaries:
 
     def test_unparseable_va_rejected(self) -> None:
         target = require_target()
-        status, _, _ = self._asm(target, "va=zzz&size=16")
+        status, headers, body = self._asm(target, "va=zzz&size=16")
         assert status.startswith("400")
+        data = json.loads(decode_body(body, headers))
+        # One envelope covers both parameters, so the detail is what says
+        # which one was unparseable.
+        assert data["error"] == "invalid va or size"
+        assert "zzz" in data["detail"]
 
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
@@ -2160,11 +2180,15 @@ class TestBatchFunctionLookup:
         """A client that omits the header entirely is not refused; the body
         is still parsed. Keeps curl -d and other header-less clients working."""
         target = require_target()
-        status, _headers, _body = wsgi_post(
+        status, headers, body = wsgi_post(
             f"/api/targets/{target}/functions",
             body=json.dumps({"vas": ["0x10001000"]}),
         )
         assert status.startswith("200")
+        # 200 is not "the body was parsed": a handler that answered 200 with
+        # the error envelope, or with an empty list, passes the status alone.
+        results = json.loads(decode_body(body, headers))
+        assert [r["name"] for r in results] == ["_func_a"]
 
     def test_batch_rejects_oversized_body(self) -> None:
         """The batch endpoint is unauthenticated — an oversized body must be
@@ -2408,26 +2432,38 @@ class TestBatchFunctionLookup:
             assert data["error"] and data["code"] and data["detail"], url
 
     @pytest.mark.parametrize(
-        "body",
+        ("body", "error"),
         [
-            "not json at all",
-            "",
-            json.dumps([1, 2, 3]),
-            json.dumps({}),
-            json.dumps({"vas": "0x10001000"}),
+            ("not json at all", "Body must be a JSON object"),
+            ("", "Body must be a JSON object"),
+            (json.dumps([1, 2, 3]), "Body must be a JSON object"),
+            (json.dumps({}), "vas must be an array"),
+            (json.dumps({"vas": "0x10001000"}), "vas must be an array"),
+            (json.dumps({"vas": []}), "vas must not be empty"),
         ],
-        ids=["non-json", "empty", "not-an-object", "no-vas-key", "vas-not-a-list"],
+        ids=[
+            "non-json",
+            "empty",
+            "not-an-object",
+            "no-vas-key",
+            "vas-not-a-list",
+            "vas-empty",
+        ],
     )
-    def test_batch_body_shapes_that_are_not_a_va_list_400(self, body: str) -> None:
+    def test_batch_body_shapes_that_are_not_a_va_list_400(self, body: str, error: str) -> None:
         """Every body that is not `{"vas": [...]}` is a 400, not a 500.
 
         A client that posts the wrong shape gets the error envelope, whether
         it is unparsable, empty, an array, an object without `vas`, or one
-        whose `vas` is a string rather than a list.
+        whose `vas` is a string rather than a list. Each shape is named in
+        the error: a 400 the reader cannot tell apart from a neighbouring
+        shape's is the same page of a log to whoever has to fix the client.
         """
         target = require_target()
-        status, _, _ = self._post(target, body)
+        status, headers, body_bytes = self._post(target, body)
         assert status.startswith("400")
+        data = json.loads(decode_body(body_bytes, headers))
+        assert data["error"] == error, body
 
     def test_batch_malformed_va_400(self) -> None:
         target = require_target()

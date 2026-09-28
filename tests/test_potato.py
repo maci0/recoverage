@@ -1367,10 +1367,18 @@ class TestBuildUrl:
         assert f"target={quote('ターゲット')}" in url
 
     def test_filter_sorting_deterministic(self) -> None:
-        """Filters should be sorted for deterministic URLs."""
+        """Filters are sorted for deterministic URLs.
+
+        Comparing two set literals spelled in a different order is not a
+        check: CPython iterates either of them in the same per-process order
+        whether or not `sorted()` runs, so an unsorted `_build_url` would pass
+        it. The expected URL is spelled out instead, which is the only
+        spelling a join in set order cannot produce.
+        """
         url1 = _build_url("S", ".t", {"exact", "reloc", "stub"})
         url2 = _build_url("S", ".t", {"stub", "exact", "reloc"})
         assert url1 == url2
+        assert url1 == "?target=S&section=.t&filter=exact%2Creloc%2Cstub", url1
 
     def test_idx_zero(self) -> None:
         url = _build_url("S", ".t", idx=0)
@@ -1603,6 +1611,11 @@ class TestMergeCellsInvariant:
         merged = _merge_cells(cells, 64)
         total_span = sum(c.get("span", 1) for c in merged)
         assert total_span == 65
+        # The span sum is 65 whether or not the boundary was honoured, so it
+        # is the ROW COUNT that pins the property: 64 cells merge into one
+        # run, the 65th starts a second row that must not join it.
+        assert len(merged) == 2, merged
+        assert [c.get("span", 1) for c in merged] == [64, 1], merged
 
     def test_empty_cells(self) -> None:
         from recoverage.potato import _merge_cells
@@ -2990,7 +3003,10 @@ class TestRenderIsPinnedToOneSnapshot:
         potato.clear_cells_cache()
         try:
             html = render_potato_url(f"/potato?target={target}&section=.text")
-            assert html  # this request still gets its page
+            # A non-empty page is not a correct one: a grid built from the
+            # pre-rebuild rows serves this request happily. The fixture's
+            # first .text cell is the thing that distinguishes them.
+            assert "0x10001000.." in html, "the page came back without the section's cells"
             assert not potato._GRID_CACHE, "cells from before the rebuild were memoized"
             assert not potato._POTATO_STATS_CACHE, "stats from before the rebuild were memoized"
         finally:

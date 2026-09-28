@@ -123,12 +123,17 @@ class TestScalarParsing:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         """A service may start before the first ``rebrew build-db``."""
-        monkeypatch.setenv("RECOVERAGE_DB", str(tmp_path / "not-built-yet"))
+        override = tmp_path / "not-built-yet"
+        monkeypatch.setenv("RECOVERAGE_DB", str(override))
         config.check_db_override()
+        # "Allowed" is not "ignored": the read path still resolves the name
+        # the reader configured, which is the half a deleted check could take.
+        assert config.db_override() == override
 
     def test_db_override_unset_is_allowed(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("RECOVERAGE_DB", raising=False)
         config.check_db_override()
+        assert config.db_override() is None
 
     @pytest.mark.parametrize(
         "raw,expected", [("DEBUG", logging.DEBUG), ("warning", logging.WARNING), ("30", 30)]
@@ -367,18 +372,33 @@ class TestTransportBounds:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A cap validated and then not installed is a config the banner lies
-        about, so the resolved values reach the module the accept path reads."""
+        about, so the resolved values reach the module the accept path reads.
+
+        Driven through `serve` itself: the wiring this names is the CLI's, and
+        a test that calls `configure_transport` itself passes with a `serve`
+        that stopped calling it.
+        """
+        from typing import Any
+
+        from typer.testing import CliRunner
+
         import recoverage.devserver as devserver
-        from recoverage.cli import _resolve_serve_config
+        from recoverage.cli import app as cli_app
+        from recoverage.server import app as server_app
 
         monkeypatch.setenv("RECOVERAGE_MAX_CONNECTIONS", "7")
         monkeypatch.setenv("RECOVERAGE_CLIENT_TIMEOUT", "300")
-        resolved = _resolve_serve_config()
-        devserver.configure_transport(
-            max_connections=resolved.max_connections,
-            client_timeout_seconds=resolved.client_timeout,
-        )
+        monkeypatch.setattr("recoverage.api._ensure_db_watcher", lambda: None)
+
+        def raise_interrupt(self: Any, **kwargs: Any) -> None:
+            raise KeyboardInterrupt
+
+        # Stop at the accept loop: everything before it is the wiring under
+        # test, and the KeyboardInterrupt is the documented clean stop.
+        monkeypatch.setattr(type(server_app), "run", raise_interrupt)
         try:
+            result = CliRunner().invoke(cli_app, ["serve", "--no-open", "--port", "8123"])
+            assert result.exit_code == 0, result.output
             assert devserver._MAX_CONNECTIONS == 7
             assert devserver._CLIENT_SOCKET_TIMEOUT_SECONDS == 300
             # http.server reads `timeout` at handler construction.

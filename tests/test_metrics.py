@@ -250,10 +250,13 @@ class TestRedCounters:
             wsgi_get("/api/health\nX-Forged: yes")
         records = [r for r in caplog.records if r.name == "recoverage"]
         assert records, "request was not logged at all"
-        for record in records:
-            fields = getattr(record, server.LOG_FIELDS_ATTR, None)
-            if fields is None:
-                continue
+        # Counting the ones that carry fields: a filter that skipped every
+        # record would leave this loop with nothing to assert on and the test
+        # green, which is the same as the fields never being attached.
+        with_fields = [r for r in records if getattr(r, server.LOG_FIELDS_ATTR, None) is not None]
+        assert with_fields, f"no log record among {len(records)} carried the fields"
+        for record in with_fields:
+            fields = getattr(record, server.LOG_FIELDS_ATTR)
             assert "\n" not in fields["path"] and "\r" not in fields["path"]
 
 

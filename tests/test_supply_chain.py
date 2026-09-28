@@ -381,9 +381,21 @@ class TestActionsArePinned:
         assert workflows, "no workflow to check"
         return [*workflows, *actions]
 
+    def _uses_steps(self, path: Path) -> list[re.Match[str]]:
+        """Every `uses:` line in *path* the pattern recognizes.
+
+        A local composite action declares none, so the count is not asserted
+        per file: both gates below iterate what this returns, and a reformat
+        that leaves the pattern matching nothing would skip every assertion
+        in the loop and report a pin gate that checked nothing. The callers
+        therefore count what they inspected.
+        """
+        return list(self._USE_RE.finditer(path.read_text(encoding="utf-8")))
+
     def test_every_action_resolves_to_a_commit(self) -> None:
+        third_party = 0
         for path in self._action_files():
-            for match in self._USE_RE.finditer(path.read_text(encoding="utf-8")):
+            for match in self._uses_steps(path):
                 action, ref = match["action"], match["ref"]
                 if action.startswith("./"):
                     continue
@@ -393,6 +405,8 @@ class TestActionsArePinned:
                 assert self._TAG_COMMENT_RE.match(comment), (
                     f"{where} pins {ref[:12]} without naming the tag it came from"
                 )
+                third_party += 1
+        assert third_party >= 3, f"only {third_party} third-party actions were pinned"
 
     def test_the_checkout_token_does_not_outlive_the_checkout(self) -> None:
         """`persist-credentials: false` on every checkout, in every workflow.
@@ -402,6 +416,7 @@ class TestActionsArePinned:
         bun) that could read it off disk. No job pushes, so nothing needs it
         after the tree lands.
         """
+        checkouts = 0
         for path in self._action_files():
             lines = path.read_text(encoding="utf-8").splitlines()
             for index, line in enumerate(lines):
@@ -419,6 +434,10 @@ class TestActionsArePinned:
                 assert any("persist-credentials: false" in b for b in block), (
                     f"{path.relative_to(_ROOT)}: a checkout keeps the job token in .git/config"
                 )
+                checkouts += 1
+        # Every workflow that checks the tree out is covered above; a count
+        # proves the pattern still finds those steps rather than skipping them.
+        assert checkouts, "no actions/checkout step was found to check"
 
 
 class TestEnvironmentInstalls:
