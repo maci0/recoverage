@@ -504,6 +504,41 @@ class TestToolchainPins:
     would have to touch and nobody would remember to.
     """
 
+    def test_the_linux_runner_image_is_named_not_followed(self) -> None:
+        """`ubuntu-latest` is a moving label, so no job may name it.
+
+        Every other input the pipeline reads is pinned in the tree: uv by
+        version, Python by .python-version, bun by package.json, every action
+        by commit, rebrew by tag and sha. The runner image was the one left to
+        the host, and it is where the tools nothing in the tree declares come
+        from: `shellcheck` and `yamllint` (the lint job's shell and Actions
+        gates) and `diffoscope` (the build job's reproducibility diagnostic).
+        A fleet update could add a rule, drop one, or remove a tool, and the
+        same commit would lint differently on two runs or fail a gate that was
+        green a week earlier. Pinning the label is the same decision as an
+        action pin and is reviewed the same way.
+
+        The macOS and Windows matrix entries keep their floating labels: they
+        exist to exercise the claim that the suite runs on all three, they run
+        no pinned tool out of the image, and a version label there would be
+        swapped on a schedule this tree does not own.
+        """
+        for path in sorted((_ROOT / ".github" / "workflows").glob("*.y*ml")):
+            for line in path.read_text(encoding="utf-8").splitlines():
+                # A comment can name the label it forbids, so only the part
+                # of the line the runner reads is checked.
+                label = re.search(r"ubuntu[-\w.]*", line.split("#", 1)[0])
+                if label is None:
+                    continue
+                image = label.group(0)
+                where = f"{path.relative_to(_ROOT)}: {image}"
+                assert not image.endswith("-latest"), (
+                    f"{where} follows the runner fleet; name the image version"
+                )
+                assert re.fullmatch(r"ubuntu-\d\d\.\d\d", image), (
+                    f"{where} is not a versioned image label"
+                )
+
     def test_flatten_script_does_not_pin_an_oxlint_version(self) -> None:
         """The preset flattener reads the oxlint version, it does not restate it.
 

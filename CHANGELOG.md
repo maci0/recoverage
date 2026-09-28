@@ -116,6 +116,20 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **`make shell-lint` failed on the tree it was meant to gate.**
+  `tools/ci_clone_rebrew.sh` declares its dialect to shellcheck now, so the
+  array and `pipefail` below the header stop reading as an unknown shell
+  (SC2148) and the `lint` job's shell gate passes.
+- **A Linux CI job ran on a moving runner image.** Every job named
+  `ubuntu-latest`, which follows the runner fleet, and the image is where the
+  two linters the tree pins no version of come from (`shellcheck` and
+  `yamllint`) as well as `diffoscope`. The jobs name `ubuntu-24.04` now, and
+  `tests/test_supply_chain.py` fails a return to the floating label.
+- **A reproducibility failure in the `build` job said only that the artifact
+  differed.** The step called `diffoscope`, which the runner image does not
+  ship, and swallowed the resulting `command not found`, so the one failure
+  that needs a diff produced none. It prints both hashes now and adds
+  diffoscope's breakdown where the image carries it.
 - **A request the HTTP layer refused left no trace in the server log.** An
   over-long request line, a malformed one, an unsupported version, or headers
   past the limit are all rejected before a route exists, so nothing downstream

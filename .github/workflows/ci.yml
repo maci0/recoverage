@@ -17,8 +17,20 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
+  # Every Linux job names the image by version, never `ubuntu-latest`. That
+  # label moves with the runner fleet, and the image is where this pipeline
+  # gets tools nothing in the tree pins: `shellcheck` and `yamllint` (the
+  # lint job's shell and Actions gates) and `diffoscope` (the build job's
+  # reproducibility diagnostic). A fleet update could add or drop a rule, or
+  # remove the tool entirely, and the same commit would lint differently on
+  # two runs, or fail a gate that was green a week earlier. Everything else
+  # the pipeline runs is pinned in the tree (uv by version, Python by
+  # .python-version, bun by package.json, every action by commit); the runner
+  # image was the one input left to the host. Bump the label with the same
+  # review as an action pin, and tests/test_supply_chain.py fails when a job
+  # goes back to a moving label.
   lint:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -68,7 +80,7 @@ jobs:
       - run: make yaml-lint
 
   web-lint:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -138,7 +150,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest]
+        os: [ubuntu-24.04]
         # Keep in sync with the Python classifiers in pyproject.toml;
         # tests/test_supply_chain.py fails when they drift apart.
         python-version: ["3.13", "3.14"]
@@ -187,7 +199,7 @@ jobs:
           --ignore=tests/test_playwright.py
 
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -271,13 +283,24 @@ jobs:
           # build-host absolute path or an unstamped mtime shows up here.
           cd "$work"
           LC_ALL=C.UTF-8 TZ=Asia/Tokyo make build
-          # diffoscope names the field that moved when two archives disagree;
-          # a bare `cmp` would only report that they differ.
+          # A differing archive is the one failure in this workflow a reader
+          # cannot act on without a diff, so the step prints the two hashes
+          # itself (the only facts it has) and adds diffoscope's field-by-field
+          # breakdown when the image carries it. The runner ships no
+          # diffoscope, so the unguarded call was a `command not found`
+          # swallowed by `|| true`: the step failed naming the artifact and
+          # nothing else, which is the one answer that cannot say what moved.
           for artifact in dist/*.whl dist/*.tar.gz; do
             name="$(basename "$artifact")"
             if ! cmp -s "$artifact" "$first/$name"; then
               echo "::error::$name is not reproducible across path, locale and timezone"
-              diffoscope "$first/$name" "$artifact" || true
+              echo "$name expected: $(sha256sum "$first/$name" | cut -d' ' -f1)"
+              echo "$name actual:   $(sha256sum "$artifact" | cut -d' ' -f1)"
+              if command -v diffoscope >/dev/null 2>&1; then
+                diffoscope "$first/$name" "$artifact" || true
+              else
+                echo "diffoscope is not on this image; it names the field that moved"
+              fi
               exit 1
             fi
             echo "$name reproducible: $(sha256sum "$artifact" | cut -d' ' -f1)"
@@ -299,7 +322,7 @@ jobs:
           retention-days: 30
 
   smoke:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -335,7 +358,7 @@ jobs:
         run: make smoke-fail
 
   sbom:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

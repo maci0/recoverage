@@ -234,6 +234,17 @@ The same class requires `persist-credentials: false` on every
 `.git/config` and every step in these workflows runs project code, and no job
 pushes.
 
+A Linux job names its runner image (`ubuntu-24.04`), never `ubuntu-latest`, and
+`tests/test_supply_chain.py` (`TestToolchainPins`) fails the moving label. Every
+other input the pipeline reads is pinned in the tree, so the image is the last
+one left to the host, and it is where the tools the tree declares no version for
+come from: `shellcheck` and `yamllint`, which gate `tools/*.sh` and `.github/`
+in the `lint` job, and `diffoscope`, which the `build` job calls when two
+builds disagree. A fleet update that added or dropped a rule, or removed a tool,
+would change what `make lint` accepts with no commit to review. The macOS and
+Windows matrix entries keep floating labels: they exercise the cross-platform
+claim and run no pinned tool out of the image.
+
 ## Releases
 
 The release policy is not written down anywhere else, so it is stated here and
@@ -407,7 +418,9 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   produces the artifact, and it is what makes reproducibility tested rather
   than asserted: it builds twice, the second time from a copy of the tracked
   tree under a different path with `LC_ALL=C.UTF-8` and `TZ=Asia/Tokyo`, and
-  fails when the two archives differ, naming the field through `diffoscope`.
+  fails when the two archives differ, printing both hashes and adding
+  `diffoscope`'s breakdown when the runner image carries it (it does not, so
+  the hashes are what a reader gets).
   The copy gets `../rebrew` as a symlink for the same reason the preflight
   exists, and `SOURCE_DATE_EPOCH` is pinned to a constant in that job so the
   two builds cannot disagree over anything but the tree. The step removes

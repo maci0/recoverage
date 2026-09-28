@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+# shellcheck shell=bash
+# The directive as well as the shebang: this file is not executable, every
+# caller runs it as `bash <script>` (the composite action, `make
+# clone-rebrew`, CONTRIBUTING), and without a dialect declared shellcheck
+# reports SC2148 and fails `make shell-lint` on the array and pipefail below.
+#
 # Clone the sibling rebrew path dependency.
 #
 # [tool.uv.sources] in pyproject.toml resolves rebrew from ../rebrew, so a

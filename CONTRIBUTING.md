@@ -51,9 +51,15 @@ Web lint additionally needs [bun](https://bun.sh) (`packageManager` pins
 under `java`. `make web-lint` names whichever is missing.
 
 `make shell-lint` and `make yaml-lint` need `shellcheck` and `yamllint` on
-`PATH`; both ship on the CI runner image, and each target names the one that
-is missing. They cover the two non-Python source sets ruff does not see: the
-`tools/*.sh` scripts and the `.github/` Actions definitions.
+`PATH`; both ship on the pinned CI runner image, and each target names the one
+that is missing. They cover the two non-Python source sets ruff does not see:
+the `tools/*.sh` scripts and the `.github/` Actions definitions. Those two
+linters are the one part of the pipeline whose version the tree does not pin,
+so a Linux job names its runner image (`ubuntu-24.04`) rather than following
+`ubuntu-latest`: the image is where they come from, and a fleet update that
+added or dropped a rule would change what `make lint` accepts with no commit
+to review. Bump the label in `.github/workflows/ci.yml` the way you bump an
+action pin.
 
 ## The edit-test loop
 
@@ -149,9 +155,10 @@ a tracked file under `src/recoverage/assets`, and names the file.
 
 The `build` job is the only CI job that produces the artifact. It builds twice,
 the second time in a copy of the tree under a different path with a different
-locale and timezone, and fails when the two disagree, naming the field that
-moved through `diffoscope`. That is what makes the reproducibility claim
-tested rather than asserted, and it uploads the artifacts it built.
+locale and timezone, and fails when the two disagree, printing both hashes and
+adding `diffoscope`'s field-by-field breakdown when the image carries it. That
+is what makes the reproducibility claim tested rather than asserted, and it
+uploads the artifacts it built.
 
 Every target is a wrapper around the third column. Only the `test` row runs on
 the whole matrix (Linux, macOS, Windows); every other job is Linux-only. `make` itself
