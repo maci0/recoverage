@@ -485,6 +485,29 @@ class TestDbEtag:
         assert after is not None
         assert after != before
 
+    def test_a_part_carrying_the_separator_does_not_collide(self) -> None:
+        """A validator must name exactly one response, not a family of them.
+
+        The parts are a flat list, so a separator alone lets a value that
+        CONTAINS it read as several parts.  Two function-list requests with
+        free-text ``?search=`` and ``?sort=`` shift their own boundaries that
+        way and shape two different pages, which then shared one strong
+        validator: a client holding the first page's body revalidating the
+        second was answered 304 and kept rendering the first page's rows.
+        """
+        import recoverage.server as srv
+
+        by_search = srv._safe_etag(1, "T", "functions", "exact", "a|va:asc|5|3", "va", 5, 3)
+        by_sort = srv._safe_etag(1, "T", "functions", "exact", "a", "va:asc|5|3|va", 5, 3)
+        assert by_search != by_sort
+
+    def test_a_shifted_part_list_does_not_collide(self) -> None:
+        """The part COUNT is part of the key, not just the joined text."""
+        import recoverage.server as srv
+
+        assert srv._safe_etag(1, "T", "a|b") != srv._safe_etag(1, "T", "a", "b")
+        assert srv._safe_etag(1, "T", "a") != srv._safe_etag(1, "T", "a", None)
+
     def test_a_filename_outside_utf8_still_yields_a_token(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

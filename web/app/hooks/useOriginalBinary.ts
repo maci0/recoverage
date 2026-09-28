@@ -91,6 +91,14 @@ export function useOriginalBinary(
     // reader reaches by arrowing through cells.
     return () => {
       control.abort();
+      // Settle the wait here, because the aborted `.then` above returns before
+      // it and the effect that replaces this one may not start a download at
+      // all: a deselect (`enabled` false) or an empty `path` returns at the
+      // guard, so nothing would ever clear `loading` and the pane it feeds
+      // waited on a fetch that had just been cancelled. A successor that DOES
+      // start a download sets `loading` back in the same commit this cleanup
+      // belongs to, so the two cannot be observed apart.
+      setLoading(false);
     };
   }, [enabled, path, reloadToken]);
 

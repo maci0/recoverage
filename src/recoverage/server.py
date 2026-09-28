@@ -310,6 +310,14 @@ def fs_text_bytes(text: str) -> bytes:
     return text.encode("utf-8", "surrogateescape")
 
 
+#: What separates one length-prefixed :func:`_safe_etag` part from the next.
+#: A NUL cannot occur inside a part (a section name, a target id, a status word
+#: and a search term are all text a document or a query can hold, and a NUL ends
+#: a request line), so the framing is unambiguous in a way a printable
+#: delimiter is not.
+_ETAG_PART_SEP = "\0"
+
+
 def _safe_etag(*parts: object) -> str:
     """Deterministic ETag from arbitrary parts.
 
@@ -319,8 +327,23 @@ def _safe_etag(*parts: object) -> str:
     not the app's contract).  Hashed through :func:`fs_text_bytes`, so a target
     id that came off the filesystem as a surrogate-escaped name is a value
     rather than a 500.
+
+    Every part is LENGTH-PREFIXED, not merely separated.  A separator alone
+    makes the encoding ambiguous: the parts are a flat list, so a value
+    carrying the separator reads as several parts, and two different requests
+    that shaped two different responses hash the same string.  The function
+    list is the reachable case — ``?search=`` and ``?sort=`` are free text, so
+    ``search=a&sort=va:asc|5|3&limit=5&offset=3`` and ``search=a|va:asc|5|3
+    &sort=va&limit=5&offset=3`` joined to one identical string and answered
+    both requests with the same strong validator.  A client that had the
+    first page cached revalidating the second got a 304 and kept rendering
+    the first page's rows under the second page's controls.  Prefixing each
+    part with its own length makes the encoding injective, so a validator
+    names exactly one response and a 304 is only ever the answer to the
+    request that earned it.
     """
-    digest = hashlib.sha256(fs_text_bytes("|".join(str(p) for p in parts))).hexdigest()[:32]
+    payload = _ETAG_PART_SEP.join(f"{len(text)}:{text}" for text in (str(p) for p in parts))
+    digest = hashlib.sha256(fs_text_bytes(payload)).hexdigest()[:32]
     return f'"{digest}"'
 
 
@@ -745,6 +768,10 @@ def _snapshot_db_mtime() -> tuple[int, int] | None:
     entries = _coverage_file_stats()
     if not entries:
         return None
+    # The name is the only free-text field and comes first, so it absorbs every
+    # colon before the two trailing integers: the NUL between entries makes the
+    # entry list unambiguous and the trailing ints make the fields inside one
+    # entry unambiguous, even for a target id carrying a colon.
     payload = "\0".join(f"{name}:{mtime_ns}:{size}" for name, mtime_ns, size in entries)
     # fs_text_bytes, not encode("utf-8"): a name the filesystem spelled as raw
     # bytes outside UTF-8 reaches this as a surrogate-escaped str and the
