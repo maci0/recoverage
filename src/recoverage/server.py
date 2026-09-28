@@ -1421,11 +1421,11 @@ def _plain(value: Any) -> Any:
 def _cell_json(cell: Cell) -> dict[str, Any]:
     """One coverage cell as the SPA and Potato Mode read it.
 
-    The optional keys are OMITTED rather than null, which is what rebrew's
-    ``CELLS_JSON_OBJECT_SQL`` emits: `json_patch` removes a key whose patch
-    value is null, and every consumer reads them with a truthiness test, so
-    absent and null are the same thing to them.  Keeping the omission keeps the
-    served bytes of a multi-megabyte payload where they were.
+    The optional keys are OMITTED rather than null, which is what the SQLite
+    reader this replaced emitted: `json_patch` removed a key whose patch value
+    was null, and every consumer reads them with a truthiness test, so absent
+    and null are the same thing to them.  Keeping the omission keeps the served
+    bytes of a multi-megabyte payload where they were.
     """
     obj: dict[str, Any] = {"start": cell.start, "end": cell.end, "span": cell.span}
     obj["state"] = cell.state

@@ -725,6 +725,65 @@ def _cors_warnings(cors: bool, cors_origin: list[str]) -> list[str]:
     return warnings
 
 
+def _configure_logging(level: int) -> None:
+    """Route the root logger to stderr at *level*, with the request-id format.
+
+    The level is the resolved one, so a service can turn the per-request
+    chatter down (WARNING) or the detail up (DEBUG) without a code change;
+    the level it runs at is reported in the startup banner.
+
+    The request id is the pivot between a log line and the client that
+    reported it: it is echoed on the X-Request-ID response header, and carried
+    into the traceback line of a failed request.  ``defaults`` fills it in for
+    records from loggers the app does not own (bottle, rebrew).
+    """
+    handler = logging.StreamHandler()
+    # The log carries the same untrusted text as stdout (target ids, request
+    # paths, the X-Request-ID value), and stderr carries the locale's codec:
+    # under LC_ALL=C, or on a Windows code page, encoding a non-ASCII record
+    # raises inside logging and the record is replaced by a
+    # "--- Logging error ---" traceback that says nothing about the request.
+    # backslashreplace keeps the record readable in whatever the stream is.
+    # A stream that cannot be reconfigured (an in-memory test double) keeps
+    # its own codec, as in _use_utf8_stdout.
+    reconfigure = getattr(handler.stream, "reconfigure", None)
+    if reconfigure is not None:
+        with contextlib.suppress(ValueError, OSError):
+            reconfigure(errors="backslashreplace")
+    handler.setFormatter(
+        logging.Formatter(LOG_FORMAT, datefmt=LOG_DATEFMT, defaults={"request_id": "-"})
+    )
+    logging.basicConfig(handlers=[handler], level=level)
+
+
+def _echo_banner(
+    url: str,
+    listen_url: str,
+    assets: Path,
+    active: Mapping[str, str],
+    cors: bool,
+) -> None:
+    """Print the startup banner on stdout.
+
+    The caller publishes *active* through ``server.configure_startup`` before
+    calling, so the banner and ``/api/health`` carry the same rendered
+    values.  Kept apart from ``serve`` so the banner is one callable rather
+    than nine echoes interleaved with the listener setup.
+
+    ``_db_path_or_exit`` runs inside the print, so an unresolvable coverage
+    directory still fails before the listener binds.
+    """
+    typer.echo(f"Serving coverage dashboard at {url}")
+    typer.echo(f"  Listening on: {listen_url}")
+    typer.echo(f"  Assets: {assets}")
+    typer.echo(f"  DB: {_db_path_or_exit()}")
+    typer.echo("  Config: " + " ".join(f"{key}={value}" for key, value in active.items()))
+    if cors:
+        typer.echo("  CORS: enabled")
+    typer.echo("  Regen: POST /api/regen or click Reload in UI")
+    typer.echo("  Stop: Ctrl+C")
+
+
 @app.command()
 def serve(
     # Every option defaults to None so "not passed on the command line" stays
@@ -843,30 +902,7 @@ def serve(
     # host "" port ::8001).
     display_host = f"[{bind}]" if ":" in bind else bind
 
-    # Configure logging at the resolved level, so a service can turn the
-    # per-request chatter down (WARNING) or the detail up (DEBUG) without a
-    # code change; the level it runs at is reported in the banner below.
-    # The request id is the pivot between a log line and the client that
-    # reported it: it is echoed on the X-Request-ID response header, and
-    # carried into the traceback line of a failed request.  `defaults` fills
-    # it in for records from loggers the app does not own (bottle, rebrew).
-    handler = logging.StreamHandler()
-    # The log carries the same untrusted text as stdout (target ids, request
-    # paths, the X-Request-ID value), and stderr carries the locale's codec:
-    # under LC_ALL=C, or on a Windows code page, encoding a non-ASCII record
-    # raises inside logging and the record is replaced by a
-    # "--- Logging error ---" traceback that says nothing about the request.
-    # backslashreplace keeps the record readable in whatever the stream is.
-    # A stream that cannot be reconfigured (an in-memory test double) keeps
-    # its own codec, as in _use_utf8_stdout.
-    reconfigure = getattr(handler.stream, "reconfigure", None)
-    if reconfigure is not None:
-        with contextlib.suppress(ValueError, OSError):
-            reconfigure(errors="backslashreplace")
-    handler.setFormatter(
-        logging.Formatter(LOG_FORMAT, datefmt=LOG_DATEFMT, defaults={"request_id": "-"})
-    )
-    logging.basicConfig(handlers=[handler], level=resolved.log_level)
+    _configure_logging(resolved.log_level)
 
     allowed_origins = cors_origin
     if token:
@@ -898,10 +934,6 @@ def serve(
 
     _log.info("Starting recoverage server on %s (port=%d, cors=%s)", listen_url, port, cors)
 
-    typer.echo(f"Serving coverage dashboard at {url}")
-    typer.echo(f"  Listening on: {listen_url}")
-    typer.echo(f"  Assets: {assets}")
-    typer.echo(f"  DB: {_db_path_or_exit()}")
     # The full active configuration, resolved from flags and the environment,
     # so an operator can confirm what the process is actually running with.
     # Rendered ONCE and published to /api/health: the banner and the running
@@ -918,11 +950,13 @@ def serve(
         log_level=resolved.log_level,
     )
     _server.configure_startup(active)
-    typer.echo("  Config: " + " ".join(f"{key}={value}" for key, value in active.items()))
-    if cors:
-        typer.echo("  CORS: enabled")
-    typer.echo("  Regen: POST /api/regen or click Reload in UI")
-    typer.echo("  Stop: Ctrl+C")
+    _echo_banner(
+        url=url,
+        listen_url=listen_url,
+        assets=assets,
+        active=active,
+        cors=cors,
+    )
 
     browser_timer: threading.Timer | None = None
     if not no_open:

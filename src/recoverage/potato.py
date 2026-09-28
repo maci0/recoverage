@@ -23,7 +23,7 @@ from urllib.parse import ParseResult, parse_qs, urlparse
 from urllib.parse import quote as _url_quote
 
 from bottle import HTTPResponse, SimpleTemplate  # type: ignore[import-untyped]
-from rebrew.coverage_toml import Cell, CoverageSnapshot, CoverageTomlError, Function
+from rebrew.coverage_toml import CoverageSnapshot, CoverageTomlError, Function
 
 from recoverage import __version__
 from recoverage._paths import _db_path
@@ -32,6 +32,7 @@ from recoverage.server import (
     CACHE_NO_STORE,
     CACHE_REVALIDATE,
     _bucket_row,
+    _cell_json,
     _compressed,
     _etag_or_304,
     _evict_oldest,
@@ -1227,24 +1228,6 @@ def _load_section_data(
     return sections, data
 
 
-def _cell_object(cell: Cell) -> dict[str, Any]:
-    """One snapshot cell as the grid and the detail panel read it.
-
-    The same key set and the same omissions as the JSON the SPA is served
-    (``server._cell_json``): the three optional keys are absent rather than
-    null, which every consumer here already treats alike with ``.get``.
-    """
-    obj: dict[str, Any] = {"start": cell.start, "end": cell.end, "span": cell.span}
-    obj["state"] = cell.state
-    if cell.functions:
-        obj["functions"] = list(cell.functions)
-    if cell.label:
-        obj["label"] = cell.label
-    if cell.parent_function:
-        obj["parent_function"] = cell.parent_function
-    return obj
-
-
 def _function_list_key(fn: Function, order_by: str) -> Any:
     """Sort key for the Potato function list, with SQLite's NULL ordering.
 
@@ -1357,7 +1340,7 @@ def _load_grid_cells(
     # An unknown or cell-less section has no cells and the grid renders empty.
     found = coverage.sections.get(section)
     cells: list[dict[str, Any]] = (
-        [_cell_object(cell) for cell in found.cells] if found is not None else []
+        [_cell_json(cell) for cell in found.cells] if found is not None else []
     )
     merged = _merge_cells(cells, grid_columns)
     # The watermark re-check: *snap* predates this cursor's read snapshot, so

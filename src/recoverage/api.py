@@ -1380,14 +1380,6 @@ def handle_api_functions_list(target: str) -> bytes | HTTPResponse:
     # has already run its clear by then, so nothing drops that entry until the
     # next rebuild, and every later list request reads a count that describes
     # rows the DB no longer holds.
-    # The change token the total is memoized on is stat'ed BEFORE the read
-    # snapshot is loaded, the same order api.handle_api_stats,
-    # api.handle_api_data and potato.render_potato use. Stat'ed after, a
-    # rebuild committing between the load and the stat files the PRE-rebuild
-    # count under the post-rebuild fingerprint — and the db-updated broadcast
-    # has already run its clear by then, so nothing drops that entry until the
-    # next rebuild, and every later list request reads a count that describes
-    # rows the DB no longer holds.
     snap = _snapshot_db_mtime()
     with _target_snapshot(target) as coverage:
         # `total` and the page come from ONE filter pass over one frozen
