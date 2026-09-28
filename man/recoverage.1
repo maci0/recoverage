@@ -1,0 +1,252 @@
+.TH RECOVERAGE 1 "2026-09-29" "recoverage 3.0.0" "User Commands"
+.SH NAME
+recoverage \- coverage dashboard for binary-matching decompilation projects
+.SH SYNOPSIS
+.B recoverage
+.RI [ OPTIONS ]
+.I COMMAND
+.RI [ ARGS ]...
+.PP
+.B recoverage
+with no subcommand runs
+.BR "recoverage serve" .
+Any argument at all, including
+.BR \-\-help ,
+keeps its own meaning.
+.SH DESCRIPTION
+.B recoverage
+serves a local web dashboard that visualises per-byte match status across the
+sections of a decompilation target, reading rebrew's clear-text coverage
+documents
+.RI ( db/coverage\-<target>.toml ).
+The documents are written by
+.BR "rebrew build\-db" ,
+which
+.B recoverage regen
+and
+.B "recoverage serve \-\-regen"
+also run.
+.PP
+Run
+.B recoverage config
+to print the settings
+.B serve
+would start with, without binding a port.
+.SH COMMANDS
+.TP
+.B serve
+Start the recoverage dashboard server.
+.TP
+.B stats
+Print coverage stats as a table, or as JSON with
+.BR \-\-json .
+.TP
+.B export
+Export coverage data to stdout as JSON, CSV or Markdown.
+.TP
+.B check
+Check coverage against a threshold (CI gate).
+.TP
+.B regen
+Re-run rebrew catalog + build\-db to regenerate the coverage documents.
+.TP
+.B open
+Open the dashboard in a browser.
+.TP
+.B config
+Print the configuration
+.B serve
+would start with, without binding a port.
+.SH OPTIONS
+.TP
+.B \-\-no\-color
+Disable colored output (overrides
+.B NO_COLOR
+and
+.BR TERM=dumb ).
+Every subcommand takes it.
+.TP
+.B \-V ", " \-\-version
+Show the version and exit.
+.TP
+.B \-\-install\-completion
+Install shell completion for the current shell.
+.TP
+.B \-\-show\-completion
+Print the completion script for the current shell, to copy or customize it.
+.TP
+.B \-h ", " \-\-help
+Show the help for the command and exit.
+.SH "SERVE OPTIONS"
+.TP
+.BI \-\-port " PORT" "\fR, \fP" \-p " PORT"
+Port to serve on, 0-65535 (default: 8001; env:
+.BR RECOVERAGE_PORT ).
+.TP
+.BI \-\-bind " ADDRESS"
+Interface to bind to (default: 127.0.0.1; use 0.0.0.0 for the LAN; env:
+.BR RECOVERAGE_BIND ).
+An IPv6 literal such as ::1 is accepted.
+.TP
+.B \-\-allow\-remote
+Required with
+.BR "\-\-bind 0.0.0.0" :
+acknowledges that the unauthenticated API, including raw binary bytes, is
+exposed on the network (env:
+.BR RECOVERAGE_ALLOW_REMOTE ).
+.TP
+.B \-\-no\-open
+Do not open a browser automatically.
+.TP
+.B \-\-regen
+Regenerate the coverage documents before starting.
+.TP
+.B \-\-cors
+Enable CORS processing, for allowlisted origins only (env:
+.BR RECOVERAGE_CORS ).
+.TP
+.BI \-\-cors\-origin " ORIGIN"
+Origin allowed to read the API cross-origin. Repeatable, and comma-separated
+in the environment (env:
+.BR RECOVERAGE_CORS_ORIGIN ).
+An origin that is not
+.IR scheme://host[:port]
+is refused at startup rather than dropped.
+.TP
+.BI \-\-token " TOKEN"
+Require this bearer token for every request, as
+.BR "Authorization: Bearer <token>" ,
+as
+.BR "?token=" ,
+or by opening the dashboard as
+.BI /?token= TOKEN
+to set the browser cookie (env:
+.BR RECOVERAGE_TOKEN ,
+which keeps the token out of the process listing).
+.TP
+.BI \-\-log\-level " LEVEL"
+Log threshold: any name or number
+.B logging
+knows, such as DEBUG, INFO, WARN, ERROR or CRITICAL (env:
+.BR RECOVERAGE_LOG_LEVEL ).
+.SH "OTHER SUBCOMMAND OPTIONS"
+.TP
+.BI \-\-target " TARGET" "\fR, \fP" \-t " TARGET"
+Target ID. The default is every target.
+.TP
+.BI \-\-section " SECTION" "\fR, \fP" \-s " SECTION"
+Section name. Only
+.B check
+takes it.
+.TP
+.B \-\-json
+Emit JSON instead of a table. Only
+.B stats
+and
+.B check
+write the coverage report;
+.B config
+writes its resolved settings.
+.TP
+.BI \-\-format " FORMAT" "\fR, \fP" \-f " FORMAT"
+.B export
+output format: json, csv or md (default: json).
+.TP
+.BI \-\-min\-coverage " PERCENT" "\fR, \fP" \-m " PERCENT"
+.B check
+threshold, 0-100. Required.
+.SH ENVIRONMENT
+Every
+.B serve
+setting flag reads a RECOVERAGE_*
+.B \fR environment variable as its default; a flag always wins over the
+environment, an unrecognised RECOVERAGE_*
+name is a startup error, and so is a value that is not a valid port, boolean,
+log level, non-empty string or browser-sendable CORS origin.
+.PP
+.TP
+.B RECOVERAGE_PORT
+Default for
+.BR \-\-port ,
+and the port
+.B open
+opens.
+.TP
+.B RECOVERAGE_BIND
+Default for
+.BR \-\-bind .
+.TP
+.B RECOVERAGE_ALLOW_REMOTE
+Default for
+.BR \-\-allow\-remote .
+.TP
+.B RECOVERAGE_CORS
+Default for
+.BR \-\-cors .
+.TP
+.B RECOVERAGE_CORS_ORIGIN
+Default for
+.BR \-\-cors\-origin .
+.TP
+.B RECOVERAGE_TOKEN
+Default for
+.BR \-\-token .
+Empty means authentication is off.
+.TP
+.B RECOVERAGE_LOG_LEVEL
+Default for
+.BR \-\-log\-level .
+.TP
+.B RECOVERAGE_DB
+The coverage directory to read, instead of resolving rebrew-project.toml from
+the working directory. rebrew resolves what a regen
+.B writes
+from rebrew-project.toml alone, so a regen under an override naming another
+directory is refused rather than run.
+.TP
+.B RECOVERAGE_MAX_CONNECTIONS
+Cap on concurrent client connections. There is no flag for it: it sizes the
+transport rather than selecting a behavior.
+.TP
+.B RECOVERAGE_CLIENT_TIMEOUT
+Seconds a client socket may take to send a request. Transport, not behavior.
+.SH "EXIT STATUS"
+.TP
+.B 0
+Success. For
+.BR check ,
+every compared section met the threshold.
+.TP
+.B 1
+Failure. For
+.BR check ,
+a section fell below it; for
+.B open \fR,
+no browser could be launched; for a non-loopback bind without
+.BR \-\-allow\-remote ,
+the bind was refused.
+.TP
+.B 2
+Misconfiguration: an invalid flag or RECOVERAGE_*
+value, or an unreadable coverage directory.
+.SH FILES
+.TP
+.I db/coverage\-<target>.toml
+The coverage documents, resolved through rebrew-project.toml unless
+.B RECOVERAGE_DB
+names another directory.
+.SH EXAMPLES
+.PP
+.nf
+.RS
+recoverage                          # start the dashboard on port 8001
+recoverage serve \-\-port 3000        # custom port
+recoverage stats \-\-json             # machine-readable statistics
+recoverage export \-\-format csv > coverage.csv
+recoverage check \-\-min\-coverage 50  # CI gate
+recoverage regen                     # re-run catalog + build-db
+recoverage config \-\-json            # what serve would start with
+.RE
+.fi
+.SH "SEE ALSO"
+.BR rebrew (1)

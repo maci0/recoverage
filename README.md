@@ -136,6 +136,9 @@ recoverage
 
 ## CLI Commands
 
+The wheel installs a man page with the entry point, so an installed copy
+answers `man recoverage` without this README at hand.
+
 ### Global flags
 
 | Flag | Default | Description |
@@ -561,6 +564,7 @@ recoverage/
 ├── CONTRIBUTING.md          # Bootstrap, edit-test loop, local/CI parity
 ├── Makefile                 # Contributor targets (`make help`); wraps the CI commands
 ├── LICENSE                  # MIT
+├── man/recovery.1         # Man page for the console script, installed by the wheel
 ├── NOTICE                   # Grants for the third-party code the web build bundles
 ├── docs/                    # Screenshots, mascot & design doc
 │   ├── DESIGN.md            # Detailed architecture & design doc

@@ -134,6 +134,74 @@ class TestSdistContents:
         )
 
 
+class TestManPage:
+    """The console script is the only thing a package index hands a user, so
+    the man page ships with the wheel and names what `--help` names.
+
+    Read through the file and the CLI's own registration rather than by
+    rendering one: a man page is the only documentation an installed copy
+    has, and it drifts from the flags the moment a flag is added.
+    """
+
+    #: The two fuzz knobs are in `config.KNOWN_VARS` so an operator who
+    #: exported them can still run a command, but they drive the test suite
+    #: and no subcommand reads them.
+    _NOT_A_SETTING = frozenset({"RECOVERAGE_FUZZ_ITERATIONS", "RECOVERAGE_FUZZ_SEED"})
+
+    @staticmethod
+    def _page() -> str:
+        """The page as its reader sees it: roff spells a literal hyphen
+        `\\-`, so a flag is matched against the unescaped text."""
+        return (_ROOT / "man" / "recoverage.1").read_text(encoding="utf-8").replace("\\-", "-")
+
+    @staticmethod
+    def _cli() -> tuple[set[str], set[str]]:
+        """The subcommand names and the long flags `recoverage --help`
+        renders, read off the click command typer builds from the app."""
+        from typer.main import get_command
+
+        from recoverage.cli import app
+
+        group = get_command(app)
+        names = set(group.commands)
+        flags = {opt for param in group.params for opt in param.opts if opt.startswith("--")}
+        for command in group.commands.values():
+            flags |= {opt for param in command.params for opt in param.opts if opt.startswith("--")}
+        return names, flags
+
+    def test_the_man_page_is_a_man_page(self) -> None:
+        raw = (_ROOT / "man" / "recoverage.1").read_text(encoding="utf-8")
+        assert raw.startswith(".TH RECOVERAGE 1"), "no man header, so man(1) cannot render it"
+        assert ".SH NAME" in raw and ".SH SYNOPSIS" in raw and ".SH DESCRIPTION" in raw
+
+    def test_it_ships_in_the_wheel_and_the_sdist(self) -> None:
+        manifest = tomllib.loads((_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        installed = manifest["tool"]["setuptools"]["data-files"]
+        assert installed.get("share/man/man1") == ["man/recoverage.1"], (
+            f"the man page installs nowhere: {installed}"
+        )
+        assert "include man/recoverage.1" in TestSdistContents._rules(), (
+            "a wheel rebuilt from the sdist ships the entry point and no man page"
+        )
+
+    def test_every_subcommand_and_flag_is_documented(self) -> None:
+        names, flags = self._cli()
+        assert names and flags, "no CLI read from typer; the checks below would pass vacuously"
+        page = self._page()
+        assert not sorted(name for name in names if f"\n.B {name}\n" not in page), (
+            "a subcommand the CLI registers is missing from the man page"
+        )
+        missing = sorted(flag for flag in flags if flag not in page)
+        assert not missing, f"flags the CLI registers that the man page omits: {missing}"
+
+    def test_every_setting_the_server_reads_is_documented(self) -> None:
+        from recoverage.config import KNOWN_VARS
+
+        page = self._page()
+        missing = sorted(name for name in KNOWN_VARS - self._NOT_A_SETTING if name not in page)
+        assert not missing, f"settings the man page does not document: {missing}"
+
+
 class TestReproducibleBuild:
     def test_the_build_recipe_pins_time_locale_and_timezone(self) -> None:
         """Without all three the artifact carries the build host's clock,

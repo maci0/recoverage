@@ -58,6 +58,8 @@ dependencies = [
 [project.urls]
 Homepage = "https://github.com/relumea/recoverage"
 Repository = "https://github.com/relumea/recoverage"
+Changelog = "https://github.com/relumea/recoverage/blob/main/CHANGELOG.md"
+Issues = "https://github.com/relumea/recoverage/issues"
 
 [project.optional-dependencies]
 dev = [
@@ -87,6 +89,15 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 recoverage = ["assets/*"]
+
+# The console script is the only thing a package index hands a user, so it
+# ships a man page with it. data_files is the only mechanism a wheel has for
+# this: pip installs share/man/man1/ into the prefix, and every Unix `man`
+# path already on the machine finds it. MANIFEST.in carries the same file
+# into the sdist, or a wheel rebuilt from the published archive would ship
+# the entry point and nothing to read about it.
+[tool.setuptools.data-files]
+"share/man/man1" = ["man/recoverage.1"]
 
 [tool.uv]
 package = true

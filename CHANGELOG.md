@@ -7,6 +7,11 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- The wheel installs a man page (`share/man/man1/recoverage.1`) for the
+  `recoverage` entry point, covering every subcommand, flag and `RECOVERAGE_*`
+  setting `recoverage --help` lists, with the exit codes and the environment
+  each flag defaults from. `man recoverage` works on an installed copy, which
+  previously shipped the entry point and no documentation for it.
 - The server log's request and regen lines now carry their counters as named
   fields (`method`, `path`, `status`, `duration_ms`, `route` on a request;
   `event=regen`, `outcome`, `duration_s` on a rebuild), rendered as

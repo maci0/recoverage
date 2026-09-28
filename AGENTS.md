@@ -23,6 +23,8 @@ recoverage/
 ├── pyproject.toml          # Package config, entry point: recoverage
 ├── build-constraints.txt   # Exact pin for the PEP 517 backend (uv.lock does not cover it)
 ├── MANIFEST.in             # What the sdist carries: the backend pin, and not the test suite
+├── man/recovery.1         # Man page for the console script; installed by the wheel through
+│                           #   [tool.setuptools.data-files] (share/man/man1)
 ├── README.md               # User-facing docs
 ├── CHANGELOG.md            # Release history
 ├── CONTRIBUTING.md         # Bootstrap, edit-test loop, local/CI parity table
@@ -50,7 +52,7 @@ recoverage/
 ├── tests/
 │   ├── conftest.py           # Shared fixtures (synthetic coverage TOML)
 │   ├── coverage_fixture.py   # Builders for synthetic coverage documents
-│   ├── test_build.py          # Artifact build: shipped files, reproducible bytes
+│   ├── test_build.py          # Artifact build: shipped files, the man page, reproducible bytes
 │   ├── test_api.py           # API validation, security, SQL injection tests
 │   ├── test_cli.py           # CSV export, formatting, edge case tests
 │   ├── test_lifecycle.py     # Lifecycle: regen ordering, browser-opener reaping

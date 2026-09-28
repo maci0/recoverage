@@ -15,3 +15,7 @@ include build-constraints.txt
 # dev-only files in a published artifact. `make test` needs the sibling rebrew
 # checkout too, so it is not a test the sdist could run either way.
 prune tests
+
+# The man page installs through [tool.setuptools.data-files]; a rebuild from
+# the sdist needs the source the wheel copies out of it.
+include man/recoverage.1
