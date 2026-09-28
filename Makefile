@@ -285,6 +285,9 @@ check-bundle-clean:
 	  echo "ERROR: the committed frontend bundle does not match web/:"; \
 	  git status --porcelain -- $(BUNDLE_DIR); \
 	  echo "Run 'make web-build' and commit the result."; \
+	  echo "Rebuilt with bun $$(bun --version 2>/dev/null || echo unknown), the pinned"; \
+	  echo "version is bun@$(BUN_PIN) (package.json packageManager): a different bun is the"; \
+	  echo "one cause of bytes that differ with no change under web/."; \
 	  exit 1; \
 	fi
 
@@ -420,6 +423,16 @@ typecheck-web: ensure-bun
 	bun install --frozen-lockfile
 	bun run typecheck:web
 
+# The bun the bundle is built with builds a committed artifact, so a different
+# bun produces different bytes for the same sources: `check-bundle-clean` then
+# reports the committed app.js as stale and the cause is the tool rather than
+# web/. Read the pin out of package.json (the one place it is written; ci.yml's
+# setup-bun reads the same field) and say so on a mismatch. A warning rather
+# than a refusal, like the uv floor above: the gate that has to hold is
+# check-bundle-clean, and a bun that bundles web/ to the same bytes is not the
+# contributor's problem.
+BUN_PIN = $(shell sed -n 's/.*"packageManager"[[:space:]]*:[[:space:]]*"bun@\([^"]*\)".*/\1/p' package.json)
+
 ensure-bun:
 	@$(SET_STRICT) \
 	if ! command -v bun >/dev/null 2>&1; then \
@@ -428,6 +441,13 @@ ensure-bun:
 	  echo "The targets that need it: web-build, web-dev, web-lint, typecheck-web,"; \
 	  echo "regen-oxlint and build (which runs web-build)."; \
 	  exit 1; \
+	fi; \
+	have=$$(bun --version 2>/dev/null || echo unknown); \
+	if [ -n "$(BUN_PIN)" ] && [ "$$have" != "$(BUN_PIN)" ]; then \
+	  echo "WARNING: bun $$have is not the pinned bun@$(BUN_PIN) (package.json packageManager)."; \
+	  echo "The dashboard bundle is built by bun and committed, so a different bun bundles the"; \
+	  echo "same web/ sources to different bytes and 'make check-bundle-clean' then reports the"; \
+	  echo "committed app.js as stale. Install bun $(BUN_PIN) before committing a bundle."; \
 	fi
 
 # tools/oxlint/rikalabs-strict.json is generated from the installed

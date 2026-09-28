@@ -69,6 +69,7 @@ recoverage/
 │   ├── test_config.py        # RECOVERAGE_* env: parsing, precedence, fail-fast
 │   ├── test_server.py        # Compression, encoding, snapshot, path helper tests
 │   ├── test_serve_harness.py # Shared serve harness (builds the sample coverage, boots the server)
+│   ├── test_lint_html.py     # The vnu gate's start-up failures: no jar, no JRE, a refused exec
 │   ├── test_potato.py        # Potato Mode unit tests
 │   ├── test_perf.py          # Deterministic perf gates (work counters, not wall clock)
 │   ├── test_metrics.py       # Request id, RED counters, slow-request log line
@@ -115,7 +116,11 @@ recoverage/
 Frontend lint (bun + a JDK; see `bun run lint:js|html`): `oxlint.config.ts` is
 the JS/TS config, `tools/lint_html.py` runs vnu over both the static assets and
 the documents the server actually serves, and `tools/oxlint/anti-slop/` is a
-vendored upstream copy to keep in sync. `lint:js` runs oxlint with
+vendored upstream copy to keep in sync. Both of vnu's start-up inputs are
+checked by name before it is launched (`tools/lint_html.py`'s
+`RUNNER_UNAVAILABLE`), so a missing `bun install` or a missing JRE is a status
+of its own rather than a `FileNotFoundError` and a code no reader can tell from
+a finding; `tests/test_lint_html.py` holds that. `lint:js` runs oxlint with
 `--deny-warnings --report-unused-disable-directives`, so an
 `oxlint-disable-next-line` whose rule no longer reports fails the run rather
 than outliving the finding it silences: that is the frontend's RUF100 and
@@ -1035,7 +1040,15 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   reproducibility comparison cannot tell a stale commit from a fresh one,
   because both trees rebuild the same bytes from the same sources. It fails
   when the build changed a tracked file under `src/recoverage/assets`. Never
-  hand-edit them. `check-bundle-clean` only compares bytes: `emptyOutDir` is off
+  hand-edit them. The bytes are bun's, so the bun the bundle was built with is
+  part of the artifact: `ensure-bun` reads the pin out of `package.json`'s
+  `packageManager` (the one place it is written; `ci.yml`'s setup-bun reads the
+  same field) and warns on a mismatch, and `check-bundle-clean` names the bun it
+  ran under when it fails, because a different bun bundling unchanged `web/` to
+  different bytes is otherwise reported as a stale commit. It is a warning, not a
+  refusal, the way the uv floor is: the gate is `check-bundle-clean`, and a bun
+  that produces the same bytes is not the contributor's problem.
+  `check-bundle-clean` only compares bytes: `emptyOutDir` is off
   in `web/vite.config.ts` (that directory also holds the hand-written
   `index.html`, `print.css` and `favicon.svg`), so nothing clears a stray file
   out of it, and `pyproject.toml`'s `assets/*` glob makes the directory's
