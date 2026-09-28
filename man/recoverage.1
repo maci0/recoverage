@@ -148,6 +148,17 @@ write the coverage report;
 .B config
 writes its resolved settings.
 .TP
+.BI \-\-port " PORT" "\fR, \fP" \-p " PORT"
+Port of the running server.
+.B open
+only: it takes the same flag, default and RECOVERAGE_PORT as
+.BR serve ,
+so a deployment that moved the dashboard off 8001 does not need every operator
+to remember the new port as well. A port of 0 is refused: it names the free
+port the server picked, which is in the banner
+.B serve
+printed and not something this command can know.
+.TP
 .BI \-\-format " FORMAT" "\fR, \fP" \-f " FORMAT"
 .B export
 output format: json, csv or md (default: json).

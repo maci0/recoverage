@@ -19,3 +19,18 @@ prune tests
 # The man page installs through [tool.setuptools.data-files]; a rebuild from
 # the sdist needs the source the wheel copies out of it.
 include man/recoverage.1
+
+# A downstream packager takes the changelog from the archive it unpacks, and
+# the wheel metadata already points a reader at one. It is the record of what
+# each tag contains, so the sdist that carries the code has to carry it.
+include CHANGELOG.md
+
+# setuptools writes src/recoverage.egg-info/ into the tree it builds from and
+# the default sdist then ships it: generated build metadata, a second PKG-INFO
+# and the unpacked requirements, in an archive that already carries the same
+# facts at its root. It is gitignored here, so it is a leftover of whichever
+# build ran last, not part of what this commit contains, and the wheel build
+# regenerates it, so pruning it costs a rebuild nothing. SOURCES.txt is the one
+# member that stays: setuptools writes it after this file is read, so no
+# exclusion rule here can reach it.
+prune src/recoverage.egg-info

@@ -22,7 +22,8 @@ compiler toolchain, only a readable coverage document.
 recoverage/
 ├── pyproject.toml          # Package config, entry point: recoverage
 ├── build-constraints.txt   # Exact pin for the PEP 517 backend (uv.lock does not cover it)
-├── MANIFEST.in             # What the sdist carries: the backend pin, and not the test suite
+├── MANIFEST.in             # What the sdist carries: the backend pin, the man page and the
+│                           #   changelog; not the test suite, not the generated egg-info
 ├── man/recoverage.1       # Man page for the console script; installed by the wheel through
 │                           #   [tool.setuptools.data-files] (share/man/man1)
 ├── README.md               # User-facing docs

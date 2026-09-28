@@ -122,6 +122,24 @@ class TestSdistContents:
             "coverage_fixture.py, so the sdist carries a suite that cannot collect"
         )
 
+    def test_the_changelog_ships_in_the_sdist(self) -> None:
+        """A downstream packager takes the release notes from the archive it
+        unpacks, and the wheel metadata already points a reader at one."""
+        assert "include CHANGELOG.md" in self._rules(), (
+            "the sdist carries the code and no changelog, so a packager writing "
+            "an upstream changelog has nothing to summarize"
+        )
+
+    def test_the_generated_egg_info_is_pruned(self) -> None:
+        """setuptools writes it into the tree it builds from and the default
+        sdist ships it: a second PKG-INFO, the unpacked requirements, build
+        metadata, all gitignored here. A rebuild regenerates it, so keeping it
+        in the archive buys nothing."""
+        assert "prune src/recoverage.egg-info" in self._rules(), (
+            "the sdist ships a leftover src/recovery.egg-info/ from whichever "
+            "build ran last, not what this commit contains"
+        )
+
     def test_the_suite_is_more_than_its_own_fixtures(self) -> None:
         """`prune tests` is only worth having while the default sdist would
         pick up test modules the archive cannot run. A suite reduced to a
