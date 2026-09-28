@@ -88,7 +88,16 @@ function potatoUrl(state: {
 export function App() {
   const params = useMemo(() => new URLSearchParams(window.location.search), []);
   const [targets, setTargets] = useState<Array<TargetInfo>>([]);
-  const [target, setTarget] = useState<string>("");
+  // A `?target=` in the URL is the page's own state, so it seeds the selection
+  // before the target list arrives: `/api/targets/<t>/data` then starts in
+  // parallel with `/api/targets` instead of one round trip behind it, which is
+  // the path every reload and every shared link takes. It is still validated
+  // against the list below, and a name the server no longer serves falls back
+  // the same way a stale remembered one does.
+  const [urlTarget] = useState<string>(
+    () => new URLSearchParams(window.location.search).get("target") ?? "",
+  );
+  const [target, setTarget] = useState<string>(urlTarget);
   const [targetReady, setTargetReady] = useState(false);
   const [section, setSection] = useState<string>(() => params.get("section") ?? ".text");
   const [query, setQuery] = useState<string>(() => params.get("q") ?? "");
@@ -176,21 +185,24 @@ export function App() {
     return () => control.abort();
   }, []);
 
-  // Pick a target once the list is known: the URL wins, then the remembered
-  // one, then the first the server offers.
+  // Pick a target once the list is known: a URL target that the server still
+  // serves stays, then the remembered one, then the first the server offers.
   useEffect(() => {
-    if (!targetReady || target !== "" || targets.length === 0) {
+    if (!targetReady || targets.length === 0) {
       return;
     }
-    const fromUrl = new URLSearchParams(window.location.search).get("target");
+    const served = targets.some((entry) => entry.id === target);
+    if (target !== "" && served) {
+      return;
+    }
     setTarget(
-      [fromUrl, readStored(TARGET_KEY)].find(
+      [urlTarget, readStored(TARGET_KEY)].find(
         (candidate) => candidate !== null && targets.some((entry) => entry.id === candidate),
       ) ??
         targets[0]?.id ??
         "",
     );
-  }, [target, targetReady, targets]);
+  }, [target, targetReady, targets, urlTarget]);
 
   // The URL carries the state a reload or a shared link has to restore.
   useEffect(() => {

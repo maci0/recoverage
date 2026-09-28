@@ -3084,7 +3084,7 @@ class TestDataPayloadMemo:
         _, open_calls, _ = self._gated_open(tmp_path, monkeypatch, never)
         snap = api._snapshot_db_mtime()
         assert snap is not None
-        key: tuple[tuple[int, int], str, None] = (snap, "GAME", None)
+        key: tuple[tuple[int, int], str, None, bool] = (snap, "GAME", None, True)
         built = threading.Event()
         api._DATA_CACHE_BUILDING[key] = built
 
@@ -3134,7 +3134,7 @@ class TestDataPayloadMemo:
 
         snap = api._snapshot_db_mtime()
         assert snap is not None
-        key: tuple[tuple[int, int], str, str | None] = (snap, "GAME", "nope")
+        key: tuple[tuple[int, int], str, str | None, bool] = (snap, "GAME", "nope", True)
         built = threading.Event()
         api._DATA_CACHE_BUILDING[key] = built
 
@@ -5098,3 +5098,38 @@ class TestDbWatcherLogging:
         stopper.join(timeout=1.0)
         assert any("continuing to poll" in r.getMessage() for r in caplog.records)
         assert not any("DB watcher stopped" in r.getMessage() for r in caplog.records)
+
+
+class TestDataSearchIndexOptOut:
+    """`/api/targets/<t>/data?index=0` omits the search index.
+
+    The index is target-wide while the rest of a `?section=` payload is that
+    one section, so the section-switch request re-sent a payload that grows
+    with the function count on every tab click. The key is omitted rather than
+    emptied, the same signal `cells` uses, and the two variants must not share
+    a validator or a memo entry.
+    """
+
+    def test_full_payload_carries_the_index(self) -> None:
+        api._clear_data_cache()
+        target = get_first_target()
+        status, headers, body = wsgi_get(f"/api/targets/{target}/data")
+        assert status.startswith("200"), status
+        assert "search_index" in json.loads(decode_body(body, headers))
+
+    def test_index_zero_omits_the_index_and_keeps_the_cells(self) -> None:
+        api._clear_data_cache()
+        target = get_first_target()
+        status, headers, body = wsgi_get(f"/api/targets/{target}/data?section=.text&index=0")
+        assert status.startswith("200"), status
+        payload = json.loads(decode_body(body, headers))
+        assert "search_index" not in payload
+        # Only the index goes: the section the request asked for still arrives.
+        assert payload["sections"][".text"]["cells"]
+
+    def test_the_two_variants_do_not_share_an_etag(self) -> None:
+        api._clear_data_cache()
+        target = get_first_target()
+        _, full, _ = wsgi_get(f"/api/targets/{target}/data?section=.text")
+        _, bare, _ = wsgi_get(f"/api/targets/{target}/data?section=.text&index=0")
+        assert full["Etag"] != bare["Etag"]

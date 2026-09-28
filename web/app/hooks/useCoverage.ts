@@ -33,6 +33,20 @@ export function useCoverage(target: string, section: string): Coverage {
   const [cellError, setCellError] = useState<{ section: string; detail: string } | null>(null);
   const inflight = useRef(new Map<string, Promise<void>>());
   const [reloadToken, setReloadToken] = useState(0);
+  // The search index is target-wide, so it is asked for once per (target,
+  // build) and every later section request passes `index=0`. A ref, not state:
+  // it decides what the NEXT request sends, so a re-render from landing the
+  // index must not restart the load that fetched it.
+  const reloadTokenRef = useRef(reloadToken);
+  reloadTokenRef.current = reloadToken;
+  const indexed = useRef<{ target: string; token: number } | null>(null);
+  const indexIsCurrent = useCallback(
+    (name: string): boolean =>
+      indexed.current !== null &&
+      indexed.current.target === name &&
+      indexed.current.token === reloadTokenRef.current,
+    [],
+  );
 
   const merge = useCallback((payload: DataPayload, wanted: string): void => {
     setSections((current) => {
@@ -48,17 +62,22 @@ export function useCoverage(target: string, section: string): Coverage {
       }
       return merged;
     });
-    setSearchIndex(payload.search_index ?? {});
+    // An absent key means the request already holds the index, not that the
+    // target has none, so a section switch keeps the one it has.
+    if (payload.search_index !== undefined) {
+      setSearchIndex(payload.search_index);
+      indexed.current = { target, token: reloadTokenRef.current };
+    }
     setPaths(payload.paths ?? {});
     if (payload.sections[wanted]?.cells !== undefined) {
       setCellError((current) => (current?.section === wanted ? null : current));
     }
-  }, []);
+  }, [indexed, reloadTokenRef, target]);
 
   const load = useCallback(
     async (name: string, signal: AbortSignal): Promise<void> => {
       try {
-        merge(await fetchData(target, name, signal), name);
+        merge(await fetchData(target, name, signal, !indexIsCurrent(target)), name);
         if (!signal.aborted) {
           setLoadError(null);
         }
@@ -97,7 +116,7 @@ export function useCoverage(target: string, section: string): Coverage {
       const control = new AbortController();
       const fetchCells = async (): Promise<void> => {
         try {
-          merge(await fetchData(target, name, control.signal), name);
+          merge(await fetchData(target, name, control.signal, !indexIsCurrent(target)), name);
           // oxlint-disable-next-line @rikalabs/no-silent-catch-fallback -- the failure is reported on the tab itself, with a retry, and kept per section
         } catch (error: unknown) {
           setCellError({
@@ -110,12 +129,14 @@ export function useCoverage(target: string, section: string): Coverage {
       };
       inflight.current.set(name, fetchCells());
     },
-    [merge, sections, target],
+    [indexIsCurrent, merge, sections, target],
   );
 
   const reload = useCallback(() => {
     // Every section's cells are refetched, not just the visible one: a rebuild
     // re-spans cells, so the loaded siblings are as stale as the map on screen.
+    // The token bump retires the search index with them, so the next request
+    // asks for a fresh one rather than passing `index=0` against a stale index.
     inflight.current.clear();
     setSections((current) => {
       const next: Record<string, Section> = {};

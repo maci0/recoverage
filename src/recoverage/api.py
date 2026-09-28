@@ -199,7 +199,12 @@ def _record_completed_key(key: str) -> None:
 # so a first request with an unseen Accept-Encoding can mint its variant
 # without re-running the queries or json.dumps.  Compressing the multi-MB
 # payload on every memo hit dominated repeat-request cost (~30-70 ms CPU).
-_DATA_CACHE: dict[tuple[tuple[int, int] | None, str, str | None], dict[str, bytes]] = {}
+#
+# The section filter and the search-index opt-out are both part of the key, so
+# the two payload shapes never share a memo entry (and, further down, a
+# validator) even though they are built from the same snapshot.
+_DataKey = tuple[tuple[int, int] | None, str, str | None, bool]
+_DATA_CACHE: dict[_DataKey, dict[str, bytes]] = {}
 _DATA_CACHE_LOCK = threading.Lock()
 # Upper bound on retained payloads: a long-running server across many rebuilds
 # must not accumulate one multi-MB payload per fingerprint forever.
@@ -209,7 +214,7 @@ _DATA_CACHE_MAX = 8
 # memo and wakes every connected SSE client, which all refetch /data at once;
 # without this, each of those cold misses materializes its own multi-MB
 # payload (full-table json_group_array + search index + json.dumps).
-_DATA_CACHE_BUILDING: dict[tuple[tuple[int, int] | None, str, str | None], threading.Event] = {}
+_DATA_CACHE_BUILDING: dict[_DataKey, threading.Event] = {}
 #: How long a follower waits on the leader's build Event.  The leader's finally
 #: always sets it, so this only bounds the case where it does not (a thread
 #: killed mid-build).  Comfortably longer than a cold /data build on a large
@@ -228,7 +233,7 @@ def _clear_data_cache() -> None:
 
 
 def _data_cache_checkout(
-    key: tuple[tuple[int, int] | None, str, str | None],
+    key: _DataKey,
 ) -> tuple[dict[str, bytes] | None, threading.Event | None]:
     """Return ``(memo_entry, owned_event)`` for *key*.
 
@@ -257,9 +262,7 @@ def _data_cache_checkout(
         return _DATA_CACHE.get(key), None
 
 
-def _data_cache_build_done(
-    key: tuple[tuple[int, int] | None, str, str | None], event: threading.Event
-) -> None:
+def _data_cache_build_done(key: _DataKey, event: threading.Event) -> None:
     """Release followers of *key* (owner only — see :func:`_data_cache_checkout`)."""
     with _DATA_CACHE_LOCK:
         if _DATA_CACHE_BUILDING.get(key) is event:
@@ -268,7 +271,7 @@ def _data_cache_build_done(
 
 
 def _cache_data_insert(
-    key: tuple[tuple[int, int] | None, str, str | None],
+    key: _DataKey,
     raw: bytes,
     encoding: str,
     body: bytes,
@@ -1046,13 +1049,22 @@ def _build_search_index(snap: CoverageSnapshot) -> dict[str, Any]:
     return index
 
 
-def _build_data_raw(snap: CoverageSnapshot, target: str, section_filter: str | None) -> bytes:
+def _build_data_raw(
+    snap: CoverageSnapshot,
+    target: str,
+    section_filter: str | None,
+    include_search_index: bool = True,
+) -> bytes:
     """Serialize the full /data payload (sections + cells + search index).
 
     Raises the shared JSON 404 for an unknown *section_filter*.  Pure snapshot
     work — caching/compression stays in the endpoint, and the snapshot is
     already the pin `server.read_snapshot` used to take: every field below comes
     from one build.
+
+    *include_search_index* false omits the index (an absent key, the same
+    signal `cells` uses), for the section-switch request that only wants one
+    more section's cells and already holds the index from the load before it.
     """
     data: dict[str, Any] = _server.load_metadata(snap)
 
@@ -1089,7 +1101,8 @@ def _build_data_raw(snap: CoverageSnapshot, target: str, section_filter: str | N
         else:
             cells_json[name] = _server.cells_json(sec.cells)
 
-    data["search_index"] = _build_search_index(snap)
+    if include_search_index:
+        data["search_index"] = _build_search_index(snap)
 
     # The accepted format-version set travels with the payload: the SPA's
     # empty-state message needs it to tell "no section rows yet" from "this
@@ -1152,6 +1165,12 @@ def _dumps_with_cells(data: dict[str, Any], cells_json: dict[str, str | None]) -
 def handle_api_data(target: str) -> bytes | HTTPResponse:
     target = path_param(target)
     section_filter = query_param("section").strip() or None
+    # `?index=0` is the section-switch request: it arrives for one more
+    # section's cells and already holds the target-wide search index, which is
+    # the part of this payload that grows with the function count rather than
+    # with the section. Omitted rather than emptied, the same signal `cells`
+    # already uses, so one absence convention covers both.
+    include_search_index = query_param("index").strip() != "0"
 
     # ETag caching based on DB modification time + target + section.
     # Uses the WAL-aware snapshot (mtime_ns-precision) so two rebuilds
@@ -1162,8 +1181,13 @@ def handle_api_data(target: str) -> bytes | HTTPResponse:
     # _etag_or_304).  etag is None only when the DB is unreadable — no ETag
     # is sent, and the queries below answer the standard 503 shortly after.
     snap = _snapshot_db_mtime()
-    fingerprint: tuple[tuple[int, int] | None, str, str | None] = (snap, target, section_filter)
-    etag = _etag_or_304(snap, target, section_filter)
+    fingerprint: tuple[tuple[int, int] | None, str, str | None, bool] = (
+        snap,
+        target,
+        section_filter,
+        include_search_index,
+    )
+    etag = _etag_or_304(snap, target, section_filter, include_search_index)
     headers = _revalidate_headers(etag)
 
     # Serve a memoized payload for an unchanged DB instead of re-running the
@@ -1186,7 +1210,7 @@ def handle_api_data(target: str) -> bytes | HTTPResponse:
 
     try:
         with _target_snapshot(target) as coverage:
-            raw_json = _build_data_raw(coverage, target, section_filter)
+            raw_json = _build_data_raw(coverage, target, section_filter, include_search_index)
             accept_enc = _header("Accept-Encoding", "")
             body, encoding = compress_payload(raw_json, accept_enc)
             _cache_data_insert(fingerprint, raw_json, encoding, body)

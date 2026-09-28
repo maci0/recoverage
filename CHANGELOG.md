@@ -28,6 +28,16 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   carrying a stale bundle still produced a good artifact and passed every other
   gate. The CI `build` job runs it too, because the two-build reproducibility
   comparison cannot tell a stale commit from a fresh one.
+- `GET /api/targets/<target>/data` takes `?index=0`, which omits the
+  target-wide `search_index` from the payload. The dashboard passes it on the
+  section-switch request, which already holds the index, so a tab click stops
+  re-sending a payload that grows with the target's function count. The key is
+  part of the ETag inputs and the memo key, so the two shapes stay separate
+  representations. A request without the parameter is unchanged.
+- The dashboard starts `/api/targets/<target>/data` as soon as the page names a
+  target in its URL, in parallel with `/api/targets` instead of behind it, so a
+  reload or a shared link spends one round trip less before the map appears. A
+  target the server no longer serves falls back the way it always did.
 - The 503 an unreadable `rebrew-project.toml` answers now spells its
   human-readable `error` as `Database unavailable`, the same as every other
   coverage-read 503. Its `code` was already `db_unavailable` and is unchanged.

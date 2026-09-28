@@ -2,9 +2,10 @@
  *
  * One module owns every path, so a component never spells a URL and the field
  * names the server serves live in one place.  The payloads are the ones
- * `recoverage.api` builds: `sections` always carries every section row, and a
+ * `recoverage.api` builds: `sections` always carries every section row, a
  * `?section=` request omits its siblings' `cells` (an absent key, which is the
- * lazy-load signal, not an empty grid). */
+ * lazy-load signal, not an empty grid), and `?index=0` omits `search_index` the
+ * same way, for the caller that already holds it. */
 
 /** One coverage cell, in spatial order. Optional keys are omitted by the
  * server rather than sent as null (`server._cell_json`). */
@@ -44,6 +45,7 @@ export type SearchEntry = {
 export type DataPayload = {
   sections: Record<string, Section>;
   section_cell_stats?: Record<string, CellBucket>;
+  /** Absent when the request asked with `index=0`. */
   search_index?: Record<string, SearchEntry>;
   known_schema?: Array<string>;
   db_version?: number;
@@ -85,9 +87,19 @@ export async function fetchData(
   target: string,
   section: string | null,
   signal?: AbortSignal,
+  withSearchIndex = true,
 ): Promise<DataPayload> {
-  const query = section === null ? "" : `?section=${encodeURIComponent(section)}`;
-  const res = await fetch(`/api/targets/${encodeURIComponent(target)}/data${query}`, init(signal));
+  const query = new URLSearchParams();
+  if (section !== null) {
+    query.set("section", section);
+  }
+  if (!withSearchIndex) {
+    // The index is target-wide, so the section-switch request says it already
+    // has one and the server omits the key rather than re-sending it.
+    query.set("index", "0");
+  }
+  const suffix = query.size === 0 ? "" : `?${query.toString()}`;
+  const res = await fetch(`/api/targets/${encodeURIComponent(target)}/data${suffix}`, init(signal));
   if (!res.ok) {
     throw new Error(`/api/targets/${target}/data answered ${res.status}`);
   }
