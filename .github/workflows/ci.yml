@@ -228,6 +228,19 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: package.json
+      # `make build` runs the frontend bundler before it packages, in this
+      # tree and in the second one below, and `bun install --frozen-lockfile`
+      # is the step that reaches the registry. The same key the web-lint job
+      # uses: bun.lock alone, hashed with package.json because a tree another
+      # bun installed is not the tree bun.lock describes. A lockfile change
+      # misses, so a dependency bump still installs from the registry; the
+      # second tree reads bun's own package cache in the same job, which is
+      # why one restore covers both builds.
+      - name: Restore node_modules
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: node_modules
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock', 'package.json') }}
       # The sibling rebrew checkout that [tool.uv.sources] resolves, fetched
       # at the pin the clone script owns. The composite action is the one
       # mechanism a job may use: it wraps that script and carries no pin of

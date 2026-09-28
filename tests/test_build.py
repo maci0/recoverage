@@ -211,6 +211,17 @@ class TestReproducibleBuild:
             assert var in recipe, f"the build recipe does not export {var}"
         assert "normalize_sdist.py" in recipe, "the sdist is not normalized after the build"
 
+    def test_the_bundle_recipe_pins_locale_and_timezone(self) -> None:
+        """`web-build` is a prerequisite of `build`, so it runs in its own
+        shell and the recipe's exports do not reach it. The two files it writes
+        are packaged inputs, so a bundle produced under a non-C locale or a
+        non-UTC timezone is a wheel input no CI run byte-compared, and
+        `check-bundle-clean` then reports the committed bundle as stale."""
+        recipe = _MAKEFILE.split("\nweb-build:", 1)[1].split("\n\n", 1)[0]
+        for var in ("LC_ALL=C", "TZ=UTC"):
+            assert var in recipe, f"the bundle recipe does not export {var}"
+        assert "bun run build:web" in recipe, "the bundle recipe no longer builds the bundle"
+
     def test_the_two_build_step_clears_what_it_extracts_into(self) -> None:
         """The second tree is extracted with tar and linked with ln, both of
         which MERGE into an existing destination: on a self-hosted runner or a

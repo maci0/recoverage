@@ -214,8 +214,17 @@ check-bundle-clean:
 # twice, and a wheel built without a bundler on the host must still carry a
 # frontend. Rebuilding here is what makes the committed bytes reproducible
 # rather than merely present: the build job's second tree rebuilds and compares.
+#
+# LC_ALL and TZ, the same two the `build` recipe exports: this target is a
+# prerequisite of it, so it runs in its own shell, and the two files it writes
+# are packaged inputs rather than a by-product. A contributor whose shell
+# exports a non-C locale or a non-UTC timezone therefore produced a bundle no
+# CI run ever byte-compared, and `check-bundle-clean` would report the
+# committed one as stale.
 web-build: ensure-bun
-	bun install --frozen-lockfile
+	@$(SET_STRICT) \
+	export LC_ALL=C TZ=UTC; \
+	bun install --frozen-lockfile; \
 	bun run build:web
 
 # Match CI's invocation so a local pass and a CI pass mean the same thing.

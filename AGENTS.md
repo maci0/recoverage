@@ -415,7 +415,10 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
 - `make build` is the one command that produces the distribution, and it is
   reproducible: `SOURCE_DATE_EPOCH` (the commit's own date, `FALLBACK_SOURCE_DATE_EPOCH`
   when there is no git) plus `LC_ALL=C` and `TZ=UTC` around `uv build`, then
-  `tools/normalize_sdist.py`. setuptools stamps the *wheel* from
+  `tools/normalize_sdist.py`. `web-build` exports the same two: it is a
+  prerequisite of `build`, so it runs in its own shell, and the two bundle
+  files it writes are packaged inputs rather than a by-product. setuptools
+  stamps the *wheel* from
   `SOURCE_DATE_EPOCH` but not the *sdist*, which keeps the working tree's
   mtimes, the building user, the archive order and the gzip header's wall
   clock; the normalizer pins those four so two builds of one commit hash the
