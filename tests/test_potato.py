@@ -1135,6 +1135,76 @@ def test_function_detail_similarity_fraction_rendered_as_percent(
     assert "0.8734" not in panel
 
 
+def test_similarity_near_complete_does_not_render_as_100(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A similarity short of 1.0 must not read as a perfect match.
+
+    Both similarity columns are 0-1 fractions, and the SPA renders them through
+    `format.percent1`, which floors.  Potato Mode formatted them with a bare
+    ``"%.1f"``, which rounds to nearest and rounds UP: 0.9999 (99.99%) printed
+    as "100.0%", beside a function that is not an exact match, while the SPA
+    beside it showed 99.9.  The map header already went through
+    `server.pct_1dp`; these two detail rows did not.
+    """
+    _write_doc(
+        tmp_path,
+        monkeypatch,
+        "SIMNEAR_POTATO",
+        {
+            ".text": {
+                "va": 256,
+                "size": 64,
+                "fileOffset": 16,
+                "unitBytes": 16,
+                "columns": 8,
+                "cells": [cell(0, 32, "exact", functions=("_func_near",))],
+            }
+        },
+        functions=[
+            {
+                "va": 256,
+                "name": "_func_near",
+                "vaStart": "0x100",
+                "size": 32,
+                "fileOffset": 16,
+                "status": "EXACT",
+                "similarity": 0.9999,
+            }
+        ],
+    )
+
+    panel = render_potato_url("/potato?target=SIMNEAR_POTATO&section=.text&idx=0")
+    assert "99.9%" in panel
+    assert "100.0%" not in panel
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (0.873, "87.3%"),
+        (0.9999, "99.9%"),
+        (0.99999, "99.9%"),
+        (1.0, "100.0%"),
+        (0.0, "0.0%"),
+        (float("nan"), None),
+        (float("inf"), None),
+        (True, None),
+        ("0.5", None),
+    ],
+)
+def test_similarity_pct_helper(value: object, expected: str | None) -> None:
+    """The one rendering both similarity columns go through.
+
+    A non-finite fraction returns None rather than reaching `math.floor` (which
+    raises on NaN) or printing a literal "nan%": a coverage document is
+    untrusted input, and the caller falls back to showing the stored value.
+    """
+    from recoverage.potato import _similarity_pct
+
+    assert _similarity_pct(value) == expected
+
+
 @pytest.mark.skipif(not HAS_DB, reason="No coverage document")
 def test_etag_caching():
     target = require_target()

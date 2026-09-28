@@ -395,7 +395,15 @@ simpler and strictly wider.
      Both hand the digits to `toLocaleString`, so a served figure reads in the
      reader's own decimal separator and grouping rather than a `.` and a `,`
      that no non-English locale writes. A new served number in a component calls
-     the helper rather than `toFixed` or a bare `String(...)`.
+     the helper rather than `toFixed` or a bare `String(...)`. The two
+     similarity figures (the `functions.similarity` row and the
+     `verify_results.similarity` one) are 0-1 FRACTIONS, so each surface scales
+     before flooring: Potato Mode through `potato._similarity_pct` (which also
+     leaves a non-finite stored value alone, since a coverage document is
+     untrusted input and `pct_1dp` reaches `math.floor`, which raises on NaN),
+     the SPA through `format.percent1(sim * 100)`. A bare `"%.1f"` there
+     rounded 99.99% up to a "100.0%" the dashboard showed as 99.9, so a new
+     surface rendering either column scales and floors rather than formats.
    - The catalog's `summary` blob is NOT stored in the document (the writer
      keeps the facts, not the precomputed answers). `server._summary` rebuilds
      it from the stored cells and functions, and `/stats` and `/data` serve the

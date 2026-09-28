@@ -248,6 +248,15 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Potato Mode reported a near-perfect match as a perfect one.** A function's
+  code-similarity (both the function row and the latest `rebrew verify` record)
+  is a 0-1 fraction, and the dashboard renders it through the flooring helper
+  every other percentage goes through. The two Potato Mode detail rows
+  formatted it with a bare `%.1f`, which rounds to nearest and rounds up: a
+  99.99% match printed as `100.0%` beside a function that is not an exact
+  match, while the dashboard beside it showed `99.9`. Both now floor, so the
+  two views of one function cannot disagree, and a stored value that is not a
+  finite number is left alone rather than formatted as `nan%`.
 - **A cell's parent link in the dashboard went nowhere.** `parent_function` is
   the NAME rebrew gives the function a data or thunk block belongs to, and the
   panel printed it as if it were an address: the link read `0X_FUNC_A` and

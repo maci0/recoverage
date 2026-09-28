@@ -11,6 +11,7 @@ import base64
 import functools
 import importlib.util
 import logging
+import math
 import re
 import struct
 import textwrap
@@ -2474,6 +2475,31 @@ def _panel_empty_cell_bytes(
         ctx["inspector_html"] = inspector
 
 
+def _similarity_pct(fraction: Any) -> str | None:
+    """A stored 0-1 similarity fraction as a floored 1dp percentage, or None.
+
+    Both ``functions.similarity`` and ``verify_results.similarity`` are 0-1
+    fractions (rebrew's verify import divides its percent scale by 100), and
+    both render here and in the SPA's panel (``percent1``).  The formatting goes
+    through :func:`server.pct_1dp` rather than a bare ``"%.1f"`` because that
+    rounds to nearest and rounds UP: a 0.9999 fraction (99.99%) printed as
+    ``"100.0%"``, beside a function that is not an exact match, is precisely the
+    false completion ``pct_1dp`` and ``coverage_pct`` exist to keep off the
+    page.  The SPA already floored, so the two surfaces disagreed about the
+    same number on the same function.
+
+    None for a non-finite value: a coverage document is untrusted input, and
+    ``pct_1dp`` reaches ``math.floor`` (which raises on NaN), while a bare
+    format would have printed a literal "nan%".  The callers fall back to the
+    generic detail-row rendering, which shows the stored value unchanged.
+    """
+    if isinstance(fraction, bool) or not isinstance(fraction, int | float):
+        return None
+    if not math.isfinite(fraction):
+        return None
+    return f"{pct_1dp(fraction * 100):.1f}%"
+
+
 def _panel_fn_attach_verify(coverage: CoverageSnapshot, fn_data: dict[str, Any]) -> None:
     """Attach the latest `rebrew verify -o` record (byte_delta / diff_lines /
     code-similarity) so the detail panel shows verification stats the same
@@ -2506,8 +2532,11 @@ def _panel_fn_attach_verify(coverage: CoverageSnapshot, fn_data: dict[str, Any])
         # verify_results.similarity is a 0-1 fraction (rebrew's verify import
         # divides its percent scale by 100), same unit as functions.similarity
         # below.  Rendered unscaled it read 100x low: a 87.3% match showed as
-        # "0.9%".
-        fn_data["last_verify_similarity"] = f"{fields['similarity'] * 100:.1f}%"
+        # "0.9%".  A non-finite fraction leaves the row out rather than
+        # printing a fabricated figure (see _similarity_pct).
+        rendered = _similarity_pct(fields["similarity"])
+        if rendered is not None:
+            fn_data["last_verify_similarity"] = rendered
     if fields["reg_delta"] is not None:
         fn_data["last_verify_reg_delta"] = fields["reg_delta"]
     if fields["effective_match"]:
@@ -2648,9 +2677,14 @@ def _panel_function_detail(
             return f'<a href="{va_link}"><font color="{ACCENT_COLOR}">{val}</font></a>'
         # functions.similarity is stored as a 0-1 fraction (schema CHECK); the
         # SPA renders it scaled by 100 with a "%" (app.js), so Potato Mode must
-        # too instead of showing the bare fraction.
-        if k == "similarity" and isinstance(v, int | float) and not isinstance(v, bool):
-            return f"{v * 100:.1f}%"
+        # too instead of showing the bare fraction.  It is floored through the
+        # shared helper so the two surfaces cannot disagree about the same
+        # figure: a "%.1f" here rounded 99.99% up to a "100.0%" the SPA shows as
+        # 99.9.  A non-finite value keeps the generic rendering.
+        if k == "similarity":
+            rendered = _similarity_pct(v)
+            if rendered is not None:
+                return rendered
         return val
 
     ctx["detail_rows_html"] = _detail_rows(fn_data, skip_fields, hex_fields, _fn_val)
