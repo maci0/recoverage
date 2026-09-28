@@ -199,10 +199,13 @@ class TestDeclaredFloorsAreRecorded:
         assert f"Programming Language :: Python :: {floor[1]}.{minor + 1}" in classifiers
 
     def test_unreleased_uses_canonical_section_headings(self) -> None:
-        """Keep a Changelog headings, so a reader's tool groups the entries."""
+        """Keep a Changelog headings, so a reader's tool groups the entries.
+
+        A release moves every entry into the shipped section, so an empty
+        Unreleased block is the steady state, not a missing group.
+        """
         unreleased = _changelog().split("## [Unreleased]", 1)[1].split("\n## [", 1)[0]
         headings = re.findall(r"^### (.+)$", unreleased, re.MULTILINE)
-        assert headings
         for heading in headings:
             assert heading in {
                 "Added",

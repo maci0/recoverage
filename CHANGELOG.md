@@ -5,6 +5,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-09-28
+
 ### Changed
 
 - **Schema v11 is accepted.** Current rebrew stamps `db_version` `"11"`.
