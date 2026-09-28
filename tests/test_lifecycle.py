@@ -8,6 +8,9 @@ Pins:
 - ``_open_and_reap`` must reap the browser-opener child (setsid alone does not
   prevent zombies), bound its wait so a hung opener cannot stall serve, and
   detach the opener from the console on every platform that needs it.
+- A client that hangs up on ``/api/events`` must give back both slots it took:
+  the ``_SSE_MAX_CLIENTS`` entry and the connection-admission slot behind its
+  handler thread. Both are global and neither comes back on its own.
 """
 
 from __future__ import annotations
@@ -713,6 +716,120 @@ class TestClientConnectionDeadline:
         finally:
             server.shutdown()
             server.server_close()
+
+    def test_a_dropped_event_stream_gives_its_slot_back(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A client that hangs up on /api/events must release the map entry it holds.
+
+        The stream registers its queue in `_SSE_CLIENTS` BEFORE the iterable
+        exists, so a peer that goes away between the handler returning and the
+        first write is unregisterable by the generator's `finally` alone: PEP
+        3333 lets a server close the iterable it was handed without ever
+        iterating it. `_SSEStream._release` covers both exits, and that release
+        is the only thing standing between a dropped tab and a
+        `_SSE_MAX_CLIENTS` that erodes by one per disconnect for the life of
+        the process.
+
+        The bound is the HEARTBEAT, not the disconnect: a peer that vanishes
+        without a FIN the server can see is noticed when the next write fails,
+        so a slot is held for at most `_SSE_HEARTBEAT_SECONDS`. The test waits
+        one heartbeat and asks for the whole burst back, because that is the
+        claim; a per-disconnect assertion would fail on a correct release.
+
+        Driven over real sockets against the real handler stack, in a burst, so
+        the number that has to come back is one a leak would make obvious.
+        """
+        import threading
+        from wsgiref.simple_server import make_server
+
+        from recoverage import api, metrics
+        from recoverage.webapp import app
+
+        # A short heartbeat, so the release this test waits for arrives in
+        # about a second rather than in the production 15. It is the MECHANISM
+        # under test (a failed write releases the slot), not the interval: the
+        # bound the production value sets is one heartbeat, which is why
+        # shortening it shortens the wait and changes nothing else.
+        monkeypatch.setattr(api, "_SSE_HEARTBEAT_SECONDS", 1.0)
+        monkeypatch.setattr(devserver._QuietTimeoutRequestHandler, "timeout", 5)
+        monkeypatch.setattr(
+            devserver._QuietTimeoutRequestHandler, "log_message", lambda *a, **k: None
+        )
+
+        server = make_server(
+            "127.0.0.1",
+            0,
+            app,
+            server_class=_server_class_for("127.0.0.1"),
+            handler_class=devserver._QuietTimeoutRequestHandler,
+        )
+        server.block_on_close = False
+        accept_thread = threading.Thread(target=server.serve_forever, daemon=True)
+        accept_thread.start()
+        port = server.server_address[1]
+        # Well under both caps, so the burst is admitted rather than refused.
+        burst = 8
+        conns: list[socket.socket] = []
+        # Each of these takes TWO slots the process never regains by itself: the
+        # connection-admission slot behind its handler thread, and its entry in
+        # _SSE_CLIENTS. Both are global gauges, so the count this test is
+        # asserting against has to be restored before it returns or every later
+        # test reads a server that is holding streams nobody opened.
+        held_before = metrics.CONNECTIONS.open
+        try:
+            with api._SSE_CLIENTS_LOCK:
+                registered_before = len(api._SSE_CLIENTS)
+            for _ in range(burst):
+                conn = socket.create_connection(("127.0.0.1", port), timeout=30)
+                conn.settimeout(30)
+                conn.sendall(
+                    b"GET /api/events HTTP/1.1\r\n"
+                    b"Host: 127.0.0.1\r\nAccept: text/event-stream\r\n\r\n"
+                )
+                assert b" 200 " in conn.recv(64)
+                conns.append(conn)
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                with api._SSE_CLIENTS_LOCK:
+                    if len(api._SSE_CLIENTS) >= registered_before + burst:
+                        break
+                time.sleep(0.02)
+            with api._SSE_CLIENTS_LOCK:
+                # A DELTA, not a total: a neighbouring test's stream releases on
+                # the same mechanism and can still be registered when this one
+                # starts. What has to hold is the count THIS burst added.
+                assert len(api._SSE_CLIENTS) == registered_before + burst, (
+                    "the streams never registered their slots"
+                )
+            # Hang up mid-body on every one of them: the response is unframed,
+            # so this is the path a browser tab closing takes.
+            for conn in conns:
+                conn.close()
+            conns.clear()
+            deadline = time.monotonic() + api._SSE_HEARTBEAT_SECONDS + 10
+            while time.monotonic() < deadline:
+                with api._SSE_CLIENTS_LOCK:
+                    if (
+                        len(api._SSE_CLIENTS) <= registered_before
+                        and metrics.CONNECTIONS.open <= held_before
+                    ):
+                        break
+                time.sleep(0.05)
+            with api._SSE_CLIENTS_LOCK:
+                assert len(api._SSE_CLIENTS) <= registered_before, (
+                    "disconnected event streams kept their slots; the cap erodes by "
+                    "one per dropped tab for the life of the process"
+                )
+            assert metrics.CONNECTIONS.open <= held_before, (
+                "a dropped event stream kept its connection slot"
+            )
+        finally:
+            for conn in conns:
+                conn.close()
+            server.shutdown()
+            server.server_close()
+            accept_thread.join(timeout=5)
 
     def test_connections_are_capped_and_the_slot_is_released(self, monkeypatch) -> None:
         """The deadlines above bound how LONG a handler thread lives, never how
