@@ -14,7 +14,7 @@ import {
   type Geometry,
   type Packed,
 } from "@/grid/pack";
-import { hex, isolate } from "@/lib/format";
+import { count, hex, isolate } from "@/lib/format";
 
 /** The roving tab stop's next cell for a key, or null when the key is not a
  * navigation key. Home and End are the lattice's own ends. */
@@ -112,7 +112,7 @@ export function CoverageMap({
       const base = section.va ?? 0;
       const name = pack.fns[index];
       return [
-        `Block ${index}`,
+        `Block ${count(index)}`,
         `${hex(base + (pack.starts[index] ?? 0), 8)} to ${hex(base + (pack.ends[index] ?? 0), 8)}`,
         STATE_LABEL[pack.states[index] ?? 0],
         name === "" ? "no function" : isolate(String(name)),

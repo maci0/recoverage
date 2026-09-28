@@ -258,7 +258,7 @@ function FunctionMeta({
       {fn.last_verify == null ? null : (
         <MetaItem label="Verified">
           {`${fn.last_verify.verified_at == null ? "" : dateTime(fn.last_verify.verified_at)}${
-            fn.last_verify.byte_delta == null ? "" : ` (Δ${count(fn.last_verify.byte_delta)}B)`
+            fn.last_verify.byte_delta == null ? "" : ` (${isolate(`Δ${count(fn.last_verify.byte_delta)}B`)}`
           }`}
         </MetaItem>
       )}
@@ -385,7 +385,7 @@ export function CoveragePanel({
   const { cells } = section ?? {};
   const cell = cellIndex === null || cells === undefined ? undefined : cells.at(cellIndex);
   const { fn } = panes;
-  const subject = cellIndex === null ? (section?.name ?? "") : `Block ${cellIndex}`;
+  const subject = cellIndex === null ? (section?.name ?? "") : `Block ${count(cellIndex)}`;
   const title = isolate(fn?.name ?? subject);
   const openModal = (heading: string, text: string, language: HighlightLanguage): void => {
     setModal({ title: `${heading}: ${title}`, text, language });

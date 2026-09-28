@@ -352,6 +352,13 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   symlink out of it is refused too), and the refusal is logged, so a target
   with no binary configured and one whose binary is out of bounds are
   distinguishable in the log.
+- **A percentage kept its sign only for a reader whose digits are Latin.** The
+  dashboard spells every figure in the reader's own locale, so an Arabic or
+  Hindi reader got Arabic-Indic digits beside a `%` that carries no script of
+  its own. Interpolated into a sentence, the sign moved to the other end of its
+  own number. Every percentage printed with a sign is now one isolated run, the
+  same mechanism the dashboard already uses for a name out of a coverage
+  document, and a block index is spelled like the counts beside it.
 - **A Potato Mode coverage failure could split the log line that records it.**
   The "coverage unavailable" warning names the coverage directory and the
   parse error that made it unavailable, and it claims to mirror the API's

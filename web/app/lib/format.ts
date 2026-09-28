@@ -1,7 +1,7 @@
 /** Formatting helpers and the shared user-facing strings.
  *
  * `hex` upper-cases and zero-pads, which is the spelling every address, byte
- * offset and size in the dashboard uses; `percent1`, `count`, `dateTime` and
+ * offset and size in the dashboard uses; `percent1`, `percentLabel`, `count`, `dateTime` and
  * `foldForSearch` are the locale-aware spellings the numbers, the timestamps
  * and the search read through; `MSG` is the one vocabulary the shell
  * and the detail panes share, so a loading pane and a loading overlay read the
@@ -32,6 +32,23 @@ export function percent1(percentage: number): string {
     minimumFractionDigits: PERCENT_DECIMALS,
     maximumFractionDigits: PERCENT_DECIMALS,
   });
+}
+
+/** A percentage carrying its own sign, as one directional run.
+ *
+ * The sign is a bidi NEUTRAL, and the digits it sits against are not Latin:
+ * `toLocaleString` spells them in the reader's script (Arabic-Indic digits for
+ * an Arabic reader, a comma decimal for a German one), so the one character
+ * that decides which end of the figure the run reads from has no script of its
+ * own. Left alone in a sentence, a reader whose text runs right to left saw the
+ * `%` travel to the other side of the number, and a figure stood in a cell did
+ * the same beside its label. The isolate keeps number and sign together and
+ * hands the surrounding sentence its own direction, which is the half
+ * `dir="auto"` cannot cover: it applies to a value standing alone, and every
+ * percentage the dashboard prints is interpolated into words the page owns
+ * ("NN.N% covered", "similarity NN.N%"). */
+export function percentLabel(percentage: number): string {
+  return isolate(`${percent1(percentage)}%`);
 }
 
 /** A count, grouped the way the reader's locale groups digits. */
@@ -95,7 +112,7 @@ export function similarityPct(fraction: unknown): string | null {
   if (typeof fraction !== "number" || !Number.isFinite(fraction)) {
     return null;
   }
-  return `${percent1(fraction * 100)}%`;
+  return percentLabel(fraction * 100);
 }
 
 /** The case fold `server.fold_text` performs, as far as JavaScript can. NFC

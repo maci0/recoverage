@@ -3298,7 +3298,7 @@ class TestSpaStateVocabulary:
     def test_cell_tooltip_names_the_state_and_function(self) -> None:
         """The hover title says what the cell is, not a 0/1 flag."""
         map_source = _web("components/CoverageMap.tsx")
-        assert "Block ${index}" in map_source
+        assert "Block ${count(index)}" in map_source
         assert "STATE_LABEL[pack.states[index]" in map_source
         assert "no function" in map_source
 
@@ -3503,9 +3503,35 @@ class TestSpaLocaleFormatting:
 
     def test_the_served_figures_go_through_the_helpers(self) -> None:
         strip = _web("components/StatsStrip.tsx")
-        assert "percent1(stats.summary.coveragePercent)" in strip
-        assert "percent1(row.coverage_pct)" in strip
+        assert "percentLabel(stats.summary.coveragePercent)" in strip
+        assert "percentLabel(row.coverage_pct)" in strip
         assert "count(stats.summary.totalFunctions)" in strip
+
+    def test_a_percentage_is_one_directional_run(self) -> None:
+        """The sign travels with the digits it belongs to.
+
+        `toLocaleString` spells the digits in the reader's script, and `%` is a
+        bidi NEUTRAL, so a figure interpolated into a sentence kept the sign
+        away from its own number wherever the text around it ran the other way.
+        Every surface printing a percentage with a sign goes through the one
+        helper that isolates the pair, rather than concatenating the sign at a
+        call site.
+        """
+        fmt = _web("lib/format.ts")
+        body = fmt.split("export function percentLabel", 1)[1].split("\n}", 1)[0]
+        assert "percent1(percentage)" in body
+        assert "isolate(" in body
+        similarity = fmt.split("export function similarityPct", 1)[1].split("\n}", 1)[0]
+        assert "percentLabel(fraction * 100)" in similarity
+        # No call site spells the sign out beside its own figure.
+        offenders = sorted(
+            str(path.relative_to(REPO_ROOT))
+            for path in WEB_APP.rglob("*")
+            if path.suffix in {".ts", ".tsx"}
+            and path.name != "format.ts"
+            and any(needle in path.read_text(encoding="utf-8") for needle in ("}%", "percent1("))
+        )
+        assert offenders == [], f"percentage spelled at the call site: {offenders}"
 
     def test_percent1_floors_and_localizes(self) -> None:
         """The helper is the flooring and the locale, not a bare `toFixed`."""

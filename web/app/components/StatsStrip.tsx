@@ -3,7 +3,7 @@ import type { ComponentChildren } from "preact";
 import type { StatsPayload } from "@/api";
 import { Button } from "@/components/ui/button";
 import { STATE_FILTERS, paletteVarForFilter } from "@/grid/pack";
-import { count, percent1 } from "@/lib/format";
+import { count, percentLabel } from "@/lib/format";
 
 /** The bucket `/stats` counts a state under. Only the tooling failures differ:
  * the server folds them into `other`, which is the state the map paints as slot
@@ -64,7 +64,7 @@ export function StatsStrip({
   return (
     <div className="stats font-mono text-micro text-muted flex flex-wrap items-center gap-x-4 gap-y-1">
       <span className="stats-target">
-        <b className="text-label text-text">{percent1(stats.summary.coveragePercent)}%</b>{" "}
+        <b className="text-label text-text">{percentLabel(stats.summary.coveragePercent)}</b>{" "}
         covered · {count(stats.summary.matchedFunctions)}/{count(stats.summary.totalFunctions)}{" "}
         functions matched
       </span>
@@ -95,7 +95,7 @@ export function StatsStrip({
               </Button>
             );
           })}
-          <span>{percent1(row.coverage_pct)}% covered</span>
+          <span>{percentLabel(row.coverage_pct)} covered</span>
         </span>
       )}
     </div>
