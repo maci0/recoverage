@@ -1085,6 +1085,20 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   (`potato._SEARCH_ROW_LIMIT`) are selected with `heapq.nsmallest`, the
   documented equivalent of `sorted(...)[:limit]`, so a match set larger than
   the cap is not fully ordered to keep the first 500.
+- The columns a function list can be ordered by are `server.
+  FUNCTION_SORT_COLUMNS`, and a surface NARROWS that set rather than spelling
+  its own: the API list takes it whole (`api._ALLOWED_SORT` is a name for it)
+  and the Potato table takes the columns it renders (`potato.
+  FUNCTION_LIST_COLUMNS`, an intersection, because an order a rendered column
+  cannot show is one a reader has nothing to check it against). The attribute
+  map beside it, `server.FUNCTION_SORT_FIELDS`, is every column but `size`,
+  which has a key arm of its own because its NULL needs a tuple. A stale
+  spelling of the column list is invisible rather than loud: a surface that no
+  longer carries a column answers its reader the default order for it, so
+  `?sort=symbol` on the Potato table reads as va order with nothing saying so.
+  Pinned at `tests/test_server.py` (`TestSortColumnVocabularyIsShared`), which
+  holds the two surfaces against the package's list and every column against a
+  key that resolves.
 - `_log_safe` escapes the characters that end a log line, which is C0, DEL,
   the C1 controls, and U+2028/U+2029 (a header value carries those literally,
   and every viewer that breaks on `\n` breaks on them). It deliberately leaves

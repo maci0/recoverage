@@ -2722,6 +2722,43 @@ class TestBucketVocabularyIsShared:
         assert summary[".data"]["coveredBytes"] < data.size
 
 
+class TestSortColumnVocabularyIsShared:
+    """The function list's sort columns are ONE vocabulary, narrowed per surface.
+
+    The API page and the Potato table order the same rows, and both reject a
+    column they do not carry by answering the default order rather than by
+    refusing, so a stale spelling of the column list is invisible: a reader
+    asks for a column the surface dropped and gets a list in va order with
+    nothing to say so.  Each surface therefore narrows
+    `server.FUNCTION_SORT_COLUMNS` instead of writing its own list, and these
+    are the three facts that keep the narrowing honest: the package's list is
+    the union of the two surfaces', each surface's is a subset of it, and the
+    key table covers every column but the one that has an arm of its own.
+    """
+
+    def test_the_package_list_is_the_union_of_the_two_surfaces(self) -> None:
+        import recoverage.api as api_
+        import recoverage.potato as potato_
+        import recoverage.server as srv
+
+        rendered = set(potato_.FUNCTION_LIST_COLUMNS)
+        assert rendered == {"va", "name", "size", "status"}
+        assert set(api_._ALLOWED_SORT) == set(srv.FUNCTION_SORT_COLUMNS)
+        assert set(srv.FUNCTION_SORT_COLUMNS) >= rendered
+
+    def test_every_column_but_size_resolves_to_an_attribute(self) -> None:
+        """A column with no key would raise on the first row it ordered.
+
+        `size` is the exception and has an arm of its own, because its NULL
+        needs a tuple the plain attribute keys do not build.
+        """
+        import recoverage.server as srv
+
+        assert set(srv.FUNCTION_SORT_FIELDS) | {"size"} == set(srv.FUNCTION_SORT_COLUMNS)
+        for field in srv.FUNCTION_SORT_COLUMNS:
+            assert callable(srv.function_sort_key(field)), field
+
+
 class TestUnreadableDocumentIsNotAnEmptyTarget:
     """A document that cannot be read must surface, never degrade to empty.
 

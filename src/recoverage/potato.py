@@ -34,6 +34,7 @@ from recoverage.disasm import disassembly_available, get_disassembly
 from recoverage.server import (
     CACHE_NO_STORE,
     CACHE_REVALIDATE,
+    FUNCTION_SORT_COLUMNS,
     _bucket_row,
     _cell_json,
     _compressed,
@@ -2189,6 +2190,15 @@ def _build_grid_html(
     return "".join(grid_html_parts)
 
 
+#: The columns this table renders, and therefore the ones it can be ordered by:
+#: a sort on a column the list does not show gives a reader an order with
+#: nothing in the page to check it against.  Narrowed from the package's one
+#: vocabulary (`server.FUNCTION_SORT_COLUMNS`) rather than spelled here, so a
+#: column the server stops sorting by cannot linger as a spelling this surface
+#: accepts and then quietly answers with the default order.
+FUNCTION_LIST_COLUMNS = frozenset(FUNCTION_SORT_COLUMNS) & {"va", "name", "size", "status"}
+
+
 def _order_key(field: str) -> Callable[[Function], Any]:
     """``(column, ascending va)`` order, the table's whole ordering.
 
@@ -2210,8 +2220,7 @@ def _render_function_list(
     sort_key: str,
     status_filter: str,
 ) -> str:
-    allowed_sort = {"va", "name", "size", "status"}
-    order_by = sort_key if sort_key in allowed_sort else "va"
+    order_by = sort_key if sort_key in FUNCTION_LIST_COLUMNS else "va"
 
     # Base filter: GLOBAL/DATA marker rows live in the functions array but are
     # data markers, not functions — same exclusion as the API list endpoint and

@@ -535,12 +535,11 @@ def _function_total(
     return total
 
 
-#: The columns the list endpoint can sort by.  ONE list: an unknown field
-#: ignores the whole sort parameter rather than applying a direction to a column
-#: the response does not carry.  ``size`` is here and absent from
-#: ``server.FUNCTION_SORT_FIELDS``, which maps the rest to their attributes;
-#: the sort key gives it an arm of its own for its NULL.
-_ALLOWED_SORT = ("va", "name", "size", "status", "symbol", "module")
+#: The columns the list endpoint can sort by: the package's one vocabulary
+#: (`server.FUNCTION_SORT_COLUMNS`), which this endpoint takes whole, since it
+#: carries every one of them.  An unknown field ignores the whole sort parameter
+#: rather than applying a direction to a column the response does not carry.
+_ALLOWED_SORT = _server.FUNCTION_SORT_COLUMNS
 
 
 def _filtered_functions(

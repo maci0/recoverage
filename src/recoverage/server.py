@@ -2070,11 +2070,30 @@ def fold_can_match_decimal(folded_needle: str) -> bool:
 # because a page boundary is a page boundary: the two surfaces must not be able
 # to order the same rows differently and hand a reader a different row 1.
 
+#: Every column a function list can be ordered by, and the ONE spelling of
+#: that vocabulary in the package.  Each surface narrows it (the API list takes
+#: the whole set, the Potato table the columns it renders) rather than writing
+#: its own: three lists of the same six names is three places a renamed or
+#: dropped column leaves a spelling behind, and a stale spelling does not fail
+#: loudly, it silently answers the default order for a column the reader asked
+#: for.  Membership is the whole contract; the order here is documentation.
+FUNCTION_SORT_COLUMNS: tuple[str, ...] = (
+    "va",
+    "name",
+    "size",
+    "status",
+    "symbol",
+    "module",
+)
+
 #: The columns :func:`function_sort_key` reads through ``getattr``, mapped to
 #: the attribute each one names.  ``size`` is absent because it is handled by
 #: an arm of its own: its NULL needs a tuple the rest do not, and a key whose
 #: attribute is not in this table would raise rather than sort.  An unknown
-#: field is the caller's to reject, not this table's.
+#: field is the caller's to reject, not this table's.  Every key is a
+#: :data:`FUNCTION_SORT_COLUMNS` member, and every one but ``size`` is a plain
+#: attribute, which is what keeps the two tables from disagreeing about what
+#: the package can sort by.
 FUNCTION_SORT_FIELDS: dict[str, str] = {
     "va": "va",
     "name": "name",
