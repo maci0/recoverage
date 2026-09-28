@@ -3620,6 +3620,80 @@ class TestSpaTimestampRendering:
         assert match.group(1) == r"^\d{4}-\d{2}-\d{2}$", match.group(1)
         assert "u" in match.group(2), f"DATE_ONLY lost its u flag: /{match.group(2)}/"
 
+    #: The reader zones the render is driven in, and the calendar day each of
+    #: them must show for the stamps below. One well west of UTC, one east of
+    #: it, one on a zone that observes DST, so a reader whose own clock is a
+    #: different offset from the writer's is exercised rather than assumed.
+    ZONE_DAYS: ClassVar[dict[str, tuple[str, str]]] = {
+        # (day-only stamp -> the day it names, instant stamp -> the reader's day)
+        "America/Sao_Paulo": ("2026-09-29", "28"),
+        "Europe/Warsaw": ("2026-09-29", "29"),
+        "Pacific/Auckland": ("2026-09-29", "29"),
+    }
+
+    #: An instant two hours after UTC midnight on the 29th: still the 29th
+    #: east of Greenwich, already the 28th west of it. The two renderings of it
+    #: cannot both name one day, which is what makes the pair a real oracle.
+    WEST_OF_UTC_STAMP = "2026-09-29T02:00:00+00:00"
+
+    def test_the_rendered_day_is_the_readers_own_calendar_day(self) -> None:
+        """The shipped function, run in a reader's zone, not a description of it.
+
+        The two assertions above read `lib/format.ts` as text, so they hold
+        whatever the code says about itself and say nothing about what a
+        browser does with it: a `DATE_ONLY.test` inverted, or the anchor time
+        half carrying an offset, both pass them and both move the day off the
+        calendar for every reader outside the writer's zone. Running the
+        module under a `TZ` is what proves the rendering.
+        """
+        bun = shutil.which("bun")
+        if bun is None:
+            pytest.skip("bun not on PATH")
+
+        driver = (
+            "import { dateTime } from " + json.dumps(str(WEB_APP / "lib" / "format.ts")) + ";\n"
+            "console.log(JSON.stringify([dateTime(process.argv[2]), "
+            "dateTime(process.argv[3]), dateTime('not a timestamp')]));\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            script = Path(tmp) / "render.ts"
+            script.write_text(driver, encoding="utf-8")
+            rendered: dict[str, list[str]] = {}
+            for zone, (day_only, _west_day) in self.ZONE_DAYS.items():
+                proc = subprocess.run(
+                    [bun, "run", str(script), day_only, self.WEST_OF_UTC_STAMP],
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                    check=False,
+                    env={**os.environ, "TZ": zone},
+                )
+                assert proc.returncode == 0, f"dateTime harness failed to run: {proc.stderr}"
+                rendered[zone] = json.loads(proc.stdout)
+
+        for zone, (_day_only, west_day) in self.ZONE_DAYS.items():
+            as_written, instant, unreadable = rendered[zone]
+            # A day-only stamp names a calendar day, so every reader's zone
+            # shows that day. The digit guards are spelled as lookaround
+            # because `toLocaleString` picks its own ordering and separators:
+            # a bare "29" would be satisfied by a year or a clock that carried
+            # one, and neither is the day under test.
+            assert as_written != _day_only, f"{zone}: the stamp was not rendered ({as_written!r})"
+            assert re.search(r"(?<!\d)29(?!\d)", as_written), (
+                f"{zone}: day-only stamp lost its day ({as_written!r})"
+            )
+            assert not re.search(r"(?<!\d)28(?!\d)", as_written), (
+                f"{zone}: day-only stamp moved a day ({as_written!r})"
+            )
+            # The same function, given an instant, converts it: west of UTC the
+            # 29th in the document is the 28th on the reader's wall clock. A
+            # renderer that echoed the writer's zone fails this, and the zones
+            # on both sides of Greenwich are what make it fail loudly.
+            assert re.search(rf"(?<!\d){west_day}(?!\d)", instant), (
+                f"{zone}: {instant!r} is not the reader's own day"
+            )
+            assert unreadable == "not a timestamp", f"{zone}: an unreadable stamp was rendered"
+
 
 class TestSpaSearchFoldsLikeTheServer:
     """The search box compares in the same form `server.fold_match` does.
