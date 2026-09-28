@@ -3,12 +3,12 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 
 import type { Section } from "@/api";
 import {
-  FILTER_KEY,
   PALETTE_VARS,
   STATE_LABEL,
   hitTest,
   layoutSection,
   packSection,
+  survivesFilter,
   type Geometry,
   type Packed,
 } from "@/grid/pack";
@@ -176,11 +176,11 @@ export function CoverageMap({
       state.accent = computed.getPropertyValue("--c").trim();
     }
     const { cell } = geo;
-    const { states, fns, n } = pack;
+    const { states, ground, fns, n } = pack;
     const { pCell, pX, pY, pW, parts } = geo;
     const filtering = filters.size > 0;
     const isDim = (index: number): boolean =>
-      (filtering && !filters.has(FILTER_KEY[states[index] ?? 0] ?? "")) ||
+      (filtering && !survivesFilter(states[index] ?? 0, ground[index] ?? 0, filters)) ||
       (matchedFns !== null && !matchedFns.has(fns[index] ?? ""));
     ctx.clearRect(0, 0, geo.width, geo.height);
     for (let pass = 0; pass < 2; pass += 1) {

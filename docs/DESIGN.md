@@ -84,6 +84,7 @@ it is mounted from.
 * **Grid Caching**: Each section's layout (cell walk, row packing, hit-map, canvas size) is computed once and cached, and only the active section is painted, making tab switching instantaneous even for sections with 6,000+ chunks.
 * **Canvas Painting**: Each section's grid is a single `<canvas>` painted from precomputed per-cell rectangles, one batched path per state (~12 ms to ~2.6 ms at 39k cells), rather than thousands of individual DOM nodes.
 * **Canvas-Based Filtering**: Filter and search dimming are a second alpha pass (`globalAlpha = 0.15`) over the same rectangles, not CSS class toggling and not a per-cell DOM walk.
+* **One filter rule, and it reads the cell, not the slot**: `pack.ts`'s `survivesFilter(slot, ground, active)` is the map's whole status-filter rule, and Potato Mode's `_state_survives_filter` is the same rule over the raw state; `tests/test_server.py` (`TestSpaStateVocabulary`) runs one against the other cell for cell. The exemption for the undocumented ground is the reason it takes a per-cell `ground` column rather than reading the filter key off `FILTER_KEY[states[i]]`: palette slot 0 is a projection of THREE states (the ground plus the data and thunk states), and only the ground is exempt, so a rule keyed on the paint slot cannot express the difference. The three shared the slot, and therefore the empty filter key, correctly: a data or thunk cell is dimmed by every status filter in both renderers, and no pill isolates it.
 * **Keyboard & semantics**: the canvas wrapper is a `role="application"` region carrying a single `tabindex="0"`, named by `aria-label` and described by the hidden key map, so the grid is one tab stop no matter how many thousands the section holds. It is deliberately not a `listbox`: that role promises `option` descendants a canvas cannot have. The wrapper handles the keys itself: arrows move the selection (left/right by one, up/down by a full row), Home/End jump to the ends, Enter/Space select. The cells are painted, not DOM nodes, so the selection is a canvas stroke, and the cursor's value is announced through a hidden `role="status"` paragraph instead of an `aria-selected` attribute.
 
 ### 3. Side Panel (`.panel`, metadata grid and code panes mounted by `components/CoveragePanel.tsx`)
@@ -223,7 +224,7 @@ On function/global selection:
 ### Search & Filtering
 * **Search**: Matches against function name, VA, and symbol (case-insensitive)
 * **Filters**: Set-based toggling; progress bar segments are clickable to quick-filter
-* **Dimming**: Non-matching cells are dimmed (opacity 0.15) rather than hidden, preserving grid layout.  Undocumented blocks dim too: they are not matches either, and exempting them left most of the map lit during a search
+* **Dimming**: Non-matching cells are dimmed (opacity 0.15) rather than hidden, preserving grid layout.  A search dims undocumented blocks too: they are not matches either, and exempting them left most of the map lit during a search. A status filter does not dim them, and that is the one place the two dimming rules differ: see *Canvas-Based Filtering* above.
 
 ### Theme Persistence
 * Checks `localStorage` for `recoverage_theme` ("light" or "dark")

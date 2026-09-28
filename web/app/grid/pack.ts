@@ -91,6 +91,26 @@ export const PALETTE_VARS = [
  * isolate would be unreachable by filter. */
 export const FILTER_KEY = ["", "exact", "reloc", "near_match", "stub", "padding", "proven", "problem"];
 
+/** Whether a cell survives the active status filter.
+ *
+ * `FILTER_KEY` is indexed by the PAINT slot, and slot 0 is a projection of
+ * three different states: the undocumented ground and the two data/thunk
+ * states. They cannot share a filter answer, so the exemption is carried per
+ * cell as a fact of the cell's own state rather than inferred from the slot it
+ * happens to paint into. Potato Mode reaches the same answer through
+ * `potato._state_survives_filter`, which tests the raw state; the two rules
+ * are pinned to each other by
+ * `test_the_status_filter_agrees_with_potato_mode_cell_for_cell` in
+ * tests/test_server.py, because the ground is the one cell a status filter
+ * must not dim: it is the background the statuses are read against, and dimming
+ * it makes a filtered map look like the cell does not exist. */
+export function survivesFilter(slot: number, ground: number, active: ReadonlySet<string>): boolean {
+  if (active.size === 0 || ground === 1) {
+    return true;
+  }
+  return active.has(FILTER_KEY[slot] ?? "");
+}
+
 /** Packed section: parallel columns, one slot per cell. */
 export type Packed = {
   n: number;
@@ -98,6 +118,10 @@ export type Packed = {
   ends: Uint32Array;
   spans: Uint16Array;
   states: Uint8Array;
+  /** 1 for an undocumented cell, the ground a status filter never dims. Read
+   * by `survivesFilter`, which cannot recover it from `states`: slot 0 also
+   * holds the data and thunk states, which a filter DOES dim. */
+  ground: Uint8Array;
   /** The first function per cell — its name, or a VA spelling — which is the
    * key both the search dimming and the selection outline compare against. */
   fns: Array<string | number>;
@@ -110,6 +134,7 @@ export function packSection(section: Section): Packed {
   const ends = new Uint32Array(n);
   const spans = new Uint16Array(n);
   const states = new Uint8Array(n);
+  const ground = new Uint8Array(n);
   const fns: Array<string | number> = Array.from({ length: n }, (): string => "");
   for (let i = 0; i < n; i += 1) {
     const cell = cells[i];
@@ -120,9 +145,10 @@ export function packSection(section: Section): Packed {
     ends[i] = cell.end ?? 0;
     spans[i] = cell.span === 0 ? 1 : (cell.span ?? 1);
     states[i] = stateSlot(cell.state);
+    ground[i] = cell.state === "none" ? 1 : 0;
     fns[i] = cell.functions?.[0] ?? "";
   }
-  return { n, starts, ends, spans, states, fns };
+  return { n, starts, ends, spans, states, ground, fns };
 }
 
 export type Placement = {

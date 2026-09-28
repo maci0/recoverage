@@ -2280,6 +2280,40 @@ def _array_items(source: str, name: str) -> list[str]:
     return [item for item in re.findall(r'"([^"]+)"', match.group(1)) if item != ""]
 
 
+def _filter_keys() -> list[str]:
+    """`FILTER_KEY` from `grid/pack.ts`, empty first slot included.
+
+    The empty string is load-bearing: it is the key every cell in palette slot
+    0 carries, and the SPA never puts it in a filter set, so a slot-0 cell is
+    dimmed by any active filter unless a filter exempts it by hand.
+    """
+    pack_ts = _web("grid/pack.ts")
+    block = re.search(r"export const FILTER_KEY = \[(.*?)\];", pack_ts, re.DOTALL)
+    assert block is not None, "pack.ts no longer defines FILTER_KEY"
+    return re.findall(r'"([^"]*)"', block.group(1))
+
+
+def _spa_ground_state() -> str:
+    """The cell state `packSection` marks as the ground a status filter never dims.
+
+    Read from the source rather than restated here, so the pin below is a
+    statement about what the map does and not a second copy of it.
+    """
+    match = re.search(r'ground\[i\] = cell\.state === "(\w+)" \? 1 : 0;', _web("grid/pack.ts"))
+    assert match is not None, "pack.ts no longer marks a ground cell in the pack"
+    assert "ground === 1" in _web("grid/pack.ts"), (
+        "survivesFilter no longer exempts the ground, so a status filter dims it again"
+    )
+    return match.group(1)
+
+
+def _spa_survives_filter(state: str, active: set[str]) -> bool:
+    """The map's status-filter rule, as `grid/pack.ts` states it."""
+    if not active or state == _spa_ground_state():
+        return True
+    return _filter_keys()[_packed_slots().get(state, 7)] in active
+
+
 class TestSpaStateVocabulary:
     """The map's state table must cover every state rebrew can write.
 
@@ -2330,6 +2364,57 @@ class TestSpaStateVocabulary:
             f"legend rows name slots {sorted(named)}; the map paints "
             f"{sorted(set(_packed_slots().values()))}"
         )
+
+    def test_the_status_filter_agrees_with_potato_mode_cell_for_cell(self) -> None:
+        """One filter rule in both renderers, not two that happened to match once.
+
+        The vocabulary was already pinned state by state, and the SURVIVAL rule
+        was not, which is how the undocumented ground came to be the one cell
+        the two renderers disagreed about: `potato._state_survives_filter`
+        exempts it by raw state, and the map used to read the exemption off the
+        paint slot, where it is indistinguishable from the data and thunk
+        states that a filter does dim. Same cell, same `?filter=`, two answers.
+        """
+        from recoverage.potato import FILTER_STATES, _state_survives_filter
+
+        mismatched = [
+            (state, key)
+            for state in sorted(_packed_slots())
+            for key in sorted(FILTER_STATES)
+            if _spa_survives_filter(state, {key}) != _state_survives_filter(state, {key})
+        ]
+        assert mismatched == [], f"the map and Potato Mode filter these apart: {mismatched}"
+
+    def test_the_undocumented_ground_survives_every_status_filter(self) -> None:
+        """The one exemption, asserted on both sides.
+
+        The ground is the background the statuses are read against. Dimming it
+        turns a filtered map into one where the undocumented regions have
+        vanished rather than receded, which reads as absence of data.
+        """
+        from recoverage.potato import FILTER_STATES, _state_survives_filter
+
+        ground = _spa_ground_state()
+        assert _spa_survives_filter(ground, set()) and all(
+            _spa_survives_filter(ground, {key}) for key in FILTER_STATES
+        )
+        assert all(_state_survives_filter(ground, {key}) for key in FILTER_STATES)
+
+    def test_data_and_thunk_are_not_the_ground(self) -> None:
+        """They share palette slot 0 with the ground and are not exempt.
+
+        The pack carries the exemption per cell for exactly this reason: read
+        off the slot, these two would inherit the ground's exemption and stop
+        dimming, and no cell in either renderer could isolate them any more.
+        """
+        from recoverage.potato import FILTER_STATES, _state_survives_filter
+
+        for state in ("data", "thunk"):
+            assert _packed_slots()[state] == 0
+            assert state != _spa_ground_state()
+            for key in FILTER_STATES:
+                assert not _spa_survives_filter(state, {key}), (state, key)
+                assert not _state_survives_filter(state, {key}), (state, key)
 
     def test_legend_swatches_read_the_palette_variables(self) -> None:
         """A legend row draws its swatch from PALETTE_VARS, so a row cannot name
