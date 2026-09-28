@@ -62,9 +62,13 @@ class Manifest(TypedDict):
 
 def build_manifest() -> Manifest:
     """The manifest body for the tree as it stands on disk."""
+    # Sorted by the RECORD's key, not by the Path: PurePath ordering is
+    # case-folded on Windows and byte-wise on POSIX, so the same tree would
+    # serialize its keys in a different order per platform and --check would
+    # report a manifest mismatch for a tree that did not change.
     files = {
         path.relative_to(TREE).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
-        for path in sorted(TREE.rglob("*"))
+        for path in sorted(TREE.rglob("*"), key=lambda p: p.relative_to(TREE).as_posix())
         if path.is_file() and not is_excluded(path.relative_to(TREE).as_posix())
     }
     return {

@@ -293,25 +293,52 @@ _MD_PIPE = "\\|"
 _REBUILD_HINT = "(run 'rebrew build-db' to rebuild it)"
 
 
-def _use_utf8_stdout() -> None:
-    """Make stdout encode UTF-8, whatever the environment's locale says.
+def _pin_utf8(stream: IO[str], errors: str) -> None:
+    """Reconfigure *stream* to encode UTF-8, whatever the locale's codec is.
 
-    `export`, `check` and `stats` write target ids and section names straight
-    from the database, and those come out of PE images: any byte is possible.
-    stdout carries the locale's codec, so under LC_ALL=C (with locale coercion
-    off) or a Windows code page the write raises UnicodeEncodeError part-way
-    through the output and leaves a truncated file behind a `>` redirect.
+    One implementation for the two operator-facing streams, because they fail
+    the same way and only differ in what they do with a character the target
+    encoding cannot hold: stdout has to be readable (a piped value is parsed by
+    whatever reads it next), stderr only has to stay one line per warning.
     """
-    encoding = (getattr(sys.stdout, "encoding", None) or "").lower().replace("-", "")
-    if encoding == "utf8":
+    encoding = (getattr(stream, "encoding", None) or "").lower().replace("-", "")
+    if encoding == "utf8" and errors == "strict":
         return
     # A stream that cannot be reconfigured (an in-memory test double, a pipe
     # wrapper) keeps its own codec; nothing here is worth failing.
-    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    reconfigure = getattr(stream, "reconfigure", None)
     if reconfigure is None:
         return
     with contextlib.suppress(ValueError, OSError):
-        reconfigure(encoding="utf-8")
+        reconfigure(encoding="utf-8", errors=errors)
+
+
+def _use_utf8_stdout() -> None:
+    """Make stdout encode UTF-8, whatever the environment's locale says.
+
+    `export`, `check`, `stats`, `serve`, `config` and `regen` write target ids,
+    section names and filesystem paths straight from the database and the
+    project, and those come out of PE images and off a disk: any byte is
+    possible.  stdout carries the locale's codec, so under LC_ALL=C (with
+    locale coercion off) or a Windows code page the write raises
+    UnicodeEncodeError part-way through the output, and for `serve` that is
+    before the listener binds, so a checkout under a non-ASCII path is a
+    traceback and an exit rather than a dashboard.
+    """
+    _pin_utf8(sys.stdout, "strict")
+
+
+def _use_utf8_stderr() -> None:
+    """Make stderr carry a path the platform's code page cannot spell.
+
+    The startup warnings embed the bind address, the CORS origins and the
+    coverage directory, and they are printed before `_configure_logging`
+    installs the `backslashreplace` filter the log stream runs with, so a
+    non-ASCII project path reached stderr unprotected there.  backslashreplace
+    is the same choice `_configure_logging` makes: the warning stays readable
+    and stays one line.
+    """
+    _pin_utf8(sys.stderr, "backslashreplace")
 
 
 def _utf8_stream(stream: IO[str]) -> IO[str]:
@@ -1036,13 +1063,21 @@ def _stop_on_sigterm() -> Callable[[], None]:
     and ``finally`` cover the stop exactly as they cover the keystroke: the
     same quiet exit, the same cancelled deferred opener.
 
+    Windows has no SIGTERM a handler can ever see: ``os.kill`` with anything
+    but CTRL_C_EVENT/CTRL_BREAK_EVENT calls TerminateProcess, and a service
+    stop there arrives as CTRL_BREAK_EVENT (SIGBREAK), whose default
+    disposition is the same abrupt kill. So SIGBREAK is the Windows arm of
+    the same rule, installed only where the constant exists; Ctrl+C is left to
+    the interpreter on both.
+
     SIGINT is left to the interpreter, which already raises here. The
-    returned callable puts back whatever handler was installed before, so a
+    returned callable puts back whatever handlers were installed before, so a
     test or an embedding caller is not left running under this one.
     """
-    if not hasattr(signal, "SIGTERM"):
+    names = [name for name in ("SIGTERM", "SIGBREAK") if hasattr(signal, name)]
+    if not names:
         return lambda: None
-    previous = signal.getsignal(signal.SIGTERM)
+    installed = {getattr(signal, name): signal.getsignal(getattr(signal, name)) for name in names}
 
     def raise_interrupt(signum: int, frame: object) -> NoReturn:
         raise KeyboardInterrupt
@@ -1050,9 +1085,11 @@ def _stop_on_sigterm() -> Callable[[], None]:
     def restore() -> None:
         # signal.signal returns the handler it displaced; the callable handed
         # back says nothing, and serve's finally only calls it.
-        signal.signal(signal.SIGTERM, previous)
+        for signum, handler in installed.items():
+            signal.signal(signum, handler)
 
-    signal.signal(signal.SIGTERM, raise_interrupt)
+    for signum in installed:
+        signal.signal(signum, raise_interrupt)
     return restore
 
 
@@ -1219,6 +1256,14 @@ def serve(
         _project_dir,
     )
     from recoverage.webapp import app as bottle_app
+
+    # The banner echoes the assets and coverage directories, and the warnings
+    # below quote the bind address, the origins and the coverage directory, all
+    # before _configure_logging installs the log stream's own codec. A project
+    # under a non-ASCII path is a name a Windows code page cannot spell, so pin
+    # both streams before anything prints rather than after.
+    _use_utf8_stdout()
+    _use_utf8_stderr()
 
     resolved = _resolve_serve_config(
         port=port,
@@ -1912,6 +1957,7 @@ def regen(no_color: bool = _no_color_option()) -> None:
     """
     from recoverage.server import _project_dir
 
+    _use_utf8_stdout()
     _check_env_or_exit()
     written = _run_regen(_project_dir())
     if written:
@@ -1998,6 +2044,8 @@ def config_cmd(
     [bold]serve[/bold] binds in its place is a different one on every run.  The
     banner that run prints is where the real number is.
     """
+    _use_utf8_stdout()
+    _use_utf8_stderr()
     resolved = _resolve_serve_config()
     settings = config.active_config(
         port=resolved.port,

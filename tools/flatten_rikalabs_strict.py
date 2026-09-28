@@ -138,7 +138,10 @@ def main() -> int:
         "rules": merged["rules"],
         "overrides": merged["overrides"],
     }
-    with OUT.open("w", encoding="utf-8") as fh:
+    # newline="" because the body is LF by construction (the trailing fh.write
+    # below): text mode's default translates every \n to os.linesep, so a run on
+    # Windows would rewrite the committed generated file with CRLF line endings.
+    with OUT.open("w", encoding="utf-8", newline="") as fh:
         json.dump(out, fh, indent=2)
         fh.write("\n")
     print(f"wrote {OUT}: {len(out['rules'])} rules, {len(out['plugins'])} plugins")

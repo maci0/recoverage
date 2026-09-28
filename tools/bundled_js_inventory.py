@@ -176,7 +176,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.output is None:
         print(body, end="")
     else:
-        args.output.write_text(body, encoding="utf-8")
+        # newline="" for the same reason as the sibling tools: the body is LF by
+        # construction, and this file is uploaded as a diffable CI artifact, so
+        # the bytes a Windows run writes must match the ones a Linux run does.
+        args.output.write_text(body, encoding="utf-8", newline="")
         print(f"{args.output}: {len(SHIPPED)} shipped packages")
     return 0
 

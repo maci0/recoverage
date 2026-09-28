@@ -1158,9 +1158,16 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   `finally` calls it. It is installed BEFORE the `try` and not inside it, so
   a `serve()` run from a non-main thread fails the way it did before rather
   than through an unbound name in the cleanup. SIGINT is left to the
-  interpreter. Pinned by `tests/test_cli.py` (`TestServeStopSignal`), which
-  delivers a real signal to the test process with `os.kill` while the stubbed
-  listener stands in for the accept loop.
+  interpreter. The same arm covers Windows, which has no SIGTERM a handler can
+  see (`os.kill` with anything but CTRL_C_EVENT/CTRL_BREAK_EVENT calls
+  TerminateProcess): there the stop signal is `SIGBREAK`, so the handler is
+  installed for every one of `SIGTERM` and `SIGBREAK` the platform defines, and
+  the restore puts back all of them. Pinned by `tests/test_cli.py`
+  (`TestServeStopSignal`), which delivers a real signal to the test process
+  with `os.kill` while the stubbed listener stands in for the accept loop on
+  POSIX, and on every platform over the signals the module claims: the
+  real-delivery case is skipped where `os.kill` would kill the runner rather
+  than raise in the handler.
 - `server.set_auth_cookie` is the one place the `?token=` share-link cookie is
   written, and every page route a share link can land on calls it: `/` and
   `/potato`. Both pages link with relative URLs, so the cookie is what carries

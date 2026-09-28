@@ -2007,6 +2007,13 @@ class TestServeStopSignal:
 
         assert signal.getsignal(signal.SIGTERM) is previous, "handler not restored"
 
+    @pytest.mark.skipif(
+        os.name == "nt",
+        reason="Windows cannot deliver SIGTERM: os.kill with anything but "
+        "CTRL_C_EVENT/CTRL_BREAK_EVENT calls TerminateProcess, so this kills "
+        "the pytest run instead of raising in the handler. The handler's own "
+        "contract is still covered above; Windows stops with Ctrl+C.",
+    )
     def test_sigterm_cancels_deferred_browser_opener(self, monkeypatch: Any) -> None:
         """Same as the Ctrl+C case: a stop must not leave the armed opener to
         fire half a second later at a port that is no longer served.
@@ -2049,6 +2056,34 @@ class TestServeStopSignal:
 
         assert result.exit_code == 0
         assert signal.getsignal(signal.SIGTERM) is before
+
+    def test_every_stop_signal_the_platform_delivers_is_handled(self) -> None:
+        """The stop arm covers every signal the platform can actually deliver.
+
+        SIGTERM on POSIX, SIGBREAK on Windows: a signal with no handler stops
+        the dashboard the abrupt way this class exists to prevent, and one is
+        only the default disposition on a platform that has it. So the set is
+        read off the module rather than off this platform's own constants,
+        which is the only way the Windows arm is covered from a Linux run.
+        """
+        import signal
+
+        from recoverage import cli
+
+        expected = [
+            getattr(signal, name) for name in ("SIGTERM", "SIGBREAK") if hasattr(signal, name)
+        ]
+        assert expected, "no stop signal this platform delivers"
+        before = {signum: signal.getsignal(signum) for signum in expected}
+        restore = cli._stop_on_sigterm()
+        try:
+            for signum in expected:
+                assert signal.getsignal(signum) is not before[signum], f"{signum} left undisposed"
+                with pytest.raises(KeyboardInterrupt):
+                    signal.getsignal(signum)(signum, None)  # type: ignore[operator]
+        finally:
+            restore()
+        assert {signum: signal.getsignal(signum) for signum in expected} == before
 
 
 class TestAllowRemoteWithoutRemoteBind:

@@ -221,7 +221,9 @@ machine, and a `systemctl stop` or `docker stop` reaches it.
 
 Stopping is `SIGINT` or `SIGTERM`; both unwind the accept loop, cancel the
 deferred browser opener and exit 0, so a unit file's `TimeoutStopSec` drains
-instead of cutting the requests in flight.
+instead of cutting the requests in flight. Windows has no `SIGTERM` a handler
+can see, so there the stop signal is `CTRL_BREAK` (`SIGBREAK`), with `Ctrl+C`
+as the always-available one.
 
 `RECOVERAGE_DB` moves what is *read*, and rebrew resolves what a regen
 *writes* from `rebrew-project.toml` alone. A regen with the two pointing at
