@@ -1069,7 +1069,12 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   cleared in the handler's `finally` and past `_REGEN_KEY_TTL_SECONDS`, because
   a run abandoned by a dead process would otherwise hold its key for the life
   of the server. `_REGEN_LOCK`, not either map, is what keeps two pipelines
-  from running. Pinned at `tests/test_api.py` (`TestRegenIdempotencyKey`).
+  from running, and the completed ledger is read again once the lock is held:
+  the read before it cannot be the claim, because a duplicate that arrives
+  while its predecessor is still running sees no entry and reaches the lock
+  only after the predecessor released, and the cooldown cannot catch that
+  window either (it counts from the previous run's START, and a regen runs for
+  minutes). Pinned at `tests/test_api.py` (`TestRegenIdempotencyKey`).
   The other in-flight marker, the `/data`
   single-flight claim in `api._DATA_CACHE_BUILDING`, follows the same rule: an
   in-flight marker whose owner was killed is reclaimed on its deadline

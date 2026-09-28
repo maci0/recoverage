@@ -2387,6 +2387,17 @@ def handle_regen() -> bytes | HTTPResponse:
             Retry_After=str(int(_REGEN_COOLDOWN_SECONDS)),
         )
     try:
+        # Re-read the ledger UNDER the lock, so claiming a key is atomic with
+        # running it.  The checks above ran without it, which leaves one window
+        # open: a duplicate whose predecessor was still running saw neither a
+        # completed nor an in-flight key and reaches this point after the
+        # predecessor released.  The cooldown cannot close it, because it counts
+        # from the previous run's START and a regen runs for minutes, so it has
+        # long expired by the time that run ends.  Without this read, a retry of
+        # a key that already completed starts a second full pipeline.
+        if key and _regen_replayed(key):
+            _log.info("Regen %s already completed — answering the retry without re-running", key)
+            return _json_ok({"ok": True}, Idempotent_Replay="true")
         now = clock.monotonic()
         since = math.inf if _regen_last_attempt is None else now - _regen_last_attempt
         if since < _REGEN_COOLDOWN_SECONDS:

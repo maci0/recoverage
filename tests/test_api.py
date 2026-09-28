@@ -1450,6 +1450,41 @@ class TestRegenIdempotencyKey:
         # it, and a second POST with it would never start a run again.
         assert not api._regen_in_progress("click-1")
 
+    def test_a_duplicate_whose_first_ledger_read_raced_the_completion(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A retry that read the ledger too early must not re-run the pipeline.
+
+        The handler reads the key before taking the lock, so a duplicate whose
+        predecessor was still running sees no ledger entry and arrives after it
+        released.  The cooldown cannot catch it: it counts from the previous
+        run's START, and a regen runs for minutes.  The ledger is read again
+        under the lock, where the claim becomes atomic with the run.
+        """
+        import recoverage.api as api
+
+        runs = self._counting_regen(monkeypatch)
+        assert_regen_accepted(self._post("click-1"))
+        assert len(runs) == 1
+
+        # The duplicate, whose own read of the ledger landed while the
+        # predecessor was still running and so saw nothing.
+        real_replayed = api._regen_replayed
+        reads: list[str] = []
+
+        def replayed(key: str) -> bool:
+            reads.append(key)
+            return False if len(reads) == 1 else real_replayed(key)
+
+        monkeypatch.setattr(api, "_regen_replayed", replayed)
+        api._regen_last_attempt = 0.0
+        status, headers, body = self._post("click-1")
+        assert status.startswith("200")
+        assert headers.get("Idempotent-Replay") == "true"
+        assert json.loads(decode_body(body, headers)) == {"ok": True}
+        assert len(reads) >= 2, "the ledger was read once, so no claim was made under the lock"
+        assert len(runs) == 1
+
     def test_another_key_mid_run_is_still_refused(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The 202 names the run in flight, so a DIFFERENT key keeps the 429.
 

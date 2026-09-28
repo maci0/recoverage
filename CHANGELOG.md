@@ -305,6 +305,15 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   reachable dashboard got one only that machine reaches, and the only clue was
   a refused connection. `serve` and `recoverage config` now warn, beside the
   CORS warnings they already print.
+- **A retry of `POST /api/regen` could run a second full rebuild.** The
+  `Idempotency-Key` ledger was consulted before the regen lock was taken, so a
+  duplicate that arrived while its predecessor was still running saw no entry
+  and reached the pipeline after the predecessor released it. The cooldown
+  could not catch it either: it counts from the previous run's start, and a
+  regen runs for minutes, so it had long expired. The key is now read again
+  under the lock, so claiming it is atomic with the run, and a retry of a
+  completed regenerate is answered with `Idempotent-Replay: true` instead of
+  rebuilding the documents a second time.
 - **`make build` stamped a sdist with the wrong date, or crashed, when
   `SOURCE_DATE_EPOCH` was not plain ASCII digits.** The value was checked with
   `str.isdigit`, which accepts every Unicode decimal digit and every
