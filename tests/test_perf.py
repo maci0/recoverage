@@ -12,8 +12,6 @@ from recoverage import potato as _potato
 
 def test_data_memo_skips_rebuild():
     _api._DATA_CACHE.clear()
-    s, _, _b = wsgi_get("/api/targets/FAKEDLL/data")
-    assert s.startswith("200"), s
     calls = 0
     orig = _api._build_data_raw
 
@@ -22,8 +20,16 @@ def test_data_memo_skips_rebuild():
         calls += 1
         return orig(*a, **k)
 
+    # The cold arm runs under the counter too: a probe that only ever watched
+    # the warm request passes for the same `0` whether the memo answers or the
+    # render path stopped building the payload at all, so the count has to be
+    # shown to move once before it is trusted to stay still.
     _api._build_data_raw = counting  # type: ignore[method-assign]
     try:
+        s, _, _b = wsgi_get("/api/targets/FAKEDLL/data")
+        assert s.startswith("200"), s
+        assert calls == 1, f"the probe never saw a cold build ({calls} calls)"
+        calls = 0
         s2, _, _ = wsgi_get("/api/targets/FAKEDLL/data")
     finally:
         _api._build_data_raw = orig
@@ -72,9 +78,6 @@ def test_function_list_total_memo_serves_the_repeat():
 
 def test_potato_grid_memo_skips_decode():
     _potato._GRID_CACHE.clear()
-    s, h, b = wsgi_get("/potato?target=FAKEDLL&section=.text")
-    assert s.startswith("200"), s
-    body1 = decode_body(b, h)
     calls = 0
     orig = _potato._cell_json
 
@@ -85,8 +88,16 @@ def test_potato_grid_memo_skips_decode():
 
     # The cells come from the frozen snapshot now, so the work a memo miss
     # would repeat is building the grid's cell objects — one call per cell.
+    # The cold render is counted too: a probe that never saw the count move
+    # reads the same `0` whether the memo answers or the render path stopped
+    # asking for cells at all.
     _potato._cell_json = counting  # type: ignore[method-assign]
     try:
+        s, h, b = wsgi_get("/potato?target=FAKEDLL&section=.text")
+        assert s.startswith("200"), s
+        assert calls > 0, "the probe never saw a cold build, so it cannot see a warm one"
+        body1 = decode_body(b, h)
+        calls = 0
         s2, h2, b2 = wsgi_get("/potato?target=FAKEDLL&section=.text")
     finally:
         _potato._cell_json = orig

@@ -46,6 +46,28 @@ def _clean_startup_policy() -> None:
 
 
 @pytest.fixture(autouse=True)
+def _clean_regen_gate() -> None:
+    """Reset the regen gate's process globals before each test.
+
+    `api._regen_last_attempt` is stamped by every accepted POST, and the two
+    idempotency ledgers outlive the request that filed them, so a test that
+    drives `/api/regen` leaves a live cooldown timestamp and whatever keys it
+    used behind it for every test that runs next.  The damage is invisible in
+    file order and fatal in any other: the accepted-path assertions ask for a
+    200 and a surviving timestamp answers 429, and a surviving completed key
+    replays a stubbed run as a real one.  A few classes reset what they touch
+    in their own fixtures; the rest of the file did not, and the suite only
+    stayed green because the next regen test happened to reset the same
+    global before it posted.
+    """
+    from recoverage import api
+
+    api._regen_last_attempt = None
+    api._REGEN_COMPLETED_KEYS.clear()
+    api._REGEN_ACTIVE_KEYS.clear()
+
+
+@pytest.fixture(autouse=True)
 def _clean_derived_caches() -> None:
     """Drop every coverage.db-derived cache before each test.
 
