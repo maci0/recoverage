@@ -3115,6 +3115,76 @@ def _spa_survives_filter(state: str, active: set[str]) -> bool:
     return _filter_keys()[_packed_slots().get(state, 7)] in active
 
 
+# Tailwind's stock steps, in the four scales the token layer replaces. A utility
+# from one of them is a value nobody chose: the same `text-sm` reads 14px here
+# because it happens to coincide with `--text-title` and 12px the day the scale
+# moves, and the same `indigo-500` is a color the phosphor ground has no name
+# for. The token spellings (`rounded-hair`, `text-label`, `bg-panel`) are not in
+# these lists, which is what lets the scan be a plain word-boundary match.
+_STOCK_TAILWIND_UTILITIES = re.compile(
+    r"\b(?:text|bg|border|ring|fill|stroke|outline|decoration|from|to|via)-"
+    r"(?:slate|gray|zinc|neutral|stone|red|orange|amber|yellow|lime|green|emerald"
+    r"|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose)-"
+    r"(?:50|[1-9]00)\b"
+    r"|\btext-(?:xs|sm|base|lg|xl|[2-9]xl)\b"
+    r"|\brounded-(?:sm|md|lg|xl|[2-3]xl|full)\b"
+    r"|\bshadow-(?:sm|md|lg|xl|[2-9]xl|inner)\b"
+)
+
+# The three `bg-*` names that are not colors and so are not tokens: they set
+# the alpha channel, not a hue, and the token layer publishes no value for them.
+_BUILTIN_UTILITY_NAMES = frozenset({"transparent", "clip-path", "clip-border"})
+
+
+class TestSpaCarriesNoStockTailwindUtilities:
+    """Every color, size, radius and shadow the dashboard paints is a token.
+
+    The identity here is a phosphor terminal, and it is written down: one
+    accent hue, one neutral family, square corners, four type rungs. A stock
+    utility is the one thing that reintroduces the framework's palette beside
+    it, and it does so invisibly, because `indigo-500` beside `bg-panel` is a
+    correct-looking Tailwind class rather than a visible bug. One such utility
+    is a choice; a page of them is the default look the tokens exist to replace,
+    so the rule is held here rather than left to review.
+    """
+
+    @staticmethod
+    def _sources() -> list[Path]:
+        return sorted(p for p in WEB_APP.rglob("*") if p.suffix in (".ts", ".tsx"))
+
+    def test_every_frontend_source_is_scanned(self) -> None:
+        assert len(self._sources()) >= 10, "the scan found fewer sources than the tree ships"
+
+    def test_no_source_uses_a_stock_utility(self) -> None:
+        found: list[str] = []
+        for path in self._sources():
+            found.extend(
+                f"{path.relative_to(REPO_ROOT)}:{number}: {match.group(0)}"
+                for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+                for match in _STOCK_TAILWIND_UTILITIES.finditer(line)
+            )
+        message = "stock Tailwind utilities outside the token layer:\n  " + "\n  ".join(found)
+        assert found == [], message
+
+    def test_every_color_utility_names_a_published_token(self) -> None:
+        """A color a component names has to exist, or the utility is a no-op.
+
+        Tailwind 4 resolves a class at build time and silently drops one whose
+        theme entry is absent, so a misspelled `bg-pannel` compiles away and
+        the panel paints the ground behind it. The scan above cannot see that,
+        because the class is not a stock utility: it is a typo in a token name.
+        """
+        published = set(re.findall(r"--color-([a-z0-9-]+):", _web("index.css")))
+        missing: list[str] = []
+        for path in self._sources():
+            for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                for name in re.findall(r"\b(?:bg|fill|stroke)-([a-z][a-z0-9-]*)\b", line):
+                    if name in _BUILTIN_UTILITY_NAMES or name in published:
+                        continue
+                    missing.append(f"{path.relative_to(REPO_ROOT)}:{number}: {name}")
+        assert missing == [], "color utilities no token publishes:\n  " + "\n  ".join(missing)
+
+
 class TestSpaStateVocabulary:
     """The map's state table must cover every state rebrew can write.
 

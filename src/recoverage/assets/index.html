@@ -3,6 +3,12 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <!-- The product's default ground is the dark one, and the toggle is a
+         second. The UA paints what the token layer does not reach: the canvas
+         past a short document, the overscroll glow, and the control faces it
+         draws itself. Without this the browser picks its own light default and
+         a dark dashboard sits on a white strip. -->
+    <meta name="color-scheme" content="dark light">
     <title>ReCoverage</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="/print.css" media="print">

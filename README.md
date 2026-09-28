@@ -34,9 +34,9 @@ block that covers it.
 
 ## Screenshots
 
-### Main Dashboard
+### Dark Mode (the default)
 
-![Main dashboard — coverage grid with section tabs and filter buttons](https://raw.githubusercontent.com/relumea/recoverage/main/docs/recoverage_main.png)
+![Main dashboard, the coverage grid with section tabs and filter buttons](https://raw.githubusercontent.com/relumea/recoverage/main/docs/recoverage_main.png)
 
 ### Function Detail
 
@@ -48,10 +48,10 @@ block that covers it.
 
 ### Potato Mode
 
-![Potato Mode — retro pure-HTML table view](https://raw.githubusercontent.com/relumea/recoverage/main/docs/recoverage_potato.png)
+![Potato Mode, the retro pure-HTML table view](https://raw.githubusercontent.com/relumea/recoverage/main/docs/recoverage_potato.png)
 
 Potato Mode is a **zero-JavaScript**, server-side rendered HTML fallback.
-Every view is a plain HTML table — no CSS, no JS — so it works on
+Every view is a plain HTML table (no CSS, no JS) so it works on
 low-spec machines, restricted browsers, or anywhere you just want a quick
 glance without loading the full SPA.
 
@@ -125,7 +125,7 @@ recoverage
 > [!NOTE]
 > The server resolves the coverage **directory** from the **current working
 > directory**: `[project] db_dir` in `rebrew-project.toml` when set, falling back
-> to `<root>/db` — so run it from your project root. A `rebrew-project.toml` that
+> to `<root>/db`, so run it from your project root. A `rebrew-project.toml` that
 > is present but not valid TOML is an error, not a fallback.
 > `RECOVERAGE_DB` still selects an explicit coverage directory.
 >
@@ -339,7 +339,7 @@ not `json` is a usage error (exit 2), not a silent winner.
 
 ### `recoverage check`
 
-CI gate — exits non-zero if coverage is below a threshold.  Sections the
+CI gate, exits non-zero if coverage is below a threshold.  Sections the
 grid never records matches for (e.g. `.bss`/`.data` when only `.text`
 matches are tracked) are skipped, not failed.
 
@@ -576,7 +576,7 @@ and `Cache-Control: no-cache,
 must-revalidate`. Send `If-None-Match` and unchanged documents answer
 **304** with no body. `/api/health` is `no-store` instead: it
 reports the server's own state, not the coverage documents'.
-`/api/targets` revalidates as well — its tag names both the coverage snapshot
+`/api/targets` revalidates as well: its tag names both the coverage snapshot
 and the project config's stat, because the list merges the two, and it falls
 back to `no-store` when the coverage directory cannot be read, since there is
 then nothing to revalidate against.
@@ -618,7 +618,7 @@ body key.
 
 ## Architecture & How it works
 
-**recoverage** is designed as a standalone **consumer** of the data that [rebrew](https://github.com/maci0/rebrew) produces — the two packages are intentionally decoupled.
+**recoverage** is designed as a standalone **consumer** of the data that [rebrew](https://github.com/maci0/rebrew) produces. The two packages are intentionally decoupled.
 
 ```text
 rebrew build-db (catalog in-process)  recoverage (Bottle)

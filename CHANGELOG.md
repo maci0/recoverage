@@ -323,6 +323,17 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **A refused `POST /api/regen` raised `NameError` and answered 500.** Every
+  arm of the endpoint's security gate (a peer that is not loopback, an `Origin`
+  that is not this dashboard, a failed token) routes through the one helper
+  that logs the refusal, counts it and answers the 403, and that helper named
+  a peer accessor that does not exist. The refusal therefore logged nothing,
+  counted nothing and escaped the handler as an unhandled error, which is the
+  opposite of what it was written to do.
+- `src/recoverage/assets/.scratch_head.js`, a minified scratch copy of the
+  bundle, was committed into the directory `make web-build` writes and
+  `pyproject.toml` packages. It was not in `BUNDLE_ASSETS`, so `make build` and
+  `make web-lint` both failed on it.
 - **The deferred browser opener slept on the wall clock, not on `clock`.**
   `serve --open` probes the listener before it opens a tab, and the loop read
   its deadline through `recoverage.clock` but parked between attempts on

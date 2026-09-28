@@ -413,7 +413,7 @@ export function CoveragePanel({
               copy buttons out of the panel unless the title may break and the
               buttons are the part that stays whole. */}
           <h2
-            className="panel-title wrap-anywhere min-w-0 font-mono text-sm font-bold"
+            className="panel-title wrap-anywhere min-w-0 font-mono text-title font-bold"
             id="panel-title"
             dir="auto"
           >
