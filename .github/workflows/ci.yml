@@ -204,6 +204,12 @@ jobs:
         with:
           # The single interpreter pin, the same file uv builds the venv from.
           python-version-file: .python-version
+      # `make build` runs the frontend bundler before it packages, so this job
+      # needs bun: the dashboard ships built assets, and rebuilding them in
+      # both trees is what proves the committed bundle matches its sources.
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
       # The sibling rebrew checkout that [tool.uv.sources] resolves, fetched
       # at the pin the clone script owns. The composite action is the one
       # mechanism a job may use: it wraps that script and carries no pin of
@@ -212,7 +218,7 @@ jobs:
       - uses: ./.github/actions/sibling-rebrew
       - run: uv sync --locked --extra dev
       # Nothing else in this workflow builds the artifact, so a wheel missing
-      # a vendored asset, a backend that stopped stamping from
+      # an asset, a backend that stopped stamping from
       # SOURCE_DATE_EPOCH, or a normalizer that stopped removing the sdist's
       # uid and mtimes would ship unnoticed. Build twice and diff the hashes:
       # the second build runs in a copy of the tree under a different path,

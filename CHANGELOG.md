@@ -5,6 +5,43 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [4.0.0] - 2026-09-28
+
+### Breaking
+
+- **The dashboard frontend is a Preact + Tailwind bundle.** The VanJS SPA is
+  gone: `app.js` and `detail.js` are replaced by one built bundle, `style.css`
+  is compiled by Tailwind, and the vendored `van.min.js`, `hljs*.js` and
+  `hljs.css` assets are no longer shipped. Anyone serving or caching those URLs
+  by name has to update: only `/app.js`, `/style.css`, `/print.css` and
+  `/favicon.svg` are still answered from the assets directory.
+- **The inlined shell is ~45 KB brotli, not ~14 KB.** It cannot fit RFC 6928's
+  initial congestion window, so `ui._TCP_CWND_BUDGET` is now a 90 KB ceiling
+  with headroom over the measurement rather than the protocol constant. The
+  shell still paints without a render-blocking subresource request, and
+  highlight.js is inside the bundle instead of being fetched on first use.
+- **`/` carries `<div id="root">` and no static markup.** The shell markup a
+  scraper or a stylesheet hook matched before is gone with the script that built
+  it.
+
+### Changed
+
+- The dashboard is built from `web/` with Vite, Preact (through
+  `preact/compat`), TypeScript, Tailwind CSS 4 and shadcn/ui primitives, all
+  themed from the same token layer the VanJS stylesheet carried. `make web-build` produces
+  `src/recoverage/assets/app.js` and `style.css`; `make build` runs it first,
+  and the CI build job rebuilds in both trees to prove the committed bundle
+  matches its sources.
+- Syntax highlighting is compiled in from the `highlight.js` npm package (core
+  plus the `c` and `x86asm` grammars and the dashboard's own `hex` language)
+  instead of being fetched as three separate scripts, so the pane no longer
+  has a state where it renders unhighlighted.
+- `NOTICE` credits the libraries compiled into the bundle.
+
+### Removed
+
+- VanJS, the deferred `detail.js` split, and the vendored Highlight.js blobs.
+
 ## [3.0.0] - 2026-09-28
 
 ### Added

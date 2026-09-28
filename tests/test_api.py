@@ -4080,20 +4080,22 @@ class TestIndexWarmup:
             len(body) for _k, (body, _e, _t) in ui.CACHED_INDEX_COMPRESSED.items()
         )
 
-    def test_the_shipped_shell_fits_the_congestion_window(self) -> None:
-        """The shell a browser receives must fit the initial congestion window.
+    def test_the_shipped_shell_fits_the_payload_budget(self) -> None:
+        """The shell a browser receives must fit `ui._TCP_CWND_BUDGET`.
 
         Scoped to clients that accept brotli, because brotli is the smallest
         encoding here: zstd 19 and gzip 9 are both larger, so no preference
         order brings them under a budget brotli misses.  Every browser with
         zstd also has brotli, so this is the set that ships.
 
-        The window is a protocol constant (RFC 6928: 10 x 1460), not a
-        tunable, and brotli q11 is the highest quality the library offers, so
-        the only way to hold this line is to move deferrable work into
-        detail.js.  That is a ratchet only while something fails when it is
-        crossed: _check_payload_budget WARNS (the next test), which is one log
-        line nobody reads, and a warning is not a gate.  This is the gate.
+        The budget no longer has a protocol constant behind it: the frontend is
+        one React + Tailwind bundle, measured at ~96 KB brotli, which cannot fit
+        RFC 6928's initial window.  The number in `ui.py` is a checked ceiling
+        with headroom over that measurement, so a dependency that doubles the
+        bundle fails here instead of shipping.  That is a ratchet only while
+        something fails when it is crossed: _check_payload_budget WARNS (the
+        next test), which is one log line nobody reads, and a warning is not a
+        gate.  This is the gate.
         """
         import recoverage.ui as ui
 
@@ -4108,8 +4110,8 @@ class TestIndexWarmup:
         smallest = min(len(b) for b in brotli_bodies)
         assert smallest <= ui._TCP_CWND_BUDGET, (
             f"the inlined shell is {smallest} B, {smallest - ui._TCP_CWND_BUDGET} B over the "
-            f"{ui._TCP_CWND_BUDGET} B window; move deferrable work into detail.js "
-            "(see docs/DESIGN_PRINCIPLES.md, 'First Draw in First TCP Packet')"
+            f"{ui._TCP_CWND_BUDGET} B budget; check what the bundle grew by "
+            "(see docs/DESIGN.md, 'First Draw in First TCP Packet')"
         )
 
     def test_the_ratchet_reports_the_overage_of_the_served_body(
@@ -4141,7 +4143,7 @@ class TestIndexWarmup:
         # measured exactly as _check_payload_budget measures the real one: the
         # smallest of the three static encodings.  Random bytes, not a run of
         # one character, which every codec would compress back to nothing.
-        inflated = ui.CACHED_INDEX_PAYLOAD + os.urandom(2000)
+        inflated = ui.CACHED_INDEX_PAYLOAD + os.urandom(120_000)
         best = min(
             len(gzip.compress(inflated, compresslevel=GZIP_STATIC_LEVEL)),
             len(brotli.compress(inflated, quality=BROTLI_STATIC_QUALITY)),
@@ -4153,7 +4155,7 @@ class TestIndexWarmup:
         with caplog.at_level("WARNING", logger="recoverage"):
             caplog.clear()
             ui._check_payload_budget(inflated)
-        assert caplog.records, f"the payload is {over} bytes over the window and said nothing"
+        assert caplog.records, f"the payload is {over} bytes over the budget and said nothing"
         assert str(over) in caplog.text
         assert str(ui._TCP_CWND_BUDGET) in caplog.text
 

@@ -757,22 +757,45 @@ class TestBundledThirdPartyAssets:
         )
         assert (_ROOT / "NOTICE").is_file()
 
-    def test_every_bundled_third_party_blob_is_credited(self) -> None:
-        """Every vendored asset is named in NOTICE with a license and a source.
+    #: Every third-party library compiled into the shipped bundle.  The bundle is
+    #: one generated file (`src/recoverage/assets/app.js`, plus the compiled
+    #: `style.css`), so a per-file grant cannot express what is inside it: this
+    #: list is the boundary, and the check below requires NOTICE to credit each
+    #: entry with a license and a source.
+    BUNDLED_LIBRARIES = (
+        "Preact (and preact/compat)",
+        "highlight.js",
+        "Tailwind CSS",
+        "clsx, tailwind-merge, class-variance-authority, lucide-react",
+    )
 
-        The vendored blobs are the minified ones: first-party sources (app.js,
-        detail.js) are not minified, so the suffix is the boundary between
-        "written here" and "copied from somewhere".
+    def test_every_bundled_library_is_credited(self) -> None:
+        """NOTICE must name every third-party library the bundle carries.
+
+        The dashboard ships built assets, so the frontend's dependencies are
+        vendored into the wheel in effect: a library compiled into `app.js` with
+        no grant beside it is code distributed without its license. The list is
+        checked entry by entry rather than globbed, because there is no file
+        name left to glob on.
         """
         notice = (_ROOT / "NOTICE").read_text(encoding="utf-8")
-        bundled = sorted((_ROOT / "src" / "recoverage" / "assets").glob("*.min.js"))
-        assert bundled, "no vendored assets found; the glob this check relies on has moved"
-        for blob in bundled:
-            rel = blob.relative_to(_ROOT).as_posix()
-            entry = re.search(rf"^.*{re.escape(rel)}.*?$\n\n", notice, re.MULTILINE | re.DOTALL)
-            assert entry, f"NOTICE does not credit {rel}, which ships in the wheel"
-            assert "License:" in entry.group(0), f"NOTICE names {rel} without its license"
-            assert "Upstream:" in entry.group(0), f"NOTICE names {rel} without its source"
+        for library in self.BUNDLED_LIBRARIES:
+            entry = re.search(rf"^{re.escape(library)}.*\n(?:.*\n)*?\n", notice, re.MULTILINE)
+            assert entry, f"NOTICE does not credit {library}, which the bundle carries"
+            assert "License:" in entry.group(0), f"NOTICE names {library} without its license"
+            assert "Upstream:" in entry.group(0), f"NOTICE names {library} without its source"
+
+    def test_the_bundled_libraries_are_the_frontend_dependencies(self) -> None:
+        """The credit list must cover what package.json actually ships.
+
+        A dependency added to the bundle without joining this list would ship
+        uncredited again, which is the failure the list exists to catch.
+        """
+        manifest = json.loads((_ROOT / "package.json").read_text(encoding="utf-8"))
+        bundled = {"preact", "highlight.js", "tailwindcss"}
+        assert bundled <= set(manifest["devDependencies"]), (
+            "a bundled library left package.json; update BUNDLED_LIBRARIES with it"
+        )
 
 
 class TestVendoredLintPlugin:

@@ -1,0 +1,436 @@
+/* The one token layer for the recoverage dashboard.
+ *
+ * Tailwind 4 entry. The `:root` / `.light-mode` blocks are the palette the
+ * VanJS stylesheet carried, kept name for name so the canvas map, the badges
+ * and the Potato Mode pages keep reading the same values. `@theme inline` maps
+ * them onto Tailwind's own namespaces, so a utility reads a token rather than a
+ * literal and a theme switch stays a token swap.
+ *
+ * `.light-mode` is applied to `<body>`, so the variant matches a descendant of
+ * the class rather than the class itself. */
+
+@import "tailwindcss";
+
+@custom-variant light (&:is(.light-mode *));
+
+:root {
+  --bg: #0f1216;
+  --panel: #151a21;
+  --muted: #8b949e;
+  --text: #e7edf4;
+  --border: rgba(6, 182, 212, 0.15);
+  --none: rgba(255, 255, 255, 0.05);
+  --c: #06b6d4;
+  --glow: rgba(6, 182, 212, 0.35);
+  --bg-grad-1: rgba(42, 111, 219, 0.22);
+  --bg-grad-2: rgba(31, 191, 117, 0.18);
+  --text-shadow: 0 0 2px rgba(6, 182, 212, 0.3), 0 0 8px rgba(6, 182, 212, 0.1);
+  --c-shadow: 0 0 8px rgba(6, 182, 212, 0.25), inset 0 0 8px rgba(6, 182, 212, 0.08);
+  --c-shadow-active: 0 0 10px rgba(42, 111, 219, 0.3);
+  --btn-bg: rgba(255, 255, 255, 0.04);
+  --btn-bg-hover: rgba(255, 255, 255, 0.07);
+  --btn-active-bg: rgba(42, 111, 219, 0.35);
+  --btn-active-border: rgba(42, 111, 219, 0.5);
+  --btn-active-text: var(--text);
+  --code-bg: rgba(0, 0, 0, 0.26);
+  --grid-bg: rgba(0, 0, 0, 0.22);
+  --meta-item-bg: rgba(255, 255, 255, 0.03);
+  --meta-item-border: rgba(255, 255, 255, 0.05);
+  /* Opaque, like every other surface in this theme: the topbar was the one
+   * translucent panel left, and the blur behind it was invisible over a
+   * near-black ground while repainting on every scroll frame. */
+  --topbar-bg: var(--panel);
+  --modal-header-bg: rgba(15, 18, 22, 0.5);
+  --scroll-track: var(--bg);
+  --scroll-thumb: var(--border);
+  --scroll-thumb-hover: var(--muted);
+  --scroll-border: var(--bg);
+  --overlay-bg: var(--panel);
+  --modal-backdrop: rgba(0, 0, 0, 0.85);
+  --inspector-bg: rgba(0, 0, 0, 0.2);
+  --bar-border: rgba(255, 255, 255, 0.1);
+
+  /* Height of the sticky topbar, measured at runtime so the sticky panel
+   * header parks below it instead of underneath it. */
+  --topbar-h: 0px;
+
+  --exact-bg: rgba(16, 185, 129, 0.75);
+  --reloc-bg: rgba(2, 132, 199, 0.65);
+  --near-match-bg: rgba(255, 200, 0, 0.65);
+  --stub-bg: rgba(255, 0, 0, 0.65);
+  --padding-bg: rgba(200, 200, 220, 0.55);
+  /* Post-verify semantic promotion: a section rebrew proved equivalent, which
+   * is not the same claim as a byte-identical match. */
+  --proven-bg: rgba(6, 182, 212, 0.65);
+  /* Tooling-failure and unclassified-annotation states (compile_error,
+   * extract_error, invalid_va, missing_file, missing_size, skip, unknown,
+   * drift, unchecked). Distinct from --none so a cell the pipeline could not
+   * classify is not read as a byte nobody has looked at. */
+  --other-bg: rgba(168, 85, 247, 0.55);
+
+  /* Badge surfaces carry the same status hues as the grid cells, at badge
+   * alpha. Each text token below clears 4.5:1 on its own tinted fill. */
+  --badge-exact-bg: rgba(16, 185, 129, 0.2);
+  --badge-exact-border: rgba(16, 185, 129, 0.4);
+  --badge-reloc-bg: rgba(14, 165, 233, 0.2);
+  --badge-reloc-border: rgba(14, 165, 233, 0.4);
+  --badge-near-bg: rgba(245, 158, 11, 0.2);
+  --badge-near-border: rgba(245, 158, 11, 0.4);
+  --badge-stub-bg: rgba(239, 68, 68, 0.2);
+  --badge-stub-border: rgba(239, 68, 68, 0.4);
+
+  /* Accent tokens — section logos, links, badges, delta */
+  --accent-c-source: #3b82f6;
+  --accent-asm: #ef4444;
+  --accent-data: #a855f7;
+  --accent-bytes: #10b981;
+  --link: #7dd3fc;
+  --link-hover: #bae6fd;
+  --link-hover-glow: rgba(125, 211, 252, 0.5);
+  --delta: #f59e0b;
+  --badge-exact-text: #10b981;
+  --badge-reloc-text: #7dd3fc;
+  --badge-near-text: #f59e0b;
+  --badge-stub-text: #f87171;
+  --asm-link-underline: rgba(255, 255, 255, 0.5);
+  --asm-link-hover-bg: rgba(31, 191, 117, 0.1);
+
+  --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
+  /* Two faces, chosen rather than accumulated: the terminal face for every
+   * name, address, heading and disassembly, the system sans for prose and
+   * control labels. */
+  --font-ui: system-ui, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  /* A phosphor terminal has square corners: a rounded card reads as a web
+   * dashboard, not as the instrument. Three steps, not a scale nobody chose:
+   * hairline (cells, links, chips), control (buttons, fields, frames), pill
+   * (progress bar, badges). */
+  --radius-hair: 2px;
+  --radius: 4px;
+  --radius-pill: 6px;
+}
+
+.light-mode {
+  /* The light ground is the same neutral family as the dark one, a shade
+   * short of the accent rather than a stock blue-gray. Every pairing below
+   * clears 4.5:1 at the margin the raw grays had, and --muted gains headroom. */
+  --bg: #c3ccd0;
+  --panel: #dbe3e5;
+  --muted: #3c4f57;
+  --text: #0c1417;
+  --border: rgba(9, 102, 120, 0.28);
+  --none: rgba(0, 0, 0, 0.08);
+  /* #12566c is 6.27:1 on --panel and 5.00:1 on --bg. */
+  --c: #12566c;
+  --bg-grad-1: rgba(42, 111, 219, 0.1);
+  --bg-grad-2: rgba(31, 191, 117, 0.1);
+  /* No phosphor bloom: the glow is the dark ground's, where light has
+   * somewhere to travel. */
+  --text-shadow: none;
+  --c-shadow: 0 0 0 1px rgba(9, 102, 120, 0.35);
+  --c-shadow-active: 0 0 0 1px rgba(9, 102, 120, 0.6);
+  --btn-bg: var(--panel);
+  --btn-bg-hover: rgba(0, 0, 0, 0.04);
+  --btn-active-bg: rgba(42, 111, 219, 0.1);
+  --btn-active-border: rgba(42, 111, 219, 0.3);
+  --btn-active-text: #1d4ed8;
+  --code-bg: #f2f6f7;
+  --grid-bg: rgba(0, 0, 0, 0.03);
+  --meta-item-bg: rgba(0, 0, 0, 0.02);
+  --meta-item-border: rgba(9, 102, 120, 0.18);
+  --topbar-bg: var(--panel);
+  --modal-header-bg: var(--panel);
+  --scroll-track: rgba(0, 0, 0, 0.05);
+  --scroll-thumb: rgba(9, 102, 120, 0.3);
+  --scroll-thumb-hover: rgba(9, 102, 120, 0.5);
+  --scroll-border: var(--bg);
+  --overlay-bg: var(--panel);
+  --modal-backdrop: rgba(12, 20, 23, 0.6);
+  --inspector-bg: rgba(0, 0, 0, 0.04);
+  --bar-border: rgba(9, 102, 120, 0.35);
+
+  --padding-bg: rgba(60, 60, 90, 0.55);
+  --proven-bg: rgba(6, 182, 212, 0.65);
+
+  /* Text-bearing accents are tuned to clear 4.5:1 against the surface they sit
+   * on (--panel for badges and links, the tinted badge background for status
+   * text). */
+  --accent-c-source: #2563eb;
+  --accent-asm: #dc2626;
+  --accent-data: #9333ea;
+  --accent-bytes: #059669;
+  --link: #075985;
+  --link-hover: #0c4a6e;
+  --link-hover-glow: rgba(2, 132, 199, 0.3);
+  --delta: #92400e;
+  --badge-exact-text: #14532d;
+  --badge-reloc-text: #075985;
+  --badge-near-text: #854d0e;
+  --badge-stub-text: #991b1b;
+  --asm-link-underline: rgba(0, 0, 0, 0.3);
+  --asm-link-hover-bg: rgba(2, 132, 199, 0.1);
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-panel: var(--panel);
+  --color-text: var(--text);
+  --color-muted: var(--muted);
+  --color-line: var(--border);
+  --color-accent: var(--c);
+  --color-link: var(--link);
+  --color-link-hover: var(--link-hover);
+  --color-delta: var(--delta);
+  --color-none: var(--none);
+
+  /* Cell fills: the map, the legend and the swatches read one name each. */
+  --color-exact: var(--exact-bg);
+  --color-reloc: var(--reloc-bg);
+  --color-near-match: var(--near-match-bg);
+  --color-stub: var(--stub-bg);
+  --color-padding: var(--padding-bg);
+  --color-proven: var(--proven-bg);
+  --color-other: var(--other-bg);
+
+  --color-badge-exact-bg: var(--badge-exact-bg);
+  --color-badge-exact-border: var(--badge-exact-border);
+  --color-badge-exact-text: var(--badge-exact-text);
+  --color-badge-reloc-bg: var(--badge-reloc-bg);
+  --color-badge-reloc-border: var(--badge-reloc-border);
+  --color-badge-reloc-text: var(--badge-reloc-text);
+  --color-badge-near-bg: var(--badge-near-bg);
+  --color-badge-near-border: var(--badge-near-border);
+  --color-badge-near-text: var(--badge-near-text);
+  --color-badge-stub-bg: var(--badge-stub-bg);
+  --color-badge-stub-border: var(--badge-stub-border);
+  --color-badge-stub-text: var(--badge-stub-text);
+
+  --color-btn: var(--btn-bg);
+  --color-btn-hover: var(--btn-bg-hover);
+  --color-btn-active: var(--btn-active-bg);
+  --color-btn-active-border: var(--btn-active-border);
+  --color-btn-active-text: var(--btn-active-text);
+  --color-code: var(--code-bg);
+  --color-grid: var(--grid-bg);
+  --color-meta: var(--meta-item-bg);
+  --color-meta-border: var(--meta-item-border);
+  --color-topbar: var(--topbar-bg);
+  --color-modal-header: var(--modal-header-bg);
+  --color-overlay: var(--overlay-bg);
+  --color-inspector: var(--inspector-bg);
+  --color-bar-border: var(--bar-border);
+  --color-scroll-track: var(--scroll-track);
+  --color-scroll-thumb: var(--scroll-thumb);
+
+  --color-c-source: var(--accent-c-source);
+  --color-asm: var(--accent-asm);
+  --color-data: var(--accent-data);
+  --color-bytes: var(--accent-bytes);
+
+  --font-sans: var(--font-ui);
+  --font-mono: var(--mono);
+
+  --radius-hair: var(--radius-hair);
+  --radius-control: var(--radius);
+  --radius-pill: var(--radius-pill);
+
+  --shadow-glow: var(--c-shadow);
+  --shadow-glow-active: var(--c-shadow-active);
+  --shadow-text: var(--text-shadow);
+}
+
+/* A value with no break opportunity (a hash, a path, a signature, a base
+ * address) otherwise pushes a panel wider than a phone. */
+@utility wrap-anywhere {
+  overflow-wrap: anywhere;
+}
+
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background-color: var(--bg);
+    background-image: radial-gradient(1200px 600px at 25% -10%, var(--bg-grad-1), transparent 60%),
+      radial-gradient(900px 500px at 85% 0%, var(--bg-grad-2), transparent 55%);
+    background-repeat: no-repeat;
+    color: var(--text);
+    text-shadow: var(--text-shadow);
+    font-family: var(--font-ui);
+    overflow-x: clip;
+    overflow-y: scroll;
+    transition: background-color 0.3s ease, color 0.3s ease;
+  }
+
+  a {
+    color: var(--link);
+  }
+
+  a:hover {
+    color: var(--link-hover);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--c);
+    outline-offset: 2px;
+  }
+}
+
+/* highlight.js token colours.
+ *
+ * The theme the vendored `hljs.css` carried, with its values kept: a status hue
+ * is tuned as a translucent cell fill, and at that value on a dark code ground
+ * it does not clear 4.5:1 as 12px text, so the four exceptions are lightened
+ * steps of the hue they stand for. Everything else reads the token layer, so a
+ * palette change moves the code panes with it. */
+@layer components {
+  :root {
+    --hljs-bg: transparent;
+    --hljs-color: var(--text);
+    --hljs-keyword: var(--badge-stub-text);
+    --hljs-title: #d8b4fe;
+    --hljs-attr: var(--link);
+    --hljs-string: #fcd34d;
+    --hljs-symbol: #5eead4;
+    --hljs-comment: var(--muted);
+    --hljs-name: #6ee7b7;
+    --hljs-section: #67e8f9;
+    --hljs-bullet: #fcd34d;
+    --hljs-addition-color: #6ee7b7;
+    --hljs-addition-bg: #0d3a26;
+    --hljs-deletion-color: #fecaca;
+    --hljs-deletion-bg: #45161a;
+  }
+
+  .light-mode {
+    --hljs-color: var(--text);
+    --hljs-keyword: var(--badge-stub-text);
+    --hljs-title: #6d28d9;
+    --hljs-attr: var(--link);
+    --hljs-string: var(--badge-near-text);
+    --hljs-symbol: #0f766e;
+    --hljs-comment: var(--muted);
+    --hljs-name: var(--badge-exact-text);
+    --hljs-section: var(--c);
+    --hljs-bullet: var(--badge-near-text);
+    --hljs-addition-color: var(--badge-exact-text);
+    --hljs-addition-bg: #e8f8ef;
+    --hljs-deletion-color: #7f1d1d;
+    --hljs-deletion-bg: #fdeaea;
+  }
+
+  .hljs {
+    color: var(--hljs-color);
+    background: var(--hljs-bg);
+  }
+
+  .hljs-doctag,
+  .hljs-keyword,
+  .hljs-meta .hljs-keyword,
+  .hljs-template-tag,
+  .hljs-template-variable,
+  .hljs-type,
+  .hljs-variable.language_ {
+    color: var(--hljs-keyword);
+  }
+
+  .hljs-title,
+  .hljs-title.class_,
+  .hljs-title.class_.inherited__,
+  .hljs-title.function_ {
+    color: var(--hljs-title);
+  }
+
+  .hljs-attr,
+  .hljs-attribute,
+  .hljs-literal,
+  .hljs-meta,
+  .hljs-number,
+  .hljs-operator,
+  .hljs-selector-attr,
+  .hljs-selector-class,
+  .hljs-selector-id,
+  .hljs-variable {
+    color: var(--hljs-attr);
+  }
+
+  .hljs-meta .hljs-string,
+  .hljs-regexp,
+  .hljs-string {
+    color: var(--hljs-string);
+  }
+
+  .hljs-built_in,
+  .hljs-symbol {
+    color: var(--hljs-symbol);
+  }
+
+  .hljs-code,
+  .hljs-comment,
+  .hljs-formula {
+    color: var(--hljs-comment);
+  }
+
+  .hljs-name,
+  .hljs-quote,
+  .hljs-selector-pseudo,
+  .hljs-selector-tag {
+    color: var(--hljs-name);
+  }
+
+  .hljs-subst {
+    color: var(--hljs-color);
+  }
+
+  .hljs-section {
+    color: var(--hljs-section);
+    font-weight: 700;
+  }
+
+  .hljs-bullet {
+    color: var(--hljs-bullet);
+  }
+
+  .hljs-emphasis {
+    color: var(--hljs-color);
+    font-style: italic;
+  }
+
+  .hljs-strong {
+    color: var(--hljs-color);
+    font-weight: 700;
+  }
+
+  .hljs-addition {
+    color: var(--hljs-addition-color);
+    background-color: var(--hljs-addition-bg);
+  }
+
+  .hljs-deletion {
+    color: var(--hljs-deletion-color);
+    background-color: var(--hljs-deletion-bg);
+  }
+
+  /* An address inside a disassembly line is a jump target. */
+  .asm-link {
+    color: inherit;
+    text-decoration: underline;
+    text-decoration-color: var(--asm-link-underline);
+    text-underline-offset: 2px;
+  }
+
+  .asm-link:hover {
+    background: var(--asm-link-hover-bg);
+  }
+
+  /* Every scrolling region gets the thin scrollbar the frame's tokens name
+   * instead of the platform default. */
+  pre,
+  .modal-body {
+    scrollbar-width: thin;
+    scrollbar-color: var(--scroll-thumb) transparent;
+  }
+}

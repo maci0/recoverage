@@ -1,0 +1,588 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from "preact/compat";
+
+import type { ComponentChildren, TargetedKeyboardEvent } from "preact";
+
+import { fetchTargets, type Section, type TargetInfo } from "@/api";
+import { CoverageMap } from "@/components/CoverageMap";
+import { CoveragePanel } from "@/components/CoveragePanel";
+import { Button } from "@/components/ui/button";
+import { LEGEND, PALETTE_VARS } from "@/grid/pack";
+import { useCoverage, type Coverage } from "@/hooks/useCoverage";
+import { useLiveReload } from "@/hooks/useLiveReload";
+import { originalDllPath, useOriginalBinary } from "@/hooks/useOriginalBinary";
+import { cellIndexForVa, useSelection } from "@/hooks/useSelection";
+import { MSG, hex, sameOriginPath, toVa } from "@/lib/format";
+import { readStored, writeStored } from "@/lib/storage";
+
+/** The dashboard shell: the document, the topbar's controls, and the map.
+ *
+ * The query string is the dashboard's state — `target`, `section`, `q`,
+ * `filter` — so a link to a search or a section is shareable and a reload lands
+ * where it left. The panel beside the map is the selected block's detail. */
+
+const TARGET_KEY = "recoverage_target";
+const THEME_KEY = "recoverage_theme";
+const NAV_NOTICE_MS = 4000;
+
+/** The filters the toolbar offers. A state the grid can paint but no button can
+ * isolate is unreachable by filter, so this list covers every palette slot. */
+const FILTERS: Array<{ key: string; label: string; aria: string; title: string }> = [
+  { key: "all", label: "All", aria: "Filter all", title: "Show all statuses" },
+  { key: "exact", label: "E", aria: "Filter exact", title: "Exact match" },
+  { key: "reloc", label: "R", aria: "Filter reloc", title: "Reloc match" },
+  { key: "near_match", label: "M", aria: "Filter near-match", title: "Near-match" },
+  { key: "stub", label: "S", aria: "Filter stub", title: "Stub" },
+  { key: "padding", label: "P", aria: "Filter padding", title: "Padding" },
+  { key: "proven", label: "V", aria: "Filter proven", title: "Proven (verified equivalent)" },
+  {
+    key: "problem",
+    label: "X",
+    aria: "Filter problem",
+    title: "Problem (build or classification failure)",
+  },
+];
+
+/** Sections in PE load order (ascending VA), which puts `.text` first instead
+ * of leaving the section that carries the work at the end of an alphabetical
+ * row. Sections without a VA sort last, keeping their relative order. */
+function sectionNames(sections: Record<string, { va?: number }>): Array<string> {
+  return Object.keys(sections).toSorted(
+    (left, right) => (sections[left]?.va ?? 1e18) - (sections[right]?.va ?? 1e18),
+  );
+}
+
+function initialTheme(): "dark" | "light" {
+  const saved = readStored(THEME_KEY);
+  if (saved === "light" || saved === "dark") {
+    return saved;
+  }
+  return window.matchMedia?.("(prefers-color-scheme: light)").matches === true ? "light" : "dark";
+}
+
+export function App() {
+  const params = useMemo(() => new URLSearchParams(window.location.search), []);
+  const [targets, setTargets] = useState<Array<TargetInfo>>([]);
+  const [target, setTarget] = useState<string>("");
+  const [targetReady, setTargetReady] = useState(false);
+  const [section, setSection] = useState<string>(() => params.get("section") ?? ".text");
+  const [query, setQuery] = useState<string>(() => params.get("q") ?? "");
+  const [filters, setFilters] = useState<ReadonlySet<string>>(
+    () => new Set(params.getAll("filter")),
+  );
+  const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
+  const [theme, setTheme] = useState<"dark" | "light">(initialTheme);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const gridFocus = useRef<((index: number) => void) | null>(null);
+  const noticeTimer = useRef<number | null>(null);
+  const topbarRef = useRef<HTMLElement | null>(null);
+
+  const coverage = useCoverage(target, section);
+  const sourceRoot = sameOriginPath(
+    coverage.paths.sourceRoot ?? "",
+    `/src/${encodeURIComponent(target.toLowerCase())}`,
+  );
+  const dll = useOriginalBinary(originalDllPath(coverage.paths.originalDll, target), target !== "");
+  const panes = useSelection({
+    target,
+    section,
+    sections: coverage.sections,
+    sourceRoot,
+    cellIndex: selectedIndex,
+    dll,
+  });
+  const { reload, busy } = useLiveReload({
+    enabled: target !== "",
+    onDbUpdated: coverage.reload,
+    onNotice: setNotice,
+  });
+
+  useEffect(() => {
+    document.title = "ReCoverage";
+  }, []);
+
+  useEffect(() => {
+    document.body.classList.toggle("light-mode", theme === "light");
+    const topbar = topbarRef.current;
+    if (topbar === null) {
+      return;
+    }
+    // The topbar is sticky, so the panel header parks below its measured height
+    // instead of underneath it.
+    const measure = (): void => {
+      document.documentElement.style.setProperty(
+        "--topbar-h",
+        `${topbar.getBoundingClientRect().height}px`,
+      );
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(topbar);
+    return () => observer.disconnect();
+  }, [theme]);
+
+  useEffect(() => {
+    const control = new AbortController();
+    void (async () => {
+      try {
+        setTargets(await fetchTargets(control.signal));
+        setTargetReady(true);
+        // oxlint-disable-next-line @rikalabs/no-silent-catch-fallback -- the failure is surfaced in the header's error line, and the dashboard still renders its empty state
+      } catch (error: unknown) {
+        if (!control.signal.aborted) {
+          setLoadError(error instanceof Error ? error.message : String(error));
+          setTargetReady(true);
+        }
+      }
+    })();
+    return () => control.abort();
+  }, []);
+
+  // Pick a target once the list is known: the URL wins, then the remembered
+  // one, then the first the server offers.
+  useEffect(() => {
+    if (!targetReady || target !== "" || targets.length === 0) {
+      return;
+    }
+    const fromUrl = new URLSearchParams(window.location.search).get("target");
+    setTarget(
+      [fromUrl, readStored(TARGET_KEY)].find(
+        (candidate) => candidate !== null && targets.some((entry) => entry.id === candidate),
+      ) ??
+        targets[0]?.id ??
+        "",
+    );
+  }, [target, targetReady, targets]);
+
+  // The URL carries the state a reload or a shared link has to restore.
+  useEffect(() => {
+    if (!targetReady) {
+      return;
+    }
+    const url = new URL(window.location.href);
+    if (target === "") {
+      url.searchParams.delete("target");
+    } else {
+      url.searchParams.set("target", target);
+    }
+    url.searchParams.set("section", section);
+    if (query === "") {
+      url.searchParams.delete("q");
+    } else {
+      url.searchParams.set("q", query);
+    }
+    url.searchParams.delete("filter");
+    for (const key of filters) {
+      url.searchParams.append("filter", key);
+    }
+    window.history.replaceState({}, "", url);
+  }, [filters, query, section, target, targetReady]);
+
+  const { sections } = coverage;
+  const names = useMemo(() => sectionNames(sections), [sections]);
+  const active = sections[section] ?? sections[names[0] ?? ""] ?? null;
+
+  // A section's cells arrive lazily, so switching tabs asks for them.
+  useEffect(() => {
+    if (section !== "" && sections[section] !== undefined) {
+      coverage.ensureCells(section);
+    }
+  }, [coverage, section, sections]);
+
+  // A `section` the target does not have (a stale link) falls back to the first.
+  useEffect(() => {
+    if (section !== "" && sections[section] === undefined && names.length > 0) {
+      setSection(names[0] ?? "");
+    }
+  }, [names, section, sections]);
+
+  // Names first, then the VA spellings: `.text` cells store the function's name
+  // in `cell.functions`, while a search hit is keyed by name and carries the VA
+  // — the dimming test compares against both, so both go in the set.
+  const matchedNames = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    if (needle === "") {
+      return null;
+    }
+    const matched = new Set<string>();
+    for (const [name, entry] of Object.entries(coverage.searchIndex)) {
+      const haystack = `${name} ${entry.symbol ?? ""} ${entry.name ?? ""} ${hex(entry.va, 8)}`;
+      if (haystack.toLowerCase().includes(needle)) {
+        matched.add(name);
+      }
+    }
+    return matched;
+  }, [coverage.searchIndex, query]);
+
+  const matchedFns = useMemo(() => {
+    if (matchedNames === null) {
+      return null;
+    }
+    const matched = new Set<string | number>(matchedNames);
+    for (const name of matchedNames) {
+      const va = coverage.searchIndex[name]?.va;
+      if (va !== undefined) {
+        matched.add(String(va));
+      }
+    }
+    return matched;
+  }, [coverage.searchIndex, matchedNames]);
+
+  const flash = useCallback((text: string) => {
+    setNotice(text);
+    if (noticeTimer.current !== null) {
+      window.clearTimeout(noticeTimer.current);
+    }
+    noticeTimer.current = window.setTimeout(() => setNotice(null), NAV_NOTICE_MS);
+  }, []);
+
+  const flashTimer = noticeTimer;
+  const jumpToAddress = useCallback(
+    (address: number) => {
+      // Every loaded section is a candidate: an asm operand or a VA link can
+      // point into a sibling, and the jump switches the tab to it.
+      for (const [name, row] of Object.entries(coverage.sections)) {
+        if (row.cells === undefined) {
+          continue;
+        }
+        const base = row.va ?? 0;
+        if (address < base || address >= base + (row.size ?? 0)) {
+          continue;
+        }
+        const index = cellIndexForVa(row, address);
+        if (index < 0) {
+          continue;
+        }
+        setSection(name);
+        setSelectedIndex(index);
+        gridFocus.current?.(index);
+        return;
+      }
+      setNotice(MSG.JUMP_NO_BLOCK(hex(address, 8)));
+      if (flashTimer.current !== null) {
+        window.clearTimeout(flashTimer.current);
+      }
+      flashTimer.current = window.setTimeout(() => setNotice(null), NAV_NOTICE_MS);
+    },
+    [coverage.sections, flashTimer],
+  );
+
+  const onSearchKeyDown = (event: TargetedKeyboardEvent<HTMLInputElement>): void => {
+    if (event.key !== "Enter" || matchedNames === null) {
+      return;
+    }
+    const [first] = matchedNames;
+    if (first === undefined) {
+      flash("Search matched nothing in this target.");
+      return;
+    }
+    const cell = active?.cells?.findIndex((entry) => entry.functions?.[0] === first) ?? -1;
+    if (cell < 0) {
+      const entry = coverage.searchIndex[first];
+      if (entry === undefined) {
+        flash("Search matched nothing in this target.");
+        return;
+      }
+      jumpToAddress(toVa(entry.va));
+      return;
+    }
+    setSelectedIndex(cell);
+    gridFocus.current?.(cell);
+  };
+
+  const toggleFilter = (key: string): void => {
+    setFilters((current) => {
+      if (key === "all") {
+        return new Set<string>();
+      }
+      const toggled = new Set(current);
+      if (toggled.has(key)) {
+        toggled.delete(key);
+      } else {
+        toggled.add(key);
+      }
+      return toggled;
+    });
+  };
+
+  const onTarget = (next: string): void => {
+    writeStored(TARGET_KEY, next);
+    // A query belongs to the binary it was typed for: keeping it would dim the
+    // whole new map against a name that does not exist there.
+    setQuery("");
+    setSelectedIndex(null);
+    setTarget(next);
+  };
+
+  const noTargets = targetReady && targets.length === 0;
+
+  return (
+    <>
+      <a
+        href="#main-content"
+        className="skip-link sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:z-30 focus:rounded-hair focus:border focus:border-line focus:bg-panel focus:px-2 focus:py-1"
+      >
+        Skip to main content
+      </a>
+      <header
+        ref={topbarRef}
+        className="topbar sticky top-0 z-20 flex flex-wrap items-center gap-3 border-b border-line bg-topbar px-4 py-2"
+      >
+        <div className="topbar-left flex flex-wrap items-center gap-3">
+          <div className="title-container flex items-center gap-2">
+            <div
+              className="logo-r inline-flex items-center justify-center rounded-hair border-2 border-accent bg-accent/5 px-2 py-0.5 font-mono text-xl font-extrabold text-accent shadow-glow"
+              aria-hidden="true"
+            >
+              R
+            </div>
+            <h1 className="title font-mono text-lg font-bold tracking-wide">ReCoverage</h1>
+          </div>
+          <div className="tabs flex flex-wrap gap-1" aria-label="sections">
+            {names.map((name) => (
+              <Button
+                key={name}
+                className="tab-btn"
+                active={name === section}
+                onClick={() => {
+                  setSection(name);
+                  setSelectedIndex(null);
+                }}
+              >
+                {name}
+              </Button>
+            ))}
+          </div>
+        </div>
+        <div className="topbar-right ml-auto flex flex-wrap items-center gap-3">
+          <div className="search flex flex-col gap-1">
+            <div className="search-row flex items-center gap-2">
+              <input
+                type="search"
+                className="input-el rounded-hair border border-line bg-btn px-2 py-1 font-mono text-xs text-text"
+                placeholder="Search function name or VA..."
+                aria-label="Search functions"
+                value={query}
+                onChange={(event) => setQuery(event.currentTarget.value)}
+                onKeyDown={onSearchKeyDown}
+              />
+              {query !== "" && (
+                <Button
+                  className="search-clear"
+                  aria-label="Clear search"
+                  title="Clear search"
+                  onClick={() => setQuery("")}
+                >
+                  Clear
+                </Button>
+              )}
+            </div>
+            {query !== "" && matchedNames !== null && (
+              <div
+                className="search-status font-mono text-[11px] text-muted"
+                role="status"
+                aria-live="polite"
+              >
+                Searching: "{query}" ({matchedNames.size}{" "}
+                {matchedNames.size === 1 ? "match" : "matches"})
+                {matchedNames.size === 0
+                  ? " - no matches. Check the spelling, or search by VA."
+                  : " - press Enter to jump to the first one."}
+              </div>
+            )}
+          </div>
+          <div className="filters flex flex-wrap gap-1">
+            {FILTERS.map((entry) => {
+              const on = entry.key === "all" ? filters.size === 0 : filters.has(entry.key);
+              return (
+                <Button
+                  key={entry.key}
+                  className={`filter-btn filter-${entry.key}`}
+                  aria-label={entry.aria}
+                  aria-pressed={on}
+                  title={entry.title}
+                  active={on}
+                  onClick={() => toggleFilter(entry.key)}
+                >
+                  {entry.label}
+                </Button>
+              );
+            })}
+          </div>
+          <div className="actions flex items-center gap-2">
+            {targets.length > 0 && (
+              <select
+                className="input-el target-select rounded-hair border border-line bg-btn px-2 py-1 font-mono text-xs text-text"
+                aria-label="Select target binary"
+                value={target}
+                onChange={(event) => onTarget(event.currentTarget.value)}
+              >
+                {targets.map((entry) => (
+                  <option key={entry.id} value={entry.id}>
+                    {entry.name}
+                  </option>
+                ))}
+              </select>
+            )}
+            <Button
+              className="icon-btn reload-btn"
+              aria-label={busy ? MSG.REGEN_IN_PROGRESS : "Regenerate coverage data"}
+              title={busy ? MSG.REGEN_IN_PROGRESS : "Regenerate coverage data"}
+              disabled={busy}
+              onClick={reload}
+            >
+              Reload
+            </Button>
+            <Button
+              className="icon-btn"
+              aria-label={theme === "light" ? "Switch to Dark Mode" : "Switch to Light Mode"}
+              title={theme === "light" ? "Switch to Dark Mode" : "Switch to Light Mode"}
+              onClick={() => {
+                setTheme(theme === "light" ? "dark" : "light");
+                writeStored(THEME_KEY, theme === "light" ? "dark" : "light");
+              }}
+            >
+              {theme === "light" ? "Dark" : "Light"}
+            </Button>
+          </div>
+        </div>
+      </header>
+
+      <main className="layout mx-auto flex max-w-[1600px] gap-4 px-4 py-4" id="main-content">
+        <div className="grid-area min-w-0 flex-1">
+          {notice !== null && (
+            <p
+              className="nav-notice mb-2 rounded-hair border border-line bg-panel px-3 py-2 font-mono text-xs"
+              role="status"
+              aria-live="polite"
+            >
+              {notice}
+            </p>
+          )}
+          {(loadError ?? coverage.error) !== null && (
+            <p className="grid-error mb-2 rounded-hair border border-line bg-panel px-3 py-2 font-mono text-xs text-badge-stub-text">
+              {loadError ?? coverage.error}
+            </p>
+          )}
+          <MapArea
+            noTargets={noTargets}
+            coverage={coverage}
+            active={active}
+            sectionEmpty={!coverage.loading && target !== "" && names.length === 0}
+            filters={filters}
+            matchedFns={matchedFns}
+            selectedIndex={selectedIndex}
+            activeFn={panes.fnKey}
+            theme={theme}
+            onSelect={setSelectedIndex}
+            onGridReady={(focus) => {
+              gridFocus.current = focus;
+            }}
+          />
+          <ul className="legend mt-3 flex flex-wrap gap-3 font-mono text-[11px] text-muted">
+            {LEGEND.map(([slot, label]) => (
+              <li key={label} className="flex items-center gap-1.5">
+                <span
+                  className={`swatch swatch-${label.replaceAll(" ", "-")}`}
+                  style={{ background: `var(${PALETTE_VARS[slot] ?? "--none"})` }}
+                />
+                {label}
+              </li>
+            ))}
+          </ul>
+        </div>
+        <CoveragePanel
+          section={active}
+          cellIndex={selectedIndex}
+          panes={panes}
+          sourceRoot={sourceRoot}
+          onJumpToAddress={jumpToAddress}
+        />
+      </main>
+    </>
+  );
+}
+
+/** What the map area shows: the lattice, a loading line, a failure with a
+ * retry, or the empty state. A component rather than a chain of ternaries in
+ * the shell's own JSX, which is where the reader has to look for the data flow. */
+function MapArea({
+  noTargets,
+  coverage,
+  active,
+  sectionEmpty,
+  filters,
+  matchedFns,
+  selectedIndex,
+  activeFn,
+  theme,
+  onSelect,
+  onGridReady,
+}: {
+  noTargets: boolean;
+  coverage: Coverage;
+  active: Section | null;
+  sectionEmpty: boolean;
+  filters: ReadonlySet<string>;
+  matchedFns: ReadonlySet<string | number> | null;
+  selectedIndex: number | null;
+  activeFn: string | number | null;
+  theme: "dark" | "light";
+  onSelect: (index: number) => void;
+  onGridReady: (focus: (index: number) => void) => void;
+}): ComponentChildren {
+  if (noTargets) {
+    return (
+      <div className="empty-state rounded-control border border-line bg-panel p-6 text-center font-mono text-xs text-muted">
+        <p className="font-bold text-text">No coverage database</p>
+        <p>Run rebrew build-db to create db/coverage-*.toml, then reload this page.</p>
+      </div>
+    );
+  }
+  if (active === null) {
+    return pending(sectionEmpty ? "No sections in this target." : "Loading coverage data…");
+  }
+  if (active.cells === undefined) {
+    if (coverage.cellError?.section !== active.name) {
+      return pending(`Loading ${active.name}…`);
+    }
+    return (
+      <div
+        className="grid-error rounded-control border border-line bg-panel p-4 font-mono text-xs"
+        role="status"
+      >
+        <p>
+          Could not load the {active.name} map: {coverage.cellError.detail}
+        </p>
+        <Button className="mt-2" onClick={() => coverage.ensureCells(active.name)}>
+          Retry
+        </Button>
+      </div>
+    );
+  }
+  return (
+    <CoverageMap
+      key={active.name}
+      section={active}
+      filters={filters}
+      matchedFns={matchedFns}
+      selectedIndex={selectedIndex}
+      activeFn={activeFn}
+      theme={theme}
+      onSelect={onSelect}
+      onGridReady={onGridReady}
+    />
+  );
+}
+
+function pending(text: string): ComponentChildren {
+  return (
+    <div
+      className="loading-overlay rounded-control border border-line bg-panel p-6 text-center font-mono text-xs text-muted"
+      role="status"
+      aria-live="polite"
+    >
+      {text}
+    </div>
+  );
+}

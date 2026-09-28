@@ -2360,12 +2360,8 @@ class TestSectionAccentsMatchSpa:
 
     @staticmethod
     def _spa_tokens() -> dict[str, str]:
-        import importlib.resources
-
-        css = (
-            importlib.resources.files("recoverage.assets")
-            .joinpath("style.css")
-            .read_text(encoding="utf-8")
+        css = (Path(__file__).resolve().parents[1] / "web" / "app" / "index.css").read_text(
+            encoding="utf-8"
         )
         # :root only: .light-mode restates the same names with darker values
         # for light surfaces, which Potato Mode has no counterpart for.

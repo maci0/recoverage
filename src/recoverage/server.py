@@ -1185,7 +1185,7 @@ BROTLI_STATIC_QUALITY = 11
 # every request; the shell and the static assets are compressed once per
 # encoding and then served from a dict, so they take the same "pay once, keep
 # the effort" trade BROTLI_STATIC_QUALITY already makes.  Measured on the
-# shipped assets: hljs.min.js 45,575 -> 39,773 bytes and detail.js
+# shipped assets: the bundle ~332 KB and style.css ~22 KB
 # 10,468 -> 9,555 (both zstd), for ~20 ms paid once instead of 6 ms per
 # request.  Level 19 is where zstd stops returning a smaller frame on these
 # bodies (level 22 matches it exactly), so this is the knee, not a guess.
@@ -1602,7 +1602,7 @@ def _format_hex_dump(raw_bytes: bytes, base_offset: int = 0, max_bytes: int | No
     Potato Mode's Original Bytes block (the two inline copies had already
     drifted: a single 48-char hex column vs 8+8 byte columns).  Layout:
     8-hex-digit offset, hex bytes in two 8-byte columns, ASCII gutter —
-    the same layout as detail.js's client-side dump, which upper-cases the
+    the same layout as the dashboard's client-side dump, which upper-cases the
     hex, so the two renderings of one slice differ in case.  *max_bytes*
     caps the dump and appends a ``... (N more bytes)`` tail; ``None`` dumps
     everything.
@@ -2144,7 +2144,7 @@ def _log_request() -> None:
 
 # Content-Security-Policy for the dashboard.  The SPA inlines VanJS + app.js
 # into the HTML shell and uses inline styles, so 'unsafe-inline' is required
-# for scripts/styles; everything else is same-origin (detail.js, hljs assets,
+# for scripts/styles; everything else is same-origin (the bundle and the assets,
 # fetch/EventSource to /api/*) or data: images (grid sprites, SVG badges).
 # The policy still pins the useful gates: no plugins, no base-element hijack,
 # no framing, no off-host exfil from any future injection sink.

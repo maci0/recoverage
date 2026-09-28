@@ -6,6 +6,7 @@ import gzip
 import json
 import logging
 import queue
+import re
 import shutil
 import subprocess
 import tempfile
@@ -752,97 +753,40 @@ class TestSnapshotIsTheReadPin:
             snap.sections[".text"] = None  # type: ignore[index]
 
 
-class TestDeepLinking:
-    """J9: the SPA carries URL deep-link wiring (target/fn/section/q)."""
+class TestSpaFilterControls:
+    """The status filters match what the two renderers share.
 
-    def test_spa_has_deep_link_code(self) -> None:
-        import importlib.resources
+    A filter name no button offers dims every painted cell and lights none, and
+    a pill with no key in the state table isolates nothing: the toolbar, the
+    deep link, the dimming pass and Potato Mode all read the same vocabulary.
+    """
 
-        from recoverage import assets
+    def test_filter_url_names_are_allowlisted(self) -> None:
+        from recoverage.potato import FILTER_STATES
 
-        app_js = importlib.resources.files(assets).joinpath("app.js").read_text(encoding="utf-8")
-        for marker in (
-            "URL_PARAMS = new URLSearchParams",
-            "const syncUrl = () =>",
-            'params.set("target"',
-            'params.set("fn"',
-            'params.set("section"',
-            'params.set("q"',
-            "history.replaceState",
-        ):
-            assert marker in app_js, f"deep-link marker missing: {marker}"
+        pack = _web("grid/pack.ts")
+        raw = re.search(r"export const FILTER_KEY = \[(.*?)\];", pack).group(1)
+        keys = set(re.findall(r'"([a-z_]*)"', raw))
+        assert keys - {""} == set(FILTER_STATES)
+
+    def test_every_filter_key_has_a_button(self) -> None:
+        from recoverage.potato import FILTER_STATES
+
+        app = _web("App.tsx")
+        buttons = set(re.findall(r'key: "([a-z_]+)"', app))
+        assert buttons - {"all"} == set(FILTER_STATES)
+
+    def test_every_packed_state_survives_a_filter(self) -> None:
+        """A "" in FILTER_KEY means the cell is dimmed by every pill and lit by
+        none, which is the state the two missing buttons were for."""
+        pack = _web("grid/pack.ts")
+        raw = re.search(r"export const FILTER_KEY = \[(.*?)\];", pack, re.DOTALL).group(1)
+        keys = [value.strip().strip('"') for value in raw.split(",") if value.strip()]
+        assert keys[:6] == ["", "exact", "reloc", "near_match", "stub", "padding"]
+        assert keys[6:] == ["proven", "problem"]
 
 
 # ── Token auth & security headers ──────────────────────────────────
-
-
-class TestSpaFilterControls:
-    """The SPA's status filters match what the two renderers share.
-
-    The SPA wrote target/function/section/search into the URL and left the
-    filter out, so a filtered map could not be reloaded or shared even though
-    Potato Mode has carried `?filter=` all along. It also offered no filter
-    for two states the legend names, which left those cells painted but
-    unreachable: every pill dimmed them, none isolated them.
-    """
-
-    @staticmethod
-    def _app_js() -> str:
-        import importlib.resources
-
-        from recoverage import assets
-
-        return importlib.resources.files(assets).joinpath("app.js").read_text(encoding="utf-8")
-
-    def test_filter_is_part_of_the_deep_link(self) -> None:
-        app_js = self._app_js()
-        assert 'params.set("filter"' in app_js
-        # Every toggle has to reach the URL, or the link goes stale on the
-        # first click rather than on the second.
-        toggle = app_js.split("const toggleFilter =", 1)[1].split("};", 1)[0]
-        assert "syncUrl()" in toggle
-
-    def test_filter_url_names_are_allowlisted(self) -> None:
-        """A name no button offers dims every painted cell and lights none."""
-        import re
-
-        from recoverage.potato import FILTER_STATES
-
-        app_js = self._app_js()
-        block = re.search(r"const FILTER_KEYS = new Set\(\[(.*?)\]\);", app_js, re.DOTALL).group(1)
-        keys = set(re.findall(r'"([a-z_]+)"', block))
-        assert keys == set(FILTER_STATES)
-        assert "FILTER_KEYS.has" in app_js
-
-    def test_every_filter_key_has_a_button(self) -> None:
-        import re
-
-        from recoverage.potato import FILTER_STATES
-
-        app_js = self._app_js()
-        buttons = set(re.findall(r'FilterButton\("([a-z_]+)"', app_js))
-        assert buttons - {"all"} == set(FILTER_STATES)
-        for key in FILTER_STATES:
-            assert f'FilterButton("{key}"' in app_js, f"no toolbar button for {key}"
-
-    def test_every_packed_state_survives_a_filter(self) -> None:
-        """FILTER_KEY is the state->key table the dimming pass reads.
-
-        A "" there means the cell is dimmed by every pill and lit by none,
-        which is the state the two missing buttons were for.
-        """
-        import importlib.resources
-        import re
-
-        from recoverage import assets
-
-        detail_js = (
-            importlib.resources.files(assets).joinpath("detail.js").read_text(encoding="utf-8")
-        )
-        raw = re.search(r"const FILTER_KEY = \[(.*?)\];", detail_js, re.DOTALL).group(1)
-        keys = [v.strip().strip('"') for v in raw.split(",") if v.strip()]
-        assert keys[6:] == ["proven", "problem"]
-        assert keys[:6] == ["", "exact", "reloc", "near_match", "stub", "padding"]
 
 
 class TestAuthTokenMatches:
@@ -1119,7 +1063,7 @@ class TestStaticAssetRevalidation:
 
     Cache-Control is no-cache, so the browser revalidates on every load; with
     no validator the only answer was the full body again (45 KB of hljs.min.js
-    per asm pane, 9.5 KB of detail.js per visit). The ETag must be stable
+    per visit). The ETag must be stable
     across requests, distinct per encoding, and must reject a stale tag.
 
     wsgiref title-cases header names on the way out, so the tag arrives as
@@ -1129,7 +1073,7 @@ class TestStaticAssetRevalidation:
     def test_asset_carries_an_etag(self) -> None:
         from conftest import wsgi_get
 
-        status, headers, body = wsgi_get("/detail.js", headers={"Accept-Encoding": "gzip"})
+        status, headers, body = wsgi_get("/app.js", headers={"Accept-Encoding": "gzip"})
         assert status == "200 OK"
         assert headers["Etag"]
         assert body
@@ -1137,10 +1081,10 @@ class TestStaticAssetRevalidation:
     def test_matching_if_none_match_returns_empty_304(self) -> None:
         from conftest import wsgi_get
 
-        _, headers, _ = wsgi_get("/detail.js", headers={"Accept-Encoding": "gzip"})
+        _, headers, _ = wsgi_get("/app.js", headers={"Accept-Encoding": "gzip"})
         etag = headers["Etag"]
         status, headers_304, body = wsgi_get(
-            "/detail.js",
+            "/app.js",
             headers={"Accept-Encoding": "gzip", "If-None-Match": etag},
         )
         assert status == "304 Not Modified"
@@ -1151,10 +1095,10 @@ class TestStaticAssetRevalidation:
     def test_weak_validator_still_matches(self) -> None:
         from conftest import wsgi_get
 
-        _, headers, _ = wsgi_get("/detail.js", headers={"Accept-Encoding": "gzip"})
+        _, headers, _ = wsgi_get("/app.js", headers={"Accept-Encoding": "gzip"})
         weak = f"W/{headers['Etag']}"
         status, _, _ = wsgi_get(
-            "/detail.js", headers={"Accept-Encoding": "gzip", "If-None-Match": weak}
+            "/app.js", headers={"Accept-Encoding": "gzip", "If-None-Match": weak}
         )
         assert status == "304 Not Modified"
 
@@ -1164,9 +1108,9 @@ class TestStaticAssetRevalidation:
         `assert body` alone is satisfied by a 200 that echoed the stale tag."""
         from conftest import decode_body, wsgi_get
 
-        _, current_headers, _ = wsgi_get("/detail.js", headers={"Accept-Encoding": "gzip"})
+        _, current_headers, _ = wsgi_get("/app.js", headers={"Accept-Encoding": "gzip"})
         status, headers, body = wsgi_get(
-            "/detail.js",
+            "/app.js",
             headers={"Accept-Encoding": "gzip", "If-None-Match": '"not-the-tag"'},
         )
         assert status == "200 OK"
@@ -1178,8 +1122,8 @@ class TestStaticAssetRevalidation:
         strong validator must not match across them."""
         from conftest import wsgi_get
 
-        _, br_headers, _ = wsgi_get("/detail.js", headers={"Accept-Encoding": "br"})
-        _, zstd_headers, _ = wsgi_get("/detail.js", headers={"Accept-Encoding": "zstd"})
+        _, br_headers, _ = wsgi_get("/app.js", headers={"Accept-Encoding": "br"})
+        _, zstd_headers, _ = wsgi_get("/app.js", headers={"Accept-Encoding": "zstd"})
         assert br_headers["Etag"] != zstd_headers["Etag"]
 
     def test_index_revalidates_instead_of_resending(self) -> None:
@@ -1213,16 +1157,18 @@ class TestStaticAssetRevalidation:
         _, zstd_headers, _ = wsgi_get("/", headers={"Accept-Encoding": "zstd"})
         assert br_headers["Etag"] != zstd_headers["Etag"]
 
-    def test_index_preloads_detail_js(self) -> None:
-        """detail.js is requested by the inlined app.js, so the shell
-        advertises it during the preload scan instead of a round trip later."""
+    def test_index_inlines_the_bundle_and_the_stylesheet(self) -> None:
+        """The shell carries both, so the first paint takes no render-blocking
+        subresource request: one script, one style, and no link to either."""
         from conftest import decode_body, wsgi_get
 
         _, headers, body = wsgi_get("/", headers={"Accept-Encoding": "gzip"})
         html = decode_body(body, headers).decode("utf-8")
-        assert 'rel="preload"' in html
-        assert 'href="/detail.js"' in html
-        assert 'as="script"' in html
+        assert "<script>" in html
+        assert "<style>" in html
+        assert 'href="/app.js"' not in html
+        assert 'href="/style.css"' not in html
+        assert '<div id="root">' in html
 
     def test_index_preloads_the_target_list(self) -> None:
         """The target list is on the first-paint path and cannot be discovered
@@ -1909,403 +1855,183 @@ class TestUnreadableDocumentIsNotAnEmptyTarget:
             srv.coverage_snapshots()
 
 
-def _spa_sources() -> tuple[str, str]:
-    """The SPA's two scripts, as shipped: (app.js, detail.js).
+REPO_ROOT = Path(__file__).resolve().parents[1]
+WEB_APP = REPO_ROOT / "web" / "app"
 
-    The classes below pin contracts the browser half of which Python cannot
-    observe, so they assert against the source text.
+
+def _web(relative: str) -> str:
+    """One frontend source file, as written.
+
+    The dashboard ships as a built bundle (`src/recoverage/assets/app.js`), so
+    the contracts below are pinned against the sources the bundle is built from
+    rather than against minified output.  Behaviour a browser can observe has
+    moved to `tests/test_playwright.py`, which drives the served page.
     """
-    import importlib.resources
+    return (WEB_APP / relative).read_text(encoding="utf-8")
 
-    from recoverage import assets
 
-    base = importlib.resources.files(assets)
-    return (
-        base.joinpath("app.js").read_text(encoding="utf-8"),
-        base.joinpath("detail.js").read_text(encoding="utf-8"),
+def _packed_slots() -> dict[str, int]:
+    """`STATE_SLOTS` from `grid/pack.ts`, as state -> palette slot."""
+    pack_ts = _web("grid/pack.ts")
+    block = re.search(
+        r"const STATE_SLOTS = new Map<string, number>\(\[(.*?)\]\);", pack_ts, re.DOTALL
     )
+    assert block is not None, "pack.ts no longer defines STATE_SLOTS"
+    return {name: int(slot) for name, slot in re.findall(r'\["(\w+)",\s*(\d+)\]', block.group(1))}
+
+
+def _array_items(source: str, name: str) -> list[str]:
+    """The string items of one exported array literal in *source*."""
+    match = re.search(rf"export const {name} = \[(.*?)\];", source, re.DOTALL)
+    assert match is not None, f"{name} is no longer an array literal"
+    return [item for item in re.findall(r'"([^"]+)"', match.group(1)) if item != ""]
 
 
 class TestSpaStateVocabulary:
-    """The SPA's STATE_ID must cover every state rebrew can write.
+    """The map's state table must cover every state rebrew can write.
 
-    An unmapped state packed to slot 0 and painted as an undocumented gap,
-    contradicting /stats (which counts 'verified' as exact and covered_bytes
-    over every state != 'none'). PALETTE_VARS and FILTER_KEY are indexed by the
-    same ids, so they must stay the same length.
+    An unmapped state falls to slot 7 (the tooling-failure catch-all) rather
+    than to 0, because slot 0 is an undocumented gap and `verified` counts as an
+    exact match in /stats: painting one as the other contradicts the number
+    beside it. PALETTE_VARS and FILTER_KEY are indexed by the same slots, so all
+    three tables have to be the same length.
     """
 
-    def _window_rc_keys(self, app_js: str) -> set[str]:
-        """Top-level key names of the ``window.RC = { ... }`` literal in *app_js*.
-
-        detail.js reads its shared state off ``window.RC``, so the contract is
-        which names are published, not the order or spelling of the literal.
-        Splitting on commas is wrong: the object holds arrow bodies with their
-        own commas, so the scan tracks brace depth and only yields keys that
-        sit at depth 1.
-        """
-        import re
-
-        literal = re.search(r"window\.RC\s*=\s*\{", app_js)
-        assert literal is not None, "app.js never publishes window.RC"
-        body = app_js[literal.end() :]
-        keys: set[str] = set()
-        depth = 1
-        start = 0
-        for i, ch in enumerate(body):
-            if ch in "{([":
-                depth += 1
-            elif ch in "})]":
-                depth -= 1
-                if depth == 0:
-                    segment = body[start:i]
-                    key = segment.split(":", 1)[0].strip()
-                    if key:
-                        keys.add(key)
-                    return keys
-            elif ch == "," and depth == 1:
-                segment = body[start:i]
-                key = segment.split(":", 1)[0].strip()
-                if key:
-                    keys.add(key)
-                start = i + 1
-        raise AssertionError("window.RC literal is never closed")
-
-    def test_state_id_covers_every_known_cell_state(self) -> None:
+    def test_state_slots_cover_every_known_cell_state(self) -> None:
         from rebrew.build_db import _KNOWN_CELL_STATES
 
-        app_js, _ = _spa_sources()
-        block = app_js.split("const STATE_ID = {", 1)[1].split("};", 1)[0]
-        mapped = {
-            line.split(":")[0].strip()
-            for line in block.replace("\n", " ").split(",")
-            if ":" in line
-        }
-        missing = sorted(_KNOWN_CELL_STATES - mapped)
-        assert missing == [], f"cell states the SPA paints as undocumented: {missing}"
+        missing = sorted(_KNOWN_CELL_STATES - set(_packed_slots()))
+        assert missing == [], f"cell states the map paints as undocumented: {missing}"
 
     def test_verified_is_not_packed_as_none(self) -> None:
-        app_js, _ = _spa_sources()
-        block = app_js.split("const STATE_ID = {", 1)[1].split("};", 1)[0]
-        assert "verified: 1" in block
-        assert "verified: 0" not in block
+        slots = _packed_slots()
+        assert slots["verified"] == 1
+        assert slots["none"] == 0
 
-    def test_palette_and_filter_arrays_match_the_state_count(self) -> None:
-        """STATE_ID tops out at 7; both lookup tables must be that long.
+    def test_palette_filter_and_label_tables_match_the_state_count(self) -> None:
+        """Slot 7 is the highest; every lookup table must be eight long.
 
-        A short array makes pal[st] undefined (silently --none) and
-        FILTER_KEY[st] undefined (a filter mismatch on every such cell).
-        The tooltip's word list is a third such table: a short one shows
-        "undefined" in the hover title, which is worse than showing nothing.
+        A short table makes `palette[slot]` undefined (silently `--none`) and
+        `FILTER_KEY[slot]` undefined (a filter mismatch on every such cell),
+        while a short `STATE_LABEL` prints "undefined" in the hover title.
         """
-        import re
-
-        app_js, detail_js = _spa_sources()
-        palette = re.search(r"const PALETTE_VARS = \[(.*?)\];", detail_js).group(1)
-        filters = re.search(r"const FILTER_KEY = \[(.*?)\];", detail_js).group(1)
-        assert palette.count('"--') == 8
-        assert len([v for v in filters.split(",") if v.strip()]) == 8
-        labels = re.search(r"const STATE_LABEL = \[(.*?)\];", app_js, re.DOTALL).group(1)
-        assert len([v for v in labels.split(",") if v.strip()]) == 8
-        assert "STATE_LABEL" in detail_js
-        # Membership, not a prefix: adding another shared export to the
-        # window.RC object literal must not read as STATE_LABEL being dropped
-        # (the tooltip reads it as window.RC.STATE_LABEL).
-        published = self._window_rc_keys(app_js)
-        required = {"van", "MetaItem", "MSG", "hex", "STATE_LABEL"}
-        missing = sorted(required - published)
-        assert missing == [], f"read by detail.js but not published on window.RC: {missing}"
-
-    def test_cell_tooltip_names_the_state_and_function(self) -> None:
-        """The hover title must say what the cell is, not print a 0/1 flag.
-
-        It used to end in `${fn ? 1 : 0} fn`, which told a user nothing about
-        the cell they were pointing at.
-        """
-        _, detail_js = _spa_sources()
-        assert "0} fn" not in detail_js
-        assert "wrap.title = [`Block ${idx}`" in detail_js
+        pack = _web("grid/pack.ts")
+        assert len(_array_items(pack, "PALETTE_VARS")) == 8
+        raw_filters = re.search(r"export const FILTER_KEY = \[(.*?)\];", pack).group(1)
+        assert len(re.findall(r'"([a-z_]*)"', raw_filters)) == 8
+        assert len(_array_items(pack, "STATE_LABEL")) == 8
+        assert max(_packed_slots().values()) == 7
 
     def test_other_bg_token_is_defined(self) -> None:
-        import importlib.resources
-
-        from recoverage import assets
-
-        css = importlib.resources.files(assets).joinpath("style.css").read_text(encoding="utf-8")
+        css = _web("index.css")
         assert "--other-bg:" in css
-        assert ".swatch-compile_error" in css
+        assert "--color-other: var(--other-bg);" in css
 
     def test_legend_names_every_painted_slot(self) -> None:
-        """Every STATE_ID slot the grid paints needs a legend row.
-
-        The grid painted ``proven`` (slot 6) and the hover tooltip called it
-        by name, but the legend had no row for it: a verified-semantic block
-        was a colour the reader had no way to look up.  A slot with no row
-        fails the same way a state missing from STATE_ID does, one layer up.
-        """
-        import re
-
-        app_js, _ = _spa_sources()
-        legend = re.search(r"const LEGEND = \[(.*?)\];", app_js, re.DOTALL)
-        assert legend is not None, "app.js has no LEGEND table"
-        rows = re.findall(r'\["(\w+)",\s*"[^"]*"\]', legend.group(1))
-        assert rows, "the legend table is empty"
-
-        state_block = re.search(r"const STATE_ID = \{(.*?)\};", app_js, re.DOTALL).group(1)
-        state_id = dict(re.findall(r"(\w+):\s*(\d+)", state_block))
-        named = {int(state_id[key]) for key in rows}
-        painted = {int(slot) for slot in state_id.values()}
-        assert named == painted, (
-            f"legend rows name slots {sorted(named)}; the grid paints {sorted(painted)}"
+        """Every slot the map can paint needs a legend row."""
+        legend = _web("grid/pack.ts")
+        block = re.search(r"export const LEGEND[^=]*= \[(.*?)\];", legend, re.DOTALL).group(1)
+        rows = re.findall(r'\[(\d+), "[^"]+"\]', block)
+        named = {int(slot) for slot in rows}
+        assert named == set(_packed_slots().values()), (
+            f"legend rows name slots {sorted(named)}; the map paints "
+            f"{sorted(set(_packed_slots().values()))}"
         )
 
-    def test_every_legend_key_has_a_swatch(self) -> None:
-        """The legend renders `swatch-<key>`, so each key needs the rule.
+    def test_legend_swatches_read_the_palette_variables(self) -> None:
+        """A legend row draws its swatch from PALETTE_VARS, so a row cannot name
+        a colour the map paints from somewhere else."""
+        app = _web("App.tsx")
+        assert "PALETTE_VARS[slot]" in app
+        assert "swatch swatch-" in app
 
-        A missing rule leaves an empty 12px box that reads as a gap in the key.
-        """
-        import importlib.resources
-        import re
-
-        from recoverage import assets
-
-        app_js = importlib.resources.files(assets).joinpath("app.js").read_text(encoding="utf-8")
-        css = importlib.resources.files(assets).joinpath("style.css").read_text(encoding="utf-8")
-        block = re.search(r"const LEGEND = \[(.*?)\];", app_js, re.DOTALL).group(1)
-        keys = re.findall(r'\["(\w+)",\s*"[^"]*"\]', block)
-        missing = [k for k in keys if f".swatch-{k} " not in css]
-        assert missing == [], f"legend keys with no swatch rule: {missing}"
+    def test_cell_tooltip_names_the_state_and_function(self) -> None:
+        """The hover title says what the cell is, not a 0/1 flag."""
+        map_source = _web("components/CoverageMap.tsx")
+        assert "Block ${index}" in map_source
+        assert "STATE_LABEL[pack.states[index]" in map_source
+        assert "no function" in map_source
 
 
-class TestSpaGridLayoutMemo:
-    """The grid layout memo must key on the packed cells, not on a count.
+class TestSpaLayoutAndFeedback:
+    """Structural contracts of the ported map and shell.
 
-    ``layout`` caches the walk, the hit-map, and the per-cell rect geometry
-    for a section.  A rebuild re-spans cells without necessarily changing how
-    many there are, so a (columns, cell-count) key matches while the spans
-    differ: the map then hands a click the wrong cell and the rects have the
-    wrong widths.  packSection returns a fresh object per section version and
-    after a lazy cells fetch, so the pack identity is the exact change token.
+    These pin the wiring Python cannot observe: the layout memo's key, the
+    roving-focus scroll, the ResizeObserver teardown, the per-section cell
+    failure, and the timed notice. Browser-observable behaviour lives in
+    `tests/test_playwright.py`.
     """
 
-    @staticmethod
-    def _detail_js() -> str:
-        import importlib.resources
+    def test_layout_memo_keys_on_the_packed_cells_and_the_width(self) -> None:
+        """A rebuild re-spans cells without necessarily changing how many there
+        are, so a (columns, cell-count) key would match while the spans differ
+        and hand a click the wrong block."""
+        map_source = _web("components/CoverageMap.tsx")
+        assert "state.pack === pack" in map_source
+        assert "state.layWidth === width" in map_source
 
-        from recoverage import assets
+    def test_selection_scrolls_the_block_into_view(self) -> None:
+        map_source = _web("components/CoverageMap.tsx")
+        assert "scrollCell" in map_source
+        assert "window.scrollTo" in map_source
+        assert "wrap.scrollTo" in map_source
 
-        return importlib.resources.files(assets).joinpath("detail.js").read_text(encoding="utf-8")
+    def test_resize_observer_is_disconnected(self) -> None:
+        """A ResizeObserver holds every observed target strongly, so dropping a
+        wrapper without disconnecting pins its canvas and typed arrays for the
+        rest of the session."""
+        map_source = _web("components/CoverageMap.tsx")
+        assert "observer.disconnect()" in map_source
 
-    def test_layout_keys_on_the_pack_object(self) -> None:
-        detail_js = self._detail_js()
-        assert "g.layPack === pack" in detail_js
-        assert "g.layPack = pack" in detail_js
-        assert "pack.n}" not in detail_js, (
-            "layout keyed on a cell count: a re-span that keeps the count serves stale geometry"
-        )
+    def test_section_cell_failure_is_reported_with_a_retry(self) -> None:
+        coverage = _web("hooks/useCoverage.ts")
+        assert "setCellError({" in coverage
+        app = _web("App.tsx")
+        assert "Could not load the" in app
+        assert "ensureCells(active.name)" in app
 
-    def test_rebuild_resyncs_the_declared_column_count(self) -> None:
-        """A changed section width lives in the DOM, so paint must refresh it.
+    def test_a_jump_to_an_uncovered_address_says_so(self) -> None:
+        app = _web("App.tsx")
+        assert "jumpToAddress" in app
+        assert "MSG.JUMP_NO_BLOCK" in app
+        assert 'role="status"' in app
 
-        layout reads the column count back off ``wrap.dataset.cols``, which was
-        written when the grid was first created.  Without the resync a rebuild
-        that changes a section's column count keeps wrapping at the old one.
-        """
-        detail_js = self._detail_js()
-        assert "g.wrap.dataset.cols !== declared" in detail_js
-        assert "g.wrap.dataset.cols = declared" in detail_js
-        assert "const declared = String(sec.columns || 64);" in detail_js
+    def test_deep_links_carry_target_section_query_and_filter(self) -> None:
+        app = _web("App.tsx")
+        for marker in (
+            'searchParams.set("target"',
+            'searchParams.set("section"',
+            'searchParams.set("q"',
+            'searchParams.append("filter"',
+            "history.replaceState",
+        ):
+            assert marker in app, f"deep-link marker missing: {marker}"
 
-    def test_pack_is_invalidated_when_lazy_cells_land(self) -> None:
-        """The lazy cells fetch must drop the memoized pack, or the layout
-        memo keys on a pack built from an empty section forever."""
-        import importlib.resources
-
-        from recoverage import assets
-
-        app_js = importlib.resources.files(assets).joinpath("app.js").read_text(encoding="utf-8")
-        assert "delete sec._pack;" in app_js
-        assert "sec._pack = " in app_js
-
-    def test_a_block_wraps_instead_of_being_clamped_to_the_row(self) -> None:
-        """A block wider than a row must be drawn whole, across lines.
-
-        ``spanAt`` clamped a span to the column count, so the tail of every
-        over-wide block was dropped from the map: unpainted, and (with the
-        hit-map overflow) unclickable.  A span is measured against the DECLARED
-        width, so a dense lattice made that the common case, not the rare one.
-        ``walk`` now emits one PLACEMENT per line a block crosses, and the
-        paint, the hit-map and the selection stroke all read placements.
-        """
-        detail_js = self._detail_js()
-        assert "spanAt" not in detail_js, (
-            "the span clamp is back: an over-wide block loses its tail"
-        )
-        # The wrap itself: take what fits, keep the rest for the next line.
-        assert "const take = Math.min(left, cols - col);" in detail_js
-        # One placement per line, and the paint reads the placement arrays.
-        assert "const pCell = new Int32Array(parts);" in detail_js
-        assert "for (let k = 0; k < parts; k += 1) {" in detail_js
-        assert "ctx.rect(pX[k], pY[k], pW[k], cell);" in detail_js
-        # The stroke follows a wrapped cell across its lines, and the per-cell
-        # geometry still names the FIRST placement for scrollCell.
-        assert "for (let k = cellFirst[i]; k < parts && pCell[k] === i; k += 1) {" in detail_js
-        assert "cellFirst[i] = placed;" in detail_js
-
-    def test_layout_also_keys_on_the_wrapper_width(self) -> None:
-        """A hidden section reports clientWidth 0, so the ResizeObserver never
-        relaid it out: a section first laid out before a window resize comes
-        back painted and hit-mapped at the old geometry."""
-        detail_js = self._detail_js()
-        assert "g.layWidth === width" in detail_js
-        assert "g.layWidth = width" in detail_js
-        assert "const width = g.wrap.clientWidth;" in detail_js
-
-    def test_pointer_position_is_measured_against_the_canvas(self) -> None:
-        """The lattice's own coordinates are canvas-relative, and the canvas
-        rect already carries the wrapper's scroll offset and excludes its 1px
-        border. Measured against the wrapper, a map scrolled sideways (every
-        narrow viewport, where the 12px minimum cell makes the lattice wider
-        than the frame) selects whichever cell sits under the same viewport
-        coordinates."""
-        detail_js = self._detail_js()
-        assert "const rect = wrap.getBoundingClientRect();" not in detail_js, (
-            "pointer hit-test measured against the scrollable wrapper"
-        )
-        assert detail_js.count("canvas.getBoundingClientRect()") >= 2
-
-    def test_a_keyboard_jump_scrolls_the_map_horizontally_too(self) -> None:
-        """Arrow keys, search Enter and asm links all end in scrollCell, and on
-        a narrow viewport the selected cell is off-screen sideways."""
-        detail_js = self._detail_js()
-        assert "g.wrap.scrollTo({ left:" in detail_js
+    def test_the_same_origin_guard_wraps_both_db_supplied_paths(self) -> None:
+        app = _web("App.tsx")
+        binary = _web("hooks/useOriginalBinary.ts")
+        assert "sameOriginPath(" in app and "coverage.paths.sourceRoot" in app
+        assert "sameOriginPath(" in binary and "documentPath" in binary
 
 
-class TestSpaJumpFeedback:
-    """A jump to an address no block covers must say so, not do nothing.
+class TestSpaJumpAndSearch:
+    """The search set and the jump must agree on what a cell stores.
 
-    The only signal was a console warning, which the person clicking the VA
-    link or the asm operand never sees, so the control read as dead. The
-    notice rides the hint's own slot (no layout shift) and times itself out.
+    `.text` cells hold the function's name (or a VA spelling); the search index
+    is keyed by name and carries the VA. The dimming pass compares against both,
+    and Enter jumps to the first matched name.
     """
 
-    @staticmethod
-    def _app_js() -> str:
-        import importlib.resources
+    def test_matched_set_carries_names_and_va_spellings(self) -> None:
+        app = _web("App.tsx")
+        assert "new Set<string | number>(matchedNames)" in app
+        assert "coverage.searchIndex[name]?.va" in app
 
-        from recoverage import assets
-
-        return importlib.resources.files(assets).joinpath("app.js").read_text(encoding="utf-8")
-
-    def test_an_uncovered_address_reports_itself(self) -> None:
-        app_js = self._app_js()
-        assert "flashNavNotice(MSG.JUMP_NO_BLOCK(" in app_js
-        assert "const navNotice = van.state(null);" in app_js
-        assert "navNoticeTimer = setTimeout" in app_js
-
-    def test_the_notice_is_rendered_with_a_live_region(self) -> None:
-        app_js = self._app_js()
-        assert 'class: "hint hint-notice", role: "status"' in app_js
-
-
-class TestSpaStackedLayoutSelection:
-    """Selecting a block must be visible wherever the panel is.
-
-    Below 1300px the panel stacks under the map, and the .text lattice runs
-    thousands of pixels tall, so a block clicked near the top of the map
-    updates a panel far outside the viewport and the click reads as dead.
-    """
-
-    @staticmethod
-    def _app_js() -> str:
-        import importlib.resources
-
-        from recoverage import assets
-
-        return importlib.resources.files(assets).joinpath("app.js").read_text(encoding="utf-8")
-
-    def test_a_selection_brings_an_offscreen_panel_into_view(self) -> None:
-        app_js = self._app_js()
-        assert "panel.getBoundingClientRect().top >= window.innerHeight" in app_js
-        assert 'panel.scrollIntoView({ behavior: "smooth", block: "start" })' in app_js
-        assert "revealPanelIfOffscreen();" in app_js
-
-    def test_it_never_scrolls_a_panel_that_is_already_visible(self) -> None:
-        """Scrolling unconditionally would yank the map out from under the
-        click on the side-by-side layout, where the panel is on screen."""
-        app_js = self._app_js()
-        body = app_js.split("const revealPanelIfOffscreen = ", 1)[1].split("};", 1)[0]
-        assert "if (" in body, "the scroll is no longer guarded by a visibility test"
-
-
-class TestSpaResourceTeardown:
-    """The SPA must release what it registers, on every path that drops it.
-
-    A live dashboard re-renders on every coverage.db rebuild, so a
-    registration made per render and never released accumulates for the life
-    of the tab rather than for one request. The browser half of that contract
-    is not observable from Python, so it is pinned against the source, the
-    same way the SPA state vocabulary above is.
-    """
-
-    def test_grid_teardown_disconnects_the_resize_observer(self) -> None:
-        """Every observed grid wrapper is dropped by dropGrids, so the
-        observer that holds them must be disconnected there too. A ResizeObserver
-        keeps its targets alive until unobserved, and a dropped wrapper carries
-        its canvas context and the per-section hit-map typed arrays with it."""
-        _, detail_js = _spa_sources()
-        drop = detail_js.split("const dropGrids = () => {", 1)[1].split("};", 1)[0]
-        assert "ro.disconnect()" in drop
-        assert "container.innerHTML" in drop
-
-    def test_live_reload_subscribes_once(self) -> None:
-        """The SSE stream pins a bounded server-side /api/events slot until it
-        is closed, so the derive that opens it must not open a second one when
-        it re-runs."""
-        app_js, _ = _spa_sources()
-        after = app_js.split("let closeEvents = null;", 1)[1]
-        derive = after.split("van.derive(() => {", 1)[1].split("});", 1)[0]
-        assert "connectEvents" in derive
-        assert "!detailReady.val || closeEvents" in derive
-
-
-class TestSpaSectionCellsFeedback:
-    """A sibling tab fetches its cells on switch, so it can be slow or fail.
-
-    Without a frame of its own the map area went blank for the fetch and stayed
-    blank after a failure, with nothing to click and nothing said: the tab was
-    a dead end.  The grid renders a loading overlay while the cells are in
-    flight and a retryable notice when the fetch fails.
-    """
-
-    def test_grid_frames_a_section_whose_cells_have_not_arrived(self) -> None:
-        _, detail_js = _spa_sources()
-        branch = detail_js.split("if (sec.cells == null) {", 1)[1].split("return;", 1)[0]
-        assert "loading-overlay" in branch
-        assert "grid-error" in branch
-        assert "Retry" in branch
-        assert "retrySectionCells(secName)" in branch
-
-    def test_a_failed_cells_fetch_is_reported_and_retryable(self) -> None:
-        app_js, _ = _spa_sources()
-        fetch = app_js.split("const ensureSectionCells = async (name) => {", 1)[1]
-        catch = fetch.split("} catch (error)", 1)[1].split("} finally", 1)[0]
-        assert "cellLoadError.val = { section: name, detail: error.message }" in catch
-        # The grid reads the state, so it has to be handed to mountGrid.
-        mount = app_js.split("window.RC.mountGrid({", 1)[1].split("});", 1)[0]
-        assert "cellLoadError" in mount
-        assert "retrySectionCells" in mount
-
-    def test_error_frame_is_styled(self) -> None:
-        import importlib.resources
-
-        from recoverage import assets
-
-        css = importlib.resources.files(assets).joinpath("style.css").read_text(encoding="utf-8")
-        assert ".grid-error {" in css
-
-
-# ── The clock seam ──────────────────────────────────────────────────────
+    def test_enter_jumps_to_the_first_matched_name(self) -> None:
+        app = _web("App.tsx")
+        assert "const [first] = matchedNames;" in app
+        assert "entry.functions?.[0] === first" in app
+        assert "jumpToAddress(toVa(entry.va))" in app
 
 
 class TestClockSeam:
@@ -2564,24 +2290,24 @@ class TestConfigDerivedMemosFollowTheConfigStat:
 class TestSpaDbSuppliedPathsStaySameOrigin:
     """``paths.sourceRoot`` / ``paths.originalDll`` must not steer the browser off-origin.
 
-    Both are values the coverage.db hands the SPA, and a database built from a
-    hostile binary — or imported wholesale from elsewhere — can hold any string
-    in them.  Spliced into an href or a fetch, ``//evil.example`` is a
-    protocol-relative URL and ``/\\evil.example`` is the same once a browser
-    normalizes the backslash, so either one turns the analyst's browser into a
-    beacon and the Source link into a navigation somewhere the dashboard does
-    not own.
+    Both are values the coverage documents hand the dashboard, and a document
+    built from a hostile binary — or imported wholesale from elsewhere — can
+    hold any string in them.  Spliced into an href or a fetch, ``//evil.example``
+    is a protocol-relative URL and ``/\\evil.example`` is the same once a
+    browser normalizes the backslash, so either one turns the analyst's browser
+    into a beacon and the Source link into a navigation somewhere the dashboard
+    does not own.
 
-    The helper is executed rather than pattern-matched: the shipped source is
-    lifted out of app.js and run under bun, so this pins the behaviour the
-    browser sees and fails if the guard is ever edited into something weaker.
-    Skipped when bun is absent; CI installs it (see package.json packageManager).
+    The helper is executed rather than pattern-matched: bun runs the shipped
+    TypeScript module, so this pins the behaviour a browser sees and fails if
+    the guard is ever edited into something weaker.  Skipped when bun is absent;
+    CI installs it (see package.json packageManager).
     """
 
     FALLBACK = "/fallback"
 
-    # (db value, expected result). Accepted values come back unchanged; every
-    # other entry must come back as FALLBACK.
+    # (document value, expected result). Accepted values come back unchanged;
+    # every other entry must come back as FALLBACK.
     CASES: ClassVar[list[tuple[Any, str]]] = [
         # Accepted: same-origin, absolute or relative.
         ("/src/foo", "/src/foo"),
@@ -2609,48 +2335,28 @@ class TestSpaDbSuppliedPathsStaySameOrigin:
     ]
 
     @staticmethod
-    def _app_js() -> str:
-        import importlib.resources
-
-        from recoverage import assets
-
-        return importlib.resources.files(assets).joinpath("app.js").read_text(encoding="utf-8")
-
-    @classmethod
-    def _helper_source(cls) -> str:
-        """The guard as shipped, lifted verbatim out of app.js.
-
-        Sliced on its own boundaries rather than pasted, so the test can never
-        pass against a copy that drifted from the file the server serves.
-        """
-        app_js = cls._app_js()
-        start = app_js.find("const PATH_CONTROL_MAX")
-        end_marker = "return rawPath;\n};"
-        end = app_js.find(end_marker)
-        assert start != -1, "app.js no longer defines the same-origin path guard"
-        assert end != -1, "the same-origin path guard in app.js changed shape"
-        return app_js[start : end + len(end_marker)]
+    def _module_path() -> Path:
+        return WEB_APP / "lib" / "format.ts"
 
     def test_guard_rejects_off_origin_and_scheme_paths(self) -> None:
         bun = shutil.which("bun")
         if bun is None:
             pytest.skip("bun not on PATH")
 
-        harness = (
-            self._helper_source()
-            + "\nconst FALLBACK = "
-            + json.dumps(self.FALLBACK)
+        driver = (
+            "import { sameOriginPath } from "
+            + json.dumps(str(self._module_path()))
             + ";\n"
-            + "const CASES = "
-            + json.dumps(self.CASES)
-            + ";\n"
-            + "console.log(JSON.stringify(CASES.map(([v]) => sameOriginPath(v, FALLBACK))));\n"
+            + "const cases = JSON.parse(await Bun.file(process.argv[2]).text());\n"
+            + "console.log(JSON.stringify(cases.map(([v, f]) => sameOriginPath(v, f))));\n"
         )
         with tempfile.TemporaryDirectory() as tmp:
-            script = Path(tmp) / "guard.mjs"
-            script.write_text(harness, encoding="utf-8")
+            script = Path(tmp) / "guard.ts"
+            script.write_text(driver, encoding="utf-8")
+            cases = Path(tmp) / "cases.json"
+            cases.write_text(json.dumps(self.CASES), encoding="utf-8")
             proc = subprocess.run(
-                [bun, "run", str(script)],
+                [bun, "run", str(script), str(cases)],
                 capture_output=True,
                 text=True,
                 timeout=60,
@@ -2662,76 +2368,63 @@ class TestSpaDbSuppliedPathsStaySameOrigin:
         assert actual == expected, "sameOriginPath accepted an off-origin or scheme-bearing path"
 
     def test_both_db_path_consumers_go_through_the_guard(self) -> None:
-        """Wiring: neither consumer may read a db path without the guard.
+        """Wiring: neither consumer may read a document path without the guard.
 
-        currentDllPath() feeds fetch() with the value completely unencoded, and
-        currentSourceRoot() feeds both the C-source fetch and the href detail.js
-        builds, so a bypass on either is the vulnerability the guard exists for.
+        The binary path reaches fetch() completely unencoded, and the source root
+        feeds both the C-source fetch and the Source href, so a bypass on either
+        is the vulnerability the guard exists for.
         """
-        app_js = self._app_js()
-        for consumer in ("originalDll", "sourceRoot"):
-            at = app_js.find(f".paths.{consumer}")
-            assert at != -1, f"app.js no longer reads paths.{consumer} off the db payload"
-            window = app_js[max(0, at - 400) : at]
-            assert "sameOriginPath(" in window, (
-                f"currentDllPath/currentSourceRoot must validate paths.{consumer} "
-                "through sameOriginPath before it reaches fetch() or an href"
-            )
+        binary = _web("hooks/useOriginalBinary.ts")
+        assert "sameOriginPath(" in binary
+        assert "documentPath" in binary
+        app = _web("App.tsx")
+        assert "sameOriginPath(" in app
+        assert "coverage.paths.sourceRoot" in app
 
 
 class TestHljsThemeFollowsAppTokens:
-    """hljs.css must read the app's palette, not restate it.
+    """The highlight theme must read the app's palette, not restate it.
 
-    The two stylesheets are separate files, so a colour restated as a hex
-    literal is a value that survives a palette change in style.css as an
-    orphan: the code pane keeps the old hue and nothing fails. A var()
-    reference follows. A lightened step of a status hue is legitimate and
-    stays a literal, because it is a different value on purpose.
+    A colour restated as a hex literal is a value that survives a palette change
+    as an orphan: the code pane keeps the old hue and nothing fails. A var()
+    reference follows. A lightened step of a status hue is legitimate and stays
+    a literal, because it is a different value on purpose.
     """
 
     @staticmethod
-    def _css() -> tuple[str, str]:
-        import importlib.resources
-
-        from recoverage import assets
-
-        base = importlib.resources.files(assets)
-        return (
-            base.joinpath("style.css").read_text(encoding="utf-8"),
-            base.joinpath("hljs.css").read_text(encoding="utf-8"),
-        )
+    def _css() -> str:
+        return _web("index.css")
 
     @staticmethod
     def _declarations(css: str, selector: str) -> dict[str, str]:
-        import re
-
         body = css.split(f"{selector} {{", 1)[1].split("\n}", 1)[0]
         return dict(re.findall(r"(--[a-z0-9-]+):\s*([^;]+);", body))
 
     def test_every_referenced_token_is_declared(self) -> None:
-        import re
-
-        style_css, hljs_css = self._css()
+        style_css = self._css()
         declared = set(self._declarations(style_css, ":root"))
         declared |= set(self._declarations(style_css, ".light-mode"))
-        for name in sorted(set(re.findall(r"var\((--[a-z0-9-]+)\)", hljs_css))):
+        theme = style_css.split("@layer components {", 1)[1]
+        for name in sorted(set(re.findall(r"var\((--[a-z0-9-]+)\)", theme))):
             if name.startswith("--hljs-"):
                 continue
-            assert name in declared, f"hljs.css reads {name}, which style.css never declares"
+            assert name in declared, (
+                f"the highlight theme reads {name}, which the token layer never declares"
+            )
 
     @pytest.mark.parametrize(("selector", "css_index"), [(":root", 0), (".light-mode", 1)])
     def test_no_app_token_is_restated_as_a_literal(self, selector: str, css_index: int) -> None:
-        import re
-
-        style_css, hljs_css = self._css()
+        del css_index
+        style_css = self._css()
         app_values = {
             value.strip()
             for value in self._declarations(style_css, selector).values()
             if value.strip().startswith("#")
         }
-        theme = hljs_css.split(f"{selector} {{", 1)[1].split("\n}", 1)[0]
-        literals = {m.group(0).lower() for m in re.finditer(r"#[0-9a-fA-F]{3,8}\b", theme)}
+        theme = style_css.split("@layer components {", 1)[1]
+        hljs_block = theme.split(f"{selector} {{", 1)[1].split("\n}", 1)[0]
+        literals = {m.group(0).lower() for m in re.finditer(r"#[0-9a-fA-F]{3,8}\b", hljs_block)}
         assert not (literals & app_values), (
-            f"hljs.css {selector} spells {sorted(literals & app_values)} by hand; "
+            f"the highlight theme {selector} spells {sorted(literals & app_values)} by hand; "
             "reference the token so the code pane follows a palette change"
         )

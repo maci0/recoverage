@@ -4,16 +4,31 @@
   "private": true,
   "type": "module",
   "packageManager": "bun@1.4.2",
-  "description": "Frontend lint tooling for the recoverage dashboard (JS/TS + HTML/CSS)",
+  "description": "Frontend tooling for the recoverage dashboard (React + Tailwind build, JS/TS + HTML/CSS lint)",
   "scripts": {
     "lint": "bun run lint:js && bun run lint:html",
     "lint:js": "oxlint",
-    "lint:html": "uv run --locked python tools/lint-html.py"
+    "lint:html": "uv run --locked python tools/lint-html.py",
+    "build:web": "vite build --config web/vite.config.ts",
+    "dev:web": "vite --config web/vite.config.ts",
+    "typecheck:web": "tsc --noEmit --project web/tsconfig.json"
   },
   "devDependencies": {
     "@oxlint/plugins": "1.83.0",
+    "@preact/preset-vite": "2.10.6",
     "@rikalabs/oxlint-standards": "0.8.1",
+    "@tailwindcss/vite": "4.3.3",
+    "@types/node": "24.13.4",
+    "class-variance-authority": "0.7.1",
+    "clsx": "2.1.1",
+    "highlight.js": "11.12.0",
+    "lucide-react": "0.577.0",
     "oxlint": "1.83.0",
+    "preact": "10.29.8",
+    "tailwind-merge": "3.7.0",
+    "tailwindcss": "4.3.3",
+    "typescript": "5.9.3",
+    "vite": "8.3.0",
     "vnu-jar": "26.9.16"
   }
 }

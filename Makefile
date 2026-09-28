@@ -174,11 +174,20 @@ setup: ensure-rebrew warn-uv-version
 # backend release can change the artifact bytes under a fixed
 # SOURCE_DATE_EPOCH. --clear drops artifacts from an earlier version, which
 # would otherwise sit in dist/ beside the new ones and be published together.
-build: ensure-rebrew ensure-uv
+build: ensure-rebrew ensure-uv web-build
 	@$(SET_STRICT) \
 	export SOURCE_DATE_EPOCH="$(SOURCE_DATE_EPOCH)" LC_ALL=C TZ=UTC; \
 	uv build --out-dir dist --build-constraints build-constraints.txt --clear; \
 	$(UV_RUN) python tools/normalize_sdist.py dist
+
+# The dashboard bundle. It is committed (src/recoverage/assets/app.js and
+# style.css) because the CI build job copies the tracked tree and builds it
+# twice, and a wheel built without a bundler on the host must still carry a
+# frontend. Rebuilding here is what makes the committed bytes reproducible
+# rather than merely present: the build job's second tree rebuilds and compares.
+web-build: ensure-bun
+	bun install --frozen-lockfile
+	bun run build:web
 
 # Match CI's invocation so a local pass and a CI pass mean the same thing.
 # `python -m`, never the bare tool name: with the dev extra installed a bare

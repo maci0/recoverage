@@ -106,7 +106,7 @@ class _KeepAliveRequestHandler(_QuietTimeoutRequestHandler):
 
     wsgiref's stock handler is HTTP/1.0 and its ``handle`` reads one request
     line and returns, so the connection closed after every response: loading
-    the dashboard opened a fresh TCP connection for the shell, ``detail.js``,
+    the dashboard opened a fresh TCP connection for the shell, the bundle,
     ``/api/targets`` and the data payload, and paid a handshake for each.  The
     loop below is stock ``BaseHTTPRequestHandler.handle`` behaviour that
     wsgiref narrowed to a single request; restoring it is what makes

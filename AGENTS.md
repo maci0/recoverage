@@ -3,7 +3,7 @@
 ## Overview
 
 **recoverage** is a coverage dashboard for binary-matching decompilation projects.
-It serves a VanJS dashboard over rebrew's clear-text coverage TOML,
+It serves a Preact dashboard over rebrew's clear-text coverage TOML,
 visualising per-byte match status across PE sections (`.text`, `.data`,
 `.bss`). Two modes: a modern SPA (default) and a retro "Potato Mode" that
 renders entirely in server-side HTML tables.
@@ -28,7 +28,8 @@ recoverage/
 ├── Makefile                # Contributor targets (`make help`); wraps the CI commands
 ├── LICENSE                  # MIT
 ├── NOTICE                   # Grants for the third-party browser assets bundled in the wheel
-├── package.json            # bun scripts: lint, lint:js, lint:html
+├── package.json            # bun scripts: lint, build:web, dev:web, typecheck:web
+├── web/                    # frontend sources: vite.config.ts + app/ (Preact + Tailwind)
 ├── .yamllint.yaml          # yamllint config for .github/ (document-start, 100 cols)
 ├── oxlint.config.ts        # JS/TS lint config (see the tooling notes below)
 ├── .github/
@@ -83,14 +84,10 @@ recoverage/
     ├── webapp.py            # Composition root: imports api+ui+potato so app has every route
     └── assets/
         ├── index.html       # SPA shell
-        ├── style.css        # All styles
+        ├── style.css        # built Tailwind output — generated, never hand-edited
         ├── print.css        # Print stylesheet
-        ├── app.js           # VanJS frontend
-        ├── detail.js        # Deferred panel logic (hex dump, metadata grid, modal, live reload)
-        ├── van.min.js       # VanJS library
-        ├── favicon.svg      # Retro "R" logo favicon
-        ├── hljs.min.js / hljs-c.min.js / hljs-x86asm.min.js  # Highlight.js core + grammars
-        └── hljs.css         # Highlight.js theme (custom hex language)
+        ├── app.js           # built bundle — generated, never hand-edited
+        └── favicon.svg      # Retro "R" logo favicon
 ```
 
 Frontend lint (bun + a JDK; see `bun run lint:js|html`): `oxlint.config.ts` is
@@ -140,6 +137,7 @@ make format-check           # uv run --locked --extra dev python -m ruff format 
 make format                 # uv run --locked --extra dev python -m ruff format (writes)
 make shell-lint             # shellcheck -x tools/*.sh (needs shellcheck on PATH)
 make yaml-lint              # yamllint -c .yamllint.yaml .github/ (needs yamllint on PATH)
+make web-build              # bun install --frozen-lockfile && bun run build:web (the dashboard bundle)
 make web-lint               # bun install --frozen-lockfile && bun run lint
 make smoke                  # uv run --locked --extra dev python tools/smoke.py
 make smoke-fail             # same, against a deliberately corrupt db
@@ -511,10 +509,14 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   pin classes) and `tests/test_potato.py`
   (`TestRenderIsPinnedToOneSnapshot`), which drive a rebuild from inside the
   read and require the page to stay the first build's.
-- HTML/CSS/JS in `assets/` — no build step, VanJS for reactivity
+- The dashboard frontend is `web/` (Vite + Preact + TypeScript + Tailwind CSS 4
+  + shadcn/ui primitives), built into `assets/app.js` and `assets/style.css` by
+  `make web-build`. The built files are committed: the CI build job copies the
+  tracked tree and rebuilds in both copies, so the committed bundle is proved to
+  match its sources. Never hand-edit them.
 - The cell-state vocabulary is owned by rebrew (`rebrew.build_db._KNOWN_CELL_STATES`)
   and must be covered on the rendering side: `potato.COLORS` + `LEGEND_ITEMS`,
-  `app.js` `STATE_ID`, and `detail.js` `PALETTE_VARS`/`FILTER_KEY`. An unmapped
+  and `web/app/grid/pack.ts` `STATE_SLOTS`/`PALETTE_VARS`/`FILTER_KEY`. An unmapped
   state paints as an undocumented gap, which contradicts `/stats` — `verified`
   is counted there as an exact match. Tests in `test_potato.py`
   (`TestCellStateVocabularyCoverage`) and `test_server.py` (`TestSpaStateVocabulary`)
@@ -551,11 +553,11 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   `tests/test_config.py` pins it: empty means auth off, on purpose, because
   the same spellings would otherwise leave a token-guarded deployment
   unauthenticated in exactly the way the empty allowlist does.
-- JS is linted with oxlint under the `@rikalabs/oxlint-standards` strict preset
-  plus the vendored anti-slop rules; the webui is a classic-script SPA, so
-  `app.js`/`detail.js` are wrapped in IIFEs and share state via `window.RC`.
-  Rationale-bearing `oxlint-disable` comments are the sanctioned escape hatch
-  for UI error boundaries and VanJS idioms (see `oxlint.config.ts`).
+- The frontend is linted with oxlint (and typechecked by `tsc --noEmit`) under
+  the `@rikalabs/oxlint-standards` strict preset plus the vendored anti-slop
+  rules. Rationale-bearing `oxlint-disable` comments are the sanctioned escape
+  hatch where a Preact idiom or a platform constraint collides with a rule (see
+  `oxlint.config.ts`).
 - Search compares names through `server.fold_match`, never a hand-written
   comparison: both sides go through `server.fold_text` (NFC composition plus
   `str.casefold`), so a non-ASCII term matches, `ß` matches `ss`, and the NFD

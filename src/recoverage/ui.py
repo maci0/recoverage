@@ -77,7 +77,12 @@ def _index_etag(payload: bytes, encoding: str) -> str:
 
 
 def _build_index_payload() -> bytes:
-    """Read the SPA shell, inline minified CSS/JS into it, return it.
+    """Read the SPA shell, inline its stylesheet and its bundle, return it.
+
+    The bundle is a single IIFE built by Vite from `web/` (`make web-build`), so
+    the shell still paints without a render-blocking subresource request: the
+    inline is what the first-paint contract buys, and minifying here keeps the
+    served bytes independent of what the bundler already did.
 
     Pure: caching is the caller's job (it already holds INDEX_LOCK).
     """
@@ -91,26 +96,27 @@ def _build_index_payload() -> bytes:
     try:
         js = (assets / "app.js").read_text(encoding="utf-8")
     except OSError:
-        _log.warning("app.js missing — dashboard SPA will not function")
-        js = ""
-    try:
-        vanjs = (assets / "van.min.js").read_text(encoding="utf-8")
-    except OSError:
         # A shipped package asset is missing — the SPA renders but does
         # nothing.  Log it so a broken install is diagnosable.
-        _log.warning("van.min.js missing — dashboard SPA will not function")
-        vanjs = ""
+        _log.warning("app.js missing — dashboard SPA will not function")
+        js = ""
     html = html.replace("<!-- INJECT_CSS -->", f"<style>{rcssmin.cssmin(css)}</style>")
-    html = html.replace(
-        "<!-- INJECT_JS -->",
-        f"<script>{vanjs}\n{rjsmin.jsmin(js)}</script>",
-    )
+    html = html.replace("<!-- INJECT_JS -->", f"<script>{rjsmin.jsmin(js)}</script>")
     payload = html.encode("utf-8")
     _check_payload_budget(payload)
     return payload
 
 
-_TCP_CWND_BUDGET = 14_600
+#: The shell's own size budget.  It was 10 x 1460 bytes (RFC 6928's initial
+#: congestion window) while the frontend was a ~14 KB script that painted the
+#: map itself and deferred the rest.  The current frontend is one Preact +
+#: Tailwind bundle: measured ~45 KB brotli for the inlined shell and stylesheet,
+#: which no longer fits a round trip's initial window and is the price the port
+#: was accepted at.  Preact rather than React is most of why it is that small.
+#: The number below is the checked ceiling rather than the measurement, so a
+#: dependency that doubles the bundle trips the warning instead of growing
+#: silently.
+_TCP_CWND_BUDGET = 90_000
 _log = logging.getLogger("recoverage")
 
 
@@ -123,14 +129,11 @@ def _check_payload_budget(payload: bytes) -> None:
     is the number that decides whether the shell fits the initial congestion
     window, so it is the number checked here.
 
-    The budget is the initial congestion window (10 x 1460-byte MSS), so the
-    payload should arrive in one round trip.  The shipped shell measures
-    ~14.2 KB under brotli q11, the highest quality the library offers, which
-    fits; the margin is thin, and everything deferrable (the asm fetch, its
-    formatting, the canvas coverage map, and the highlight.js load among it)
-    lives in ``detail.js``, so further gains have to come from there.  The
-    warning is the ratchet that says when the shell has crossed, naming the
-    exact overage.
+    The shell ships as one inlined document so the first paint needs no
+    render-blocking subresource request; this is the ratchet that says when that
+    document has grown past its budget, naming the exact overage.  See
+    ``_TCP_CWND_BUDGET`` for why the number is what it is, and docs/DESIGN.md
+    for the measurement.
     """
     results: list[tuple[str, int]] = [
         ("gzip", len(gzip.compress(payload, compresslevel=GZIP_STATIC_LEVEL))),
@@ -145,7 +148,7 @@ def _check_payload_budget(payload: bytes) -> None:
     over = best_size - _TCP_CWND_BUDGET
     _log.warning(
         "Inlined index payload (%s %d bytes) exceeds TCP cwnd budget (%d bytes) by %d bytes"
-        " (move deferrable work into detail.js instead; see docs/DESIGN.md)",
+        " (see docs/DESIGN.md, 'First Draw Without a Render-Blocking Request')",
         best_name,
         best_size,
         _TCP_CWND_BUDGET,
@@ -241,7 +244,7 @@ def _finalized_shell(variant: _Variant) -> bytes:
     under a running server, so it belongs to the same class as the static
     assets below — but it was served ``no-store`` with no validator, which made
     it the one response in the set that a repeat visit could never skip.  Every
-    reload re-downloaded the whole shell while detail.js and the rest answered
+    reload re-downloaded the whole shell while the assets answered
     304.  Revalidate instead: the unchanged case now costs a header round trip
     and no body.
 
@@ -312,18 +315,15 @@ def serve_repo_file(filepath: str) -> bytes | HTTPResponse:
 # on hljs.min.js: brotli q=11 is 37.7 KB vs q=5's 41.4 KB, and its 101 ms runs
 # once instead of per request.
 #
-# static_file served these raw: detail.js, which the shell preloads beside
-# itself (index.html) and app.js requests without blocking first paint, is
-# ~41 KB, and hljs.min.js — fetched when a function's asm pane opens — is
-# 127 KB.  Both brotli down to roughly a third of that, and the whole set is
-# ~280 KB raw.
+# static_file served these raw: the bundle is ~330 KB and the stylesheet ~22 KB,
+# both of which brotli down to a third of that, and the set is what the shell
+# links beside itself.
 #
 # Each entry carries a strong ETag next to the body.  CACHE_REVALIDATE alone
 # ("no-cache") forces the browser back on every load, and with no validator to
 # compare, the only answer is to re-send the whole compressed body: a repeat
-# visit to the dashboard re-downloaded detail.js and every asm pane opening
-# re-downloaded hljs.min.js plus its grammars.  With the ETag those repeat
-# visits answer 304: no body, no decompression, no parse.
+# visit to the dashboard re-downloaded them.  With the ETag those repeat visits
+# answer 304: no body, no decompression, no parse.
 # max-age is deliberately NOT raised — the URLs are not content-hashed, so a
 # package upgrade changes the bytes under the same name and a long-lived
 # freshness lifetime would pin the browser to old JS.  Revalidate cheaply
@@ -373,10 +373,7 @@ def _not_modified(etag: str) -> HTTPResponse:
     )
 
 
-@app.get(
-    "/<filename:re:(?:app\\.js|detail\\.js|style\\.css|print\\.css|van\\.min\\.js|favicon\\.svg"
-    "|hljs\\.css|hljs\\.min\\.js|hljs-c\\.min\\.js|hljs-x86asm\\.min\\.js)>"
-)
+@app.get("/<filename:re:(?:app\\.js|style\\.css|print\\.css|favicon\\.svg)>")
 def serve_static_asset(filename: str) -> bytes | HTTPResponse:
     accept_encoding = _header("Accept-Encoding", "")
     variant_key = static_variant_key(accept_encoding)

@@ -504,7 +504,7 @@ graph TD
 - HTML, CSS, JS, and VanJS library inlined into a single response
 - Minified with `rjsmin`/`rcssmin` and compressed with Brotli/Zstd/gzip
 - Total payload 14,075 B brotli, against a 14,600-byte budget (the TCP initial congestion window), so 525 bytes of headroom remain; `ui._check_payload_budget` warns with the exact overage and `tests/test_api.py` fails, so crossing the window is a regression rather than a log line
-- Everything deferrable (the grid, asm, hex, data inspector, live reload) lives in `detail.js`, which the shell preloads, so a new byte comes out of `detail.js` rather than out of the window
+- The whole frontend is one built bundle inlined into the shell, so a change to the map, the asm pane, the hex dump or the data inspector moves the same measured number, and `tests/test_api.py` fails when it crosses the ceiling
 - Compression algorithm auto-selected from `Accept-Encoding` header
 - Deferred Highlight.js loading: fetched from this origin (vendored in `assets/`) only on first code block click
 - `AbortController` cancels in-flight requests when clicking rapidly between cells
@@ -512,7 +512,7 @@ graph TD
 
 ```mermaid
 graph TD
-    A["Browser requests /"] --> B["Server reads<br/>index.html + style.css<br/>+ app.js + van.min.js"]
+    A["Browser requests /"] --> B["Server reads<br/>index.html + style.css<br/>+ app.js (built bundle)"]
     B --> C["Inline all into<br/>single HTML document"]
     C --> D["Minify CSS (rcssmin)<br/>+ JS (rjsmin)"]
     D --> E{"Accept-Encoding?"}

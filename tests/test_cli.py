@@ -1033,7 +1033,7 @@ class TestServeServerWiring:
         """The handler must speak HTTP/1.1.
 
         wsgiref is HTTP/1.0 and answers one request per connection, so
-        loading the dashboard paid a TCP handshake for the shell, detail.js,
+        loading the dashboard paid a TCP handshake for the shell and its assets,
         the targets list and the data payload.  Keep-alive only exists under
         1.1, and the preamble comes from the ServerHandler subclass, not the
         request handler, so both are pinned here.

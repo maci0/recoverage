@@ -84,7 +84,20 @@ def test_text_section_cells(page: Any):
     page.wait_for_timeout(500)  # wait for render
     canvas = page.locator(".grid-canvas")
     box = canvas.bounding_box()
-    assert box is not None and box["width"] > 50 and box["height"] > 50
+    assert box is not None and box["width"] > 50 and box["height"] > 5
+    # Laid out and painted, not merely sized: a section with a handful of cells
+    # is one short row, so height alone would read as a sliver either way. The
+    # painted alpha channel is what says the map drew something.
+    lit = page.evaluate(
+        """() => {
+          const c = document.querySelector('.grid-canvas');
+          const { data } = c.getContext('2d').getImageData(0, 0, c.width, c.height);
+          let lit = 0;
+          for (let i = 3; i < data.length; i += 4) if (data[i] !== 0) lit += 1;
+          return lit;
+        }"""
+    )
+    assert lit > 0, "the coverage map painted nothing"
 
     # Potato UI still paints one <td> per merged cell.  The count is the
     # section's cell count read back from the API, not a magic number: the
@@ -145,9 +158,8 @@ def test_cell_selection_panel(page: Any):
 
 
 def test_asm_pane_renders_disassembly(page: Any):
-    """The asm fetch, formatting, and highlight live in detail.js (out of the
-    inlined shell), so selecting a function must still fill the Assembly
-    section — text first, then the highlight pass."""
+    """Selecting a function must fill the Assembly section — text first,
+    then the highlight pass."""
     page.goto(f"{BASE_URL}/?section=.text")
     page.wait_for_selector(".grid-canvas")
     page.locator(".tab-btn", has_text=".text").click()

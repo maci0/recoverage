@@ -36,3 +36,7 @@ coverage.db
 coverage.db-shm
 coverage.db-wal
 coverage.db.lock
+.bun-cache/
+.bun-tmp/
+web/dist/
+.uv-cache/
