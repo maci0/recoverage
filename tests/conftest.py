@@ -299,3 +299,17 @@ def get_first_target() -> str:
 
     found = db_target_ids()
     return found[0] if found else ""
+
+
+def require_target() -> str:
+    """The first target, failing the test when the coverage directory holds none.
+
+    Every caller sits behind ``@pytest.mark.skipif(not HAS_DB)``, so an empty
+    target list is not an absent fixture: it is a regression in the synthetic
+    documents or in the directory resolution. A skip there reported a green
+    suite with every assertion behind it unrun.
+    """
+    target = get_first_target()
+    if not target:
+        pytest.fail(f"no coverage target resolved from {Path.cwd() / 'db'}")
+    return target

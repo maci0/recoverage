@@ -9,7 +9,7 @@ from typing import Any, ClassVar
 from urllib.parse import quote, unquote, urlparse
 
 import pytest
-from conftest import HAS_DB, get_first_target, wsgi_get
+from conftest import HAS_DB, require_target, wsgi_get
 from coverage_fixture import cell, coverage_dir, write_coverage
 from rebrew.coverage_toml import CoverageSnapshot, load_coverage
 
@@ -78,9 +78,7 @@ def _shared_snapshot() -> CoverageSnapshot:
     Reads the ambient ``<cwd>/db`` the way the server does, so a
     ``HAS_DB``-gated assertion exercises the same document the render does.
     """
-    target = get_first_target()
-    if not target:
-        pytest.skip("No targets in DB")
+    target = require_target()
     return load_coverage(Path.cwd(), target)
 
 
@@ -725,7 +723,7 @@ def test_multi_function_cell(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage document")
 def test_function_list_view():
-    target = get_first_target()
+    target = require_target()
     html = render_potato_url(f"/potato?target={target}&section=.text&view=functions")
     assert "Functions" in html
     assert "Origin" in html
@@ -739,7 +737,7 @@ def test_function_list_no_match_says_what_to_do():
     used to print neither, so a user who searched from the grid and switched
     views saw "No functions found." with no sign the search was the cause.
     """
-    target = get_first_target()
+    target = require_target()
     html = render_potato_url(
         f"/potato?target={target}&section=.text&view=functions&search=zzz_no_such_function"
     )
@@ -752,7 +750,7 @@ def test_function_list_no_match_says_what_to_do():
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage document")
 def test_function_list_no_match_status_filter_offers_a_way_back():
-    target = get_first_target()
+    target = require_target()
     html = render_potato_url(
         f"/potato?target={target}&section=.text&view=functions&status=NO_SUCH_STATUS"
     )
@@ -768,9 +766,9 @@ def test_search_status_line_explains_an_empty_result():
     `search_match_count == 0` branch, so a template check alone stays green
     when the count never reaches it (the hint on every search, or on none).
     """
-    target = get_first_target()
+    target = require_target()
     if not target:
-        pytest.skip("No targets in DB")
+        pytest.fail("no coverage target resolved: the synthetic document is missing or unreadable")
     hint = "no matches. Check the spelling, or search by VA."
     empty = render_potato_url(f"/potato?target={target}&search=zzz_no_such_function")
     assert hint in empty
@@ -807,11 +805,7 @@ def test_parent_url_selects_the_parents_own_block():
     # And the panel really publishes it. Without this, dropping the
     # parent_url assignment in _render_panel renders href="" and both
     # assertions above still pass, because they read the template constant.
-    from conftest import get_first_target
-
-    target = get_first_target()
-    if not target:
-        pytest.skip("No targets in DB")
+    target = require_target()
     html = render_potato_url(f"/potato?target={target}&section=.text&idx=5")
     assert 'href="?target=FAKEDLL&amp;section=.text&amp;idx=0#sel"' in html
     assert "Parent:" in html
@@ -859,7 +853,7 @@ def test_function_list_sort():
     _func_c (32) and _func_b (16): by name reads a, b, c; by size reads
     b, c, a, so a renderer that ignored ?sort= could not satisfy both.
     """
-    target = get_first_target()
+    target = require_target()
 
     def _first_index(html: str, name: str) -> int:
         return html.index(name)
@@ -877,7 +871,7 @@ def test_function_list_status_filter():
     # The synthetic DB seeds _func_a EXACT, _func_b RELOC, _func_c STUB.  An
     # ignored ?status= would still list all three, so the filtered-out names
     # have to be absent for the filter to be proven.
-    target = get_first_target()
+    target = require_target()
     html = render_potato_url(f"/potato?target={target}&section=.text&view=functions&status=STUB")
     assert "_func_c" in html
     assert "_func_a" not in html
@@ -894,7 +888,7 @@ def test_function_list_reports_the_row_cap(monkeypatch):
     import recoverage.potato as potato_module
 
     monkeypatch.setattr(potato_module, "_SEARCH_ROW_LIMIT", 1)
-    target = get_first_target()
+    target = require_target()
     html = render_potato_url(f"/potato?target={target}&section=.text&view=functions")
     found = re.search(r"\(first 1 of (\d+) results\)", html)
     assert found is not None, html[:400]
@@ -904,7 +898,7 @@ def test_function_list_reports_the_row_cap(monkeypatch):
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage document")
 def test_prev_next_navigation():
-    target = get_first_target()
+    target = require_target()
     html = render_potato_url(f"/potato?target={target}&section=.text&idx=5")
     assert "#sel" in html
     assert "Prev" in html
@@ -913,14 +907,14 @@ def test_prev_next_navigation():
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage document")
 def test_skip_link():
-    target = get_first_target()
+    target = require_target()
     html = render_potato_url(f"/potato?target={target}")
     assert 'href="#grid-container"' in html
 
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage document")
 def test_accesskey_attributes():
-    target = get_first_target()
+    target = require_target()
     html = render_potato_url(f"/potato?target={target}")
     # Search input accesskey + per-section tabs (accesskey = 2nd char of the
     # section name: .text -> "t", .data -> "d").
@@ -934,7 +928,7 @@ def test_functions_nav_link_is_url_quoted():
     # The header [Functions] href is percent-encoded, so a target or section
     # holding "&" cannot append query parameters to it.  Every other href on
     # the page is built by _build_url, which does the same.
-    target = get_first_target()
+    target = require_target()
     html = render_potato_url(f"/potato?target={target}&section=.text")
     assert f'href="?target={target}&amp;section=.text&amp;view=functions"' in html
 
@@ -943,7 +937,7 @@ def test_functions_nav_link_is_url_quoted():
 def test_clickable_asm_addresses(monkeypatch: pytest.MonkeyPatch) -> None:
     from recoverage import potato as _potato
 
-    target = get_first_target()
+    target = require_target()
     idx = _find_cell_idx(target, ".text", lambda funcs: len(funcs) > 0)
     if idx is None:
         pytest.skip("No .text function cell found")
@@ -967,14 +961,14 @@ def test_clickable_asm_addresses(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage document")
 def test_back_to_main_link():
-    target = get_first_target()
+    target = require_target()
     html = render_potato_url(f"/potato?target={target}")
     assert 'href="/"' in html
 
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage document")
 def test_footer_db_date():
-    target = get_first_target()
+    target = require_target()
     html = render_potato_url(f"/potato?target={target}")
     assert "DB updated" in html
     assert "recoverage" in html
@@ -1054,7 +1048,7 @@ class TestDbUpdatedLabel:
 def test_detail_panel_label_value_rows():
     # The detail panel renders label/value rows as <td> pairs, not <th>:
     # potato.py's panel template has no header cells at all.
-    target = get_first_target()
+    target = require_target()
     idx = _find_cell_idx(target, ".text", lambda funcs: len(funcs) > 0)
     if idx is None:
         pytest.skip("No function cell found")
@@ -1067,7 +1061,7 @@ def test_detail_panel_label_value_rows():
 def test_function_detail_shows_verify_similarity():
     """The function data panel surfaces the `rebrew verify -o` record — byte
     delta, diff-line count, and the code-similarity score."""
-    target = get_first_target()
+    target = require_target()
     # The synthetic DB seeds a verify_results row for 0x10001000 (_func_a) with
     # similarity 0.873 — the unit-interval fraction the column stores, rendered
     # as 87.3%.  The render's per-cell `idx` is the grid position (not the
@@ -1082,7 +1076,7 @@ def test_function_detail_shows_verify_similarity():
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage document")
 def test_label_for_search():
-    target = get_first_target()
+    target = require_target()
     html = render_potato_url(f"/potato?target={target}")
     assert 'label for="search-input"' in html
     assert 'label for="target-select"' in html
@@ -1129,7 +1123,7 @@ def test_function_detail_similarity_fraction_rendered_as_percent(
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage document")
 def test_etag_caching():
-    target = get_first_target()
+    target = require_target()
 
     def _etag(headers: dict[str, str]) -> str | None:
         # Bottle emits the header as "Etag"; HTTP headers are case-insensitive.
@@ -1369,9 +1363,7 @@ class TestIdxParsing:
     CELL_MARKER = "<b>Range:</b>"
 
     def _render(self, idx_value: str) -> str:
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         return render_potato_url(
             f"/potato?target={target}&section=.text&idx={quote(idx_value, safe='')}"
         )
@@ -2741,9 +2733,7 @@ class TestRenderIsPinnedToOneSnapshot:
         """
         from recoverage import potato
 
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
 
         # Call 1: the render's token, before it loads the snapshot.  Every call
         # after it sees a `rebrew build-db` that committed mid-render.

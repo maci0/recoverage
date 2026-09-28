@@ -18,7 +18,15 @@ from typing import Any, ClassVar
 from wsgiref.util import setup_testing_defaults
 
 import pytest
-from conftest import HAS_DB, decode_body, get_first_target, wsgi_get, wsgi_post, wsgi_request
+from conftest import (
+    HAS_DB,
+    decode_body,
+    get_first_target,
+    require_target,
+    wsgi_get,
+    wsgi_post,
+    wsgi_request,
+)
 from coverage_fixture import cell, coverage_dir, write_coverage
 from rebrew.coverage_toml import CoverageSnapshot, CoverageTomlError, load_coverage
 
@@ -588,9 +596,7 @@ class TestApiFunctions:
     """Test /api/targets/<target>/functions with sort validation."""
 
     def test_default_sort(self) -> None:
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         status, headers, body = wsgi_get(f"/api/targets/{target}/functions")
         assert status.startswith("200")
         data = json.loads(decode_body(body, headers))
@@ -604,9 +610,7 @@ class TestApiFunctions:
         `name:desc` and then ignored it answered identically. The synthetic
         DB seeds _func_a/_func_b/_func_c, so the descending order is exact.
         """
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         status, headers, body = wsgi_get(f"/api/targets/{target}/functions?sort=name:desc&limit=50")
         assert status.startswith("200")
         data = json.loads(decode_body(body, headers))
@@ -617,9 +621,7 @@ class TestApiFunctions:
 
     def test_invalid_sort_field_falls_back(self) -> None:
         """SQL injection in sort field should be rejected by whitelist."""
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         # Should still return 200 — invalid sort falls back to default "va"
         status, headers, body = wsgi_get(
             f"/api/targets/{target}/functions?sort=DROP%20TABLE%20functions"
@@ -636,9 +638,7 @@ class TestApiFunctions:
         assert data["total"] >= 1
 
     def test_pagination(self) -> None:
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         status, headers, body = wsgi_get(f"/api/targets/{target}/functions?limit=5&offset=0")
         assert status.startswith("200")
         data = json.loads(decode_body(body, headers))
@@ -709,18 +709,14 @@ class TestApiFunctions:
         cap, not a number, zero, and negative. Each is answered 200 with the
         field the server actually used.
         """
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         status, headers, body = wsgi_get(f"/api/targets/{target}/functions?{query}")
         assert status.startswith("200")
         data = json.loads(decode_body(body, headers))
         assert data[field] == expected
 
     def test_status_filter_narrows_results(self) -> None:
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         status, headers, body = wsgi_get(f"/api/targets/{target}/functions?status=EXACT")
         assert status.startswith("200")
         data = json.loads(decode_body(body, headers))
@@ -735,9 +731,7 @@ class TestApiFunctions:
         answer 200 with total 0 — indistinguishable from a target that has no
         functions of that status.
         """
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         status, headers, body = wsgi_get(f"/api/targets/{target}/functions?status=EXACTX")
         assert status.startswith("400")
         data = json.loads(decode_body(body, headers))
@@ -746,17 +740,13 @@ class TestApiFunctions:
 
     def test_every_known_status_is_accepted(self) -> None:
         """The guard rejects typos only: no status in the vocabulary 400s."""
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         for value in sorted(api._FUNCTION_STATUSES):
             status, _, _ = wsgi_get(f"/api/targets/{target}/functions?status={value}")
             assert status.startswith("200"), f"{value} is in the vocabulary but was refused"
 
     def test_search_matches_name_substring(self) -> None:
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         status, headers, body = wsgi_get(f"/api/targets/{target}/functions?search=_func_b")
         assert status.startswith("200")
         data = json.loads(decode_body(body, headers))
@@ -765,9 +755,7 @@ class TestApiFunctions:
     def test_search_like_wildcards_match_literally(self) -> None:
         """% in the search must be escaped, not act as a LIKE wildcard —
         an unescaped pattern would return every row (or inject a pattern)."""
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         status, headers, body = wsgi_get(f"/api/targets/{target}/functions?search=%25")
         assert status.startswith("200")
         data = json.loads(decode_body(body, headers))
@@ -820,18 +808,14 @@ class TestApiAsmVaBoundaries:
         """va=0x10000F80: delta -0x80 so file_offset=0x180 stays >= 0 — only
         the va < sec_va half catches this; disassembling bytes from before
         the section as if they were at va was the bug."""
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         status, headers, body = self._asm(target, "va=0x10000F80&size=16")
         assert status.startswith("400")
         data = json.loads(decode_body(body, headers))
         assert data["error"] == "va is before section start"
 
     def test_negative_va_rejected(self) -> None:
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         status, headers, body = self._asm(target, "va=-0x10&size=16")
         assert status.startswith("400")
         data = json.loads(decode_body(body, headers))
@@ -839,25 +823,19 @@ class TestApiAsmVaBoundaries:
 
     def test_va_at_exact_section_end_rejected(self) -> None:
         """VA equal to sec_va + sec_size is the first out-of-bounds address."""
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         status, headers, body = self._asm(target, "va=0x10002000&size=16")
         assert status.startswith("400")
         data = json.loads(decode_body(body, headers))
         assert data["error"] == "va is beyond section end"
 
     def test_va_one_past_end_rejected(self) -> None:
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         status, _, _ = self._asm(target, "va=0x10002001&size=16")
         assert status.startswith("400")
 
     def test_va_far_beyond_end_rejected(self) -> None:
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         status, _, _ = self._asm(target, "va=0xFFFFFFFF&size=16")
         assert status.startswith("400")
 
@@ -865,9 +843,7 @@ class TestApiAsmVaBoundaries:
         """va = section end - 1 must NOT trip either boundary check; the
         request proceeds far enough to fail later on the missing DLL (404),
         which proves the guard accepted the final in-bounds address."""
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         status, headers, body = self._asm(target, "va=0x10001FFF&size=1")
         assert status.startswith("404")
         data = json.loads(decode_body(body, headers))
@@ -875,9 +851,7 @@ class TestApiAsmVaBoundaries:
 
     def test_zero_size_still_rejected_at_boundary_class(self) -> None:
         """size clamps/validates before the VA checks: size=0 is its own 400."""
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         status, _, _ = self._asm(target, "va=0x10001000&size=0")
         assert status.startswith("400")
 
@@ -888,9 +862,7 @@ class TestApiAsmVaBoundaries:
         read an address orders of magnitude past the section and answered 400
         for every undocumented-block disassembly request.
         """
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         status, headers, body = self._asm(target, "va=268439648&size=16")
         # Past the boundary guards and far enough to fail on the missing DLL.
         assert status.startswith("404")
@@ -905,9 +877,7 @@ class TestApiAsmVaBoundaries:
         the resolved-then-404 answer `test_decimal_va_spelling_accepted`
         establishes for 0x10001000.
         """
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         dec_status, dec_headers, dec_body = self._asm(target, "va=268439552&size=1")
         hex_status, hex_headers, hex_body = self._asm(target, "va=0x10001000&size=1")
         assert dec_status == hex_status == "404 Not Found", (dec_status, hex_status)
@@ -923,18 +893,14 @@ class TestApiAsmVaBoundaries:
         error text is what separates "resolved, then the DLL is missing" from
         "no such VA".
         """
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         status, headers, body = self._asm(target, "va=10001060&size=16")
         assert status.startswith("404")
         data = json.loads(decode_body(body, headers))
         assert data["error"] == "DLL not found"
 
     def test_unparseable_va_rejected(self) -> None:
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         status, _, _ = self._asm(target, "va=zzz&size=16")
         assert status.startswith("400")
 
@@ -953,18 +919,14 @@ class TestApiAsm:
         monkeypatch.setattr(api, "capstone_unavailable_reason", lambda: None)
 
     def test_missing_params_returns_400(self) -> None:
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         status, headers, body = wsgi_get(f"/api/targets/{target}/asm")
         assert status.startswith("400")
         data = json.loads(decode_body(body, headers))
         assert data["error"] == "missing va or size"
 
     def test_zero_size_returns_400(self) -> None:
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         status, headers, body = wsgi_get(f"/api/targets/{target}/asm?va=0x10001000&size=0")
         assert status.startswith("400")
         data = json.loads(decode_body(body, headers))
@@ -984,9 +946,7 @@ class TestApiAsm:
         import recoverage.api as api
 
         monkeypatch.setattr(api, "_load_dll", lambda target: None)
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         for fmt in ("text", "json"):
             status, headers, body = wsgi_get(
                 f"/api/targets/{target}/asm?va=0x10001000&size=16&format={fmt}"
@@ -1555,9 +1515,7 @@ class TestLastVerify:
     """
 
     def test_function_detail_includes_last_verify(self) -> None:
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         status, headers, body = wsgi_get(f"/api/targets/{target}/functions/0x10001000")
         assert status.startswith("200")
         data = json.loads(decode_body(body, headers))
@@ -1567,18 +1525,20 @@ class TestLastVerify:
     def test_function_detail_accepts_decimal_va(self) -> None:
         """The /functions list emits va as a decimal int — taking that value
         straight into the detail route must not 404 (round-trip contract)."""
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
-        status, _, body = wsgi_get(f"/api/targets/{target}/functions/0x10001000")
-        hex_data = json.loads(decode_body(body, {}))
-        status, _, body = wsgi_get(f"/api/targets/{target}/functions/{hex_data['va']}")
+        target = require_target()
+        status, headers, body = wsgi_get(f"/api/targets/{target}/functions/0x10001000")
         assert status.startswith("200")
+        hex_data = json.loads(decode_body(body, headers))
+        status, headers, body = wsgi_get(f"/api/targets/{target}/functions/{hex_data['va']}")
+        assert status.startswith("200")
+        # The 200 alone is half the contract: a reader that parsed the decimal
+        # as 0 and then resolved *something* answered identically. The two
+        # spellings of one VA must return the same function.
+        assert json.loads(decode_body(body, headers)) == hex_data
+        assert hex_data["name"] == "_func_a"
 
     def test_function_without_verify_record_omits_field(self) -> None:
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         status, headers, body = wsgi_get(f"/api/targets/{target}/functions/0x10001030")
         assert status.startswith("200")
         data = json.loads(decode_body(body, headers))
@@ -2040,9 +2000,7 @@ class TestBatchFunctionLookup:
         )
 
     def test_batch_returns_details_with_last_verify(self) -> None:
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         status, headers, body = self._post(
             target, json.dumps({"vas": ["0x10001000", "0x10001010"]})
         )
@@ -2063,9 +2021,7 @@ class TestBatchFunctionLookup:
         verify row exists.  A row dropped, reordered, or silently missing a
         field still parses as JSON, so asserting on the parsed array is the
         only thing that catches it."""
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         vas = ["0x10001010", "0x10001000"]  # reverse order: output follows input
         status, headers, body = self._post(target, json.dumps({"vas": vas}))
         assert status.startswith("200")
@@ -2085,9 +2041,7 @@ class TestBatchFunctionLookup:
         """A declared non-JSON media type is a 415, not a body that parses
         by accident: the client set the header wrongly and 'Body must be a
         JSON object' would blame the payload instead."""
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         for content_type in ("text/plain", "application/x-www-form-urlencoded"):
             status, headers, body = wsgi_post(
                 f"/api/targets/{target}/functions",
@@ -2102,27 +2056,28 @@ class TestBatchFunctionLookup:
     def test_batch_accepts_json_content_type_variants(self) -> None:
         """A charset parameter and a +json structured suffix are both JSON;
         the check is on the media type, not a byte-exact header match."""
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         for content_type in (
             "application/json; charset=utf-8",
             "application/vnd.recoverage+json",
             "APPLICATION/JSON",
         ):
-            status, _headers, _body = wsgi_post(
+            status, headers, body = wsgi_post(
                 f"/api/targets/{target}/functions",
                 headers={"Content-Type": content_type},
                 body=json.dumps({"vas": ["0x10001000"]}),
             )
             assert status.startswith("200"), content_type
+            # 200 is not "the body was parsed": a handler that answered 200
+            # with the error envelope passes it. The VA is known, so the
+            # result names it.
+            results = json.loads(decode_body(body, headers))
+            assert [r["name"] for r in results] == ["_func_a"], content_type
 
     def test_batch_accepts_absent_content_type(self) -> None:
         """A client that omits the header entirely is not refused; the body
         is still parsed. Keeps curl -d and other header-less clients working."""
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         status, _headers, _body = wsgi_post(
             f"/api/targets/{target}/functions",
             body=json.dumps({"vas": ["0x10001000"]}),
@@ -2132,9 +2087,7 @@ class TestBatchFunctionLookup:
     def test_batch_rejects_oversized_body(self) -> None:
         """The batch endpoint is unauthenticated — an oversized body must be
         rejected with 413 before it is parsed, not read into memory."""
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         status, _, _body = wsgi_post(
             f"/api/targets/{target}/functions",
             body=b'{"vas": ["0x10001000"]' + b" " * 70_000 + b"}",
@@ -2151,9 +2104,7 @@ class TestBatchFunctionLookup:
         so if the handler reads it at all the count moves; the refusal must
         come from the header alone.
         """
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         stream = _CountingStream(b'{"vas": ["0x10001000"]}')
         status, headers, _body = wsgi_request(
             "POST",
@@ -2170,9 +2121,7 @@ class TestBatchFunctionLookup:
         """The reader stops at the cap with the rest of the body in the
         socket, so the refusal must close: a keep-alive handler would read
         those bytes as the next request."""
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         status, headers, _body = wsgi_post(
             f"/api/targets/{target}/functions",
             body=b'{"vas": ["0x10001000"]' + b" " * 70_000 + b"}",
@@ -2183,12 +2132,10 @@ class TestBatchFunctionLookup:
     def test_batch_reads_a_chunked_body(self) -> None:
         """A chunked request carries no Content-Length, so the cap can only be
         enforced while reading. The chunks decode to the same JSON."""
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         payload = json.dumps({"vas": ["0x10001000"]}).encode()
         chunked = b"%x\r\n%s\r\n0\r\n\r\n" % (len(payload), payload)
-        status, _, _body = wsgi_request(
+        status, headers, body = wsgi_request(
             "POST",
             f"/api/targets/{target}/functions",
             {"Transfer-Encoding": "chunked"},
@@ -2197,13 +2144,19 @@ class TestBatchFunctionLookup:
             content_length=None,
         )
         assert status.startswith("200")
+        # "decode to the same JSON" is the claim the docstring makes, so it is
+        # the claim to assert: the framed request answers with the results the
+        # unframed one does, which a 200 from an unparsed body would not.
+        _s, plain_headers, plain_body = wsgi_post(f"/api/targets/{target}/functions", body=payload)
+        assert json.loads(decode_body(body, headers)) == json.loads(
+            decode_body(plain_body, plain_headers)
+        )
+        assert [r["name"] for r in json.loads(decode_body(body, headers))] == ["_func_a"]
 
     def test_batch_refuses_an_oversize_chunked_body(self) -> None:
         """The chunked cap is on the DECODED bytes, so a body split into many
         small chunks is refused just the same."""
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         chunk = b" " * 4096
         framed = b"".join(b"%x\r\n%s\r\n" % (len(chunk), chunk) for _ in range(32))
         status, headers, _body = wsgi_request(
@@ -2224,9 +2177,7 @@ class TestBatchFunctionLookup:
         this body decodes whole — a body the client never framed that way, read
         off a socket that is carrying whatever follows it. Refused as malformed
         instead, and the connection closed with it."""
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         status, headers, _body = wsgi_request(
             "POST",
             f"/api/targets/{target}/functions",
@@ -2239,9 +2190,7 @@ class TestBatchFunctionLookup:
         assert headers.get("Connection") == "close"
 
     def test_batch_omits_unknown_vas(self) -> None:
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         status, headers, body = self._post(
             target, json.dumps({"vas": ["0x10001000", "0x99999999"]})
         )
@@ -2250,17 +2199,13 @@ class TestBatchFunctionLookup:
         assert [fn["va"] for fn in data] == [0x10001000]
 
     def test_batch_all_unknown_vas_returns_empty_list(self) -> None:
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         status, headers, body = self._post(target, json.dumps({"vas": ["0x99999999"]}))
         assert status.startswith("200")
         assert json.loads(decode_body(body, headers)) == []
 
     def test_batch_includes_globals(self) -> None:
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         status, headers, body = self._post(
             target, json.dumps({"vas": ["0x10001000", "0x10002000"]})
         )
@@ -2271,9 +2216,7 @@ class TestBatchFunctionLookup:
         assert data[1]["isGlobal"] == 1
 
     def test_batch_preserves_input_order(self) -> None:
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         status, headers, body = self._post(
             target, json.dumps({"vas": ["0x10001030", "0x10001000"]})
         )
@@ -2282,18 +2225,14 @@ class TestBatchFunctionLookup:
         assert [fn["name"] for fn in data] == ["_func_c", "_func_a"]
 
     def test_batch_accepts_int_vas(self) -> None:
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         status, headers, body = self._post(target, json.dumps({"vas": [0x10001000]}))
         assert status.startswith("200")
         data = json.loads(decode_body(body, headers))
         assert [fn["name"] for fn in data] == ["_func_a"]
 
     def test_batch_dedupes_repeated_vas(self) -> None:
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         status, headers, body = self._post(
             target, json.dumps({"vas": ["0x10001000", "0x10001000"]})
         )
@@ -2302,9 +2241,7 @@ class TestBatchFunctionLookup:
         assert len(data) == 1
 
     def test_batch_empty_vas_400(self) -> None:
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         status, headers, body = self._post(target, json.dumps({"vas": []}))
         assert status.startswith("400")
         data = json.loads(decode_body(body, headers))
@@ -2320,9 +2257,7 @@ class TestBatchFunctionLookup:
         answers, so a handler that raises _json_err without one of the keys
         must not be able to ship.
         """
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         probes: list[str] = [
             "/api/targets/no-such-target/stats",
             f"/api/targets/{target}/functions?status=nope",
@@ -2356,16 +2291,12 @@ class TestBatchFunctionLookup:
         it is unparsable, empty, an array, an object without `vas`, or one
         whose `vas` is a string rather than a list.
         """
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         status, _, _ = self._post(target, body)
         assert status.startswith("400")
 
     def test_batch_malformed_va_400(self) -> None:
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         status, headers, body = self._post(target, json.dumps({"vas": ["not-a-va"]}))
         assert status.startswith("400")
         data = json.loads(decode_body(body, headers))
@@ -2375,9 +2306,7 @@ class TestBatchFunctionLookup:
     def test_batch_too_many_vas_400(self) -> None:
         import recoverage.api as api
 
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         vas = ["0x10001000"] * (api._MAX_BATCH_LOOKUP + 1)
         status, headers, body = self._post(target, json.dumps({"vas": vas}))
         assert status.startswith("400")
@@ -2412,9 +2341,7 @@ class TestBatchFunctionLookup:
         the real route: the WSGI environ carries the broken stream, and only
         the error label may differ from a genuinely empty body.
         """
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
 
         class _BrokenStream:
             def read(self, _n: int = -1) -> bytes:
@@ -2471,17 +2398,13 @@ class TestErrorResponseShape:
         return data
 
     def test_404_function_detail(self) -> None:
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         status, headers, body = wsgi_get(f"/api/targets/{target}/functions/0xdeadbeef")
         data = self._check(status, headers, body, "not_found")
         assert "0xdeadbeef" in data["detail"]
 
     def test_400_bad_request(self) -> None:
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         status, headers, body = wsgi_post(f"/api/targets/{target}/functions", body="[]")
         self._check(status, headers, body, "bad_request")
 
@@ -2517,9 +2440,7 @@ class TestErrorResponseShape:
     def test_503_db_unavailable(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import recoverage.server as server_mod
 
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
 
         def _boom(_root: Path) -> dict[str, CoverageSnapshot]:
             raise CoverageTomlError("no readable coverage document")
@@ -2541,9 +2462,7 @@ class TestErrorResponseShape:
         import recoverage.api as api
         import recoverage.server as server_mod
 
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
 
         def _boom(_root: Path) -> dict[str, CoverageSnapshot]:
             raise CoverageTomlError("coverage-GAME.toml: malformed TOML (torn file)")
@@ -2769,9 +2688,7 @@ class TestUnknownTarget:
 
     @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")
     def test_known_target_still_200(self) -> None:
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         status, _, _ = wsgi_get(f"/api/targets/{target}/stats")
         assert status.startswith("200")
 
@@ -2864,9 +2781,7 @@ class TestPostResolveReadFailure:
     def test_read_failure_returns_json_503(self, monkeypatch: Any) -> None:
         import recoverage.server as server_mod
 
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
 
         # A warm /stats memo returns before reading coverage at all; this test
         # exercises the read-failure path, so it must start from a cold memo.
@@ -3791,9 +3706,7 @@ class TestApiEtagContract:
         a pure function of the DB snapshot and the target, so a polling
         consumer must be able to get a 304 rather than re-run the
         SECTION_STATS_SQL aggregation."""
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         status, headers, _ = wsgi_get(f"/api/targets/{target}/stats")
         assert status.startswith("200")
         etag = _header(headers, "ETag")
@@ -3808,17 +3721,13 @@ class TestApiEtagContract:
     def test_stats_etag_differs_from_data_etag(self) -> None:
         """The two same-snapshot routes must not share a validator, or a
         client that revalidated /stats could cache the /data body under it."""
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         _, stats_headers, _ = wsgi_get(f"/api/targets/{target}/stats")
         _, data_headers, _ = wsgi_get(f"/api/targets/{target}/data")
         assert _header(stats_headers, "ETag") != _header(data_headers, "ETag")
 
     def test_data_etag_roundtrip(self) -> None:
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         status, headers, _ = wsgi_get(f"/api/targets/{target}/data")
         assert status.startswith("200")
         etag = _header(headers, "ETag")
@@ -3831,18 +3740,14 @@ class TestApiEtagContract:
         assert body == b""
 
     def test_data_etag_differs_by_section(self) -> None:
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         _, h1, _ = wsgi_get(f"/api/targets/{target}/data")
         _, h2, _ = wsgi_get(f"/api/targets/{target}/data?section=.text")
         assert _header(h1, "ETag") != _header(h2, "ETag")
 
     def test_unknown_section_404s(self) -> None:
         """/data?section=<unknown> must 404 (was a silent empty grid)."""
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         status, _, body = wsgi_get(f"/api/targets/{target}/data?section=.nosuch")
         assert status.startswith("404")
         payload = json.loads(decode_body(body, {}))
@@ -4127,9 +4032,6 @@ class TestSseClientCap:
         with 503 (thread-DoS guard)."""
         import recoverage.api as api
 
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
         with api._SSE_CLIENTS_LOCK:
             for _ in range(api._SSE_MAX_CLIENTS):
                 api._SSE_CLIENTS[queue.Queue(maxsize=api._SSE_QUEUE_MAX)] = "test-peer"
@@ -4202,9 +4104,7 @@ class TestDataEndpointUnreadableCoverage:
         import recoverage.server as server_mod
 
         api._clear_data_cache()  # drop memo entries earlier tests left behind
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
 
         def _boom(_root: Path) -> dict[str, CoverageSnapshot]:
             raise CoverageTomlError("coverage-GAME.toml: malformed TOML")
@@ -4223,9 +4123,7 @@ class TestKnownSchemaContract:
     def test_data_payload_lists_known_schema(self) -> None:
         from recoverage import server as server_mod
 
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         status, _, body = wsgi_get(f"/api/targets/{target}/data")
         assert status.startswith("200")
         data = json.loads(decode_body(body, {}))
@@ -4239,9 +4137,7 @@ class TestKnownSchemaContract:
         """No consumer reads cells.id, and as the only high-entropy column it
         cost 4.3x on the wire (322 KB -> 75 KB zstd on a 39k-cell section).
         Re-adding it would silently undo that, so pin the served key set."""
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         status, _, body = wsgi_get(f"/api/targets/{target}/data")
         assert status.startswith("200")
         data = json.loads(decode_body(body, {}))
@@ -4378,9 +4274,7 @@ class TestSectionFilterKeepsSiblings:
     """?section= omits sibling cell arrays but still lists every section."""
 
     def test_section_query_keeps_all_section_rows(self) -> None:
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         status, _, body = wsgi_get(f"/api/targets/{target}/data?section=.text")
         assert status.startswith("200")
         data = json.loads(decode_body(body, {}))
@@ -4653,10 +4547,13 @@ class TestVaOverflowValidation:
 
     def test_batch_accepts_signed_int64_max(self) -> None:
         """The boundary itself is valid input: a miss, not an error."""
-        status, _, _ = wsgi_post(
+        status, headers, body = wsgi_post(
             "/api/targets/FAKEDLL/functions", body=json.dumps({"vas": [2**63 - 1]})
         )
         assert status.startswith("200")
+        # A miss is an empty result list; 2**63-1 is in no section, so any
+        # entry here would be a row resolved from a truncated or wrapped VA.
+        assert json.loads(decode_body(body, headers)) == []
 
     def test_get_function_huge_va_is_404_not_500(self) -> None:
         status, headers, body = wsgi_get(f"/api/targets/FAKEDLL/functions/{2**80}")
@@ -4665,9 +4562,7 @@ class TestVaOverflowValidation:
         assert data["code"] == "not_found"
 
     def test_functions_offset_beyond_int64_clamped(self) -> None:
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         status, headers, body = wsgi_get(f"/api/targets/{target}/functions?offset={10**25}")
         assert status.startswith("200")
         data = json.loads(decode_body(body, headers))
@@ -5160,9 +5055,7 @@ class TestSliceValidationDetail:
             server.DLL_DATA["FAKEDLL"] = self.dll
 
     def test_asm_missing_param_names_which(self) -> None:
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         status, headers, body = wsgi_get(f"/api/targets/{target}/asm?va=0x10001000")
         assert status.startswith("400")
         data = json.loads(decode_body(body, headers))
@@ -5171,9 +5064,7 @@ class TestSliceValidationDetail:
         assert "va" not in data["detail"].split("size")[0]
 
     def test_asm_bad_size_quotes_the_value(self) -> None:
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         status, headers, body = wsgi_get(f"/api/targets/{target}/asm?va=0x10001000&size=abc")
         assert status.startswith("400")
         data = json.loads(decode_body(body, headers))
@@ -5182,9 +5073,7 @@ class TestSliceValidationDetail:
 
     def test_asm_unknown_format_rejected(self) -> None:
         """A typo'd representation must not silently return the text form."""
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         status, headers, body = wsgi_get(
             f"/api/targets/{target}/asm?va=0x10001000&size=16&format=jsom"
         )
@@ -5201,9 +5090,7 @@ class TestSliceValidationDetail:
         `not 400` is a claim any 5xx satisfies, so the two spellings must
         answer 200 with the same disassembly, byte for byte.
         """
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         lower = wsgi_get(f"/api/targets/{target}/asm?va=0x10001000&size=16&format=text")
         upper = wsgi_get(f"/api/targets/{target}/asm?va=0x10001000&size=16&format=TEXT")
         assert lower[0].startswith("200"), lower[0]
@@ -5211,9 +5098,7 @@ class TestSliceValidationDetail:
         assert decode_body(upper[2], upper[1]) == decode_body(lower[2], lower[1])
 
     def test_asm_empty_format_is_the_default(self) -> None:
-        target = get_first_target()
-        if not target:
-            pytest.skip("No targets in DB")
+        target = require_target()
         query = f"/api/targets/{target}/asm?va=0x10001000&size=16"
         default = wsgi_get(query)
         empty = wsgi_get(f"{query}&format=")
@@ -5811,14 +5696,14 @@ class TestDataSearchIndexOptOut:
 
     def test_full_payload_carries_the_index(self) -> None:
         api._clear_data_cache()
-        target = get_first_target()
+        target = require_target()
         status, headers, body = wsgi_get(f"/api/targets/{target}/data")
         assert status.startswith("200"), status
         assert "search_index" in json.loads(decode_body(body, headers))
 
     def test_index_zero_omits_the_index_and_keeps_the_cells(self) -> None:
         api._clear_data_cache()
-        target = get_first_target()
+        target = require_target()
         status, headers, body = wsgi_get(f"/api/targets/{target}/data?section=.text&index=0")
         assert status.startswith("200"), status
         payload = json.loads(decode_body(body, headers))
@@ -5828,14 +5713,14 @@ class TestDataSearchIndexOptOut:
 
     def test_the_two_variants_do_not_share_an_etag(self) -> None:
         api._clear_data_cache()
-        target = get_first_target()
+        target = require_target()
         _, full, _ = wsgi_get(f"/api/targets/{target}/data?section=.text")
         _, bare, _ = wsgi_get(f"/api/targets/{target}/data?section=.text&index=0")
         assert full["Etag"] != bare["Etag"]
 
     def test_index_one_and_an_absent_index_both_carry_it(self) -> None:
         api._clear_data_cache()
-        target = get_first_target()
+        target = require_target()
         for query in ("", "?index=1", "?index=%201%20"):
             status, headers, body = wsgi_get(f"/api/targets/{target}/data{query}")
             assert status.startswith("200"), status
@@ -5849,7 +5734,7 @@ class TestDataSearchIndexOptOut:
         with nothing in the answer to say the opt-out was ignored.
         """
         api._clear_data_cache()
-        target = get_first_target()
+        target = require_target()
         for value in ("false", "no", "2", "00"):
             status, headers, body = wsgi_get(f"/api/targets/{target}/data?index={value}")
             assert status.startswith("400"), value
