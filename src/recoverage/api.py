@@ -14,7 +14,8 @@ from pathlib import Path
 from typing import Any
 
 from rebrew.coverage_toml import CoverageSnapshot, CoverageTomlError, Function, Global
-from rebrew.workspace import KNOWN_STATUSES, VA_MAX, parse_va_candidates
+from rebrew.workspace import VA_MAX, parse_va_candidates
+from rebrew.workspace.status import COVERAGE_DB_STATUSES
 
 from recoverage import __version__, clock
 from recoverage import metrics as _metrics
@@ -1529,13 +1530,15 @@ _MAX_SLICE_SIZE = 4096
 _MAX_SEARCH_CHARS = 500
 
 #: Statuses ``functions.status`` can carry: rebrew's own vocabulary
-#: (``rebrew.build_db._FUNCTION_DB_STATUSES``, which is KNOWN_STATUSES plus the
-#: UNKNOWN default a catalog row falls back to) read from rebrew rather than
-#: restated, so a status rebrew adds is filterable the day it lands.
+#: (``rebrew.workspace.status.COVERAGE_DB_STATUSES``, which build_db installs as
+#: ``_FUNCTION_DB_STATUSES``) read from rebrew rather than restated, so a status
+#: rebrew adds is filterable the day it lands, and one it withdraws stops being
+#: accepted the day it goes.  The same rule ``server.DATA_MARKER_TYPES`` follows
+#: for the marker vocabulary.
 #: ``tests/test_api.py`` (``TestFunctionStatusVocabulary``) pins the set against
 #: rebrew's, so a rebrew change that misses this import fails a test instead of
 #: silently 400-ing a status the DB does hold.
-_FUNCTION_STATUSES: frozenset[str] = frozenset({*KNOWN_STATUSES, "UNKNOWN"})
+_FUNCTION_STATUSES: frozenset[str] = COVERAGE_DB_STATUSES
 
 # Media types POST /api/targets/<t>/functions accepts for its body.  The
 # endpoint has exactly one body format, so a request declaring anything else
