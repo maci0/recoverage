@@ -2985,6 +2985,85 @@ class TestSpaStateVocabulary:
         assert "no function" in map_source
 
 
+class TestSpaNumericBoundaries:
+    """The dashboard's own arithmetic: a range, a fraction and a lattice width,
+    each read off the coverage document and each with a bound the Python
+    surfaces already applied.
+
+    `rebrew.coverage_toml` reads these columns as plain ints and whatever the
+    document spells (only a non-finite FLOAT is nulled on the wire, by
+    `server._plain`), so every narrowing the SPA does on them is a place a
+    hand-edited or hostile document silently becomes a different number. The
+    map and Potato Mode render the same document, so the two apply one bound.
+    """
+
+    def test_the_va_lookup_treats_the_cell_end_as_exclusive(self) -> None:
+        """`cellIndexForVa` resolved a boundary address to the PREVIOUS cell.
+
+        rebrew's grid writes `cur = cell_end` for the next cell and a cell's
+        size is `end - start` (the slice in `useSelection`, `potato`'s hex
+        dump), so `end` is the first byte of the NEXT block. Read as
+        inclusive, every address on a boundary matched the cell before it,
+        and a function's entry VA is exactly a boundary, so every search hit
+        and every parent-function link opened the block before the one named.
+        """
+        source = _web("hooks/useSelection.ts")
+        body = source.split("export function cellIndexForVa", 1)[1].split("\nfunction ", 1)[0]
+        assert "relative >= cell.start && relative < cell.end" in body
+        assert "relative <= cell.end" not in body
+
+    def test_cell_offsets_are_not_narrowed_to_32_bits(self) -> None:
+        """`starts`/`ends` hold section-relative byte offsets, read with no
+        ceiling in the reader, and were `Uint32Array`: an offset past 2^32
+        wrapped to `offset % 2^32` and the map announced an address in a
+        different section. A double holds every offset a PE file can."""
+        packed = _web("grid/pack.ts").split("export type Packed = {", 1)[1].split("};", 1)[0]
+        for column in ("starts", "ends"):
+            declared = re.search(rf"{column}: (\w+);", packed)
+            assert declared is not None, f"Packed no longer declares {column}"
+            assert declared.group(1) == "Float64Array", (
+                f"{column} is a {declared.group(1)}: a document offset past its "
+                "range wraps silently"
+            )
+
+    def test_a_span_past_the_typed_range_saturates(self) -> None:
+        """`spans` is a `Uint16Array` and `span` is unbounded in the reader, so
+        a stored span above 65535 wrapped to `span % 65536` and the cell was
+        laid out over the wrong number of dots."""
+        stored = re.search(r"spans\[i\] = (.*);", _web("grid/pack.ts"))
+        assert stored is not None, "packSection no longer fills spans[i]"
+        assert "Math.min(" in stored.group(1), (
+            f"spans[i] = {stored.group(1)}: a span past 65535 wraps silently"
+        )
+
+    def test_the_lattice_width_is_clamped_to_what_potato_clamps_it_to(self) -> None:
+        """`columns` is unbounded in the reader, and `layoutSection` sizes a
+        `new Int32Array(rows * cols)` from it, so a document declaring 1e9
+        columns asks the renderer for gigabytes. Potato Mode has clamped to
+        256 all along; the map drew the same document unbounded."""
+        from recoverage.potato import _MAX_GRID_COLUMNS
+
+        exported = re.search(r"export const MAX_GRID_COLUMNS = (\d+);", _web("grid/pack.ts"))
+        assert exported is not None, "pack.ts no longer exports MAX_GRID_COLUMNS"
+        assert int(exported.group(1)) == _MAX_GRID_COLUMNS
+        # And the map has to APPLY it, not merely export it.
+        assert "MAX_GRID_COLUMNS" in _web("components/CoverageMap.tsx")
+
+    def test_similarity_is_scaled_only_when_it_is_a_number(self) -> None:
+        """Both similarity columns are 0-1 fractions, so the SPA scales by 100.
+        The declared type is `number | null`, but the value is document data:
+        a string passed `server._plain` untouched, and `"87.3" * 100` is 8730,
+        so the panel read `8,730.0%` where Potato omits the row outright."""
+        helper = _web("lib/format.ts").split("export function similarityPct", 1)[1].split("}", 1)[0]
+        assert 'typeof fraction !== "number"' in helper
+        assert "Number.isFinite(fraction)" in helper
+        # Every surface that renders one goes through the helper, rather than
+        # repeating the unguarded `similarity * 100`.
+        panel = _web("components/CoveragePanel.tsx")
+        assert "similarityPct(" in panel
+        assert "similarity * 100" not in panel
+
+
 class TestCellFillsAreDrawnPerTheme:
     """A cell fill is a graphic, so it owes 3:1 against what it is painted on.
 

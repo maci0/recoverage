@@ -58,6 +58,31 @@ export function dateTime(stamp: string): string {
   return parsed.toLocaleString();
 }
 
+/** A 0-1 similarity FRACTION as a rendered percentage, or null when the value
+ * is not one.
+ *
+ * Both similarity columns store a fraction, so the caller scales by 100 and
+ * `percent1` floors the result: the same scale-then-floor `potato.
+ * _similarity_pct` performs on the Potato side, and for the same reason
+ * (a bare `toFixed` there rounded 99.99% up to a "100.0%" the dashboard read
+ * as 99.9).
+ *
+ * The width of the value is the document's, not the declared
+ * `similarity?: number` type: `server._plain` only maps a non-finite FLOAT to
+ * null, so a string reaches the panel untouched and `"87.3" * 100` is 8730 —
+ * a row reading `8,730.0%` where Potato omits the row entirely.  A bool is the
+ * same shape (`true * 100 === 100`) and rendered as a real `100.0%`.  A value
+ * this cannot scale is one the caller omits, which is what both surfaces do
+ * for the same field. */
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- the declared `similarity?: number` is the caller's assumption; the value arrives from the coverage document with whatever width it spells, and narrowing it here is the point
+export function similarityPct(fraction: unknown): string | null {
+  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- the boundary is exactly "whatever the coverage document carried", and the declared type is the caller's assumption, not this one
+  if (typeof fraction !== "number" || !Number.isFinite(fraction)) {
+    return null;
+  }
+  return `${percent1(fraction * 100)}%`;
+}
+
 /** The case fold `server.fold_text` performs, as far as JavaScript can. NFC
  * composition and `toLowerCase` cover every one-code-point-to-one mapping;
  * full case folding also has the one-to-many ones, and `toLowerCase` has no

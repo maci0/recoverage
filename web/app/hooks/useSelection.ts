@@ -47,7 +47,14 @@ export type SelectionInput = {
   dll: OriginalBinary;
 };
 
-/** The cell covering *va* in *section*, or -1. */
+/** The cell covering *va* in *section*, or -1.
+ *
+ * `end` is EXCLUSIVE: a cell's size is `end - start` (the slice in
+ * `useSelection` below and rebrew's grid, which writes `cur = cell_end` for the
+ * next cell, so the two abut), so a test reading it as inclusive returns the
+ * PREVIOUS cell for every address on a cell boundary — which is what a
+ * function's entry VA is, so every search hit and every parent-function link
+ * opened the block before the one named. */
 export function cellIndexForVa(section: Section | undefined, va: number): number {
   const cells = section?.cells;
   const base = section?.va ?? 0;
@@ -55,7 +62,7 @@ export function cellIndexForVa(section: Section | undefined, va: number): number
     return -1;
   }
   const relative = va - base;
-  return cells.findIndex((cell) => relative >= cell.start && relative <= cell.end);
+  return cells.findIndex((cell) => relative >= cell.start && relative < cell.end);
 }
 
 function bytesMissMessage(dll: OriginalBinary): string {

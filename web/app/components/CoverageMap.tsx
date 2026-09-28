@@ -3,6 +3,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 
 import type { Section } from "@/api";
 import {
+  DEFAULT_GRID_COLUMNS,
+  MAX_GRID_COLUMNS,
   PALETTE_VARS,
   STATE_LABEL,
   hitTest,
@@ -119,7 +121,16 @@ export function CoverageMap({
     [pack, section.va],
   );
 
-  const declaredColumns = section.columns === 0 ? 64 : (section.columns ?? 64);
+  // The same upper bound Potato Mode applies (potato._MAX_GRID_COLUMNS), for
+  // the same reason: `columns` reaches the reader as a plain int with no ceiling
+  // (rebrew.coverage_toml._section), and `layoutSection` sizes a
+  // `new Int32Array(rows * cols)` from it, so a document declaring 1e9 columns
+  // asks the renderer for gigabytes and leaves the map blank. Potato rendered
+  // the same document fine, so the two surfaces disagreed.
+  const declaredColumns = Math.min(
+    section.columns === 0 ? DEFAULT_GRID_COLUMNS : (section.columns ?? DEFAULT_GRID_COLUMNS),
+    MAX_GRID_COLUMNS,
+  );
 
   const geometry = useCallback(
     (force: boolean): Geometry | null => {

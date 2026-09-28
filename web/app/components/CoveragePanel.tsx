@@ -12,7 +12,7 @@ import { META_GRID, MetaItem } from "@/components/ui/meta";
 import { STATE_LABEL, stateSlot } from "@/grid/pack";
 import type { Panes } from "@/hooks/useSelection";
 import type { HighlightLanguage } from "@/lib/highlight";
-import { MSG, count, dateTime, hex, percent1, sourceFileUrl, toVa } from "@/lib/format";
+import { MSG, count, dateTime, hex, similarityPct, sourceFileUrl, toVa } from "@/lib/format";
 
 /** The selected block's detail.
  *
@@ -208,6 +208,10 @@ function FunctionMeta({
   // or a disassembly line has to convert it by hand.
   const addressHex = hex(toVa(address), 8);
   const status = fn.status ?? "?";
+  // Both similarity columns are 0-1 fractions off the wire; `similarityPct`
+  // scales, floors, and refuses a value the document spelled as something else.
+  const fnSimilarity = similarityPct(fn.similarity);
+  const lastVerifySimilarity = similarityPct(fn.last_verify?.similarity);
   return (
     <dl className={META_GRID}>
       <MetaItem label="VA">
@@ -258,8 +262,8 @@ function FunctionMeta({
           }`}
         </MetaItem>
       )}
-      {fn.last_verify?.similarity == null ? null : (
-        <MetaItem label="Code Sim">{`${percent1(fn.last_verify.similarity * 100)}%`}</MetaItem>
+      {lastVerifySimilarity === null ? null : (
+        <MetaItem label="Code Sim">{lastVerifySimilarity}</MetaItem>
       )}
       {fn.last_verify?.diff_lines == null ? null : (
         <MetaItem label="Diff Lines">{count(fn.last_verify.diff_lines)}</MetaItem>
@@ -275,9 +279,7 @@ function FunctionMeta({
           {`${fn.updated_by}${fn.updated_at == null ? "" : ` (${dateTime(fn.updated_at)})`}`}
         </MetaItem>
       )}
-      {fn.similarity == null ? null : (
-        <MetaItem label="Similarity">{`${percent1(fn.similarity * 100)}%`}</MetaItem>
-      )}
+      {fnSimilarity === null ? null : <MetaItem label="Similarity">{fnSimilarity}</MetaItem>}
       {fn.is_thunk === true ? <MetaItem label="Type">IAT thunk (not reversible)</MetaItem> : null}
       {fn.is_export === true ? <MetaItem label="Type">Exported function</MetaItem> : null}
       {fn.sha256 == null ? null : (

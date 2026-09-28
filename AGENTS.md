@@ -339,7 +339,7 @@ The release policy is not written down anywhere else, so it is stated here and
 | `/api/targets/<target>/functions` | GET | Paginated function list (`?status=` takes rebrew's status vocabulary; anything else is a 400). ETag-revalidating like `/stats` and `/data`: every parameter that shapes the page is in the validator |
 | `/api/targets/<target>/functions` | POST | Batch lookup: `{"vas": [...]}` → function/global details in input order (`application/json`, else 415) |
 | `/api/targets/<target>/functions/<va>` | GET | Function/global detail |
-| `/api/targets/<target>/asm` | GET | Disassembly (requires capstone) |
+| `/api/targets/<target>/asm` | GET | Disassembly (requires capstone). `?size=` is capped at `_MAX_SLICE_SIZE` AND at what the section holds from `?va=`, so a va at the section's tail cannot read the next section's bytes |
 | `/api/targets/<target>/sections/<section>/bytes` | GET | Raw byte slice |
 | `/api/events` | GET | Server-Sent Events: `db-updated` when the coverage documents change (SPA auto-refresh) |
 | `/api/regen` | POST | Re-run catalog + build-db (localhost only, rate-limited; optional `Idempotency-Key` header, replayed from a bounded ledger) |
@@ -419,9 +419,14 @@ simpler and strictly wider.
      before flooring: Potato Mode through `potato._similarity_pct` (which also
      leaves a non-finite stored value alone, since a coverage document is
      untrusted input and `pct_1dp` reaches `math.floor`, which raises on NaN),
-     the SPA through `format.percent1(sim * 100)`. A bare `"%.1f"` there
-     rounded 99.99% up to a "100.0%" the dashboard showed as 99.9, so a new
-     surface rendering either column scales and floors rather than formats.
+     the SPA through `format.similarityPct`, which takes the fraction, scales
+     and floors it AND refuses a value the document spelled as something else:
+     `_plain` nulls a non-finite float but passes a string through, and
+     `"87.3" * 100` is 8730, so a row read `8,730.0%` where Potato omits it. A
+     bare `"%.1f"` in Potato rounded 99.99% up to a "100.0%" the dashboard
+     showed as 99.9, so a new surface rendering either column calls
+     `similarityPct` (SPA) or `potato._similarity_pct` rather than scaling and
+     formatting by hand.
      The WIRE has its own rule, `server._plain`: a non-finite float read from a
      document becomes `null`, because `json.dumps` writes `NaN` / `Infinity`
      and no JSON parser outside Python accepts them, so one such figure would
@@ -852,6 +857,21 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   is counted there as an exact match. Tests in `test_potato.py`
   (`TestCellStateVocabularyCoverage`) and `test_server.py` (`TestSpaStateVocabulary`)
   fail on a gap; extend all of them together when rebrew adds a state.
+- The SPA's own arithmetic over document columns follows four rules, because
+  `rebrew.coverage_toml` reads `columns`, `start`, `end` and `span` as plain
+  ints with no ceiling, and a value past a JS typed array's range wraps
+  silently. A cell's `end` is EXCLUSIVE (rebrew writes `cur = cell_end` for
+  the next cell, and a cell's size is `end - start`), so
+  `useSelection.cellIndexForVa` compares `relative < cell.end`: inclusive, it
+  resolved every boundary address — which is what a function's entry VA is —
+  to the block BEFORE the one named. `packSection` stores offsets in
+  `Float64Array`, not `Uint32Array`, and saturates `span` into its
+  `Uint16Array` with `MAX_SPAN`. The lattice width is clamped to
+  `MAX_GRID_COLUMNS`, which is `potato._MAX_GRID_COLUMNS`: `layoutSection`
+  sizes a `new Int32Array(rows * cols)` from it, so an unbounded `columns` asks
+  the renderer for gigabytes while Potato renders the same document fine. Both
+  surfaces apply one bound, and `tests/test_server.py`
+  (`TestSpaNumericBoundaries`) pins all four against the sources.
 - The coverage map is a canvas, so the accessibility of the whole map is
   carried by three things in `CoverageMap.tsx` and one stylesheet rule, and a
   change to any of them is a change to all of them. The wrapper is

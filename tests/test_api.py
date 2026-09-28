@@ -895,6 +895,28 @@ class TestApiAsmVaBoundaries:
 
         monkeypatch.setattr(api, "capstone_unavailable_reason", lambda: None)
 
+    @pytest.fixture
+    def disassembly_sizes(self, monkeypatch: pytest.MonkeyPatch) -> list[int]:
+        """A binary reaching past the section's last byte, and a disassembler
+        that records the size it was handed.
+
+        Opt-in rather than autouse: the guard tests below assert the 404 a
+        request gets when the DLL is ABSENT, which is how they prove the guard
+        let the request through. 0x200 + 0x1000 is the section's file range,
+        so an unbounded slice has real bytes to read past the section end.
+        """
+        import recoverage.api as api
+
+        seen: list[int] = []
+        monkeypatch.setattr(api, "_load_dll", lambda target: bytes(0x200 + 0x1000))
+
+        def record(va: int, size: int, file_offset: int, target: str) -> str:
+            seen.append(size)
+            return "disassembly"
+
+        monkeypatch.setattr(api, "get_disassembly", record)
+        return seen
+
     def _asm(self, target: str, query: str) -> tuple[str, dict[str, str], bytes]:
         return wsgi_get(f"/api/targets/{target}/asm?{query}")
 
@@ -948,6 +970,52 @@ class TestApiAsmVaBoundaries:
         assert status.startswith("404")
         data = json.loads(decode_body(body, headers))
         assert data["error"] == "DLL not found"
+
+    def test_slice_running_past_the_section_end_is_clamped(
+        self, disassembly_sizes: list[int]
+    ) -> None:
+        """The last in-bounds VA with a size that leaves the section.
+
+        Only `va` was bounded, so this read the NEXT section's file bytes and
+        disassembled them at this VA: the answer depended on where .text sat
+        in the file. Clamped to the section rather than refused, because the
+        SPA asks for a function's vaStart+size and a function ending on the
+        section's last byte must still disassemble.
+        """
+        assert self._disassembled_size(disassembly_sizes, "va=0x10001FFF&size=2") == 1
+
+    def test_slice_ending_exactly_on_the_section_end_is_untouched(
+        self, disassembly_sizes: list[int]
+    ) -> None:
+        """va + size == sec_size is the last whole slice in the section; a
+        clamp of `<` rather than `<=` would shave a byte off it."""
+        assert self._disassembled_size(disassembly_sizes, "va=0x10001FF0&size=16") == 16
+
+    def test_oversize_size_is_clamped_to_what_the_section_holds(
+        self, disassembly_sizes: list[int]
+    ) -> None:
+        """`?size=` is capped at _MAX_SLICE_SIZE, but a 4096-byte ask at the
+        head of a 0x1000 section leaves the section long before it reaches it;
+        the section is the tighter of the two bounds and has to be the one
+        applied."""
+        assert self._disassembled_size(disassembly_sizes, "va=0x10001000&size=4096") == 0x1000
+
+    def _disassembled_size(self, seen: list[int], query: str) -> int:
+        """The size this query reached the disassembler, through the endpoint.
+
+        The section ends inside the fake DLL, so an unbounded slice would read
+        whatever followed it there; the recorded argument is the number under
+        test, and the response is asserted so a request that never reached the
+        disassembler cannot report 0 and pass.
+        """
+        target = require_target()
+        seen.clear()
+        status, headers, body = self._asm(target, query)
+        assert status.startswith("200"), body
+        data = json.loads(decode_body(body, headers))
+        assert data["asm"] == "disassembly"
+        assert len(seen) == 1
+        return seen[0]
 
     def test_zero_size_still_rejected_at_boundary_class(self) -> None:
         """size clamps/validates before the VA checks: size=0 is its own 400.

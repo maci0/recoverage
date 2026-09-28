@@ -2158,6 +2158,17 @@ def handle_api_asm(target: str) -> bytes | HTTPResponse:
                     f"..0x{sec_va + sec['size'] - 1:x}",
                 },
             )
+        # The section bounds the SLICE, not just the start address: `va` inside
+        # the section says nothing about `va + size` being inside it, so a va at
+        # the section's tail read the NEXT section's file bytes and
+        # disassembled them at this section's VAs — an answer that depended on
+        # where .text sat in the file.  Clamped rather than refused, because the
+        # SPA asks for a FUNCTION's `vaStart`/`size` and a function whose body
+        # runs to the section's last byte would otherwise lose its disassembly
+        # entirely; the refusal of the whole request belongs to /bytes, whose
+        # caller asked for an exact offset+size range.  The 422 below still
+        # answers a section that cannot supply what the request named.
+        size = min(size, sec["size"] - (va - sec_va))
         file_offset = sec["fileOffset"] + va - sec_va
         if file_offset < 0:
             # Unreachable for a schema-valid sections row (fileOffset carries a

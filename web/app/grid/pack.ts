@@ -130,11 +130,21 @@ export function paletteVarForFilter(key: string): string {
   return PALETTE_VARS[FILTER_KEY.indexOf(key)] ?? "--none";
 }
 
+/** The largest span the lattice can lay out, and the `Uint16Array` ceiling the
+ * document value is saturated to (see `packSection`). */
+export const MAX_SPAN = 0xFF_FF;
+
 /** Packed section: parallel columns, one slot per cell. */
 export type Packed = {
   n: number;
-  starts: Uint32Array;
-  ends: Uint32Array;
+  /** Cell byte offsets, section-relative. `Float64Array` rather than the
+   * `Uint32Array` these were: a cell offset is read straight off the document
+   * with no ceiling in the reader (rebrew.coverage_toml._cell), so one past
+   * 2^32 wrapped to `offset % 2^32` and the map announced an address in a
+   * different section. Every byte offset a PE file can hold is exact in a
+   * double, so the wrap bought nothing. */
+  starts: Float64Array;
+  ends: Float64Array;
   spans: Uint16Array;
   states: Uint8Array;
   /** 1 for an undocumented cell, the ground a status filter never dims. Read
@@ -149,8 +159,8 @@ export type Packed = {
 export function packSection(section: Section): Packed {
   const cells: Array<Cell> = section.cells ?? [];
   const n = cells.length;
-  const starts = new Uint32Array(n);
-  const ends = new Uint32Array(n);
+  const starts = new Float64Array(n);
+  const ends = new Float64Array(n);
   const spans = new Uint16Array(n);
   const states = new Uint8Array(n);
   const ground = new Uint8Array(n);
@@ -162,7 +172,12 @@ export function packSection(section: Section): Packed {
     }
     starts[i] = cell.start ?? 0;
     ends[i] = cell.end ?? 0;
-    spans[i] = cell.span === 0 ? 1 : (cell.span ?? 1);
+    // `spans` is a Uint16Array and `span` comes off the document as a plain int
+    // (rebrew.coverage_toml._cell reads it with no ceiling), so storing a span
+    // past 65535 wrapped it to `span % 65536` and the cell was laid out over
+    // the wrong number of dots, silently. Saturate instead: a span past the
+    // lattice width is clamped by the walk below anyway.
+    spans[i] = Math.min(cell.span === 0 ? 1 : (cell.span ?? 1), MAX_SPAN);
     states[i] = stateSlot(cell.state);
     ground[i] = cell.state === "none" ? 1 : 0;
     fns[i] = cell.functions?.[0] ?? "";
@@ -242,6 +257,12 @@ export type Geometry = {
 
 const GAP = 2;
 const PAD = 8;
+/** Columns per row when a section declares none, matching rebrew's
+ * `build_db.DEFAULT_GRID_GEOMETRY` (a 0 is "absent", not "no columns"). */
+export const DEFAULT_GRID_COLUMNS = 64;
+/** The ceiling Potato Mode clamps to (`potato._MAX_GRID_COLUMNS`), so both
+ * surfaces draw the same document at the same lattice width. */
+export const MAX_GRID_COLUMNS = 256;
 /** Cell size the map aims for, in CSS px. The section's declared column count
  * is the floor, not the target: a 64-column section in a wide wrapper would
  * otherwise draw blocks too large to read a function's shape from. */
