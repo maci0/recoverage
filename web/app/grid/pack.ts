@@ -138,13 +138,23 @@ export type Placement = {
   span: number;
 };
 
-/** Walk the lattice: a block lays out like a line of text, filling the columns
- * left on its row and continuing on the next.
+/** What one walk of the lattice measures. */
+type Lattice = {
+  parts: number;
+  rows: number;
+};
+
+/** The lattice walk, and the two numbers it measures. A block lays out like a
+ * line of text: it fills the columns left on its row and continues on the next.
  *
  * One placement per line a block touches, so the rect geometry is per placement
  * while the hit map answers every dot of the block with the same cell. A span
- * never occupies less than one dot. */
-export function walk(pack: Packed, cols: number, visit?: (p: Placement) => void): number {
+ * never occupies less than one dot.
+ *
+ * `parts` and `rows` come out of the same pass that emits the placements, so
+ * sizing the geometry and filling it cannot disagree about the lattice, and
+ * an empty section reports 0 lines and 0 placements rather than 1 line. */
+function forEachPlacement(pack: Packed, cols: number, visit?: (p: Placement) => void): Lattice {
   let col = 0;
   let row = 0;
   let parts = 0;
@@ -165,37 +175,7 @@ export function walk(pack: Packed, cols: number, visit?: (p: Placement) => void)
       }
     }
   }
-  return parts;
-}
-
-/** Rows the lattice occupies. An empty section is 0 lines, not 1. */
-function rowCount(pack: Packed, cols: number): number {
-  if (pack.n === 0) {
-    return 0;
-  }
-  let col = 0;
-  let row = 0;
-  let parts = 0;
-  for (let i = 0; i < pack.n; i += 1) {
-    let left = pack.spans[i] ?? 1;
-    if (left < 1) {
-      left = 1;
-    }
-    while (left > 0) {
-      const take = Math.min(left, cols - col);
-      parts += 1;
-      left -= take;
-      col += take;
-      if (col >= cols) {
-        col = 0;
-        row += 1;
-      }
-    }
-  }
-  if (parts === 0) {
-    return 0;
-  }
-  return row + (col > 0 ? 1 : 0);
+  return { parts, rows: parts === 0 ? 0 : row + (col > 0 ? 1 : 0) };
 }
 
 export type Geometry = {
@@ -246,8 +226,7 @@ export function layoutSection(
   // band under a short canvas. Narrow screens shrink the cells to `min`.
   const cols = Math.max(declaredColumns, Math.floor((usableWidth + GAP) / (TARGET_CELL_PX + GAP)));
   const cell = Math.max(min, (usableWidth - GAP * (cols - 1)) / cols);
-  const rows = rowCount(pack, cols);
-  const parts = walk(pack, cols);
+  const { parts, rows } = forEachPlacement(pack, cols);
   const map = new Int32Array(Math.max(1, rows) * cols);
   map.fill(-1);
   const cellFirst = new Int32Array(pack.n);
@@ -261,7 +240,7 @@ export function layoutSection(
   const pY = new Float32Array(parts);
   const pW = new Float32Array(parts);
   let placed = 0;
-  walk(pack, cols, ({ cell: i, col, row, span }) => {
+  forEachPlacement(pack, cols, ({ cell: i, col, row, span }) => {
     const base = row * cols + col;
     for (let k = 0; k < span; k += 1) {
       map[base + k] = i;

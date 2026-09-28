@@ -623,9 +623,15 @@ _BUCKET_FOLD: dict[str, tuple[str, ...]] = {
     "proven": ("proven",),
     "size_mismatch": ("size_mismatch",),
 }
-_KNOWN_BUCKET_STATES: frozenset[str] = frozenset(
-    state for states in _BUCKET_FOLD.values() for state in states
-)
+#: The same fold the other way: state -> bucket, which is the direction every
+#: reader wants.  Derived rather than hand-written so the two cannot disagree,
+#: and a dup in the forward table is now a module-level error rather than a
+#: silently dropped cell.  Both bucket walks classify every cell in the
+#: largest sections' worth of state, once per cell.
+_STATE_TO_BUCKET: dict[str, str] = {
+    state: name for name, states in _BUCKET_FOLD.items() for state in states
+}
+_KNOWN_BUCKET_STATES: frozenset[str] = frozenset(_STATE_TO_BUCKET)
 
 
 def _bucket_row(section: Any) -> dict[str, Any]:
@@ -644,12 +650,11 @@ def _bucket_row(section: Any) -> dict[str, Any]:
     buckets: dict[str, Any] = dict.fromkeys(_BUCKET_FOLD, 0)
     other = 0
     for cell in section.cells:
-        for name, states in _BUCKET_FOLD.items():
-            if cell.state in states:
-                buckets[name] += 1
-                break
-        else:
+        name = _STATE_TO_BUCKET.get(cell.state)
+        if name is None:
             other += 1
+        else:
+            buckets[name] += 1
     return {"total_cells": total_cells, **buckets, "other": other}
 
 
@@ -673,11 +678,12 @@ def _section_summary(section: Any) -> dict[str, Any]:
         size = cell.size
         covered_bytes += size
         total_functions += names
-        for name, states in _BUCKET_FOLD.items():
-            if name in sizes and cell.state in states:
-                counts[name] += 1
-                sizes[name] += size
-                break
+        name = _STATE_TO_BUCKET.get(cell.state)
+        # Only the five named buckets have a count; data, thunk, none, proven
+        # and size_mismatch contribute covered_bytes and nothing else.
+        if name in sizes:
+            counts[name] += 1
+            sizes[name] += size
     return {
         "exactMatches": counts["exact"],
         "relocMatches": counts["reloc"],
