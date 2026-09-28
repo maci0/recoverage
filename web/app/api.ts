@@ -38,6 +38,26 @@ export type CellBucket = {
   total_cells: number;
 } & Record<string, number>;
 
+/** One section's row from `/stats`: the buckets `/data` serves, plus the byte
+ * sums only the stats reader computes. */
+export type SectionStats = CellBucket & {
+  matched: number;
+  covered_bytes: number;
+  total_bytes: number;
+  coverage_pct: number;
+  size_bytes: number;
+};
+
+export type StatsPayload = {
+  target: string;
+  summary: {
+    totalFunctions: number;
+    matchedFunctions: number;
+    coveragePercent: number;
+  };
+  sections: Record<string, SectionStats>;
+};
+
 export type SearchEntry = {
   va: number;
   symbol?: string;
@@ -109,6 +129,17 @@ export async function fetchData(
   // `recoverage.api._build_data_raw` pins: the fields read below are the ones
   // it writes, and the cells splice never changes the envelope.
   return (await res.json()) as DataPayload;
+}
+
+export async function fetchStats(target: string, signal?: AbortSignal): Promise<StatsPayload> {
+  const res = await fetch(`/api/targets/${encodeURIComponent(target)}/stats`, init(signal));
+  if (!res.ok) {
+    throw new Error(`/api/targets/${target}/stats answered ${res.status}`);
+  }
+  // SAFETY: this origin's own JSON, whose shape
+  // `recoverage.api.handle_api_stats` pins: `summary` and `sections` are the
+  // rows `recoverage.server._section_stats` writes.
+  return (await res.json()) as StatsPayload;
 }
 
 /** A function or global as `/api/targets/<t>/functions/<va>` serves it. */

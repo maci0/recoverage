@@ -923,11 +923,20 @@ class TestSpaFilterControls:
         assert keys - {""} == set(FILTER_STATES)
 
     def test_every_filter_key_has_a_button(self) -> None:
+        """The pills come from the shared STATE_FILTERS table, so the check
+        reads the table the shell spreads rather than a copy of the keys that
+        used to sit in App.tsx. A pill the table drops would leave a filter
+        unreachable exactly as before."""
         from recoverage.potato import FILTER_STATES
 
+        pack = _web("grid/pack.ts")
+        raw = re.search(r"export const STATE_FILTERS = \[(.*?)\] as const;", pack, re.DOTALL).group(
+            1
+        )
+        buttons = set(re.findall(r'key: "([a-z_]+)"', raw))
+        assert buttons == set(FILTER_STATES)
         app = _web("App.tsx")
-        buttons = set(re.findall(r'key: "([a-z_]+)"', app))
-        assert buttons - {"all"} == set(FILTER_STATES)
+        assert "...STATE_FILTERS," in app
 
     def test_every_packed_state_survives_a_filter(self) -> None:
         """A "" in FILTER_KEY means the cell is dimmed by every pill and lit by

@@ -102,6 +102,38 @@ export function survivesFilter(slot: number, ground: number, active: ReadonlySet
   return active.has(FILTER_KEY[slot] ?? "");
 }
 
+/** The state filters the toolbar and the stats strip offer, in palette order.
+ * A state the grid can paint but no control can isolate is unreachable, so
+ * this list covers every slot but the first (undocumented, which is the absence
+ * of a match and has no filter). It is the one place the key, the pill's label
+ * and the words on its tooltip are written, so the two surfaces that print
+ * them cannot drift. */
+export const STATE_FILTERS = [
+  { key: "exact", label: "E", aria: "Filter exact", title: "Exact match" },
+  { key: "reloc", label: "R", aria: "Filter reloc", title: "Reloc match" },
+  { key: "near_match", label: "M", aria: "Filter near-match", title: "Near-match" },
+  { key: "stub", label: "S", aria: "Filter stub", title: "Stub" },
+  { key: "padding", label: "P", aria: "Filter padding", title: "Padding" },
+  {
+    key: "proven",
+    label: "V",
+    aria: "Filter proven",
+    title: "Proven (verified equivalent)",
+  },
+  {
+    key: "problem",
+    label: "X",
+    aria: "Filter problem",
+    title: "Problem (build or classification failure)",
+  },
+] as const;
+
+/** The palette variable a filter's cells paint with. FILTER_KEY is in slot
+ * order and PALETTE_VARS is in slot order, so the two index alike. */
+export function paletteVarForFilter(key: string): string {
+  return PALETTE_VARS[FILTER_KEY.indexOf(key)] ?? "--none";
+}
+
 /** Packed section: parallel columns, one slot per cell. */
 export type Packed = {
   n: number;

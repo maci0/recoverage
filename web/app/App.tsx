@@ -5,8 +5,9 @@ import type { ComponentChildren, TargetedKeyboardEvent } from "preact";
 import { fetchTargets, type Section, type TargetInfo } from "@/api";
 import { CoverageMap } from "@/components/CoverageMap";
 import { CoveragePanel } from "@/components/CoveragePanel";
+import { StatsStrip } from "@/components/StatsStrip";
 import { Button, controlVariants } from "@/components/ui/button";
-import { FILTER_KEY, LEGEND, PALETTE_VARS } from "@/grid/pack";
+import { FILTER_KEY, LEGEND, PALETTE_VARS, STATE_FILTERS } from "@/grid/pack";
 import { useCoverage, type Coverage } from "@/hooks/useCoverage";
 import { useLiveReload } from "@/hooks/useLiveReload";
 import { originalDllPath, useOriginalBinary } from "@/hooks/useOriginalBinary";
@@ -25,22 +26,12 @@ const TARGET_KEY = "recoverage_target";
 const THEME_KEY = "recoverage_theme";
 const NAV_NOTICE_MS = 4000;
 
-/** The filters the toolbar offers. A state the grid can paint but no button can
- * isolate is unreachable by filter, so this list covers every palette slot. */
+/** The filters the toolbar offers: "all" first, then one per state the grid
+ * can paint. The state half is `STATE_FILTERS`, which the stats strip draws the
+ * same words from. */
 const FILTERS: Array<{ key: string; label: string; aria: string; title: string }> = [
   { key: "all", label: "All", aria: "Filter all", title: "Show all statuses" },
-  { key: "exact", label: "E", aria: "Filter exact", title: "Exact match" },
-  { key: "reloc", label: "R", aria: "Filter reloc", title: "Reloc match" },
-  { key: "near_match", label: "M", aria: "Filter near-match", title: "Near-match" },
-  { key: "stub", label: "S", aria: "Filter stub", title: "Stub" },
-  { key: "padding", label: "P", aria: "Filter padding", title: "Padding" },
-  { key: "proven", label: "V", aria: "Filter proven", title: "Proven (verified equivalent)" },
-  {
-    key: "problem",
-    label: "X",
-    aria: "Filter problem",
-    title: "Problem (build or classification failure)",
-  },
+  ...STATE_FILTERS,
 ];
 
 /** Sections in PE load order (ascending VA), which puts `.text` first instead
@@ -115,6 +106,21 @@ export function App() {
   const gridFocus = useRef<((index: number) => void) | null>(null);
   const noticeTimer = useRef<number | null>(null);
   const topbarRef = useRef<HTMLElement | null>(null);
+  // The address a jump is waiting on: a sibling section's cells are fetched
+  // before the map can say which block covers it.
+  const deferredJump = useRef<number | null>(null);
+
+  // A notice that is a result rather than a state: a jump that found no
+  // block, a regen that finished. It expires on its own. A notice that IS the
+  // state (a regen in flight, a failure) is set directly and stays until
+  // something replaces it.
+  const flash = useCallback((text: string) => {
+    setNotice(text);
+    if (noticeTimer.current !== null) {
+      window.clearTimeout(noticeTimer.current);
+    }
+    noticeTimer.current = window.setTimeout(() => setNotice(null), NAV_NOTICE_MS);
+  }, []);
 
   const coverage = useCoverage(target, section);
   // The fallback carries the target id verbatim: rebrew names the tree
@@ -141,6 +147,7 @@ export function App() {
     enabled: target !== "",
     onDbUpdated: coverage.reload,
     onNotice: setNotice,
+    onDone: flash,
   });
 
   useEffect(() => {
@@ -289,24 +296,21 @@ export function App() {
     return matched;
   }, [coverage.searchIndex, matchedNames]);
 
-  const flash = useCallback((text: string) => {
-    setNotice(text);
-    if (noticeTimer.current !== null) {
-      window.clearTimeout(noticeTimer.current);
-    }
-    noticeTimer.current = window.setTimeout(() => setNotice(null), NAV_NOTICE_MS);
-  }, []);
-
   const jumpToAddress = useCallback(
     (address: number) => {
-      // Every loaded section is a candidate: an asm operand or a VA link can
-      // point into a sibling, and the jump switches the tab to it.
+      // Every section is a candidate: an asm operand, a parent-function link or
+      // a search hit can point into a sibling, and the jump switches the tab
+      // to it. The section that HOLDS the address is decided from its row,
+      // which every /data payload carries, so a sibling whose cells are not
+      // loaded yet is a request, not a dead end.
+      let unloaded: string | null = null;
       for (const [name, row] of Object.entries(coverage.sections)) {
-        if (row.cells === undefined) {
-          continue;
-        }
         const base = row.va ?? 0;
         if (address < base || address >= base + (row.size ?? 0)) {
+          continue;
+        }
+        if (row.cells === undefined) {
+          unloaded = name;
           continue;
         }
         const index = cellIndexForVa(row, address);
@@ -316,16 +320,46 @@ export function App() {
         setSection(name);
         setSelectedIndex(index);
         gridFocus.current?.(index);
+        deferredJump.current = null;
         return;
       }
-      setNotice(MSG.JUMP_NO_BLOCK(hex(address, 8)));
-      if (noticeTimer.current !== null) {
-        window.clearTimeout(noticeTimer.current);
+      if (unloaded !== null && deferredJump.current !== address) {
+        // One deferred attempt per address: the cells are fetched and the
+        // effect below retries when they land. A fetch that never lands (the
+        // tab's own retry) falls through to the notice on the next attempt
+        // rather than deferring forever.
+        deferredJump.current = address;
+        setSection(unloaded);
+        coverage.ensureCells(unloaded);
+        return;
       }
-      noticeTimer.current = window.setTimeout(() => setNotice(null), NAV_NOTICE_MS);
+      deferredJump.current = null;
+      flash(MSG.JUMP_NO_BLOCK(hex(address, 8)));
     },
-    [coverage.sections],
+    [coverage, flash],
   );
+
+  // A jump deferred for cells that were not loaded: retried when the section
+  // the address is in has them. The marker stays until then, so the retry
+  // cannot defer itself a second time, and nothing is reported while the
+  // section is still on its way (its own error line and Retry own that wait).
+  useEffect(() => {
+    const address = deferredJump.current;
+    if (address === null) {
+      return;
+    }
+    const loaded = Object.values(coverage.sections).some(
+      (row) =>
+        row.cells !== undefined &&
+        address >= (row.va ?? 0) &&
+        address < (row.va ?? 0) + (row.size ?? 0),
+    );
+    if (!loaded) {
+      return;
+    }
+    deferredJump.current = null;
+    jumpToAddress(address);
+  }, [coverage.sections, jumpToAddress]);
 
   const onSearchKeyDown = (event: TargetedKeyboardEvent<HTMLInputElement>): void => {
     if (event.key !== "Enter" || matchedNames === null) {
@@ -532,6 +566,13 @@ export function App() {
 
       <main className="layout mx-auto flex max-w-[1600px] flex-col gap-4 px-4 py-4 lg:flex-row" id="main-content">
         <div className="grid-area min-w-0 flex-1">
+          <StatsStrip
+            stats={coverage.stats}
+            error={coverage.statsError}
+            section={active?.name ?? null}
+            filters={filters}
+            onToggleFilter={toggleFilter}
+          />
           {notice !== null && (
             <p
               className="nav-notice mb-2 rounded-hair border border-line bg-panel px-3 py-2 font-mono text-label"

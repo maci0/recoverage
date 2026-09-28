@@ -25,10 +25,15 @@ export function useLiveReload({
   enabled,
   onDbUpdated,
   onNotice,
+  onDone,
 }: {
   enabled: boolean;
   onDbUpdated: () => void;
+  /** A message that stays until something replaces it: an in-flight line and a
+   * failure both have to outlive the read that raised them. */
   onNotice: (text: string | null) => void;
+  /** A transient confirmation, which the shell clears on its own. */
+  onDone: (text: string) => void;
 }): LiveReload {
   const [busy, setBusy] = useState(false);
   // null, not 0: performance.now() counts from page load, so a first Reload
@@ -75,7 +80,16 @@ export function useLiveReload({
     void (async () => {
       try {
         const { ok } = await postRegen(key);
-        onNotice(ok ? null : MSG.REGEN_UNAVAILABLE);
+        // A regen runs for minutes behind a button that says "Regenerating...".
+        // Saying nothing when it ends leaves the reader to tell a finished
+        // rebuild from a failed one out of the map's own repaint, so the
+        // success is stated; the failure still holds the line until it is
+        // replaced, which is what the two callbacks are for.
+        if (ok) {
+          onDone(MSG.REGEN_DONE);
+        } else {
+          onNotice(MSG.REGEN_UNAVAILABLE);
+        }
         // oxlint-disable-next-line @rikalabs/no-silent-catch-fallback -- a failed regen is reported to the reader as REGEN_UNAVAILABLE, and the refresh still runs
       } catch {
         onNotice(MSG.REGEN_UNAVAILABLE);
@@ -84,7 +98,7 @@ export function useLiveReload({
         onDbUpdated();
       }
     })();
-  }, [onDbUpdated, onNotice]);
+  }, [onDbUpdated, onDone, onNotice]);
 
   return { reload, busy };
 }

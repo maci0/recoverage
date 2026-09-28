@@ -12,6 +12,13 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   setting `recoverage --help` lists, with the exit codes and the environment
   each flag defaults from. `man recoverage` works on an installed copy, which
   previously shipped the entry point and no documentation for it.
+- The dashboard prints the target's coverage and the section on screen above
+  the map: `82.4% covered, 1,234/1,500 functions matched` and the active
+  section's per-state block counts with its own covered percentage. Potato Mode
+  already showed both from the same numbers, so the two views of one target
+  could not disagree about the map below them. Each state count is also the
+  filter pill for that state, so "where are the stubs" is one click on the
+  number that answers it.
 - The server log's request and regen lines now carry their counters as named
   fields (`method`, `path`, `status`, `duration_ms`, `route` on a request;
   `event=regen`, `outcome`, `duration_s` on a rebuild), rendered as
@@ -167,6 +174,16 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   value reports the one that was bound. `recoverage open --port 0` is refused
   with exit 2 instead, naming the banner that holds it: the command has no way
   to know which free port a server running elsewhere picked.
+- **An address in a section whose cells are not loaded yet was reported as
+  unmapped.** A search hit, an assembly operand or a parent link pointing into
+  a sibling section switched to that section and then answered "no block
+  covers it", because the map had no cells to locate the block in. The section
+  is fetched and the jump completes when its cells arrive.
+- **A regenerate that finished said nothing.** The dashboard showed
+  "Regenerating..." while the pipeline ran and then went silent, leaving a
+  reader to tell a completed rebuild from a failed one out of the map's own
+  repaint. The success is now stated; a failure still holds its line until
+  something replaces it.
 - **A Potato Mode line could start with a combining mark.** The detail panel
   and the disassembly pane hard-wrap their text at a fixed column count, and
   the wrap landed between a character and a combining mark that followed it,

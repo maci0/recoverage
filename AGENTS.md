@@ -349,7 +349,13 @@ simpler and strictly wider.
      (999,997 of 1,000,000 bytes is not 100%). The `check` gate compares the
      UNROUNDED ratio and quotes this one, so a FAIL line cannot read
      "coverage 100.00% < 100.00%". A new percentage over the same counts calls
-     the helper rather than `round`.
+     the helper rather than `round`. The SPA's stats strip
+     (`web/app/components/StatsStrip.tsx`) renders the SERVED figures
+     (`summary.coveragePercent`, a section's `coverage_pct`) and never divides
+     its own counts, so a fourth rendering cannot round its way to a different
+     number beside the same map; its per-state counts are the `STATE_FILTERS`
+     table in `web/app/grid/pack.ts`, which the toolbar's pills are built from,
+     and each one is a filter toggle rather than a second vocabulary.
    - The catalog's `summary` blob is NOT stored in the document (the writer
      keeps the facts, not the precomputed answers). `server._summary` rebuilds
      it from the stored cells and functions, and `/stats` and `/data` serve the

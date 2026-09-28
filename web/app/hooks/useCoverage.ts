@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "preact/compat";
 
-import { fetchData, type DataPayload, type SearchEntry, type Section } from "@/api";
+import { fetchData, fetchStats, type DataPayload, type SearchEntry, type Section, type StatsPayload } from "@/api";
 
 /** The dashboard's coverage data.
  *
@@ -14,6 +14,10 @@ export type Coverage = {
   sections: Record<string, Section>;
   searchIndex: Record<string, SearchEntry>;
   paths: { sourceRoot?: string; originalDll?: string };
+  /** The target's headline numbers and per-section rows, or null while they
+   * load and after a rebuild asks for them again. */
+  stats: StatsPayload | null;
+  statsError: string | null;
   loading: boolean;
   error: string | null;
   /** A section whose cells could not be fetched, with the reason. */
@@ -36,6 +40,8 @@ export function useCoverage(target: string, section: string): Coverage {
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [cellError, setCellError] = useState<{ section: string; detail: string } | null>(null);
+  const [stats, setStats] = useState<StatsPayload | null>(null);
+  const [statsError, setStatsError] = useState<string | null>(null);
   const inflight = useRef(new Map<string, Promise<void>>());
   const [reloadToken, setReloadToken] = useState(0);
   // The search index is target-wide, so it is asked for once per (target,
@@ -110,6 +116,32 @@ export function useCoverage(target: string, section: string): Coverage {
     return () => control.abort();
   }, [load, reloadToken, section, target]);
 
+  // The stats are target-wide, so this asks once per (target, build) and not
+  // per section: the section cells come from /data, the numbers from here.
+  useEffect(() => {
+    if (target === "") {
+      setStats(null);
+      return;
+    }
+    const control = new AbortController();
+    void (async () => {
+      try {
+        const payload = await fetchStats(target, control.signal);
+        if (!control.signal.aborted) {
+          setStats(payload);
+          setStatsError(null);
+        }
+        // oxlint-disable-next-line @rikalabs/no-silent-catch-fallback -- the failure is reported on the stats strip itself; the map above and below it is unaffected, so it does not take the page's error line
+      } catch (error: unknown) {
+        if (!control.signal.aborted) {
+          setStats(null);
+          setStatsError(error instanceof Error ? error.message : String(error));
+        }
+      }
+    })();
+    return () => control.abort();
+  }, [reloadToken, target]);
+
   const ensureCells = useCallback(
     (name: string): void => {
       if (sections[name]?.cells !== undefined || target === "") {
@@ -143,6 +175,9 @@ export function useCoverage(target: string, section: string): Coverage {
     // The token bump retires the search index with them, so the next request
     // asks for a fresh one rather than passing `index=0` against a stale index.
     inflight.current.clear();
+    // The numbers a rebuild is about to replace are dropped with the cells, so
+    // the strip never states a coverage figure for a map it is no longer over.
+    setStats(null);
     setSections((current) => {
       const next: Record<string, Section> = {};
       for (const [name, row] of Object.entries(current)) {
@@ -158,6 +193,8 @@ export function useCoverage(target: string, section: string): Coverage {
     sections,
     searchIndex,
     paths,
+    stats,
+    statsError,
     loading,
     error: loadError,
     cellError,
