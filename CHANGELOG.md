@@ -255,6 +255,16 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **`recoverage serve` exited on a `TypeError` before it bound a port.** The
+  command passed the raw `--cors-origin` flag to the security configuration
+  instead of the resolved allowlist, and the flag is `None` whenever it was
+  not given, so every `serve` raised `TypeError: 'NoneType' object is not
+  iterable`. Where a flag was given it was not the list either: an allowlist
+  named only by `RECOVERAGE_CORS_ORIGIN` was never installed, so the server
+  came up with an empty one and refused precisely the reads the entry was
+  written for. `serve` and `recoverage config` now install and report the same
+  resolved list.
+
 - **`make build` stamped a sdist with the wrong date, or crashed, when
   `SOURCE_DATE_EPOCH` was not plain ASCII digits.** The value was checked with
   `str.isdigit`, which accepts every Unicode decimal digit and every

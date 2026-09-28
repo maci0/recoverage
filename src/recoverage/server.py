@@ -831,7 +831,7 @@ def _if_none_match_matches(raw: str, etag: str) -> bool:
 
 
 def _etag_or_304(snap: tuple[int, int] | None, *parts: object) -> str | None:
-    """DB-freshness ETag over the WAL-aware snapshot *snap* + *parts*; 304 on match.
+    """DB-freshness ETag over the document snapshot *snap* + *parts*; 304 on match.
 
     Shared tail of every cacheable DB-derived endpoint (/data, /stats, /asm,
     /bytes, /potato): compute ``_safe_etag(snap[0], parts...)``, answer
@@ -1171,10 +1171,10 @@ _MAX_DLL_SIZE = 512 * 1024 * 1024  # 512 MiB — reject unreasonably large binar
 
 
 _TOML_CONFIG_CACHE: dict[str, Any] | None = None
-#: Key for :data:`_RESOLVED_TARGETS_CACHE`: the config stat and the WAL-aware
-#: DB snapshot, the two inputs of the merge, so the memo self-invalidates on
-#: either.  The DB half the rebuild broadcast already covered; the config half
-#: nothing did (see :func:`resolve_targets`).
+#: Key for :data:`_RESOLVED_TARGETS_CACHE`: the config stat and the
+#: coverage-document snapshot, the two inputs of the merge, so the memo
+#: self-invalidates on either.  The document half the rebuild broadcast
+#: already covered; the config half nothing did (see :func:`resolve_targets`).
 _ResolvedTargetsKey = tuple[tuple[int, int] | None, tuple[int, int] | None]
 _RESOLVED_TARGETS_CACHE: tuple[_ResolvedTargetsKey, list[dict[str, str]]] | None = None
 _RESOLVED_TARGETS_CACHE_LOCK = threading.RLock()

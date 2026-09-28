@@ -1276,9 +1276,10 @@ def handle_potato() -> bytes | Any:
     # /potato?token=... lost the credential on their first click.
     set_auth_cookie()
     try:
-        # WAL-aware snapshot (see _snapshot_db_mtime), not raw st_mtime: a
-        # rebuild that commits only to -wal must still mint a new ETag or
-        # browsers keep a stale 304.  Same contract as /data, /asm, /bytes.
+        # The coverage-document fingerprint (see _snapshot_db_mtime), not raw
+        # st_mtime: a rebuild that rewrote any target's document must still
+        # mint a new ETag or browsers keep a stale 304.  Same contract as
+        # /data, /asm, /bytes.
         qs = request.query_string
         if isinstance(qs, bytes):
             qs = qs.decode("utf-8", errors="replace")
@@ -1409,8 +1410,9 @@ def _load_grid_cells(
     sections never render cells, so materializing their multi-MB payloads
     was pure waste.
 
-    *snap* is the caller's WAL-aware change token, stat'ed BEFORE the read
-    snapshot this cursor reads through was pinned (:func:`render_potato`).
+    *snap* is the caller's change token over the coverage documents, taken
+    BEFORE the snapshot this cursor reads through was pinned
+    (:func:`render_potato`).
     It is the key's fingerprint, and the publish below re-checks it, which is
     what keeps a payload read through an older snapshot from being filed under
     a newer fingerprint: a rebuild that commits mid-render moves the token, the

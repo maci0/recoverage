@@ -1325,6 +1325,42 @@ class TestServeServerWiring:
         assert devserver._KeepAliveServerHandler.http_version == "1.1"
 
     @pytest.mark.parametrize(
+        ("flag", "environment", "expected"),
+        [
+            (["--cors", "--cors-origin", "http://a.test:5173"], None, ["http://a.test:5173"]),
+            (["--cors"], "http://b.test:5173", ["http://b.test:5173"]),
+            (["--cors"], None, []),
+        ],
+    )
+    def test_the_installed_cors_allowlist_is_the_resolved_one(
+        self,
+        flag: list[str],
+        environment: str | None,
+        expected: list[str],
+        monkeypatch: Any,
+    ) -> None:
+        """`serve` must install the RESOLVED allowlist, not the raw flag.
+
+        The flag is `None` whenever it was not given, so passing it straight
+        to `configure_security` raised `TypeError` on every `serve` at all,
+        and where it did not, an allowlist named only by
+        `RECOVERAGE_CORS_ORIGIN` was never installed: the server came up with
+        an empty list and refused precisely the reads the entry was written
+        for, which is the outcome the setting exists to prevent.
+        """
+        from recoverage import server as srv
+
+        monkeypatch.setattr("recoverage.api._ensure_db_watcher", lambda: None)
+        monkeypatch.setattr(type(srv.app), "run", lambda self, **kwargs: None)
+        if environment is None:
+            monkeypatch.delenv("RECOVERAGE_CORS_ORIGIN", raising=False)
+        else:
+            monkeypatch.setenv("RECOVERAGE_CORS_ORIGIN", environment)
+        result = runner.invoke(app, ["serve", "--no-open", "--port", "8123", *flag])
+        assert result.exit_code == 0, result.output
+        assert expected == srv.CORS_ALLOWED_ORIGINS
+
+    @pytest.mark.parametrize(
         "error", [TimeoutError("timed out"), ConnectionResetError("peer gone")]
     )
     def test_a_dead_connection_closes_without_a_traceback(self, error: BaseException) -> None:

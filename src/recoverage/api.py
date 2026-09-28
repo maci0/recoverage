@@ -726,8 +726,9 @@ def _broadcast_db_updated(snapshot: tuple[int, int] | None) -> None:
         "timestamp": clock.wall_time(),
     }
     if snapshot is not None:
-        # Opaque WAL-aware change token (see _snapshot_db_mtime) — NOT an
-        # mtime; named so clients cannot misread it as wall-clock data.
+        # Opaque change token over the coverage documents (see
+        # _snapshot_db_mtime), NOT an mtime; named so clients cannot misread
+        # it as wall-clock data.
         payload["db"]["fingerprint"] = snapshot[0]
         payload["db"]["size_bytes"] = snapshot[1]
     frame = f"event: db-updated\ndata: {json.dumps(payload)}\n\n".encode()
@@ -1430,12 +1431,12 @@ def handle_api_data(target: str) -> bytes | HTTPResponse:
         )
     include_search_index = index_flag != "0"
 
-    # ETag caching based on DB modification time + target + section.
-    # Uses the WAL-aware snapshot (mtime_ns-precision) so two rebuilds
-    # within the same second get distinct ETags (a float mtime would let a
-    # browser keep a stale 304), and a WAL-committed change that did not
-    # checkpoint the main file still invalidates.  The snapshot is computed
-    # once here: it is both the memo key and the ETag input (see
+    # ETag caching based on the coverage-document fingerprint + target +
+    # section.  The token folds every document's mtime_ns and size, so two
+    # rebuilds within the same second get distinct ETags (a float mtime would
+    # let a browser keep a stale 304) and a rebuild that rewrote any other
+    # target's document invalidates too.  The snapshot is computed once here:
+    # it is both the memo key and the ETag input (see
     # _etag_or_304).  etag is None only when the DB is unreadable — no ETag
     # is sent, and the queries below answer the standard 503 shortly after.
     snap = _snapshot_db_mtime()
@@ -2062,11 +2063,12 @@ def handle_api_asm(target: str) -> bytes | HTTPResponse:
             },
         )
 
-    # ETag bound to the WAL-aware DB snapshot + request identity (see
+    # ETag bound to the coverage-document fingerprint + request identity (see
     # _etag_or_304): disassembly reflects the binary + section layout, which
-    # change when the DB is rebuilt.  Without this, a one-year immutable
-    # Cache-Control served stale disassembly to browsers after re-gen /
-    # --fix-sizes; raw st_mtime alone also missed WAL-committed rebuilds.
+    # change when the documents are rebuilt.  Without this, a one-year
+    # immutable Cache-Control served stale disassembly to browsers after
+    # re-gen / --fix-sizes; a single file's mtime missed a rebuild that
+    # rewrote any other target's document.
     # The raw spelling (not the resolved int) keys the ETag: it is hashed, so
     # request data never reaches a header, and each spelling is just its own
     # revalidation identity.
@@ -2192,9 +2194,10 @@ def handle_api_bytes(target: str, section: str) -> bytes | HTTPResponse:
     if size_err is not None:
         return size_err
 
-    # ETag bound to the WAL-aware DB snapshot + request identity so /bytes
-    # revalidates after a rebuild instead of serving year-immutable stale
-    # bytes (raw st_mtime alone missed WAL-committed rebuilds).
+    # ETag bound to the coverage-document fingerprint + request identity so
+    # /bytes revalidates after a rebuild instead of serving year-immutable
+    # stale bytes (one file's mtime missed a rebuild that rewrote any other
+    # target's document).
     bytes_etag = _etag_or_304(_snapshot_db_mtime(), target, section, req_offset, req_size)
 
     with _target_snapshot(target) as coverage:
