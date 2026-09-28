@@ -487,10 +487,14 @@ class _KeepAliveServerHandler(ServerHandler):
     A response that carries neither Content-Length nor Transfer-Encoding ends
     only when the connection does (RFC 9112 6.3), which under HTTP/1.1 would
     leave the client reading into whatever the next response put on the
-    socket.  The streamed ``/api/events`` is exactly that response, and
-    nothing else here is: bottle sets Content-Length for every body it
-    returns.  So an unframed response gets ``Connection: close``, which is
-    what a client has to do with it either way.
+    socket.  The streamed ``/api/events`` is that response, and the only body
+    the package ever returns without a length header: bottle sets
+    Content-Length for every other body it returns, so an unframed response
+    gets ``Connection: close``, which is what a client has to do with it
+    either way.  The two other answers
+    need no close and are not a framing fault at all: a HEAD response carries
+    no body for the client to run into, and 204/304 are defined as bodiless
+    however the handler rendered them.
     """
 
     http_version = "1.1"

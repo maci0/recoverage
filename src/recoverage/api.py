@@ -574,9 +574,9 @@ def _filtered_functions(
 ) -> list[Function]:
     """The functions the list endpoint would serve, before paging.
 
-    GLOBAL/DATA/VTABLE/STRING marker rows are data, not functions (rebrew ADR
-    023 widened the legal marker set), so they are dropped here for the count,
-    the page and the by-status filter alike.
+    The data-marker rows (server.DATA_MARKER_TYPES) are data, not functions
+    (rebrew ADR 023 widened the legal marker set), so they are dropped here for
+    the count, the page and the by-status filter alike.
 
     Search folds BOTH sides through :func:`server.fold_match`, over the same
     four columns the SQL matched: the name, the symbol, the decimal VA text and
@@ -1500,8 +1500,8 @@ def _build_data_raw(
     # header use: the buckets are derived from the snapshot's cells, so /data
     # and /stats cannot disagree about the same section.
     # ?section= narrows the cells, not the section set, so the unfiltered
-    # payload is keyed by every section the document has; the filtered one
-    # carries the single section it was asked for.
+    # payload is keyed by every section that has cells to count; the filtered
+    # one carries the single section it was asked for.
     data["section_cell_stats"] = {
         name: _server._bucket_row(sec)
         for name, sec in snap.sections.items()
@@ -1666,8 +1666,9 @@ _DEFAULT_PAGE_LIMIT = 50
 
 # Bound on the batch-lookup request body: the payload is fully parsed before
 # the _MAX_BATCH_LOOKUP cap applies, so an unbounded read would let one
-# request pin memory and CPU.  The read takes cap + 1 so an oversized body
-# is detectable without a second read.
+# request pin memory and CPU.  server.read_request_body refuses an oversized
+# body from the declared Content-Length alone, so nothing past the cap is
+# ever allocated.
 _MAX_BATCH_BODY_BYTES = 64 * 1024
 
 # Pagination offset ceiling: a real target holds orders of magnitude fewer

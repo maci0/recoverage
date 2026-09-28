@@ -1,6 +1,6 @@
 # recoverage
 
-![recoverage mascot: a raccoon detective reading a coverage grid](https://raw.githubusercontent.com/relumea/recovery/main/docs/mascot.png)
+![recoverage mascot: a raccoon detective reading a coverage grid](https://raw.githubusercontent.com/relumea/recoverage/main/docs/mascot.png)
 
 Coverage dashboard for binary-matching decompilation projects, for the person
 whose decomp stopped matching the original binary and has to find out which part.
@@ -36,19 +36,19 @@ block that covers it.
 
 ### Main Dashboard
 
-![Main dashboard — coverage grid with section tabs and filter buttons](https://raw.githubusercontent.com/relumea/recovery/main/docs/recoverage_main.png)
+![Main dashboard — coverage grid with section tabs and filter buttons](https://raw.githubusercontent.com/relumea/recoverage/main/docs/recoverage_main.png)
 
 ### Function Detail
 
-![Function detail panel showing metadata, C source, and disassembly](https://raw.githubusercontent.com/relumea/recovery/main/docs/recoverage_detail.png)
+![Function detail panel showing metadata, C source, and disassembly](https://raw.githubusercontent.com/relumea/recoverage/main/docs/recoverage_detail.png)
 
 ### Dark Mode
 
-![Dark mode with function detail panel](https://raw.githubusercontent.com/relumea/recovery/main/docs/recoverage_dark.png)
+![Dark mode with function detail panel](https://raw.githubusercontent.com/relumea/recoverage/main/docs/recoverage_dark.png)
 
 ### Potato Mode
 
-![Potato Mode — retro pure-HTML table view](https://raw.githubusercontent.com/relumea/recovery/main/docs/recoverage_potato.png)
+![Potato Mode — retro pure-HTML table view](https://raw.githubusercontent.com/relumea/recoverage/main/docs/recoverage_potato.png)
 
 Potato Mode is a **zero-JavaScript**, server-side rendered HTML fallback.
 Every view is a plain HTML table — no CSS, no JS — so it works on
@@ -98,10 +98,10 @@ change that breaks a consumer takes a major version. Before upgrading, run
 way `serve` ends, so a raised floor, a malformed token or a bind that needs an
 acknowledgment shows up there rather than at the next restart.
 
-[docs/UPGRADING.md](https://github.com/relumea/recovery/blob/main/docs/UPGRADING.md)
+[docs/UPGRADING.md](https://github.com/relumea/recoverage/blob/main/docs/UPGRADING.md)
 carries the before, the after and the thing to change for every major that
 broke something, and
-[CHANGELOG.md](https://github.com/relumea/recovery/blob/main/CHANGELOG.md)
+[CHANGELOG.md](https://github.com/relumea/recoverage/blob/main/CHANGELOG.md)
 is the full record.
 
 ---
@@ -138,7 +138,7 @@ recoverage
 ## CLI Commands
 
 The wheel installs a man page with the entry point, at
-`<prefix>/share/man/man1/recovery.1`. A system or user prefix puts that on
+`<prefix>/share/man/man1/recoverage.1`. A system or user prefix puts that on
 the man path, so such an installed copy answers `man recoverage` without this
 README at hand; a virtualenv prefix does not, and `MANPATH` has to name that
 directory for `man` to find the page there.
@@ -429,7 +429,7 @@ admits in that window, so a key is only ever dropped by its own age), and a
 failed run is not remembered.
 
 Both of those are this process's own bookkeeping. A regen under way in another
-process (a `recovery regen` at a terminal, a cron job over the same tree) is a
+process (a `recoverage regen` at a terminal, a cron job over the same tree) is a
 duplicate none of them can see, so the pipeline takes a lock in the coverage
 directory and the POST is answered `429` with the same body the in-process lock
 sends, counting as a refusal rather than a failure.
@@ -662,6 +662,7 @@ recoverage/
 │   ├── DESIGN_PRINCIPLES.md # Core operational philosophies
 │   ├── USER_STORIES.md      # User stories with acceptance criteria
 │   ├── THREAT_MODEL.md      # Attack surface, trust boundaries, risks
+│   ├── UPGRADING.md         # Before/after for every major that broke a consumer
 │   └── ideas.md             # Future improvement ideas
 ├── web/                     # Frontend sources built into the assets (Vite + Preact + Tailwind)
 │   ├── app/                 # SPA components, hooks, grid geometry, tokens
@@ -688,6 +689,7 @@ recoverage/
 │   ├── test_concurrency.py   # Barrier-driven races: single flight, counters, the admission cap
 │   ├── test_config.py        # RECOVERAGE_* parsing, precedence, fail-fast
 │   ├── test_import_graph.py  # The import rules the modules rely on
+│   ├── test_frontend_import_graph.py  # The same rules over web/app
 │   ├── test_lifecycle.py     # Lifecycle (regen ordering, opener reaping, deadlines)
 │   ├── test_paths.py         # Coverage directory resolution tests
 │   ├── test_server.py        # Compression, encoding tests

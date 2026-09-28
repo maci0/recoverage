@@ -115,7 +115,7 @@ recoverage = ["assets/*", "py.typed"]
 
 # The console script is the only thing a package index hands a user, so it
 # ships a man page with it. data_files is the only mechanism a wheel has for
-# this: the installer puts the file at <prefix>/share/man/man1/recovery.1,
+# this: the installer puts the file at <prefix>/share/man/man1/recoverage.1,
 # which a system or user prefix puts on the man path and a virtualenv prefix
 # does not, so a reader who installs into one adds that directory to MANPATH.
 # MANIFEST.in carries the same file into the sdist, or a wheel rebuilt from

@@ -577,7 +577,13 @@ def _asset_etag(filename: str, encoding: str, raw: bytes) -> str:
 
 
 def _not_modified(etag: str) -> HTTPResponse:
-    """The 304 both revalidating surfaces answer: the shell and the static assets."""
+    """The 304 every revalidating surface answers: the shell, the packaged
+    assets, and the ``/src``/``original`` file trees.
+
+    One body, so one answer: a change to the ETag contract reaches all of them
+    at once, which is why they share this rather than each building the same
+    headers.
+    """
     return HTTPResponse(
         status=304,
         headers={"ETag": etag, "Vary": "Accept-Encoding", "Cache-Control": CACHE_REVALIDATE},

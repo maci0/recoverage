@@ -4,7 +4,7 @@ import os
 import re
 import subprocess
 import unicodedata
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, ClassVar
 from urllib.parse import quote, unquote, urlparse
@@ -1133,14 +1133,12 @@ def test_footer_db_date():
 
 
 class TestDbUpdatedLabel:
-    """DB-updated footer stamp: wall-clock rendering of the newest document mtime."""
+    """DB-updated footer stamp: wall-clock rendering of the newest document mtime.
 
-    @staticmethod
-    def _patch_db(monkeypatch: pytest.MonkeyPatch, directory: Path) -> None:
-        # The stamp is read through server._newest_mtime_ns, whose one input is
-        # the coverage directory _db_path resolves — the same directory the
-        # renderer globs for its documents.
-        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+    The render reads the instant once and hands it to both renderings, so what
+    these test is the two formats over a value the page supplies; which value
+    that is is ``_newest_mtime_ns``'s answer, pinned here too.
+    """
 
     @staticmethod
     def _doc(directory: Path, target: str, mtime_ns: int) -> Path:
@@ -1151,44 +1149,29 @@ class TestDbUpdatedLabel:
         os.utime(path, ns=(mtime_ns, mtime_ns))
         return path
 
-    def test_missing_db_renders_empty(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        self._patch_db(monkeypatch, tmp_path / "nope")
-        assert _db_updated_label() == ""
+    def test_missing_db_renders_empty(self) -> None:
+        assert _db_updated_label(None) == ""
 
-    def test_label_reflects_the_newest_document_mtime(
+    def test_the_instant_is_the_newest_document_mtime(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A rebuild rewrites one target's document, so the stamp must be the
         newest of them: reading any single one shows a stale instant while the
         served data for the rewritten target already changed."""
-        directory = tmp_path / "db"
+        from recoverage.server import _newest_mtime_ns
+
         old_ns = 1_700_000_000_000_000_000
         new_ns = old_ns + 90 * 1_000_000_000
+        directory = tmp_path / "db"
         self._doc(directory, "STALE", old_ns)
         self._doc(directory, "FRESH", new_ns)
-        self._patch_db(monkeypatch, directory)
-        expected = datetime.fromtimestamp(new_ns // 1_000_000_000, tz=UTC).strftime(
-            "%Y-%m-%d %H:%M UTC"
-        )
-        assert _db_updated_label() == expected
+        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+        assert _newest_mtime_ns() == new_ns
 
-    def test_label_with_a_single_document_uses_its_mtime(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        directory = tmp_path / "db"
-        ns = 1_700_000_000_000_000_000
-        self._doc(directory, "ONLY", ns)
-        self._patch_db(monkeypatch, directory)
-        expected = datetime.fromtimestamp(ns // 1_000_000_000, tz=UTC).strftime(
-            "%Y-%m-%d %H:%M UTC"
-        )
-        assert _db_updated_label() == expected
+    def test_label_renders_the_instant_it_is_given(self) -> None:
+        assert _db_updated_label(1_700_000_000_000_000_000) == "2023-11-14 22:13 UTC"
 
-    def test_label_with_an_unrepresentable_mtime_renders_the_extreme(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_label_with_an_unrepresentable_mtime_renders_the_extreme(self) -> None:
         """A footer stamp past year 9999 is a stamp, not a failed render.
 
         The mtime is filesystem input, so a restored tree or a bad RTC can
@@ -1196,45 +1179,51 @@ class TestDbUpdatedLabel:
         every render, so raising there took Potato Mode down over a stamp the
         clock cannot name.
         """
-        directory = tmp_path / "db"
-        self._doc(directory, "FUTURE", 253_402_300_800 * 1_000_000_000)
-        self._patch_db(monkeypatch, directory)
-        assert _db_updated_label() == "9999-12-31 23:59 UTC"
+        assert _db_updated_label(253_402_300_800 * 1_000_000_000) == "9999-12-31 23:59 UTC"
 
-    def test_label_truncates_rather_than_rounds_the_minute(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_label_truncates_rather_than_rounds_the_minute(self) -> None:
         """A rebuild in the last microsecond of a minute is stamped with the
         minute it landed in, not the one it has not reached.  A float-second
         conversion rounds 12:34:59.999999999 up to 12:35, and a footer that
         reads ahead of the data it describes is worse than one that lags by a
         fraction of a second."""
-        directory = tmp_path / "db"
         # 2023-11-14T22:13:59.999999999Z: rounds up through a float second.
-        ns = 1_700_000_039_999_999_999
-        self._doc(directory, "TRUNC", ns)
-        self._patch_db(monkeypatch, directory)
-        assert _db_updated_label() == "2023-11-14 22:13 UTC"
+        assert _db_updated_label(1_700_000_039_999_999_999) == "2023-11-14 22:13 UTC"
 
-    def test_the_footers_time_element_carries_the_same_instant(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_the_footers_time_element_carries_the_same_instant(self) -> None:
         """The label is a fixed pattern on a page whose locale the server never
         learns, so the footer's ``<time>`` publishes the same instant in a form
         a reader's own tooling can re-render, truncated the same way."""
-        directory = tmp_path / "db"
         ns = 1_700_000_039_999_999_999
-        self._doc(directory, "ISO", ns)
-        self._patch_db(monkeypatch, directory)
-        iso = _db_updated_iso()
+        iso = _db_updated_iso(ns)
         assert iso == "2023-11-14T22:13:00+00:00"
-        assert datetime.fromisoformat(iso).strftime("%Y-%m-%d %H:%M UTC") == _db_updated_label()
+        assert datetime.fromisoformat(iso).strftime("%Y-%m-%d %H:%M UTC") == _db_updated_label(ns)
 
-    def test_no_db_leaves_the_time_element_out(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    def test_no_db_leaves_the_time_element_out(self) -> None:
+        assert _db_updated_iso(None) == ""
+
+    def test_the_page_reads_the_coverage_directory_once(
+        self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        self._patch_db(monkeypatch, tmp_path / "nope")
-        assert _db_updated_iso() == ""
+        """The label and the ``datetime`` attribute are one instant.
+
+        Each renderer used to call ``_newest_mtime_ns`` itself, and that is a
+        fresh walk of the coverage directory: a rebuild landing between the
+        two walks filed the text a reader sees and the value their tooling
+        reads under different builds.
+        """
+        import recoverage.potato as potato_mod
+
+        calls: list[None] = []
+        monkeypatch.setattr(
+            potato_mod,
+            "_newest_mtime_ns",
+            lambda: (calls.append(None), 1_700_000_000_000_000_000)[1],
+        )
+        html = potato_mod.render_potato(urlparse("/potato"))
+        assert len(calls) == 1
+        assert "2023-11-14 22:13 UTC" in html
+        assert 'datetime="2023-11-14T22:13:00+00:00"' in html
 
 
 class TestDocumentNamesCarryTheirOwnDirection:

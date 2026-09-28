@@ -835,9 +835,9 @@ def mtime_ns_to_utc(mtime_ns: int) -> datetime:
     The seconds are clamped to the range :class:`datetime` spans before the
     conversion, because the value comes off the filesystem and an mtime
     outside that range raises rather than rendering (see
-    :data:`_MIN_MTIME_SECONDS`).  The clamp lands on the last representable
-    second, so the microsecond remainder is dropped at the ceiling rather
-    than added past it.
+    :data:`_MIN_MTIME_SECONDS`).  The remainder rides on top of the clamped
+    second, which stays inside the range: the last representable whole second
+    still has a microsecond field to add to.
     """
     seconds, nanoseconds = divmod(mtime_ns, _NS_PER_SECOND)
     seconds = min(max(seconds, _MIN_MTIME_SECONDS), _MAX_MTIME_SECONDS)
@@ -1302,8 +1302,8 @@ def _section_stats(snap: CoverageSnapshot) -> dict[str, Any]:
             "size_bytes": section.size or 0,
         }
 
-    # Function counts by status.  GLOBAL/DATA/VTABLE/STRING marker rows live in
-    # the functions array but are data markers, not functions — exclude them.
+    # Function counts by status.  The data-marker rows (DATA_MARKER_TYPES) live
+    # in the functions array but are data, not functions — exclude them.
     by_status: dict[str, int] = {}
     for fn in snap.functions:
         if _is_data_marker(fn):
@@ -1891,13 +1891,13 @@ def compress_static_variants(body: bytes, accept_encoding: str) -> tuple[bytes, 
     * zstd runs at :data:`ZSTD_STATIC_LEVEL` rather than the dynamic level 3.
 
     Measured on the committed bundle, with the shipped levels
-    (``tools/payload_budget.py`` prints these): the inlined shell is 161,826 B
-    raw, and brotli q11 gives 48,244 B against zstd's 51,614 B at level 19 and
-    gzip's 56,048 B at level 9.  zstd wins on throughput, not on this payload,
+    (``tools/payload_budget.py`` prints these): the inlined shell is 167,249 B
+    raw, and brotli q11 gives 49,684 B against zstd's 53,112 B at level 19 and
+    gzip's 57,741 B at level 9.  zstd wins on throughput, not on this payload,
     so choosing by size hands every client the brotli body and hands a
-    zstd-first client 3 KB more than necessary.  The smallest body no longer
-    fits one initial congestion window (14,600 B); ``ui._TCP_CWND_BUDGET``
-    records the size the port accepted.
+    zstd-first client 3.4 KB more than necessary.  The smallest body no longer
+    fits one initial congestion window (14,600 B); ``ui._TCP_CWND_BUDGET`` is
+    the checked ceiling the bundle is held under.
 
     Returns (body, "") when the client accepts none of the supported
     encodings, so the caller sets Content-Encoding only on a truthy name.

@@ -1414,7 +1414,7 @@ def _load_section_data(
     return sections, data
 
 
-def _db_updated_label() -> str:
+def _db_updated_label(mtime_ns: int | None) -> str:
     """The newest coverage-document mtime as "YYYY-MM-DD HH:MM UTC" ("" with no DB).
 
     A rebuild rewrites one document per target, so the footer reads the newest
@@ -1433,23 +1433,26 @@ def _db_updated_label() -> str:
     and Python has no locale-aware formatter in the stdlib). :func:`
     _db_updated_iso` carries the same instant in a form a reader's own tooling
     can re-render, which the footer's ``<time datetime>`` publishes.
+
+    Takes the instant rather than reading it: the caller walks the coverage
+    directory once and hands the same value to both renderings, so a rebuild
+    landing between two walks cannot file the label and the ``datetime``
+    attribute under different builds.
     """
-    mtime_ns = _newest_mtime_ns()
     if mtime_ns is None:
         return ""
     return mtime_ns_to_utc(mtime_ns).strftime("%Y-%m-%d %H:%M UTC")
 
 
-def _db_updated_iso() -> str:
+def _db_updated_iso(mtime_ns: int | None) -> str:
     """The same instant as :func:`_db_updated_label`, in ISO 8601 ("" with no DB).
 
-    Truncated to the minute for the same reason and through the same read of
-    the same documents, so the two cannot disagree: the footer's ``<time>``
+    Truncated to the minute for the same reason and from the same read of the
+    same documents, so the two cannot disagree: the footer's ``<time>``
     element carries this as its machine-readable value beside the label a
     reader sees, and a consumer that re-renders the instant in a locale gets
     the one the truncation names rather than one recovered from the text.
     """
-    mtime_ns = _newest_mtime_ns()
     if mtime_ns is None:
         return ""
     return mtime_ns_to_utc(mtime_ns).replace(second=0, microsecond=0).isoformat()
@@ -1691,9 +1694,9 @@ _FUNCTION_ROWS: dict[int, tuple[CoverageSnapshot, tuple[Function, ...]]] = {}
 def _function_rows(coverage: CoverageSnapshot) -> tuple[Function, ...]:
     """``coverage.functions`` without the data-marker rows, memoized per snapshot.
 
-    GLOBAL/DATA/VTABLE/STRING marker rows live in the functions array but are
-    data, not functions, and both the functions view and the API list endpoint
-    drop them: the two surfaces list the same rows.
+    The data-marker rows (server.DATA_MARKER_TYPES) live in the functions array
+    but are data, not functions, and both the functions view and the API list
+    endpoint drop them: the two surfaces list the same rows.
 
     A tuple, because the callers sort in place and the cached rows are shared
     by every request that reads the snapshot.
@@ -1737,8 +1740,11 @@ def _search_functions(coverage: CoverageSnapshot, search_query: str) -> set[str]
     returns.  Addresses go through :func:`_va_matches`, and ``vaStart`` is
     matched as well because it is the spelling a ``.text`` cell stores.
 
-    The row cap applies to the rows selected, not to the returned set: a
-    project with more matches than the cap still dims every name it found.
+    The row cap bounds what the page can show, so it also bounds the dimming:
+    a project matching more rows than the cap dims the first
+    ``_SEARCH_ROW_LIMIT`` of them, and the rest read as no match.  Naming the
+    cap on the returned set is what tells a reader which of the two a row past
+    it belongs to.
     """
     search_matched_fns: set[str] = set()
     if not search_query:
@@ -2395,10 +2401,11 @@ def _render_function_list(
     # The spelling is the one `_build_url` emits for the same value.
     filter_arg = f"&filter={_url_quote(','.join(sorted(active_filters)))}" if active_filters else ""
 
-    # Base filter: GLOBAL/DATA marker rows live in the functions array but are
-    # data markers, not functions — same exclusion as the API list endpoint and
-    # server._section_stats, so both surfaces list the same rows.  Memoized per
-    # snapshot, so a search keystroke no longer re-walks the whole array.
+    # Base filter: the data-marker rows (server.DATA_MARKER_TYPES) live in the
+    # functions array but are data markers, not functions — same exclusion as
+    # the API list endpoint and server._section_stats, so both surfaces list
+    # the same rows.  Memoized per snapshot, so a search keystroke no longer
+    # re-walks the whole array.
     rows = list(_function_rows(coverage))
     if status_filter:
         rows = [fn for fn in rows if fn.status == status_filter]
@@ -2796,8 +2803,13 @@ def _render_potato_inner(
 
     progress_bar_png_uri = _progress_svg(tuple(progress["segments"])) if progress else ""
 
-    db_mtime_str = _db_updated_label()
-    db_mtime_iso = _db_updated_iso()
+    # ONE walk answers both footer stamps: `_newest_mtime_ns` is a fresh scan
+    # of the coverage directory, and a rebuild landing between two of them
+    # filed the visible label and the `<time datetime>` attribute under
+    # different builds.
+    db_mtime_ns = _newest_mtime_ns()
+    db_mtime_str = _db_updated_label(db_mtime_ns)
+    db_mtime_iso = _db_updated_iso(db_mtime_ns)
 
     rendered = _PAGE_TPL.render(
         # Constants
