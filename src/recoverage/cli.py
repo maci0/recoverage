@@ -1276,7 +1276,8 @@ def serve(
     its default: RECOVERAGE_PORT, RECOVERAGE_BIND, RECOVERAGE_ALLOW_REMOTE,
     RECOVERAGE_CORS, RECOVERAGE_CORS_ORIGIN, RECOVERAGE_TOKEN,
     RECOVERAGE_LOG_LEVEL and RECOVERAGE_DB (an explicit coverage directory,
-    instead of resolving rebrew-project.toml from the working directory), plus
+    instead of resolving rebrew-project.toml from the working directory, and
+    read by every command rather than by serve alone), plus
     RECOVERAGE_MAX_CONNECTIONS and RECOVERAGE_CLIENT_TIMEOUT, which size the
     transport rather than select a behavior and so have no flag.
     [bold]--no-open[/bold], [bold]--regen[/bold] and [bold]--no-color[/bold] are
@@ -1294,7 +1295,10 @@ def serve(
     names a non-loopback address without --allow-remote (the refusal and the
     firewall warning go to stderr) or when the port is already taken, and 0 on
     Ctrl+C. [bold]recoverage config[/bold] runs the same checks and ends the
-    same way, so a deployment can preflight this configuration.
+    same way, so a deployment can preflight this configuration. It reads the
+    environment only and takes none of these flags, so it preflights a
+    deployment that sets RECOVERAGE_*; one that passes these flags in argv is
+    checked when it starts.
     """
     import recoverage.server as _server
     from recoverage.server import (
@@ -2102,9 +2106,14 @@ def config_cmd(
 ) -> None:
     """Print the configuration [bold]serve[/bold] would start with, without binding a port.
 
-    The values come from the same merge and validation [bold]serve[/bold] runs, so a
-    deployment can confirm its environment before the listener opens.  The
-    token is reported as [bold]set[/bold] or [bold]unset[/bold]; its value is never printed.
+    The values come from the same merge and validation [bold]serve[/bold] runs,
+    over the [bold]environment[/bold]: this command declares no setting flags,
+    so a flag given to [bold]serve[/bold] on the command line is not a value it
+    can see or check.  It preflights the deployment that configures
+    [bold]serve[/bold] through RECOVERAGE_*; to preflight one that passes flags
+    in argv, read the answers back from a [bold]serve[/bold] that starts and
+    stops on them.  The token is reported as [bold]set[/bold] or
+    [bold]unset[/bold]; its value is never printed.
 
     It is a preflight, so it also ends the way [bold]serve[/bold] ends: the same
     network-bind refusal (exit 1) and the same CORS warnings, after the

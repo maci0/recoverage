@@ -155,6 +155,14 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `recoverage config`'s help, `recoverage serve --help` and the man page now
+  say what the preflight can and cannot check: `config` reads the environment
+  and declares no setting flags, so it resolves the same values and runs the
+  same validation `serve` does for a deployment configured through
+  `RECOVERAGE_*`, and a flag passed to `serve` in argv is neither visible to
+  it nor checked by it. Both texts claimed "the same merge and validation
+  `serve` runs" without the limit, so a deployment gating on `config` exiting 0
+  had checked nothing about the flags it was about to pass.
 - `RECOVERAGE_CORS_ORIGIN` set to a value that names no origin, where before
   only an empty one was refused (`,` and `" , "` parsed to an empty list, since
   the empty items between separators are dropped), is a startup error like the

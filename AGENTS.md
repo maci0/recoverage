@@ -800,7 +800,13 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   a reachable dashboard has one only this machine reaches. `config` is the
   preflight a deployment gates on:
   a check that exits 0 for a configuration `serve` exits 1 on is a deployment
-  that finds out at boot instead of at the check. `cli._db_warnings` joins
+  that finds out at boot instead of at the check. It preflights the ENVIRONMENT,
+  not the argv: `config_cmd` declares no setting flags, so it resolves
+  `_resolve_serve_config()` with none and a flag handed to `serve` is neither
+  visible to it nor checked by it. A second option table on `config` would be
+  the two tables `_argv_with_default_command` refuses to keep in step, so the
+  help and the man page name the limit rather than the command growing flags.
+  `cli._db_warnings` joins
   them: a coverage directory that does not exist, or exists and holds no
   `coverage-*.toml`, serves an empty target list, and every figure the
   dashboard renders then reads as a healthy zero. It is a warning and not

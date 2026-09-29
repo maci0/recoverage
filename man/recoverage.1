@@ -39,7 +39,10 @@ Run
 .B recoverage config
 to print the settings
 .B serve
-would start with, without binding a port.
+would start with, without binding a port. It reads the environment, so it
+preflights a deployment configured through RECOVERAGE_*, not one that passes
+.BR serve 's
+flags in argv.
 .SH COMMANDS
 .TP
 .B serve
@@ -70,7 +73,14 @@ Open the dashboard in a browser.
 .B config
 Print the configuration
 .B serve
-would start with, without binding a port.
+would start with, without binding a port. It resolves the environment only
+and declares no setting flags, so it preflights a deployment that configures
+.B serve
+through RECOVERAGE_*; a flag passed to
+.B serve
+in argv is not a value it can see or check, and is checked when
+.B serve
+starts.
 .SH OPTIONS
 .TP
 .B \-\-no\-color
