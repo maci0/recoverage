@@ -5,6 +5,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [4.1.0] - 2026-09-29
+
 ### Changed
 
 - The dashboard, Potato Mode and the token page wear the relumea brand: the
