@@ -238,6 +238,15 @@ export function CoverageMap({
   }, [activeFn, filters, geometry, matchedFns, pack, selectedIndex]);
 
   // Rebuild the state on section change, then paint on every input change.
+  //
+  // The deps are `geometry` and `pack` alone, and both are section tokens
+  // (`geometry` is keyed on exactly those two). `paint` is NOT one of them: it
+  // is a function of the selection, the filters and the match set, so listing
+  // it re-ran this teardown on every click and every search keystroke, and the
+  // state it rebuilt starts at `focus: 0`. The roving cursor therefore jumped
+  // back to the first block on the render the click that moved it caused, and
+  // the arrow keys walked from there. Repainting on those changes is the
+  // effect below's job, and it does not need the state rebuilt to do it.
   useLayoutEffect(() => {
     stateRef.current = {
       pack,
@@ -250,7 +259,9 @@ export function CoverageMap({
     };
     geometry(true);
     paint();
-  }, [declaredColumns, geometry, pack, paint, section]);
+    // `paint` is called for its side effect on the section that was just
+    // rebuilt, and the effect below repaints on every change of its own.
+  }, [declaredColumns, geometry, pack]);
 
   // A theme switch changes the tokens, not the geometry. `paint` is also a
   // function of the filters, the match set and the selection, so this is the
