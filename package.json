@@ -16,6 +16,7 @@
     "@oxlint/plugins": "1.83.0",
     "@preact/preset-vite": "2.10.6",
     "@rikalabs/oxlint-standards": "0.8.1",
+    "@shadcn/lint": "0.1.5",
     "@tailwindcss/vite": "4.3.3",
     "@types/node": "24.13.4",
     "class-variance-authority": "0.7.1",

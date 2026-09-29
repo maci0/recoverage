@@ -2,12 +2,13 @@ import type { ComponentChildren } from "preact";
 
 import type { StatsPayload } from "@/api";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/cn";
 import { count, percentLabel } from "@/lib/format";
-import { STATE_FILTERS, paletteVarForFilter } from "@/states";
+import { STATE_FILTERS, swatchForFilter } from "@/states";
 
 /** The bucket `/stats` counts a state under. Only the tooling failures differ:
  * the server folds them into `other`, which is the state the map paints as slot
- * 7 and the toolbar calls "problem". */
+ * 7 and the filter calls "problem". */
 const BUCKET_KEY = {
   exact: "exact",
   reloc: "reloc",
@@ -31,14 +32,15 @@ export type StatsStripProps = {
   onToggleFilter: (key: string) => void;
 };
 
-/** The numbers above the map: how much of the target is covered, and how the
- * section on screen breaks down.
+/** The numbers above the map and the filter row under them.
  *
  * Potato Mode prints the same two lines from the same `/stats` payload (its
  * progress bar and its map header), so the two views of one target cannot
- * disagree about the map below them. Each state count is also the filter pill
- * for that state: "where are the stubs" is one click, and it answers with the
- * pill the toolbar already draws rather than a second vocabulary to learn. */
+ * disagree about the map below them. Each state is one pill: its fill, its
+ * word and, once `/stats` has answered, its block count in the section on
+ * screen. The pill is the filter for that state, so "where are the stubs" is
+ * one click. The pills render before the counts arrive and when they never do,
+ * because a filter does not depend on the numbers. */
 export function StatsStrip({
   stats,
   error,
@@ -47,63 +49,110 @@ export function StatsStrip({
   filters,
   onToggleFilter,
 }: StatsStripProps): ComponentChildren {
+  const row = stats === null || section === null ? undefined : stats.sections[section];
+  return (
+    <div className="stats mb-3 flex flex-col gap-3">
+      <Summary
+        stats={stats}
+        error={error}
+        loading={loading}
+        section={row === undefined ? null : section}
+        sectionPct={row?.coverage_pct ?? null}
+      />
+      <div
+        className="filters flex flex-wrap items-center gap-1.5"
+        role="group"
+        aria-label="Filter the map by state"
+      >
+        <Button
+          className="filter-btn"
+          size="sm"
+          active={filters.size === 0}
+          aria-pressed={filters.size === 0}
+          title="Show every state"
+          onClick={() => onToggleFilter("all")}
+        >
+          All states
+        </Button>
+        {STATE_FILTERS.map((entry) => {
+          const bucket = BUCKET_KEY[entry.key];
+          const blocks = row === undefined ? null : (row[bucket] ?? 0);
+          const on = filters.has(entry.key);
+          return (
+            <Button
+              key={entry.key}
+              className="filter-btn"
+              size="sm"
+              active={on}
+              aria-pressed={on}
+              aria-label={
+                blocks === null ? entry.label : `${entry.label}, ${count(blocks)} blocks`
+              }
+              title={entry.title}
+              onClick={() => onToggleFilter(entry.key)}
+            >
+              <span
+                className={cn("swatch size-2.5 rounded-cell", swatchForFilter(entry.key))}
+                aria-hidden="true"
+              />
+              <span className={entry.label === entry.label.toUpperCase() ? "font-mono tracking-chip" : ""}>
+                {entry.label}
+              </span>
+              {blocks === null ? null : (
+                <span className="font-mono tabular-nums text-text-muted">{count(blocks)}</span>
+              )}
+            </Button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/** The target's headline figure, or the line that stands in for it. The line
+ * holds the place while a rebuild runs for minutes and says why when the read
+ * failed, rather than leaving the reader to assume a target has no coverage.
+ *
+ * The section's own figure closes the line, scoped by its name: on a complete
+ * project both figures read "100.0%", and a figure a reader cannot scope is a
+ * figure they cannot use. */
+function Summary({
+  stats,
+  error,
+  loading,
+  section,
+  sectionPct,
+}: {
+  stats: StatsPayload | null;
+  error: string | null;
+  loading: boolean;
+  section: string | null;
+  sectionPct: number | null;
+}): ComponentChildren {
   if (stats === null) {
-    // The numbers are dropped while a rebuild runs and come back after it, and
-    // a strip that is simply gone says nothing about the minutes in between:
-    // the line holds the place the figures occupied and says they are on their
-    // way. A failed read says the same thing about itself rather than leaving
-    // the reader to assume a target has no coverage yet.
     if (error !== null) {
-      return <p className="stats font-mono text-micro text-muted">Coverage summary unavailable.</p>;
+      return <p className="m-0 text-data text-text-muted">Coverage summary unavailable.</p>;
     }
     return loading ? (
-      <p className="stats font-mono text-micro text-muted">Coverage summary loading...</p>
+      <p className="m-0 text-data text-text-muted">Loading the coverage summary…</p>
     ) : null;
   }
-  const row = section === null ? undefined : stats.sections[section];
+  const { summary } = stats;
   return (
-    <div className="stats font-mono text-micro text-muted flex flex-wrap items-center gap-x-4 gap-y-1">
-      <span className="stats-target">
-        <b className="text-label text-text">{percentLabel(stats.summary.coveragePercent)}</b>{" "}
-        covered · {count(stats.summary.matchedFunctions)}/{count(stats.summary.totalFunctions)}{" "}
-        functions matched
+    <p className="m-0 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+      <b className="text-figure font-semibold leading-title tracking-figure tabular-nums text-text">
+        {percentLabel(summary.coveragePercent)}
+      </b>
+      <span className="text-data text-text-muted">
+        of the target covered, {count(summary.matchedFunctions)} of{" "}
+        {count(summary.totalFunctions)} functions matched
+        {section === null || sectionPct === null ? null : (
+          <>
+            {" · "}
+            <span className="font-mono text-text">{section}</span> {percentLabel(sectionPct)}
+          </>
+        )}
       </span>
-      {row === undefined ? null : (
-        <span className="stats-section flex flex-wrap items-center gap-x-2 gap-y-1">
-          <span className="text-text">{section}</span>
-          {STATE_FILTERS.map((entry) => {
-            const bucket = BUCKET_KEY[entry.key] ?? entry.key;
-            const blocks = row[bucket] ?? 0;
-            const on = filters.has(entry.key);
-            return (
-              <Button
-                key={entry.key}
-                className="stat-count min-h-6 min-w-6 px-1.5 py-0.5 text-micro"
-                active={on}
-                aria-label={`${entry.title}: ${blocks} blocks, filter ${on ? "on" : "off"}`}
-                aria-pressed={on}
-                title={`${entry.title}: ${blocks} blocks`}
-                onClick={() => onToggleFilter(entry.key)}
-              >
-                <span
-                  className="swatch"
-                  aria-hidden="true"
-                  style={{ background: `var(${paletteVarForFilter(entry.key)})` }}
-                />
-                {entry.label}
-                <span className="text-text">{count(blocks)}</span>
-              </Button>
-            );
-          })}
-          {/* The target's figure opens the strip and this one closes it, and on
-              a project that is complete both read "100.0% covered": one number
-              printed twice with nothing saying they count different things.
-              The section's own name travels with its figure for the same
-              reason the pills carry it — a figure a reader cannot scope is a
-              figure they cannot use. */}
-          <span>{section} {percentLabel(row.coverage_pct)} covered</span>
-        </span>
-      )}
-    </div>
+    </p>
   );
 }

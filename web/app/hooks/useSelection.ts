@@ -221,7 +221,7 @@ export function useSelection({
         const size = detail.size ?? 0;
 
         // The C source and the disassembly load in parallel: neither is needed
-        // to start the other, and the panes show whichever lands first.
+        // to start the other, and the panes whichever lands first.
         const asm = fetchAsm(target, address, size, section, signal).catch(
           (): string => MSG.ASM_PLACEHOLDER,
         );

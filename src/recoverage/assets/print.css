@@ -20,7 +20,7 @@ body {
 .modal,
 .hint { display: none !important; }
 
-.layout { display: block; padding: 0; }
+#main-content { display: block; padding: 0; }
 
 .map, .panel {
   border: 1px solid #999;

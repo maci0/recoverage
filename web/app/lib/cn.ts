@@ -1,20 +1,32 @@
 import { clsx, type ClassValue } from "clsx";
 import { extendTailwindMerge } from "tailwind-merge";
 
-/** `twMerge`, told what this app's type scale is.
+/** `twMerge`, told what the relumea type scale is.
  *
- * `index.css` names five font sizes (`text-micro` … `text-mark`) that Tailwind
- * does not ship, and `twMerge` reads an unknown `text-*` class as a TEXT
- * COLOUR. So a recipe carrying both a size and a colour — every control in the
- * dashboard — lost the size to a conflict that never existed: `text-label` lost
- * to `text-text`, and the workhorse control label rendered at the browser's
- * default 16px instead of the 12px the token names. Declaring the names as the
- * font-size group is what keeps the two apart. `extend` appends the group to
- * `twMerge`'s own, so the stock sizes keep merging as before. */
+ * `system/tokens.css` names its font sizes (`text-chip` … `text-display`), and
+ * `twMerge` reads an unknown `text-*` class as a TEXT COLOUR. A recipe carrying
+ * both a size and a colour (every control here) would then lose the size to a
+ * conflict that does not exist: `text-data` dropped for `text-text`. Declaring
+ * the names as the font-size group keeps the two apart. */
 const twMerge = extendTailwindMerge({
   extend: {
     classGroups: {
-      "font-size": [{ text: ["micro", "label", "title", "wordmark", "mark"] }],
+      "font-size": [
+        {
+          text: [
+            "chip",
+            "micro",
+            "data",
+            "body",
+            "intro",
+            "lede",
+            "figure",
+            "title",
+            "headline",
+            "display",
+          ],
+        },
+      ],
     },
   },
 });

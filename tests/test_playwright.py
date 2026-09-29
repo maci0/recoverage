@@ -56,11 +56,11 @@ def test_titles(page: Any):
     # the target resolved, and the target is part of the title.
     page.goto(f"{BASE_URL}/")
     page.wait_for_selector(".grid")
-    expect(page).to_have_title(re.compile(r"^ReCoverage · .+ · \S+$"))
+    expect(page).to_have_title(re.compile(r"^recoverage · .+ · \S+$"))
 
     # Potato UI
     page.goto(f"{BASE_URL}/potato")
-    expect(page).to_have_title("ReCoverage - Potato Mode")
+    expect(page).to_have_title("recoverage · Potato Mode")
 
 
 def test_sections_present(page: Any):
@@ -136,10 +136,12 @@ def test_filters_present(page: Any):
     page.goto(f"{BASE_URL}/potato")
     pt_filters_text = page.locator("#filters").inner_text()
 
-    # Check E, R, M, S
-    for f in ["E", "R", "M", "S"]:
-        assert f in og_filters
-        assert f in pt_filters_text
+    # The SPA's pills print the verdict words, Potato Mode its one-letter keys,
+    # one pill per state in both.
+    og_text = " ".join(og_filters)
+    for word, letter in [("EXACT", "E"), ("RELOC", "R"), ("NEAR", "M"), ("STUB", "S")]:
+        assert word in og_text
+        assert letter in pt_filters_text
 
 
 def test_cell_selection_panel(page: Any):

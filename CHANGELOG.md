@@ -5,6 +5,25 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- The dashboard, Potato Mode and the token page wear the relumea brand: the
+  shared light and dark tokens, Archivo and JetBrains Mono served from the
+  wheel, the shared 24-unit icon set, and verdict colours that match every
+  other relumea surface (`STUB` is grey, red is kept for failure). The theme
+  follows the OS until the header toggle picks one.
+- The search status line reads `33 matches for "Init". Press Enter for the
+  first, or pick one below.` in the dashboard and in Potato Mode.
+
+### Fixed
+
+- A verify record's unmeasured figures (`diff_lines`, `reg_delta`,
+  `similarity`) are served as `null` instead of `""`, so the detail panel no
+  longer draws labelled rows with no value. An empty compiler reads `(n/a)`
+  and an empty blocker row is left out.
+- On a phone, the detail panel's copy buttons wrap under the function name
+  instead of squeezing it to one letter per line.
+
 ## [4.0.0] - 2026-09-29
 
 ### Added

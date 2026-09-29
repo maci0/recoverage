@@ -570,6 +570,7 @@ _STATIC_TYPES = {
     ".js": "application/javascript; charset=utf-8",
     ".css": "text/css; charset=utf-8",
     ".svg": "image/svg+xml",
+    ".woff2": "font/woff2",
 }
 
 
@@ -598,10 +599,16 @@ def _not_modified(etag: str) -> HTTPResponse:
     )
 
 
-@app.get("/<filename:re:(?:app\\.js|style\\.css|print\\.css|favicon\\.svg)>")
+@app.get(
+    "/<filename:re:(?:app\\.js|style\\.css|print\\.css|favicon\\.svg"
+    "|archivo\\.woff2|jetbrains-mono\\.woff2)>"
+)
 def serve_static_asset(filename: str) -> bytes | HTTPResponse:
     accept_encoding = _header("Accept-Encoding", "")
-    variant_key = static_variant_key(accept_encoding)
+    # A woff2 font is already brotli inside, and compressing it again made it
+    # larger, so it is always served as the file it is.
+    precompressed = filename.endswith(".woff2")
+    variant_key = "" if precompressed else static_variant_key(accept_encoding)
     if not variant_key:
         # No shared encoding: hand off to bottle, which still does Range and
         # If-Modified-Since on the raw file.  The validator is minted here
@@ -620,7 +627,13 @@ def serve_static_asset(filename: str) -> bytes | HTTPResponse:
         etag = _asset_etag(filename, "identity", identity_bytes)
         if _if_none_match_matches(_header("If-None-Match", ""), etag):
             return _not_modified(etag)
-        raw = static_file(filename, root=str(_assets_dir()))
+        # The stdlib `mimetypes` table has no entry for woff2, so bottle's
+        # guess would send the font with no Content-Type at all.
+        raw = static_file(
+            filename,
+            root=str(_assets_dir()),
+            mimetype=_STATIC_TYPES[".woff2"] if precompressed else "auto",
+        )
         if isinstance(raw, HTTPResponse):
             raw.set_header("Cache-Control", CACHE_REVALIDATE)
             raw.set_header("ETag", etag)

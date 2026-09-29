@@ -30,6 +30,9 @@ _LEVELS: dict[str, int] = {
     "grid": 0,
     "lib": 0,
     "states": 0,
+    # The relumea design system, copied verbatim from relumea.ai: tokens,
+    # icons and the Icon component, which import nothing of this app.
+    "system": 0,
     "hooks": 1,
     "components": 2,
     "App": 3,

@@ -243,8 +243,8 @@ export function extractDocs(source: string): string | null {
 }
 
 export const MSG = {
-  LOADING: "Loading...",
-  ASM_LOADING: "Loading assembly...",
+  LOADING: "Loading…",
+  ASM_LOADING: "Loading the disassembly…",
   ERROR_PREFIX: "Error: ",
   SELECT_FUNCTION: "(select a function)",
   NO_C_SOURCE: "(no C implementation for this function yet)",
@@ -252,15 +252,15 @@ export const MSG = {
   NO_C_FOR_BLOCK: "(no C implementation)",
   UNDOCUMENTED_BLOCK: "(undocumented block)",
   ASM_PLACEHOLDER: "(no disassembly for this block)",
-  DATA_SECTION_NO_ASM: "(Data section - no assembly)",
+  DATA_SECTION_NO_ASM: "(data section: no disassembly)",
   BYTES_FAILED: "(byte range falls outside the original binary)",
-  BYTES_BSS: "(uninitialized data - no raw bytes)",
+  BYTES_BSS: "(uninitialized data: no bytes in the file)",
   BYTES_LOAD_FAILED:
     "(original binary not found: expected it at /original/ in the project directory)",
   GLOBAL_VAR: "Global variable",
   NA: "(n/a)",
   REGEN_USING_CACHE: (remaining: number) => `Using cached data. Regeneration available in ${remaining}s...`,
-  REGEN_IN_PROGRESS: "Regenerating...",
+  REGEN_IN_PROGRESS: "Regenerating…",
   REGEN_ALREADY_RUNNING:
     "This regeneration is already running. The map refreshes by itself when it finishes.",
   REGEN_DONE: "Coverage data regenerated.",
@@ -269,7 +269,7 @@ export const MSG = {
   JUMP_NO_BLOCK: (address: string) =>
     `No block covers ${address} in this target, so there is nothing to select.`,
   NO_DECL: "(no declaration found)",
-  DETAIL_UNAVAILABLE: "(detail view failed to load — reload the page)",
+  DETAIL_UNAVAILABLE: "(the detail view did not load; reload the page)",
 } as const;
 
 /** `paths.sourceRoot` and `paths.originalDll` come out of the coverage
