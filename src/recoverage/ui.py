@@ -9,7 +9,6 @@ from pathlib import Path, PurePath, PurePosixPath
 from typing import NamedTuple
 
 import rcssmin
-import rjsmin
 from bottle import static_file
 
 import recoverage.server as _server
@@ -88,8 +87,9 @@ def _build_index_payload() -> bytes:
 
     The bundle is a single IIFE built by Vite from `web/` (`make web-build`), so
     the shell still paints without a render-blocking subresource request: the
-    inline is what the first-paint contract buys, and minifying here keeps the
-    served bytes independent of what the bundler already did.
+    inline is what the first-paint contract buys.  The stylesheet is minified
+    here; the bundle is inlined unchanged, because Vite already minifies it and
+    rjsmin does not parse template literals (it ate the space in `` ` (${x})` ``).
 
     Pure: caching is the caller's job (it already holds INDEX_LOCK).
     """
@@ -125,7 +125,7 @@ def _build_index_payload() -> bytes:
         _log.warning("app.js missing — dashboard SPA will not function")
         js = ""
     html = html.replace("<!-- INJECT_CSS -->", f"<style>{rcssmin.cssmin(css)}</style>")
-    html = html.replace("<!-- INJECT_JS -->", f"<script>{rjsmin.jsmin(js)}</script>")
+    html = html.replace("<!-- INJECT_JS -->", f"<script>{js.strip()}</script>")
     payload = html.encode("utf-8")
     _check_payload_budget(payload)
     return payload

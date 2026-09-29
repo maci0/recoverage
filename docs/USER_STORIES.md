@@ -507,7 +507,7 @@ graph TD
 
 ### Acceptance Criteria
 - HTML, the built stylesheet and the built bundle inlined into a single response
-- Minified with `rjsmin`/`rcssmin` and compressed with Brotli/Zstd/gzip
+- CSS minified with `rcssmin` (the bundle arrives minified by Vite and is inlined unchanged), compressed with Brotli/Zstd/gzip
 - Total payload 49,908 B brotli, which no longer fits RFC 6928's initial congestion window; the budget in `ui._TCP_CWND_BUDGET` is a 90 KB ceiling over the measurement, `ui._check_payload_budget` warns with the exact overage, and `tests/test_api.py` fails, so crossing the ceiling is a regression rather than a log line. The current winner is brotli, with zstd 53,235 B and gzip 58,020 B. `make payload-budget` re-derives all three from the committed bundle (measured 2026-09-29)
 - The whole frontend is one built bundle inlined into the shell, so a change to the map, the asm pane, the hex dump or the data inspector moves the same measured number, and `tests/test_api.py` fails when it crosses the ceiling
 - Compression algorithm auto-selected from `Accept-Encoding` header
@@ -519,7 +519,7 @@ graph TD
 graph TD
     A["Browser requests /"] --> B["Server reads<br/>index.html + style.css<br/>+ app.js (built bundle)"]
     B --> C["Inline all into<br/>single HTML document"]
-    C --> D["Minify CSS (rcssmin)<br/>+ JS (rjsmin)"]
+    C --> D["Minify CSS (rcssmin)"]
     D --> E{"Which encodings does<br/>Accept-Encoding accept?"}
     E -->|zstd| F["Zstandard compress"]
     E -->|br| G["Brotli compress"]

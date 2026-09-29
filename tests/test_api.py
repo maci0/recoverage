@@ -5746,6 +5746,18 @@ class TestIndexWarmup:
             "a caller that keeps serving must be able to catch this and not an OSError"
         )
 
+    def test_the_shell_inlines_the_bundle_byte_for_byte(self) -> None:
+        """The served shell carries the built app.js unchanged.
+
+        Vite already minifies the bundle.  A second pass with rjsmin, which
+        does not parse template literals, dropped the leading space inside
+        `` ` (${...})` `` and the detail panel printed "PM(Δ0 B)".
+        """
+        import recoverage.ui as ui
+
+        bundle = (ui._assets_dir() / "app.js").read_text(encoding="utf-8")
+        assert bundle.strip().encode("utf-8") in ui._build_index_payload()
+
     def test_warm_builds_payload_and_all_encodings(self, monkeypatch: Any) -> None:
         import recoverage.ui as ui
 
