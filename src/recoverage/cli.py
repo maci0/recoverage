@@ -1694,9 +1694,9 @@ def export(
     """Export coverage data to stdout.
 
     JSON verbatim. CSV cells that start with a spreadsheet formula or control
-    character are prefixed with an apostrophe, and rows end with a single
-    newline so Windows stdout does not double it. Markdown cells escape pipes
-    and newlines.
+    character are prefixed with an apostrophe, rows end with the platform's
+    line ending, and a line break inside a cell is written as the document
+    spells it. Markdown cells escape pipes and newlines.
 
     The rows are the only thing on stdout, so a redirect or a pipe gets clean
     data. Exits 1 when the coverage directory holds no document or --target
@@ -1739,14 +1739,20 @@ def export(
     elif output_format == ExportFormat.csv:
         import csv
 
-        # lineterminator="\n": the default "\r\n" would be translated again by
-        # Windows' text-mode stdout, corrupting every row to \r\r\n.  One \n
-        # here means the platform writes its native ending exactly once.
+        # The csv module owns every line break it writes: stdout's newline
+        # translation is switched off and the rows end in os.linesep, so a row
+        # ends in the platform's native ending exactly once.  Left on,
+        # Windows' text-mode stdout also rewrote a "\n" INSIDE a quoted cell
+        # (a section or target name can hold one) to "\r\n", and the cell read
+        # back was not the name the document holds.
         stream = _utf8_stream(sys.stdout)
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(newline="")
         written = 0
         total = sum(len(data["sections"]) for data in all_data)
         try:
-            writer = csv.writer(stream, lineterminator="\n")
+            writer = csv.writer(stream, lineterminator=os.linesep)
             writer.writerow(["target", "section", *_SECTION_COLUMNS])
             for data in all_data:
                 for sec_name, sec in sorted(data["sections"].items()):

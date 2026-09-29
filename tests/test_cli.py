@@ -987,6 +987,33 @@ class TestExportCsvStdoutEncoding:
             monkeypatch.setattr(sys, "stdout", real_stdout)
         return sink.getvalue()
 
+    def test_a_line_break_inside_a_cell_survives_a_translating_stdout(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Windows' stdout translates "\\n" to "\\r\\n"; a cell must not be.
+
+        The wrapper below translates the way a Windows console or redirect
+        does.  Rows end in the platform's ending once, and the break inside the
+        quoted section name comes back as the one byte the document holds.
+        """
+        from recoverage.cli import ExportFormat, export
+
+        section = "sec\ntion"
+        directory = _coverage_dir(tmp_path)
+        _write_sections(directory, [section], [(section, 0, 100, "exact")])
+        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+        sink = io.BytesIO()
+        wrapper = io.TextIOWrapper(sink, encoding="utf-8", newline="\r\n")
+        monkeypatch.setattr(sys, "stdout", wrapper)
+        export(output_format=ExportFormat.csv, json_flag=False, target=None)
+        wrapper.flush()
+        raw = sink.getvalue()
+        assert b'"sec\ntion"' in raw, raw
+        header = raw.split(os.linesep.encode(), 1)[0]
+        assert header.startswith(b"target,section,") and b"\r" not in header
+        rows = list(csv.reader(io.StringIO(raw.decode("utf-8"), newline="")))
+        assert rows[1][rows[0].index("section")] == section
+
     def test_non_ascii_section_survives_ascii_stdout(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
