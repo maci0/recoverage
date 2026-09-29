@@ -95,6 +95,8 @@ _LICENSE_TEXT = {
 # reviewed decision; a new entry is not a fallback.
 _UNDECLARED_METADATA = {
     "capstone": ("BSD-3-Clause", "capstone-5.0.9.dist-info/LICENSE.TXT"),
+    # Windows only (typer and pytest pull it in there), so a Linux run never reads it.
+    "colorama": ("BSD-3-Clause", "colorama-0.4.6.dist-info/licenses/LICENSE.txt"),
     "markdown-it-py": ("MIT", "markdown_it_py-4.2.0.dist-info/licenses/LICENSE"),
     "mdurl": ("MIT", "mdurl-0.1.2.dist-info/LICENSE"),
     "python-flirt": ("Apache-2.0", "python_flirt-0.10.0.dist-info/licenses/LICENSE.txt"),

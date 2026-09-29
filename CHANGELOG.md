@@ -5,6 +5,12 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- On Windows, a coverage document stamped after the year 3000 no longer turns
+  `/api/health` and Potato Mode into a 500. The date renders as it does on
+  Linux and macOS, clamped to 9999-12-31 past the last one it can print.
+
 ## [4.1.0] - 2026-09-29
 
 ### Changed

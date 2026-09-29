@@ -244,3 +244,26 @@ def require_target() -> str:
     if not target:
         pytest.fail(f"no coverage target resolved from {Path.cwd() / 'db'}")
     return target
+
+
+def path_the_filesystem_holds(parent: Path, name: str | bytes) -> Path | None:
+    """``parent / name`` when the filesystem can create that entry, else None.
+
+    Windows refuses control characters and ``<>:"|?*`` in a name and has no
+    spelling for a byte outside UTF-8, and APFS refuses the latter too; a test
+    whose subject is such a name has nothing to exercise there.  The probe
+    creates the entry and removes it, so the caller starts from the same empty
+    ``parent`` it passed.
+    """
+    try:
+        text = os.fsdecode(name)
+    except UnicodeDecodeError:
+        return None
+    path = parent / text
+    parent.mkdir(parents=True, exist_ok=True)
+    try:
+        path.touch()
+    except OSError:
+        return None
+    path.unlink()
+    return path

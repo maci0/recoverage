@@ -10,7 +10,7 @@ from typing import Any, ClassVar
 from urllib.parse import quote, unquote, urlparse
 
 import pytest
-from conftest import HAS_DB, require_target, wsgi_get
+from conftest import HAS_DB, path_the_filesystem_holds, require_target, wsgi_get
 from coverage_fixture import cell, coverage_dir, write_coverage
 from rebrew.coverage_toml import CoverageSnapshot, load_coverage
 
@@ -3237,6 +3237,8 @@ class TestDbUnavailableContract:
         """
         import bottle
 
+        if path_the_filesystem_holds(tmp_path, "d\nb") is None:
+            pytest.skip("the filesystem refuses a line break in a name")
         directory = self._point_at_empty_dir(tmp_path, monkeypatch, "d\nb")
         directory.mkdir()
         # A document whose target id (and so whose parse error) carries a break.

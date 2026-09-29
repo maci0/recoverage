@@ -15,7 +15,7 @@ from typing import Any
 
 import pytest
 import typer
-from conftest import HAS_DB
+from conftest import HAS_DB, path_the_filesystem_holds
 from coverage_fixture import cell, coverage_dir, write_coverage
 from rebrew.coverage_toml import CoverageTomlError
 from typer.testing import CliRunner
@@ -2394,8 +2394,10 @@ class TestStdoutWritesAPathTheFilesystemSpelledInBytes:
 
     @staticmethod
     def _db_path_with_a_foreign_byte(tmp_path: Path) -> Path:
-        directory = tmp_path / os.fsdecode(b"db\xff")
-        directory.mkdir(parents=True)
+        directory = path_the_filesystem_holds(tmp_path, b"db\xff")
+        if directory is None:
+            pytest.skip("the filesystem cannot name a directory with a byte outside UTF-8")
+        directory.mkdir()
         return directory
 
     def test_config_reports_a_directory_named_in_bytes(

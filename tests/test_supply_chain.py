@@ -2103,7 +2103,7 @@ class TestPythonDependencyLicenses:
     def test_every_recorded_license_names_a_file_that_is_still_there(self) -> None:
         """`_UNDECLARED_METADATA` is a claim about a file, so the file is checked.
 
-        Five distributions name no license in their METADATA, and the record
+        Six distributions name no license in their METADATA, and the record
         is what the gate reads for them. A bump that moves or renames a LICENSE
         file would otherwise leave a claim standing that nobody re-reads, so
         the recorded path is resolved against what the distribution actually
