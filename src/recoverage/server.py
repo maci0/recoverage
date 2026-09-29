@@ -484,6 +484,16 @@ def strip_ascii_whitespace(value: str) -> str:
     return value.strip(_ASCII_SPACE)
 
 
+#: Longest ``?search=`` either surface accepts.  A longer term is compared
+#: against every row of every function, and names nothing a user types.
+#: Lives here, beside the trimming helper the term is read through, because
+#: BOTH surfaces take the same term and the cap is the one bound on it: the
+#: Potato grid copies the term into the link of every cell on the page, so an
+#: uncapped one there is a multiplier rather than a per-row comparison, and
+#: api.py's cap alone left the page a request could inflate by the cell count.
+MAX_SEARCH_CHARS: Final = 500
+
+
 def query_param(name: str, default: str = "") -> str:
     """One query-string value, percent-decoded as UTF-8.
 

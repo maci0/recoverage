@@ -35,6 +35,7 @@ from recoverage.server import (
     CACHE_NO_STORE,
     CACHE_REVALIDATE,
     FUNCTION_SORT_COLUMNS,
+    MAX_SEARCH_CHARS,
     _bucket_row,
     _cell_json,
     _compressed,
@@ -738,6 +739,16 @@ def _esc(text: object) -> str:
 
 _MAX_RAW_READ = 1 << 20  # 1 MiB — more than any plausible function or data cell
 
+#: The most bytes the panel's disassembly pane is built from, and the same
+#: bound api.py's /asm serves ``?size=`` at (``_MAX_SLICE_SIZE``).  The size
+#: reaching here is the document's own ``size`` column, and this is the one
+#: path that took it unbounded: capstone expands a byte range into a Python
+#: object per instruction, so a document declaring a size of 10**9 turns one
+#: ?idx= request into tens of millions of objects on a handler thread.  The
+#: sibling sink for the same value (_get_raw_bytes above) clamps to
+#: _MAX_RAW_READ for the same reason.
+_MAX_ASM_READ = 4096
+
 # Sort key standing in for a section row with no VA, so sections without one
 # land after every real address. Above the 64-bit VA ceiling, and an int so the
 # key list stays one comparable type.
@@ -1256,6 +1267,13 @@ def render_potato(parsed_url: ParseResult) -> str:
     active_filters = _parse_filters(filter_str)
     idx_str = qs.get("idx", [""])[0]
     search_query = strip_ascii_whitespace(qs.get("search", [""])[0])
+    # The same cap the API list applies, for a reason that bites harder here:
+    # the term is copied into the href of EVERY cell on the page, so the work
+    # a render does with it scales with the page (up to _GRID_PAGE_ROWS *
+    # _MAX_GRID_COLUMNS cells) rather than with the number of rows compared.
+    # An uncapped term is only a per-row comparison on /functions; here one
+    # request line is enough to ask for a page of hundreds of megabytes.
+    search_query = search_query[:MAX_SEARCH_CHARS]
     view = qs.get("view", [""])[0]
     sort_key = qs.get("sort", ["va"])[0]
     status_filter = qs.get("status", [""])[0]
@@ -1381,7 +1399,7 @@ def handle_potato() -> bytes | Any:
         )
         return _db_unavailable_page()
     # json.JSONDecodeError needs no entry: it subclasses ValueError.
-    except (OSError, ValueError, KeyError):
+    except (OSError, ValueError, KeyError, TypeError):
         _log.exception(
             "Potato mode render failed serving %s %s",
             _log_safe(request.method),
@@ -3149,7 +3167,24 @@ def _panel_fn_source_text(data: dict[str, Any], target: str, fn_data: dict[str, 
         _log.debug("Source root %r is not contained in the project", source_root)
         return None
     base = (project_root / source_root).resolve()
+    # The plain-relative rule above is LEXICAL: it holds "src/evil" whatever
+    # src/evil is, and resolve() follows a symlink.  A base that leaves the
+    # project makes every is_relative_to below pass trivially, because they
+    # are all measured against the base that already escaped.  Check the base
+    # against the project it was joined onto, which is the one root nothing
+    # has moved yet.  ui.py's /src route refuses the same shape for the same
+    # reason, and a checkout carries symlinks.
+    if not base.is_relative_to(project_root):
+        _log.debug("Source root %r resolves outside the project", source_root)
+        return None
     raw = files[0]
+    # A coverage document is untrusted input and TOML puts no type on an
+    # array element: `files = [1]` reaches Path() as a TypeError, and a name
+    # carrying a NUL (legal in the document, impossible in a filename) makes
+    # resolve() raise ValueError.  ui.py refuses both on the same value, and
+    # the answer here is the panel without its source, not a failed page.
+    if not isinstance(raw, str) or "\x00" in raw:
+        return None
     # Reject anchored paths and parent traversal before resolve
     if not is_plain_relative(Path(raw)):
         return None
@@ -3266,13 +3301,19 @@ def _panel_function_detail(
         asm_va = fn_data.get("va")
         asm_size = fn_data.get("size")
         asm_file_offset = fn_data.get("fileOffset")
+        # isinstance, not is-not-None: these three are the document's own
+        # columns, and a `size = "0x20"` reaches both the clamp below and
+        # disasm's own length check as a str.  A cell whose document spells
+        # its size as anything but an integer loses the pane, not the page.
         if (
             disassembly_available()
-            and asm_va is not None
-            and asm_size is not None
-            and asm_file_offset is not None
+            and isinstance(asm_va, int)
+            and isinstance(asm_size, int)
+            and isinstance(asm_file_offset, int)
         ):
-            asm_text = get_disassembly(asm_va, asm_size, asm_file_offset, target)
+            asm_text = get_disassembly(
+                asm_va, min(asm_size, _MAX_ASM_READ), asm_file_offset, target
+            )
             if asm_text:
                 ctx["asm_heading"] = _section_heading("ASM", ACCENT_ASM, "Assembly")
                 ctx["asm_html"] = _code_block_raw(
