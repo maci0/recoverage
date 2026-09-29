@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import copy
 import csv
+import errno
 import html
 import io
 import ipaddress
@@ -4289,12 +4290,13 @@ def _serve_wire(data: bytes) -> tuple[list[dict[str, Any]], bytes]:
         try:
             client_side.sendall(data)
             client_side.shutdown(socket.SHUT_WR)
-        except ConnectionError:
-            # The handler closed its end with request bytes unread (a 414, a
-            # malformed line), which is where a real client's write stops too.
-            return
         except OSError as failure:
-            client_errors.append(failure)
+            # The handler closed its end first (a 414, a malformed line), which
+            # is where a real client's write stops too: the send fails with a
+            # ConnectionError, and on macOS the shutdown after a send that got
+            # through fails with ENOTCONN.
+            if not isinstance(failure, ConnectionError) and failure.errno != errno.ENOTCONN:
+                client_errors.append(failure)
 
     def read() -> None:
         while True:
