@@ -3527,12 +3527,6 @@ class TestCellFillsAreDrawnPerTheme:
     `PALETTE_VARS` in `states.ts`, minus the unlit cell, which is the ground
     of an unread byte and is quiet on purpose.
 
-    The light fills do not clear the floor: the relumea `cell-*` tokens are
-    tints (1.5 to 2.1:1 on white), and a repo may not redefine a token. The
-    light case is therefore a strict xfail that names the gap; when relumea.ai
-    deepens the light fills and the copy here is refreshed, it passes and the
-    marker has to go.
-
     The fills also sit at one lightness and differ by hue alone, with three
     greens and two greys among them, so a pair closer than `SAME_HUE_DELTA_E`
     must differ in its ink mark (`MARK_CLASS`), and the mark ink must clear the
@@ -3541,8 +3535,8 @@ class TestCellFillsAreDrawnPerTheme:
     """
 
     NON_TEXT_FLOOR = 3.0
-    # Measured on the relumea fills: the greens and greys pair at ΔE 5.9 to
-    # 15.3 and every other pair is 20.4 or more apart.
+    # Measured on the relumea fills: the three greens pair at ΔE 5.9 to 15.6
+    # and every other pair is 20.8 or more apart.
     SAME_HUE_DELTA_E = 20.0
     # The ink each mark is drawn in; padding is filler and takes the muted ink.
     MARK_INK: ClassVar[dict[str, str]] = {
@@ -3571,10 +3565,6 @@ class TestCellFillsAreDrawnPerTheme:
         }
         assert all(ratio >= self.NON_TEXT_FLOOR for ratio in low.values()), low
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="relumea light cell-* fills are 1.5-2.1:1 on white; token change owed upstream",
-    )
     def test_light_fills_clear_the_non_text_floor(self) -> None:
         low = {
             name: round(_contrast(_token(name, "light"), _token("surface", "light")), 2)

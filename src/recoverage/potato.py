@@ -103,10 +103,10 @@ COLORS = {
     "proven": "#3f7a63",  # cell-proven
     # SIZE_MISMATCH: not a match, so it shares the near-match amber.
     "size_mismatch": "#8a6c2c",
-    "stub": "#6a6a73",  # cell-stub
+    "stub": "#6b6b74",  # cell-stub
     "padding": "#3a3a42",  # border-strong, as the SPA paints padding
-    "data": "#3b5b73",  # cell-live
-    "thunk": "#6f629f",  # cell-thunk
+    "data": "#4f7088",  # cell-live
+    "thunk": "#7063a0",  # cell-thunk
     "none": "#212124",  # cell-unlit
     # Data-metadata verdicts.  VERIFIED is a match (build_db counts it as
     # exact), so it takes the exact fill; DRIFT and UNCHECKED are the two
