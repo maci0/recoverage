@@ -3,15 +3,18 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <!-- The product's default ground is the dark one, and the toggle is a
-         second. The UA paints what the token layer does not reach: the canvas
-         past a short document, the overscroll glow, and the control faces it
-         draws itself. Without this the browser picks its own light default and
-         a dark dashboard sits on a white strip. -->
-    <meta name="color-scheme" content="dark light">
-    <title>ReCoverage</title>
+    <!-- Both themes are first-class: the page follows the OS until the reader
+         pins one with the theme toggle. The UA paints what the token layer
+         does not reach (the canvas past a short document, the overscroll area,
+         the control faces it draws itself), so it has to know both. -->
+    <meta name="color-scheme" content="light dark">
+    <title>recoverage</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="/print.css" media="print">
+    <!-- The two faces the injected stylesheet names. Preloaded so the first
+         paint of the dashboard is in its own type rather than a swap later. -->
+    <link rel="preload" href="/archivo.woff2" as="font" type="font/woff2" crossorigin>
+    <link rel="preload" href="/jetbrains-mono.woff2" as="font" type="font/woff2" crossorigin>
     <!-- The app cannot know the target id until /api/targets answers, so the
          coverage map is otherwise two serialized round trips after the shell
          lands. Preloading it as a fetch starts that request during the preload
@@ -21,32 +24,23 @@
     <!-- The first paint. The app mounts only after this document's own inline
          bundle has been parsed and run, and the dashboard it draws is
          serialized behind /api/targets and /data, so an empty #root paints a
-         blank page for the whole of that. The boot line below is in the HTML
-         for that reason: it is the first thing a reader sees, and main.tsx
-         removes it before the app mounts. Its own rules are here rather than
-         in the injected stylesheet because the injected sheet is the built
-         Tailwind output, which carries no class for markup that never went
-         through the bundler.
-
-         It is the app's first paint, so it wears the app: the mark, the
-         wordmark and the terminal face from the topbar, at the sizes the
-         type scale already names, in the accent hue. It used to be a centred
-         system-ui line, the one surface in the product in a face the rest of
-         it never uses, and the swap from it to the live dashboard was a change
-         of typeface as well as of content. Every value is a token with a
-         literal fallback, because this markup paints before the injected
-         sheet has loaded (and before it exists at all under `vite dev`). -->
+         blank page for the whole of that. The boot block below is in the HTML
+         for that reason, and main.tsx removes it before the app mounts. Its
+         rules are here because the injected sheet is the built Tailwind
+         output, which carries no class for markup that never went through the
+         bundler. They read the tokens that sheet declares, with light-theme
+         literals for `vite dev`, where the sheet arrives after this paint. -->
     <style>
       #boot, .boot {
         display: flex;
         flex-direction: column;
         align-items: center;
         justify-content: center;
-        gap: 10px;
+        gap: 12px;
         min-height: 60vh;
-        color: var(--muted, #8b949e);
-        font-family: var(--font-mono, ui-monospace, "SFMono-Regular", Menlo, monospace);
-        font-size: var(--text-label, 12px);
+        color: var(--color-text-muted, #55585f);
+        font-family: var(--font-sans, sans-serif);
+        font-size: var(--text-data, 14px);
         line-height: 1.5;
       }
       .boot p {
@@ -54,63 +48,59 @@
         margin: 0;
         text-align: center;
       }
-      .boot-mark {
+      .boot-word {
         display: inline-flex;
         align-items: center;
-        padding: 2px 10px;
-        border: 2px solid var(--c, #06b6d4);
-        color: var(--c, #06b6d4);
-        font-size: var(--text-mark, 24px);
-        font-weight: 800;
-        box-shadow: var(--shadow-glow, none);
-      }
-      .boot-word {
-        color: var(--text, #e7edf4);
-        font-size: var(--text-wordmark, 20px);
+        gap: 8px;
+        color: var(--color-text, #0a0a0b);
+        font-size: var(--text-intro, 18px);
         font-weight: 700;
+        letter-spacing: -0.03em;
+      }
+      .boot-mark {
+        fill: currentColor;
+      }
+      .boot-mark .lit {
+        fill: var(--color-accent, #0f7a42);
+      }
+      .boot-mark .unlit {
+        fill: var(--color-border-strong, #d5d8de);
       }
     </style>
     <!-- INJECT_CSS -->
-  </head>
-  <body>
-    <!-- The theme class, before the first paint. The bundle applies it too
-         (`web/app/App.tsx`), but that lands a frame after this shell has
-         already painted: the topbar and the panels take the stored theme
-         instantly, because nothing transitions them, while the body's ground,
-         the wordmark and the legend's colour cross-fade out of the dark
-         default over 300ms. The first frame is therefore a light header over a
-         dark page, with the wordmark and the legend mid-swap and unreadable on
-         whatever they are sitting on. Reading the same two sources here means
-         the first paint is the theme the app settles into. This is the one
-         place the shell repeats the app's rule, and it has to: nothing else
-         runs before the paint. -->
+    <!-- The pinned theme, before the first paint. The bundle applies it too
+         (`web/app/App.tsx`), but a frame late: the first paint would be the
+         OS theme and then flip. With nothing stored the attribute stays off
+         and the tokens follow the OS. This is the one place the shell repeats
+         the app's rule, and it has to: nothing else runs before the paint. -->
     <script>
       (() => {
         let stored = null;
         try {
           stored = localStorage.getItem("recoverage_theme");
         } catch {
-          // Storage can be blocked; the media query still answers.
+          // Storage can be blocked; the OS preference still answers.
         }
-        const light =
-          stored === "light" ||
-          (stored !== "dark" && window.matchMedia("(prefers-color-scheme: light)").matches);
-        document.body.classList.toggle("light-mode", light);
+        if (stored === "light" || stored === "dark") {
+          document.documentElement.dataset.theme = stored;
+        }
       })();
     </script>
+  </head>
+  <body>
     <div id="root">
       <div id="boot">
-        <span class="boot-mark" aria-hidden="true">R</span>
-        <p class="boot-word">ReCoverage</p>
+        <p class="boot-word">
+          <svg class="boot-mark" aria-hidden="true" viewBox="0 0 24 24" width="22" height="22"><rect x="1.5" y="1.5" width="6" height="6" rx="1.5"/><rect x="9" y="1.5" width="6" height="6" rx="1.5"/><rect class="lit" x="16.5" y="1.5" width="6" height="6" rx="1.5"/><rect x="1.5" y="9" width="6" height="6" rx="1.5"/><rect class="unlit" x="9" y="9" width="6" height="6" rx="1.5"/><rect class="unlit" x="16.5" y="9" width="6" height="6" rx="1.5"/><rect x="1.5" y="16.5" width="6" height="6" rx="1.5"/><rect class="unlit" x="9" y="16.5" width="6" height="6" rx="1.5"/><rect class="unlit" x="16.5" y="16.5" width="6" height="6" rx="1.5"/></svg>
+          recoverage
+        </p>
         <p role="status">Loading coverage…</p>
       </div>
     </div>
     <!-- The dashboard IS the inlined bundle below, so a reader whose browser
-         has scripting off never gets past the boot line above. Potato Mode
+         has scripting off never gets past the boot block above. Potato Mode
          renders the same coverage as server-side HTML, so the way in is named
-         here rather than left for them to find. Browsers do not render
-         <noscript> content when scripting is on, so this costs the reader who
-         can use the dashboard nothing. -->
+         here rather than left for them to find. -->
     <noscript>
       <div class="boot">
         <p>The interactive coverage map needs JavaScript, which this browser has turned off.</p>

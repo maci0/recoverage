@@ -5,6 +5,7 @@ import type { ComponentChildren } from "preact";
 import { HighlightedCode } from "@/components/HighlightedCode";
 import { Button } from "@/components/ui/button";
 import { CopyButton } from "@/components/ui/copy-button";
+import { Icon } from "@/system/icons/Icon";
 import type { HighlightLanguage } from "@/lib/highlight";
 
 /** The expanded code viewer.
@@ -53,7 +54,7 @@ export function CodeModal({
   }, []);
 
   useEffect(() => {
-    const regions = document.querySelectorAll(".skip-link, .topbar, .layout");
+    const regions = document.querySelectorAll(".skip-link, .topbar, #main-content");
     if (!open) {
       for (const region of regions) {
         // SAFETY: the selector above names page regions this dashboard renders,
@@ -90,7 +91,7 @@ export function CodeModal({
 
   return createPortal(
     <div
-      className="modal show fixed inset-0 z-40 flex items-center justify-center bg-backdrop p-6"
+      className="modal fixed inset-0 z-40 flex items-center justify-center bg-scrim p-4 sm:p-6"
       role="dialog"
       aria-modal="true"
       aria-labelledby={titleId}
@@ -100,14 +101,15 @@ export function CodeModal({
         }
       }}
     >
-      <div className="modal-content flex max-h-[85vh] w-[min(1200px,95vw)] flex-col overflow-hidden rounded-control border border-line bg-panel">
-        <div className="modal-header flex items-center gap-2 border-b border-line bg-modal-header px-3 py-2">
-          <span id={titleId} className="modal-title font-mono text-title font-bold">
+      <div className="modal-content flex max-h-full w-full max-w-shell flex-col overflow-hidden rounded-panel bg-surface shadow-lift">
+        <div className="modal-header flex items-center gap-3 border-b border-border bg-raised px-4 py-3">
+          <span id={titleId} className="modal-title min-w-0 font-mono text-data font-semibold wrap-anywhere">
             {title === "" ? "Code viewer" : title}
           </span>
           <div className="modal-actions ms-auto flex gap-2">
-            <CopyButton label="Copy" value={text} ariaLabel="Copy Modal Content" />
-            <Button ref={closeRef} className="modal-close" aria-label="Close Modal" onClick={onClose}>
+            <CopyButton label="Copy" value={text} ariaLabel="Copy the code" />
+            <Button ref={closeRef} className="modal-close" size="sm" onClick={onClose}>
+              <Icon name="x" />
               Close
             </Button>
           </div>
@@ -118,7 +120,7 @@ export function CodeModal({
             hands the region over to it rather than declaring a second,
             identically named one over the same content. */}
         <div
-          className="modal-body min-h-0 overflow-auto p-3"
+          className="modal-body min-h-0 overflow-auto p-4"
           tabIndex={0}
           role="region"
           aria-label={title === "" ? "Code viewer" : `${title} pane`}

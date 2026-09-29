@@ -1919,6 +1919,24 @@ class TestLastVerify:
         assert "last_verify" not in data
 
 
+def test_an_unmeasured_verify_figure_is_served_as_null() -> None:
+    """A verify record writes "" for a figure it did not measure; served as-is,
+    the SPA and Potato Mode both drew a labelled row with no value."""
+    from recoverage.server import verify_payload
+
+    payload = verify_payload(
+        {"verified_at": "", "byte_delta": 0, "diff_lines": "", "similarity": "", "reg_delta": ""}
+    )
+    assert payload == {
+        "verified_at": None,
+        "byte_delta": 0,
+        "diff_lines": None,
+        "similarity": None,
+        "reg_delta": None,
+        "effective_match": None,
+    }
+
+
 # ── SSE live reload (/api/events) ─────────────────────────────────
 
 
@@ -6386,8 +6404,8 @@ class TestSearchCaseFolding:
             f"&search={quote('CAF\u00c9', safe='')}"
         )
         assert status.startswith("200")
-        assert b"Searching:" in body
-        assert b"no matches" not in body
+        assert b" match for &quot;" in body or b" matches for &quot;" in body
+        assert b"Check the spelling" not in body
 
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage database")

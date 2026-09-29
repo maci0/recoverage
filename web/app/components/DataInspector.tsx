@@ -14,7 +14,7 @@ export function inspectorText(items: Array<InspectorItem> | null): string {
  * what a data section has instead of disassembly. */
 export function DataInspector({ items }: { items: Array<InspectorItem> | null }): ComponentChildren {
   if (items === null || items.length === 0) {
-    return <div className="code rounded-hair border border-line bg-code p-3 text-muted">{MSG.BYTES_BSS}</div>;
+    return <div className="code rounded-control border border-border bg-code p-3 text-micro text-text-muted">{MSG.BYTES_BSS}</div>;
   }
   return (
     <dl className={META_GRID}>

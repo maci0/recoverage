@@ -1,301 +1,42 @@
-/* The one token layer for the recoverage dashboard.
+/* The dashboard's stylesheet entry.
  *
- * Tailwind 4 entry. The `:root` / `.light-mode` blocks are the palette the
- * VanJS stylesheet carried, kept name for name so the canvas map and the
- * Potato Mode pages keep reading the same values. `@theme inline` maps
- * them onto Tailwind's own namespaces, so a utility reads a token rather than a
- * literal and a theme switch stays a token swap.
+ * Every colour, size, radius, shadow and motion value comes from
+ * `./system/tokens.css`, a verbatim copy of relumea.ai's `src/system/tokens.css`
+ * (the relumea brand guide, "Consuming the tokens"). Never edit the copy: a
+ * value the system lacks is proposed there first, then copied here.
  *
- * `.light-mode` is applied to `<body>`, so the variant matches a descendant of
- * the class rather than the class itself. */
+ * The theme follows the OS, or `data-theme="light" | "dark"` on <html>, which
+ * the shell sets before the first paint and the theme toggle sets after it.
+ * Components read tokens and never branch on the theme. Hand-written rules sit
+ * in `@layer base` or `@layer components`, so a utility on the same element
+ * always wins. */
 
 @import "tailwindcss";
+@import "./system/tokens.css";
 
-@custom-variant light (&:is(.light-mode *));
-
-:root {
-  --bg: #0f1216;
-  --panel: #151a21;
-  --muted: #8b949e;
-  --text: #e7edf4;
-  --border: rgba(6, 182, 212, 0.15);
-  --none: rgba(255, 255, 255, 0.05);
-  --c: #06b6d4;
-  --glow: rgba(6, 182, 212, 0.35);
-  /* The ground is a phosphor wash in the one hue this product has, and its
-   * second stop is a deeper teal rather than a second hue: a stock blue-green
-   * gradient sat here and named no state, while the accent it ignored is the
-   * hue the focus ring, the logo, the links and the active control all use. */
-  --bg-grad-1: rgba(6, 182, 212, 0.1);
-  --bg-grad-2: rgba(8, 145, 178, 0.08);
-  --text-shadow: 0 0 2px rgba(6, 182, 212, 0.3), 0 0 8px rgba(6, 182, 212, 0.1);
-  --c-shadow: 0 0 8px rgba(6, 182, 212, 0.25), inset 0 0 8px rgba(6, 182, 212, 0.08);
-  /* Selection is the one state an operator reads at a glance, so it wears the
-   * accent rather than a hue that appears in no other token. Potato Mode's
-   * active section pill was already cyan; this is the same choice the SPA
-   * makes now. */
-  --c-shadow-active: 0 0 10px rgba(6, 182, 212, 0.3);
-  --btn-bg: rgba(255, 255, 255, 0.04);
-  --btn-bg-hover: rgba(255, 255, 255, 0.07);
-  --btn-active-bg: rgba(6, 182, 212, 0.2);
-  --btn-active-border: rgba(6, 182, 212, 0.55);
-  --btn-active-text: var(--text);
-  /* The search box's placeholder. Tailwind's preflight dims it to
-     `color-mix(currentcolor 50%, transparent)`, which lands at 4.41:1 on the
-     dark field's button ground and 3.27:1 on the light one: a 12px label under
-     4.5:1 in both themes, and the only text on the field before a reader types
-     (WCAG 1.4.3). `--muted` clears it on both grounds at full strength. */
-  --placeholder: var(--muted);
-  --code-bg: rgba(0, 0, 0, 0.26);
-  --grid-bg: rgba(0, 0, 0, 0.22);
-  --meta-item-bg: rgba(255, 255, 255, 0.03);
-  --meta-item-border: rgba(255, 255, 255, 0.05);
-  /* Opaque, like every other surface in this theme: the topbar was the one
-   * translucent panel left, and the blur behind it was invisible over a
-   * near-black ground while repainting on every scroll frame. */
-  --topbar-bg: var(--panel);
-  --modal-header-bg: rgba(15, 18, 22, 0.5);
-  --scroll-track: var(--bg);
-  --scroll-thumb: var(--border);
-  --scroll-thumb-hover: var(--muted);
-  --scroll-border: var(--bg);
-  --overlay-bg: var(--panel);
-  --modal-backdrop: rgba(0, 0, 0, 0.85);
-  --inspector-bg: rgba(0, 0, 0, 0.2);
-  --bar-border: rgba(255, 255, 255, 0.1);
-
-  /* Height of the sticky topbar, measured at runtime so the sticky panel
-   * header parks below it instead of underneath it. */
-  --topbar-h: 0px;
-
-  --exact-bg: rgba(16, 185, 129, 0.75);
-  --near-match-bg: rgba(255, 200, 0, 0.65);
-  --padding-bg: rgba(200, 200, 220, 0.55);
-  /* Post-verify semantic promotion: a section rebrew proved equivalent, which
-   * is not the same claim as a byte-identical match. */
-  --proven-bg: rgba(6, 182, 212, 0.65);
-  /* The three fills below carry an alpha the map needs rather than the one a
-   * swatch on a dark ground happens to need: composited over --grid-bg at
-   * 0.65 they sat at 2.5:1 (reloc, stub) and 2.2:1 (other), under the 3:1 a
-   * graphic owes the surface it is drawn on, and a state cell is the one
-   * graphic this page exists to show. 0.8 clears it with room to spare; the
-   * hues are the palette's either way. */
-  --reloc-bg: rgba(2, 132, 199, 0.8);
-  --stub-bg: rgba(255, 0, 0, 0.8);
-  /* Tooling-failure and unclassified-annotation states (compile_error,
-   * extract_error, invalid_va, missing_file, missing_size, skip, unknown,
-   * drift, unchecked). Distinct from --none so a cell the pipeline could not
-   * classify is not read as a byte nobody has looked at. */
-  --other-bg: rgba(168, 85, 247, 0.8);
-
-  /* Accent tokens — section logos, links, status hues, delta */
-  --accent-c-source: #3b82f6;
-  --accent-asm: #ef4444;
-  --accent-data: #a855f7;
-  --accent-bytes: #10b981;
-  --link: #7dd3fc;
-  --link-hover: #bae6fd;
-  --link-hover-glow: rgba(125, 211, 252, 0.5);
-  --delta: #f59e0b;
-  --badge-exact-text: #10b981;
-  --badge-reloc-text: #7dd3fc;
-  --badge-near-text: #f59e0b;
-  --badge-stub-text: #f87171;
-  --asm-link-underline: rgba(255, 255, 255, 0.5);
-  --asm-link-hover-bg: rgba(31, 191, 117, 0.1);
-
-  --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
-    "Courier New", monospace;
-  /* Two faces, chosen rather than accumulated: the terminal face for every
-   * name, address, heading and disassembly, the system sans for prose and
-   * control labels. */
-  --font-ui: system-ui, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  /* A phosphor terminal has square corners: a rounded card reads as a web
-   * dashboard, not as the instrument. Three steps, not a scale nobody chose:
-   * hairline (cells, links, chips), control (buttons, fields, frames), pill
-   * (progress bar, scrollbar pills). */
-  --radius-hair: 2px;
-  --radius: 4px;
-  --radius-pill: 6px;
-
-  /* Five sizes, in the order the interface reads them. There was no scale here
-   * before: the app took Tailwind's stock sizes ad hoc, which left the
-   * wordmark at 18px, every panel title at 14px, the workhorse label at 12px
-   * and two places on a hardcoded 11px that was no step in any series. The
-   * wordmark was then the same size as the section tabs beside it, so the
-   * page's one heading did not read as a heading. Potato Mode already had the
-   * hierarchy this was missing, in its `<font size="1|2|3|5">`; these are the
-   * same four rungs for a screen, plus the mark above the wordmark.
-   *
-   * A phosphor instrument is dense and the map is the reading, so the scale
-   * opens a whole step at the wordmark and stays tight below it. Nothing here
-   * is below 11px and the two micro labels keep the size they already had, so
-   * no text gets smaller than it reads today. */
-  --text-micro: 11px;
-  --text-label: 12px;
-  --text-title: 14px;
-  --text-wordmark: 20px;
-  --text-mark: 24px;
+@font-face {
+  font-family: "Archivo";
+  src: url("/archivo.woff2") format("woff2");
+  font-weight: 100 900;
+  font-stretch: normal;
+  font-style: normal;
+  font-display: swap;
 }
 
-.light-mode {
-  /* The light ground is the same neutral family as the dark one, a shade
-   * short of the accent rather than a stock blue-gray. Every pairing below
-   * clears 4.5:1 at the margin the raw grays had, and --muted gains headroom. */
-  --bg: #c3ccd0;
-  --panel: #dbe3e5;
-  --muted: #3c4f57;
-  --text: #0c1417;
-  --border: rgba(9, 102, 120, 0.28);
-  --none: rgba(0, 0, 0, 0.08);
-  /* #12566c is 6.27:1 on --panel and 5.00:1 on --bg. */
-  --c: #12566c;
-  --bg-grad-1: rgba(18, 86, 108, 0.1);
-  --bg-grad-2: rgba(8, 145, 178, 0.07);
-  /* No phosphor bloom: the glow is the dark ground's, where light has
-   * somewhere to travel. */
-  --text-shadow: none;
-  --c-shadow: 0 0 0 1px rgba(9, 102, 120, 0.35);
-  --c-shadow-active: 0 0 0 1px rgba(9, 102, 120, 0.6);
-  --btn-bg: var(--panel);
-  --btn-bg-hover: rgba(0, 0, 0, 0.04);
-  --btn-active-bg: rgba(18, 86, 108, 0.12);
-  --btn-active-border: rgba(9, 102, 120, 0.45);
-  --placeholder: var(--muted);
-  /* --c, the hue every other accent-bearing token in this theme already
-   * uses, at the 6.27:1 on --panel its own comment certifies. A stock blue-700
-   * spelled out here read as the framework's, not the instrument's. */
-  --btn-active-text: var(--c);
-  --code-bg: #f2f6f7;
-  --grid-bg: rgba(0, 0, 0, 0.03);
-  --meta-item-bg: rgba(0, 0, 0, 0.02);
-  --meta-item-border: rgba(9, 102, 120, 0.18);
-  --topbar-bg: var(--panel);
-  --modal-header-bg: var(--panel);
-  --scroll-track: rgba(0, 0, 0, 0.05);
-  --scroll-thumb: rgba(9, 102, 120, 0.3);
-  --scroll-thumb-hover: rgba(9, 102, 120, 0.5);
-  --scroll-border: var(--bg);
-  --overlay-bg: var(--panel);
-  --modal-backdrop: rgba(12, 20, 23, 0.6);
-  --inspector-bg: rgba(0, 0, 0, 0.04);
-  --bar-border: rgba(9, 102, 120, 0.35);
-
-  /* The cell fills are DRAWN, not tinted: over a light ground the dark
-   * palette's 0.65-alpha washes composited to within 1.1:1 of the map
-   * background, so a near-match and an exact cell read as the same pale
-   * wash and the map stopped being the signal it is. These are deeper steps
-   * of the same eight hues, opaque because a tint's value depends on the
-   * ground behind it. Each clears 3:1 against the surface a cell is painted
-   * on (--grid-bg over --bg, #BDC6CA), and the hues stay far enough apart to
-   * be told apart; the light text tokens below are steps of these same hues.
-   * --none keeps the dark mode's intent, a cell nothing has been read for,
-   * and stays as close to the ground as the dark one is to its own. */
-  --exact-bg: #0b7048;
-  --reloc-bg: #16659c;
-  --near-match-bg: #906300;
-  --stub-bg: #a02c20;
-  --proven-bg: #097084;
-  --other-bg: #6a3bc7;
-  --padding-bg: #5f6974;
-
-  /* Text-bearing accents are tuned to clear 4.5:1 against the surface they sit
-   * on (--panel for links, the code surface for the status hues below). */
-  --accent-c-source: #2563eb;
-  --accent-asm: #dc2626;
-  --accent-data: #9333ea;
-  --accent-bytes: #059669;
-  --link: #075985;
-  --link-hover: #0c4a6e;
-  --link-hover-glow: rgba(2, 132, 199, 0.3);
-  /* One step darker than the dark theme's #f59e0b needs to be here. #92400e
-   * read 4.34:1 on --bg, under the 4.5:1 a 12px label owes, because this theme's
-   * ground is a mid gray rather than a near-black one: the same step that clears
-   * 8.14:1 on --panel and 6.52:1 on the code surface on the dark ground lands
-   * under the floor on the light one. #843a0b reads 4.97 / 6.23 / 7.45 on
-   * those three grounds. */
-  --delta: #843a0b;
-  --badge-exact-text: #14532d;
-  --badge-reloc-text: #075985;
-  /* One step darker than #854d0e for the same reason as `--delta` above: on
-   * this theme's mid-gray ground it read 4.20:1. #733f09 reads 5.27 / 6.60 /
-   * 7.90 on --bg, --panel and --code-bg. */
-  --badge-near-text: #733f09;
-  --badge-stub-text: #991b1b;
-  --asm-link-underline: rgba(0, 0, 0, 0.3);
-  --asm-link-hover-bg: rgba(2, 132, 199, 0.1);
+@font-face {
+  font-family: "Archivo Fallback";
+  src: local("Arial"), local("Helvetica Neue"), local("Liberation Sans"), local("DejaVu Sans");
+  size-adjust: 95.69%;
+  ascent-override: 91.75%;
+  descent-override: 21.95%;
+  line-gap-override: 0%;
 }
 
-@theme inline {
-  --color-bg: var(--bg);
-  --color-panel: var(--panel);
-  --color-text: var(--text);
-  --color-muted: var(--muted);
-  --color-line: var(--border);
-  --color-accent: var(--c);
-  --color-link: var(--link);
-  --color-link-hover: var(--link-hover);
-  --color-delta: var(--delta);
-  --color-none: var(--none);
-
-  /* Cell fills: the map, the legend and the swatches read one name each. */
-  --color-exact: var(--exact-bg);
-  --color-reloc: var(--reloc-bg);
-  --color-near-match: var(--near-match-bg);
-  --color-stub: var(--stub-bg);
-  --color-padding: var(--padding-bg);
-  --color-proven: var(--proven-bg);
-  --color-other: var(--other-bg);
-
-  --color-badge-exact-text: var(--badge-exact-text);
-  --color-badge-reloc-text: var(--badge-reloc-text);
-  --color-badge-near-text: var(--badge-near-text);
-  --color-badge-stub-text: var(--badge-stub-text);
-
-  --color-btn: var(--btn-bg);
-  --color-btn-hover: var(--btn-bg-hover);
-  --color-btn-active: var(--btn-active-bg);
-  --color-btn-active-border: var(--btn-active-border);
-  --color-btn-active-text: var(--btn-active-text);
-  --color-code: var(--code-bg);
-  --color-grid: var(--grid-bg);
-  --color-meta: var(--meta-item-bg);
-  --color-meta-border: var(--meta-item-border);
-  --color-topbar: var(--topbar-bg);
-  --color-modal-header: var(--modal-header-bg);
-  --color-overlay: var(--overlay-bg);
-  /* The scrim behind the code modal. It was declared per theme and reached
-     nothing, so the modal reached for a raw `bg-black/80`: the one surface
-     painted from a Tailwind literal rather than the token layer, and the same
-     80% black in both themes, which is a mechanical inversion where the light
-     ground's own scrim already existed. */
-  --color-backdrop: var(--modal-backdrop);
-  --color-inspector: var(--inspector-bg);
-  --color-bar-border: var(--bar-border);
-  --color-scroll-track: var(--scroll-track);
-  --color-scroll-thumb: var(--scroll-thumb);
-
-  --color-c-source: var(--accent-c-source);
-  --color-asm: var(--accent-asm);
-  --color-data: var(--accent-data);
-  --color-bytes: var(--accent-bytes);
-
-  --font-sans: var(--font-ui);
-  --font-mono: var(--mono);
-
-  --radius-hair: var(--radius-hair);
-  --radius-control: var(--radius);
-  --radius-pill: var(--radius-pill);
-
-  --text-micro: var(--text-micro);
-  --text-label: var(--text-label);
-  --text-title: var(--text-title);
-  --text-wordmark: var(--text-wordmark);
-  --text-mark: var(--text-mark);
-
-  --shadow-glow: var(--c-shadow);
-  --shadow-glow-active: var(--c-shadow-active);
-  --shadow-text: var(--text-shadow);
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("/jetbrains-mono.woff2") format("woff2");
+  font-weight: 400 700;
+  font-display: swap;
 }
 
 /* A value with no break opportunity (a hash, a path, a signature, a base
@@ -305,119 +46,83 @@
 }
 
 @layer base {
-  * {
-    box-sizing: border-box;
-  }
-
   body {
     margin: 0;
     min-height: 100vh;
-    background-color: var(--bg);
-    background-image: radial-gradient(1200px 600px at 25% -10%, var(--bg-grad-1), transparent 60%),
-      radial-gradient(900px 500px at 85% 0%, var(--bg-grad-2), transparent 55%);
-    background-repeat: no-repeat;
-    color: var(--text);
-    text-shadow: var(--text-shadow);
-    font-family: var(--font-ui);
+    background: var(--color-bg);
+    color: var(--color-text);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
     overflow-x: clip;
     overflow-y: scroll;
   }
 
-  /* The theme switch is the only page-wide animation, and it is a cross-fade
-   * of the whole viewport: motion nobody asked for, so the reduced-motion
-   * setting turns it off rather than shortening it (WCAG 2.3.3). */
-  @media (prefers-reduced-motion: no-preference) {
-    body {
-      transition: background-color 0.3s ease, color 0.3s ease;
-    }
-  }
-
   a {
-    color: var(--link);
+    color: var(--color-text);
+    text-decoration-color: var(--color-border-strong);
+    text-underline-offset: 2px;
   }
 
   a:hover {
-    color: var(--link-hover);
+    text-decoration-color: currentColor;
   }
 
-  /* Tailwind's preflight sets `::placeholder` to `opacity: 1` and then dims
-     the color itself to 50% alpha; the token replaces that dimming. */
+  /* Tailwind's preflight dims the placeholder to half the text colour, which
+     lands under 4.5:1; the faint ink token clears it on every ground. */
   ::placeholder {
-    color: var(--placeholder);
+    color: var(--color-text-faint);
+  }
+
+  /* The search field has its own labelled Clear button, which every engine
+     shows; the WebKit-only glyph beside it was a second, unnamed one. */
+  input[type="search"]::-webkit-search-cancel-button {
+    appearance: none;
   }
 
   :focus-visible {
-    outline: 2px solid var(--c);
+    outline: 2px solid var(--color-accent);
     outline-offset: 2px;
+  }
+
+  /* Code has no ligatures: `!=` renders as typed. */
+  code,
+  pre {
+    font-variant-ligatures: none;
   }
 }
 
-/* Forced colors: the token layer is replaced wholesale by the system's own
- * palette, so the one selected control in a row (the active section tab, a
- * pressed filter) loses the background, border and text colors that were the
- * whole of its appearance. Highlight is the system color for "this one is
- * current", and it survives the replacement. */
+/* Forced colors: the token layer is replaced by the system palette, so the one
+ * selected control in a row loses the fill that was its whole appearance.
+ * Highlight survives the replacement. The map keeps its verdict fills, which
+ * are data, not decoration. */
 @media (forced-colors: active) {
-  [data-active] {
+  [data-active],
+  [aria-pressed="true"] {
     outline: 2px solid Highlight;
     outline-offset: -2px;
   }
 
-  .grid,
-  .modal-content,
-  .panel,
-  .empty-state,
-  .loading-overlay {
-    border-color: CanvasText;
+  .grid-canvas,
+  .swatch {
+    forced-color-adjust: none;
   }
 }
 
-/* highlight.js token colours.
- *
- * The theme the vendored `hljs.css` carried, with its values kept: a status hue
- * is tuned as a translucent cell fill, and at that value on a dark code ground
- * it does not clear 4.5:1 as 12px text, so the four exceptions are lightened
- * steps of the hue they stand for. Everything else reads the token layer, so a
- * palette change moves the code panes with it. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition: none !important;
+    animation: none !important;
+  }
+}
+
+/* highlight.js token colours, from the shared listing palette (`syn-*`), so a
+ * pane here reads like a listing on every other relumea surface. */
 @layer components {
-  :root {
-    --hljs-bg: transparent;
-    --hljs-color: var(--text);
-    --hljs-keyword: var(--badge-stub-text);
-    --hljs-title: #d8b4fe;
-    --hljs-attr: var(--link);
-    --hljs-string: #fcd34d;
-    --hljs-symbol: #5eead4;
-    --hljs-comment: var(--muted);
-    --hljs-name: #6ee7b7;
-    --hljs-section: #67e8f9;
-    --hljs-bullet: #fcd34d;
-    --hljs-addition-color: #6ee7b7;
-    --hljs-addition-bg: #0d3a26;
-    --hljs-deletion-color: #fecaca;
-    --hljs-deletion-bg: #45161a;
-  }
-
-  .light-mode {
-    --hljs-color: var(--text);
-    --hljs-keyword: var(--badge-stub-text);
-    --hljs-title: #6d28d9;
-    --hljs-attr: var(--link);
-    --hljs-string: var(--badge-near-text);
-    --hljs-symbol: #0f766e;
-    --hljs-comment: var(--muted);
-    --hljs-name: var(--badge-exact-text);
-    --hljs-section: var(--c);
-    --hljs-bullet: var(--badge-near-text);
-    --hljs-addition-color: var(--badge-exact-text);
-    --hljs-addition-bg: #e8f8ef;
-    --hljs-deletion-color: #7f1d1d;
-    --hljs-deletion-bg: #fdeaea;
-  }
-
   .hljs {
-    color: var(--hljs-color);
-    background: var(--hljs-bg);
+    color: var(--color-text);
+    background: transparent;
   }
 
   .hljs-doctag,
@@ -425,119 +130,100 @@
   .hljs-meta .hljs-keyword,
   .hljs-template-tag,
   .hljs-template-variable,
-  .hljs-type,
   .hljs-variable.language_ {
-    color: var(--hljs-keyword);
+    color: var(--color-syn-keyword);
+  }
+
+  .hljs-type,
+  .hljs-attr,
+  .hljs-attribute,
+  .hljs-meta,
+  .hljs-section,
+  .hljs-selector-attr,
+  .hljs-selector-class,
+  .hljs-selector-id {
+    color: var(--color-syn-type);
   }
 
   .hljs-title,
   .hljs-title.class_,
   .hljs-title.class_.inherited__,
   .hljs-title.function_ {
-    color: var(--hljs-title);
+    color: var(--color-syn-call);
   }
 
-  .hljs-attr,
-  .hljs-attribute,
+  .hljs-built_in,
+  .hljs-variable,
+  .hljs-symbol {
+    color: var(--color-syn-register);
+  }
+
   .hljs-literal,
-  .hljs-meta,
   .hljs-number,
-  .hljs-operator,
-  .hljs-selector-attr,
-  .hljs-selector-class,
-  .hljs-selector-id,
-  .hljs-variable {
-    color: var(--hljs-attr);
+  .hljs-operator {
+    color: var(--color-syn-number);
   }
 
   .hljs-meta .hljs-string,
   .hljs-regexp,
-  .hljs-string {
-    color: var(--hljs-string);
-  }
-
-  .hljs-built_in,
-  .hljs-symbol {
-    color: var(--hljs-symbol);
+  .hljs-string,
+  .hljs-bullet {
+    color: var(--color-syn-string);
   }
 
   .hljs-code,
   .hljs-comment,
-  .hljs-formula {
-    color: var(--hljs-comment);
+  .hljs-formula,
+  .hljs-quote {
+    color: var(--color-syn-comment);
+    font-style: italic;
   }
 
   .hljs-name,
-  .hljs-quote,
   .hljs-selector-pseudo,
-  .hljs-selector-tag {
-    color: var(--hljs-name);
-  }
-
-  .hljs-subst {
-    color: var(--hljs-color);
-  }
-
-  .hljs-section {
-    color: var(--hljs-section);
-    font-weight: 700;
-  }
-
-  .hljs-bullet {
-    color: var(--hljs-bullet);
+  .hljs-selector-tag,
+  .hljs-subst,
+  .hljs-emphasis,
+  .hljs-strong {
+    color: var(--color-text);
   }
 
   .hljs-emphasis {
-    color: var(--hljs-color);
     font-style: italic;
   }
 
   .hljs-strong {
-    color: var(--hljs-color);
     font-weight: 700;
   }
 
   .hljs-addition {
-    color: var(--hljs-addition-color);
-    background-color: var(--hljs-addition-bg);
+    color: var(--color-st-exact);
+    background-color: var(--color-accent-soft);
   }
 
   .hljs-deletion {
-    color: var(--hljs-deletion-color);
-    background-color: var(--hljs-deletion-bg);
+    color: var(--color-st-fail);
+    background-color: var(--color-fail-soft);
   }
 
   /* An address inside a disassembly line is a jump target. */
   .asm-link {
     color: inherit;
     text-decoration: underline;
-    text-decoration-color: var(--asm-link-underline);
+    text-decoration-color: var(--color-border-strong);
     text-underline-offset: 2px;
   }
 
   .asm-link:hover {
-    background: var(--asm-link-hover-bg);
+    background: var(--color-accent-soft);
+    text-decoration-color: currentColor;
   }
 
-  /* Every scrolling region gets the thin scrollbar the frame's tokens name
-   * instead of the platform default. */
+  /* Scrolling regions take a thin scrollbar in the strong hairline, never the
+     platform default. */
   pre,
   .modal-body {
     scrollbar-width: thin;
-    scrollbar-color: var(--scroll-thumb) transparent;
-  }
-
-  /* The colour key. The legend under the map and the stats strip above it both
-   * name a state beside the swatch the map paints it in, and the fill arrives
-   * as an inline `var(--exact-bg)` and nothing else: a span with no rule is a
-   * 0x0 box, so the key said the word and never showed the colour it stands
-   * for. The box is the hairline every other chip in the theme wears. */
-  .swatch {
-    display: inline-block;
-    flex: none;
-    width: 12px;
-    height: 12px;
-    border-radius: var(--radius-hair);
-    border: 1px solid var(--border);
+    scrollbar-color: var(--color-border-strong) transparent;
   }
 }

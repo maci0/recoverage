@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "preact/compat";
 import type { ComponentChildren } from "preact";
 
 import { Button } from "@/components/ui/button";
+import { Icon } from "@/system/icons/Icon";
 
 /** How long the outcome label holds before the button returns to its own. */
 const COPIED_FLASH_MS = 1000;
@@ -46,17 +47,17 @@ export function CopyButton({
   };
   const copy = (): void => {
     if (value === "") {
-      setFlashed("Nothing");
+      setFlashed("Nothing to copy");
       scheduleReset();
       return;
     }
     void (async () => {
       try {
         await navigator.clipboard.writeText(value);
-        setFlashed("Copied!");
-        // oxlint-disable-next-line @rikalabs/no-silent-catch-fallback -- a refused clipboard is reported on the button itself ("Failed")
+        setFlashed("Copied");
+        // oxlint-disable-next-line @rikalabs/no-silent-catch-fallback -- a refused clipboard is reported on the button itself ("Copy failed")
       } catch {
-        setFlashed("Failed");
+        setFlashed("Copy failed");
       } finally {
         scheduleReset();
       }
@@ -64,7 +65,7 @@ export function CopyButton({
   };
   return (
     <Button
-      className="copy-btn"
+      size="sm"
       // The outcome replaces the visible label, so it joins the accessible name
       // too: a name that still read only "Copy VA" left a voice-control user
       // saying "click Copied" with nothing to match (WCAG 2.5.3).
@@ -73,10 +74,11 @@ export function CopyButton({
       disabled={disabled === true}
       onClick={copy}
     >
+      <Icon name={flashed === "Copied" ? "check" : "copy"} />
       {flashed ?? label}
       {/* The outcome repeats into a live region of its own: the button's
           accessible name is the fixed aria-label above, so a screen reader
-          focused on it hears the label and never the "Copied!" its label
+          focused on it hears the label and never the "Copied" its label
           replaced (WCAG 4.1.3). The region is always in the tree, so the text
           lands in a region that already existed when it changed. */}
       <span className="sr-only" role="status">

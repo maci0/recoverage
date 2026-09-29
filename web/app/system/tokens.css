@@ -1,0 +1,250 @@
+/* relumea design tokens: the single source for every relumea surface.
+   One definition per token. A value defined twice is the failure mode that
+   once rendered the coverage map flat grey in production, so both themes live
+   in the same declaration: `light-dark(<light>, <dark>)`.
+
+   The theme follows `color-scheme`: the OS preference by default, pinned by
+   `data-theme="light"` or `data-theme="dark"` on <html>. Set it on <html>
+   only: the production build polyfills `light-dark()` with variables that
+   resolve once on :root, so a subtree cannot switch on its own.
+   Components never branch on the theme; they read a token and it flips.
+
+   Other repos copy this file verbatim (docs/brand/BRAND.md, "Consuming the
+   tokens"). Change a value here first, run `bun run check:contrast`, then
+   update the tables in docs/brand/BRAND.md. */
+
+:root {
+  color-scheme: light dark;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+@theme {
+  /* Tailwind's stock palette, type, radius, shadow and container scales are
+     cleared, so a class outside this file (`bg-zinc-800`, `rounded-md`,
+     `text-sm`) generates nothing and `shadcn/no-unknown-classes` names it. */
+  --color-*: initial;
+  --text-*: initial;
+  --radius-*: initial;
+  --shadow-*: initial;
+  --inset-shadow-*: initial;
+  --drop-shadow-*: initial;
+  --text-shadow-*: initial;
+  --container-*: initial;
+  --font-*: initial;
+  --leading-*: initial;
+  --tracking-*: initial;
+  --ease-*: initial;
+
+  /* Grounds and surfaces, back to front. */
+  --color-bg: light-dark(#fafafa, #0b0b0c);
+  --color-surface: light-dark(#ffffff, #131316);
+  --color-surface-2: light-dark(#f5f6f8, #1a1a1e);
+  --color-surface-3: light-dark(#eef0f3, #212126);
+  /* Panel heads: not the ground, not the card. */
+  --color-raised: light-dark(#fcfcfd, #1a1a1e);
+  --color-code: light-dark(#fafafb, #101012);
+
+  /* Hairlines are decoration (about 1.2:1). A control is told apart from its
+     surface by its edge alone, so control lines carry 3:1 (WCAG 1.4.11). */
+  --color-border: light-dark(#e7e8ec, #28282e);
+  --color-border-strong: light-dark(#d5d8de, #3a3a42);
+  --color-control-line: light-dark(#82828a, #767681);
+  --color-control-line-hover: light-dark(#63636c, #8f8f9b);
+
+  /* Ink. The primary action is filled with `text` and labeled with `surface`,
+     so it inverts with the theme. */
+  --color-text: light-dark(#0a0a0b, #ededef);
+  --color-text-muted: light-dark(#55585f, #a3a3ab);
+  --color-text-faint: light-dark(#686d75, #8e8e97);
+  --color-ink-hover: light-dark(#26262a, #c9c9cf);
+
+  /* The one accent: verdict green. */
+  --color-accent: light-dark(#0f7a42, #3fbf7a);
+  --color-accent-hover: light-dark(#0b6234, #5ccf91);
+  --color-accent-ink: light-dark(#ffffff, #04170d);
+  --color-accent-soft: light-dark(#eaf5ef, #192b24);
+
+  /* Tints behind a stopped run, a gated row and a failure. */
+  --color-warn-soft: light-dark(#fdf3ea, #2c271e);
+  --color-near-soft: light-dark(#fdf8f1, #24201c);
+  --color-fail-soft: light-dark(#f8eded, #322425);
+  --color-live-soft: light-dark(#ebf2f6, #1f2a33);
+  --color-scrim: light-dark(rgb(10 10 11 / 72%), rgb(0 0 0 / 72%));
+  /* The invitation rail above the nav: an ink band in light, a quiet surface
+     in dark, where an inverted band would be the brightest thing on the page. */
+  --color-rail: light-dark(#0a0a0b, #1a1a1e);
+  --color-rail-ink: light-dark(#ffffff, #ededef);
+
+  /* Verdict words (`st-*`) are text and clear 4.5:1 on every surface. */
+  --color-st-exact: light-dark(#0f7a42, #4cc38a);
+  --color-st-reloc: light-dark(#0f6f68, #4fc2b0);
+  --color-st-proven: light-dark(#2a7154, #86d4ad);
+  --color-st-thunk: light-dark(#5b3fa8, #b8a7f0);
+  --color-st-near: light-dark(#8a5a00, #e3b65c);
+  --color-st-stub: light-dark(#5f6673, #a3a3ab);
+  --color-st-live: light-dark(#0b5c8a, #6cb4e4);
+  --color-st-fail: light-dark(#a32318, #f08a80);
+
+  --color-conf-high: light-dark(#0f6f68, #5ccdbd);
+  --color-conf-medium: light-dark(#2b6b66, #45b3a5);
+
+  /* Verdict fills (`cell-*`): one per verdict, shared by the map and every
+     legend. When a fill lived in two places, the map and its key disagreed. */
+  --color-cell-exact: light-dark(#86d3a4, #2f7a56);
+  --color-cell-reloc: light-dark(#7fcbb8, #31806f);
+  --color-cell-proven: light-dark(#a9dcc1, #3f7a63);
+  --color-cell-thunk: light-dark(#c9bdf0, #6f629f);
+  --color-cell-near: light-dark(#e8cf86, #8a6c2c);
+  --color-cell-stub: light-dark(#c3c7cf, #6a6a73);
+  --color-cell-live: light-dark(#9ecdea, #3b5b73);
+  --color-cell-fail: light-dark(#e8a49c, #a05c54);
+  --color-cell-unlit: light-dark(#eff0f3, #212124);
+  /* How much of a background coverage field shows, as mask alpha. Dark fills
+     sit about twice as far off their ground as light ones, so the dark field
+     shows at half strength to read as the same texture. */
+  --color-field-mask: light-dark(#000000, rgb(0 0 0 / 50%));
+
+  /* Registry fills: one cell per tool. Gated shares the NEAR amber because
+     both mean "stops here until something changes". */
+  --color-tool-read: light-dark(#cdd2da, #39393b);
+  --color-tool-gated: light-dark(#e3b65c, #8a6c2c);
+
+  /* Code listing palette, shared with the workspace so a sample on the landing
+     looks like the product. Each clears AA on the ground and on accent-soft,
+     the tint of a selected line. */
+  --color-syn-keyword: light-dark(#5b3fa8, #b8a7f0);
+  --color-syn-type: light-dark(#0b5c8a, #6cb4e4);
+  --color-syn-string: light-dark(#8a5a00, #e3b65c);
+  --color-syn-number: light-dark(#0f7a42, #4cc38a);
+  --color-syn-register: light-dark(#0b5c8a, #6cb4e4);
+  --color-syn-call: light-dark(#0f7a42, #3fbf7a);
+  --color-syn-comment: light-dark(#62666e, #8e8e97);
+
+  --font-sans: "Archivo", "Archivo Fallback", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+
+  /* Type scale. Six body steps and four display steps, each visibly apart:
+     11 / 12 / 14 / 16 / 18 / 22, then 32 / 30-42 / 36-60 / 40-72. */
+  --text-chip: 0.6875rem;
+  --text-micro: 0.75rem;
+  --text-data: 0.875rem;
+  --text-body: 1rem;
+  --text-intro: 1.125rem;
+  --text-lede: 1.375rem;
+  --text-figure: 2rem;
+  --text-title: clamp(1.875rem, 3vw, 2.625rem);
+  --text-headline: clamp(2.25rem, 4.4vw, 3.75rem);
+  --text-display: clamp(2.5rem, 5vw, 4.5rem);
+
+  --leading-display: 1.05;
+  --leading-title: 1.14;
+  --leading-snug: 1.5;
+  --leading-body: 1.55;
+  --leading-prose: 1.6;
+  --leading-code: 1.7;
+
+  --tracking-display: -0.028em;
+  --tracking-title: -0.025em;
+  --tracking-figure: -0.02em;
+  --tracking-tight: -0.01em;
+  --tracking-logo: -0.03em;
+  --tracking-label: 0.06em;
+  --tracking-chip: 0.04em;
+
+  /* Spacing: every `p-*`, `gap-*`, `m-*` step is a multiple of 4px. No named
+     overrides: `p-7` is 28px in every repo. */
+  --spacing: 0.25rem;
+
+  /* Corners, ascending. A literal radius in a class is a rung this ladder does
+     not have. */
+  --radius-hair: 1px;
+  --radius-cell: 3px;
+  --radius-chip: 5px;
+  --radius-control: 9px;
+  --radius-action: 10px;
+  --radius-card: 14px;
+  --radius-panel: 16px;
+
+  /* The one shadow: the floating nav and popovers. Content panels take a
+     border instead, never both. */
+  --shadow-lift:
+    0 1px 2px light-dark(rgb(10 10 11 / 4%), rgb(0 0 0 / 40%)),
+    0 12px 32px -18px light-dark(rgb(10 10 11 / 12%), rgb(0 0 0 / 60%));
+
+  /* Motion. Short functional transitions, and one authored moment (the
+     coverage scan). `prefers-reduced-motion: reduce` stops both. */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  --default-transition-duration: 150ms;
+  --default-transition-timing-function: var(--ease-standard);
+  --duration-meter: 260ms;
+  --duration-scan: 1500ms;
+
+  /* Icons: 24-unit grid; the stroke in px at every rendered size. */
+  --icon-stroke: 1.7;
+
+  /* Measures. */
+  --container-shell: 1200px;
+  --container-hero: 940px;
+  --container-form: 30rem;
+  /* Sized so the section lede reads at 70ch in its own 18px font: `ch` resolves
+     against the element it is set on (the 16px header), not the 18px prose
+     inside it, so the raw value runs about 18% longer than the measure it gives. */
+  --container-measure: 76ch;
+  --container-lede: 60ch;
+  --container-prose: 46ch;
+  /* FAQ answers: the 65-75ch body measure at 16px. */
+  --container-prose-wide: 70ch;
+}
+
+/* shadcn/ui recipes read these names. They point at the tokens above and add
+   no value of their own. `accent` is relumea's verdict green, not shadcn's
+   hover fill: a copied recipe's `hover:bg-accent` becomes `hover:bg-surface-2`. */
+@theme inline {
+  --color-background: var(--color-bg);
+  --color-foreground: var(--color-text);
+  --color-card: var(--color-surface);
+  --color-card-foreground: var(--color-text);
+  --color-popover: var(--color-surface);
+  --color-popover-foreground: var(--color-text);
+  --color-primary: var(--color-text);
+  --color-primary-foreground: var(--color-surface);
+  --color-secondary: var(--color-surface-2);
+  --color-secondary-foreground: var(--color-text);
+  --color-muted: var(--color-surface-2);
+  --color-muted-foreground: var(--color-text-muted);
+  --color-accent-foreground: var(--color-accent-ink);
+  --color-destructive: var(--color-st-fail);
+  --color-input: var(--color-control-line);
+  --color-ring: var(--color-accent);
+}
+
+/* Icons (src/system/icons): every icon is one stroked path on the 24-unit
+   grid. Stroke width is in grid units, so each rendered size (Icon.tsx
+   ICON_SIZE) scales it back to --icon-stroke px: the line is 1.7px at 16, 20
+   and 24px alike. */
+@layer base {
+  [data-icon] {
+    flex: none;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: var(--icon-stroke);
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  [data-icon][width="20"] {
+    stroke-width: calc(var(--icon-stroke) * 24 / 20);
+  }
+
+  [data-icon][width="16"] {
+    stroke-width: calc(var(--icon-stroke) * 24 / 16);
+  }
+}

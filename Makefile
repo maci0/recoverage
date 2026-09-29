@@ -273,7 +273,7 @@ BUNDLE_DIR = src/recoverage/assets
 # from a renamed output stays where it was dropped. The `build` recipe refuses a
 # directory holding anything else, and a missing member, so a contaminated
 # bundle fails the build instead of shipping.
-BUNDLE_ASSETS = app.js favicon.svg index.html print.css style.css
+BUNDLE_ASSETS = app.js archivo.woff2 favicon.svg index.html jetbrains-mono.woff2 print.css style.css
 
 check-bundle-clean:
 	@$(SET_STRICT) \

@@ -25,7 +25,8 @@ import {
   trimSearch,
 } from "@/lib/format";
 import { readStored, writeStored } from "@/lib/storage";
-import { FILTER_KEY, PALETTE_VARS, STATE_FILTERS, STATE_LABEL } from "@/states";
+import { FILTER_KEY, STATE_LABEL, SWATCH_CLASS } from "@/states";
+import { Icon } from "@/system/icons/Icon";
 
 /** The dashboard shell: the document, the topbar's controls, and the map.
  *
@@ -40,14 +41,6 @@ const NAV_NOTICE_MS = 4000;
  * A target-wide term can match thousands of names, and the list is there to be
  * scanned, not to be a second index: past the cap it narrows the term. */
 const SEARCH_RESULT_LIMIT = 20;
-
-/** The filters the toolbar offers: "all" first, then one per state the grid
- * can paint. The state half is `STATE_FILTERS`, which the stats strip draws the
- * same words from. */
-const FILTERS: Array<{ key: string; label: string; aria: string; title: string }> = [
-  { key: "all", label: "All", aria: "Filter all", title: "Show all statuses" },
-  ...STATE_FILTERS,
-];
 
 /** Sections in PE load order (ascending VA), which puts `.text` first instead
  * of leaving the section that carries the work at the end of an alphabetical
@@ -70,12 +63,16 @@ const SECTION_TAB_STEP = new Map<string, SectionTabStep>([
   ["End", (_at, last) => last],
 ]);
 
-function initialTheme(): "dark" | "light" {
+type Theme = "dark" | "light";
+
+/** The theme the reader pinned with the toggle, or null to follow the OS. */
+function pinnedTheme(): Theme | null {
   const saved = readStored(THEME_KEY);
-  if (saved === "light" || saved === "dark") {
-    return saved;
-  }
-  return window.matchMedia?.("(prefers-color-scheme: light)").matches === true ? "light" : "dark";
+  return saved === "light" || saved === "dark" ? saved : null;
+}
+
+function systemTheme(): Theme {
+  return window.matchMedia?.("(prefers-color-scheme: dark)").matches === true ? "dark" : "light";
 }
 
 /** The Potato Mode link for the current view. Potato reads `search` for the
@@ -114,15 +111,15 @@ function searchHint(
   resultsOpen: boolean,
 ): string {
   if (matches === 0) {
-    return " - no matches. Check the spelling, or search by VA.";
+    return ". Check the spelling, or search by address.";
   }
   if (sectionMatches === 0) {
-    return ` - none of them in ${isolate(section ?? "this section")}; press Enter to jump to the first one.`;
+    return `, none in ${isolate(section ?? "this section")}. Press Enter to jump to the first.`;
   }
   if (!resultsOpen) {
-    return " - press Enter to jump, or click the box to list the matches.";
+    return ". Press Enter to jump, or click the box to list them.";
   }
-  return " - press Enter, or pick a name from the list below.";
+  return ". Press Enter for the first, or pick one below.";
 }
 
 export function App() {
@@ -169,7 +166,10 @@ export function App() {
   // itself changed, which left twenty rows floating over the lattice for the
   // rest of the visit after one search.
   const [resultsOpen, setResultsOpen] = useState(false);
-  const [theme, setTheme] = useState<"dark" | "light">(initialTheme);
+  const [pinned, setPinned] = useState<Theme | null>(pinnedTheme);
+  const [system, setSystem] = useState<Theme>(systemTheme);
+  const theme = pinned ?? system;
+  const otherTheme: Theme = theme === "light" ? "dark" : "light";
   const [notice, setNotice] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const gridFocus = useRef<((index: number) => void) | null>(null);
@@ -242,7 +242,7 @@ export function App() {
   useEffect(() => {
     // The tab is a second surface for the same selection the topbar shows, and
     // a flat "ReCoverage" left it reading as a marketing page in every state.
-    const parts = ["ReCoverage"];
+    const parts = ["recoverage"];
     if (target !== "") {
       parts.push(target);
     }
@@ -255,8 +255,32 @@ export function App() {
     document.title = parts.join(" · ");
   }, [target, section, query]);
 
+  // The tokens resolve through `color-scheme`, which `data-theme` on <html>
+  // pins; with no attribute they follow the OS. The shell sets the same
+  // attribute before the first paint, from the same stored value.
   useEffect(() => {
-    document.body.classList.toggle("light-mode", theme === "light");
+    if (pinned === null) {
+      delete document.documentElement.dataset.theme;
+    } else {
+      document.documentElement.dataset.theme = pinned;
+    }
+  }, [pinned]);
+
+  // While the OS decides, the map still has to repaint when it changes its
+  // mind: the canvas resolves its fills once per theme.
+  useEffect(() => {
+    const scheme = window.matchMedia?.("(prefers-color-scheme: dark)");
+    if (scheme === undefined) {
+      return;
+    }
+    const control = new AbortController();
+    scheme.addEventListener("change", () => setSystem(scheme.matches ? "dark" : "light"), {
+      signal: control.signal,
+    });
+    return () => control.abort();
+  }, []);
+
+  useEffect(() => {
     const topbar = topbarRef.current;
     if (topbar === null) {
       return;
@@ -273,7 +297,7 @@ export function App() {
     const observer = new ResizeObserver(measure);
     observer.observe(topbar);
     return () => observer.disconnect();
-  }, [theme]);
+  }, []);
 
   // The target list's own controller, held so the error line's Retry can start
   // a fresh request. The first load is driven by the effect below, which
@@ -571,11 +595,11 @@ export function App() {
       return null;
     }
     if (matchedNames === null) {
-      return `Searching: "${query}" (loading the function index...)`;
+      return `Searching for "${query}": loading the function index…`;
     }
-    return `Searching: "${query}" (${count(matchedNames.size)} ${
+    return `${count(matchedNames.size)} ${
       matchedNames.size === 1 ? "match" : "matches"
-    })${searchHint(matchedNames.size, sectionMatches, active?.name ?? null, resultsOpen)}`;
+    } for "${query}"${searchHint(matchedNames.size, sectionMatches, active?.name ?? null, resultsOpen)}`;
   }, [active?.name, matchedNames, query, resultsOpen, sectionMatches]);
 
   /** The section an address falls in, for a search result's own row. Every
@@ -751,36 +775,29 @@ export function App() {
     <>
       <a
         href="#main-content"
-        className="skip-link sr-only focus:not-sr-only focus:absolute focus:start-2 focus:top-2 focus:z-30 focus:rounded-hair focus:border focus:border-line focus:bg-panel focus:px-2 focus:py-1"
+        className="skip-link sr-only focus:not-sr-only focus:absolute focus:start-2 focus:top-2 focus:z-30 focus:rounded-control focus:border focus:border-control-line focus:bg-surface focus:px-3 focus:py-2 focus:text-data"
       >
         Skip to main content
       </a>
       <header
         ref={topbarRef}
-        // Pinned only where it is one or two rows tall. A narrow viewport
-        // wraps the section tabs, the filter pills and the actions into a
-        // block that can take half the screen, and a sticky block that size
-        // scrolls the map out from under the reader who is trying to read it.
-        className="topbar z-20 flex flex-wrap items-center gap-3 border-b border-line bg-topbar px-4 py-2 lg:sticky lg:top-0"
+        // Pinned only where it is one row tall. A narrow viewport wraps the
+        // tabs, the search and the actions into a block that can take half
+        // the screen, and a sticky block that size scrolls the map out from
+        // under the reader who is trying to read it.
+        className="topbar z-20 flex flex-wrap items-center gap-x-5 gap-y-3 border-b border-border bg-surface px-4 py-3 lg:sticky lg:top-0 lg:px-6"
       >
-        <div className="topbar-left flex flex-wrap items-center gap-3">
-          <div className="title-container flex items-center gap-2">
-            <div
-              className="logo-r inline-flex items-center justify-center rounded-hair border-2 border-accent bg-accent/5 px-2 py-0.5 font-mono text-mark font-extrabold text-accent shadow-glow"
-              aria-hidden="true"
-            >
-              R
-            </div>
-            <h1 className="title font-mono text-wordmark font-bold tracking-wide">ReCoverage</h1>
+        <div className="flex min-w-0 flex-wrap items-center gap-x-5 gap-y-3">
+          <div className="flex items-center gap-2">
+            <Mark />
+            <h1 className="title m-0 text-intro font-bold leading-title tracking-logo">recoverage</h1>
           </div>
           {/* A tablist, not a row of toggle buttons: the section tabs select
-              what the ONE panel below them shows, which is what `tablist` is
-              for, and the pattern pairs the active tab's state with the
-              `tabpanel` the map is. `aria-pressed` announced the state but not
-              the relationship, and read as eight independent toggles. */}
+              what the ONE panel below them shows, and the pattern pairs the
+              active tab's state with the `tabpanel` the map is. */}
           <div
             ref={sectionTabRef}
-            className="tabs flex flex-wrap gap-1"
+            className="tabs flex flex-wrap gap-0.5 rounded-control border border-border bg-surface-2 p-0.5"
             role="tablist"
             aria-label="Sections"
             aria-orientation="horizontal"
@@ -790,15 +807,16 @@ export function App() {
               return (
                 <Button
                   key={name}
-                  className="tab-btn"
+                  variant="ghost"
+                  size="sm"
+                  className="tab-btn rounded-chip font-mono data-active:border-border-strong data-active:bg-surface"
                   active={current}
                   role="tab"
                   id={`section-tab-${name}`}
                   aria-selected={current}
                   // Roving tabindex: one stop for the whole row, and the arrow
-                  // keys move within it, which is what a tablist promises.
-                  // Without it Tab walks all eight and the arrow keys do
-                  // nothing (WCAG 2.1.1).
+                  // keys move within it, which is what a tablist promises
+                  // (WCAG 2.1.1).
                   tabIndex={current ? 0 : -1}
                   aria-controls="section-panel"
                   onClick={() => {
@@ -813,58 +831,53 @@ export function App() {
             })}
           </div>
         </div>
-        <div className="topbar-right ms-auto flex flex-wrap items-center gap-3">
-          {/* Both rows below WRAP, and the search box may shrink. The topbar
-              clips its overflow (`body { overflow-x: clip }`), so a row that
-              cannot break is not scrolled off to the side: at the 320 CSS px
-              1.4.10 asks for, the actions row (target picker, Regenerate, HTML,
-              theme) is about 350px wide as one unbreakable item, and the
-              theme toggle at its end was clipped away with nothing to scroll
-              it back into reach. `min-w-0` is what lets the search column
-              shrink to its box's own minimum rather than to the widest fixed
-              width any child declares. */}
-          <div className="search relative flex min-w-0 flex-col gap-1" ref={searchBoxRef}>
-            <div className="search-row flex flex-wrap items-center gap-2">
-              {/* A real <label> element rather than the input's own hint
-                  attribute: that hint is the field's only visible name and it
-                  disappears the moment a reader types, which is the
-                  hint-as-label antipattern (WCAG 3.3.2). It is visually
-                  hidden so the topbar keeps its one-row shape, and
-                  `aria-label` is dropped so the accessible name is this
-                  element's own text and the two cannot drift apart
-                  (WCAG 2.5.3). */}
+        <div className="flex min-w-0 grow flex-wrap items-start justify-end gap-x-3 gap-y-3">
+          {/* The search column may shrink and the rows wrap: the body clips
+              horizontal overflow, so a row that cannot break at 320 CSS px
+              (WCAG 1.4.10) would lose its last control with no scroll
+              position that brings it back. */}
+          <div className="search relative flex min-w-0 grow flex-col gap-1 sm:max-w-80" ref={searchBoxRef}>
+            <div className="search-row flex flex-wrap items-center gap-1.5">
+              {/* A real <label>: the hint inside the field is gone once a reader types
+                  (WCAG 3.3.2), and the name is this element's own text so the
+                  two cannot drift apart (WCAG 2.5.3). Visually hidden so the
+                  topbar keeps its one-row shape. */}
               <label className="sr-only" for="search-input">
                 Search functions by name or address
               </label>
-              <input
-                id="search-input"
-                type="search"
-                className="input-el w-56 max-w-full rounded-hair border border-line bg-btn px-2 py-1 font-mono text-label text-text sm:w-72"
-                placeholder="Search function name or VA..."
-                value={query}
-                onChange={(event) => {
-                  setQuery(event.currentTarget.value);
-                  setResultsOpen(true);
-                }}
-                onFocus={() => setResultsOpen(true)}
-                // The list is an overlay on the map, so the reader closes it by
-                // going somewhere else: focus leaving the box for anything
-                // outside it (a block on the map, a filter pill, another
-                // control) puts the map back, and focus moving to a row of the
-                // list itself does not, since the pick closes it in turn.
-                onBlur={(event) => {
-                  const { relatedTarget: next } = event;
-                  const box = searchBoxRef.current;
-                  if (next instanceof Node && box !== null && box.contains(next)) {
-                    return;
-                  }
-                  setResultsOpen(false);
-                }}
-                onKeyDown={onSearchKeyDown}
-              />
+              <div className="relative min-w-0 grow">
+                <span className="pointer-events-none absolute start-2.5 top-2 text-text-faint">
+                  <Icon name="search" />
+                </span>
+                <input
+                  id="search-input"
+                  type="search"
+                  className="h-8 w-full min-w-0 rounded-control border border-control-line bg-surface ps-8 pe-2 text-data text-text hover:border-control-line-hover"
+                  placeholder="Function name or address"
+                  value={query}
+                  onChange={(event) => {
+                    setQuery(event.currentTarget.value);
+                    setResultsOpen(true);
+                  }}
+                  onFocus={() => setResultsOpen(true)}
+                  // The list is an overlay on the map, so focus leaving the box
+                  // for anything outside it puts the map back; focus moving to
+                  // a row of the list does not, since the pick closes it.
+                  onBlur={(event) => {
+                    const { relatedTarget: next } = event;
+                    const box = searchBoxRef.current;
+                    if (next instanceof Node && box !== null && box.contains(next)) {
+                      return;
+                    }
+                    setResultsOpen(false);
+                  }}
+                  onKeyDown={onSearchKeyDown}
+                />
+              </div>
               {query !== "" && (
                 <Button
-                  className="search-clear"
+                  variant="ghost"
+                  size="icon"
                   aria-label="Clear search"
                   title="Clear search"
                   onClick={() => {
@@ -872,18 +885,15 @@ export function App() {
                     setResultsOpen(false);
                   }}
                 >
-                  Clear
+                  <Icon name="x" />
                 </Button>
               )}
             </div>
             {/* The live region stays in the tree while the query is empty: a
-                status element INSERTED together with its text is announced by
-                some screen readers and dropped by others, so the region every
-                keystroke writes into has to exist before the write (WCAG 4.1.3). */}
+                status element inserted together with its text is announced by
+                some screen readers and dropped by others (WCAG 4.1.3). */}
             <div
-              className={
-                searchStatus === null ? "sr-only" : "search-status font-mono text-micro text-muted"
-              }
+              className={searchStatus === null ? "sr-only" : "text-micro text-text-muted"}
               role="status"
               aria-live="polite"
             >
@@ -901,52 +911,11 @@ export function App() {
               />
             )}
           </div>
-          {/* The pills are one letter each, and the letter is the filter's own
-              short spelling: `E` isolates exact matches and `P` padding, which
-              was legible on hover and to a screen reader and to nobody looking
-              at the toolbar. The key under them names every letter with the
-              word the pill's own tooltip and the map's legend below already
-              use — one vocabulary, spelled once — so the letters read at a
-              glance without widening the pills into a sentence. */}
-          <div className="filters-box flex flex-col gap-1">
-            <div className="filters flex flex-wrap gap-1">
-              {FILTERS.map((entry) => {
-                const on = entry.key === "all" ? filters.size === 0 : filters.has(entry.key);
-                return (
-                  <Button
-                    key={entry.key}
-                    className={`filter-btn filter-${entry.key}`}
-                    aria-label={entry.aria}
-                    aria-pressed={on}
-                    title={entry.title}
-                    active={on}
-                    onClick={() => toggleFilter(entry.key)}
-                  >
-                    {entry.label}
-                  </Button>
-                );
-              })}
-            </div>
-            {/* Visible to sighted readers only: every pill's accessible name
-                is already its word ("Filter exact"), so a screen reader that
-                also read this key would hear each state named twice. */}
-            <ul
-              className="filter-key flex flex-wrap gap-x-2 font-mono text-micro text-muted"
-              aria-hidden="true"
-            >
-              {FILTERS.filter((entry) => entry.key !== "all").map((entry) => (
-                <li key={entry.key}>
-                  <b className="text-text">{entry.label}</b>{" "}
-                  {entry.title.split(" (")[0] ?? entry.title}
-                </li>
-              ))}
-            </ul>
-          </div>
-          <div className="actions flex flex-wrap items-center gap-2">
+          <div className="actions flex flex-wrap items-center gap-1.5">
             {targets.length > 0 && (
               <select
-                className="input-el target-select max-w-full min-w-0 rounded-hair border border-line bg-btn px-2 py-1 font-mono text-label text-text"
-                aria-label="Select target binary"
+                className="h-8 min-w-0 max-w-full rounded-control border border-control-line bg-surface px-2 font-mono text-micro text-text hover:border-control-line-hover"
+                aria-label="Target binary"
                 value={target}
                 onChange={(event) => onTarget(event.currentTarget.value)}
               >
@@ -958,61 +927,55 @@ export function App() {
               </select>
             )}
             <Button
-              className="icon-btn reload-btn"
-              // "Regenerate" leads the accessible name for the same reason
-              // (WCAG 2.5.3), and is also the honest name for what the click
-              // runs: rebrew's catalog analysis, for minutes at a time, which
-              // "Reload" (the browser's own word for a refresh) does not tell a
-              // reader to expect.
+              // "Regenerate" leads the accessible name (WCAG 2.5.3), and it is
+              // the honest name for what the click runs: rebrew's catalog
+              // analysis, for minutes at a time.
               aria-label={busy ? MSG.REGEN_IN_PROGRESS : "Regenerate coverage data"}
-              title={busy ? MSG.REGEN_IN_PROGRESS : "Re-run the coverage analysis (takes minutes)"}
+              title={busy ? MSG.REGEN_IN_PROGRESS : "Re-run the coverage analysis. Takes minutes."}
               // `aria-disabled`, not `disabled`: a disabled button leaves the
-              // tab order, so the reader who just activated it is dropped to
-              // <body> and has to walk the whole page back to find where they
-              // were, for the minutes the regen runs (WCAG 2.4.3).
-              // `aria-disabled` keeps the control focusable and announced as
-              // unavailable, and `useLiveReload.reload` refuses the click.
+              // tab order and drops the reader who just pressed it to <body>
+              // for the minutes the regen runs (WCAG 2.4.3).
+              // `useLiveReload.reload` refuses the click instead.
               aria-disabled={busy ? "true" : undefined}
               onClick={reload}
             >
               {busy ? MSG.REGEN_IN_PROGRESS : "Regenerate"}
             </Button>
             <a
-              className={cn(controlVariants(), "potato-link")}
+              className={cn(controlVariants({ variant: "ghost" }), "no-underline")}
               href={potatoHref}
-              aria-label="HTML: open this view in Potato Mode"
-              title="Open this view in Potato Mode (server-rendered HTML)"
+              title="Open this view in Potato Mode, the server-rendered HTML page"
             >
-              HTML
+              Plain HTML
             </a>
             <Button
-              className="icon-btn"
-              aria-label={theme === "light" ? "Switch to Dark Mode" : "Switch to Light Mode"}
-              title={theme === "light" ? "Switch to Dark Mode" : "Switch to Light Mode"}
+              variant="ghost"
+              aria-label={`Switch to the ${otherTheme} theme`}
               onClick={() => {
-                setTheme(theme === "light" ? "dark" : "light");
-                writeStored(THEME_KEY, theme === "light" ? "dark" : "light");
+                setPinned(otherTheme);
+                writeStored(THEME_KEY, otherTheme);
               }}
             >
-              {theme === "light" ? "Dark" : "Light"}
+              {otherTheme === "dark" ? "Dark theme" : "Light theme"}
             </Button>
           </div>
         </div>
       </header>
 
-      <main className="layout mx-auto flex max-w-[1600px] flex-col gap-4 px-4 py-4 lg:flex-row" id="main-content">
+      <main
+        className="flex flex-col gap-6 px-4 py-6 lg:flex-row lg:items-start lg:px-6"
+        id="main-content"
+      >
         {/* The tabpanel the section tabs control: the map and everything that
             describes it. The tab row is outside it so the panel is the one
             thing a tab switch replaces. */}
         <div
-          className="grid-area min-w-0 flex-1"
+          className="min-w-0 flex-1"
           id="section-panel"
           role="tabpanel"
-          // The tab that selected this panel, so its name is the one on screen
-          // (WCAG 4.1.2). A target whose document names no section renders no
-          // tab to point at, and an `aria-labelledby` naming a missing id
-          // resolves to nothing at all, which is a panel with no name rather
-          // than one carrying the label it is asking for.
+          // The tab that selected this panel names it (WCAG 4.1.2). A target
+          // whose document names no section renders no tab to point at, and
+          // an `aria-labelledby` naming a missing id names nothing.
           aria-labelledby={names.length > 0 ? `section-tab-${active?.name ?? section}` : undefined}
           aria-label={names.length > 0 ? undefined : "Coverage map"}
         >
@@ -1024,15 +987,14 @@ export function App() {
             filters={filters}
             onToggleFilter={toggleFilter}
           />
-          {/* Always mounted, for the same reason as the search status above: a
-              regen that finished or a jump that found nothing has to be
-              announced, and a region inserted with its text is not reliably
-              announced (WCAG 4.1.3). Empty, it is visually nothing. */}
+          {/* Always mounted, like the search status: a finished regen or a
+              jump that found nothing has to be announced (WCAG 4.1.3). Empty,
+              it is visually nothing. */}
           <p
             className={
               notice === null
                 ? "sr-only"
-                : "nav-notice mb-2 rounded-hair border border-line bg-panel px-3 py-2 font-mono text-label"
+                : "mb-3 rounded-control border border-border bg-live-soft px-3 py-2 text-data text-text"
             }
             role="status"
             aria-live="polite"
@@ -1041,29 +1003,22 @@ export function App() {
           </p>
           {(loadError ?? coverage.error) !== null && (
             <p
-              className="grid-error mb-2 rounded-hair border border-line bg-panel px-3 py-2 font-mono text-label text-badge-stub-text"
+              className="mb-3 flex flex-wrap items-center gap-3 rounded-control border border-border bg-fail-soft px-3 py-2 text-data text-st-fail"
               role="alert"
             >
-              {loadError ?? coverage.error}
-              {/* The next action the line did not offer. A refused read left
-                  the reader with a reason and nothing to do about it, and the
-                  only way back was reloading the whole page. It re-runs the
-                  read that failed: the target list when that is what was
-                  refused, the current section's data otherwise. */}
-              <Button className="ms-3" onClick={retryFailedLoad}>
+              <span className="min-w-0">{loadError ?? coverage.error}</span>
+              {/* Re-runs the read that failed: the target list when that is
+                  what was refused, the current section's data otherwise. */}
+              <Button size="sm" onClick={retryFailedLoad}>
                 Retry
               </Button>
             </p>
           )}
-          {/* The map area's own live region, mounted for the life of the shell
-              like the notice above it. A section switch, a lazy cell load and a
-              cell load that failed each replace the map, and a `role="status"`
-              inserted together with its text is announced by some screen
-              readers and dropped by others; this region exists before the
-              write (WCAG 4.1.3). Empty and visible, it is a line of text
-              naming the section the map is showing, which is the one thing a
-              reader who cannot see the tab row cannot work out. */}
-          <p className="map-status sr-only" role="status" aria-live="polite">
+          {/* The map area's own live region, mounted for the life of the shell.
+              A section switch, a lazy cell load and a failed cell load each
+              replace the map, and this region exists before the write
+              (WCAG 4.1.3). */}
+          <p className="sr-only" role="status" aria-live="polite">
             {mapStatus}
           </p>
           <MapArea
@@ -1084,13 +1039,12 @@ export function App() {
               gridFocus.current = focus;
             }}
           />
-          <ul className="legend mt-3 flex flex-wrap gap-3 font-mono text-micro text-muted">
+          <ul className="legend m-0 mt-3 flex list-none flex-wrap gap-x-4 gap-y-1 p-0 text-micro text-text-muted">
             {STATE_LABEL.map((label, slot) => (
               <li key={label} className="flex items-center gap-1.5">
                 <span
                   aria-hidden="true"
-                  className={`swatch swatch-${label.replaceAll(" ", "-")}`}
-                  style={{ background: `var(${PALETTE_VARS[slot] ?? "--none"})` }}
+                  className={cn("swatch size-2.5 rounded-cell", SWATCH_CLASS[slot])}
                 />
                 {label}
               </li>
@@ -1107,6 +1061,29 @@ export function App() {
         />
       </main>
     </>
+  );
+}
+
+/** The relumea mark (brand guide, "The mark"): a lowercase r in coverage-map
+ * cells, one of them lit. Ink cells follow the text colour. */
+function Mark(): ComponentChildren {
+  const cells: Array<[number, number, string]> = [
+    [1.5, 1.5, "fill-current"],
+    [9, 1.5, "fill-current"],
+    [16.5, 1.5, "fill-accent"],
+    [1.5, 9, "fill-current"],
+    [9, 9, "fill-border-strong"],
+    [16.5, 9, "fill-border-strong"],
+    [1.5, 16.5, "fill-current"],
+    [9, 16.5, "fill-border-strong"],
+    [16.5, 16.5, "fill-border-strong"],
+  ];
+  return (
+    <svg className="shrink-0 text-text" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+      {cells.map(([x, y, fill]) => (
+        <rect key={`${x}-${y}`} className={fill} x={x} y={y} width="6" height="6" rx="1.5" />
+      ))}
+    </svg>
   );
 }
 
@@ -1150,9 +1127,12 @@ function MapArea({
 }: MapAreaProps): ComponentChildren {
   if (noTargets) {
     return (
-      <div className="empty-state rounded-control border border-line bg-panel p-6 text-center font-mono text-label text-muted">
-        <p className="font-bold text-text">No coverage database</p>
-        <p>Run rebrew build-db to create db/coverage-*.toml, then press Regenerate.</p>
+      <div className="flex flex-col items-center gap-2 rounded-card border border-border bg-surface px-6 py-12 text-center text-data text-text-muted">
+        <p className="m-0 text-intro font-semibold text-text">No coverage database</p>
+        <p className="m-0 max-w-prose">
+          Run <code className="font-mono text-micro text-text">rebrew build-db</code> to write{" "}
+          <code className="font-mono text-micro text-text">db/coverage-*.toml</code>, then press Regenerate.
+        </p>
       </div>
     );
   }
@@ -1162,9 +1142,14 @@ function MapArea({
   // missing document nor the command that writes it.
   if (sectionEmpty) {
     return (
-      <div className="empty-state rounded-control border border-line bg-panel p-6 text-center font-mono text-label text-muted">
-        <p className="font-bold text-text">No coverage data for {target}</p>
-        <p>Run rebrew build-db to write db/coverage-{target}.toml, then press Regenerate.</p>
+      <div className="flex flex-col items-center gap-2 rounded-card border border-border bg-surface px-6 py-12 text-center text-data text-text-muted">
+        <p className="m-0 text-intro font-semibold text-text">
+          No coverage data for <span className="font-mono">{target}</span>
+        </p>
+        <p className="m-0 max-w-prose">
+          Run <code className="font-mono text-micro text-text">rebrew build-db</code> to write{" "}
+          <code className="font-mono text-micro text-text">db/coverage-{target}.toml</code>, then press Regenerate.
+        </p>
       </div>
     );
   }
@@ -1175,9 +1160,9 @@ function MapArea({
   if (active === null) {
     if (loadError !== null) {
       return (
-        <div className="grid-error rounded-control border border-line bg-panel p-4 font-mono text-label">
-          <p>Coverage data unavailable: {loadError}</p>
-          <Button className="mt-2" onClick={onRetry}>
+        <div className="flex flex-col items-start gap-3 rounded-card border border-border bg-fail-soft p-4 text-data text-st-fail">
+          <p className="m-0">Coverage data unavailable: {loadError}</p>
+          <Button size="sm" onClick={onRetry}>
             Retry
           </Button>
         </div>
@@ -1191,13 +1176,13 @@ function MapArea({
     }
     return (
       <div
-        className="grid-error rounded-control border border-line bg-panel p-4 font-mono text-label"
+        className="flex flex-col items-start gap-3 rounded-card border border-border bg-fail-soft p-4 text-data text-st-fail"
         aria-busy="true"
       >
-        <p>
+        <p className="m-0">
           Could not load the {isolate(active.name)} map: {coverage.cellError.detail}
         </p>
-        <Button className="mt-2" onClick={() => coverage.ensureCells(active.name)}>
+        <Button size="sm" onClick={() => coverage.ensureCells(active.name)}>
           Retry
         </Button>
       </div>
@@ -1253,7 +1238,7 @@ function pending(text: string): ComponentChildren {
   // (WCAG 4.1.3). `aria-busy` marks the map as replacing itself instead.
   return (
     <div
-      className="loading-overlay rounded-control border border-line bg-panel p-6 text-center font-mono text-label text-muted"
+      className="rounded-card border border-border bg-surface px-6 py-12 text-center text-data text-text-muted"
       aria-busy="true"
     >
       {text}

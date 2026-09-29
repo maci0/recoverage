@@ -83,7 +83,7 @@ export function useLiveReload({
     void (async () => {
       try {
         const { ok, inProgress, reason } = await postRegen(key);
-        // A regen runs for minutes behind a button that says "Regenerating...".
+        // A regen runs for minutes behind a button that says "Regenerating…".
         // Saying nothing when it ends leaves the reader to tell a finished
         // rebuild from a failed one out of the map's own repaint, so the
         // success is stated; the failure still holds the line until it is
@@ -95,7 +95,7 @@ export function useLiveReload({
         } else if (inProgress) {
           // The run this key named is still going: a re-send that reached the
           // run its own first send started. Neither a success nor a refusal,
-          // and the line left as it stood said neither: "Regenerating..."
+          // and the line left as it stood said neither: "Regenerating…"
           // beside a button already back to "Regenerate" is a run nothing
           // owns, so the reader clicks again and asks for a second pipeline.
           // The documents land on their own and `db-updated` refreshes the

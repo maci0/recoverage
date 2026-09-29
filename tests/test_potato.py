@@ -608,10 +608,20 @@ URLS = [
     # The synthetic DB matches no function name against "alloc", but the
     # banner is the contract: a term that finds nothing says so, and says
     # how to fix the spelling.
-    ("/potato?search=alloc", "search alloc", ("Searching: ", "(0 matches)", "no matches"), ()),
-    ("/potato?search=0x1000", "search VA prefix", ("Searching: ",), ()),
-    ("/potato?search=g_ServerConfig", "global search", ("Searching: ",), ()),
-    ("/potato?search=nonexistent_xyz", "search no results", ("(0 matches)", "no matches"), ()),
+    (
+        "/potato?search=alloc",
+        "search alloc",
+        ("0 matches for &quot;alloc&quot;", "Check the spelling"),
+        (),
+    ),
+    ("/potato?search=0x1000", "search VA prefix", (" for &quot;",), ()),
+    ("/potato?search=g_ServerConfig", "global search", (" for &quot;",), ()),
+    (
+        "/potato?search=nonexistent_xyz",
+        "search no results",
+        ("0 matches for", "Check the spelling"),
+        (),
+    ),
     (
         "/potato?target=SERVER&section=.text&filter=exact,reloc&idx=0&search=alloc",
         "all params combined",
@@ -630,7 +640,7 @@ URLS = [
     (
         "/potato?search=<script>alert(1)</script>",
         "XSS in search",
-        ("Searching: ", "&lt;script&gt;alert(1)&lt;/script&gt;"),
+        (" for &quot;", "&lt;script&gt;alert(1)&lt;/script&gt;"),
         ("<script>alert(1)</script>",),
     ),
     (
@@ -834,10 +844,10 @@ def test_search_status_line_explains_an_empty_result():
     target = require_target()
     if not target:
         pytest.fail("no coverage target resolved: the synthetic document is missing or unreadable")
-    hint = "no matches. Check the spelling, or search by VA."
+    hint = "Check the spelling, or search by address."
     empty = render_potato_url(f"/potato?target={target}&search=zzz_no_such_function")
     assert hint in empty
-    assert "(0 matches)" in empty
+    assert "0 matches for &quot;zzz_no_such_function&quot;." in empty
     hit = render_potato_url(f"/potato?target={target}&search=_func_a")
     assert hint not in hit
 
@@ -847,15 +857,15 @@ def test_search_status_counts_the_rows_the_function_list_prints():
     """The status line sits above both views, so the list has to fill it in.
 
     Only the grid view built the match set, so a search in the function list
-    read "0 matches - no matches. Check the spelling" directly over a table
+    read "0 matches" and "Check the spelling" directly over a table
     full of the rows it had just matched.
     """
     target = require_target()
     if not target:
         pytest.fail("no coverage target resolved: the synthetic document is missing or unreadable")
     html = render_potato_url(f"/potato?target={target}&view=functions&search=_func_a")
-    assert "no matches. Check the spelling" not in html
-    assert "(1 match)" in html or re.search(r"\(\d+ matches\)", html)
+    assert "Check the spelling" not in html
+    assert re.search(r"\b[1-9]\d* match(es)? for &quot;_func_a&quot;", html)
 
 
 def test_parent_url_selects_the_parents_own_block():
@@ -2159,17 +2169,17 @@ class TestV4StateColors:
         marker = html.rindex('bgcolor="', 0, anchor) + len('bgcolor="')
         return html[marker : html.index('"', marker)]
 
-    def test_proven_renders_cyan(self) -> None:
-        assert self._cell_bgcolor("proven") == "#06b6d4"
+    def test_proven_renders_the_proven_fill(self) -> None:
+        assert self._cell_bgcolor("proven") == "#3f7a63"
 
-    def test_legacy_near_matching_renders_yellow(self) -> None:
-        assert self._cell_bgcolor("near_matching") == "#f59e0b"
+    def test_legacy_near_matching_renders_the_near_fill(self) -> None:
+        assert self._cell_bgcolor("near_matching") == "#8a6c2c"
 
-    def test_size_mismatch_renders_yellow(self) -> None:
-        assert self._cell_bgcolor("size_mismatch") == "#f59e0b"
+    def test_size_mismatch_renders_the_near_fill(self) -> None:
+        assert self._cell_bgcolor("size_mismatch") == "#8a6c2c"
 
-    def test_unknown_state_still_falls_back_to_none_gray(self) -> None:
-        assert self._cell_bgcolor("some_future_state") == "#3F4958"
+    def test_unknown_state_still_falls_back_to_the_unlit_fill(self) -> None:
+        assert self._cell_bgcolor("some_future_state") == "#212124"
 
 
 class TestRawByteRange:
@@ -3523,67 +3533,127 @@ class TestFilterKeysCoverTheLegend:
         assert "exact" not in pills["reloc"]
 
 
-class TestSectionAccentsMatchSpa:
-    """The two renderers paint the four pane accents from separate files.
+def _dark_token(name: str) -> str:
+    """The dark half of ``--color-<name>`` in the relumea token file.
 
-    Potato Mode has no CSS, so it spells the hexes as module constants while
-    the SPA reads them from :root. A pane whose heading changed hue in one
-    renderer is drift a screenshot would not catch and a user sees as the
-    dashboard and its fallback disagreeing about what kind of pane this is.
+    Potato Mode is a dark page that cannot read CSS variables, so it spells the
+    dark values of the tokens the SPA reads. Every token is declared once as
+    ``light-dark(<light>, <dark>)``; this returns ``<dark>``, lowercased.
+    """
+    tokens = (
+        Path(__file__).resolve().parents[1] / "web" / "app" / "system" / "tokens.css"
+    ).read_text(encoding="utf-8")
+    match = re.search(
+        rf"--color-{re.escape(name)}:\s*light-dark\(\s*(#[0-9a-fA-F]{{6}}),\s*(#[0-9a-fA-F]{{6}})\s*\);",
+        tokens,
+    )
+    assert match is not None, f"tokens.css declares no --color-{name}"
+    return match.group(2).lower()
+
+
+class TestSectionAccentsMatchSpa:
+    """The pane headings wear the muted ink in both renderers.
+
+    The SPA titles each pane with an icon in `text-muted` (the brand has one
+    accent, so a pane kind is no longer a hue). Potato Mode has no CSS and
+    spells the value as module constants; a pane heading in a hue of its own
+    in one renderer is drift a screenshot would not catch.
     """
 
-    PAIRS = (
-        ("--accent-c-source", "ACCENT_C_SOURCE"),
-        ("--accent-asm", "ACCENT_ASM"),
-        ("--accent-data", "ACCENT_DATA"),
-        ("--accent-bytes", "ACCENT_BYTES"),
-    )
+    PANE_ACCENTS = ("ACCENT_C_SOURCE", "ACCENT_ASM", "ACCENT_DATA", "ACCENT_BYTES")
 
-    @staticmethod
-    def _spa_tokens() -> dict[str, str]:
-        css = (Path(__file__).resolve().parents[1] / "web" / "app" / "index.css").read_text(
-            encoding="utf-8"
-        )
-        # :root only: .light-mode restates the same names with darker values
-        # for light surfaces, which Potato Mode has no counterpart for.
-        root = css.split(":root {", 1)[1].split("\n}", 1)[0]
-        return dict(re.findall(r"(--accent-[a-z-]+):\s*(#[0-9a-fA-F]{6});", root))
-
-    @pytest.mark.parametrize(("token", "constant"), PAIRS)
-    def test_spa_token_matches_potato_constant(self, token: str, constant: str) -> None:
+    @pytest.mark.parametrize("constant", PANE_ACCENTS)
+    def test_pane_accent_is_the_muted_ink(self, constant: str) -> None:
         from recoverage import potato
 
-        assert self._spa_tokens()[token] == getattr(potato, constant)
+        assert getattr(potato, constant).lower() == _dark_token("text-muted")
 
     def test_every_accent_the_renderers_use_is_pinned(self) -> None:
-        """A new pane kind must be added to PAIRS, not left unpinned."""
+        """A new pane kind must be added to PANE_ACCENTS, not left unpinned."""
         from recoverage import potato
 
-        pane_accents = {name for _, name in self.PAIRS}
         declared = {
             name
             for name, value in vars(potato).items()
             if name.startswith("ACCENT_") and isinstance(value, str)
         }
-        # ACCENT_COLOR is the phosphor accent, not a pane accent.
-        assert declared - {"ACCENT_COLOR"} == pane_accents
+        # ACCENT_COLOR is the brand accent, not a pane accent.
+        assert declared - {"ACCENT_COLOR"} == set(self.PANE_ACCENTS)
 
+    @pytest.mark.parametrize(
+        ("constant", "token"),
+        [
+            ("BG_COLOR", "bg"),
+            ("PANEL_COLOR", "surface"),
+            ("RAISED_COLOR", "raised"),
+            ("TRACK_COLOR", "surface-3"),
+            ("CODE_BG_COLOR", "code"),
+            ("BORDER_COLOR", "border"),
+            ("TEXT_COLOR", "text"),
+            ("MUTED_COLOR", "text-muted"),
+            ("ACCENT_COLOR", "accent"),
+        ],
+    )
+    def test_page_colours_are_the_dark_tokens(self, constant: str, token: str) -> None:
+        from recoverage import potato
 
-def _rgb_triplet(hex_color: str) -> tuple[int, int, int]:
-    """``#06b6d4`` as the ``6, 182, 212`` a CSS ``rgb()`` stop spells."""
-    raw = hex_color.lstrip("#")
-    return (int(raw[0:2], 16), int(raw[2:4], 16), int(raw[4:6], 16))
+        assert getattr(potato, constant).lower() == _dark_token(token)
+
+    @pytest.mark.parametrize(
+        ("state", "fill", "word"),
+        [
+            ("exact", "cell-exact", "st-exact"),
+            ("reloc", "cell-reloc", "st-reloc"),
+            ("near_match", "cell-near", "st-near"),
+            ("proven", "cell-proven", "st-proven"),
+            ("stub", "cell-stub", "st-stub"),
+            ("thunk", "cell-thunk", "st-thunk"),
+            ("data", "cell-live", "st-live"),
+            ("none", "cell-unlit", "text-muted"),
+            ("padding", "border-strong", "text-muted"),
+            ("compile_error", "cell-fail", "st-fail"),
+        ],
+    )
+    def test_state_fill_and_word_are_the_dark_tokens(
+        self, state: str, fill: str, word: str
+    ) -> None:
+        """A cell takes the fill, a printed state takes the word: the fills
+        are graphics and do not clear 4.5:1 as text on the dark grounds."""
+        from recoverage import potato
+
+        assert potato.COLORS[state].lower() == _dark_token(fill)
+        assert potato.STATE_INK[state].lower() == _dark_token(word)
+
+    def test_every_state_has_a_word_colour(self) -> None:
+        from recoverage import potato
+
+        assert set(potato.STATE_INK) == set(potato.COLORS)
 
 
 class TestPageIdentityMatchesTheSpa:
     """The two renderers are one product and carry one mark.
 
-    The SPA serves the phosphor R as ``assets/favicon.svg`` and draws it again
-    in its topbar; Potato Mode embeds the same drawing as ``R_LOGO_SVG`` for
-    its topbar. A third, unrelated glyph on the Potato tab strip meant the same
-    product wore a different icon depending on which view a browser tab was
-    showing, and nothing caught it because both pages rendered.
+    The SPA serves the relumea mark as ``assets/favicon.svg`` and draws it
+    again in its topbar; Potato Mode embeds the same file as ``R_LOGO_SVG``
+    for its tab icon, and draws the mark in its dark-ground colours as
+    ``MARK_ON_DARK_SVG`` in its topbar. An unrelated glyph on the Potato tab
+    strip meant the same product wore a different icon depending on which view
+    a browser tab was showing, and nothing caught it because both pages
+    rendered.
     """
+
+    def test_the_topbar_mark_is_the_same_nine_cells(self) -> None:
+        """The dark-ground mark is the favicon's geometry, not a lookalike."""
+        from recoverage import potato
+
+        root = Path(__file__).resolve().parents[1]
+        favicon = (root / "src" / "recoverage" / "assets" / "favicon.svg").read_text(
+            encoding="utf-8"
+        )
+        mark = base64.b64decode(potato.MARK_ON_DARK_SVG.split(",", 1)[1]).decode("utf-8")
+        cells = re.compile(r"""x=['"]([\d.]+)['"] y=['"]([\d.]+)['"]""")
+        assert sorted(cells.findall(mark)) == sorted(cells.findall(favicon))
+        assert potato.ACCENT_COLOR in mark
 
     def test_potato_tab_icon_is_the_shared_logo(self) -> None:
         from recoverage import potato
@@ -3612,62 +3682,34 @@ class TestPageIdentityMatchesTheSpa:
 class TestCodePaneColorsMatchTheSpa:
     """A code pane is one pane, and both renderers paint it one way.
 
-    Potato Mode's Pygments map was VS Code Dark+ shipped verbatim: a phosphor
-    green comment, an orange string, a periwinkle keyword. The SPA's
-    highlight.js theme reads the token layer, so the same C function was one
-    palette in the dashboard and another in its own fallback, and a
-    contributor reading either file would copy whichever they found first.
+    Both read the shared listing palette (`syn-*` in the relumea tokens): the
+    SPA's highlight.js rules through `var(--color-syn-*)`, Potato Mode's
+    Pygments map through these constants, which spell the dark values.
     """
 
     PAIRS = (
-        # The highlight.js theme is declared in the @layer components :root and
-        # spells its own values there.
-        ("--hljs-symbol", "HLJS_SYMBOL"),
-        ("--hljs-string", "HLJS_STRING"),
-        ("--hljs-title", "HLJS_TITLE"),
-        ("--hljs-section", "HLJS_SECTION"),
-        ("--hljs-name", "HLJS_NAME"),
-        # The rest are token-layer values the theme reaches through var(), so
-        # they are read from the block that declares them.
-        ("--muted", "HLJS_COMMENT"),
-        ("--badge-stub-text", "HLJS_KEYWORD"),
-        ("--link", "HLJS_ATTR"),
+        ("syn-register", "HLJS_SYMBOL"),
+        ("syn-string", "HLJS_STRING"),
+        ("syn-call", "HLJS_TITLE"),
+        ("syn-type", "HLJS_SECTION"),
+        ("text", "HLJS_NAME"),
+        ("syn-comment", "HLJS_COMMENT"),
+        ("syn-keyword", "HLJS_KEYWORD"),
+        ("syn-type", "HLJS_ATTR"),
     )
-
-    @staticmethod
-    def _spa_tokens() -> dict[str, str]:
-        """The dark values of the eight names, each read from the block that
-        declares it.
-
-        Two blocks, because the stylesheet declares them in two places: the
-        token layer's own ``:root``, and the highlight.js theme's ``:root``
-        inside ``@layer components``. Reading the whole file in one pass would
-        let either block's names win by position, and a ``.light-mode`` block
-        restates a name with the deeper step of the same hue, which is not the
-        value Potato Mode paints. Each block is taken on its own and up to its
-        own closing brace.
-        """
-        css = (Path(__file__).resolve().parents[1] / "web" / "app" / "index.css").read_text(
-            encoding="utf-8"
-        )
-        token_root = css.split(":root {", 1)[1].split("\n}", 1)[0]
-        # The theme block is cut at its OWN closing brace. Stopping at the
-        # .light-mode one that follows it would carry that block's deeper steps
-        # in, and a name the light theme restates would win by position.
-        theme = css.split("@layer components {", 1)[1].split(":root {", 1)[1]
-        theme_root = theme.split(".light-mode", 1)[0].rsplit("}", 1)[0]
-        found = dict(re.findall(r"(--[a-z-]+):\s*(#[0-9a-fA-F]{6});", token_root))
-        # The theme block restates --muted, --link and --badge-stub-text as
-        # var() references rather than hexes, so it contributes the --hljs-*
-        # names it alone declares; the token values are the ones above.
-        found.update(re.findall(r"(--hljs-[a-z-]+):\s*(#[0-9a-fA-F]{6});", theme_root))
-        return found
 
     @pytest.mark.parametrize(("token", "constant"), PAIRS)
     def test_spa_token_matches_potato_constant(self, token: str, constant: str) -> None:
         from recoverage import potato
 
-        assert self._spa_tokens()[token].lower() == getattr(potato, constant).lower()
+        assert _dark_token(token) == getattr(potato, constant).lower()
+
+    @pytest.mark.parametrize("token", sorted({token for token, _ in PAIRS} - {"text"}))
+    def test_the_spa_highlight_rules_read_the_same_token(self, token: str) -> None:
+        css = (Path(__file__).resolve().parents[1] / "web" / "app" / "index.css").read_text(
+            encoding="utf-8"
+        )
+        assert f"var(--color-{token})" in css
 
     def test_the_pygments_map_holds_no_unpinned_hue(self) -> None:
         """Every colour the lexer map reaches is one of the pinned tokens.
@@ -3703,41 +3745,39 @@ class TestCodePaneColorsMatchTheSpa:
         assert potato.HLJS_NAME in dump
 
 
-class TestSelectionIsTheAccent:
-    """Every selected control in both renderers wears ``--c``.
+class TestSelectionIsOneControlState:
+    """A pressed control looks the same in both renderers.
 
-    The SPA's active button and Potato Mode's active pill were blue
-    (``rgba(42, 111, 219, ...)``, ``#2a6fdb``) while the accent beside them was
-    phosphor cyan, so the one state an operator reads at a glance was the one
-    state the theme did not own.
+    The SPA's pressed button is `bg-surface-3` inside `border-control-line-hover`
+    (`web/app/components/ui/button.tsx`); Potato Mode's active pill images
+    draw the dark values of the same two tokens, and its resting pills the
+    3:1 control edge a control is told apart by.
     """
 
-    @staticmethod
-    def _root_block() -> str:
-        css = (Path(__file__).resolve().parents[1] / "web" / "app" / "index.css").read_text(
-            encoding="utf-8"
-        )
-        return css.split(":root {", 1)[1].split("\n}", 1)[0]
+    def test_the_spa_pressed_variant_names_the_two_tokens(self) -> None:
+        button = (
+            Path(__file__).resolve().parents[1] / "web" / "app" / "components" / "ui" / "button.tsx"
+        ).read_text(encoding="utf-8")
+        active = re.search(r'active:\s*"([^"]+)"', button)
+        assert active is not None
+        assert {"bg-surface-3", "border-control-line-hover"} <= set(active.group(1).split())
 
     @pytest.mark.parametrize(
-        "token",
-        ["--btn-active-bg", "--btn-active-border", "--c-shadow-active", "--bg-grad-1"],
+        ("names", "fill", "edge"),
+        [
+            (("ACTIVE_L", "ACTIVE_R", "ACTIVE_MID"), "surface-3", "control-line-hover"),
+            (("INACTIVE_L", "INACTIVE_R", "INACTIVE_MID"), "surface", "control-line"),
+        ],
     )
-    def test_dark_active_tokens_are_the_accent_hue(self, token: str) -> None:
+    def test_potato_pills_draw_the_same_tokens(
+        self, names: tuple[str, ...], fill: str, edge: str
+    ) -> None:
         from recoverage import potato
 
-        match = re.search(rf"{token}:\s*([^;]+);", self._root_block())
-        assert match is not None, token
-        value = match.group(1).lower().replace(" ", "")
-        red, green, blue = _rgb_triplet(potato.ACCENT_COLOR)
-        assert f"{red},{green},{blue}" in value or potato.ACCENT_COLOR in value, token
-
-    def test_potato_active_pills_use_the_accent(self) -> None:
-        from recoverage import potato
-
-        for name in ("ACTIVE_L", "ACTIVE_R", "ACTIVE_MID"):
+        for name in names:
             svg = base64.b64decode(getattr(potato, name).split(",", 1)[1]).decode("utf-8")
-            assert potato.ACCENT_COLOR in svg, name
+            assert _dark_token(fill) in svg.lower(), name
+            assert _dark_token(edge) in svg.lower(), name
 
 
 class TestRenderIsPinnedToOneSnapshot:
@@ -3957,7 +3997,7 @@ class TestCellStateSpellingInTheDetailPanel:
     def test_a_mixed_case_state_keeps_its_colour_in_the_panel(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from recoverage.potato import COLORS
+        from recoverage.potato import STATE_INK
 
         _write_doc(
             tmp_path,
@@ -3975,4 +4015,4 @@ class TestCellStateSpellingInTheDetailPanel:
             },
         )
         html = render_potato_url("/potato?target=MIXED&section=.text&idx=0")
-        assert f'color="{COLORS["exact"]}"><b>EXACT</b>' in html
+        assert f'color="{STATE_INK["exact"]}"><b>EXACT</b>' in html

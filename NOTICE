@@ -31,10 +31,22 @@ clsx, tailwind-merge, class-variance-authority
   License: MIT
   Bundled into app.js.
 
+Archivo
+  Upstream: https://github.com/Omnibus-Type/Archivo
+  License: SIL Open Font License 1.1, https://openfontlicense.org
+  Shipped as src/recoverage/assets/archivo.woff2, a Latin subset with the
+  width axis pinned, copied from the relumea brand files.
+
+JetBrains Mono
+  Upstream: https://github.com/JetBrains/JetBrainsMono
+  License: SIL Open Font License 1.1, https://openfontlicense.org
+  Shipped as src/recoverage/assets/jetbrains-mono.woff2, a Latin subset,
+  copied from the relumea brand files.
+
 The remaining npm packages in package.json (vite, typescript, oxlint,
-@oxlint/plugins, @rikalabs/oxlint-standards, vnu-jar and the build plugins) are
-development tools: they run at build time and are not shipped. The copy of
-dmmulroy/anti-slop under tools/oxlint/anti-slop/ is not shipped either; it
+@oxlint/plugins, @rikalabs/oxlint-standards, @shadcn/lint, vnu-jar and the build
+plugins) are development tools: they run at build time and are not shipped. The
+copy of dmmulroy/anti-slop under tools/oxlint/anti-slop/ is not shipped either; it
 carries its own LICENSE, is recorded in README.md, and is inventoried file by
 file with a sha256 in tools/oxlint/anti-slop.manifest.json, which
 tools/vendor_manifest.py writes from the tree.

@@ -46,29 +46,46 @@ export function stateSlot(state: string): number {
 }
 
 /** The words for each packed slot, in palette order. The grid tooltip shows
- * one, so hovering a cell says what the cell is instead of a raw index. */
+ * one, so hovering a cell says what the cell is instead of a raw index.
+ * Verdicts keep their code casing (relumea brand guide, "Terminology"). */
 export const STATE_LABEL = [
   "undocumented",
-  "exact match",
-  "reloc match",
-  "near-match",
-  "stub",
+  "EXACT",
+  "RELOC",
+  "NEAR",
+  "STUB",
   "padding",
-  "proven",
+  "PROVEN",
   "problem",
 ];
 
-/** The palette variables, in slot order. The canvas reads them off the wrapper
- * so a theme switch is a token swap rather than a repaint from literals. */
+/** The verdict fill tokens, in slot order. The canvas resolves them on the map
+ * element, so a theme switch is a token swap rather than a repaint from
+ * literals. The brand has no padding verdict; padding is alignment filler, so
+ * it takes the strong hairline, the quietest fill that is not the unlit cell. */
 export const PALETTE_VARS = [
-  "--none",
-  "--exact-bg",
-  "--reloc-bg",
-  "--near-match-bg",
-  "--stub-bg",
-  "--padding-bg",
-  "--proven-bg",
-  "--other-bg",
+  "--color-cell-unlit",
+  "--color-cell-exact",
+  "--color-cell-reloc",
+  "--color-cell-near",
+  "--color-cell-stub",
+  "--color-border-strong",
+  "--color-cell-proven",
+  "--color-cell-fail",
+];
+
+/** The same fills as utility classes, in slot order, for the legend and the
+ * filter swatches. Spelled out rather than built from `PALETTE_VARS`, because
+ * Tailwind only generates a class it can read in the source. */
+export const SWATCH_CLASS = [
+  "bg-cell-unlit",
+  "bg-cell-exact",
+  "bg-cell-reloc",
+  "bg-cell-near",
+  "bg-cell-stub",
+  "bg-border-strong",
+  "bg-cell-proven",
+  "bg-cell-fail",
 ];
 
 /** A packed state's filter key. A state the grid can paint but no button can
@@ -95,34 +112,24 @@ export function survivesFilter(slot: number, ground: number, active: ReadonlySet
   return active.has(FILTER_KEY[slot] ?? "");
 }
 
-/** The state filters the toolbar and the stats strip offer, in palette order.
- * A state the grid can paint but no control can isolate is unreachable, so
- * this list covers every slot but the first (undocumented, which is the absence
- * of a match and has no filter). It is the one place the key, the pill's label
- * and the words on its tooltip are written, so the two surfaces that print
- * them cannot drift. */
+/** The state filters the stats strip offers, in palette order. A state the grid
+ * can paint but no control can isolate is unreachable, so this list covers
+ * every slot but the first (undocumented, which is the absence of a match and
+ * has no filter). It is the one place the key, the pill's word and its
+ * description are written. `label` is the word `STATE_LABEL` gives the same
+ * slot, so the pill, the legend and the map tooltip say one thing. */
 export const STATE_FILTERS = [
-  { key: "exact", label: "E", aria: "Filter exact", title: "Exact match" },
-  { key: "reloc", label: "R", aria: "Filter reloc", title: "Reloc match" },
-  { key: "near_match", label: "M", aria: "Filter near-match", title: "Near-match" },
-  { key: "stub", label: "S", aria: "Filter stub", title: "Stub" },
-  { key: "padding", label: "P", aria: "Filter padding", title: "Padding" },
-  {
-    key: "proven",
-    label: "V",
-    aria: "Filter proven",
-    title: "Proven (verified equivalent)",
-  },
-  {
-    key: "problem",
-    label: "X",
-    aria: "Filter problem",
-    title: "Problem (build or classification failure)",
-  },
+  { key: "exact", label: "EXACT", title: "Recompiled bytes identical" },
+  { key: "reloc", label: "RELOC", title: "Identical except linker-filled addresses" },
+  { key: "near_match", label: "NEAR", title: "Close; the diff names the rest" },
+  { key: "stub", label: "STUB", title: "Control flow still diverges" },
+  { key: "padding", label: "padding", title: "Alignment filler between functions" },
+  { key: "proven", label: "PROVEN", title: "Semantic equivalence proven" },
+  { key: "problem", label: "problem", title: "Build or classification failure" },
 ] as const;
 
-/** The palette variable a filter's cells paint with. FILTER_KEY is in slot
- * order and PALETTE_VARS is in slot order, so the two index alike. */
-export function paletteVarForFilter(key: string): string {
-  return PALETTE_VARS[FILTER_KEY.indexOf(key)] ?? "--none";
+/** The swatch class a filter's cells paint with. FILTER_KEY is in slot order
+ * and SWATCH_CLASS is in slot order, so the two index alike. */
+export function swatchForFilter(key: string): string {
+  return SWATCH_CLASS[FILTER_KEY.indexOf(key)] ?? "bg-cell-unlit";
 }

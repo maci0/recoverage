@@ -11,8 +11,11 @@ import { CopyButton } from "@/components/ui/copy-button";
 import { META_GRID, MetaItem } from "@/components/ui/meta";
 import type { Panes } from "@/hooks/useSelection";
 import type { HighlightLanguage } from "@/lib/highlight";
+import { cn } from "@/lib/cn";
 import { MSG, count, dateTime, hex, isolate, similarityPct, sourceFileUrl, toVa } from "@/lib/format";
 import { STATE_LABEL, stateSlot } from "@/states";
+import { Icon } from "@/system/icons/Icon";
+import type { IconName } from "@/system/icons/paths";
 
 /** The selected block's detail.
  *
@@ -34,7 +37,7 @@ export type CoveragePanelProps = {
   onJumpToAddress: (address: number) => void;
 };
 
-/** Pane text that stands for "nothing to show", which turns Copy and Open off:
+/** Pane text that stands for "nothing to", which turns Copy and Open off:
  * copying "(select a function)" is never what the reader wants. */
 function isEmptyMessage(text: string): boolean {
   return (
@@ -58,57 +61,47 @@ function isEmptyMessage(text: string): boolean {
   );
 }
 
-/** The hexagon badge each code pane is titled with. */
-function HexLogo({
-  label,
-  color,
-  heading,
-}: {
-  label: string;
-  color: string;
-  heading: string;
-}): ComponentChildren {
+/** The verdict word's ink (`st-*`), keyed by the status rebrew wrote. A status
+ * this table does not name reads in the muted ink rather than a verdict colour
+ * it has not earned. */
+const STATUS_INK = new Map<string, string>([
+  ["EXACT", "text-st-exact"],
+  ["VERIFIED", "text-st-exact"],
+  ["RELOC", "text-st-reloc"],
+  ["PROVEN", "text-st-proven"],
+  ["NEAR", "text-st-near"],
+  ["NEAR_MATCH", "text-st-near"],
+  ["MATCHING", "text-st-near"],
+  ["SIZE_MISMATCH", "text-st-near"],
+  ["STUB", "text-st-stub"],
+  ["COMPILE_ERROR", "text-st-fail"],
+  ["EXTRACT_ERROR", "text-st-fail"],
+]);
+
+function statusInk(status: string): string {
+  return STATUS_INK.get(status.toUpperCase()) ?? "text-text-muted";
+}
+
+/** A pane heading: the pane's icon beside its name. The icon is decorative;
+ * the heading carries the name. */
+function PaneTitle({ icon, heading }: { icon: IconName; heading: string }): ComponentChildren {
   return (
-    <div className="section-title-left flex items-center gap-2">
-      <span className="hex-logo" aria-hidden="true" style={{ color }}>
-        <svg viewBox="0 0 100 100" width="22" height="22">
-          <polygon
-            points="50,5 90,27.5 90,72.5 50,95 10,72.5 10,27.5"
-            fill="currentColor"
-            fillOpacity="0.15"
-            stroke="currentColor"
-            strokeWidth="6"
-            strokeLinejoin="round"
-          />
-          <text
-            x="50"
-            y="54"
-            dominantBaseline="middle"
-            textAnchor="middle"
-            fill="currentColor"
-            fontWeight="800"
-            fontSize={label.length > 2 ? "26" : "42"}
-          >
-            {label}
-          </text>
-        </svg>
-      </span>
-      <h3 className="section-title-text font-mono text-label font-bold">{heading}</h3>
+    <div className="flex min-w-0 items-center gap-2 text-text-muted">
+      <Icon name={icon} />
+      <h3 className="section-title-text m-0 text-data font-semibold text-text">{heading}</h3>
     </div>
   );
 }
 
 function CodeSection({
-  logo,
-  color,
+  icon,
   heading,
   language,
   text,
   onOpen,
   onAddressClick,
 }: {
-  logo: string;
-  color: string;
+  icon: IconName;
   heading: string;
   language: HighlightLanguage;
   text: string;
@@ -117,9 +110,9 @@ function CodeSection({
 }): ComponentChildren {
   const empty = isEmptyMessage(text);
   return (
-    <section className="section mt-3">
-      <div className="section-title flex items-center gap-2 border-b border-line pb-1">
-        <HexLogo label={logo} color={color} heading={heading} />
+    <section className="section mt-5">
+      <div className="section-title mb-2 flex items-center gap-2">
+        <PaneTitle icon={icon} heading={heading} />
         <div className="section-actions ms-auto flex gap-2">
           <CopyButton
             label="Copy"
@@ -129,7 +122,7 @@ function CodeSection({
             disabled={empty}
           />
           <Button
-            className="copy-btn"
+            size="sm"
             aria-label={`Open ${heading} in a larger view`}
             title={empty ? "Select a block first" : ""}
             disabled={empty}
@@ -195,7 +188,7 @@ function FunctionMeta({
             {hex(toVa(fn.va), 8)}
           </a>
         </MetaItem>
-        <MetaItem label="Type">Global Variable</MetaItem>
+        <MetaItem label="Type">Global variable</MetaItem>
         {sourceItem}
       </dl>
     );
@@ -231,51 +224,56 @@ function FunctionMeta({
       <MetaItem label="Offset">{hex(fn.fileOffset ?? 0, 1)}</MetaItem>
       <MetaItem label="Symbol">{fn.symbol ?? MSG.NA}</MetaItem>
       <MetaItem label="Status">
-        <span className={`meta-value status-badge status-${status.toLowerCase().replace("_", "-")}`}>
+        <span
+          className={cn(
+            "meta-value inline-flex rounded-chip bg-surface-2 px-1.5 py-0.5 font-mono text-chip font-semibold tracking-chip",
+            statusInk(status),
+          )}
+        >
           {status}
         </span>
       </MetaItem>
       <MetaItem label="Module">{fn.module ?? "?"}</MetaItem>
-      <MetaItem label="Compiler">{fn.cflags ?? MSG.NA}</MetaItem>
+      <MetaItem label="Compiler">{fn.cflags == null || fn.cflags === "" ? MSG.NA : fn.cflags}</MetaItem>
       <MetaItem label="Marker">{fn.markerType ?? "?"}</MetaItem>
-      {fn.blocker == null ? null : (
+      {fn.blocker == null || fn.blocker === "" ? null : (
         <MetaItem label="Blocker" fullWidth>
-          <span className="meta-value blocker-value">{fn.blocker}</span>
+          <span className="meta-value">{fn.blocker}</span>
         </MetaItem>
       )}
       {fn.blockerDelta == null ? null : (
         <MetaItem label="Delta">
-          <span className="meta-value delta-value">{`${count(fn.blockerDelta)} bytes`}</span>
+          <span className="meta-value">{`${count(fn.blockerDelta)} bytes`}</span>
         </MetaItem>
       )}
       {fn.ghidra_name != null && fn.ghidra_name !== fn.name ? (
         <MetaItem label="Ghidra">{fn.ghidra_name}</MetaItem>
       ) : null}
       {fn.list_name != null && fn.list_name !== fn.name ? (
-        <MetaItem label="Func List">{fn.list_name}</MetaItem>
+        <MetaItem label="Function list">{fn.list_name}</MetaItem>
       ) : null}
-      {fn.size_reason == null ? null : <MetaItem label="Size Source">{fn.size_reason}</MetaItem>}
+      {fn.size_reason == null ? null : <MetaItem label="Size source">{fn.size_reason}</MetaItem>}
       {fn.last_verify == null ? null : (
         <MetaItem label="Verified">
           {`${fn.last_verify.verified_at == null ? "" : dateTime(fn.last_verify.verified_at)}${
-            fn.last_verify.byte_delta == null ? "" : ` (${isolate(`Δ${count(fn.last_verify.byte_delta)}B`)}`
+            fn.last_verify.byte_delta == null ? "" : ` (${isolate(`Δ${count(fn.last_verify.byte_delta)} B`)})`
           }`}
         </MetaItem>
       )}
       {lastVerifySimilarity === null ? null : (
-        <MetaItem label="Code Sim">{lastVerifySimilarity}</MetaItem>
+        <MetaItem label="Code similarity">{lastVerifySimilarity}</MetaItem>
       )}
       {fn.last_verify?.diff_lines == null ? null : (
-        <MetaItem label="Diff Lines">{count(fn.last_verify.diff_lines)}</MetaItem>
+        <MetaItem label="Diff lines">{count(fn.last_verify.diff_lines)}</MetaItem>
       )}
       {fn.last_verify?.reg_delta == null ? null : (
-        <MetaItem label="Reg Delta">{count(fn.last_verify.reg_delta)}</MetaItem>
+        <MetaItem label="Register delta">{count(fn.last_verify.reg_delta)}</MetaItem>
       )}
       {fn.last_verify?.effective_match === true ? (
-        <MetaItem label="Effective">register-only delta — prove candidate</MetaItem>
+        <MetaItem label="Effective">register-only delta, a candidate for a proof</MetaItem>
       ) : null}
       {fn.updated_by == null ? null : (
-        <MetaItem label="Updated By">
+        <MetaItem label="Updated by">
           {`${fn.updated_by}${fn.updated_at == null ? "" : ` (${dateTime(fn.updated_at)})`}`}
         </MetaItem>
       )}
@@ -295,7 +293,7 @@ function FunctionMeta({
       {sourceItem}
       {docs === null || docs === MSG.SELECT_FUNCTION || docs === MSG.NO_DOCS ? null : (
         <MetaItem label="Annotations" fullWidth>
-          <pre className="meta-docs whitespace-pre-wrap">{docs}</pre>
+          <pre className="m-0 whitespace-pre-wrap text-micro">{docs}</pre>
         </MetaItem>
       )}
     </dl>
@@ -420,18 +418,20 @@ export function CoveragePanel({
 
   return (
     <aside
-      className="panel w-full shrink-0 self-start rounded-control border border-line bg-panel p-3 lg:w-[460px] lg:max-w-[45vw]"
+      className="panel w-full shrink-0 self-start overflow-hidden rounded-card border border-border bg-surface lg:w-form"
       id="panel"
       aria-labelledby="panel-title"
     >
-      <div className="panel-head border-b border-line pb-2">
-        <div className="flex items-start gap-2">
+      <div className="panel-head border-b border-border bg-raised p-4">
+        <div className="flex flex-wrap items-start gap-2">
           {/* A decompiled C identifier is as long as the analyst's patience, and
               in the terminal face it has no break opportunity, so it pushes the
               copy buttons out of the panel unless the title may break and the
-              buttons are the part that stays whole. */}
+              buttons are the part that stays whole. The title keeps at least
+              10rem; past that the buttons wrap to their own row, or a phone
+              stacks the title one letter per line. */}
           <h2
-            className="panel-title wrap-anywhere min-w-0 font-mono text-title font-bold"
+            className="panel-title m-0 min-w-0 flex-1 basis-40 font-mono text-intro font-semibold leading-snug wrap-anywhere"
             id="panel-title"
             dir="auto"
           >
@@ -462,7 +462,7 @@ export function CoveragePanel({
             )}
           </div>
         </div>
-        <div className="panel-meta mt-2">
+        <div className="mt-3">
           <PanelMeta
             fn={fn}
             cell={cell}
@@ -474,17 +474,16 @@ export function CoveragePanel({
           />
         </div>
       </div>
-      <div className="panel-body pt-2">
+      <div className="px-4 pb-4">
         {fn === null && cellIndex === null ? (
-          <p className="hint text-muted">
-            Click a block on the map, or press Enter in the search box, to see its source,
-            disassembly and bytes here.
+          <p className="hint m-0 pt-4 text-data text-text-muted">
+            Select a block on the map, or search for a function, to see its C source, disassembly
+            and original bytes here.
           </p>
         ) : (
           <>
             <CodeSection
-              logo="C"
-              color="var(--accent-c-source)"
+              icon="braces"
               heading="C Source"
               language="c"
               text={panes.source}
@@ -492,8 +491,7 @@ export function CoveragePanel({
             />
             {section?.name === ".text" ? (
               <CodeSection
-                logo="ASM"
-                color="var(--accent-asm)"
+                icon="cpu"
                 heading="Assembly"
                 language="x86asm"
                 text={panes.asm}
@@ -503,7 +501,7 @@ export function CoveragePanel({
                 }}
               />
             ) : (
-              <section className="section mt-3">
+              <section className="section mt-5">
                 {/* The same head and the same two controls the three text panes
                     carry: a reader who copies a block's disassembly can copy
                     its interpreted values the same way, and a data block's
@@ -513,8 +511,8 @@ export function CoveragePanel({
                     file-backed bytes leaves nothing to take, so both controls
                     go off with them, as they do on a text pane that holds only
                     a message. */}
-                <div className="section-title flex items-center gap-2 border-b border-line pb-1">
-                  <HexLogo label="{}" color="var(--accent-data)" heading="Data Inspector" />
+                <div className="section-title mb-2 flex items-center gap-2">
+                  <PaneTitle icon="list" heading="Data Inspector" />
                   <div className="section-actions ms-auto flex gap-2">
                     <CopyButton
                       label="Copy"
@@ -524,7 +522,7 @@ export function CoveragePanel({
                       disabled={inspectorEmpty}
                     />
                     <Button
-                      className="copy-btn"
+                      size="sm"
                       aria-label="Open Data Inspector in a larger view"
                       title={inspectorEmpty ? "Select a block first" : ""}
                       disabled={inspectorEmpty}
@@ -538,8 +536,7 @@ export function CoveragePanel({
               </section>
             )}
             <CodeSection
-              logo="01"
-              color="var(--accent-bytes)"
+              icon="file-binary"
               heading="Original Bytes"
               language="hex"
               text={panes.bytes}

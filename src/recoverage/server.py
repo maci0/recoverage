@@ -2487,14 +2487,21 @@ def verify_payload(row: Mapping[str, Any]) -> dict[str, Any]:
     scaling belongs to the renderers.  Every key is always present and null when
     the document does not carry the value, which is the shape Potato Mode's
     verify rows read (``fields["reg_delta"] is not None``) and the shape the
-    SPA's ``== null`` tests are written against.
+    SPA's ``== null`` tests are written against. An empty string is how a
+    verify record leaves a figure unmeasured, so it is null here too: served
+    as ``""`` it passed both ``is not None`` tests and printed a blank row.
     """
+
+    def figure(key: str) -> Any:
+        value = row.get(key)
+        return None if value == "" else _plain(value)
+
     return {
-        "verified_at": row.get("verified_at"),
-        "byte_delta": _plain(row.get("byte_delta")),
-        "diff_lines": _plain(row.get("diff_lines")),
-        "similarity": _plain(row.get("similarity")),
-        "reg_delta": _plain(row.get("reg_delta")),
+        "verified_at": row.get("verified_at") or None,
+        "byte_delta": figure("byte_delta"),
+        "diff_lines": figure("diff_lines"),
+        "similarity": figure("similarity"),
+        "reg_delta": figure("reg_delta"),
         "effective_match": bool(row["effective_match"])
         if row.get("effective_match") is not None
         else None,
@@ -2686,37 +2693,34 @@ _AUTH_TOKEN: str = ""
 # beyond the handful of attributes needed to be readable on a dark background.
 #
 # It is also a page of this product, not a generic error screen: it is the
-# first thing a locked-out operator sees, and it used to be the one surface
-# that spoke no common language with the rest of the interface (a system-ui
-# stack, an <h1> in whatever serif the browser picked, and an accent that
-# appears in no brand asset). The values below are the SPA's own token layer
-# (--bg, --panel, --text, --muted, --c, --link), the same face Potato Mode
-# prints its wordmark in, and the same size rungs (<font size="5|3|1">) the
-# rest of the product uses, so the reader is looking at ReCoverage before they
-# ever authenticate. TestUnauthorizedPageMatchesTheTokenLayer holds the values
-# against web/app/index.css, the way the two renderers' section accents are held
-# together.
+# first thing a locked-out operator sees. The colours are the dark values of the
+# relumea tokens the SPA reads (web/app/system/tokens.css: bg, surface, border,
+# text, text-muted), the faces are the ones Potato Mode names (Archivo for
+# prose, JetBrains Mono for the flag and the URL), and the sizes are the rungs
+# the rest of the product uses (<font size="5|3|1">).
+# TestUnauthorizedPageMatchesTheTokenLayer holds the values against that file.
 _UNAUTHORIZED_HTML = (
     b'<!doctype html><html lang="en"><head><meta charset="utf-8">'
     b'<meta name="viewport" content="width=device-width, initial-scale=1">'
-    b"<title>ReCoverage - access token required</title></head>"
-    b'<body bgcolor="#0f1216" text="#e7edf4">'
+    b"<title>recoverage \xc2\xb7 access token required</title></head>"
+    b'<body bgcolor="#0b0b0c" text="#ededef">'
     # role="presentation" for the same reason every layout table in potato.py
     # carries it: a one-cell centring table is announced as a table with no
     # headers before the message it exists to centre (WCAG 1.3.1).
     b'<table role="presentation" width="100%" height="90%" border="0">'
     b'<tr><td align="center" valign="middle">'
-    b'<font face="SFMono-Regular, Consolas, Liberation Mono, Courier New, monospace">'
-    b'<h1><font size="5" color="#e7edf4"><b>ReCoverage</b></font></h1>'
-    b'<font size="3" color="#8b949e">Access token required</font>'
+    b'<font face="Archivo, Arial, Helvetica Neue, Liberation Sans, sans-serif">'
+    b'<h1><font size="5" color="#ededef"><b>recoverage</b></font></h1>'
+    b'<font size="3" color="#a3a3ab">Access token required</font>'
     b"<p>This dashboard was started with"
-    b' <font size="3" color="#06b6d4">--token</font>. Open it with the token appended'
-    b" to the URL:</p>"
-    b'<table border="1" bordercolor="#1c2a38" cellpadding="4" cellspacing="0"'
-    b' align="center" bgcolor="#151a21"><tr><td>'
-    b'<font size="3" color="#7dd3fc"><tt>?token=YOUR_TOKEN</tt></font>'
+    b' <font face="JetBrains Mono, Consolas, Liberation Mono, Courier New, monospace"'
+    b' size="3">--token</font>. Open it with the token appended to the URL:</p>'
+    b'<table border="1" bordercolor="#28282e" cellpadding="4" cellspacing="0"'
+    b' align="center" bgcolor="#131316"><tr><td>'
+    b'<font face="JetBrains Mono, Consolas, Liberation Mono, Courier New, monospace"'
+    b' size="3" color="#ededef"><tt>?token=YOUR_TOKEN</tt></font>'
     b"</td></tr></table>"
-    b'<p><font color="#8b949e" size="1">The person who started the server has the token.'
+    b'<p><font color="#a3a3ab" size="1">The person who started the server has the token.'
     b" It is stored in a cookie afterwards, so you only need the URL once.</font></p>"
     b"</font></td></tr></table></body></html>"
 )

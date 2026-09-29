@@ -43,24 +43,24 @@ export function SearchResults({
     // Positioned under the box rather than in the topbar's flow: the topbar is
     // sticky and measured into `--topbar-h`, so a list that grew it would move
     // the map the reader is looking at every keystroke.
-    <div className="search-results absolute top-full start-0 z-30 mt-1 w-[min(28rem,90vw)] rounded-hair border border-line bg-panel shadow-text">
-      <ol className="m-0 max-h-64 list-none overflow-y-auto p-0">
+    <div className="search-results absolute top-full start-0 z-30 mt-1 w-full min-w-72 max-w-form overflow-hidden rounded-card bg-surface shadow-lift">
+      <ol className="m-0 max-h-72 list-none overflow-y-auto p-1">
         {results.map((result) => (
           <li key={`${result.name}-${result.va}`}>
             <button
               type="button"
-              className="search-result flex w-full items-baseline gap-2 border-0 bg-transparent px-2 py-1 text-left font-mono text-micro text-text hover:bg-btn-hover"
+              className="search-result flex min-h-8 w-full cursor-pointer items-baseline gap-2 rounded-chip border-0 bg-transparent px-2 py-1.5 text-left font-mono text-micro text-text hover:bg-surface-2"
               onClick={() => onPick(result)}
             >
               <span className="min-w-0 grow truncate" dir="auto">
                 {isolate(result.name)}
               </span>
               {result.symbol === null || result.symbol === result.name ? null : (
-                <span className="min-w-0 shrink truncate text-muted" dir="auto">
+                <span className="min-w-0 shrink truncate text-text-muted" dir="auto">
                   {result.symbol}
                 </span>
               )}
-              <span className="shrink-0 text-muted">{hex(result.va, 8)}</span>
+              <span className="shrink-0 text-text-muted">{hex(result.va, 8)}</span>
               {/* Which section each hit is in, on every row that has one. A
                   target-wide term matches `.rdata` and `.text` alike, and the
                   rows that were not in the section on screen carried nothing at
@@ -72,8 +72,8 @@ export function SearchResults({
                 <span
                   className={
                     result.section === section
-                      ? "shrink-0 text-accent"
-                      : "shrink-0 text-muted opacity-70"
+                      ? "shrink-0 text-st-exact"
+                      : "shrink-0 text-text-faint"
                   }
                 >
                   {result.section === section ? `in ${isolate(section)}` : isolate(result.section)}
@@ -84,8 +84,8 @@ export function SearchResults({
         ))}
       </ol>
       {hidden > 0 ? (
-        <p className="border-0 border-t border-line px-2 py-1 font-mono text-micro text-muted">
-          {count(hidden)} more match{hidden === 1 ? "es" : ""} - narrow the search to see them.
+        <p className="m-0 border-0 border-t border-border px-3 py-2 text-micro text-text-muted">
+          {count(hidden)} more match{hidden === 1 ? "" : "es"} not shown. Narrow the search to see them.
         </p>
       ) : null}
     </div>

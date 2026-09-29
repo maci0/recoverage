@@ -39,8 +39,8 @@ export function HighlightedCode({
   const html = useMemo(() => highlightCode(text, language), [language, text]);
   return (
     <pre
-      className={cn("code rounded-hair border border-line bg-code p-3", className, {
-        "overflow-auto": region,
+      className={cn("code m-0 rounded-control border border-border bg-code p-3", className, {
+        "max-h-80 overflow-auto": region,
       })}
       // A scroll container that is not focusable cannot be scrolled from the
       // keyboard, which strands a long disassembly or byte dump off to the
@@ -50,7 +50,7 @@ export function HighlightedCode({
       aria-label={region ? label : undefined}
     >
       <code
-        className="hljs block font-mono text-label leading-[1.45] whitespace-pre"
+        className="hljs block font-mono text-micro leading-code whitespace-pre"
         onClick={(event) => {
           const { target } = event;
           if (!(target instanceof HTMLElement) || onAddressClick === undefined) {

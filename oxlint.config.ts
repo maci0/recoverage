@@ -51,7 +51,22 @@ export default defineConfig({
         new URL("./tools/oxlint/anti-slop/index.ts", import.meta.url),
       ),
     },
+    {
+      name: "shadcn",
+      specifier: fileURLToPath(
+        new URL("./node_modules/@shadcn/lint/dist/index.js", import.meta.url),
+      ),
+    },
   ],
+  settings: {
+    // @shadcn/lint reads the classes Tailwind can generate from the stylesheet
+    // `components.json` names (web/app/index.css, which imports the relumea
+    // tokens), so a class outside the token set is an unknown class here.
+    shadcn: {
+      componentImports: ["^@/components/ui(/|$)"],
+      note: "Tokens come from web/app/system/tokens.css, a verbatim copy of relumea.ai's. A value the system lacks is proposed there first.",
+    },
+  },
   rules: {
     // The preset's oxc/no-new-buffer does not exist in oxlint 1.83.0; the
     // same rule lives under unicorn. Keep the preset's intent.
@@ -124,8 +139,64 @@ export default defineConfig({
     "anti-slop/no-unsafe-dictionary-type": "error",
     "anti-slop/no-widen-then-assert": "error",
     "anti-slop/require-safety-comment-for-type-assertion": "error",
+    // @shadcn/lint: the design-system rules. Colours, sizes, radii and
+    // shadows come from the token layer only.
+    "shadcn/no-raw-colors": "error",
+    "shadcn/no-arbitrary-values": "error",
+    // The allowed names are hooks, not styles: print.css, the dialog's inert
+    // query and the browser specs select on them, and none carries a rule.
+    "shadcn/no-unknown-classes": [
+      "error",
+      {
+        allow: [
+          "actions",
+          "filter-btn",
+          "filters",
+          "hint",
+          "legend",
+          "meta-item",
+          "meta-label",
+          "meta-value",
+          "modal",
+          "modal-actions",
+          "modal-close",
+          "modal-content",
+          "modal-header",
+          "modal-title",
+          "panel",
+          "panel-actions",
+          "panel-head",
+          "panel-title",
+          "search",
+          "search-result",
+          "search-results",
+          "search-row",
+          "section",
+          "section-actions",
+          "section-title",
+          "section-title-text",
+          "skip-link",
+          "source-link",
+          "stats",
+          "tab-btn",
+          "tabs",
+          "title",
+          "topbar",
+        ],
+      },
+    ],
+    "shadcn/no-inline-styles": "error",
+    "shadcn/require-static-classes": "error",
   },
   overrides: [
+    {
+      // web/app/system is a verbatim copy of relumea.ai's src/system, which
+      // declares props with `interface`. The copy is never edited.
+      files: ["web/app/system/**"],
+      rules: {
+        "typescript/consistent-type-definitions": "off",
+      },
+    },
     {
       // vitest rules only apply to test files; the webui assets are never
       // tests, and oxlint does not scope vitest rules by file pattern itself.

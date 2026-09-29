@@ -71,6 +71,10 @@ _JS_CLI_ONLY = {
         "tools/flatten_rikalabs_strict.py reads its preset, and oxlint.config.ts "
         "names the plugin under node_modules"
     ),
+    "@shadcn/lint": (
+        "oxlint.config.ts names node_modules/@shadcn/lint/dist/index.js as the "
+        "`shadcn` JS plugin the lint:js script loads"
+    ),
 }
 
 # A module specifier in a JS, TS or CSS source: `from "x"`, `import "x"`,

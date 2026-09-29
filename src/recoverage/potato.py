@@ -86,28 +86,33 @@ _log = logging.getLogger("recoverage")
 # problem states (tooling failures and unclassified annotations) share one
 # colour: they are distinguishable from a gap, which is the point, without
 # spending nine legend rows on states an operator cannot act on individually.
-_COLORS_PROBLEM = "#a855f7"
+#
+# Potato Mode draws with <font color> and bgcolor and no stylesheet, so it
+# cannot read the relumea tokens the SPA reads (web/app/system/tokens.css); it
+# spells their DARK values here, because the page has one theme and a dark
+# ground keeps the verdict fills apart. A token change there moves these too.
+_COLORS_PROBLEM = "#a05c54"  # cell-fail
 COLORS = {
-    "exact": "#10b981",
-    "reloc": "#0ea5e9",
-    "near_match": "#f59e0b",
+    "exact": "#2f7a56",  # cell-exact
+    "reloc": "#31806f",  # cell-reloc
+    "near_match": "#8a6c2c",  # cell-near
     # Canonical spelling of near_match; the map palette is its own (rebrew's
     # document carries the terminal report's STATUS_HEX, a darker set).
-    "near_matching": "#f59e0b",
+    "near_matching": "#8a6c2c",
     # Post-verify semantic promotion, a state of its own rather than a match.
-    "proven": "#06b6d4",
-    # SIZE_MISMATCH: not a match, so it shares the near-match yellow.
-    "size_mismatch": "#f59e0b",
-    "stub": "#ef4444",
-    "padding": "#C0C0D4",
-    "data": "#8b5cf6",
-    "thunk": "#f97316",
-    "none": "#3F4958",
+    "proven": "#3f7a63",  # cell-proven
+    # SIZE_MISMATCH: not a match, so it shares the near-match amber.
+    "size_mismatch": "#8a6c2c",
+    "stub": "#6a6a73",  # cell-stub
+    "padding": "#3a3a42",  # border-strong, as the SPA paints padding
+    "data": "#3b5b73",  # cell-live
+    "thunk": "#6f629f",  # cell-thunk
+    "none": "#212124",  # cell-unlit
     # Data-metadata verdicts.  VERIFIED is a match (build_db counts it as
-    # exact), so it takes the exact green; DRIFT and UNCHECKED are the two
-    # problem states here, and both take _COLORS_PROBLEM, the hue the SPA
-    # paints --other-bg.
-    "verified": "#10b981",
+    # exact), so it takes the exact fill; DRIFT and UNCHECKED are the two
+    # problem states here, and both take _COLORS_PROBLEM, the fill the SPA
+    # paints the problem slot with.
+    "verified": "#2f7a56",
     "drift": _COLORS_PROBLEM,
     "unchecked": _COLORS_PROBLEM,
     "compile_error": _COLORS_PROBLEM,
@@ -118,40 +123,55 @@ COLORS = {
     "skip": _COLORS_PROBLEM,
     "unknown": _COLORS_PROBLEM,
 }
-BG_COLOR = "#0f1216"
-PANEL_COLOR = "#151a21"
-# Empty progress-bar track: approximates --none (white 0.05) over PANEL_COLOR.
-TRACK_COLOR = "#22272e"
-CODE_BG_COLOR = "#0a0d14"  # darker than panel; approximates --code-bg rgba(0,0,0,0.26) on #0f1216
-BORDER_COLOR = "#1c2a38"  # subtle cyan-tinted dark, matches rgba(6,182,212,0.15) on dark bg
-TEXT_COLOR = "#e7edf4"
-MUTED_COLOR = "#8b949e"
-ACCENT_COLOR = "#06b6d4"
-# The four section-heading accents, one per pane kind.  The SPA paints the
-# same four from --accent-c-source, --accent-asm, --accent-data, and
-# --accent-bytes, so the hexes live in two files; a pane that reads blue in
-# one renderer and cyan in the other is drift nobody would notice on a
-# screenshot.  TestSectionAccentsMatchSpa pins the two sets together.
-ACCENT_C_SOURCE = "#3b82f6"
-ACCENT_ASM = "#ef4444"
-ACCENT_DATA = "#a855f7"
-ACCENT_BYTES = "#10b981"
-# The code-pane hues, the same steps the SPA's highlight.js theme names in
-# `web/app/index.css` (--muted, --badge-stub-text, --hljs-symbol, --hljs-string,
-# --text, --hljs-title, --link, --hljs-section, --hljs-name). Potato Mode paints
-# with <font color> and no stylesheet, so it cannot read those vars; it spells
-# the same values here. TestPygmentsColorsMatchTheSpaTheme holds the two sets
-# together, so a palette change moves both renderers or neither.
-HLJS_COMMENT = MUTED_COLOR
-HLJS_KEYWORD = "#f87171"
-HLJS_SYMBOL = "#5eead4"
-HLJS_STRING = "#fcd34d"
-HLJS_TITLE = "#d8b4fe"
-HLJS_ATTR = "#7dd3fc"
-HLJS_SECTION = "#67e8f9"
-HLJS_NAME = "#6ee7b7"
-SANS_FONT = "system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif"
-MONO_FONT = "SFMono-Regular, Consolas, Liberation Mono, Courier New, monospace"
+# The same states as TEXT: the verdict words (`st-*`, dark values), which clear
+# 4.5:1 on the page and panel grounds where the fills above do not. A state
+# printed as a word or a count takes this colour; a cell or a swatch takes
+# COLORS.
+_INK_PROBLEM = "#f08a80"  # st-fail
+STATE_INK = {
+    "exact": "#4cc38a",  # st-exact
+    "verified": "#4cc38a",
+    "reloc": "#4fc2b0",  # st-reloc
+    "near_match": "#e3b65c",  # st-near
+    "near_matching": "#e3b65c",
+    "size_mismatch": "#e3b65c",
+    "proven": "#86d4ad",  # st-proven
+    "stub": "#a3a3ab",  # st-stub
+    "padding": "#a3a3ab",  # text-muted
+    "data": "#6cb4e4",  # st-live
+    "thunk": "#b8a7f0",  # st-thunk
+    "none": "#a3a3ab",  # text-muted
+}
+STATE_INK |= {state: _INK_PROBLEM for state in COLORS if state not in STATE_INK}
+BG_COLOR = "#0b0b0c"  # bg
+PANEL_COLOR = "#131316"  # surface
+RAISED_COLOR = "#1a1a1e"  # raised, the panel heads
+TRACK_COLOR = "#212126"  # surface-3, the bar track
+CODE_BG_COLOR = "#101012"  # code
+BORDER_COLOR = "#28282e"  # border
+TEXT_COLOR = "#ededef"  # text
+MUTED_COLOR = "#a3a3ab"  # text-muted
+ACCENT_COLOR = "#3fbf7a"  # accent
+# The pane headings. The SPA titles each pane with a muted icon rather than a
+# hue per pane kind (the brand has one accent), so all four are the muted ink.
+ACCENT_C_SOURCE = MUTED_COLOR
+ACCENT_ASM = MUTED_COLOR
+ACCENT_DATA = MUTED_COLOR
+ACCENT_BYTES = MUTED_COLOR
+# The code-pane hues: the shared listing palette (`syn-*`) the SPA's
+# highlight.js rules read in `web/app/index.css`, dark values.
+# TestCodePaneColorsMatchTheSpa holds the two sets together.
+HLJS_COMMENT = "#8e8e97"  # syn-comment
+HLJS_KEYWORD = "#b8a7f0"  # syn-keyword
+HLJS_SYMBOL = "#6cb4e4"  # syn-register
+HLJS_STRING = "#e3b65c"  # syn-string
+HLJS_TITLE = "#3fbf7a"  # syn-call
+HLJS_ATTR = "#6cb4e4"  # syn-type
+HLJS_SECTION = "#6cb4e4"  # syn-type
+HLJS_NAME = TEXT_COLOR
+# The brand faces, used when installed: Potato Mode loads no font files.
+SANS_FONT = "Archivo, Arial, Helvetica Neue, Liberation Sans, sans-serif"
+MONO_FONT = "JetBrains Mono, Consolas, Liberation Mono, Courier New, monospace"
 
 # The keys a ?filter= may name, and the cell states each one stands for.  A
 # filter is a key, not a state name, so the states the SPA packs onto one cell
@@ -169,7 +189,9 @@ FILTER_STATES: dict[str, frozenset[str]] = {
     "problem": frozenset(s for s, color in COLORS.items() if color == _COLORS_PROBLEM),
 }
 # The colour each pill is drawn in, which is the colour of one of its states.
-FILTER_COLORS: dict[str, str] = {key: COLORS[min(states)] for key, states in FILTER_STATES.items()}
+FILTER_COLORS: dict[str, str] = {
+    key: STATE_INK[min(states)] for key, states in FILTER_STATES.items()
+}
 
 
 def _state_survives_filter(state: str, active_filters: set[str]) -> bool:
@@ -231,42 +253,10 @@ _INT_FMTS: list[tuple[int, str, str]] = [
 
 TRANSPARENT_GIF = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
 
-SCANLINE_PNG = (
-    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAADCAYAAABS3WWC"
-    "AAAADElEQVR4nGNgQAYaAAA3AClW0vESAAAAAElFTkSuQmCC"
-)
-
 
 def _svg_uri(svg: str) -> str:
     """Inline an SVG document as a base64 data URI."""
     return "data:image/svg+xml;base64," + base64.b64encode(svg.encode("utf-8")).decode("utf-8")
-
-
-# Stretched behind the topbar table as its background image.
-def _make_topbar_svg() -> str:
-    """Generate a 1x80 vertical gradient SVG data URI for the topbar."""
-    svg = (
-        '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="80">'
-        "<defs>"
-        '<linearGradient id="grad" x1="0%" y1="0%" x2="0%" y2="100%">'
-        f'<stop offset="0%" style="stop-color:{BG_COLOR};stop-opacity:1" />'
-        f'<stop offset="100%" style="stop-color:{PANEL_COLOR};stop-opacity:1" />'
-        "</linearGradient>"
-        "</defs>"
-        '<rect width="1" height="80" fill="url(#grad)" />'
-        "</svg>"
-    )
-    return _svg_uri(svg)
-
-
-TOPBAR_SVG = _make_topbar_svg()
-
-PANEL_HDR_PNG = (
-    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAYCAYAAAA7zJfa"
-    "AAAAYUlEQVR4nCXEWQJDMABF0buJKhIZRdC5Oux/Zc+H83HI61+k5Sfi/BWxfkSo"
-    "m/DTW/jyEq48hRsfYsh3YfNN2HQVJl6ECavowyI6P4vOVdG6SbRDEWc7isZm0Zgk"
-    "Tn082gH6xSG4aTtBqgAAAABJRU5ErkJggg=="
-)
 
 
 def _dot_uri(fill_hex: str) -> str:
@@ -363,30 +353,57 @@ def _make_pill_mid_tile(height: int, fill_hex: str, border_hex: str) -> str:
     return _svg_uri(svg)
 
 
-# Pill cap images.  A section tab and a filter pill are the same widget, so
-# the pills take the cyan the tabs do: the blue they wore was the one hue in
-# this page that named nothing.  The SPA paints both from one `--c`-derived
-# pair.
-ACTIVE_L, ACTIVE_R = _make_pill_caps(32, "#1a3a4a", border_hex="#06b6d4")
-INACTIVE_L, INACTIVE_R = _make_pill_caps(32, "#182230", border_hex="#2a3a4a")
-ACTIVE_MID = _make_pill_mid_tile(32, "#1a3a4a", "#06b6d4")
-INACTIVE_MID = _make_pill_mid_tile(32, "#182230", "#2a3a4a")
+# Pill cap images.  A section tab and a filter pill are the same widget, and
+# both draw the SPA's control: the pressed one is `surface-3` inside the
+# hovered control edge, the rest `surface` inside the control edge (the 3:1
+# line a control is told apart by).
+ACTIVE_L, ACTIVE_R = _make_pill_caps(32, "#212126", border_hex="#8f8f9b")
+INACTIVE_L, INACTIVE_R = _make_pill_caps(32, "#131316", border_hex="#767681")
+ACTIVE_MID = _make_pill_mid_tile(32, "#212126", "#8f8f9b")
+INACTIVE_MID = _make_pill_mid_tile(32, "#131316", "#767681")
 
+# The browser-tab icon: the SPA's assets/favicon.svg, byte for byte, which
+# follows the OS theme on the tab strip.
 R_LOGO_SVG = (
     "data:image/svg+xml;base64,"
-    "PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAg"
-    "MCAxMDAgMTAwJz48ZGVmcz48ZmlsdGVyIGlkPSdnJz48ZmVHYXVzc2lhbkJsdXIgc3Rk"
-    "RGV2aWF0aW9uPSczJyByZXN1bHQ9J2InLz48ZmVNZXJnZT48ZmVNZXJnZU5vZGUgaW49"
-    "J2InLz48ZmVNZXJnZU5vZGUgaW49J1NvdXJjZUdyYXBoaWMnLz48L2ZlTWVyZ2U+PC9m"
-    "aWx0ZXI+PHBhdHRlcm4gaWQ9J3MnIHdpZHRoPSc0JyBoZWlnaHQ9JzQnIHBhdHRlcm5V"
-    "bml0cz0ndXNlclNwYWNlT25Vc2UnPjxyZWN0IHdpZHRoPSc0JyBoZWlnaHQ9JzInIGZp"
-    "bGw9J3JnYmEoMCwyNTUsMjU1LDAuMiknLz48L3BhdHRlcm4+PC9kZWZzPjxyZWN0IHdp"
-    "ZHRoPScxMDAnIGhlaWdodD0nMTAwJyByeD0nMTUnIGZpbGw9JyMwZjEyMTYnLz48cmVj"
-    "dCB4PSc4JyB5PSc4JyB3aWR0aD0nODQnIGhlaWdodD0nODQnIHJ4PSc4JyBmaWxsPSd1"
-    "cmwoI3MpJyBzdHJva2U9JyMwZmYnIHN0cm9rZS13aWR0aD0nNCcgZmlsdGVyPSd1cmwo"
-    "I2cpJy8+PHRleHQgeD0nNTAnIHk9JzcyJyBmb250LWZhbWlseT0nbW9ub3NwYWNlJyBm"
-    "b250LXNpemU9JzY1JyBmb250LXdlaWdodD0nYm9sZCcgZmlsbD0nIzBmZicgdGV4dC1h"
-    "bmNob3I9J21pZGRsZScgZmlsdGVyPSd1cmwoI2cpJz5SPC90ZXh0Pjwvc3ZnPg=="
+    "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIzMiIg"
+    "aGVpZ2h0PSIzMiIgdmlld0JveD0iMCAwIDI0IDI0Ij4KICA8IS0tIFRoZSByZWx1bWVh"
+    "IG1hcmsgKEJSQU5ELm1kIHNlY3Rpb24gMikuIEluayBhbmQgdW5saXQgY2VsbHMgZm9s"
+    "bG93IHRoZSB0YWIgYmFyIHNjaGVtZS4gLS0+CiAgPHN0eWxlPi5pe2ZpbGw6IzBhMGEw"
+    "Yn0udXtmaWxsOiNkNWQ4ZGV9QG1lZGlhIChwcmVmZXJzLWNvbG9yLXNjaGVtZTpkYXJr"
+    "KXsuaXtmaWxsOiNlZGVkZWZ9LnV7ZmlsbDojM2EzYTQyfX08L3N0eWxlPgogIDxyZWN0"
+    "IGNsYXNzPSJpIiB4PSIxLjUiIHk9IjEuNSIgd2lkdGg9IjYiIGhlaWdodD0iNiIgcng9"
+    "IjEuNSIgLz48cmVjdCBjbGFzcz0iaSIgeD0iOSIgeT0iMS41IiB3aWR0aD0iNiIgaGVp"
+    "Z2h0PSI2IiByeD0iMS41IiAvPjxyZWN0IGZpbGw9IiMwZjdhNDIiIHg9IjE2LjUiIHk9"
+    "IjEuNSIgd2lkdGg9IjYiIGhlaWdodD0iNiIgcng9IjEuNSIgLz4KICA8cmVjdCBjbGFz"
+    "cz0iaSIgeD0iMS41IiB5PSI5IiB3aWR0aD0iNiIgaGVpZ2h0PSI2IiByeD0iMS41IiAv"
+    "PjxyZWN0IGNsYXNzPSJ1IiB4PSI5IiB5PSI5IiB3aWR0aD0iNiIgaGVpZ2h0PSI2IiBy"
+    "eD0iMS41IiAvPjxyZWN0IGNsYXNzPSJ1IiB4PSIxNi41IiB5PSI5IiB3aWR0aD0iNiIg"
+    "aGVpZ2h0PSI2IiByeD0iMS41IiAvPgogIDxyZWN0IGNsYXNzPSJpIiB4PSIxLjUiIHk9"
+    "IjE2LjUiIHdpZHRoPSI2IiBoZWlnaHQ9IjYiIHJ4PSIxLjUiIC8+PHJlY3QgY2xhc3M9"
+    "InUiIHg9IjkiIHk9IjE2LjUiIHdpZHRoPSI2IiBoZWlnaHQ9IjYiIHJ4PSIxLjUiIC8+"
+    "PHJlY3QgY2xhc3M9InUiIHg9IjE2LjUiIHk9IjE2LjUiIHdpZHRoPSI2IiBoZWlnaHQ9"
+    "IjYiIHJ4PSIxLjUiIC8+Cjwvc3ZnPgo="
+)
+
+# The topbar mark: the same drawing with the dark-ground fills fixed (ink
+# `text`, lit `accent`, unlit `border-strong`), because this page is dark in
+# every OS theme and the favicon's own colours follow the OS.
+MARK_ON_DARK_SVG = (
+    "data:image/svg+xml;base64,"
+    "PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHdpZHRoPScyNCcg"
+    "aGVpZ2h0PScyNCcgdmlld0JveD0nMCAwIDI0IDI0Jz48ZyBmaWxsPScjZWRlZGVmJz48"
+    "cmVjdCB4PScxLjUnIHk9JzEuNScgd2lkdGg9JzYnIGhlaWdodD0nNicgcng9JzEuNScv"
+    "PjxyZWN0IHg9JzknIHk9JzEuNScgd2lkdGg9JzYnIGhlaWdodD0nNicgcng9JzEuNScv"
+    "PjxyZWN0IHg9JzEuNScgeT0nOScgd2lkdGg9JzYnIGhlaWdodD0nNicgcng9JzEuNScv"
+    "PjxyZWN0IHg9JzEuNScgeT0nMTYuNScgd2lkdGg9JzYnIGhlaWdodD0nNicgcng9JzEu"
+    "NScvPjwvZz48cmVjdCBmaWxsPScjM2ZiZjdhJyB4PScxNi41JyB5PScxLjUnIHdpZHRo"
+    "PSc2JyBoZWlnaHQ9JzYnIHJ4PScxLjUnLz48ZyBmaWxsPScjM2EzYTQyJz48cmVjdCB4"
+    "PSc5JyB5PSc5JyB3aWR0aD0nNicgaGVpZ2h0PSc2JyByeD0nMS41Jy8+PHJlY3QgeD0n"
+    "MTYuNScgeT0nOScgd2lkdGg9JzYnIGhlaWdodD0nNicgcng9JzEuNScvPjxyZWN0IHg9"
+    "JzknIHk9JzE2LjUnIHdpZHRoPSc2JyBoZWlnaHQ9JzYnIHJ4PScxLjUnLz48cmVjdCB4"
+    "PScxNi41JyB5PScxNi41JyB3aWR0aD0nNicgaGVpZ2h0PSc2JyByeD0nMS41Jy8+PC9n"
+    "Pjwvc3ZnPg=="
 )
 
 # One row per colour a reader has to be able to name.  data (purple) and thunk
@@ -552,7 +569,7 @@ def _pygments() -> tuple[Any, dict[Any, str], Any, dict[Any, str]] | None:
         # exception, so returning None is also what keeps a broken install
         # costing one attempt per process instead of one per rendered pane.
         _log.warning(
-            "pygments is installed but unusable — Potato code panes render unhighlighted (%s: %s)",
+            "pygments is installed but unusable; Potato code panes render unhighlighted (%s: %s)",
             type(exc).__name__,
             exc,
         )
@@ -920,8 +937,8 @@ def _build_url(
 # caption nor a header row.
 _PAGE_SRC = r"""<!DOCTYPE html>
 <html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>ReCoverage - Potato Mode</title><!-- The same phosphor R the topbar below and the SPA's assets/favicon.svg draw. An emoji in a data URI was this link's first spelling, so a browser tab showed a desktop-computer glyph on one view of the product and the logo on the other. --><link rel="icon" href="{{R_LOGO_SVG}}"></head>
-<body bgcolor="{{BG_COLOR}}" text="{{TEXT_COLOR}}" background="{{SCANLINE_PNG}}" link="{{COLORS['reloc']}}" vlink="{{COLORS['reloc']}}" alink="{{COLORS['exact']}}">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>recoverage · Potato Mode</title><!-- The relumea mark the topbar below and the SPA's assets/favicon.svg draw. An emoji in a data URI was this link's first spelling, so a browser tab showed a desktop-computer glyph on one view of the product and the logo on the other. --><link rel="icon" href="{{R_LOGO_SVG}}"></head>
+<body bgcolor="{{BG_COLOR}}" text="{{TEXT_COLOR}}" link="{{TEXT_COLOR}}" vlink="{{TEXT_COLOR}}" alink="{{ACCENT_COLOR}}">
 <font face="{{SANS_FONT}}">
 <main>
 <!-- Page wrapper: the grid is a fixed-width lattice (grid_columns x cell_w), so
@@ -934,7 +951,7 @@ _PAGE_SRC = r"""<!DOCTYPE html>
 <table role="presentation" id="page" width="100%" border="0" cellpadding="0" cellspacing="0"><tr><td>
 
 <!-- Top Bar -->
-<table role="presentation" id="topbar" width="100%" border="0" cellpadding="4" cellspacing="0" background="{{TOPBAR_PNG}}">
+<table role="presentation" id="topbar" width="100%" border="0" cellpadding="4" cellspacing="0" bgcolor="{{PANEL_COLOR}}">
   <tr>
     <td colspan="2">
       <a href="#grid-container"><font size="1" color="{{MUTED_COLOR}}">[Skip to grid]</font></a>
@@ -944,8 +961,8 @@ _PAGE_SRC = r"""<!DOCTYPE html>
     <td valign="middle">
       <table role="presentation" id="logo" border="0" cellpadding="0" cellspacing="0">
         <tr>
-          <td><img src="{{R_LOGO_SVG}}" width="48" height="32" border="0" alt="R"></td>
-          <td valign="middle" nowrap><h1><a href="/"><font face="{{MONO_FONT}}" size="5" color="{{TEXT_COLOR}}">&nbsp;<b>ReCoverage</b></font></a></h1>&nbsp;<a href="/"><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">[SPA]</font></a>&nbsp;<a href="{{functions_nav_url}}"><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">[Functions]</font></a></td>
+          <td><img src="{{MARK_ON_DARK_SVG}}" width="24" height="24" border="0" alt=""></td>
+          <td valign="middle" nowrap><h1><a href="/"><font face="{{SANS_FONT}}" size="5" color="{{TEXT_COLOR}}">&nbsp;<b>recoverage</b></font></a></h1>&nbsp;<a href="/"><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">[SPA]</font></a>&nbsp;<a href="{{functions_nav_url}}"><font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">[Functions]</font></a></td>
         </tr>
       </table>
     </td>
@@ -957,7 +974,7 @@ _PAGE_SRC = r"""<!DOCTYPE html>
              only the text made the clickable area the ~20px glyph while the
              32px pill around it looked like the button and did nothing. -->
         % if s_active:
-          <a href="{{s_url}}" {{!s_acc}} aria-current="page"><table role="presentation" border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{ACTIVE_L}}" width="16" height="32" border="0" alt=""></td><td background="{{ACTIVE_MID}}" height="32" nowrap dir="auto"><font face="{{MONO_FONT}}" size="3" color="#ffffff"><b>{{s_name}}</b></font></td><td><img src="{{ACTIVE_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
+          <a href="{{s_url}}" {{!s_acc}} aria-current="page"><table role="presentation" border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{ACTIVE_L}}" width="16" height="32" border="0" alt=""></td><td background="{{ACTIVE_MID}}" height="32" nowrap dir="auto"><font face="{{MONO_FONT}}" size="3" color="{{TEXT_COLOR}}"><b>{{s_name}}</b></font></td><td><img src="{{ACTIVE_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
         % else:
           <a href="{{s_url}}" {{!s_acc}}><table role="presentation" border="0" cellpadding="0" cellspacing="0"><tr><td><img src="{{INACTIVE_L}}" width="16" height="32" border="0" alt=""></td><td background="{{INACTIVE_MID}}" height="32" nowrap dir="auto"><font face="{{MONO_FONT}}" size="3" color="{{MUTED_COLOR}}">{{s_name}}</font></td><td><img src="{{INACTIVE_R}}" width="16" height="32" border="0" alt=""></td></tr></table></a>
         % end
@@ -1049,9 +1066,9 @@ _PAGE_SRC = r"""<!DOCTYPE html>
         </td>
         </tr>
         % if search_query:
-        <tr><td colspan="4" valign="middle" nowrap><font size="1" color="{{ACCENT_COLOR}}">Searching: &quot;{{search_query}}&quot; ({{search_match_label}})</font>
+        <tr><td colspan="4" valign="middle" nowrap><font size="1" color="{{ACCENT_COLOR}}">{{search_match_label}} for &quot;{{search_query}}&quot;{{"." if search_match_count == 0 else ""}}</font>
         % if search_match_count == 0:
-        <font size="1" color="{{MUTED_COLOR}}"> - no matches. Check the spelling, or search by VA.</font>
+        <font size="1" color="{{MUTED_COLOR}}">Check the spelling, or search by address.</font>
         % end
         <a href="{{clear_search_url}}"><font size="1" color="{{MUTED_COLOR}}">[Clear search]</font></a></td></tr>
         % end
@@ -1075,9 +1092,9 @@ _PAGE_SRC = r"""<!DOCTYPE html>
     % else:
   <tr>
     <td valign="top" width="100%">
-      <table role="presentation" id="map" width="100%" border="1" cellpadding="0" cellspacing="0" bgcolor="{{PANEL_COLOR}}" bordercolor="{{BORDER_COLOR}}">        <tr><td id="map-header" background="{{PANEL_HDR_PNG}}" cellpadding="8">&nbsp;<font color="{{MUTED_COLOR}}" size="2"><b>Coverage Map - {{section}}</b></font> <font color="{{MUTED_COLOR}}" size="1"> ({{block_count}} blocks)</font>
+      <table role="presentation" id="map" width="100%" border="1" cellpadding="0" cellspacing="0" bgcolor="{{PANEL_COLOR}}" bordercolor="{{BORDER_COLOR}}">        <tr><td id="map-header" bgcolor="{{RAISED_COLOR}}" cellpadding="8">&nbsp;<font color="{{MUTED_COLOR}}" size="2"><b>Coverage Map - {{section}}</b></font> <font color="{{MUTED_COLOR}}" size="1"> ({{block_count}} blocks)</font>
         % if sec_stats.get('total', 0) > 0:
-          <br>&nbsp;<font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">E:<font color="{{COLORS['exact']}}">{{sec_stats['exact']}}</font> R:<font color="{{COLORS['reloc']}}">{{sec_stats['reloc']}}</font> M:<font color="{{COLORS['near_match']}}">{{sec_stats['near_match']}}</font> S:<font color="{{COLORS['stub']}}">{{sec_stats['stub']}}</font> P:<font color="{{COLORS['padding']}}">{{sec_stats.get('padding', 0)}}</font> &#x2502; {{sec_stats['pct']}}% covered</font>
+          <br>&nbsp;<font face="{{MONO_FONT}}" size="1" color="{{MUTED_COLOR}}">E:<font color="{{STATE_INK['exact']}}">{{sec_stats['exact']}}</font> R:<font color="{{STATE_INK['reloc']}}">{{sec_stats['reloc']}}</font> M:<font color="{{STATE_INK['near_match']}}">{{sec_stats['near_match']}}</font> S:<font color="{{STATE_INK['stub']}}">{{sec_stats['stub']}}</font> P:<font color="{{STATE_INK['padding']}}">{{sec_stats.get('padding', 0)}}</font> &#x2502; {{sec_stats['pct']}}% covered</font>
         % end
         </td></tr>
         <tr><td bgcolor="{{PANEL_COLOR}}" cellpadding="8">
@@ -1111,7 +1128,7 @@ _PAGE_SRC = r"""<!DOCTYPE html>
   <tr>
     <td valign="top" width="100%">
       <table role="presentation" id="panel" width="100%" border="1" cellpadding="0" cellspacing="0" bgcolor="{{PANEL_COLOR}}" bordercolor="{{BORDER_COLOR}}">
-        <tr><td id="panel-header" background="{{PANEL_HDR_PNG}}" cellpadding="8">&nbsp;<font color="{{MUTED_COLOR}}" size="2"><b>Block Details</b></font></td></tr>
+        <tr><td id="panel-header" bgcolor="{{RAISED_COLOR}}" cellpadding="8">&nbsp;<font color="{{MUTED_COLOR}}" size="2"><b>Block Details</b></font></td></tr>
         <tr><td height="1" bgcolor="{{BORDER_COLOR}}"></td></tr>
         <tr><td id="panel-content" bgcolor="{{PANEL_COLOR}}" cellpadding="14" valign="top">{{!panel_html}}</td></tr>
       </table>
@@ -1202,7 +1219,7 @@ _PANEL_SRC = r"""
 &nbsp;<font size="2"><b>Annotations</b></font><br>
 <table role="presentation" width="100%" border="0" cellpadding="3" cellspacing="1" bgcolor="{{BORDER_COLOR}}">
       % for tag, text in annotations:
-        % tag_color = COLORS.get("stub", "#ef4444") if tag == "BLOCKER" else ACCENT_COLOR
+        % tag_color = STATE_INK["near_match"] if tag == "BLOCKER" else ACCENT_COLOR
 <tr><td bgcolor="{{PANEL_COLOR}}" width="25%"><font size="1" color="{{tag_color}}"><b>{{tag}}</b></font></td><td bgcolor="{{PANEL_COLOR}}"><font face="Courier New, monospace" size="1">{{text}}</font></td></tr>
       % end
 </table>
@@ -1254,7 +1271,7 @@ def _db_unavailable_page() -> HTTPResponse:
         body=(
             '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width, initial-scale=1">'
-            "<title>ReCoverage — database unavailable</title></head>"
+            "<title>recoverage · database unavailable</title></head>"
             f'<body bgcolor="{BG_COLOR}" text="{TEXT_COLOR}">'
             f'<font face="{MONO_FONT}">'
             '<table role="presentation" width="100%" height="90%" border="0"><tr><td align="center" valign="middle">'
@@ -2619,7 +2636,7 @@ def _render_function_list(
     parts = [
         f'<table role="presentation" width="100%" border="1" cellpadding="0" cellspacing="0" bordercolor="{BORDER_COLOR}" bgcolor="{PANEL_COLOR}">',
         (
-            f'<tr><td background="{PANEL_HDR_PNG}" cellpadding="8">'
+            f'<tr><td bgcolor="{RAISED_COLOR}" cellpadding="8">'
             f'<font color="{MUTED_COLOR}" size="2"><b>Functions</b></font> '
             f'<font size="1" color="{MUTED_COLOR}">({count_label})</font> '
             + status_note
@@ -2683,7 +2700,7 @@ def _render_function_list(
         for fn in rows:
             name, va, size, status, module = fn.name, fn.va, fn.size, fn.status, fn.module
             st = status or "none"
-            color = COLORS.get(st.lower(), TEXT_COLOR)
+            color = STATE_INK.get(st.lower(), TEXT_COLOR)
             name_link = link_prefix + _url_quote(name)
             parts.append(
                 "<tr>"
@@ -2831,7 +2848,7 @@ def _render_potato_inner(
         return (
             '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width, initial-scale=1">'
-            f"<title>ReCoverage — no data for {_esc(target)}</title></head>"
+            f"<title>recoverage · no data for {_esc(target)}</title></head>"
             f'<body bgcolor="{BG_COLOR}" text="{TEXT_COLOR}">'
             f'<font face="{MONO_FONT}">'
             '<table role="presentation" width="100%" height="90%" border="0"><tr><td align="center" valign="middle">'
@@ -2850,11 +2867,11 @@ def _render_potato_inner(
     sec_data: dict[str, Any] = sections.get(section, {})
 
     search_matched_fns: set[str] = set()
-    # What the topbar's "Searching: ... (N matches)" counts.  The grid view
+    # What the topbar's "N matches for ..." counts.  The grid view
     # takes the names `_search_functions` found; the function list takes the
     # row count of the list it just built, the same match set narrowed by
     # `?status=`.  Neither branch may leave it at zero: the line is above both
-    # views, so a functions-view search used to read "0 matches - no matches.
+    # views, so a functions-view search used to read "0 matches for ...
     # Check the spelling" directly over a table full of rows that had matched.
     search_match_count = 0
     # One pass of accesskey claims in document order: the search box, the
@@ -2965,10 +2982,10 @@ def _render_potato_inner(
         SANS_FONT=SANS_FONT,
         MONO_FONT=MONO_FONT,
         COLORS=COLORS,
-        SCANLINE_PNG=SCANLINE_PNG,
-        TOPBAR_PNG=TOPBAR_SVG,
-        PANEL_HDR_PNG=PANEL_HDR_PNG,
+        STATE_INK=STATE_INK,
+        RAISED_COLOR=RAISED_COLOR,
         R_LOGO_SVG=R_LOGO_SVG,
+        MARK_ON_DARK_SVG=MARK_ON_DARK_SVG,
         DOT_PNGS=DOT_PNGS,
         LEGEND_ITEMS=LEGEND_ITEMS,
         # Data
@@ -3046,6 +3063,7 @@ def _panel_base_ctx() -> dict[str, Any]:
         "MUTED_COLOR": MUTED_COLOR,
         "ACCENT_COLOR": ACCENT_COLOR,
         "COLORS": COLORS,
+        "STATE_INK": STATE_INK,
     }
 
 
@@ -3309,9 +3327,7 @@ def _panel_function_detail(
     # Badges
     badges: list[str] = []
     if fn_data.get("is_thunk"):
-        badges.append(
-            f'<font color="{COLORS.get("near_match", "#f59e0b")}"><b>[IAT thunk]</b></font>'
-        )
+        badges.append(f'<font color="{STATE_INK["near_match"]}"><b>[IAT thunk]</b></font>')
     if fn_data.get("is_export"):
         badges.append(f'<font color="{ACCENT_COLOR}"><b>[Exported]</b></font>')
     badge_html = " ".join(badges)
@@ -3485,7 +3501,7 @@ def _render_panel(
             "idx": idx,
             "cell_range": f"{hex(sec_va + (cell.get('start') or 0))} .. {hex(sec_va + (cell.get('end') or 0))}",
             "state_upper": state.upper(),
-            "state_color": COLORS.get(state.lower(), TEXT_COLOR),
+            "state_color": STATE_INK.get(state.lower(), TEXT_COLOR),
             "funcs": funcs,
             "cell_label": cell.get("label", ""),
             "parent_function": parent_function,

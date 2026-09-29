@@ -42,6 +42,16 @@ function stepFor(key: string, index: number, cols: number, last: number): number
   }
 }
 
+/** A colour token as the canvas can use it. The tokens are `light-dark()`
+ * pairs, and the build may rewrite those into variables that only resolve on
+ * a property, so the raw custom property is not a colour a 2D context parses.
+ * Set on the probe's `color`, the browser resolves it for the current theme
+ * and hands back `rgb()`. */
+function resolveColour(probe: HTMLElement, token: string): string {
+  probe.style.color = `var(${token})`;
+  return getComputedStyle(probe).color;
+}
+
 /** One section's coverage map.
  *
  * A canvas, not one element per cell: 39k cells is a page that cannot be
@@ -75,6 +85,7 @@ type GridState = {
   layCols: number;
   palette: Array<string>;
   accent: string;
+  ink: string;
   focus: number;
 };
 
@@ -91,6 +102,7 @@ export function CoverageMap({
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const stateRef = useRef<GridState | null>(null);
+  const probeRef = useRef<HTMLSpanElement | null>(null);
   const hintId = `grid-hint-${section.name.replaceAll(".", "")}`;
   // What the roving cursor is on, as text. A canvas has no accessible
   // children, so this is the only thing a screen reader can read about the
@@ -178,11 +190,13 @@ export function CoverageMap({
       return;
     }
     if (state.palette.length === 0) {
-      // One getComputedStyle for all eight variables: each call returns a live
-      // declaration, and reading a property off a fresh one re-flushes style.
-      const computed = getComputedStyle(wrap);
-      state.palette = PALETTE_VARS.map((name) => computed.getPropertyValue(name).trim());
-      state.accent = computed.getPropertyValue("--c").trim();
+      const probe = probeRef.current;
+      if (probe === null) {
+        return;
+      }
+      state.palette = PALETTE_VARS.map((name) => resolveColour(probe, name));
+      state.accent = resolveColour(probe, "--color-accent");
+      state.ink = resolveColour(probe, "--color-text");
     }
     const { cell } = geo;
     const { states, ground, fns, n } = pack;
@@ -208,8 +222,10 @@ export function CoverageMap({
       }
     }
     ctx.globalAlpha = 1;
+    // The selection is drawn in ink, the roving focus in the accent: the
+    // accent is the focus colour everywhere else on the page.
     const stroke = (index: number, dashed: boolean): void => {
-      ctx.strokeStyle = state.accent;
+      ctx.strokeStyle = dashed ? state.accent : state.ink;
       ctx.lineWidth = dashed ? 1 : 2;
       ctx.setLineDash(dashed ? [2, 2] : []);
       for (let k = geo.cellFirst[index] ?? -1; k >= 0 && k < parts && pCell[k] === index; k += 1) {
@@ -255,6 +271,7 @@ export function CoverageMap({
       layCols: declaredColumns,
       palette: [],
       accent: "",
+      ink: "",
       focus: 0,
     };
     geometry(true);
@@ -397,11 +414,10 @@ export function CoverageMap({
       ref={wrapRef}
       // The `.grid` hook and `data-cols` are what the map and the browser
       // specs query; `id` is what a jump to an address scrolls.
-      // The map is a frame beside the detail panel's, so it wears the same
-      // corner the frame tier names (`--radius`); `rounded-hair` is the cell
-      // and chip tier, and two boxes in one row with different corners read as
-      // two layouts.
-      className="grid max-w-full overflow-x-auto rounded-control border border-line bg-grid"
+      // The map and the detail panel beside it are both cards, so they share
+      // the card corner and the hairline; two boxes in one row with different
+      // corners read as two layouts.
+      className="grid max-w-full overflow-x-auto rounded-card border border-border bg-surface"
       id={`grid-${section.name.replaceAll(".", "")}`}
       data-cols={declaredColumns}
       // A canvas carries no accessible children, so this is an application
@@ -424,6 +440,7 @@ export function CoverageMap({
       onClick={(event) => onPointer(event.clientX, event.clientY, true)}
       onKeyDown={onKeyDown}
     >
+      <span ref={probeRef} className="hidden" aria-hidden="true" />
       <canvas ref={canvasRef} className="grid-canvas block" aria-hidden="true" />
       <p id={hintId} className="sr-only">
         Arrow keys move between blocks, Home and End jump to the first and last, Enter or Space
