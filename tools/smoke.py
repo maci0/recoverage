@@ -24,6 +24,10 @@ from pathlib import Path
 
 from _serve_harness import build_sample_db, get, running_server, scratch_project_dir, wait_for
 
+#: A string only the served SPA shell carries: its <title>, which the relumea
+#: brand spells in lowercase.
+SHELL_MARKER = b"<title>recoverage</title>"
+
 
 def smoke(project_dir: Path, *, expect_failure: bool = False) -> int:
     db = build_sample_db(project_dir)
@@ -71,10 +75,10 @@ def smoke(project_dir: Path, *, expect_failure: bool = False) -> int:
                 failed += 1
             print(f"[{'PASS' if ok else 'FAIL'}] {path} -> {status}")
             if path == "/" and ok:
-                shell = b"ReCoverage" in body
+                shell = SHELL_MARKER in body
                 if not shell:
                     failed += 1
-                    print("       SPA shell marker 'ReCoverage' missing")
+                    print(f"       SPA shell marker {SHELL_MARKER!r} missing")
         return 1 if failed else 0
 
 
