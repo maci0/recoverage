@@ -39,6 +39,11 @@ recoverage/
 │                           #   unit file or a container spec; pinned to config.KNOWN_VARS and the
 │                           #   module's defaults by tests/test_config.py (TestEnvExample)
 ├── web/                    # frontend sources: vite.config.ts + app/ (Preact + Tailwind)
+│                           #   app/system/ is a verbatim copy of relumea.ai's src/system
+│                           #   (tokens.css, icons/Icon.tsx, icons/paths.ts): never edit it,
+│                           #   re-copy after an upstream change
+├── components.json         # shadcn config; @shadcn/lint reads the token set from the
+│                           #   stylesheet it names (web/app/index.css)
 ├── .yamllint.yaml          # yamllint config for .github/ (document-start, 100 cols)
 ├── oxlint.config.ts        # JS/TS lint config (see the tooling notes below)
 ├── .github/
@@ -111,13 +116,17 @@ recoverage/
         ├── style.css        # built Tailwind output — generated, never hand-edited
         ├── print.css        # Print stylesheet
         ├── app.js           # built bundle — generated, never hand-edited
-        └── favicon.svg      # Retro "R" logo favicon
+        ├── archivo.woff2    # brand fonts (OFL, credited in NOTICE), committed as-is
+        ├── jetbrains-mono.woff2
+        └── favicon.svg      # the relumea mark
 ```
 
 Frontend lint (bun + a JDK; see `bun run lint:js|html`): `oxlint.config.ts` is
 the JS/TS config, `tools/lint_html.py` runs vnu over both the static assets and
 the documents the server actually serves, and `tools/oxlint/anti-slop/` is a
-vendored upstream copy to keep in sync. Both of vnu's start-up inputs are
+vendored upstream copy to keep in sync. `@shadcn/lint` runs as an oxlint plugin
+and refuses raw colours, arbitrary values, inline styles and classes outside the
+relumea token set; its allowlist names only hook classes that carry no style. Both of vnu's start-up inputs are
 checked by name before it is launched (`tools/lint_html.py`'s
 `RUNNER_UNAVAILABLE`), so a missing `bun install` or a missing JRE is a status
 of its own rather than a `FileNotFoundError` and a code no reader can tell from

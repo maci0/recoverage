@@ -53,7 +53,7 @@ graph TD
 > **As an RE Dev**, I want to see a defrag-style grid where each cell represents a chunk of the binary so that I can instantly spot which areas are matched, partially matched, or still stubs.
 
 ### Acceptance Criteria
-- Grid cells colored by match status: Exact (green), Reloc (blue), Near-match (yellow), Proven (cyan), Size mismatch (yellow), Stub (red), Padding (silver), Problem (violet), None (gray); data and thunk cells render as undocumented (gray)
+- Grid cells take the relumea verdict fills: `EXACT` (green), `RELOC` (teal), `PROVEN` (pale green), `NEAR` and size mismatch (amber), `STUB` (grey), padding (hairline grey), problem (red), undocumented (unlit); data and thunk cells render as undocumented
 - Grid cells stay square: a `ResizeObserver` triggers a relayout that resizes cells (floor 6px desktop, 12px under 700px), and the section's declared column count is never reduced
 - Section tabs (`.text`, `.rdata`, `.data`, `.bss`) switch views instantly (cached layouts)
 - A section's cells are fetched on first visit; the map area says the cells are loading, and a failed fetch says what went wrong and offers a Retry
@@ -283,11 +283,10 @@ graph LR
 > **As a Contributor**, I want to toggle between dark and light themes so that I can use the dashboard comfortably in any lighting condition.
 
 ### Acceptance Criteria
-- Dark mode (default): retro CRT aesthetic, carried by phosphor glow on the tokens that earn it. There is no page-wide scanline overlay: at 0.05 opacity it repainted on every scroll frame for a texture no one could name. The only scanlines in the package are drawn into `assets/favicon.svg`
-- Light mode: softer grays for reduced eye strain
-- Toggle via sun/moon icon button in the topbar
-- Preference persisted to `localStorage` (`recoverage_theme`)
-- Falls back to `prefers-color-scheme` media query
+- Both themes are the relumea light and dark tokens; no component branches on the theme
+- With no stored choice, the theme follows `prefers-color-scheme`
+- The topbar's "Dark theme" / "Light theme" button sets `data-theme` on `<html>`
+- The choice is persisted to `localStorage` (`recoverage_theme`)
 
 ```mermaid
 graph TD
@@ -297,8 +296,8 @@ graph TD
     D -->|Yes| E["Apply dark mode"]
     D -->|No| F["Apply light mode"]
 
-    G["Click theme toggle<br/>(sun/moon icon)"] --> H["Toggle .light-mode<br/>on body"]
-    H --> I["CSS variables switch<br/>all colors instantly"]
+    G["Click Dark theme /<br/>Light theme"] --> H["Set data-theme<br/>on html"]
+    H --> I["light-dark() tokens<br/>switch every colour"]
     I --> J["Save to localStorage"]
 
     style A fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
