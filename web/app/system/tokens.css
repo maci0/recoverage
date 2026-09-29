@@ -62,7 +62,7 @@
      so it inverts with the theme. */
   --color-text: light-dark(#0a0a0b, #ededef);
   --color-text-muted: light-dark(#55585f, #a3a3ab);
-  --color-text-faint: light-dark(#686d75, #8e8e97);
+  --color-text-faint: light-dark(#686d75, #8f8f98);
   --color-ink-hover: light-dark(#26262a, #c9c9cf);
 
   /* The one accent: verdict green. */
@@ -96,20 +96,22 @@
   --color-conf-medium: light-dark(#2b6b66, #45b3a5);
 
   /* Verdict fills (`cell-*`): one per verdict, shared by the map and every
-     legend. When a fill lived in two places, the map and its key disagreed. */
-  --color-cell-exact: light-dark(#86d3a4, #2f7a56);
-  --color-cell-reloc: light-dark(#7fcbb8, #31806f);
-  --color-cell-proven: light-dark(#a9dcc1, #3f7a63);
-  --color-cell-thunk: light-dark(#c9bdf0, #6f629f);
-  --color-cell-near: light-dark(#e8cf86, #8a6c2c);
-  --color-cell-stub: light-dark(#c3c7cf, #6a6a73);
-  --color-cell-live: light-dark(#9ecdea, #3b5b73);
-  --color-cell-fail: light-dark(#e8a49c, #a05c54);
+     legend. When a fill lived in two places, the map and its key disagreed.
+     Each fill clears 3:1 against every ground and against `cell-unlit`
+     (WCAG 1.4.11), so a lit cell is told apart without its neighbours. */
+  --color-cell-exact: light-dark(#4c986c, #2f7a56);
+  --color-cell-reloc: light-dark(#4b9786, #31806f);
+  --color-cell-proven: light-dark(#64947b, #3f7a63);
+  --color-cell-thunk: light-dark(#8f83b3, #7063a0);
+  --color-cell-near: light-dark(#a08840, #8a6c2c);
+  --color-cell-stub: light-dark(#868a92, #6b6b74);
+  --color-cell-live: light-dark(#628fab, #4f7088);
+  --color-cell-fail: light-dark(#ba7972, #a05c54);
   --color-cell-unlit: light-dark(#eff0f3, #212124);
-  /* How much of a background coverage field shows, as mask alpha. Dark fills
-     sit about twice as far off their ground as light ones, so the dark field
-     shows at half strength to read as the same texture. */
-  --color-field-mask: light-dark(#000000, rgb(0 0 0 / 50%));
+  /* How much of a background coverage field shows, as mask alpha. Fills sit
+     3:1 off their ground in both themes, so a field behind text shows at half
+     strength in both. */
+  --color-field-mask: rgb(0 0 0 / 50%);
 
   /* Registry fills: one cell per tool. Gated shares the NEAR amber because
      both mean "stops here until something changes". */

@@ -5,6 +5,14 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- The coverage map's verdict fills follow relumea's new token values: the
+  light theme's fills are darker and each one now stands out 3:1 from the card
+  it is painted on, where they were pale tints at 1.3 to 1.8:1. In the dark
+  theme, and in Potato Mode, `STUB`, thunk and data cells are slightly
+  lighter for the same reason.
+
 ### Fixed
 
 - On Windows, a coverage document stamped after the year 3000 no longer turns
