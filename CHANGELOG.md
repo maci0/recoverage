@@ -5,6 +5,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [4.1.2] - 2026-09-29
+
 ### Fixed
 
 - The dashboard no longer shows "No coverage data for <target>" for a frame
