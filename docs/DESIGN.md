@@ -76,29 +76,29 @@ panel and the modal); each section below names the `web/app/components/` module
 it is mounted from.
 
 ### 1. Topbar (`header.topbar`)
-* **Logo & Title**: Retro-futuristic "R" logo with CRT scanline effects.
-* **Surface**: Opaque `--panel` with a 1px bottom border, no `backdrop-filter`. The topbar was the last translucent, blurred surface in the theme: over the near-black ground the blur showed nothing, and it repainted on every scroll frame, which is the same argument the sticky panel header already records for dropping its own blur.
+* **Logo & Title**: the relumea mark (a 3x3 grid of cells, one lit in the accent) and the lowercase `recoverage` wordmark.
+* **Surface**: Opaque `surface` with a 1px bottom border, no `backdrop-filter`. The topbar was the last translucent, blurred surface in the theme: over the near-black ground the blur showed nothing, and it repainted on every scroll frame, which is the same argument the sticky panel header already records for dropping its own blur.
 * **Tabs**: Dynamic segment selectors generated from the active target's sections, ordered by ascending VA so PE load order (`.text`, `.rdata`, `.data`, `.bss`) holds and the section carrying the work leads, instead of an alphabetical row ending in `.text`.
 * **StatsStrip**: The row above the map: the target's `<coverage %> covered · <matched>/<total> functions matched` as plain text, then the section on screen, one pill per cell state with its count, and that section's own `<coverage %> covered`. The figures are the ones `/stats` serves, never a second division over the same counts, so the strip cannot disagree with the map beside it. **Each pill is the filter toggle for its state** (`STATE_FILTERS` in `web/app/states.ts`, the same table the toolbar is built from), reachable by keyboard and carrying `aria-pressed`; there is no separate segment strip, and no arithmetic over denominators to disagree with.
 * **Target Selector**: Dropdown to switch between targets (e.g., `SERVER`, `GOLD`, `GOLDTL`). Persists selection to URL (`?target=XXX`) and localStorage.
-* **Search & Filters**: A search input and toggleable filter buttons (All, E, R, M, S, P, V, X). V isolates `proven` cells and X the problem states, so every row the legend prints is reachable as a filter instead of only through a pixel. The set is written to the URL as `?filter=` (the parameter Potato Mode already used) on every toggle, so a filtered map survives a reload and can be shared; a name outside the set is dropped, since it would dim every painted cell and light no button.
+* **Search & Filters**: A search input, and the StatsStrip pills as the filters (`All states`, then one per state). `PROVEN` and problem have pills too, so every row the legend prints is reachable as a filter instead of only through a pixel. The set is written to the URL as `?filter=` (the parameter Potato Mode already used) on every toggle, so a filtered map survives a reload and can be shared; a name outside the set is dropped, since it would dim every painted cell and light no button.
 * **Search results** (`components/SearchResults.tsx`): the matches, as a list under the box, ordered by address so it reads in the order the lattice does, capped at `SEARCH_RESULT_LIMIT` with a count of what the cap left out. Counting the matches and letting Enter jump to the first one left a target-wide term (`Init`, 400 names) with no way to reach any but the first: the reader had to keep narrowing the term until one match survived, guessing a spelling. Potato Mode's `?view=functions` list was already that answer, so this is the SPA catching up to its own sibling rather than a new pattern. The list is absolutely positioned, because the topbar is sticky and measured into `--topbar-h`, so a list in its flow moved the map the reader was looking at on every keystroke. `Escape` in the box clears the query, the list and the map's dimming together.
-* **Actions**: Theme toggle (sun/moon icons) and the Regenerate button with a 5-second cooldown to prevent spam. The button is named for what it runs, rebrew's catalog analysis for minutes at a time, which "Reload" (the browser's own word for a page refresh) did not tell a reader to expect. The empty states name the same button rather than telling the reader to reload the page by hand.
+* **Actions**: a "Dark theme" / "Light theme" text button and the Regenerate button with a 5-second cooldown to prevent spam. The button is named for what it runs, rebrew's catalog analysis for minutes at a time, which "Reload" (the browser's own word for a page refresh) did not tell a reader to expect. The empty states name the same button rather than telling the reader to reload the page by hand.
 
 ### 2. Grid (`.map`, mounted by `components/CoverageMap.tsx`)
 * A canvas map that always renders every declared column: the section's `columns` value is stored on the element as `data-cols` and drives the lattice, the row height, and the arrow-key row step. Narrow screens shrink the cells (floor 6px desktop, 12px phone) instead of re-wrapping them onto extra rows, which left a blank band under short sections. Reading the column count from one place is what keeps the track count, row height, and keyboard step from drifting.
-* Cells are colored based on their status:
-  * **Exact** (green) — byte-for-byte match
-  * **Reloc** (blue/teal) — match after masking relocations
-  * **Near-match** (yellow) — near-miss with structural differences (stored state `near_match`; a document may spell it `near_matching`, which renders identically)
-  * **Proven** (bold cyan) — post-verify semantic-equivalence promotion (`proven`)
-  * **Size mismatch** (yellow) — compiled size differs from the original (`size_mismatch`)
-  * **Stub** (red) — far off or placeholder
-  * **Padding** (silver) — alignment padding
-  * **Problem** (violet) — tooling failures and unclassified annotations (`compile_error`, `extract_error`, `invalid_va`, `missing_file`, `missing_size`, `skip`, `unknown`, plus the data `drift` / `unchecked` verdicts)
-  * **None** (gray) — undocumented block
+* Cells take the relumea verdict fills (`cell-*` tokens in `web/app/system/tokens.css`), one opaque set per theme:
+  * **`EXACT`** (`cell-exact`, green): byte-for-byte match
+  * **`RELOC`** (`cell-reloc`, teal): match after masking relocations
+  * **`NEAR`** (`cell-near`, amber): near-miss with structural differences (stored state `near_match`; a document may spell it `near_matching`, which renders identically)
+  * **`PROVEN`** (`cell-proven`, pale green): post-verify semantic-equivalence promotion (`proven`)
+  * **Size mismatch** (`cell-near`, amber): compiled size differs from the original (`size_mismatch`)
+  * **`STUB`** (`cell-stub`, grey): far off or placeholder. Red is kept for failure.
+  * **Padding** (`border-strong`, hairline grey): alignment padding. The brand has no padding verdict, so it takes the quietest fill that is not the unlit cell.
+  * **Problem** (`cell-fail`, red): tooling failures and unclassified annotations (`compile_error`, `extract_error`, `invalid_va`, `missing_file`, `missing_size`, `skip`, `unknown`, plus the data `drift` / `unchecked` verdicts)
+  * **Undocumented** (`cell-unlit`): no claim on the block
 
-  Data and thunk cells keep their stored states but render with the undocumented gray here: their dedicated purple/orange tints were removed together with the data/thunk filters. Potato Mode still colors those states.
+  Data and thunk cells keep their stored states but render as undocumented here. Potato Mode still colors those states.
 
   Every state `build_db` can write has a slot. An unlisted state used to fall through to the undocumented gray, which contradicted `/stats`: `covered_bytes` covers every state but `none`, and `verified` is folded into `exact_count`, so those bytes were counted as covered while drawn as gaps. `verified` therefore packs as an exact match; the problem states share one violet.
 * **Grid Caching**: Each section's layout (cell walk, row packing, hit-map, canvas size) is computed once and cached, and only the active section is painted, making tab switching instantaneous even for sections with 6,000+ chunks.
@@ -117,8 +117,8 @@ it is mounted from.
   * Type badges: "IAT thunk (not reversible)", "Exported function"
   * Parent function link: For data and thunk cells, a clickable link to the parent function that owns the data block
 * **Source Links**: Clickable links to the original `.c` files.
-* **Copy Buttons**: "Copy VA" and "Copy Symbol" in the panel header.
-* **Code Blocks**: Three distinct sections for **C Source**, **Assembly** (or **Data Inspector**), and **Original Bytes** (hex dump). Each features a custom hexagon logo and has:
+* **Copy Buttons**: "Copy VA", "Copy Symbol" and, for a function, "Copy SHA" in the panel header. They wrap under the title once it would get narrower than 10rem.
+* **Code Blocks**: Three distinct sections for **C Source**, **Assembly** (or **Data Inspector**), and **Original Bytes** (hex dump). Each is headed by an icon from the shared relumea set (`braces`, `cpu` or `list`, `file-binary`) and has:
   * **Copy** button to copy content to clipboard
   * **Open** button to launch a centered modal for expanded viewing
 * **Data Inspector**: When viewing `.rdata`, `.data`, or `.bss` sections, the Assembly view is replaced by a Data Inspector that instantly interprets the raw bytes as `int8`, `uint8`, `int16`, `uint16`, `int32`, `uint32`, `float32`, `float64`, and `string (ascii)`.
@@ -138,27 +138,18 @@ it is mounted from.
 * Usage hint: "Click a block to view function details. Use filters to show specific statuses."
 
 ## Styling & Theming
-* **CSS Variables**: Core colors are defined in `:root` (e.g., `--bg`, `--panel`, `--text`, `--border`).
-* **Dark Mode (Default)**: Cool slate/cyan/blue hacker aesthetic (`#0f1216` background) with subtle CRT glow effects (text-shadows and box-shadows using cyan `rgba(6, 182, 212, 0.3)`).
-* **Light Mode**: Triggered by the `.light-mode` class on the `body`. It re-grounds the same neutral family a shade short of the accent (`#c3ccd0` background, `#dbe3e5` panels) rather than inverting the dark theme: a stock blue-gray ground put a second hue between the surface and a cyan accent, and the two renderers disagreed about what color a border is. Light mode also drops the two phosphor effects rather than fading them, a cyan text bloom behind every glyph and a diffuse box-shadow halo, and replaces the latter with a tight tinted ring: a hover mark wants an edge, and bloom on a light ground reads as blur.
-* **Phosphor Glow, Not a Scanline Overlay**: the CRT effect is light, not a texture. Cyan text-shadows and box-shadows on the tokens that earn them, dropped in light mode; the only scanlines in the package are drawn into `assets/favicon.svg`, where a repaint per frame is not paid. An overlay across the whole page was dropped: at `0.05` opacity it was a repaint on every scroll frame for a texture no one could name.
-* **Match Status Colors**:
-  * **Exact**: Green (`rgba(16, 185, 129, 0.75)`)
-  * **Reloc**: Blue/Teal (`rgba(2, 132, 199, 0.8)`)
-  * **Near-match**: Yellow/Amber (`rgba(255, 200, 0, 0.65)`)
-  * **Size mismatch**: Yellow/Amber, the same hue as near-match (the SPA's `STATE_SLOTS` in `web/app/states.ts` packs both to slot 3)
-  * **Proven**: Bold Cyan (`rgba(6, 182, 212, 0.65)`, `--proven-bg`)
-  * **Stub**: Red (`rgba(255, 0, 0, 0.8)`)
-  * **Padding**: Silver (`rgba(200, 200, 220, 0.55)`)
-  * **Problem**: Violet (`--other-bg`, `rgba(168, 85, 247, 0.55)` dark and `#6a3bc7` light, the same hue Potato Mode paints at `#a855f7`)
-* **Cell fills are drawn per theme, not tinted per theme**: the eight fills above are alpha colours tuned to composite over a near-black ground. Over the light ground they washed out: a 0.65-alpha near-match landed at 1.0:1 against the map background, so an exact cell and a near-match cell read as the same pale wash and the map stopped being the signal. `.light-mode` therefore declares its own eight, deeper steps of the same hues, opaque rather than translucent, because a tint's value is whatever is behind it. Every one clears 3:1 against the surface a cell is painted on (`--grid-bg` over `--bg`, `#bdc6ca`), and the light text tokens are steps of these same hues.
-* **One palette, not two**: every other color is drawn from the same source. Status badges tint their fill with the state hue at 0.2 alpha (border 0.4) and take their text from the same hue, lightened where 4.5:1 needs it. Links use the cyan family (`--link`), not a stock blue. The highlight.js theme in `web/app/index.css` reads the app tokens by `var()` rather than restating their hexes — `--text`, `--muted`, `--link`, `--badge-stub-text` for keywords, `--badge-near-text` for strings, `--badge-exact-text` for names, `--c` for section markers — so a code pane follows a palette change instead of trailing one release behind it. Four values are the deliberate exception, a lightened step of a status hue that clears 4.5:1 as 12px text where the cell fill's own value does not; the file says which. Potato Mode derives its own colors from its module constants (`BG_COLOR`, `PANEL_COLOR`, `TRACK_COLOR`, `BORDER_COLOR`); no hex literal in `potato.py` is a stock framework neutral.
-* **Transitions**: Smooth `0.3s ease` transitions on background colors, borders, and opacities ensure fluid theme switching and filter toggling.
+* **Tokens**: `web/app/system/tokens.css` is a verbatim copy of relumea.ai's `src/system/tokens.css`, the brand's single source of colour, type, radius, shadow and motion. `web/app/index.css` imports it after Tailwind and adds only the font faces, base element rules and the highlight.js mapping onto the `syn-*` listing tokens. Components use token utilities (`bg-surface`, `text-text-muted`, `rounded-card`) and never a hex, an arbitrary value or a stock Tailwind palette class; `@shadcn/lint` in `oxlint.config.ts` enforces that. A value the system lacks is proposed in relumea.ai first, then the file is copied again.
+* **Themes**: every colour token is `light-dark(light, dark)`. With no stored choice the page follows `prefers-color-scheme`; the topbar button writes `data-theme` on `<html>` and `recoverage_theme` in `localStorage`, and the shell's inline script applies that before first paint. No component branches on the theme.
+* **Fonts**: Archivo for prose and controls, JetBrains Mono for data (addresses, symbols, code, verdict words). Both are served from the wheel (`archivo.woff2`, `jetbrains-mono.woff2`) with `font-display: swap`; nothing loads from a third-party host.
+* **Verdict words keep their code casing** (`EXACT`, `RELOC`, `NEAR`, `STUB`, `PROVEN`) in the strip, the legend and the status badge; non-verdict states (padding, problem, undocumented) are lowercase words.
+* **Cell fills are opaque per theme**: a translucent fill's value is whatever sits behind it, so each theme has its own opaque set. `TestCellFillsAreDrawnPerTheme` in `tests/test_server.py` holds the dark fills at 3:1 against `surface`. The light fills are tints at 1.5 to 2.1:1 on white, under the WCAG 1.4.11 floor; the light case is a strict xfail until relumea.ai deepens them.
+* **Potato Mode and the token page** use the same values, written as HTML attributes from the dark set (`BG_COLOR`, `PANEL_COLOR`, `BORDER_COLOR` in `potato.py`, `_UNAUTHORIZED_HTML` in `server.py`). `TestUnauthorizedPageMatchesTheTokenLayer` holds the token page against `tokens.css`.
+* **Transitions**: 150ms on `ease-standard`, the token default. `prefers-reduced-motion: reduce` turns every transition and animation off.
 * **Scrollbars**: every scrolling region gets the standard thin scrollbar the theme's `--scroll-thumb` token names (`scrollbar-width`/`scrollbar-color`), so both engine families follow the palette.
 * **Loading Overlay**: A centered, muted label on an opaque `--panel` ground gives immediate visual feedback during data fetches. It carries no `backdrop-filter`: it sits over the lattice, and a blur there re-filters on every repaint of the grid beneath it.
 * **Print**: `assets/print.css`, linked with `media="print"` so it costs nothing at first paint.  Paper drops the controls and the copy/open affordances, keeps the status colours (`print-color-adjust: exact`), unclamps the code panes, and appends link targets after source links.
-* **Favicon**: `assets/favicon.svg`, matching the retro-futuristic "R" logo with a cyan glow and scanline pattern.  It is a served file rather than an inline data URI so it stays out of the first-packet budget.
-* **Responsive**: one breakpoint, Tailwind's `lg:` (64rem), and no `pointer` media queries. The topbar is a single flex row that wraps, the map takes the width it is given, and the two panes stack below it: `flex-col` becomes `flex-row` at `lg`, where the panel also takes a fixed 460px capped at 45vw.
+* **Favicon**: `assets/favicon.svg`, the relumea mark, with ink and unlit cells that follow the browser's colour scheme.  It is a served file rather than an inline data URI so it stays out of the first-packet budget.
+* **Responsive**: one breakpoint, Tailwind's `lg:` (64rem), and no `pointer` media queries. The topbar is a single flex row that wraps, the map takes the width it is given, and the two panes stack below it: `flex-col` becomes `flex-row` at `lg`, where the panel also takes the `max-w-form` width (30rem).
 * **Reduced motion**: the theme cross-fade is the only page-wide animation, and it sits inside a `prefers-reduced-motion: no-preference` wrapper, so a reader who asked for less motion gets the instant switch.
 * **Contrast**: text-bearing tokens clear 4.5:1 on the surface they sit on, in both themes.  `--c` doubles as the focus-ring colour, so its light-mode value is tuned for text contrast rather than the 3:1 non-text floor. The cell fills are the 3:1 arm: they are graphics, they are the map, and each theme has its own set rather than one alpha set read over two grounds.
 
@@ -329,7 +320,6 @@ Potato Mode is a pure HTML 5 alternative UI that works **without any CSS or Java
 - **Assembly View** via Capstone for `.text` cells
 - **Global Variables** support
 - **Annotation Extraction** (`// NOTE:`, `// BLOCKER:`, etc.)
-- **Inline Images** (data URIs for retro CRT scanlines, gradients, and status dots)
 - **W3C Nu HTML Validator** compliant
 
 ## URL Parameters

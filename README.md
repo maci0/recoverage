@@ -23,9 +23,9 @@ block that covers it.
 
 | What | How |
 |---|---|
-| Defrag-style grid | One cell per chunk, colored by state: Exact (green), Reloc (blue), Near-match (yellow), Proven (cyan), Stub (red), None (gray) |
+| Defrag-style grid | One cell per chunk, colored by verdict: `EXACT` (green), `RELOC` (teal), `PROVEN` (pale green), `NEAR` (amber), `STUB` (grey), problem (red), undocumented (unlit) |
 | Function detail panel | Click any cell for metadata, C source, disassembly, and hex dump side by side |
-| Light and dark themes | Retro CRT dark mode by default, clean light mode one click away |
+| Light and dark themes | Follows the OS, with a one-click override; both use the relumea brand tokens |
 | Clickable cross-references | Hex addresses in the disassembly are live links that jump to that chunk |
 | Interactive progress bar | Segmented by state; click a segment to filter the grid |
 | First draw without a subrequest | HTML, CSS, and the JS bundle inlined and compressed (Brotli/Zstd) to ~48 KB |
