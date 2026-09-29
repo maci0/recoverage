@@ -818,14 +818,20 @@ _NS_PER_MICROSECOND = 1_000
 #: the filesystem, so a restored tree, a bad RTC, a ``touch -d`` or a
 #: filesystem whose own clock runs ahead can carry a value outside this range
 #: (a year-10000 stamp is reachable with ``os.utime`` on any Linux box, and
-#: FAT's own 2-byte year field tops out in 2107).  ``fromtimestamp`` raises
-#: ``ValueError`` on one, which took ``/api/health`` and Potato's footer down
-#: with it -- a freshness stamp is never worth a 500 over a stamp the clock
-#: cannot name.  Clamping reports the extreme instead, and the extremes are
-#: the right answer: both surfaces are rendering "as far from now as a
-#: timestamp can say", which is what an unrepresentable mtime means.
+#: FAT's own 2-byte year field tops out in 2107), and ``datetime`` raises on
+#: one, which took ``/api/health`` and Potato's footer down with it: a
+#: freshness stamp is never worth a 500 over a stamp the clock cannot name.
+#: Clamping reports the extreme instead, and the extremes are the right
+#: answer: both surfaces are rendering "as far from now as a timestamp can
+#: say", which is what an unrepresentable mtime means.
 _MIN_MTIME_SECONDS = -62_135_596_800  # 0001-01-01T00:00:00Z
 _MAX_MTIME_SECONDS = 253_402_300_799  # 9999-12-31T23:59:59Z
+
+#: The instant an mtime counts from.  The conversion adds to it instead of
+#: calling ``datetime.fromtimestamp``, which goes through the C runtime and on
+#: Windows raises ``OSError`` for a second past 3000 or before 1970, inside
+#: the clamped range.
+_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 
 
 def mtime_ns_to_utc(mtime_ns: int) -> datetime:
@@ -834,7 +840,7 @@ def mtime_ns_to_utc(mtime_ns: int) -> datetime:
     One definition of the file-mtime rendering both freshness surfaces use
     (``/api/health``'s ``mtime_utc`` and Potato Mode's footer stamp), and
     integer arithmetic all the way through: ``mtime_ns / 1e9`` is a float
-    second, which cannot hold a nanosecond, so ``fromtimestamp`` rounds to
+    second, which cannot hold a nanosecond, so a float conversion rounds to
     the nearest one and reports a stamp up to half a second LATE.  Potato
     renders that rounded value to the minute, so a file written at
     12:34:59.999999999 is stamped "12:35 UTC" for a rebuild that has not
@@ -851,9 +857,7 @@ def mtime_ns_to_utc(mtime_ns: int) -> datetime:
     """
     seconds, nanoseconds = divmod(mtime_ns, _NS_PER_SECOND)
     seconds = min(max(seconds, _MIN_MTIME_SECONDS), _MAX_MTIME_SECONDS)
-    return datetime.fromtimestamp(seconds, tz=UTC) + timedelta(
-        microseconds=nanoseconds // _NS_PER_MICROSECOND
-    )
+    return _EPOCH + timedelta(seconds=seconds, microseconds=nanoseconds // _NS_PER_MICROSECOND)
 
 
 def _newest_mtime_ns() -> int | None:

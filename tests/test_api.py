@@ -12,7 +12,7 @@ import threading
 import time
 import unicodedata
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from operator import attrgetter
 from pathlib import Path
@@ -659,13 +659,19 @@ class TestHealthDbMtime:
         # 10000-01-01T00:00:00Z: representable to `os.utime`, not to datetime.
         unrepresentable_ns = 253_402_300_800 * 1_000_000_000
         os.utime(doc, ns=(unrepresentable_ns, unrepresentable_ns))
+        if doc.stat().st_mtime_ns != unrepresentable_ns:
+            # ext4 stores up to 2446 and APFS up to 2262, so the stamp never
+            # reaches the server there; TestMtimeNsToUtc holds the clamp itself.
+            pytest.skip("this filesystem clamps a year-10000 mtime on write")
 
         status, headers, body = wsgi_get("/api/health")
         assert status.startswith("200")
         data = json.loads(decode_body(body, headers))["db"]
         # Clamped to the last second datetime spans, not a traceback.
         assert data["mtime_utc"] == "9999-12-31T23:59:59+00:00"
-        assert data["mtime_utc"] == datetime.fromtimestamp(data["mtime"], tz=UTC).isoformat()
+        # Epoch arithmetic, not fromtimestamp: Windows' C runtime refuses year 9999.
+        epoch = datetime(1970, 1, 1, tzinfo=UTC)
+        assert data["mtime_utc"] == (epoch + timedelta(seconds=data["mtime"])).isoformat()
 
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage.db")

@@ -58,6 +58,7 @@ import os
 import random
 import re
 import socket
+import threading
 import unicodedata
 from collections.abc import Callable
 from http.cookies import SimpleCookie
@@ -67,7 +68,14 @@ from typing import Any
 from urllib.parse import unquote, urlsplit
 
 import pytest
-from conftest import HAS_DB, WSGI_PEER, decode_body, get_first_target, wsgi_request
+from conftest import (
+    HAS_DB,
+    WSGI_PEER,
+    decode_body,
+    get_first_target,
+    path_the_filesystem_holds,
+    wsgi_request,
+)
 from coverage_fixture import build_synthetic_coverage, cell, write_coverage
 from rebrew.coverage_toml import CoverageSnapshot, Function, load_coverage
 from typer.testing import CliRunner
@@ -3750,9 +3758,15 @@ class TestCliRendersHostileDocumentValues:
         runner = CliRunner()
         rng = random.Random(FUZZ_SEED)
         directory = tmp_path / "db"
+        rounds_run = 0
         for round_index in range(FUZZ_ITERATIONS):
             target = rng.choice(CLI_TARGET_NAMES)
             section = rng.choice(CLI_SECTION_NAMES)
+            if path_the_filesystem_holds(directory, f"coverage-{target}.toml") is None:
+                # Windows refuses `|` and `"` in a filename, so no document
+                # there can carry this target name.
+                continue
+            rounds_run += 1
             monkeypatch.setenv("RECOVERAGE_DB", str(directory))
             self._install(directory, target, section)
             for argv in CLI_COMMANDS:
@@ -3763,6 +3777,7 @@ class TestCliRendersHostileDocumentValues:
                         f"seed={FUZZ_SEED} round={round_index}: {argv}\n"
                         f"target={target!r} section={section!r}\n{failure}"
                     ) from failure
+        assert rounds_run, "the filesystem refused every target name in the pool"
 
     def _assert_command(
         self,
@@ -4258,14 +4273,50 @@ def _serve_wire(data: bytes) -> tuple[list[dict[str, Any]], bytes]:
     A socketpair, not a ``BytesIO``: the handler calls ``connection.settimeout``
     between requests and catches ``TimeoutError`` on the close path, so a fake
     connection would have to reproduce the deadline the code under test reads.
-    The client end is shut down before the handler starts, so every read the
-    malformed request provokes ends at EOF instead of parking the campaign.
+    The client writes and reads on threads of its own while the handler runs,
+    as a real peer does: a socketpair buffers only a few KiB on macOS, so
+    writing the 64 KiB 414 seed up front, or leaving the answers unread until
+    the handler returns, parks one side on the other.  The writer shuts its end
+    down after the last byte, so every read the malformed request provokes
+    ends at EOF instead of parking the campaign.
     """
     server_side, client_side = socket.socketpair()
     client_side.settimeout(10)
+    chunks: list[bytes] = []
+    client_errors: list[OSError] = []
+
+    def write() -> None:
+        try:
+            client_side.sendall(data)
+            client_side.shutdown(socket.SHUT_WR)
+        except ConnectionError:
+            # The handler closed its end with request bytes unread (a 414, a
+            # malformed line), which is where a real client's write stops too.
+            return
+        except OSError as failure:
+            client_errors.append(failure)
+
+    def read() -> None:
+        while True:
+            try:
+                part = client_side.recv(65536)
+            except ConnectionResetError:
+                # A reset is what a client really sees when the server closes
+                # a connection whose request bytes it never read, which is most
+                # of a malformed stream.  Whatever was already written is the
+                # answer; the rest never leaves the socket.
+                return
+            except OSError as failure:
+                client_errors.append(failure)
+                return
+            if not part:
+                return
+            chunks.append(part)
+
+    client = [threading.Thread(target=job, daemon=True) for job in (write, read)]
     try:
-        client_side.sendall(data)
-        client_side.shutdown(socket.SHUT_WR)
+        for thread in client:
+            thread.start()
         handler = _RecordingRequestHandler(server_side)
         try:
             handler.handle()
@@ -4276,21 +4327,13 @@ def _serve_wire(data: bytes) -> tuple[list[dict[str, Any]], bytes]:
             # never sees EOF while it is open.
             handler.wfile.close()
             server_side.close()
-        chunks: list[bytes] = []
-        while True:
-            try:
-                part = client_side.recv(65536)
-            except ConnectionResetError:
-                # A reset is what a client really sees when the server closes
-                # a connection whose request bytes it never read, which is most
-                # of a malformed stream.  Whatever was already written is the
-                # answer; the rest never leaves the socket.
-                break
-            if not part:
-                break
-            chunks.append(part)
+        for thread in client:
+            thread.join()
+        if client_errors:
+            raise client_errors[0]
         return handler.dispatched, b"".join(chunks)
     finally:
+        server_side.close()
         client_side.close()
 
 

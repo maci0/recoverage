@@ -1085,7 +1085,7 @@ class TestClientConnectionDeadline:
         monkeypatch.setattr(devserver, "_MAX_CONNECTIONS", 2)
 
         server = devserver._ThreadingWSGIServer(
-            ("127.0.1", 0), devserver._QuietTimeoutRequestHandler
+            ("127.0.0.1", 0), devserver._QuietTimeoutRequestHandler
         )
         server.block_on_close = False
         port = server.server_address[1]
@@ -1095,7 +1095,7 @@ class TestClientConnectionDeadline:
         try:
             # Two silent peers occupy the cap; both park in the request-line read.
             for _ in range(2):
-                sock = socket.create_connection(("127.0.1", port), timeout=5)
+                sock = socket.create_connection(("127.0.0.1", port), timeout=5)
                 held.append(sock)
             deadline = time.monotonic() + 5
             while time.monotonic() < deadline and metrics.CONNECTIONS.open < 2:
@@ -1103,7 +1103,7 @@ class TestClientConnectionDeadline:
             assert metrics.CONNECTIONS.open == 2
 
             # The third is past the cap: refused with a 503, not served.
-            with socket.create_connection(("127.0.1", port), timeout=5) as extra:
+            with socket.create_connection(("127.0.0.1", port), timeout=5) as extra:
                 extra.settimeout(5)
                 reply = extra.recv(64)
             assert reply.startswith(b"HTTP/1.1 503"), reply
@@ -1114,7 +1114,7 @@ class TestClientConnectionDeadline:
             deadline = time.monotonic() + 5
             while time.monotonic() < deadline and metrics.CONNECTIONS.open > 0:
                 time.sleep(0.02)
-            with socket.create_connection(("127.0.1", port), timeout=5) as again:
+            with socket.create_connection(("127.0.0.1", port), timeout=5) as again:
                 again.settimeout(5)
                 again.sendall(b"GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
                 assert again.recv(16).startswith(b"HTTP/")

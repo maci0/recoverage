@@ -23,7 +23,7 @@ from typing import IO, Any, ClassVar
 import brotli
 import pytest
 import zstandard as zstd
-from conftest import WSGI_PEER
+from conftest import WSGI_PEER, path_the_filesystem_holds
 from coverage_fixture import TOML_VERSION, cell, coverage_dir, write_coverage
 from rebrew.coverage_toml import CoverageSnapshot, CoverageTomlError, load_coverage
 
@@ -584,7 +584,9 @@ class TestDbEtag:
         directory = _coverage_dir(tmp_path, monkeypatch)
         self._doc(directory, "FAKEDLL")
         body = (directory / "coverage-FAKEDLL.toml").read_bytes()
-        raw = directory / os.fsdecode(b"coverage-ca\xffx.toml")
+        raw = path_the_filesystem_holds(directory, b"coverage-ca\xffx.toml")
+        if raw is None:
+            pytest.skip("the filesystem cannot name a file with a byte outside UTF-8")
         raw.write_bytes(body)
 
         token = srv._snapshot_db_mtime()
@@ -1123,14 +1125,16 @@ class TestSnapshotIsTheReadPin:
         pinned = srv.coverage_snapshots()["GAME"]
         before = pinned.sections[".text"].size
 
-        # The rebuild lands between the two reads.
-        self._write(directory, 99)
+        # The rebuild lands between the two reads.  Its size field is longer,
+        # so the document's byte count moves even when the rewrite lands in
+        # the same mtime tick (NTFS's clock is that coarse).
+        self._write(directory, 4096)
         during = pinned.sections[".text"].size
         # Outside the pin the next read sees the committed rebuild.
         after = srv.coverage_snapshots()["GAME"].sections[".text"].size
 
         assert before == during == 16
-        assert after == 99
+        assert after == 4096
 
     def test_an_unchanged_directory_returns_the_same_snapshot(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
