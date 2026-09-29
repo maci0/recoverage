@@ -111,7 +111,7 @@ help:
 		'  make test               # full pytest suite (CI test job, minus the matrix)' \
 		'  make test-one T=<node>  # one file or nodeid, e.g. T=tests/test_api.py::TestX' \
 		'  make test-browser       # browser tests: installs playwright + chromium, then runs them' \
-		'  make fuzz              # longer seeded campaign over the untrusted-input surfaces' \
+		'  make fuzz              # the seeded fuzz campaigns (SEED= / ITERATIONS= widen one)' \
 		'  make lint               # ruff check src/ tests/ tools/ (CI lint job)' \
 		'  make type-check         # mypy over src/, tools/ and the shared fixtures (CI lint job)' \
 		'  make format             # ruff format (writes)' \
@@ -121,6 +121,7 @@ help:
 		'  make web-build          # rebuild the committed bundle in src/recoverage/assets' \
 		'  make web-dev            # vite dev server for web/ on 127.0.0.1:5173 (see CONTRIBUTING)' \
 		'  make regen-oxlint       # regenerate tools/oxlint/rikalabs-strict.json after a preset bump' \
+		'  make vendor-manifest    # regenerate tools/oxlint/anti-slop.manifest.json after a re-vendor' \
 		'  make shell-lint         # shellcheck over tools/*.sh (CI lint job)' \
 		'  make yaml-lint          # yamllint over .github/ (CI lint job)' \
 		'  make smoke              # boot the dashboard against a sample db and probe it' \
@@ -350,13 +351,18 @@ test-browser: ensure-rebrew
 	$(UV_RUN) playwright install chromium
 	$(UV_RUN) python -m pytest tests/test_playwright.py -v -rs --tb=short
 
-# A wider campaign over the same seeded harnesses `make test` already runs;
-# the seed and iteration count come from the environment so no file changes.
-SEED ?= 1
-ITERATIONS ?= 20000
+# A campaign over the same seeded harnesses `make test` already runs.  With no
+# SEED or ITERATIONS given, neither variable is exported, so the corpus is the
+# one test_fuzz.py's module constants name and `make test` already runs: a
+# campaign that fails here reproduces with `make test`, and a Makefile that
+# defaulted them would be a second copy of two constants CI never reads.
+# `make fuzz SEED=7 ITERATIONS=200000` widens it from the environment instead.
+SEED ?=
+ITERATIONS ?=
 
 fuzz: ensure-rebrew
-	RECOVERAGE_FUZZ_SEED=$(SEED) RECOVERAGE_FUZZ_ITERATIONS=$(ITERATIONS) \
+	env $(if $(SEED),RECOVERAGE_FUZZ_SEED=$(SEED),) \
+		$(if $(ITERATIONS),RECOVERAGE_FUZZ_ITERATIONS=$(ITERATIONS),) \
 		$(UV_RUN) python -m pytest tests/test_fuzz.py -v --tb=short
 
 lint: ensure-rebrew
@@ -458,6 +464,14 @@ ensure-bun:
 regen-oxlint: ensure-rebrew ensure-bun
 	bun install --frozen-lockfile
 	$(UV_RUN) python tools/flatten_rikalabs_strict.py
+
+# The other generated record a re-vendor leaves stale, for the vendored plugin
+# rather than the preset.  It hashes the checked-in tree, so it needs neither
+# bun nor node_modules: `make vendor-manifest && make web-lint` is the whole
+# re-vendor, and the bare `uv run python tools/vendor_manifest.py` the README
+# used to spell is the one place a contributor ran outside the locked env.
+vendor-manifest: ensure-rebrew
+	$(UV_RUN) python tools/vendor_manifest.py
 
 smoke: ensure-rebrew
 	$(UV_RUN) python tools/smoke.py

@@ -2220,8 +2220,14 @@ def _row_matches(term: str, fn: Function) -> bool:
     the handler strips it (an all-whitespace search is not a search at all), an
     absent column as the empty string, and a substring test with both sides
     folded — which is what makes a wildcard in the term match literally.
+
+    ``server.strip_ascii_whitespace`` is the trimming the handler applies, not
+    ``str.strip``: Python calls U+001C-U+001F whitespace, so ``str.strip`` turned
+    the term ``\\x1fTRASSE`` into ``TRASSE`` and the oracle answered a search the
+    endpoint never ran.  An oracle that judges the endpoint has to trim the way
+    the endpoint trims, which is what the helper exists to make one call.
     """
-    needle = _fold(term.strip())
+    needle = _fold(srv.strip_ascii_whitespace(term))
     if not needle:
         return True
     return any(needle in _fold(column) for column in (fn.name, fn.symbol, str(fn.va), fn.vaStart))
@@ -2252,7 +2258,9 @@ def _assert_search_agrees(corpus: CoverageSnapshot, data: bytes) -> None:
     if code == 400:
         # The one documented refusal, and it must be about length: a term the
         # endpoint reads being turned away would hide every answer it owes.
-        assert len(term.strip()) > _MAX_SEARCH_CHARS, f"search={term!r}: refused a term it reads"
+        assert len(srv.strip_ascii_whitespace(term)) > _MAX_SEARCH_CHARS, (
+            f"search={term!r}: refused a term it reads"
+        )
         return
     assert code == 200, f"search={term!r}: unexpected {code}: {payload!r}"
     served = {row["va"] for row in payload["functions"]}
