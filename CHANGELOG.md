@@ -15,6 +15,12 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- On a phone, the dashboard's top bar no longer grows while it loads: the
+  section tabs sit on their own row from the first frame, and the target
+  picker shows "Loading targets…" until the list arrives, so the page below
+  does not jump down when they fill in.
+- The dashboard, Potato Mode and the access-token page carry a page
+  description.
 - The "Access token required" page draws in Archivo and JetBrains Mono like
   the rest of the dashboard. With `--token` set, the two brand font files are
   now served without the token (they are the same public OFL files in every

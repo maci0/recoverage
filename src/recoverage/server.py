@@ -2707,7 +2707,9 @@ _UNAUTHORIZED_HTML = (
     b'<!doctype html><html lang="en"><head><meta charset="utf-8">'
     b'<meta name="viewport" content="width=device-width, initial-scale=1">'
     b'<meta name="color-scheme" content="light dark">'
-    b"<title>recoverage \xc2\xb7 access token required</title><style>"
+    b"<title>recoverage \xc2\xb7 access token required</title>"
+    b'<meta name="description" content="This recoverage dashboard needs an access token.">'
+    b"<style>"
     b":root{color-scheme:light dark}"
     b'@font-face{font-family:Archivo;src:url("/archivo.woff2") format("woff2");'
     b"font-weight:100 900;font-display:swap}"

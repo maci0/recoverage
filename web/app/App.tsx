@@ -787,7 +787,10 @@ export function App() {
         // under the reader who is trying to read it.
         className="topbar z-20 flex flex-wrap items-center gap-x-5 gap-y-3 border-b border-border bg-surface px-4 py-3 lg:sticky lg:top-0 lg:px-6"
       >
-        <div className="flex min-w-0 flex-wrap items-center gap-x-5 gap-y-3">
+        {/* Below `sm` the tabs take a row of their own from the first frame:
+            beside the wordmark, a target with several sections wrapped them
+            onto a new row when the list arrived and pushed the page down. */}
+        <div className="flex min-w-0 flex-col items-start gap-x-5 gap-y-3 sm:flex-row sm:flex-wrap sm:items-center">
           <div className="flex items-center gap-2">
             <Mark />
             <h1 className="title m-0 text-intro font-bold leading-title tracking-logo">recoverage</h1>
@@ -797,7 +800,10 @@ export function App() {
               active tab's state with the `tabpanel` the map is. */}
           <div
             ref={sectionTabRef}
-            className="tabs flex flex-wrap gap-0.5 rounded-control border border-border bg-surface-2 p-0.5"
+            // min-h-8.5 is one row of tabs (a 28px tab, the padding and the
+            // border), held before the section list arrives so the topbar does
+            // not grow under the reader when it does (CLS).
+            className="tabs flex min-h-8.5 flex-wrap gap-0.5 rounded-control border border-border bg-surface-2 p-0.5"
             role="tablist"
             aria-label="Sections"
             aria-orientation="horizontal"
@@ -912,18 +918,26 @@ export function App() {
             )}
           </div>
           <div className="actions flex flex-wrap items-center gap-1.5">
-            {targets.length > 0 && (
+            {/* Rendered while the target list loads, disabled, so its arrival
+                does not wrap this row onto a second line on a phone and push
+                the page down (CLS). A list that loaded empty removes it. */}
+            {!noTargets && (
               <select
                 className="h-8 min-w-0 max-w-full rounded-control border border-control-line bg-surface px-2 font-mono text-micro text-text hover:border-control-line-hover"
                 aria-label="Target binary"
                 value={target}
+                disabled={targets.length === 0}
                 onChange={(event) => onTarget(event.currentTarget.value)}
               >
-                {targets.map((entry) => (
-                  <option key={entry.id} value={entry.id} dir="auto">
-                    {entry.name}
-                  </option>
-                ))}
+                {targets.length === 0 ? (
+                  <option value="">Loading targets…</option>
+                ) : (
+                  targets.map((entry) => (
+                    <option key={entry.id} value={entry.id} dir="auto">
+                      {entry.name}
+                    </option>
+                  ))
+                )}
               </select>
             )}
             <Button
