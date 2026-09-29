@@ -5,6 +5,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [4.1.1] - 2026-09-29
+
 ### Changed
 
 - The coverage map's verdict fills follow relumea's new token values: the
