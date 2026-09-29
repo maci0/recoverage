@@ -137,7 +137,7 @@ copied into the repo: `tools/vendor_manifest.py` writes
 `tools/oxlint/anti-slop.manifest.json` (upstream, license, every file with its
 sha256, the excluded paths), and `tests/test_supply_chain.py` fails when the
 tree and that record disagree. Re-vendor by replacing the directory, running
-the script, then `bun run lint:js`.
+`make vendor-manifest` (the target that wraps the script), then `make web-lint`.
 
 ## Commands
 
@@ -164,7 +164,7 @@ uv sync --locked --extra dev --extra playwright   # browser tests: playwright, p
 # job has no sibling ../rebrew to resolve the path dependency against.
 make test                   # uv run --locked --extra dev python -m pytest tests/ -v --ignore=tests/test_playwright.py
 make test-one T=tests/test_api.py  # one file or pytest node id (FLAGS="-k name" narrows it)
-make fuzz                  # wider seeded campaign (SEED=, ITERATIONS= override)
+make fuzz                  # the seeded fuzz campaigns (SEED=, ITERATIONS= widen one)
 make test-browser          # uv sync --locked --extra dev --extra playwright, the
                             #   chromium install, then pytest tests/test_playwright.py
 make check-bundle-clean    # rebuild web/ and fail if a tracked asset changed

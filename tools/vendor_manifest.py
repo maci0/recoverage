@@ -12,8 +12,9 @@ test (tests/test_supply_chain.py) compares the tree against it, so an edit,
 a deletion or a re-vendor that skipped this file fails the suite instead of
 landing unnoticed.
 
-To re-vendor: replace the directory from upstream, run this script, then
-`bun run lint:js` to confirm the rule set still passes.
+To re-vendor: replace the directory from upstream, run this script
+(`make vendor-manifest`), then `make web-lint` to confirm the rule set still
+passes.
 """
 
 from __future__ import annotations
