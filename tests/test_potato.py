@@ -2162,6 +2162,64 @@ class TestV4StateColors:
         assert self._cell_bgcolor("some_future_state") == "#3F4958"
 
 
+class TestRawByteRange:
+    """`_get_raw_bytes` must refuse a range that escapes the buffer at EITHER
+    end, and a negative size is the end the file_offset check never sees.
+
+    A negative-index slice counts back from the END of the buffer, so
+    `_get_raw_bytes(0, -4096)` on a 25600-byte binary answered with 21504
+    bytes of unrelated code, which the function panel rendered as that
+    function's "Original Bytes" dump and Data Inspector. The clamp above the
+    slice is a no-op against a negative value, so a size of -1_000_000_000
+    asked the slice for a gigabyte rather than the 1 MiB bound. The document is
+    untrusted input: `rebrew.coverage_toml.Function.size` is `int | None` with
+    no floor, and the function panel hands that value straight through, so
+    this is the tail both callers arrive at.
+    """
+
+    #: 1 MiB + 100 bytes, so a read clamped to :data:`_MAX_RAW_READ` still
+    #: lands inside it and the clamp is observable rather than refused.
+    BINARY = bytes(range(256)) * 4100
+
+    @pytest.fixture(autouse=True)
+    def _loaded(self, monkeypatch: Any) -> None:
+        from recoverage import potato, server
+
+        monkeypatch.setattr(potato, "_load_dll", lambda target: self.BINARY)
+        with server.DLL_LOCK:
+            server.DLL_DATA.clear()
+        yield
+        with server.DLL_LOCK:
+            server.DLL_DATA.clear()
+
+    @pytest.mark.parametrize(
+        ("offset", "size"),
+        [
+            (0, -4096),  # the whole binary but its tail
+            (0, -20000),
+            (0, -1_000_000_000),  # the clamp is a no-op on a negative
+            (100, -10),
+            (0, 0),  # nothing to read
+            (-1, 16),  # the offset end, which was already refused
+        ],
+    )
+    def test_a_range_outside_the_buffer_is_refused(self, offset: int, size: int) -> None:
+        from recoverage.potato import _get_raw_bytes
+
+        assert _get_raw_bytes(offset, size, "target") is None
+
+    def test_the_in_bounds_range_is_the_exact_slice(self) -> None:
+        from recoverage.potato import _get_raw_bytes
+
+        assert _get_raw_bytes(100, 16, "target") == self.BINARY[100:116]
+
+    def test_a_size_past_the_read_bound_is_clamped(self) -> None:
+        from recoverage.potato import _MAX_RAW_READ, _get_raw_bytes
+
+        got = _get_raw_bytes(0, _MAX_RAW_READ + 1, "target")
+        assert got == self.BINARY[:_MAX_RAW_READ]
+
+
 class TestGridColumnsValidation:
     """grid_columns <= 0 now raises ValueError (not assert)."""
 
@@ -2176,6 +2234,62 @@ class TestGridColumnsValidation:
 
         with pytest.raises(ValueError, match="grid_columns must be positive"):
             _build_grid_html([], {}, -1, set(), "", set(), "", "t", ".text")
+
+
+class TestGridWrapsACellWiderThanTheLattice:
+    """No rendered cell may be wider than the lattice, and a cell that is has
+    to be SPLIT rather than clipped.
+
+    `catalog/grid._build_cells` guarantees `span <= columns`, so a wider cell is
+    only a hand-edited or byte-mutated document, but it reached the renderer: a
+    200-span cell in a 64-column section emitted `<td colspan="200">` into a
+    table whose sizing row declares 64 cells, so the browser resolved the table
+    to 200 columns and every cell after the wide one was laid out against a
+    different column count. The SPA already wraps the same cell
+    (`pack.forEachPlacement`), so the two surfaces disagreed about one cell's
+    width; the two now agree, and no colspan escapes `grid_columns`.
+    """
+
+    def _grid(self, cells: list[dict[str, object]], columns: int, idx: str = "") -> str:
+        from recoverage.potato import _build_grid_html
+
+        return _build_grid_html(cells, {}, columns, set(), "", set(), idx, "t", ".text")
+
+    def test_a_wide_cell_is_split_across_rows(self) -> None:
+        html = self._grid(
+            [
+                {"state": "exact", "span": 200, "start": 0, "end": 200, "functions": ["f"]},
+                {"state": "stub", "span": 1, "start": 200, "end": 201, "functions": []},
+            ],
+            64,
+        )
+        widths = [int(value) for value in re.findall(r'colspan="(\d+)"', html)]
+        assert widths == [64, 64, 64, 8, 1, 55]
+        assert max(widths) <= 64
+
+    def test_the_selection_id_stays_unique_when_a_cell_is_split(self) -> None:
+        html = self._grid(
+            [{"state": "exact", "span": 200, "start": 0, "end": 200, "functions": ["f"]}],
+            64,
+            idx="0",
+        )
+        assert html.count('id="sel"') == 1
+
+    def test_a_wide_cell_still_carries_its_whole_address_range(self) -> None:
+        html = self._grid(
+            [{"state": "exact", "span": 200, "start": 0, "end": 200, "functions": ["f"]}],
+            64,
+        )
+        # Every piece links the same cell, so the whole run stays reachable.
+        assert re.findall(r'href="([^"]*)"', html) == ["?target=t&section=.text&idx=0"] * 4
+
+    def test_an_ordinary_cell_is_one_cell_still(self) -> None:
+        html = self._grid(
+            [{"state": "exact", "span": 3, "start": 0, "end": 3, "functions": ["f"]}],
+            64,
+        )
+        assert re.findall(r'colspan="(\d+)"', html) == ["3", "61"]
+        assert html.count("<tr>") == html.count("</tr>")
 
 
 class TestGridTargetSize:

@@ -745,7 +745,24 @@ _SECTION_VA_MAX = 1 << 64
 
 
 def _get_raw_bytes(file_offset: int, size: int, target: str) -> bytes | None:
-    """Read raw bytes from the target DLL using the shared DLL cache."""
+    """Read raw bytes from the target DLL using the shared DLL cache.
+
+    Both ends of the range are refused, not only the start.  A negative
+    ``size`` is a negative-index slice, which counts back from the END of the
+    buffer: ``data[0:-4096]`` is the whole binary but its last 4096 bytes, so a
+    document spelling a function's ``size`` as -4096 answered with tens of
+    thousands of unrelated bytes as that function's "Original Bytes" and Data
+    Inspector, and a size of -1_000_000_000 asked the slice for a gigabyte
+    while the bound above was applied to the negative number and left it
+    negative.  ``rebrew.coverage_toml.Function.size`` is ``int | None`` with no
+    floor, and this is the one tail both callers arrive at (the cell panel
+    refuses a non-positive size of its own; the function panel hands the
+    document's value straight through), so the refusal belongs here, beside
+    the ``file_offset < 0`` check ``disasm._disassemble_loaded`` carries for
+    the same reason.
+    """
+    if size <= 0:
+        return None
     size = min(size, _MAX_RAW_READ)
     dll_data = _load_dll(target)
     if dll_data is None:
@@ -2374,10 +2391,6 @@ def _build_grid_html(
         # Absent orig_idx means the no-merge fast path returned the parsed cells;
         # the global index is then this page's offset plus this position.
         orig_idx = cell.get("orig_idx", page_offset + i)
-        if curr_col >= grid_columns:
-            grid_html_parts.append("</tr><tr>")
-            curr_col = 0
-
         state = cell.get("state", "none")
 
         dimmed = (not _state_survives_lit_states(state, lit_states)) or (
@@ -2395,28 +2408,49 @@ def _build_grid_html(
         # same address range the title does.  With state alone, thousands of
         # links announced as "none" with no way to tell them apart (WCAG 2.4.4).
         escaped_title = _esc(title)
-        w = cell_w * span
-        # One image for both cells: the selection is an inset of the same
-        # link, and building the markup twice is how the alt text and the
-        # title drift apart between the two.
-        inset = _CELL_INSET if selected else 0
-        img = (
-            f'<a href="{link}" title="{escaped_title}">'
-            f'<img src="{TRANSPARENT_GIF}" width="{w - inset}" height="{cell_h - inset}" '
-            f'border="0" alt="{escaped_title}"></a>'
-        )
 
-        if selected:
-            grid_html_parts.append(
-                f'<td id="sel" bgcolor="{BG_COLOR}" width="{w}" height="{cell_h}" colspan="{span}">'
-                f'<table role="presentation" border="1" cellpadding="0" cellspacing="0" bordercolor="{ACCENT_COLOR}" width="100%">'
-                f'<tr><td bgcolor="{bgcolor}">{img}</td></tr></table></td>'
+        # A cell wider than the lattice cannot be one <td>. A colspan past
+        # grid_columns adds columns the sizing row never declared, so the row
+        # above it stops being a row of uniform 26px cells and every cell after
+        # the wide one is laid out against a different column count: a 200-span
+        # cell in a 64-column section turned the map into a 200-column table
+        # with a 64-cell sizing row. rebrew's writer guarantees span <= columns
+        # (catalog/grid._build_cells splits the same run itself), so only a
+        # hand-edited or byte-mutated document arrives here, and the SPA already
+        # draws it the other way (pack.forEachPlacement wraps a cell that does
+        # not fit), so the two surfaces cannot disagree about one cell's width.
+        # Fill the row this cell starts on, close it, and continue the rest on
+        # the next; the selection outline goes on the FIRST piece only, so
+        # `id="sel"` stays the one id it is.
+        left = span
+        while left > 0:
+            if curr_col >= grid_columns:
+                grid_html_parts.append("</tr><tr>")
+                curr_col = 0
+            take = min(left, grid_columns - curr_col)
+            w = cell_w * take
+            # One image for both cells: the selection is an inset of the same
+            # link, and building the markup twice is how the alt text and the
+            # title drift apart between the two.
+            inset = _CELL_INSET if selected else 0
+            img = (
+                f'<a href="{link}" title="{escaped_title}">'
+                f'<img src="{TRANSPARENT_GIF}" width="{w - inset}" height="{cell_h - inset}" '
+                f'border="0" alt="{escaped_title}"></a>'
             )
-        else:
-            grid_html_parts.append(
-                f'<td bgcolor="{bgcolor}" width="{w}" height="{cell_h}" colspan="{span}">{img}</td>'
-            )
-        curr_col += span
+            if selected:
+                grid_html_parts.append(
+                    f'<td id="sel" bgcolor="{BG_COLOR}" width="{w}" height="{cell_h}" colspan="{take}">'
+                    f'<table role="presentation" border="1" cellpadding="0" cellspacing="0" bordercolor="{ACCENT_COLOR}" width="100%">'
+                    f'<tr><td bgcolor="{bgcolor}">{img}</td></tr></table></td>'
+                )
+            else:
+                grid_html_parts.append(
+                    f'<td bgcolor="{bgcolor}" width="{w}" height="{cell_h}" colspan="{take}">{img}</td>'
+                )
+            curr_col += take
+            left -= take
+            selected = False
 
     remaining = grid_columns - curr_col
     if remaining > 0:
