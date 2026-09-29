@@ -73,6 +73,31 @@
     <!-- INJECT_CSS -->
   </head>
   <body>
+    <!-- The theme class, before the first paint. The bundle applies it too
+         (`web/app/App.tsx`), but that lands a frame after this shell has
+         already painted: the topbar and the panels take the stored theme
+         instantly, because nothing transitions them, while the body's ground,
+         the wordmark and the legend's colour cross-fade out of the dark
+         default over 300ms. The first frame is therefore a light header over a
+         dark page, with the wordmark and the legend mid-swap and unreadable on
+         whatever they are sitting on. Reading the same two sources here means
+         the first paint is the theme the app settles into. This is the one
+         place the shell repeats the app's rule, and it has to: nothing else
+         runs before the paint. -->
+    <script>
+      (() => {
+        let stored = null;
+        try {
+          stored = localStorage.getItem("recoverage_theme");
+        } catch {
+          // Storage can be blocked; the media query still answers.
+        }
+        const light =
+          stored === "light" ||
+          (stored !== "dark" && window.matchMedia("(prefers-color-scheme: light)").matches);
+        document.body.classList.toggle("light-mode", light);
+      })();
+    </script>
     <div id="root">
       <div id="boot">
         <span class="boot-mark" aria-hidden="true">R</span>

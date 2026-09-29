@@ -526,4 +526,18 @@
     scrollbar-width: thin;
     scrollbar-color: var(--scroll-thumb) transparent;
   }
+
+  /* The colour key. The legend under the map and the stats strip above it both
+   * name a state beside the swatch the map paints it in, and the fill arrives
+   * as an inline `var(--exact-bg)` and nothing else: a span with no rule is a
+   * 0x0 box, so the key said the word and never showed the colour it stands
+   * for. The box is the hairline every other chip in the theme wears. */
+  .swatch {
+    display: inline-block;
+    flex: none;
+    width: 12px;
+    height: 12px;
+    border-radius: var(--radius-hair);
+    border: 1px solid var(--border);
+  }
 }

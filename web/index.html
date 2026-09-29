@@ -47,6 +47,22 @@
     </style>
   </head>
   <body>
+    <!-- The same pre-paint theme class the served shell carries, and for the
+         same reason: see the note in src/recoverage/assets/index.html. -->
+    <script>
+      (() => {
+        let stored = null;
+        try {
+          stored = localStorage.getItem("recoverage_theme");
+        } catch {
+          // Storage can be blocked; the media query still answers.
+        }
+        const light =
+          stored === "light" ||
+          (stored !== "dark" && window.matchMedia("(prefers-color-scheme: light)").matches);
+        document.body.classList.toggle("light-mode", light);
+      })();
+    </script>
     <div id="root">
       <div id="boot">
         <span class="boot-mark" aria-hidden="true">R</span>
