@@ -1022,7 +1022,7 @@ _PAGE_SRC = r"""<!DOCTYPE html>
           % if status_filter:
             <input type="hidden" name="status" value="{{status_filter}}">
           % end
-          <label for="search-input"><font size="1" color="{{MUTED_COLOR}}">Search:&nbsp;</font></label><input id="search-input" type="text" name="search" size="14" value="{{search_query}}" placeholder="Search VA or name..." accesskey="{{search_accesskey}}"> <input type="submit" value="Go"></form>
+          <label for="search-input"><font size="1" color="{{MUTED_COLOR}}">Search:&nbsp;</font></label><input id="search-input" type="text" name="search" size="24" value="{{search_query}}" placeholder="Function name or address" accesskey="{{search_accesskey}}"> <input type="submit" value="Go"></form>
         </td>
         <!-- Spacer cells, not &nbsp; text: <form> is a block box, so a leading
              text node in the same cell pushed the form onto its own line and

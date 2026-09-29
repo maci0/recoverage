@@ -6,6 +6,7 @@ import gzip
 import itertools
 import json
 import logging
+import math
 import os
 import queue
 import re
@@ -1455,11 +1456,12 @@ class TestUnauthorizedPageMatchesTheTokenLayer:
 
     It is a page of this product, served before anyone has authenticated, and
     it is written as a byte string because it has to answer with no stylesheet
-    and no bundle. A color hand-typed into it is therefore a color nothing
+    and no bundle. A colour hand-typed into it is therefore a colour nothing
     else in the project can find, which is how a lockout page ends up a
-    different brand from the dashboard that serves it. Each literal here has
-    to be a value the token layer already publishes, and the page has to print
-    the terminal face the rest of the product uses.
+    different brand from the dashboard that serves it. Each colour has to be a
+    `light-dark()` pair the token layer already publishes, so the page follows
+    the OS theme the way the dashboard does, and it prints the faces the rest
+    of the product uses.
     """
 
     @staticmethod
@@ -1468,32 +1470,38 @@ class TestUnauthorizedPageMatchesTheTokenLayer:
 
         return _UNAUTHORIZED_HTML.decode("utf-8")
 
-    @staticmethod
-    def _dark_token_values() -> set[str]:
-        """The dark halves of every `light-dark()` token the SPA reads."""
-        css = (
-            Path(__file__).resolve().parents[1] / "web" / "app" / "system" / "tokens.css"
-        ).read_text(encoding="utf-8")
-        pairs = re.findall(r"light-dark\(\s*#[0-9a-fA-F]{6},\s*(#[0-9a-fA-F]{6})\s*\)", css)
-        return {value.lower() for value in pairs}
-
-    def test_every_color_on_the_page_is_a_token_value(self) -> None:
-        published = self._dark_token_values()
-        used = {value.lower() for value in re.findall(r"#[0-9a-fA-F]{6}\b", self._page())}
-        assert used, "the 401 page painted no color at all"
+    def test_every_colour_on_the_page_is_a_token_pair(self) -> None:
+        published = set(_token_pairs().values())
+        used = {
+            (light.lower(), dark.lower())
+            for light, dark in re.findall(
+                r"light-dark\((#[0-9a-fA-F]{6}),(#[0-9a-fA-F]{6})\)", self._page()
+            )
+        }
+        assert used, "the 401 page painted no colour at all"
         assert used <= published, (
-            f"401 page colors not in the token layer: {sorted(used - published)}"
+            f"401 page colours not in the token layer: {sorted(used - published)}"
         )
+        bare = re.sub(r"light-dark\([^)]*\)", "", self._page())
+        assert re.findall(r"#[0-9a-fA-F]{3,8}\b", bare) == [], "a colour outside light-dark()"
 
-    def test_the_page_prints_the_product_face_and_rungs(self) -> None:
+    def test_the_page_follows_the_os_theme(self) -> None:
+        page = self._page()
+        assert '<meta name="color-scheme" content="light dark">' in page
+        assert "color-scheme:light dark" in page
+
+    def test_the_page_prints_the_product_faces(self) -> None:
         from recoverage.potato import MONO_FONT, SANS_FONT
 
         page = self._page()
-        assert f'face="{SANS_FONT}"' in page
-        assert f'face="{MONO_FONT}"' in page
+        assert f"font:1rem/1.55 {SANS_FONT.replace(', ', ',')}" in page
+        assert f"font-family:{MONO_FONT.replace(', ', ',')}" in page
         assert "system-ui" not in page
-        for rung in ('size="5"', 'size="3"', 'size="1"'):
-            assert rung in page, f"the 401 page has no {rung} step"
+
+    def test_the_page_uses_no_obsolete_markup(self) -> None:
+        page = self._page().lower()
+        for tag in ("<font", "<tt", "<table", "bgcolor=", "align="):
+            assert tag not in page, tag
 
     def test_the_page_still_explains_the_share_link(self) -> None:
         page = self._page()
@@ -1902,16 +1910,19 @@ class TestStaticAssetRevalidation:
         """The target list is on the first-paint path and cannot be discovered
         until app.js runs, so the shell advertises it as a fetch preload; the
         plain same-origin fetch() in app.js then reuses it rather than
-        issuing a second request."""
+        issuing a second request.
+
+        Reuse needs the preload's mode and credentials to match the fetch's.
+        fetch() is a cors-mode request with same-origin credentials, which is
+        what `crossorigin` (anonymous) gives the preload; without it the
+        preload is no-cors, Chrome logs "credentials mode does not match" and
+        downloads the list twice (checked in Chromium 2026-09-29)."""
         from conftest import decode_body, wsgi_get
 
         _, headers, body = wsgi_get("/", headers={"Accept-Encoding": "gzip"})
         html = decode_body(body, headers).decode("utf-8")
-        assert '<link rel="preload" href="/api/targets" as="fetch">' in html
-        # Preload reuse needs the same mode and credentials the fetch uses:
-        # a crossorigin attribute here would put the two in different caches
-        # and the browser would download the list twice.
-        assert '<link rel="preload" href="/api/targets" as="fetch" crossorigin' not in html
+        assert '<link rel="preload" href="/api/targets" as="fetch" crossorigin>' in html
+        assert "credentials:" not in _web("api.ts")
 
 
 class TestHostnameOf:
@@ -3476,6 +3487,35 @@ def _contrast(left: tuple[float, float, float], right: tuple[float, float, float
     return (lighter + 0.05) / (darker + 0.05)
 
 
+def _lab(rgb: tuple[float, float, float]) -> tuple[float, float, float]:
+    """CIELAB (D65) of an sRGB colour, for the ΔE between two fills."""
+
+    def linear(channel: float) -> float:
+        return channel / 12.92 if channel <= 0.04045 else ((channel + 0.055) / 1.055) ** 2.4
+
+    red, green, blue = (linear(channel) for channel in rgb)
+    x = (0.4124 * red + 0.3576 * green + 0.1805 * blue) / 0.95047
+    y = 0.2126 * red + 0.7152 * green + 0.0722 * blue
+    z = (0.0193 * red + 0.1192 * green + 0.9505 * blue) / 1.08883
+
+    def f(value: float) -> float:
+        return value ** (1 / 3) if value > 216 / 24389 else (24389 / 27 * value + 16) / 116
+
+    return (116 * f(y) - 16, 500 * (f(x) - f(y)), 200 * (f(y) - f(z)))
+
+
+def _delta_e(left: tuple[float, float, float], right: tuple[float, float, float]) -> float:
+    """CIE76 colour difference."""
+    return math.dist(_lab(left), _lab(right))
+
+
+def _marks() -> list[str]:
+    """`MARK_CLASS` from `states.ts`, empty slots included."""
+    block = re.search(r"export const MARK_CLASS[^=]*= \[(.*?)\];", _web("states.ts"), re.DOTALL)
+    assert block is not None, "states.ts no longer defines MARK_CLASS"
+    return re.findall(r'"([^"]*)"', block.group(1))
+
+
 class TestCellFillsAreDrawnPerTheme:
     """A cell fill is a graphic, so it owes 3:1 against what it is painted on.
 
@@ -3488,9 +3528,24 @@ class TestCellFillsAreDrawnPerTheme:
     light case is therefore a strict xfail that names the gap; when relumea.ai
     deepens the light fills and the copy here is refreshed, it passes and the
     marker has to go.
+
+    The fills also sit at one lightness and differ by hue alone, with three
+    greens and two greys among them, so a pair closer than `SAME_HUE_DELTA_E`
+    must differ in its ink mark (`MARK_CLASS`), and the mark ink must clear the
+    floor on the fill it is drawn over.  Padding's fill is the hairline token
+    and is exempt from the fill floor; its mark is what makes it visible.
     """
 
     NON_TEXT_FLOOR = 3.0
+    # Measured on the relumea fills: the greens and greys pair at ΔE 5.9 to
+    # 15.3 and every other pair is 20.4 or more apart.
+    SAME_HUE_DELTA_E = 20.0
+    # The ink each mark is drawn in; padding is filler and takes the muted ink.
+    MARK_INK: ClassVar[dict[str, str]] = {
+        "mark-dots": "text",
+        "mark-hatch": "text",
+        "mark-rule": "text-muted",
+    }
 
     @staticmethod
     def _fills() -> list[str]:
@@ -3522,6 +3577,52 @@ class TestCellFillsAreDrawnPerTheme:
             for name in self._fills()
         }
         assert all(ratio >= self.NON_TEXT_FLOOR for ratio in low.values()), low
+
+    @pytest.mark.parametrize("theme", _THEMES)
+    def test_fills_that_share_a_hue_carry_different_marks(self, theme: str) -> None:
+        palette = _array_items(_web("states.ts"), "PALETTE_VARS")
+        marks = _marks()
+        assert len(marks) == len(palette)
+        slots = range(1, len(palette))
+        clashes = [
+            f"{palette[left]} / {palette[right]}: {marks[left]!r}"
+            for left in slots
+            for right in slots
+            if left < right
+            and marks[left] == marks[right]
+            and _delta_e(
+                _token(palette[left].removeprefix("--color-"), theme),
+                _token(palette[right].removeprefix("--color-"), theme),
+            )
+            < self.SAME_HUE_DELTA_E
+        ]
+        assert clashes == [], f"{theme}: " + "; ".join(clashes)
+
+    @pytest.mark.parametrize("theme", _THEMES)
+    def test_every_mark_is_drawn_in_an_ink_that_clears_the_floor(self, theme: str) -> None:
+        palette = _array_items(_web("states.ts"), "PALETTE_VARS")
+        css = _web("index.css")
+        low: dict[str, float] = {}
+        for fill, mark in zip(palette, _marks(), strict=True):
+            if mark == "":
+                continue
+            rule = re.search(rf"@utility {mark} {{(.*?)\n}}", css, re.DOTALL)
+            assert rule is not None, mark
+            assert f"var(--color-{self.MARK_INK[mark]})" in rule.group(1), mark
+            ratio = _contrast(
+                _token(self.MARK_INK[mark], theme), _token(fill.removeprefix("--color-"), theme)
+            )
+            if ratio < self.NON_TEXT_FLOOR:
+                low[mark] = round(ratio, 2)
+        assert low == {}, f"{theme}: {low}"
+        source = _web("components/CoverageMap.tsx")
+        for ink in set(self.MARK_INK.values()):
+            assert f'resolveColour(probe, "--color-{ink}")' in source, ink
+        assert 'mark === "mark-rule" ? muted : ink' in source
+
+    def test_the_padding_slot_carries_a_mark(self) -> None:
+        padding = _filter_keys().index("padding")
+        assert _marks()[padding] != ""
 
 
 class TestSpaTextTokensClearTheTextFloor:
@@ -4872,16 +4973,27 @@ class TestSpaFirstPaint:
         for classes in swatches:
             assert "size-2.5" in classes.split(), classes
 
-    def test_the_type_scale_names_are_font_sizes_to_the_merger(self) -> None:
-        """`twMerge` reads a `text-*` name it does not know as a text COLOUR.
+    @pytest.mark.parametrize(
+        ("prefix", "group"),
+        [
+            ("text", "text"),
+            ("radius", "radius"),
+            ("shadow", "shadow"),
+            ("leading", "leading"),
+            ("tracking", "tracking"),
+        ],
+    )
+    def test_every_token_scale_name_is_known_to_the_merger(self, prefix: str, group: str) -> None:
+        """`twMerge` knows only Tailwind's default scale names.
 
-        Every control carries a size and a colour, so the size lost the
-        conflict and the control label rendered at the browser's 16px default
-        instead of the size the token names.
+        An unknown `text-*` reads as a text COLOUR, so a control's size lost to
+        its colour and rendered at 16px. An unknown `rounded-*` joins no group,
+        so an override kept both classes and the section tabs drew at the
+        Button recipe's 9px radius instead of `rounded-chip`.
         """
         merger = _web("lib/cn.ts")
-        assert "extendTailwindMerge" in merger
-        declared = re.findall(r"--text-([a-z]+):", _web("system/tokens.css"))
-        assert declared, "the token file names no type scale"
-        for name in declared:
-            assert f'"{name}"' in merger, f"the merger does not know text-{name} is a size"
+        listed = re.search(rf"^\s*{group}: \[([^\]]*)\]", merger, re.MULTILINE)
+        assert listed is not None, f"cn.ts extends no {group} scale"
+        declared = re.findall(rf"^\s*--{prefix}-([a-z]+):", _web("system/tokens.css"), re.MULTILINE)
+        assert declared, f"the token file names no {prefix} scale"
+        assert sorted(re.findall(r'"([a-z]+)"', listed.group(1))) == sorted(declared)

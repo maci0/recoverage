@@ -14,6 +14,14 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   follows the OS until the header toggle picks one.
 - The search status line reads `33 matches for "Init". Press Enter for the
   first, or pick one below.` in the dashboard and in Potato Mode.
+- On the coverage map, `RELOC` blocks are dotted, `PROVEN` blocks hatched and
+  padding ruled, and the legend and filter swatches carry the same marks. The
+  relumea fills put `EXACT`, `RELOC` and `PROVEN` in one green and `STUB` and
+  padding in one grey, so the fill alone did not tell them apart.
+- The token page is plain HTML5 that follows the OS light or dark theme, and
+  it is now checked by the HTML validator with the other served pages.
+- Potato Mode's search box asks for a "Function name or address", like the
+  dashboard's.
 
 ### Fixed
 
@@ -23,6 +31,13 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   and an empty blocker row is left out.
 - On a phone, the detail panel's copy buttons wrap under the function name
   instead of squeezing it to one letter per line.
+- The detail panel prints `9/28/2026, 8:34:34 PM (Δ0 B)` and
+  `verify (9/22/2026, ...)` with their space again. The served page ran the
+  already-minified bundle through a second minifier that does not understand
+  template strings; the bundle is now inlined as built.
+- The section tabs draw at the chip radius they ask for, not the button's.
+- The `/api/targets` preload is used instead of discarded, so a page load asks
+  for the target list once and logs no preload warnings.
 
 ## [4.0.0] - 2026-09-29
 

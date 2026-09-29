@@ -2689,40 +2689,43 @@ def _json_err(status: int, data: dict[str, Any], **headers: str) -> HTTPResponse
 _AUTH_TOKEN: str = ""
 
 
-# Deliberately does not echo the expected token, and carries no CSS of its own
-# beyond the handful of attributes needed to be readable on a dark background.
-#
-# It is also a page of this product, not a generic error screen: it is the
-# first thing a locked-out operator sees. The colours are the dark values of the
-# relumea tokens the SPA reads (web/app/system/tokens.css: bg, surface, border,
-# text, text-muted), the faces are the ones Potato Mode names (Archivo for
-# prose, JetBrains Mono for the flag and the URL), and the sizes are the rungs
-# the rest of the product uses (<font size="5|3|1">).
-# TestUnauthorizedPageMatchesTheTokenLayer holds the values against that file.
+# Deliberately does not echo the expected token.  It is also a page of this
+# product, not a generic error screen: it is the first thing a locked-out
+# operator sees.  It carries its own <style>, because the stylesheet and the
+# fonts sit behind the same gate: each colour is a `light-dark()` pair copied
+# from the relumea tokens the SPA reads (web/app/system/tokens.css: bg, surface,
+# border, text, text-muted), so it follows the OS theme like the dashboard, and
+# the faces are the stacks Potato Mode names (potato.SANS_FONT, MONO_FONT),
+# which fall back to a system face because the woff2 files are gated too.
+# TestUnauthorizedPageMatchesTheTokenLayer holds the values against that file,
+# and tools/lint_html.py runs the page through vnu.
 _UNAUTHORIZED_HTML = (
     b'<!doctype html><html lang="en"><head><meta charset="utf-8">'
     b'<meta name="viewport" content="width=device-width, initial-scale=1">'
-    b"<title>recoverage \xc2\xb7 access token required</title></head>"
-    b'<body bgcolor="#0b0b0c" text="#ededef">'
-    # role="presentation" for the same reason every layout table in potato.py
-    # carries it: a one-cell centring table is announced as a table with no
-    # headers before the message it exists to centre (WCAG 1.3.1).
-    b'<table role="presentation" width="100%" height="90%" border="0">'
-    b'<tr><td align="center" valign="middle">'
-    b'<font face="Archivo, Arial, Helvetica Neue, Liberation Sans, sans-serif">'
-    b'<h1><font size="5" color="#ededef"><b>recoverage</b></font></h1>'
-    b'<font size="3" color="#a3a3ab">Access token required</font>'
-    b"<p>This dashboard was started with"
-    b' <font face="JetBrains Mono, Consolas, Liberation Mono, Courier New, monospace"'
-    b' size="3">--token</font>. Open it with the token appended to the URL:</p>'
-    b'<table border="1" bordercolor="#28282e" cellpadding="4" cellspacing="0"'
-    b' align="center" bgcolor="#131316"><tr><td>'
-    b'<font face="JetBrains Mono, Consolas, Liberation Mono, Courier New, monospace"'
-    b' size="3" color="#ededef"><tt>?token=YOUR_TOKEN</tt></font>'
-    b"</td></tr></table>"
-    b'<p><font color="#a3a3ab" size="1">The person who started the server has the token.'
-    b" It is stored in a cookie afterwards, so you only need the URL once.</font></p>"
-    b"</font></td></tr></table></body></html>"
+    b'<meta name="color-scheme" content="light dark">'
+    b"<title>recoverage \xc2\xb7 access token required</title><style>"
+    b":root{color-scheme:light dark}"
+    b"body{margin:0;min-height:100vh;display:grid;place-items:center;padding:1rem;"
+    b"box-sizing:border-box;background:light-dark(#fafafa,#0b0b0c);"
+    b"color:light-dark(#0a0a0b,#ededef);"
+    b"font:1rem/1.55 Archivo,Arial,Helvetica Neue,Liberation Sans,sans-serif}"
+    b"main{max-width:32rem;text-align:center}"
+    b"h1{margin:0 0 .25rem;font-size:1.375rem;line-height:1.14}"
+    b".muted{margin:0;color:light-dark(#55585f,#a3a3ab)}"
+    b".small{font-size:.75rem}"
+    b"code{font-family:JetBrains Mono,Consolas,Liberation Mono,Courier New,monospace;"
+    b"font-size:.875rem}"
+    b"pre{display:inline-block;margin:0;padding:.5rem .75rem;border-radius:9px;"
+    b"border:1px solid light-dark(#e7e8ec,#28282e);background:light-dark(#ffffff,#131316)}"
+    b"</style></head><body><main>"
+    b"<h1>recoverage</h1>"
+    b'<p class="muted">Access token required</p>'
+    b"<p>This dashboard was started with <code>--token</code>."
+    b" Open it with the token appended to the URL:</p>"
+    b"<pre><code>?token=YOUR_TOKEN</code></pre>"
+    b'<p class="muted small">The person who started the server has the token.'
+    b" It is stored in a cookie afterwards, so you only need the URL once.</p>"
+    b"</main></body></html>"
 )
 
 

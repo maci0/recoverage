@@ -19,8 +19,10 @@
          coverage map is otherwise two serialized round trips after the shell
          lands. Preloading it as a fetch starts that request during the preload
          scan instead; the plain same-origin fetch() then reuses the preloaded
-         response rather than issuing a second one. -->
-    <link rel="preload" href="/api/targets" as="fetch">
+         response rather than issuing a second one. `crossorigin` is required:
+         without it the preload is a no-cors request, its credentials mode
+         differs from fetch()'s, and Chrome discards it and fetches twice. -->
+    <link rel="preload" href="/api/targets" as="fetch" crossorigin>
     <!-- The first paint. The app mounts only after this document's own inline
          bundle has been parsed and run, and the dashboard it draws is
          serialized behind /api/targets and /data, so an empty #root paints a

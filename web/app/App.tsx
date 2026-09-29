@@ -25,7 +25,7 @@ import {
   trimSearch,
 } from "@/lib/format";
 import { readStored, writeStored } from "@/lib/storage";
-import { FILTER_KEY, STATE_LABEL, SWATCH_CLASS } from "@/states";
+import { FILTER_KEY, MARK_CLASS, STATE_LABEL, SWATCH_CLASS } from "@/states";
 import { Icon } from "@/system/icons/Icon";
 
 /** The dashboard shell: the document, the topbar's controls, and the map.
@@ -1044,7 +1044,7 @@ export function App() {
               <li key={label} className="flex items-center gap-1.5">
                 <span
                   aria-hidden="true"
-                  className={cn("swatch size-2.5 rounded-cell", SWATCH_CLASS[slot])}
+                  className={cn("swatch size-2.5 rounded-cell", SWATCH_CLASS[slot], MARK_CLASS[slot])}
                 />
                 {label}
               </li>

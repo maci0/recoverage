@@ -88,6 +88,16 @@ export const SWATCH_CLASS = [
   "bg-cell-fail",
 ];
 
+/** The mark each slot draws over its fill, in slot order, as the utility the
+ * legend and filter swatches use (`index.css`); the map draws the same tile on
+ * the canvas. The relumea fills separate verdicts by hue at one lightness, and
+ * EXACT, RELOC and PROVEN share its green while STUB and padding share its
+ * grey, so a colour-blind reader, or anyone at a glance, cannot tell those
+ * apart by fill alone (WCAG 1.4.1). Every pair of fills closer than the ΔE
+ * floor in tests/test_server.py carries different marks. */
+export type Mark = "" | "mark-dots" | "mark-hatch" | "mark-rule";
+export const MARK_CLASS: ReadonlyArray<Mark> = ["", "", "mark-dots", "", "", "mark-rule", "mark-hatch", ""];
+
 /** A packed state's filter key. A state the grid can paint but no button can
  * isolate would be unreachable by filter. */
 export const FILTER_KEY = ["", "exact", "reloc", "near_match", "stub", "padding", "proven", "problem"];
@@ -128,8 +138,10 @@ export const STATE_FILTERS = [
   { key: "problem", label: "problem", title: "Build or classification failure" },
 ] as const;
 
-/** The swatch class a filter's cells paint with. FILTER_KEY is in slot order
- * and SWATCH_CLASS is in slot order, so the two index alike. */
+/** The swatch classes (fill and mark) a filter's cells paint with.
+ * FILTER_KEY, SWATCH_CLASS and MARK_CLASS are all in slot order, so they
+ * index alike. */
 export function swatchForFilter(key: string): string {
-  return SWATCH_CLASS[FILTER_KEY.indexOf(key)] ?? "bg-cell-unlit";
+  const slot = FILTER_KEY.indexOf(key);
+  return `${SWATCH_CLASS[slot] ?? "bg-cell-unlit"} ${MARK_CLASS[slot] ?? ""}`.trim();
 }
