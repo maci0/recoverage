@@ -53,7 +53,7 @@ graph TD
 > **As an RE Dev**, I want to see a defrag-style grid where each cell represents a chunk of the binary so that I can instantly spot which areas are matched, partially matched, or still stubs.
 
 ### Acceptance Criteria
-- Grid cells take the relumea verdict fills: `EXACT` (green), `RELOC` (teal), `PROVEN` (pale green), `NEAR` and size mismatch (amber), `STUB` (grey), padding (hairline grey), problem (red), undocumented (unlit); data and thunk cells render as undocumented
+- Grid cells take the relumea verdict fills: `EXACT` (green), `RELOC` (teal, dotted), `PROVEN` (pale green, hatched), `NEAR` and size mismatch (amber), `STUB` (grey), padding (hairline grey, ruled), problem (red), undocumented (unlit); data and thunk cells render as undocumented
 - Grid cells stay square: a `ResizeObserver` triggers a relayout that resizes cells (floor 6px desktop, 12px under 700px), and the section's declared column count is never reduced
 - Section tabs (`.text`, `.rdata`, `.data`, `.bss`) switch views instantly (cached layouts)
 - A section's cells are fetched on first visit; the map area says the cells are loading, and a failed fetch says what went wrong and offers a Retry

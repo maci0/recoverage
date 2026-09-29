@@ -12,7 +12,7 @@ import {
   type Packed,
 } from "@/grid/pack";
 import { count, hex, isolate } from "@/lib/format";
-import { PALETTE_VARS, STATE_LABEL, survivesFilter } from "@/states";
+import { MARK_CLASS, PALETTE_VARS, STATE_LABEL, survivesFilter, type Mark } from "@/states";
 
 /** The roving tab stop's next cell for a key, or null when the key is not a
  * navigation key. Home and End are the lattice's own ends. */
@@ -52,6 +52,57 @@ function resolveColour(probe: HTMLElement, token: string): string {
   return getComputedStyle(probe).color;
 }
 
+/** Device pixels per CSS pixel the canvas is drawn at, capped so a 3x screen
+ * does not triple the backing store of a 39k-cell map. */
+const MAX_CANVAS_SCALE = 2;
+
+function canvasScale(): number {
+  return Math.min(MAX_CANVAS_SCALE, window.devicePixelRatio || 1);
+}
+
+/** The mark tile, in CSS px: the `mark-*` utilities in index.css draw the
+ * same 1px ink on the same tile. */
+const MARK_TILE_PX = 4;
+const MARK_DOT_RADIUS_PX = 0.75;
+
+/** A verdict mark as a repeating canvas pattern in `ink`, or null for a slot
+ * with no mark. The tile is drawn at the canvas scale and mapped back, so the
+ * 1px lines stay sharp on a 2x screen. */
+function markPattern(ctx: CanvasRenderingContext2D, mark: Mark, ink: string): CanvasPattern | null {
+  if (mark === "") {
+    return null;
+  }
+  const scale = canvasScale();
+  const tile = document.createElement("canvas");
+  tile.width = Math.round(MARK_TILE_PX * scale);
+  tile.height = tile.width;
+  const pen = tile.getContext("2d");
+  if (pen === null) {
+    return null;
+  }
+  pen.scale(scale, scale);
+  pen.fillStyle = ink;
+  pen.strokeStyle = ink;
+  pen.lineWidth = 1;
+  if (mark === "mark-dots") {
+    pen.beginPath();
+    pen.arc(MARK_TILE_PX / 2, MARK_TILE_PX / 2, MARK_DOT_RADIUS_PX, 0, Math.PI * 2);
+    pen.fill();
+  } else if (mark === "mark-rule") {
+    pen.fillRect(0, 0, MARK_TILE_PX, 1);
+  } else {
+    pen.beginPath();
+    for (const offset of [-MARK_TILE_PX, 0, MARK_TILE_PX]) {
+      pen.moveTo(offset, MARK_TILE_PX);
+      pen.lineTo(offset + MARK_TILE_PX, 0);
+    }
+    pen.stroke();
+  }
+  const pattern = ctx.createPattern(tile, "repeat");
+  pattern?.setTransform(new DOMMatrix().scale(1 / scale));
+  return pattern;
+}
+
 /** One section's coverage map.
  *
  * A canvas, not one element per cell: 39k cells is a page that cannot be
@@ -84,6 +135,7 @@ type GridState = {
   layWidth: number;
   layCols: number;
   palette: Array<string>;
+  marks: Array<CanvasPattern | null>;
   accent: string;
   ink: string;
   focus: number;
@@ -162,7 +214,7 @@ export function CoverageMap({
       if (canvas !== null) {
         canvas.style.width = `${next.width}px`;
         canvas.style.height = `${next.height}px`;
-        const dpr = Math.min(2, window.devicePixelRatio || 1);
+        const dpr = canvasScale();
         canvas.width = Math.max(1, Math.round(next.width * dpr));
         canvas.height = Math.max(1, Math.round(next.height * dpr));
         canvas.getContext("2d")?.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -197,6 +249,11 @@ export function CoverageMap({
       state.palette = PALETTE_VARS.map((name) => resolveColour(probe, name));
       state.accent = resolveColour(probe, "--color-accent");
       state.ink = resolveColour(probe, "--color-text");
+      // Padding is filler, so its rule is drawn in the muted ink, which still
+      // clears 3:1 on the hairline fill; the verdict marks take the full ink.
+      const muted = resolveColour(probe, "--color-text-muted");
+      const { ink } = state;
+      state.marks = MARK_CLASS.map((mark) => markPattern(ctx, mark, mark === "mark-rule" ? muted : ink));
     }
     const { cell } = geo;
     const { states, ground, fns, n } = pack;
@@ -219,6 +276,11 @@ export function CoverageMap({
           ctx.rect(pX[k] ?? 0, pY[k] ?? 0, pW[k] ?? 0, cell);
         }
         ctx.fill();
+        const mark = state.marks[slot] ?? null;
+        if (mark !== null) {
+          ctx.fillStyle = mark;
+          ctx.fill();
+        }
       }
     }
     ctx.globalAlpha = 1;
@@ -270,6 +332,7 @@ export function CoverageMap({
       layWidth: -1,
       layCols: declaredColumns,
       palette: [],
+      marks: [],
       accent: "",
       ink: "",
       focus: 0,

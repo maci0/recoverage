@@ -1076,6 +1076,18 @@ def test_accesskey_attributes():
 
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage document")
+def test_the_search_box_asks_for_what_the_dashboard_asks_for():
+    """Both surfaces take a function name or an address, and say so alike."""
+    app = (Path(__file__).resolve().parents[1] / "web" / "app" / "App.tsx").read_text(
+        encoding="utf-8"
+    )
+    spa = re.search(r'placeholder="([^"]+)"', app)
+    assert spa is not None
+    html = render_potato_url(f"/potato?target={require_target()}")
+    assert f'placeholder="{spa.group(1)}"' in html
+
+
+@pytest.mark.skipif(not HAS_DB, reason="No coverage document")
 def test_no_two_controls_claim_one_accesskey():
     # The Stub pill's own letter is "S" and the search box's is "s": both were
     # written before, and a browser resolves a duplicated accesskey to the

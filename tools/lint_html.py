@@ -14,7 +14,9 @@ Two passes, one vnu runner:
   cannot see because the server assembles them: ``GET /`` (the SPA shell with
   ``style.css`` and ``app.js`` injected) and ``GET /potato`` (fully
   server-rendered).  Both use ``--also-check-css`` so the embedded CSS is
-  validated too.
+  validated too.  The 401 page ``--token`` answers a browser with is a
+  constant (``server._UNAUTHORIZED_HTML``) sent as-is, so it is written out
+  and checked strictly with no filter.
 
 Potato Mode deliberately renders HTML4-era markup (``<font>``, ``bgcolor``,
 ``cellpadding``, ... — see the "no CSS" docstrings in potato.py).  The obsolete
@@ -42,6 +44,8 @@ import sys
 from pathlib import Path
 
 from _serve_harness import build_sample_db, get, running_server, scratch_project_dir, wait_for
+
+from recoverage.server import _UNAUTHORIZED_HTML
 
 REPO_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 VNU_JAR = REPO_ROOT / "node_modules" / "vnu-jar" / "build" / "dist" / "vnu.jar"
@@ -160,6 +164,10 @@ def main() -> int:
                     ["--also-check-css", "--filterpattern", ".*obsolete.*"],
                     [docs["potato.html"]],
                 )
+            if rc == 0:
+                unauthorized = project_dir / "unauthorized.html"
+                unauthorized.write_bytes(_UNAUTHORIZED_HTML)
+                rc = run_vnu(["--also-check-css"], [unauthorized])
             if rc != 0:
                 print("served-document lint failed")
                 return rc

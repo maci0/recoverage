@@ -45,6 +45,24 @@
   overflow-wrap: anywhere;
 }
 
+/* Verdict marks (`MARK_CLASS` in states.ts): a 1px ink pattern on a 4px tile
+ * over the fill, the same tile `CoverageMap.tsx` draws on the canvas. The
+ * verdict marks are `text`, the one token that clears 3:1 on every green fill
+ * in both themes; padding's rule is `text-muted`, which clears it on the
+ * hairline fill and keeps filler quieter than a verdict. */
+@utility mark-dots {
+  background-image: radial-gradient(circle at 2px 2px, var(--color-text) 0.75px, transparent 1px);
+  background-size: 4px 4px;
+}
+
+@utility mark-hatch {
+  background-image: repeating-linear-gradient(-45deg, var(--color-text) 0 1px, transparent 1px 2.83px);
+}
+
+@utility mark-rule {
+  background-image: repeating-linear-gradient(to bottom, var(--color-text-muted) 0 1px, transparent 1px 4px);
+}
+
 @layer base {
   body {
     margin: 0;

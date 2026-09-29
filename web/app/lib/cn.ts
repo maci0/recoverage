@@ -1,32 +1,24 @@
 import { clsx, type ClassValue } from "clsx";
 import { extendTailwindMerge } from "tailwind-merge";
 
-/** `twMerge`, told what the relumea type scale is.
+/** `twMerge`, told the relumea scale names.
  *
- * `system/tokens.css` names its font sizes (`text-chip` … `text-display`), and
- * `twMerge` reads an unknown `text-*` class as a TEXT COLOUR. A recipe carrying
- * both a size and a colour (every control here) would then lose the size to a
- * conflict that does not exist: `text-data` dropped for `text-text`. Declaring
- * the names as the font-size group keeps the two apart. */
+ * `system/tokens.css` names its scales (`text-chip`, `rounded-control`,
+ * `leading-title`, ...), and `twMerge` knows only Tailwind's defaults. An
+ * unknown `text-*` reads as a TEXT COLOUR, so a recipe's size lost to a colour
+ * it never conflicted with; an unknown `rounded-*` joins no group, so an
+ * override kept both classes and the stylesheet order picked the winner
+ * (`rounded-chip` on a tab rendered at the Button recipe's `rounded-control`).
+ * Every name below is a token, and tests/test_server.py fails when one is
+ * missing. */
 const twMerge = extendTailwindMerge({
   extend: {
-    classGroups: {
-      "font-size": [
-        {
-          text: [
-            "chip",
-            "micro",
-            "data",
-            "body",
-            "intro",
-            "lede",
-            "figure",
-            "title",
-            "headline",
-            "display",
-          ],
-        },
-      ],
+    theme: {
+      text: ["chip", "micro", "data", "body", "intro", "lede", "figure", "title", "headline", "display"],
+      radius: ["hair", "cell", "chip", "control", "action", "card", "panel"],
+      shadow: ["lift"],
+      leading: ["display", "title", "snug", "body", "prose", "code"],
+      tracking: ["display", "title", "figure", "tight", "logo", "label", "chip"],
     },
   },
 });
