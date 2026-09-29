@@ -95,7 +95,13 @@ export function StatsStrip({
               </Button>
             );
           })}
-          <span>{percentLabel(row.coverage_pct)} covered</span>
+          {/* The target's figure opens the strip and this one closes it, and on
+              a project that is complete both read "100.0% covered": one number
+              printed twice with nothing saying they count different things.
+              The section's own name travels with its figure for the same
+              reason the pills carry it — a figure a reader cannot scope is a
+              figure they cannot use. */}
+          <span>{section} {percentLabel(row.coverage_pct)} covered</span>
         </span>
       )}
     </div>

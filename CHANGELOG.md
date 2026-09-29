@@ -375,6 +375,45 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **The dashboard's first frame could render a light header over a dark page,
+  with the wordmark and the legend unreadable.** The shell painted the dark
+  default and the bundle applied the stored or preferred theme a frame later;
+  the topbar and every panel take a new theme instantly, because nothing
+  transitions them, while the ground, the wordmark and the legend's colour
+  cross-fade over 300ms. The frame in between was a light header on a dark
+  ground, with the wordmark and the legend mid-swap on both. The theme class is
+  now set by the shell before the first paint, from the same stored setting and
+  media query, so the first frame is the theme the app settles into.
+- The legend under the map and the per-state chips in the stats strip drew
+  their colour from a fill token on a `<span>` that no rule sized, so every
+  swatch was 0x0: the key to the map printed the state names without the
+  colours they stand for. `web/app/index.css` carries the `.swatch` rule again
+  (12px, the theme's hairline border), so the legend and the strip show the
+  same squares the map paints.
+- Every control in the dashboard rendered its label at the browser's default
+  16px instead of the 12px the type scale gives `text-label`. `tailwind-merge`
+  reads a `text-*` class it does not know as a text COLOUR, so a control
+  carrying both a size and a colour lost the size to a conflict that never
+  existed. `web/app/lib/cn.ts` declares the app's five scale names as font
+  sizes, which keeps a size and a colour apart while the stock sizes merge as
+  before.
+- The coverage map's frame wore the chip tier's 2px corner while the detail
+  panel beside it wore the frame tier's 4px; two boxes in one row with
+  different corners read as two layouts. Both are `rounded-control`.
+- The stats strip printed a section's coverage unlabelled beside the target's,
+  so on a complete project the same figure read twice in one line. The
+  section's figure now names its section (`.text 27.2% covered`). Both served
+  values are still shown; neither is re-derived in the browser.
+- Potato Mode's skip link sat above the page frame, half outside the viewport's
+  top edge. It is now the header's first row, inside `#topbar` and in flow:
+  Potato Mode ships no stylesheet, so it cannot be hidden until focused the way
+  the SPA hides its own, and a link inside the frame is the one place it can be
+  neither clipped nor painted over the header.
+- The toolbar's filter pills are single letters. A key under them now names
+  every letter in the words the map's legend already uses (`E Exact match
+  R Reloc match M Near-match S Stub P Padding V Proven X Problem`), drawn from
+  each pill's own tooltip so there is one vocabulary rather than two. The pill
+  labels themselves are unchanged.
 - A regeneration the server answers 202 for (a re-send that reached the run its
   own first request started) left the dashboard's notice line reading
   "Regenerating..." with nothing running behind it and the button already back

@@ -1183,6 +1183,29 @@ class TestSpaFilterControls:
         app = _web("App.tsx")
         assert "...STATE_FILTERS," in app
 
+    def test_the_filter_key_names_each_pill_in_the_legends_words(self) -> None:
+        """A pill is one letter, and the key under the pills spells it out.
+
+        The letter alone was legible on hover, to a screen reader and to nobody
+        reading the toolbar, and a key that invented its own words for the
+        states would be a second vocabulary beside the legend the map already
+        carries. The key prints the word each pill's own tooltip leads with —
+        the same words `STATE_LABEL` lists below the map.
+        """
+        states = _web("states.ts")
+        filters = states.split("export const STATE_FILTERS = [", 1)[1].split("] as const;", 1)[0]
+        titles = re.findall(r'title: "([^"]+)"', filters)
+        assert len(titles) == 7, "the key would name fewer letters than the toolbar draws"
+        label_block = states.split("export const STATE_LABEL = [", 1)[1].split("];", 1)[0]
+        legend = {value.lower() for value in re.findall(r'"([^"]+)"', label_block)}
+        # A tooltip carries the word and then its own gloss ("Proven (verified
+        # equivalent)"); the key prints the word alone.
+        assert {title.split(" (")[0].lower() for title in titles} <= legend, (
+            "the filter key spells a state in words the map's legend does not use"
+        )
+        key = _web("App.tsx").split('className="filter-key', 1)[1].split("</ul>", 1)[0]
+        assert "{entry.label}" in key and "entry.title" in key
+
     def test_every_packed_state_survives_a_filter(self) -> None:
         """A "" in FILTER_KEY means the cell is dimmed by every pill and lit by
         none, which is the state the two missing buttons were for."""
@@ -3670,6 +3693,15 @@ class TestSpaLocaleFormatting:
         assert "percentLabel(row.coverage_pct)" in strip
         assert "count(stats.summary.totalFunctions)" in strip
 
+    def test_the_section_figure_names_its_section(self) -> None:
+        """The strip's last figure is the section's coverage, and on a project
+        that is complete it reads word for word the same as the target's first
+        figure. Unlabelled, one number printed twice reads as one number; the
+        section's own name travels with its figure, and neither served value is
+        dropped or divided again."""
+        strip = _web("components/StatsStrip.tsx")
+        assert "{section} {percentLabel(row.coverage_pct)} covered" in strip
+
     def test_a_percentage_is_one_directional_run(self) -> None:
         """The sign travels with the digits it belongs to.
 
@@ -4838,3 +4870,65 @@ class TestMtimeNsToUtc:
         stamp = mtime_ns_to_utc(1_700_000_000 * self.NS)
         assert stamp.tzinfo is not None
         assert stamp.utcoffset() == timedelta(0)
+
+
+class TestSpaFirstPaint:
+    """The shell's own frame: the theme it paints in, and the two marks the map
+    is read through.
+
+    Each of these reached a running dashboard and was visible in a screenshot of
+    it, and each is invisible to the compiler: a class the stylesheet gives no
+    box, a `text-*` name the merger reads as a colour, and a theme applied one
+    frame after the document has already been painted.
+    """
+
+    @staticmethod
+    def _shell() -> str:
+        return (REPO_ROOT / "src" / "recoverage" / "assets" / "index.html").read_text(
+            encoding="utf-8"
+        )
+
+    def test_the_shell_sets_the_theme_before_the_bundle_runs(self) -> None:
+        """The bundle toggles the same class, and that is one frame too late.
+
+        The topbar and the panels take their ground with no transition, while
+        the body's ground and its inherited colour cross-fade over 300ms. A
+        theme applied after the first paint therefore renders a light header
+        over a dark page, with the wordmark and the legend mid-swap and
+        unreadable on whatever they are sitting on. The class has to be on the
+        body before the boot markup beside it paints.
+        """
+        shell = self._shell()
+        applied = shell.index('classList.toggle("light-mode"')
+        assert applied < shell.index('id="root"'), (
+            "the shell paints its first frame before the theme is applied"
+        )
+        assert shell.count('localStorage.getItem("recoverage_theme")') == 1
+        assert shell.count("prefers-color-scheme: light") == 1
+        assert 'const THEME_KEY = "recoverage_theme";' in _web("App.tsx"), (
+            "the pre-paint class and the app no longer read the same setting"
+        )
+
+    def test_the_swatch_is_a_sized_box(self) -> None:
+        """A fill on an unsized span is a colour nobody can see.
+
+        The legend under the map and the stats strip's per-state chips both
+        name a state beside the fill the map paints it in. With no rule the box
+        was 0x0, so the key to the map printed the words and never the colours.
+        """
+        block = _web("index.css").split(".swatch {", 1)[1].split("}", 1)[0]
+        assert "width:" in block and "height:" in block, (
+            ".swatch carries a fill and no box, so every legend chip is invisible"
+        )
+
+    def test_the_type_scale_names_are_font_sizes_to_the_merger(self) -> None:
+        """`twMerge` reads a `text-*` name it does not know as a text COLOUR.
+
+        Every control carries a size and a colour, so the size lost the
+        conflict and the workhorse label rendered at the browser's 16px default
+        instead of the 12px the token names.
+        """
+        merger = _web("lib/cn.ts")
+        assert "extendTailwindMerge" in merger
+        for name in ("micro", "label", "title", "wordmark", "mark"):
+            assert f'"{name}"' in merger, f"the merger does not know text-{name} is a size"

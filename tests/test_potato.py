@@ -1042,6 +1042,16 @@ def test_skip_link():
     target = require_target()
     html = render_potato_url(f"/potato?target={target}")
     assert 'href="#grid-container"' in html
+    # Inside the topbar frame, not above it: the link outside the page wrapper
+    # was painted over the viewport's top edge with the header starting below
+    # it. Potato Mode ships no stylesheet, so it cannot be hidden until focus
+    # the way the SPA hides its own; in flow inside the header it is the
+    # document's first focusable control and the header's own first row.
+    assert (
+        html.index('id="topbar"')
+        < html.index('href="#grid-container"')
+        < html.index('id="controls"')
+    )
 
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage document")

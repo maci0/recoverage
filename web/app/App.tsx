@@ -901,23 +901,46 @@ export function App() {
               />
             )}
           </div>
-          <div className="filters flex flex-wrap gap-1">
-            {FILTERS.map((entry) => {
-              const on = entry.key === "all" ? filters.size === 0 : filters.has(entry.key);
-              return (
-                <Button
-                  key={entry.key}
-                  className={`filter-btn filter-${entry.key}`}
-                  aria-label={entry.aria}
-                  aria-pressed={on}
-                  title={entry.title}
-                  active={on}
-                  onClick={() => toggleFilter(entry.key)}
-                >
-                  {entry.label}
-                </Button>
-              );
-            })}
+          {/* The pills are one letter each, and the letter is the filter's own
+              short spelling: `E` isolates exact matches and `P` padding, which
+              was legible on hover and to a screen reader and to nobody looking
+              at the toolbar. The key under them names every letter with the
+              word the pill's own tooltip and the map's legend below already
+              use — one vocabulary, spelled once — so the letters read at a
+              glance without widening the pills into a sentence. */}
+          <div className="filters-box flex flex-col gap-1">
+            <div className="filters flex flex-wrap gap-1">
+              {FILTERS.map((entry) => {
+                const on = entry.key === "all" ? filters.size === 0 : filters.has(entry.key);
+                return (
+                  <Button
+                    key={entry.key}
+                    className={`filter-btn filter-${entry.key}`}
+                    aria-label={entry.aria}
+                    aria-pressed={on}
+                    title={entry.title}
+                    active={on}
+                    onClick={() => toggleFilter(entry.key)}
+                  >
+                    {entry.label}
+                  </Button>
+                );
+              })}
+            </div>
+            {/* Visible to sighted readers only: every pill's accessible name
+                is already its word ("Filter exact"), so a screen reader that
+                also read this key would hear each state named twice. */}
+            <ul
+              className="filter-key flex flex-wrap gap-x-2 font-mono text-micro text-muted"
+              aria-hidden="true"
+            >
+              {FILTERS.filter((entry) => entry.key !== "all").map((entry) => (
+                <li key={entry.key}>
+                  <b className="text-text">{entry.label}</b>{" "}
+                  {entry.title.split(" (")[0] ?? entry.title}
+                </li>
+              ))}
+            </ul>
           </div>
           <div className="actions flex flex-wrap items-center gap-2">
             {targets.length > 0 && (

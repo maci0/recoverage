@@ -242,11 +242,17 @@ def test_code_modal_names_one_scroll_region(page: Any):
     """The modal's body is the pane's scroll container, so it carries the
     focusable region and its name. The <pre> inside used to declare a second
     region under the same name over the same content: two tab stops where one
-    scrolls, and a screen reader reading the same line twice."""
-    page.goto(f"{BASE_URL}/?section=.text")
+    scrolls, and a screen reader reading the same line twice.
+
+    The pane has to hold real text, because Open (like Copy) is deliberately
+    off for every placeholder a pane shows. The sample document's `.text`
+    functions carry no `files`, so their C Source pane holds "(no C
+    implementation for this function yet)" and the button is correctly
+    disabled; the `.data` block's global carries a `decl`, which is the pane's
+    text. A test that clicks a block and waits 15s for a source the fixture
+    never had is asserting the fixture, not the modal."""
+    page.goto(f"{BASE_URL}/?section=.data")
     page.wait_for_selector(".grid-canvas")
-    page.locator(".tab-btn", has_text=".text").click()
-    page.wait_for_timeout(500)
 
     canvas = page.locator(".grid-canvas")
     box = canvas.bounding_box()

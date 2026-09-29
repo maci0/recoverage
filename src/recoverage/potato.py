@@ -923,7 +923,6 @@ _PAGE_SRC = r"""<!DOCTYPE html>
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>ReCoverage - Potato Mode</title><!-- The same phosphor R the topbar below and the SPA's assets/favicon.svg draw. An emoji in a data URI was this link's first spelling, so a browser tab showed a desktop-computer glyph on one view of the product and the logo on the other. --><link rel="icon" href="{{R_LOGO_SVG}}"></head>
 <body bgcolor="{{BG_COLOR}}" text="{{TEXT_COLOR}}" background="{{SCANLINE_PNG}}" link="{{COLORS['reloc']}}" vlink="{{COLORS['reloc']}}" alink="{{COLORS['exact']}}">
 <font face="{{SANS_FONT}}">
-<a href="#grid-container"><font size="1" color="{{MUTED_COLOR}}">[Skip to grid]</font></a>
 <main>
 <!-- Page wrapper: the grid is a fixed-width lattice (grid_columns x cell_w), so
      on a narrow viewport it is wider than the window.  Without this wrapper the
@@ -936,6 +935,11 @@ _PAGE_SRC = r"""<!DOCTYPE html>
 
 <!-- Top Bar -->
 <table role="presentation" id="topbar" width="100%" border="0" cellpadding="4" cellspacing="0" background="{{TOPBAR_PNG}}">
+  <tr>
+    <td colspan="2">
+      <a href="#grid-container"><font size="1" color="{{MUTED_COLOR}}">[Skip to grid]</font></a>
+    </td>
+  </tr>
   <tr>
     <td valign="middle">
       <table role="presentation" id="logo" border="0" cellpadding="0" cellspacing="0">
@@ -2121,7 +2125,7 @@ def _build_progress(
 
 
 def _cell_span(cell: dict[str, Any]) -> int:
-    """A cell's lattice width in columns, never below 1.
+    """A cell's lattice width in columns, between 1 and the lattice ceiling.
 
     ``span`` reaches this module as rebrew read it: a plain int, with no
     ceiling and no floor (a document may spell it zero, negative, or as a
@@ -2134,9 +2138,18 @@ def _cell_span(cell: dict[str, Any]) -> int:
     ``packSection`` applies on the SPA side, so the two surfaces draw one
     document at one lattice.
 
+    The ceiling is the other half of the same bound, and it is a
+    response-size one: the row renderer emits a ``<td>`` per row-width of a
+    cell wider than the lattice, so a document spelling ``span = 1 << 64``
+    asked for 2^58 table cells and the render died in a ``MemoryError`` long
+    before it answered.  No lattice is wider than :data:`_MAX_GRID_COLUMNS`
+    (the same cap the section's declared column count takes), so a span above
+    it is already a width no surface draws and is clamped there rather than
+    wrapped into a page nobody can receive.
+
     Absent (``span`` omitted) reads as 1, the reader's own default.
     """
-    return max(1, int(cell.get("span", 1)))
+    return min(_MAX_GRID_COLUMNS, max(1, int(cell.get("span", 1))))
 
 
 def _merge_cells(cells: list[dict[str, Any]], grid_columns: int) -> list[dict[str, Any]]:
