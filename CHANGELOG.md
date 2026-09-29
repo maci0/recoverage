@@ -5,6 +5,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [4.0.0] - 2026-09-29
+
 ### Added
 
 - The dashboard's detail panel carries a `Copy SHA` control for the SHA256 the

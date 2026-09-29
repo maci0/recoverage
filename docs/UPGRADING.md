@@ -32,11 +32,10 @@ recoverage config --json   # the same object, for a script to diff
 So a deployment that upgrades onto a raised floor finds out here rather than at
 the next restart.
 
-## [Unreleased]
+## [4.0.0]
 
-The next major. Seven changes break a consumer; everything else in the
-`[Unreleased]` section of the changelog is additive or a fix. When this ships,
-the release commit renames the heading to the version it ships as.
+Seven changes break a consumer; everything else in this release of the
+changelog is additive or a fix.
 
 ### The dashboard is a Preact bundle, not VanJS
 

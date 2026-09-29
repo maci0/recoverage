@@ -2,14 +2,14 @@
 
 ## Supported versions
 
-The current release line is `3.x`. `recoverage` is a single-developer,
+The current release line is `4.x`. `recoverage` is a single-developer,
 single-machine tool: it is supported on the version the maintainer ships, and
 older versions receive no backports.
 
 | Version | Supported |
 |---------|-----------|
-| 3.x (current, `__version__` at `src/recoverage/__init__.py:40`; `3.0.0` is tagged `v3.0.0`) | yes |
-| < 3.0.0 | no |
+| 4.x (current, `__version__` at `src/recoverage/__init__.py:40`; `4.0.0` is tagged `v4.0.0`) | yes |
+| < 4.0.0 | no |
 
 ## Reporting a vulnerability
 
