@@ -188,6 +188,14 @@ performs.
    `OPTIONS` carries no `Origin` and stays gated, the request the preflight
    precedes is authenticated by the same hook, and an exempt preflight does not
    clear the failed-token window (only a verified token does).
+   The other requests it passes are a `GET` or `HEAD` of the two brand fonts,
+   `/archivo.woff2` and `/jetbrains-mono.woff2` (`server._UNGATED_ASSETS`),
+   which the 401 page draws in. They are OFL files, byte-identical in every
+   wheel and credited in `NOTICE`, and none of the assets listed below: a peer
+   fetching one learns only that recoverage is listening, which the 401 page
+   already tells it. The fetch neither charges nor clears the failed-token
+   window, and every other static asset (`style.css`, `app.js`, `print.css`,
+   `favicon.svg`) stays gated.
 2. **App to coverage documents.** `db/coverage-<target>.toml` is printed by
    `rebrew build-db` and read here, never written (`server.coverage_snapshots`,
    `src/recoverage/server.py`; the reader is `rebrew.coverage_toml`,

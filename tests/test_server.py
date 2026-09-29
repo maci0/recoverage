@@ -1273,6 +1273,29 @@ class TestTokenAuthEndpoint:
         status, _, _ = wsgi_get("/api/health", headers={"Authorization": "Bearer unit-test-token"})
         assert status.startswith("200")
 
+    @pytest.mark.parametrize("path", ["/archivo.woff2", "/jetbrains-mono.woff2"])
+    def test_the_brand_fonts_answer_without_a_token(self, path: str) -> None:
+        """The 401 page draws in these, and a peer reading it has no token."""
+        from conftest import wsgi_get
+
+        import recoverage.server as srv
+
+        failures = srv.metrics.AUTH.snapshot()["failures"]
+        status, headers, body = wsgi_get(path, headers={"Accept": "*/*"})
+        assert status.startswith("200"), status
+        assert headers.get("Content-Type") == "font/woff2"
+        assert body[:4] == b"wOF2"
+        # A font fetch is not a guess at the token: it charges no failure.
+        assert not srv._auth_failures.get(WSGI_PEER)
+        assert srv.metrics.AUTH.snapshot()["failures"] == failures
+
+    @pytest.mark.parametrize("path", ["/style.css", "/app.js", "/favicon.svg", "/potato"])
+    def test_every_other_asset_stays_gated(self, path: str) -> None:
+        from conftest import wsgi_get
+
+        status, _, _ = wsgi_get(path)
+        assert status.startswith("401"), (path, status)
+
     def test_rate_limit_after_max_failures(self) -> None:
         from conftest import wsgi_get
 
@@ -1501,6 +1524,13 @@ class TestUnauthorizedPageMatchesTheTokenLayer:
         assert f"font:1rem/1.55 {SANS_FONT.replace(', ', ',')}" in page
         assert f"font-family:{MONO_FONT.replace(', ', ',')}" in page
         assert "system-ui" not in page
+
+    def test_the_page_loads_the_faces_it_names_from_ungated_paths(self) -> None:
+        from recoverage.server import _UNGATED_ASSETS
+
+        loaded = set(re.findall(r'@font-face\{[^}]*src:url\("([^"]+)"\)', self._page()))
+        assert loaded == {"/archivo.woff2", "/jetbrains-mono.woff2"}
+        assert loaded <= _UNGATED_ASSETS, "a face the 401 page loads sits behind the gate"
 
     def test_the_page_uses_no_obsolete_markup(self) -> None:
         page = self._page().lower()
