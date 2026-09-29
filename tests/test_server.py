@@ -4038,7 +4038,12 @@ class TestSpaJumpAndSearch:
 
     def test_matched_set_carries_names_and_va_spellings(self) -> None:
         app = _web("App.tsx")
-        assert "new Set<string | number>(matchedNames)" in app
+        # The set is seeded with every matched NAME and then extended with that
+        # name's VA spelling, so a `.text` cell holding either one dims. The
+        # generic is the names' own: every member is a string, and a numeric arm
+        # no call site can satisfy is a type wider than the set is.
+        assert "new Set<string>(matchedNames)" in app
+        assert "matched.add(String(va))" in app
         assert "coverage.searchIndex[name]?.va" in app
 
     def test_enter_jumps_to_a_matched_block_in_the_section_on_screen(self) -> None:

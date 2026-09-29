@@ -7,7 +7,7 @@ import { useEffect, useState } from "preact/compat";
 import { fetchAsm, fetchFunction, fetchTextSafe, type FunctionDetail, type Section } from "@/api";
 import type { OriginalBinary } from "@/hooks/useOriginalBinary";
 import { formatBytes, inspectBytes, type InspectorItem } from "@/lib/bytes";
-import { MSG, extractDocs, hex, sourceFileUrl, toVa } from "@/lib/format";
+import { MSG, errorMessage, extractDocs, hex, sourceFileUrl, toVa } from "@/lib/format";
 
 /** The selected block's detail panes.
  *
@@ -250,7 +250,7 @@ export function useSelection({
         setPanes({
           fn: null,
           fnKey: firstFn,
-          source: MSG.ERROR_PREFIX + (error instanceof Error ? error.message : String(error)),
+          source: MSG.ERROR_PREFIX + (errorMessage(error)),
           docs: MSG.NO_DOCS,
           asm: global ? MSG.DATA_SECTION_NO_ASM : MSG.ASM_PLACEHOLDER,
           bytes: bytesMissMessage(dll),
