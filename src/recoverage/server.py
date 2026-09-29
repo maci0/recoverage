@@ -2695,12 +2695,12 @@ _AUTH_TOKEN: str = ""
 
 # Deliberately does not echo the expected token.  It is also a page of this
 # product, not a generic error screen: it is the first thing a locked-out
-# operator sees.  It carries its own <style>, because the stylesheet and the
-# fonts sit behind the same gate: each colour is a `light-dark()` pair copied
-# from the relumea tokens the SPA reads (web/app/system/tokens.css: bg, surface,
-# border, text, text-muted), so it follows the OS theme like the dashboard, and
-# the faces are the stacks Potato Mode names (potato.SANS_FONT, MONO_FONT),
-# which fall back to a system face because the woff2 files are gated too.
+# operator sees.  It carries its own <style>, because the stylesheet sits
+# behind the same gate: each colour is a `light-dark()` pair copied from the
+# relumea tokens the SPA reads (web/app/system/tokens.css: bg, surface, border,
+# text, text-muted), so it follows the OS theme like the dashboard.  The faces
+# are the brand woff2 files, which `_UNGATED_ASSETS` serves without the token,
+# over the stacks Potato Mode names (potato.SANS_FONT, MONO_FONT).
 # TestUnauthorizedPageMatchesTheTokenLayer holds the values against that file,
 # and tools/lint_html.py runs the page through vnu.
 _UNAUTHORIZED_HTML = (
@@ -2709,6 +2709,10 @@ _UNAUTHORIZED_HTML = (
     b'<meta name="color-scheme" content="light dark">'
     b"<title>recoverage \xc2\xb7 access token required</title><style>"
     b":root{color-scheme:light dark}"
+    b'@font-face{font-family:Archivo;src:url("/archivo.woff2") format("woff2");'
+    b"font-weight:100 900;font-display:swap}"
+    b'@font-face{font-family:"JetBrains Mono";src:url("/jetbrains-mono.woff2") format("woff2");'
+    b"font-weight:400 700;font-display:swap}"
     b"body{margin:0;min-height:100vh;display:grid;place-items:center;padding:1rem;"
     b"box-sizing:border-box;background:light-dark(#fafafa,#0b0b0c);"
     b"color:light-dark(#0a0a0b,#ededef);"
@@ -3064,6 +3068,21 @@ def _is_cors_preflight() -> bool:
     )
 
 
+#: Paths a GET or HEAD reaches without the token: the two brand faces the 401
+#: page draws in.  They are OFL fonts, byte-identical in every wheel and
+#: credited in NOTICE, so fetching one tells an unauthenticated peer only that
+#: recoverage is listening, which the 401 page already says.  Gating them left
+#: the one page such a peer sees in a system face.  Nothing read from the
+#: project, the coverage documents or the process is in this set, and a path
+#: joins it only on that same argument (docs/THREAT_MODEL.md, flow 1).
+_UNGATED_ASSETS = frozenset({"/archivo.woff2", "/jetbrains-mono.woff2"})
+
+
+def _is_ungated_asset() -> bool:
+    """Whether this request fetches one of :data:`_UNGATED_ASSETS`."""
+    return request.method in ("GET", "HEAD") and request.path in _UNGATED_ASSETS
+
+
 def _require_auth() -> None:
     """Enforce the configured bearer token, or pass when none is set.
 
@@ -3083,7 +3102,7 @@ def _require_auth() -> None:
     answer 429 to the operator, and one operator's traffic cannot reset
     another client's count.
     """
-    if not _AUTH_TOKEN or _is_cors_preflight():
+    if not _AUTH_TOKEN or _is_cors_preflight() or _is_ungated_asset():
         return
 
     # The peer key for the throttle. REMOTE_ADDR is the socket peer here (the

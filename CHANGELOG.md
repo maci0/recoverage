@@ -9,12 +9,16 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - The coverage map's verdict fills follow relumea's new token values: the
   light theme's fills are darker and each one now stands out 3:1 from the card
-  it is painted on, where they were pale tints at 1.3 to 1.8:1. In the dark
+  it is painted on, where they were pale tints under 3:1. In the dark
   theme, and in Potato Mode, `STUB`, thunk and data cells are slightly
   lighter for the same reason.
 
 ### Fixed
 
+- The "Access token required" page draws in Archivo and JetBrains Mono like
+  the rest of the dashboard. With `--token` set, the two brand font files are
+  now served without the token (they are the same public OFL files in every
+  install); every other file and endpoint still needs it.
 - Potato Mode no longer scrolls sideways on a 1440px or 1280px window. The
   coverage map draws at most 40 blocks per row and wraps the rest onto more
   rows, where a 64-column section used to draw a 1728px map.
