@@ -15,6 +15,7 @@ from coverage_fixture import cell, coverage_dir, write_coverage
 from rebrew.coverage_toml import CoverageSnapshot, load_coverage
 
 from recoverage.potato import (
+    _MAX_RENDERED_COLUMNS,
     BG_COLOR,
     BORDER_COLOR,
     MUTED_COLOR,
@@ -572,8 +573,9 @@ def test_grid_structure():
         first_row_tds = re.findall(r"<td\b", table_rows[0]) or []
 
         # The document's own columns field, defaulting to the 64 the renderer
-        # falls back to for a section that states none.
-        grid_columns = int(snap.sections[sec].columns) or 64
+        # falls back to for a section that states none, capped at the widest
+        # lattice the page draws.
+        grid_columns = min(int(snap.sections[sec].columns) or 64, _MAX_RENDERED_COLUMNS)
 
         assert len(first_row_tds) >= grid_columns, f"grid {sec}: sizing row"
 
@@ -2266,6 +2268,37 @@ class TestGridColumnsValidation:
 
         with pytest.raises(ValueError, match="grid_columns must be positive"):
             _build_grid_html([], {}, -1, set(), "", set(), "", "t", ".text")
+
+
+class TestGridFitsADesktopWindow:
+    """A 64-column section, which is what rebrew writes, renders narrower.
+
+    At 27px a column the declared 64 made a 1728px lattice, so Potato Mode
+    scrolled sideways on a 1440px desktop.  The page reflows the same blocks
+    into at most ``_MAX_RENDERED_COLUMNS`` columns.
+    """
+
+    def test_a_64_column_section_renders_at_the_cap(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        states = ("exact", "stub")
+        cells = [cell(i * 16, i * 16 + 16, states[i % 2]) for i in range(100)]
+        _write_doc(
+            tmp_path,
+            monkeypatch,
+            "WIDE",
+            {".text": {"size": 1600, "columns": 64, "unitBytes": 16, "cells": cells}},
+        )
+        html = render_potato_url("/potato?target=WIDE&section=.text")
+        grid = re.search(r'<table id="grid"[^>]*>(.*?)</table>', html, re.DOTALL)
+        assert grid is not None
+        rows = re.split(r"</tr><tr>", grid.group(1))
+        assert len(re.findall(r"<td\b", rows[0])) == _MAX_RENDERED_COLUMNS
+        for row in rows[1:]:
+            spans = [int(v) for v in re.findall(r'colspan="(\d+)"', row)]
+            assert sum(spans) == _MAX_RENDERED_COLUMNS, row[:120]
+        # Every block is still drawn: 100 alternating cells, none merged.
+        assert len(re.findall(r'href="\?target=WIDE&section=\.text&idx=\d+"', grid.group(1))) == 100
 
 
 class TestGridWrapsACellWiderThanTheLattice:

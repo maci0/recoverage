@@ -15,6 +15,9 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Potato Mode no longer scrolls sideways on a 1440px or 1280px window. The
+  coverage map draws at most 40 blocks per row and wraps the rest onto more
+  rows, where a 64-column section used to draw a 1728px map.
 - On Windows, a coverage document stamped after the year 3000 no longer turns
   `/api/health` and Potato Mode into a 500. The date renders as it does on
   Linux and macOS, clamped to 9999-12-31 past the last one it can print.

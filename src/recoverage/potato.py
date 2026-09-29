@@ -2350,6 +2350,12 @@ _MAX_GRID_COLUMNS = 256
 #: Column count used when a sections row declares none (NULL or not a positive
 #: int), which is schema-legal the way a NULL va in a .bss cell is.
 _DEFAULT_GRID_COLUMNS = 64
+#: Widest lattice the page draws, whatever the section declares.  Cells flow
+#: left to right and wrap, so a narrower lattice shows the same blocks in more
+#: rows.  At :data:`_CELL_SIZE` plus the 1px rule a column is 27px, so 40 of
+#: them (1080px) and the page chrome fit a 1280px window; the 64 columns rebrew
+#: writes (1728px) scrolled the page sideways on a 1440px desktop.
+_MAX_RENDERED_COLUMNS = 40
 #: Side of one lattice cell, in CSS pixels.  A cell IS a link, and WCAG 2.2 SC
 #: 2.5.8 puts the floor for a pointer target at 24x24, which the 12px lattice
 #: this page shipped with missed on both axes.  The cell is two pixels above the
@@ -2397,9 +2403,9 @@ def _build_grid_html(
     grid_columns = min(grid_columns, _MAX_GRID_COLUMNS)
     # One cell is one link, so the cell and the image inside it are the target
     # size SC 2.5.8 asks for rather than the pitch a denser map would prefer.
-    # A 64-column lattice is 1664px at this size, which is what the page scrolls
-    # for on a narrow viewport; narrowing it is the spacing exception, and two
-    # cells 12px apart do not satisfy it.
+    # The page renders at most _MAX_RENDERED_COLUMNS (1080px), which is what it
+    # scrolls for on a viewport narrower than that; shrinking the cell instead
+    # is the spacing exception, and two cells 12px apart do not satisfy it.
     cell_w = _CELL_SIZE
     cell_h = _CELL_SIZE
     sizing_tds = "".join(
@@ -2782,7 +2788,7 @@ def _render_grid_view(
     grid_columns = sec_data.get("columns") or _DEFAULT_GRID_COLUMNS
     if grid_columns <= 0:
         grid_columns = _DEFAULT_GRID_COLUMNS
-    grid_columns = min(grid_columns, _MAX_GRID_COLUMNS)
+    grid_columns = min(grid_columns, _MAX_RENDERED_COLUMNS)
     cells, merged_cells, grid_key = _load_grid_cells(coverage, section, grid_columns, snap=snap)
     per_section_stats = _section_stats_cached(coverage, sections, data, snap=snap)
     block_count = len(merged_cells)
