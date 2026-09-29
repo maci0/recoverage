@@ -397,7 +397,11 @@ export function CoverageMap({
       ref={wrapRef}
       // The `.grid` hook and `data-cols` are what the map and the browser
       // specs query; `id` is what a jump to an address scrolls.
-      className="grid max-w-full overflow-x-auto rounded-hair border border-line bg-grid"
+      // The map is a frame beside the detail panel's, so it wears the same
+      // corner the frame tier names (`--radius`); `rounded-hair` is the cell
+      // and chip tier, and two boxes in one row with different corners read as
+      // two layouts.
+      className="grid max-w-full overflow-x-auto rounded-control border border-line bg-grid"
       id={`grid-${section.name.replaceAll(".", "")}`}
       data-cols={declaredColumns}
       // A canvas carries no accessible children, so this is an application
