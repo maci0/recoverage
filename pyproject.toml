@@ -58,7 +58,6 @@ dependencies = [
     # is subsumed by this floor.)
     "rebrew>=2.16.0",
     "rich>=15.0.0",
-    "rjsmin>=1.2",
     "typer>=0.27.2",
     "zstandard>=0.22",
 ]
@@ -185,12 +184,12 @@ python_version = "3.13"
 strict = true
 disallow_untyped_decorators = false
 no_implicit_reexport = false
-# The runtime deps (bottle, brotli, rcssmin, rjsmin) ship no py.typed, so
+# The runtime deps (bottle, brotli, rcssmin) ship no py.typed, so
 # every import of them is an error mypy cannot see past. ignore_missing_imports
 # is what covers them, tree-wide rather than per import site: a per-site
 # `# type: ignore[import-untyped]` would be redundant under this setting, and
 # warn_unused_ignores below would then report each one as a stale suppression.
-# The setting is therefore one tree-wide statement about these four packages,
+# The setting is therefore one tree-wide statement about these three packages,
 # and every `type: ignore` left in the tree is one a reader can trust to be
 # silencing a real error.
 ignore_missing_imports = true
