@@ -19,10 +19,14 @@ Two passes, one vnu runner:
 Potato Mode deliberately renders HTML4-era markup (``<font>``, ``bgcolor``,
 ``cellpadding``, ... — see the "no CSS" docstrings in potato.py).  The obsolete
 family is filtered for that document as the documented retro contract, while
-every other message stays fatal — the SPA shell is checked strictly.
+every other message stays fatal. The Tailwind stylesheet, as a file and inlined
+in the shell, is checked strictly apart from ``TAILWIND_OUTPUT_FILTER``: three
+messages vnu raises on valid Tailwind 4 output, named one by one. A canary run
+plants an error in a copy of the stylesheet first, so a vnu that validates
+nothing (as it did on the previous bundle) fails the gate instead of passing it.
 
-The gate fails on any vnu message of any severity — nothing is skipped beyond
-the documented Potato Mode obsolete-element filter above.
+The gate fails on any other vnu message of any severity: nothing is skipped
+beyond those two documented filters.
 
 Requires: uv (project venv), java on PATH, and ``bun install`` already run
 (for vnu-jar).  Both are checked here and reported by name, so a run that
@@ -57,6 +61,24 @@ RUNNER_UNAVAILABLE = 3
 HTML_FILES = ("index.html",)
 CSS_FILES = ("print.css", "style.css")
 
+#: The three messages vnu's CSS checker raises on valid Tailwind 4 output, and
+#: nothing else. `@property` is CSS Properties and Values API Level 1, which the
+#: checker does not implement; `margin-trim` only appears inside an `@supports`
+#: test Tailwind uses to detect engines; a custom property in
+#: `transition-property` is allowed by CSS Transitions Level 1. Every other
+#: message on the stylesheet or the served shell still fails the gate.
+TAILWIND_OUTPUT_FILTER = (
+    ".*(Unrecognized at-rule “@property”"
+    "|“margin-trim”: Property “margin-trim” doesn't exist"
+    "|“transition-property”: “--tw-[a-z-]+” is not a “transition-property” value).*"
+)
+
+#: A declaration vnu has to reject. Appended to a copy of the built stylesheet,
+#: it proves the CSS pass validated the file rather than skipping it: vnu
+#: 26.9.16 reported nothing at all on the previous bundle, a planted typo
+#: included, so a clean exit on its own was no evidence.
+CSS_CANARY = "\n.vnu-canary{colr:red}\n"
+
 
 def run_vnu(args: list[str], paths: list[str | Path]) -> int:
     """Run vnu over *paths*; return its exit status (non-zero = findings)."""
@@ -72,12 +94,21 @@ def run_vnu(args: list[str], paths: list[str | Path]) -> int:
         return RUNNER_UNAVAILABLE
 
 
-def lint_static_assets() -> int:
+def lint_static_assets(scratch: Path) -> int:
     """Validate the shipped assets; 0 when clean."""
     rc = run_vnu([], [ASSETS_DIR / f for f in HTML_FILES])
     if rc != 0:
         return rc
-    return run_vnu(["--css"], [ASSETS_DIR / f for f in CSS_FILES])
+    canary = scratch / "style-canary.css"
+    canary.write_text(
+        (ASSETS_DIR / "style.css").read_text(encoding="utf-8") + CSS_CANARY, encoding="utf-8"
+    )
+    if run_vnu(["--css", "--filterpattern", TAILWIND_OUTPUT_FILTER], [canary]) == 0:
+        print("vnu accepted a stylesheet with a planted error, so it validated nothing")
+        return 1
+    return run_vnu(
+        ["--css", "--filterpattern", TAILWIND_OUTPUT_FILTER], [ASSETS_DIR / f for f in CSS_FILES]
+    )
 
 
 def main() -> int:
@@ -91,12 +122,12 @@ def main() -> int:
         )
         return RUNNER_UNAVAILABLE
 
-    rc = lint_static_assets()
-    if rc != 0:
-        print("static-asset lint failed")
-        return rc
-
     with scratch_project_dir() as project_dir:
+        rc = lint_static_assets(project_dir)
+        if rc != 0:
+            print("static-asset lint failed")
+            return rc
+
         if not build_sample_db(project_dir).is_file():
             print("sample coverage document not built")
             return 1
@@ -115,12 +146,15 @@ def main() -> int:
                 (project_dir / name).write_bytes(body)
                 docs[name] = project_dir / name
 
-            # SPA shell: strict — any vnu message of any severity fails the gate.
+            # SPA shell: strict apart from TAILWIND_OUTPUT_FILTER, the three
+            # messages vnu raises on valid Tailwind 4 output in the inlined sheet.
             # Potato Mode: the obsolete-element/attribute family (<font>,
             # bgcolor, valign, ...) is the documented retro design, so hide
             # those messages; every other message still fails the gate.
             # (vnu's --filterpattern matches the full message, hence the .*)
-            rc = run_vnu(["--also-check-css"], [docs["spa.html"]])
+            rc = run_vnu(
+                ["--also-check-css", "--filterpattern", TAILWIND_OUTPUT_FILTER], [docs["spa.html"]]
+            )
             if rc == 0:
                 rc = run_vnu(
                     ["--also-check-css", "--filterpattern", ".*obsolete.*"],
