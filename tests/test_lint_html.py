@@ -101,3 +101,26 @@ def test_vnu_is_launched_with_the_pinned_jar(monkeypatch: Any) -> None:
     lint_html.run_vnu(["--css"], [REPO_ROOT / "package.json"])
     assert seen[0][:3] == ["java", "-jar", str(lint_html.VNU_JAR)]
     assert seen[0][3:] == ["--css", str(REPO_ROOT / "package.json")]
+
+
+def test_a_checker_that_validates_nothing_fails_the_css_pass(
+    monkeypatch: Any, capsys: Any, tmp_path: Path
+) -> None:
+    """vnu reported nothing at all on an earlier bundle, a planted typo
+    included, so a clean exit is not evidence on its own. The canary copy
+    carries a declaration vnu must reject; a checker that accepts it fails the
+    gate before the real stylesheet is read."""
+    calls: list[list[str]] = []
+
+    def accept_everything(args: list[str], paths: list[str | Path]) -> int:
+        calls.append([*args, *(str(p) for p in paths)])
+        return 0
+
+    monkeypatch.setattr(lint_html, "run_vnu", accept_everything)
+    assert lint_html.lint_static_assets(tmp_path) == 1
+    assert "validated nothing" in capsys.readouterr().out
+    canary = tmp_path / "style-canary.css"
+    assert canary.read_text(encoding="utf-8").endswith(lint_html.CSS_CANARY)
+    # The canary ran, and the shipped stylesheets were never passed as clean.
+    assert any(str(canary) in call for call in calls)
+    assert not any(str(lint_html.ASSETS_DIR / "print.css") in call for call in calls)
