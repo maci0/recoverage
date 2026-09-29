@@ -770,6 +770,24 @@ export function App() {
    * element, so without this the only signal that anything happened is the
    * pixels changing. */
   const mapStatus = describeMapArea(noTargets, active, coverage.cellError, filters);
+  const sectionEmpty = !coverage.loading && target !== "" && names.length === 0;
+  /** The map area is a loading line whose height is not the map's. Whatever
+   * sits under it (the legend, and the panel once the layout stacks below
+   * `lg`) would jump down when the map lands, which Lighthouse scores as
+   * layout shift, so it stays out of the flow until then. */
+  const mapPending =
+    !noTargets &&
+    !sectionEmpty &&
+    (active === null
+      ? (loadError ?? coverage.error) === null
+      : active.cells === undefined && coverage.cellError?.section !== active.name);
+  /** The summary above the map is still a loading line. It grows by a figure
+   * and a wrapped sentence when `/stats` answers, and its filter pills gain
+   * their counts and wrap onto another row, so a loading line under it would
+   * move twice. While both are loading the summary's own line is the one
+   * loading message on screen. */
+  const holdMapArea =
+    mapPending && target !== "" && coverage.stats === null && coverage.statsError === null;
 
   return (
     <>
@@ -918,12 +936,14 @@ export function App() {
             )}
           </div>
           <div className="actions flex flex-wrap items-center gap-1.5">
-            {/* Rendered while the target list loads, disabled, so its arrival
-                does not wrap this row onto a second line on a phone and push
-                the page down (CLS). A list that loaded empty removes it. */}
+            {/* Rendered while the target list loads, disabled, and a row of its
+                own below `sm`: sized to its longest option, the arrival of
+                the list moved the buttons after it onto or off a second line
+                on a phone and the page with them (CLS). A list that loaded
+                empty removes it. */}
             {!noTargets && (
               <select
-                className="h-8 min-w-0 max-w-full rounded-control border border-control-line bg-surface px-2 font-mono text-micro text-text hover:border-control-line-hover"
+                className="h-8 w-full min-w-0 max-w-full rounded-control border border-control-line bg-surface px-2 font-mono text-micro text-text hover:border-control-line-hover sm:w-auto"
                 aria-label="Target binary"
                 value={target}
                 disabled={targets.length === 0}
@@ -1035,25 +1055,32 @@ export function App() {
           <p className="sr-only" role="status" aria-live="polite">
             {mapStatus}
           </p>
-          <MapArea
-            noTargets={noTargets}
-            target={target}
-            coverage={coverage}
-            active={active}
-            sectionEmpty={!coverage.loading && target !== "" && names.length === 0}
-            loadError={loadError ?? coverage.error}
-            onRetry={retryFailedLoad}
-            filters={filters}
-            matchedFns={matchedFns}
-            selectedIndex={selectedIndex}
-            activeFn={panes.fnKey}
-            theme={theme}
-            onSelect={onGridSelect}
-            onGridReady={(focus) => {
-              gridFocus.current = focus;
-            }}
-          />
-          <ul className="legend m-0 mt-3 flex list-none flex-wrap gap-x-4 gap-y-1 p-0 text-micro text-text-muted">
+          {!holdMapArea && (
+            <MapArea
+              noTargets={noTargets}
+              target={target}
+              coverage={coverage}
+              active={active}
+              sectionEmpty={sectionEmpty}
+              loadError={loadError ?? coverage.error}
+              onRetry={retryFailedLoad}
+              filters={filters}
+              matchedFns={matchedFns}
+              selectedIndex={selectedIndex}
+              activeFn={panes.fnKey}
+              theme={theme}
+              onSelect={onGridSelect}
+              onGridReady={(focus) => {
+                gridFocus.current = focus;
+              }}
+            />
+          )}
+          <ul
+            className={cn(
+              "legend m-0 mt-3 flex list-none flex-wrap gap-x-4 gap-y-1 p-0 text-micro text-text-muted",
+              mapPending && "hidden",
+            )}
+          >
             {STATE_LABEL.map((label, slot) => (
               <li key={label} className="flex items-center gap-1.5">
                 <span
@@ -1072,6 +1099,7 @@ export function App() {
           sourceRoot={sourceRoot}
           parentVaFor={parentVaFor}
           onJumpToAddress={jumpToAddress}
+          hiddenWhenStacked={mapPending}
         />
       </main>
     </>

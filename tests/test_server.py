@@ -4174,8 +4174,8 @@ class TestSpaLayoutAndFeedback:
         while it loads.
         """
         coverage = _web("hooks/useCoverage.ts")
-        start = coverage.index("setLoading(true)")
-        end = coverage.index("void load(section, control.signal);", start)
+        end = coverage.index("void load(section, control.signal);")
+        start = coverage.rindex("useEffect(", 0, end)
         assert "setLoadError(null)" in coverage[start:end], (
             "a new load keeps the error of the one it replaced"
         )
