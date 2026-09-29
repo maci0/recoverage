@@ -2415,13 +2415,20 @@ class TestPathTraversalGuard:
         """A sourceRoot that is plain-relative but RESOLVES out of the project.
 
         ``is_plain_relative`` is a lexical rule: it holds "src/evil" whatever
-        src/evil is, and ``resolve()`` follows a symlink. The containment check
-        that follows is measured against ``base``, which is the directory that
-        already escaped, so every ``is_relative_to`` below it passes trivially.
-        Git preserves a symlink in a checkout, so this is a file the tree
-        ships, not one a reader has to plant.
+        src/evil is, and ``resolve()`` follows a symlink. The check on the
+        resolved base against the project root is what refuses it: every
+        ``is_relative_to`` below that is measured against ``base``, which is
+        the directory that already escaped, so those pass trivially. Git
+        preserves a symlink in a checkout, so this is a file the tree ships,
+        not one a reader has to plant.
+
+        The escape target is a SIBLING of the project root, because that is
+        what the guard measures. A target under the project root is not an
+        escape at all: the panel may read the project's own files, and the
+        fixture would then assert a refusal the guard does not owe (it read
+        the file, and the test failed on a correct guard).
         """
-        outside = tmp_path / "outside"
+        outside = tmp_path.parent / f"{tmp_path.name}-outside"
         outside.mkdir()
         (outside / "passwd").write_text("root:x:0:0", encoding="utf-8")
         (tmp_path / "src").mkdir()
