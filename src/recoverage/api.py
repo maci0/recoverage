@@ -1727,10 +1727,10 @@ _DEFAULT_ASM_SECTION = ".text"
 #: Bytes a raw-slice request reads when it asks for no size.
 _DEFAULT_SLICE_SIZE = 256
 
-# Longest ?search= the list endpoint accepts.  A longer term is compared
-# against every row of every function, and names nothing a user types;
-# rejecting it keeps the work per request finite.
-_MAX_SEARCH_CHARS = 500
+# Longest ?search= the list endpoint accepts: server.MAX_SEARCH_CHARS, the one
+# cap both search surfaces read, so the term a client can get past on one is
+# the term it can get past on the other.
+_MAX_SEARCH_CHARS = _server.MAX_SEARCH_CHARS
 
 #: Statuses ``functions.status`` can carry: rebrew's own vocabulary
 #: (``rebrew.workspace.status.COVERAGE_DB_STATUSES``, which build_db installs as

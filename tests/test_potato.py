@@ -2399,6 +2399,39 @@ class TestPathTraversalGuard:
         for source_root in ("C:/Windows", "C:\\Windows", "\\Windows\\System32"):
             assert self._read(tmp_path, monkeypatch, "main.c", source_root) is None, source_root
 
+    def test_symlinked_source_root_blocked(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A sourceRoot that is plain-relative but RESOLVES out of the project.
+
+        ``is_plain_relative`` is a lexical rule: it holds "src/evil" whatever
+        src/evil is, and ``resolve()`` follows a symlink. The containment check
+        that follows is measured against ``base``, which is the directory that
+        already escaped, so every ``is_relative_to`` below it passes trivially.
+        Git preserves a symlink in a checkout, so this is a file the tree
+        ships, not one a reader has to plant.
+        """
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "passwd").write_text("root:x:0:0", encoding="utf-8")
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "evil").symlink_to(outside, target_is_directory=True)
+        assert self._read(tmp_path, monkeypatch, "passwd", "src/evil") is None
+
+    def test_non_string_and_nul_file_refused(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A document spells ``files`` with no type on its elements.
+
+        ``files = [1]`` reaches Path() as a TypeError and a NUL-bearing name
+        makes resolve() raise ValueError; the second is caught and the first
+        escaped handle_potato's except tuple as a raw 500. ui.py refuses both
+        on the same value. The answer is the panel without its source.
+        """
+        (tmp_path / "src").mkdir()
+        assert self._read(tmp_path, monkeypatch, 1) is None  # type: ignore[arg-type]
+        assert self._read(tmp_path, monkeypatch, "a\x00b") is None
+
     def test_absolute_path_blocked(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """An absolute files[0] replaces the base entirely (Path join
         semantics) and must be rejected even when the file exists."""
