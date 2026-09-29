@@ -38,7 +38,12 @@ export function useCoverage(target: string, section: string): Coverage {
   const [sections, setSections] = useState<Record<string, Section>>({});
   const [searchIndex, setSearchIndex] = useState<Record<string, SearchEntry>>({});
   const [paths, setPaths] = useState<{ sourceRoot?: string; originalDll?: string }>({});
-  const [loading, setLoading] = useState(false);
+  // The request the last settled /data load answered, as `requestKey` spells
+  // it. `loading` is derived from it rather than set by the load effect: an
+  // effect runs after the frame that first names a target is painted, so a
+  // flag it raises leaves that frame with a target, no sections and no load,
+  // which the shell draws as "No coverage data" until the next frame.
+  const [settledKey, setSettledKey] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [cellError, setCellError] = useState<{ section: string; detail: string } | null>(null);
   const [stats, setStats] = useState<StatsPayload | null>(null);
@@ -96,6 +101,7 @@ export function useCoverage(target: string, section: string): Coverage {
   const load = useCallback(
     async (name: string, signal: AbortSignal): Promise<void> => {
       const token = reloadTokenRef.current;
+      const key = requestKey(target, name, token);
       try {
         merge(await fetchData(target, name, signal, !indexIsCurrent(target)), name, token);
         // oxlint-disable-next-line @rikalabs/no-silent-catch-fallback -- the failure is surfaced as the header's error line, and the map keeps its last good frame
@@ -105,7 +111,7 @@ export function useCoverage(target: string, section: string): Coverage {
         }
       } finally {
         if (!signal.aborted) {
-          setLoading(false);
+          setSettledKey(key);
         }
       }
     },
@@ -148,7 +154,6 @@ export function useCoverage(target: string, section: string): Coverage {
       return;
     }
     const control = new AbortController();
-    setLoading(true);
     // A superseded load's error goes with it. The effect re-runs on a target
     // switch, a section switch and a rebuild, and each of those starts a
     // request for a different document: a stale target the server no longer
@@ -270,6 +275,8 @@ export function useCoverage(target: string, section: string): Coverage {
     setReloadToken((token) => token + 1);
   }, []);
 
+  const loading = target !== "" && settledKey !== requestKey(target, section, reloadToken);
+
   return {
     sections,
     searchIndex,
@@ -283,4 +290,10 @@ export function useCoverage(target: string, section: string): Coverage {
     reload,
     reloadToken,
   };
+}
+
+/** One /data load's identity: the target, the section and the build it was
+ * issued under. */
+function requestKey(target: string, section: string, token: number): string {
+  return JSON.stringify([target, section, token]);
 }

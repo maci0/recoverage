@@ -272,3 +272,40 @@ def test_code_modal_names_one_scroll_region(page: Any):
     # Exactly one focusable region, and it is the one that scrolls.
     expect(page.locator('.modal-body [role="region"]')).to_have_count(0)
     expect(page.locator('.modal-body[role="region"]')).to_have_count(1)
+
+
+# Web Vitals' "good" ceiling for cumulative layout shift; Lighthouse scores
+# the load against it.
+GOOD_CLS = 0.1
+PHONE_VIEWPORT = {"width": 412, "height": 823}
+
+# Sums the load's layout shifts and notes whether the empty state ever painted.
+_LOAD_PROBE = """
+window.__cls = 0;
+window.__emptyStateSeen = false;
+new PerformanceObserver((list) => {
+  for (const entry of list.getEntries()) {
+    if (!entry.hadRecentInput) window.__cls += entry.value;
+  }
+}).observe({ type: "layout-shift", buffered: true });
+new MutationObserver(() => {
+  const map = document.getElementById("section-panel");
+  if (map?.textContent.includes("No coverage data for")) window.__emptyStateSeen = true;
+}).observe(document, { childList: true, subtree: true, characterData: true });
+"""
+
+
+def test_phone_load_holds_its_layout(page: Any):
+    """On a phone the panel and legend stack under the map, and the summary
+    and the topbar sit above it, so a loading line or a control whose size
+    changes when data arrives moved everything below it. The first frame that
+    named a target also drew "No coverage data" before its load started."""
+    page.set_viewport_size(PHONE_VIEWPORT)
+    page.add_init_script(_LOAD_PROBE)
+    page.goto(f"{BASE_URL}/")
+    page.wait_for_selector(".grid-canvas")
+    page.wait_for_selector(".stats b")
+    page.wait_for_timeout(500)
+
+    assert page.evaluate("window.__emptyStateSeen") is False
+    assert page.evaluate("window.__cls") < GOOD_CLS

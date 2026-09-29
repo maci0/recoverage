@@ -5,6 +5,16 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- The dashboard no longer shows "No coverage data for <target>" for a frame
+  before the target's data starts loading.
+- On a phone, the dashboard no longer jumps down while it loads. The block
+  panel and the legend wait for the map instead of sitting under its loading
+  line, the loading line waits for the coverage summary above it, and the
+  target picker takes a row of its own, so buttons no longer move between
+  rows when the target list arrives.
+
 ## [4.1.1] - 2026-09-29
 
 ### Changed

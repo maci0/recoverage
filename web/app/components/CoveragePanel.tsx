@@ -35,6 +35,9 @@ export type CoveragePanelProps = {
    * link is a lookup rather than an address it already holds. */
   parentVaFor: (name: string) => number | null;
   onJumpToAddress: (address: number) => void;
+  /** Take the panel out of the flow below `lg`, where it stacks under the
+   * map. Beside the map (`lg` and up) it stays, since nothing above it moves. */
+  hiddenWhenStacked: boolean;
 };
 
 /** Pane text that stands for "nothing to", which turns Copy and Open off:
@@ -380,6 +383,7 @@ export function CoveragePanel({
   sourceRoot,
   parentVaFor,
   onJumpToAddress,
+  hiddenWhenStacked,
 }: CoveragePanelProps): ComponentChildren {
   const [modal, setModal] = useState<{
     title: string;
@@ -418,7 +422,10 @@ export function CoveragePanel({
 
   return (
     <aside
-      className="panel w-full shrink-0 self-start overflow-hidden rounded-card border border-border bg-surface lg:w-form"
+      className={cn(
+        "panel w-full shrink-0 self-start overflow-hidden rounded-card border border-border bg-surface lg:w-form",
+        hiddenWhenStacked && "max-lg:hidden",
+      )}
       id="panel"
       aria-labelledby="panel-title"
     >
