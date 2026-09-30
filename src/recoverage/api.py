@@ -2238,7 +2238,7 @@ def handle_api_asm(target: str) -> bytes | HTTPResponse:
             {
                 "error": "capstone not available",
                 "detail": f"{reason}; disassembly needs the optional extra: "
-                "pip install 'recoverage[capstone]'",
+                "uv sync --extra capstone",
             },
         )
 
