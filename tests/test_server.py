@@ -4967,6 +4967,31 @@ class TestSpaLayoutAndFeedback:
         ):
             assert marker in app, f"deep-link marker missing: {marker}"
 
+    def test_the_share_link_token_leaves_the_address_bar(self) -> None:
+        """`?token=` is a credential, not page state, and the address bar is
+        where a credential lives longest.
+
+        The share link is the only way a browser hands the SPA a credential:
+        `/` calls `server.set_auth_cookie`, which turns the query value into an
+        HttpOnly cookie before the bundle runs, and that cookie is what every
+        later fetch, EventSource and relative link authenticates with. So the
+        value in `window.location` was carrying nothing — and it was carrying
+        it into the history entry, the address bar a screen share or a
+        screenshot shows, and any bookmark saved from the page. The same
+        effect that restores the deep link drops the parameter, so the token
+        survives exactly the one request that needed it.
+        """
+        app = _web("App.tsx")
+        assert 'searchParams.delete("token")' in app
+
+        # The server side of the claim: the cookie is set FROM `?token=`, and
+        # the gate reads it back under the same name, so dropping the
+        # parameter cannot lock the reader out of the page they just
+        # authenticated on.
+        server_py = (REPO_ROOT / "src" / "recoverage" / "server.py").read_text(encoding="utf-8")
+        assert 'query_param("token")' in server_py
+        assert "AUTH_COOKIE_NAME" in server_py
+
     def test_the_same_origin_guard_wraps_both_db_supplied_paths(self) -> None:
         app = _web("App.tsx")
         binary = _web("hooks/useOriginalBinary.ts")

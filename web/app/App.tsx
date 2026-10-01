@@ -364,11 +364,24 @@ export function App() {
   }, [target, targetReady, targets, urlTarget]);
 
   // The URL carries the state a reload or a shared link has to restore.
+  //
+  // `token` is the one parameter that is NOT state, and it is dropped from the
+  // address bar here. The share link is the only way a browser hands this page
+  // a credential, and `server.set_auth_cookie` (called by `/` before this
+  // renders) has already turned it into an HttpOnly cookie by the time this
+  // effect runs, which is what every later fetch, EventSource and relative
+  // link authenticates with. Leaving the value in `window.location` therefore
+  // bought nothing and cost a credential that sits in the history entry, in
+  // the address bar over a screenshot or a screen share, and in the bookmark a
+  // reader saves the page under, for as long as the tab is open. The
+  // `Referrer-Policy: no-referrer` the server sends keeps it off the wire; this
+  // keeps it off the screen.
   useEffect(() => {
     if (!targetReady) {
       return;
     }
     const url = new URL(window.location.href);
+    url.searchParams.delete("token");
     if (target === "") {
       url.searchParams.delete("target");
     } else {
