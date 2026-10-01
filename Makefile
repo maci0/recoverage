@@ -4,7 +4,7 @@
 # is the one step that keeps the committed assets matching web/.
 .PHONY: help setup clean build check-bundle-clean web-build web-dev test test-one test-browser fuzz lint format format-check web-lint smoke smoke-fail \
 	shell-lint yaml-lint type-check all ensure-uv ensure-rebrew warn-uv-version clone-rebrew ensure-lint-tools \
-	ensure-bun regen-oxlint typecheck-web payload-budget browser-sbom browser-sbom-spdx python-sbom license-inventory
+	ensure-bun regen-oxlint vendor-manifest typecheck-web payload-budget browser-sbom browser-sbom-spdx python-sbom license-inventory
 
 # Force POSIX sh for recipes (ignore a caller-exported SHELL=bash).  Version
 # compares use ``sort -t. -k…n`` (POSIX), not GNU ``sort -V``.
@@ -210,6 +210,14 @@ setup: ensure-rebrew warn-uv-version
 # rebuild would otherwise differ on. Run it twice and `sha256sum dist/*` to
 # see both artifacts hold their hash.
 #
+# umask too, and for the wheel alone: `bdist_wheel` records every member with
+# the mode it finds on disk, and unlike the sdist there is no normalizer to pin
+# them afterwards, so a shell exporting `umask 077` produced a wheel whose
+# package files were 0o600. The CI job's two builds agreed only because both
+# inherit the runner's default 022. The sdist's modes are normalized after the
+# fact either way, so this costs the wheel nothing and fixes the one archive
+# whose bytes still followed the builder's own environment.
+#
 # ensure-rebrew, not just ensure-uv: the recipe ends in a `uv run`, which syncs
 # the project environment, and that environment cannot resolve the rebrew path
 # dependency without the sibling checkout. Without the preflight the build dies
@@ -230,6 +238,7 @@ setup: ensure-rebrew warn-uv-version
 # passes every other gate here and is found by whoever installs the wheel.
 build: ensure-rebrew ensure-uv web-build
 	@$(SET_STRICT) \
+	umask 022; \
 	export SOURCE_DATE_EPOCH="$(SOURCE_DATE_EPOCH)" LC_ALL=C TZ=UTC; \
 	for f in $(BUNDLE_ASSETS); do \
 	  if [ ! -f "$(BUNDLE_DIR)/$$f" ]; then \

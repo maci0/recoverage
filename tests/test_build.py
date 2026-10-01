@@ -676,6 +676,23 @@ class TestReproducibleBuild:
             assert var in recipe, f"the build recipe does not export {var}"
         assert "normalize_sdist.py" in recipe, "the sdist is not normalized after the build"
 
+    def test_the_build_recipe_pins_the_umask(self) -> None:
+        """The wheel is normalized for time but not for permissions.
+
+        `bdist_wheel` records each member with the mode it finds on disk, so the
+        wheel's bytes follow the umask of whoever ran the build: a contributor
+        whose shell exported `umask 077` produced a wheel whose package files
+        were 0o600, and the CI job's two builds agreed only because both
+        inherit the runner's default 022. `normalize_sdist.py` pins the
+        sdist's modes and there is no equivalent for the wheel, so the umask is
+        pinned in the recipe that writes the archive instead.
+        """
+        recipe = _MAKEFILE.split("\nbuild:", 1)[1].split("\n\n", 1)[0]
+        assert "umask 022" in recipe, (
+            "the build recipe does not pin the umask, so the wheel's member modes "
+            "follow the calling shell's"
+        )
+
     def test_the_bundle_recipe_pins_locale_and_timezone(self) -> None:
         """`web-build` is a prerequisite of `build`, so it runs in its own
         shell and the recipe's exports do not reach it. The two files it writes
@@ -738,6 +755,38 @@ class TestReproducibleBuild:
         assert ".NOTPARALLEL:" in _MAKEFILE, (
             "the Makefile is parallel and its targets share the venv, node_modules and dist/"
         )
+
+    def test_every_target_is_declared_phony(self) -> None:
+        """`.PHONY` is maintained by hand, so a target added without it stays
+        invisible until a file of that name appears: a stale `shell-lint`
+        script, a `build/` directory left by an interrupted run, or an editor
+        backup named `ensure-bun` would each make make consider the target up
+        to date and skip the recipe silently. `shell-lint`, `ensure-bun` and
+        `vendor-manifest` had drifted out of the list before this check
+        existed."""
+        declared = re.search(r"^\.PHONY:(.*?)(?=^\S)", _MAKEFILE, re.DOTALL | re.MULTILINE)
+        assert declared, "the Makefile declares no .PHONY list"
+        # The list wraps across lines and a make continuation leaves a trailing
+        # backslash on each, which is not a name.
+        phony = set(declared.group(1).replace("\\", " ").split())
+
+        # A target rule is a name at column 0 followed by a colon, then either
+        # nothing (a target with no prerequisites) or its prerequisite list on
+        # the SAME line. Anchored at the start and stopped at the newline, so a
+        # recipe line (indented) and a continuation line cannot both match, and
+        # `build: ensure-rebrew ensure-uv web-build` is one target, not three.
+        targets = set(re.findall(r"^([A-Za-z][A-Za-z0-9_-]*):[^\n]*$", _MAKEFILE, re.MULTILINE))
+        assert len(targets) > 30, f"only {len(targets)} targets parsed out of the Makefile"
+        undeclared = sorted(targets - phony)
+        assert not undeclared, (
+            f"targets make may treat as up to date instead of running: {undeclared}"
+        )
+
+        # The other direction is a typo rather than a hazard, but it is the same
+        # hand-maintained list: a `.PHONY` name no rule defines is a thing a
+        # reader is told to run that does not exist.
+        stale = sorted(phony - targets)
+        assert not stale, f".PHONY names targets the Makefile does not define: {stale}"
 
     def test_the_build_recipe_pins_the_backend_and_clears_stale_artifacts(self) -> None:
         """`uv build` resolves PEP 517 build requirements outside uv.lock, so
