@@ -432,7 +432,7 @@ The release policy is not written down anywhere else, so it is stated here and
 | `/index.html` | GET | Same document, for a URL that names it |
 | `/src/<filepath:path>` | GET | A file under the target's `src/` tree, for the code panes |
 | `/original/<filepath:path>` | GET | A file under the original binary's tree (`web/app/hooks/useOriginalBinary.ts` reads it) |
-| `/<filename:app.js, style.css, print.css, favicon.svg>` | GET | The packaged static assets, `no-cache` with a strong `ETag` |
+| `/<filename:app.js, style.css, print.css, favicon.svg, archivo.woff2, jetbrains-mono.woff2>` | GET | The packaged static assets, `no-cache` with a strong `ETag` |
 | `/potato` | GET | Potato Mode (pure-HTML fallback) |
 | `/api/health` | GET | Server version, the settings the process resolved, DB info, installed extras, request/regen/stream/connection counters, cache hit-miss |
 | `/api/targets` | GET | List available targets (ETag-revalidating) |
@@ -1677,8 +1677,8 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   `::1` and nothing else, judged against `ipaddress` rather than against the
   parser under test; the request id carries no control byte; an accepted
   idempotency key is inside the ledger's alphabet and length, and the ledger
-  stays within `_REGEN_KEY_MAX` however many distinct keys arrive. The token
-  gate's accept decision is judged against the extraction rules
+  stays within `_REGEN_LEDGER_MAX_ENTRIES` however many distinct keys arrive.
+  The token gate's accept decision is judged against the extraction rules
   `server._require_auth` documents, not against the status code: a carrier
   is served only when the value the gate extracts from it is the configured
   token, with each carrier's own grammar as the oracle (`http.cookies`

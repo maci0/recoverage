@@ -28,7 +28,7 @@ block that covers it.
 | Light and dark themes | Follows the OS, with a one-click override; both use the relumea brand tokens |
 | Clickable cross-references | Hex addresses in the disassembly are live links that jump to that chunk |
 | Interactive progress bar | Segmented by state; click a segment to filter the grid |
-| First draw without a subrequest | HTML, CSS, and the JS bundle inlined and compressed (Brotli/Zstd) to ~48 KB |
+| First draw without a subrequest | HTML, CSS, and the JS bundle inlined and compressed to the smallest of Brotli/Zstd/gzip the client accepts, ~54 KB today (`make payload-budget` re-derives it against the 90 KB `ui._TCP_CWND_BUDGET` ceiling) |
 | Potato Mode | Zero-JS server-rendered fallback for constrained environments |
 | Live regen | Re-catalog and rebuild from the browser without restarting the server |
 
@@ -703,7 +703,9 @@ recoverage/
 │   ├── USER_STORIES.md      # User stories with acceptance criteria
 │   ├── THREAT_MODEL.md      # Attack surface, trust boundaries, risks
 │   ├── UPGRADING.md         # Before/after for every major that broke a consumer
-│   └── ideas.md             # Future improvement ideas
+│   ├── ideas.md             # Future improvement ideas
+│   ├── mascot.jpg           # The raccoon detective the README shows
+│   └── *.png                # Screenshots for the README
 ├── web/                     # Frontend sources built into the assets (Vite + Preact + Tailwind)
 │   ├── app/                 # SPA components, hooks, grid geometry, tokens
 │   ├── index.html           # The `vite dev` shell
@@ -751,6 +753,8 @@ recoverage/
     ├── _paths.py             # Coverage directory resolution (RECOVERAGE_DB, db_dir)
     ├── clock.py              # The one time source the request path reads
     ├── config.py             # RECOVERAGE_* env: defaults, validation, startup banner
+    ├── documents.py          # Coverage documents read per file; the TOML parse persisted
+    │                         #   under $XDG_CACHE_HOME/recoverage/documents/
     ├── metrics.py            # In-process RED counters, read by /api/health
     ├── devserver.py          # WSGI serving stack: threading server, keep-alive handlers
     ├── cli.py                # Typer CLI entry point
