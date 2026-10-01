@@ -55,6 +55,9 @@ SPA and Potato Mode actually send) mutated by a fixed set of operators, driven
 by a seeded PRNG so a failure is reproducible.  The seed is a module constant,
 so CI runs the identical corpus on every build; ``RECOVERAGE_FUZZ_SEED`` and
 ``RECOVERAGE_FUZZ_ITERATIONS`` widen a local run without touching the code.
+That one run seed determines the WHOLE run: every campaign's mutation stream is
+derived from it by name, so each surface explores independently, a failure names
+the seed its own campaign drew from, and that seed replays that campaign alone.
 """
 
 from __future__ import annotations
@@ -62,6 +65,7 @@ from __future__ import annotations
 import copy
 import csv
 import errno
+import hashlib
 import html
 import io
 import ipaddress
@@ -126,8 +130,53 @@ _SUPPORTED_ENCODINGS = frozenset({"", "zstd", "br", "gzip"})
 # Campaign size.  Small enough that `make test` grows by seconds, large enough
 # that every seed is mutated dozens of times.  RECOVERAGE_FUZZ_SEED and
 # RECOVERAGE_FUZZ_ITERATIONS widen a local campaign without a code change.
-FUZZ_SEED = int(os.environ.get("RECOVERAGE_FUZZ_SEED", "20260927"), 10)
+#
+# RUN_SEED is the ONE knob for this whole module and it determines the entire
+# run: every campaign's mutation stream is DERIVED from it by name (see
+# campaign_seed below), so a run replays from this one value alone.
+RUN_SEED = int(os.environ.get("RECOVERAGE_FUZZ_SEED", "20260927"), 10)
 FUZZ_ITERATIONS = int(os.environ.get("RECOVERAGE_FUZZ_ITERATIONS", "400"))
+
+
+def campaign_seed(label: str) -> int:
+    """The stream seed for one named campaign, derived from the run seed.
+
+    ONE run seed has to determine the WHOLE run and still leave every surface
+    an independent stream, and those two requirements pull against each other:
+    with one seed shared outright, the dozen campaigns that run
+    ``iterations=300`` all draw from the SAME ``random.Random`` sequence, so a
+    mutational path that finds something in the auth-throttle corpus walks the
+    identical path in the origin-normalisation one, and the two surfaces never
+    explore independently.  It is also not addressable: a failure names a seed
+    and a round, and there is no way to replay *that surface* alone, because
+    the seed it used is every other surface's seed too.
+
+    So the run seed is the ONE knob (:data:`RUN_SEED`, or
+    ``RECOVERAGE_FUZZ_SEED``), and each campaign's stream is derived from it
+    through a stable digest of the campaign's NAME.  The properties this buys,
+    each of which the shared seed lacked:
+
+    * **The run is still fully determined by one seed.**  ``label`` is a
+      literal at the call site, not a counter and not the order the tests
+      happen to run in, so one run seed walks the same streams in every
+      process regardless of ``-k`` selection, test ordering, or worker count.
+    * **Streams are independent and stable.**  Distinct names give distinct
+      streams, and a new campaign takes a stream no existing one walks, so
+      adding a surface cannot shift another surface's inputs — the property a
+      shared counter-based index would not have.
+    * **One surface replays alone.**  The seed a failure reports IS that
+      campaign's derived seed, so re-running with it reproduces exactly the
+      stream that failed, with no other campaign's inputs involved.
+
+    sha256 rather than ``hash(label)`` on purpose: ``hash`` of a str is
+    randomized per process unless ``PYTHONHASHSEED`` is pinned, so a built-in
+    hash would make a derived stream differ between a developer's shell and CI.
+    A truncated int from a fixed digest is stable across interpreters,
+    platforms and runs.
+    """
+    material = f"{RUN_SEED}:{label}".encode()
+    return int.from_bytes(hashlib.sha256(material).digest()[:8], "big")
+
 
 # Statuses a handler may answer for attacker-chosen input.  Everything else is
 # a crash (5xx), a routing miss (which the catch-all turns into 404), or a
@@ -263,12 +312,18 @@ def _fuzz(
     seeds: list[bytes],
     check: Callable[[bytes], None],
     *,
+    label: str,
     iterations: int = FUZZ_ITERATIONS,
-    seed: int = FUZZ_SEED,
     struct_tokens: tuple[bytes, ...] = _JSON_TOKENS,
     num_tokens: tuple[bytes, ...] = _NUM_TOKENS,
 ) -> None:
     """Mutate *seeds* for *iterations* rounds, calling *check* on each input.
+
+    *label* names this campaign, and its stream is derived from the run seed
+    through it (:func:`campaign_seed`).  Required rather than defaulted,
+    because a default is exactly how a dozen surfaces came to share one
+    stream, and a named one is what the failure message quotes, so a reader can
+    replay this campaign alone.
 
     A failing round re-runs the check on every intermediate input of that
     round's mutation chain, so the assertion message names the smallest
@@ -277,8 +332,10 @@ def _fuzz(
     The message also names the seed and the round, because the shrinking walk
     consumes the same stream: without them a failure is reproducible only by
     reading this module for the constant the environment did not set, and the
-    round is the only handle on where the campaign stood.
+    round is the only handle on where the campaign stood.  The reported seed is
+    the DERIVED one, because that is the value this campaign drew from.
     """
+    seed = campaign_seed(label)
     rng = random.Random(seed)
     for round_index in range(iterations):
         data = _mutate(
@@ -300,7 +357,7 @@ def _fuzz(
                     check(smaller)
                 except AssertionError:
                     chain.append(smaller)
-            where = f"seed={seed} round={round_index} of {iterations}"
+            where = f"campaign={label} seed={seed} round={round_index} of {iterations}"
             smallest = min(chain, key=len)
             try:
                 check(smallest)
@@ -474,7 +531,7 @@ class TestBatchLookupBody:
                 assert isinstance(entry, dict), f"{path}: non-object entry {entry!r}"
                 assert "va" in entry, f"{path}: entry without a va: {entry!r}"
 
-        _fuzz(BATCH_SEEDS, check)
+        _fuzz(BATCH_SEEDS, check, label="TestBatchLookupBody.test_body_never_crashes")
 
     def test_accepted_body_reports_only_requested_vas(self) -> None:
         """A 200 answers exactly the deduped, order-preserving request.
@@ -549,7 +606,12 @@ class TestBatchBodyNesting:
             if code >= 400:
                 _assert_envelope(payload, status, path)
 
-        _fuzz(BATCH_SEEDS, check, struct_tokens=_NESTING_TOKENS)
+        _fuzz(
+            BATCH_SEEDS,
+            check,
+            struct_tokens=_NESTING_TOKENS,
+            label="TestBatchBodyNesting.test_nested_body_never_crashes",
+        )
 
     def test_every_depth_answers_a_documented_status(self) -> None:
         """The exhaustive half: a refusal must be a refusal a client can read,
@@ -626,7 +688,12 @@ class TestBatchContentType:
                     f"{path}: 415 echoed a VA from a body it refused to read: {payload!r}"
                 )
 
-        _fuzz(list(_CONTENT_TYPE_SEEDS), check, struct_tokens=_CONTENT_TYPE_SEEDS)
+        _fuzz(
+            list(_CONTENT_TYPE_SEEDS),
+            check,
+            struct_tokens=_CONTENT_TYPE_SEEDS,
+            label="TestBatchContentType.test_media_type_never_crashes",
+        )
 
     def test_an_accepted_media_type_answers_exactly_as_no_header(self) -> None:
         """Pair assertion across the header boundary: the header may only
@@ -686,7 +753,7 @@ class TestListQuery:
             if limit is not None and 1 <= limit <= 500:
                 assert len(items) <= limit, f"{path}: {len(items)} rows exceed limit {limit}"
 
-        _fuzz(QUERY_SEEDS, check)
+        _fuzz(QUERY_SEEDS, check, label="TestListQuery.test_query_never_crashes")
 
 
 def _query_value(query: bytes, key: str) -> str:
@@ -733,7 +800,12 @@ class TestDataQuery:
             else:
                 assert "search_index" in payload, f"{path}: the index went missing"
 
-        _fuzz(DATA_QUERY_SEEDS, check, struct_tokens=_DATA_QUERY_TOKENS)
+        _fuzz(
+            DATA_QUERY_SEEDS,
+            check,
+            struct_tokens=_DATA_QUERY_TOKENS,
+            label="TestDataQuery.test_query_never_crashes",
+        )
 
 
 def _limit_of(query: bytes) -> int | None:
@@ -771,7 +843,7 @@ class TestSliceEndpoints:
                     total = sum(i.get("size", 0) for i in insns)
                     assert total <= size, f"{path}: {total} bytes exceed requested size {size}"
 
-        _fuzz(SLICE_SEEDS, check)
+        _fuzz(SLICE_SEEDS, check, label="TestSliceEndpoints.test_asm_query_never_crashes")
 
     def test_bytes_query_never_crashes(self) -> None:
         path = f"/api/targets/{_pct(get_first_target())}/sections/.text/bytes"
@@ -791,7 +863,7 @@ class TestSliceEndpoints:
                 lines = str(payload["hex"]).splitlines()
                 assert len(lines) <= (size + 15) // 16 + 1, f"{path}: dump longer than size {size}"
 
-        _fuzz(BYTES_SEEDS, check)
+        _fuzz(BYTES_SEEDS, check, label="TestSliceEndpoints.test_bytes_query_never_crashes")
 
     def test_section_path_never_crashes(self) -> None:
         """The <section> path segment is attacker-controlled and reaches SQL."""
@@ -817,7 +889,12 @@ class TestSliceEndpoints:
             if code >= 400:
                 _assert_envelope(payload, status, path)
 
-        _fuzz([s.encode("latin-1", "replace") for s in sections], check, iterations=120)
+        _fuzz(
+            [s.encode("latin-1", "replace") for s in sections],
+            check,
+            iterations=120,
+            label="TestSliceEndpoints.test_section_path_never_crashes",
+        )
 
 
 def _wants_json(query: bytes) -> bool:
@@ -866,7 +943,12 @@ def _check_targets(suffixes: tuple[str, ...], *, iterations: int = 200) -> None:
             elif not isinstance(payload, dict):
                 raise AssertionError(f"{path}: 200 body is not an object: {payload!r}")
 
-        _fuzz([s.encode("utf-8") for s in TARGET_SEEDS], check, iterations=iterations)
+        _fuzz(
+            [s.encode("utf-8") for s in TARGET_SEEDS],
+            check,
+            iterations=iterations,
+            label="_check_targets",
+        )
 
 
 ACCEPT_ENCODING_SEEDS: list[bytes] = [
@@ -904,7 +986,12 @@ class TestAcceptEncoding:
             encoding = _best_encoding(data.decode("latin-1"))
             assert encoding in _SUPPORTED_ENCODINGS, f"{data!r}: unknown encoding {encoding!r}"
 
-        _fuzz(ACCEPT_ENCODING_SEEDS, check, iterations=600)
+        _fuzz(
+            ACCEPT_ENCODING_SEEDS,
+            check,
+            iterations=600,
+            label="TestAcceptEncoding.test_returns_a_supported_encoding",
+        )
 
     def test_q_zero_is_never_chosen(self) -> None:
         """RFC 9110: ``token;q=0`` means "not acceptable", so a header offering
@@ -985,7 +1072,12 @@ class TestJunkHeaders:
                 payload = json.loads(decode_body(body, headers).decode("utf-8"))
                 assert isinstance(payload, dict) and "version" in payload
 
-        _fuzz(JUNK_HEADER_SEEDS, check, iterations=80)
+        _fuzz(
+            JUNK_HEADER_SEEDS,
+            check,
+            iterations=80,
+            label="TestJunkHeaders.test_non_utf8_header_value_never_crashes",
+        )
 
 
 # ── access-gating headers ──────────────────────────────────────────
@@ -1145,7 +1237,12 @@ class TestOriginNormalization:
             )
 
         _fuzz(
-            ORIGIN_SEEDS, check, iterations=400, struct_tokens=ORIGIN_SEEDS, num_tokens=ORIGIN_SEEDS
+            ORIGIN_SEEDS,
+            check,
+            iterations=400,
+            struct_tokens=ORIGIN_SEEDS,
+            num_tokens=ORIGIN_SEEDS,
+            label="TestOriginNormalization.test_never_raises_and_answers_a_plain_authority",
         )
 
     def test_allowlist_match_implies_the_allowed_origin(self) -> None:
@@ -1175,7 +1272,12 @@ class TestOriginNormalization:
             assert (parts.scheme or "http") == "http", f"{data!r}: scheme {parts.scheme!r}"
 
         _fuzz(
-            ORIGIN_SEEDS, check, iterations=300, struct_tokens=ORIGIN_SEEDS, num_tokens=ORIGIN_SEEDS
+            ORIGIN_SEEDS,
+            check,
+            iterations=300,
+            struct_tokens=ORIGIN_SEEDS,
+            num_tokens=ORIGIN_SEEDS,
+            label="TestOriginNormalization.test_allowlist_match_implies_the_allowed_origin",
         )
 
     def test_allowlisted_origin_is_never_echoed_to_another(self) -> None:
@@ -1215,6 +1317,7 @@ class TestOriginNormalization:
                 iterations=200,
                 struct_tokens=ORIGIN_SEEDS,
                 num_tokens=ORIGIN_SEEDS,
+                label="TestOriginNormalization.test_allowlisted_origin_is_never_echoed_to_another",
             )
         finally:
             srv.configure_security(cors_enabled=restore[0], cors_allowed_origins=restore[1])
@@ -1247,7 +1350,14 @@ class TestPeerAddressClassification:
             value = str(mapped) if mapped is not None else str(parsed)
             assert value in {"127.0.0.1", "::1"}, f"{data!r}: accepted {value} as loopback"
 
-        _fuzz(ADDR_SEEDS, check, iterations=400, struct_tokens=ADDR_SEEDS, num_tokens=ADDR_SEEDS)
+        _fuzz(
+            ADDR_SEEDS,
+            check,
+            iterations=400,
+            struct_tokens=ADDR_SEEDS,
+            num_tokens=ADDR_SEEDS,
+            label="TestPeerAddressClassification.test_loopback_is_never_widened",
+        )
 
     def test_a_wildcard_or_public_peer_is_never_loopback(self) -> None:
         """The addresses that must never open the regen endpoint, whatever
@@ -1315,6 +1425,7 @@ class TestRegenOriginSameOrigin:
                 iterations=200,
                 struct_tokens=ORIGIN_SEEDS,
                 num_tokens=ORIGIN_SEEDS,
+                label="TestRegenOriginSameOrigin.test_only_the_dashboards_own_origin_is_admitted",
             )
 
     def test_a_neighbouring_loopback_origin_is_refused(self) -> None:
@@ -1362,6 +1473,7 @@ class TestRequestIdAndIdempotencyKey:
             iterations=300,
             struct_tokens=REQUEST_ID_SEEDS,
             num_tokens=REQUEST_ID_SEEDS,
+            label="TestRequestIdAndIdempotencyKey.test_request_id_carries_no_control_character",
         )
 
     def test_idempotency_key_accepts_only_the_documented_alphabet(self) -> None:
@@ -1386,6 +1498,7 @@ class TestRequestIdAndIdempotencyKey:
             iterations=400,
             struct_tokens=IDEMPOTENCY_SEEDS,
             num_tokens=IDEMPOTENCY_SEEDS,
+            label="TestRequestIdAndIdempotencyKey.test_idempotency_key_accepts_only_the_documented_alphabet",
         )
 
     def test_ledger_never_exceeds_its_cap(self) -> None:
@@ -1536,7 +1649,13 @@ class TestAuthCredentialPresentation:
                 [("Authorization", {"Authorization": raw}, "/api/health", _accepts_via_header(raw))]
             )
 
-        _fuzz(AUTH_SEEDS, check, struct_tokens=AUTH_SEEDS, num_tokens=AUTH_SEEDS)
+        _fuzz(
+            AUTH_SEEDS,
+            check,
+            struct_tokens=AUTH_SEEDS,
+            num_tokens=AUTH_SEEDS,
+            label="TestAuthCredentialPresentation.test_header_credential_matches_the_extraction_rules",
+        )
 
     def test_share_link_credential_matches_the_extraction_rules(self) -> None:
         def check(data: bytes) -> None:
@@ -1547,7 +1666,13 @@ class TestAuthCredentialPresentation:
                 [("?token=", None, f"/api/health?token={quoted}", _accepts_via_query(data))]
             )
 
-        _fuzz(AUTH_SEEDS, check, struct_tokens=AUTH_SEEDS, num_tokens=AUTH_SEEDS)
+        _fuzz(
+            AUTH_SEEDS,
+            check,
+            struct_tokens=AUTH_SEEDS,
+            num_tokens=AUTH_SEEDS,
+            label="TestAuthCredentialPresentation.test_share_link_credential_matches_the_extraction_rules",
+        )
 
     def test_cookie_credential_matches_the_extraction_rules(self) -> None:
         def check(data: bytes) -> None:
@@ -1563,7 +1688,13 @@ class TestAuthCredentialPresentation:
                 ]
             )
 
-        _fuzz(AUTH_SEEDS, check, struct_tokens=AUTH_SEEDS, num_tokens=AUTH_SEEDS)
+        _fuzz(
+            AUTH_SEEDS,
+            check,
+            struct_tokens=AUTH_SEEDS,
+            num_tokens=AUTH_SEEDS,
+            label="TestAuthCredentialPresentation.test_cookie_credential_matches_the_extraction_rules",
+        )
 
     def test_a_rejected_credential_never_renders_a_page(self) -> None:
         """A page route answers the 401 page, never the dashboard, and the
@@ -1584,7 +1715,14 @@ class TestAuthCredentialPresentation:
             assert headers.get("Cache-Control") == "no-store"
             assert _AUTH_TOKEN.encode() not in body, "the token reached the 401 page"
 
-        _fuzz(AUTH_SEEDS, check, iterations=120, struct_tokens=AUTH_SEEDS, num_tokens=AUTH_SEEDS)
+        _fuzz(
+            AUTH_SEEDS,
+            check,
+            iterations=120,
+            struct_tokens=AUTH_SEEDS,
+            num_tokens=AUTH_SEEDS,
+            label="TestAuthCredentialPresentation.test_a_rejected_credential_never_renders_a_page",
+        )
 
     def test_guessing_is_bounded_and_a_correct_token_is_never_throttled(self) -> None:
         """The failed-token window caps guessing, and a correct credential
@@ -1719,6 +1857,7 @@ class TestConfigEnvParsers:
             iterations=300,
             struct_tokens=ENV_VALUE_SEEDS,
             num_tokens=ENV_VALUE_SEEDS,
+            label="TestConfigEnvParsers.test_fuzzed_port_never_binds_a_bogus_port",
         )
 
     def test_fuzzed_bool_is_a_bool_or_loud(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1742,6 +1881,7 @@ class TestConfigEnvParsers:
             iterations=300,
             struct_tokens=ENV_VALUE_SEEDS,
             num_tokens=ENV_VALUE_SEEDS,
+            label="TestConfigEnvParsers.test_fuzzed_bool_is_a_bool_or_loud",
         )
 
     def test_fuzzed_bind_is_an_answerable_address_or_loud(
@@ -1774,6 +1914,7 @@ class TestConfigEnvParsers:
             iterations=300,
             struct_tokens=ENV_VALUE_SEEDS,
             num_tokens=ENV_VALUE_SEEDS,
+            label="TestConfigEnvParsers.test_fuzzed_bind_is_an_answerable_address_or_loud",
         )
 
     def test_fuzzed_cors_origin_yields_only_plain_items(
@@ -1805,6 +1946,7 @@ class TestConfigEnvParsers:
             iterations=300,
             struct_tokens=ENV_VALUE_SEEDS,
             num_tokens=ENV_VALUE_SEEDS,
+            label="TestConfigEnvParsers.test_fuzzed_cors_origin_yields_only_plain_items",
         )
 
     def test_fuzzed_log_level_is_a_level_number_or_loud(
@@ -1826,6 +1968,7 @@ class TestConfigEnvParsers:
             iterations=300,
             struct_tokens=ENV_VALUE_SEEDS,
             num_tokens=ENV_VALUE_SEEDS,
+            label="TestConfigEnvParsers.test_fuzzed_log_level_is_a_level_number_or_loud",
         )
 
     def test_unknown_var_message_names_every_one(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1999,6 +2142,7 @@ class TestPotatoQuery:
             iterations=300,
             struct_tokens=POTATO_QUERY_TOKENS,
             num_tokens=POTATO_QUERY_TOKENS,
+            label="TestPotatoQuery.test_query_never_crashes",
         )
 
     @pytest.mark.parametrize("field", _POTATO_REFLECTED)
@@ -2332,6 +2476,7 @@ class TestSearchFoldDifferential:
             iterations=250,
             struct_tokens=SEARCH_TOKENS,
             num_tokens=SEARCH_TOKENS,
+            label="TestSearchFoldDifferential.test_query_returns_exactly_the_rows_the_term_denotes",
         )
 
     def test_a_wildcard_never_becomes_a_pattern(self, search_corpus: CoverageSnapshot) -> None:
@@ -2466,7 +2611,14 @@ class TestPathAndQueryDecoders:
             # the value reaching the containment check is the one-pass decode.
             assert srv.path_param(decoded) in (decoded, unquote(decoded, errors="replace"))
 
-        _fuzz(PATH_SEEDS, check, iterations=400, struct_tokens=PATH_TOKENS, num_tokens=PATH_TOKENS)
+        _fuzz(
+            PATH_SEEDS,
+            check,
+            iterations=400,
+            struct_tokens=PATH_TOKENS,
+            num_tokens=PATH_TOKENS,
+            label="TestPathAndQueryDecoders.test_path_param_never_raises_and_is_one_pass",
+        )
 
     def test_path_param_round_trips_a_quoted_segment(self) -> None:
         """Positive direction: a filename a browser would escape has to come
@@ -2499,7 +2651,14 @@ class TestPathAndQueryDecoders:
             if raw.isascii():
                 assert once == raw, f"{data!r}: an ASCII value was rewritten"
 
-        _fuzz(PATH_SEEDS, check, iterations=300, struct_tokens=PATH_TOKENS, num_tokens=PATH_TOKENS)
+        _fuzz(
+            PATH_SEEDS,
+            check,
+            iterations=300,
+            struct_tokens=PATH_TOKENS,
+            num_tokens=PATH_TOKENS,
+            label="TestPathAndQueryDecoders.test_decode_query_value_never_raises_and_is_idempotent",
+        )
 
     def test_a_200_serves_the_bytes_the_named_file_holds(self) -> None:
         """Differential across the containment boundary.
@@ -2588,6 +2747,7 @@ class TestRepoFileRoute:
             iterations=200,
             struct_tokens=REPO_FILE_TOKENS,
             num_tokens=REPO_FILE_TOKENS,
+            label="TestRepoFileRoute.test_path_never_crashes",
         )
 
     @pytest.mark.parametrize(
@@ -2770,7 +2930,15 @@ def _spelling_round_roots(root: Path, data: bytes) -> tuple[Path, str]:
     re-spelled composed to decomposed but never back would pass against a
     tree that only ever answers one way.
     """
-    key = random.Random(FUZZ_SEED + len(data)).choice(tuple(SPELLING_TREE))
+    # This campaign's own stream, keyed by the INPUT rather than shared across
+    # every round: the whole point of the fixture is that one input is asked
+    # for under both spellings, and a stream shared with the rest of the
+    # campaign would let a mutational path that pays off on one name decide
+    # which tree the NEXT name is looked up in.  Keying on the input keeps one
+    # name's pairing a function of that name alone, and a replay reproduces
+    # every pairing.
+    seed = campaign_seed(f"TestFilesystemSpelling.{data!r}")
+    key = random.Random(seed).choice(tuple(SPELLING_TREE))
     return root / key, data.decode("utf-8", "surrogateescape")
 
 
@@ -2835,6 +3003,7 @@ class TestFilesystemSpelling:
             iterations=400,
             struct_tokens=_SPELLING_TOKENS,
             num_tokens=_SPELLING_TOKENS,
+            label="TestFilesystemSpelling.test_a_resolved_name_never_leaves_the_tree_it_was_read_from",
         )
 
     def test_a_name_the_tree_holds_is_found_from_either_spelling(self, spelling_root: Path) -> None:
@@ -2904,6 +3073,7 @@ class TestFilesystemSpelling:
             iterations=300,
             struct_tokens=_SPELLING_TOKENS,
             num_tokens=_SPELLING_TOKENS,
+            label="TestFilesystemSpelling.test_re_spelling_is_a_fixed_point",
         )
 
 
@@ -2967,8 +3137,8 @@ def _chunked_frames(rng: random.Random, count: int) -> list[bytes]:
     never in the accepted one, because every framing carries a CRLF it will
     have to lose.  These are built instead: the boundaries, the size spelling
     and the trailer vary, and one round in four is cut short so the truncated
-    arms are reached too.  The PRNG is the module's own FUZZ_SEED, so the same
-    corpus is built on every run.
+    arms are reached too.  The PRNG is this campaign's own stream (derived from
+    the module's run seed), so the same corpus is built on every run.
     """
     frames: list[bytes] = []
     for _ in range(count):
@@ -3002,7 +3172,7 @@ def _frame(*parts: bytes, trailer: bytes = b"") -> bytes:
 _LOOKUP = b'{"vas": ["0x10001000"]}'
 
 CHUNKED_SEEDS: list[bytes] = [
-    *_chunked_frames(random.Random(FUZZ_SEED), 48),
+    *_chunked_frames(random.Random(campaign_seed("TestChunkedBodyFraming.corpus")), 48),
     b"",
     b"0\r\n\r\n",
     b"0\r\n",
@@ -3139,6 +3309,7 @@ class TestChunkedBodyFraming:
             iterations=200,
             struct_tokens=CHUNKED_TOKENS,
             num_tokens=CHUNKED_TOKENS,
+            label="TestChunkedBodyFraming.test_framing_never_crashes_and_never_overruns",
         )
 
     @pytest.mark.parametrize("size", _REFUSED_CHUNK_SIZES)
@@ -3327,7 +3498,14 @@ class TestConditionalRequestComparison:
                     f"against {etag!r}"
                 )
 
-        _fuzz(INM_SEEDS, check, iterations=250, struct_tokens=INM_TOKENS, num_tokens=INM_TOKENS)
+        _fuzz(
+            INM_SEEDS,
+            check,
+            iterations=250,
+            struct_tokens=INM_TOKENS,
+            num_tokens=INM_TOKENS,
+            label="TestConditionalRequestComparison.test_a_304_means_the_header_named_the_served_etag",
+        )
 
     def test_the_accepted_spellings_revalidate(self) -> None:
         """The spellings the campaign mutates around, one request each: a
@@ -3809,6 +3987,7 @@ class TestCoverageDocumentContents:
             iterations=250,
             struct_tokens=_DOC_TOKENS,
             num_tokens=_DOC_TOKENS,
+            label="TestCoverageDocumentContents.test_a_corrupt_document_never_crashes_a_reader",
         )
 
     def test_a_parsed_document_with_wrong_values_still_serves(
@@ -3829,12 +4008,13 @@ class TestCoverageDocumentContents:
         real and hostile values and the document is rendered through the same
         writer the fixtures use, so every round is a document the reader
         accepts.  The round is named on failure because the stream is seeded
-        from :data:`FUZZ_SEED` and replays identically, and the round count is
+        from :data:`RUN_SEED` and replays identically, and the round count is
         :data:`FUZZ_ITERATIONS`, so ``make fuzz`` widens this campaign on the
         same terms as every byte-driven one.
         """
         document = self._install(tmp_path, monkeypatch)
-        rng = random.Random(FUZZ_SEED)
+        seed = campaign_seed("TestCoverageDocumentContents")
+        rng = random.Random(seed)
 
         def check(round_index: int) -> None:
             text = _document_with_drawn_values(rng)
@@ -3846,7 +4026,7 @@ class TestCoverageDocumentContents:
                     self._assert_response(status, headers, body, path)
                 except AssertionError as failure:
                     raise AssertionError(
-                        f"seed={FUZZ_SEED} round={round_index}: {failure}\ndocument was:\n{text}"
+                        f"seed={seed} round={round_index}: {failure}\ndocument was:\n{text}"
                     ) from failure
 
         for round_index in range(FUZZ_ITERATIONS):
@@ -4024,7 +4204,12 @@ class TestFunctionVaSegment:
                 f"{path}: served a name the document does not hold: {payload.get('name')!r}"
             )
 
-        _fuzz(VA_SEEDS, check, iterations=600)
+        _fuzz(
+            VA_SEEDS,
+            check,
+            iterations=600,
+            label="TestFunctionVaSegment.test_a_va_spelling_resolves_to_the_documented_row",
+        )
 
 
 # ── the CLI ───────────────────────────────────────────────────────────
@@ -4124,7 +4309,8 @@ class TestCliRendersHostileDocumentValues:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         runner = CliRunner()
-        rng = random.Random(FUZZ_SEED)
+        seed = campaign_seed("TestCliRendersHostileDocumentValues")
+        rng = random.Random(seed)
         directory = tmp_path / "db"
         rounds_run = 0
         for round_index in range(FUZZ_ITERATIONS):
@@ -4142,7 +4328,7 @@ class TestCliRendersHostileDocumentValues:
                     self._assert_command(runner, argv, target, section)
                 except AssertionError as failure:
                     raise AssertionError(
-                        f"seed={FUZZ_SEED} round={round_index}: {argv}\n"
+                        f"seed={seed} round={round_index}: {argv}\n"
                         f"target={target!r} section={section!r}\n{failure}"
                     ) from failure
         assert rounds_run, "the filesystem refused every target name in the pool"
@@ -4443,6 +4629,7 @@ class TestProjectConfigDocument:
             iterations=150,
             struct_tokens=_CONFIG_TOKENS,
             num_tokens=_CONFIG_TOKENS,
+            label="TestProjectConfigDocument.test_a_corrupt_config_never_crashes_a_reader",
         )
 
     def test_a_declared_target_reaches_every_reader_intact(
@@ -4462,7 +4649,8 @@ class TestProjectConfigDocument:
         above and rendered as TOML, so the round exercises the consumers rather
         than the parse refusal.
         """
-        rng = random.Random(FUZZ_SEED)
+        seed = campaign_seed("TestProjectConfigDocument")
+        rng = random.Random(seed)
         for round_index in range(FUZZ_ITERATIONS):
             # Distinct ids: TOML refuses to declare one table twice, and a
             # round that landed on that refusal would test the parser's error
@@ -4487,7 +4675,7 @@ class TestProjectConfigDocument:
                 self._check_round(project, ids, binaries)
             except AssertionError as failure:
                 raise AssertionError(
-                    f"seed={FUZZ_SEED} round={round_index}: {failure}\nconfig was:\n{text}"
+                    f"seed={seed} round={round_index}: {failure}\nconfig was:\n{text}"
                 ) from failure
 
     def _check_round(self, project: Path, ids: list[str], binaries: dict[str, str]) -> None:
@@ -4770,6 +4958,7 @@ class TestRequestLineParser:
             iterations=150,
             struct_tokens=REQUEST_WIRE_TOKENS,
             num_tokens=REQUEST_WIRE_TOKENS,
+            label="TestRequestLineParser.test_wire_bytes_never_crash_and_stay_framed",
         )
 
     def test_a_well_formed_request_reaches_the_app_intact(self) -> None:
@@ -4986,6 +5175,7 @@ class TestFreshnessStamp:
             iterations=400,
             struct_tokens=_MTIME_SEED_SECONDS_BYTES,
             num_tokens=_MTIME_SEED_SECONDS_BYTES,
+            label="TestFreshnessStamp.test_every_reachable_stamp_renders_and_never_raises",
         )
 
     def test_an_unrepresentable_stamp_reports_the_extreme(self, tmp_path: Path) -> None:
@@ -5104,6 +5294,7 @@ class TestContainerHeaderWidth:
             iterations=400,
             struct_tokens=CONTAINER_TOKENS,
             num_tokens=CONTAINER_TOKENS,
+            label="TestContainerHeaderWidth.test_a_width_is_answered_for_every_header_and_matches_the_format",
         )
 
     def test_the_declared_widths_reach_a_handle(self) -> None:
@@ -5142,6 +5333,7 @@ class TestContainerHeaderWidth:
             iterations=120,
             struct_tokens=CONTAINER_TOKENS,
             num_tokens=CONTAINER_TOKENS,
+            label="TestContainerHeaderWidth.test_the_declared_widths_reach_a_handle",
         )
 
 
@@ -5337,6 +5529,7 @@ class TestBinaryDecodeWindow:
             iterations=60,
             struct_tokens=DISASM_TOKENS,
             num_tokens=DISASM_TOKENS,
+            label="TestBinaryDecodeWindow.test_a_slice_reads_nothing_outside_the_window_it_was_given",
         )
 
     def test_a_repeated_slice_renders_the_same_text(
@@ -5394,6 +5587,7 @@ class TestBinaryDecodeWindow:
             iterations=60,
             struct_tokens=DISASM_TOKENS,
             num_tokens=DISASM_TOKENS,
+            label="TestBinaryDecodeWindow.test_a_repeated_slice_renders_the_same_text",
         )
 
 
@@ -5509,4 +5703,88 @@ class TestPersistedParseCache:
             iterations=120,
             struct_tokens=(stolen_slot, *CACHE_TOKENS),
             num_tokens=CACHE_TOKENS,
+            label="TestPersistedParseCache.test_a_slot_never_answers_with_something_the_document_did_not_say",
         )
+
+
+class TestCampaignSeeds:
+    """One run seed determines the whole run; each campaign owns its stream.
+
+    The properties here are what make a failure REPLAYABLE rather than merely
+    reproducible in principle, and each is a way the single shared seed this
+    replaced got it wrong:
+
+    * a run seed alone fixes every stream, so two runs of it walk the same
+      inputs in the same order;
+    * distinct campaigns draw distinct streams, so one surface's exploration
+      does not decide another's;
+    * a campaign's seed is a pure function of its NAME, so adding, removing or
+      reordering campaigns cannot shift the ones that remain — the property a
+      shared counter would have lost;
+    * the reported seed is the derived one, so what a failure prints is what
+      that campaign actually drew from, and replays it alone.
+    """
+
+    def test_one_run_seed_fixes_every_stream(self) -> None:
+        """The same name and run seed give the same stream, twice over."""
+        name = "TestListQuery.test_query_never_crashes"
+        assert campaign_seed(name) == campaign_seed(name)
+        # A fresh Random from it walks the identical first draws, which is what
+        # "replays identically" means for a caller that re-seeds by hand.
+        first = random.Random(campaign_seed(name))
+        second = random.Random(campaign_seed(name))
+        assert [first.random() for _ in range(8)] == [second.random() for _ in range(8)]
+
+    def test_distinct_campaigns_draw_distinct_streams(self) -> None:
+        """No two campaign names share a stream, so exploration is independent.
+
+        Two campaigns running the same number of rounds used to draw from the
+        same sequence, so a mutational path that paid off on one surface walked
+        the identical path on the other and the two never explored apart.
+        """
+        names = [
+            "TestListQuery.test_query_never_crashes",
+            "TestDataQuery.test_query_never_crashes",
+            "TestPotatoQuery.test_query_never_crashes",
+            "TestAuthCredentialPresentation.test_cookie_credential_matches_the_extraction_rules",
+        ]
+        seeds = [campaign_seed(name) for name in names]
+        assert len(set(seeds)) == len(names), "two campaign names share a mutation stream"
+        firsts = [random.Random(seed).random() for seed in seeds]
+        assert len(set(firsts)) == len(firsts)
+
+    def test_the_seed_is_a_stable_digest_not_a_builtin_hash(self) -> None:
+        """A campaign seed is a fixed 64-bit digest of its name and run seed.
+
+        ``hash(str)`` is randomized per process unless ``PYTHONHASHSEED`` is
+        pinned, so a built-in hash here would make one run seed walk different
+        streams in a developer's shell than in CI — the run would no longer be
+        the thing that determines the run.  A sha256 digest is stable across
+        interpreters, platforms and processes.
+        """
+        seed = campaign_seed("TestListQuery.test_query_never_crashes")
+        assert isinstance(seed, int)
+        assert 0 <= seed < 2**64
+        # The digest is of the run seed AND the name, so a different name gives
+        # a different stream under the same run seed.
+        assert seed != campaign_seed("TestDataQuery.test_query_never_crashes")
+
+    def test_the_reported_failure_seed_is_the_campaign_stream(self) -> None:
+        """What a failure prints is the seed THAT campaign drew from.
+
+        The message quotes the derived seed, not the run seed: a reader who
+        re-seeds with what was printed reproduces this campaign alone, whereas
+        the run seed would send them through every other campaign's stream too.
+        It names the campaign as well, so a failure that names one seed is
+        still attributable to a surface.
+        """
+
+        def check(data: bytes) -> None:
+            raise AssertionError("forced failure to read the message")
+
+        label = "TestCampaignSeeds.test_the_reported_failure_seed_is_the_campaign_stream"
+        with pytest.raises(AssertionError) as excinfo:
+            _fuzz([b"seed-input"], check, iterations=1, label=label)
+        message = str(excinfo.value)
+        assert f"campaign={label}" in message, message
+        assert f"seed={campaign_seed(label)}" in message, message

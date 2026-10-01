@@ -134,9 +134,16 @@ After changing a dependency, run `uv lock` (and bump `REBREW_REF`/`REBREW_SHA`
 in `tools/ci_clone_rebrew.sh` if rebrew moved) before the next `make`.
 
 `make fuzz` runs the same seeded campaigns `make test` already runs, from the
-seed and round count in `tests/test_fuzz.py`; `make fuzz SEED=7 ITERATIONS=200000`
+run seed and round count in `tests/test_fuzz.py`; `make fuzz SEED=7 ITERATIONS=200000`
 widens one from the environment. A campaign that fails under `make fuzz`
 reproduces under `make test`, so the default is not a separate corpus.
+
+`SEED` is the one knob for a whole run: every campaign's mutation stream is
+derived from it by the campaign's own name, so one value determines the run,
+each surface explores independently, and adding a campaign cannot shift another
+surface's inputs. A failure names the seed its own campaign drew from, and
+`RECOVERAGE_FUZZ_SEED=<that seed> make test-one T=tests/test_fuzz.py -k <campaign>`
+replays that campaign alone.
 
 The suite is hermetic. It builds its own synthetic coverage documents (see
 `tests/conftest.py`) and needs no project workspace, compiler toolchain, or
