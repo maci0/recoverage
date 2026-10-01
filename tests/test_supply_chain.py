@@ -2461,6 +2461,63 @@ class TestBrowserSpdxExport:
             module._checksum("sha512-not base64!")
 
 
+class TestToolWritesReportTheirFailures:
+    """A tool that cannot write its output says so, and exits non-zero.
+
+    Both writers run unattended (`make browser-sbom` and `make vendor-manifest`
+    are wrapper targets, and the sbom one uploads its output as a CI artifact),
+    and both used to let the write escape `main` as an OSError traceback: the
+    job died on a stack naming no artifact directory, and the manifest refusal
+    left the operator reading a traceback after a full tree walk instead of the
+    file and the errno. The exit code is what the Makefile and the job read, so
+    an unwritable target has to be one the tool reports itself, and never one
+    it exits 0 on.
+    """
+
+    @staticmethod
+    def _deny_writes(monkeypatch: pytest.MonkeyPatch) -> None:
+        """Make every ``Path.write_text`` raise, as a read-only mount would."""
+
+        def refuse(*_args: object, **_kwargs: object) -> int:
+            raise OSError(30, "Read-only file system")
+
+        monkeypatch.setattr(Path, "write_text", refuse)
+
+    def test_the_inventory_refuses_an_unwritable_output(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        module = _js_inventory_module()
+        self._deny_writes(monkeypatch)
+        target = tmp_path / "unwritable.json"
+        assert module.main(["--output", str(target)]) == 1
+        assert "unwritable.json" in capsys.readouterr().err, (
+            "the refusal does not name the file it could not write"
+        )
+
+    def test_the_inventory_still_reports_a_build_failure(
+        self, capsys: pytest.CaptureFixture
+    ) -> None:
+        module = _js_inventory_module()
+        # A SOURCE_DATE_EPOCH that is not a timestamp is refused through
+        # InventoryError, and the write arm below it must not turn that refusal
+        # into a success. ("-1" is a valid in-range stamp, so it is a string
+        # that will not parse that exercises the refusal.)
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setenv("SOURCE_DATE_EPOCH", "yesterday")
+            assert module.main(["--format", "spdx"]) == 1
+        assert "SOURCE_DATE_EPOCH" in capsys.readouterr().err
+
+    def test_the_vendor_manifest_refuses_an_unwritable_target(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        script = _vendor_manifest_module()
+        self._deny_writes(monkeypatch)
+        assert script.main([]) == 1
+        assert "anti-slop.manifest.json" in capsys.readouterr().err, (
+            "the refusal does not name the manifest it could not write"
+        )
+
+
 class TestVendoredLintPlugin:
     """`tools/oxlint/anti-slop/` is third-party code that lives in the repo.
 

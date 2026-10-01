@@ -61,6 +61,17 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- The contributor tools that WRITE a file reported a failure to write it as a
+  raw `OSError` traceback instead of a line naming the file and the errno, and
+  `tools/normalize_sdist.py` stopped at the first archive it could not read, so a
+  corrupt or unwritable `.tar.gz` left the archives after it unreported and
+  unnormalized. `tools/bundled_js_inventory.py`, `tools/vendor_manifest.py` and
+  `tools/normalize_sdist.py` now name the target they could not write and exit
+  non-zero, each in the `print(..., file=sys.stderr); return 1` form the rest of
+  the tools already use. The normalizer continues past a bad archive, so one
+  unreadable file no longer costs the reproducibility stamp on every other one,
+  and its temp-file cleanup can no longer replace the tarfile or gzip error that
+  explains the failure with the `OSError` out of the `unlink`.
 - A target whose id `rebrew-project.toml` spelled differently from the coverage
   document it was built into served nothing on macOS and Windows. Those filesystems
   resolve `coverage-GAME.toml` and a `[targets.game]` entry to one file, but the

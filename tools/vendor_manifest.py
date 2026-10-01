@@ -111,7 +111,17 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{MANIFEST.relative_to(REPO_ROOT)}: up to date")
         return 0
 
-    MANIFEST.write_text(body, encoding="utf-8")
+    # The write is the last step and the only one that can fail on the
+    # filesystem: `make vendor-manifest` and every re-vendor run writes here, and
+    # an unwritable tools/oxlint (a read-only mount, a permissions change) raised
+    # OSError out of main as a traceback after a full tree walk, so the operator
+    # read a stack instead of the file and the errno that says which of the two
+    # it was.  Non-zero, and it names the file, matching the refusals above.
+    try:
+        MANIFEST.write_text(body, encoding="utf-8")
+    except OSError as exc:
+        print(f"cannot write {MANIFEST} ({exc.strerror or exc})", file=sys.stderr)
+        return 1
     print(f"{MANIFEST.relative_to(REPO_ROOT)}: {len(manifest['files'])} files recorded")
     return 0
 

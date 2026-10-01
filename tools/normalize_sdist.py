@@ -23,6 +23,7 @@ Every ``*.tar.gz`` under the given directories is rewritten in place.
 
 from __future__ import annotations
 
+import contextlib
 import gzip
 import os
 import re
@@ -84,7 +85,14 @@ def normalize_archive(path: Path, epoch: int) -> None:
                 payload = tar_in.extractfile(member) if member.isreg() else None
                 tar_out.addfile(normalized(member, epoch), payload)
     except BaseException:
-        tmp.unlink(missing_ok=True)
+        # Best effort, and it must not REPLACE what is unwinding: an OSError out
+        # of the unlink (a directory the build user cannot write, a filesystem
+        # that went read-only mid-build) would surface as this tool's failure and
+        # hide the tarfile or gzip error that explains it.  The half-written
+        # temp file beside the archive is the smaller problem next to an
+        # operator reading the wrong cause.
+        with contextlib.suppress(OSError):
+            tmp.unlink(missing_ok=True)
         raise
     tmp.replace(path)
 
@@ -119,9 +127,25 @@ def main(argv: list[str]) -> int:
     if not targets:
         print(f"no sdist (*.tar.gz) under {[str(r) for r in roots]}", file=sys.stderr)
         return 1
+    failed = 0
     for target in targets:
-        normalize_archive(target, epoch)
+        try:
+            normalize_archive(target, epoch)
+        except OSError as exc:
+            # Per archive, and the run continues: one corrupt tar or an
+            # unwritable dist/ ended the loop with a traceback naming neither
+            # the archive nor the errno, after the sdists already normalized
+            # were reported and the ones that were not were not.  `make build`
+            # is the caller and reads a non-zero exit as the whole step failing,
+            # so the failure is reported with its name and every archive that
+            # can be normalized still is.
+            failed += 1
+            print(f"cannot normalize {target}: {exc}", file=sys.stderr)
+            continue
         print(f"normalized {target}")
+    if failed:
+        print(f"{failed} of {len(targets)} sdist(s) left unnormalized", file=sys.stderr)
+        return 1
     return 0
 
 

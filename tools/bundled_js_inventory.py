@@ -401,13 +401,32 @@ def main(argv: list[str] | None = None) -> int:
         print(exc, file=sys.stderr)
         return 1
 
+    # The write is guarded like the build above it, because it fails the same
+    # way and an operator reads it the same way: the sbom job runs this with
+    # --output into an artifact directory, and an unwritable one (a full runner
+    # disk, a permissions change between checkout and upload) raised OSError out
+    # of main as a raw traceback naming no path and no inventory.  BrokenPipeError
+    # is an OSError, so `| head` takes the same line instead of the
+    # interpreter's shutdown traceback.
     if args.output is None:
-        print(body, end="")
+        try:
+            print(body, end="")
+        except OSError as exc:
+            print(f"cannot write the inventory to stdout: {exc}", file=sys.stderr)
+            return 1
     else:
-        # newline="" for the same reason as the sibling tools: the body is LF by
-        # construction, and this file is uploaded as a diffable CI artifact, so
-        # the bytes a Windows run writes must match the ones a Linux run does.
-        args.output.write_text(body, encoding="utf-8", newline="")
+        try:
+            # newline="" for the same reason as the sibling tools: the body is
+            # LF by construction, and this file is uploaded as a diffable CI
+            # artifact, so the bytes a Windows run writes must match the ones a
+            # Linux run does.
+            args.output.write_text(body, encoding="utf-8", newline="")
+        except OSError as exc:
+            print(
+                f"cannot write the inventory to {args.output} ({exc.strerror or exc})",
+                file=sys.stderr,
+            )
+            return 1
         print(f"{args.output}: {len(SHIPPED)} shipped packages")
     return 0
 

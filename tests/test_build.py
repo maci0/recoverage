@@ -990,3 +990,33 @@ class TestReproducibleBuild:
                 mp.setenv("SOURCE_DATE_EPOCH", raw)
                 assert normalize.main(["normalize_sdist.py", td]) == 2
             assert archive.read_bytes() == before, "a refused run still rewrote the archive"
+
+    def test_one_unreadable_archive_does_not_stop_the_others(
+        self, capsys: pytest.CaptureFixture
+    ) -> None:
+        """A corrupt sdist is named and the rest of the run still normalizes.
+
+        The loop reported every archive it had already normalized and then died
+        on the first one it could not read, with a traceback naming neither the
+        archive nor the errno, and never reported the ones after it.  `make
+        build` reads a non-zero exit as the whole step failing, so the exit code
+        is unchanged; what changed is that the failure names its archive and a
+        readable sibling beside it is still normalized instead of being lost to
+        the first failure.
+        """
+        normalize = _normalizer()
+        with _scratch_dir() as td:
+            good = Path(td) / "good.tar.gz"
+            bad = Path(td) / "bad.tar.gz"
+            _build_sdist(good, 1_600_000_000, 1000)
+            before = good.read_bytes()
+            bad.write_bytes(b"not a gzip stream at all")
+            with pytest.MonkeyPatch.context() as mp:
+                mp.setenv("SOURCE_DATE_EPOCH", str(EPOCH))
+                assert normalize.main(["normalize_sdist.py", td]) == 1
+            assert "bad.tar.gz" in capsys.readouterr().err, (
+                "the refusal does not name the archive it could not read"
+            )
+            assert good.read_bytes() != before, "the readable sibling was left as it was"
+            with tarfile.open(good, "r:gz") as tar:
+                assert all(m.mtime == EPOCH for m in tar), "the sibling was left unstamped"
