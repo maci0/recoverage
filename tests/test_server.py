@@ -3773,7 +3773,7 @@ class TestSpaStateVocabulary:
     """
 
     def test_state_slots_cover_every_known_cell_state(self) -> None:
-        from rebrew.build_db import _KNOWN_CELL_STATES
+        from rebrew.coverage_db import _KNOWN_CELL_STATES
 
         missing = sorted(_KNOWN_CELL_STATES - set(_packed_slots()))
         assert missing == [], f"cell states the map paints as undocumented: {missing}"

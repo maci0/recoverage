@@ -3726,7 +3726,7 @@ class TestCellStateVocabularyCoverage:
     """
 
     def test_every_known_cell_state_has_a_color(self) -> None:
-        from rebrew.build_db import _KNOWN_CELL_STATES
+        from rebrew.coverage_db import _KNOWN_CELL_STATES
 
         from recoverage.potato import COLORS
 

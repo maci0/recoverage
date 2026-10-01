@@ -214,7 +214,12 @@ strict_equality = true
 [tool.ruff.lint]
 # RUF001-RUF003 flag every confusable in prose; the multiplication sign is
 # deliberate typography in the coverage arithmetic, not a homoglyph typo.
-allowed-confusables = ["×"]
+# `ſ` (LATIN SMALL LETTER LONG S) is deliberate for the opposite reason: the
+# docstring naming it in tests/test_server.py documents a case the generated
+# SPA case-fold table must carry (`ſ` folds to `s`, `f` does not), so the
+# confusable IS the subject. Rewriting it as an `f` would make the test
+# describe a character the table has no entry for.
+allowed-confusables = ["×", "ſ"]
 # Core groups (E/F/W/I/UP/B/SIM) plus correctness-oriented groups proven clean
 # on this tree:
 #   A      — shadowing builtins; ASYNC — blocking calls in async code;

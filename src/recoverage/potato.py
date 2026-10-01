@@ -83,7 +83,7 @@ from recoverage.server import (
 _log = logging.getLogger("recoverage")
 
 # ── UI Constants ────────────────────────────────────────────────────────────────────────
-# Every state rebrew's build_db can write to cells.state needs a key here, or
+# Every state rebrew's coverage_db can write to cells.state needs a key here, or
 # the grid falls back to COLORS["none"] and paints the cell as an undocumented
 # gap.  That fallback is a data-fidelity bug, not a cosmetic one: build_db
 # counts 'verified' as an exact match (section_cell_stats folds it into

@@ -1236,7 +1236,7 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   tree git cannot read rather than passing on an empty substitution: outside a
   work tree `git status` writes its error to stderr and yields nothing, which
   read as a clean bundle.
-- The cell-state vocabulary is owned by rebrew (`rebrew.build_db._KNOWN_CELL_STATES`)
+- The cell-state vocabulary is owned by rebrew (`rebrew.coverage_db._KNOWN_CELL_STATES`)
   and must be covered on the rendering side: `potato.COLORS` + `LEGEND_ITEMS`,
   and `web/app/states.ts` `STATE_SLOTS`/`PALETTE_VARS`/`FILTER_KEY`. An unmapped
   state paints as an undocumented gap, which contradicts `/stats` — `verified`
