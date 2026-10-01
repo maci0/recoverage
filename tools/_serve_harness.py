@@ -10,13 +10,14 @@ from __future__ import annotations
 
 import contextlib
 import http.client
+import os
 import socket
 import subprocess
 import sys
 import tempfile
 from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 from recoverage import clock
 
@@ -104,24 +105,108 @@ def wait_for(predicate: Callable[[], bool], timeout: float = 30.0) -> bool:
     return False
 
 
+#: Bytes of the server's own stderr kept for the failure report.  Enough for a
+#: traceback and the banner, bounded so a chatty run cannot fill the temp dir.
+SERVER_STDERR_CAPTURE_BYTES = 64 * 1024
+
+
+def server_stderr(proc: subprocess.Popen[bytes]) -> str:
+    """What the server under *proc* wrote to stderr, decoded for the failure report.
+
+    The report is built from the live file, not from a buffer the harness
+    accumulated, so nothing is lost when the child outran whatever was kept in
+    memory.  :data:`SERVER_STDERR_CAPTURE_BYTES` is the ceiling, not a
+    promise: a full disk or a write error under this directory leaves the file
+    short rather than raising out of a teardown that has a verdict to deliver,
+    which is the opposite of what the report exists for.
+    """
+    tail: Path | None = getattr(proc, "stderr_tail", None)
+    if tail is None:
+        return ""
+    try:
+        with tail.open("rb") as fh:
+            try:
+                fh.seek(-SERVER_STDERR_CAPTURE_BYTES, os.SEEK_END)
+            except OSError:
+                fh.seek(0)
+            return fh.read().decode("utf-8", errors="replace").strip()
+    except OSError:
+        return ""
+
+
+def report_server_exit(proc: subprocess.Popen[bytes], stream: Any = None) -> None:
+    """Print why the server under *proc* is not answering, then that it is gone.
+
+    ``server exited early with code 1`` on its own is the finding this exists
+    to fix: every boot failure the harness can hit — a port already bound, a
+    ``rebrew-project.toml`` that does not parse, a coverage override pointing
+    at a file, an import error in the tree under test — prints its cause on
+    stderr and exits 1 or 2, and a harness that sends that stream to
+    ``DEVNULL`` reports the code and nothing else, so the CI log names a
+    failure with no way to act on it.  The report is emitted from the exit path
+    the caller already detected, so a healthy run stays silent.
+    """
+    out = sys.stderr if stream is None else stream
+    if proc.poll() is None:
+        return
+    print(f"server exited early with code {proc.returncode}", file=out)
+    tail = server_stderr(proc)
+    if tail:
+        print("--- server stderr ---", file=out)
+        print(tail, file=out)
+        print("--- end server stderr ---", file=out)
+    else:
+        print("server stderr was empty", file=out)
+
+
 @contextlib.contextmanager
 def running_server(project_dir: Path) -> Iterator[tuple[int, subprocess.Popen[bytes]]]:
-    """Run ``recoverage serve`` in *project_dir*; yield ``(port, process)``, stop it."""
+    """Run ``recoverage serve`` in *project_dir*; yield ``(port, process)``, stop it.
+
+    stderr goes to a file under the system temp dir rather than to
+    ``DEVNULL``: a server that refuses to boot writes the reason there, and
+    :func:`report_server_exit` reads it back on the failure paths.  The file is
+    unlinked on the way out, so a run leaves nothing behind, and the tail is
+    bounded by :data:`SERVER_STDERR_CAPTURE_BYTES`.  ``serve`` logs at INFO by
+    default, so a healthy run fills a little of it and the file is where that
+    goes instead of the parent terminal.
+    """
     port = free_port()
-    proc = subprocess.Popen(
-        [sys.executable, "-m", "recoverage", "serve", "--no-open", "--port", str(port)],
-        cwd=str(project_dir),
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
+    # A NamedTemporaryFile kept open is unlinkable-as-a-directory-entry on
+    # Windows, and the child inherits the handle; delete=False plus an
+    # explicit unlink in the finally is the shape that works on both.
+    # SIM115 is off for this line because the lifetime is the child's, not this
+    # scope's: a `with` here would close the handle the moment the block ends,
+    # and the server has not even been spawned yet.  Every exit below — the
+    # spawn failure, the yield's finally — closes and unlinks it exactly once.
+    log = tempfile.NamedTemporaryFile(prefix="recoverage-serve-", suffix=".log", delete=False)  # noqa: SIM115
+    try:
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "recoverage", "serve", "--no-open", "--port", str(port)],
+            cwd=str(project_dir),
+            stdout=subprocess.DEVNULL,
+            stderr=log,
+        )
+        # Carried on the handle rather than yielded as a third element, so
+        # every existing caller keeps its two and a call site that forgets to
+        # report still gets a file it can read.
+        proc.stderr_tail = Path(log.name)  # type: ignore[attr-defined]
+    except BaseException:
+        log.close()
+        Path(log.name).unlink(missing_ok=True)
+        raise
     try:
         yield port, proc
     finally:
-        proc.terminate()
+        log.close()
         try:
-            proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            # kill() signals; only a wait() reaps.  Without this the harness
-            # leaves a zombie behind on every timed-out teardown.
-            proc.wait()
+            proc.terminate()
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                # kill() signals; only a wait() reaps.  Without this the harness
+                # leaves a zombie behind on every timed-out teardown.
+                proc.wait()
+        finally:
+            Path(log.name).unlink(missing_ok=True)

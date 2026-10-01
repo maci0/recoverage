@@ -22,7 +22,14 @@ import argparse
 import sys
 from pathlib import Path
 
-from _serve_harness import build_sample_db, get, running_server, scratch_project_dir, wait_for
+from _serve_harness import (
+    build_sample_db,
+    get,
+    report_server_exit,
+    running_server,
+    scratch_project_dir,
+    wait_for,
+)
 
 #: A string only the served SPA shell carries: its <title>, which the relumea
 #: brand spells in lowercase.
@@ -43,8 +50,7 @@ def smoke(project_dir: Path, *, expect_failure: bool = False) -> int:
     with running_server(project_dir) as (port, proc):
         if not wait_for(lambda: get(port, "/api/health")[0] == 200):
             print("server never became healthy")
-            if proc.poll() is not None:
-                print(f"server exited early with code {proc.returncode}")
+            report_server_exit(proc)
             return 1
 
         if expect_failure:

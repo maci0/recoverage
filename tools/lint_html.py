@@ -43,7 +43,14 @@ import subprocess
 import sys
 from pathlib import Path
 
-from _serve_harness import build_sample_db, get, running_server, scratch_project_dir, wait_for
+from _serve_harness import (
+    build_sample_db,
+    get,
+    report_server_exit,
+    running_server,
+    scratch_project_dir,
+    wait_for,
+)
 
 from recoverage.potato import _RENDER_ERROR_BODY, _db_unavailable_page, _no_data_page
 from recoverage.server import _UNAUTHORIZED_HTML
@@ -137,9 +144,10 @@ def main() -> int:
             print("sample coverage document not built")
             return 1
 
-        with running_server(project_dir) as (port, _):
+        with running_server(project_dir) as (port, proc):
             if not wait_for(lambda: get(port, "/api/health")[0] == 200):
                 print("server never became healthy")
+                report_server_exit(proc)
                 return 1
 
             docs: dict[str, Path] = {}
