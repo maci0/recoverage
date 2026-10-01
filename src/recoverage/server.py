@@ -3159,6 +3159,14 @@ class _RequestIdFilter(logging.Filter):
 
     Records from other loggers (bottle, rebrew) never pass this filter, so
     the formatter supplies the same field's default for them.
+
+    ``Logger.handle`` runs the filters of the logger a record was logged ON
+    and never an ancestor's, so this reaches a module's lines only because
+    every module logs on the one ``"recoverage"`` logger rather than on
+    ``getLogger(__name__)``.  A module naming itself silently drops the
+    correlation off every line it writes, which is what
+    ``documents.py`` did; pinned by ``tests/test_metrics.py``
+    (``TestRequestId``).
     """
 
     def filter(self, record: logging.LogRecord) -> bool:

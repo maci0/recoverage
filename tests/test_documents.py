@@ -150,7 +150,7 @@ def test_a_cache_entry_rebrew_refuses_falls_back_to_the_document(
         slot.write_text(text.replace('"version":1', '"version":99'), encoding="utf-8")
 
     _restart(monkeypatch)
-    with caplog.at_level(logging.WARNING, logger="recoverage.documents"):
+    with caplog.at_level(logging.WARNING, logger="recoverage"):
         assert server.coverage_snapshots() == first
     assert caplog.text.count("discarding the cached parse") == 2
     assert _document_cache() == {"hits": 0, "misses": 2}
@@ -173,7 +173,7 @@ def test_an_unwritable_cache_still_serves_and_warns_once(
     monkeypatch.setenv("XDG_CACHE_HOME", str(blocker))
     monkeypatch.setattr(documents, "_WRITE_WARNED", False)
 
-    with caplog.at_level(logging.WARNING, logger="recoverage.documents"):
+    with caplog.at_level(logging.WARNING, logger="recoverage"):
         snaps = server.coverage_snapshots()
 
     assert sorted(snaps) == ["GAME", "TOOL"]
@@ -269,7 +269,7 @@ def test_an_unreadable_document_is_logged_on_one_line(
     except (OSError, ValueError):
         pytest.skip("the filesystem cannot name a file with a line break")
 
-    with caplog.at_level(logging.WARNING, logger="recoverage.documents"):
+    with caplog.at_level(logging.WARNING, logger="recoverage"):
         snaps = server.coverage_snapshots()
 
     assert sorted(snaps) == ["GAME", "TOOL"]

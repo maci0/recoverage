@@ -2167,6 +2167,70 @@ class TestSseEvents:
         finally:
             api._stop_db_watcher()
 
+    def test_a_closed_stream_is_named_and_aged(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A stream's END is on the record, not only its refusals.
+
+        The peer is held beside the queue so every other line about a stream
+        can name it (the queue-full warning, the cap refusal), and a
+        disconnect named nothing at all, so ``streams.clients`` falling by
+        one reads as the same thing whether a tab closed, a laptop slept or a
+        handler thread died mid-frame.  DEBUG, because a disconnect is the
+        ordinary case; the line is here for the LENGTH, which no gauge shows.
+        """
+        import recoverage.api as api
+
+        api._stop_db_watcher()
+        environ: dict[str, Any] = {}
+        setup_testing_defaults(environ)
+        environ["REQUEST_METHOD"] = "GET"
+        environ["PATH_INFO"] = "/api/events"
+        environ["QUERY_STRING"] = ""
+        environ["REMOTE_ADDR"] = "203.0.113.9"
+        environ["wsgi.input"] = BytesIO(b"")
+        environ["CONTENT_LENGTH"] = "0"
+
+        with caplog.at_level(logging.DEBUG, logger="recoverage"):
+            result = webapp.app(environ, lambda *a: None)
+            result.close()
+            # A second close must not produce a second line: _release is
+            # idempotent and the log is no exception to that.
+            result.close()
+
+        ended = [r for r in caplog.records if "Event stream for" in r.getMessage()]
+        assert len(ended) == 1, caplog.text
+        assert "203.0.113.9" in ended[0].getMessage()
+        assert ended[0].levelno == logging.DEBUG
+        api._stop_db_watcher()
+
+    def test_a_stream_peer_cannot_forge_the_close_line(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The peer reaches this line from the socket and is escaped.
+
+        An SSE peer label is REMOTE_ADDR behind a proxy, so it is as hostile as
+        any other request value; a control byte in it would split the line.
+        """
+        import recoverage.api as api
+
+        api._stop_db_watcher()
+        environ: dict[str, Any] = {}
+        setup_testing_defaults(environ)
+        environ["REQUEST_METHOD"] = "GET"
+        environ["PATH_INFO"] = "/api/events"
+        environ["QUERY_STRING"] = ""
+        environ["REMOTE_ADDR"] = "10.0.0.1\nX-Forged: yes"
+        environ["wsgi.input"] = BytesIO(b"")
+        environ["CONTENT_LENGTH"] = "0"
+
+        with caplog.at_level(logging.DEBUG, logger="recoverage"):
+            result = webapp.app(environ, lambda *a: None)
+            result.close()
+
+        [ended] = [r for r in caplog.records if "Event stream for" in r.getMessage()]
+        assert "\n" not in ended.getMessage()
+        assert "X-Forged" in ended.getMessage()
+        api._stop_db_watcher()
+
     def test_stream_delivers_db_updated_frame(self) -> None:
         import recoverage.api as api
 

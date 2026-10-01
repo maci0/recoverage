@@ -730,6 +730,14 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   seed has to produce the same one, so two runs diff field for field instead
   of diverging on the first value compared. A correlation id that must not be
   guessable is a different kind of value and gets `secrets`, not this.
+  The filter is installed on the package's `recoverage` logger, and
+  `Logger.handle` runs the filters of the logger a record was logged ON and
+  never an ancestor's: a module taking `getLogger(__name__)` gets a stream but
+  no `rid`, and every line it writes renders `[rid=-]`. `documents.py` did
+  that, so the coverage-document warnings — the ones naming which document is
+  broken — landed uncorrelatable from the 503 they explain. Every module logs
+  on the one logger, and `tests/test_metrics.py` (`TestRequestId`) fails when
+  one names itself.
   A new failure path that answers 4xx/5xx from outside a handler (bottle
   turns an escaped exception into a 500 only *after* `after_request` has
   filed the request as a 200) must call `server._reclassify_request`, or the

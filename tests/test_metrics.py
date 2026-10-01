@@ -151,6 +151,47 @@ class TestRequestId:
         assert errors[0].request_id == "trace-me"
         assert errors[0].exc_info is not None, "the traceback did not reach the log"
 
+    def test_every_module_logs_on_the_package_logger(self) -> None:
+        """No module names itself, or it silently loses the correlation.
+
+        ``Logger.handle`` runs the filters of the logger a record was logged
+        ON and never an ancestor's, so ``getLogger(__name__)`` gives a module
+        a stream but no ``rid``: every line it writes renders ``[rid=-]`` and
+        the operator cannot join it to the request that produced it.
+        ``documents.py`` did exactly that, which is why the coverage-document
+        warnings, the ones naming the broken file, were uncorrelatable from
+        the 503 they explain.
+        """
+        from recoverage import api, cli, devserver, disasm, documents, potato, server, ui
+
+        offenders = sorted(
+            module.__name__
+            for module in (api, cli, devserver, disasm, documents, potato, server, ui)
+            if getattr(module, "_log", None) is not None and module._log.name != "recoverage"
+        )
+        assert offenders == [], (
+            f"these modules log on a logger the request-id filter never sees: {offenders}"
+        )
+
+    def test_a_module_line_is_stamped_mid_request(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A line written from another module mid-request carries the id.
+
+        The filter reads thread-local state rather than the request scope, so
+        any module logging inside a handler gets the same id the response
+        header echoed, which is the pivot from a client's report to the log.
+        """
+        from recoverage import documents
+
+        with caplog.at_level(logging.WARNING, logger="recoverage"):
+            server._REQUEST_TLS.request_id = "mid-request"
+            try:
+                documents._log.warning("a module line inside a request")
+            finally:
+                server._REQUEST_TLS.request_id = None
+        stamped = [r for r in caplog.records if r.getMessage() == "a module line inside a request"]
+        assert stamped, "the line reached no handler"
+        assert stamped[0].request_id == "mid-request"
+
 
 class TestRedCounters:
     def test_health_reports_the_counters(self) -> None:

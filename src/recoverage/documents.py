@@ -51,7 +51,18 @@ from rebrew.coverage_toml import CoverageSnapshot, CoverageTomlError, _snapshot
 
 from recoverage import clock, metrics
 
-_log = logging.getLogger(__name__)
+# The package logger, NOT getLogger(__name__): a filter is run only for the
+# records logged on the logger it is installed on, never for a child's, so
+# under "recoverage.documents" the request-id filter (server._RequestIdFilter)
+# never ran and every line this module wrote reached the log with no `rid`,
+# which LOG_FORMAT renders as the `-` placeholder.  Those lines are the
+# unreadable-document skip, the discarded cached parse and an unwritable cache
+# directory — the three that name WHICH document is broken, landing mid-request
+# and read exactly when an operator is chasing the 503 they explain, and none
+# of them joinable to the request that produced it.  One logger name across the
+# package is what carries the correlation into every module; pinned by
+# tests/test_metrics.py::TestRequestId.
+_log = logging.getLogger("recoverage")
 
 #: Glob rebrew's writer names its documents with.
 _PREFIX: Final = "coverage-"

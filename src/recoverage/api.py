@@ -1028,6 +1028,10 @@ class _SSEStream:
     a handler thread for the process's remaining lifetime, permanently eroding
     the ``_SSE_MAX_CLIENTS`` cap.  Both exit paths go through
     :meth:`_release` instead, and :meth:`close` is safe to call twice.
+
+    ``_release`` also writes the stream's end at DEBUG: the peer is stored
+    beside the queue precisely so every later line about this stream can name
+    it, and a disconnect was the one movement of the peer that named nothing.
     """
 
     def __init__(self, client_queue: queue.Queue[bytes], peer: str = "unknown") -> None:
@@ -1035,6 +1039,7 @@ class _SSEStream:
         self._peer = peer
         self._gen: Generator[bytes] | None = None
         self._released = False
+        self._opened_at = clock.monotonic()
 
     def _release(self) -> None:
         if self._released:
@@ -1042,6 +1047,31 @@ class _SSEStream:
         self._released = True
         with _SSE_CLIENTS_LOCK:
             _SSE_CLIENTS.pop(self._queue, None)
+        # The END of a stream is a lifecycle event, not a bookkeeping step:
+        # every other movement of this peer is on the record (the queue-full
+        # warning names it, the cap refusal names it, the per-request line
+        # counts the request), so a stream that ends wrote nothing at all.
+        # That leaves "the client count fell" with no cause on it — a browser
+        # tab that navigated away, a reader whose laptop slept and a client
+        # whose handler thread died mid-frame all render as the same silent
+        # -1 on the `streams.clients` gauge, which is the number an operator
+        # reads to decide whether live reload is saturated.
+        #
+        # DEBUG, not WARNING: a disconnect is the ordinary case and the gauge
+        # already accounts for it, so a line above DEBUG per closed tab is the
+        # per-request chatter that teaches an operator to skip the stream. It
+        # goes on at DEBUG because the length is the part that is not visible
+        # elsewhere: a stream that lived 40 minutes and one that lived four
+        # seconds look identical in the gauge, and only this names which.
+        #
+        # close() may run before the generator was ever started (see the
+        # class docstring), so an unstarted stream reports a near-zero age
+        # rather than no age at all.
+        _log.debug(
+            "Event stream for %s ended after %.0fs",
+            _server._log_safe(self._peer),
+            clock.monotonic() - self._opened_at,
+        )
 
     def __iter__(self) -> Generator[bytes]:
         # One generator for the object's life, so a second iter()/next() sees
