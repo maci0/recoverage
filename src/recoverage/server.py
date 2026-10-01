@@ -3579,24 +3579,36 @@ def _security_headers() -> None:
         response.set_header("Access-Control-Allow-Origin", origin)
         _merge_vary("Origin")
         response.set_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        # The credential/validator headers the API itself documents.  Without
-        # Authorization in this list a --cors frontend cannot use the
-        # --token auth the README advertises (the preflight fails, so the
-        # request is never sent), without If-None-Match it cannot do the
-        # conditional GET that every ETag-bearing endpoint (/data, /asm,
-        # /bytes, /potato) is built around, and without Idempotency-Key the
-        # retry POST /api/regen documents never reaches the handler that
-        # reads it.
+        # The credential/validator/correlation headers the API itself
+        # documents.  Without Authorization in this list a --cors frontend
+        # cannot use the --token auth the README advertises (the preflight
+        # fails, so the request is never sent), without If-None-Match it
+        # cannot do the conditional GET that every ETag-bearing endpoint
+        # (/data, /asm, /bytes, /potato) is built around, without
+        # Idempotency-Key the retry POST /api/regen documents never reaches
+        # the handler that reads it, and without X-Request-ID the correlation
+        # id a client is told to send ("Send your own X-Request-ID and the
+        # server uses it instead of minting one, so a report from a client can
+        # be matched to the server log") cannot leave the browser at all: the
+        # preflight refuses the request before the header is ever sent.
         response.set_header(
             "Access-Control-Allow-Headers",
-            "Content-Type, Authorization, If-None-Match, Idempotency-Key",
+            "Content-Type, Authorization, If-None-Match, Idempotency-Key, X-Request-ID",
         )
         # ETag and Retry-After are response headers a cross-origin client
         # cannot read unless they are exposed; without this the validator the
         # server sends is invisible to the client that needs it, and so is the
         # `Idempotent-Replay: true` that is the whole answer to a replayed
-        # Idempotency-Key.
-        response.set_header("Access-Control-Expose-Headers", "ETag, Retry-After, Idempotent-Replay")
+        # Idempotency-Key.  X-Request-ID is the same case from the other side:
+        # it is on EVERY response and is what joins a client's report to the
+        # server log, so a cross-origin client that cannot read it can report
+        # "the map failed" with nothing for the operator to grep.  It is a
+        # correlation label, not a credential (see _REQUEST_ID_HEADER), so
+        # exposing it grants nothing.
+        response.set_header(
+            "Access-Control-Expose-Headers",
+            "ETag, Retry-After, Idempotent-Replay, X-Request-ID",
+        )
         response.set_header("Access-Control-Allow-Credentials", "true")
     elif origin:
         # Ensure caches key on Origin even when not allowed.

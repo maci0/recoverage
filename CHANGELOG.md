@@ -7,6 +7,13 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `--cors` now accepts and exposes `X-Request-ID`. The README tells a client
+  to send its own so a report can be matched to the server log, and every
+  response carries one back; a cross-origin client could do neither, because
+  the header was in neither the preflight's allow list (so the request was
+  never sent) nor the readable-response set (so the id came back unreadable).
+  It is a correlation label and not a credential, so allowing it grants
+  nothing, and the SPA's own refusal messages already quote it.
 - `recoverage open` writes its `Opening <url>` line to stderr instead of
   stdout. The line is status, not data: a container entrypoint that captured
   stdout and treated a non-empty result as an opened dashboard was told the

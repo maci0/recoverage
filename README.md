@@ -642,12 +642,16 @@ Query-parameter rules, the same on every endpoint:
   to stay off that path.
 
 With `--cors`, an allowlisted origin may send `Content-Type`, `Authorization`
-(the `--token` bearer check) and `If-None-Match` (the conditional GET every
-ETag-bearing endpoint above expects); a preflight naming any other request
-header is refused. `ETag` and `Retry-After` are exposed as readable response
-headers, so a cross-origin client can revalidate and honour a 429's wait.
-Every 429 the server emits carries `Retry-After` alongside the `retry_after`
-body key.
+(the `--token` bearer check), `If-None-Match` (the conditional GET every
+ETag-bearing endpoint above expects), `Idempotency-Key` (the regen retry) and
+`X-Request-ID` (the correlation id described under *Observing a running server*
+below, so a cross-origin client can send its own and match it to the server
+log); a preflight naming any other request header is refused. `ETag`,
+`Retry-After`, `Idempotent-Replay` and `X-Request-ID` are exposed as readable
+response headers, so a cross-origin client can revalidate, honour a 429's wait,
+tell a replayed regen from a fresh one, and quote the request id when it
+reports a failure. Every 429 the server emits carries `Retry-After` alongside
+the `retry_after` body key.
 
 ---
 

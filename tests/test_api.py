@@ -3248,11 +3248,14 @@ class TestCorsOriginAllowlist:
         assert "Content-Type" in headers.get("Access-Control-Allow-Headers", "")
 
     def test_allow_headers_cover_the_documented_auth_and_validators(self) -> None:
-        """--cors must not preflight-fail the two credentials the API documents.
+        """--cors must not preflight-fail the credentials the API documents.
 
-        Authorization carries the --token bearer check and If-None-Match
-        carries the conditional GET every ETag-bearing endpoint expects; a
-        client sending either without it in this list never gets a response.
+        Authorization carries the --token bearer check, If-None-Match carries
+        the conditional GET every ETag-bearing endpoint expects, Idempotency-Key
+        carries the documented regen retry, and X-Request-ID carries the
+        correlation id a client is told to send so its report can be matched to
+        the server log; a client sending any of them without it in this list
+        never gets a response at all.
         """
         self._enable(["http://localhost:5173"])
         _status, headers, _body = wsgi_get(
@@ -3261,9 +3264,31 @@ class TestCorsOriginAllowlist:
         allowed = headers.get("Access-Control-Allow-Headers", "")
         assert "Authorization" in allowed
         assert "If-None-Match" in allowed
+        assert "Idempotency-Key" in allowed
+        assert "X-Request-ID" in allowed
         exposed = headers.get("Access-Control-Expose-Headers", "")
         assert "ETag" in exposed
         assert "Retry-After" in exposed
+        assert "Idempotent-Replay" in exposed
+        # The id is on every response and is what joins a client's report to
+        # the server log, so a cross-origin client that cannot read it can
+        # report a failure with nothing for the operator to grep.
+        assert "X-Request-ID" in exposed
+
+    def test_a_client_supplied_request_id_survives_the_preflight(self) -> None:
+        """The correlation id round-trips cross-origin, in both directions.
+
+        The header is allowlisted so the preflight admits it, exposed so the
+        echo is readable, and echoed back verbatim: a client that sent it gets
+        the same id, which is what lets its report name a log line.
+        """
+        self._enable(["http://localhost:5173"])
+        rid = "cors-correlate-1"
+        _status, headers, _body = wsgi_get(
+            "/api/health",
+            headers={"Origin": "http://localhost:5173", "X-Request-ID": rid},
+        )
+        assert headers.get("X-Request-Id") == rid
 
     def test_preflight_unknown_origin_gets_no_acao(self) -> None:
         """Preflight for a non-allowlisted origin answers 200 but must not
