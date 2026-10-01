@@ -2295,6 +2295,38 @@ def _plain(value: Any) -> Any:
     return value
 
 
+def _measure(value: Any) -> int | float | None:
+    """A document's COUNT as the number the wire declares, or ``None``.
+
+    ``byte_delta``, ``diff_lines`` and ``reg_delta`` are measurements of a
+    quantity (bytes, lines, registers), so both renderers add their unit to
+    them and the SPA groups their digits: ``web/app/api.ts``'s
+    ``LastVerifyPayload`` declares every one ``number | null`` and
+    ``CoveragePanel`` calls ``count()`` on it, while Potato Mode prints
+    ``{byte_delta}B``.  rebrew's reader stores these rows RAW, so a document
+    can spell one as a string, and a string a renderer treats as a count is
+    worse than a missing figure: the SPA answers ``"nan"`` where a number
+    belongs and ``"87.3".toLocaleString()`` reads ``8,730`` beside Potato's
+    ``87.3``, while a non-finite float ``_plain`` only blanks is still
+    formatted into the page by Potato's own ``f`` string.
+
+    So the type is settled HERE, in the one function that builds the payload,
+    the way the wire settles every other figure: a bool is not a count, a
+    number that is not finite is no figure, and a document's spelling of
+    something that is not a number is ``None`` -- the value both renderers
+    already read as "nothing to show".
+
+    ``similarity`` is deliberately NOT coerced: it is a fraction a caller may
+    legitimately store as a string, and ``potato._similarity_pct`` /
+    ``format.similarityPct`` are the documented scaling for it.
+    """
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    # cast: _plain is the JSON-shape boundary and is typed Any, but the
+    # isinstance above has already settled this to a finite int | float.
+    return cast("int | float | None", _plain(value))
+
+
 def _cell_json(cell: Cell) -> dict[str, Any]:
     """One coverage cell as the SPA and Potato Mode read it.
 
@@ -2556,6 +2588,12 @@ def verify_payload(row: Mapping[str, Any]) -> dict[str, Any]:
     SPA's ``== null`` tests are written against. An empty string is how a
     verify record leaves a figure unmeasured, so it is null here too: served
     as ``""`` it passed both ``is not None`` tests and printed a blank row.
+
+    The three COUNTS go through :func:`_measure` rather than ``figure``, so
+    the wire carries the ``number | null`` its own declared type promises no
+    matter how the document spelled the value.  ``similarity`` stays on
+    ``figure``: it is a fraction a caller may store as a string, and its
+    scaling is the renderers' documented job (see :func:`_measure`).
     """
 
     def figure(key: str) -> Any:
@@ -2564,10 +2602,10 @@ def verify_payload(row: Mapping[str, Any]) -> dict[str, Any]:
 
     return {
         "verified_at": row.get("verified_at") or None,
-        "byte_delta": figure("byte_delta"),
-        "diff_lines": figure("diff_lines"),
+        "byte_delta": _measure(row.get("byte_delta")),
+        "diff_lines": _measure(row.get("diff_lines")),
         "similarity": figure("similarity"),
-        "reg_delta": figure("reg_delta"),
+        "reg_delta": _measure(row.get("reg_delta")),
         "effective_match": bool(row["effective_match"])
         if row.get("effective_match") is not None
         else None,

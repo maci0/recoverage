@@ -1971,6 +1971,51 @@ def test_an_unmeasured_verify_figure_is_served_as_null() -> None:
     }
 
 
+def test_a_verify_count_served_as_a_string_is_null_not_a_figure() -> None:
+    """rebrew stores verify rows raw, so a count can reach the wire as a string.
+
+    ``web/app/api.ts`` declares byte_delta/diff_lines/reg_delta ``number | null``
+    and ``CoveragePanel`` calls ``count()`` on them, and Potato Mode appends
+    "B" -- so a string served as a count rendered as ``"nan"`` in the SPA and
+    ``nanB`` in the panel, and a numeric string read as ``8,730`` there against
+    ``87.3`` here.  Similarity is left alone: it is a fraction a caller may
+    store as a string, and the renderers scale it.
+    """
+    from recoverage.server import verify_payload
+
+    payload = verify_payload(
+        {
+            "verified_at": "2026-01-01T00:00:00+00:00",
+            "byte_delta": "nan",
+            "diff_lines": float("nan"),
+            "similarity": "87.3",
+            "reg_delta": float("inf"),
+            "effective_match": True,
+        }
+    )
+    assert payload["byte_delta"] is None
+    assert payload["diff_lines"] is None
+    assert payload["reg_delta"] is None
+    # A caller may legitimately store the fraction as a string; that one is scaled
+    # by the renderer and is not this coercion's business.
+    assert payload["similarity"] == "87.3"
+
+    # A real count still reads as the number it is, 0 and 0.0 included, and a
+    # bool (which is an int in Python, and is not a count) does not.
+    real = verify_payload(
+        {"verified_at": "", "byte_delta": 0, "diff_lines": 2.5, "similarity": 0.0, "reg_delta": 1}
+    )
+    assert real["byte_delta"] == 0
+    assert real["diff_lines"] == 2.5
+    assert real["reg_delta"] == 1
+    assert isinstance(real["byte_delta"], int)
+    # A bool is an int in Python, and is not a count.
+    bool_row = verify_payload(
+        {"verified_at": "", "byte_delta": True, "diff_lines": 0, "similarity": 0.0, "reg_delta": 0}
+    )
+    assert bool_row["byte_delta"] is None
+
+
 # ── SSE live reload (/api/events) ─────────────────────────────────
 
 
