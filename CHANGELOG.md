@@ -7,6 +7,16 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- A coverage directory holding a `coverage-<target>.toml` whose name is not
+  valid UTF-8 — legal on ext4, and what a checkout, an archive or a copy off a
+  Windows tool produces — took the dashboard down. The target id arrives
+  holding the surrogate Python's `os.fsdecode` gives a raw filename byte, and
+  every URL built from it raised: `/potato` answered 500 because its links
+  percent-encode the id, and the SPA's own requests threw `URIError` because
+  `encodeURIComponent` refuses a lone surrogate. Both ends now percent-encode
+  the byte the filesystem actually holds, so the target resolves and links to
+  it work; Potato Mode's query reader decodes with the matching rule, where it
+  previously spelled such an id as `?` and resolved no target at all.
 - `--cors` now accepts and exposes `X-Request-ID`. The README tells a client
   to send its own so a report can be matched to the server log, and every
   response carries one back; a cross-origin client could do neither, because

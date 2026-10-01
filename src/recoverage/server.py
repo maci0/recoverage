@@ -26,7 +26,7 @@ from operator import attrgetter, itemgetter
 from pathlib import Path, PurePath
 from types import MappingProxyType
 from typing import Any, Final, NamedTuple, cast
-from urllib.parse import unquote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 import brotli
 import zstandard as zstd
@@ -309,6 +309,34 @@ def fs_text_bytes(text: str) -> bytes:
     spelling is recoverable.
     """
     return text.encode("utf-8", "surrogateescape")
+
+
+def fs_url_quote(text: str) -> str:
+    """*text* percent-encoded for a URL, the inverse of :func:`path_param`.
+
+    ``urllib.parse.quote`` encodes a ``str`` through UTF-8 and raises
+    ``UnicodeEncodeError`` on a surrogate — the U+DCFF a target id carries when
+    the coverage file's NAME held a byte outside UTF-8, since
+    ``documents.load_all`` reads that name with ``os.fsdecode``.  Every rendered
+    link embeds the target id, so one such file raised inside
+    :func:`recoverage.potato._build_url` and took the whole page down; the
+    server's own digests already treat that id as a value through
+    :func:`fs_text_bytes`, and a link has to be as tolerant as the value it
+    names.
+
+    :func:`fs_text_bytes` is the exact inverse of the ``os.fsdecode`` the name
+    arrived through, so the bytes go into ``quote`` rather than the string:
+    ``GAME\\udcff`` becomes ``GAME%FF``, one escape for the one byte the
+    filesystem holds.  ``quote`` over ``str`` would have raised, and
+    ``errors="surrogateescape"`` is not an argument it takes — the bytes are
+    the only spelling of the value that is encodable at all.
+
+    The reader side is :func:`path_param` and :func:`decode_query_value`, which
+    leave such a segment percent-encoded rather than raising, so a link that
+    names the value resolves to the value the filesystem already resolved it
+    to.
+    """
+    return quote(fs_text_bytes(text))
 
 
 #: What separates one length-prefixed :func:`_safe_etag` part from the next.

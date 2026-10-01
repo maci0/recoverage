@@ -351,6 +351,64 @@ export function sameOriginPath(rawPath: string, fallback: string): string {
   return rawPath;
 }
 
+/** One value percent-encoded for a URL path segment or query value.
+ *
+ * `encodeURIComponent` throws `URIError: URI malformed` on a lone surrogate,
+ * and a target id is a FILENAME: the server reads it with `os.fsdecode`, which
+ * is `surrogateescape`, so `coverage-GAME\xff.toml` — legal on ext4, and what a
+ * checkout, an archive or a copy from a Windows tool produces — arrives as
+ * `GAME\uDCFF`. The list in `/api/targets` carries it, and every request for
+ * that target threw on the way out: one undecodable byte in the coverage
+ * directory took the dashboard down rather than one row of the picker.
+ *
+ * `TextEncoder` writes the lone surrogate as the three bytes of U+FFFD, which
+ * is what `server.fs_url_quote` would have to invert to land back on the byte
+ * the filesystem holds; so the byte is encoded directly instead, one escape
+ * per unpaired code unit, which is the exact inverse of the server's
+ * `fs_url_quote` (`quote(fs_text_bytes(...))`). Both ends must agree: the
+ * server leaves a segment whose escapes are not valid UTF-8 percent-encoded
+ * rather than raising (`server.path_param`), and `/potato` reads its own query
+ * with `errors="surrogateescape"`.
+ *
+ * `encodeURIComponent` is still called for everything else, so the escaping
+ * alphabet, and every URL this package builds, is unchanged for every value
+ * that decodes — which is every value a document can hold, since TOML rejects
+ * `\uD800`. */
+export function encodeUrlValue(text: string): string {
+  let encoded = "";
+  for (const character of text) {
+    // A lone surrogate is the one character `encodeURIComponent` refuses; the
+    // iterator hands it over whole only as a paired unit, so an unpaired half
+    // here IS the one case the UTF-16 unit stands alone for.
+    const point = character.codePointAt(0) ?? 0;
+    if (point >= 0xDC_80 && point <= 0xDC_FF) {
+      encoded += percentEscapeFilesystemByte(point);
+      continue;
+    }
+    // Outside the recoverable range — an unpaired HIGH surrogate, which
+    // `os.fsdecode` never produces — the byte it stands for does not exist and
+    // is not invented here: masking to a byte would spell it `%00`, and a NUL
+    // injected into a URL is worse than the escape the server answers with.
+    // U+FFFD is what the server's own `errors="surrogateescape"` cannot avoid
+    // either, and such a target resolves to nothing on both ends rather than to
+    // something else.
+    encoded += point >= 0xD8_00 && point <= 0xDF_FF ? "%EF%BF%BD" : encodeURIComponent(character);
+  }
+  return encoded;
+}
+
+/** The byte a lone low surrogate stands for, percent-encoded.
+ *
+ * U+DC80..U+DCFF is `surrogateescape`'s whole alphabet: it maps that code unit
+ * onto the byte it carries in its low eight bits, which is the inverse of the
+ * server's `server.fs_text_bytes`. The caller narrows to that range, because
+ * nothing outside it is recoverable and the same mask on an unpaired high
+ * surrogate spells `%00`. */
+function percentEscapeFilesystemByte(codePoint: number): string {
+  const byte = codePoint - 0xDC_00;
+  return `%${byte.toString(16).toUpperCase().padStart(2, "0")}`;
+}
+
 /** Every `/`-separated segment of *path* percent-encoded, separators intact.
  *
  * One segment at a time because `/` is the only structure in the value: encode
@@ -358,7 +416,7 @@ export function sameOriginPath(rawPath: string, fallback: string): string {
  * empty segment (a leading `/`, a trailing one) encodes to the empty string, so
  * both spellings of the same root survive. */
 export function encodePathSegments(path: string): string {
-  return path.split("/").map((segment) => encodeURIComponent(segment)).join("/");
+  return path.split("/").map((segment) => encodeUrlValue(segment)).join("/");
 }
 
 /** The URL of one file under an accepted `sourceRoot`. Both halves are encoded,

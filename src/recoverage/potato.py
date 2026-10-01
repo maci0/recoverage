@@ -23,7 +23,6 @@ from html import escape as _html_escape
 from pathlib import Path
 from typing import Any, NamedTuple, cast
 from urllib.parse import ParseResult, parse_qs, urlparse
-from urllib.parse import quote as _url_quote
 
 from bottle import HTTPResponse, SimpleTemplate
 from rebrew.coverage_toml import CoverageSnapshot, CoverageTomlError, Function
@@ -56,6 +55,8 @@ from recoverage.server import (
     fold_needle,
     folded_row_columns,
     folded_va_columns,
+    fs_text_bytes,
+    fs_url_quote,
     function_json,
     function_sort_key,
     global_json,
@@ -638,14 +639,14 @@ def _highlight_asm(text: str, target: str) -> str:
 
     def _addr_link(addr: str) -> str:
         return (
-            f'<a href="?target={_url_quote(target)}&search={_url_quote(addr.strip())}">'
+            f'<a href="?target={fs_url_quote(target)}&search={fs_url_quote(addr.strip())}">'
             f'<font color="{MUTED_COLOR}">{_html_escape(addr)}</font></a>'
         )
 
     def _link_hex_refs(html: str) -> str:
         return _HEX_ADDR_RE.sub(
             lambda m: (
-                f'<a href="?target={_url_quote(target)}&search={_url_quote(m.group(0))}">'
+                f'<a href="?target={fs_url_quote(target)}&search={fs_url_quote(m.group(0))}">'
                 f"{m.group(0)}</a>"
             ),
             html,
@@ -909,19 +910,19 @@ def _build_url(
     grid, so every link a reader follows from inside the function list has to
     pass it, not only the ones that leave the list on purpose.
     """
-    url = "?target=" + _url_quote(target) + "&section=" + _url_quote(section)
+    url = "?target=" + fs_url_quote(target) + "&section=" + fs_url_quote(section)
     if filters:
-        url += "&filter=" + _url_quote(",".join(sorted(filters)))
+        url += "&filter=" + fs_url_quote(",".join(sorted(filters)))
     if idx is not None:
         url += "&idx=" + str(idx)
     if search:
-        url += "&search=" + _url_quote(search)
+        url += "&search=" + fs_url_quote(search)
     if page:
         url += "&page=" + str(page)
     if status:
-        url += "&status=" + _url_quote(status)
+        url += "&status=" + fs_url_quote(status)
     if view:
-        url += "&view=" + _url_quote(view)
+        url += "&view=" + fs_url_quote(view)
     return url
 
 
@@ -1301,7 +1302,19 @@ def render_potato(parsed_url: ParseResult) -> str:
     documents cannot be read; the route below does not catch it, so it leaves
     the route as a response rather than a render error.
     """
-    qs = parse_qs(parsed_url.query, keep_blank_values=True)
+    qs = parse_qs(
+        parsed_url.query,
+        keep_blank_values=True,
+        encoding="utf-8",
+        # ``surrogateescape``, the inverse of fs_url_quote above: a target id
+        # whose name the filesystem held as a byte outside UTF-8 is written
+        # into every link as one escape (``GAME%FF``), and the default
+        # ``replace`` decoded that escape to U+FFFD instead.  The page then
+        # resolved no target at all, and the ids that did differ stopped
+        # being distinguishable.  ``path_param`` spells the same rule for
+        # the API's own segments.
+        errors="surrogateescape",
+    )
     target = qs.get("target", [""])[0]
     section = qs.get("section", [".text"])[0]
     filter_str = ",".join(qs.get("filter", [""]))
@@ -1419,7 +1432,13 @@ def handle_potato() -> bytes | Any:
             tuple(binary_stamp(t) for t in db_target_ids()),
             qs,
         )
-        body = render_potato(urlparse(request.url)).encode("utf-8")
+        # fs_text_bytes, not a bare encode: the page embeds the target id in
+        # its title, its nav and every cell's href, so a name the filesystem
+        # spelled in a byte outside UTF-8 reaches here holding its U+DCFF and
+        # the strict encode raised — a 500 on the page that was otherwise
+        # renderable, over the same value every digest in this package already
+        # reads as a value rather than an error.
+        body = fs_text_bytes(render_potato(urlparse(request.url)))
         # Every other DB-derived response carries an explicit cache policy;
         # /potato was the one surface sent with none, which leaves the browser
         # free to apply heuristic freshness and a shared cache free to store
@@ -2462,10 +2481,10 @@ def _build_grid_html(
     # hoisted out of the loop (quoting + escaping ~2k times per render was
     # measurable).  The pieces reassemble to exactly what _build_url produces
     # for each cell: ?target&section[&filter]&idx=N[&search].
-    link_prefix = f"?target={_url_quote(target)}&section={_url_quote(section)}" + (
-        f"&filter={_url_quote(','.join(sorted(active_filters)))}" if active_filters else ""
+    link_prefix = f"?target={fs_url_quote(target)}&section={fs_url_quote(section)}" + (
+        f"&filter={fs_url_quote(','.join(sorted(active_filters)))}" if active_filters else ""
     )
-    link_suffix = f"&search={_url_quote(search_query)}" if search_query else ""
+    link_suffix = f"&search={fs_url_quote(search_query)}" if search_query else ""
 
     # The union of the active filters' states, resolved once for the page
     # rather than per cell: the grid asks the same question of each of the
@@ -2607,7 +2626,9 @@ def _render_function_list(
     # the map and opens the list has pills that read as set, and every link
     # that leaves the list used to land on a map with all of them cleared.
     # The spelling is the one `_build_url` emits for the same value.
-    filter_arg = f"&filter={_url_quote(','.join(sorted(active_filters)))}" if active_filters else ""
+    filter_arg = (
+        f"&filter={fs_url_quote(','.join(sorted(active_filters)))}" if active_filters else ""
+    )
 
     # Base filter: the data-marker rows (server.DATA_MARKER_TYPES) live in the
     # functions array but are data markers, not functions — same exclusion as
@@ -2676,13 +2697,13 @@ def _render_function_list(
         )
 
     prefix = (
-        f"?target={_url_quote(target)}&section={_url_quote(section)}{filter_arg}&view=functions"
+        f"?target={fs_url_quote(target)}&section={fs_url_quote(section)}{filter_arg}&view=functions"
     )
     base = prefix
     if search_query:
-        base += f"&search={_url_quote(search_query)}"
+        base += f"&search={fs_url_quote(search_query)}"
     if status_filter:
-        base += f"&status={_url_quote(status_filter)}"
+        base += f"&status={fs_url_quote(status_filter)}"
 
     parts = [
         f'<table role="presentation" width="100%" border="1" cellpadding="0" cellspacing="0" bordercolor="{BORDER_COLOR}" bgcolor="{PANEL_COLOR}">',
@@ -2715,7 +2736,7 @@ def _render_function_list(
     # top of the page for the box they just typed in.
     without_search = prefix
     if status_filter:
-        without_search += f"&status={_url_quote(status_filter)}"
+        without_search += f"&status={fs_url_quote(status_filter)}"
 
     if not rows:
         if search_query:
@@ -2744,15 +2765,15 @@ def _render_function_list(
         # here opened the panel in the wrong section for every other list.
         # The status criterion rides along beside them, so opening a function's
         # panel and stepping back to the list finds the same list.
-        link_prefix = f"?target={_url_quote(target)}&section={_url_quote(section)}{filter_arg}"
+        link_prefix = f"?target={fs_url_quote(target)}&section={fs_url_quote(section)}{filter_arg}"
         if status_filter:
-            link_prefix += f"&status={_url_quote(status_filter)}"
+            link_prefix += f"&status={fs_url_quote(status_filter)}"
         link_prefix += "&search="
         for fn in rows:
             name, va, size, status, module = fn.name, fn.va, fn.size, fn.status, fn.module
             st = status or "none"
             color = STATE_INK.get(st.lower(), TEXT_COLOR)
-            name_link = link_prefix + _url_quote(name)
+            name_link = link_prefix + fs_url_quote(name)
             parts.append(
                 "<tr>"
                 f'<td dir="auto"><a href="{name_link}"><font color="{ACCENT_COLOR}">{_esc(name)}</font></a></td>'
@@ -3001,18 +3022,18 @@ def _render_potato_inner(
     # `{{section}}` in the template: those get HTML-escaped only, so a target
     # or section holding "&" would append attacker-chosen query parameters to
     # this one href.  Every other href in the page goes through _build_url.
-    functions_nav_url = f"?target={_url_quote(target)}&section={_url_quote(section)}"
+    functions_nav_url = f"?target={fs_url_quote(target)}&section={fs_url_quote(section)}"
     if active_filters:
         # The pills a reader set on the grid travel into the list with them, the
         # same way the criterion below does: the list draws those pills, so a
         # [Functions] link that dropped them landed on a page whose controls read
         # as unset over a grid that had been narrowed.
-        functions_nav_url += "&filter=" + _url_quote(",".join(sorted(active_filters)))
+        functions_nav_url += "&filter=" + fs_url_quote(",".join(sorted(active_filters)))
     functions_nav_url += "&view=functions"
     if status_filter:
         # The criterion the list is narrowed by travels with the link into it,
         # so leaving for the grid and coming back does not quietly widen it.
-        functions_nav_url += "&status=" + _url_quote(status_filter)
+        functions_nav_url += "&status=" + fs_url_quote(status_filter)
 
     progress_bar_png_uri = _progress_svg(tuple(progress["segments"])) if progress else ""
 

@@ -7,7 +7,7 @@
  * lazy-load signal, not an empty grid), and `?index=0` omits `search_index` the
  * same way, for the caller that already holds it. */
 
-import { MSG } from "@/lib/format";
+import { MSG, encodeUrlValue } from "@/lib/format";
 
 /** One coverage cell, in spatial order. Optional keys are omitted by the
  * server rather than sent as null (`server._cell_json`). */
@@ -168,7 +168,7 @@ export async function fetchData(
     query.set("index", "0");
   }
   const suffix = query.size === 0 ? "" : `?${query.toString()}`;
-  const res = await fetch(`/api/targets/${encodeURIComponent(target)}/data${suffix}`, init(signal));
+  const res = await fetch(`/api/targets/${encodeUrlValue(target)}/data${suffix}`, init(signal));
   if (!res.ok) {
     throw new Error(await refusal(res));
   }
@@ -179,7 +179,7 @@ export async function fetchData(
 }
 
 export async function fetchStats(target: string, signal?: AbortSignal): Promise<StatsPayload> {
-  const res = await fetch(`/api/targets/${encodeURIComponent(target)}/stats`, init(signal));
+  const res = await fetch(`/api/targets/${encodeUrlValue(target)}/stats`, init(signal));
   if (!res.ok) {
     throw new Error(await refusal(res));
   }
@@ -283,7 +283,7 @@ export async function fetchFunction(
   signal?: AbortSignal,
 ): Promise<FunctionDetail> {
   const res = await fetch(
-    `/api/targets/${encodeURIComponent(target)}/functions/${encodeURIComponent(String(va))}`,
+    `/api/targets/${encodeUrlValue(target)}/functions/${encodeUrlValue(String(va))}`,
     init(signal),
   );
   if (!res.ok) {
@@ -305,8 +305,8 @@ export async function fetchAsm(
   section: string,
   signal?: AbortSignal,
 ): Promise<string> {
-  const query = `?va=${encodeURIComponent(String(address))}&size=${size}&section=${encodeURIComponent(section)}`;
-  const res = await fetch(`/api/targets/${encodeURIComponent(target)}/asm${query}`, init(signal));
+  const query = `?va=${encodeUrlValue(String(address))}&size=${size}&section=${encodeUrlValue(section)}`;
+  const res = await fetch(`/api/targets/${encodeUrlValue(target)}/asm${query}`, init(signal));
   // SAFETY: this origin's own JSON, whose shape `recoverage.api.handle_api_asm`
   // pins to `{asm}` or `{error, detail}`.
   const payload = (await res.json()) as AsmPayload;

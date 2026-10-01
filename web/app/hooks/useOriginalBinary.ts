@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "preact/compat";
 
 import { fetchArrayBufferSafe } from "@/api";
-import { encodePathSegments, sameOriginPath } from "@/lib/format";
+import { encodePathSegments, encodeUrlValue, sameOriginPath } from "@/lib/format";
 
 /** The target binary, downloaded once per (target, build), on first use.
  *
@@ -48,7 +48,7 @@ export type OriginalBinary = {
 export function originalDllPath(documentPath: string | undefined, target: string): string {
   const accepted = sameOriginPath(
     documentPath ?? "",
-    `/original/${encodeURIComponent(target)}.dll`,
+    `/original/${encodeUrlValue(target)}.dll`,
   );
   return accepted === documentPath ? encodePathSegments(accepted) : accepted;
 }

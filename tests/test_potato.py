@@ -1663,6 +1663,44 @@ class TestBuildUrl:
         url = _build_url("ターゲット", ".text")
         assert f"target={quote('ターゲット')}" in url
 
+    def test_target_named_by_a_byte_outside_utf8(self) -> None:
+        """A target id is a FILENAME, so it can be one ``os.fsdecode`` spells
+        with a surrogate.
+
+        ``urllib.parse.quote`` encodes a ``str`` through UTF-8 and raised
+        ``UnicodeEncodeError`` here, which is a ``ValueError``:
+        ``handle_potato`` caught it and answered 500. One
+        ``coverage-GAME\xff.toml`` - legal on ext4, and what a checkout, an
+        archive or a copy off a Windows tool produces - took the whole page
+        down rather than narrowing the target picker to one row.
+
+        The escape is the byte the filesystem holds, not U+FFFD: the reader
+        below resolves the link back to the id the filesystem already resolved
+        it to, and a U+FFFD would resolve to no target at all.
+        """
+        url = _build_url("GAME\udcff", ".text")
+        assert "target=GAME%FF" in url
+        assert "\udcff" not in url
+
+    def test_a_target_named_by_a_byte_outside_utf8_round_trips(self) -> None:
+        """The pair that makes the link above worth building.
+
+        ``parse_qs``'s default ``replace`` decoded ``GAME%FF`` to
+        ``GAME\ufffd``, so the page resolved no target at all, and two ids that
+        differed only in the byte stopped being distinguishable.
+        ``surrogateescape`` is the exact inverse of the spelling the link is
+        written with.
+        """
+        from urllib.parse import parse_qs
+
+        target = "GAME\udcff"
+        query = _build_url(target, ".text").lstrip("?")
+        assert parse_qs(query, keep_blank_values=True, encoding="utf-8", errors="surrogateescape")[
+            "target"
+        ] == [target]
+        # ...and the decode that was in place instead did not round-trip.
+        assert parse_qs(query, keep_blank_values=True)["target"] != [target]
+
     def test_filter_sorting_deterministic(self) -> None:
         """Filters are sorted for deterministic URLs.
 

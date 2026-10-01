@@ -1053,9 +1053,30 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   is computed before a handler can answer, so it 500'd every snapshot-keyed
   route. Two names differing only in an undecodable byte still hash apart.
   Pinned at `tests/test_server.py` (`TestDbEtag`).
-- A search term is trimmed of ASCII whitespace only, through `server.
-  strip_ascii_whitespace` (`/functions?search=`, Potato's `?search=`) and
-  `format.trimSearch` (the SPA box), which remove the same run on both sides.
+- A filename that is not valid text is still a value in a URL, and BOTH ends
+  encode it the same way. `urllib.parse.quote` encodes a `str` through UTF-8, so
+  it raised `UnicodeEncodeError` on that U+DCFF — inside `potato._build_url`,
+  every rendered link embeds the target id, and `UnicodeEncodeError` is a
+  `ValueError` that `handle_potato` caught, so one `coverage-GAME\xff.toml` in
+  the coverage directory answered `/potato` with a 500. The write side is
+  `server.fs_url_quote` (`quote(fs_text_bytes(text))`: the name's own bytes, one
+  escape for the one byte the filesystem holds) and `format.encodeUrlValue` on
+  the SPA side, where `encodeURIComponent` threw `URIError: URI malformed` on
+  the same string and took the whole dashboard down rather than the one row of
+  the target picker. The read sides are `potato.render_potato`'s
+  `parse_qs(..., errors="surrogateescape")` — the default `replace` spelled
+  `GAME%FF` as `GAME�`, so the page resolved no target at all — and
+  `server.path_param`, which leaves the segment percent-encoded rather than
+  raising, an honest 404. Only U+DC80..U+DCFF is recoverable, so
+  `encodeUrlValue` spells anything outside it `%EF%BF%BD` rather than masking a
+  high surrogate to `%00` and putting a NUL in a URL. A value that DECODES is
+  byte-for-byte what the old call spelled, which is what keeps every URL this
+  package already builds unchanged. Pinned at `tests/test_server.py`
+  (`TestDbEtagSurrogateName`, `TestSpaUrlEncodingSurvivesAFilenameOutsideUtf8`,
+  which runs the shipped `format.ts` under bun and drives all 128 code units of
+  the range) and `tests/test_potato.py` (`TestBuildUrl`). A new URL built from a
+  document value, a target id or a filename goes through the two helpers; the
+  test fails if a call site reaches for `encodeURIComponent` again.
   `str.strip` and `String.prototype.trim` also remove U+00A0, U+2000-U+200A,
   U+3000 and U+FEFF, so a term made of a non-breaking space became the EMPTY
   term and the search answered with every row instead of the rows whose name

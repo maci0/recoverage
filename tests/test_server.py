@@ -19,6 +19,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import IO, Any, ClassVar
+from urllib.parse import parse_qs, quote
 
 import brotli
 import pytest
@@ -596,6 +597,64 @@ class TestDbEtag:
         # Still a fingerprint of the DIRECTORY: removing the odd file moves it.
         raw.unlink()
         assert srv._snapshot_db_mtime() != token
+
+    def test_a_link_quotes_a_filename_outside_utf8(self) -> None:
+        """The write side of :func:`fs_url_quote`, and what it must not do.
+
+        ``urllib.parse.quote`` encodes a ``str`` through UTF-8, so it raised
+        ``UnicodeEncodeError`` on the U+DCFF a ``coverage-GAME\\xff.toml``
+        arrives as. Every rendered link embeds the target id, so one such file
+        in the coverage directory took Potato Mode down with a 500 rather than
+        narrowing the picker to one row.
+
+        The escape is the byte the filesystem holds, not U+FFFD: the reader
+        (below) resolves the link back to the id the filesystem already
+        resolved it to, and a U+FFFD would resolve to no target at all.
+        """
+        import recoverage.server as srv
+
+        assert srv.fs_url_quote("GAME\udcff") == "GAME%FF"
+        assert srv.fs_url_quote("GAME\udc80") == "GAME%80"
+        # Every value that DECODES is byte-for-byte what urllib spells, so no
+        # URL this package builds changes for any document a TOML file can
+        # hold (tomllib rejects \uD800).
+        for value in ("GAME", "caf\u00e9", "\u65e5", "\U0001f600", ".text", "a b/c#d", "%41"):
+            assert srv.fs_url_quote(value) == quote(value), value
+
+    def test_a_quoted_filename_outside_utf8_resolves_back_to_itself(self) -> None:
+        """The read half, which is the only claim the write half makes.
+
+        ``path_param`` returns a segment whose escapes are not valid UTF-8
+        unchanged, so a link built by :func:`fs_url_quote` lands on a path the
+        route cannot resolve - an honest 404 rather than a raise, and the
+        behavior Potato Mode's own query reader now matches.
+        """
+        import recoverage.server as srv
+
+        quoted = srv.fs_url_quote("GAME\udcff")
+        assert srv.path_param(quoted) == quoted
+        # ...and the reader Potato Mode uses round-trips it to the value.
+        parsed = parse_qs(
+            f"target={quoted}", keep_blank_values=True, encoding="utf-8", errors="surrogateescape"
+        )
+        assert parsed["target"][0] == "GAME\udcff"
+        # The decode it replaced spelled it U+FFFD, so the page resolved no
+        # target at all and two ids that differ stopped being distinguishable.
+        assert parse_qs(f"target={quoted}", keep_blank_values=True)["target"][0] != "GAME\udcff"
+
+    def test_an_unpaired_high_surrogate_is_not_invented_a_byte(self) -> None:
+        """Only U+DC80..U+DCFF is recoverable; nothing else becomes a byte.
+
+        ``surrogateescape`` is the whole reason the helper exists, and its
+        alphabet is exactly that range - ``os.fsdecode`` never produces an
+        unpaired high surrogate. Masking one to its low byte would spell
+        ``%00`` and put a NUL in a URL, so the strict encode's refusal is the
+        answer there, exactly as it is for every other digest in the package.
+        """
+        import recoverage.server as srv
+
+        with pytest.raises(UnicodeEncodeError):
+            srv.fs_url_quote("\ud800")
 
     def test_two_filenames_differing_only_in_an_undecodable_byte_differ(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -5673,3 +5732,134 @@ class TestSpaFirstPaint:
         declared = re.findall(rf"^\s*--{prefix}-([a-z]+):", _web("system/tokens.css"), re.MULTILINE)
         assert declared, f"the token file names no {prefix} scale"
         assert sorted(re.findall(r'"([a-z]+)"', listed.group(1))) == sorted(declared)
+
+
+class TestSpaUrlEncodingSurvivesAFilenameOutsideUtf8:
+    """A target id is a FILENAME, and the SPA builds every request for one.
+
+    The server reads the name with ``os.fsdecode``, which is
+    ``surrogateescape``, so ``coverage-GAME\\xff.toml`` — legal on ext4, and
+    what a checkout, an archive or a copy off a Windows tool produces — is
+    served as the JS string ``GAME\\uDCFF``.  ``encodeURIComponent`` throws
+    ``URIError: URI malformed`` on a lone surrogate, so every request for that
+    target threw on the way out and one undecodable byte in the coverage
+    directory took the dashboard down rather than the one row of the picker.
+
+    ``format.encodeUrlValue`` spells the byte the filesystem holds instead, and
+    that is the exact inverse of the server's ``server.fs_url_quote``.  Both
+    halves are executed here — bun runs the shipped TypeScript, Python does the
+    server's — and the round trip is asserted across both, because two encoders
+    that each look right in isolation are how this breaks twice.
+
+    Skipped when bun is absent; CI installs it (see package.json
+    packageManager).
+    """
+
+    #: The whole ``surrogateescape`` alphabet: U+DC80..U+DCFF is the image of
+    #: the bytes 0x80..0xFF, and nothing outside it can arrive from a
+    #: filesystem.  Driven in full so a range test that drifts by one boundary
+    #: is a failure rather than a case nobody ran.
+    RECOVERABLE = "".join(chr(point) for point in range(0xDC80, 0xDCFF + 1))
+
+    @staticmethod
+    def _module_path() -> Path:
+        return WEB_APP / "lib" / "format.ts"
+
+    def _encode_in_bun(self, values: list[str]) -> list[str]:
+        bun = shutil.which("bun")
+        if bun is None:
+            pytest.skip("bun not on PATH")
+
+        driver = (
+            "import { encodeUrlValue } from "
+            + json.dumps(str(self._module_path()))
+            + ";\n"
+            + "const cases = JSON.parse(await Bun.file(process.argv[2]).text());\n"
+            + "console.log(JSON.stringify(cases.map((v) => encodeUrlValue(v))));\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            script = Path(tmp) / "encode.ts"
+            script.write_text(driver, encoding="utf-8")
+            values_path = Path(tmp) / "values.json"
+            values_path.write_text(json.dumps(values), encoding="utf-8")
+            proc = subprocess.run(
+                [bun, "run", str(script), str(values_path)],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
+            )
+        assert proc.returncode == 0, f"encode harness failed to run: {proc.stderr}"
+        encoded: list[str] = json.loads(proc.stdout)
+        return encoded
+
+    def test_the_whole_recoverable_range_becomes_the_byte_it_stands_for(self) -> None:
+        import recoverage.server as srv
+
+        values = list(self.RECOVERABLE)
+        assert self._encode_in_bun(values) == [srv.fs_url_quote(value) for value in values]
+
+    def test_every_value_that_decodes_is_unchanged(self) -> None:
+        """The regression guard for every URL this package already builds.
+
+        ``encodeURIComponent`` is still what encodes everything else, so this
+        asserts the property rather than a copy of the alphabet: a value the old
+        helper spelled, the new one spells identically.  Without it the fix is a
+        silent rewrite of every request the SPA makes.
+
+        The expected spelling is ``encodeURIComponent``'s, not
+        ``urllib.parse.quote``'s, and the two differ: ``quote`` leaves ``/``
+        unescaped in a query value where JavaScript escapes it.  The client is
+        what builds these URLs, so its spelling is the one the browser sends.
+        """
+        expected = [
+            "GAME",
+            "caf%C3%A9",
+            "%E6%97%A5",
+            "%F0%9F%98%80",
+            ".text",
+            "a%20b%2Fc%23d",
+            "%2541",
+            "",
+            "a%2Fb",
+        ]
+        decodes = ["GAME", "café", "日", "😀", ".text", "a b/c#d", "%41", "", "a/b"]
+        assert self._encode_in_bun(decodes) == expected
+
+    def test_a_target_name_from_the_filesystem_round_trips_through_both_ends(self) -> None:
+        """One ``coverage-GAME\\xff.toml``, link followed.
+
+        The write half is the SPA's ``encodeUrlValue``; the read half is the
+        server's own decoding.  The URL the client builds must name the value
+        the server already holds, or the fix traded a crash for a dashboard that
+        silently requests nothing.
+        """
+        import recoverage.server as srv
+
+        target = "GAME\udcff"
+        encoded = self._encode_in_bun([target])[0]
+        assert encoded == "GAME%FF"
+        assert srv.path_param(encoded) == encoded
+        assert parse_qs(
+            f"target={encoded}",
+            keep_blank_values=True,
+            encoding="utf-8",
+            errors="surrogateescape",
+        )["target"] == [target]
+
+    def test_no_call_site_still_builds_a_url_with_encodeuricomponent(self) -> None:
+        """Wiring: the guard is a helper, and a helper nobody calls is not one.
+
+        ``encodeURIComponent`` raises on exactly the value every one of these
+        call sites receives, so a new URL built with it reintroduces the crash
+        for the one target the rest of the dashboard now handles.  The helper
+        itself keeps its one call — that is the whole of what encodes a
+        character that decodes — so ``format.ts`` is exempt.
+        """
+        for relative in ("api.ts", "hooks/useOriginalBinary.ts"):
+            body = (WEB_APP / relative).read_text(encoding="utf-8")
+            offenders = [line for line in body.splitlines() if "encodeURIComponent(" in line]
+            assert not offenders, f"{relative} builds a URL with encodeURIComponent: {offenders}"
+        helper = self._module_path().read_text(encoding="utf-8")
+        calls = [line for line in helper.splitlines() if "encodeURIComponent(" in line]
+        assert len(calls) == 1, f"encodeUrlValue delegates {len(calls)} times: {calls}"
