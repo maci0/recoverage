@@ -141,8 +141,9 @@ _C1_LAST: Final = 0x9F
 #: The IPv6 scope delimiter.  It is named as a constant of its own because it
 #: is the one character the bind floor cannot judge from the set below: a
 #: link-local literal holds it, so it may not sit in that set, and every other
-#: address is refused for carrying it.
-PERCENT: Final = "%"
+#: address is refused for carrying it.  Private, like the rest of the floor:
+#: only :func:`validate_bind` reads it.
+_PERCENT_SIGN: Final = "%"
 
 #: Characters no IPv4 literal and no hostname can carry, so a value holding one
 #: is a mistyped or misquoted address rather than an unresolvable one.  The
@@ -308,8 +309,9 @@ def validate_bind(value: str, name: str = "RECOVERAGE_BIND") -> str:
     state, and refusing it would turn a deployment that works minutes later
     into a startup error.  So the check is structural — every character in
     :data:`_NOT_IN_AN_ADDRESS` is one no IPv4 literal and no hostname holds,
-    :data:`PERCENT` is one only a link-local IPv6 literal may carry, and what
-    is left the resolver answers or it does not, in the listener's own words.
+    :data:`_PERCENT_SIGN` is one only a link-local IPv6 literal may carry,
+    and what is left the resolver answers or it does not, in the listener's
+    own words.
 
     Without the floor, an interface spec a systemd unit can carry (``0.0.0.0``
     followed by the percent sign and the interface name) passed here and failed
@@ -333,7 +335,7 @@ def validate_bind(value: str, name: str = "RECOVERAGE_BIND") -> str:
                 f"{name}: {value!r} is not an interface address "
                 "(drop the port; it belongs to RECOVERAGE_PORT/--port)"
             ) from None
-    elif PERCENT in value:
+    elif _PERCENT_SIGN in value:
         # An IPv6 literal keeps its percent sign (a link-local zone, which
         # :class:`IPv6Address` above accepted); anywhere else it is an
         # interface spec — ``0.0.0.0%eth0`` — or the escaped tail of a URL

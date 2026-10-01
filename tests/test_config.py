@@ -351,7 +351,7 @@ class TestBindValidation:
         deployment that would have served.
         """
         assert not set(raw) & config._NOT_IN_AN_ADDRESS, raw
-        assert config.PERCENT not in raw or ":" in raw, raw
+        assert config._PERCENT_SIGN not in raw or ":" in raw, raw
         monkeypatch.setenv("RECOVERAGE_BIND", raw)
         assert config.bind() == raw
 

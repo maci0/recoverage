@@ -181,7 +181,8 @@ export function dateTime(stamp: string): string {
   // DIFFERENT one; one carrying an offset names an instant and always
   // round-trips, so the check below does not apply to it.
   const literal = NAIVE_STAMP.exec(anchored);
-  if (literal !== null && !readersClockAgreesWith(parsed, literal)) {
+  const named = literal?.groups;
+  if (named !== undefined && !readersClockAgreesWith(parsed, named)) {
     return stamp;
   }
   return parsed.toLocaleString();
@@ -197,15 +198,23 @@ export function dateTime(stamp: string): string {
  * parsed value in the reader's own zone is therefore the check, and comparing
  * them to the literal is what separates "the zone has this reading" from
  * "`Date` found something to substitute for it". */
-function readersClockAgreesWith(parsed: Date, literal: RegExpExecArray): boolean {
+function readersClockAgreesWith(
+  parsed: Date,
+  literal: Record<string, string | undefined>,
+): boolean {
+  // Every group the pattern names, read by the NAME rather than by its index:
+  // an index is a position a future edit to the pattern silently moves, and
+  // the name is the field it holds.  An absent group destructures to
+  // `undefined`, and `Number(undefined)` is NaN, which no `get*` returns.
+  const { year, month, day, hour, minute, second } = literal;
   return (
-    parsed.getFullYear() === Number(literal[1]) &&
-    parsed.getMonth() + 1 === Number(literal[2]) &&
-    parsed.getDate() === Number(literal[3]) &&
-    (literal[4] === undefined ||
-      (parsed.getHours() === Number(literal[4]) &&
-        parsed.getMinutes() === Number(literal[5]) &&
-        (literal[6] === undefined || parsed.getSeconds() === Number(literal[6]))))
+    parsed.getFullYear() === Number(year) &&
+    parsed.getMonth() + 1 === Number(month) &&
+    parsed.getDate() === Number(day) &&
+    (hour === undefined ||
+      (parsed.getHours() === Number(hour) &&
+        parsed.getMinutes() === Number(minute) &&
+        (second === undefined || parsed.getSeconds() === Number(second))))
   );
 }
 

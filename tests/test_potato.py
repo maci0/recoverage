@@ -3099,6 +3099,31 @@ class TestFunctionListSearchFolding:
         assert _search_functions(snap, "CAFÉ") == {"Café_Render"}
         assert "Café_Render" in _render_function_list(snap, "T", ".text", None, "CAFÉ", "va", "")[0]
 
+    def test_a_va_start_only_spelling_matches_on_both_views(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The address a row carries in `vaStart` alone is a search term.
+
+        `va` and `vaStart` are independent document columns, so a row whose
+        `va` is 0 and whose `vaStart` names the address is one the two hex
+        spellings cannot match. This view spelled its name columns out by
+        index and left `vaStart` out, so such a row matched here and nowhere
+        else: the API list matches `vaStart`, and the grid does too.
+        """
+        from recoverage.potato import _render_function_list, _search_functions
+
+        snap = _write_doc(
+            tmp_path,
+            monkeypatch,
+            "T",
+            {".text": {"size": 16, "cells": [cell(0, 16, "exact")]}},
+            functions=[{"va": 0, "vaStart": "0x401000", "name": "no_va_row"}],
+        )
+        assert _search_functions(snap, "0x401000") == {"no_va_row"}
+        html, count = _render_function_list(snap, "T", ".text", None, "0x401000", "va", "")
+        assert count == 1, count
+        assert "no_va_row" in html
+
 
 class TestCellsCacheInvalidation:
     """The grid memo must invalidate when a document is rewritten.

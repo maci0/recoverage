@@ -2704,10 +2704,13 @@ def _render_function_list(
     if status_filter:
         rows = [fn for fn in rows if fn.status == status_filter]
     if search_query:
-        # The VA arms are this view's own addition, where _search_functions
-        # matches `vaStart` instead because that is the string a .text cell
-        # stores.  The name columns come from the snapshot's folded table, and
-        # the two address spellings only when the term can hold one.
+        # The same three folded name columns and the two folded address
+        # spellings `_search_functions` selects on, through the same two
+        # helpers, so a term that finds the row on the grid finds it in this
+        # list: the arms were once spelled out here and this one dropped the
+        # `vaStart` column, so a document whose row carries that address in
+        # `vaStart` alone matched nothing on this view while the API list and
+        # the grid both returned it.
         needle = fold_needle(search_query)
         match_hex = fold_can_match_hex(needle)
         folded = folded_row_columns(coverage, coverage.functions)
@@ -2715,8 +2718,7 @@ def _render_function_list(
         rows = [
             fn
             for fn in rows
-            if needle in folded[id(fn)][0]
-            or needle in folded[id(fn)][1]
+            if _columns_match(folded[id(fn)], needle)
             or _va_matches_folded(
                 folded_vas[id(fn)] if folded_vas is not None else None, needle, match_hex
             )

@@ -439,10 +439,9 @@ def _data_cache_checkout(
         # for this key would pay the same full wait again, and the entry would
         # outlive the process.  The `is event` guard means a leader that
         # released (or was superseded by an earlier reclaim) is left alone —
-        # and the same guard
-        # has to decide the install.  A claim registered in between (an
-        # earlier follower already reclaimed and a later request became the
-        # leader) belongs to a LIVE builder, and overwriting it would
+        # and the same guard has to decide the install.  A claim registered in
+        # between (an earlier follower already reclaimed and a later request
+        # became the leader) belongs to a LIVE builder, and overwriting it would
         # disarm its single-flight: its _data_cache_build_done identity check
         # would no longer match, so the claim would never be released and a
         # third request would start a second build beside it.  Building
