@@ -171,6 +171,32 @@ def _default(text: str, var: str) -> str:
 
 
 class TestRbrewPin:
+    def test_the_sibling_is_never_tracked_inside_the_tree(self) -> None:
+        """`rebrew` belongs at `../rebrew`, and a tracked copy in-tree is broken.
+
+        `[tool.uv.sources]` resolves the dependency from `../rebrew`, so an
+        in-tree `rebrew` is not a second way to supply it: it is a path uv
+        never reads. A contributor in a git worktree, where the checkout is
+        not beside the tree, links the wrong one, `uv sync` still answers
+        "Distribution not found", and the link sitting in the tree reads as a
+        solved bootstrap. Committed, it is worse: a symlink stores one
+        machine's absolute path, so it dangles in CI and in every other
+        contributor's clone. One slipped in under a commit about served
+        verify-result counts, which is what this holds against.
+        """
+        link = _ROOT / "rebrew"
+        assert not link.is_symlink() and not link.exists(), (
+            "an in-tree ./rebrew is present: [tool.uv.sources] resolves the dependency "
+            "from ../rebrew, so this link does nothing and only looks like a bootstrap "
+            "that works. Committed it is worse — it stores one machine's absolute path "
+            "and dangles in CI and in every other clone. Link ../rebrew instead"
+        )
+        ignore = (_ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+        assert any(line.strip() == "/rebrew" for line in ignore), (
+            ".gitignore no longer ignores an in-tree /rebrew, so the link this test "
+            "refuses comes back under the next `git add .`"
+        )
+
     def test_ci_populates_the_sibling_only_through_the_pinned_script(self) -> None:
         """Every installing job materializes the sibling rebrew, one way only.
 
@@ -821,6 +847,42 @@ class TestEnvironmentInstalls:
                 f"package.json runs uv without --extra dev, so it re-syncs the "
                 f"environment and uninstalls the dev tools: {flags}"
             )
+
+    def test_web_lint_keeps_the_rebrew_preflight(self) -> None:
+        """A `uv run` reached through package.json still resolves uv.lock.
+
+        The check above reads the script; this one reads the Makefile target
+        that runs it. `web-lint` runs `bun run lint`, which is
+        `lint:js && lint:html`, and `lint:html` is the `uv run` above — so
+        `web-lint` resolves uv.lock, and the lock carries the rebrew path
+        dependency, through a layer the Makefile's own recipes never touched.
+        The target depended on `ensure-bun` alone, and a contributor with no
+        sibling checkout got `Distribution not found at file://…/rebrew`
+        printed from inside a bun script, naming neither the missing checkout
+        nor the command that fetches it. Every target that reaches uv
+        directly already depended on `ensure-rebrew` for exactly this reason;
+        this one reached uv through package.json and was missed.
+        """
+        scripts = json.loads(_PACKAGE_JSON.read_text(encoding="utf-8"))["scripts"]
+        reaching_uv = {name for name, command in scripts.items() if "uv run" in command}
+        assert reaching_uv, (
+            "no package.json script reaches uv; this check would pass vacuously, and a "
+            "target that runs one would then have lost the preflight naming a missing "
+            "sibling rebrew"
+        )
+        assert any(name in scripts.get("lint", "") for name in reaching_uv), (
+            "`bun run lint` no longer reaches uv, so `make web-lint` no longer resolves "
+            "uv.lock and this target needs no rebrew preflight; re-point this check at "
+            "whatever target runs the uv script"
+        )
+        makefile = _MAKEFILE.read_text(encoding="utf-8")
+        match = re.search(r"^web-lint:([^\n]*)", makefile, re.MULTILINE)
+        assert match is not None, "the Makefile no longer defines web-lint"
+        assert "ensure-rebrew" in match.group(1), (
+            "web-lint runs a script that reaches uv, and without ensure-rebrew a "
+            "checkout with no sibling rebrew dies inside bun with a uv error naming "
+            "neither the missing checkout nor 'make clone-rebrew'"
+        )
 
 
 class TestToolchainPins:

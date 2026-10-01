@@ -74,6 +74,14 @@ neither, and uv resolves `../rebrew` through it the same way.
 the path out of `pyproject.toml`, so a check that passes there and a sync that
 resolves elsewhere would be worse than none.
 
+Link `../rebrew`, not `./rebrew`. An in-tree `rebrew` symlink is the natural
+thing to reach for in a worktree, and it does nothing: `[tool.uv.sources]`
+resolves the dependency from `../rebrew`, so `uv sync` still answers
+`Distribution not found at file://…/rebrew` with the link sitting right there,
+looking like a solved bootstrap. `.gitignore` ignores an in-tree `/rebrew` for
+the same reason — it is a symlink holding one machine's absolute path, dangling
+in CI and in every clone but the one that made it.
+
 Web lint additionally needs [bun](https://bun.sh) (`packageManager` pins
 1.4.2) and a JDK 17+ on `PATH`, since `vnu-jar` validates the HTML and CSS
 under `java`. `make web-lint` names whichever is missing.

@@ -420,7 +420,17 @@ yaml-lint: ensure-lint-tools
 
 # CI installs bun + a JDK before this; name both rather than failing inside
 # oxlint or vnu with a stack trace.
-web-lint: ensure-bun
+#
+# ensure-rebrew, unlike web-build / web-dev / typecheck-web beside it, which
+# are pure JS/TS: `bun run lint` is `lint:js && lint:html`, and lint:html is
+# `uv run --locked --extra dev python tools/lint_html.py`, which imports
+# recoverage.server and therefore rebrew. `uv run` resolves uv.lock on its own,
+# and the lock carries the rebrew path dependency, so on a checkout with no
+# sibling the HTML pass died with "Distribution not found at file://…/rebrew"
+# from inside a bun script, naming neither the missing checkout nor the command
+# that fetches it. The preflight is what every other uv-reaching target here
+# already had; this one reached uv through a package.json script and was missed.
+web-lint: ensure-bun ensure-rebrew
 	@$(SET_STRICT) \
 	if ! command -v java >/dev/null 2>&1; then \
 	  echo "ERROR: java not on PATH (vnu-jar runs the Nu Html Checker under java)."; \

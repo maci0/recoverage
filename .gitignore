@@ -27,6 +27,17 @@ node_modules/
 # Scratch space (experiments, probes, throwaway files)
 .scratch/
 
+# A sibling rebrew checkout linked INTO the tree. [tool.uv.sources] resolves
+# rebrew from ../rebrew, so an in-tree ./rebrew symlink is what a contributor
+# working in a git worktree (where the checkout is not beside the tree) most
+# often makes while reaching for the sibling — and uv does not read it, so the
+# link looks like a solved bootstrap while `uv sync` still fails on
+# "Distribution not found at file://…/rebrew". It also carries an absolute
+# path that means nothing on another machine, so `git add .` would commit a
+# dangling symlink into the tree. (The path uv actually reads is ../rebrew;
+# link THAT, as CONTRIBUTING spells out.)
+/rebrew
+
 # Coverage documents the smoke harness and the serve harness write into a
 # project's coverage directory (runtime artifact, not source).  The SQLite
 # database this pattern used to ignore is no longer produced: rebrew writes

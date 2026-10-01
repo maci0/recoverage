@@ -13,6 +13,19 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   tab was open on the headless run that exits 1. Every other command keeps
   stdout for data (`export` documents this) or for nothing at all (`regen`);
   `open` was the one that mixed them.
+- `make web-lint` runs `lint:html`, a `uv run` reached through a `package.json`
+  script, so it resolved `uv.lock` — and the lock's sibling `rebrew` path
+  dependency — without the preflight every other `uv`-reaching target carries.
+  On a checkout with no sibling rebrew it died inside bun with a bare
+  `Distribution not found at file://…/rebrew`. It now depends on
+  `ensure-rebrew` and names `make clone-rebrew`, like `make test` and
+  `make lint` already did.
+- A `rebrew` symlink committed into the tree root is gone. `uv` resolves the
+  dependency from `../rebrew`, so an in-tree link never satisfied it: it only
+  made a broken bootstrap look finished, and as a tracked symlink it stored one
+  machine's absolute path and dangled in CI and in every other clone.
+  `.gitignore` now ignores an in-tree `/rebrew`, and CONTRIBUTING says to link
+  `../rebrew`.
 - Search no longer re-folds every name and address of every function and
   global on every keystroke. The folds are pure functions of a snapshot that
   does not change while the term does, so they are computed once per snapshot
