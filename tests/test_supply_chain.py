@@ -1799,6 +1799,58 @@ def _js_inventory_module() -> ModuleType:
     return module
 
 
+def _assert_stdlib_only_targets(targets: tuple[str, ...], *, reason: str) -> None:
+    """A Make target runs its tool without the project environment.
+
+    `ensure-rebrew` and `$(UV_RUN)` are the two things a checkout without a
+    `../rebrew` sibling cannot do: the preflight refuses outright, and `uv run`
+    resolves uv.lock, which carries the path dependency. A tool that imports
+    nothing outside the stdlib can do neither and does not need to, so a target
+    running one has to reach it through `$(UV_STDLIB)` (`uv run --no-project`)
+    or it locks a stdlib-only command behind a bootstrap it does not read.
+
+    `reason` says what makes this tool stdlib-only at the call site, because the
+    gate cannot infer it: it can only check the tool does not import a
+    distribution the manifest declares, and a tool that starts importing one
+    needs this spelling changed deliberately.
+    """
+    makefile = _MAKEFILE.read_text(encoding="utf-8")
+    for target in targets:
+        assert re.search(rf"^{target}:(?! ensure-rebrew)", makefile, re.MULTILINE), (
+            f"`make {target}` requires the sibling rebrew checkout, but {reason}"
+        )
+        recipe = makefile.split(f"{target}:", 1)[1].split("\n\n", 1)[0]
+        assert "$(UV_RUN)" not in recipe, (
+            f"`make {target}` runs through $(UV_RUN), which resolves uv.lock and so the rebrew "
+            f"path dependency, but {reason}"
+        )
+        assert "$(UV_STDLIB)" in recipe, (
+            f"`make {target}` no longer runs through $(UV_STDLIB), so it resolves the project "
+            f"environment anyway, but {reason}"
+        )
+        # The tool itself, which is what the claim is about: a `rebrew` or
+        # `recoverage` import here is what would make the sibling mandatory.
+        ran = re.search(r"\$\(UV_STDLIB\) \$\(PYTHON\) (\S+)", recipe)
+        assert ran, f"`make {target}` no longer names the tool it runs through $(UV_STDLIB)"
+        source = (_ROOT / ran.group(1)).read_text(encoding="utf-8")
+        project = tomllib.loads(_MANIFEST.read_text(encoding="utf-8"))
+        known = set(project["project"]["dependencies"]) | set(
+            project["project"]["optional-dependencies"]
+        )
+        imported = {
+            match.split(".")[0]
+            for match in re.findall(r"^(?:from|import)\s+([A-Za-z_][\w.]*)", source, re.MULTILINE)
+            if match.split(".")[0] != "__future__"
+        }
+        # A stdlib module name (hashlib, json, argparse) is not a distribution,
+        # so the claim is about the ones the manifest can answer for.
+        assert not (imported & known), (
+            f"{ran.group(1)} imports {sorted(imported & known)}, a declared distribution; the "
+            "targets reaching it through $(UV_STDLIB) run no environment, so a stdlib-only "
+            "tool has to leave that spelling"
+        )
+
+
 class TestBrowserBundleInventory:
     """The wheel ships compiled browser code, so that code has an inventory too.
 
@@ -1895,6 +1947,47 @@ class TestBrowserBundleInventory:
             "the browser inventory is written but not uploaded as an artifact"
         )
         assert "uv export" in job, "the sbom job stopped exporting the Python inventory"
+
+    def test_the_local_targets_match_the_job_they_mirror(self) -> None:
+        """`make browser-sbom` runs where the sbom job runs, or it does not run.
+
+        The sbom job has no sibling checkout and no synced environment: it calls
+        the tool with a bare `python` because the tool imports nothing outside
+        the stdlib. A target that reached it through `ensure-rebrew` and
+        `$(UV_RUN)` needed both of the things the job deliberately lacks, so the
+        local mirror of the artifact was refused on the checkout the artifact is
+        produced on -- the Windows bootstrap, which has no `../rebrew` beside the
+        tree. The stdlib-only claim is what this holds: a tool that starts
+        importing the package has to leave this spelling, and the gate then says
+        so rather than the contributor finding out from a preflight.
+        """
+        _assert_stdlib_only_targets(
+            ("browser-sbom", "browser-sbom-spdx"),
+            reason=(
+                "the sbom job runs the tool with a bare `python` and no sibling checkout, so "
+                "the local mirror of that artifact must not require either"
+            ),
+        )
+
+    def test_the_revendor_needs_no_bootstrapped_environment(self) -> None:
+        """`make vendor-manifest` runs on a tree that has only been cloned.
+
+        Re-vendoring the plugin is a contributor task done on `web/` and
+        `tools/oxlint/`, and the tool hashes the checked-in tree: it imports
+        nothing outside the stdlib and reads no lockfile, so `ensure-rebrew` and
+        `$(UV_RUN)` made it the one re-vendor step unreachable until the sibling
+        checkout was in place, for a tree that has none. `make web-lint` beside
+        it does need the sibling (its lint:html pass imports recoverage.server),
+        and that asymmetry is the point: the two halves of the same re-vendor
+        have different inputs and must not both be gated the same way.
+        """
+        _assert_stdlib_only_targets(
+            ("vendor-manifest",),
+            reason=(
+                "the tool hashes the checked-in tree and imports nothing outside the stdlib, "
+                "so a re-vendor must not wait on the sibling rebrew checkout"
+            ),
+        )
 
     def test_notice_points_at_the_browser_inventory(self) -> None:
         """A wheel consumer reads NOTICE, so the artifact is named there."""

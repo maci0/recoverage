@@ -47,6 +47,19 @@ UV_SYNC_FLAGS ?= --locked --extra dev
 # still mean the same thing.
 UV_RUN := uv run --locked --extra dev
 
+# Every recipe that runs a STDLIB-ONLY tool: one that imports nothing outside
+# the interpreter, so it needs neither the project environment nor the sibling
+# rebrew checkout `[tool.uv.sources]` pins. `--no-project` is what makes that
+# true of `uv run` rather than of the recipe's argument: without it uv resolves
+# the project environment first, and the lock carries the rebrew path
+# dependency, so a checkout with no ../rebrew died with "Distribution not
+# found at file://…/rebrew" from inside a script that never imports rebrew.
+# The interpreter still comes from the same pin (.python-version) a synced
+# recipe gets. No --frozen: uv warns that it has no effect beside
+# --no-project, and --no-project already resolves nothing.
+UV_STDLIB := uv run --no-project
+PYTHON := python
+
 # The hash seed every Python process in this tree starts with.  CPython
 # randomizes `hash()` of a str per process, so `set` and `frozenset` iterate in
 # a different order in every run: a value that reaches an assertion, a served
@@ -498,8 +511,14 @@ regen-oxlint: ensure-rebrew ensure-bun
 # bun nor node_modules: `make vendor-manifest && make web-lint` is the whole
 # re-vendor, and the bare `uv run python tools/vendor_manifest.py` the README
 # used to spell is the one place a contributor ran outside the locked env.
-vendor-manifest: ensure-rebrew
-	$(UV_RUN) python tools/vendor_manifest.py
+#
+# `$(UV_STDLIB)` rather than `$(UV_RUN)`, for the reason `python-sbom` below
+# gives: the tool imports nothing outside the stdlib, so a checkout with no
+# sibling rebrew beside it can still re-vendor. `ensure-rebrew` would have said
+# otherwise, and the re-vendor is a task a contributor does on a tree they have
+# not necessarily bootstrapped yet.
+vendor-manifest:
+	$(UV_STDLIB) $(PYTHON) tools/vendor_manifest.py
 
 smoke: ensure-rebrew
 	$(UV_RUN) python tools/smoke.py
@@ -516,8 +535,16 @@ payload-budget: ensure-rebrew
 # The npm packages `make web-build` compiles into the shipped browser assets.
 # The sbom job uploads it as an artifact; this is the same inventory to read
 # without CI, and it needs no network and no environment, only bun.lock.
-browser-sbom: ensure-rebrew
-	$(UV_RUN) python tools/bundled_js_inventory.py
+#
+# No `ensure-rebrew` and no UV_RUN, like `python-sbom` below and for the same
+# reason: the sbom job runs this tool with a bare `python` and no sibling
+# checkout, because tools/bundled_js_inventory.py imports nothing outside the
+# stdlib. Carrying the preflight said the opposite of the comment above it and
+# made the target unreachable on exactly the checkout the job runs on: a
+# Windows contributor bootstraps through uv and has no ../rebrew beside the
+# tree, so `make browser-sbom` refused to print an inventory of bun.lock.
+browser-sbom:
+	$(UV_STDLIB) $(PYTHON) tools/bundled_js_inventory.py
 
 # The same rows as an SPDX 2.3 document, which is the shape a vulnerability
 # scanner takes. The line-per-package text above is the one a reader opens;
@@ -525,10 +552,10 @@ browser-sbom: ensure-rebrew
 # recoverage-browser-spdx. SOURCE_DATE_EPOCH is exported for the same reason
 # `build` does: the document carries a `created` stamp, and an artifact that
 # differs between two runs of one commit cannot be diffed.
-browser-sbom-spdx: ensure-rebrew
+browser-sbom-spdx:
 	@$(SET_STRICT) \
 	export SOURCE_DATE_EPOCH="$(SOURCE_DATE_EPOCH)"; \
-	$(UV_RUN) python tools/bundled_js_inventory.py --format spdx
+	$(UV_STDLIB) $(PYTHON) tools/bundled_js_inventory.py --format spdx
 
 # The other half of the sbom job's output: the resolved Python tree, every
 # extra, with the hashes a scanner needs. `browser-sbom` is the same job's

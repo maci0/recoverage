@@ -281,4 +281,16 @@ here.
   `tools/oxlint/anti-slop/` means replacing the directory from upstream and
   running `make vendor-manifest`, then `make web-lint`.
 
+Three targets need no sibling `../rebrew` and no synced environment, because the
+tools they run import nothing outside the stdlib and read no lockfile:
+`make python-sbom`, `make browser-sbom` (and `-spdx`), and `make vendor-manifest`.
+They reach their tools through `uv run --no-project`, which resolves nothing, so
+they work on the checkout the `sbom` job runs on and on the Windows bootstrap,
+where there is no `../rebrew` beside the tree. `make web-lint`, the other half of
+that re-vendor, does need the sibling: its `lint:html` pass imports
+`recoverage.server`. So `make vendor-manifest` works before `make setup` and
+`make web-lint` does not, and a target that adds an import of `rebrew` or
+`recoverage` to one of those three tools moves it back to `$(UV_RUN)` in the same
+change (`tests/test_supply_chain.py` holds the split).
+
 Conventions, architecture, and the design rules are in `AGENTS.md`.
