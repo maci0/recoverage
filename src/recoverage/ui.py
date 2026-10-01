@@ -237,6 +237,11 @@ def warm_index_cache() -> None:
 @app.get("/")
 @app.get("/index.html")
 def handle_index() -> bytes:
+    """Serve the SPA shell at ``/`` and ``/index.html``.
+
+    The bundle is inlined rather than linked, so the shell is one request
+    with no build-time asset graph to resolve.
+    """
     # When token auth is enabled, opening the dashboard as
     # http://host:port/?token=<TOKEN> sets an HttpOnly SameSite cookie so
     # the SPA's own fetch/EventSource calls authenticate without any
@@ -332,6 +337,12 @@ def _repo_file_forbidden(reason: str, filepath: str) -> HTTPResponse:
 @app.get("/src/<filepath:path>")
 @app.get("/original/<filepath:path>")
 def serve_repo_file(filepath: str) -> bytes | HTTPResponse:
+    """Serve one file from the project's ``src/`` or ``original/`` tree.
+
+    *filepath* is the route's ``<filepath:path>``, still percent-encoded;
+    it is decoded through :func:`server.path_param` before the containment
+    check, which refuses a path that escapes the tree it names.
+    """
     prefix = "src" if request.path.startswith("/src/") else "original"
     root = (_project_dir() / prefix).resolve()
     # The capture is the raw, still percent-encoded request path (PEP 3333),
@@ -611,6 +622,11 @@ def _not_modified(etag: str) -> HTTPResponse:
     "|archivo\\.woff2|jetbrains-mono\\.woff2)>"
 )
 def serve_static_asset(filename: str) -> bytes | HTTPResponse:
+    """Serve a packaged static asset (``app.js``, ``style.css``, the fonts).
+
+    ``no-cache`` with a strong ``ETag``, negotiated against the encodings the
+    client accepts; a font is already compressed and is served as the file.
+    """
     accept_encoding = _header("Accept-Encoding", "")
     # A woff2 font is already brotli inside, and compressing it again made it
     # larger, so it is always served as the file it is.

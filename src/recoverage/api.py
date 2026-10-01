@@ -2281,6 +2281,11 @@ def handle_api_functions_batch(target: str) -> bytes | HTTPResponse:
 
 @app.get("/api/targets/<target>/functions/<va>")
 def handle_api_function(target: str, va: str) -> bytes | HTTPResponse:
+    """Function or global detail for one *va*, which may be a name instead.
+
+    Answers 404 for a value that resolves to neither. Revalidates on the
+    coverage snapshot, the target and the requested spelling.
+    """
     target = path_param(target)
     va = path_param(va)
     value = va.strip()
@@ -2330,6 +2335,11 @@ def handle_api_function(target: str, va: str) -> bytes | HTTPResponse:
 
 @app.get("/api/targets/<target>/asm")
 def handle_api_asm(target: str) -> bytes | HTTPResponse:
+    """Disassemble ``?va=`` for ``?size=`` bytes, capped at what the section holds.
+
+    Requires the ``capstone`` extra and answers 501 without it; an unknown
+    ``?format=`` is a 400.
+    """
     target = path_param(target)
     reason = capstone_unavailable_reason()
     if reason is not None:

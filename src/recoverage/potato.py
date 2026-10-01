@@ -1472,6 +1472,11 @@ def render_potato(parsed_url: ParseResult) -> str:
 
 @app.get("/potato")
 def handle_potato() -> bytes | Any:
+    """Render the Potato Mode page: the dashboard as pure-HTML tables.
+
+    Same coverage documents as the SPA, no JavaScript; revalidates on the
+    coverage snapshot's fingerprint like ``/data`` and ``/asm`` do.
+    """
     # Before the ETag check, which raises a bare 304: the cookie rides on the
     # 200 the first visit gets, and a repeat already has it.  Every href on the
     # page is relative, so without this a reader who arrived at

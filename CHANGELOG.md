@@ -5,6 +5,22 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Mounting the dashboard in your own WSGI server is documented: `recoverage.webapp.app`
+  is the fully routed application, `recoverage.server.app` on its own registers no
+  route and answers 404, and the two things the bundled listener does for you — installing
+  the token, CORS and `Host` policy through `server.configure_security(...)`, and the
+  admission cap and per-connection deadline — are yours to do, or your host's, when you
+  mount the app yourself. The README names `/highlight.js`, the standalone highlighter
+  the code panes load on demand, which the packaged-assets route serves and the
+  endpoint table did not list.
+- Every public function and class in the package now carries a docstring, so
+  `help()` and an editor's hover have something to show a consumer: the route handlers
+  (`handle_api_asm`, `handle_api_function`, `handle_index`, `serve_repo_file`,
+  `serve_static_asset`, `handle_potato`), `cli.main`, `server.clear_target_cache`,
+  `server.NameIndex`, `cli.ExportFormat` and the two `stats.start` counters.
+
 ### Changed
 
 - The dashboard's first paint got smaller: the syntax highlighter is no longer

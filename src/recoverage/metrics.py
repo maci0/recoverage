@@ -167,6 +167,7 @@ class RequestStats:
         self._by_status: dict[str, int] = {}
 
     def start(self) -> None:
+        """Open one request: *in_flight* up by one until :meth:`finish`."""
         with self._lock:
             self._in_flight += 1
 
@@ -384,6 +385,7 @@ class RegenStats:
         self._last_ok: bool | None = None
 
     def start(self) -> None:
+        """Open one regen run: *in_flight* and *runs* up by one."""
         with self._lock:
             self._in_flight += 1
             self._runs += 1

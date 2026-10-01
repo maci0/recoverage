@@ -445,7 +445,7 @@ the banner that run printed holds.
 | `/index.html` | GET | The same document, for a URL that names it |
 | `/src/<filepath:path>` | GET | A file under the target's `src/` tree, for the code panes |
 | `/original/<filepath:path>` | GET | A file under the original binary's tree |
-| `/app.js`, `/style.css`, `/print.css`, `/favicon.svg`, `/archivo.woff2`, `/jetbrains-mono.woff2` | GET | The packaged static assets (`no-cache` with a strong `ETag`) |
+| `/app.js`, `/style.css`, `/print.css`, `/favicon.svg`, `/highlight.js`, `/archivo.woff2`, `/jetbrains-mono.woff2` | GET | The packaged static assets (`no-cache` with a strong `ETag`). `/highlight.js` is the standalone highlighter the code panes load on demand; it is emitted as a second bundle beside `app.js` because the dashboard bundle is an IIFE and cannot code-split |
 | `/potato` | GET | Potato Mode (pure-HTML fallback) |
 | `/api/health` | GET | Server version, the settings this process resolved, coverage directory info, installed extras, request/regen/stream/connection counters, cache hit-miss |
 | `/api/targets` | GET | List available targets. Revalidates: an `ETag` over the coverage snapshot and the project config's stat, so a repeat is a 304 |
@@ -694,6 +694,44 @@ then has to pass); `--cors` is for a separate local frontend origin and is never
 needed for the dashboard's own page. There is no TLS, so a token on a network
 bind travels in cleartext. The full picture, including what the code does not
 cover, is in [docs/THREAT_MODEL.md](https://github.com/relumea/recoverage/blob/main/docs/THREAT_MODEL.md).
+
+### Mounting the app in your own WSGI server
+
+`recoverage.webapp.app` is the fully wired Bottle application: importing it
+mounts every route (`/api/*`, `/`, the static assets, `/potato`) on the shared
+`app` object. A WSGI host can serve it directly.
+
+```python
+from recoverage.webapp import app  # a WSGI callable
+
+# `recoverage.server.app` ALONE is routeless: it is the shared kernel the
+# route modules mount on, so importing it registers no route and every path
+# answers 404. Import `recoverage.webapp` (or run the CLI), never bare
+# `recoverage.server`.
+```
+
+Two things the CLI does are yours to do when you mount the app yourself:
+
+- **Request policy.** `recoverage.server.configure_security(...)` installs the
+  bearer token, the CORS allowlist and the `Host` allowlist, which live in
+  process-wide state read by every worker thread without a lock. Call it once
+  before the host accepts requests; without it the app runs with no token, no
+  CORS and no `Host` allowlist at all, which is the loopback posture and safe
+  for nothing else. Pass the loopback allowlist for a local bind, and a token
+  for a remote one, the way `serve` does for `--allow-remote`.
+  `configure_startup(...)` publishes the settings `/api/health` reports;
+  skip it and the health block's `config` reads `null` rather than a
+  configuration that was never resolved.
+- **Transport bounds.** The admission cap (`RECOVERAGE_MAX_CONNECTIONS`), the
+  per-connection deadline (`RECOVERAGE_CLIENT_TIMEOUT`) and keep-alive framing
+  live in the bundled listener (`recoverage.devserver`), not in the app, so a
+  WSGI host enforces its own. `/api/events` holds one connection open per
+  browser tab, so the host has to be threaded or asynchronous; a single-threaded
+  server serves the dashboard and then hangs on the first tab that opens.
+
+The API under `/api/*` is the same either way: see
+[API Endpoints](#api-endpoints) for the routes, their query parameters and the
+error envelope.
 
 ---
 

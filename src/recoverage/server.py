@@ -1639,6 +1639,11 @@ def _get_targets_config() -> dict[str, Any]:
 
 
 def clear_target_cache() -> None:
+    """Drop every memo derived from ``rebrew-project.toml``.
+
+    Called on a rebuild and on the rebuild broadcast. A failed config read is
+    never memoized, so a caller that fixes the file recovers without this.
+    """
     global _TOML_CONFIG_CACHE, _TOML_CACHE_MTIME, _RESOLVED_TARGETS_CACHE
     # The config-read verdict is retried rather than memoized (see
     # _get_targets_config), so the next call reports the recovery itself; this
@@ -2555,6 +2560,8 @@ def _name_match[NamedRow: (Function, Global)](
 #: spelling, and the folded one.  A repeated name keeps the FIRST row, which is
 #: what the linear scan this replaced returned.
 class NameIndex[NamedRow: (Function, Global)](NamedTuple):
+    """Both name maps for one snapshot: exact spelling, and folded."""
+
     exact: Mapping[str, NamedRow]
     #: Keyed by :func:`fold_text` of the name, which is ``None`` only for an
     #: absent name; a NULL key can never be looked up (the query value is a

@@ -238,6 +238,8 @@ def _app_callback(
 
 
 class ExportFormat(enum.StrEnum):
+    """The ``--format`` values ``recoverage export`` accepts."""
+
     json = "json"
     csv = "csv"
     md = "md"
@@ -2263,6 +2265,13 @@ def _argv_with_default_command(argv: list[str]) -> list[str]:
 
 
 def main() -> None:
+    """The ``recoverage`` console script: default the subcommand, then run it.
+
+    A bare invocation (flags only, no subcommand) serves the dashboard, so
+    ``recoverage`` and ``recoverage serve`` are the same command. Exits 0 on a
+    clean ``SIGINT``/``SIGTERM`` stop, 1 on a failed command, 2 on a
+    misconfiguration.
+    """
     sys.argv = _argv_with_default_command(sys.argv)
     try:
         app()

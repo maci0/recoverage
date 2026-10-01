@@ -518,6 +518,43 @@ def _defined_public_surface() -> set[str]:
     return defined
 
 
+def _undocumented_in(tree: ast.Module, module: str) -> set[str]:
+    """The public functions and classes of one parsed module with no docstring.
+
+    The per-file half of `_undocumented_public_callables`, over an `ast` tree
+    rather than a path, so the self-test can drive it with a synthetic module
+    instead of only against the tree (which is documented, and therefore
+    cannot make the gate fail).
+    """
+    undocumented: set[str] = set()
+    for node in tree.body:
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        if not node.name.startswith("_") and ast.get_docstring(node) is None:
+            undocumented.add(f"{module}::{node.name}")
+    return undocumented
+
+
+def _undocumented_public_callables() -> set[str]:
+    """`module::NAME` for every public function or class with no docstring.
+
+    The same walk `_defined_public_surface` makes, keeping only the two node
+    kinds that are callable, and reading the sources with `ast` so it answers
+    for the tree rather than for whichever modules the suite imported first.
+    A module-level assignment is not in scope: a constant is read at the call
+    site, where a comment reaches and a docstring does not.
+    """
+    undocumented: set[str] = set()
+    for path in sorted(_PACKAGE.rglob("*.py")):
+        parts = list(path.relative_to(_PACKAGE.parent).with_suffix("").parts)
+        if parts[-1] == "__init__":
+            parts.pop()
+        undocumented |= _undocumented_in(
+            ast.parse(path.read_text(encoding="utf-8")), ".".join(parts)
+        )
+    return undocumented
+
+
 def _removal_groups(changelog: str) -> str:
     """The prose of every `Removed` and `Breaking` group in the file.
 
@@ -662,3 +699,47 @@ class TestPublicSurfaceChangesAreRecorded:
             "recoverage.potato::TOPBAR_SVG", "### Removed\n\n- `TOPBAR_SVG2`\n"
         )
         assert _names_a_removal("recoverage.potato::TOPBAR_SVG", "### Removed\n\n- `TOPBAR_SVG`\n")
+
+
+class TestPublicCallablesAreDocumented:
+    """A public name a reader cannot look up is half a surface.
+
+    `tests/public_surface.txt` says which module-level names the package
+    promises a consumer. This reads the same set out of the sources and
+    requires every function and class among them to carry a docstring: the
+    package ships `py.typed`, so a consumer's editor offers these names with
+    no other channel of documentation. The set is read with `ast` like
+    `_defined_public_surface`, so it answers for the tree rather than for
+    whichever modules the suite happened to import first.
+    """
+
+    def test_every_public_function_and_class_has_a_docstring(self) -> None:
+        undocumented = _undocumented_public_callables()
+        assert not undocumented, (
+            "public callable(s) with no docstring, so `help()` and an editor's "
+            f"hover have nothing to show a consumer: {sorted(undocumented)}"
+        )
+
+    def test_the_gate_fires_on_a_bare_def(self) -> None:
+        """A guard nothing has seen fail is not known to work.
+
+        The tree is documented, so it can only ever make this pass. The
+        synthetic module carries one documented callable, one bare public
+        function, one bare public class and one private function: the gate has
+        to report the two bare public names and neither of the other two.
+        """
+        synthetic = ast.parse(
+            '"""Module."""\n'
+            "def documented() -> None:\n"
+            '    """What it does."""\n'
+            "def bare() -> None:\n"
+            "    pass\n"
+            "class BareClass:\n"
+            "    pass\n"
+            "def _private() -> None:\n"
+            "    pass\n"
+        )
+        assert _undocumented_in(synthetic, "pkg") == {
+            "pkg::bare",
+            "pkg::BareClass",
+        }

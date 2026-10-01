@@ -31,6 +31,8 @@ from pathlib import Path
 
 import pytest
 
+from recoverage import server, webapp
+
 _PACKAGE = "recoverage"
 _SRC = Path(__file__).resolve().parent.parent / "src" / _PACKAGE
 
@@ -182,3 +184,65 @@ def test_no_import_cycles() -> None:
                 else:
                     stack.append((nxt, (*path, nxt)))
     assert not cycles, f"import cycles: {cycles}"
+
+
+def test_the_composition_root_wires_every_documented_route() -> None:
+    """`recoverage.webapp.app` is what a WSGI host mounts, and it is complete.
+
+    The composition root is the only import that mounts every route: importing
+    `recoverage.server` alone registers none, which the README now says in as
+    many words. A route added to a route module without the root being reached
+    (a module dropped from `webapp`, a route registered on a second app object)
+    would leave a documented endpoint answering 404 in a mounted deployment
+    and nothing else in the suite would notice, so the table the README prints
+    is read back off the app object.
+    """
+    documented = {
+        "GET /",
+        "GET /index.html",
+        "GET /src/<filepath:path>",
+        "GET /original/<filepath:path>",
+        "GET /potato",
+        "GET /api/health",
+        "GET /api/targets",
+        "GET /api/targets/<target>/stats",
+        "GET /api/targets/<target>/data",
+        "GET /api/targets/<target>/functions",
+        "POST /api/targets/<target>/functions",
+        "GET /api/targets/<target>/functions/<va>",
+        "GET /api/targets/<target>/asm",
+        "GET /api/targets/<target>/sections/<section>/bytes",
+        "GET /api/events",
+        "POST /api/regen",
+    }
+    app = webapp.app
+    assert app is server.app, (
+        "the composition root must wire the SHARED app object: a second app "
+        "leaves every hook and every route on the one the host does not mount"
+    )
+    mounted = {f"{route.method} {route.rule}" for route in app.routes}
+    assert documented <= mounted, f"documented but not mounted: {sorted(documented - mounted)}"
+
+
+def test_an_unconfigured_mount_is_the_documented_posture() -> None:
+    """`configure_security()`'s defaults are what the README tells a WSGI host.
+
+    A host that mounts the app and forgets the call gets no token, no CORS and
+    no `Host` allowlist, and the README documents that as the loopback
+    posture. If the defaults ever tighten, this fails and the prose is what has
+    to change — an app whose default silently became remote-safe would not be
+    wrong, but the paragraph would be.
+
+    The three globals are saved and put back rather than left behind: they are
+    process-wide state every other test in the suite reads.
+    """
+    names = ("ALLOWED_HOSTS", "CORS_ENABLED", "CORS_ALLOWED_ORIGINS")
+    saved = {name: getattr(server, name) for name in names}
+    try:
+        server.configure_security()
+        assert server.ALLOWED_HOSTS is None, "an unset Host allowlist means no Host validation"
+        assert server.CORS_ENABLED is False
+        assert server.CORS_ALLOWED_ORIGINS == []
+    finally:
+        for name, value in saved.items():
+            setattr(server, name, value)

@@ -121,6 +121,8 @@ recoverage/
         ├── style.css        # built Tailwind output — generated, never hand-edited
         ├── print.css        # Print stylesheet
         ├── app.js           # built bundle — generated, never hand-edited
+        ├── highlight.js     # the standalone highlighter, a SECOND build (`web/build.ts`):
+        │                    #   app.js is an IIFE, so it cannot code-split the grammars out
         ├── archivo.woff2    # brand fonts (OFL, credited in NOTICE), committed as-is
         ├── jetbrains-mono.woff2
         └── favicon.svg      # the relumea mark
@@ -434,7 +436,7 @@ The release policy is not written down anywhere else, so it is stated here and
 | `/index.html` | GET | Same document, for a URL that names it |
 | `/src/<filepath:path>` | GET | A file under the target's `src/` tree, for the code panes |
 | `/original/<filepath:path>` | GET | A file under the original binary's tree (`web/app/hooks/useOriginalBinary.ts` reads it) |
-| `/<filename:app.js, style.css, print.css, favicon.svg, archivo.woff2, jetbrains-mono.woff2>` | GET | The packaged static assets, `no-cache` with a strong `ETag` |
+| `/<filename:app.js, style.css, print.css, favicon.svg, highlight.js, archivo.woff2, jetbrains-mono.woff2>` | GET | The packaged static assets, `no-cache` with a strong `ETag`. `highlight.js` is the second Vite build: the dashboard bundle is an IIFE and cannot code-split |
 | `/potato` | GET | Potato Mode (pure-HTML fallback) |
 | `/api/health` | GET | Server version, the settings the process resolved, DB info, installed extras, request/regen/stream/connection counters, cache hit-miss |
 | `/api/targets` | GET | List available targets (ETag-revalidating) |

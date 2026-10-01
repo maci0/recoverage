@@ -2199,15 +2199,25 @@ class TestBrowserSpdxExport:
         module = _js_inventory_module()
         document = module.spdx_document(module.resolve())
         notice = (_ROOT / "NOTICE").read_text(encoding="utf-8")
+        # One grant is one blank-line-separated paragraph: a heading naming the
+        # package, then its upstream, license, version and shipped files. The
+        # name and the grant have to be in the SAME paragraph, which is the
+        # claim. A fixed character window was the other spelling of it and it
+        # broke the moment NOTICE grew: `highlight.js` is named first in the
+        # list of shipped assets, hundreds of characters above the paragraph
+        # that credits its BSD-3-Clause grant, so the window read the asset
+        # list and reported a grant NOTICE plainly carries.
+        grants = notice.split("\n\n")
         for entry in module.SHIPPED:
             package = next(pkg for pkg in document["packages"] if pkg["name"] == entry.package)
             assert package["licenseConcluded"] == entry.license_id
             assert package["licenseDeclared"] == entry.license_id
             assert entry.homepage.startswith("https://")
-            credited = notice[notice.index(entry.package) :][:400]
-            assert entry.license_id in credited, (
-                f"NOTICE credits {entry.package} without the {entry.license_id} grant the "
-                "SPDX document declares"
+            credited = [block for block in grants if entry.package in block]
+            assert credited, f"NOTICE never names {entry.package} at all"
+            assert any(entry.license_id in block for block in credited), (
+                f"no NOTICE paragraph naming {entry.package} carries the {entry.license_id} "
+                "grant the SPDX document declares"
             )
 
     def test_the_stamp_comes_from_the_environment_not_the_clock(
