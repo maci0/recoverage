@@ -27,6 +27,40 @@ _CAPSTONE_INSTALLED = importlib.util.find_spec("capstone") is not None
 
 _CAPSTONE_MD_TLS = threading.local()
 
+#: The x86 instruction width a binary is decoded at, when its container header
+#: does not say.  32 is the historical answer this module always used, and it
+#: is also what every 32-bit PE declares explicitly, so a header this reader
+#: cannot make sense of keeps today's behaviour rather than losing it.
+_DEFAULT_WIDTH_BITS = 32
+
+#: Memoized width per binary stamp: one dict lookup on the request path instead
+#: of re-reading the container header per slice, keyed on the SAME stat the
+#: disassembly memo is keyed on so a rebuilt binary that changed architecture is
+#: decoded at the new one's width rather than the previous one's.
+_WIDTH_LOCK = threading.Lock()
+_WIDTH_MEMO: dict[tuple[int, int, int], int] = {}
+_WIDTH_MEMO_MAX = 64
+
+#: How much of the file the container headers live in.  ELF is trivially
+#: inside it (the 16-bit ``e_machine`` is at offset 18), PE is not: the DOS
+#: header's ``e_lfanew`` is a FILE offset into the DOS stub, and real images
+#: put the PE header anywhere past 0x80, so a 64-byte read — the length of the
+#: smallest legal DOS header — names no ``Machine`` field and every PE would
+#: read as unknown. 4096 is the window Microsoft's own loader tooling reads a
+#: PE header out of, it bounds the read whatever the binary's size, and the
+#: buffer is already in memory, so the cost is one short slice.
+_CONTAINER_HEADER_BYTES = 4096
+
+#: The container machine fields, read little-endian at these offsets: PE/COFF
+#: puts a 16-bit ``Machine`` 4 bytes past its ``PE\0\0`` signature, and ELF puts
+#: a 16-bit ``e_machine`` at 0x12 of the file.  Only the 64-bit member of the
+#: x86 family is named, because 32 bits is the answer for everything else this
+#: can decode: another machine has no x86 decoder, and rebrew's own
+#: ``binary_loader`` picks the architecture from the same field, so recoverage
+#: follows the producer rather than guessing wider.
+_PE_MACHINE_AMD64 = 0x8664
+_ELF_MACHINE_X86_64 = 62
+
 #: Memoized load verdict + its lock.  The probe imports capstone once per
 #: process, so the cost is paid by the first caller (health, /asm, a Potato
 #: panel) and every later caller reads the answer.
@@ -44,17 +78,100 @@ class CapstoneUnavailableError(RuntimeError):
     """
 
 
-def _new_cs() -> Any:
+def binary_width_bits(data: bytes) -> int:
+    """The x86 instruction width *data*'s container header declares.
+
+    64 for a 64-bit image, :data:`_DEFAULT_WIDTH_BITS` for a 32-bit one and for
+    anything this cannot read: a header that is not PE/ELF at all, a truncated
+    one, or a machine that is not the x86 family.  That last case is a
+    deliberate floor rather than a guess — recoverage has no decoder for another
+    architecture, and rebrew would have chosen one itself, so a 32-bit answer
+    keeps the panel rendering what it always rendered instead of raising on a
+    route that is contracted to answer.
+
+    Every field is read little-endian, which is what PE/COFF and both x86 ELF
+    variants specify; nothing here depends on the HOST's byte order, because
+    the offsets and the widths are explicit rather than cast from a struct.
+    """
+    if len(data) >= 4 and data[:4] == b"\x7fELF":
+        if len(data) < 0x14:
+            return _DEFAULT_WIDTH_BITS
+        machine = int.from_bytes(data[0x12:0x14], "little")
+        if machine == _ELF_MACHINE_X86_64:
+            return 64
+        return _DEFAULT_WIDTH_BITS
+    if len(data) >= 0x40 and data[:2] == b"MZ":
+        # e_lfanew is a signed 32-bit file offset; a header that points outside
+        # the bytes we hold names no Machine field, so it reads as unknown.
+        pe_offset = int.from_bytes(data[0x3C:0x40], "little", signed=True)
+        start = pe_offset + 4  # the PE signature is four bytes before Machine
+        if pe_offset < 0 or start + 2 > len(data):
+            return _DEFAULT_WIDTH_BITS
+        if data[pe_offset : pe_offset + 4] != b"PE\x00\x00":
+            return _DEFAULT_WIDTH_BITS
+        machine = int.from_bytes(data[start : start + 2], "little")
+        if machine == _PE_MACHINE_AMD64:
+            return 64
+        return _DEFAULT_WIDTH_BITS
+    return _DEFAULT_WIDTH_BITS
+
+
+def _target_width_bits(target: str, data: bytes) -> int:
+    """:func:`binary_width_bits` for *target*, memoized on the binary's stat.
+
+    Only the leading :data:`_CONTAINER_HEADER_BYTES` of *data* is read, which
+    covers every field in both headers; the rest is a whole binary already in
+    memory and is not this function's business.
+
+    Keyed on the stamp for the reason every other binary-derived memo is: a
+    rebuild can replace the file with one of a different architecture, and a
+    width remembered from the previous build would decode the new one wrong.
+    The bound is a memory bound on a dict keyed by a stat triple, and the
+    oldest key goes first — a target whose binary is gone then re-reads its
+    header, which is the free path.
+    """
+    stamp = binary_stamp(target)
+    if stamp is None:
+        return binary_width_bits(data[:_CONTAINER_HEADER_BYTES])
+    with _WIDTH_LOCK:
+        cached = _WIDTH_MEMO.get(stamp)
+    if cached is not None:
+        return cached
+    width = binary_width_bits(data[:_CONTAINER_HEADER_BYTES])
+    with _WIDTH_LOCK:
+        if len(_WIDTH_MEMO) >= _WIDTH_MEMO_MAX:
+            for oldest in list(_WIDTH_MEMO)[: len(_WIDTH_MEMO) - _WIDTH_MEMO_MAX + 1]:
+                del _WIDTH_MEMO[oldest]
+        _WIDTH_MEMO[stamp] = width
+    return width
+
+
+def clear_width_cache() -> None:
+    """Forget every memoized width, alongside the disassembly memo."""
+    with _WIDTH_LOCK:
+        _WIDTH_MEMO.clear()
+
+
+def _new_cs(bits: int = _DEFAULT_WIDTH_BITS) -> Any:
     """A Capstone handle in the ONE configuration this module asks for.
 
     Both the probe below and :func:`get_capstone_md` build their ``Cs`` here,
     so the configuration the probe certifies is the one the request path
     runs: they drifted once, and the probe verified a handle with ``detail``
     left at its default while every caller turned it off.
+
+    *bits* is the image width :func:`binary_width_bits` read off the binary.
+    Decoding a 64-bit image at 32 bits is not a smaller answer, it is a wrong
+    one: a ``REX`` prefix is read as the start of the next instruction, every
+    RIP-relative displacement as a ModRM, and the panel renders garbage over
+    exactly the bytes the reader selected.  The probe passes the default because
+    it certifies that capstone LOADS, and any mode a given handle is built with
+    would answer that equally.
     """
     import capstone as _capstone
 
-    md = _capstone.Cs(_capstone.CS_ARCH_X86, _capstone.CS_MODE_32)
+    mode = _capstone.CS_MODE_64 if bits == 64 else _capstone.CS_MODE_32
+    md = _capstone.Cs(_capstone.CS_ARCH_X86, mode)
     md.detail = False
     return md
 
@@ -98,8 +215,8 @@ def disassembly_available() -> bool:
     return capstone_unavailable_reason() is None
 
 
-def get_capstone_md() -> Any:
-    """Return a thread-local Capstone disassembler.
+def get_capstone_md(bits: int = _DEFAULT_WIDTH_BITS) -> Any:
+    """Return a thread-local Capstone disassembler for a *bits*-wide image.
 
     A single shared ``Cs`` instance is NOT safe to disassemble concurrently
     (libcapstone is not thread-safe) — with the threaded WSGI server, request
@@ -108,13 +225,26 @@ def get_capstone_md() -> Any:
     Raises :class:`CapstoneUnavailableError` when the probe says the extra is
     unusable, so a caller that skipped the gate names the reason instead of
     dying on the import.
+
+    *bits* selects among the handles this thread holds, one per width, because
+    the mode is fixed at construction: a 32-bit and a 64-bit handle are two
+    objects, and a project with a target of each width would otherwise decode
+    whichever it built first.  Caching by width rather than by target is what
+    keeps this bounded at two: the widths are what the binary can be, not what
+    a caller asked for.
     """
-    md = getattr(_CAPSTONE_MD_TLS, "md", None)
-    if md is None:
+    handle = getattr(_CAPSTONE_MD_TLS, "handles", None)
+    if not handle:
+        # An EMPTY cache is the same as no cache: the probe has to run before a
+        # handle exists, and a test that empties the cache is asking for the
+        # verdict, not for a handle built without one.
         reason = capstone_unavailable_reason()
         if reason is not None:
             raise CapstoneUnavailableError(reason)
-        md = _CAPSTONE_MD_TLS.md = _new_cs()
+        handle = _CAPSTONE_MD_TLS.handles = {}
+    md = handle.get(bits)
+    if md is None:
+        md = handle[bits] = _new_cs(bits)
     return md
 
 
@@ -216,7 +346,7 @@ def _disassemble_loaded(
     if len(code_bytes) < size:
         return ""
 
-    md = get_capstone_md()
+    md = get_capstone_md(_target_width_bits(target, target_data))
     asm_lines = [
         f"0x{insn.address:08x}  {insn.mnemonic:8s} {insn.op_str}"
         for insn in md.disasm(code_bytes, va)
@@ -241,4 +371,11 @@ def clear_disassembly_cache() -> None:
     global _DISASSEMBLY_GENERATION
     with _GENERATION_LOCK:
         _DISASSEMBLY_GENERATION += 1
+    # The memoized widths with it: a rebuild is exactly when the binary's
+    # architecture can have changed, and the width is read off the SAME file
+    # the memoized disassembly was decoded from.  The stamp keying them would
+    # retire those entries on its own, so this is belt and braces for the
+    # entries a rebuild raced past the stat — and it keeps the two memos from
+    # outliving the reason they exist independently.
+    clear_width_cache()
     _disassemble_loaded.cache_clear()

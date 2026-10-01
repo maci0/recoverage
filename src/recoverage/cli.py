@@ -881,14 +881,33 @@ def _open_and_reap(url: str, args: list[str]) -> bool:
 
 
 def open_browser(url: str) -> bool:
-    """Hand *url* to the platform opener; return whether one was launched."""
+    """Hand *url* to the platform opener; return whether one was launched.
+
+    The three systems that need a command of their own are named; every other
+    POSIX host takes ``xdg-open`` too, rather than dropping to
+    ``webbrowser``.  The old table keyed the POSIX arm on ``system == "Linux"``,
+    so a FreeBSD, OpenBSD, NetBSD, Solaris or illumos host — none of which this
+    package claims, but none of which needs a stranger to install a browser
+    driver to read a dashboard — silently lost the detached-session opener and
+    went through ``webbrowser.open`` instead, which neither detaches nor reaps.
+    ``xdg-open`` is the freedesktop.org opener and ships on those systems, so
+    the capability is the same one Linux has, and the OS NAME is the wrong test
+    for it.
+
+    Windows keeps its own spelling because ``cmd /c start`` is the only one
+    there, and macOS keeps ``open`` because that is the name of its own
+    LaunchServices client (and ``xdg-open`` is absent).  Anything that is not
+    POSIX at all — a Java/Jython host, a bare ``sys.platform`` this tree does
+    not name — still falls through to ``webbrowser``, which is the answer for a
+    host with no shell convention of its own.
+    """
     system = platform.system()
-    if system == "Linux":
-        return _open_and_reap(url, ["xdg-open", url])
     if system == "Darwin":
         return _open_and_reap(url, ["open", url])
     if system == "Windows":
         return _open_and_reap(url, ["cmd", "/c", "start", "", url])
+    if os.name == "posix":
+        return _open_and_reap(url, ["xdg-open", url])
     return webbrowser.open(url)
 
 

@@ -5623,6 +5623,108 @@ class TestVaOverflowValidation:
         assert data["functions"] == []
 
 
+class TestImageWidthIsReadFromTheContainerHeader:
+    """The x86 width a binary is decoded at comes from its own header.
+
+    ``disasm._new_cs`` used to build every handle at ``CS_MODE_32``, so a
+    64-bit target decoded as one: a ``REX`` prefix reads as the start of the
+    next instruction and every RIP-relative displacement as a ModRM, which
+    renders garbage over precisely the bytes the reader selected.  rebrew builds
+    x86_64 targets (``binary_loader`` recognises AMD64 PE and ELF64), so the
+    document set is not 32-bit by construction.
+
+    The width is read here with the stdlib rather than through LIEF, which is
+    rebrew's dependency and not this package's, and every field is read at an
+    explicit little-endian offset: the answer is the FILE's architecture, not
+    the host's byte order.
+    """
+
+    @staticmethod
+    def _pe(machine: int) -> bytes:
+        head = bytearray(b"MZ" + bytes(0x3A))
+        head[0x3C:0x40] = (0x80).to_bytes(4, "little")
+        head += bytes(0x80 - len(head))
+        head += b"PE\x00\x00" + machine.to_bytes(2, "little")
+        return bytes(head)
+
+    @staticmethod
+    def _elf(machine: int) -> bytes:
+        head = bytearray(b"\x7fELF\x02\x01\x01" + bytes(14))
+        head[0x12:0x14] = machine.to_bytes(2, "little")
+        return bytes(head).ljust(64, b"\x00")
+
+    @pytest.mark.parametrize(
+        ("data", "bits"),
+        [
+            (_pe(0x8664), 64),
+            (_elf(62), 64),
+            (_pe(0x014C), 32),
+            (_elf(3), 32),
+        ],
+    )
+    def test_the_declared_width_is_the_one_decoded_at(self, data: bytes, bits: int) -> None:
+        import recoverage.disasm as disasm
+
+        assert disasm.binary_width_bits(data) == bits
+
+    @pytest.mark.parametrize(
+        "data",
+        [
+            b"",
+            b"not a container at all",
+            b"\x7fELF",  # truncated: the machine field is not here yet
+            b"MZ" + bytes(0x3A),  # a DOS header naming no PE header
+            b"\x7fELF" + bytes(9) + (62).to_bytes(2, "little"),  # truncated ELF
+        ],
+    )
+    def test_a_header_this_cannot_read_keeps_the_historical_width(self, data: bytes) -> None:
+        """A floor, not a guess: recoverage has no decoder for another
+        architecture, and a route contracted to answer must answer."""
+        import recoverage.disasm as disasm
+
+        assert disasm.binary_width_bits(data) == disasm._DEFAULT_WIDTH_BITS
+
+    def test_a_pe_header_past_the_dos_stub_is_still_read(self) -> None:
+        """``e_lfanew`` is a file offset into the DOS stub, not a fixed place:
+        real images put the PE header past 0x80, and a reader that only looked
+        inside the 64-byte DOS header would call every one of them unknown."""
+        import recoverage.disasm as disasm
+
+        offset = 0x200
+        head = bytearray(b"MZ" + bytes(0x3A))
+        head[0x3C:0x40] = offset.to_bytes(4, "little")
+        head += bytes(offset - len(head))
+        head += b"PE\x00\x00" + (0x8664).to_bytes(2, "little")
+        assert disasm.binary_width_bits(bytes(head)) == 64
+
+    def test_a_pe_header_pointing_outside_the_bytes_reads_as_unknown(self) -> None:
+        import recoverage.disasm as disasm
+
+        head = bytearray(b"MZ" + bytes(0x3A))
+        head[0x3C:0x40] = (0x7FFFFFFF).to_bytes(4, "little")
+        assert disasm.binary_width_bits(bytes(head)) == disasm._DEFAULT_WIDTH_BITS
+
+    def test_a_dos_header_naming_a_non_pe_offset_reads_as_unknown(self) -> None:
+        """The e_lfanew offset is trusted only once the signature it points at
+        is the one a PE header carries."""
+        import recoverage.disasm as disasm
+
+        head = bytearray(b"MZ" + bytes(0x3A))
+        head[0x3C:0x40] = (0x80).to_bytes(4, "little")
+        head += bytes(0x80 - len(head))
+        head += b"NOPE" + (0x8664).to_bytes(2, "little")
+        assert disasm.binary_width_bits(bytes(head)) == disasm._DEFAULT_WIDTH_BITS
+
+    def test_a_machine_outside_the_x86_family_keeps_the_historical_width(self) -> None:
+        import recoverage.disasm as disasm
+
+        # ARM64 (0xAA64): rebrew would have decoded it with a different
+        # architecture entirely, and recoverage follows the producer rather
+        # than guessing a width for an architecture it cannot decode.
+        assert disasm.binary_width_bits(self._pe(0xAA64)) == disasm._DEFAULT_WIDTH_BITS
+        assert disasm.binary_width_bits(self._elf(183)) == disasm._DEFAULT_WIDTH_BITS
+
+
 class TestCapstoneCapabilityProbe:
     """``find_spec`` says a capstone distribution is on the path; it does not
     say it loads.  A wheel for the wrong architecture, a missing libcapstone or
@@ -5643,8 +5745,10 @@ class TestCapstoneCapabilityProbe:
         monkeypatch.setattr(disasm, "_CAPSTONE_INSTALLED", True)
         monkeypatch.setattr(disasm, "_probed", False)
         monkeypatch.setattr(disasm, "_probe_reason", None)
-        # A handle cached by an earlier test would short-circuit the probe.
-        monkeypatch.setattr(disasm._CAPSTONE_MD_TLS, "md", None, raising=False)
+        # Handles cached by an earlier test would short-circuit the probe.
+        # The cache is keyed by image width (see disasm.get_capstone_md), so
+        # it is emptied wholesale rather than per width.
+        monkeypatch.setattr(disasm._CAPSTONE_MD_TLS, "handles", {}, raising=False)
         monkeypatch.setitem(sys.modules, "capstone", None)
 
     def test_probe_names_the_failure_and_memoizes(self, monkeypatch: Any) -> None:

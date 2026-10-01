@@ -108,7 +108,8 @@ recoverage/
     ├── cli.py               # Typer CLI entry point (serve, stats, export, check, regen, open)
     ├── server.py            # Bottle app, shared helpers & compression
     ├── disasm.py            # Capstone disassembly (optional extra): loadability probe,
-    │                        #   thread-local Cs, memo
+    │                        #   per-thread Cs per image width (read off the PE/ELF
+    │                        #   container header), memo
     ├── regen.py             # In-process rebrew regen (calls rebrew as a library), cross-process lock
     ├── api.py               # REST API routes (/api/*)
     ├── ui.py                # UI routes (/, static files)
@@ -1036,6 +1037,28 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   life: the invalidation that would have cleared the entry had already run. A
   new coverage-derived memo takes its token the same way or states why its read
   cannot straddle a rebuild.
+- The machine a binary is decoded at is a fact about the FILE, read from the
+  container header, never a constant and never the host's own architecture.
+  `disasm._new_cs` built every handle at `CS_MODE_32`, and a 64-bit image
+  decoded at 32 bits is not a narrower answer, it is a wrong one: a `REX`
+  prefix reads as the start of the next instruction and a RIP-relative
+  displacement as a ModRM, so the panel rendered garbage over exactly the bytes
+  the reader selected. rebrew builds x86_64 targets (`binary_loader` recognises
+  AMD64 PE and ELF64), so a 32-bit-only decode was never safe. The width comes
+  from `disasm.binary_width_bits`, which reads the PE `Machine` field or the
+  ELF `e_machine` at explicit little-endian offsets out of the first 64 bytes,
+  stdlib only because LIEF is rebrew's dependency and not this package's. Two
+  properties the reader keeps deliberately: it is a FLOOR, not a guess — a
+  header it cannot read, and a machine outside the x86 family, both answer
+  `_DEFAULT_WIDTH_BITS` rather than raising, because `/asm` is contracted to
+  answer and a 32-bit panel is a better one than a 500; and its answer is
+  memoized per binary stamp (`disasm._target_width_bits`), because the mode is
+  fixed at handle construction and a rebuild that changes a target's
+  architecture must not be decoded at the previous one's width, which is the
+  same reason `clear_disassembly_cache` empties that memo beside its own. A
+  per-thread handle is kept PER WIDTH, so a project with a target of each width
+  decodes both correctly and the cache stays bounded at two objects. Pinned at
+  `tests/test_api.py` (`TestImageWidthIsReadFromTheContainerHeader`).
 - A path that crosses into the filesystem is read with `PurePath` rules, not
   POSIX string rules. `server.is_plain_relative` is the one definition, keyed
   on `anchor` (drive, leading separator, UNC) rather than `is_absolute()`, and
@@ -1451,6 +1474,21 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   the plain format did (every record from bottle or rebrew). A new log line
   whose values an operator would filter on names the helper; a new formatter
   is not the place to add a second rendering.
+- The opener a dashboard hands its URL to is named by CAPABILITY, and only the
+  two systems whose opener genuinely differs are named at all: macOS's `open`
+  is the name of its LaunchServices client, Windows has only `cmd /c start`,
+  and every other POSIX host carries `xdg-open`. The POSIX arm used to be keyed
+  on `platform.system() == "Linux"`, which is an OS NAME standing in for a
+  capability, so a FreeBSD, OpenBSD, NetBSD, Solaris or illumos host fell
+  through to `webbrowser.open` and lost every property `_open_and_reap` exists
+  to provide: the detached session, the bounded wait and the reap that keeps a
+  hung opener off `serve`'s startup. The dispatch is `os.name == "posix"` for
+  that arm with the two exceptions first, so a host this tree does not name
+  still reaches `webbrowser` rather than a launcher it has no command for. A
+  new platform branch names the capability that differs, not the OS. Pinned at
+  `tests/test_cli.py` (`TestBrowserOpenerSelection`), which drives the whole
+  table on every host instead of asserting only the answer that platform's
+  runner gives.
 - The deferred browser opener is `cli._open_when_listening`, and it asks the
   listener before it launches anything. `Timer.cancel` sets the timer's event
   and returns without waiting for the thread, so a start that fails while the

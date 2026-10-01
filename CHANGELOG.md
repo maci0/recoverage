@@ -7,6 +7,20 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- The disassembly panel decoded every binary as 32-bit x86, so a 64-bit target
+  rendered garbage over exactly the bytes a reader selected: a `REX` prefix
+  read as the start of the next instruction, and a RIP-relative displacement as
+  a ModRM byte. The instruction width is now read from the binary's own
+  container header (the PE `Machine` field or the ELF `e_machine`), so a 64-bit
+  image decodes at 64 bits. A header that cannot be read keeps the previous
+  32-bit behaviour rather than raising, and the width is remembered per
+  binary, so a rebuild that changes a target's architecture is decoded at the
+  new one's width.
+- The browser opener was chosen from the OS name, and its POSIX branch was
+  keyed on `system == "Linux"`, so on any other POSIX host a failed or absent
+  opener silently fell back to `webbrowser` instead of the detached, bounded,
+  reaped launcher the rest of the startup path uses. Every POSIX host now takes
+  the POSIX opener; macOS and Windows keep the command each of them owns.
 - A coverage directory holding a `coverage-<target>.toml` whose name is not
   valid UTF-8 — legal on ext4, and what a checkout, an archive or a copy off a
   Windows tool produces — took the dashboard down. The target id arrives

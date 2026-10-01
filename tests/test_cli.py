@@ -1590,6 +1590,75 @@ class TestOpenPort:
             assert "Opening http://127.0.0.1:8001" in result.stderr
 
 
+class TestBrowserOpenerSelection:
+    """`open_browser` names the opener each host owns, by capability.
+
+    Three systems need a command of their own: macOS's `open` is the name of
+    its LaunchServices client and Windows has only ``cmd /c start``. Every other
+    POSIX host takes ``xdg-open``, which is what the freedesktop.org systems
+    ship and what the BSDs and Solaris carry too.  The table used to key the
+    POSIX arm on ``system == "Linux"``, so any other POSIX host dropped to
+    ``webbrowser.open`` and lost the detached session, the bounded wait and the
+    reap :func:`_open_and_reap` exists to do — the one thing on this path that
+    keeps a hung opener off ``serve``'s startup.
+
+    The dispatch reads ``os.name`` for the POSIX arm and the OS NAME for the two
+    systems whose opener differs, so this runs the whole table on every
+    platform instead of asserting only the answer that platform's runner gives.
+    """
+
+    def _opened(
+        self, monkeypatch: Any, system: str, os_name: str | None = None
+    ) -> tuple[list[list[str]], list[str]]:
+        """Return (argv handed to the detached opener, urls webbrowser got)."""
+        launched: list[list[str]] = []
+        fallback: list[str] = []
+
+        def record_opener(url: str, args: list[str]) -> bool:
+            launched.append(list(args))
+            return True
+
+        def record_webbrowser(url: str) -> bool:
+            fallback.append(url)
+            return True
+
+        monkeypatch.setattr(cli.platform, "system", lambda: system)
+        if os_name is not None:
+            monkeypatch.setattr(cli.os, "name", os_name)
+        monkeypatch.setattr(cli, "_open_and_reap", record_opener)
+        monkeypatch.setattr(cli.webbrowser, "open", record_webbrowser)
+        assert cli.open_browser("http://127.0.0.1:8001/") is True
+        return launched, fallback
+
+    def test_macos_take_the_launchservices_client(self, monkeypatch: Any) -> None:
+        launched, fallback = self._opened(monkeypatch, "Darwin")
+        assert launched == [["open", "http://127.0.0.1:8001/"]]
+        assert fallback == []
+
+    def test_windows_takes_cmd_start(self, monkeypatch: Any) -> None:
+        """The empty argument is ``start``'s title, not a stray: without it the
+        URL is read as the window title and no browser opens."""
+        launched, fallback = self._opened(monkeypatch, "Windows", os_name="nt")
+        assert launched == [["cmd", "/c", "start", "", "http://127.0.0.1:8001/"]]
+        assert fallback == []
+
+    @pytest.mark.parametrize("system", ["Linux", "FreeBSD", "OpenBSD", "NetBSD", "SunOS"])
+    def test_every_posix_host_takes_xdg_open(self, monkeypatch: Any, system: str) -> None:
+        """The regression: a POSIX host that is not Linux took ``webbrowser``,
+        which neither detaches nor reaps, so the opener's abandonment paths
+        never ran and the log line naming a failed opener could not exist."""
+        launched, fallback = self._opened(monkeypatch, system, os_name="posix")
+        assert launched == [["xdg-open", "http://127.0.0.1:8001/"]]
+        assert fallback == []
+
+    def test_a_host_with_no_shell_convention_still_reaches_webbrowser(
+        self, monkeypatch: Any
+    ) -> None:
+        launched, fallback = self._opened(monkeypatch, "Java", os_name="nt")
+        assert launched == []
+        assert fallback == ["http://127.0.0.1:8001/"]
+
+
 class TestServeServerWiring:
     def test_the_installed_allowlist_is_what_the_server_is_configured_with(
         self, monkeypatch: Any
