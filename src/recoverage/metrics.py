@@ -456,6 +456,9 @@ REGEN = RegenStats()
 DATA_PAYLOAD_CACHE: Final = "data_payload"
 STATS_CACHE: Final = "stats"
 REVALIDATION_CACHE: Final = "revalidate"
+#: The persisted TOML parse (`documents`): a hit is a document read from the
+#: JSON cache, a miss a full `tomllib` parse.
+DOCUMENT_CACHE: Final = "document"
 
 
 class CacheStats:

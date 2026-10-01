@@ -1202,6 +1202,27 @@ class TestDbUpdatedLabel:
     def test_missing_db_renders_empty(self) -> None:
         assert _db_updated_label(None) == ""
 
+    def test_a_same_bytes_rebuild_does_not_revalidate_the_old_stamp(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The change token keys on content, so a rebuild that wrote the same
+        bytes keeps it.  The footer renders the file time, and a 304 against
+        the token alone would keep showing the previous build's stamp."""
+        directory = coverage_dir(tmp_path)
+        self._patch_db(monkeypatch, directory)
+        first_ns = 1_700_000_000 * 10**9
+        path = self._doc(directory, "GAME", first_ns)
+        status, headers, _ = wsgi_get("/potato?target=GAME")
+        assert status.startswith("200")
+        etag = {k.lower(): v for k, v in headers.items()}["etag"]
+
+        later_ns = first_ns + 3600 * 10**9
+        os.utime(path, ns=(later_ns, later_ns))
+        status, _, body = wsgi_get("/potato?target=GAME", headers={"If-None-Match": etag})
+
+        assert status.startswith("200")
+        assert _db_updated_label(later_ns).encode() in body
+
     def test_the_instant_is_the_newest_document_mtime(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

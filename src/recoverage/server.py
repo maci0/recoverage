@@ -39,7 +39,6 @@ from rebrew.coverage_toml import (
     CoverageTomlError,
     Function,
     Global,
-    load_all_coverage_from,
 )
 from rebrew.utils import floor_pct
 from rebrew.workspace import (
@@ -54,6 +53,7 @@ from rebrew.workspace import (
 
 from recoverage import clock, metrics
 from recoverage._paths import _db_path, config_fingerprint
+from recoverage.documents import load_all, versions
 
 # Thread-local compressor — python-zstandard gives ZstdCompressor instances NO
 # thread-safety guarantees ("do not operate on the same instance from different
@@ -755,12 +755,14 @@ _COVERAGE_FILE_SUFFIX = ".toml"
 def _coverage_file_stats() -> tuple[tuple[str, int, int], ...]:
     """``(name, mtime_ns, size)`` for every coverage document, name-sorted.
 
-    ONE directory scan behind both freshness surfaces (:func:`_snapshot_db_mtime`
-    and :func:`_newest_mtime_ns`) and behind the SSE watcher, so the change
-    token, the rendered stamp and the broadcast cannot disagree about what the
-    coverage directory holds.  Sorted because a directory listing's order is not
-    a fact about the files; a file that vanishes between the listing and the
-    stat is skipped, and the next call's differing key catches the miss.
+    The directory scan behind the rendered freshness stamp
+    (:func:`_newest_mtime_ns`) and the health block's file list.  The change
+    token and the SSE watcher read :func:`recoverage.documents.versions`
+    instead, which keys on content: a stamp is a time a reader is shown, a
+    token is whether anything they would be shown changed.  Sorted because a
+    directory listing's order is not a fact about the files; a file that
+    vanishes between the listing and the stat is skipped, and the next call's
+    differing key catches the miss.
     """
     entries: list[tuple[str, int, int]] = []
     for path in _db_path().glob(f"{_COVERAGE_FILE_PREFIX}*{_COVERAGE_FILE_SUFFIX}"):
@@ -777,35 +779,41 @@ def _snapshot_db_mtime() -> tuple[int, int] | None:
     """Return (fingerprint, total size) of the coverage documents, or None.
 
     The replacement for the WAL-aware ``coverage.db`` snapshot: the token
-    folds every ``coverage-*.toml`` — its name, mtime_ns and size — into one int,
-    and element 1 is their total size, which `/api/health` publishes as the
-    coverage size.  Callers must treat the fingerprint as an opaque change
-    token, never as an mtime.
+    folds every ``coverage-*.toml`` (its name and the CONTENT version
+    :func:`recoverage.documents.versions` reports, the sha256 of its bytes)
+    into one int, and element 1 is their total size, which `/api/health`
+    publishes as the coverage size.  Callers must treat the fingerprint as an
+    opaque change token, never as an mtime.
+
+    Content, not ``(mtime, size)``: rebrew's writer replaces every document on
+    every build, and a build that changed nothing writes the same bytes, so a
+    stat-keyed token threw away every memo, moved every ETag and broadcast
+    ``db-updated`` for a rebuild with nothing to show.  Reading the versions
+    loads any document that changed, which the request taking the token was
+    about to do anyway.
 
     A directory holding no document reads as None, which is the old missing-file
     answer: every DB-derived memo keys on this, every ETag is built from it, and
     the endpoints answer the 503 ``db_unavailable`` contract a moment later.
-    A single file's mtime is not enough here the way it was for SQLite: a
+    A single file's version is not enough here the way it was for SQLite: a
     rebuild writes one document per target, so a target added, removed or
     rewritten anywhere in the directory has to move the token.
 
     EVERY coverage-derived cache key and ETag must be built on this snapshot,
     not raw ``st_mtime`` on one file.
     """
-    entries = _coverage_file_stats()
+    entries = versions(_db_path())
     if not entries:
         return None
-    # The name is the only free-text field and comes first, so it absorbs every
-    # colon before the two trailing integers: the NUL between entries makes the
-    # entry list unambiguous and the trailing ints make the fields inside one
-    # entry unambiguous, even for a target id carrying a colon.
-    payload = "\0".join(f"{name}:{mtime_ns}:{size}" for name, mtime_ns, size in entries)
+    # The name is length-prefixed, so a target id carrying a colon or a NUL
+    # cannot shift where the version starts or an entry ends.
+    payload = "\0".join(f"{len(name)}:{name}:{version}" for name, version, _size in entries)
     # fs_text_bytes, not encode("utf-8"): a name the filesystem spelled as raw
     # bytes outside UTF-8 reaches this as a surrogate-escaped str and the
     # strict encode raised, so one such file in the coverage directory turned
     # every endpoint that keys on this token into a 500.
     digest = hashlib.sha256(fs_text_bytes(payload)).digest()
-    return int.from_bytes(digest[:8], "big"), sum(size for _n, _m, size in entries)
+    return int.from_bytes(digest[:8], "big"), sum(size for _n, _v, size in entries)
 
 
 #: Nanoseconds in a second, and in a microsecond: the two constants the
@@ -875,10 +883,11 @@ def _newest_mtime_ns() -> int | None:
 
 # ── Coverage snapshots ─────────────────────────────────────────────
 #
-# Every fact the dashboard serves comes from one call to rebrew's coverage TOML
-# reader.  That call parses each `coverage-<target>.toml` and derives what the
-# SQLite schema used to materialize (per-section buckets, byte coverage, the
-# by-VA index), and it is memoized on the files' own stat — so an unchanged
+# Every fact the dashboard serves comes from one call to `documents.load_all`,
+# which builds each `coverage-<target>.toml` through rebrew's snapshot reader
+# (deriving what the SQLite schema used to materialize: per-section buckets,
+# byte coverage, the by-VA index).  It is memoized per file on the file's stat,
+# and the parse persists across restarts, so an unchanged
 # directory returns THE SAME mapping and the SAME snapshot objects.  That
 # identity is the change token every DB-derived cache here keys on, exactly the
 # role the WAL-aware fingerprint played against SQLite.
@@ -898,7 +907,7 @@ def coverage_snapshots() -> Mapping[str, CoverageSnapshot]:
     dashboard.  One unreadable document beside readable ones is skipped by the
     reader with a warning naming the file, and the other targets keep serving.
     """
-    snapshots = load_all_coverage_from(_db_path())
+    snapshots = load_all(_db_path())
     if not snapshots:
         raise CoverageTomlError(
             f"{_db_path()}: no coverage-*.toml document — run 'rebrew build-db'"
@@ -915,7 +924,7 @@ def db_target_ids() -> list[str]:
     because this is also what the config-only fallback target list is built
     from.
     """
-    return sorted(load_all_coverage_from(_db_path()))
+    return sorted(load_all(_db_path()))
 
 
 def coverage_for(target: str) -> CoverageSnapshot:
@@ -927,7 +936,7 @@ def coverage_for(target: str) -> CoverageSnapshot:
     returned no rows); the TOML equivalent is a snapshot with no sections, no
     cells and no functions, so the response shapes are the same empty ones.
     """
-    snapshot = load_all_coverage_from(_db_path()).get(target)
+    snapshot = load_all(_db_path()).get(target)
     if snapshot is not None:
         return snapshot
     return CoverageSnapshot(
@@ -986,7 +995,7 @@ def known_schema_versions() -> list[str]:
     Pinned by ``tests/test_server.py::TestCoverageVersionGate``, which fails if
     a version the reader refuses can ever reach this list.
     """
-    return sorted({str(snap.version) for snap in load_all_coverage_from(_db_path()).values()})
+    return sorted({str(snap.version) for snap in load_all(_db_path()).values()})
 
 
 def _if_none_match_matches(raw: str, etag: str) -> bool:

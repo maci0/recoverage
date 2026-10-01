@@ -82,6 +82,19 @@ def _clean_derived_caches() -> None:
     _clear_derived_caches()
 
 
+@pytest.fixture(autouse=True)
+def _isolated_document_cache(
+    monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    """Point the persisted document parse at a fresh directory per test.
+
+    `documents` writes under `$XDG_CACHE_HOME`, so without this the suite would
+    fill the developer's own `~/.cache` and one test's parse would answer the
+    next one's read.
+    """
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path_factory.mktemp("xdg-cache")))
+
+
 # ── Synthetic coverage documents ────────────────────────────────────────────────────────
 # The document-gated tests below read the directory `_db_path()` resolves, and
 # CI has no real rebrew project — so they silently never ran.  Write a minimal

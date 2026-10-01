@@ -208,6 +208,12 @@ always wins over the environment.
 | `RECOVERAGE_FUZZ_SEED` | unset | seed for the mutation campaigns (`make fuzz`); read by the test suite, not the server |
 | `RECOVERAGE_FUZZ_ITERATIONS` | unset | round count for those campaigns; same reader |
 
+Parsed coverage documents persist under `$XDG_CACHE_HOME/recoverage/documents/`
+(`~/.cache/recoverage/documents/` when it is unset or relative), one file per
+document, so a restart skips the TOML parse for every document whose bytes have
+not changed. It keeps the 64 most recently used documents, and deleting the
+directory is always safe.
+
 ```bash
 # A service that is not run from the project root, on a LAN interface,
 # with a token that never reaches the process listing:

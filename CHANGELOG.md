@@ -5,6 +5,25 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- A restart no longer re-parses unchanged coverage documents: the parse is kept
+  under `$XDG_CACHE_HOME/recoverage/documents/` (`~/.cache/...` when unset),
+  keyed by each document's sha256. On a 20 MB, three-target project the first
+  load after a restart drops from about 1.9 s to 0.35 s. The first parse of a
+  newly written document costs a little more, for the cache write. The cache
+  keeps the 64 most recently used documents. An unwritable cache directory
+  logs one warning and the dashboard keeps serving.
+- A rebuild re-reads only the documents it rewrote. Before, rewriting one
+  target re-parsed every target's document.
+- A rebuild that rewrites a document with the same bytes no longer
+  invalidates anything: rebrew replaces every document on every build, and
+  each one used to drop every cached response, change every ETag and send
+  every open dashboard a `db-updated` refetch. Now only a change in the
+  bytes does.
+- `/api/health`'s `caches` block has a `document` row: a hit is a document
+  read from that cache, a miss a full TOML parse.
+
 ## [4.1.2] - 2026-09-29
 
 ### Fixed

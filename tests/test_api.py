@@ -86,7 +86,7 @@ def _snapshot_mapping(
 ) -> dict[str, CoverageSnapshot]:
     """Write ``<root>/db/coverage-<target>.toml`` and return it as a mapping.
 
-    The shape a patched ``server.load_all_coverage_from`` has to hand back, loaded
+    The shape a patched ``server.load_all`` has to hand back, loaded
     through the real reader so the test asserts against what the server would
     have read.
     """
@@ -97,7 +97,7 @@ def _snapshot_mapping(
 def _alternating_reader(
     monkeypatch: pytest.MonkeyPatch, mappings: list[dict[str, CoverageSnapshot]]
 ) -> list[int]:
-    """Patch ``server.load_all_coverage_from`` to hand back *mappings* in turn.
+    """Patch ``server.load_all`` to hand back *mappings* in turn.
 
     The last mapping repeats once the list runs out, and the returned list
     records the index each call served.  An unchanged directory can never
@@ -114,7 +114,7 @@ def _alternating_reader(
         served.append(index)
         return mappings[index]
 
-    monkeypatch.setattr(server_mod, "load_all_coverage_from", _reader)
+    monkeypatch.setattr(server_mod, "load_all", _reader)
     return served
 
 
@@ -2998,7 +2998,7 @@ class TestErrorResponseShape:
         def _boom(_root: Path) -> dict[str, CoverageSnapshot]:
             raise CoverageTomlError("no readable coverage document")
 
-        monkeypatch.setattr(server_mod, "load_all_coverage_from", _boom)
+        monkeypatch.setattr(server_mod, "load_all", _boom)
         status, headers, body = wsgi_get(f"/api/targets/{target}/stats")
         self._check(status, headers, body, "db_unavailable")
 
@@ -3020,7 +3020,7 @@ class TestErrorResponseShape:
         def _boom(_root: Path) -> dict[str, CoverageSnapshot]:
             raise CoverageTomlError("coverage-GAME.toml: malformed TOML (torn file)")
 
-        monkeypatch.setattr(server_mod, "load_all_coverage_from", _boom)
+        monkeypatch.setattr(server_mod, "load_all", _boom)
         api._clear_stats_cache()
         with caplog.at_level(_logging.WARNING, logger="recoverage"):
             status, headers, body = wsgi_get(f"/api/targets/{target}/stats")
@@ -3294,7 +3294,7 @@ class TestConfiguredUnbuiltTarget:
         def _boom(_root: Path) -> dict[str, CoverageSnapshot]:
             raise CoverageTomlError("no readable coverage document")
 
-        monkeypatch.setattr(server_mod, "load_all_coverage_from", _boom)
+        monkeypatch.setattr(server_mod, "load_all", _boom)
         status, headers, body = wsgi_get("/api/targets")
         assert status.startswith("200")
         ids = [t["id"] for t in json.loads(decode_body(body, headers))["targets"]]
@@ -3716,7 +3716,6 @@ class TestDataPayloadMemo:
     def test_memo_self_invalidates_on_db_change(self, tmp_path: Any, monkeypatch: Any) -> None:
         """A document fingerprint change (rebuild) must empty the memo — a memo
         keyed on a constant would pass the explicit-clear test above."""
-        import os
 
         import recoverage.api as api
 
@@ -3724,16 +3723,47 @@ class TestDataPayloadMemo:
 
         api.handle_api_data("GAME")
         assert len(api._DATA_CACHE) == 1
-        # Simulate a rebuild: the document's stat moves (same cells, new
-        # mtime), which is the change token every memo keys on.
+        # Simulate a rebuild that changed the document: the token keys on
+        # the bytes, so the rewrite has to move them.
         doc = api._db_path() / "coverage-GAME.toml"
-        st = doc.stat()
-        os.utime(doc, ns=(st.st_atime_ns + 2 * 10**9, st.st_mtime_ns + 2 * 10**9))
+        doc.write_text(doc.read_text(encoding="utf-8") + "# rebuilt\n", encoding="utf-8")
         api.handle_api_data("GAME")
         # A constant fingerprint would still hold ONE key; two keys prove
-        # the snapshot is fingerprint-sensitive (the changed stat produced
-        # a different cache key — a miss, not a stale hit).
+        # the snapshot is fingerprint-sensitive (the changed bytes produced
+        # a different cache key, a miss rather than a stale hit).
         assert len(api._DATA_CACHE) == 2
+
+    def test_a_rebuild_that_rewrote_the_same_bytes_keeps_the_memo_and_the_etag(
+        self, tmp_path: Any, monkeypatch: Any
+    ) -> None:
+        """rebrew replaces every document on every build, and a build that
+        changed nothing writes identical bytes.  That rewrite must not cost a
+        rebuilt payload or a full re-download: the memo keeps its one entry
+        and the old validator still answers 304."""
+        import recoverage.api as api
+
+        monkeypatch.setenv("RECOVERAGE_DB", str(self._make_db(tmp_path)))
+        api._clear_data_cache()
+        status, headers, _ = wsgi_get("/api/targets/GAME/data")
+        assert status.startswith("200")
+        etag = _header(headers, "ETag")
+        assert len(api._DATA_CACHE) == 1
+
+        # A new file renamed over the old one, as rebrew's atomic write does:
+        # new inode, new mtime, same bytes.
+        doc = api._db_path() / "coverage-GAME.toml"
+        tmp = doc.with_name(doc.name + ".tmp")
+        tmp.write_bytes(doc.read_bytes())
+        st = doc.stat()
+        os.utime(tmp, ns=(st.st_atime_ns + 2 * 10**9, st.st_mtime_ns + 2 * 10**9))
+        tmp.replace(doc)
+
+        status, _, body = wsgi_get("/api/targets/GAME/data", headers={"If-None-Match": etag})
+        assert status == "304 Not Modified"
+        assert body == b""
+        status, _, _ = wsgi_get("/api/targets/GAME/data")
+        assert status.startswith("200")
+        assert len(api._DATA_CACHE) == 1
 
     def test_memo_stores_per_encoding_bodies(self, tmp_path: Any, monkeypatch: Any) -> None:
         """A memo hit must serve the stored per-encoding body instead of
@@ -4945,7 +4975,7 @@ class TestDataEndpointUnreadableCoverage:
         def _boom(_root: Path) -> dict[str, CoverageSnapshot]:
             raise CoverageTomlError("coverage-GAME.toml: malformed TOML")
 
-        monkeypatch.setattr(server_mod, "load_all_coverage_from", _boom)
+        monkeypatch.setattr(server_mod, "load_all", _boom)
         status, _, body = wsgi_get(f"/api/targets/{target}/data")
         assert status.startswith("503"), body
         data = json.loads(decode_body(body, {}))
@@ -5587,7 +5617,7 @@ class TestUnhandledErrorContract:
         # An unexpected (non-CoverageTomlError) failure anywhere under the read
         # path is what the 500 contract is about; the shared reader is the one
         # call every target-scoped endpoint makes.
-        monkeypatch.setattr(server_mod, "load_all_coverage_from", boom)
+        monkeypatch.setattr(server_mod, "load_all", boom)
         with caplog.at_level(logging.ERROR, logger="recoverage"):
             status, headers, body = wsgi_get("/api/targets/x/stats")
         assert status.startswith("500")
@@ -5612,7 +5642,7 @@ class TestUnhandledErrorContract:
         def boom(_root: Path) -> dict[str, CoverageSnapshot]:
             raise RuntimeError("exploding reader")
 
-        monkeypatch.setattr(server_mod, "load_all_coverage_from", boom)
+        monkeypatch.setattr(server_mod, "load_all", boom)
         forged_path = "/api/targets/br\n\nINJECTED: pwned/stats"
         with caplog.at_level(logging.ERROR, logger="recoverage"):
             wsgi_get(forged_path)
@@ -5705,8 +5735,8 @@ class TestSectionStatsMemo:
         body1 = json.loads(api.handle_api_stats("GAME"))
         assert body1["sections"][".text"]["total_cells"] == 1
 
-        # Simulate a rebuild: the document is rewritten with one more cell and
-        # a newer stat, which is the change token every memo keys on.
+        # Simulate a rebuild: the document is rewritten with one more cell,
+        # which moves its bytes and so the change token every memo keys on.
         self._make_db(tmp_path, ((".text", 0, 16, "exact"), (".text", 16, 32, "exact")))
         doc = directory / "coverage-GAME.toml"
         st = doc.stat()

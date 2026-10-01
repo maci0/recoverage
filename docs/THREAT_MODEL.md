@@ -206,6 +206,12 @@ performs.
    instead of executing; the reader validates the format version, the shape of
    every array and table, and that the document's `target` matches its filename,
    and every failure is one `CoverageTomlError`.
+   The parse is cached as JSON under `$XDG_CACHE_HOME/recoverage/documents/`
+   (`src/recoverage/documents.py`), and a cached parse goes through the same
+   validation as a fresh one, and an entry that validation refuses is discarded
+   for a parse of the document itself, so whoever can write that directory can
+   do no more than whoever can write the coverage directory. It is JSON, not pickle,
+   because loading a pickle runs code.
    Unreadable is not empty, and the two answers stay distinguishable. A document
    that exists and does not parse raises `CoverageTomlError`, which is the 503
    `db_unavailable` contract (`server._db_unavailable_err`, `src/recoverage/server.py`);

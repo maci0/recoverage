@@ -1400,14 +1400,17 @@ def handle_potato() -> bytes | Any:
         # The coverage-document fingerprint (see _snapshot_db_mtime), not raw
         # st_mtime: a rebuild that rewrote any target's document must still
         # mint a new ETag or browsers keep a stale 304.  Same contract as
-        # /data, /asm, /bytes.
+        # /data, /asm, /bytes.  The newest mtime joins it because the footer
+        # renders it: the fingerprint keys on content, so a rebuild that wrote
+        # the same bytes keeps it, and a 304 would keep the previous build's
+        # "DB updated" stamp.
         qs = request.query_string
         if isinstance(qs, bytes):
             qs = qs.decode("utf-8", errors="replace")
         # Redact token from ETag input so query-string ETag doesn't leak it.
         if "token=" in qs:
             qs = "&".join(p for p in qs.split("&") if not p.startswith("token="))
-        etag = _etag_or_304(_snapshot_db_mtime(), qs)
+        etag = _etag_or_304(_snapshot_db_mtime(), _newest_mtime_ns(), qs)
         body = render_potato(urlparse(request.url)).encode("utf-8")
         # Every other DB-derived response carries an explicit cache policy;
         # /potato was the one surface sent with none, which leaves the browser

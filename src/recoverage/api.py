@@ -1626,12 +1626,12 @@ def handle_api_data(target: str) -> bytes | HTTPResponse:
     include_search_index = index_flag != "0"
 
     # ETag caching based on the coverage-document fingerprint + target +
-    # section.  The token folds every document's mtime_ns and size, so two
-    # rebuilds within the same second get distinct ETags (a float mtime would
-    # let a browser keep a stale 304) and a rebuild that rewrote any other
-    # target's document invalidates too.  The snapshot is computed once here:
-    # it is both the memo key and the ETag input (see
-    # _etag_or_304).  etag is None only when the DB is unreadable — no ETag
+    # section.  The token folds every document's content digest, so two
+    # rebuilds within the same second get distinct ETags when they wrote
+    # different bytes, a rebuild that rewrote the same bytes keeps the ETag,
+    # and a rebuild that changed any other target's document invalidates too.
+    # The snapshot is computed once here: it is both the memo key and the
+    # ETag input (see _etag_or_304).  etag is None only when the DB is unreadable — no ETag
     # is sent, and the queries below answer the standard 503 shortly after.
     snap = _snapshot_db_mtime()
     fingerprint: _DataKey = (

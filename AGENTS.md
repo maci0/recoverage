@@ -72,6 +72,7 @@ recoverage/
 │   ├── test_cli.py           # CSV export, formatting, edge case tests
 │   ├── test_lifecycle.py     # Lifecycle: regen ordering, the cross-process regen lock, browser-opener reaping
 │   ├── test_paths.py         # Coverage directory resolution tests
+│   ├── test_documents.py     # Per-document reload, the persisted parse, the cold herd
 │   ├── test_config.py        # RECOVERAGE_* env: parsing, precedence, fail-fast
 │   ├── test_server.py        # Compression, encoding, snapshot, path helper tests
 │   ├── test_serve_harness.py # Shared serve harness (builds the sample coverage, boots the server)
@@ -97,6 +98,8 @@ recoverage/
     ├── __init__.py
     ├── __main__.py          # python -m recoverage
     ├── _paths.py            # Coverage directory resolution (RECOVERAGE_DB, db_dir)
+    ├── documents.py         # Coverage documents read per file; the TOML parse persisted
+    │                        #   as JSON under $XDG_CACHE_HOME/recoverage/documents/
     ├── config.py            # RECOVERAGE_* env: flag defaults, validation, startup banner
     ├── devserver.py         # WSGI serving stack serve() binds: threading server, keep-alive handlers,
     │                        #   admission cap + socket deadline (RECOVERAGE_MAX_CONNECTIONS/CLIENT_TIMEOUT)
@@ -886,8 +889,9 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   path included, since the memo the leader published is the hit it was
   answered from), the `/stats` lookup, and `server._etag_or_304` for both arms
   of the 304. The names are `metrics.DATA_PAYLOAD_CACHE`,
-  `metrics.STATS_CACHE` and `metrics.REVALIDATION_CACHE`, so the map is bounded
-  by the call sites rather than by a request. A new memo or a new validator
+  `metrics.STATS_CACHE`, `metrics.REVALIDATION_CACHE` and
+  `metrics.DOCUMENT_CACHE` (the persisted TOML parse in `documents`), so the
+  map is bounded by the call sites rather than by a request. A new memo or a new validator
   names its cache next to the read and not at the call site that happens to
   notice: a rising `mean_ms` with a falling revalidation hit rate is a cache
   that stopped being consulted, and nothing else in the snapshot tells those
@@ -1073,9 +1077,15 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   (`TestSpaBidirectionalText`) and `tests/test_potato.py`
   (`TestDocumentNamesCarryTheirOwnDirection`).
 - One response, one snapshot. A snapshot is frozen — every collection is a
-  tuple or a `MappingProxyType` — and rebrew's `load_all_coverage_from` (the
-  reader `server` imports) memoizes on the documents' own stat, so an
-  unchanged directory returns THE SAME snapshot objects. A handler that builds
+  tuple or a `MappingProxyType` — and `documents.load_all` (the
+  reader `server` imports) memoizes each document on its own stat, so an
+  unchanged directory returns THE SAME snapshot objects. The change token
+  every memo and ETag keys on (`server._snapshot_db_mtime`) folds each
+  document's content digest (`documents.versions`), not its stat: rebrew
+  replaces every document on every build, and a build that changed nothing
+  writes the same bytes, which must not invalidate a memo, move an ETag or
+  broadcast `db-updated` (`tests/test_api.py`,
+  `test_a_rebuild_that_rewrote_the_same_bytes_keeps_the_memo_and_the_etag`). A handler that builds
   its answer from several collections therefore reads them all from one
   snapshot and cannot pair one build's cells with the next build's functions;
   that is the guarantee the SQLite read transaction used to buy, held by the
