@@ -1,4 +1,11 @@
-"""UI routes for the recoverage dashboard."""
+"""UI routes for the recoverage dashboard.
+
+The SPA shell (``/`` and ``/index.html``), the packaged static assets it pulls
+in, and the two source trees the code panes read (``/src`` and ``/original``).
+Every one of them mounts on ``recoverage.server.app`` at import time and takes
+its containment, compression and validator helpers from there rather than
+restating them; ``/potato`` is mounted by ``recoverage.potato``.
+"""
 
 from __future__ import annotations
 

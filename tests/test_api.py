@@ -5881,7 +5881,8 @@ class TestIndexWarmup:
         zstd also has brotli, so this is the set that ships.
 
         The budget no longer has a protocol constant behind it: the frontend is
-        one React + Tailwind bundle, measured at ~96 KB brotli, which cannot fit
+        one Preact + Tailwind bundle, whose measurement is quoted in
+        `ui._TCP_CWND_BUDGET` and in docs/DESIGN.md, and which cannot fit
         RFC 6928's initial window.  The number in `ui.py` is a checked ceiling
         with headroom over that measurement, so a dependency that doubles the
         bundle fails here instead of shipping.  That is a ratchet only while
@@ -5903,7 +5904,7 @@ class TestIndexWarmup:
         assert smallest <= ui._TCP_CWND_BUDGET, (
             f"the inlined shell is {smallest} B, {smallest - ui._TCP_CWND_BUDGET} B over the "
             f"{ui._TCP_CWND_BUDGET} B budget; check what the bundle grew by "
-            "(see docs/DESIGN.md, 'First Draw in First TCP Packet')"
+            "(see docs/DESIGN.md, 'First Draw Without a Render-Blocking Request')"
         )
 
     def test_the_ratchet_reports_the_overage_of_the_served_body(

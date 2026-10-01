@@ -123,8 +123,10 @@ Before: the dashboard read a SQLite database at `db/coverage.db`, and
 After: it reads `db/coverage-<target>.toml`, and `RECOVERAGE_DB` names the
 *directory* holding those documents. Run `rebrew build-db` to write them; the
 catalog analysis runs inside that command, so there is no step before it. A
-directory holding no `coverage-*.toml` is the 503 `db_unavailable` the
-dashboard used to report for a missing database.
+directory holding no `coverage-*.toml` is not an error: `serve` warns that the
+dashboard will list no targets and every figure reads as a healthy zero, which
+is the empty table set the SQLite reader answered from. The 503
+`db_unavailable` is reserved for a document that exists and does not parse.
 
 Do: run `rebrew build-db` once after upgrading, then point `RECOVERAGE_DB` at
 the directory. A value that exists and is not a directory used to resolve to a

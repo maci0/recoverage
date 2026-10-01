@@ -1,4 +1,13 @@
-"""API routes for the recoverage dashboard."""
+"""API routes for the recoverage dashboard.
+
+``/api/*``: the coverage reads the SPA and Potato Mode are built from, the
+health probe, the SSE rebuild broadcast and the regen endpoint.  Routes mount on
+``recoverage.server.app`` at import time and share the kernel there (snapshot
+access, ETags, auth and the JSON error envelope); nothing in this module is a
+cross-route edge, and the one sibling wiring it needs — dropping Potato Mode's
+grid memo on a rebuild — is registered through :func:`register_cache_invalidator`
+by the composition root.
+"""
 
 from __future__ import annotations
 

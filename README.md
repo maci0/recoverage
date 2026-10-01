@@ -142,6 +142,10 @@ recoverage
 
 ## CLI Commands
 
+The examples below write `recoverage` bare. Prefix it with `uv run` (as the
+installation section does) when you have no activated environment, or activate
+the one `make setup` synced so the entry point is on `PATH`.
+
 The wheel installs a man page with the entry point, at
 `<prefix>/share/man/man1/recoverage.1`. A system or user prefix puts that on
 the man path, so such an installed copy answers `man recoverage` without this
@@ -425,7 +429,7 @@ the banner that run printed holds.
 | `/index.html` | GET | The same document, for a URL that names it |
 | `/src/<filepath:path>` | GET | A file under the target's `src/` tree, for the code panes |
 | `/original/<filepath:path>` | GET | A file under the original binary's tree |
-| `/app.js`, `/style.css`, `/print.css`, `/favicon.svg` | GET | The packaged static assets (`no-cache` with a strong `ETag`) |
+| `/app.js`, `/style.css`, `/print.css`, `/favicon.svg`, `/archivo.woff2`, `/jetbrains-mono.woff2` | GET | The packaged static assets (`no-cache` with a strong `ETag`) |
 | `/potato` | GET | Potato Mode (pure-HTML fallback) |
 | `/api/health` | GET | Server version, the settings this process resolved, coverage directory info, installed extras, request/regen/stream/connection counters, cache hit-miss |
 | `/api/targets` | GET | List available targets. Revalidates: an `ETag` over the coverage snapshot and the project config's stat, so a repeat is a 304 |
@@ -716,7 +720,9 @@ recoverage/
 │   ├── test_cli.py           # CSV export, formatting tests
 │   ├── test_concurrency.py   # Barrier-driven races: single flight, counters, the admission cap
 │   ├── test_config.py        # RECOVERAGE_* parsing, precedence, fail-fast
+│   ├── test_documents.py     # Per-document reload, the persisted parse, the cold herd
 │   ├── test_import_graph.py  # The import rules the modules rely on
+│   ├── test_lint_html.py     # The vnu gate's start-up failures (no jar, no JRE)
 │   ├── test_frontend_import_graph.py  # The same rules over web/app
 │   ├── test_lifecycle.py     # Lifecycle (regen ordering, opener reaping, deadlines)
 │   ├── test_paths.py         # Coverage directory resolution tests
@@ -750,7 +756,9 @@ recoverage/
         ├── app.js            # Built dashboard bundle (Preact + Tailwind)
         ├── style.css         # Built Tailwind output
         ├── print.css         # Print stylesheet
-        └── favicon.svg       # Retro "R" logo favicon
+        ├── favicon.svg       # Retro "R" logo favicon
+        ├── archivo.woff2     # Brand sans face (OFL, credited in NOTICE)
+        └── jetbrains-mono.woff2  # Terminal face for the hex and asm panes
 ```
 
 The frontend sources are in `web/`, not in `assets/`: `app/` holds the Preact
