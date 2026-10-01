@@ -518,18 +518,49 @@ def _defined_public_surface() -> set[str]:
     return defined
 
 
-def _unrecorded_removals(baseline: set[str], changelog: str) -> list[str]:
-    """Baseline names the package no longer defines, if the changelog is silent.
+def _removal_groups(changelog: str) -> str:
+    """The prose of every `Removed` and `Breaking` group in the file.
 
-    A `Removed` or `Breaking` group anywhere in the file is the record: its
-    entries name the symbols, and no test here has to guess which line of
-    prose covers which name. The gate reads the whole file rather than the
+    The gate matches against this rather than the whole changelog, so a
+    removal is recorded by an entry that NAMES the symbol. Reading the whole
+    file for a `### Removed` heading anywhere made one recorded removal silence
+    the gate for every other one: 4.0.0 recorded six `FILTER_*` pill caps, and
+    4.1.0 then removed `PANEL_HDR_PNG`, `SCANLINE_PNG` and `TOPBAR_SVG` under
+    the same heading's long shadow, with nothing naming them.
+    """
+    pattern = r"^### (?:Removed|Breaking)\s*$.*?(?=^### |\Z)"
+    return "\n".join(m[0] for m in re.finditer(pattern, changelog, re.DOTALL | re.MULTILINE))
+
+
+def _names_a_removal(entry: str, recorded: str) -> bool:
+    """Whether a `Removed`/`Breaking` entry records this baseline name.
+
+    Matched on the bare name, because the notes use both spellings: a
+    whole-module removal is written as a module's names, and a one-off as the
+    constant. Matching the whole `module::NAME` would let
+    `recoverage.potato::TOPBAR_SVG` go unrecorded because the entry said
+    `` `TOPBAR_SVG` ``. The `::` and the leading module are consumed by a
+    lookbehind so `TOPBAR_SVG` cannot be satisfied by a longer name that ends
+    in it.
+    """
+    bare = entry.partition("::")[2]
+    if not bare:
+        return False
+    return re.search(rf"(?<![\w]){re.escape(bare)}(?![\w])", recorded) is not None
+
+
+def _unrecorded_removals(baseline: set[str], changelog: str) -> list[str]:
+    """Baseline names the package no longer defines, with no entry naming them.
+
+    The gate reads every `Removed` and `Breaking` entry rather than the
     pending block, so a release that has already recorded its removals keeps
     passing afterwards without the baseline being rewritten under it.
     """
-    if "### Removed" in changelog or "### Breaking" in changelog:
-        return []
-    return sorted(baseline - _defined_public_surface())
+    recorded = _removal_groups(changelog)
+    if not recorded:
+        return sorted(baseline - _defined_public_surface())
+    gone = baseline - _defined_public_surface()
+    return sorted(name for name in gone if not _names_a_removal(name, recorded))
 
 
 class TestPublicSurfaceChangesAreRecorded:
@@ -544,6 +575,11 @@ class TestPublicSurfaceChangesAreRecorded:
     is the surface as of the last release that shipped with no unrecorded
     removal, and this class is the gate: the removal is legal, and it is not
     legal to ship it unwritten.
+
+    The gate matches per symbol. An earlier version cleared every name as soon
+    as the file held one `### Removed` or `### Breaking` group anywhere, so the
+    six `FILTER_*` caps recorded in 4.0.0 covered the three asset constants
+    4.1.0 removed under their shadow.
     """
 
     def test_a_removed_public_name_is_written_down(self) -> None:
@@ -584,4 +620,45 @@ class TestPublicSurfaceChangesAreRecorded:
         gone = "recoverage.potato::FILTER_ACT_MID"
         assert gone not in _defined_public_surface(), "the self-test needs a name the package lacks"
         assert _unrecorded_removals({gone}, "") == [gone]
-        assert _unrecorded_removals({gone}, "### Removed\n\n- the six pill caps.\n") == []
+        assert (
+            _unrecorded_removals({gone}, "### Removed\n\n- the `FILTER_ACT_MID` pill cap.\n") == []
+        )
+
+    def test_one_recorded_removal_does_not_silence_another(self) -> None:
+        """A `Removed` group is per symbol, not a blanket clearance.
+
+        The gate used to return nothing whenever the file held a `### Removed`
+        or `### Breaking` group anywhere, so the six `FILTER_*` caps recorded
+        in 4.0.0 covered `PANEL_HDR_PNG`, `SCANLINE_PNG` and `TOPBAR_SVG`,
+        which 4.1.0 removed and wrote nothing about. That is the hole the
+        class exists to close, so it is driven here rather than left to the
+        next removal.
+        """
+        recorded = (
+            "### Removed\n\n"
+            "- The six duplicate pill-cap images in `recoverage.potato`\n"
+            "  for `FILTER_ACT_L`, `FILTER_ACT_R`, `FILTER_ACT_MID`,\n"
+            "  `FILTER_INACT_L`, `FILTER_INACT_R`, `FILTER_INACT_MID`.\n"
+        )
+        baseline = {
+            "recoverage.potato::FILTER_ACT_MID",
+            "recoverage.potato::PANEL_HDR_PNG",
+            "recoverage.potato::SCANLINE_PNG",
+            "recoverage.potato::TOPBAR_SVG",
+        }
+        assert _unrecorded_removals(baseline, recorded) == [
+            "recoverage.potato::PANEL_HDR_PNG",
+            "recoverage.potato::SCANLINE_PNG",
+            "recoverage.potato::TOPBAR_SVG",
+        ], "an entry naming six names must not record a seventh that shares the group"
+        # And the group the notes wrote is honoured, so recording the three
+        # clears the gate without the baseline being rewritten under it.
+        plus = recorded + "- The brand's `TOPBAR_SVG`, `PANEL_HDR_PNG` and `SCANLINE_PNG`.\n"
+        assert _unrecorded_removals(baseline, plus) == []
+
+    def test_a_longer_name_does_not_record_a_shorter_one(self) -> None:
+        """The match is a whole word, so `TOPBAR_SVG2` is not `TOPBAR_SVG`."""
+        assert not _names_a_removal(
+            "recoverage.potato::TOPBAR_SVG", "### Removed\n\n- `TOPBAR_SVG2`\n"
+        )
+        assert _names_a_removal("recoverage.potato::TOPBAR_SVG", "### Removed\n\n- `TOPBAR_SVG`\n")

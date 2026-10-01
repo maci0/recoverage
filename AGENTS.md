@@ -406,13 +406,16 @@ The release policy is not written down anywhere else, so it is stated here and
   without a leading underscore) as of the last release that shipped with no
   unrecorded removal, and
   `tests/test_release.py::TestPublicSurfaceChangesAreRecorded` fails when a
-  name in it is gone and no `Removed` or `Breaking` group records the removal.
-  Adding a name needs neither an entry nor a baseline edit, which is why the
-  gate reads one direction: a baseline carried forward on every addition would
-  fail constantly and stop being read. Rewriting the baseline is the release
-  commit's move, made beside the entry that records what it dropped. A name
-  that only this tree imports is private whatever its spelling, so it is
-  renamed with a leading underscore rather than recorded.
+  name in it is gone and no `Removed` or `Breaking` entry NAMES it. The gate
+  matches per symbol rather than per group: one recorded removal used to
+  clear every other name in the file, which is how 4.0.0's six `FILTER_*`
+  pill caps went on to cover the three asset constants 4.1.0 removed
+  unwritten. Adding a name needs neither an entry nor a baseline edit, which
+  is why the gate reads one direction: a baseline carried forward on every
+  addition would fail constantly and stop being read. Rewriting the baseline
+  is the release commit's move, made beside the entry that records what it
+  dropped. A name that only this tree imports is private whatever its
+  spelling, so it is renamed with a leading underscore rather than recorded.
 - The release commit is `chore: release X.Y.Z` and the tag is `vX.Y.Z`;
   both land together, and neither is re-cut.
 - `rebrew` is a hard runtime dependency and is not on the package index, so

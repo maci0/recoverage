@@ -113,6 +113,16 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The `/api/targets` preload is used instead of discarded, so a page load asks
   for the target list once and logs no preload warnings.
 
+### Removed
+
+- The three unused asset constants in `recoverage.potato`: `PANEL_HDR_PNG`,
+  `SCANLINE_PNG` and `TOPBAR_SVG`. The brand move replaced the base64 assets
+  they held with the relumea mark, and no template reached for them, so
+  `from recoverage.potato import TOPBAR_SVG` is an `ImportError` where it
+  imported. (Recorded here after 4.1.0 shipped: the removals were real and
+  user-visible, and the release notes are the only record a consumer of that
+  version reads.)
+
 ## [4.0.0] - 2026-09-29
 
 ### Added
