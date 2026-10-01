@@ -1774,8 +1774,49 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   inside the project tree. A `[targets.X].binary` that does not is refused by
   `_find_dll_path` and logged, and the test
   `TestPathHelpers::test_find_dll_path_refuses_a_binary_outside_the_tree` pins
-  the shapes it has to refuse. Two more parsers read a FILE rather than a
-  request, so no request campaign reaches either of them.
+  the shapes it has to refuse. Four more parsers read a FILE rather than a
+  request, so no request campaign reaches any of them, and every property they
+  have to keep is one a status code cannot show: the route answers 404 for a
+  path a reader mishandles and 200 for one it does not, and both are correct
+  answers to the request that was made. What differs is WHICH file was opened.
+  `server.match_filesystem_spelling` (`TestFilesystemSpelling`) is the one
+  reader among them that walks the filesystem with a name taken from untrusted
+  input: a decoded request segment in `ui.py`, and a source path read straight
+  out of a document in `potato.py`. Both callers re-spell AFTER
+  `is_plain_relative` and BEFORE the resolve that measures containment, so the
+  re-spelling sits exactly where widening a path would go unseen. The campaign
+  holds three properties, none of them "it did not raise": containment (the
+  asked name and the answered one must reach the same `is_plain_relative`
+  verdict, and the answer must resolve inside the same root), the pair across
+  the filesystem boundary (a name the tree HOLDS is found from either
+  normalization, and one it does NOT hold comes back unchanged, because a
+  resolver that guessed the other spelling would serve a source file from a
+  tree that no longer has it), and idempotence, since both callers open what
+  came back. Its fixture builds the two spellings through
+  `unicodedata.normalize` rather than as two literals: the difference between
+  them is invisible in a source file and in a review, so an editor that
+  normalizes and one that does not both produce the same-looking line and a
+  corpus with nothing to bridge. That is the one way this campaign can pass
+  while testing nothing, so the fixture asserts its own two roots differ, and a
+  mutation check is what says the corpus really reaches it — a resolver that
+  re-spelled one way only, or that invented a name no file matched, has to fail
+  it. `server.mtime_ns_to_utc` (`TestFreshnessStamp`) is the one arithmetic
+  reader among them that takes a value off the FILESYSTEM —
+  `os.stat().st_mtime_ns` of every coverage document — and hands it to
+  `datetime`, which raises on a second outside the range it spans. Such a stamp
+  is not hypothetical: `os.utime` writes one on any Linux box, FAT tops out in
+  2107, and a restored tree carries whatever the archive held. The campaign
+  asserts that the answer EXISTS and is aware for every input (a stamp the
+  clock cannot name would otherwise take `/api/health` and Potato's footer down
+  with it), that the clamp for one outside the range is the EXTREME rather than
+  a nearby second, and that the remainder truncates rather than rounding up
+  into the second above — which would stamp a rebuild ahead of the data it
+  describes. Its out-of-range arm writes the stamp with `os.utime` and reads it
+  back off `stat` rather than handing the reader the same number twice, so the
+  assertion is against the value a filesystem really holds. The nanosecond
+  seeds are the fixed-width field a `stat` hands over, big-endian, because the
+  mutator splices and doubles bytes and a decimal seed would never reach the
+  magnitudes past the clamp.
   `disasm.binary_width_bits` (`TestContainerHeaderWidth`) is handed raw image
   bytes and reads the PE `e_lfanew` at a signed 32-bit offset chosen by
   whatever produced the file, so its campaign asserts the answer against the

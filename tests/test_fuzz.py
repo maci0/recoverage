@@ -71,7 +71,7 @@ import unicodedata
 from collections.abc import Callable
 from http.cookies import SimpleCookie
 from itertools import pairwise
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
@@ -2633,6 +2633,267 @@ class TestRepoFileRoute:
             assert data["code"] == "forbidden", f"{prefix}{segment}: {data}"
 
 
+# ── the filesystem spelling resolver ───────────────────────────────
+#
+# ``server.match_filesystem_spelling`` is the one resolver in the package that
+# walks the filesystem with a name taken from untrusted input: a decoded
+# request path segment in ``ui.py``, and a source path read straight out of a
+# coverage document in ``potato.py``.  No campaign above reached it — every one
+# stops at a route boundary or drives a real request whose answer is a status
+# code, and every property it has to keep is invisible to one.
+
+#: The name whose composed and decomposed spellings DIFFER.  Built through
+#: :func:`unicodedata.normalize` rather than written as two literals, because
+#: the difference between them is invisible in a source file and in a review:
+#: an editor that normalizes, an editor that does not, and a copy through a
+#: form that cannot tell them apart all produce the same-looking line and a
+#: corpus with nothing to bridge.
+_CAFE = "café.c"
+
+#: Names the tree actually holds.  macOS stores the DECOMPOSED form whatever
+#: wrote it, Linux and Windows store what was passed, so a tree holding one
+#: name in each spelling is what makes both directions testable on any host:
+#: the resolver's own re-spelling is what has to bridge them.
+SPELLING_TREE: dict[str, str] = {
+    "composed": unicodedata.normalize("NFC", _CAFE),
+    "decomposed": unicodedata.normalize("NFD", _CAFE),
+    "plain": "main.c",
+    "space": "a file.c",
+}
+
+#: How to spell each of the above as a seed.  Both normalizations of the
+#: marked name, the parent hop and the anchor that must not survive, the NUL a
+#: name cannot carry, and the lengths (a component is capped at 255 bytes by
+#: every filesystem that serves one, and the resolver must reach that cap
+#: without an exception).
+_SPELLING_SEEDS: list[bytes] = [
+    b"main.c",
+    b"sub/main.c",
+    b"ascii.c",
+    b"a file.c",
+    unicodedata.normalize("NFC", _CAFE).encode(),
+    unicodedata.normalize("NFD", _CAFE).encode(),
+    unicodedata.normalize("NFC", _CAFE + "/main.c").encode(),
+    unicodedata.normalize("NFD", _CAFE + "/main.c").encode(),
+    b"..",
+    b"../main.c",
+    b"sub/../main.c",
+    b".",
+    b"./main.c",
+    b"sub/./main.c",
+    b"/etc/passwd",
+    b"sub//main.c",
+    b"main.c/",
+    b"sub/",
+    b"",
+    b"\x00",
+    b"main.c\x00.png",
+    b"a" * 255,
+    unicodedata.normalize("NFD", _CAFE).encode() + b"/../main.c",
+]
+
+#: The segment shapes the resolver's per-segment loop branches on.  Byte
+#: mutation of a seed almost never produces a decomposed name or a NUL, the
+#: way ``%2e%2e%2f`` had to be seeded for the route campaign above.
+_SPELLING_TOKENS: tuple[bytes, ...] = (
+    b"main.c",
+    b"ascii.c",
+    b"sub",
+    b"..",
+    b".",
+    b"",
+    b"/",
+    b"\\",
+    b"\x00",
+    b"%2f",
+    b"a file.c",
+    b"/etc/passwd",
+    b"C:foo",
+    unicodedata.normalize("NFC", _CAFE).encode(),
+    unicodedata.normalize("NFD", _CAFE).encode(),
+)
+
+
+@pytest.fixture(scope="module")
+def spelling_root(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A tree holding the marked name in BOTH spellings, plus plain names.
+
+    Built once per module: it is read-only to every round, and the campaign is
+    about the resolver's ANSWER rather than about a tree that moves under it.
+    ``tmp_path_factory`` gives a per-session directory, so the names are never
+    written into the repository.  The ``composed`` and ``decomposed`` keys are
+    two roots holding the SAME name differently, which is the whole point of
+    the campaign; a fixture that wrote one spelling twice would leave the
+    re-spelling untested while reading as though it covered it.
+    """
+    root = tmp_path_factory.mktemp("spelling")
+    for key, name in SPELLING_TREE.items():
+        (root / key).mkdir()
+        # A nested directory, so the segment-by-segment arm is exercised and
+        # not only the whole-path one.
+        (root / key / "sub").mkdir()
+        for shared in ("main.c", "ascii.c"):
+            (root / key / shared).write_text(key, encoding="utf-8")
+            (root / key / "sub" / shared).write_text(key, encoding="utf-8")
+        (root / key / name).write_text(key, encoding="utf-8")
+        (root / key / "sub" / name).write_text(key, encoding="utf-8")
+    # Asserted rather than assumed: the two roots have to differ, or the whole
+    # campaign is one spelling measured against itself.
+    composed = (root / "composed" / SPELLING_TREE["composed"]).name
+    decomposed = (root / "decomposed" / SPELLING_TREE["decomposed"]).name
+    assert composed != decomposed and len(decomposed) > len(composed), (
+        f"the fixture holds {composed!a} in both roots, so nothing here tests a re-spelling"
+    )
+    return root
+
+
+def _spelling_round_roots(root: Path, data: bytes) -> tuple[Path, str]:
+    """The tree a round reads, and the name it asks about.
+
+    Which sub-tree a round lands on is drawn from the campaign's own stream
+    rather than fixed, because both directions have to be reachable:
+    ``composed``/``decomposed`` and ``decomposed``/``composed`` are the two
+    pairings macOS and Linux produce between them, and a resolver that
+    re-spelled composed to decomposed but never back would pass against a
+    tree that only ever answers one way.
+    """
+    key = random.Random(FUZZ_SEED + len(data)).choice(tuple(SPELLING_TREE))
+    return root / key, data.decode("utf-8", "surrogateescape")
+
+
+class TestFilesystemSpelling:
+    """``server.match_filesystem_spelling`` re-spells an untrusted name the way
+    the tree under it actually spells it, and both callers' containment checks
+    then run on whatever it returned.
+
+    Both callers re-spell AFTER ``is_plain_relative`` and BEFORE the resolve
+    that measures containment, so the re-spelling sits exactly where widening a
+    path would be invisible to the route's status code: a name served for a
+    path the tree does not hold, or refused for one it does.
+    """
+
+    def _assert_contained(self, root: Path, asked: str, answered: str) -> None:
+        """Containment, restated from the callers rather than from a status.
+
+        The resolver must not be the step that widens a path: a name the rule
+        refused stays refused, and a name it allowed can only become a name
+        inside the same root.  ``resolve()`` is the check both callers make,
+        and it is the one that follows a symlink, so it is the one asserted.
+        """
+        asked_ok = srv.is_plain_relative(PurePath(asked))
+        answered_ok = srv.is_plain_relative(PurePath(answered))
+        assert answered_ok == asked_ok, (
+            f"{asked!r} answered {answered!r}: the re-spelling changed the "
+            f"plain-relative verdict ({asked_ok} -> {answered_ok}), so a name "
+            "the containment rule refused would reach the join"
+        )
+        if not answered_ok or "\x00" in answered:
+            # realpath refuses an embedded NUL outright, which is why ui.py
+            # carries its own NUL guard ahead of this call.
+            return
+        try:
+            resolved = (root / answered).resolve()
+        except OSError:
+            return
+        assert resolved.is_relative_to(root.resolve()), (
+            f"{asked!r} answered {answered!r}, which resolves to {resolved}, "
+            f"outside the tree at {root}"
+        )
+
+    def test_a_resolved_name_never_leaves_the_tree_it_was_read_from(
+        self, spelling_root: Path
+    ) -> None:
+        """The arm whose failure is a wrong FILE rather than a 500.
+
+        Nothing here is a crash to catch: every property is one a status code
+        cannot show, because the route answers 404 for a path the resolver
+        mishandles and 200 for one it does not, and both are correct answers
+        to the request that was made.  What differs is WHICH file was opened.
+        """
+
+        def check(data: bytes) -> None:
+            root, asked = _spelling_round_roots(spelling_root, data)
+            answered = srv.match_filesystem_spelling(root, asked)
+            self._assert_contained(root, asked, answered)
+
+        _fuzz(
+            _SPELLING_SEEDS,
+            check,
+            iterations=400,
+            struct_tokens=_SPELLING_TOKENS,
+            num_tokens=_SPELLING_TOKENS,
+        )
+
+    def test_a_name_the_tree_holds_is_found_from_either_spelling(self, spelling_root: Path) -> None:
+        """The pair assertion across the filesystem boundary.
+
+        Every name here is one the tree ACTUALLY holds, so the resolver has a
+        file to find rather than nothing to report.  A resolver that stopped
+        re-spelling answers 404 for a composed name against a decomposed tree:
+        no crash, a code pane quietly empty beside a source file sitting on
+        disk.  Both directions are asserted, because the document spells
+        composed, macOS stores decomposed, and either host is a real one.
+        """
+        for key, name in SPELLING_TREE.items():
+            for form in ("NFC", "NFD"):
+                for asked in (name, f"sub/{name}", "main.c", "sub/main.c"):
+                    spelling = unicodedata.normalize(form, asked)
+                    answered = srv.match_filesystem_spelling(spelling_root / key, spelling)
+                    assert (spelling_root / key / answered).exists(), (
+                        f"{key}/{asked!r} asked as {form} answered {answered!r}, "
+                        "which names no file the tree holds"
+                    )
+                    self._assert_contained(spelling_root / key, spelling, answered)
+
+    def test_a_missing_name_still_reads_as_missing(self, spelling_root: Path) -> None:
+        """The other half of the pair: normalization must not INVENT a file.
+
+        A resolver that answered a name no file matched by guessing the other
+        spelling would serve a source file from a tree that no longer has it,
+        and the reader would be shown source that is not there.  The answer
+        for a name the tree does not hold is the name, unchanged.
+        """
+        for asked in (
+            "no-such-file.c",
+            "sub/no-such-file.c",
+            "café-typo.c",
+            "a" * 300,
+            "sub/deeper/still/no-such-file.c",
+        ):
+            answered = srv.match_filesystem_spelling(spelling_root / "plain", asked)
+            assert answered == asked, (
+                f"{asked!r} names no file, but the resolver answered {answered!r}"
+            )
+
+    def test_re_spelling_is_a_fixed_point(self, spelling_root: Path) -> None:
+        """Idempotence.
+
+        Both callers resolve the answered path against the tree and the Potato
+        panel opens the result, so an answer that re-spells AGAIN is one whose
+        value depends on how many times a caller asks.  The name in the other
+        direction (decomposed asked, composed answered, decomposed tree) is
+        exactly where that shows up, and the campaign above reaches it because
+        the sub-tree is drawn per round.
+        """
+
+        def check(data: bytes) -> None:
+            root, asked = _spelling_round_roots(spelling_root, data)
+            once = srv.match_filesystem_spelling(root, asked)
+            twice = srv.match_filesystem_spelling(root, once)
+            assert twice == once, (
+                f"{asked!r} answered {once!r}, which re-spells to {twice!r}: "
+                "the answer depends on how many times a caller asks"
+            )
+
+        _fuzz(
+            _SPELLING_SEEDS,
+            check,
+            iterations=300,
+            struct_tokens=_SPELLING_TOKENS,
+            num_tokens=_SPELLING_TOKENS,
+        )
+
+
 # ── chunked body framing ───────────────────────────────────────────
 
 #: The bodies a client would frame.  Four parse, so the campaign reaches the
@@ -4594,6 +4855,177 @@ def _declared_width(data: bytes) -> int | None:
         machine = int.from_bytes(data[offset + 4 : offset + 6], "little")
         return 64 if machine == PE_AMD64 else None
     return None
+
+
+# ── the freshness stamp ─────────────────────────────────────────────
+#
+# ``server.mtime_ns_to_utc`` is the one arithmetic reader in the package that
+# takes a value off the FILESYSTEM — ``os.stat().st_mtime_ns`` of every coverage
+# document — and hands it to ``datetime``.  ``datetime`` raises on a second
+# outside the range it spans, and an mtime outside that range is not
+# hypothetical: ``os.utime`` writes one on any Linux box, FAT tops out in 2107,
+# and a restored tree carries whatever the archive held.  The clamp is the
+# documented defense, and no campaign above reaches it, because every other one
+# draws its integers from a request or a document.
+
+#: Whole seconds since the epoch, seeded at both ends of the range
+#: ``datetime`` spans and just outside it — the arm the clamp exists for, and
+#: the one a float conversion (``mtime_ns / 1e9``) rounds rather than
+#: truncates.
+_MTIME_SEED_SECONDS: tuple[int, ...] = (
+    0,
+    -1,
+    1,
+    1_700_000_000,
+    -1_500_000_000,
+    2_147_483_648,
+    4_102_444_800,
+    253_402_300_799,
+    -62_135_596_800,
+    253_402_300_800,
+    -62_135_596_801,
+)
+
+#: The same instants as the fixed-width field a ``stat`` hands over.  Spliced
+#: and doubled by the mutator, so a round reaches magnitudes no filesystem
+#: holds - which is exactly the arm the clamp has to answer for.
+_MTIME_SEED_SECONDS_BYTES: tuple[bytes, ...] = tuple(
+    seconds.to_bytes(8, "big", signed=True) for seconds in _MTIME_SEED_SECONDS
+)
+
+
+class TestFreshnessStamp:
+    """``server.mtime_ns_to_utc`` turns a filesystem stamp into the instant both
+    freshness surfaces render, and must answer for every stamp a filesystem can
+    hold."""
+
+    def test_every_reachable_stamp_renders_and_never_raises(self) -> None:
+        """The liveness arm: an unrepresentable mtime must not take a page down.
+
+        Both consumers render the answer on a path a stamp the clock cannot name
+        would take with it: ``/api/health`` is polled by whatever is watching
+        the dashboard, and Potato's footer is stamped on every render.  An
+        ``OverflowError`` out of here is a 503 and an empty panel, so the
+        assertion is that the answer EXISTS for every input and that it is the
+        aware datetime the callers' own formatters expect.
+        """
+
+        def check(data: bytes) -> None:
+            # The harness mutates bytes and a nanosecond stamp is a fixed-width
+            # field read big-endian, so the seeds below are the integers in the
+            # bytes a stat hands over.  Eight bytes signed carry the whole range
+            # datetime spans plus a wide margin, and the mutations reach
+            # magnitudes past it — the arm a clamped reader still has to answer
+            # for, and the one a float conversion would have turned into an
+            # OverflowError.
+            nanoseconds = int.from_bytes(data.ljust(8, b"\x00"), "big", signed=True)
+            rendered = srv.mtime_ns_to_utc(nanoseconds)
+            assert rendered.tzinfo is not None, (
+                f"{nanoseconds}: rendered a naive datetime {rendered!r}, which a "
+                "caller would read as local time"
+            )
+            # The three renderings the two surfaces actually apply to it.
+            rendered.isoformat()
+            rendered.strftime("%Y-%m-%d %H:%M UTC")
+            rendered.replace(second=0, microsecond=0).isoformat()
+            rendered.timestamp()
+
+        _fuzz(
+            [seconds.to_bytes(8, "big", signed=True) for seconds in _MTIME_SEED_SECONDS],
+            check,
+            iterations=400,
+            struct_tokens=_MTIME_SEED_SECONDS_BYTES,
+            num_tokens=_MTIME_SEED_SECONDS_BYTES,
+        )
+
+    def test_an_unrepresentable_stamp_reports_the_extreme(self, tmp_path: Path) -> None:
+        """The pair assertion across the filesystem boundary.
+
+        The clamp is the thing under test, and its correct answer is not "some
+        time near the boundary" — it is the extreme, because both surfaces are
+        rendering "as far from now as a timestamp can say".  The stamps are
+        written with ``os.utime`` and read back off ``stat``, so the assertion
+        is against the value the filesystem really holds rather than against a
+        literal restated here; that is the whole reason to cross the boundary
+        instead of handing the reader the same number twice.
+        """
+        wrote = 0
+        for seconds in (
+            253_402_300_800,
+            -62_135_596_801,
+            2_147_483_648,
+            4_102_444_800,
+            253_402_300_799,
+            -62_135_596_800,
+        ):
+            target = tmp_path / f"stamp-{seconds}"
+            target.write_text("x")
+            try:
+                os.utime(target, ns=(seconds * srv._NS_PER_SECOND,) * 2)
+            except (OSError, OverflowError, ValueError):
+                # A platform whose own time_t cannot hold it.  The conversion
+                # itself is covered by the arm above on every platform; this
+                # one only asserts the round trip through a real file.
+                continue
+            wrote += 1
+            stat_ns = target.stat().st_mtime_ns
+            rendered = srv.mtime_ns_to_utc(stat_ns)
+            assert rendered.tzinfo is srv._EPOCH.tzinfo, (
+                f"{stat_ns}: rendered {rendered!r} in a zone other than the "
+                "one the rest of the package publishes"
+            )
+            # The clamp's answer for a stamp outside the range is the extreme,
+            # not a nearby second: both surfaces are rendering "as far from now
+            # as a timestamp can say".
+            outside = not (
+                srv._MIN_MTIME_SECONDS <= stat_ns // srv._NS_PER_SECOND <= srv._MAX_MTIME_SECONDS
+            )
+            if outside:
+                clamped = srv.mtime_ns_to_utc(
+                    srv._MAX_MTIME_SECONDS * srv._NS_PER_SECOND
+                    if stat_ns > 0
+                    else srv._MIN_MTIME_SECONDS * srv._NS_PER_SECOND
+                )
+                assert (
+                    rendered == clamped.replace(microsecond=rendered.microsecond)
+                    or rendered == clamped
+                ), (
+                    f"{stat_ns}: rendered {rendered}, and the only right answer "
+                    f"for a stamp datetime cannot name is the extreme {clamped}"
+                )
+            assert srv._MIN_MTIME_SECONDS <= rendered.timestamp() <= (srv._MAX_MTIME_SECONDS + 1), (
+                f"{stat_ns}: rendered {rendered}, outside the range datetime spans"
+            )
+        assert wrote >= 2, "this platform wrote too few of the stamps to compare"
+
+    def test_the_stamp_never_rounds_forward(self) -> None:
+        """Truncation, not rounding — the property both surfaces depend on.
+
+        Potato renders the stamp to the MINUTE, so a conversion that rounded to
+        the nearest second stamped a rebuild at 12:35 for a file written at
+        12:34:59.999999999: a freshness stamp ahead of the data it describes,
+        which is the one direction a stamp may not err in.  Asserted against
+        the raw nanoseconds rather than a fixture, because the behaviour lives
+        in the last three digits of a second and a fixture rounds them away on
+        the way in.
+        """
+        second = 1_700_000_000
+        # The whole second this one names, read back off the reader itself at a
+        # zero remainder, so the assertion compares two renderings of the same
+        # input rather than one rendering and a hand-written datetime.
+        whole_second = srv.mtime_ns_to_utc(second * srv._NS_PER_SECOND)
+        for fraction in (1, 999, 999_999, 999_999_999):
+            rendered = srv.mtime_ns_to_utc(second * srv._NS_PER_SECOND + fraction)
+            # The remainder rides on the microsecond field and never carries
+            # into the second above it, which is what "truncates" means here.
+            assert rendered.microsecond == fraction // srv._NS_PER_MICROSECOND, (
+                f"{fraction} ns into the second rendered {rendered}, whose "
+                "microsecond field is not the remainder"
+            )
+            assert rendered == whole_second.replace(microsecond=rendered.microsecond), (
+                f"{fraction} ns into the second rendered {rendered}, which left "
+                f"the whole second {whole_second}"
+            )
 
 
 class TestContainerHeaderWidth:
