@@ -16,6 +16,7 @@ from rebrew.coverage_toml import CoverageSnapshot, load_coverage
 
 from recoverage.potato import (
     _MAX_RENDERED_COLUMNS,
+    _RENDER_ERROR_BODY,
     BG_COLOR,
     BORDER_COLOR,
     MUTED_COLOR,
@@ -27,6 +28,7 @@ from recoverage.potato import (
     _build_url,
     _cell_file_offset,
     _compute_section_stats,
+    _db_unavailable_page,
     _db_updated_iso,
     _db_updated_label,
     _esc,
@@ -4178,6 +4180,56 @@ class TestRenderedPageNamesAndStates:
         """A wrong voice on every control: no lang means no speech synthesiser."""
         html = self._render(tmp_path, monkeypatch, "")
         assert '<html lang="en">' in html
+
+    @pytest.mark.parametrize(
+        ("document", "heading"),
+        [
+            (_RENDER_ERROR_BODY, "Internal server error"),
+            (_db_unavailable_page().body, "Database unavailable"),
+        ],
+    )
+    def test_every_page_this_route_answers_carries_the_same_structure(
+        self, document: object, heading: str
+    ) -> None:
+        """The fallback pages, not only the 200 one.
+
+        The gate in ``tools/lint_html.py`` fetches ``/potato`` and validates
+        what came back, so every page the route answers on an error reached a
+        browser and no reader's assistive technology untested. The 500 arm was
+        a bare ``<html><body>Internal server error</body></html>``: no language
+        (WCAG 3.1.1), no title (2.4.2), no heading and no landmark (1.3.1), and
+        a document vnu rejects outright.
+
+        The landmark is ``<body role="main">`` rather than a ``<main>``
+        element: the retro centring table holds this content in a ``<td>``,
+        where ``<main>`` is invalid, and that table is what every page on this
+        route but the served one stands inside.
+        """
+        body = document if isinstance(document, str) else bytes(document).decode("utf-8")
+        assert body.startswith("<!DOCTYPE html>")
+        assert '<html lang="en">' in body
+        assert '<meta name="viewport" content="width=device-width, initial-scale=1">' in body
+        assert "<title>recoverage · " in body
+        # A `<main>` landmark, and NOT the retro centring table: ARIA in HTML
+        # forbids `<main>` as a descendant of a `<td>` at any depth, and
+        # `role="main"` on the `<body>` is rejected the same way, so a page
+        # laid out in a table has no way to carry one.
+        assert "<body><main>" in body
+        assert "<table" not in body
+        assert "<font" not in body
+        assert "<h1>" in body
+        assert f"<h1>{heading}</h1>" in body
+        # Nothing here may leak a detail the log line owns.
+        assert "Traceback" not in body
+
+    def test_the_no_data_page_carries_the_same_structure(self) -> None:
+        """The empty-target arm is a document too, not a bare paragraph."""
+        html = render_potato_url("/potato?target=NONEXISTENT")
+        assert '<html lang="en">' in html
+        assert "<body><main>" in html
+        assert "<table" not in html
+        assert "<font" not in html
+        assert "No data for target NONEXISTENT" in html
 
 
 @pytest.mark.skipif(not HAS_DB, reason="No coverage document")

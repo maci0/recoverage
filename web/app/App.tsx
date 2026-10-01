@@ -955,7 +955,17 @@ export function App() {
                   // existed or how many (WCAG 4.1.2).
                   role="combobox"
                   aria-expanded={resultsOpen && searchResults.length > 0}
-                  aria-controls="search-results-list"
+                  // Only while the list is in the DOM. The `SearchResults`
+                  // element renders only when `resultsOpen`, so naming it
+                  // unconditionally left `aria-controls` pointing at an id
+                  // that did not exist for as long as the field was collapsed
+                  // — a dangling reference a screen reader either ignored or
+                  // announced as an empty popup. `aria-expanded="false"` is
+                  // what conveys the closed state (ARIA 1.2 combobox pattern;
+                  // WCAG 4.1.2).
+                  aria-controls={
+                    resultsOpen && searchResults.length > 0 ? "search-results-list" : undefined
+                  }
                   aria-autocomplete="list"
                   aria-activedescendant={
                     resultsOpen && activeRow !== null

@@ -81,7 +81,7 @@ from coverage_fixture import build_synthetic_coverage, cell, write_coverage
 from rebrew.coverage_toml import CoverageSnapshot, Function, load_coverage
 from typer.testing import CliRunner
 
-from recoverage import cli, config, devserver
+from recoverage import cli, config, devserver, potato
 from recoverage import server as srv
 from recoverage.api import (
     _MAX_BATCH_BODY_BYTES,
@@ -1921,8 +1921,11 @@ _POTATO_LEAK_MARKERS = (
 
 #: The route's own failure page: a caught exception must render exactly this,
 #: so a 500 carrying anything else (a half-built document, a stack trace) is
-#: a finding even though the status is deliberate.
-_POTATO_500_BODY = "<html><body>Internal server error</body></html>"
+#: a finding even though the status is deliberate.  Read off the module rather
+#: than restated here, so the campaign and the page cannot drift apart: this
+#: constant used to name a bare ``<html><body>`` document, which vnu rejects and
+#: which a screen reader reads as an untitled page in an unknown language.
+_POTATO_500_BODY = potato._RENDER_ERROR_BODY
 
 #: Query fields whose value the page echoes back into markup, so an escaping
 #: regression is observable from the response alone.  ``filter`` is not one:

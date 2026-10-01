@@ -17,6 +17,24 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the byte the filesystem actually holds, so the target resolves and links to
   it work; Potato Mode's query reader decodes with the matching rule, where it
   previously spelled such an id as `?` and resolved no target at all.
+- Potato Mode's failure pages are documents again. The 500 a failed render
+  answered with was a bare `<html><body>Internal server error</body></html>`:
+  no language, so a screen reader read it in an unknown voice; no title, no
+  heading, no landmark, and a document vnu rejects outright. The 503 an
+  unreadable coverage directory answers and the "no data for target" page now
+  carry the same four things. None of the three is the retro surface a reader
+  chooses, so they centre with a stylesheet rather than the served page's
+  table layout — which is also what lets them hold a real `main` landmark at
+  all, since `main` is not a legal descendant of a table cell.
+- `make web-lint` validated the served pages and the 401 page, so a document
+  that only ever reached a reader on a 503 or a 500 was never seen by the gate
+  at all. The three Potato fallback pages are now written out from their
+  module constants and checked strictly, with no obsolete-element filtering:
+  they carry no retro markup.
+- The SPA's search field named its result list through `aria-controls` even
+  while the field was collapsed and the list was not on the page, leaving a
+  reference a screen reader could not resolve. It is present while the list
+  exists; `aria-expanded` is what says "closed".
 - `--cors` now accepts and exposes `X-Request-ID`. The README tells a client
   to send its own so a report can be matched to the server log, and every
   response carries one back; a cross-origin client could do neither, because

@@ -45,6 +45,7 @@ from pathlib import Path
 
 from _serve_harness import build_sample_db, get, running_server, scratch_project_dir, wait_for
 
+from recoverage.potato import _RENDER_ERROR_BODY, _db_unavailable_page, _no_data_page
 from recoverage.server import _UNAUTHORIZED_HTML
 
 REPO_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
@@ -168,6 +169,28 @@ def main() -> int:
                 unauthorized = project_dir / "unauthorized.html"
                 unauthorized.write_bytes(_UNAUTHORIZED_HTML)
                 rc = run_vnu(["--also-check-css"], [unauthorized])
+            # The three Potato fallback pages answer on a status no fetch above
+            # reaches: 503 (the coverage directory is unreadable), 500 (a render
+            # raised) and the "no data for target" page (a target the project
+            # declares but nothing has built).  They are module constants, not a
+            # 200 response, so the served-document pass never saw them — and the
+            # 500 one was a bare ``<html><body>`` document, which is how a page
+            # with no language, no title, no heading and no landmark shipped
+            # past a gate that reported the tree as validated.  Written out and
+            # checked STRICTLY: unlike the served Potato page these carry no
+            # retro markup (see ``potato._FALLBACK_PAGE_STYLE``), so no
+            # obsolete family needs filtering for them.
+            if rc == 0:
+                fallback_paths: list[str | Path] = []
+                for name, document in (
+                    ("potato-503.html", str(_db_unavailable_page().body)),
+                    ("potato-500.html", _RENDER_ERROR_BODY),
+                    ("potato-no-data.html", _no_data_page("SOME_TARGET")),
+                ):
+                    page = project_dir / name
+                    page.write_text(document, encoding="utf-8")
+                    fallback_paths.append(page)
+                rc = run_vnu(["--also-check-css"], fallback_paths)
             if rc != 0:
                 print("served-document lint failed")
                 return rc

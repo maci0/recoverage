@@ -4938,7 +4938,9 @@ class TestSpaSearchIsACombobox:
     and state, the listbox the field points at, and the row
     `aria-activedescendant` names. A row id the list does not render is an
     active descendant that announces nothing, so the id is derived once and
-    both sides read it.
+    both sides read it — and `aria-controls` names the listbox, which is
+    unmounted while the field is collapsed, so that one is present only while
+    it exists. Both halves of the contract are "name what is on the page".
     """
 
     def test_the_field_is_an_editable_combobox_with_a_live_list(self) -> None:
@@ -4946,7 +4948,12 @@ class TestSpaSearchIsACombobox:
         assert 'role="combobox"' in app
         assert 'aria-autocomplete="list"' in app
         assert "aria-expanded={resultsOpen && searchResults.length > 0}" in app
-        assert 'aria-controls="search-results-list"' in app
+        # `aria-controls` only while the list is in the DOM. `SearchResults`
+        # renders only when `resultsOpen`, so naming it unconditionally left
+        # the reference dangling for as long as the field was collapsed — the
+        # same failure the option id above is written against, on the other
+        # half of the contract. `aria-expanded` is what says "closed".
+        assert 'resultsOpen && searchResults.length > 0 ? "search-results-list" : undefined' in app
 
     def test_the_list_is_a_listbox_of_options_the_field_can_name(self) -> None:
         results = _web("components/SearchResults.tsx")

@@ -177,6 +177,31 @@ HLJS_NAME = TEXT_COLOR
 SANS_FONT = "Archivo, Arial, Helvetica Neue, Liberation Sans, sans-serif"
 MONO_FONT = "JetBrains Mono, Consolas, Liberation Mono, Courier New, monospace"
 
+#: The stylesheet the three fallback pages carry: the 503 a missing coverage
+#: directory answers, the 500 a failed render answers, and the "no data for
+#: target" page a target the project has not built answers.
+#:
+#: It exists so those pages can hold a real ``<main>`` landmark.  Each used to
+#: centre itself with the retro ``<table role="presentation">`` / ``<font>``
+#: nest the served Potato page is built from, and ARIA in HTML forbids a
+#: ``<main>`` as a descendant of a ``<td>`` at ANY depth — a ``<div>`` in the
+#: cell does not help — so a table-laid-out page has no way to carry one, and
+#: the role that would substitute is rejected on the ``<body>`` in turn.  vnu
+#: reports both as errors, and the gate in ``tools/lint_html.py`` never saw
+#: either page: it fetches ``/potato`` and validates the 200.
+#:
+#: The declarations do the centring the table did, so these pages are no longer
+#: the retro surface a reader chooses — they are diagnostics — and they are now
+#: valid documents rather than valid-looking ones.  The served page keeps its
+#: table, its ``<font>`` and its obsolete attributes: that is the design, and
+#: ``lint_html.py`` filters the obsolete-element family for it by name.
+_FALLBACK_PAGE_STYLE = (
+    "<style>html,body{height:100%;margin:0}"
+    "body{display:flex;align-items:center;justify-content:center;text-align:center;"
+    f"background:{BG_COLOR};color:{TEXT_COLOR};font-family:{MONO_FONT}}}"
+    f"main{{max-width:60ch;padding:1rem}}a{{color:{ACCENT_COLOR}}}</style>"
+)
+
 # The keys a ?filter= may name, and the cell states each one stands for.  A
 # filter is a key, not a state name, so the states the SPA packs onto one cell
 # state (its STATE_ID: VERIFIED onto exact, NEAR_MATCHING and SIZE_MISMATCH
@@ -1269,30 +1294,70 @@ def _db_unavailable_page() -> HTTPResponse:
     today — :func:`render_potato` is the only reader of a document on this path
     and it converts the error itself — so the arm is the second tail to keep,
     not a second code path.
+
+    The 500 page beside it (:data:`_RENDER_ERROR_BODY`) carries the same four
+    things: a declared language, a charset, a title and a main landmark with
+    one h1.  Neither uses the retro centring table the served page does, and
+    :data:`_FALLBACK_PAGE_STYLE` is why: a ``<main>`` may not be a descendant
+    of a ``<td>`` at any depth (ARIA in HTML; vnu reports it as an error), so
+    a table-based page has no way to carry the landmark, and ``role="main"`` on
+    the ``<body>`` is rejected the same way.  These pages are diagnostics rather
+    than the retro surface a reader chooses, so they centre with a
+    two-declaration flexbox and are valid documents instead of valid-looking
+    ones.
     """
     return HTTPResponse(
         status=503,
         body=(
             '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width, initial-scale=1">'
-            "<title>recoverage · database unavailable</title></head>"
-            f'<body bgcolor="{BG_COLOR}" text="{TEXT_COLOR}">'
-            f'<font face="{MONO_FONT}">'
-            '<table role="presentation" width="100%" height="90%" border="0"><tr><td align="center" valign="middle">'
-            # The main landmark, as the page this one stands in for has: a
-            # screen reader walking either document finds the content in the
-            # same place (WCAG 1.3.1 / 2.4.1).
-            "<main>"
-            "<h1>Database unavailable</h1>"
-            f'<p><font color="{MUTED_COLOR}">Run '
-            "'rebrew build-db' to create or rebuild it,"
-            ' then <a href="/potato">retry Potato Mode</a> or '
-            '<a href="/">open the SPA</a>.</font></p>'
-            "</main>"
-            "</td></tr></table></font></body></html>"
+            f"<title>recoverage · database unavailable</title>{_FALLBACK_PAGE_STYLE}</head>"
+            "<body><main><h1>Database unavailable</h1>"
+            "<p>Run 'rebrew build-db' to create or rebuild it, then "
+            '<a href="/potato">retry Potato Mode</a> or '
+            '<a href="/">open the SPA</a>.</p></main></body></html>'
         ),
         headers={"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store"},
     )
+
+
+def _no_data_page(target: str) -> str:
+    """The page a target the project declares but nothing has built answers.
+
+    A function rather than an inline literal, so ``tools/lint_html.py`` can
+    validate it the way it validates the other two: a document that only ever
+    reaches a reader on a status no successful fetch sees is a document no gate
+    sees, and the 500 page this file keeps beside it is exactly the one that
+    shipped unvalidated.  The target id is escaped, and it is a value rebrew
+    names out of a PE image, so it is untrusted input like every other value
+    read from a document.
+    """
+    return (
+        '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">'
+        f"<title>recoverage · no data for {_esc(target)}</title>{_FALLBACK_PAGE_STYLE}</head>"
+        f"<body><main><h1>No data for target {_esc(target)}</h1>"
+        '<p>Pick a built target from <a href="/potato">Potato Mode</a> or '
+        '<a href="/">the SPA</a>.</p></main></body></html>'
+    )
+
+
+#: The page a render failure answers with.  A module constant rather than a
+#: literal inside the handler, so ``tests/test_fuzz.py`` pins the exact bytes
+#: against this one definition instead of a restatement of it that can drift.
+#: The shape it replaces, a bare ``<html><body>``, is a document vnu rejects
+#: and a screen reader reads as an untitled page in an unknown language with
+#: nothing to navigate (WCAG 1.3.1 / 2.4.2 / 3.1.1).  The detail itself belongs
+#: in the log line, never in the body.
+_RENDER_ERROR_BODY = (
+    '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
+    '<meta name="viewport" content="width=device-width, initial-scale=1">'
+    f"<title>recoverage · internal server error</title>{_FALLBACK_PAGE_STYLE}</head>"
+    "<body><main><h1>Internal server error</h1>"
+    "<p>Potato Mode could not render this page. The server log carries the "
+    'detail; <a href="/potato">retry</a> or <a href="/">open the SPA</a>.</p>'
+    "</main></body></html>"
+)
 
 
 def render_potato(parsed_url: ParseResult) -> str:
@@ -1476,8 +1541,8 @@ def handle_potato() -> bytes | Any:
         )
         return HTTPResponse(
             status=500,
-            body="<html><body>Internal server error</body></html>",
-            headers={"Cache-Control": CACHE_NO_STORE},
+            body=_RENDER_ERROR_BODY,
+            headers={"Content-Type": "text/html; charset=utf-8", "Cache-Control": CACHE_NO_STORE},
         )
 
 
@@ -2917,21 +2982,7 @@ def _render_potato_inner(
 
     sections, data = _load_section_data(coverage, snap=snap)
     if not sections:
-        return (
-            '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
-            '<meta name="viewport" content="width=device-width, initial-scale=1">'
-            f"<title>recoverage · no data for {_esc(target)}</title></head>"
-            f'<body bgcolor="{BG_COLOR}" text="{TEXT_COLOR}">'
-            f'<font face="{MONO_FONT}">'
-            '<table role="presentation" width="100%" height="90%" border="0"><tr><td align="center" valign="middle">'
-            # As above: the main landmark the page this stands in for carries.
-            "<main>"
-            f"<h1>No data for target {_esc(target)}</h1>"
-            f'<p><font color="{MUTED_COLOR}">Pick a built target from '
-            '<a href="/potato">Potato Mode</a> or <a href="/">the SPA</a>.</font></p>'
-            "</main>"
-            "</td></tr></table></font></body></html>"
-        )
+        return _no_data_page(target)
 
     if section not in sections:
         section = next(iter(sections))

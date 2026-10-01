@@ -446,7 +446,7 @@ This suite covers:
 - Cell selection at various indices
 - Invalid/unknown parameters (graceful fallbacks)
 
-HTML validation is a separate gate: `bun run lint:html` (`tools/lint_html.py`) validates the static assets plus the served SPA shell and Potato Mode page.
+HTML validation is a separate gate: `bun run lint:html` (`tools/lint_html.py`) validates the static assets, the served SPA shell and Potato Mode page, the 401 page, and the three Potato fallback documents — the 503 an unreadable coverage directory answers, the 500 a failed render answers, and the "no data for target" page. The fallback three are written out from their module constants and checked strictly, because a document that only ever reaches a reader on a non-200 is a document a fetch cannot see; they carry no retro markup, so no obsolete-element family is filtered for them the way it is for the served Potato page.
 
 Playwright comparison tests verify visual and behavioral parity with the main UI:
 ```bash
