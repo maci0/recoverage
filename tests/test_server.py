@@ -1895,6 +1895,94 @@ class TestAuthFailureLimiter:
         assert reserved.count(True) == workers - srv._AUTH_FAIL_MAX
 
 
+class TestSnapshotIndexHoldsOneSnapshotsWorkingSet:
+    """The per-snapshot derived-index memo must be able to hold ONE snapshot.
+
+    Two constraints meet here and a literal bound can only satisfy one of them
+    by luck.  A page that searches, opens a cell and hits the batch endpoint
+    touches every kind, and the bound this replaces was smaller than the kind
+    count, so the store evicted entries a request had just built: the second
+    identical pass rebuilt all six, re-folding every row of a 50k-function
+    array each time.  A memo that cannot hit is worse than none, because it
+    reads as one.  The bound is therefore written as a function of the kind
+    count (server._SNAPSHOT_INDEX_MAX), and this is what fails when a new kind
+    is added without it.
+    """
+
+    def test_one_snapshots_working_set_survives_a_second_pass(self, tmp_path: Path) -> None:
+        import recoverage.server as srv
+
+        write_coverage(tmp_path / "db", "T", {".text": _cell_section(["exact"])})
+        snapshot = load_coverage(tmp_path, "T")
+
+        kinds = sorted(srv._SNAPSHOT_INDEX_KINDS)
+        assert kinds, "the kind list went empty, so the bound under it means nothing"
+
+        srv._SNAPSHOT_INDEX.clear()
+        built: list[str] = []
+
+        def builder(kind: str) -> Any:
+            built.append(kind)
+            return {kind: kind}
+
+        for kind in kinds:
+            srv._snapshot_index(snapshot, kind, lambda k=kind: builder(k))
+        assert len(built) == len(kinds)
+
+        # The same sweep again, with the builders still wired: everything the
+        # first pass built is still resident, so nothing is rebuilt.
+        built.clear()
+        for kind in kinds:
+            srv._snapshot_index(snapshot, kind, lambda k=kind: builder(k))
+        assert built == [], (
+            f"a second pass over one snapshot rebuilt {built}: the bound "
+            f"({srv._SNAPSHOT_INDEX_MAX}) cannot hold the working set of one "
+            f"snapshot ({len(kinds)} kinds), so this memo never hits"
+        )
+
+    def test_the_bound_covers_every_kind_a_call_site_asks_for(self) -> None:
+        """The kind list is the bound's input, so it must not fall behind.
+
+        ``_SNAPSHOT_INDEX_MAX`` is derived from ``_SNAPSHOT_INDEX_KINDS`` so
+        that adding a kind widens the bound instead of quietly making the memo
+        smaller than its working set.  That only holds while the list names
+        every kind a call site actually asks for, and a new call site is not
+        anywhere near this constant, so the two are read against each other
+        here rather than left to a human to remember.
+        """
+        import recoverage.server as srv
+
+        package = Path(srv.__file__).parent
+        sources = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in sorted(package.iterdir())
+            if path.suffix == ".py"
+        )
+        asked = {
+            m.group(1)
+            for m in re.finditer(r'_snapshot_index\([^)]*?"([a-z_]+)"', sources, re.DOTALL)
+        }
+        assert asked, "the search found no call site, so it is not proving anything"
+        missing = asked - set(srv._SNAPSHOT_INDEX_KINDS)
+        assert not missing, (
+            "these kinds are memoized but absent from _SNAPSHOT_INDEX_KINDS, "
+            "so the bound does not account for them: " + ", ".join(sorted(missing))
+        )
+
+    def test_two_snapshots_still_fit(self) -> None:
+        """Two is the reason for the multiplier: a superseding build lands
+        somewhere while the build a request is serving is still being read."""
+        import recoverage.server as srv
+
+        kinds = srv._SNAPSHOT_INDEX_KINDS
+        snapshots_held = srv._SNAPSHOT_INDEX_MAX // max(len(kinds), 1)
+        assert snapshots_held >= 2, (
+            f"the bound holds {snapshots_held} snapshot(s) of {len(kinds)} "
+            "kinds; two are needed so a superseding build lands somewhere "
+            "while the build a request is serving is still being read"
+        )
+
+
 class TestEvictOldest:
     """Bounded-cache arithmetic shared by the /data memo and Potato cells
     memo: callers invoke it BEFORE inserting, so at-capacity caches shed
@@ -5467,6 +5555,134 @@ class TestConfigDerivedMemosFollowTheConfigStat:
         )
         assert srv._load_dll(target) == b"SECOND-BINARY", (
             "/asm and /bytes kept serving the binary the config edit replaced"
+        )
+
+    def test_an_unreadable_config_is_retried_not_pinned(
+        self, project: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A config that fails to read must not become the cached answer.
+
+        ``read_config`` raises for a file an editor has half written, a
+        ``git checkout`` that renamed, or a filesystem that blipped, exactly as
+        it does for a config that is permanently invalid.  Caching the failure
+        under the config's stat pinned the project to "declares no targets"
+        until the stat moved, and nothing else clears these memos: a rebuild
+        and the broadcast are both driven by the coverage directory, which a
+        config edit never touches.  The symptom reads as healthy -- the built
+        targets are still listed, the config half is simply gone.
+        """
+        from rebrew.workspace import WorkspaceConfigError
+
+        import recoverage.server as srv
+
+        write_coverage(project / "db", "FROMDB", {".text": _cell_section(["exact"])})
+        (project / "rebrew-project.toml").write_text(
+            '[targets.CONFIGTARGET]\nbinary = "bin/c.dll"\n', encoding="utf-8"
+        )
+        monkeypatch.setenv("RECOVERAGE_DB", str(project / "db"))
+        clear_target_cache()
+
+        fingerprint = srv.config_fingerprint(project)
+        real = srv.read_config
+        state = {"broken": True}
+
+        def flaky(root: Path) -> Any:
+            if state["broken"]:
+                raise WorkspaceConfigError("transient")
+            return real(root)
+
+        monkeypatch.setattr(srv, "read_config", flaky)
+
+        assert "CONFIGTARGET" not in [t["id"] for t in srv.resolve_targets()]
+
+        state["broken"] = False
+        assert srv.config_fingerprint(project) == fingerprint, (
+            "the file never changed; the stat cannot be what recovers this"
+        )
+        assert "CONFIGTARGET" in [t["id"] for t in srv.resolve_targets()], (
+            "one unreadable config left every target it declares out of "
+            "/api/targets, the dropdown and Potato Mode for the life of the "
+            "process, because nothing but the stat ever cleared the memo"
+        )
+
+    def test_a_still_broken_config_warns_once_and_the_recovery_says_so(
+        self, project: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Not caching the failure is what makes the warning repeatable.
+
+        The retry costs one read per request while the config is broken, so the
+        warning has to move with the state rather than repeat: a line per page
+        load for as long as it stayed broken is what teaches an operator to
+        skip the line, and the recovery has to be said out loud because nothing
+        else reports it.
+        """
+        from rebrew.workspace import WorkspaceConfigError
+
+        import recoverage.server as srv
+
+        write_coverage(project / "db", "FROMDB", {".text": _cell_section(["exact"])})
+        monkeypatch.setenv("RECOVERAGE_DB", str(project / "db"))
+        clear_target_cache()
+
+        real = srv.read_config
+        state = {"broken": True}
+
+        def flaky(root: Path) -> Any:
+            if state["broken"]:
+                raise WorkspaceConfigError("transient")
+            return real(root)
+
+        monkeypatch.setattr(srv, "read_config", flaky)
+
+        with caplog.at_level(logging.WARNING, logger="recoverage"):
+            for _ in range(20):
+                srv.resolve_targets()
+        failures = [r for r in caplog.records if "Failed to load" in r.getMessage()]
+        assert len(failures) == 1, (
+            f"a config broken for 20 requests logged {len(failures)} warnings; "
+            "the failure is retried, so it must be reported once"
+        )
+
+        state["broken"] = False
+        caplog.clear()
+        with caplog.at_level(logging.INFO, logger="recoverage"):
+            srv.resolve_targets()
+        assert any("read again" in r.getMessage() for r in caplog.records), (
+            "the config recovered and nothing said so"
+        )
+
+    def test_a_degraded_target_list_is_not_published_as_the_merged_one(
+        self, project: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The merged memo must not keep serving a list built from no config.
+
+        ``_get_targets_config`` no longer memoizes its own failure, but the
+        merged list above it would have carried the degraded answer forward
+        under a key nothing else invalidates, which is the same pin one layer
+        down.
+        """
+        from rebrew.workspace import WorkspaceConfigError
+
+        import recoverage.server as srv
+
+        write_coverage(project / "db", "FROMDB", {".text": _cell_section(["exact"])})
+        monkeypatch.setenv("RECOVERAGE_DB", str(project / "db"))
+        (project / "rebrew-project.toml").write_text(
+            '[targets.CONFIGTARGET]\nbinary = "bin/c.dll"\n', encoding="utf-8"
+        )
+        clear_target_cache()
+
+        def refuse(root: Path) -> Any:
+            raise WorkspaceConfigError("transient")
+
+        monkeypatch.setattr(srv, "read_config", refuse)
+        monkeypatch.setattr(srv, "_snapshot_db_mtime", lambda: (1, 1))
+
+        assert [t["id"] for t in srv.resolve_targets()] == ["FROMDB"]
+        assert srv._RESOLVED_TARGETS_CACHE is None, (
+            "a list built with no readable config was filed under the "
+            "fingerprint, so the memo keeps answering with it after the "
+            "config is readable again"
         )
 
 

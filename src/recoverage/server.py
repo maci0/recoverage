@@ -1519,6 +1519,54 @@ def request_log_fields(
 
 _TOML_CACHE_MTIME: tuple[int, int] | None = None
 
+#: The config-read failure this process last reported, or None while the config
+#: reads.  Set on the first failure and cleared on the first success, so a
+#: config that stays broken logs once rather than once per request: the reason
+#: this failure is NOT memoized is that it must be retried (see
+#: :func:`_get_targets_config`), and a retry that warned every time would write
+#: one line per page load for as long as it stayed broken, which is what
+#: teaches an operator to skip the line.  Same rule, and same shape, as
+#: ``api._log_targets_fallback`` and ``api._log_health_status``.
+_CONFIG_ERROR_LOCK = threading.Lock()
+_config_error_reported: str | None = None
+
+
+def _config_read_ok(fingerprint: tuple[int, int] | None) -> bool:
+    """Whether the project config was read successfully at *fingerprint*.
+
+    True exactly when :data:`_TOML_CONFIG_CACHE` holds the memoized parse for
+    that stat, which after :func:`_get_targets_config` means the read
+    SUCCEEDED — a failure publishes nothing, so a memo derived from the
+    degraded list (:data:`_RESOLVED_TARGETS_CACHE`) is not filed under a
+    fingerprint that has never produced a complete one.  Read under the same
+    lock that fills the memo, so a publish cannot race the read it describes.
+    """
+    with _RESOLVED_TARGETS_CACHE_LOCK:
+        return _TOML_CONFIG_CACHE is not None and fingerprint == _TOML_CACHE_MTIME
+
+
+def _log_config_error(reason: str | None) -> None:
+    """Log the config read moving into failure and back out of it.
+
+    ``reason`` is the failure text (escaped), or None on a successful read.
+    Both the report and the recovery are wanted: the recovery says the operator
+    does not have to go looking for whether the dashboard is still degraded.
+    """
+    global _config_error_reported
+    with _CONFIG_ERROR_LOCK:
+        previous = _config_error_reported
+        if previous == reason:
+            return
+        _config_error_reported = reason
+    if reason is None:
+        if previous is not None:
+            _log.info("%s read again; project targets are complete", CONFIG_NAME)
+        return
+    if previous is None:
+        _log.warning("Failed to load %s: %s", CONFIG_NAME, reason)
+    else:
+        _log.warning("Failed to load %s: %s (was: %s)", CONFIG_NAME, reason, previous)
+
 
 def _get_targets_config() -> dict[str, Any]:
     """Load target configuration from rebrew-project.toml (thread-safe, cached).
@@ -1526,6 +1574,27 @@ def _get_targets_config() -> dict[str, Any]:
     Each value's ``filename`` is the target binary resolved against the project
     root ("" when the target configures none), the shape ``_target_filename``
     and ``_find_dll_path`` consume.
+
+    Only a SUCCESSFUL read is memoized, and that is the whole invalidation
+    story: ``read_config`` raises for an unreadable file as readily as for a
+    permanently invalid one — an editor that has written half a config, a
+    ``git checkout`` that renamed it, an NFS or permissions blip — and each of
+    those is fixed by the file being rewritten.  Caching the failure verdict
+    under :func:`_paths.config_fingerprint` pinned the dashboard to "this
+    project declares no targets" until the stat happened to move, and nothing
+    else clears this cache: ``clear_target_cache`` runs on a rebuild and on
+    the broadcast, neither of which an operator who fixed their config has
+    waiting.  A same-size edit inside one mtime tick does not move the
+    fingerprint at all, so that recovery could be permanent for the life of the
+    process, and the symptom reads as healthy: an empty config half of
+    ``/api/targets`` with every coverage-derived target still listed.
+
+    So the failure is answered for this call and retried on the next one, which
+    costs one ``read_config`` per request while the config is broken and buys
+    the correct list the moment the file reads.  The transient/durable split is
+    the one :func:`_cache_dll_unavailable` already draws for the binary: what
+    is permanent for as long as the file is unreadable is worth a warning, and
+    what is about to stop being true is worth a retry.
     """
     global _TOML_CONFIG_CACHE, _TOML_CACHE_MTIME
     root = _project_dir()
@@ -1533,6 +1602,7 @@ def _get_targets_config() -> dict[str, Any]:
     current = config_fingerprint(root)
     with _RESOLVED_TARGETS_CACHE_LOCK:
         if _TOML_CONFIG_CACHE is not None and current == _TOML_CACHE_MTIME:
+            _log_config_error(None)
             return _TOML_CONFIG_CACHE
 
         try:
@@ -1542,12 +1612,16 @@ def _get_targets_config() -> dict[str, Any]:
             # reader raises rather than returning {}: the defaults that
             # would fill in name a different workspace. Targets contributed
             # by the file are dropped; an explicit RECOVERAGE_DB still serves.
-            _log.warning("Failed to load %s: %s", CONFIG_NAME, exc)
-            config = {}
+            _log_config_error(_log_safe(str(exc)))
+            return {}
+        if toml_path.is_file() and not config:
+            # A present file that parses to nothing names no targets. This one
+            # IS memoized: it read successfully, and an empty document stays
+            # empty until it is rewritten, which moves the stat.
+            _log_config_error("unreadable or invalid TOML")
         else:
-            if toml_path.is_file() and not config:
-                # A present file that parses to nothing names no targets.
-                _log.warning("Failed to load %s: unreadable or invalid TOML", CONFIG_NAME)
+            _log_config_error(None)
+
         targets_info: dict[str, Any] = {}
         for tid, entry in targets_table(config).items():
             binary = target_binary(root, entry)
@@ -1560,6 +1634,11 @@ def _get_targets_config() -> dict[str, Any]:
 
 def clear_target_cache() -> None:
     global _TOML_CONFIG_CACHE, _TOML_CACHE_MTIME, _RESOLVED_TARGETS_CACHE
+    # The config-read verdict is retried rather than memoized (see
+    # _get_targets_config), so the next call reports the recovery itself; this
+    # only closes a report whose next caller never arrives, so a long-broken
+    # config does not leave the operator believing it is still reported.
+    _log_config_error(None)
     with _RESOLVED_TARGETS_CACHE_LOCK:
         _TOML_CONFIG_CACHE = None
         _TOML_CACHE_MTIME = None
@@ -1651,7 +1730,7 @@ def resolve_targets() -> list[dict[str, str]]:
             {"id": tid, "name": tid} for tid in sorted(snapshots) if tid not in targets_info
         ]
 
-        if _snapshot_db_mtime() == key[1]:
+        if _snapshot_db_mtime() == key[1] and _config_read_ok(key[0]):
             _RESOLVED_TARGETS_CACHE = (key, targets_list)
         return targets_list
 
@@ -2545,18 +2624,48 @@ def lookup_global(snap: CoverageSnapshot, value: str) -> Global | None:
 #: 25M comparisons, and one cell click was a full scan of the verify rows.
 #: Entries hold the snapshot they were built from, which is what makes
 #: ``id()`` a sound key: the object is pinned, so its id cannot be reused by
-#: a later one while the entry lives.  The bound is therefore a memory bound
-#: as well as a cache bound — 4 entries is at most two retained snapshots,
-#: the same order as Potato's per-snapshot grid memo.  A snapshot is
-#: ``slots=True`` and its fields are mapping proxies, so a ``WeakKeyDictionary``
-#: cannot key it and a field-derived hash cannot be computed; holding the
-#: object is the only sound alternative.
+#: a later one while the entry lives.  A snapshot is ``slots=True`` and its
+#: fields are mapping proxies, so a ``WeakKeyDictionary`` cannot key it and a
+#: field-derived hash cannot be computed; holding the object is the only sound
+#: alternative, which is what makes the bound a memory bound as well as a
+#: cache bound.
 _SNAPSHOT_INDEX_LOCK = threading.Lock()
 #: The derived value of any kind, so one bounded store holds the by-VA
 #: mappings and the name indices alike; :func:`_snapshot_index` casts it back
 #: to the type its builder produced.
 _SNAPSHOT_INDEX: dict[tuple[int, str], tuple[CoverageSnapshot, Any]] = {}
-_SNAPSHOT_INDEX_MAX = 4
+
+#: Every kind :func:`_snapshot_index` is asked for.  The bound is written as a
+#: function of this rather than as a literal, because the two constraints are
+#: different and a literal can only satisfy one of them by luck:
+#:
+#: 1. ONE snapshot's whole working set must fit, or the memo misses on every
+#:    pass and the store is pure overhead.  A page that searches, opens a cell
+#:    and hits the batch endpoint touches all six, and the four-entry bound
+#:    this replaces evicted the first two on every sweep: the second identical
+#:    pass rebuilt all six, re-folding every row of a 50k-function array each
+#:    time, so the memo cost what it was written to save.  A bound under this
+#:    is a cache that cannot hit, which is worse than no cache because it reads
+#:    as one.
+#: 2. Enough for TWO snapshots, so the build that supersedes the one a request
+#:    is serving has somewhere to land while the old one is still being read.
+#:    Entries hold their snapshot, so this is also what bounds how many
+#:    snapshots the process retains.
+#:
+#: Adding a kind without raising this is a silent regression to (1), so the
+#: test that pins the working set (tests/test_server.py,
+#: ``TestSnapshotIndexHoldsOneSnapshotsWorkingSet``) fails instead.
+_SNAPSHOT_INDEX_KINDS = frozenset(
+    {
+        "folded_functions",
+        "folded_globals",
+        "folded_va_functions",
+        "folded_va_globals",
+        "globals_by_va",
+        "verify_by_va",
+    }
+)
+_SNAPSHOT_INDEX_MAX = 2 * len(_SNAPSHOT_INDEX_KINDS)
 
 
 def _snapshot_index[IndexT](
