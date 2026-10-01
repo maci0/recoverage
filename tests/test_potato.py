@@ -3226,7 +3226,10 @@ class TestFunctionListSearchFolding:
             {".text": {"size": 16, "cells": [cell(0, 16, "exact")]}},
             functions=[{"va": 0, "vaStart": "0x401000", "name": "no_va_row"}],
         )
-        assert _search_functions(snap, "0x401000") == {"no_va_row"}
+        # The set carries the name AND the vaStart spelling, because the grid's
+        # dimming test compares a cell's entry against it (see
+        # `_search_functions`).
+        assert {"no_va_row", "0x401000"} <= _search_functions(snap, "0x401000")
         html, count = _render_function_list(snap, "T", ".text", None, "0x401000", "va", "")
         assert count == 1, count
         assert "no_va_row" in html

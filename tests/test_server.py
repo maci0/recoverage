@@ -4397,11 +4397,11 @@ class TestSpaLocaleFormatting:
         one: the set of disagreeing code points is `CharacterFolding.txt`, and
         a table written by hand from a handful of ligatures silently omits the
         rest. The omissions are not exotic. `µ` (MICRO SIGN) against `μ`
-        (GREEK SMALL MU) is a unit a firmware symbol carries, `ſ` (LATIN
+        (GREEK SMALL MU) is a unit a firmware symbol carries, U+017F (LATIN
         SMALL LETTER LONG S) against `s` is a letter a name can carry, and
-        `և` (ARMENIAN SMALL LIGATURE ECH YIWN) and the `ᲀ`-`ᲈ` Cherokee
-        series each fold to a whole word. Each one is a row the API lists and
-        the SPA reported "0 matches" for.
+        U+0587 (ARMENIAN SMALL LIGATURE ECH YIWN) and the U+1C80-U+1C88
+        Old Cyrillic series each fold to a whole word. Each one is a row the API
+        lists and the SPA reported "0 matches" for.
 
         The oracle is `str.casefold` itself, over every scalar code point, so
         this holds the table against the operator it stands in for rather than
@@ -4421,21 +4421,13 @@ class TestSpaLocaleFormatting:
         assert expected, "str.casefold diverged nowhere, so this asserts nothing"
 
         shipped = dict(_full_fold_pairs())
-        missing = {
-            key: value for key, value in expected.items() if key not in shipped
-        }
+        missing = {key: value for key, value in expected.items() if key not in shipped}
         extra = {key: value for key, value in shipped.items() if key not in expected}
-        assert not missing, (
-            "FULL_FOLD omits code points str.casefold rewrites: "
-            + ", ".join(
-                f"{key!r}->{value!r}" for key, value in sorted(missing.items())[:10]
-            )
+        assert not missing, "FULL_FOLD omits code points str.casefold rewrites: " + ", ".join(
+            f"{key!r}->{value!r}" for key, value in sorted(missing.items())[:10]
         )
-        assert not extra, (
-            "FULL_FOLD carries keys toLowerCase already rewrote: "
-            + ", ".join(
-                f"{key!r}->{value!r}" for key, value in sorted(extra.items())[:10]
-            )
+        assert not extra, "FULL_FOLD carries keys toLowerCase already rewrote: " + ", ".join(
+            f"{key!r}->{value!r}" for key, value in sorted(extra.items())[:10]
         )
 
     def test_the_spa_fold_pattern_matches_the_table_exactly(self) -> None:

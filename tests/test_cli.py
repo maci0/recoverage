@@ -1724,6 +1724,24 @@ class TestBrowserOpenerSelection:
 
 
 class TestServeServerWiring:
+    def _capture_security(self, monkeypatch: Any) -> dict[str, Any]:
+        """Run ``serve`` without a listener or a db watcher, and hand back the
+        keywords it installed the security policy with.
+
+        ``configure_security`` is called once, so the last call is the one
+        ``serve`` finished with.
+        """
+        from recoverage.server import app as server_app
+
+        installed: dict[str, Any] = {}
+        monkeypatch.setattr("recoverage.api._ensure_db_watcher", lambda: None)
+        monkeypatch.setattr(
+            "recoverage.server.configure_security",
+            lambda **kwargs: installed.update(kwargs),
+        )
+        monkeypatch.setattr(type(server_app), "run", lambda self, **kwargs: None)
+        return installed
+
     def test_the_installed_allowlist_is_what_the_server_is_configured_with(
         self, monkeypatch: Any
     ) -> None:
@@ -1738,15 +1756,7 @@ class TestServeServerWiring:
         matcher compares against, so anything else installs a different
         allowlist than the banner reports.
         """
-        from recoverage.server import app as server_app
-
-        captured: list[dict[str, Any]] = []
-        monkeypatch.setattr("recoverage.api._ensure_db_watcher", lambda: None)
-        monkeypatch.setattr(
-            "recoverage.server.configure_security",
-            lambda **kwargs: captured.append(kwargs),
-        )
-        monkeypatch.setattr(type(server_app), "run", lambda self, **kwargs: None)
+        captured = self._capture_security(monkeypatch)
 
         result = runner.invoke(
             app,
@@ -1761,7 +1771,7 @@ class TestServeServerWiring:
             ],
         )
         assert result.exit_code == 0
-        assert captured[-1]["cors_allowed_origins"] == ["http://example.com:5173"]
+        assert captured["cors_allowed_origins"] == ["http://example.com:5173"]
         assert "cors_origin=http://example.com:5173" in result.output
 
     def test_no_cors_origin_leaves_an_empty_allowlist_not_none(self, monkeypatch: Any) -> None:
@@ -1819,19 +1829,7 @@ class TestServeServerWiring:
         drops it, so a request from the page the entry was written for is
         refused by the very entry that allows it.
         """
-        from recoverage.server import app as server_app
-
-        monkeypatch.setattr("recoverage.api._ensure_db_watcher", lambda: None)
-        installed: dict[str, Any] = {}
-        monkeypatch.setattr(
-            server_app.__class__,
-            "run",
-            lambda self, **kwargs: None,
-        )
-        monkeypatch.setattr(
-            "recoverage.server.configure_security",
-            lambda **kwargs: installed.update(kwargs),
-        )
+        installed = self._capture_security(monkeypatch)
         result = runner.invoke(
             app,
             [

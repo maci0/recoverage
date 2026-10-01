@@ -58,6 +58,31 @@ def _health() -> dict:
     return json.loads(body)
 
 
+_STEP = 2.0
+
+
+def _one_slow_request(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> list[logging.LogRecord]:
+    """Drive one request over the slow threshold on the clock, not in real time.
+
+    Each read of the patched clock advances by ``_STEP`` seconds, so the
+    duration the request is recorded with is a whole multiple of it — a figure a
+    real wall-clock read could not have produced — and nothing here sleeps, so
+    the same numbers come out on a loaded machine as on an idle one.
+    """
+    reads = [0]
+
+    def _fake_monotonic() -> float:
+        reads[0] += 1
+        return 1.0 + _STEP * reads[0]
+
+    monkeypatch.setattr(clock, "monotonic", _fake_monotonic)
+    with caplog.at_level(logging.WARNING, logger="recoverage"):
+        wsgi_get("/api/health")
+    return [r for r in caplog.records if "Slow request" in r.getMessage()]
+
+
 @contextlib.contextmanager
 def _swap_route(rule: str, wrapper: Callable[[Callable], object]) -> Iterator[None]:
     for route in server.app.routes:
@@ -254,26 +279,13 @@ class TestRedCounters:
         """A request crosses the threshold on the clock, not on real time.
 
         The handler runs in microseconds; the request is slow because the
-        clock read at the two ends of it are two seconds apart.  The recorded
-        duration is therefore a whole multiple of the fake step, which a real
-        wall-clock read could not produce, and nothing here sleeps, so the same
-        numbers come out on a loaded machine as on an idle one.
+        clock read at the two ends of it are ``_STEP`` seconds apart.
         """
-        step = 2.0
-        reads = [0]
-
-        def _fake_monotonic() -> float:
-            reads[0] += 1
-            return 1.0 + step * reads[0]
-
-        monkeypatch.setattr(clock, "monotonic", _fake_monotonic)
-        with caplog.at_level(logging.WARNING, logger="recoverage"):
-            wsgi_get("/api/health")
-        assert any("Slow request" in r.getMessage() for r in caplog.records)
+        assert _one_slow_request(monkeypatch, caplog)
         requests = _health()["requests"]
         assert requests["slow"] >= 1
         max_ms = max(float(row["max_ms"]) for row in requests["by_route"].values())
-        assert max_ms % (step * 1000.0) == 0.0
+        assert max_ms % (_STEP * 1000.0) == 0.0
 
     def test_slow_request_carries_the_counters_as_fields(
         self,
@@ -286,17 +298,7 @@ class TestRedCounters:
         were slow has to carry the same values as fields, or an operator pivots
         from the counter to a wall of prose.
         """
-        step = 2.0
-        reads = [0]
-
-        def _fake_monotonic() -> float:
-            reads[0] += 1
-            return 1.0 + step * reads[0]
-
-        monkeypatch.setattr(clock, "monotonic", _fake_monotonic)
-        with caplog.at_level(logging.WARNING, logger="recoverage"):
-            wsgi_get("/api/health")
-        slow = [r for r in caplog.records if "Slow request" in r.getMessage()]
+        slow = _one_slow_request(monkeypatch, caplog)
         assert slow, "the slow request was not logged"
         fields = getattr(slow[0], server.LOG_FIELDS_ATTR)
         assert fields["method"] == "GET"

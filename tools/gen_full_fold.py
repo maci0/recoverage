@@ -134,10 +134,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if stale:
-        print(
-            f"{_FORMAT_TS.relative_to(_ROOT)} is stale; "
-            "run tools/gen_full_fold.py --write"
-        )
+        print(f"{_FORMAT_TS.relative_to(_ROOT)} is stale; run tools/gen_full_fold.py --write")
         return 1
     print("format.ts matches str.casefold")
     return 0

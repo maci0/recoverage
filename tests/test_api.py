@@ -4172,6 +4172,16 @@ class TestDataPayloadMemo:
         monkeypatch.setattr(api, "response", fake_resp)
         return api, open_calls, query
 
+    @staticmethod
+    def _data_key() -> Any:
+        """The ``_DATA_CACHE_BUILDING`` key a cold ``/api/targets/GAME/data``
+        checks out, stamped with the current snapshot so it matches."""
+        import recoverage.api as api
+
+        snap = api._snapshot_db_mtime()
+        assert snap is not None
+        return (snap, "GAME", None, True)
+
     def test_concurrent_cold_misses_single_flight(self, tmp_path: Any, monkeypatch: Any) -> None:
         """Simultaneous cold misses share ONE payload build.
 
@@ -4348,9 +4358,7 @@ class TestDataPayloadMemo:
         _, open_calls, _ = self._gated_open(tmp_path, monkeypatch, release)
         api._clear_data_cache()
 
-        snap = api._snapshot_db_mtime()
-        assert snap is not None
-        key: tuple[tuple[int, int], str, None, bool] = (snap, "GAME", None, True)
+        key = self._data_key()
         # A leader that was killed: registered, never set, never released.
         # The deadline is already past, so the next checkout must drop it.
         dead = threading.Event()
@@ -4390,9 +4398,7 @@ class TestDataPayloadMemo:
         _, open_calls, _ = self._gated_open(tmp_path, monkeypatch, release)
         api._clear_data_cache()
 
-        snap = api._snapshot_db_mtime()
-        assert snap is not None
-        key: tuple[tuple[int, int], str, None, bool] = (snap, "GAME", None, True)
+        key = self._data_key()
         dead = threading.Event()
         api._DATA_CACHE_BUILDING[key] = (dead, api.clock.monotonic() - 1.0)
         release.set()
@@ -4416,9 +4422,7 @@ class TestDataPayloadMemo:
         _, open_calls, _ = self._gated_open(tmp_path, monkeypatch, release)
         api._clear_data_cache()
 
-        snap = api._snapshot_db_mtime()
-        assert snap is not None
-        key: tuple[tuple[int, int], str, None, bool] = (snap, "GAME", None, True)
+        key = self._data_key()
         live = threading.Event()
         api._DATA_CACHE_BUILDING[key] = (
             live,
