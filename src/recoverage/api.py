@@ -1124,35 +1124,53 @@ def handle_api_events() -> Any:
     # Read the environ before registering, so the peer that goes in the map is
     # the one every later log line about this stream names.
     peer = _server.peer_label()
+    client_queue: queue.Queue[bytes] | None
     with _SSE_CLIENTS_LOCK:
+        # The check and the reservation are ONE critical section (the reason
+        # this lock exists), so every accepting thread sees the room left by
+        # the ones before it and the cap admits exactly _SSE_MAX_CLIENTS.
+        # Nothing else runs under it: the refusal below BUILDS A RESPONSE and
+        # writes a log line, and `logging` takes its own module-wide lock
+        # while every other handler on it takes a package lock (_health, the
+        # targets fallback, the reclaim warning).  Logging here inverted that
+        # order — _SSE_CLIENTS_LOCK -> logging lock — against those paths'
+        # logging lock -> package lock, so a saturated dashboard could wedge
+        # every thread in the process behind one full queue.  Same rule
+        # _log_health_status and _log_targets_fallback already follow, and for
+        # the same reason.  Deciding under the lock and acting outside it
+        # keeps the count exact: the answer only needs the count it read.
         if len(_SSE_CLIENTS) >= _SSE_MAX_CLIENTS:
-            # Refusals reach /api/health's error count, but a health snapshot
-            # says "the cap is full", not "the cap has been full since 10:04
-            # and every SPA tab since then is stale".  One line per refusal is
-            # bounded by the refusal rate, which is the interesting signal.
-            _log.warning(
-                "Refusing /api/events: %d/%d streams already connected",
-                len(_SSE_CLIENTS),
-                _SSE_MAX_CLIENTS,
-            )
-            return _json_err(
-                503,
-                {
-                    "error": "too many event-stream clients",
-                    "code": "rate_limited",
-                    "detail": f"max {_SSE_MAX_CLIENTS} concurrent /api/events connections",
-                    "retry_after": int(_SSE_POLL_INTERVAL_SECONDS),
-                },
-                # One value in both places: a client that reads the header
-                # instead of the body (the auth throttle and /api/regen send
-                # the same header) must not be told a different wait than one
-                # the JSON states.  An int in both, which is the type every
-                # 429's `retry_after` now carries too, so one client reads one
-                # JSON type out of the key whichever refusal it hit.
-                Retry_After=str(int(_SSE_POLL_INTERVAL_SECONDS)),
-            )
-        client_queue: queue.Queue[bytes] = queue.Queue(maxsize=_SSE_QUEUE_MAX)
-        _SSE_CLIENTS[client_queue] = peer
+            connected = len(_SSE_CLIENTS)
+            client_queue = None
+        else:
+            client_queue = queue.Queue(maxsize=_SSE_QUEUE_MAX)
+            _SSE_CLIENTS[client_queue] = peer
+    if client_queue is None:
+        # Refusals reach /api/health's error count, but a health snapshot
+        # says "the cap is full", not "the cap has been full since 10:04
+        # and every SPA tab since then is stale".  One line per refusal is
+        # bounded by the refusal rate, which is the interesting signal.
+        _log.warning(
+            "Refusing /api/events: %d/%d streams already connected",
+            connected,
+            _SSE_MAX_CLIENTS,
+        )
+        return _json_err(
+            503,
+            {
+                "error": "too many event-stream clients",
+                "code": "rate_limited",
+                "detail": f"max {_SSE_MAX_CLIENTS} concurrent /api/events connections",
+                "retry_after": int(_SSE_POLL_INTERVAL_SECONDS),
+            },
+            # One value in both places: a client that reads the header
+            # instead of the body (the auth throttle and /api/regen send
+            # the same header) must not be told a different wait than one
+            # the JSON states.  An int in both, which is the type every
+            # 429's `retry_after` now carries too, so one client reads one
+            # JSON type out of the key whichever refusal it hit.
+            Retry_After=str(int(_SSE_POLL_INTERVAL_SECONDS)),
+        )
     # Start the poller on the first registered client; ``serve`` already
     # started it at startup, so this is the idempotent call.  A failed start
     # (e.g. RuntimeError under thread exhaustion) must not leave the queue

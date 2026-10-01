@@ -18,6 +18,13 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- A dashboard already at its concurrent event-stream cap logged its refusal
+  while holding the lock that guards the cap, and every other logging path in
+  the package takes its own lock on the way to the same module-wide logging
+  lock. That inverted the order of the two, so a saturated server could wedge
+  every request thread behind a lock the logging path could not release. The
+  cap now decides under its lock and writes the warning and builds the 503
+  outside it, so the refusal costs nothing but its own log line.
 - A regen whose coverage directory could not be resolved (`db_dir` raising
   on a symlink loop, a permission error on a parent, a name the OS refuses)
   skipped the check that a regen writes where the dashboard reads, and said

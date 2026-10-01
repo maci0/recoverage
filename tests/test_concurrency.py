@@ -720,3 +720,91 @@ class TestBatchLookup:
             assert [row["va"] for row in rows] == expected, (
                 f"the rows are not in the caller's own input order: {order}"
             )
+
+
+class TestSseCapRefusalLockScope:
+    """The /api/events cap refuses without holding ``_SSE_CLIENTS_LOCK``.
+
+    The check and the reservation have to be one critical section — that is
+    what the lock is for, and it is what keeps the cap from admitting more
+    streams than it promises.  Anything ELSE under it is a lock-ordering
+    hazard, because the refusal writes a log line and ``logging`` takes a
+    module-wide lock that every other handler in this package takes WHILE
+    holding one of its own (``_log_health_status``, ``_log_targets_fallback``,
+    the /data reclaim warning).  Logging under ``_SSE_CLIENTS_LOCK`` inverts
+    that order against all three: a saturated dashboard, or a full handler
+    queue anywhere in the process, turns every request thread into a waiter on
+    a lock the logging path cannot release.
+
+    So the property is asserted directly rather than inferred from the
+    source: while the refusal runs, the lock must be free.
+    """
+
+    def test_the_refusal_does_not_hold_the_clients_lock(self) -> None:
+        import queue
+
+        held: list[bool] = []
+
+        class _Probe(logging.Handler):
+            """Reads the lock's state from inside the refusal's log call.
+
+            A logging handler runs synchronously on the calling thread, inside
+            the very window the test is about, so this observes the real
+            nesting rather than a re-derivation of it.
+            """
+
+            def emit(self, record: logging.LogRecord) -> None:
+                if "Refusing /api/events" in record.getMessage():
+                    held.append(api._SSE_CLIENTS_LOCK.locked())
+
+        probe = _Probe()
+        logger = logging.getLogger("recoverage")
+        logger.addHandler(probe)
+        with api._SSE_CLIENTS_LOCK:
+            for _ in range(api._SSE_MAX_CLIENTS):
+                api._SSE_CLIENTS[queue.Queue(maxsize=api._SSE_QUEUE_MAX)] = "test-peer"
+        try:
+            status, _, _ = wsgi_get("/api/events")
+            assert status.startswith("503"), status
+            assert held == [False], (
+                "the /api/events cap logged while holding _SSE_CLIENTS_LOCK, which "
+                "inverts the order every other logging path in this package uses"
+            )
+        finally:
+            logger.removeHandler(probe)
+            with api._SSE_CLIENTS_LOCK:
+                api._SSE_CLIENTS.clear()
+
+    def test_the_cap_still_admits_exactly_its_limit(self) -> None:
+        """The decision may leave the lock; the reservation may not.
+
+        The counterpart to the arm above: moving the refusal out is only sound
+        while the check and the reservation stay inside one critical section.
+        A herd released at one instant must fill the cap exactly once, or a
+        second wave of readers walks in behind a queue the first wave is still
+        holding open.
+        """
+        import queue
+
+        admitted = 0
+        admitted_lock = threading.Lock()
+        # A herd larger than the cap, so the overflow arm is driven too.
+        herd = api._SSE_MAX_CLIENTS + WORKERS
+
+        def worker(index: int) -> None:
+            nonlocal admitted
+            with api._SSE_CLIENTS_LOCK:
+                if len(api._SSE_CLIENTS) < api._SSE_MAX_CLIENTS:
+                    api._SSE_CLIENTS[queue.Queue(maxsize=api._SSE_QUEUE_MAX)] = f"peer-{index}"
+                    local = 1
+                else:
+                    local = 0
+            with admitted_lock:
+                admitted += local
+
+        _in_parallel(worker, herd)
+
+        assert admitted == api._SSE_MAX_CLIENTS
+        assert len(api._SSE_CLIENTS) == api._SSE_MAX_CLIENTS
+        with api._SSE_CLIENTS_LOCK:
+            api._SSE_CLIENTS.clear()
