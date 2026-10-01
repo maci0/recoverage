@@ -25,6 +25,17 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   every request thread behind a lock the logging path could not release. The
   cap now decides under its lock and writes the warning and builds the 503
   outside it, so the refusal costs nothing but its own log line.
+- A regen that completed was recorded under its `Idempotency-Key` only after
+  the response was built, so anything in between — the connection dying on the
+  way back, a Ctrl+C at the terminal running `serve`, a `SystemExit` from
+  somewhere inside rebrew, a logging error — left a finished rebuild with
+  nothing in the ledger, and the client's re-send (the retry the key exists to
+  absorb) started a second full pipeline over documents the first one had
+  already written. The key is now written by the pipeline itself the moment it
+  completes, with nothing that can raise between the success log line and the
+  write, so a duplicate of a finished run replays whatever the client lost. A
+  run that failed or was interrupted is still not recorded, so retrying a
+  failure retries for real.
 - A regen whose coverage directory could not be resolved (`db_dir` raising
   on a symlink loop, a permission error on a parent, a name the OS refuses)
   skipped the check that a regen writes where the dashboard reads, and said

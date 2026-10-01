@@ -1283,7 +1283,7 @@ class TestRegenOriginSameOrigin:
         import recoverage.api as api
 
         with pytest.MonkeyPatch.context() as patch:
-            patch.setattr(api, "_do_regen", lambda remote: api._json_ok({"ok": True}))
+            patch.setattr(api, "_do_regen", lambda remote, key="": api._json_ok({"ok": True}))
             patch.setattr(api, "_regen_last_attempt", None)
 
             def check(data: bytes) -> None:
@@ -1315,7 +1315,7 @@ class TestRegenOriginSameOrigin:
         import recoverage.api as api
 
         with pytest.MonkeyPatch.context() as patch:
-            patch.setattr(api, "_do_regen", lambda remote: api._json_ok({"ok": True}))
+            patch.setattr(api, "_do_regen", lambda remote, key="": api._json_ok({"ok": True}))
             patch.setattr(api, "_regen_last_attempt", None)
 
             for origin in (

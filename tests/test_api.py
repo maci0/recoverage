@@ -215,7 +215,7 @@ class TestRegenOriginValidation:
         rebrew installed, `pytest` would rebuild the developer's real DB."""
         import recoverage.api as api
 
-        monkeypatch.setattr(api, "_do_regen", lambda remote: api._json_ok({"ok": True}))
+        monkeypatch.setattr(api, "_do_regen", lambda remote, key="": api._json_ok({"ok": True}))
         # The cooldown timestamp is a module global stamped by every accepted
         # POST, so without this the second accepted test in the file answers
         # 429 and the accepted-path assertion below fails on the shared state.
@@ -1435,7 +1435,7 @@ class TestRegenRateLimit:
     def _no_real_regen(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import recoverage.api as api
 
-        monkeypatch.setattr(api, "_do_regen", lambda remote: api._json_ok({"ok": True}))
+        monkeypatch.setattr(api, "_do_regen", lambda remote, key="": api._json_ok({"ok": True}))
 
     def test_rapid_second_call_rate_limited(self, monkeypatch: pytest.MonkeyPatch) -> None:
         self._no_real_regen(monkeypatch)
@@ -1903,6 +1903,66 @@ class TestRegenIdempotencyKey:
         assert status.startswith("400")
         assert json.loads(decode_body(body, headers))["code"] == "bad_request"
         assert runs == []
+
+    def test_a_completed_run_is_recorded_before_its_answer_exists(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The key is on the record while the run's own answer is still being built.
+
+        A regen is minutes of work, and the client that asked for it re-sends
+        the same key the moment the answer is lost.  The write used to happen in
+        the handler, after the answer came back from the pipeline, so
+        everything in between — building the response, a logging error, a
+        Ctrl+C at the terminal running `serve` — could unwind a COMPLETED
+        rebuild with nothing behind it, and the re-send paid for a second one.
+        """
+        import recoverage.api as api
+
+        runs = self._counting_regen(monkeypatch)
+        real_do_regen = api._do_regen
+        recorded_when_answered: list[bool] = []
+
+        def do_regen(remote: str, key: str = "") -> object:
+            answer = real_do_regen(remote, key)
+            recorded_when_answered.append(bool(key) and api._regen_replayed(key))
+            return answer
+
+        monkeypatch.setattr(api, "_do_regen", do_regen)
+        assert_regen_accepted(self._post("click-1"))
+
+        assert recorded_when_answered == [True]
+        # And the duplicate still replays rather than re-running.
+        status, headers, _ = self._post("click-1")
+        assert status.startswith("200")
+        assert headers.get("Idempotent-Replay") == "true"
+        assert len(runs) == 1
+
+    def test_an_interrupted_run_leaves_its_key_free_to_retry(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A `BaseException` out of the pipeline clears the key's in-flight mark.
+
+        The marker describes a run, and the run is over in every case, so one
+        left behind answers every later request carrying that key 202 with
+        nothing behind it, and the key can never run again.
+        """
+        import recoverage.api as api
+
+        def interrupted(root: Path) -> None:
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(api, "run_regen", interrupted)
+        monkeypatch.setattr(api, "_project_dir", lambda: Path("/nonexistent"))
+        with pytest.raises(KeyboardInterrupt):
+            self._post("click-1")
+        assert not api._regen_in_progress("click-1")
+        assert not api._regen_replayed("click-1")
+
+        # The failure is not recorded, so the retry runs for real.
+        runs = self._counting_regen(monkeypatch)
+        api._regen_last_attempt = 0.0
+        assert_regen_accepted(self._post("click-1"))
+        assert len(runs) == 1
 
     def test_ledger_is_bounded_by_age_and_count(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import recoverage.api as api
@@ -3098,7 +3158,7 @@ class TestErrorResponseShape:
 
         # The first POST must pass the cooldown gate without running a real
         # regen (rebrew would rebuild the developer's coverage.db).
-        monkeypatch.setattr(api, "_do_regen", lambda remote: api._json_ok({"ok": True}))
+        monkeypatch.setattr(api, "_do_regen", lambda remote, key="": api._json_ok({"ok": True}))
         api._regen_last_attempt = None
         wsgi_request("POST", "/api/regen", remote_addr="127.0.0.1")
         status, headers, body = wsgi_request("POST", "/api/regen", remote_addr="127.0.0.1")
@@ -3136,7 +3196,7 @@ class TestErrorResponseShape:
             return int(_header(headers, "Retry-After") or 0) - value
 
         api._regen_last_attempt = None
-        monkeypatch.setattr(api, "_do_regen", lambda remote: api._json_ok({"ok": True}))
+        monkeypatch.setattr(api, "_do_regen", lambda remote, key="": api._json_ok({"ok": True}))
         wsgi_request("POST", "/api/regen", remote_addr="127.0.0.1")
         status, headers, body = wsgi_request("POST", "/api/regen", remote_addr="127.0.0.1")
         cooldown = self._check(status, headers, body, "rate_limited")
@@ -3144,7 +3204,7 @@ class TestErrorResponseShape:
 
         # The lock arm, the other 429 this endpoint sends.
         api._regen_last_attempt = None
-        monkeypatch.setattr(api, "_do_regen", lambda remote: api._json_ok({"ok": True}))
+        monkeypatch.setattr(api, "_do_regen", lambda remote, key="": api._json_ok({"ok": True}))
         api._REGEN_LOCK.acquire()
         try:
             status, headers, body = wsgi_request("POST", "/api/regen", remote_addr="127.0.0.1")

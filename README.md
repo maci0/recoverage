@@ -465,10 +465,13 @@ request and a repeat of that key is answered with the recorded result
 (`Idempotent-Replay: true`) instead of running the pipeline again; a repeat that
 lands while the first run is still going is answered `202` with
 `{"ok": true, "in_progress": true}` (`Idempotent-Replay: in-progress`), since
-a regen runs for minutes and a proxy gives up long before it finishes. Keys are
+a regen runs for minutes and a proxy gives up long before it finishes. A key is
+recorded the moment the pipeline completes, not when the answer is sent, so a
+retry still replays after a connection that died on the way back. Keys are
 remembered for 10 minutes (the ledger holds more slots than the rate limit
 admits in that window, so a key is only ever dropped by its own age), and a
-failed run is not remembered.
+failed or interrupted run is not remembered — retrying a failure retries for
+real.
 
 Both of those are this process's own bookkeeping. A regen under way in another
 process (a `recoverage regen` at a terminal, a cron job over the same tree) is a

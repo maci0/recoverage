@@ -2629,15 +2629,17 @@ def handle_regen() -> bytes | HTTPResponse:
     gives.
 
     Send an ``Idempotency-Key`` header to make a retry cheap:
-    the key is remembered once the run completes (see ``_REGEN_KEY_TTL_SECONDS``
-    for the retention window and ``_REGEN_LEDGER_MAX_ENTRIES`` for the ledger's
-    cap) and a later request
-    carrying it is answered from the ledger with ``Idempotent-Replay: true``
-    instead of re-running.  A key whose run is still going is answered 202 with
-    ``in_progress``, which is the retry that lands before the first answer
-    exists: it is told the operation is under way, not that it failed.  A run
-    that failed is not recorded, so retrying a failure retries for real.
-    Without the header, every POST re-runs.
+    the key is remembered by the pipeline itself, before the success line and
+    with nothing that can raise between the two (see ``_do_regen``; the
+    retention window is ``_REGEN_KEY_TTL_SECONDS`` and the cap is
+    ``_REGEN_LEDGER_MAX_ENTRIES``), so a COMPLETED run is on the record even
+    when the connection dies or the process is interrupted on the way back to
+    the client.  A later request carrying it is answered from the ledger with
+    ``Idempotent-Replay: true`` instead of re-running.  A key whose run is
+    still going is answered 202 with ``in_progress``, which is the retry that
+    lands before the first answer exists: it is told the operation is under
+    way, not that it failed.  A run that failed is not recorded, so retrying
+    a failure retries for real.  Without the header, every POST re-runs.
     """
     global _regen_last_attempt
 
@@ -2784,13 +2786,18 @@ def handle_regen() -> bytes | HTTPResponse:
         # (cooldown, or a key already in flight) must leave the key free.
         if key:
             _record_active_key(key)
-        result = _do_regen(remote)
-        # _do_regen answers the success body as bytes and a mapped failure as
-        # an HTTPResponse.  Only a completed run is recorded, so a client that
-        # retries a failure gets a real second attempt.
-        if key and isinstance(result, bytes):
-            _record_completed_key(key)
-        return result
+        # The key is handed to _do_regen, which is the only code that can see
+        # that the pipeline COMPLETED, and it records it there — before its
+        # success log line, inside the same run-to-return stretch that has no
+        # failing call.  It was recorded here instead, on the isinstance of the
+        # answer, which is one step too late: anything between the writer
+        # finishing and this line (the JSON body build, a logging error, a
+        # KeyboardInterrupt at the terminal running `serve`, a SystemExit from
+        # somewhere inside rebrew) escaped a COMPLETED rebuild with no ledger
+        # entry, and the client's re-send — carrying that same key, the one
+        # re-send the key exists for — started a second full pipeline over
+        # documents the first one had already written.
+        return _do_regen(remote, key)
     finally:
         # Both outcomes, and the exceptions: the marker describes a run, and
         # the run is over in every case, so a key left marked in flight would
@@ -2800,8 +2807,21 @@ def handle_regen() -> bytes | HTTPResponse:
         _REGEN_LOCK.release()
 
 
-def _do_regen(remote: str) -> bytes | HTTPResponse:
-    """Run catalog + build-db in-process. Caller holds _REGEN_LOCK."""
+def _do_regen(remote: str, key: str = "") -> bytes | HTTPResponse:
+    """Run catalog + build-db in-process. Caller holds _REGEN_LOCK.
+
+    *key* is the request's ``Idempotency-Key`` (empty when the client sent
+    none).  A run that COMPLETED is recorded under it HERE rather than by the
+    caller: this is the one function that knows the pipeline finished, and
+    recording it on the way back to the caller put a whole class of late
+    failures between the two — the ledger write then happened after the answer
+    was built, and a crash, a KeyboardInterrupt or a logging error in that
+    stretch left a finished rebuild with no entry, so the client's retry paid
+    for a second one.  Every other outcome returns before the write, so a run
+    that failed is not recorded and retrying it retries for real, and a
+    caller that passes no key (the unit tests that drive this function
+    directly) records nothing.
+    """
     # Clear derived caches before AND after: the pre-run clears matter while
     # the regen runs; the resolved-target / index caches get repopulated from
     # the OLD db the moment anything queries them, and with no SSE client
@@ -2907,6 +2927,14 @@ def _do_regen(remote: str) -> bytes | HTTPResponse:
         _clear_derived_caches_logged("after regen")
     elapsed = _elapsed_s(started_at)
     _metrics.REGEN.finish(True, _elapsed_ms(started_at))
+    # The ledger write sits between the log line and the answer, and the log
+    # line is what an operator reads to find out whether the pipeline finished:
+    # a `ok` line with no key behind it is a rebuild whose retry will run
+    # again, and a `rejected` one is a refusal.  Nothing here can raise (a
+    # pruned dict entry, a bounded eviction, a float stamp), so the key is
+    # recorded by every run this one logs as completed.
+    if key:
+        _record_completed_key(key)
     _log.info(
         "Regen completed successfully in %.1fs", elapsed, extra=_regen_log_fields("ok", elapsed)
     )

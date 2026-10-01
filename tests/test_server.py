@@ -5492,7 +5492,17 @@ class TestClockSeam:
         now = [1_000.0]
         monkeypatch.setattr(clock, "monotonic", lambda: now[0])
         monkeypatch.setattr(api, "_regen_last_attempt", None)
-        monkeypatch.setattr(api, "_do_regen", lambda remote: api._json_ok({"ok": True}))
+
+        # The stub stands in for the real _do_regen, which is where a
+        # completed run records its key, so it does the same: this class is
+        # about the WINDOWS, and a stub that recorded nothing would test a
+        # ledger nothing ever writes.
+        def run(remote: str, key: str = "") -> bytes:
+            if key:
+                api._record_completed_key(key)
+            return api._json_ok({"ok": True})
+
+        monkeypatch.setattr(api, "_do_regen", run)
         monkeypatch.setattr(srv, "_AUTH_TOKEN", "tok")
         api._REGEN_COMPLETED_KEYS.clear()
 
