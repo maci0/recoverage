@@ -2984,6 +2984,26 @@ class TestGetDisassemblyNoNegativeCache:
         finally:
             disasm._disassemble_loaded.cache_clear()
 
+    def test_a_negative_va_does_not_render_an_unsigned_address(self, monkeypatch: Any) -> None:
+        """The same guard on the ADDRESS rather than on the slice.
+
+        Capstone's `insn.address` is unsigned, so a decode started below zero
+        rendered every line at a `0xfffffffffff...` address beside the byte
+        dump of the very bytes it describes — and a VA is a virtual address
+        in the image, so there is no reading of a negative one. The panel
+        hands this function the document's own `va`, which nothing else checks.
+        """
+        import recoverage.disasm as disasm
+
+        body = b"\x90\x90\x90\x90"
+        monkeypatch.setattr(disasm, "_load_dll", lambda target: b"MZ" + bytes(64) + body)
+        try:
+            assert disasm._disassemble_loaded(-0x1000, 4, 66, "__neg_va__", None) == ""
+            positive = disasm._disassemble_loaded(0x1000, 4, 66, "__pos_va__", None)
+            assert "0x00001000" in positive, positive
+        finally:
+            disasm._disassemble_loaded.cache_clear()
+
 
 class TestBucketReconciliation:
     """total_cells must equal the sum of the counted buckets.

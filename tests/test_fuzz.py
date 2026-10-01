@@ -41,7 +41,13 @@ tests enumerate:
   is decoded at is read from (where a wrong answer is a 64-bit image decoded at
   32 bits, not a bad render), and the persisted parse in the cache directory,
   which stands in for the document behind it and is therefore parsed with no
-  less suspicion than the document itself.
+  less suspicion than the document itself;
+* the decode and render of a SLICE, which is where the container header stops
+  being the input: the binary's own bytes, decoded at attacker-chosen
+  ``va``/``size``/``fileOffset``, are the sample under analysis rather than
+  something this build wrote, and a wrong answer there renders plausible
+  instructions at addresses the reader never asked for, over bytes they never
+  selected.
 
 No coverage-guided fuzzer is available offline, so the harness is a seeded
 mutation engine: a hand-written corpus of real-shaped seeds (the spellings the
@@ -5092,6 +5098,258 @@ class TestContainerHeaderWidth:
             iterations=120,
             struct_tokens=CONTAINER_TOKENS,
             num_tokens=CONTAINER_TOKENS,
+        )
+
+
+# ── the bytes the decoder reads ───────────────────────────────────────
+#
+# The campaign above reads a header and stops.  Everything past it — the
+# width memo, the slice, the decoder and the renderer, in
+# ``disasm.get_disassembly`` — runs on the BINARY'S OWN BYTES, and a binary
+# is exactly the input this package trusts least: it is the sample under
+# analysis, not something the build wrote, and a hand-built image can put any
+# byte at any offset.  The request campaigns reach ``/asm`` only against a
+# target whose binary this repository already holds, so this one plants the
+# bytes itself.
+#
+# The failure this hunts is not a crash in capstone (a C library, out of
+# reach) but the two the Python around it can make on its own:
+#
+# * the slice is bounded by what the caller asked for.  ``_disassemble_loaded``
+#   refuses a negative offset or length precisely because a negative index
+#   counts back from the END of the buffer, and the handler's own clamp is the
+#   other half; a bound that leaked answers with bytes from elsewhere in the
+#   image, at the address the reader selected, which reads as correct.
+# * every rendered instruction sits inside the requested window.  The renderer
+#   formats ``insn.address`` from the decoder, so a width or offset mistake
+#   shows as lines outside ``[va, va + size)`` — an address the reader never
+#   asked for, over bytes they never selected.
+
+#: Real x86 bodies, so the decoder has instructions to render rather than one
+#: undecodable byte: a REX-prefixed mov (one instruction at 64 bits, a ``dec
+#: eax`` at 32), a RIP-relative load, a loop, an SSE pair, a branch, a
+#: privileged instruction, and a plain function tail.
+DISASM_SEEDS: list[bytes] = [
+    _pe_image(0x80, PE_AMD64) + b"\x48\x8b\x44\x24\x08\xc3",
+    _pe_image(0x80, PE_AMD64) + b"\x55\x48\x89\xe5\x31\xc0\x5d\xc3",
+    _pe_image(0x80, PE_AMD64) + b"\x48\x8b\x05\x00\x00\x00\x00\x90",
+    _pe_image(0x80, 0x014C) + b"\x55\x8b\xec\x83\xec\x10\x5d\xc3",
+    _pe_image(0x80, PE_AMD64) + b"\x0f\x1f\x84\x00\x00\x00\x00\x74\x10",
+    _pe_image(0x80, PE_AMD64) + b"\xf3\x0f\x10\x04\x24\xf3\x0f\x11\x44\x24\x08",
+    _pe_image(0x80, PE_AMD64) + b"\x0f\x05\xc3\xcc\xcc\xcc\xcc",
+    _pe_image(0x80, PE_AMD64) + bytes(range(256)),
+    _pe_image(0x80, PE_AMD64) + bytes(range(255, -1, -1)),
+    _pe_image(0x80, PE_AMD64) + b"\xe8\xff\xff\xff\xff\xe9\x00\x00\x00\x00",
+    _elf_image(ELF_X86_64) + b"\x48\x31\xc0\xc3",
+    b"\x90\x90\x90\x90",
+    b"",
+    b"\xff" * 32,
+]
+
+#: The prefixes and suffixes a real image is made of, so a mutated seed stays
+#: an IMAGE rather than collapsing into noise: the two magics, both container
+#: signatures, and the opcode families the decoder branches on.
+DISASM_TOKENS: tuple[bytes, ...] = (
+    b"MZ",
+    b"PE\x00\x00",
+    b"\x7fELF",
+    PE_AMD64.to_bytes(2, "little"),
+    (0x014C).to_bytes(2, "little"),
+    b"\x48",  # REX.W
+    b"\x4c",  # REX.WR
+    b"\x8b\x44\x24",
+    b"\x0f\x05",  # syscall
+    b"\xf3\x0f\x10",  # movss
+    b"\xc3",
+    b"\xcc",
+    b"\xe8",
+    b"\x00\x00\x00\x00",
+)
+
+_DISASM_TARGET = "FUZZBIN"
+
+
+#: Every (va, size, fileOffset) a caller can ask for, in one list, so a round
+#: asks for ALL of them rather than drawing one: a regression a sampled
+#: campaign happens not to reach is a regression the suite reports as green,
+#: and there are few enough shapes to ask for each. The negative VA is first
+#: because it is the one the module had no guard for.
+_DISASM_SLICES: tuple[tuple[int, int, int], ...] = (
+    (-0x1000, 16, 0x80),
+    (0x1000, 16, 0x80),
+    (0x1000, 0, 0x80),
+    (0x1000, 16, -1),
+    (0x1000, -16, 0x80),
+    (0x1000, 16, 1 << 40),
+    (0x1000, 1 << 40, 0x80),
+    (0x0, 64, 0),
+    (0x1000, 4, 64),
+    (0x7FFF_FFFF, 64, 0x80),
+    (0xFFFF_FFFF_FFFF_FFF0, 16, 0),
+)
+
+
+def _decode_one_slice(
+    disasm: Any, srv: Any, binary: Path, data: bytes, va: int, size: int, offset: int
+) -> str:
+    """One planted image, one slice of it, and both memos cleared either way.
+
+    The memos are per-binary and the campaign replaces the file every round, so
+    a memo left behind is the NEXT round reading the PREVIOUS round's bytes:
+    a campaign that forgets this asserts against whatever ran before it.
+    """
+    binary.write_bytes(data)
+    os.utime(binary, ns=(2 * 10**18, 2 * 10**18))
+    with srv.DLL_LOCK:
+        srv.DLL_DATA.pop(_DISASM_TARGET, None)
+        srv._DLL_STAMPS.pop(_DISASM_TARGET, None)
+    disasm.clear_width_cache()
+    disasm.clear_disassembly_cache()
+    try:
+        return str(disasm.get_disassembly(va, size, offset, _DISASM_TARGET))
+    finally:
+        disasm.clear_disassembly_cache()
+        disasm.clear_width_cache()
+        with srv.DLL_LOCK:
+            srv.DLL_DATA.pop(_DISASM_TARGET, None)
+            srv._DLL_STAMPS.pop(_DISASM_TARGET, None)
+
+
+def _assert_slice_window(rendered: str, data: bytes, va: int, size: int, offset: int) -> None:
+    """Every rendered address lies inside the window the caller asked for.
+
+    The "(no instructions)" placeholder names no address, so only the rendered
+    instructions carry one to check.
+    """
+    lines = [line for line in rendered.splitlines() if line.startswith("0x")]
+    shape = f"va={va} size={size} offset={offset}"
+    if size <= 0 or offset < 0 or va < 0:
+        # The guard the module documents: a negative index counts back from
+        # the END of the buffer, and capstone renders a negative VA as an
+        # unsigned address the reader never asked for. A slice carrying either
+        # is unanswerable and must render nothing rather than the tail of the
+        # image at an address nobody named.
+        assert not lines, (
+            f"{data[:16]!r}: {shape} rendered {lines[:2]!r} off bytes the caller never asked for"
+        )
+        return
+    if offset + size > len(data):
+        assert not lines, (
+            f"{data[:16]!r}: {shape} ran past a {len(data)}-byte image and rendered {lines[:2]!r}"
+        )
+        return
+    previous_end = va
+    for line in lines:
+        head = line.split("  ", 1)[0].strip()
+        assert head.startswith("0x"), f"{data[:16]!r}: {shape} rendered {line!r}"
+        address = int(head, 16)
+        assert va <= address < va + size, (
+            f"{data[:16]!r}: {shape} rendered 0x{address:x} outside the requested "
+            f"window 0x{va:x}..0x{va + size - 1:x}"
+        )
+        assert address >= previous_end, (
+            f"{data[:16]!r}: {shape} rendered 0x{address:x} overlapping the "
+            f"instruction before it, which reached 0x{previous_end:x}"
+        )
+        previous_end = address + 1
+
+
+class TestBinaryDecodeWindow:
+    """The decode and render of a slice, over an image the campaign plants."""
+
+    def test_a_slice_reads_nothing_outside_the_window_it_was_given(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Differential on the slice contract, not on the status of a call.
+
+        Both ends of the round trip are here: the bytes the caller asked for
+        are the bytes that come back, at the addresses they were asked for.
+        A negative index counting back from the end of the buffer, an offset
+        past the tail, or a width read from a header the format does not fix
+        all answer a perfectly good string over bytes the reader never
+        selected, which is what these assertions are for.
+        """
+        import recoverage.disasm as disasm
+        import recoverage.server as srv
+
+        if not disasm.disassembly_available():
+            pytest.skip("capstone is not installed")
+
+        binary = tmp_path / "fuzz.bin"
+        monkeypatch.setattr(srv, "_find_dll_path", lambda target: binary)
+
+        def check(data: bytes) -> None:
+            # Every shape this module draws, not one of them per round: a
+            # sampled draw is a round that sometimes runs the code the fix
+            # touches, and the seed decides which rounds those are.
+            for va, size, offset in _DISASM_SLICES:
+                rendered = _decode_one_slice(disasm, srv, binary, data, va, size, offset)
+                assert isinstance(rendered, str)
+                _assert_slice_window(rendered, data, va, size, offset)
+
+        _fuzz(
+            DISASM_SEEDS,
+            check,
+            iterations=60,
+            struct_tokens=DISASM_TOKENS,
+            num_tokens=DISASM_TOKENS,
+        )
+
+    def test_a_repeated_slice_renders_the_same_text(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The pair assertion across the two memos this path reads.
+
+        ``_target_width_bits`` and ``_disassemble_loaded`` both key on the
+        binary's stamp, so a mutation of the width memo or a stale entry in the
+        disassembly memo answers the SECOND read of an unchanged slice with
+        text the first read did not produce — a panel that changes under the
+        reader with no rebuild in between.  Both memos are cleared, the binary
+        replaced and the same slice asked for again.
+        """
+        import recoverage.disasm as disasm
+        import recoverage.server as srv
+
+        if not disasm.disassembly_available():
+            pytest.skip("capstone is not installed")
+
+        binary = tmp_path / "fuzz.bin"
+        monkeypatch.setattr(srv, "_find_dll_path", lambda target: binary)
+
+        def check(data: bytes) -> None:
+            if len(data) < 0x90:
+                return
+            first_bytes, second_bytes = data[:0x90], data[:0x90]
+            try:
+                binary.write_bytes(first_bytes)
+                os.utime(binary, ns=(2 * 10**18, 2 * 10**18))
+                disasm.clear_width_cache()
+                disasm.clear_disassembly_cache()
+                first = disasm.get_disassembly(0x1000, 0x10, 0x80, _DISASM_TARGET)
+                # The same bytes, written again: a different mtime, so both
+                # memos miss, and the answer has to be the answer.
+                binary.write_bytes(second_bytes)
+                os.utime(binary, ns=(4 * 10**18, 4 * 10**18))
+                disasm.clear_width_cache()
+                disasm.clear_disassembly_cache()
+                second = disasm.get_disassembly(0x1000, 0x10, 0x80, _DISASM_TARGET)
+            finally:
+                disasm.clear_width_cache()
+                disasm.clear_disassembly_cache()
+                with srv.DLL_LOCK:
+                    srv.DLL_DATA.pop(_DISASM_TARGET, None)
+                    srv._DLL_STAMPS.pop(_DISASM_TARGET, None)
+            assert first == second, (
+                f"{data[:16]!r}: the same slice rendered twice with different text:\n"
+                f"  {first!r}\n  {second!r}"
+            )
+
+        _fuzz(
+            [seed for seed in DISASM_SEEDS if len(seed) >= 0x90],
+            check,
+            iterations=60,
+            struct_tokens=DISASM_TOKENS,
+            num_tokens=DISASM_TOKENS,
         )
 
 

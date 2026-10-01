@@ -1823,7 +1823,17 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   two headers RESTATED in the test rather than against the reader itself, and
   pushes every 64-bit answer through `get_capstone_md` to check the handle a
   64-bit mode produces; a header the format fixes no width for must answer the
-  documented floor, never a guess. `documents._read_cached`
+  documented floor, never a guess. Past that header the campaign stops, so the
+  DECODE of the image's own bytes is `TestBinaryDecodeWindow`'s: it plants the
+  binary and calls `disasm.get_disassembly` at an attacker-shaped `va`, `size`
+  and `fileOffset`, the only way those three reach the function together (the
+  Potato panel hands it the document's own columns unchecked for sign, which is
+  how a negative `va` rendered as the unsigned address the reader never asked
+  for). A slice that cannot be answered renders nothing, a slice running past
+  the image renders nothing, and every rendered instruction sits inside
+  `[va, va + size)` with no overlap — the two properties a status code cannot
+  show, since every failure above answers a plain string.
+  `documents._read_cached`
   (`TestPersistedParseCache`) loads JSON from the cache directory under
   `$XDG_CACHE_HOME`, which is not the coverage directory and so is not covered
   by the document campaign: it stands in for the TOML, and the seed that

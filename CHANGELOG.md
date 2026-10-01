@@ -18,6 +18,12 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- The disassembly panel rendered a function whose document spells a negative
+  `va`, showing instructions at `0xfffffffffff…` addresses beside the byte
+  dump of the very bytes they describe. The decoder's address is unsigned, so
+  the slice was already refused for a negative length or file offset but not
+  for a negative address; it is refused on the same grounds now, and the pane
+  falls back to its bytes alone.
 - Potato Mode's function list searched two of the three columns the grid view
   and the API list search, so a row whose address appears only in its
   `vaStart` column (a document whose `va` is 0) matched on neither of those

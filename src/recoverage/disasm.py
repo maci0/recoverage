@@ -331,7 +331,7 @@ def _disassemble_loaded(
         # frame.
         return ""
 
-    if file_offset < 0 or size < 0:
+    if file_offset < 0 or size < 0 or va < 0:
         # A negative offset or length is a negative-index slice, and a negative
         # index counts back from the END of the buffer: `data[-10:-5]` is five
         # bytes near the tail of the binary, so a hand-edited document carrying
@@ -340,6 +340,13 @@ def _disassemble_loaded(
         # check below. api.py's /asm and /bytes both refuse a negative file
         # offset for this reason; the Potato panel hands this function the
         # document's own value, so the refusal belongs where both paths arrive.
+        #
+        # A negative VA is the same class of mistake in the ADDRESS rather than
+        # in the slice: capstone's `insn.address` is unsigned, so a decode
+        # started at -4096 renders every line as `0xfffffffffffff000`, an
+        # address the reader never asked for, and the panel shows it beside
+        # the byte dump of the very bytes it describes. A VA is a virtual
+        # address in the image, so there is no reading of a negative one.
         return ""
 
     code_bytes = target_data[file_offset : file_offset + size]
