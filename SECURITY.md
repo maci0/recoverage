@@ -44,13 +44,33 @@ The bundled listener speaks no TLS, so a non-loopback deployment has no
 transport security either, and the token travels as a URL parameter. The model
 names that as risk 4. The share-link form is narrowed on the client side: `/`
 exchanges `?token=` for an HttpOnly cookie (`server.set_auth_cookie`,
-`src/recoverage/server.py:3071`) and the SPA then removes the parameter from
+`src/recoverage/server.py:3084`) and the SPA then removes the parameter from
 `window.location` (`web/app/App.tsx`), so the value does not stay in the
 address bar, the current history entry or a bookmark. That is a client-side
 window, not a transport change: the request line, an upstream proxy's access
 log, a pasted link, and a URL copied before the page settles all still carry
 the bearer value, so a token shared as a link should be read as disclosed to
 every system that saw the request.
+
+## Running under a WSGI host
+
+`recoverage.webapp.app` (`src/recoverage/webapp.py`) is the same fully routed
+application, and a WSGI host may serve it directly instead of running
+`recoverage serve`. Two things a reader should know before choosing that:
+
+- The controls `serve` installs as a side effect of starting are the host's to
+  install. `server.configure_security(...)`
+  (`src/recoverage/server.py:129`) sets the bearer token, the CORS allowlist and
+  the `Host` allowlist, and every one of its defaults is off: no token, no
+  CORS, and no `Host` validation. A host that mounts the app without calling it
+  serves the whole project unauthenticated, and `cli._remote_bind_gate`
+  (`src/recoverage/cli.py:1010`) does not apply, because it is the CLI's
+  acknowledgement rather than a property of the app.
+- The connection cap, the per-connection deadline and the keep-alive framing
+  live in `src/recoverage/devserver.py`, not in the app. Behind a WSGI host they
+  are whatever the host enforces, which is the boundary the model ranks.
+
+`docs/THREAT_MODEL.md` carries this as boundary 8 and folds it into risk 1.
 
 ## Threat model
 
