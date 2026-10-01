@@ -2175,6 +2175,40 @@ class TestBrowserSpdxExport:
         with pytest.raises(module.InventoryError, match="SOURCE_DATE_EPOCH"):
             module.spdx_document(module.resolve())
 
+    @pytest.mark.parametrize(
+        ("stamp", "renders"),
+        [
+            ("-62135596801", False),  # 0000-12-31, one second before year 1
+            ("-62135596800", True),  # 0001-01-01T00:00:00Z, the first datetime holds
+            ("253402300799", True),  # 9999-12-31T23:59:59Z, the last
+            ("253402300800", False),  # 10000-01-01T00:00:00Z, the first it does not
+            ("99999999999999", False),  # year 3170843
+        ],
+    )
+    def test_a_stamp_outside_the_calendar_is_refused_not_raised(
+        self, monkeypatch: pytest.MonkeyPatch, stamp: str, renders: bool
+    ) -> None:
+        """A stamp no calendar has is the same mistake as one that is not a number.
+
+        `int()` accepts any run of digits, so a `SOURCE_DATE_EPOCH` naming year
+        3170843 parses and then dies inside `datetime.fromtimestamp` with a raw
+        ValueError. That escaped `spdx_document`, and `main` catches
+        `InventoryError` only, so the sbom job failed on a traceback rather than
+        on the one-line refusal every other bad stamp gets. The floor is
+        datetime's own range, and the two seconds either side of each end are
+        here so a floor that drifted by one would fail rather than pass.
+        """
+        module = _js_inventory_module()
+        monkeypatch.setenv("SOURCE_DATE_EPOCH", stamp)
+        if renders:
+            rendered = module.spdx_document(module.resolve())["creationInfo"]["created"]
+            assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", rendered), (
+                f"{stamp} is inside datetime's range but rendered as {rendered!r}"
+            )
+        else:
+            with pytest.raises(module.InventoryError, match="SOURCE_DATE_EPOCH"):
+                module.spdx_document(module.resolve())
+
     def test_the_sbom_job_uploads_the_document(self) -> None:
         """CI produces the machine-readable half, or the gap reopens silently.
 

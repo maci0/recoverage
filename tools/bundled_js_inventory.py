@@ -208,6 +208,15 @@ def render(rows: list[tuple[Shipped, str, str]]) -> str:
 #: checksum a validator rejects.
 _DIGEST_ALGORITHMS = {"sha512": "SHA512", "sha256": "SHA256", "sha1": "SHA1"}
 
+#: The first and last whole seconds since the epoch a `datetime` can represent
+#: (0001-01-01T00:00:00Z and 9999-12-31T23:59:59Z), the floor :func:`created`
+#: checks a `SOURCE_DATE_EPOCH` against.  A stamp outside this range is a value
+#: no renderer can spell, so it is refused as a bad stamp rather than raised out
+#: of the conversion.  The same pair the package's coverage-file mtime
+#: conversion clamps to (server._MIN_MTIME_SECONDS / _MAX_MTIME_SECONDS).
+_MIN_EPOCH = -62_135_596_800
+_MAX_EPOCH = 253_402_300_799
+
 
 def _checksum(digest: str) -> dict[str, str]:
     """The bun.lock integrity string as an SPDX checksum."""
@@ -238,7 +247,23 @@ def created() -> str:
         if raw:
             raise InventoryError(f"SOURCE_DATE_EPOCH={raw!r} is not a Unix timestamp") from None
         stamp = int(datetime.datetime.now(tz=datetime.UTC).timestamp())
-    return datetime.datetime.fromtimestamp(stamp, tz=datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    if not _MIN_EPOCH <= stamp <= _MAX_EPOCH:
+        # `int()` takes any run of digits, so this stamp parsed and then raised
+        # out of `fromtimestamp` below as a raw ValueError — past `main`'s
+        # `except InventoryError`, so the sbom job died on a traceback instead
+        # of the one-line refusal the not-a-number arm above already gives.
+        raise InventoryError(
+            f"SOURCE_DATE_EPOCH={raw!r} is not a timestamp datetime can represent"
+        ) from None
+    # `isoformat` and not `strftime("%Y-...")`: %Y is NOT zero-padded below year
+    # 1000, so a stamp at the floor rendered as `1-01-01T00:00:00Z` and a
+    # validator reading the four-digit year SPDX 2.3 requires rejected the
+    # document the tool had just called reproducible.  `isoformat` pads every
+    # field; the `+00:00` it writes is the same offset in the other spelling,
+    # which is the one trailing `Z` means and the only change made here.
+    return (
+        datetime.datetime.fromtimestamp(stamp, tz=datetime.UTC).isoformat().replace("+00:00", "Z")
+    )
 
 
 def _version() -> str:

@@ -18,6 +18,14 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- The browser SBOM's `created` stamp rendered a year before 1000 without its
+  leading zeros (`1-01-01T00:00:00Z`), because `strftime`'s `%Y` is not
+  zero-padded below year 1000, so a scanner reading the four-digit year SPDX
+  2.3 requires rejected a document the tool had just called reproducible. A
+  `SOURCE_DATE_EPOCH` naming an instant the calendar does not have (year
+  3170843, say) also escaped as a bare `ValueError` from the conversion
+  instead of the one-line refusal every other bad stamp gets. The stamp is now
+  rendered through `isoformat` and is range-checked before the conversion.
 - The disassembly panel rendered a function whose document spells a negative
   `va`, showing instructions at `0xfffffffffff…` addresses beside the byte
   dump of the very bytes they describe. The decoder's address is unsigned, so

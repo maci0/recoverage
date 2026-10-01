@@ -3217,7 +3217,11 @@ class TestFunctionListSearchFolding:
         index and left `vaStart` out, so such a row matched here and nowhere
         else: the API list matches `vaStart`, and the grid does too.
         """
-        from recoverage.potato import _render_function_list, _search_functions
+        from recoverage.potato import (
+            _cell_dim_keys,
+            _render_function_list,
+            _search_functions,
+        )
 
         snap = _write_doc(
             tmp_path,
@@ -3226,10 +3230,16 @@ class TestFunctionListSearchFolding:
             {".text": {"size": 16, "cells": [cell(0, 16, "exact")]}},
             functions=[{"va": 0, "vaStart": "0x401000", "name": "no_va_row"}],
         )
-        # The set carries the name AND the vaStart spelling, because the grid's
-        # dimming test compares a cell's entry against it (see
-        # `_search_functions`).
-        assert {"no_va_row", "0x401000"} <= _search_functions(snap, "0x401000")
+        # `_search_functions` returns NAMES only — the topbar counts this set,
+        # so a row that also carried its address would read as "2 matches".
+        # The grid's dimming test needs the address spelling a `.text` cell
+        # stores, and `_cell_dim_keys` derives it from this set.
+        matched = _search_functions(snap, "0x401000")
+        assert "no_va_row" in matched, "the vaStart-only row did not match by address"
+        assert "0x401000" not in matched, "the set is names-only; a second entry double-counts"
+        # The address the grid compares a cell's `functions` field against is
+        # derived here, so the dimming still finds the cell.
+        assert {"no_va_row", "0x401000"} <= _cell_dim_keys(snap, matched)
         html, count = _render_function_list(snap, "T", ".text", None, "0x401000", "va", "")
         assert count == 1, count
         assert "no_va_row" in html
