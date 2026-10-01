@@ -458,6 +458,156 @@ class TestLongDescriptionLinksResolveWhereItIsRendered:
                     )
 
 
+class TestShippedScreenshotsAreWhatTheyAreNamed:
+    """A screenshot the README shows is part of the product.
+
+    Three properties, each of which failed and each of which is invisible in
+    review because the asset is a blob: a JPEG served under a `.png` name
+    (`mascot.png` was one, and the raw host answers with the extension as the
+    content type, so GitHub rendered the image above the fold broken); a
+    heading naming a theme the shot is not in (`recoverage_main.png` is a
+    light capture sitting under "Dark Mode (the default)", and the default
+    follows the OS rather than the file); and two headings that both claimed
+    to be the dark view of the same panel, one of which was not.
+
+    Every verdict is read off the file itself, so a re-shoot updates the
+    gate rather than a hand-maintained list that drifts from the bytes.
+    """
+
+    _README = _ROOT / "README.md"
+
+    #: The mean channel a ground has to be under to count as dark. The
+    #: brand's own two are `#0b0b0c` (11) and `#fafafa` (250), so the
+    #: midpoint is nowhere near either and the gate does not depend on where
+    #: between them a re-shoot lands.
+    _LIGHT_GROUND = 128
+
+    #: The magic bytes each container starts with, and the extension that
+    #: matches it. A `.png` holding a JPEG is served as `image/png` and does
+    #: not decode in a browser.
+    _SIGNATURES: tuple[tuple[bytes, str], ...] = (
+        (b"\x89PNG\r\n\x1a\n", ".png"),
+        (b"\xff\xd8\xff", ".jpg"),
+        (b"GIF87a", ".gif"),
+        (b"GIF89a", ".gif"),
+    )
+
+    #: `### heading` followed by the image it captions, in the README's own
+    #: image syntax, on the raw host the long description is rendered from.
+    _CAPTION_RE = re.compile(
+        r"^### (?P<heading>[^\n]+)\n\n!\[(?P<alt>[^\]]*)\]"
+        r"\(https://raw\.githubusercontent\.com/[^/]+/[^/]+/main/(?P<path>docs/[^)\s]+)\)",
+        re.MULTILINE,
+    )
+
+    def test_every_image_file_matches_its_extension(self) -> None:
+        """The container is what the name says, or the host serves it wrong."""
+        wrong: list[str] = []
+        for image in sorted((_ROOT / "docs").iterdir()):
+            if not image.is_file() or image.suffix == ".md":
+                continue
+            head = image.read_bytes()[:8]
+            for magic, suffix in self._SIGNATURES:
+                if head.startswith(magic):
+                    if image.suffix != suffix:
+                        wrong.append(f"{image.name} holds a {suffix} file")
+                    break
+            else:
+                wrong.append(f"{image.name} is not an image this table knows")
+        assert not wrong, wrong
+
+    def test_no_two_screenshot_headings_say_the_same_thing(self) -> None:
+        """Two headings with one name read as a copy-paste, not as two views."""
+        headings = re.findall(r"^### (.+)$", self._README.read_text(encoding="utf-8"), re.MULTILINE)
+        duplicates = sorted({h for h in headings if headings.count(h) > 1})
+        assert not duplicates, f"README headings repeated: {duplicates}"
+
+    def test_a_heading_calling_a_shot_dark_ships_a_dark_shot(self) -> None:
+        """A caption claiming "Dark Mode" over a light capture is a claim
+        about the product a reader cannot check from the file name, and the
+        default follows the OS rather than the file.
+        """
+        mislabelled = [
+            f"{match['path']} is captioned {match['heading']!r} but its ground averages "
+            f"{_png_ground(_ROOT / match['path'])}/255"
+            for match in self._CAPTION_RE.finditer(self._README.read_text(encoding="utf-8"))
+            if "dark" in match["heading"].lower()
+            and match["path"].lower().endswith(".png")
+            and _png_ground(_ROOT / match["path"]) > self._LIGHT_GROUND
+        ]
+        assert not mislabelled, mislabelled
+
+    def test_a_light_shot_is_not_captioned_as_the_default(self) -> None:
+        """The theme default is the OS preference, not whichever file is
+        first, so a heading that calls a capture the default is asserting
+        something about behaviour the dashboard does not have.
+        """
+        claimed = [
+            f"{match['path']} is captioned {match['heading']!r}"
+            for match in self._CAPTION_RE.finditer(self._README.read_text(encoding="utf-8"))
+            if "default" in match["heading"].lower()
+        ]
+        assert not claimed, (
+            "the dashboard follows the OS theme by default (`tokens.css`), so a screenshot "
+            f"section cannot call any one of its shots the default: {claimed}"
+        )
+
+
+def _png_ground(path: Path) -> int:
+    """The mean channel of a PNG's top-left 64 rows, the page chrome.
+
+    Enough to tell a light ground from a dark one, and stdlib only, so the
+    gate needs no image library. The PNG filters are un-applied because a
+    filtered row does not hold the pixels it appears to.
+    """
+    import struct
+    import zlib
+
+    data = path.read_bytes()
+    if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return 0
+    width, height = struct.unpack(">II", data[16:24])
+    idat = b""
+    offset = 8
+    while offset + 12 <= len(data):
+        length = struct.unpack(">I", data[offset : offset + 4])[0]
+        if data[offset + 4 : offset + 8] == b"IDAT":
+            idat += data[offset + 8 : offset + 8 + length]
+        offset += 12 + length
+    raw = zlib.decompress(idat)
+    stride = width * 3
+    columns = min(64, width)
+    rows = min(64, height)
+    total = 0
+    previous = bytearray(stride)
+    for y in range(rows):
+        start = y * (stride + 1)
+        filter_type = raw[start]
+        line = bytearray(raw[start + 1 : start + 1 + stride])
+        if filter_type == 1:
+            for x in range(3, stride):
+                line[x] = (line[x] + line[x - 3]) & 0xFF
+        elif filter_type in (2, 3, 4):
+            for x in range(stride):
+                left = line[x - 3] if x >= 3 else 0
+                up = previous[x]
+                if filter_type == 2:
+                    line[x] = (line[x] + up) & 0xFF
+                elif filter_type == 3:
+                    line[x] = (line[x] + ((left + up) >> 1)) & 0xFF
+                else:
+                    upper_left = previous[x - 3] if x >= 3 else 0
+                    estimate = left + up - upper_left
+                    da = abs(estimate - left)
+                    db = abs(estimate - up)
+                    dc = abs(estimate - upper_left)
+                    nearest = left if da <= db and da <= dc else (up if db <= dc else upper_left)
+                    line[x] = (line[x] + nearest) & 0xFF
+        total += sum(line[: columns * 3])
+        previous = line
+    return total // (rows * columns * 3)
+
+
 class TestShippedMetadataNamesItsAuthor:
     """Who wrote the package, as an installed copy can see it.
 

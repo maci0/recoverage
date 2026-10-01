@@ -1,6 +1,6 @@
 # recoverage
 
-![recoverage mascot: a raccoon detective reading a coverage grid](https://raw.githubusercontent.com/relumea/recoverage/main/docs/mascot.png)
+![recoverage mascot: a raccoon detective reading a coverage grid](https://raw.githubusercontent.com/relumea/recoverage/main/docs/mascot.jpg)
 
 Coverage dashboard for binary-matching decompilation projects, for the person
 whose decomp stopped matching the original binary and has to find out which part.
@@ -34,15 +34,21 @@ block that covers it.
 
 ## Screenshots
 
-### Dark Mode (the default)
+> [!NOTE]
+> These four shots predate the move onto the relumea brand tokens
+> (`web/app/system/tokens.css`) and still carry the older palette. The layout
+> they show is current; the colours are not. Re-shoot them from a running
+> `recoverage serve` before treating them as the product's current look.
+
+### Main dashboard
 
 ![Main dashboard, the coverage grid with section tabs and filter buttons](https://raw.githubusercontent.com/relumea/recoverage/main/docs/recoverage_main.png)
 
-### Function Detail
+### Function detail
 
 ![Function detail panel showing metadata, C source, and disassembly](https://raw.githubusercontent.com/relumea/recoverage/main/docs/recoverage_detail.png)
 
-### Dark Mode
+### Function detail, dark theme
 
 ![Dark mode with function detail panel](https://raw.githubusercontent.com/relumea/recoverage/main/docs/recoverage_dark.png)
 
