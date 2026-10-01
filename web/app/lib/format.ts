@@ -349,6 +349,10 @@ export function extractDocs(source: string): string | null {
 export const MSG = {
   LOADING: "Loading…",
   ASM_LOADING: "Loading the disassembly…",
+  /** The pane's text is shown, but the highlighter that colours it could not
+   * be loaded. A chunk fetch that fails is a visible state: plain text with no
+   * word here reads as a pane that simply has no colours. */
+  HIGHLIGHT_FAILED: "(syntax highlighting unavailable: the highlighter failed to load)",
   ERROR_PREFIX: "Error: ",
   SELECT_FUNCTION: "(select a function)",
   NO_C_SOURCE: "(no C implementation for this function yet)",

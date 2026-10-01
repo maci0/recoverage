@@ -5,6 +5,17 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- The dashboard's first paint got smaller: the syntax highlighter is no longer
+  part of the bundle the server inlines into the page, and is fetched the first
+  time a code pane opens. Nothing in the first frame reads it, so every visit
+  was paying for it. The page itself went from 53,767 to 40,527 bytes
+  compressed, and a first visit that never opens a code pane saves those bytes
+  outright. A pane opens showing its text immediately and colours it a moment
+  later, and if the highlighter cannot be loaded the pane says so instead of
+  staying uncoloured with no explanation.
+
 ### Fixed
 
 - The disassembly panel decoded every binary as 32-bit x86, so a 64-bit target

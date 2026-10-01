@@ -1,16 +1,24 @@
-import { useMemo } from "preact/compat";
+import { useEffect, useState } from "preact/compat";
 
 import type { ComponentChildren } from "preact";
 
 import { cn } from "@/lib/cn";
-import { highlightCode, type HighlightLanguage } from "@/lib/highlight";
+import { MSG } from "@/lib/format";
+import { highlightCode, loadHighlighter, type HighlightLanguage } from "@/lib/highlight";
 
 /** A pane's code block, highlighted.
  *
  * The HTML comes from highlight.js rather than from React children: the
  * highlighter returns markup, and escaping it would print the markup instead of
  * colouring the text. Addresses the disassembly pass turned into `<a>` elements
- * are routed back to the dashboard through one delegated click handler. */
+ * are routed back to the dashboard through one delegated click handler.
+ *
+ * The highlighter itself is loaded on demand (`loadHighlighter`), because it is
+ * a tenth of the SPA shell and only a SELECTION renders a pane. So the text is
+ * shown escaped and unhighlighted on the first paint and repainted in colour
+ * once the module lands — the pane is never blank and never waits on it. A
+ * failed import says so on the pane instead of leaving the reader with
+ * permanently plain text they cannot tell from a finished render. */
 
 export type HighlightedCodeProps = {
   text: string;
@@ -28,6 +36,8 @@ export type HighlightedCodeProps = {
   onAddressClick?: (address: string) => void;
 };
 
+type Highlighter = Awaited<ReturnType<typeof loadHighlighter>>;
+
 export function HighlightedCode({
   text,
   language,
@@ -36,7 +46,54 @@ export function HighlightedCode({
   region = true,
   onAddressClick,
 }: HighlightedCodeProps): ComponentChildren {
-  const html = useMemo(() => highlightCode(text, language), [language, text]);
+  const [highlighter, setHighlighter] = useState<Highlighter | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  // Only a pane with text asks for the highlighter, and only the first pane
+  // does any work: `loadHighlighter` memoises the in-flight load, so opening a
+  // second cell costs a resolved promise rather than a second request.
+  useEffect(() => {
+    if (text === "") {
+      return;
+    }
+    let live = true;
+    void (async () => {
+      try {
+        const hljs = await loadHighlighter();
+        if (live) {
+          setHighlighter(hljs);
+        }
+        // The rejection becomes a RENDERED state, not a silence: the pane keeps
+        // showing the text unhighlighted and says so underneath it, which is
+        // what a reader can act on. Re-throwing here would take the whole cell
+        // panel down over a missing syntax highlighter.
+        // oxlint-disable-next-line @rikalabs/no-silent-catch-fallback -- (perf, first-paint) the fallback is `setFailed`, which the pane renders as a status line; the rule's "return a typed error" is a state, and this one is on screen
+      } catch (error: unknown) {
+        if (live) {
+          setFailed(true);
+          // The console line is the diagnostic: the pane's own status names the
+          // condition for the reader, and the detail — which of the two
+          // failures, and which URL — is what a maintainer needs and a reader
+          // does not.
+          // oxlint-disable-next-line eslint/no-console -- the SPA has no logger, and a pane that can never highlight is worth one line here
+          console.error("recoverage: syntax highlighting unavailable", error);
+        }
+      }
+    })();
+    return () => {
+      live = false;
+    };
+  }, [text]);
+
+  // An empty pane has nothing to colour and nothing to show, so it does not
+  // render a border around a blank box and does not fetch the highlighter.
+  if (text === "") {
+    return null;
+  }
+
+  const html =
+    highlighter === null ? escapeHtml(text) : highlightCode(highlighter, text, language);
+
   return (
     <pre
       className={cn("code m-0 rounded-control border border-border bg-code p-3", className, {
@@ -51,6 +108,9 @@ export function HighlightedCode({
     >
       <code
         className="hljs block font-mono text-micro leading-code whitespace-pre"
+        // The highlighter's own output once it is loaded, escaped text before
+        // that: the same pane either way, and never unescaped document text.
+        dangerouslySetInnerHTML={{ __html: html }}
         onClick={(event) => {
           const { target } = event;
           if (!(target instanceof HTMLElement) || onAddressClick === undefined) {
@@ -63,11 +123,22 @@ export function HighlightedCode({
             onAddressClick(address);
           }
         }}
-        // The highlighter's own output, not user HTML: highlight.js escapes the
-        // text it is given, and the only markup added afterwards is the address
-        // anchor above.
-        dangerouslySetInnerHTML={{ __html: html }}
       />
+      {/* The status line is inside the labelled region, so a screen reader
+       * reaching the pane is told the same thing the line shows. `role=status`
+       * announces it without taking focus. */}
+      {failed && (
+        <span role="status" className="mt-2 block font-mono text-micro text-text-muted">
+          {MSG.HIGHLIGHT_FAILED}
+        </span>
+      )}
     </pre>
   );
+}
+
+function escapeHtml(text: string): string {
+  return text
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
 }

@@ -1457,7 +1457,9 @@ class TestTokenAuthEndpoint:
         assert not srv._auth_failures.get(WSGI_PEER)
         assert srv.metrics.AUTH.snapshot()["failures"] == failures
 
-    @pytest.mark.parametrize("path", ["/style.css", "/app.js", "/favicon.svg", "/potato"])
+    @pytest.mark.parametrize(
+        "path", ["/style.css", "/app.js", "/highlight.js", "/favicon.svg", "/potato"]
+    )
     def test_every_other_asset_stays_gated(self, path: str) -> None:
         from conftest import wsgi_get
 
@@ -2127,6 +2129,49 @@ class TestStaticAssetRevalidation:
         assert body_304 == b""
         assert headers_304["Etag"] == etag
         assert headers_304["Vary"] == "Accept-Encoding"
+
+    def test_the_highlighter_is_not_inlined_into_the_shell(self) -> None:
+        """The highlighter is a separate, lazy asset, and the shell must not
+        carry it.
+
+        `app.js` is an IIFE the shell inlines, and an IIFE cannot code-split, so
+        the highlighter is a second Vite build fetched on the first code pane
+        rather than a dynamic `import()`. The property this pins is the one that
+        was actually wrong: a highlighter left inside the entry puts ~10 KB
+        brotli of a library no first frame reads back onto the critical path,
+        and nothing else in the tree would notice. A regression that re-merges
+        the two entries is invisible in a size assertion on `app.js` alone, so
+        this reads the shell and asks what is IN it."""
+        from conftest import decode_body, wsgi_get
+
+        _, headers, body = wsgi_get("/", headers={"Accept-Encoding": "gzip"})
+        html = decode_body(body, headers).decode("utf-8")
+        # The loader is in the shell: it is the thing that fetches the rest.
+        assert "/highlight.js" in html
+        # The highlighter is not: its own language name appears nowhere, so an
+        # entry that merged the grammar tables back in fails here.
+        assert "X86 Assembly" not in html
+
+    def test_the_highlighter_is_served_as_a_cacheable_asset(self) -> None:
+        """/highlight.js is a first-class static asset.
+
+        It is the whole payload of the lazy path, so it has to carry the same
+        contract as `app.js`: a content type a script tag will execute, a
+        strong validator that revalidates rather than re-sends, `Vary` on the
+        negotiated encoding, and a 304 for a matching `If-None-Match`."""
+        from conftest import wsgi_get
+
+        status, headers, body = wsgi_get("/highlight.js", headers={"Accept-Encoding": "br"})
+        assert status.startswith("200")
+        assert headers["Content-Type"] == "application/javascript; charset=utf-8"
+        assert "Accept-Encoding" in headers["Vary"]
+        assert body
+        etag = headers["Etag"]
+        revalidated, _, revalidated_body = wsgi_get(
+            "/highlight.js", headers={"Accept-Encoding": "br", "If-None-Match": etag}
+        )
+        assert revalidated == "304 Not Modified"
+        assert not revalidated_body
 
     def test_index_etag_differs_per_encoding(self) -> None:
         """Same rule as the static assets: a strong validator must not match

@@ -37,6 +37,12 @@ _LEVELS: dict[str, int] = {
     "components": 2,
     "App": 3,
     "main": 4,
+    # The highlighter's own build entry: a second bundle the dashboard fetches
+    # on the first code pane, so it sits with `main` as an entry point. It
+    # imports no module of this app, so nothing points at it and nothing is
+    # imported through it; the level is here because the table must place every
+    # module, and an entry point is the top of the tree by definition.
+    "highlight-entry": 4,
 }
 
 #: ``import ... from "@/<spec>"`` and the bare ``import "<spec>"`` form, both

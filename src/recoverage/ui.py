@@ -607,7 +607,7 @@ def _not_modified(etag: str) -> HTTPResponse:
 
 
 @app.get(
-    "/<filename:re:(?:app\\.js|style\\.css|print\\.css|favicon\\.svg"
+    "/<filename:re:(?:app\\.js|style\\.css|print\\.css|favicon\\.svg|highlight\\.js"
     "|archivo\\.woff2|jetbrains-mono\\.woff2)>"
 )
 def serve_static_asset(filename: str) -> bytes | HTTPResponse:
