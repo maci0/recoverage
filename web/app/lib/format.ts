@@ -71,6 +71,54 @@ export function count(amount: number): string {
   return amount.toLocaleString();
 }
 
+/** A raw float reading, written the way the reader's locale writes a decimal.
+ *
+ * The Data Inspector's `float32` / `float64` cells print the value a PE image
+ * stores, and `toPrecision` printed it with a `.` and applied no grouping: a
+ * de-DE reader had `3.141593` beside the `count`-formatted integers of the
+ * same control, and an ar-EG reader had Latin digits in a row the rest of wrote
+ * in Arabic-Indic ones. Grouping is deliberately NOT added here, unlike
+ * `count`: a reading of the bytes at an address is a field read digit by digit
+ * beside a hex dump, and `1.234.567,5` is harder to read there than
+ * `1234567,5` is. The separator is the locale's and the digits are the
+ * value's.
+ *
+ * `maximumFractionDigits: 20` is as many as a double carries, so the reading
+ * is the one stored rather than a rounded one. `toPrecision` rounded, and
+ * rounded a value a reader can check: a `float64` of `1234567.5` printed as
+ * `1234568` beside a hex dump that says otherwise. */
+export function reading(measurement: number, locale?: string | ReadonlyArray<string>): string {
+  return measurement.toLocaleString(locale, {
+    useGrouping: false,
+    maximumFractionDigits: 20,
+  });
+}
+
+/** A count and the noun that agrees with it, in the reader's locale.
+ *
+ * The forms are supplied by the caller, which is where the English copy lives.
+ *
+ * A two-form test is not the whole of pluralization: Polish, Russian and
+ * Arabic select between categories `count === 1 ? "" : "es"` cannot name
+ * (`one`, `few`, `many`, and Arabic's six), so a UI served in one of them
+ * printed "1 matches" or "5 match" beside a count that was itself right.
+ * `Intl.PluralRules` is the one implementation of those rules the platform
+ * already carries, and the omitted *locale* is its own default: the reader's,
+ * read from the browser rather than from a locale this package would have to
+ * be told about, which is what a caller that names no locale wants. Naming one
+ * renders in that locale instead, which is what a language switcher passes and
+ * what the test drives. A category the caller supplied no form for falls back
+ * to `other` rather than dropping the noun, because a missing form is a
+ * missing translation and a missing noun is a broken sentence. */
+export function plural(
+  amount: number,
+  forms: Readonly<Partial<Record<Intl.LDMLPluralRule, string>>>,
+  locale?: string | ReadonlyArray<string>,
+): string {
+  const category = new Intl.PluralRules(locale, { type: "cardinal" }).select(amount);
+  return forms[category] ?? forms.other ?? "";
+}
+
 /** A bare calendar day, `YYYY-MM-DD`, with no time and no offset. The `u` flag
  * is the Unicode-aware parser; `\d` stays ASCII digits under it, so a
  * non-ASCII digit spelling still fails the test and the stamp falls back to

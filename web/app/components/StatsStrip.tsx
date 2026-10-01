@@ -3,7 +3,7 @@ import type { ComponentChildren } from "preact";
 import type { StatsPayload } from "@/api";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
-import { count, percentLabel } from "@/lib/format";
+import { count, percentLabel, plural } from "@/lib/format";
 import { STATE_FILTERS, swatchForFilter } from "@/states";
 
 /** The bucket `/stats` counts a state under. Only the tooling failures differ:
@@ -86,7 +86,12 @@ export function StatsStrip({
               active={on}
               aria-pressed={on}
               aria-label={
-                blocks === null ? entry.label : `${entry.label}, ${count(blocks)} blocks`
+                blocks === null
+                  ? entry.label
+                  : `${entry.label}, ${count(blocks)} ${plural(blocks, {
+                      one: "block",
+                      other: "blocks",
+                    })}`
               }
               title={entry.title}
               onClick={() => onToggleFilter(entry.key)}
@@ -145,7 +150,9 @@ function Summary({
       </b>
       <span className="text-data text-text-muted">
         of the target covered, {count(summary.matchedFunctions)} of{" "}
-        {count(summary.totalFunctions)} functions matched
+        {count(summary.totalFunctions)}{" "}
+        {plural(summary.matchedFunctions, { one: "function", other: "functions" })}{" "}
+        matched
         {section === null || sectionPct === null ? null : (
           <>
             {" · "}

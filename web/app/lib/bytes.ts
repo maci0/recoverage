@@ -6,7 +6,7 @@
  * `format.count`, because a `uint32` is ten digits wide and `String` spells
  * those the same for every reader. */
 
-import { count, hex } from "@/lib/format";
+import { count, hex, reading } from "@/lib/format";
 
 export type InspectorItem = { label: string; value: string; fullWidth?: boolean };
 
@@ -62,14 +62,14 @@ export function inspectBytes(buffer: ArrayBuffer): Array<InspectorItem> {
       label: "float32",
       value: read(4, () => {
         const value = view.getFloat32(0, true);
-        return Number.isFinite(value) ? value.toPrecision(7) : String(value);
+        return Number.isFinite(value) ? reading(value) : String(value);
       }),
     },
     {
       label: "float64",
       value: read(8, () => {
         const value = view.getFloat64(0, true);
-        return Number.isFinite(value) ? value.toPrecision(15) : String(value);
+        return Number.isFinite(value) ? reading(value) : String(value);
       }),
     },
   ];

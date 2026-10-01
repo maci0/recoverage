@@ -20,6 +20,7 @@ import {
   foldForSearch,
   hex,
   isolate,
+  plural,
   sameOriginPath,
   toVa,
   trimSearch,
@@ -597,9 +598,10 @@ export function App() {
     if (matchedNames === null) {
       return `Searching for "${query}": loading the function index…`;
     }
-    return `${count(matchedNames.size)} ${
-      matchedNames.size === 1 ? "match" : "matches"
-    } for "${query}"${searchHint(matchedNames.size, sectionMatches, active?.name ?? null, resultsOpen)}`;
+    return `${count(matchedNames.size)} ${plural(matchedNames.size, {
+      one: "match",
+      other: "matches",
+    })} for "${query}"${searchHint(matchedNames.size, sectionMatches, active?.name ?? null, resultsOpen)}`;
   }, [active?.name, matchedNames, query, resultsOpen, sectionMatches]);
 
   /** The section an address falls in, for a search result's own row. Every
@@ -1269,7 +1271,10 @@ function describeMapArea(
   }
   const filtered =
     filters.size > 0 ? ` Filtered by ${[...filters].toSorted().join(", ")}.` : "";
-  return `${isolate(active.name)} map, ${count(active.cells.length)} blocks.${filtered}`;
+  return `${isolate(active.name)} map, ${count(active.cells.length)} ${plural(
+    active.cells.length,
+    { one: "block", other: "blocks" },
+  )}.${filtered}`;
 }
 
 function pending(text: string): ComponentChildren {

@@ -1,7 +1,7 @@
 import type { ComponentChildren } from "preact";
 
 import type { SearchEntry } from "@/api";
-import { count, hex, isolate, toVa } from "@/lib/format";
+import { count, hex, isolate, plural, toVa } from "@/lib/format";
 
 /** One match, as the result list draws it. */
 export type SearchResult = {
@@ -49,7 +49,7 @@ export function SearchResults({
           <li key={`${result.name}-${result.va}`}>
             <button
               type="button"
-              className="search-result flex min-h-8 w-full cursor-pointer items-baseline gap-2 rounded-chip border-0 bg-transparent px-2 py-1.5 text-left font-mono text-micro text-text hover:bg-surface-2"
+              className="search-result flex min-h-8 w-full cursor-pointer items-baseline gap-2 rounded-chip border-0 bg-transparent px-2 py-1.5 text-start font-mono text-micro text-text hover:bg-surface-2"
               onClick={() => onPick(result)}
             >
               <span className="min-w-0 grow truncate" dir="auto">
@@ -85,7 +85,8 @@ export function SearchResults({
       </ol>
       {hidden > 0 ? (
         <p className="m-0 border-0 border-t border-border px-3 py-2 text-micro text-text-muted">
-          {count(hidden)} more match{hidden === 1 ? "" : "es"} not shown. Narrow the search to see them.
+          {count(hidden)} more {plural(hidden, { one: "match", other: "matches" })} not shown. Narrow
+          the search to see them.
         </p>
       ) : null}
     </div>

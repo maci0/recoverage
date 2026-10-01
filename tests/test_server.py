@@ -4085,6 +4085,286 @@ class TestSpaTimestampRendering:
             assert unreadable == "not a timestamp", f"{zone}: an unreadable stamp was rendered"
 
 
+class TestSpaCountsAgreeWithTheReadersLocale:
+    """A count the reader's locale does not write is a wrong count.
+
+    The SPA hands every number to `Intl` (`percent1`, `count`, `dateTime`),
+    and two kinds of surface were the exceptions, each of them beside a call
+    site that did it right:
+
+    * the Data Inspector's `float32` / `float64` cells used `toPrecision`,
+      which spells a `.` and rounds: a de-DE reader had `3.141593` beside the
+      `count`-formatted integers of the same control, an ar-EG reader had Latin
+      digits in a row the rest of wrote in Arabic-Indic ones, and a
+      `float64` holding `1234567.5` printed as `1234568` beside a hex dump
+      that says otherwise;
+    * the match, block and function counts spliced a `=== 1 ? one : many` test
+      into the sentence. That is right in en-US and nowhere else: Polish,
+      Russian and Arabic select between `one`, `few`, `many` and (for Arabic)
+      six categories, so a translated surface reads "1 matches" or "5 match"
+      beside a count that was itself right.
+
+    `format.plural` and `format.reading` are the fixes, and both take a named
+    locale, which is what the assertions below drive them with: they are the
+    same code path a reader's own locale takes (the default argument), so
+    naming one only makes the rendering observable from a test that cannot
+    change the machine's locale.
+    """
+
+    #: One locale per shape the two-form test got wrong: en-US is the one that
+    #: passed, de-DE the comma decimal, ar-EG the RTL locale with its own
+    #: digits, pl and ru the `few` category a two-form test cannot name, and
+    #: ja a CJK locale, which groups and pluralizes as en does and is here to
+    #: prove the helpers do not branch on script.
+    LOCALES = ("en-US", "de-DE", "ar-EG", "pl", "ru", "ja")
+
+    #: The counts below are indexed by these, in order. Russian differs from
+    #: Polish at 21 (`one`, the teens rule) and 101 (`one`, the hundreds rule),
+    #: which is what keeps the two rows from being one table typed twice.
+    SAMPLES = (0, 1, 2, 3, 5, 11, 21, 22, 101)
+
+    #: The category CLDR names for each locale and count, and the rendering of
+    #: the three readings a `float32`/`float64` cell prints. Written out
+    #: rather than computed: the oracle is what a browser does, and a table
+    #: recomputed by the same `Intl` the code calls would agree with itself
+    #: through a regression.
+    #: - pl/ru: `few` for 2-4 and a teen's parent (22), `many` for 0, 5 and 11;
+    #:   ru alone reads 21 and 101 as `one`.
+    #: - ar-EG: `zero`, `one`, `two`, then `few` to 10, `many` to 99, and
+    #:   `other` beyond, which is where the six categories go.
+    EXPECTED: ClassVar[dict[str, dict[str, list[str]]]] = {
+        "en-US": {
+            "plural": [
+                "other",
+                "one",
+                "other",
+                "other",
+                "other",
+                "other",
+                "other",
+                "other",
+                "other",
+            ],
+            "readings": ["3.14159265358979", "1234567.5", "0.5"],
+        },
+        "de-DE": {
+            "plural": [
+                "other",
+                "one",
+                "other",
+                "other",
+                "other",
+                "other",
+                "other",
+                "other",
+                "other",
+            ],
+            "readings": ["3,14159265358979", "1234567,5", "0,5"],
+        },
+        "ar-EG": {
+            "plural": ["zero", "one", "two", "few", "few", "many", "many", "many", "other"],
+            "readings": [
+                "\u0663\u066b\u0661\u0664\u0661\u0665\u0669\u0662\u0666\u0665\u0663\u0665\u0668\u0669\u0667\u0669",
+                "\u0661\u0662\u0663\u0664\u0665\u0666\u0667\u066b\u0665",
+                "\u0660\u066b\u0665",
+            ],
+        },
+        "pl": {
+            "plural": ["many", "one", "few", "few", "many", "many", "many", "few", "many"],
+            "readings": ["3,14159265358979", "1234567,5", "0,5"],
+        },
+        "ru": {
+            "plural": ["many", "one", "few", "few", "many", "many", "one", "few", "one"],
+            "readings": ["3,14159265358979", "1234567,5", "0,5"],
+        },
+        "ja": {
+            "plural": [
+                "other",
+                "other",
+                "other",
+                "other",
+                "other",
+                "other",
+                "other",
+                "other",
+                "other",
+            ],
+            "readings": ["3.14159265358979", "1234567.5", "0.5"],
+        },
+    }
+
+    def _render(self, driver_body: str = "") -> dict[str, object]:
+        """Run *driver_body* over the shipped module and return its JSON.
+
+        `node` rather than `bun`: bun's `Intl` carries no locale data beyond
+        en-US, so it rendered `de-DE` and `ar-EG` through the en-US fallback
+        and a harness run under it would have passed a `toPrecision`-shaped
+        helper for a locale-aware one. `node` has read the CLDR tables, and it
+        runs the module's TypeScript directly.
+        """
+        node = shutil.which("node")
+        if node is None:
+            pytest.skip("node not on PATH")
+        driver = (
+            "import { plural, reading } from "
+            + json.dumps(str(WEB_APP / "lib" / "format.ts"))
+            + ";\n"
+            "const forms = { zero: 'zero', one: 'one', two: 'two', few: 'few',"
+            " many: 'many', other: 'other' };\n"
+            "const samples = " + json.dumps(list(self.SAMPLES)) + ";\n"
+            "const out = {};\n"
+            "for (const locale of " + json.dumps(list(self.LOCALES)) + ") {\n"
+            "  out[locale] = {\n"
+            "    plural: samples.map((n) => plural(n, forms, locale)),\n"
+            "    readings: [reading(3.14159265358979, locale), reading(1234567.5, locale),"
+            " reading(0.5, locale)],\n"
+            "  };\n"
+            "}\n" + driver_body + "console.log(JSON.stringify(out));\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            script = Path(tmp) / "locale.mts"
+            script.write_text(driver, encoding="utf-8")
+            proc = subprocess.run(
+                [node, str(script)],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
+            )
+            assert proc.returncode == 0, f"locale harness failed to run: {proc.stderr}"
+            return json.loads(proc.stdout)
+
+    def test_the_plural_category_is_the_locales_own(self) -> None:
+        """`plural` selects through `Intl.PluralRules`, so 2 in Polish is
+        `few` and 0 is `many`: a two-form test can name neither, and 5 in
+        Polish is `many` where en-US reads `other`."""
+        rendered = self._render()
+        for locale, expected in self.EXPECTED.items():
+            assert rendered[locale]["plural"] == expected["plural"], (
+                f"{locale}: the plural category is not the locale's own"
+            )
+        # The two-form test this replaced, spelled out: every locale but en-US
+        # and ja would have got at least one of these wrong.
+        english = self.EXPECTED["en-US"]["plural"]
+        assert any(self.EXPECTED[loc]["plural"] != english for loc in self.LOCALES), (
+            "the fixture no longer distinguishes a locale-aware selection"
+        )
+
+    def test_a_reading_is_spelled_the_locale_spells_it_and_keeps_its_digits(
+        self,
+    ) -> None:
+        """The Data Inspector's float cells went through `toPrecision`, which
+        emits a `.` and rounds: beside the `count`-formatted integers of the
+        same control, a de-DE reader had `3.141593` next to `1.234.567`, an
+        ar-EG reader had Latin digits in a row the rest wrote in Arabic-Indic
+        ones, and every reader had `1234568` for a `float64` that stored
+        `1234567.5`."""
+        rendered = self._render()
+        for locale, expected in self.EXPECTED.items():
+            assert rendered[locale]["readings"] == expected["readings"], (
+                f"{locale}: a reading is not spelled the locale spells it, or was rounded"
+            )
+        # No locale rounds `1234567.5` to a whole number, which is the whole
+        # of the `toPrecision` regression and the reason the helper carries
+        # `maximumFractionDigits` rather than significant figures.
+        for locale, out in rendered.items():
+            assert "1234568" not in out["readings"], f"{locale}: the reading was rounded"
+
+    def test_a_form_the_caller_omitted_falls_back_to_other(self) -> None:
+        """A translator who has not reached a category yet gets the `other`
+        form, not a missing noun: an English form table served in Polish or
+        Arabic renders every count, because their `few`, `many` and `two` all
+        fall through to the one form it carries."""
+        driver = (
+            "const twoForms = { one: 'match', other: 'matches' };\n"
+            "out.twoForms = Object.fromEntries(['en-US', 'pl', 'ru', 'ar-EG'].map("
+            "(loc) => [loc, [0, 1, 2, 3, 5].map((n) => plural(n, twoForms, loc))]));\n"
+        )
+        rendered = self._render(driver)
+        two_forms = rendered["twoForms"]
+        assert isinstance(two_forms, dict)
+        for locale, row in two_forms.items():
+            assert row == ["matches", "match", "matches", "matches", "matches"], (
+                f"{locale}: a missing form took the wrong branch or lost the noun"
+            )
+        # The `one` form is still reached where the locale names it, so the
+        # fallback is a fallback rather than the whole of the rule. This is
+        # the assertion a two-form test cannot satisfy on its own: the forms
+        # it is given ARE two, and what is being checked is that the
+        # *selection* between them is the locale's.
+        assert two_forms["en-US"][1] == "match"
+        assert two_forms["pl"][1] == "match"
+        assert two_forms["ar-EG"][1] == "match"
+
+    def test_a_category_beyond_two_forms_is_reached(self) -> None:
+        """The shape a `count === 1 ? one : other` can never produce: a Polish
+        or Arabic form table carrying `few` and `many` renders them, because
+        the selection is the locale's and not the caller's. Without this, a
+        two-form helper passes every other assertion in this class by
+        resolving `one` and falling through, which is exactly the regression
+        the surfaces above were fixed for.
+        """
+        driver = (
+            "const rich = { one: 'jeden', few: 'kilka', many: 'wiele', other: 'inne' };\n"
+            "const arabic = { zero: 'zero', one: 'one', two: 'two', few: 'few',"
+            " many: 'many', other: 'other' };\n"
+            "out.rich = Object.fromEntries(['pl', 'ru'].map((loc) =>"
+            " [loc, [0, 1, 2, 3, 5].map((n) => plural(n, rich, loc))]));\n"
+            "out.arabic = [0, 1, 2, 3, 5].map((n) => plural(n, arabic, 'ar-EG'));\n"
+        )
+        rendered = self._render(driver)
+        # Polish: 1 is `one`, 2 and 3 are `few`, 0 and 5 are `many`.
+        assert rendered["rich"]["pl"] == ["wiele", "jeden", "kilka", "kilka", "wiele"]
+        # Russian: the same three here, by a rule that differs at 11.
+        assert rendered["rich"]["ru"] == ["wiele", "jeden", "kilka", "kilka", "wiele"]
+        # Arabic names a category per leading digit: zero, one, two, few.
+        assert rendered["arabic"] == ["zero", "one", "two", "few", "few"]
+
+    def test_no_count_reaches_the_sentence_through_a_two_form_test(self) -> None:
+        """The call sites, read as text: the hand-rolled `=== 1 ? "" : "es"` is
+        the exact shape this class exists to keep out of the tree, and the
+        helper has to be reachable from each of the surfaces that renders a
+        count rather than present in the module alone."""
+        app = _web("App.tsx")
+        for relative in (
+            "App.tsx",
+            "components/SearchResults.tsx",
+            "components/StatsStrip.tsx",
+        ):
+            source = _web(relative)
+            assert "=== 1 ? " not in source, f"{relative} spells a count by hand"
+            assert "plural(" in source, f"{relative} lost its plural helper"
+        # Each surface's own count, named so a surface that stopped calling
+        # the helper cannot pass on a sibling's use of it.
+        assert "plural(matchedNames.size" in app, "the search count is unrouted"
+        assert "active.cells.length" in app, "the map's block count is unrouted"
+        # The helper's own call: `plural(\n    active.cells.length,` spans a
+        # line break, so match the pair rather than either half of it.
+        assert "plural(\n    active.cells.length" in app, (
+            "the map's block count no longer goes through the helper"
+        )
+        assert "plural(hidden," in _web("components/SearchResults.tsx"), (
+            "the capped-list count is unrouted"
+        )
+        strip = _web("components/StatsStrip.tsx")
+        assert "plural(blocks," in strip, "the section block count is unrouted"
+        assert "plural(summary.matchedFunctions," in strip, "the matched-function count is unrouted"
+
+    def test_the_data_inspector_reads_its_floats_through_the_helper(self) -> None:
+        """`toPrecision` is the one number formatter left in the tree with no
+        locale in it, and the one that rounded a binary reading."""
+        source = _web("lib/bytes.ts")
+        assert "toPrecision(" not in source, "the float readings are back on toPrecision"
+        assert "reading(" in source
+
+    def test_the_search_row_alignment_follows_the_writing_direction(self) -> None:
+        """`text-left` is a physical alignment on a row whose name and symbol
+        cells are `dir="auto"`, so an Arabic or Hebrew row's text pinned to
+        the left while its own direction ran the other way."""
+        assert "text-left" not in _web("components/SearchResults.tsx")
+        assert "text-start" in _web("components/SearchResults.tsx")
+
+
 class TestSpaSearchFoldsLikeTheServer:
     """The search box compares in the same form `server.fold_match` does.
 
