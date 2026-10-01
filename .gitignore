@@ -41,10 +41,28 @@ coverage.db.lock
 web/dist/
 .uv-cache/
 
-# The sbom job's two artifacts, by the names it uploads them under. The job
+# The sbom job's three artifacts, by the names it uploads them under. The job
 # writes them on the runner, where nothing reads the tree afterwards, but
 # `make python-sbom > recoverage-python-sbom.txt` is the documented way to
 # reproduce one on a workstation, and a root file an ignore list does not name
-# is one `git add .` picks up.
+# is one `git add .` picks up.  The SPDX document is named by the job too
+# (`tools/bundled_js_inventory.py --format spdx --output`), and listing only
+# the two .txt files left the third one a `git add .` would have swept into a
+# commit; `make browser-sbom-spdx` writes it at the same root.
 recoverage-python-sbom.txt
 recoverage-browser-sbom.txt
+recoverage-browser-spdx.json
+
+# The sibling rebrew checkout, as a link inside this tree.  Nothing here reads
+# it: the uv sources table in pyproject.toml and the Makefile both resolve
+# `../rebrew`, which is OUTSIDE the work tree, so a link here is not what any
+# gate or build resolves.  One was committed anyway, pointing at an absolute
+# /tmp path that resolves on the machine that made it and nowhere else: every
+# other clone got a dangling entry, and `git ls-files | tar` -- which the build
+# job uses to stage its reproducibility rebuild -- carried it into that tree
+# verbatim, where it stood in for the sibling checkout the same step links in
+# from $GITHUB_WORKSPACE/../rebrew.  A worktree or a contributor who links the
+# sibling in place still works; that link is a local convenience, not source.
+# tests/test_supply_chain.py (TestSiblingCheckoutIsNotATrackedLink) holds it out
+# of the index.
+/rebrew

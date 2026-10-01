@@ -18,6 +18,7 @@ import importlib.metadata
 import importlib.util
 import json
 import re
+import subprocess
 import sys
 import tomllib
 from itertools import pairwise
@@ -91,6 +92,9 @@ _ACTION_USE_RE = re.compile(r"\.github/actions/sibling-rebrew|tools/ci_clone_reb
 _PINS = {"REBREW_REF": "v2.16.0", "REBREW_SHA": "6713531551b396c842d76d7c70aa35616accf229"}
 # How a job names the composite action that fetches the sibling checkout.
 _SIBLING_ACTION_STEP = "uses: ./.github/actions/sibling-rebrew"
+# What _git_lines returns for a tree git cannot answer for. A check that read
+# an empty result instead would pass on a tree that is not a work tree at all.
+_NO_GIT = "<git unavailable>"
 
 # The test modules [tool.mypy] `files` does not name, and what each one is
 # waiting on. This is the deferral list, not an approval: a module is here
@@ -441,6 +445,146 @@ class TestRbrewPin:
             assert pinned.group(1) == _default(
                 _MAKEFILE.read_text(encoding="utf-8"), "UV_VERSION"
             ), "ci.yml installs a different uv than the Makefile's UV_VERSION"
+
+
+class TestSiblingCheckoutIsNotATrackedLink:
+    """The sibling rebrew checkout is resolved from OUTSIDE this tree.
+
+    `../rebrew` is where the uv sources table and the Makefile both look, so
+    nothing in this repository needs a `rebrew` entry of its own. A tracked one
+    is worse than dead weight: an absolute symlink target resolves on the
+    machine that committed it and nowhere else, so every other clone carries a
+    dangling entry, and the build job's `git ls-files | tar` stages it into the
+    reproducibility rebuild verbatim -- where it sits next to the sibling link
+    that same step creates from $GITHUB_WORKSPACE/../rebrew, and a dangling
+    entry there reads like the checkout that step just made.
+
+    The index is the thing to read rather than the filesystem: a contributor
+    who links the sibling in place locally is working, not breaking, and
+    .gitignore names the path so `git add .` will not sweep the link up. That
+    is why this asks git what is tracked instead of asking whether the file is
+    on disk.
+    """
+
+    def test_the_sibling_is_not_a_tracked_entry(self) -> None:
+        """No tracked `rebrew` at the repository root, symlink or otherwise."""
+        tracked = _tracked_paths()
+        assert "rebrew" not in tracked, (
+            "rebrew is tracked at the repository root; the sibling checkout is "
+            "resolved from ../rebrew and this entry resolves on no other machine"
+        )
+
+    def test_no_tracked_path_leaves_the_tree(self) -> None:
+        """No tracked symlink points outside the work tree.
+
+        The general shape of the finding above, because a link that escapes the
+        tree is the same hazard whatever it is named: git stores the target, so
+        the tree a build stages from carries whatever that target happens to
+        point at on the machine that made the link, and the clone a reader
+        performs resolves it against their own filesystem instead.
+        """
+        escaping = {
+            path: target
+            for path, target in _tracked_symlink_targets().items()
+            if Path(target).is_absolute() or not _inside_tree(target, _ROOT / path)
+        }
+        assert not escaping, f"tracked symlinks leaving the tree: {escaping}"
+
+    def test_the_ignore_entry_survives_so_the_link_stays_untracked(self) -> None:
+        """The path is named in .gitignore, or `git add .` re-tracks it.
+
+        Without the entry, the next contributor to link the sibling in place
+        commits an absolute path again and this class goes quiet for another
+        release. Checking the pattern rather than whether the link exists keeps
+        the assertion true on a tree that has never made one.
+        """
+        patterns = {
+            line.strip()
+            for line in (_ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        }
+        assert "/rebrew" in patterns or "rebrew" in patterns, (
+            ".gitignore no longer names the sibling link, so `git add .` re-tracks it"
+        )
+
+
+def _git_lines(*args: str) -> list[str]:
+    """Lines of one read-only git query, or a single marker when git is absent.
+
+    The supply-chain gates read what the INDEX holds, which is the only place
+    the answer to "is this tracked" lives: the working tree and the commit can
+    disagree, and the file on disk says nothing about either. A tree that is
+    not a work tree yields the marker, and every caller says what it expects
+    rather than passing on an empty answer that reads as clean.
+    """
+    try:
+        proc = subprocess.run(
+            ["git", *args],
+            cwd=_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return [_NO_GIT]
+    if proc.returncode != 0:
+        return [_NO_GIT]
+    return [line for line in proc.stdout.splitlines() if line]
+
+
+def _tracked_paths() -> set[str]:
+    """Every path in the index, as a path relative to the repository root."""
+    paths = _git_lines("ls-files")
+    if paths == [_NO_GIT]:
+        raise AssertionError("git could not list the index")
+    return set(paths)
+
+
+def _tracked_symlink_targets() -> dict[str, str]:
+    """Tracked symlinks, as the path relative to the root -> stored target.
+
+    `ls-files --stage` carries the mode in the first field, and 120000 is the
+    symlink mode; everything else in the index (100644 a file, 100755 an
+    executable, 160000 a gitlink/submodule) is a path this does not answer for.
+
+    The target is read with `git cat-file`, not by following the link on disk.
+    The file and the index are two different answers and only the second is what
+    this tree would stage: a link deleted from the work tree but not yet
+    committed is still tracked, and there is no link left on disk to read, so
+    anything derived from the path would report the path itself -- which reads
+    as contained when the blob git stores names somewhere else entirely.
+    """
+    stage = _git_lines("ls-files", "--stage")
+    if stage == [_NO_GIT]:
+        raise AssertionError("git could not read the index modes")
+    links: dict[str, str] = {}
+    for line in stage:
+        fields = line.split(maxsplit=3)
+        if len(fields) != 4 or fields[0] != "120000":
+            continue
+        path, blob = fields[3], fields[1]
+        target = _git_lines("cat-file", "blob", blob)
+        if target == [_NO_GIT]:
+            raise AssertionError(f"git could not read the stored target of {path}")
+        links[path] = "\n".join(target)
+    return links
+
+
+def _inside_tree(target: str, link_path: Path) -> bool:
+    """Whether `target`, read relative to `link_path`'s directory, stays inside.
+
+    A relative link resolves against the directory holding it, not against the
+    root, so a path that looks contained by inspection can still climb out with
+    `..`. This is the same rule `server.is_plain_relative` applies to a request
+    path, applied to the tree instead: resolve, then compare against the base.
+    """
+    resolved = (link_path.parent / target).resolve(strict=False)
+    try:
+        resolved.relative_to(_ROOT.resolve())
+    except ValueError:
+        return False
+    return True
 
 
 class TestActionsArePinned:

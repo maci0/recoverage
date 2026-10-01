@@ -30,6 +30,13 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The "Skip to main content" link now lands somewhere focusable, so the next
   Tab continues from the start of the content rather than from wherever the
   browser last had focus.
+- The repository no longer tracks a `rebrew` symlink pointing at an absolute
+  `/tmp` path. It resolved on the machine that committed it and nowhere else,
+  so every clone carried a dangling entry, and the build job's copy of the
+  tracked tree — the reproducibility rebuild — carried it into that tree beside
+  the sibling checkout the same step links in. Linking `../rebrew` in place is
+  still the supported way to work in a checkout whose sibling is elsewhere, and
+  the path is now ignored so the link is not committed by accident.
 
 ## [4.2.0] - 2026-10-01
 
