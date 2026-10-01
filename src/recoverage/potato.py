@@ -59,6 +59,7 @@ from recoverage.server import (
     fs_url_quote,
     function_json,
     function_sort_key,
+    functions_by_name,
     global_json,
     is_plain_relative,
     load_metadata,
@@ -1983,6 +1984,14 @@ def _search_functions(coverage: CoverageSnapshot, search_query: str) -> set[str]
     returns.  Addresses go through :func:`_va_matches_folded`, and ``vaStart``
     is matched as well because it is the spelling a ``.text`` cell stores.
 
+    The returned set is NAMES, one per matching row and no address spelling
+    beside it, because that is what the reader is told: the topbar's
+    "N matches" line counts it, and a row that added its ``vaStart`` too
+    counted twice, so one function found by address read as "2 matches".  The
+    grid needs those address strings as well, to dim the cells that store one,
+    and :func:`_cell_dim_keys` derives them from this set rather than this
+    function returning a set with two kinds of entry in it.
+
     The row cap bounds what the page can show, so it also bounds the dimming:
     a project matching more rows than the cap dims the first
     ``_SEARCH_ROW_LIMIT`` of them, and the rest read as no match.  Naming the
@@ -2024,11 +2033,6 @@ def _search_functions(coverage: CoverageSnapshot, search_query: str) -> set[str]
         key=lambda fn: (fn.name, fn.vaStart),
     ):
         search_matched_fns.add(fn.name)
-        if fn.vaStart:
-            # Grid .text cells store the function's vaStart string (not the
-            # name) in their `functions` field — the dimming test compares
-            # cell entries against this set, so VA spellings must be included.
-            search_matched_fns.add(fn.vaStart)
 
     folded_gls = folded_row_columns(coverage, coverage.globals)
     folded_gl_vas = folded_va_columns(coverage, coverage.globals) if match_hex else None
@@ -2046,6 +2050,35 @@ def _search_functions(coverage: CoverageSnapshot, search_query: str) -> set[str]
     )
     search_matched_fns.update(gl.name for gl in gl_rows)
     return search_matched_fns
+
+
+def _cell_dim_keys(coverage: CoverageSnapshot, matched: set[str]) -> set[str]:
+    """The values a grid cell's ``functions`` field is tested against for *matched*.
+
+    A ``.text`` cell does not store the function's name: it stores the
+    ``vaStart`` string, so the dimming test in :func:`_build_grid_html` finds
+    no match for a name-only set and greys every cell of a row the search had
+    found.  The address spellings are therefore added here rather than folded
+    into :func:`_search_functions`'s return value, which counts rows for the
+    topbar and would count each function twice.
+
+    The walk is over *matched*, resolved through the snapshot's name index, so
+    it is O(len(matched)) rather than another pass over every function; a name
+    naming no row contributes nothing, which is what keeps a global's entry
+    from carrying an address no function cell holds.
+    """
+    if not matched:
+        return set()
+    keys = set(matched)
+    # `.exact`, not `_name_match`: every name here came out of this same
+    # snapshot's own rows, so it is a byte-equal hit and the folded arm cannot
+    # resolve one the exact arm misses.
+    by_name = functions_by_name(coverage).exact
+    for name in matched:
+        fn = by_name.get(name)
+        if fn is not None and fn.vaStart:
+            keys.add(fn.vaStart)
+    return keys
 
 
 #: The search box's own accesskey.  Claimed before anything else derives one,
@@ -3040,8 +3073,14 @@ def _render_potato_inner(
         # rows in full. Folding every function to build it is a per-keystroke
         # pass over the whole list (measured 13 ms on a 6000-function target),
         # and the functions view renders none of it.
-        search_matched_fns = _search_functions(coverage, search_query)
-        search_match_count = len(search_matched_fns)
+        #
+        # The COUNT is the matched NAMES, one per row, which is what the reader
+        # is told; the grid below is handed the wider dim set, which carries the
+        # `vaStart` spellings a .text cell stores beside them. One set served
+        # both and read "2 matches" for a single function found by its address.
+        matched_fns = _search_functions(coverage, search_query)
+        search_match_count = len(matched_fns)
+        search_matched_fns = _cell_dim_keys(coverage, matched_fns)
         grid_html, block_count, panel_html, sec_stats = _render_grid_view(
             coverage,
             target,

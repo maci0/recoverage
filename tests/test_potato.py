@@ -2807,6 +2807,38 @@ class TestSearchLimit:
         assert len(result) == 500
         assert result == set(sorted(names)[:500])
 
+    def test_the_match_set_counts_rows_and_the_dim_set_carries_addresses(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """One match, one count; the grid's own key set is the wider one.
+
+        A ``.text`` cell stores its function's ``vaStart`` string, not its
+        name, so the dimming test compares cell entries against a set that
+        carries both spellings.  That set was the one `_search_functions`
+        returned, and the topbar's "N matches" line counts it: a single
+        function found by its address read "2 matches".  The count therefore
+        takes the names alone and `_cell_dim_keys` derives the grid's set, so
+        neither the count nor the dimming can drift apart again.
+        """
+        from recoverage.potato import _cell_dim_keys, _search_functions
+
+        snap = _write_doc(
+            tmp_path,
+            monkeypatch,
+            "T",
+            {".text": {"size": 16, "cells": [cell(0, 16, "exact")]}},
+            functions=[{"va": 0x401000, "vaStart": "0x401000", "name": "matched_row"}],
+            globals_=[{"va": 0x402000, "name": "g_counter"}],
+        )
+        matched = _search_functions(snap, "matched_row")
+        assert matched == {"matched_row"}, matched
+        assert len(matched) == 1
+        # The grid still dims the cells, which carry the address spelling.
+        assert _cell_dim_keys(snap, matched) == {"matched_row", "0x401000"}
+        # A global names no function row, so it carries no address with it.
+        assert _cell_dim_keys(snap, {"g_counter"}) == {"g_counter"}
+        assert _cell_dim_keys(snap, set()) == set()
+
     def test_globals_cap_is_deterministic(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         """With >500 matches, which globals enter the dimming set must be
         reproducible: the 500-row cap is only deterministic with an ordering,
