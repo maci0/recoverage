@@ -7298,6 +7298,47 @@ class TestDataSearchIndexOptOut:
             assert status.startswith("200"), status
             assert "search_index" in json.loads(decode_body(body, headers))
 
+    def test_a_symbol_that_repeats_its_own_key_is_omitted(self) -> None:
+        """The value half of an index entry is dropped when it is a copy of the key.
+
+        rebrew stores ``symbol == name`` for a function whose symbol IS its
+        name, and every global carries ``""``.  The SPA labels a result row with
+        the key and draws the symbol beside it only when the two differ, and it
+        folds ``key + symbol`` into one haystack, so the repeat can match no
+        substring test the key does not already match.  The index rides the
+        FIRST load whether or not the search box is ever opened, so the copy is
+        bytes on every visitor's critical path for nothing.
+        """
+        api._clear_data_cache()
+        target = require_target()
+        status, headers, body = wsgi_get(f"/api/targets/{target}/data")
+        assert status.startswith("200"), status
+        index = json.loads(decode_body(body, headers))["search_index"]
+
+        # Every fixture function's symbol is its name; every global's is empty.
+        assert index["_func_a"] == {"va": "0x10001000"}
+        assert index["g_counter"] == {"va": "0x10002000"}
+        assert not [name for name, entry in index.items() if "symbol" in entry]
+
+    def test_a_symbol_that_differs_from_the_name_still_travels(self) -> None:
+        """The omission is the repeat, not the column.
+
+        A demangled C++ symbol is the one the result list draws BESIDE the name
+        and the one a term may be typed as instead of it, so it has to reach
+        the client when the two differ.
+        """
+        from dataclasses import replace
+
+        snap = _server.coverage_for(require_target())
+        rebuilt = replace(
+            snap,
+            functions=(replace(snap.functions[0], name="_fn_demangled", symbol="_ZN3Foo3barEv"),),
+        )
+        assert api._build_search_index(rebuilt)["_fn_demangled"] == {
+            "va": snap.functions[0].vaStart,
+            "symbol": "_ZN3Foo3barEv",
+        }
+
     def test_an_unrecognised_index_is_a_400(self) -> None:
         """The flag is an enum, and an unknown one is refused like ?format=.
 

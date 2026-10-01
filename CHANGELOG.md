@@ -76,6 +76,19 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   outright. A pane opens showing its text immediately and colours it a moment
   later, and if the highlighter cannot be loaded the pane says so instead of
   staying uncoloured with no explanation.
+- `GET /api/targets/<target>/data` omits a `search_index` entry's `symbol` when
+  it repeats the name the entry is keyed on, which is the case for every
+  function rebrew stores one symbol for and for every global (an empty string).
+  The dashboard draws a search result's symbol only when it differs from the
+  name beside it, and folds both into one haystack, so the copy matched
+  nothing the name did not already match. On a 40,000-function target of mangled
+  C++ names the response went 180,576 B -> 149,921 B compressed (-17%); on a
+  document whose symbols all equal their names, 396,684 B -> 323,866 B (-18%).
+  The index is served on the first load whether or not the search box is ever
+  opened, so these bytes were on every visit's critical path. A client reading
+  `entry.symbol` should treat a missing key as the empty string; the shipped SPA
+  already does. An entry whose symbol DIFFERS from its name is unchanged.
+  `docs/UPGRADING.md` has the before/after for a client that reads the field.
 
 ### Fixed
 

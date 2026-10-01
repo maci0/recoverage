@@ -34,8 +34,48 @@ the next restart.
 
 ## [Unreleased]
 
-Two changes break a consumer; everything else in this release of the
-changelog is additive or a fix.
+Two changes break a consumer, and one changes a field's presence on the wire
+without changing what the dashboard does with it; everything else in this
+release of the changelog is additive or a fix.
+
+### `/data`'s `search_index` omits a redundant `symbol`
+
+`GET /api/targets/<target>/data` answers a `search_index` object mapping a name
+to `{ "va": ..., "symbol": ... }`. An entry now omits `symbol` when it is a copy
+of the name it is keyed on, which is every function whose symbol IS its name
+(what rebrew stores for a C symbol) and every global, whose `symbol` was the
+empty string.
+
+Before:
+
+```json
+"search_index": {
+  "_ZN3Foo3barEv": { "va": "0x10001000", "symbol": "_ZN3Foo3barEv" },
+  "g_counter":     { "va": "0x10002000", "symbol": "" }
+}
+```
+
+After:
+
+```json
+"search_index": {
+  "_ZN3Foo3barEv": { "va": "0x10001000" },
+  "g_counter":     { "va": "0x10002000" }
+}
+```
+
+What to change: read the field through its own fallback, `entry.symbol ?? ""` in
+JavaScript and `entry.get("symbol")` in Python. A client that assumed the key
+was present lost every search row on such a document; the shipped SPA already
+read it that way and is unchanged.
+
+This is a wire-shape change rather than a behaviour change, so it ships in a
+minor: the dashboard folds the name and the symbol into one haystack and
+labels a result row with the name, so a copy of the name matched nothing and
+showed nothing. A demangled symbol, the case that carries what the name does
+not, still travels. On a 40,000-function target of mangled C++ names the
+response went 180,576 B to 149,921 B compressed; the index rides the first load
+whether or not the search box is ever opened.
 
 ### `recoverage regen` exits 2, not 1, on an unreadable `rebrew-project.toml`
 

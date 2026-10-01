@@ -5120,6 +5120,40 @@ class TestSpaSearchFoldsLikeTheServer:
             "lowercasing before composing is not the same fold"
         )
 
+    def test_an_omitted_symbol_folds_and_renders_as_absent(self) -> None:
+        """`search_index` omits `symbol` when it repeats the key it is filed
+        under, which is the case for every function rebrew stores one symbol for
+        and for every global. The two client reads of it have to treat the
+        missing key as the absent value: a client that assumed the key was
+        there lost every search row on such a document, and one that printed it
+        beside an identical name printed the name twice.
+
+        Server side is `api._build_search_index`, pinned by
+        `tests/test_api.py::TestDataSearchIndexOptOut`; this is the half of the
+        contract on the other side of the wire.
+        """
+        app = _web("App.tsx")
+        folded = re.search(r"const foldedIndex = useMemo.*?\}, \[.*?\]\);", app, re.DOTALL)
+        assert folded is not None, "the folded search index is no longer a memo"
+        assert "entry.symbol ??" in folded.group(0), (
+            "the search haystack dereferences entry.symbol without a fallback; "
+            'an omitted key folds as "undefined" and never matches'
+        )
+
+        rows = _web("components/SearchResults.tsx")
+        assert "entry.symbol ?? null" in rows, (
+            "a result row must read the symbol through its own fallback"
+        )
+
+        # And the type has to admit the absent key, or `exactOptionalPropertyTypes`
+        # fails the next surface that reads one.
+        api = _web("api.ts")
+        entry = re.search(r"export type SearchEntry = \{(.*?)\n\};", api, re.DOTALL)
+        assert entry is not None, "SearchEntry is no longer an object type"
+        assert re.search(r"^\s*symbol\?:", entry.group(1), re.MULTILINE), (
+            "SearchEntry.symbol is required, so an omitted key is a type error"
+        )
+
     def test_the_fold_agrees_with_the_server_on_the_nfd_pair(self) -> None:
         """The property the fold exists for, asserted on the server's side.
 
