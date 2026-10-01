@@ -4305,6 +4305,122 @@ class TestSpaTopbarReflowsAtTheNarrowViewport:
         assert {"w-full", "min-w-0"} <= set(classes.group(1).split())
 
 
+class TestSpaSurvivesTheTextSpacingOverrides:
+    """1.4.12: the WCAG text-spacing overrides must not cost a reader content.
+
+    Every other layout criterion here has a gate (1.4.10 in the class above,
+    1.4.3 in `TestSpaTextTokensClearTheTextFloor`, 1.4.11 over the cell fills),
+    and 1.4.12 is the one that had none. The override is four declarations a
+    reader can apply from the browser or an OS setting: line-height 1.5, and
+    0.12em of letter- and paragraph-spacing, 0.16em of word-spacing. Two shapes
+    fail it, and neither needs a browser to see:
+
+    - a control whose height is FIXED and whose text therefore has somewhere to
+      go but the box, so the extra leading clips the label and the control
+      answers no name;
+    - an `overflow-hidden` box holding text that cannot grow a scroller.
+
+    Neither is judged here by rendering: the check is the arithmetic. The tallest
+    line a control can hold is its font-size under `line-height: 1.5 !important`,
+    and a fixed-height control clears the override when that line fits its own
+    box with the border, or when nothing clips what spills out. A control that
+    centres its content (`items-center` on the flex box) spills symmetrically and
+    loses nothing, which is the property this class pins rather than a height
+    that could be widened later.
+    """
+
+    #: The 1.4.12 line-height, from the success criterion's own override block.
+    LINE_HEIGHT = 1.5
+
+    def _font_px(self, text_class: str) -> float:
+        """A text-size utility's rem value, in px, read off the token file."""
+        assert text_class.startswith("text-")
+        size = text_class.removeprefix("text-")
+        found = re.search(
+            rf"^\s*--text-{re.escape(size)}:\s*([\d.]+)rem;",
+            _web("system/tokens.css"),
+            re.MULTILINE,
+        )
+        assert found is not None, f"{text_class} is not a text-size token"
+        return float(found.group(1)) * 16
+
+    def test_every_fixed_height_button_holds_its_label_under_the_override(self) -> None:
+        """A `size` recipe pins its box in px, so the override has to fit.
+
+        Each recipe is read out of `controlVariants` rather than restated, so a
+        new size joins this check by being written down once and is held to the
+        same arithmetic as the ones shipped.
+        """
+        recipes = dict(
+            re.findall(
+                r'^\s*(\w+):\s*"([^"]*)",?\s*$', _web("components/ui/button.tsx"), re.MULTILINE
+            )
+        )
+        fixed: dict[str, tuple[float, str]] = {}
+        for size, recipe in recipes.items():
+            height = re.search(r"\b(?:h|size)-(\d+(?:\.\d+)?)\b", recipe)
+            if height is None:
+                continue
+            text = re.search(r"\b(text-(?:micro|data|lg|intro))\b", recipe)
+            assert text is not None, f"the {size} size names no text scale: {recipe}"
+            fixed[size] = (float(height.group(1)) * 4, text.group(1))
+        assert fixed, "the button recipe pins no height, so this class checks nothing"
+
+        clipped = [
+            f"{size}: a {box:.0f}px box holds a {line:.1f}px line under the override"
+            for size, (box, text_class) in sorted(fixed.items())
+            if (line := self._font_px(text_class) * self.LINE_HEIGHT) > box
+        ]
+        assert clipped == [], "; ".join(clipped)
+
+    def test_a_button_centres_its_content_so_nothing_clips(self) -> None:
+        """The property that makes a taller line harmless rather than hidden.
+
+        `items-center` on the flex box means a line taller than the box spills
+        equally above and below instead of being pushed out of one edge, and the
+        recipe adds no `overflow-hidden` of its own to take it back.
+        """
+        head = _web("components/ui/button.tsx").split("variants:", 1)[0]
+        assert "items-center" in head
+        assert "overflow-hidden" not in head
+
+    def test_no_clipped_box_with_a_height_cap_holds_text_without_an_inner_scroller(self) -> None:
+        """`overflow-hidden` alone clips nothing: a box with no height cap grows
+        with its content. It becomes a 1.4.12 failure only when the box also
+        carries a height (or max-height) cap AND nothing inside it scrolls —
+        then a line taller than the cap is gone with no scroll position that
+        brings it back.
+
+        The modal is the shape that has to stay right: `modal-content` is
+        `max-h-full overflow-hidden`, and the code pane inside it is the
+        `min-h-0 overflow-auto` region that keeps the long disassembly
+        reachable. A cap without that inner scroller is the finding.
+        """
+        offenders: list[str] = []
+        for path in sorted(WEB_APP.rglob("*.tsx")):
+            source = path.read_text(encoding="utf-8")
+            for tag in re.findall(r"<div\b[^>]*>", source):
+                classes = re.search(r'className="([^"]*)"', tag)
+                if classes is None:
+                    continue
+                tokens = classes.group(1).split()
+                if "overflow-hidden" not in tokens:
+                    continue
+                if not any(re.fullmatch(r"(?:max-)?h-[\w.\[\]/]+", token) for token in tokens):
+                    continue
+                # A cap whose content has no scroller of its own is still lost
+                # text. The modal is the case the check has to read correctly:
+                # its scroller is the BODY, a sibling of the capped box, so the
+                # element that carries the cap is exempt by name and every other
+                # capped-and-clipped box is a finding.
+                if any("overflow-auto" in t or "overflow-y-auto" in t for t in tokens):
+                    continue
+                if "modal-content" in tokens:
+                    continue
+                offenders.append(f"{path.relative_to(REPO_ROOT)}: {classes.group(1)}")
+        assert offenders == [], "; ".join(offenders)
+
+
 class TestSpaLocaleFormatting:
     """The numbers and the search fold the dashboard prints, not `toFixed`.
 
