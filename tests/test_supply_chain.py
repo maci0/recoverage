@@ -2348,6 +2348,18 @@ class TestBrowserSpdxExport:
         assert "SOURCE_DATE_EPOCH" in job, (
             "the document is stamped from the wall clock, so two runs of one commit differ"
         )
+        # Naming the variable is not stamping from it. The tool reads an EMPTY
+        # SOURCE_DATE_EPOCH as "no stamp given" and falls back to the wall
+        # clock, so `export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"`
+        # under `set -e` exported the empty string whenever the substitution
+        # failed and uploaded a nondeterministic artifact from a green job: the
+        # assertion above is satisfied by exactly the line it has to refuse.
+        assert re.search(r'case\s+"\$stamp" in', job), (
+            "the sbom job exports the commit stamp without refusing an empty one"
+        )
+        assert "''|*[!0-9]*)" in job, (
+            "the stamp guard accepts a value that is not an ASCII decimal run"
+        )
 
     def test_a_digest_this_document_cannot_carry_stops_the_export(self) -> None:
         """An algorithm outside SPDX's checksum vocabulary is a refusal.

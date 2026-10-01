@@ -463,7 +463,23 @@ jobs:
           # the SPDX document's `created` is a function of the commit rather
           # than of the minute the job ran: this artifact is uploaded, and two
           # runs of one commit have to produce the same bytes to be diffable.
-          export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          #
+          # Refused when it is not a number, rather than exported empty: the
+          # tool treats an EMPTY SOURCE_DATE_EPOCH as "no stamp given" and
+          # falls back to the wall clock, so a git that failed or a tree with
+          # no commits would upload an artifact stamped with the minute the job
+          # ran and no line saying so — the exact nondeterminism this stamp
+          # exists to remove, arriving through the failure path. `make build`
+          # cannot reach it because its stamp carries FALLBACK_SOURCE_DATE_EPOCH.
+          stamp="$(git log -1 --format=%ct 2>/dev/null || true)"
+          case "$stamp" in
+            ''|*[!0-9]*)
+              echo "::error::no commit timestamp (got '${stamp}')"
+              echo "the SPDX artifact would carry the wall clock instead of the commit"
+              exit 1
+              ;;
+          esac
+          export SOURCE_DATE_EPOCH="$stamp"
           python tools/bundled_js_inventory.py --output recoverage-browser-sbom.txt
           test -s recoverage-browser-sbom.txt
           # The same rows as an SPDX 2.3 document, which is the shape a
