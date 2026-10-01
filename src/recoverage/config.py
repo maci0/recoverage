@@ -35,13 +35,24 @@ from typing import Final
 #: environment variable cannot be mistaken for one of ours.
 ENV_PREFIX: Final = "RECOVERAGE_"
 
-#: Every variable this module reads.  Anything else under the prefix is a
+#: Every variable this module reads, or that another tool in this repository
+#: reads under the same prefix.  Anything else under the prefix is a
 #: misspelling and is rejected by :func:`check_unknown_vars`.
 #:
-#: The two fuzz knobs are listed because they carry the prefix but belong to
-#: the test suite (``tests/test_fuzz.py``, the ``fuzz`` make target), not to
-#: the server: without them an operator who exported them once to drive a
-#: campaign could not run any command until the shell was cleaned up.
+#: The knobs that belong to a TOOL rather than to `serve` are listed for one
+#: reason: without them an operator who exported one could not run any command
+#: until the shell was cleaned up, and the refusal would read as a typo rather
+#: than as the tool the name belongs to.  They are:
+#:
+#: * the two fuzz knobs, read by the test suite (``tests/test_fuzz.py``, the
+#:   `fuzz` make target);
+#: * ``RECOVERAGE_DEV_API``, the origin ``web/vite.config.ts`` proxies
+#:   ``/api``, ``/src`` and ``/original`` to in the frontend dev loop
+#:   (``make web-dev``; CONTRIBUTING.md documents it beside the loop).
+#:
+#: None of them is read anywhere under ``src/``; they change nothing `serve`
+#: does, so a reader of this set must not take membership for one of them being
+#: a server setting.
 KNOWN_VARS: Final[frozenset[str]] = frozenset(
     {
         "RECOVERAGE_ALLOW_REMOTE",
@@ -50,6 +61,7 @@ KNOWN_VARS: Final[frozenset[str]] = frozenset(
         "RECOVERAGE_CORS",
         "RECOVERAGE_CORS_ORIGIN",
         "RECOVERAGE_DB",
+        "RECOVERAGE_DEV_API",
         "RECOVERAGE_FUZZ_ITERATIONS",
         "RECOVERAGE_FUZZ_SEED",
         "RECOVERAGE_LOG_LEVEL",
@@ -125,6 +137,27 @@ _ASCII_INT: Final = re.compile(r"\A[+-]?[0-9]+\Z")
 _C0_LAST: Final = 0x1F
 _DEL: Final = 0x7F
 _C1_LAST: Final = 0x9F
+
+#: The IPv6 scope delimiter.  It is named as a constant of its own because it
+#: is the one character the bind floor cannot judge from the set below: a
+#: link-local literal holds it, so it may not sit in that set, and every other
+#: address is refused for carrying it.
+PERCENT: Final = "%"
+
+#: Characters no IPv4 literal and no hostname can carry, so a value holding one
+#: is a mistyped or misquoted address rather than an unresolvable one.  The
+#: floor :func:`validate_bind` draws; see its docstring for why it is
+#: structural and not a resolver call.  Each one escapes or terminates the
+#: authority of the URL spelling such a value is usually pasted from, which is
+#: where an address carrying one came from.
+#:
+#: The percent sign is NOT in this set and never could be: it is the scope
+#: delimiter of a link-local IPv6 literal (``fe80::1`` with a zone), which
+#: :meth:`ipaddress.IPv6Address` parses and the resolver answers, so refusing
+#: it would refuse a real binding on a host with no other route to that
+#: network.  :func:`validate_bind` therefore checks the percent sign on its
+#: own, and only on the values this set does not already cover.
+_NOT_IN_AN_ADDRESS: Final = frozenset("@\\/?#")
 
 
 class ConfigError(ValueError):
@@ -267,6 +300,23 @@ def validate_bind(value: str, name: str = "RECOVERAGE_BIND") -> str:
     caller should have passed to ``--port``/``RECOVERAGE_PORT`` instead.
     *name* is the spelling the error quotes, so the flag path names the flag
     and the environment path names the variable.
+
+    A character no address can carry is the same kind of mistake, and the same
+    place to catch it.  It is a FLOOR, not a resolution: the address is never
+    looked up here, because a host whose resolver has not come up yet (a
+    container started before its DNS, a laptop off the network) is a normal
+    state, and refusing it would turn a deployment that works minutes later
+    into a startup error.  So the check is structural — every character in
+    :data:`_NOT_IN_AN_ADDRESS` is one no IPv4 literal and no hostname holds,
+    :data:`PERCENT` is one only a link-local IPv6 literal may carry, and what
+    is left the resolver answers or it does not, in the listener's own words.
+
+    Without the floor, an interface spec a systemd unit can carry (``0.0.0.0``
+    followed by the percent sign and the interface name) passed here and failed
+    inside ``socket.bind()`` as ``gaierror``, which `serve`'s ``OSError``
+    handler reports as "is another instance already running?" — the wrong
+    variable and the wrong remedy, after the DB watcher, the cache warmup and
+    the browser opener have already started.
     """
     if not value:
         raise ConfigError(f"{name}: set but empty (unset it, or give it an address)")
@@ -283,6 +333,24 @@ def validate_bind(value: str, name: str = "RECOVERAGE_BIND") -> str:
                 f"{name}: {value!r} is not an interface address "
                 "(drop the port; it belongs to RECOVERAGE_PORT/--port)"
             ) from None
+    elif PERCENT in value:
+        # An IPv6 literal keeps its percent sign (a link-local zone, which
+        # :class:`IPv6Address` above accepted); anywhere else it is an
+        # interface spec — ``0.0.0.0%eth0`` — or the escaped tail of a URL
+        # pasted whole into the unit file. Neither is a name getaddrinfo
+        # answers.
+        raise ConfigError(
+            f"{name}: {value!r} is not an interface address (it carries a "
+            "percent sign outside an IPv6 literal, where it is a zone id; give "
+            "the interface address or its name)"
+        )
+    carried = sorted(set(value) & _NOT_IN_AN_ADDRESS)
+    if carried:
+        raise ConfigError(
+            f"{name}: {value!r} is not an interface address (it carries "
+            + ", ".join(repr(ch) for ch in carried)
+            + ", which no address or hostname can hold; give the interface address or its name)"
+        )
     return value
 
 

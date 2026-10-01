@@ -341,10 +341,18 @@ class TestManPage:
     has, and it drifts from the flags the moment a flag is added.
     """
 
-    #: The two fuzz knobs are in `config.KNOWN_VARS` so an operator who
-    #: exported them can still run a command, but they drive the test suite
-    #: and no subcommand reads them.
-    _NOT_A_SETTING = frozenset({"RECOVERAGE_FUZZ_ITERATIONS", "RECOVERAGE_FUZZ_SEED"})
+    #: The names in `config.KNOWN_VARS` this page does NOT document: the test
+    #: suite's fuzz knobs and the frontend dev server's proxy target. They are
+    #: in the set so a developer who exported one can still run a command, but
+    #: none of them is a setting, and a man page is read by whoever installed
+    #: the tool rather than by whoever runs the dev loop. They are named in
+    #: README.md's environment table instead.
+    #: `tests/test_config.py::TestEnvExample` omits `RECOVERAGE_DEV_API` for
+    #: the same reason and carries the same name, so the two artifacts cannot
+    #: drift apart.
+    _NOT_A_SETTING = frozenset(
+        {"RECOVERAGE_DEV_API", "RECOVERAGE_FUZZ_ITERATIONS", "RECOVERAGE_FUZZ_SEED"}
+    )
 
     @staticmethod
     def _page() -> str:

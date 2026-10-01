@@ -206,7 +206,7 @@ always wins over the environment.
 | Variable | Default | Accepts |
 |----------|---------|---------|
 | `RECOVERAGE_PORT` | `8001` | integer `0`-`65535` |
-| `RECOVERAGE_BIND` | `127.0.0.1` | an interface address or hostname; no whitespace, no `host:port` (the port belongs to `RECOVERAGE_PORT`) |
+| `RECOVERAGE_BIND` | `127.0.0.1` | an interface address or hostname; no whitespace, no `host:port` (the port belongs to `RECOVERAGE_PORT`), and none of the characters no address or hostname can hold — a `0.0.0.0%eth0` interface spec and a URL pasted into the unit file are startup errors naming this variable, not a bind error blaming another instance. A `%` is legal in exactly one place: the zone of a link-local IPv6 literal (`fe80::1%1`) |
 | `RECOVERAGE_ALLOW_REMOTE` | `false` | `1`/`0`, `true`/`false`, `yes`/`no`, `on`/`off` |
 | `RECOVERAGE_CORS` | `false` | same booleans |
 | `RECOVERAGE_CORS_ORIGIN` | none | comma-separated origin URLs; each must be one a browser could send (`scheme://host[:port]`, no userinfo, path or whitespace). A value naming no origin at all (empty, or only commas and whitespace) is a startup error, so an environment that spells "not configured" as an empty value cannot start a server that refuses every cross-origin read |
@@ -217,6 +217,7 @@ always wins over the environment.
 | `RECOVERAGE_DB` | resolved from the working directory | path to the coverage directory (the one holding `coverage-<target>.toml`); a path that is a file is a startup error, not an empty dashboard |
 | `RECOVERAGE_FUZZ_SEED` | unset | seed for the mutation campaigns (`make fuzz`); read by the test suite, not the server |
 | `RECOVERAGE_FUZZ_ITERATIONS` | unset | round count for those campaigns; same reader |
+| `RECOVERAGE_DEV_API` | `http://127.0.0.1:8001` | the running server the `make web-dev` Vite proxy forwards `/api`, `/src` and `/original` to; read by `web/vite.config.ts`, not by any subcommand (the same rule the two fuzz knobs follow: the name is accepted so exporting it cannot refuse a command, and it changes nothing `serve` does) |
 
 Parsed coverage documents persist under `$XDG_CACHE_HOME/recoverage/documents/`
 (`~/.cache/recoverage/documents/` when it is unset or relative), one file per

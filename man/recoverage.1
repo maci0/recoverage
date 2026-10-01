@@ -229,6 +229,13 @@ opens.
 .B RECOVERAGE_BIND
 Default for
 .BR \-\-bind .
+An interface address or a hostname. A value carrying a character no address
+can hold is refused at startup, so an interface spec and a URL pasted into the
+unit file fail with the variable named rather than as a bind error blaming
+another instance. A percent sign is legal in one place only: the zone of a
+link-local IPv6 literal, which
+.B fe80::1
+with a zone after it is.
 .TP
 .B RECOVERAGE_ALLOW_REMOTE
 Default for

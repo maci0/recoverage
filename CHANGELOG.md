@@ -18,6 +18,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `RECOVERAGE_BIND` accepted an interface spec (`0.0.0.0%eth0`) and a URL pasted into a unit file, and both then failed inside `socket.bind()` with an address lookup error that `serve` reports as "is another instance already running?" — naming neither the variable nor the remedy, after the database watcher, the cache warmup and the browser opener have started. A character no address or hostname can carry is now refused at startup, where the error names the variable. The check is structural rather than a resolver call, because a host whose DNS has not come up is a normal state and refusing it would turn a deployment that works minutes later into a startup error; a `%` stays legal in the one place it belongs, the zone of a link-local IPv6 literal.
+- `RECOVERAGE_DEV_API`, the origin the `make web-dev` Vite proxy forwards to, carries the `RECOVERAGE_` prefix and is not a known setting, so a developer who exported it once got "unknown configuration variable" from every command, naming a tool knob this repository owns as a misspelling. It is accepted now, for the same reason the two fuzz knobs are, and it changes nothing `serve` does.
 - The disassembly panel decoded every binary as 32-bit x86, so a 64-bit target
   rendered garbage over exactly the bytes a reader selected: a `REX` prefix
   read as the start of the next instruction, and a RIP-relative displacement as

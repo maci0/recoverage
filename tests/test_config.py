@@ -300,9 +300,83 @@ class TestBindValidation:
         with pytest.raises(config.ConfigError, match=reason):
             config.bind()
 
+    def test_the_dev_proxy_target_matches_the_server_default(self) -> None:
+        """`web/vite.config.ts` restates the server's default address.
+
+        The Vite config runs in Node, where the package is not importable, so
+        the fallback cannot be read off `config.DEFAULT_BIND` /
+        `config.DEFAULT_PORT` and has to be written out. A contributor who
+        moved `serve` off 8001 in `config.py` and forgot this string points the
+        dev proxy at a port nothing is listening on, and the frontend dev loop
+        fails with a connection error that names neither file. This is the test
+        that fails instead.
+        """
+        vite = (_ROOT / "web" / "vite.config.ts").read_text(encoding="utf-8")
+        expected = f'"http://{config.DEFAULT_BIND}:{config.DEFAULT_PORT}"'
+        assert expected in vite, f"the dev proxy default moved off {expected}"
+
     def test_validate_bind_rejects_empty(self) -> None:
         with pytest.raises(config.ConfigError, match="set but empty"):
             config.validate_bind("")
+
+    @pytest.mark.parametrize("raw", ["localhost/api", "ho@st", "ho#st"])
+    def test_a_character_no_address_can_hold_is_a_startup_error(
+        self, monkeypatch: pytest.MonkeyPatch, raw: str
+    ) -> None:
+        """The floor is structural, so it costs no resolver call.
+
+        The ways a URL pasted into a unit file brings its authority's
+        delimiters along with it all reach `socket.bind()` as `gaierror` when
+        they get past here, and `serve`'s `OSError` handler reports that as "is
+        another instance already running?" — naming neither the variable nor
+        the remedy, after the DB watcher, the cache warmup and the browser
+        opener have started. The percent sign gets its own test below because
+        an IPv6 literal is allowed to hold it.
+        """
+        monkeypatch.setenv("RECOVERAGE_BIND", raw)
+        with pytest.raises(config.ConfigError, match="not an interface address"):
+            config.bind()
+
+    @pytest.mark.parametrize(
+        "raw", ["0.0.0.0", "127.0.0.1", "::", "::1", "host.lan", "a-b", "a_b", "fe80::1%1"]
+    )
+    def test_the_floor_keeps_every_address_the_resolver_could_answer(
+        self, monkeypatch: pytest.MonkeyPatch, raw: str
+    ) -> None:
+        """The point of a floor: it refuses what cannot work, and nothing else.
+
+        `_NOT_IN_AN_ADDRESS` is a list of characters, not a hostname grammar.
+        Validating labels, length or the IDNA rules here would refuse a name
+        the host's own resolver answers, which is a startup error for a
+        deployment that would have served.
+        """
+        assert not set(raw) & config._NOT_IN_AN_ADDRESS, raw
+        assert config.PERCENT not in raw or ":" in raw, raw
+        monkeypatch.setenv("RECOVERAGE_BIND", raw)
+        assert config.bind() == raw
+
+    @pytest.mark.parametrize("raw", ["0.0.0.0%eth0", "0.0.0.0%lo"])
+    def test_an_interface_spec_is_a_startup_error_but_a_zone_is_not(
+        self, monkeypatch: pytest.MonkeyPatch, raw: str
+    ) -> None:
+        """The percent sign is the one character with two right answers.
+
+        `0.0.0.0` with an interface name after it is the systemd spelling and
+        no resolver answers it; `fe80::1` with a zone after it is a real
+        link-local literal, the only route a host with no other one has to that
+        network. A floor that refused both would break the second to catch the
+        first, so the two are judged apart — and the flag path reaches the same
+        verdict, because `--bind` and `RECOVERAGE_BIND` are one setting.
+        """
+        monkeypatch.setenv("RECOVERAGE_BIND", raw)
+        with pytest.raises(config.ConfigError, match="percent sign"):
+            config.bind()
+        with pytest.raises(config.ConfigError, match="percent sign"):
+            config.validate_bind(raw, "--bind")
+
+    def test_the_flag_path_shares_the_floor(self) -> None:
+        with pytest.raises(config.ConfigError, match="not an interface address"):
+            config.validate_bind("localhost/api", "--bind")
 
     def test_validate_bind_is_what_the_flag_path_uses(self) -> None:
         """--bind and RECOVERAGE_BIND are one setting; the flag skips bind()
@@ -356,6 +430,50 @@ class TestUnknownVars:
         """check_unknown_vars can only pass if the reader set is complete."""
         for name in config.KNOWN_VARS:
             assert name.startswith(config.ENV_PREFIX)
+
+    def test_the_frontend_dev_proxy_target_is_accepted(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`RECOVERAGE_DEV_API` must not lock the dev loop out of the CLI.
+
+        `web/vite.config.ts` reads it to point the dev server's proxy at a
+        `serve` that is not on the default port, and CONTRIBUTING.md documents
+        it beside that loop. A developer who exported it once ran `serve` on a
+        non-default port from the same shell, and every `recoverage` command
+        exited 2 naming it as a misspelling — a tool knob the repo itself owns
+        read as a typo in a setting. It changes nothing `serve` does, so it
+        belongs in KNOWN_VARS for the same reason the fuzz knobs do.
+        """
+        monkeypatch.setenv("RECOVERAGE_DEV_API", "http://127.0.0.1:9000")
+        config.check_unknown_vars()
+        # And it is not a server setting the merge may pick up by accident.
+        assert config.port() == config.DEFAULT_PORT
+
+    def test_no_server_reader_consumes_a_tool_knob(self) -> None:
+        """Membership in KNOWN_VARS is not a claim that `serve` reads it.
+
+        The two fuzz knobs and the dev proxy target are listed so exporting one
+        does not refuse every command; none is a setting, and a reader added
+        later would make the startup banner and `recoverage config` name a
+        variable the CLI cannot resolve from a flag.
+        """
+        from recoverage import cli
+
+        resolved = cli._resolve_serve_config()
+        rendered = config.active_config(
+            port=resolved.port,
+            bind=resolved.bind,
+            allow_remote=resolved.allow_remote,
+            cors=resolved.cors,
+            cors_origin=resolved.cors_origins,
+            token=resolved.token,
+            db=resolved.db,
+            log_level=resolved.log_level,
+            max_connections=resolved.max_connections,
+            client_timeout=resolved.client_timeout,
+        )
+        tool_knobs = {"RECOVERAGE_DEV_API", "RECOVERAGE_FUZZ_ITERATIONS", "RECOVERAGE_FUZZ_SEED"}
+        assert not rendered.keys() & tool_knobs
 
 
 class TestTransportBounds:
@@ -1101,6 +1219,16 @@ class TestEnvExample:
     notice a setting that reached config.KNOWN_VARS and never reached here.
     """
 
+    #: The one name in ``config.KNOWN_VARS`` this file does NOT carry: the
+    #: frontend dev server's proxy target, which points a Vite dev server at a
+    #: `serve` the same contributor is running. It is in KNOWN_VARS so
+    #: exporting it does not refuse every command, but it is not a deployment
+    #: setting, and a line naming it here would tell an operator to set a
+    #: variable no subcommand reads. The man page omits the same name, for the
+    #: same reason and with the same list (tests/test_build.py,
+    #: ``_NOT_A_SETTING``), so the two artifacts cannot drift apart.
+    _NOT_A_SETTING = frozenset({"RECOVERAGE_DEV_API"})
+
     @staticmethod
     def _documented() -> dict[str, str]:
         """Every ``NAME=value`` line in the example, commented or not."""
@@ -1113,7 +1241,7 @@ class TestEnvExample:
 
     def test_it_names_every_known_variable_and_nothing_else(self) -> None:
         named = {name for name in self._documented() if name.startswith(config.ENV_PREFIX)}
-        assert named == config.KNOWN_VARS
+        assert named == config.KNOWN_VARS - self._NOT_A_SETTING
 
     def test_no_line_actually_sets_a_variable(self) -> None:
         """A checked-in value is a value every deployment starts from.

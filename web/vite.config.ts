@@ -75,7 +75,18 @@ function libBuild(entry: string, fileName: string) {
 
 /* oxlint-disable node/no-process-env -- a Vite config runs in Node, where the dev
    API target is read from the environment; the bundle itself never sees
-   process.env, and the built app talks to its own origin. */
+   process.env, and the built app talks to its own origin.
+
+   One read of the knob, because it was spelled once per proxied path and an
+   edit to two of them is how a contributor ends up proxying /api to one server
+   and /src to another. The fallback restates `config.DEFAULT_BIND` /
+   `config.DEFAULT_PORT` in `src/recoverage/config.py`: this config runs in Node
+   before the package is importable, so the value cannot be read off the
+   constant it mirrors, and
+   `tests/test_config.py::TestBindValidation::test_the_dev_proxy_target_matches_the_server_default`
+   holds the two in step instead. */
+const devApi = process.env.RECOVERAGE_DEV_API ?? "http://127.0.0.1:8001";
+
 const devServer = {
   // Binds the IPv4 literal: the default `localhost` resolves to ::1 here,
   // which a browser pointed at 127.0.0.1 cannot reach.
@@ -86,10 +97,10 @@ const devServer = {
   // and that app asks the dashboard for the script, so the entry has to be the
   // running server's asset rather than this server's.
   proxy: {
-    "/api": { target: process.env.RECOVERAGE_DEV_API ?? "http://127.0.0.1:8001" },
-    "/src": { target: process.env.RECOVERAGE_DEV_API ?? "http://127.0.0.1:8001" },
-    "/original": { target: process.env.RECOVERAGE_DEV_API ?? "http://127.0.0.1:8001" },
-    "/highlight.js": { target: process.env.RECOVERAGE_DEV_API ?? "http://127.0.0.1:8001" },
+    "/api": { target: devApi },
+    "/src": { target: devApi },
+    "/original": { target: devApi },
+    "/highlight.js": { target: devApi },
   },
 } as const;
 
