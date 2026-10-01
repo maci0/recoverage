@@ -25,7 +25,7 @@ import brotli
 import pytest
 import zstandard as zstd
 from conftest import WSGI_PEER, path_the_filesystem_holds
-from coverage_fixture import TOML_VERSION, cell, coverage_dir, write_coverage
+from coverage_fixture import TOML_VERSION, cell, coverage_dir, known_cell_states, write_coverage
 from rebrew.coverage_toml import CoverageSnapshot, CoverageTomlError, load_coverage
 
 from recoverage import clock
@@ -3548,9 +3548,7 @@ class TestSpaStateVocabulary:
     """
 
     def test_state_slots_cover_every_known_cell_state(self) -> None:
-        from rebrew.build_db import _KNOWN_CELL_STATES
-
-        missing = sorted(_KNOWN_CELL_STATES - set(_packed_slots()))
+        missing = sorted(known_cell_states() - set(_packed_slots()))
         assert missing == [], f"cell states the map paints as undocumented: {missing}"
 
     def test_verified_is_not_packed_as_none(self) -> None:

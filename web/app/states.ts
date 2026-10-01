@@ -1,6 +1,7 @@
 /** The cell-state vocabulary every surface renders through.
  *
- * rebrew owns the vocabulary (`rebrew.build_db._KNOWN_CELL_STATES`); this is
+ * rebrew owns the vocabulary (a private `_KNOWN_CELL_STATES`; the module
+ * holding it moved from `build_db` to `coverage_db`); this is
  * the SPA's one spelling of it, and it is shared rather than per-surface
  * because a state the map paints but the toolbar cannot filter, or a figure the
  * strip prints beside a differently painted cell, reads as two dashboards. The

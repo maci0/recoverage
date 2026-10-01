@@ -135,9 +135,26 @@ const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/u;
  * stamp WITHOUT one names a wall clock reading, and `Date` resolves such a
  * string leniently instead of refusing the ones the reader's zone cannot
  * place. The trailing fractional group is captured but not compared: a
- * sub-second field is below the resolution `toLocaleString` renders. */
+ * sub-second field is below the resolution `toLocaleString` renders.
+ *
+ * Every group is NAMED: the comparison below reads `literal.hour`, and a
+ * positional `literal[4]` is an index a later edit to the pattern can renumber
+ * under the comparison that trusts it. `fraction` is captured and never read
+ * (see above), the one group named for a field nothing compares. */
 const NAIVE_STAMP =
-  /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2}))?(?:\.(\d+))?)?$/u;
+  /^(?<year>\d{4})-(?<month>\d{2})-(?<day>\d{2})(?:[T ](?<hour>\d{2}):(?<minute>\d{2})(?::(?<second>\d{2}))?(?:\.(?<fraction>\d+))?)?$/u;
+
+/** The named groups `NAIVE_STAMP` yields; every optional field is absent when
+ * the stamp carries none, which is how the day-only form is told from one with
+ * a time of day. */
+type NaiveStamp = {
+  year: string;
+  month: string;
+  day: string;
+  hour?: string;
+  minute?: string;
+  second?: string;
+};
 
 /** A stored timestamp, written the way the reader's locale writes a date and
  * in their own timezone. The documents carry ISO 8601, which is a wire format
@@ -180,8 +197,12 @@ export function dateTime(stamp: string): string {
   // Only a stamp that named a wall clock reading can be resolved to a
   // DIFFERENT one; one carrying an offset names an instant and always
   // round-trips, so the check below does not apply to it.
-  const literal = NAIVE_STAMP.exec(anchored);
-  if (literal !== null && !readersClockAgreesWith(parsed, literal)) {
+  // SAFETY: NAIVE_STAMP's own groups are the only ones this can produce: every
+  // one is declared in NaiveStamp, and an optional group the stamp does not
+  // carry is ABSENT rather than present-and-undefined, which is what the
+  // `literal.hour === undefined` test in the comparison reads.
+  const literal = NAIVE_STAMP.exec(anchored)?.groups as NaiveStamp | undefined;
+  if (literal !== undefined && !readersClockAgreesWith(parsed, literal)) {
     return stamp;
   }
   return parsed.toLocaleString();
@@ -197,15 +218,15 @@ export function dateTime(stamp: string): string {
  * parsed value in the reader's own zone is therefore the check, and comparing
  * them to the literal is what separates "the zone has this reading" from
  * "`Date` found something to substitute for it". */
-function readersClockAgreesWith(parsed: Date, literal: RegExpExecArray): boolean {
+function readersClockAgreesWith(parsed: Date, literal: NaiveStamp): boolean {
   return (
-    parsed.getFullYear() === Number(literal[1]) &&
-    parsed.getMonth() + 1 === Number(literal[2]) &&
-    parsed.getDate() === Number(literal[3]) &&
-    (literal[4] === undefined ||
-      (parsed.getHours() === Number(literal[4]) &&
-        parsed.getMinutes() === Number(literal[5]) &&
-        (literal[6] === undefined || parsed.getSeconds() === Number(literal[6]))))
+    parsed.getFullYear() === Number(literal.year) &&
+    parsed.getMonth() + 1 === Number(literal.month) &&
+    parsed.getDate() === Number(literal.day) &&
+    (literal.hour === undefined ||
+      (parsed.getHours() === Number(literal.hour) &&
+        parsed.getMinutes() === Number(literal.minute) &&
+        (literal.second === undefined || parsed.getSeconds() === Number(literal.second))))
   );
 }
 
