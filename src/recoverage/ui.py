@@ -164,7 +164,7 @@ def _build_index_payload() -> bytes:
 #: The shell's own size budget.  It was 10 x 1460 bytes (RFC 6928's initial
 #: congestion window) while the frontend was a ~14 KB script that painted the
 #: map itself and deferred the rest.  The current frontend is one Preact +
-#: Tailwind bundle: measured ~48 KB brotli for the inlined shell and stylesheet,
+#: Tailwind bundle: measured ~41 KB brotli for the inlined shell and stylesheet,
 #: which no longer fits a round trip's initial window and is the price the port
 #: was accepted at.  Preact rather than React is most of why it is that small.
 #: The number below is the checked ceiling rather than the measurement, so a

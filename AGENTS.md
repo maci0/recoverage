@@ -446,7 +446,7 @@ The release policy is not written down anywhere else, so it is stated here and
 | `/api/targets/<target>/functions` | POST | Batch lookup: `{"vas": [...]}` → function/global details in input order (`application/json`, else 415) |
 | `/api/targets/<target>/functions/<va>` | GET | Function/global detail (ETag-revalidating: the tag names the snapshot, the target and the requested spelling) |
 | `/api/targets/<target>/asm` | GET | Disassembly (requires capstone). `?size=` is capped at `_MAX_SLICE_SIZE` AND at what the section holds from `?va=`, so a va at the section's tail cannot read the next section's bytes |
-| `/api/targets/<target>/sections/<section>/bytes` | GET | Raw byte slice |
+| `/api/targets/<target>/sections/<section>/bytes` | GET | Raw byte slice (`?offset=&size=`; `?size=` is capped at `_MAX_SLICE_SIZE` and at what the section holds from `?offset=`) |
 | `/api/events` | GET | Server-Sent Events: `db-updated` when the coverage documents change (SPA auto-refresh) |
 | `/api/regen` | POST | Re-run catalog + build-db (localhost only, rate-limited; optional `Idempotency-Key` header, replayed from a bounded ledger) |
 
