@@ -2369,6 +2369,49 @@ class TestSseEvents:
         finally:
             api._SSE_CLIENTS.pop(q, None)
 
+    def test_broadcast_frame_encodes_with_a_coverage_dir_name_outside_utf8(
+        self, tmp_path: Any, monkeypatch: Any
+    ) -> None:
+        """A coverage directory whose name holds a byte outside UTF-8 still broadcasts.
+
+        ``_db_path().name`` is read with ``os.fsdecode``, so a directory whose
+        name holds a byte above 0x7f that is not valid UTF-8 - legal on ext4,
+        and what a checkout, an archive or a copy from a Windows tool produces -
+        reaches the broadcast holding a lone U+DCFF surrogate. ``.encode()`` on
+        that raises UnicodeEncodeError and takes every rebuild broadcast down
+        with it, which is the one thing a filesystem name must never do.
+
+        It does not raise, and that safety is a property of a json.dumps DEFAULT
+        rather than of the code here: ensure_ascii=True escapes the surrogate to
+        the seven ASCII bytes of its JSON escape, so what the encode sees is pure
+        ASCII. The frame is therefore asserted ASCII below, which is the property
+        that stops holding the day ``server.cells_json``'s explicit
+        ``ensure_ascii=False`` reaches this call.
+        """
+        import recoverage.api as api
+
+        raw_name = os.fsencode(tmp_path) + b"/dbs" + bytes([0xFF])
+        # Path() over the raw bytes keeps os.mkdir off the ruff hook (PTH102)
+        # while still naming the directory by its undecodable byte, which is the
+        # point: os.fsdecode turns that byte into the surrogate the frame carries.
+        Path(os.fsdecode(raw_name)).mkdir()
+        surrogate = chr(0xDCFF)
+        assert surrogate in os.fsdecode(raw_name)
+
+        q: queue.Queue[bytes] = queue.Queue()
+        api._SSE_CLIENTS[q] = "test-peer"
+        try:
+            monkeypatch.setattr(api, "_db_path", lambda: Path(os.fsdecode(raw_name)))
+            api._broadcast_db_updated((1, 2))
+            frame = q.get_nowait()
+            assert frame.isascii(), "frame is not ASCII; the encode can raise on a surrogate"
+            payload = json.loads(frame.split(b"data: ", 1)[1])
+            # The name reaches the client as the JSON escape, which the SPA's
+            # format.encodeUrlValue reads back as the byte it stands for.
+            assert payload["db"]["path"] == "dbs" + surrogate
+        finally:
+            api._SSE_CLIENTS.pop(q, None)
+
     def test_a_dropped_frame_names_the_client_it_was_dropped_for(self, caplog: Any) -> None:
         """A full queue means one dashboard stops refreshing; the line must say which.
 

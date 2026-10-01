@@ -904,6 +904,20 @@ def _broadcast_db_updated(snapshot: tuple[int, int] | None) -> None:
         # it as wall-clock data.
         payload["db"]["fingerprint"] = snapshot[0]
         payload["db"]["size_bytes"] = snapshot[1]
+    # The payload carries ``_db_path().name``, a filename read with
+    # os.fsdecode, so a coverage directory whose name holds a byte that is not
+    # valid UTF-8 (legal on ext4, and what a checkout, an archive or a copy
+    # from a Windows tool produces) hands this line a lone U+DCFF surrogate.
+    # The encode below would raise UnicodeEncodeError on it and take every
+    # rebuild broadcast down with it.  It does not, and that is worth knowing
+    # rather than rediscovering: the json.dumps default is ensure_ascii=True,
+    # which escapes the surrogate to the seven ASCII bytes of its JSON escape,
+    # so what reaches .encode() is already pure ASCII.  Left as the ambient
+    # encoding rather than named because ruff's UP012 holds the whole package
+    # to UTF-8-as-default; pinned by test_api's
+    # test_broadcast_frame_encodes_with_a_coverage_dir_name_outside_utf8, so
+    # the day an explicit ensure_ascii=False reaches this call the ASCII
+    # assertion fails here instead of a rebuild raising out of the broadcast.
     frame = f"event: db-updated\ndata: {json.dumps(payload)}\n\n".encode()
     with _SSE_CLIENTS_LOCK:
         clients = list(_SSE_CLIENTS.items())
