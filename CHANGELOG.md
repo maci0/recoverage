@@ -7,6 +7,12 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `recoverage open` writes its `Opening <url>` line to stderr instead of
+  stdout. The line is status, not data: a container entrypoint that captured
+  stdout and treated a non-empty result as an opened dashboard was told the
+  tab was open on the headless run that exits 1. Every other command keeps
+  stdout for data (`export` documents this) or for nothing at all (`regen`);
+  `open` was the one that mixed them.
 - Search no longer re-folds every name and address of every function and
   global on every keystroke. The folds are pure functions of a snapshot that
   does not change while the term does, so they are computed once per snapshot

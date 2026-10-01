@@ -1572,6 +1572,23 @@ class TestOpenPort:
         assert result.exit_code == 1
         assert "no browser available" in result.stderr
 
+    def test_nothing_reaches_stdout(self, monkeypatch: Any) -> None:
+        """`open` writes status, not data, so a failed launch cannot read as
+        a success to a caller that captured stdout.
+
+        "Opening <url>" used to go to stdout on every run, including the
+        headless one that exits 1, so a script treating a non-empty stdout as
+        an opened dashboard was wrong exactly where the exit code already said
+        so.  ``regen`` sends its progress line to stderr for this reason and
+        ``export`` reserves stdout for the rows.
+        """
+        for launched in (True, False):
+            monkeypatch.setattr("recoverage.cli.open_browser", lambda url, ok=launched: ok)
+            result = runner.invoke(app, ["open"])
+            assert result.exit_code == (0 if launched else 1)
+            assert result.stdout == ""
+            assert "Opening http://127.0.0.1:8001" in result.stderr
+
 
 class TestServeServerWiring:
     def test_the_installed_allowlist_is_what_the_server_is_configured_with(

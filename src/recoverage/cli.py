@@ -2072,8 +2072,10 @@ def open_cmd(
     names the free port the server picked, which is in the banner
     [bold]serve[/bold] printed and is not something this command can know.
 
-    Exits 1 when no browser could be launched, so a script or a container
-    entrypoint that runs this and finds nothing open learns why.
+    Writes nothing to stdout: the "Opening ..." line and every error are
+    status, and status goes to stderr, so a caller reads the outcome from the
+    exit code alone. Exits 1 when no browser could be launched, so a script or
+    a container entrypoint that runs this and finds nothing open learns why.
     """
     _check_env_or_exit()
     try:
@@ -2092,7 +2094,12 @@ def open_cmd(
         )
         raise typer.Exit(2) from None
     url = f"http://127.0.0.1:{resolved_port}"
-    typer.echo(f"Opening {url}")
+    # Status, not data, so it goes to stderr like `regen`'s progress line and
+    # the refusal beside it.  A caller reading stdout got "Opening <url>" even
+    # when no browser was launched and the command exited 1, so a script that
+    # treated a non-empty stdout as success read a headless container entrypoint
+    # as an opened dashboard.
+    _secho(f"Opening {url}", err=True)
     if not open_browser(url):
         _secho(
             f"Error: no browser available to open {url}. Open the URL by hand, "
