@@ -1322,6 +1322,109 @@ class TestSpaFilterControls:
         assert keys[6:] == ["proven", "problem"]
 
 
+class TestSpaDimmedMapSaysSo:
+    """A map dimmed to nothing says so, and says what to do about it.
+
+    The moment this answers: a reader picks a status (or types a term) that
+    this section happens not to hold, and the lattice goes blank. Dimming
+    alone reads as "this section is empty", and the status strip's counts are
+    per state over the whole target rather than over the section on screen, so
+    neither surface said how much of THIS section was still shown or which of
+    the two rules hid the rest. The way back was to find the "All states" pill
+    or the search box's Clear by eye.
+
+    The caption is the fix, and these pin it from both sides: the map renders
+    it from the one count, and the count is walked through the same dim rule
+    the paint uses, so the sentence and the picture cannot drift apart.
+    """
+
+    def test_the_map_paints_and_the_caption_count_through_one_rule(self) -> None:
+        """`CoverageMap.paint` had the dim rule inline and nothing else had it.
+
+        A second spelling of "which block is dimmed" is how the caption and the
+        canvas come to disagree: one says three blocks are shown over a
+        lattice painting two. The count therefore walks `isDimmed`, and the
+        paint calls the same function rather than re-deriving the predicate.
+        """
+        map_source = _web("components/CoverageMap.tsx")
+        assert 'from "@/states"' in map_source
+        assert "isDimmed," in map_source, "the paint does not read the shared dim rule"
+        # The inline copy the fix removed: an arm the shared rule replaced.
+        assert "survivesFilter(states[index]" not in map_source, (
+            "the paint re-spells the dim rule inline, so the caption can disagree with it"
+        )
+        assert "survivesFilter" not in map_source, "the map imports the half-rule directly"
+
+    def test_the_caption_is_rendered_from_the_survivor_count(self) -> None:
+        map_source = _web("components/CoverageMap.tsx")
+        assert "const summary = useMemo(" in map_source
+        assert "dimSummary(visible.lit, visible.total, filters, matchedFns !== null)" in map_source, (
+            "the caption is not the survivor count it claims to be"
+        )
+        assert "const visible = useMemo(" in map_source
+        # It counts the SAME columns the paint walks, over the whole section.
+        assert "isDimmed(pack.states[i] ?? 0" in map_source
+        assert "for (let i = 0; i < pack.n; i += 1)" in map_source
+
+    def test_the_caption_is_hidden_when_nothing_is_dimmed(self) -> None:
+        """The ordinary read of a full map is unchanged: the caption is a
+        response to a filter, not furniture beside one."""
+        map_source = _web("components/CoverageMap.tsx")
+        assert "{summary !== null && (" in map_source
+        states = _web("states.ts")
+        assert "if (total === 0 || lit >= total) {" in states, (
+            "a full map would carry a caption saying nothing is dimmed"
+        )
+
+    def test_the_caption_names_the_rule_and_the_way_back(self) -> None:
+        """Every combination names both, because the reader who has to act is
+        the one whose map went blank."""
+        states = _web("states.ts")
+        for phrase in (
+            "the status filter",
+            "the search",
+            "the status filter and the search",
+            "turn off the status filter",
+            "clear the search",
+            "turn off the status filter and clear the search",
+        ):
+            assert phrase in states, f"the caption cannot say {phrase!r}"
+        # The all-dimmed arm is the one that used to be a dead end.
+        assert "Every block here is dimmed" in states
+
+    def test_the_caption_counts_through_the_locale_helpers(self) -> None:
+        """A figure the page prints by hand is a figure that reads in the C
+        locale beside one that reads in the reader's own."""
+        states = _web("states.ts")
+        block = states.split("export function dimSummary(", 1)[1].split("\n}", 1)[0]
+        assert "count(lit)" in block and "count(total)" in block
+        assert "toLocaleString" not in block
+
+    def test_the_caption_click_does_not_select_a_block(self) -> None:
+        """The caption hangs below the lattice inside the map's own click
+        region, so a click on it reached `hitTest` as canvas coordinates.
+
+        The caption's padding sits within the canvas box on a short lattice,
+        and a reader reaching for the text selected whatever block was under
+        it. The pointer handler now refuses anything outside the canvas rect,
+        which also covers the horizontal scroll the wrapper allows.
+        """
+        map_source = _web("components/CoverageMap.tsx")
+        assert "clientY < rect.top ||" in map_source, (
+            "a click outside the canvas still reaches the hit test"
+        )
+        assert "clientY > rect.bottom ||" in map_source
+        assert "clientX < rect.left ||" in map_source
+
+    def test_states_takes_only_the_leaf_format_import(self) -> None:
+        """`states.ts` is the one spelling of the cell vocabulary and must not
+        come to depend on the geometry it describes. `@/lib/format` imports
+        nothing, so it cannot close a cycle; anything else would."""
+        states = _web("states.ts")
+        imports = re.findall(r'^import .* from "(.*?)";', states, re.MULTILINE)
+        assert imports == ["@/lib/format"], f"states.ts grew an import: {imports}"
+
+
 # ── Token auth & security headers ──────────────────────────────────
 
 

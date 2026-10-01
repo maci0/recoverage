@@ -12,7 +12,7 @@ import {
   type Packed,
 } from "@/grid/pack";
 import { count, hex, isolate } from "@/lib/format";
-import { MARK_CLASS, PALETTE_VARS, STATE_LABEL, survivesFilter, type Mark } from "@/states";
+import { MARK_CLASS, PALETTE_VARS, STATE_LABEL, dimSummary, isDimmed, type Mark } from "@/states";
 
 /** The roving tab stop's next cell for a key, or null when the key is not a
  * navigation key. Home and End are the lattice's own ends. */
@@ -166,6 +166,31 @@ export function CoverageMap({
   // identity is "the cells changed" and a stale hit map cannot survive it.
   const pack = useMemo(() => packSection(section), [section]);
 
+/** How many blocks the lattice is still showing at full strength.
+ *
+ * A filter or a search that leaves nothing lit painted an empty map that read as
+ * "this section is empty", and the only way back was finding the "All states"
+ * pill or the search box's Clear by eye. Counting here rather than in the
+ * caller is what makes the figure honest: it walks the same columns the paint
+ * walks, through the same `isDimmed`, so the number and the picture cannot
+ * disagree. */
+const visible = useMemo(() => {
+  let lit = 0;
+  for (let i = 0; i < pack.n; i += 1) {
+    const dim = isDimmed(pack.states[i] ?? 0, pack.ground[i] ?? 0, pack.fns[i] ?? "", filters, matchedFns);
+    if (!dim) {
+      lit += 1;
+    }
+  }
+  return { lit, total: pack.n };
+}, [filters, matchedFns, pack]);
+
+// The caption under the lattice, or null when nothing is dimming it. Derived
+// from the same count, so the sentence and the paint are one thing.
+const summary = useMemo(
+  () => dimSummary(visible.lit, visible.total, filters, matchedFns !== null),
+  [filters, matchedFns, visible],
+);
   const describe = useCallback(
     (index: number): string => {
       if (index < 0 || index >= pack.n) {
@@ -258,10 +283,10 @@ export function CoverageMap({
     const { cell } = geo;
     const { states, ground, fns, n } = pack;
     const { pCell, pX, pY, pW, parts } = geo;
-    const filtering = filters.size > 0;
+    // The one dimming rule, read through `isDimmed` so the paint and the
+    // survivor count above are the same question asked twice.
     const isDim = (index: number): boolean =>
-      (filtering && !survivesFilter(states[index] ?? 0, ground[index] ?? 0, filters)) ||
-      (matchedFns !== null && !matchedFns.has(fns[index] ?? ""));
+      isDimmed(states[index] ?? 0, ground[index] ?? 0, fns[index] ?? "", filters, matchedFns);
     ctx.clearRect(0, 0, geo.width, geo.height);
     for (let pass = 0; pass < 2; pass += 1) {
       ctx.globalAlpha = pass === 0 ? 1 : 0.15;
@@ -421,6 +446,21 @@ export function CoverageMap({
       return;
     }
     const rect = canvas.getBoundingClientRect();
+    // The dim caption lives inside this same region so it travels with the map
+    // it describes, which makes a click on it a click on the region. Its box is
+    // outside the canvas' own, so hit-testing it as canvas coordinates is what
+    // would select whatever block happened to sit under the text; the same test
+    // covers the horizontal scroll the wrapper allows.
+    if (
+      clientY < rect.top ||
+      clientY > rect.bottom ||
+      clientX < rect.left ||
+      clientX > rect.right
+    ) {
+      wrap.title = "";
+      wrap.style.cursor = "default";
+      return;
+    }
     const index = hitTest(state.geometry, clientX - rect.left, clientY - rect.top);
     if (index < 0) {
       wrap.title = "";
@@ -505,6 +545,15 @@ export function CoverageMap({
     >
       <span ref={probeRef} className="hidden" aria-hidden="true" />
       <canvas ref={canvasRef} className="grid-canvas block" aria-hidden="true" />
+      {/* Shown only while something is dimming the lattice, so the ordinary
+          read of a full map is unchanged. A filter or a search naming states
+          this section does not hold leaves nothing lit, and the map then reads
+          as "this section is empty" rather than as "your filter excludes
+          everything here"; this line says which rule did it, what it left and
+          what undoes it. */}
+      {summary !== null && (
+        <p className="border-t border-border px-3 py-2 text-micro text-text-muted">{summary}</p>
+      )}
       <p id={hintId} className="sr-only">
         Arrow keys move between blocks, Home and End jump to the first and last, Enter or Space
         selects the block under the cursor.
