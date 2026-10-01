@@ -92,6 +92,19 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `recoverage backup`'s verification pass, and therefore `recoverage restore`
+  (which verifies before it writes anything), read an archive member to
+  whatever length its tar header declares, with no bound of their own, and they
+  did it before the manifest was consulted — so an archive recoverage did not
+  write (one downloaded, or one from anywhere else) could make the command
+  allocate its declared size, and could make it hold every member at once even
+  when the manifest named none of them. The sizes are now summed from the
+  member HEADERS, which reads fixed 512-byte blocks and no member data, and the
+  archive is refused before a single member's bytes are pulled in when one
+  member is over `backup._MAX_MEMBER_BYTES` (1 GiB) or the archive is over
+  `backup._MAX_ARCHIVE_BYTES` (1 GiB) in total; both refusals name the member.
+  A member carrying one name twice is now refused too, rather than the map
+  keeping the last one under that name and the digest check passing against it.
 - The contributor tools that WRITE a file reported a failure to write it as a
   raw `OSError` traceback instead of a line naming the file and the errno, and
   `tools/normalize_sdist.py` stopped at the first archive it could not read, so a

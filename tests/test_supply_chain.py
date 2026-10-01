@@ -247,8 +247,9 @@ class TestRbrewPin:
         behind it, for a tree that is the same every time. The count is what
         the sibling-rebrew step saves, so it is read off the workflow rather
         than written here: a job added without the step is a gap, and a job
-        added WITH it is a round trip this cache exists to remove. The key hashes `tools/ci_clone_rebrew.sh`, so the cache
-        holds exactly the commit the script pins and a pin bump misses it.
+        added WITH it is a round trip this cache exists to remove. The key
+        hashes `tools/ci_clone_rebrew.sh`, so the cache holds exactly the
+        commit the script pins and a pin bump misses it.
 
         There is deliberately no `restore-keys` fallback: an older rebrew that
         still resolves is the dependency failure the tag-and-commit check

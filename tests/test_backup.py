@@ -227,6 +227,93 @@ class TestVerifyBackup:
             verify_backup(other)
 
 
+class TestArchiveSizeBounds:
+    """A verify holds every member's bytes in memory, so the reader is bounded.
+
+    The archive under the reader is not necessarily one recoverage wrote: a
+    restore takes whatever path the operator hands it, and ``tarfile`` trusts
+    the length a header declares.  These pin that the two limits are applied to
+    the HEADERS, before the data pass allocates anything, and that a member
+    carrying one name twice is refused rather than silently resolved to the
+    last one.
+    """
+
+    def test_a_member_over_the_single_member_limit_is_refused(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The limit is read where the reader lives, so a test can drive it."""
+        monkeypatch.setattr(backup, "_MAX_MEMBER_BYTES", 8)
+        fat = tmp_path / "fat.tar"
+        with tarfile.open(fat, "w") as sink:
+            payload = b"0123456789"
+            info = tarfile.TarInfo("coverage-fat.toml")
+            info.size = len(payload)
+            sink.addfile(info, io.BytesIO(payload))
+            empty = {"format": FORMAT_VERSION, "created": "x", "members": []}
+            manifest = json.dumps(empty).encode()
+            mi = tarfile.TarInfo(MANIFEST_NAME)
+            mi.size = len(manifest)
+            sink.addfile(mi, io.BytesIO(manifest))
+        with pytest.raises(BackupError, match="one member may hold"):
+            verify_backup(fat)
+
+    def test_an_archive_over_the_total_limit_is_refused(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Members each under the single-member cap, together over the total.
+
+        A per-member check alone lets every one of them through; the running
+        total is what refuses the archive, and it does so on the header pass,
+        so nothing over the cap is ever held in memory.  The bound is lowered
+        rather than a gigabyte of payload written, because the header pass is
+        what is under test and it reads no member data.
+        """
+        monkeypatch.setattr(backup, "_MAX_MEMBER_BYTES", 64)
+        monkeypatch.setattr(backup, "_MAX_ARCHIVE_BYTES", 96)
+        wide = tmp_path / "wide.tar"
+        with tarfile.open(wide, "w") as sink:
+            for index in range(4):
+                payload = b"x" * 48
+                info = tarfile.TarInfo(f"coverage-{index}.toml")
+                info.size = len(payload)
+                sink.addfile(info, io.BytesIO(payload))
+            empty = {"format": FORMAT_VERSION, "created": "x", "members": []}
+            manifest = json.dumps(empty).encode()
+            mi = tarfile.TarInfo(MANIFEST_NAME)
+            mi.size = len(manifest)
+            sink.addfile(mi, io.BytesIO(manifest))
+        with pytest.raises(BackupError, match="total limit"):
+            verify_backup(wide)
+
+    def test_a_duplicated_member_name_is_refused(self, tmp_path: Path) -> None:
+        """Two members under one name are not resolved by picking the last."""
+        data = b"second"
+        duplicate = tmp_path / "dup.tar"
+        with tarfile.open(duplicate, "w") as sink:
+            for payload in (b"first", data):
+                info = tarfile.TarInfo("coverage-a.toml")
+                info.size = len(payload)
+                sink.addfile(info, io.BytesIO(payload))
+            manifest = json.dumps(
+                {
+                    "format": FORMAT_VERSION,
+                    "created": "now",
+                    "members": [
+                        {
+                            "name": "coverage-a.toml",
+                            "size": len(data),
+                            "sha256": backup._digest(data),
+                        }
+                    ],
+                }
+            ).encode("utf-8")
+            info = tarfile.TarInfo(MANIFEST_NAME)
+            info.size = len(manifest)
+            sink.addfile(info, io.BytesIO(manifest))
+        with pytest.raises(BackupError, match="appears twice"):
+            verify_backup(duplicate)
+
+
 class TestRestoreBackup:
     """The disaster path: the documents are gone, and then they are back."""
 

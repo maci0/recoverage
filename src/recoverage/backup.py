@@ -75,6 +75,25 @@ DEFAULT_BACKUP_SUBDIR: Final = "backups"
 _ARCHIVE_PREFIX: Final = "coverage-"
 _ARCHIVE_SUFFIX: Final = ".tar"
 
+#: Most bytes one member of an archive may hold, and most bytes an archive may
+#: hold in total.  A verify (and a restore, which verifies first) holds every
+#: member's bytes in memory, because that is what makes it one pass; the bound
+#: is therefore on the reader rather than on the writer.
+#:
+#: A tar header carries the member's length and the reader trusts it, so an
+#: archive a restore did not write — one an operator downloaded, or one produced
+#: by something else entirely — declares whatever size it likes and is read to
+#: that figure.  Unbounded, that is a member read into memory before any name
+#: or digest has been looked at, which is a denial of service against the
+#: command whose whole purpose is to be safe to run on a schedule.  One
+#: gigabyte is far above any real coverage directory (the documents are
+#: per-target TOML, and a large project's set is tens of megabytes), so the
+#: bound is a ceiling against a hostile archive rather than a limit a project
+#: reaches; raise it here, which is where the reader lives, rather than adding
+#: a knob the backup commands do not otherwise carry.
+_MAX_MEMBER_BYTES: Final = 1 << 30
+_MAX_ARCHIVE_BYTES: Final = 1 << 30
+
 
 class BackupError(RuntimeError):
     """A backup could not be taken, verified, or restored.
@@ -298,6 +317,19 @@ def _read_archive(path: Path) -> tuple[dict[str, Any], dict[str, bytes]]:
     archive twice, and a restore that verifies through one pass and extracts
     through another writes the copy it did not check.
 
+    The pull-in is BOUNDED, and the bound is checked against the tar HEADERS
+    before any member's bytes are read.  ``extractfile().read()`` trusts the
+    length a header declares, so an archive recoverage did not write hands the
+    reader whatever size it claims to hold; a member's bytes are in memory here
+    and a member the manifest never names is in memory for no reason at all.
+    :data:`_MAX_MEMBER_BYTES` and :data:`_MAX_ARCHIVE_BYTES` are where that
+    stops, and both refusals name the member rather than leaving a traceback in
+    a scheduled job's mail.  The total is summed over the headers first because
+    a per-member check alone still lets the reader hold the whole cap in memory
+    before it notices the next member would cross it; the header pass reads
+    fixed 512-byte blocks and no member data, so it costs nothing against the
+    data pass that follows.
+
     Nothing is written anywhere: this is the pass a restore runs before it
     touches the coverage directory, so every refusal it can make is made before
     the first file is replaced.
@@ -305,13 +337,53 @@ def _read_archive(path: Path) -> tuple[dict[str, Any], dict[str, bytes]]:
     members: dict[str, bytes] = {}
     try:
         with tarfile.open(path, mode="r:") as tar:
+            # Header pass: every member's declared size, no member data read.
+            # Refuse an oversized member or an over-cap total here, before the
+            # data pass allocates anything.
+            declared: list[tarfile.TarInfo] = []
+            total = 0
             for member in tar.getmembers():
                 if not member.isfile():
                     continue
+                if member.size < 0 or member.size > _MAX_MEMBER_BYTES:
+                    raise BackupError(
+                        f"{path}: member {member.name!r} declares {member.size} bytes, "
+                        f"over the {_MAX_MEMBER_BYTES}-byte limit one member may hold"
+                    )
+                total += member.size
+                if total > _MAX_ARCHIVE_BYTES:
+                    raise BackupError(
+                        f"{path}: archive declares more than the {_MAX_ARCHIVE_BYTES}-byte "
+                        f"total limit once {member.name!r} is counted"
+                    )
+                declared.append(member)
+
+            for member in declared:
                 handle = tar.extractfile(member)
                 if handle is None:  # pragma: no cover - getmembers/isfile agree
                     continue
-                members[member.name] = handle.read()
+                payload = handle.read(_MAX_MEMBER_BYTES + 1)
+                # The header sized the read above; a member that delivers more
+                # than it declared is a truncated-then-appended stream, and
+                # taking only the declared count would verify a prefix of the
+                # member and write a file the manifest never described.
+                if len(payload) > member.size:
+                    raise BackupError(
+                        f"{path}: member {member.name!r} holds more bytes than its header "
+                        f"declares ({member.size}); the archive is malformed"
+                    )
+                # A tar may carry the same name twice; the map would keep the
+                # last and the digest would be checked against a member whose
+                # predecessor was never compared with anything.  Refuse it
+                # rather than pick one.
+                if member.name in members:
+                    raise BackupError(
+                        f"{path}: member {member.name!r} appears twice; "
+                        "a recoverage backup names each member once"
+                    )
+                members[member.name] = payload
+    except BackupError:
+        raise
     except (OSError, tarfile.TarError) as exc:
         raise BackupError(f"{path} is not a readable backup: {exc}") from exc
 
