@@ -1085,7 +1085,12 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   replaces every document on every build, and a build that changed nothing
   writes the same bytes, which must not invalidate a memo, move an ETag or
   broadcast `db-updated` (`tests/test_api.py`,
-  `test_a_rebuild_that_rewrote_the_same_bytes_keeps_the_memo_and_the_etag`). A handler that builds
+  `test_a_rebuild_that_rewrote_the_same_bytes_keeps_the_memo_and_the_etag`).
+  The original binary is outside that token and keys itself:
+  `server.binary_stamp(target)` is part of the `/asm`, `/bytes` and Potato
+  validators, the `disasm` memo key and the `DLL_DATA` entry, and a new consumer
+  of the binary's bytes takes the stamp the same way
+  (`tests/test_server.py`, `TestBinaryIsPartOfTheCacheKey`). A handler that builds
   its answer from several collections therefore reads them all from one
   snapshot and cannot pair one build's cells with the next build's functions;
   that is the guarantee the SQLite read transaction used to buy, held by the

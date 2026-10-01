@@ -48,8 +48,10 @@ from recoverage.server import (
     _newest_mtime_ns,
     _snapshot_db_mtime,
     app,
+    binary_stamp,
     coverage_for,
     coverage_pct,
+    db_target_ids,
     fold_can_match_hex,
     fold_match_folded,
     fold_needle,
@@ -1410,7 +1412,12 @@ def handle_potato() -> bytes | Any:
         # Redact token from ETag input so query-string ETag doesn't leak it.
         if "token=" in qs:
             qs = "&".join(p for p in qs.split("&") if not p.startswith("token="))
-        etag = _etag_or_304(_snapshot_db_mtime(), _newest_mtime_ns(), qs)
+        etag = _etag_or_304(
+            _snapshot_db_mtime(),
+            _newest_mtime_ns(),
+            tuple(binary_stamp(t) for t in db_target_ids()),
+            qs,
+        )
         body = render_potato(urlparse(request.url)).encode("utf-8")
         # Every other DB-derived response carries an explicit cache policy;
         # /potato was the one surface sent with none, which leaves the browser

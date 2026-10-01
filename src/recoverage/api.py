@@ -2303,7 +2303,9 @@ def handle_api_asm(target: str) -> bytes | HTTPResponse:
     # The raw spelling (not the resolved int) keys the ETag: it is hashed, so
     # request data never reaches a header, and each spelling is just its own
     # revalidation identity.
-    asm_etag = _etag_or_304(_snapshot_db_mtime(), target, section, raw_va, size, fmt)
+    asm_etag = _etag_or_304(
+        _snapshot_db_mtime(), target, section, raw_va, size, fmt, _server.binary_stamp(target)
+    )
 
     with _target_snapshot(target) as coverage:
         sec = _file_backed_section(coverage, section)
@@ -2442,7 +2444,14 @@ def handle_api_bytes(target: str, section: str) -> bytes | HTTPResponse:
     # /bytes revalidates after a rebuild instead of serving year-immutable
     # stale bytes (one file's mtime missed a rebuild that rewrote any other
     # target's document).
-    bytes_etag = _etag_or_304(_snapshot_db_mtime(), target, section, req_offset, req_size)
+    bytes_etag = _etag_or_304(
+        _snapshot_db_mtime(),
+        target,
+        section,
+        req_offset,
+        req_size,
+        _server.binary_stamp(target),
+    )
 
     with _target_snapshot(target) as coverage:
         sec = _file_backed_section(coverage, section)

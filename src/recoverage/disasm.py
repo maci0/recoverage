@@ -15,7 +15,7 @@ import logging
 import threading
 from typing import Any
 
-from recoverage.server import _load_dll
+from recoverage.server import _load_dll, binary_stamp
 
 _log = logging.getLogger("recoverage")
 
@@ -155,7 +155,8 @@ def get_disassembly(va: int, size: int, file_offset: int, target: str) -> str:
     if _load_dll(target) is None:
         return ""
     generation = _disassembly_generation()
-    text = _disassemble_loaded(va, size, file_offset, target)
+    stamp = binary_stamp(target)
+    text = _disassemble_loaded(va, size, file_offset, target, stamp)
     if generation == _disassembly_generation():
         return text
     # A rebuild's invalidation overtook this build: the bytes just memoized
@@ -165,7 +166,7 @@ def get_disassembly(va: int, size: int, file_offset: int, target: str) -> str:
     # build in flight at the invalidation takes this path, so the window
     # closes for the whole herd rather than per request.
     clear_disassembly_cache()
-    return _disassemble_loaded(va, size, file_offset, target)
+    return _disassemble_loaded(va, size, file_offset, target, binary_stamp(target))
 
 
 #: Memo entries for :func:`_disassemble_loaded`, sized by the memo's own
@@ -182,8 +183,15 @@ _DISASSEMBLY_MEMO_MAX = 128
 
 
 @functools.lru_cache(maxsize=_DISASSEMBLY_MEMO_MAX)
-def _disassemble_loaded(va: int, size: int, file_offset: int, target: str) -> str:
-    """Cached disassembly; :func:`get_disassembly` verified the DLL loads."""
+def _disassemble_loaded(
+    va: int, size: int, file_offset: int, target: str, stamp: tuple[int, int, int] | None
+) -> str:
+    """Cached disassembly; :func:`get_disassembly` verified the DLL loads.
+
+    *stamp* is :func:`recoverage.server.binary_stamp`, here only to key the memo
+    on the binary the slice was read from: a replaced binary is a different key,
+    where the target alone would serve the old binary's text.
+    """
     target_data = _load_dll(target)
     if target_data is None:
         # Raced a rebuild's DLL_DATA.clear() between the two loads, so this

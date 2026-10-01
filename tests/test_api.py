@@ -1225,6 +1225,34 @@ class TestApiBytes:
     def _get(self, query: str, section: str = ".text") -> tuple[str, dict[str, str], bytes]:
         return wsgi_get(f"/api/targets/FAKEDLL/sections/{section}/bytes?{query}")
 
+    def test_a_replaced_binary_revalidates_the_bytes_etag(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A data-section edit leaves every document byte-identical, so the
+        content token alone would answer 304 for bytes that changed."""
+        import recoverage.server as srv
+
+        binary = tmp_path / "game.dll"
+        binary.write_bytes(self.dll)
+        monkeypatch.setattr(srv, "_find_dll_path", lambda target: binary)
+        status, headers, _ = self._get("offset=0&size=4")
+        assert status.startswith("200")
+        etag = _header(headers, "ETag")
+
+        status, _, _ = wsgi_get(
+            "/api/targets/FAKEDLL/sections/.text/bytes?offset=0&size=4",
+            headers={"If-None-Match": etag},
+        )
+        assert status == "304 Not Modified"
+
+        binary.write_bytes(self.dll + b"x")
+        status, headers, _ = wsgi_get(
+            "/api/targets/FAKEDLL/sections/.text/bytes?offset=0&size=4",
+            headers={"If-None-Match": etag},
+        )
+        assert status.startswith("200")
+        assert _header(headers, "ETag") != etag
+
     def _foreign_section_doc(
         self,
         tmp_path: Path,

@@ -1365,6 +1365,44 @@ DLL_LOCK = threading.Lock()
 #: under the same lock and deliberately leaves this alone: the config did not
 #: change, so the next request reloads under a fingerprint that still matches.
 _DLL_CONFIG_MTIME: tuple[int, int] | None = None
+#: ``(mtime_ns, size, ino)`` of the binary each DLL_DATA entry was read from.
+#: A target in DLL_DATA with no entry here (a test filling the memo directly,
+#: or a cached "no binary") is never invalidated by a stamp.
+_DLL_STAMPS: dict[str, tuple[int, int, int]] = {}
+
+
+def _stamp_current(target: str, stamp: tuple[int, int, int] | None) -> bool:
+    """Whether DLL_DATA's entry for *target* still describes the binary at *stamp*.
+
+    Only a DIFFERENT stamp invalidates.  A binary that cannot be stat'ed (a
+    build holding it, a path briefly gone) reads as None, and dropping a good
+    entry for that would trade the cached bytes for a transient failure.  An
+    entry with no recorded stamp is never invalidated by one.  Caller holds
+    DLL_LOCK.
+    """
+    recorded = _DLL_STAMPS.get(target)
+    return stamp is None or recorded is None or recorded == stamp
+
+
+def binary_stamp(target: str) -> tuple[int, int, int] | None:
+    """``(mtime_ns, size, ino)`` of *target*'s original binary, None without one.
+
+    The binary is an input of ``/asm``, ``/bytes`` and Potato's panels that no
+    coverage document carries: a data-section edit leaves every rebuilt
+    document byte-identical, so the content-keyed change token never moves.
+    The stat is what keys the byte memo, the disassembly memo and those
+    routes' validators on the binary itself.
+    """
+    path = _find_dll_path(target)
+    if path is None:
+        return None
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return st.st_mtime_ns, st.st_size, st.st_ino
+
+
 _MAX_DLL_SIZE = 512 * 1024 * 1024  # 512 MiB — reject unreasonably large binaries
 
 
@@ -1634,7 +1672,11 @@ def _find_dll_path(target: str) -> Path | None:
 
 
 def _cache_dll_unavailable(
-    target: str, config_fp: tuple[int, int] | None, warning: str, *args: object
+    target: str,
+    config_fp: tuple[int, int] | None,
+    stamp: tuple[int, int, int] | None,
+    warning: str,
+    *args: object,
 ) -> bytes | None:
     """Record *target*'s DLL as unloadable, logging *warning* once.
 
@@ -1653,10 +1695,14 @@ def _cache_dll_unavailable(
     with DLL_LOCK:
         if config_fp != _DLL_CONFIG_MTIME:
             return None
-        if target in DLL_DATA:
+        if target in DLL_DATA and _stamp_current(target, stamp):
             return DLL_DATA[target]
         _log.warning(warning, *(_log_safe(a) if isinstance(a, str) else a for a in args))
         DLL_DATA[target] = None
+        if stamp is None:
+            _DLL_STAMPS.pop(target, None)
+        else:
+            _DLL_STAMPS[target] = stamp
         return None
 
 
@@ -1679,17 +1725,20 @@ def _load_dll(target: str) -> bytes | None:
     """
     global _DLL_CONFIG_MTIME
     config_fp = config_fingerprint(_project_dir())
+    stamp = binary_stamp(target)
     with DLL_LOCK:
         if config_fp != _DLL_CONFIG_MTIME:
             _DLL_CONFIG_MTIME = config_fp
             DLL_DATA.clear()
-        elif target in DLL_DATA:
+            _DLL_STAMPS.clear()
+        elif target in DLL_DATA and _stamp_current(target, stamp):
             return DLL_DATA[target]
     dll_path = _find_dll_path(target)
     if dll_path is None:
         return _cache_dll_unavailable(
             target,
             config_fp,
+            stamp,
             "No [targets.%s].binary configured — cannot load DLL for target %s",
             target,
             target,
@@ -1700,6 +1749,7 @@ def _load_dll(target: str) -> bytes | None:
             return _cache_dll_unavailable(
                 target,
                 config_fp,
+                stamp,
                 "DLL %s (%d MiB) exceeds %d MiB limit, skipping",
                 str(dll_path),
                 file_size >> 20,
@@ -1710,6 +1760,7 @@ def _load_dll(target: str) -> bytes | None:
             return _cache_dll_unavailable(
                 target,
                 config_fp,
+                stamp,
                 "DLL %s (%d MiB) exceeds %d MiB limit after read, skipping",
                 str(dll_path),
                 len(data) >> 20,
@@ -1734,9 +1785,11 @@ def _load_dll(target: str) -> bytes | None:
         # binary the edit just replaced.  Hand them back uncached instead.
         if config_fp != _DLL_CONFIG_MTIME:
             return data
-        if target in DLL_DATA:
-            return DLL_DATA[target]
         DLL_DATA[target] = data
+        if stamp is None:
+            _DLL_STAMPS.pop(target, None)
+        else:
+            _DLL_STAMPS[target] = stamp
         return data
 
 

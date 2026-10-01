@@ -2320,6 +2320,123 @@ class TestLoadDllTransientFailure:
                 srv.DLL_DATA.pop(key, None)
 
 
+class TestBinaryIsPartOfTheCacheKey:
+    """A replaced original binary must reach /asm, /bytes and the byte memo.
+
+    The coverage change token keys on document content, and a data-section edit
+    leaves every rebuilt document byte-identical, so the binary has to key
+    itself: ``server.binary_stamp``.
+    """
+
+    @staticmethod
+    def _binary(tmp_path: Path, monkeypatch: Any, key: str) -> Path:
+        import recoverage.server as srv
+
+        path = tmp_path / "game.dll"
+        monkeypatch.setattr(srv, "_find_dll_path", lambda target: path)
+        with srv.DLL_LOCK:
+            srv.DLL_DATA.pop(key, None)
+            srv._DLL_STAMPS.pop(key, None)
+        return path
+
+    def test_a_replaced_binary_is_reloaded(self, tmp_path: Path, monkeypatch: Any) -> None:
+        import recoverage.server as srv
+
+        key = "__replaced_binary_target__"
+        path = self._binary(tmp_path, monkeypatch, key)
+        path.write_bytes(b"MZ-old-bytes")
+        try:
+            assert srv._load_dll(key) == b"MZ-old-bytes"
+            # Same size, new inode: the shape of a rebuilt binary landing by
+            # rename, which a size comparison alone would miss.
+            replacement = tmp_path / "game.dll.new"
+            replacement.write_bytes(b"MZ-new-bytes")
+            replacement.replace(path)
+            assert srv._load_dll(key) == b"MZ-new-bytes"
+        finally:
+            with srv.DLL_LOCK:
+                srv.DLL_DATA.pop(key, None)
+                srv._DLL_STAMPS.pop(key, None)
+
+    def test_an_unchanged_binary_is_read_once(self, tmp_path: Path, monkeypatch: Any) -> None:
+        import recoverage.server as srv
+
+        key = "__unchanged_binary_target__"
+        path = self._binary(tmp_path, monkeypatch, key)
+        path.write_bytes(b"MZ-bytes")
+        reads: list[Path] = []
+        real_read = Path.read_bytes
+
+        def counting(self: Path) -> bytes:
+            reads.append(self)
+            return real_read(self)
+
+        monkeypatch.setattr(Path, "read_bytes", counting)
+        try:
+            assert srv._load_dll(key) == srv._load_dll(key) == b"MZ-bytes"
+        finally:
+            with srv.DLL_LOCK:
+                srv.DLL_DATA.pop(key, None)
+                srv._DLL_STAMPS.pop(key, None)
+        assert reads == [path]
+
+    def test_a_smaller_binary_replaces_a_refused_oversize_one(
+        self, tmp_path: Path, monkeypatch: Any
+    ) -> None:
+        import recoverage.server as srv
+
+        key = "__oversize_binary_target__"
+        path = self._binary(tmp_path, monkeypatch, key)
+        monkeypatch.setattr(srv, "_MAX_DLL_SIZE", 8)
+        path.write_bytes(b"MZ-way-too-large")
+        try:
+            assert srv._load_dll(key) is None
+            path.write_bytes(b"MZ-ok")
+            assert srv._load_dll(key) == b"MZ-ok"
+        finally:
+            with srv.DLL_LOCK:
+                srv.DLL_DATA.pop(key, None)
+                srv._DLL_STAMPS.pop(key, None)
+
+    def test_the_stamp_moves_with_the_binary_and_is_none_without_one(
+        self, tmp_path: Path, monkeypatch: Any
+    ) -> None:
+        import recoverage.server as srv
+
+        key = "__stamped_binary_target__"
+        path = self._binary(tmp_path, monkeypatch, key)
+        assert srv.binary_stamp(key) is None
+        path.write_bytes(b"MZ-a")
+        first = srv.binary_stamp(key)
+        assert first is not None
+        path.write_bytes(b"MZ-bb")
+        assert srv.binary_stamp(key) != first
+
+    def test_the_disassembly_memo_follows_the_binary(
+        self, tmp_path: Path, monkeypatch: Any
+    ) -> None:
+        import recoverage.disasm as disasm
+        import recoverage.server as srv
+
+        if disasm.capstone_unavailable_reason() is not None:
+            pytest.skip("capstone is not installed")
+        key = "__disasm_replaced_binary_target__"
+        path = self._binary(tmp_path, monkeypatch, key)
+        path.write_bytes(b"\x90\x90\x90\x90")  # nop x4
+        try:
+            before = disasm.get_disassembly(0x1000, 4, 0, key)
+            path.write_bytes(b"\xcc\xcc\xcc\xcc")  # int3 x4, same size
+            os.utime(path, ns=(2 * 10**18, 2 * 10**18))
+            after = disasm.get_disassembly(0x1000, 4, 0, key)
+        finally:
+            disasm._disassemble_loaded.cache_clear()
+            with srv.DLL_LOCK:
+                srv.DLL_DATA.pop(key, None)
+                srv._DLL_STAMPS.pop(key, None)
+        assert "nop" in before
+        assert "int3" in after
+
+
 class TestGetDisassemblyNoNegativeCache:
     """get_disassembly must not memoize the "" result of a DLL-load failure.
 
@@ -2341,7 +2458,7 @@ class TestGetDisassemblyNoNegativeCache:
 
         calls: list[tuple[int, int, int, str]] = []
 
-        def fake_impl(va: int, size: int, file_offset: int, target: str) -> str:
+        def fake_impl(va: int, size: int, file_offset: int, target: str, stamp: object) -> str:
             calls.append((va, size, file_offset, target))
             return f"disasm:{va:#x}"
 
@@ -2384,7 +2501,7 @@ class TestGetDisassemblyNoNegativeCache:
         built: list[str] = []
 
         @disasm.functools.lru_cache(maxsize=16)
-        def fake_impl(va: int, size: int, file_offset: int, target: str) -> str:
+        def fake_impl(va: int, size: int, file_offset: int, target: str, stamp: object) -> str:
             built.append(f"{va:#x}")
             if len(built) == 1:
                 # The rebuild's invalidation lands while this build runs: the
@@ -2421,7 +2538,7 @@ class TestGetDisassemblyNoNegativeCache:
         real = tmp_path / "real.dll"
 
         @disasm.functools.lru_cache(maxsize=16)
-        def _prime(va: int, size: int, file_offset: int, target: str) -> str:
+        def _prime(va: int, size: int, file_offset: int, target: str, stamp: object) -> str:
             return "cached"
 
         monkeypatch.setattr(disasm, "_disassemble_loaded", _prime)
@@ -2489,8 +2606,8 @@ class TestGetDisassemblyNoNegativeCache:
         binary = b"MZ" + bytes(range(64))
         monkeypatch.setattr(disasm, "_load_dll", lambda target: binary)
         try:
-            assert disasm._disassemble_loaded(0x1000, 5, -10, "__neg_offset__") == ""
-            assert disasm._disassemble_loaded(0x1000, -5, 0, "__neg_size__") == ""
+            assert disasm._disassemble_loaded(0x1000, 5, -10, "__neg_offset__", None) == ""
+            assert disasm._disassemble_loaded(0x1000, -5, 0, "__neg_size__", None) == ""
         finally:
             disasm._disassemble_loaded.cache_clear()
 

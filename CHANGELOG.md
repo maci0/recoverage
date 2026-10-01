@@ -16,6 +16,10 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   logs one warning and the dashboard keeps serving.
 - A rebuild re-reads only the documents it rewrote. Before, rewriting one
   target re-parsed every target's document.
+- `/asm`, `/bytes` and the Potato panels follow the original binary: replacing it
+  reloads the bytes, revalidates their ETags and refreshes the disassembly. Before,
+  they kept serving the previous binary until a document or the project config
+  changed.
 - A rebuild that rewrites a document with the same bytes no longer
   invalidates anything: rebrew replaces every document on every build, and
   each one used to drop every cached response, change every ETag and send
