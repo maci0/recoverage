@@ -35,10 +35,11 @@ block that covers it.
 ## Screenshots
 
 > [!NOTE]
-> These four shots predate the move onto the relumea brand tokens
-> (`web/app/system/tokens.css`) and still carry the older palette. The layout
-> they show is current; the colours are not. Re-shoot them from a running
-> `recoverage serve` before treating them as the product's current look.
+> These four shots are captured from a running `recoverage serve` against a
+> synthetic coverage document (`tests/coverage_fixture.py`), so the target is
+> the fixture's `FAKEDLL` rather than a real one. The layout, the palette and
+> the states on the grid are the product's own; re-shoot against a real build
+> to replace the fixture's numbers.
 
 ### Main dashboard
 

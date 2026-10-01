@@ -3977,6 +3977,59 @@ class TestPageIdentityMatchesTheSpa:
     rendered.
     """
 
+    def test_a_pane_heading_carries_the_mark_and_not_a_generated_badge(self) -> None:
+        """No initials avatar where the logo belongs.
+
+        A pane heading drew a hexagon holding a caller-chosen label (``01``,
+        ``C``, ``ASM``), which is the placeholder-avatar pattern: a generated
+        tile standing in for a mark nobody bothered to draw, and the same
+        ``01`` on two unrelated panes. The page already carries the real mark
+        in its topbar and its tab icon, so a second invented one contradicted
+        both. The mark is the product's subject, so it is what a heading
+        carries now, on every pane.
+        """
+        from recoverage import potato
+
+        heading = potato._section_heading("01", potato.ACCENT_BYTES, "Original Bytes")
+        assert "polygon" not in heading, "a pane heading drew a generated hexagon again"
+        assert "<text" not in heading, "a pane heading drew an initials badge again"
+        assert "<img" in heading
+
+        for label, color, title in (
+            ("01", potato.ACCENT_BYTES, "Original Bytes"),
+            ("C", potato.ACCENT_C_SOURCE, "C Source (server.c)"),
+            ("ASM", potato.ACCENT_ASM, "Assembly"),
+            ("{}", potato.ACCENT_DATA, "Data Inspector"),
+        ):
+            # The mark this page already draws, not a fourth spelling of it.
+            assert potato.MARK_ON_DARK_SVG in potato._section_heading(label, color, title)
+
+    def test_a_pane_heading_marks_itself_decoratively(self) -> None:
+        """The mark beside a heading carries no name of its own.
+
+        The icon is aria-hidden and every cell of it is a colour square, so a
+        screen reader announcing "Data Inspector mark" before the heading
+        reads a decoration aloud. An empty alt is the whole reason.
+        """
+        from recoverage import potato
+
+        heading = potato._section_heading("01", potato.ACCENT_BYTES, "Original Bytes")
+        assert 'alt=""' in heading
+        assert "Original Bytes" in heading
+
+    def test_no_generated_hex_avatar_is_left_to_be_drawn(self) -> None:
+        """The generator itself, not just one call site.
+
+        The four call sites each spelled their own label, so a rule held on
+        one heading would leave the others free; the hexagon has to be gone
+        from the module.
+        """
+        from recoverage import potato
+
+        source = Path(potato.__file__).read_text(encoding="utf-8")
+        assert "_hex_logo_svg" not in source, "the generated hex avatar is back"
+        assert "polygon points=" not in source, "a hexagon is drawn again"
+
     def test_the_topbar_mark_is_the_same_nine_cells(self) -> None:
         """The dark-ground mark is the favicon's geometry, not a lookalike."""
         from recoverage import potato

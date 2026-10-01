@@ -461,34 +461,30 @@ LEGEND_ITEMS = [
 # ── HTML Helpers ────────────────────────────────────────────────────────────────────────
 
 
-def _hex_logo_svg(label: str, color: str) -> str:
-    """Generate a hex-shaped SVG logo as a base64 data-URI image tag."""
-    font_size = 26 if len(label) > 2 else 42
-    safe_label = _html_escape(label)
-    svg = (
-        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="20" height="20">'
-        f'<polygon points="50,5 90,27.5 90,72.5 50,95 10,72.5 10,27.5"'
-        f' fill="{color}" fill-opacity="0.15" stroke="{color}"'
-        f' stroke-width="6" stroke-linejoin="round"/>'
-        f'<text x="50" y="54" dominant-baseline="middle" text-anchor="middle"'
-        f' fill="{color}" font-family="monospace" font-weight="800"'
-        f' font-size="{font_size}">{safe_label}</text></svg>'
-    )
-    return f'<img src="{_svg_uri(svg)}" width="20" height="20" border="0" alt="{safe_label}">'
-
-
 def _section_heading(label: str, color: str, title: str) -> str:
-    """Render a section heading with a hex logo + title text.
+    """Render a section heading with the coverage-cell mark + title text.
 
     ``title`` is escaped here, not by the caller: the heading is built by
     string concatenation into element content, so a caller that forgot the
     escape would emit a DB-sourced section or file name as live markup.
     Callers pass the raw text.
+
+    The mark is the product's, not a generated tile: this heading used to
+    draw a hexagon holding an initials badge, colour the caller chose, which
+    is the initials-avatar placeholder every generated app puts where a logo
+    belongs — six headings, four of them the same ``01``, on a page whose tab
+    icon and topbar already carry the real mark. It draws
+    ``MARK_ON_DARK_SVG``, the nine cells this class already holds to one
+    drawing, rather than a fourth spelling of the same grid. ``label`` and
+    ``color`` stay in the signature because a pane heading may still need to
+    name which pane it is; they no longer draw a colour of their own, because
+    the brand has one accent and this page is dark in both OS themes.
     """
-    logo = _hex_logo_svg(label, color)
+    del label, color  # the mark carries the identity; a pane's own colour does not
     return (
         f'<table role="presentation" border="0" cellpadding="0" cellspacing="4"><tr>'
-        f'<td valign="middle">{logo}</td>'
+        f'<td valign="middle"><img src="{MARK_ON_DARK_SVG}"'
+        f' width="20" height="20" border="0" alt=""></td>'
         f'<td valign="middle">'
         f'<h2><font size="3">{_esc(title)}</font></h2>'
         f"</td></tr></table><br>"

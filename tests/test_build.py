@@ -466,6 +466,13 @@ class TestLongDescriptionLinksResolveWhereItIsRendered:
                     )
 
 
+#: How far a shot's mean chrome channel may sit from the nearest brand ground
+#: and still be read as that ground. 12/255 covers a page whose top rows mix
+#: the ground with one raised surface and its border; the pre-token slate and
+#: sky grounds land 60+ away from every ground the tokens declare.
+_GROUND_TOLERANCE = 12
+
+
 class TestShippedScreenshotsAreWhatTheyAreNamed:
     """A screenshot the README shows is part of the product.
 
@@ -558,6 +565,64 @@ class TestShippedScreenshotsAreWhatTheyAreNamed:
         assert not claimed, (
             "the dashboard follows the OS theme by default (`tokens.css`), so a screenshot "
             f"section cannot call any one of its shots the default: {claimed}"
+        )
+
+    def test_the_shots_are_the_palette_the_product_ships(self) -> None:
+        """Every screenshot wears the brand's own grounds.
+
+        The README's own note says the four shots "predate the move onto the
+        relumea brand tokens and still carry the older palette" — a sentence
+        asking the reader to discount the product's first impression, written
+        because nobody re-shot them. A disclosure does not change what a reader
+        sees, and nothing held the note true: re-shooting the files without
+        deleting the note left it claiming a mismatch that no longer existed,
+        and editing the note away without re-shooting left the README showing
+        a slate/sky dashboard this package does not ship. So the gate reads
+        the bytes against the token file, and the note it was written for has
+        to go in the same change.
+
+        Read off the token file rather than a restated table, for the same
+        reason the colour maths elsewhere in this suite is: a re-shoot of the
+        brand's next step must not need this test edited first.
+        """
+        tokens = (_ROOT / "web" / "app" / "system" / "tokens.css").read_text(encoding="utf-8")
+        # `--color-<name>: light-dark(<light>, <dark>);` — three groups: the
+        # name and the two grounds.
+        grounds = {
+            name: (light.lower(), dark.lower())
+            for name, light, dark in re.findall(
+                r"--color-(bg|surface):\s*light-dark\(\s*(#[0-9a-fA-F]{6}),\s*"
+                r"(#[0-9a-fA-F]{6})\s*\)",
+                tokens,
+            )
+        }
+        assert len(grounds) == 2, "tokens.css no longer spells both grounds for bg/surface"
+        # `_png_ground` returns the MEAN red channel of the chrome, so a whole
+        # ground never survives the division: a page that is 66% `#ffffff` and
+        # 34% `#f5f6f8` averages to a byte no token holds. So a shot is read as
+        # the NEAREST ground, which is what the eye does, and the test is about
+        # which palette a shot wears rather than about one pixel row.
+        candidates = sorted({value for pair in grounds.values() for value in pair})
+        # The pre-token palette's grounds, named so a failure says what moved.
+        stale = {"#f8fafc", "#0f1319", "#3f4958"}  # slate-50, the old dark bg, slate-700
+
+        shots = [
+            _ROOT / match["path"]
+            for match in self._CAPTION_RE.finditer(self._README.read_text(encoding="utf-8"))
+            if match["path"].lower().endswith(".png")
+        ]
+        assert len(shots) >= 3, "the README no longer shows the dashboard this gate reads"
+        offenders = []
+        for shot in shots:
+            mean = _png_ground(shot)
+            nearest = min(candidates, key=lambda hex_: abs(int(hex_[1:3], 16) - mean))
+            if abs(int(nearest[1:3], 16) - mean) > _GROUND_TOLERANCE:
+                note = " (a ground from the pre-token palette)" if f"#{mean:02x}" in stale else ""
+                offenders.append(f"{shot.name} sits on #{mean:02x}, nearest {nearest}{note}")
+        assert not offenders, (
+            "a screenshot shows a palette this package does not ship: "
+            f"{offenders}. Re-shoot it from a running `recoverage serve` and delete "
+            "the README's stale-palette note."
         )
 
 
