@@ -369,6 +369,8 @@ export const MSG = {
     "This regeneration is already running. The map refreshes by itself when it finishes.",
   REGEN_DONE: "Coverage data regenerated.",
   REGEN_UNAVAILABLE: "Regeneration unavailable",
+  LIVE_RELOAD_OFF:
+    "Live reload disconnected — the map only refreshes when you reload the page. Reconnecting…",
   FETCH_FAILED: (url: string) => `(failed to load: ${url})`,
   JUMP_NO_BLOCK: (address: string) =>
     `No block covers ${address} in this target, so there is nothing to select.`,

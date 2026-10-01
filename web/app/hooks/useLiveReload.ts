@@ -47,6 +47,12 @@ export function useLiveReload({
     }
     const events = new EventSource("/api/events");
     let timer: number | null = null;
+    // Whether the notice line is currently carrying the "live reload is off"
+    // message, so a reconnect clears it and a repeat error does not re-set it
+    // against a notice some OTHER surface owns (a regen in progress, a failed
+    // lookup). Without this the error handler would clobber those on every
+    // reconnect attempt.
+    let reloadNotice = false;
     events.addEventListener("db-updated", () => {
       // Coalesce bursts: a build may rewrite the documents in stages.
       if (timer !== null) {
@@ -54,13 +60,33 @@ export function useLiveReload({
       }
       timer = window.setTimeout(onDbUpdated, EVENTS_DEBOUNCE_MS);
     });
+    // An EventSource that cannot connect (the server is down, /api/events is
+    // refused at its client cap with 503, the network dropped) auto-reconnects
+    // and reports NOTHING while it fails: the reader kept a map that stops
+    // updating when the next build lands and had no way to know. The SPA never
+    // polls /api/health, so this is the only place the disconnect is visible.
+    // onerror also fires for a transient blip, so it is a sticky notice the
+    // next onopen takes back, not a modal.
+    events.addEventListener("error", () => {
+      if (reloadNotice) {
+        return;
+      }
+      reloadNotice = true;
+      onNotice(MSG.LIVE_RELOAD_OFF);
+    });
+    events.addEventListener("open", () => {
+      if (reloadNotice) {
+        reloadNotice = false;
+        onNotice(null);
+      }
+    });
     return () => {
       if (timer !== null) {
         window.clearTimeout(timer);
       }
       events.close();
     };
-  }, [enabled, onDbUpdated]);
+  }, [enabled, onDbUpdated, onNotice]);
 
   const reload = useCallback((): void => {
     if (busy) {

@@ -186,9 +186,22 @@ def _exclusive_regen(root: Path) -> Iterator[None]:
             with contextlib.suppress(OSError):
                 _release_lock(handle)
             raise
-        _release_lock(handle)
+        # Best effort here too, and for the same reason as the arm above: the
+        # descriptor close in the outer finally drops the lock whatever happens,
+        # so an OSError out of this explicit unlock duplicates a release the
+        # kernel is about to perform. Unguarded, it replaced the SUCCESS it was
+        # cleaning up after — rebrew wrote every document, and the caller
+        # (exit 1, or the API's 500) reported a regen that had failed.
+        with contextlib.suppress(OSError):
+            _release_lock(handle)
     finally:
-        handle.close()
+        # Best effort: this runs on every exit, including one unwinding a
+        # RegenError or a rebrew traceback the operator needs, and a close()
+        # that raised (a flush onto a filesystem that went away between the
+        # write and here) would replace it with an OSError about a lock file
+        # nobody is left holding.
+        with contextlib.suppress(OSError):
+            handle.close()
 
 
 def _same_directory(written_to: Path, override: Path) -> bool:

@@ -225,15 +225,19 @@ class TestRunRegen:
         with pytest.raises(ValueError, match="corrupt"):
             run_regen(tmp_path)
 
-    def test_a_failing_unlock_after_a_good_run_still_surfaces(
+    def test_a_failing_unlock_after_a_good_run_is_not_a_failed_run(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        """With nothing to protect, the unlock failure is not swallowed.
+        """With nothing to protect, the unlock failure does not fail the run.
 
-        The other arm of the pair: dropping the cleanup error unconditionally
-        would make a regen that SUCCEEDED report success on a lock it never
-        released, and the next regen would answer 429/RegenBusyError against a
-        lock file no process holds.
+        The other arm of the pair: letting an OSError out of the success-path
+        unlock would report a regen that wrote every document correctly as a
+        failure (CLI exit 1, API 500). The lock it was protecting is NOT left
+        held — the descriptor close in ``_exclusive_regen``'s outer ``finally``
+        releases an flock/msvcrt byte-range lock whatever the explicit unlock
+        did (verified: closing the fd drops the LOCK_NBLCK), so there is
+        nothing to protect and nothing to report. The success-path unlock is
+        best effort for exactly the reason the failure-path one is.
         """
         from recoverage import regen
 
@@ -249,8 +253,41 @@ class TestRunRegen:
             lambda handle: (_ for _ in ()).throw(OSError("cannot unlock")),
         )
 
-        with pytest.raises(OSError, match="cannot unlock"):
-            run_regen(tmp_path)
+        # The run succeeds: run_regen returns the written-document list rather
+        # than raising the unlock error.
+        run_regen(tmp_path)
+
+    def test_the_lock_is_released_even_when_the_explicit_unlock_fails(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """A failed explicit unlock leaves no lock: the next regen runs.
+
+        The claim the previous test rests on, driven rather than assumed: the
+        descriptor close in the outer ``finally`` is what releases the lock, so
+        swallowing the success-path unlock's OSError cannot wedge the next run
+        against a lock nobody holds. With the real unlock restored for the
+        second run, a RegenBusyError here would be exactly that wedge.
+        """
+        from recoverage import regen
+
+        _install_fake_rebrew(
+            monkeypatch,
+            load_config=lambda root: object(),
+            run_catalog=lambda c: None,
+            build_db=lambda project_root, force: None,
+        )
+        real_release = regen._release_lock
+        monkeypatch.setattr(
+            regen,
+            "_release_lock",
+            lambda handle: (_ for _ in ()).throw(OSError("cannot unlock")),
+        )
+        run_regen(tmp_path)
+
+        # First run done. Back to the real unlock, and a second run must not be
+        # refused as busy — nothing holds the lock.
+        monkeypatch.setattr(regen, "_release_lock", real_release)
+        run_regen(tmp_path)
 
     def test_a_second_run_repeats_the_same_pipeline(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path

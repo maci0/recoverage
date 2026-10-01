@@ -172,30 +172,64 @@ def _read_cached(path: Path, digest: str) -> dict[str, Any] | None:
     return doc
 
 
+def _unlink_quiet(path: Path, what: str) -> None:
+    """Delete *path*, swallowing only the failures that are not worth a line.
+
+    ``missing_ok=True`` covers the common race (a concurrent prune took it
+    first), but not ``PermissionError`` on a slot another process holds open,
+    or a read-only or full filesystem.  Those must not escape: this is called
+    from the cleanup arms of the write and the prune, where an escaping OSError
+    either replaces the exception that brought us there or turns a successful
+    write into a failed one.  The cache is an optimisation, so a file that will
+    not delete is an operator note, never a failure of the parse.
+    """
+    try:
+        path.unlink(missing_ok=True)
+    except OSError as exc:
+        _log.debug("coverage cache: cannot remove %s %s: %s", what, path, exc.strerror or exc)
+
+
 def _prune(root: Path) -> None:
     """Keep the :data:`_CACHE_MAX_SLOTS` most recently used slots, drop stale temps.
 
     A slot is per document PATH, so every coverage directory ever served (a
     worktree, a moved checkout) leaves one behind, and a write killed between
-    its temp file and the rename leaves the temp.  Raises OSError like the
-    write it follows.
+    its temp file and the rename leaves the temp.
+
+    A failure to DELETE reports itself and returns: the caller's write has
+    already been renamed into place by the time this runs, so letting an
+    unlink's OSError escape would make the caller's write-failure warning
+    report "documents will be parsed on every start" for a slot that was
+    written and read fine.  Only the directory walk itself propagates, because
+    that one says the whole cache directory is unusable and the write
+    genuinely is not landing.
     """
     now = clock.wall_time()
     slots: list[tuple[int, Path]] = []
-    for entry in root.iterdir():
+    try:
+        entries = list(root.iterdir())
+    except OSError as exc:
+        _log.debug("coverage cache: cannot list %s to prune it: %s", root, exc.strerror or exc)
+        return
+    for entry in entries:
         try:
             st = entry.stat()
         except FileNotFoundError:
             # Removed by another process's prune between the listing and here.
             continue
+        except OSError as exc:
+            _log.debug(
+                "coverage cache: cannot stat %s while pruning: %s", entry, exc.strerror or exc
+            )
+            continue
         if entry.suffix == _TMP_SUFFIX:
             if now - st.st_mtime > _STALE_TMP_SECONDS:
-                entry.unlink(missing_ok=True)
+                _unlink_quiet(entry, "stale temp")
         elif entry.suffix == _SLOT_SUFFIX:
             slots.append((st.st_mtime_ns, entry))
     slots.sort(reverse=True)
     for _mtime, stale in slots[_CACHE_MAX_SLOTS:]:
-        stale.unlink(missing_ok=True)
+        _unlink_quiet(stale, "stale slot")
 
 
 def _write_cached(path: Path, digest: str, doc: dict[str, Any]) -> None:
@@ -232,7 +266,13 @@ def _write_cached(path: Path, digest: str, doc: dict[str, Any]) -> None:
             )
     finally:
         if tmp_name is not None:
-            Path(tmp_name).unlink(missing_ok=True)
+            # Through _unlink_quiet, not a bare unlink(missing_ok=True): an
+            # OSError raised in a finally REPLACES whatever exception is
+            # unwinding through this arm, so a temp file that cannot be
+            # deleted (a permission the directory does not grant, a read-only
+            # mount) would surface as the cache's failure and hide the write
+            # error the operator needs.
+            _unlink_quiet(Path(tmp_name), "temp")
 
 
 def _parse_toml(path: Path, data: bytes, digest: str) -> dict[str, Any]:
