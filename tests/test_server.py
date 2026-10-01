@@ -4280,6 +4280,96 @@ class TestSpaTimestampRendering:
             assert unreadable == "not a timestamp", f"{zone}: an unreadable stamp was rendered"
 
 
+class TestSpaRefusesAWallTimeTheReadersZoneCannotPlace:
+    """A stamp the reader's zone cannot place comes back as it arrived.
+
+    `format.dateTime` reads a naive ISO string in the reader's own zone, which
+    is the right reading of one and the whole of its correctness: `Date`
+    resolves such a string LENIENTLY rather than refusing it, and the two
+    shapes it substitutes for instead render as a confident, wrong date.
+
+    Both arrive from the coverage document, which this package treats as
+    untrusted input (docs/THREAT_MODEL.md), in `updated_at` and
+    `last_verify.verified_at` as the SPA's `CoveragePanel` reads them:
+
+    * a day the calendar does not have. `2026-02-30` is not invalid input to
+      `Date`: the ISO parser carries the overflow into the next month, so the
+      stamp rendered as `3/2/2026`, a real day the document never named.
+      `2026-09-31` likewise reads as October 1st.
+    * an hour a spring-forward transition SKIPPED. `Europe/Warsaw` jumps
+      02:00 -> 03:00 on 2026-03-29 and `America/New_York` on 2026-03-08
+      (verified with `zdump -v -c 2026,2027 <zone>` on this machine's zone
+      database), so `2026-03-29T02:30:00` is a wall clock reading no clock in
+      that zone ever had; `Date` moved it past the gap and rendered the
+      03:30, which is a time on that day that also never happened. A reader in
+      any other zone, where the hour DOES exist, still gets the reading.
+
+    So the refusal is per ZONE, not a property of the stamp: each is rendered
+    in the zone that can place it and refused in the zone that cannot, which
+    is what a "reject this string outright" fix would get wrong the other way.
+
+    The fall-back hour is deliberately absent from the refused list: the clocks
+    reading 02:30 twice on 2026-10-25 in Warsaw is an AMBIGUOUS stamp rather
+    than an impossible one, and `Date` picks the first occurrence, which is a
+    policy this suite would have to name rather than assume.
+    """
+
+    #: zone -> (the stamp, whether that zone can place it)
+    CASES: ClassVar[dict[str, tuple[str, bool]]] = {
+        "Europe/Warsaw": ("2026-03-29T02:30:00", False),
+        "America/New_York": ("2026-03-08T02:30:00", False),
+        "UTC": ("2026-03-29T02:30:00", True),
+    }
+
+    #: Stamps no zone can place, because the calendar has no such day. True in
+    #: every zone, unlike the gap above.
+    IMPOSSIBLE_DAYS: ClassVar[tuple[str, ...]] = (
+        "2026-02-30",
+        "2026-09-31",
+        "2026-02-30T00:00:00",
+    )
+
+    def _render(self, stamp: str, zone: str) -> str:
+        bun = shutil.which("bun")
+        if bun is None:
+            pytest.skip("bun not on PATH")
+        driver = (
+            "import { dateTime } from " + json.dumps(str(WEB_APP / "lib" / "format.ts")) + ";\n"
+            "console.log(JSON.stringify(dateTime(process.argv[2])));\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            script = Path(tmp) / "render.ts"
+            script.write_text(driver, encoding="utf-8")
+            proc = subprocess.run(
+                [bun, "run", str(script), stamp],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
+                env={**os.environ, "TZ": zone},
+            )
+        assert proc.returncode == 0, f"dateTime harness failed to run: {proc.stderr}"
+        return json.loads(proc.stdout)
+
+    def test_an_hour_the_transition_skipped_is_refused_where_it_does_not_exist(self) -> None:
+        for zone, (stamp, exists) in self.CASES.items():
+            rendered = self._render(stamp, zone)
+            if exists:
+                # The zone HAS this reading, so the stamp is a real wall clock
+                # time there and is rendered as one.
+                assert rendered != stamp, f"{zone}: a real reading was refused ({rendered!r})"
+            else:
+                assert rendered == stamp, (
+                    f"{zone}: a time the zone skipped rendered as {rendered!r}"
+                )
+
+    def test_a_day_the_calendar_does_not_have_is_refused_everywhere(self) -> None:
+        for zone in ("Europe/Warsaw", "America/New_York", "UTC"):
+            for stamp in self.IMPOSSIBLE_DAYS:
+                rendered = self._render(stamp, zone)
+                assert rendered == stamp, f"{zone}: impossible day {stamp} rendered as {rendered!r}"
+
+
 class TestSpaCountsAgreeWithTheReadersLocale:
     """A count the reader's locale does not write is a wrong count.
 

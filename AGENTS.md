@@ -986,6 +986,28 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   is UTC with the offset spelled out, never a fixed offset or a zone guessed
   from the locale; a log stamp is local time with `%z` attached, because the
   operator comparing it against their own clock needs to see their own clock.
+  A document's OWN stamp (`updated_at`, `last_verify.verified_at`) is the one
+  the reader sees in their own zone rather than UTC, because a naive ISO string
+  is local time to whoever wrote it and the writer is not the reader, and
+  `format.dateTime` is where that happens. That reading holds only when the
+  reader's zone CONTAINS the wall clock reading the literal names, and `Date`
+  resolves a naive string leniently instead of refusing the ones it cannot
+  place, so `dateTime` round-trips the literal against the parsed value's
+  reader-zone fields and returns the raw string when they disagree: a day the
+  calendar does not have (`2026-02-30`, which `Date` carries into the next
+  month and rendered as a real day the document never named) and an hour a
+  spring-forward transition SKIPPED (`2026-03-29T02:30:00` in `Europe/Warsaw`,
+  whose clocks jump 02:00 -> 03:00; `Date` moved it past the gap and rendered
+  the 03:30, which no clock there ever read either) both come back raw, since
+  the document is untrusted input and a wrong-but-plausible date is worth less
+  than the string that arrived. A stamp CARRYING an offset names an instant,
+  always round-trips, and is untouched by the check. The fall-back REPEATED
+  hour is deliberately not refused: it is ambiguous rather than impossible, and
+  picking the first occurrence is a policy to name rather than assume. The
+  refusal is per ZONE, so the same stamp still renders for a reader whose zone
+  has the hour. Pinned at `tests/test_server.py`
+  (`TestSpaRefusesAWallTimeTheReadersZoneCannotPlace`), driven under a real
+  `TZ`.
 - The memos derived from `rebrew-project.toml` all key on the file's stat
   (`_paths.config_fingerprint`), one token for all of them:
   `_get_targets_config`, `resolve_targets` (keyed on that stat AND the

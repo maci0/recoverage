@@ -125,6 +125,20 @@ export function plural(
  * the raw string. */
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/u;
 
+/** A stamp carrying NO UTC offset: `YYYY-MM-DD`, with an optional `T`/` `
+ * separated `HH:MM`, optional seconds and optional fractional seconds — the
+ * whole set of shapes `Date` reads as a wall clock reading in the READER's
+ * zone rather than as an instant.
+ *
+ * Split out so `dateTime` below knows which literal fields it must round-trip.
+ * A stamp WITH an offset names an instant and always round-trips exactly; a
+ * stamp WITHOUT one names a wall clock reading, and `Date` resolves such a
+ * string leniently instead of refusing the ones the reader's zone cannot
+ * place. The trailing fractional group is captured but not compared: a
+ * sub-second field is below the resolution `toLocaleString` renders. */
+const NAIVE_STAMP =
+  /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2}))?(?:\.(\d+))?)?$/u;
+
 /** A stored timestamp, written the way the reader's locale writes a date and
  * in their own timezone. The documents carry ISO 8601, which is a wire format
  * and not one anyone reads: a German reader gets `29.09.2026, 14:03` and a
@@ -144,13 +158,55 @@ const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/u;
  * UTC (UTC-3 through UTC-11, most of the Americas and the Pacific) and as the
  * 29th only in the zone that wrote it. Appending the time half without an
  * offset puts the day back on the calendar day it names, which is the only
- * reading a value carrying no time of day can support. */
+ * reading a value carrying no time of day can support.
+ *
+ * The reader's zone then has to actually CONTAIN the wall clock reading the
+ * literal names, because `Date` resolves a naive string without refusing the
+ * ones it cannot place, and it does not refuse the ones it can resolve to
+ * something else. Two shapes reach a coverage document and both used to render
+ * as a confident, wrong date: a day the calendar does not have (`2026-02-30`,
+ * `2026-09-31`) is rolled forward onto the next real one and printed as it,
+ * and an hour a spring-forward transition SKIPPED (`2026-03-29T02:30:00` in
+ * `Europe/Warsaw`, whose clocks jump 02:00 -> 03:00 that day) is moved
+ * forward past the gap and printed as the 03:30 that no clock in that zone
+ * ever read. Neither is a rendering choice, so both come back as the raw
+ * string they arrived as, like any other stamp no engine can place. */
 export function dateTime(stamp: string): string {
-  const parsed = new Date(DATE_ONLY.test(stamp) ? `${stamp}T00:00:00` : stamp);
+  const anchored = DATE_ONLY.test(stamp) ? `${stamp}T00:00:00` : stamp;
+  const parsed = new Date(anchored);
   if (Number.isNaN(parsed.getTime())) {
     return stamp;
   }
+  // Only a stamp that named a wall clock reading can be resolved to a
+  // DIFFERENT one; one carrying an offset names an instant and always
+  // round-trips, so the check below does not apply to it.
+  const literal = NAIVE_STAMP.exec(anchored);
+  if (literal !== null && !readersClockAgreesWith(parsed, literal)) {
+    return stamp;
+  }
   return parsed.toLocaleString();
+}
+
+/** Did `Date` resolve the naive stamp `literal` to the reading it names?
+ *
+ * `Date` builds the instant from the reader's zone, so a wall clock reading
+ * that exists is read back field for field, while an impossible day (an
+ * overflow the constructor carries into the next month) or an hour a
+ * spring-forward transition skipped (a reading the zone never had) comes back
+ * carrying different fields than the literal held. Reading the fields off the
+ * parsed value in the reader's own zone is therefore the check, and comparing
+ * them to the literal is what separates "the zone has this reading" from
+ * "`Date` found something to substitute for it". */
+function readersClockAgreesWith(parsed: Date, literal: RegExpExecArray): boolean {
+  return (
+    parsed.getFullYear() === Number(literal[1]) &&
+    parsed.getMonth() + 1 === Number(literal[2]) &&
+    parsed.getDate() === Number(literal[3]) &&
+    (literal[4] === undefined ||
+      (parsed.getHours() === Number(literal[4]) &&
+        parsed.getMinutes() === Number(literal[5]) &&
+        (literal[6] === undefined || parsed.getSeconds() === Number(literal[6]))))
+  );
 }
 
 /** A 0-1 similarity FRACTION as a rendered percentage, or null when the value

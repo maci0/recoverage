@@ -35,6 +35,17 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   while the field was collapsed and the list was not on the page, leaving a
   reference a screen reader could not resolve. It is present while the list
   exists; `aria-expanded` is what says "closed".
+- A timestamp in the dashboard that the reader's own timezone cannot place is
+  now shown as the document spelled it, instead of as a plausible but different
+  date and time. Two shapes reached this: a date that does not exist
+  (`2026-02-30`), which used to roll forward and read as the 2nd of March, and
+  a time inside the hour a daylight-saving transition skips (`02:30` on a
+  spring-forward morning in `Europe/Warsaw`, `America/New_York` and every
+  other zone that springs forward), which used to shift past the gap and read as
+  `03:30` — a time that did not happen either. The rendering is unchanged for
+  every timestamp a reader's clock can actually read, and a timestamp that
+  carries a UTC offset keeps naming its exact instant. The repeated hour of a
+  fall-back transition is still resolved to the first reading, as before.
 - `--cors` now accepts and exposes `X-Request-ID`. The README tells a client
   to send its own so a report can be matched to the server log, and every
   response carries one back; a cross-origin client could do neither, because
