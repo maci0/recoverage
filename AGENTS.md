@@ -702,10 +702,16 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   test file cannot join the suite untyped by default and a module that retires
   its finding leaves that dict in the same change. The selected rule
   groups, the bandit/pylint codes that are named individually instead of by
-  prefix, the two ignores (PT006, PT018) and each per-file-ignore set all
-  carry their reason next to them in `[tool.ruff.lint]` and
-  `[tool.ruff.lint.per-file-ignores]` in pyproject.toml; those comments are
-  the record of what the tree is expected to pass
+  prefix, and each per-file-ignore set all carry their reason next to them in
+  `[tool.ruff.lint]` and `[tool.ruff.lint.per-file-ignores]` in pyproject.toml;
+  those comments are the record of what the tree is expected to pass. The
+  repo-wide `ignore` list is the one severity downgrade nothing reads back —
+  a code in it stops reporting, which is indistinguishable from a tree with no
+  finding, and no file stops passing — so the reason for each of its entries
+  lives in `tests/test_supply_chain.py`
+  (`TestPythonAnalysisIsEnforced::test_a_new_repo_wide_ignore_cannot_be_added_silently`),
+  which fails when a code joins the list without one. Editing the list means
+  editing that dict.
 - The bandit security group is on for src/ and tools/, including the S1xx
   wildcard-bind, hardcoded-secret, `/tmp` and urlopen checks; the suite's
   fixtures are the only reason `tests/*` ignores them, and each of those

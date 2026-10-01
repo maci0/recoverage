@@ -90,7 +90,13 @@ from recoverage.api import (
     _REGEN_KEY_RE,
     _clear_derived_caches,
 )
-from recoverage.server import _best_encoding, _hostname_of, _normalize_origin, _peer_is_loopback
+from recoverage.server import (
+    _best_encoding,
+    _hostname_of,
+    _if_none_match_matches,
+    _normalize_origin,
+    _peer_is_loopback,
+)
 
 # The three codecs the server can actually produce, in preference order.  A
 # negotiation result outside this set means a response was labelled with an
@@ -2983,13 +2989,18 @@ def _names_served_etag(raw: str, etag: str) -> bool:
 
     The oracle the campaign judges against: RFC 9110's list, the ``*``
     wildcard, and the weak ``W/`` spelling, written out here rather than
-    reused from the helper under test.
+    reused from the helper under test.  ``W/`` is compared case-SENSITIVELY,
+    because that is what RFC 9110 section 8.8.3 says it is: the grammar is
+    ``W/`` literally, so ``w/"..."`` is not a weak validator and names nothing.
+    An oracle that upper-cased the prefix here would demand a 304 from a
+    server that correctly answers 200, and the campaign would then have been
+    failing on the refusal rather than on the comparison it exists to check.
     """
-    for candidate in raw.split(","):
-        candidate = candidate.strip()
+    for item in raw.split(","):
+        candidate = item.strip()
         if candidate == "*" or candidate == etag:
             return True
-        if candidate[:2].upper() == "W/" and candidate[2:].strip() == etag:
+        if candidate.startswith("W/") and candidate[2:].strip() == etag:
             return True
     return False
 
@@ -3078,6 +3089,41 @@ class TestConditionalRequestComparison:
             status, _headers, _body = wsgi_request("GET", path, {"If-None-Match": raw})
             assert int(status.split()[0]) == 200, (
                 f"If-None-Match={raw!r} matched the served etag {etag!r} and answered {status}"
+            )
+
+    def test_the_oracle_agrees_with_the_helper_it_judges(self) -> None:
+        """The campaign is differential, so its oracle is a second reading of
+        RFC 9110 rather than a restatement of the helper — and two readings
+        drift.
+
+        This oracle upper-cased the weak prefix while the helper compared
+        ``W/`` literally, so on ``w/"..."`` the campaign demanded a 304 from a
+        server that correctly answered 200: the failure would have been
+        reported against the comparison the campaign exists to check, naming a
+        bug in the code that is correct. Asserting the two agree on every
+        spelling costs no request and turns that class into a local failure.
+        """
+        etag = '"deadbeef"'
+        for raw in (
+            "*",
+            etag,
+            f"W/{etag}",
+            f"w/{etag}",
+            f"W/w/{etag}",
+            f"  {etag}  ",
+            f'"other", {etag}',
+            f'"{etag}"x',
+            f"x{etag}",
+            f"{etag[:-1]}",
+            f"{etag}0",
+            f"W/x{etag}",
+            '""',
+            "",
+            ",",
+        ):
+            assert _names_served_etag(raw, etag) == _if_none_match_matches(raw, etag), (
+                f"the oracle and the helper disagree on If-None-Match={raw!r}: "
+                f"{_names_served_etag(raw, etag)} against {_if_none_match_matches(raw, etag)}"
             )
 
 

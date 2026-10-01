@@ -833,8 +833,8 @@ def _get_raw_bytes(file_offset: int, size: int, target: str) -> bytes | None:
 def _extract_annotations(code: str) -> list[tuple[str, str]]:
     """Extract annotation comments (NOTE, BLOCKER, SOURCE) from C source."""
     annotations: list[tuple[str, str]] = []
-    for line in code.splitlines():
-        line = line.strip()
+    for raw_line in code.splitlines():
+        line = raw_line.strip()
         for tag in ("NOTE", "BLOCKER", "SOURCE"):
             prefix = f"// {tag}:"
             if line.startswith(prefix):

@@ -254,6 +254,21 @@ allowed-confusables = ["×"]
 #   call, nan comparison, bad raise type, encoding-less open, useless
 #   else-on-loop, self-assignment, global-at-statement), plus the PLR and TRY
 #   codes listed in select that are defect classes rather than size limits.
+#   PLC0105/0131/0132, PLC1802, PLC2401, PLW2901 — the remaining non-preview
+#   correctness rules that ran clean on src/, tests/ and tools/ before they were
+#   written here: a TypeVar whose name contradicts its variance or bound, a
+#   `len(x)` spelled as a comparison, a non-ASCII identifier, and a `for`
+#   variable rebound by the loop body. The last one is a defect class rather
+#   than a style nit — the rebinding is what makes the two spellings read as
+#   one variable when the body narrows it — and the three sites it found were
+#   renamed to say which is the split element and which the narrowed one.
+#   PLC0207 (a split that makes more tokens than the code reads) is NOT among
+#   them: 34 sites in tests/test_fuzz.py discard every token but the first, so
+#   enabling it is a tree-wide mechanical edit for a perf nit, which belongs
+#   with the review that owns those call sites rather than in this config.
+#   PLR0916, PLC1901, PLC2701, PLC2801, PLR1702, PLR1712, PLW0717, PLW3201
+#   are preview-only: selecting one is a no-op that reads as coverage, so they
+#   stay off rather than being written down as if they checked anything.
 # S603/S607/S608 (untrusted argv, partial path, string-built SQL) stay off:
 # the SQL and argv fragments are built from validated column names rather than
 # request input.
@@ -269,11 +284,13 @@ select = [
     "S312", "S313", "S314", "S315", "S316", "S317", "S318", "S319",
     "S321", "S323", "S324",
     "S601", "S602", "S604", "S605", "S606", "S609", "S610", "S611", "S612",
-    "PLC0205", "PLC0206", "PLC0208", "PLC0414", "PLC3002",
+    "PLC0105", "PLC0131", "PLC0132",
+    "PLC0205", "PLC0206", "PLC0208", "PLC0414", "PLC1802",
+    "PLC2401", "PLC3002",
     "PLW0120", "PLW0127", "PLW0128", "PLW0129", "PLW0131", "PLW0133",
     "PLW0177", "PLW0211", "PLW0245", "PLW0406", "PLW0602", "PLW0604",
     "PLW0642", "PLW0711", "PLW1501", "PLW1507", "PLW1508", "PLW1509",
-    "PLW1641", "PLW2101", "PLW3301",
+    "PLW1641", "PLW2101", "PLW2901", "PLW3301",
     # pylint refactor rules that are defect classes rather than size limits:
     # comparing a value with itself, comparing two constants, a property that
     # takes arguments, an argument rebound from a local, a bool chain that
@@ -293,10 +310,11 @@ select = [
     # the two this tree does not pass yet.
     "TRY002", "TRY004", "TRY201", "TRY203", "TRY400", "TRY401",
 ]
-# PT006 wants argnames as a tuple or list; the suite spells them the pytest
-# way, as one comma-separated string ("raw,expected"). PT018 asks for one
-# assert per line; the compact `assert a in x and b in y` form is how the
-# table-driven cases read.
+# `ignore` is the one severity-downgrade list here, and the reason each entry
+# is in it is held by `recorded` in
+# tests/test_supply_chain.py::TestPythonAnalysisIsEnforced::
+# test_a_new_repo_wide_ignore_cannot_be_added_silently, which fails when a
+# code is added here without one. Editing the list means editing that dict.
 ignore = ["PT006", "PT018"]
 # typer's idiom is `param = typer.Option(...)` in signature defaults; without
 # this, B008 would demand a noqa on every CLI option (typer docs recommend it).

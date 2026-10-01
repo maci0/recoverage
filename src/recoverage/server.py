@@ -1034,8 +1034,8 @@ def _if_none_match_matches(raw: str, etag: str) -> bool:
     (``W/"..."``) matched weakly.  Every ETag-bearing surface answers
     revalidation through here, so the accepted spellings cannot drift.
     """
-    for cand in raw.split(","):
-        cand = cand.strip()
+    for item in raw.split(","):
+        cand = item.strip()
         if cand == "*":
             return True
         if cand == etag:

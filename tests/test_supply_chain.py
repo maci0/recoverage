@@ -1275,6 +1275,30 @@ class TestPythonAnalysisIsEnforced:
             "ignore anywhere else is a path that opted out of the check"
         )
 
+    def test_a_new_repo_wide_ignore_cannot_be_added_silently(self) -> None:
+        """`ignore` is a severity downgrade, and it is the one hole in this config
+        that nothing reads back.
+
+        mypy's settings are held here one by one, and a `per-file-ignores` entry
+        naming a path the suite does not own shows up as a failing lint run on
+        whatever file it silences. `ignore` has neither property: dropping a code
+        into it stops the rule reporting, which is indistinguishable from a tree
+        with no finding, and no file stops passing. The two entries below are the
+        recorded exceptions, each with its reason beside it in pyproject.toml;
+        anything else is a rule switched off for the whole tree because one site
+        was inconvenient.
+        """
+        recorded = {
+            "PT006": "the suite spells pytest fixture argnames as one comma-separated string",
+            "PT018": "the compact `assert a in x and b in y` form is how the table cases read",
+        }
+        present = sorted(self._ruff().get("ignore", []))
+        assert present == sorted(recorded), (
+            f"[tool.ruff.lint] ignore is {present}; the recorded exceptions are "
+            f"{sorted(recorded)}. A new entry is a rule switched off for the whole tree, "
+            "so it needs a real finding behind it and its reason recorded here."
+        )
+
     def test_a_new_test_module_cannot_join_untyped(self) -> None:
         """`files` is a gate with a hole in it, and the hole is the whole
         point of the exercise: the modules it does not name are unchecked, and
