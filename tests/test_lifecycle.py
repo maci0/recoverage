@@ -23,6 +23,7 @@ import subprocess
 import sys
 import time
 import types
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -546,16 +547,109 @@ class TestRunRegen:
             run_regen(tmp_path)
         assert events == []
 
+    def test_a_db_dir_neither_side_can_resolve_is_refused_not_declined(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """The guard that keeps a regen writing where the dashboard reads must run.
 
-def _install_fake_workspace(monkeypatch: pytest.MonkeyPatch, db_dir: Path) -> None:
+        A ``db_dir`` rebrew resolved but this process cannot walk (a symlink
+        loop, a permission error on a parent) used to DECLINE the comparison,
+        and the regen went on with the write directory unknown: the one check
+        standing between a rebuild and a dashboard that stays stale had not
+        run, and nothing said so.  ``_exclusive_regen`` resolves the same
+        directory through the same helper and falls back to ``root/db``, so the
+        lock landed in a directory rebrew does not write to and two processes
+        stopped seeing each other -- the interleaved write the lock exists to
+        prevent.
+
+        The refusal is a distinct type from ``RegenDbMismatchError`` because an
+        operator reading the log has to tell the two apart: this one is a path
+        to fix, that one is a setting to change.
+        """
+        from recoverage.regen import RegenDbMismatchError, RegenDbUnresolvableError
+
+        def refuses_to_resolve(_root: Path) -> Path:
+            raise OSError(13, "Permission denied")
+
+        events: list[tuple[str, Any]] = []
+        _record_rebrew_calls(monkeypatch, events)
+        _install_fake_workspace(
+            monkeypatch,
+            tmp_path / "db",
+            db_dir_resolver=refuses_to_resolve,
+        )
+
+        monkeypatch.setenv("RECOVERAGE_DB", str(tmp_path / "elsewhere"))
+        with pytest.raises(RegenDbUnresolvableError) as excinfo:
+            run_regen(tmp_path)
+
+        message = str(excinfo.value)
+        # The message carries what an operator needs to act on: the project, the
+        # setting it disagrees with, and the underlying OS failure.
+        assert "RECOVERAGE_DB" in message
+        assert str(tmp_path / "elsewhere") in message
+        assert "Permission denied" in message
+        # Still refused BEFORE rebrew ran, and still not the mismatch type: a
+        # caller catching the mismatch alone must not see this.
+        assert events == []
+        assert not isinstance(excinfo.value, RegenDbMismatchError)
+
+    def test_the_unresolvable_lock_directory_is_named_in_the_log(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The fallback lock directory is a guess, and a guess has to be findable.
+
+        ``_coverage_dir`` still answers ``root/db`` when rebrew's own
+        resolution fails, because refusing would stop a rebuild rebrew was
+        going to run.  But a lock in the wrong directory costs two processes
+        the ability to see each other, so the arm that guesses says which
+        directory it guessed.  It is reached with ``RECOVERAGE_DB`` unset: with
+        it set, the guard above has already refused the same failure before
+        this runs.
+        """
+        from recoverage import regen
+
+        def refuses_to_resolve(_root: Path) -> Path:
+            raise OSError(13, "Permission denied")
+
+        _install_fake_workspace(
+            monkeypatch,
+            tmp_path / "db",
+            db_dir_resolver=refuses_to_resolve,
+        )
+
+        with caplog.at_level(logging.WARNING, logger="recoverage"):
+            resolved = regen._coverage_dir(tmp_path)
+
+        assert resolved == tmp_path / "db"
+        messages = [record.getMessage() for record in caplog.records]
+        assert any(
+            "regen lock is held in" in message and "Permission denied" in message
+            for message in messages
+        ), messages
+
+
+def _install_fake_workspace(
+    monkeypatch: pytest.MonkeyPatch,
+    db_dir: Path,
+    *,
+    db_dir_resolver: Callable[[Path], Path] | None = None,
+) -> None:
     """Fake ``rebrew.workspace`` with *db_dir* as the resolved coverage directory.
 
     Only the two names ``_check_writes_where_the_dashboard_reads`` imports; the
     real module is a sibling checkout this suite does not control.
+
+    ``db_dir_resolver`` replaces the resolver for the arm where resolution
+    ITSELF fails rather than returning a different directory: rebrew's real
+    ``db_dir`` resolves internally, and that resolve is what raises on a path
+    this process cannot walk.  The default is the answering resolver, so every
+    existing caller keeps saying what it said.
     """
+    resolve = db_dir_resolver if db_dir_resolver is not None else (lambda _root: db_dir)
     workspace = types.ModuleType("rebrew.workspace")
     workspace.CONFIG_NAME = "rebrew-project.toml"  # type: ignore[attr-defined]
-    workspace.db_dir = lambda root: db_dir  # type: ignore[attr-defined]
+    workspace.db_dir = resolve  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "rebrew.workspace", workspace)
 
 

@@ -10,6 +10,7 @@ renders them the same is a gate nobody can triage.
 
 from __future__ import annotations
 
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -75,6 +76,54 @@ def test_a_checker_that_will_not_start_returns_the_same_status(
     monkeypatch.setattr(lint_html.subprocess, "run", refuse)
     assert lint_html.run_vnu([], [REPO_ROOT / "package.json"]) == lint_html.RUNNER_UNAVAILABLE
     assert "could not run vnu" in capsys.readouterr().err
+
+
+def test_a_checker_that_never_finishes_is_the_same_unavailable_status(
+    monkeypatch: Any, capsys: Any
+) -> None:
+    """A wedged JVM validates nothing, and must not hold the job until CI kills it.
+
+    Unbounded, ``run_vnu`` waited on a JVM that never answers, so the gate hung
+    until the job timeout with nothing naming the command that hung.  The
+    timeout is the fix and this is the property it has to keep: the pass is
+    killed, and the status is ``RUNNER_UNAVAILABLE`` -- not a finding, because
+    nothing was checked, and not 0, which would be a gate that passed without
+    having looked at a document.
+    """
+    seen: list[Any] = []
+
+    def wedge(cmd: list[str], **kwargs: Any) -> _Completed:
+        seen.append(kwargs.get("timeout"))
+        raise subprocess.TimeoutExpired(cmd, kwargs.get("timeout") or 0.0)
+
+    monkeypatch.setattr(lint_html.subprocess, "run", wedge)
+    assert lint_html.run_vnu([], [REPO_ROOT / "package.json"]) == lint_html.RUNNER_UNAVAILABLE
+    assert "nothing was validated" in capsys.readouterr().err
+    # The bound has to be the one the module names: a timeout of None, or a
+    # value that is not positive, restores the unbounded wait this status
+    # exists to report.
+    assert seen == [lint_html.VNU_TIMEOUT_SECONDS]
+    assert lint_html.VNU_TIMEOUT_SECONDS > 0
+
+
+def test_every_vnu_launch_is_bounded(monkeypatch: Any) -> None:
+    """The bound rides on the call, so no arm of this gate can drop it.
+
+    ``run_vnu`` is the only place the checker is launched and the timeout is an
+    argument rather than a wrapper a future arm could bypass, so a second
+    launch site written as a bare ``subprocess.run`` would be the unbounded
+    wait this test exists to rule out.
+    """
+    seen: list[Any] = []
+
+    def record(*_args: Any, **kwargs: Any) -> _Completed:
+        seen.append(kwargs.get("timeout"))
+        return _Completed(0)
+
+    monkeypatch.setattr(lint_html.subprocess, "run", record)
+    lint_html.run_vnu([], [REPO_ROOT / "package.json"])
+    lint_html.run_vnu(["--css"], [REPO_ROOT / "package.json"])
+    assert seen == [lint_html.VNU_TIMEOUT_SECONDS] * 2
 
 
 @pytest.mark.parametrize("code", [0, 1])

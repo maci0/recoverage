@@ -18,6 +18,26 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- A regen whose coverage directory could not be resolved (`db_dir` raising
+  on a symlink loop, a permission error on a parent, a name the OS refuses)
+  skipped the check that a regen writes where the dashboard reads, and said
+  nothing. The rebuild ran against an unknown write directory, and the
+  cross-process regen lock took its fallback directory instead, so two
+  processes stopped seeing each other and could interleave writes to one
+  coverage document — the thing the lock exists to prevent. A regen that cannot
+  establish where it would write is now refused before rebrew runs, with a
+  message naming the project, the `RECOVERAGE_DB` value it disagrees with and
+  the underlying OS error; `recoverage regen` exits 2, as it does for the
+  directory mismatch, and `POST /api/regen` answers 500 with the same message.
+  A regen with no `RECOVERAGE_DB` override is unaffected: there is nothing to
+  disagree with, so the run proceeds and the lock's fallback directory is
+  named in the log rather than guessed in silence.
+- The HTML gate (`make web-lint`) waited on the validator JVM with no bound,
+  so a wedged vnu — an exhausted runner, a jar on a mount that never answers —
+  held the job until the job timeout with nothing naming the command that
+  hung. Each pass is now bounded, and a pass that outlives the bound is
+  reported as "the checker could not start" rather than as a finding: nothing
+  was validated, which is not the same answer as a document being wrong.
 - The browser SBOM's `created` stamp rendered a year before 1000 without its
   leading zeros (`1-01-01T00:00:00Z`), because `strftime`'s `%Y` is not
   zero-padded below year 1000, so a scanner reading the four-digit year SPDX

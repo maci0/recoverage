@@ -646,6 +646,7 @@ def _run_regen(root: Path) -> list[Path]:
     from recoverage.regen import (
         RegenBusyError,
         RegenDbMismatchError,
+        RegenDbUnresolvableError,
         RegenError,
         run_regen,
     )
@@ -656,10 +657,12 @@ def _run_regen(root: Path) -> list[Path]:
     _secho("Running rebrew catalog + build-db...", err=True)
     try:
         return run_regen(root)
-    except RegenDbMismatchError as e:
-        # A setting this package reads and rebrew cannot honour. Exit 2, the
-        # misconfiguration code `config` uses, not the regen-failed 1: rebrew
-        # never ran and the operator has to change something first.
+    except (RegenDbMismatchError, RegenDbUnresolvableError) as e:
+        # A setting this package reads and rebrew cannot honour (the mismatch),
+        # or a coverage directory neither could resolve (the sibling), which is
+        # the same answer from here: rebrew never ran and the operator has to
+        # change something first. Exit 2, the misconfiguration code `config`
+        # uses, not the regen-failed 1.
         _secho(f"Error: {e}", fg=typer.colors.RED, err=True)
         raise typer.Exit(2) from None
     except RegenBusyError as e:

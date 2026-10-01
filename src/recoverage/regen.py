@@ -40,10 +40,17 @@ from __future__ import annotations
 
 import contextlib
 import importlib
+import logging
 import os
 from collections.abc import Iterator
 from pathlib import Path
 from typing import IO
+
+#: One logger for the package (see ``server._log``): ``Logger.handle`` runs the
+#: filters of the logger a record was logged ON, so a module naming itself
+#: writes lines the request-id filter never stamps, and every failure below is
+#: one an operator correlates against a 503 or a refused regen.
+_log = logging.getLogger("recoverage")
 
 #: The advisory lock every regen holds, named in the coverage directory
 #: rebrew writes into, so the processes that share the documents also share the
@@ -91,6 +98,23 @@ class RegenBusyError(RuntimeError):
     """
 
 
+class RegenDbUnresolvableError(RuntimeError):
+    """The coverage directory could not be resolved, so the guard could not run.
+
+    A sibling of :class:`RegenDbMismatchError` and the same refusal to both
+    callers (exit 2, the API's JSON 500), because it is the same condition
+    from the operator's side: this package could not establish that a regen
+    would write where the dashboard reads, and running one anyway is how a
+    rebuild reports success while the served documents stay stale.
+
+    Distinct from :class:`RegenDbMismatchError` so a reader of the log can
+    tell "these two name different directories" from "neither could be
+    resolved here": the first is fixed in ``rebrew-project.toml``, the second
+    is a path this process cannot walk (a symlink loop, a permission error on
+    a parent, a name the OS refuses).
+    """
+
+
 def _try_lock(handle: IO[bytes]) -> bool:
     """Take an exclusive OS lock on *handle*; False when another process holds it.
 
@@ -132,18 +156,39 @@ def _release_lock(handle: IO[bytes]) -> None:
 def _coverage_dir(root: Path) -> Path:
     """The directory rebrew writes the coverage documents into, for the lock.
 
-    Resolution failures fall back to ``root/db``, rebrew's own default: a lock
-    in the wrong directory costs two processes the ability to see each other,
-    while refusing here would turn a regen rebrew was going to run into one
-    this package stops.  :func:`run_regen` calls this after ``load_config``, so
-    a config that does not parse has already been reported by rebrew's loader.
+    Resolution failures fall back to ``root/db``, rebrew's own default, and say
+    so.  The fallback stays — refusing here would turn a regen rebrew was going
+    to run into one this package stops — but it is no longer silent: a lock in
+    the wrong directory costs two processes the ability to see each other, so
+    the guess that costs that has to name itself.  WARNING because the arm is
+    reached only when rebrew's own resolution raised, which a healthy project
+    never does: the fallback directory is correct whenever `db_dir` fell over
+    on something rebrew's own default covers, and wrong in exactly the case an
+    operator has to hear about.  A transition rather than a line per regen,
+    because the message names a condition an operator fixes once.
+
+    This is the arm the regen path reaches with ``RECOVERAGE_DB`` unset; with
+    it set, :func:`_check_writes_where_the_dashboard_reads` has already refused
+    the same failure as :class:`RegenDbUnresolvableError`, before this runs.
+    :func:`run_regen` calls this after ``load_config``, so a config that does
+    not parse has already been reported by rebrew's loader.
     """
     from rebrew.workspace import db_dir
 
     try:
         return db_dir(root)
-    except (OSError, LookupError, ValueError, TypeError):
-        return root / _DEFAULT_DB_SUBDIR
+    except (OSError, LookupError, ValueError, TypeError) as exc:
+        fallback = root / _DEFAULT_DB_SUBDIR
+        _log.warning(
+            "Could not resolve the coverage directory for %s (%s: %s); the "
+            "regen lock is held in %s instead, so a second regen from another "
+            "process will not see this one",
+            root,
+            type(exc).__name__,
+            exc,
+            fallback,
+        )
+        return fallback
 
 
 @contextlib.contextmanager
@@ -249,13 +294,31 @@ def _check_writes_where_the_dashboard_reads(root: Path) -> None:
     if override is None:
         return
     try:
-        written_to = db_dir(root).resolve()
-    except (OSError, LookupError, ValueError, TypeError):
-        # A path rebrew resolved but this process could not (a symlink loop, a
-        # permission error on a parent).  A config that does not parse is NOT
-        # this arm: `db_dir` raises WorkspaceConfigError, which none of these
-        # catch, so it propagates to the caller as rebrew's own message.
-        return
+        # `db_dir` resolves internally, and that resolve is what raises on a
+        # path this process cannot walk (a symlink loop, a permission error on
+        # a parent).  Its result is already resolved; the second resolve here
+        # is what used to raise, and it was answered by DECLINING to compare.
+        written_to = db_dir(root)
+    except (OSError, LookupError, ValueError, TypeError) as exc:
+        # A config that does not parse is NOT this arm: `db_dir` raises
+        # WorkspaceConfigError, which none of these catch, so it propagates to
+        # the caller as rebrew's own message.
+        #
+        # Declining here used to be a silent pass, and it was the wrong answer:
+        # the run continued with an unknown write directory, so the guard
+        # below — the only thing standing between a regen and a dashboard that
+        # stays stale — had not run at all, and nothing said so.  `_exclusive_
+        # regen` resolves the same directory through the same helper and falls
+        # back to `root/db` on the same failure, so the lock could land in a
+        # directory rebrew does not write to: two processes stopped seeing each
+        # other and interleaved writes to one document, which is the failure
+        # the lock exists to prevent.  Refusing names the path instead.
+        raise RegenDbUnresolvableError(
+            f"cannot resolve the coverage directory for {root} "
+            f"({type(exc).__name__}: {exc}), so a regen cannot be checked against "
+            f"RECOVERAGE_DB={override}. Fix the path in {root / CONFIG_NAME}, or "
+            "unset RECOVERAGE_DB and regen into rebrew's default."
+        ) from exc
     if _same_directory(written_to, override.expanduser().resolve()):
         return
     raise RegenDbMismatchError(
