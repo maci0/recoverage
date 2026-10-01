@@ -1590,6 +1590,70 @@ class TestOpenPort:
             assert "Opening http://127.0.0.1:8001" in result.stderr
 
 
+class TestDashboardUrl:
+    """One rule for the URL a browser opens, shared by `serve` and `open`.
+
+    `serve` opens its own tab through ``cli.dashboard_url``, and ``recoverage
+    open`` is the same question asked in a second terminal. When they answered
+    it separately — ``open`` hard-coding 127.0.0.1 and ``serve`` keeping
+    loopback for every remote bind — a deployment that moved the server onto a
+    NAMED interface (a container publishing 8001, ``--bind 10.0.0.5``) got a tab
+    pointed at a socket the bind never reached: a connection refused from the
+    server the reader was trying to open.
+    """
+
+    @pytest.mark.parametrize(
+        ("bind", "expected"),
+        [
+            ("127.0.0.1", "http://127.0.0.1:8001"),
+            ("localhost", "http://localhost:8001"),
+            # A wildcard names every interface and neither answer is a
+            # destination a browser can be sent to; loopback is the one
+            # address all of them accept on.
+            ("0.0.0.0", "http://127.0.0.1:8001"),
+            ("::", "http://127.0.0.1:8001"),
+            # An IPv6 literal has to be bracketed or the port is unreadable.
+            ("::1", "http://[::1]:8001"),
+            # A named interface is that interface, not loopback.
+            ("10.0.0.5", "http://10.0.0.5:8001"),
+        ],
+    )
+    def test_the_url_is_the_address_the_listener_holds(self, bind: str, expected: str) -> None:
+        assert cli.dashboard_url(bind, 8001) == expected
+
+    def test_open_reads_the_bind_environment(self, monkeypatch: Any) -> None:
+        opened: list[str] = []
+        monkeypatch.setenv("RECOVERAGE_BIND", "10.0.0.5")
+        monkeypatch.setenv("RECOVERAGE_PORT", "9100")
+        monkeypatch.setattr("recoverage.cli.open_browser", lambda url: opened.append(url) or True)
+        result = runner.invoke(app, ["open"])
+        assert result.exit_code == 0
+        assert opened == ["http://10.0.0.5:9100"]
+
+    def test_open_bind_flag_beats_the_environment(self, monkeypatch: Any) -> None:
+        opened: list[str] = []
+        monkeypatch.setenv("RECOVERAGE_BIND", "10.0.0.5")
+        monkeypatch.setattr("recoverage.cli.open_browser", lambda url: opened.append(url) or True)
+        result = runner.invoke(app, ["open", "--bind", "127.0.0.1"])
+        assert result.exit_code == 0
+        assert opened == ["http://127.0.0.1:8001"]
+
+    def test_open_refuses_an_unbindable_address(self, monkeypatch: Any) -> None:
+        """The same floor `serve` applies to --bind, through the same reader."""
+        opened: list[str] = []
+        monkeypatch.setattr("recoverage.cli.open_browser", lambda url: opened.append(url) or True)
+        result = runner.invoke(app, ["open", "--bind", "10.0.0.5:80"])
+        assert result.exit_code == 2
+        assert opened == []
+        assert "--bind" in result.output
+
+    def test_open_refuses_an_invalid_bind_environment(self, monkeypatch: Any) -> None:
+        monkeypatch.setenv("RECOVERAGE_BIND", "0.0.0.0\x7f")
+        result = runner.invoke(app, ["open"])
+        assert result.exit_code == 2
+        assert "RECOVERAGE_BIND" in result.output
+
+
 class TestBrowserOpenerSelection:
     """`open_browser` names the opener each host owns, by capability.
 

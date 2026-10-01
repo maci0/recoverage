@@ -27,7 +27,7 @@ import logging
 import os
 import re
 from collections.abc import Mapping, Sequence
-from ipaddress import IPv6Address
+from ipaddress import IPv6Address, ip_address
 from pathlib import Path
 from typing import Final
 
@@ -359,6 +359,29 @@ def validate_bind(value: str, name: str = "RECOVERAGE_BIND") -> str:
 def bind() -> str:
     """Interface to bind to."""
     return validate_bind(_str_var("RECOVERAGE_BIND", DEFAULT_BIND))
+
+
+def bind_names_every_interface(bind: str) -> bool:
+    """True when *bind* is the unspecified address, so it holds every interface.
+
+    :func:`ip_address` answers it by VALUE, which is the only question here:
+    neither the all-interfaces IPv4 literal nor the all-interfaces IPv6 one is
+    a destination a URL can name or a browser can be sent to, and neither
+    answers on loopback, so a consumer that needs a connectable address (the
+    browser opener and the opener's probe) asks rather than compares against a
+    second hand-written table of literals that can drift from this module's
+    own reader.
+
+    A HOSTNAME is answered False, which is the safe answer: whether a name
+    resolves to the unspecified address is not something this process can know
+    without resolving it, and a URL spelled with the name is at least something
+    a browser will try.
+    """
+    try:
+        ip = ip_address(bind)
+    except ValueError:
+        return False
+    return bool(ip.is_unspecified)
 
 
 def allow_remote() -> bool:

@@ -418,11 +418,15 @@ regen that is killed does not block the next one.
 Open the dashboard in a browser (useful when `--no-open` was used).
 
 ```bash
-recoverage open --port 8001
+recoverage open --port 8001 --bind 127.0.0.1
 ```
 
-`--port` defaults to `RECOVERAGE_PORT`, the same port `serve` uses, so a
-deployment that moved off `8001` needs no second place to configure. A port of
+`--port` defaults to `RECOVERAGE_PORT` and `--bind` to `RECOVERAGE_BIND`, the
+same settings `serve` uses, so a deployment that moved off `127.0.0.1:8001`
+needs no second place to configure. The URL opened is the address the listener
+holds: a wildcard bind (`0.0.0.0`, `::`) opens through loopback, which every
+such listener answers on, and a named interface (`--bind 10.0.0.5`) opens on
+that interface, because loopback is a socket that bind never reached. A port of
 `0` is refused with exit 2: it names the free port `serve` picked, which only
 the banner that run printed holds.
 

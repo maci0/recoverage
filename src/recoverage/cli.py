@@ -729,9 +729,34 @@ _OPEN_LISTEN_POLL_SECONDS = 0.05
 #: probes rather than assuming, so this only has to clear the startup banner.
 _BROWSER_OPEN_DELAY_SECONDS = 0.5
 
-#: The port a URL with no explicit one names, for the opener's probe.  It
-#: builds `http://host/` URLs, so http and nothing else.
+#: The port a URL with no explicit one names, for the opener's probe: the
+#: opener builds `http://host/` URLs, so http and nothing else.
 _DEFAULT_HTTP_PORT = 80
+
+
+def dashboard_url(bind: str, port: int) -> str:
+    """The URL a browser on this host should open for a listener bound to *bind*.
+
+    ONE rule, read by ``serve``'s opener and by ``recoverage open``, so the two
+    cannot open different tabs for one configuration.
+
+    Three cases, in order:
+
+    * an IPv6 literal is bracketed, because ``http://::1:8001`` is not a URL
+      anything parses — ``::1`` reads as a host and the trailing ``:8001`` as a
+      port on a host that has neither;
+    * a wildcard bind names every interface, so the browser is pointed at
+      loopback, the one address each of those listeners does accept on. A host
+      serving a LAN address is then opened through its own 127.0.0.1 copy;
+    * any other address names exactly the interface the listener holds, so the
+      browser is pointed at THAT address rather than at loopback. ``--bind
+      10.0.0.5`` is a server on the LAN interface alone: loopback is another
+      socket the bind never reached, so a tab opened there gets a connection
+      refused from the server it was meant to show.
+    """
+    if config.bind_names_every_interface(bind):
+        return f"http://127.0.0.1:{port}"
+    return f"http://[{bind}]:{port}" if ":" in bind else f"http://{bind}:{port}"
 
 
 def _open_when_listening(url: str) -> None:
@@ -1410,11 +1435,12 @@ def serve(
     root = _project_dir()
     assets = _assets_dir()
     listen_url = f"http://{display_host}:{listen_port}"
-    # The browser opens against the bound loopback interface: --bind ::1
-    # listens on IPv6 loopback only, so the hard-coded http://127.0.0.1 (IPv4)
-    # would open a tab that refuses to connect.  Remote binds keep 127.0.0.1 —
-    # a wildcard/external address also answers on IPv4 loopback.
-    url = listen_url if not is_remote else f"http://127.0.0.1:{listen_port}"
+    # The browser opens against the interface the listener actually holds
+    # (dashboard_url): --bind ::1 listens on IPv6 loopback only, so the
+    # hard-coded http://127.0.0.1 (IPv4) would open a tab that refuses to
+    # connect, and a wildcard bind answers on loopback while a named LAN
+    # interface does not.
+    url = dashboard_url(bind, listen_port)
 
     if regen:
         _run_regen(root)
@@ -2081,13 +2107,21 @@ def open_cmd(
         metavar="PORT",
         help=f"Port of the running server (default: {config.DEFAULT_PORT}; env: RECOVERAGE_PORT)",
     ),
+    bind: str | None = typer.Option(
+        None,
+        "--bind",
+        metavar="ADDRESS",
+        help="Address the running server is bound to (default: "
+        f"{config.DEFAULT_BIND}; env: RECOVERAGE_BIND)",
+    ),
     no_color: bool = _no_color_option(),
 ) -> None:
     """Open the dashboard in a browser.
 
-    The port falls back to RECOVERAGE_PORT, the same default [bold]serve[/bold]
-    uses, so a deployment that moved the server off 8001 does not need every
-    operator to remember the new port as well.  A port of 0 is refused: it
+    The port falls back to RECOVERAGE_PORT and the address to
+    RECOVERAGE_BIND, the same defaults [bold]serve[/bold] uses, so a deployment
+    that moved the server off 127.0.0.1:8001 does not need every operator to
+    remember the new address and port as well.  A port of 0 is refused: it
     names the free port the server picked, which is in the banner
     [bold]serve[/bold] printed and is not something this command can know.
 
@@ -2112,7 +2146,14 @@ def open_cmd(
             err=True,
         )
         raise typer.Exit(2) from None
-    url = f"http://127.0.0.1:{resolved_port}"
+    try:
+        resolved_bind = config.bind() if bind is None else config.validate_bind(bind, "--bind")
+    except config.ConfigError as exc:
+        _secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(2) from None
+    # The same rule `serve` opens its own tab with, so a deployment that moved
+    # off loopback lands on the server that is actually listening.
+    url = dashboard_url(resolved_bind, resolved_port)
     # Status, not data, so it goes to stderr like `regen`'s progress line and
     # the refusal beside it.  A caller reading stdout got "Opening <url>" even
     # when no browser was launched and the command exited 1, so a script that

@@ -68,7 +68,15 @@ under way, in this process or another: two writers of one coverage document
 interleave rather than converge.
 .TP
 .B open
-Open the dashboard in a browser.
+Open the dashboard in a browser. The address opened is the one the listener
+holds: a wildcard bind opens through loopback, a named interface opens on
+itself, and an IPv6 literal is bracketed.
+.B \-\-port
+defaults to RECOVERAGE_PORT and
+.B \-\-bind
+to RECOVERAGE_BIND, the settings
+.B serve
+runs with.
 .TP
 .B config
 Print the configuration
