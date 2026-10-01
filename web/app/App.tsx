@@ -646,6 +646,22 @@ export function App() {
     [coverage.searchIndex, matchedNames, sectionOfAddress],
   );
 
+  // The row `aria-activedescendant` and Enter both name, clamped to the list
+  // that is on screen. The arrows and the reset sites keep `activeResult` in
+  // step with the rows they walk, but the list is not derived from the term
+  // alone: a live reload (`reload()` retires the index and refetches it) or a
+  // section switch replaces `coverage.searchIndex` and `coverage.sections`
+  // while the term and the walked row stand, so a rebuild that dropped a
+  // match left the index pointing past the end of a shorter list. The id it
+  // named was then carried by no row, which is the one thing
+  // `searchResultOptionId` documents it cannot do, and Enter fell through the
+  // `chosen === undefined` arm to the map's own first match — the exact row the
+  // reader did not aim at. Clamping here rather than resetting makes the
+  // invariant hold for every future path that rebuilds the list, not only for
+  // the ones that also remember to clear the row.
+  const activeRow =
+    activeResult !== null && activeResult < searchResults.length ? activeResult : null;
+
   const onSearchKeyDown = (event: TargetedKeyboardEvent<HTMLInputElement>): void => {
     if (event.key === "Escape") {
       // Escape is the way out of a search box everywhere else, and here it had
@@ -688,8 +704,8 @@ export function App() {
     // contract is that the active option is the selection, so Enter has to
     // take it; falling through to the map's own first match would answer a
     // keypress the reader aimed at one row with a different one.
-    if (resultsOpen && activeResult !== null) {
-      const chosen = searchResults[activeResult];
+    if (resultsOpen && activeRow !== null) {
+      const chosen = searchResults[activeRow];
       if (chosen !== undefined) {
         event.preventDefault();
         setResultsOpen(false);
@@ -942,8 +958,8 @@ export function App() {
                   aria-controls="search-results-list"
                   aria-autocomplete="list"
                   aria-activedescendant={
-                    resultsOpen && activeResult !== null
-                      ? searchResultOptionId(activeResult)
+                    resultsOpen && activeRow !== null
+                      ? searchResultOptionId(activeRow)
                       : undefined
                   }
                   onChange={(event) => {
@@ -1001,7 +1017,7 @@ export function App() {
                 results={searchResults}
                 total={matchedNames?.size ?? 0}
                 section={active?.name ?? null}
-                activeIndex={activeResult}
+                activeIndex={activeRow}
                 listId="search-results-list"
                 optionId={searchResultOptionId}
                 onPick={(result) => {

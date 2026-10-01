@@ -3571,6 +3571,33 @@ class TestSpaNumericBoundaries:
         assert "similarityPct(" in panel
         assert "similarity * 100" not in panel
 
+    def test_the_search_row_the_box_names_cannot_be_off_the_list(self) -> None:
+        """`aria-activedescendant` and Enter both name the row the arrows walked to.
+
+        The row index is state, and the list it indexes is not derived from the
+        term alone: a live reload (`reload()` retires the search index and
+        refetches it) or a section switch replaces `coverage.searchIndex` while
+        the term and the walked row stand. A rebuild that dropped a match left
+        the index past the end of a shorter list, so the id it named was carried
+        by no row and Enter fell through to the map's own first match — the row
+        the reader did not aim at. The index is clamped to the live list, so the
+        invariant `searchResultOptionId` documents holds for every path that
+        rebuilds the list, not only the ones that also clear the row.
+        """
+        source = _web("App.tsx")
+        clamped = re.search(r"const activeRow =\s*(.+?);\n", source, re.DOTALL)
+        assert clamped is not None, "App.tsx no longer derives a clamped active row"
+        assert "searchResults.length" in clamped.group(1), (
+            f"activeRow = {clamped.group(1)}: it does not check the index against "
+            "the list on screen"
+        )
+        # Every RENDERED use goes through the clamp. The raw state still drives
+        # the arrows (whose modulo keeps them in range) and the resets.
+        assert "aria-activedescendant" in source
+        assert "searchResultOptionId(activeResult)" not in source
+        assert "searchResults[activeResult]" not in source
+        assert "activeIndex={activeResult}" not in source
+
     def test_a_span_the_bounds_cannot_catch_does_not_vanish(self) -> None:
         """A NaN span stored 0, and a cell laid out over no dots is a cell the
         map never draws and no click ever reaches.
@@ -4780,7 +4807,7 @@ class TestSpaSearchIsACombobox:
         handler = app[app.index("const onSearchKeyDown") : app.index("const toggleFilter")]
         assert 'event.key === "ArrowDown" || event.key === "ArrowUp"' in handler
         assert "setActiveResult(" in handler
-        assert "if (resultsOpen && activeResult !== null)" in handler
+        assert "if (resultsOpen && activeRow !== null)" in handler
         assert "jumpToAddress(chosen.va);" in handler
 
     def test_an_option_is_not_a_tab_stop(self) -> None:
