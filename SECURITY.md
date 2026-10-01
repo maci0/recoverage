@@ -8,8 +8,11 @@ older versions receive no backports.
 
 | Version | Supported |
 |---------|-----------|
-| 4.x (current, `__version__` at `src/recoverage/__init__.py:42`; `4.2.0` is tagged `v4.2.0`) | yes |
+| 4.x (current; `__version__` at `src/recoverage/__init__.py:42`, tagged `v4.2.0`) | yes |
 | < 4.0.0 | no |
+
+The supported line is what `__version__` says, so a build that disagrees with
+the tag is the thing to look at first rather than this table.
 
 ## Reporting a vulnerability
 
@@ -26,12 +29,20 @@ this document does not fill them with a guess.
 
 ## Deployment assumption
 
-`recoverage serve` binds loopback and is unauthenticated by default. On
-`--allow-remote` without `--token` every host that can reach the port reads the
-whole project: sources under `<project>/src`, original binaries, raw byte
-slices and disassembly. That is the deployment's assumption, not a defect, and
-it is the first entry in the risk-ranked table in
+`recoverage serve` binds loopback by default (`config.DEFAULT_BIND`,
+`src/recoverage/config.py`) and is unauthenticated unless a token is
+configured. A non-loopback bind is refused at startup without
+`--allow-remote` (`cli._remote_bind_gate`, `src/recoverage/cli.py`), and
+`--allow-remote` without `--token` is an acknowledgement, not a requirement:
+every host that can reach the port then reads the whole project, which is
+sources under `<project>/src`, original binaries, raw byte slices and
+disassembly. That is the deployment's assumption, not a defect, and it is the
+first entry in the risk-ranked table in
 [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md).
+
+The bundled listener speaks no TLS, so a non-loopback deployment has no
+transport security either, and the token travels as a URL parameter. The model
+names that as risk 4.
 
 ## Threat model
 
@@ -40,3 +51,8 @@ boundaries, the risks ranked by exploitability and impact, the mitigations that
 exist in code with file references, the ones that do not, and the abuse cases.
 Its scope statement says which deployment it covers; claims outside that scope
 are not addressed there.
+
+Its header records the date and the commit it was last read against, so a
+reader can tell a current model from a stale one, and a change to
+`src/recoverage/` landing after that commit is unreviewed until the model names
+it. Every claim in that file carries a file reference.
