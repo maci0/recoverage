@@ -86,7 +86,7 @@ export function SearchResults({
               // told a low-vision reader nothing (WCAG 1.4.11). The 3px inset
               // keeps it inside the list's own padding, so no row shifts when
               // the arrow moves.
-              "search-result flex min-h-8 w-full cursor-pointer items-baseline gap-2 rounded-chip px-2 py-1.5 font-mono text-micro text-text",
+              "search-result flex min-h-8 w-full cursor-pointer items-baseline gap-2 rounded-chip px-2 py-1.5 text-start font-mono text-micro text-text",
               index === activeIndex && "is-active",
             )}
             data-active={index === activeIndex ? "" : undefined}
