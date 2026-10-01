@@ -3,14 +3,26 @@
 Scope: the `recoverage` package as shipped (`src/recoverage/`) and the way it is
 started (`recoverage serve`). Every claim below carries a file reference so a
 later pass can re-verify it. Last reviewed: 2026-10-02, against
-`__version__ = "4.2.0"` (`src/recoverage/__init__.py:42`) as of commit `88cb741`,
-which is past the `v4.2.0` tag. Nine commits have landed since the previous pass
-(`01f6640`), four of them touching `src/`; one of those is security-relevant to
-this model: `fa4d2f2` folds each function's search columns once per snapshot
-instead of once per keystroke, which added two derived tables whose sizing is
-recorded below as unmitigated item 12a rather than left implicit. The other
-three are a frontend change, a browser-opener status line, and search-row
-alignment, none of which reaches a surface named below.
+`__version__ = "4.2.0"` (`src/recoverage/__init__.py:42`) as of commit `91e4f1a`,
+which is past the `v4.2.0` tag. Twenty-three commits have landed since the
+previous pass (`01f6640`), ten of them touching `src/`; four of those reached a
+surface named below and are recorded in the sections they belong to:
+`fa4d2f2` folded each function's search columns once per snapshot instead of
+once per keystroke, which added two derived tables whose sizing is unmitigated
+item 12a rather than left implicit; `aed4928` moved the instruction width onto a
+read of the binary's own container header and keyed the opener dispatch on a
+platform CAPABILITY rather than an OS name, which widens which hosts launch
+`xdg-open` and adds a second attacker-chosen offset read from the target binary
+(entry points and unmitigated 10); `e082bcf` added `X-Request-ID` to the CORS
+allow and expose sets, which widens what a cross-origin client can read and send
+without granting a credential (mitigations table); and `5bc1ce8` made the parse
+cache's prune and temp-file deletes report-and-continue rather than raise, which
+turns the cache's slot-count bound into a conditional one on a read-only or full
+filesystem (boundary 2 and unmitigated 14). The remaining `src/` commits are a
+frontend search fix, an opener status line, the Potato fallback pages' markup,
+and the filename URL-encoding fix, none of which adds a surface; a per-commit
+read of that list is this pass's own, and a change landing after `91e4f1a` is
+unreviewed until this model names it.
 
 What ReCoverage is: a read-mostly web dashboard over the clear-text coverage
 documents (`db/coverage-<target>.toml`) that rebrew's pipeline prints, served by
@@ -25,8 +37,8 @@ supported LAN case (`--allow-remote`).
 | # | Risk | Where | Mitigation in code |
 |---|------|-------|--------------------|
 | 1 | Default deployment is unauthenticated: on `--allow-remote` without `--token` every host on the network reads project sources, original binaries, hex bytes and disassembly | `src/recoverage/cli.py`, `src/recoverage/server.py`, `src/recoverage/api.py` | Acknowledgement only: a red message and `typer.Exit(1)` without `--allow-remote`; `--token` is opt-in and never required alongside a remote bind |
-| 2 | No request rate limit on the expensive read endpoints; a multi-MB grid build plus brotli/zstd compression is CPU- and memory-bound per request | `src/recoverage/api.py` (`/data`), `src/recoverage/potato.py` (`/potato`), `src/recoverage/api.py` (`/asm`) | Bounded per-process memos with oldest-entry eviction (`server._evict_oldest`, `src/recoverage/server.py`; caps at `src/recoverage/api.py`); the only per-route cap below the process-wide connection cap is on `/api/events` (`src/recoverage/api.py`). Every derived table is capped by a COUNT of entries, and the count is not a count of bytes: the search-fold tables added in 4.2 (`server.folded_row_columns`, `server.folded_va_columns`, `src/recoverage/server.py:2550` and `:2588`) hold one entry per function and per global, folded, so their size follows the document's own function count rather than any constant. `_SNAPSHOT_INDEX_MAX` is 4 (`src/recoverage/server.py:2531`), which bounds how many such tables are live at once and not how large one is. The static-asset memo `ui._STATIC_CACHE` (`src/recoverage/ui.py`) has no count cap; it is bounded structurally by the route-matched filename and encoding variant instead |
-| 3 | The failed-token window is keyed on the requesting peer, and the key is the raw `REMOTE_ADDR` string, so a client that can choose its source address gets a fresh window per spelling: 10 attempts per key per 60 s, not per identity, and every host behind one NAT shares a window | `src/recoverage/server.py` | The window is per peer rather than process-wide, so one client can no longer answer 429 to the operator (`src/recoverage/server.py`); the prune, the cap check and the slot reservation share one lock, so a burst of concurrent bad tokens from one key cannot slip past the cap; the peer map is bounded at 1024 keys, and a window whose NEWEST failure has aged past the 60 s window is evicted before the oldest, so an attacker who cycles source addresses cannot buy fresh windows with spent ones (`_evict_spent_peer_window`, `src/recoverage/server.py:3146`); a verified request clears only its own peer's window (`server._clear_auth_failures`, `src/recoverage/server.py`), so a success is not a reset button for a guesser. See gap 4 below for what the keying does not bound |
+| 2 | No request rate limit on the expensive read endpoints; a multi-MB grid build plus brotli/zstd compression is CPU- and memory-bound per request | `src/recoverage/api.py` (`/data`), `src/recoverage/potato.py` (`/potato`), `src/recoverage/api.py` (`/asm`) | Bounded per-process memos with oldest-entry eviction (`server._evict_oldest`, `src/recoverage/server.py`; caps at `src/recoverage/api.py`); the only per-route cap below the process-wide connection cap is on `/api/events` (`src/recoverage/api.py`). Every derived table is capped by a COUNT of entries, and the count is not a count of bytes: the search-fold tables added in 4.2 (`server.folded_row_columns`, `server.folded_va_columns`, `src/recoverage/server.py:2578` and `:2616`) hold one entry per function and per global, folded, so their size follows the document's own function count rather than any constant. `_SNAPSHOT_INDEX_MAX` is 4 (`src/recoverage/server.py:2559`), which bounds how many such tables are live at once and not how large one is. The static-asset memo `ui._STATIC_CACHE` (`src/recoverage/ui.py`) has no count cap; it is bounded structurally by the route-matched filename and encoding variant instead |
+| 3 | The failed-token window is keyed on the requesting peer, and the key is the raw `REMOTE_ADDR` string, so a client that can choose its source address gets a fresh window per spelling: 10 attempts per key per 60 s, not per identity, and every host behind one NAT shares a window | `src/recoverage/server.py` | The window is per peer rather than process-wide, so one client can no longer answer 429 to the operator (`src/recoverage/server.py`); the prune, the cap check and the slot reservation share one lock, so a burst of concurrent bad tokens from one key cannot slip past the cap; the peer map is bounded at 1024 keys, and a window whose NEWEST failure has aged past the 60 s window is evicted before the oldest, so an attacker who cycles source addresses cannot buy fresh windows with spent ones (`_evict_spent_peer_window`, `src/recoverage/server.py:3174`); a verified request clears only its own peer's window (`server._clear_auth_failures`, `src/recoverage/server.py`), so a success is not a reset button for a guesser. See gap 4 below for what the keying does not bound |
 | 4 | No transport security. The token travels as `?token=` in a URL and in a cookie, in cleartext on any non-loopback bind | `src/recoverage/ui.py`, `src/recoverage/potato.py`, `src/recoverage/server.py` | `Referrer-Policy: no-referrer` (`src/recoverage/server.py`), `HttpOnly; SameSite=Strict` cookie carrying `Secure` only where the request itself arrived over TLS (`server.set_auth_cookie`, through `server.request_is_https`), constant-time compare (`src/recoverage/server.py`) |
 | 5 | `rebrew-project.toml` is trusted input: it decides which coverage directory is read, which binaries are disassembled, and which directories `/src` and `/original` serve from | `src/recoverage/_paths.py`, `src/recoverage/server.py`, `src/recoverage/ui.py` | None beyond TOML parsing; the file is assumed to come from the operator's own checkout |
 | 6 | Thread exhaustion: `ThreadingMixIn` runs one daemon thread per connection, so a flood of ordinary requests, or a set of idle keep-alive connections, spends a thread each while they are held | `src/recoverage/devserver.py` | Connections are admitted against `_MAX_CONNECTIONS` (128, `src/recoverage/devserver.py`) and refused at the cap with a 503 and a `Retry-After`, before a thread is created (`src/recoverage/devserver.py`); a 120 s per-socket deadline on every read and write in flight (`src/recoverage/devserver.py`) and a 15 s idle deadline between requests (`src/recoverage/devserver.py`); `/api/events` carries its own lower cap (`src/recoverage/api.py`) |
@@ -144,7 +156,13 @@ Non-network entry points:
   through its own resolve-and-contain check (`src/recoverage/potato.py`).
 - Browser opener subprocess `xdg-open` / `open` / `cmd /c start`
   (`src/recoverage/cli.py`), argv list, own session, killed and reaped on a 10 s
-  timeout (`src/recoverage/cli.py`).
+  timeout (`src/recoverage/cli.py`). The POSIX arm is keyed on
+  `os.name == "posix"` with the two exceptions first (`cli.open_browser`,
+  `src/recoverage/cli.py`), so every POSIX host launches `xdg-open` rather than
+  only the one whose `platform.system()` is `"Linux"`. The argv holds the URL
+  this process composed, which is the operator's bind address and port rather
+  than request input, and a non-POSIX host still falls through to
+  `webbrowser.open`.
 - Startup threads, all daemon and none joined: the coverage watcher
   (`api._ensure_db_watcher`, `src/recoverage/cli.py`) and the SPA shell warm-up
   (`ui.warm_index_cache`, `src/recoverage/cli.py`, which builds 8 compression
@@ -155,7 +173,7 @@ Non-network entry points:
 Dependency and deployment surface: `wsgiref`'s threading mixin (no TLS;
 the connection cap is this package's own, `devserver._MAX_CONNECTIONS` at
 `src/recoverage/devserver.py:53`), Bottle, and rebrew, which is imported
-in-process by `src/recoverage/regen.py` (`run_regen` at `src/recoverage/regen.py:256`) for `recoverage regen`, `serve --regen` and
+in-process by `src/recoverage/regen.py` (`run_regen` at `src/recoverage/regen.py:269`) for `recoverage regen`, `serve --regen` and
 `POST /api/regen`.
 
 Header framing is bounded by the standard library rather than by this
@@ -177,7 +195,23 @@ same Typer app (`src/recoverage/__main__.py`), and every command validates the
 (`src/recoverage/cli.py`). The in-process capstone parse behind `/asm` lives in
 `src/recoverage/disasm.py`, reached from the route at `src/recoverage/api.py` and called at
 `src/recoverage/api.py`; the JSON branch in the route itself is the only disassembly it
-performs.
+performs. Since 4.2 that parse also reads a CONTAINER HEADER out of the target binary
+before it decodes anything: `disasm.binary_width_bits` (`src/recoverage/disasm.py`)
+reads the PE `e_lfanew` at a signed 32-bit file offset and the `Machine` field past
+the `PE\0\0` signature, or the ELF `e_machine` at `0x12`, over the first
+`_CONTAINER_HEADER_BYTES` (4096) bytes. So `e_lfanew` is a second offset read out
+of the same attacker-shaped file as the bytes themselves: it is range-checked
+against the length of that 4096-byte buffer and the signature at the offset it
+names is checked before the `Machine` field is read, and an offset that fails
+either check answers `_DEFAULT_WIDTH_BITS` (32) rather than raising, because
+`/asm` is contracted to answer. The reach is therefore 4096 bytes rather than
+the whole file, and a sample that points the offset anywhere in it reads the
+`Machine` field it planted. The width is memoized per binary stat
+(`disasm._target_width_bits`, `_WIDTH_MEMO_MAX` 64) and emptied beside the
+disassembly memo by `disasm.clear_disassembly_cache`
+(`src/recoverage/disasm.py`), which is a cap by entry count and not by bytes, and
+is keyed on the stat so a rebuild that changes architecture is not decoded at the
+previous one's width.
 
 ## Trust boundaries
 
@@ -243,7 +277,7 @@ performs.
      the document's own sha256, so a slot serving a different document's content
      is a miss rather than a substitute;
    - the write is a temp file plus an atomic replace, and the directory is
-     created `mode=0o700` (`documents._write_cached`, `src/recoverage/documents.py:217`),
+     created `mode=0o700` (`documents._write_cached`, `src/recoverage/documents.py:251`),
      which is the bound that matters on a multi-user host: the cached parse is
      the project's own reverse-engineering output in a second copy on disk, and
      that copy is readable by whoever can read the directory. `$XDG_CACHE_HOME`
@@ -254,10 +288,23 @@ performs.
      variables and reaches no startup gate (`config.KNOWN_VARS`,
      `src/recoverage/config.py:45`);
    - the directory is pruned to `_CACHE_MAX_SLOTS` (64) most-recently-used slots
-     (`documents._prune`, `src/recoverage/documents.py:175`), so the directory is
+     (`documents._prune`, `src/recoverage/documents.py:192`), so the directory is
      bounded near half a gigabyte of JSON rather than growing with every
      coverage directory the account has ever served. The 64 is a count of slots,
-     and the ceiling that matters on a shared host is the byte total.
+     and the ceiling that matters on a shared host is the byte total. That bound
+     is now CONDITIONAL: a slot that will not delete, and a directory that will
+     not list, are both reported at DEBUG and skipped
+     (`documents._unlink_quiet`, `src/recoverage/documents.py:175`; the listing arm
+     of `documents._prune`) rather than raised, because a delete failing in the
+     write's `finally` would replace the exception the operator needs. So a cache
+     directory on a full or read-only filesystem grows until it can be pruned
+     again, which makes the byte total rather than the slot count the real
+     ceiling. Two notes for the next pass: `documents._prune`'s own docstring
+     still says "Only the directory walk itself propagates", which the code no
+     longer does, so read the arms rather than the docstring; and the only
+     surviving loud signal is `_write_cached`'s one-shot WARNING
+     (`src/recoverage/documents.py:235`), which fires on the write path and not
+     on the prune.
    Unreadable is not empty, and the two answers stay distinguishable. A document
    that exists and does not parse raises `CoverageTomlError`, which is the 503
    `db_unavailable` contract (`server._db_unavailable_err`, `src/recoverage/server.py`);
@@ -279,8 +326,8 @@ performs.
    The documents are also liveness: a rewritten one is picked up live (each
    document is memoized on its own stat, and the directory token folds each
    document's content digest rather than its mtime, `documents.versions` at
-   `src/recoverage/documents.py:293` and `server._snapshot_db_mtime` at
-   `src/recoverage/server.py:778`), and the SSE watcher
+   `src/recoverage/documents.py:333` and `server._snapshot_db_mtime` at
+   `src/recoverage/server.py:806`), and the SSE watcher
    (`api._db_watcher_loop`, `src/recoverage/api.py:910`) pushes `db-updated` so
    the SPA re-reads it. The token is CONTENT rather than the directory's
    mtime because rebrew replaces every document on every build, so a
@@ -297,11 +344,11 @@ performs.
    containment check independently (`src/recoverage/potato.py`).
    The same boundary carries the BUILD's output, not only the operator's own
    files: the target binary is read into the process and parsed in-process by
-   capstone (`server._load_dll`, `src/recoverage/server.py:1709`, and
+   capstone (`server._load_dll`, `src/recoverage/server.py:1737`, and
    `src/recoverage/disasm.py`). It is the one input here that is
    attacker-shaped by construction, because a reverse-engineering project's
    binary is a sample. Giving the binary its own stamp (`server.binary_stamp`,
-   `src/recoverage/server.py:1387`) closed a staleness hole, not an
+   `src/recoverage/server.py:1415`) closed a staleness hole, not an
    authorization one: a replaced binary is still served to every client that
    could already read the project.
 4. **App to local process (regen).** The only privilege transition: a POST makes
@@ -320,12 +367,12 @@ performs.
    decisions, not attacker input.
 7. **Build to runtime (regen).** rebrew's catalog pipeline runs INSIDE this
    process, on this process's authority, and writes the coverage directory the
-   same process then serves (`regen.run_regen`, `src/recoverage/regen.py:256`).
+   same process then serves (`regen.run_regen`, `src/recoverage/regen.py:269`).
    This is the one boundary where a request causes a WRITE to a path every
    later read treats as authoritative, and the only controls on it are the
    loopback gate, the cooldown, the in-process and advisory locks, and the
    directory-match refusal (`regen._check_writes_where_the_dashboard_reads`,
-   `src/recoverage/regen.py:220`). There is no sandbox: the pipeline runs with
+   `src/recoverage/regen.py:233`). There is no sandbox: the pipeline runs with
    the server's own filesystem rights over a project tree the operator may not
    be the author of.
 
@@ -340,12 +387,12 @@ performs.
 - A SECOND copy of the coverage documents, which this list did not name until
   the parse cache was added: every document's full parsed contents are
   written as JSON under `$XDG_CACHE_HOME/recoverage/documents/`
-  (`documents._write_cached`, `src/recoverage/documents.py:201`), so the same
+  (`documents._write_cached`, `src/recoverage/documents.py:235`), so the same
   reverse-engineering output that is the thing worth stealing also sits outside
   the project tree, under a name that is a hash of the path rather than one a
   reader would recognise. It is the one asset here whose exposure is a
   directory mode rather than a control: the directory is created `0o700`
-  (`src/recoverage/documents.py:217`) and the files inherit it, nothing
+  (`src/recoverage/documents.py:251`) and the files inherit it, nothing
   re-checks it, and an `XDG_CACHE_HOME` pointing at a shared or world-readable
   path defeats it with no byte of this package's code changing.
 - Server process availability and the host's CPU, memory and disk, all consumed
@@ -449,7 +496,7 @@ document or the new one and never a torn write. A document the reader cannot use
 is answered 503 rather than half-served. Denial of service remains: a large
 function list with a `search` term is walked per request (`src/recoverage/api.py`),
 and the fold those walks did per row per keystroke is now built once per
-snapshot (`server.folded_row_columns`, `src/recoverage/server.py:2550` and `:2588`), so the
+snapshot (`server.folded_row_columns`, `src/recoverage/server.py:2578` and `:2616`), so the
 per-request cost is a substring test per row with a 64-entry total memo beside
 it (`api._LIST_TOTAL_CACHE_MAX`, `src/recoverage/api.py:553`). What moved rather
 than vanished is the sizing of that fold, which is unmitigated item 12a above.
@@ -535,7 +582,7 @@ generic STRIDE checklist. Each entry names the shipped fix in
    and the function-total memo are all capped by an entry count, which is a
    real bound because one entry is one payload. The search-fold tables
    (`server.folded_row_columns`, `server.folded_va_columns`,
-   `src/recoverage/server.py:2550` and `:2588`) are capped the same way, and there one
+   `src/recoverage/server.py:2578` and `:2616`) are capped the same way, and there one
    entry is one document row, so the cap stops the table growing across
    requests but not from being large once. This is not a shipped fix; it is the
    class the next one lands in, added in the same shape as the earlier memos
@@ -563,6 +610,7 @@ generic STRIDE checklist. Each entry names the shipped fix in
 | CSP, `nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` | `src/recoverage/server.py` | Injection, framing, token leak via Referer |
 | `Secure` on the auth cookie and `Strict-Transport-Security` beside it, both read off the request through `server.request_is_https` (`wsgi.url_scheme`, or `X-Forwarded-Proto` behind a TLS-terminating proxy) | `server.set_auth_cookie`, `src/recoverage/server.py` | A cookie handed to whoever was on the wire when a reader followed an http link to a host that also answers https. A constant `Secure` would instead stop the cookie being stored at all on the plaintext loopback bind the bundled listener serves, and neither answer is a bypass: a client that claims https over plaintext only ever makes the response stricter |
 | CORS allowlist, no wildcard ever emitted, `Vary: Origin` on every response | `src/recoverage/server.py`, `src/recoverage/cli.py` | Cross-origin reads |
+| CORS `Access-Control-Expose-Headers` names exactly `ETag, Retry-After, Idempotent-Replay, X-Request-ID`, and `X-Request-ID` joined `Access-Control-Allow-Headers` | `server._security_headers`, `src/recoverage/server.py` | Without the exposure a `--cors` frontend cannot do the conditional GET the ETag-bearing endpoints are built around, cannot read the `Idempotent-Replay` answer, and cannot read the request id it was told to send, so the preflight refuses the request before the header leaves the browser at all. Every exposed name is a validator or a correlation label, none is the token, and the echoed `Access-Control-Allow-Origin` is the allowlist entry rather than the request's `Origin` reflected |
 | Symlink-resolving containment plus NUL rejection on `/src`, `/original` | `src/recoverage/ui.py` | Path traversal |
 | Independent containment check on Potato Mode's source panel | `src/recoverage/potato.py` | Path traversal through a second reader |
 | Allowlist regex for package assets | `src/recoverage/ui.py` | Arbitrary file read from the assets dir |
@@ -572,7 +620,7 @@ generic STRIDE checklist. Each entry names the shipped fix in
 | Every body refusal answers `Connection: close` through `api._body_rejected`, the one helper that puts the header there | `src/recoverage/api.py` | Request smuggling: the reader stops at its cap, so the bytes after the stop point are still in the socket and a keep-alive handler would parse them as the next request |
 | Chunked and unframed framing refused rather than guessed: a non-hex chunk size, an unterminated chunk, a missing CRLF or an oversize trailer line is `RequestBodyMalformedError` | `src/recoverage/server.py` | A framing this reader cannot account for, silently accepted as a shorter body |
 | `sort` field and direction whitelisted against `_ALLOWED_SORT` and applied as an in-memory sort key | `src/recoverage/api.py` | Arbitrary field access through the sort parameter. The SQLite-era `ORDER BY` interpolation this row used to name is gone with the query builder: the rows are Python objects, so there is no statement for a sort value to reach |
-| Search is a folded substring test in Python (`server.fold_match`, or `server.fold_match_folded` against a term folded once) | `src/recoverage/server.py`, `src/recoverage/api.py`, `src/recoverage/potato.py` | Wildcard abuse and non-ASCII misses in search. There is no SQL `LIKE` pattern any more, so the escape helper and the `rc_fold` disjunct beside the ASCII `LIKE` are gone with the SQL. The folded haystacks are memoized per snapshot (`server.folded_row_columns`, `server.folded_va_columns`, `src/recoverage/server.py:2550` and `:2588`, reached at `src/recoverage/api.py:2000` and `src/recoverage/potato.py:1923`), so the comparison is unchanged and only the number of folds per keystroke moved: the same test over the same text, built once. The address arms are still skipped when the term cannot hold a hex character (`server.fold_can_match_hex`), so the memos are built lazily and only for a term that can use them |
+| Search is a folded substring test in Python (`server.fold_match`, or `server.fold_match_folded` against a term folded once) | `src/recoverage/server.py`, `src/recoverage/api.py`, `src/recoverage/potato.py` | Wildcard abuse and non-ASCII misses in search. There is no SQL `LIKE` pattern any more, so the escape helper and the `rc_fold` disjunct beside the ASCII `LIKE` are gone with the SQL. The folded haystacks are memoized per snapshot (`server.folded_row_columns`, `server.folded_va_columns`, `src/recoverage/server.py:2578` and `:2616`, reached at `src/recoverage/api.py:2000` and `src/recoverage/potato.py:2007`), so the comparison is unchanged and only the number of folds per keystroke moved: the same test over the same text, built once. The address arms are still skipped when the term cannot hold a hex character (`server.fold_can_match_hex`), so the memos are built lazily and only for a term that can use them |
 | `_SSE_MAX_CLIENTS` cap, bounded per-client queue, idempotent unregistering | `src/recoverage/api.py` | Thread exhaustion via event streams, slow-client memory growth |
 | Connection cap: `_MAX_CONNECTIONS` slots taken before the thread, refused with a hand-written 503 plus `Retry-After` above it, released on every exit including thread-creation failure | `src/recoverage/devserver.py` | Thread and descriptor exhaustion from a flood of stalled peers. Refusing at accept rather than in the handler keeps the bound on the resource: a connection that never got a thread cannot pin one. The refusal is a `WARNING` naming the count, so the ceiling is legible to the operator |
 | Per-socket 120 s in-flight deadline and 15 s keep-alive idle deadline | `src/recoverage/devserver.py` | Threads pinned by half-open or non-reading peers, and by idle keep-alive connections |
@@ -636,7 +684,15 @@ generic STRIDE checklist. Each entry names the shipped fix in
    from.
 10. Capstone and the DLL reader parse attacker-shaped binaries in-process; a
     crafted target is a worker-level availability and memory-safety risk that
-    only the size cap touches, and that cap is post-read.
+    only the size cap touches, and that cap is post-read. Since 4.2 the
+    container header is read off those same bytes before the decode
+    (`disasm.binary_width_bits`, `src/recoverage/disasm.py`): `e_lfanew` is a
+    signed 32-bit FILE offset the sample chooses, so a target steers which bytes
+    of the 4096-byte header buffer the width reader looks at. The offset is
+    range-checked against that buffer and the `PE\0\0` signature is checked
+    before the `Machine` field is read, and a sample failing either check gets
+    the 32-bit floor rather than an error, so this is a wrong-answer surface
+    over 4096 bytes and not an out-of-bounds read.
 11. `CSP` allows `'unsafe-inline'` for scripts and styles
     (`src/recoverage/server.py`), which the inlined SPA shell requires, so an
     injection sink in the shell would execute. No such sink is known; the
@@ -647,18 +703,27 @@ generic STRIDE checklist. Each entry names the shipped fix in
     structural bound today and an unguarded dict if the regex ever widens.
 12a. No memo in this package is bounded by BYTES, and the search-fold tables
     are where that is visible. `server.folded_row_columns` and
-    `server.folded_va_columns` (`src/recoverage/server.py:2550` and `:2588`) build one
+    `server.folded_va_columns` (`src/recoverage/server.py:2578` and `:2616`) build one
     entry per function and one per global for the snapshot's life, so a
     document with an inflated function count turns a per-keystroke CPU cost
     into a resident-memory cost that no constant in this tree bounds. The cap
-    that does exist, `_SNAPSHOT_INDEX_MAX` (4, `src/recoverage/server.py:2531`),
+    that does exist, `_SNAPSHOT_INDEX_MAX` (4, `src/recoverage/server.py:2559`),
     answers "how many tables are live", not "how large is one". The rows
     themselves are bounded by what rebrew's own pipeline wrote, and a document
     reaching this table has already passed the reader's shape validation
     (`rebrew.coverage_toml`), so this is a sizing gap on a document the
     operator's own build produced rather than a remotely reachable one. It is
     listed because it is the only entry here whose growth the code does not
-    bound at all, and a new derived table over the same rows inherits it.
+    bound at all, and a new derived table over the same rows inherits it. The
+    same shape arrived on the binary side in 4.2: `disasm._target_width_bits`
+    memoizes one integer per binary stat in `_WIDTH_MEMO`, bounded at
+    `_WIDTH_MEMO_MAX` (64) entries and dropped oldest-first
+    (`src/recoverage/disasm.py`). An entry there is one small integer and the
+    key is a stat triple rather than document content, so the entry size is a
+    constant and the class does not bite; it is named here because it is a new
+    memo over untrusted input and the question to ask of the next one is the
+    same: is the entry a fixed-size payload or a row, and does the cap answer
+    the growth question the code actually has.
 13. Two daemon threads start before the listener binds and are never joined
     (`src/recoverage/cli.py`). A failure in either is logged and the start continues,
     so a server can be serving with a dead coverage watcher, which reads `healthy`
@@ -668,15 +733,19 @@ generic STRIDE checklist. Each entry names the shipped fix in
     control: `0o700` at creation, never re-checked, and overridable by pointing
     `XDG_CACHE_HOME` at a shared path (`documents.cache_dir`,
     `src/recoverage/documents.py:124`; the write at
-    `src/recoverage/documents.py:201`). Reading the cache is safe by
+    `src/recoverage/documents.py:235`). Reading the cache is safe by
     construction, so this is an exposure-of-data-at-rest gap rather than a code
     execution one, but it is the only place the project writes a copy of its
     reverse-engineering output OUTSIDE the project tree, and the model had not
-    named it as an asset before.
+    named it as an asset before. Since 4.2 its SIZE bound is also weaker than the
+    slot count suggests, because a prune that cannot delete or cannot list now
+    reports and continues (`documents._unlink_quiet`,
+    `src/recoverage/documents.py:175`) rather than raising: the directory is
+    bounded only while the filesystem accepts the deletes.
 15. A request can cause a WRITE to a path every later read treats as
     authoritative: the regen pipeline runs rebrew's catalog in-process, with the
     server's own filesystem rights, and nothing separates it from the server
-    (`regen.run_regen`, `src/recoverage/regen.py:256`). The loopback gate,
+    (`regen.run_regen`, `src/recoverage/regen.py:269`). The loopback gate,
     cooldown, locks and directory-match refusal bound WHEN it runs, not WHAT it
     can touch, and there is no sandbox between the pipeline and the project
     tree. A project the operator did not author is enough to have its tree
