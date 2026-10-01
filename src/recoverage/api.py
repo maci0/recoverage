@@ -1787,8 +1787,9 @@ _MAX_PAGE_OFFSET = 10_000_000
 
 # Upper bound for a binary-slice request (?size= on /asm and /bytes): both
 # endpoints clamp identically so the same query string cannot mean two
-# different window sizes.
-_MAX_SLICE_SIZE = 4096
+# different window sizes.  server.MAX_SLICE_SIZE, the one bound both binary
+# surfaces take (potato's panel pane reads it beside this one).
+_MAX_SLICE_SIZE = _server.MAX_SLICE_SIZE
 
 #: Section a disassembly request names when it names none.  The default the
 #: endpoint serves, beside _MAX_SLICE_SIZE, so both read off the one place.

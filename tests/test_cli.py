@@ -21,7 +21,8 @@ from rebrew.coverage_toml import CoverageTomlError
 from typer.testing import CliRunner
 
 from recoverage import cli, devserver, server
-from recoverage.cli import ExportFormat, _server_class_for, app
+from recoverage.cli import ExportFormat, app
+from recoverage.devserver import _server_class_for
 
 runner = CliRunner()
 

@@ -101,8 +101,9 @@ recoverage/
     ├── documents.py         # Coverage documents read per file; the TOML parse persisted
     │                        #   as JSON under $XDG_CACHE_HOME/recoverage/documents/
     ├── config.py            # RECOVERAGE_* env: flag defaults, validation, startup banner
-    ├── devserver.py         # WSGI serving stack serve() binds: threading server, keep-alive handlers,
-    │                        #   admission cap + socket deadline (RECOVERAGE_MAX_CONNECTIONS/CLIENT_TIMEOUT)
+    ├── devserver.py         # WSGI serving stack serve() binds: threading server + its IPv6
+    │                        #   class, keep-alive handlers, admission cap + socket deadline
+    │                        #   (RECOVERAGE_MAX_CONNECTIONS/CLIENT_TIMEOUT)
     ├── clock.py             # The one time source (monotonic / wall-clock) the request path reads
     ├── metrics.py           # In-process counters: RED requests (REQUESTS) + regen (REGEN), read by /api/health
     ├── cli.py               # Typer CLI entry point (serve, stats, export, check, regen, open)
@@ -1336,7 +1337,7 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   fixed class: `wsgiref`'s `WSGIServer` inherits `http.server.HTTPServer`'s
   `AF_INET` and never changes it, so an IPv6 address `config.validate_bind`
   accepts (`--bind ::1`, `::`) fails in `socket.bind()` on every platform and
-  the `serve` OSError handler blames another instance for it. `cli.
+  the `serve` OSError handler blames another instance for it. `devserver.
   _server_class_for` probes the address with `getaddrinfo` and returns
   `_ThreadingWSGIServer6` when it resolves to IPv6 only, so a hostname that is
   v6-only is covered alongside the literal; a name offering both keeps

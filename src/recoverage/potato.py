@@ -35,6 +35,7 @@ from recoverage.server import (
     CACHE_REVALIDATE,
     FUNCTION_SORT_COLUMNS,
     MAX_SEARCH_CHARS,
+    MAX_SLICE_SIZE,
     _bucket_row,
     _cell_json,
     _compressed,
@@ -793,8 +794,10 @@ _MAX_RAW_READ = 1 << 20  # 1 MiB — more than any plausible function or data ce
 #: object per instruction, so a document declaring a size of 10**9 turns one
 #: ?idx= request into tens of millions of objects on a handler thread.  The
 #: sibling sink for the same value (_get_raw_bytes above) clamps to
-#: _MAX_RAW_READ for the same reason.
-_MAX_ASM_READ = 4096
+#: _MAX_RAW_READ for the same reason.  server.MAX_SLICE_SIZE, the one bound
+#: both surfaces read: a route module may not import its sibling, so a
+#: re-spelled literal here is the only way this drift can happen.
+_MAX_ASM_READ = MAX_SLICE_SIZE
 
 # Sort key standing in for a section row with no VA, so sections without one
 # land after every real address. Above the 64-bit VA ceiling, and an int so the

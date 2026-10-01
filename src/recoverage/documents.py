@@ -68,6 +68,13 @@ _log = logging.getLogger("recoverage")
 _PREFIX: Final = "coverage-"
 _SUFFIX: Final = ".toml"
 
+#: That same glob, for the callers that look at the coverage directory without
+#: reading a document: ``server._coverage_file_stats`` (the freshness stamp and
+#: the health block's file list) and ``cli``'s db warnings.  ONE definition of
+#: how rebrew names a document, in the module that owns that knowledge, so a
+#: reader and a stat walk cannot drift onto two spellings of one file.
+COVERAGE_GLOB: Final = f"{_PREFIX}*{_SUFFIX}"
+
 #: Version of the cache file's own layout.  Bumped when the layout changes, so
 #: a file an older build wrote is a miss rather than a misread.
 _CACHE_FORMAT: Final = 1
@@ -122,7 +129,7 @@ _WRITE_WARNED = False
 def _stat_key(db_dir: Path) -> tuple[_StatKey, ...]:
     """Every document's stat, name-sorted; a file that vanished is skipped."""
     entries: list[_StatKey] = []
-    for path in db_dir.glob(f"{_PREFIX}*{_SUFFIX}"):
+    for path in db_dir.glob(COVERAGE_GLOB):
         try:
             st = path.stat()
         except OSError:

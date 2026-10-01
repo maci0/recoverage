@@ -71,9 +71,9 @@ The classes below the table are the ones this tree has already fixed once; start
 
 Transport, before any route runs:
 
-- `cli._server_class_for` (`src/recoverage/cli.py`) picks the socket family from the
-  bind address through `getaddrinfo`, and `cli._ThreadingWSGIServer6`
-  (`src/recoverage/cli.py`) is the `AF_INET6` class. On Linux a wildcard `AF_INET6`
+- `devserver._server_class_for` (`src/recoverage/devserver.py`) picks the socket family from the
+  bind address through `getaddrinfo`, and `devserver._ThreadingWSGIServer6`
+  (`src/recoverage/devserver.py`) is the `AF_INET6` class. On Linux a wildcard `AF_INET6`
   socket also accepts IPv4-mapped peers, which is the case
   `server._peer_is_loopback` (`src/recoverage/server.py`) has to answer correctly for
   `POST /api/regen`.

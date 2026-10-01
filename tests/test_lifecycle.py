@@ -29,10 +29,8 @@ from typing import Any
 import pytest
 
 from recoverage import devserver
-from recoverage.cli import (
-    _open_and_reap,
-    _server_class_for,
-)
+from recoverage.cli import _open_and_reap
+from recoverage.devserver import _server_class_for
 from recoverage.regen import run_regen
 
 #: The zombie scan below reads /proc/<pid>/stat, which only Linux provides.
@@ -860,7 +858,6 @@ class TestListenerReuseOption:
 
     def test_reuse_is_off_on_windows_and_on_everywhere_else(self) -> None:
         import recoverage.devserver as ds
-        from recoverage.cli import _ThreadingWSGIServer6
 
         # The Windows half of the answer is asserted by the windows-latest
         # entry in the CI matrix, which runs this file; the POSIX half is what
@@ -869,7 +866,7 @@ class TestListenerReuseOption:
         # on one setting with different answers.
         expected = os.name != "nt"
         assert ds._ThreadingWSGIServer.allow_reuse_address is expected
-        assert _ThreadingWSGIServer6.allow_reuse_address is expected
+        assert ds._ThreadingWSGIServer6.allow_reuse_address is expected
 
 
 class TestClientConnectionDeadline:

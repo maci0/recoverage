@@ -761,7 +761,8 @@ recoverage/
     ├── documents.py          # Coverage documents read per file; the TOML parse persisted
     │                         #   under $XDG_CACHE_HOME/recoverage/documents/
     ├── metrics.py            # In-process RED counters, read by /api/health
-    ├── devserver.py          # WSGI serving stack: threading server, keep-alive handlers
+    ├── devserver.py          # WSGI serving stack: threading server + its IPv6 class, keep-alive
+    │                         #   handlers
     ├── cli.py                # Typer CLI entry point
     ├── server.py             # Bottle app, shared helpers & compression
     ├── disasm.py             # Capstone disassembly (optional extra)

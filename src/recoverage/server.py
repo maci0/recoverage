@@ -53,7 +53,7 @@ from rebrew.workspace import (
 
 from recoverage import clock, metrics
 from recoverage._paths import _db_path, config_fingerprint
-from recoverage.documents import load_all, versions
+from recoverage.documents import COVERAGE_GLOB, load_all, versions
 
 # Thread-local compressor — python-zstandard gives ZstdCompressor instances NO
 # thread-safety guarantees ("do not operate on the same instance from different
@@ -521,6 +521,17 @@ def strip_ascii_whitespace(value: str) -> str:
 #: api.py's cap alone left the page a request could inflate by the cell count.
 MAX_SEARCH_CHARS: Final = 500
 
+#: Most bytes ONE disassembly or raw-slice read is built from, and the cap both
+#: binary-snapshot surfaces take: api's ``?size=`` on ``/asm`` and ``/bytes``
+#: (which clamp to it so one query string cannot mean two window sizes) and
+#: potato's panel pane (whose size arrives from the document's own ``size``
+#: column, not from a query, and was the one path that took it unbounded —
+#: capstone expands a byte range into a Python object per instruction).  Here
+#: rather than in one route module because a route module may not import a
+#: sibling, and two spellings of one bound is how a request cap and a
+#: document-driven read drift onto different windows for the same pane.
+MAX_SLICE_SIZE: Final = 4096
+
 
 def query_param(name: str, default: str = "") -> str:
     """One query-string value, percent-decoded as UTF-8.
@@ -775,11 +786,6 @@ def read_request_body(limit: int) -> bytes:
     raise RequestBodyTooLargeError(f"body over the {limit}-byte limit")
 
 
-#: Glob rebrew's writer names its documents with, and the reader globs for.
-_COVERAGE_FILE_PREFIX = "coverage-"
-_COVERAGE_FILE_SUFFIX = ".toml"
-
-
 def _coverage_file_stats() -> tuple[tuple[str, int, int], ...]:
     """``(name, mtime_ns, size)`` for every coverage document, name-sorted.
 
@@ -793,7 +799,7 @@ def _coverage_file_stats() -> tuple[tuple[str, int, int], ...]:
     differing key catches the miss.
     """
     entries: list[tuple[str, int, int]] = []
-    for path in _db_path().glob(f"{_COVERAGE_FILE_PREFIX}*{_COVERAGE_FILE_SUFFIX}"):
+    for path in _db_path().glob(COVERAGE_GLOB):
         try:
             st = path.stat()
         except OSError:

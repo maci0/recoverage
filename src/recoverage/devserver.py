@@ -91,7 +91,7 @@ def listen_family(host: str) -> socket.AddressFamily:
 
     ONE definition for the family, because two readers need it and the port
     the banner prints has to come off the socket the listener will hold:
-    :func:`resolve_listen_port` below and ``cli._server_class_for``, which
+    :func:`resolve_listen_port` below and :func:`_server_class_for`, which
     picks the class carrying it.  A probe that bound AF_INET6 where the
     listener binds AF_INET reserved the port on the wrong interface, so
     ``--port 0`` published a number the server then failed to bind.
@@ -258,6 +258,34 @@ class _ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
             super().process_request_thread(request, client_address)
         finally:
             metrics.CONNECTIONS.release()
+
+
+class _ThreadingWSGIServer6(_ThreadingWSGIServer):
+    """The same server on an IPv6 socket.
+
+    ``wsgiref``'s ``WSGIServer`` inherits ``http.server.HTTPServer``'s
+    ``AF_INET`` and never changes it, so an IPv6 bind address that
+    ``config.validate_bind`` deliberately accepts (``::1``, ``::``) dies in
+    ``socket.bind()`` (EAFNOSUPPORT here), and ``cli.serve``'s OSError handler
+    then reports "is another instance already running?" for what is an
+    address-family mismatch.  On Linux an ``AF_INET6`` socket bound to ``::``
+    also accepts IPv4-mapped peers, which is the case
+    ``server._peer_is_loopback`` documents.
+    """
+
+    address_family = socket.AF_INET6
+
+
+def _server_class_for(bind: str) -> type[_ThreadingWSGIServer]:
+    """The threaded server class whose address family *bind* needs.
+
+    The answer is :func:`listen_family`, shared with the ``--port 0`` probe
+    above: the port the banner publishes has to come off a socket of the family
+    the listener will hold, so the two cannot each resolve it.
+    """
+    if listen_family(bind) is socket.AF_INET6:
+        return _ThreadingWSGIServer6
+    return _ThreadingWSGIServer
 
 
 # Hard deadline for every socket operation on a client connection (the request

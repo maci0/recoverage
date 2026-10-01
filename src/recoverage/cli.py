@@ -28,11 +28,11 @@ from recoverage import clock, config
 from recoverage._paths import _db_path
 from recoverage.devserver import (
     _KeepAliveRequestHandler,
-    _ThreadingWSGIServer,
+    _server_class_for,
     configure_transport,
-    listen_family,
     resolve_listen_port,
 )
+from recoverage.documents import COVERAGE_GLOB
 
 app = typer.Typer(
     help="Coverage dashboard for binary-matching decompilation projects.",
@@ -111,34 +111,6 @@ def _no_color_option() -> Any:
         help="Disable colored output (overrides NO_COLOR and TERM=dumb).",
         callback=_no_color_callback,
     )
-
-
-class _ThreadingWSGIServer6(_ThreadingWSGIServer):
-    """The same server on an IPv6 socket.
-
-    ``wsgiref``'s ``WSGIServer`` inherits ``http.server.HTTPServer``'s
-    ``AF_INET`` and never changes it, so an IPv6 bind address that
-    ``config.validate_bind`` deliberately accepts (``::1``, ``::``) dies in
-    ``socket.bind()`` (EAFNOSUPPORT here), and the OSError
-    handler below then reports "is another instance already running?" for what
-    is an address-family mismatch.  On Linux an ``AF_INET6`` socket bound to
-    ``::`` also accepts IPv4-mapped peers, which is the case
-    ``server._peer_is_loopback`` documents.
-    """
-
-    address_family = socket.AF_INET6
-
-
-def _server_class_for(bind: str) -> type[_ThreadingWSGIServer]:
-    """The threaded server class whose address family *bind* needs.
-
-    The answer is :func:`devserver.listen_family`, shared with the
-    ``--port 0`` probe: the port the banner publishes has to come off a socket
-    of the family the listener will hold, so the two cannot each resolve it.
-    """
-    if listen_family(bind) is socket.AF_INET6:
-        return _ThreadingWSGIServer6
-    return _ThreadingWSGIServer
 
 
 #: Log line layout, and the stamp it carries.  The date and numeric offset are
@@ -579,7 +551,7 @@ def _load_coverage_or_exit(
 
     _check_env_or_exit()
     p = _db_path_or_exit(json_output=json_output)
-    if not any(p.glob("coverage-*.toml")):
+    if not any(p.glob(COVERAGE_GLOB)):
         _fail(
             f"Error: coverage not found at {p}",
             f"coverage not found at {p}",
@@ -1098,7 +1070,7 @@ def _db_warnings(db: Path | None) -> list[str]:
         # config.check_db_override refuses this one at startup; a warning here
         # would only repeat a refusal `serve` has already exited on.
         return []
-    elif any(path.glob("coverage-*.toml")):
+    elif any(path.glob(COVERAGE_GLOB)):
         return []
     else:
         state = f"no coverage-*.toml in {path}"
