@@ -1751,7 +1751,22 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   inside the project tree. A `[targets.X].binary` that does not is refused by
   `_find_dll_path` and logged, and the test
   `TestPathHelpers::test_find_dll_path_refuses_a_binary_outside_the_tree` pins
-  the shapes it has to refuse. The access-gating headers
+  the shapes it has to refuse. Two more parsers read a FILE rather than a
+  request, so no request campaign reaches either of them.
+  `disasm.binary_width_bits` (`TestContainerHeaderWidth`) is handed raw image
+  bytes and reads the PE `e_lfanew` at a signed 32-bit offset chosen by
+  whatever produced the file, so its campaign asserts the answer against the
+  two headers RESTATED in the test rather than against the reader itself, and
+  pushes every 64-bit answer through `get_capstone_md` to check the handle a
+  64-bit mode produces; a header the format fixes no width for must answer the
+  documented floor, never a guess. `documents._read_cached`
+  (`TestPersistedParseCache`) loads JSON from the cache directory under
+  `$XDG_CACHE_HOME`, which is not the coverage directory and so is not covered
+  by the document campaign: it stands in for the TOML, and the seed that
+  matters is a slot rebrew's schema ACCEPTS describing different coverage under
+  a digest naming neither, because every other seed is refused by the schema
+  and only that one is where serving the slot would answer with content the
+  repository never wrote. The access-gating headers
   (`Origin`/`Host`, `REMOTE_ADDR`, `X-Request-ID`, `Idempotency-Key`) and the
   `--token` gate (`Authorization: Bearer`, `?token=`, the `recoverage_token`
   cookie) are the

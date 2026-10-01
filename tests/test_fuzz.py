@@ -35,7 +35,13 @@ tests enumerate:
 * the request line and header block, which the campaigns above never reach
   because every one of them starts from a WSGI environ. Those bytes arrive
   before an environ exists, on a socket, and the transport decides there
-  whether a request reaches a route at all.
+  whether a request reaches a route at all;
+* the two parsers that read a FILE rather than a request, neither of which any
+  request campaign reaches: the PE/ELF container header the x86 width a binary
+  is decoded at is read from (where a wrong answer is a 64-bit image decoded at
+  32 bits, not a bad render), and the persisted parse in the cache directory,
+  which stands in for the document behind it and is therefore parsed with no
+  less suspicion than the document itself.
 
 No coverage-guided fuzzer is available offline, so the harness is a seeded
 mutation engine: a hand-written corpus of real-shaped seeds (the spellings the
@@ -60,6 +66,7 @@ import random
 import re
 import socket
 import threading
+import tomllib
 import unicodedata
 from collections.abc import Callable
 from http.cookies import SimpleCookie
@@ -4491,4 +4498,281 @@ class TestRequestLineParser:
         )
         assert answer.count(b"HTTP/1.1 ") == 2, (
             f"expected one answer and one refusal, got {answer[:120]!r}"
+        )
+
+
+# ── the container header a binary's width is read from ───────────────────
+#
+# `disasm.binary_width_bits` is the one parser here that reads a FILE FORMAT
+# off bytes nothing validates: the PE `e_lfanew` is a signed 32-bit offset
+# chosen by whatever produced the image, and every field after it is a slice
+# at that offset.  The campaigns above reach `/asm` only with a target whose
+# binary this repository already holds, so the header parser itself has no
+# harness at all.  A wrong answer is not a bad render: a 64-bit image read as
+# 32 bits decodes every `REX` prefix as the start of the next instruction, and
+# the panel shows garbage over exactly the bytes the reader selected.
+
+PE_AMD64 = 0x8664
+ELF_X86_64 = 62
+
+
+def _pe_image(lfanew: int, machine: int, sig: bytes = b"PE\x00\x00", pad: int = 0x80) -> bytes:
+    """A PE header at *lfanew*, the shape ``binary_width_bits`` reads."""
+    head = bytearray(b"MZ" + bytes(0x3A))
+    head[0x3C:0x40] = (lfanew & 0xFFFFFFFF).to_bytes(4, "little")
+    head += bytes(max(0, pad - len(head)))
+    head += sig + (machine & 0xFFFF).to_bytes(2, "little")
+    return bytes(head)
+
+
+def _elf_image(machine: int, cls: int = 2, pad: int = 0x40) -> bytes:
+    """An ELF header declaring *machine*, the other shape it reads."""
+    head = bytearray(b"\x7fELF" + bytes([cls, 1, 1, 0]) + bytes(14))
+    head[0x12:0x14] = (machine & 0xFFFF).to_bytes(2, "little")
+    return bytes(head).ljust(pad, b"\x00")
+
+
+CONTAINER_SEEDS: list[bytes] = [
+    _pe_image(0x80, PE_AMD64),
+    _pe_image(0x80, 0x014C),
+    _pe_image(0x80, 0xAA64),
+    _pe_image(0x200, PE_AMD64),
+    _pe_image(0x7FFFFFFF, PE_AMD64),
+    _pe_image(-1, PE_AMD64),
+    _pe_image(-0x8000_0000, PE_AMD64),
+    _pe_image(0x80, PE_AMD64, sig=b"NOPE"),
+    _pe_image(0x7FFFFFFF, PE_AMD64, pad=0x1000),
+    _elf_image(ELF_X86_64),
+    _elf_image(3),
+    _elf_image(183),
+    _elf_image(ELF_X86_64, cls=1),
+    b"\x7fELF",
+    b"\x7fELF" + bytes(9) + ELF_X86_64.to_bytes(2, "little"),
+    b"MZ" + bytes(0x3A),
+    b"MZ",
+    b"",
+    b"not a container at all",
+    bytes(4096),
+    b"\x7fELF" + bytes(4092),
+    b"MZ" + bytes(4094),
+]
+
+#: Byte mutation rarely produces a header at all, so the tokens are the field
+#: values and signatures the parser branches on: the machine numbers of the x86
+#: family, the DOS and ELF magics, and the offsets that move the slice boundary.
+CONTAINER_TOKENS: tuple[bytes, ...] = (
+    b"MZ",
+    b"PE\x00\x00",
+    b"\x7fELF",
+    b"\x02\x01\x01",
+    ELF_X86_64.to_bytes(2, "little"),
+    (3).to_bytes(2, "little"),
+    PE_AMD64.to_bytes(2, "little"),
+    (0x014C).to_bytes(2, "little"),
+    (0x80).to_bytes(4, "little"),
+    (0x7FFFFFFF).to_bytes(4, "little"),
+    b"\xff\xff\xff\xff",
+    b"\x80\x00\x00\x00",
+)
+
+
+def _declared_width(data: bytes) -> int | None:
+    """The width a CORRECT reader must answer, restated from the two headers.
+
+    Independent of ``binary_width_bits``: the reader's own offsets and bounds
+    are what the campaign would otherwise agree with itself about, so this
+    spells them out again and a change to either has to be made twice.  ``None``
+    is "no answer the format fixes": the header is not a container this module
+    reads, and the documented floor is then the contract.
+    """
+    if data[:4] == b"\x7fELF" and len(data) >= 0x14:
+        return 64 if int.from_bytes(data[0x12:0x14], "little") == ELF_X86_64 else None
+    if len(data) >= 0x40 and data[:2] == b"MZ":
+        offset = int.from_bytes(data[0x3C:0x40], "little", signed=True)
+        if offset < 0 or offset + 6 > len(data) or data[offset : offset + 4] != b"PE\x00\x00":
+            return None
+        machine = int.from_bytes(data[offset + 4 : offset + 6], "little")
+        return 64 if machine == PE_AMD64 else None
+    return None
+
+
+class TestContainerHeaderWidth:
+    """The x86 width a binary is decoded at is read off its own header."""
+
+    def test_a_width_is_answered_for_every_header_and_matches_the_format(self) -> None:
+        import recoverage.disasm as disasm
+
+        def check(data: bytes) -> None:
+            bits = disasm.binary_width_bits(data)
+            assert bits in (32, 64), f"{data[:16]!r}: answered a width of {bits} bits"
+            expected = _declared_width(data)
+            if expected is None:
+                assert bits == disasm._DEFAULT_WIDTH_BITS, (
+                    f"{data[:16]!r}: a header naming no x86-64 machine answered {bits}, "
+                    "which is the guess this module documents that it does not make"
+                )
+            else:
+                assert bits == expected, (
+                    f"{data[:16]!r}: answered {bits}, the format says {expected}"
+                )
+
+        _fuzz(
+            CONTAINER_SEEDS,
+            check,
+            iterations=400,
+            struct_tokens=CONTAINER_TOKENS,
+            num_tokens=CONTAINER_TOKENS,
+        )
+
+    def test_the_declared_widths_reach_a_handle(self) -> None:
+        """The pair assertion across the decode boundary.
+
+        A header read as 64 is only useful if it PRODUCES a 64-bit handle, so
+        the width is pushed through ``get_capstone_md`` and the decode is
+        checked on the shape that separates the two modes: ``48 8b 44 24 08``
+        is one five-byte ``mov rax, [rsp+8]`` at 64 bits and a one-byte
+        ``dec eax`` at 32.  A round whose header no longer declares 64 says
+        nothing about the handle, so the claim is made only where the reader
+        answered 64.  No capstone means no handle and no claim to make.
+        """
+        import recoverage.disasm as disasm
+
+        if not disasm.disassembly_available():
+            pytest.skip("capstone is not installed")
+        code = b"\x48\x8b\x44\x24\x08\xc3"  # mov rax, [rsp+8] ; ret
+
+        def check(data: bytes) -> None:
+            bits = disasm.binary_width_bits(data)
+            instructions = list(disasm.get_capstone_md(bits).disasm(code, 0x1000))
+            assert instructions, f"{data[:16]!r}: the {bits}-bit decode produced nothing"
+            if bits != 64:
+                return
+            first = instructions[0]
+            assert first.size == 5 and first.mnemonic == "mov", (
+                f"{data[:16]!r}: read as 64 bits, the first instruction is {first.size} "
+                f"bytes ({first.mnemonic} {first.op_str}); a 64-bit decode of a "
+                "REX-prefixed mov consumes all five and never reads it as dec eax"
+            )
+
+        _fuzz(
+            [_pe_image(0x80, PE_AMD64), _elf_image(ELF_X86_64), _pe_image(0x80, 0x014C)],
+            check,
+            iterations=120,
+            struct_tokens=CONTAINER_TOKENS,
+            num_tokens=CONTAINER_TOKENS,
+        )
+
+
+# ── the persisted parse ───────────────────────────────────────────────
+#
+# `documents._read_cached` loads JSON out of the cache directory under
+# `$XDG_CACHE_HOME`, which is NOT the coverage directory and so is not reached
+# by the document campaign: those bytes were written by a PREVIOUS process, and
+# anything else able to write there can write anything.  The cache stands in
+# for the TOML, so a slot served instead of the document behind it is a reader
+# answering with content the repository never held.
+
+_CACHE_TARGET = "CACHEFUZZ"
+
+CACHE_SEEDS: list[bytes] = [
+    b"",
+    b"{",
+    b"[]",
+    b"null",
+    b"0",
+    b'{"format": 1, "sha256": "' + b"0" * 64 + b'", "doc": {}}',
+    b'{"format": 99, "sha256": "' + b"0" * 64 + b'", "doc": {}}',
+    b'{"format": 1, "sha256": 1, "doc": {}}',
+    b'{"format": 1, "sha256": "' + b"0" * 64 + b'", "doc": []}',
+    b'{"format": 1, "sha256": "' + b"0" * 64 + b'", "doc": {"version": 99}}',
+    b'{"format": 1, "sha256": "' + b"0" * 64 + b'", "doc": {"sections": 5}}',
+    b'{"format": 1, "sha256": "' + b"0" * 64 + b'", "doc": {"sections": {"": {}}}}',
+    b'{"format": 1, "sha256": "' + b"0" * 64 + b'", "doc": {"sections": {"x": {"cells": 5}}}}',
+    b'{"format": 1, "sha256": "' + b"0" * 64 + b'", "doc": {"functions": [5]}}',
+    b'{"format": 1, "sha256": "' + b"0" * 64 + b'", "doc": {"functions": [{"va": "x"}]}}',
+    b"\xef\xbb\xbf{}",
+    b"\xff\xfe",
+    b'{"format": 1, "sha256": "' + b"0" * 64 + b'", "doc": ' + b"[" * 200 + b"}",
+]
+
+CACHE_TOKENS: tuple[bytes, ...] = (
+    b"{",
+    b"}",
+    b"[]",
+    b"null",
+    b'"format"',
+    b'"sha256"',
+    b'"doc"',
+    b'"version": 99',
+    b'"sections": 5',
+    b'"cells": 5',
+    b'"functions": [5]',
+    b'"functions": [{"va": "x"}]',
+    b"\x00",
+    b"\xff",
+    b"\xed\xa0\x80",
+)
+
+
+class TestPersistedParseCache:
+    """A cache slot is parsed JSON that stands in for a coverage document."""
+
+    def test_a_slot_never_answers_with_something_the_document_did_not_say(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The pair assertion across the persistence boundary.
+
+        Whatever bytes the slot holds, the reader answers with what the TOML
+        behind it says: a slot the reader refuses is a miss and the document
+        is parsed, and a slot the schema accepts is held to the document by
+        ``_load``'s own digest check.  Either way the served snapshot is the
+        one rebrew's own reader builds from the document, which is the oracle
+        here rather than a restatement of the code under test.
+        """
+        from rebrew.coverage_toml import load_coverage_from
+
+        from recoverage import documents, server
+
+        directory = tmp_path / "db"
+        directory.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setenv("RECOVERAGE_DB", str(directory))
+        document = write_coverage(directory, _CACHE_TARGET, _DOC_SECTIONS)
+        trusted = load_coverage_from(directory, _CACHE_TARGET)
+
+        # The seed that matters: a slot rebrew's schema ACCEPTS, describing a
+        # different coverage than the document holds, under a digest that
+        # names neither.  Every other seed is refused by the schema, so this is
+        # the one round where serving the slot instead of the document would
+        # answer 200 with content the repository never wrote — and the only
+        # thing standing between it and the reader is the digest check.
+        stolen = tomllib.loads(document.read_text(encoding="utf-8"))
+        stolen["sections"] = {".other": stolen["sections"][".text"]}
+        stolen["functions"] = [{"va": 1, "name": "injected", "size": 1, "status": "EXACT"}]
+        stolen_slot = json.dumps(
+            {"format": 1, "sha256": "0" * 64, "doc": json.loads(json.dumps(stolen))}
+        ).encode()
+
+        root = documents.cache_dir()
+        assert root is not None
+        # One load to write the slot the campaign then overwrites in place.
+        assert server.coverage_snapshots()[_CACHE_TARGET] == trusted
+        slots = sorted(root.glob("*" + ".json"))
+        assert slots, "the reader wrote no cache slot to fuzz"
+
+        def check(data: bytes) -> None:
+            for slot in slots:
+                slot.write_bytes(data)
+            monkeypatch.setattr(documents, "_STATE", None)
+            snapshots = server.coverage_snapshots()
+            assert _CACHE_TARGET in snapshots, f"{data[:40]!r}: the document stopped being served"
+            assert snapshots[_CACHE_TARGET] == trusted, (
+                f"{data[:40]!r}: the reader answered with a snapshot the document does not describe"
+            )
+
+        _fuzz(
+            [stolen_slot, *CACHE_SEEDS],
+            check,
+            iterations=120,
+            struct_tokens=(stolen_slot, *CACHE_TOKENS),
+            num_tokens=CACHE_TOKENS,
         )
