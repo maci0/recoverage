@@ -163,6 +163,7 @@ files = [
     "tools",
     "tests/conftest.py",
     "tests/coverage_fixture.py",
+    "tests/test_backup.py",
     "tests/test_concurrency.py",
     "tests/test_frontend_import_graph.py",
     "tests/test_import_graph.py",

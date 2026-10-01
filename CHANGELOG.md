@@ -16,6 +16,24 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the figures were a week out of date. The bound is a constant rather than an
   environment setting, because the build cadence belongs to the rebrew project;
   raise it where it is defined if your coverage is built in batches.
+- `recoverage backup` and `recoverage restore`: verified backup and restore of the
+  coverage documents, which are this package's only durable state and were not
+  covered by anything. rebrew writes each document as a read-modify-write over the
+  previous one, so the cumulative status `history` and the `verify_results` are
+  carried forward from the file being overwritten rather than from the source tree:
+  a regen over a directory whose documents were lost rebuilds the sections, cells
+  and functions, and loses both arrays for good. `backup` copies every document into
+  one tar carrying a manifest of the members' sha256 digests, reads the archive back
+  and recomputes them before reporting success, and publishes it through an fsynced
+  atomic rename, so a green exit means a restore could read it rather than that a
+  write returned. `restore` verifies every member before the first byte is written
+  and then replaces each document atomically, so it completes or leaves the directory
+  as it was; it refuses to roll coverage back over a document that has changed since
+  (without `--force`), because the transitions it would discard are the ones a regen
+  cannot reproduce. The archive defaults to `$RECOVERAGE_BACKUP_DIR`, else a
+  `backups/` beside the coverage directory, never inside it. `docs/RECOVERY.md` is
+  the runbook: what state exists, which of it a rebuild reproduces, what the RPO and
+  RTO depend on, and the restore drill that proves an archive is readable.
 - Mounting the dashboard in your own WSGI server is documented: `recoverage.webapp.app`
   is the fully routed application, `recoverage.server.app` on its own registers no
   route and answers 404, and the two things the bundled listener does for you — installing

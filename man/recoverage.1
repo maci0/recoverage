@@ -93,6 +93,39 @@ through RECOVERAGE_*; a flag passed to
 in argv is not a value it can see or check, and is checked when
 .B serve
 starts.
+.TP
+.B backup
+Copy every coverage document into one verified archive, then read it back.
+The documents are this package's only durable state, and the status history
+and verify results inside them are carried forward from the previous document
+on every write, so a regen over a directory whose documents were lost rebuilds
+the current facts and loses both arrays for good. Every archive is verified
+before this reports success, so a green exit means a restore could read it.
+.BI \-\-to " PATH"
+Archive path, or a directory for a stamped default name (default:
+.BR RECOVERAGE_BACKUP_DIR ,
+else a
+.B backups
+directory beside the coverage directory). Exits 1 when there is nothing to back
+up: an empty archive verifies, and restoring one empties the dashboard.
+.B \-\-json
+writes the verified members and their digests as JSON, for a scheduled job
+that reads the result rather than the table.
+.TP
+.B restore
+Put a verified backup's documents back into the coverage directory. The
+archive is verified in full before the first document is written, and each
+document lands through an atomic replace, so a restore either completes or
+leaves the directory as it was.
+.B \-\-force
+overrides exactly one refusal: a document already present that differs from
+the one in the archive. Rolling an old archive over a tree that has been
+rebuilt since discards every status transition since, and
+.B regen
+cannot recover what a rollback drops. A corrupt archive, a member that is not
+a coverage document and an unreadable file are refused either way. Run
+.B regen
+afterwards, so the served snapshots follow the restored bytes.
 .SH OPTIONS
 .TP
 .B \-\-no\-color
@@ -294,6 +327,15 @@ value outside the range is refused at startup.
 Seconds a client socket may take to send a request, per socket operation and
 not for a connection's lifetime. Transport, not behavior. An integer 16-86400,
 default 120; a value outside the range is refused at startup.
+.TP
+.B RECOVERAGE_BACKUP_DIR
+Directory
+.B backup
+writes its archive into, and nothing else reads it (default: a
+.B backups
+directory beside the coverage directory). Never point it inside the coverage
+directory: the next backup would copy the previous one, and a restore would
+extract an archive as if it were a document.
 .SH "EXIT STATUS"
 .TP
 .B 0
@@ -335,6 +377,15 @@ one that is not readable as a project file.
 The coverage documents, resolved through rebrew-project.toml unless
 .B RECOVERAGE_DB
 names another directory.
+They are the only durable state
+.B recoverage
+has: the parse cache under XDG_CACHE_HOME and every in-process memo are
+rebuilt from them, and a backup of them is the only copy of the status
+history and verify results a rebuild cannot reproduce.
+.TP
+.I backups/coverage\-<timestamp>.tar
+The default archive location, one tar per run holding the documents and a
+manifest of their sha256 digests.
 .SH EXAMPLES
 .PP
 .nf
@@ -345,6 +396,9 @@ recoverage stats \-\-json             # machine-readable statistics
 recoverage export \-\-format csv > coverage.csv
 recoverage check \-\-min\-coverage 50  # CI gate
 recoverage regen                     # re-run catalog + build-db
+recoverage backup                    # verified archive of the documents
+recoverage backup \-\-to /srv/backups/nightly.tar
+recoverage restore /srv/backups/nightly.tar
 recoverage open                      # open a running dashboard
 recoverage config \-\-json            # what serve would start with
 .RE

@@ -12,7 +12,7 @@ Module map (dependencies point one way, left to right):
   deadline, keep-alive framing (imports config+metrics; stdlib only)
 - ``_paths``      — coverage-directory resolution (imports config)
 - ``documents``   — coverage documents read per file, the TOML parse persisted
-  across restarts (imports clock+metrics)
+  across restarts, and their verified backup/restore (``backup``)
 - ``regen``       — in-process rebrew regen: imports rebrew's catalog/build-db
   lazily and runs both under one call (no in-package deps)
 - ``server``      — Bottle app, hooks/auth, shared helpers (snapshot access,

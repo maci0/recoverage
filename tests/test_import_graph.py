@@ -46,6 +46,7 @@ _LEVELS: dict[str, int] = {
     "regen": 0,
     "_paths": 1,
     "documents": 1,
+    "backup": 1,
     "server": 2,
     "disasm": 3,
     "api": 4,

@@ -73,6 +73,7 @@ recoverage/
 │   ├── test_lifecycle.py     # Lifecycle: regen ordering, the cross-process regen lock, browser-opener reaping
 │   ├── test_paths.py         # Coverage directory resolution tests
 │   ├── test_documents.py     # Per-document reload, the persisted parse, the cold herd
+│   ├── test_backup.py        # Backup/restore: verification, all-or-nothing, the rollback refusal
 │   ├── test_config.py        # RECOVERAGE_* env: parsing, precedence, fail-fast
 │   ├── test_server.py        # Compression, encoding, snapshot, path helper tests
 │   ├── test_serve_harness.py # Shared serve harness (builds the sample coverage, boots the server)
@@ -100,13 +101,19 @@ recoverage/
     ├── _paths.py            # Coverage directory resolution (RECOVERAGE_DB, db_dir)
     ├── documents.py         # Coverage documents read per file; the TOML parse persisted
     │                        #   as JSON under $XDG_CACHE_HOME/recoverage/documents/
+    ├── backup.py            # Verified backup/restore of the coverage documents, the only
+    │                        #   durable state here: history and verify_results are carried
+    │                        #   forward from the previous document, so a regen cannot
+    │                        #   reproduce them. Tar + sha256 manifest, verified on write
+    │                        #   and on read; atomic, all-or-nothing restore.
     ├── config.py            # RECOVERAGE_* env: flag defaults, validation, startup banner
     ├── devserver.py         # WSGI serving stack serve() binds: threading server + its IPv6
     │                        #   class, keep-alive handlers, admission cap + socket deadline
     │                        #   (RECOVERAGE_MAX_CONNECTIONS/CLIENT_TIMEOUT)
     ├── clock.py             # The one time source (monotonic / wall-clock) the request path reads
     ├── metrics.py           # In-process counters: RED requests (REQUESTS) + regen (REGEN), read by /api/health
-    ├── cli.py               # Typer CLI entry point (serve, stats, export, check, regen, open)
+    ├── cli.py               # Typer CLI entry point (serve, stats, export, check, regen,
+    │                        #   backup, restore, open)
     ├── server.py            # Bottle app, shared helpers & compression
     ├── disasm.py            # Capstone disassembly (optional extra): loadability probe,
     │                        #   per-thread Cs per image width (read off the PE/ELF
@@ -227,6 +234,9 @@ uv run recoverage serve --no-open   # don't auto-open browser
 uv run recoverage serve --cors      # enable CORS processing (allowlist origins with --cors-origin)
 uv run recoverage config            # print the RECOVERAGE_* settings serve resolves, no listener (same gate as serve)
 uv run recoverage regen             # re-run rebrew's catalog analysis + build-db, no server
+uv run recoverage backup            # verified tar of the coverage documents (the only
+                                   #   durable state; $RECOVERAGE_BACKUP_DIR or --to)
+uv run recoverage restore ARCHIVE   # put a verified archive's documents back
 uv run recoverage open              # open the dashboard in a browser
 uv run recoverage --install-completion  # shell completion for the CLI
 uv run recoverage stats             # print coverage stats

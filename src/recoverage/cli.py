@@ -2193,6 +2193,134 @@ def regen(no_color: bool = _no_color_option()) -> None:
         )
 
 
+@app.command()
+def backup(
+    to: str | None = typer.Option(
+        None,
+        "--to",
+        help="Archive path, or a directory for the stamped default name. "
+        "Defaults to $RECOVERAGE_BACKUP_DIR, else a backups/ beside the coverage directory.",
+    ),
+    as_json: bool = typer.Option(
+        False, "--json", help="Emit the verified archive description as a JSON object"
+    ),
+    no_color: bool = _no_color_option(),
+) -> None:
+    """Copy every coverage document into one archive, then read it back.
+
+    The coverage documents are this package's only durable state, and two of
+    the arrays inside them cannot be rebuilt: rebrew carries the cumulative
+    status history and the verify results forward from the previous document
+    on every write, so a regen over a directory whose documents were lost
+    produces the current facts and nothing else. This command is the backup
+    those documents had no other way to get.
+
+    Every archive is verified before this command reports success — each
+    member's bytes are read back and recomputed against the manifest — so a
+    green exit means a restore could read it, not that a write returned. An
+    archive is written through a temp file and fsynced before its name is
+    published, so a crash mid-run leaves the previous backup rather than a
+    truncated one.
+
+    Exits 1 when there is nothing to back up (an empty archive would verify
+    and then restore to an empty dashboard), and prints the members and their
+    digests either as a table or, with --json, as an object.
+    """
+    from rich import box
+    from rich.console import Console
+    from rich.markup import escape
+    from rich.table import Table
+
+    from recoverage.backup import BackupError, write_backup
+
+    _use_utf8_stdout()
+    _use_utf8_stderr()
+    _check_env_or_exit()
+    destination = Path(to).expanduser() if to else None
+    try:
+        info = write_backup(_db_path(), destination)
+    except BackupError as exc:
+        _secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1) from exc
+    if as_json:
+        typer.echo(
+            json.dumps(
+                {
+                    "path": str(info.path),
+                    "created": info.created,
+                    "bytes": info.total_bytes,
+                    "members": [
+                        {"name": name, "size": size, "sha256": digest}
+                        for name, size, digest in info.members
+                    ],
+                },
+                indent=2,
+            )
+        )
+        return
+    # The member name is a filename out of the coverage directory and can
+    # carry markup characters, so it goes through escape() like every other
+    # value out of a document that reaches a Rich surface.
+    table = Table(show_header=True, header_style="bold", box=box.SIMPLE_HEAD)
+    table.add_column("Document", style="cyan")
+    table.add_column("Bytes", justify="right")
+    table.add_column("SHA-256")
+    for name, size, digest in info.members:
+        table.add_row(escape(name), f"{size:,}", digest[:16])
+    Console(no_color=True if _color_off() else None).print(table)
+    _secho(
+        f"Verified backup: {info.path} — {len(info.members)} document(s), "
+        f"{info.total_bytes:,} bytes, taken {info.created}.",
+        fg=typer.colors.GREEN,
+        err=True,
+    )
+
+
+@app.command()
+def restore(
+    archive: str = typer.Argument(..., help="Backup archive written by 'recoverage backup' (.tar)"),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Restore over documents that differ from the archive's",
+    ),
+    no_color: bool = _no_color_option(),
+) -> None:
+    """Put a verified backup's documents back into the coverage directory.
+
+    The archive is verified in full — every member read, its size and digest
+    checked against the manifest — before the first document is written, and
+    each document then lands through an atomic replace. A restore therefore
+    either completes or leaves the coverage directory exactly as it was; half a
+    restore is a dashboard that reads healthy and shows half a project.
+
+    Refuses to overwrite a document that differs from the one in the archive
+    unless --force is given: rolling a month-old archive over a tree that has
+    been rebuilt since discards every status transition since, and 'recoverage
+    regen' cannot recover what a rollback drops. --force overrides exactly
+    that refusal — a corrupt archive, a member that is not a coverage document
+    and an unreadable file are refused either way.
+
+    Run 'recoverage regen' (or restart the server) after a restore, so the
+    served snapshots and ETags follow the restored bytes.
+    """
+    from recoverage.backup import BackupError, restore_backup
+
+    _use_utf8_stdout()
+    _use_utf8_stderr()
+    _check_env_or_exit()
+    try:
+        written = restore_backup(Path(archive).expanduser(), _db_path(), force=force)
+    except BackupError as exc:
+        _secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1) from exc
+    _secho(
+        f"Restored {len(written)} document(s) to {written[0].parent if written else _db_path()}.",
+        fg=typer.colors.GREEN,
+        err=True,
+    )
+
+
 @app.command("open")
 def open_cmd(
     port: str | None = typer.Option(

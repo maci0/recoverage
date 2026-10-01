@@ -418,6 +418,66 @@ running dashboard or from a cron job, which this process's own lock cannot
 see. The lock is released by the operating system when its holder exits, so a
 regen that is killed does not block the next one.
 
+### `recoverage backup`
+
+Copy every coverage document into one verified archive, and read it back.
+
+```bash
+recoverage backup                                  # backups/coverage-<stamp>.tar
+recoverage backup --to /srv/backups/nightly.tar
+recoverage backup --json                           # for a scheduled job
+```
+
+The coverage documents are recoverage's only durable state, and two arrays
+inside them cannot be rebuilt. rebrew writes each document as a
+read-modify-write over the previous one, so the cumulative `history` of status
+transitions and the `verify_results` of the last verification are carried
+forward from the file being overwritten - not from the source tree. A regen
+over a directory whose documents were lost rebuilds the current facts and
+loses both arrays for good: the charts start again from that build, and every
+earlier transition is gone.
+
+So the backup is verified rather than merely written. Every archive carries a
+manifest of its members' sha256 digests, and the command reads the archive back
+and recomputes them before reporting success, so a green exit means a restore
+could read it rather than that a write returned. The archive itself is written
+through a temp file, fsynced, and only then published by an atomic rename, so
+a crash mid-run leaves the previous backup rather than a truncated one.
+
+`--to` takes a file, or a directory to get the stamped default name. The
+default directory is `$RECOVERAGE_BACKUP_DIR`, else a `backups/` beside the
+coverage directory - never inside it, because the next run would copy the
+previous archive as if it were a document. Exits 1 when there is nothing to
+back up: an empty archive verifies, and restoring one empties the dashboard,
+so a failed build must read as an alert rather than as a green run.
+
+### `recoverage restore`
+
+Put a verified backup's documents back into the coverage directory.
+
+```bash
+recoverage restore /srv/backups/nightly.tar
+recoverage restore /srv/backups/nightly.tar --force
+```
+
+The archive is verified in full - every member read, its size and digest
+checked - before the first document is written, and each document then lands
+through an atomic replace. A restore therefore either completes or leaves the
+coverage directory exactly as it was; half a restore is a dashboard that reads
+healthy and shows half a project.
+
+`--force` overrides exactly one refusal: a document already present whose bytes
+differ from the one in the archive. Rolling a month-old archive over a tree
+that has been rebuilt since discards every status transition since, and no
+regen can bring them back, so the refusal names every document it would
+overwrite. A corrupt archive, a member that is not a coverage document, a
+member name that would escape the directory and an unreadable file are refused
+either way.
+
+Run `recoverage regen` afterwards, so the served snapshots and ETags follow the
+restored bytes. The full procedure is in
+[the recovery runbook](https://github.com/relumea/recovery-coverage/blob/main/docs/RECOVERY.md).
+
 ### `recoverage open`
 
 Open the dashboard in a browser (useful when `--no-open` was used).
