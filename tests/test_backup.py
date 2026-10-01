@@ -23,6 +23,7 @@ import io
 import json
 import tarfile
 from pathlib import Path
+from typing import Any
 
 import pytest
 from coverage_fixture import build_synthetic_coverage, write_coverage
@@ -228,6 +229,30 @@ class TestVerifyBackup:
 
 class TestRestoreBackup:
     """The disaster path: the documents are gone, and then they are back."""
+
+    def test_the_archive_is_read_once(
+        self, db: Path, archive: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The members written are the members that were verified.
+
+        A restore that verified through one read and then re-read the tar to
+        get the bytes writes a second copy of a file it never checked, and pays
+        two full passes over it to do so.
+        """
+        for document in db.glob("coverage-*.toml"):
+            document.unlink()
+        reads = 0
+        real_open = tarfile.open
+
+        def counting_open(*args: Any, **kwargs: Any) -> Any:
+            nonlocal reads
+            reads += 1
+            return real_open(*args, **kwargs)
+
+        monkeypatch.setattr(backup.tarfile, "open", counting_open)
+        written = restore_backup(archive, db)
+        assert written
+        assert reads == 1
 
     def test_restores_every_document_after_the_directory_is_wiped(
         self, db: Path, archive: Path

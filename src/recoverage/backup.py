@@ -292,21 +292,36 @@ def write_backup(db_dir: Path, destination: Path | None = None) -> BackupInfo:
 def _read_archive(path: Path) -> tuple[dict[str, Any], dict[str, bytes]]:
     """The manifest and every member's bytes, or raise :class:`BackupError`.
 
+    ONE pass over the archive: every member is pulled into memory first, and
+    the manifest is read out of that same map.  Two passes over the tar (the
+    manifest, then the members it names) read every member's bytes off the
+    archive twice, and a restore that verifies through one pass and extracts
+    through another writes the copy it did not check.
+
     Nothing is written anywhere: this is the pass a restore runs before it
     touches the coverage directory, so every refusal it can make is made before
     the first file is replaced.
     """
-    manifest: Any = None
+    members: dict[str, bytes] = {}
     try:
         with tarfile.open(path, mode="r:") as tar:
-            if MANIFEST_NAME not in tar.getnames():
-                raise BackupError(f"{path} holds no {MANIFEST_NAME}; it is not a recoverage backup")
-            handle = tar.extractfile(MANIFEST_NAME)
-            if handle is None:
-                raise BackupError(f"{path}: {MANIFEST_NAME} is not a regular member")
-            manifest = json.load(handle)
-    except (OSError, tarfile.TarError, ValueError) as exc:
+            for member in tar.getmembers():
+                if not member.isfile():
+                    continue
+                handle = tar.extractfile(member)
+                if handle is None:  # pragma: no cover - getmembers/isfile agree
+                    continue
+                members[member.name] = handle.read()
+    except (OSError, tarfile.TarError) as exc:
         raise BackupError(f"{path} is not a readable backup: {exc}") from exc
+
+    manifest_raw = members.get(MANIFEST_NAME)
+    if manifest_raw is None:
+        raise BackupError(f"{path} holds no {MANIFEST_NAME}; it is not a recoverage backup")
+    try:
+        manifest: Any = json.loads(manifest_raw)
+    except (UnicodeError, ValueError) as exc:
+        raise BackupError(f"{path}: {MANIFEST_NAME} is not readable JSON: {exc}") from exc
 
     if not isinstance(manifest, dict) or manifest.get("format") != FORMAT_VERSION:
         found = manifest.get("format") if isinstance(manifest, dict) else "?"
@@ -318,29 +333,28 @@ def _read_archive(path: Path) -> tuple[dict[str, Any], dict[str, bytes]]:
     if not isinstance(entries, list) or not entries:
         raise BackupError(f"{path}: manifest names no members")
 
-    members: dict[str, bytes] = {}
+    documents: dict[str, bytes] = {}
     try:
-        with tarfile.open(path, mode="r:") as tar:
-            for entry in entries:
-                name = entry["name"]
-                # The member name is checked against the coverage glob rather
-                # than merely joined onto the destination.  A manifest is a
-                # file an operator can edit and a tar member is a name an
-                # extractor honours, so a `../../etc/x` here would write outside
-                # the directory the restore was pointed at.  `Path(name).name !=
-                # name` is the containment half: no separator, no drive, no
-                # parent hop, whatever the platform's idea of one is.
-                if not isinstance(name, str) or Path(name).name != name or not _is_coverage(name):
-                    raise BackupError(f"{path}: member name {name!r} is not a coverage document")
-                handle = tar.extractfile(name)
-                if handle is None:
-                    raise BackupError(f"{path}: member {name} is not a regular file")
-                members[name] = handle.read()
+        for entry in entries:
+            name = entry["name"]
+            # The member name is checked against the coverage glob rather
+            # than merely joined onto the destination.  A manifest is a
+            # file an operator can edit and a tar member is a name an
+            # extractor honours, so a `../../etc/x` here would write outside
+            # the directory the restore was pointed at.  `Path(name).name !=
+            # name` is the containment half: no separator, no drive, no
+            # parent hop, whatever the platform's idea of one is.
+            if not isinstance(name, str) or Path(name).name != name or not _is_coverage(name):
+                raise BackupError(f"{path}: member name {name!r} is not a coverage document")
+            data = members.get(name)
+            if data is None:
+                raise BackupError(f"{path}: member {name} is not a regular file")
+            documents[name] = data
     except BackupError:
         raise
-    except (OSError, KeyError, TypeError, tarfile.TarError) as exc:
+    except (KeyError, TypeError) as exc:
         raise BackupError(f"{path} cannot be read: {exc}") from exc
-    return manifest, members
+    return manifest, documents
 
 
 def _is_coverage(name: str) -> bool:
@@ -355,14 +369,14 @@ def _is_coverage(name: str) -> bool:
     return fnmatch(name, COVERAGE_GLOB)
 
 
-def verify_backup(path: Path) -> BackupInfo:
-    """Check every member of *path* against its manifest; describe what it holds.
+def _verify_archive(path: Path) -> tuple[BackupInfo, dict[str, bytes]]:
+    """:func:`verify_backup` and the member bytes, from ONE read of *path*.
 
-    Raises :class:`BackupError` naming the member whose bytes do not match, so a
-    corrupted archive is one named file rather than a restore that half works.
-    This is the function a scheduled job calls after taking a backup, and the
-    one :func:`write_backup` calls on its own output — a job that only wrote an
-    archive has measured its own exit code, which is not a restore.
+    The bytes are returned beside the description so a restore does not open
+    the archive a second time: two reads of one tar parsed twice is the same
+    fact held in two places, and a member's bytes a restore then compared
+    against a freshly read copy is the copy, not what :func:`verify_backup`
+    just checked.
     """
     manifest, members = _read_archive(path)
     described: list[tuple[str, int, str]] = []
@@ -381,12 +395,26 @@ def verify_backup(path: Path) -> BackupInfo:
                 f"({digest[:12]}…, manifest {str(entry['sha256'])[:12]}…); the backup is corrupt"
             )
         described.append((name, len(data), digest))
-    return BackupInfo(
+    info = BackupInfo(
         path=path,
         created=str(manifest.get("created", "")),
         members=tuple(described),
         total_bytes=sum(size for _n, size, _d in described),
     )
+    return info, members
+
+
+def verify_backup(path: Path) -> BackupInfo:
+    """Check every member of *path* against its manifest; describe what it holds.
+
+    Raises :class:`BackupError` naming the member whose bytes do not match, so a
+    corrupted archive is one named file rather than a restore that half works.
+    This is the function a scheduled job calls after taking a backup, and the
+    one :func:`write_backup` calls on its own output — a job that only wrote an
+    archive has measured its own exit code, which is not a restore.
+    """
+    info, _members = _verify_archive(path)
+    return info
 
 
 def restore_backup(archive: Path, db_dir: Path, *, force: bool = False) -> list[Path]:
@@ -404,8 +432,7 @@ def restore_backup(archive: Path, db_dir: Path, *, force: bool = False) -> list[
     force flag a reader has to trust about data integrity is the flag that
     eventually turns a routine restore into the disaster.
     """
-    info = verify_backup(archive)
-    _manifest, members = _read_archive(archive)
+    info, members = _verify_archive(archive)
     existing = {name: (db_dir / name) for name, _s, _d in info.members}
     if not force:
         clashing = []
