@@ -481,8 +481,16 @@ ensure-bun:
 # @rikalabs/oxlint-standards and is review-blocking, so the install of the
 # package it reads is part of the command: the script looks under node_modules,
 # which a checkout that has only run `uv sync` does not have.
+#
+# LC_ALL and TZ, the same two `build` and `web-build` export. This target
+# writes a committed JSON through the same recipe shape as those two, so a
+# contributor whose shell exports a non-C locale regenerated the file with
+# whatever collating and line-ending behaviour that locale implies, and CI
+# would then report the committed preset as differing from a regeneration.
 regen-oxlint: ensure-rebrew ensure-bun
-	bun install --frozen-lockfile
+	@$(SET_STRICT) \
+	export LC_ALL=C TZ=UTC; \
+	bun install --frozen-lockfile; \
 	$(UV_RUN) python tools/flatten_rikalabs_strict.py
 
 # The other generated record a re-vendor leaves stale, for the vendored plugin

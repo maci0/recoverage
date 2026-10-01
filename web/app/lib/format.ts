@@ -137,7 +137,7 @@ const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/u;
  * place. The trailing fractional group is captured but not compared: a
  * sub-second field is below the resolution `toLocaleString` renders. */
 const NAIVE_STAMP =
-  /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2}))?(?:\.(\d+))?)?$/u;
+  /^(?<year>\d{4})-(?<month>\d{2})-(?<day>\d{2})(?:[T ](?<hour>\d{2}):(?<minute>\d{2})(?::(?<second>\d{2}))?(?:\.(?<fraction>\d+))?)?$/u;
 
 /** A stored timestamp, written the way the reader's locale writes a date and
  * in their own timezone. The documents carry ISO 8601, which is a wire format

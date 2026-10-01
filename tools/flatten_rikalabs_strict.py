@@ -131,11 +131,19 @@ def main() -> int:
     if tsgolint:
         print(f"warning: type-aware rules require oxlint-tsgolint: {tsgolint}", file=sys.stderr)
 
+    # Every mapping is emitted in sorted key order, not in the order `walk`
+    # happened to visit the preset chain. The chain's own order is an input a
+    # preset bump may legitimately change, and an unsorted dict would then
+    # rewrite every line after the moved rule in a committed file whose rules
+    # did not change, so a reviewer reads a whole-file diff for one added
+    # rule. `plugins` was already sorted; `categories` and `rules` were not.
+    # `overrides` is a list, so it is left in chain order: sorting it would
+    # change which override wins where two name the same file.
     out = {
         "options": {"typeAware": False},
         "plugins": sorted(merged["plugins"]),
-        "categories": merged["categories"],
-        "rules": merged["rules"],
+        "categories": {key: merged["categories"][key] for key in sorted(merged["categories"])},
+        "rules": {key: merged["rules"][key] for key in sorted(merged["rules"])},
         "overrides": merged["overrides"],
     }
     # newline="" because the body is LF by construction (the trailing fh.write
