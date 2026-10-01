@@ -594,20 +594,34 @@ def _select_targets(target: str | None, *, json_output: bool) -> list[str]:
     merge): this one reads only the documents and validates a CLI --target
     choice.  A requested target that was never built exits 1 with a clear
     error — sibling commands must not silently succeed on a typo'd target.
+
+    The membership test folds both sides through ``server.target_key``: a
+    ``--target`` typed in a different case from the document's own id names the
+    same target on a case-insensitive filesystem, and a case-exact test would
+    exit 1 for a target the coverage directory holds.
+
+    What it returns on a fold is the id the DOCUMENT spells, not the one typed,
+    because the caller looks that returned id up in the snapshot map
+    (:func:`_get_stats` reads ``snapshots[target]``).  Every surface that
+    reports it — the ``target`` field of the JSON output, the table header —
+    then names the target by the id the coverage data carries, which is the one
+    that names the file it came from.
     """
-    from recoverage.server import db_target_ids
+    from recoverage.server import db_target_ids, target_key
 
     known = db_target_ids()
     if target is None:
         return known
-    if target not in known:
+    wanted = target_key(target)
+    match = next((tid for tid in known if target_key(tid) == wanted), None)
+    if match is None:
         _fail(
             f"Error: target {target!r} not found in coverage (have: {', '.join(known) or 'none'}).",
             f"target not found: {target!r}",
             1,
             json_output,
         )
-    return [target]
+    return [match]
 
 
 @contextlib.contextmanager

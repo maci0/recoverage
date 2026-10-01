@@ -90,7 +90,14 @@ from conftest import (
     path_the_filesystem_holds,
     wsgi_request,
 )
-from coverage_fixture import build_synthetic_coverage, cell, write_coverage
+from coverage_fixture import (
+    build_synthetic_coverage,
+    cell,
+    coverage_bytes,
+    coverage_dir,
+    render_coverage,
+    write_coverage,
+)
 from rebrew.coverage_toml import CoverageSnapshot, Function, load_coverage
 from typer.testing import CliRunner
 
@@ -3492,22 +3499,24 @@ _DOC_TOKENS: tuple[bytes, ...] = (
 
 def _document_seeds() -> list[bytes]:
     """The well-formed document plus the two wrong shapes worth mutating."""
-    from coverage_fixture import render_coverage
-
-    whole = render_coverage(
-        _DOC_TARGET,
-        _DOC_SECTIONS,
-        functions=_DOC_FUNCTIONS,
-        globals_=[{"va": 0x10002000, "name": "g_counter"}],
-        verify_results=[{"va": 0x10001000, "match": True, "similarity": 0.5}],
-        paths={"source_root": "src/DOCFUZZ", "original_root": "orig"},
+    whole = coverage_bytes(
+        render_coverage(
+            _DOC_TARGET,
+            _DOC_SECTIONS,
+            functions=_DOC_FUNCTIONS,
+            globals_=[{"va": 0x10002000, "name": "g_counter"}],
+            verify_results=[{"va": 0x10001000, "match": True, "similarity": 0.5}],
+            paths={"source_root": "src/DOCFUZZ", "original_root": "orig"},
+        )
     )
-    hostile = render_coverage(
-        _DOC_TARGET,
-        {'.te"xt<script>': {**_DOC_SECTIONS[".text"]}},
-        functions=[{"va": 0, "name": HOSTILE_NAME, "status": "EXACT"}],
+    hostile = coverage_bytes(
+        render_coverage(
+            _DOC_TARGET,
+            {'.te"xt<script>': {**_DOC_SECTIONS[".text"]}},
+            functions=[{"va": 0, "name": HOSTILE_NAME, "status": "EXACT"}],
+        )
     )
-    return [whole.encode(), hostile.encode(), whole.encode()[: len(whole) // 2]]
+    return [whole, hostile, whole[: len(whole) // 2]]
 
 
 #: Values a document can carry that a build would never write and a hand edit,
@@ -3682,6 +3691,41 @@ def _strict_json(text: str) -> Any:
         raise AssertionError(f"served JSON carries the non-finite token {token!r}")
 
     return json.loads(text, parse_constant=reject)
+
+
+class TestDocumentFixtureBytes:
+    """The bytes a synthetic coverage document is written as are the corpus's.
+
+    Every campaign below mutates bytes produced by the fixture writer, and the
+    fixture writer is what the document-gated tests install.  Those two have to
+    be the same bytes on every host or the campaign is reading a corpus the
+    rest of the suite never does: ``Path.write_text`` opens in text mode with
+    ``newline=None``, which translates ``\\n`` to ``os.linesep`` on the way
+    out, so a fixture that used it wrote CRLF on Windows while
+    :func:`_document_seeds` — which encodes the rendered text directly — handed
+    the mutator LF.  The reader tolerates either (it universal-newline-
+    translates), so nothing failed; the campaign was simply running against
+    spelling no fixture produced.
+
+    rebrew writes the real documents with ``rebrew.utils.atomic_write_text``,
+    which encodes up front and translates nothing, so LF is the spelling the
+    producer emits on every machine and the one the fixture has to match.
+    """
+
+    def test_the_writer_and_the_mutator_agree_byte_for_byte(self, tmp_path: Path) -> None:
+        sections = _DOC_SECTIONS
+        written = write_coverage(coverage_dir(tmp_path), "GAME", sections)
+        assert written.read_bytes() == coverage_bytes(render_coverage("GAME", sections)), (
+            "the fixture's on-disk bytes are not the rendered document's bytes: "
+            f"os.linesep is {os.linesep!r} on this host"
+        )
+
+    def test_a_written_document_carries_no_carriage_return(self, tmp_path: Path) -> None:
+        written = write_coverage(coverage_dir(tmp_path), "GAME", _DOC_SECTIONS)
+        assert b"\r" not in written.read_bytes(), (
+            "a document written through text mode picked up this host's line "
+            f"ending (os.linesep is {os.linesep!r})"
+        )
 
 
 class TestCoverageDocumentContents:

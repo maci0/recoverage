@@ -5919,6 +5919,139 @@ class TestConfigDerivedMemosFollowTheConfigStat:
         )
 
 
+class TestTargetIdentityFoldsCase:
+    """A target id's identity is case-insensitive, because the filesystem's is.
+
+    A target id reaches this package twice, from two sources neither of which
+    constrains its case: ``rebrew-project.toml`` spells it under
+    ``[targets.<id>]``, and the last build spells it in
+    ``db/coverage-<id>.toml``.  On a case-sensitive filesystem a project that
+    configures ``game`` and builds ``GAME`` has two targets, and the empty
+    answer for the unbuilt one is honest.
+
+    On a case-INSENSITIVE one — macOS's default APFS and HFS+, every Windows
+    volume — the coverage directory's glob returns the file ONCE.  So the
+    document-derived list holds only the file's spelling and the config-derived
+    list only the config's, and every join that compared them with ``==`` broke:
+    the merged list carried one target twice, and whichever id the reader picked
+    off it resolved to a snapshot with no sections at all.
+    ``/api/targets/<id>/stats`` answered **200 with every figure zero** — a
+    healthy-looking empty dashboard for a target whose coverage was on disk,
+    which is the one answer an operator cannot tell from a fresh checkout.
+
+    Every join over target identity therefore folds through
+    ``server.target_key``, so the same project answers the same on every host.
+    The emitted ids keep their own spelling: the picker still shows what the
+    config wrote and what the file is called.
+    """
+
+    @pytest.fixture
+    def project(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
+        import recoverage.server as srv
+
+        monkeypatch.setattr(srv, "_project_dir", lambda: tmp_path)
+        clear_target_cache()
+        with srv.DLL_LOCK:
+            srv.DLL_DATA.clear()
+            monkeypatch.setattr(srv, "_DLL_CONFIG_MTIME", None)
+        yield tmp_path
+        clear_target_cache()
+        with srv.DLL_LOCK:
+            srv.DLL_DATA.clear()
+
+    def test_the_merged_list_carries_one_entry_not_two(
+        self, project: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import recoverage.server as srv
+
+        write_coverage(project / "db", "GAME", {".text": _cell_section(["exact"])})
+        (project / "rebrew-project.toml").write_text(
+            '[targets.game]\nbinary = "bin/game.dll"\n', encoding="utf-8"
+        )
+        monkeypatch.setenv("RECOVERAGE_DB", str(project / "db"))
+
+        ids = [t["id"] for t in srv.resolve_targets()]
+        assert ids == ["game"], (
+            f"one target was listed twice under two spellings: {ids!r} — on a "
+            "case-insensitive filesystem this is one file, and coverage_for can "
+            "answer only one of the two ids"
+        )
+
+    def test_the_configured_spelling_reaches_the_built_coverage(
+        self, project: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import recoverage.server as srv
+
+        write_coverage(project / "db", "GAME", {".text": _cell_section(["exact"])})
+        (project / "rebrew-project.toml").write_text(
+            '[targets.game]\nbinary = "bin/game.dll"\n', encoding="utf-8"
+        )
+        monkeypatch.setenv("RECOVERAGE_DB", str(project / "db"))
+
+        snap = srv.coverage_for("game")
+        assert snap.sections, (
+            "the id the config declared found no coverage: on a case-insensitive "
+            "filesystem this is the only id /api/targets lists, so the data was "
+            "unreachable and /stats answered 200 with every figure zero"
+        )
+
+    def test_a_built_spelling_still_finds_its_coverage(
+        self, project: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The fold runs in both directions; the document's own id is the common case."""
+        import recoverage.server as srv
+
+        write_coverage(project / "db", "GAME", {".text": _cell_section(["exact"])})
+        monkeypatch.setenv("RECOVERAGE_DB", str(project / "db"))
+        assert srv.coverage_for("GAME").sections
+
+    def test_an_unknown_target_is_still_an_empty_snapshot(
+        self, project: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The fold must not turn a target that was never built into a match."""
+        import recoverage.server as srv
+
+        write_coverage(project / "db", "GAME", {".text": _cell_section(["exact"])})
+        monkeypatch.setenv("RECOVERAGE_DB", str(project / "db"))
+        assert not srv.coverage_for("OTHER").sections
+
+    def test_the_configured_spelling_finds_its_binary(
+        self, project: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import recoverage.server as srv
+
+        write_coverage(project / "db", "GAME", {".text": _cell_section(["exact"])})
+        (project / "bin").mkdir(exist_ok=True)
+        (project / "bin" / "game.dll").write_bytes(b"BINARY")
+        (project / "rebrew-project.toml").write_text(
+            '[targets.game]\nbinary = "bin/game.dll"\n', encoding="utf-8"
+        )
+        monkeypatch.setenv("RECOVERAGE_DB", str(project / "db"))
+
+        assert srv._find_dll_path("game") == project / "bin" / "game.dll", (
+            "/asm refused a target whose coverage the same id was rendering"
+        )
+
+    def test_the_api_rejects_an_id_no_spelling_of_reaches(self) -> None:
+        """The 404 contract survives: a fold only joins spellings of one target."""
+        from recoverage.api import _require_target
+
+        targets = [{"id": "GAME", "name": "GAME"}]
+        assert _require_target("game", targets) is None, (
+            "the id a case-insensitive filesystem would list for this target "
+            "was refused before the handler could read its coverage"
+        )
+        assert _require_target("OTHER", targets) is not None
+
+    def test_target_key_folds_rather_than_lowers(self) -> None:
+        from recoverage.server import target_key
+
+        assert target_key("Straße") == target_key("STRASSE"), (
+            "the same folding search applies to every other name in the tree; "
+            "lower() would make this pair two targets"
+        )
+
+
 class TestSpaDbSuppliedPathsStaySameOrigin:
     """``paths.sourceRoot`` / ``paths.originalDll`` must not steer the browser off-origin.
 

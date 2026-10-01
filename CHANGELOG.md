@@ -52,6 +52,18 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- A target whose id `rebrew-project.toml` spelled differently from the coverage
+  document it was built into served nothing on macOS and Windows. Those filesystems
+  resolve `coverage-GAME.toml` and a `[targets.game]` entry to one file, but the
+  id in the target list and the key the coverage reader looks its data up by were
+  compared with `==`. `/api/targets/game/stats` answered **200 with every figure
+  zero** — an empty-looking dashboard for a target whose coverage was on disk, and
+  the one answer an operator cannot tell from a fresh checkout — while the spelling
+  that did resolve was never listed. `/api/targets` also listed the same target
+  twice, `recoverage stats --target game` exited 1, and `/asm` refused the
+  original binary. Every join over target identity now folds case, so the same
+  project answers the same on every host; each id is still shown and returned in
+  its own spelling.
 - A dashboard already at its concurrent event-stream cap logged its refusal
   while holding the lock that guards the cap, and every other logging path in
   the package takes its own lock on the way to the same module-wide logging

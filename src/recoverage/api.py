@@ -771,8 +771,18 @@ def _require_target(target: str, targets: Sequence[Mapping[str, str]]) -> HTTPRe
     *targets* is the caller's already-resolved list: re-resolving here would
     re-walk the coverage directory, which is a directory scan per document plus
     a hash, on the path of every target-scoped request.
+
+    The membership test folds both sides through ``server.target_key``, so an id
+    reaches its data whatever case the config and the document spelled it in.
+    Without the fold the two disagree on a case-insensitive filesystem, where
+    the coverage directory's glob returns one file and only one of the two
+    spellings is ever listed — so a request for the other passed the check the
+    resolved list could not answer, and the handler served a snapshot with no
+    sections: HTTP 200 with every figure zero for a target whose coverage was on
+    disk.
     """
-    if any(t.get("id") == target for t in targets):
+    wanted = _server.target_key(target)
+    if any(_server.target_key(str(t.get("id", ""))) == wanted for t in targets):
         return None
     return _target_not_found(target)
 

@@ -199,6 +199,34 @@ def render_coverage(
     return "\n".join(lines) + "\n"
 
 
+def coverage_bytes(text: str) -> bytes:
+    """The bytes a synthetic coverage document is written as.
+
+    The encoding *text* carries and nothing else: no newline translation, no
+    encoding the host's locale names.  LF is the canonical spelling because
+    rebrew writes these documents with ``rebrew.utils.atomic_write_text``,
+    which encodes up front and performs none, so a real document is
+    byte-identical on every machine that builds it — and because the fuzz
+    campaigns in ``test_fuzz.py`` mutate these bytes, a fixture that wrote
+    ``os.linesep`` would have the campaign mutating a corpus the document-gated
+    tests never read (on Windows, LF seeds against CRLF files).
+    """
+    return text.encode("utf-8")
+
+
+def write_coverage_bytes(path: Path, text: str) -> Path:
+    """Write *text* to *path* as :func:`coverage_bytes` spells it; return the path.
+
+    The one place a synthetic coverage document reaches the disk, so the bytes
+    a round of the fuzz campaigns mutates and the bytes a document-gated test
+    reads are the same on every host.  ``Path.write_text`` opens in text mode
+    with ``newline=None``, which translates ``\\n`` to ``os.linesep`` on the way
+    out; this writes the encoded bytes instead.
+    """
+    path.write_bytes(coverage_bytes(text))
+    return path
+
+
 def write_coverage(
     directory: Path,
     target: str,
@@ -208,7 +236,7 @@ def write_coverage(
     """Write ``<directory>/coverage-<target>.toml`` and return its path."""
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / f"coverage-{target}.toml"
-    path.write_text(render_coverage(target, sections, **kwargs), encoding="utf-8")
+    write_coverage_bytes(path, render_coverage(target, sections, **kwargs))
     return path
 
 

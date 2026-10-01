@@ -961,6 +961,39 @@ def db_target_ids() -> list[str]:
     return sorted(load_all(_db_path()))
 
 
+def target_key(target: str) -> str:
+    """The canonical identity of a target id, for every join between two spellings.
+
+    A target id reaches this package from two sources that are not required to
+    agree on case: ``rebrew-project.toml`` spells it under ``[targets.<id>]``,
+    and the last build spells it in ``db/coverage-<id>.toml``.  Nothing in
+    either vocabulary constrains the case, so a project that configures
+    ``[targets.game]`` and builds a target whose id is ``GAME`` carries two
+    spellings of one target.
+
+    On a case-sensitive filesystem those are two files, and the second is
+    honestly a target that was never built.  On a case-INSENSITIVE one — macOS's
+    default APFS and HFS+, every Windows volume — the coverage directory's glob
+    returns the file ONCE, so the document-derived list holds only ``GAME`` and
+    the config-derived list only ``game``.  Every join that compared the two
+    with ``==`` then failed: ``coverage_for("game")`` missed the map and
+    returned a snapshot with no sections, and ``/api/targets/game/stats``
+    answered **200 with every figure zero** for a target whose coverage was on
+    disk.  The data was unreachable by every id the dashboard listed, and the
+    one a reader saw was indistinguishable from a fresh checkout.
+
+    Folding both sides is what makes the answer the same on every host, and
+    ``str.casefold`` rather than ``str.lower`` because this is the same folding
+    :func:`fold_text` applies to every name the SPA searches, and ``ß`` /
+    ``SS`` is a target id the same way it is a symbol name.
+
+    The identity is a COMPARISON key, never a displayed one: :func:`resolve_targets`
+    keeps emitting each id in its own spelling, so the target picker still shows
+    what the config wrote and what the file is called.
+    """
+    return target.casefold()
+
+
 def coverage_for(target: str) -> CoverageSnapshot:
     """The snapshot for *target*, or an empty one it has never been built.
 
@@ -969,8 +1002,23 @@ def coverage_for(target: str) -> CoverageSnapshot:
     it.  The SQLite reader answered those from an empty table set (every query
     returned no rows); the TOML equivalent is a snapshot with no sections, no
     cells and no functions, so the response shapes are the same empty ones.
+
+    The lookup is a fold on both sides through :func:`target_key`, so a target
+    whose id the config spells differently from the document it was built into
+    still finds its data on a case-insensitive filesystem — where the glob that
+    found the document returned it once and no spelling of it was reachable
+    otherwise.  The exact lookup is tried first and the fold only runs on a
+    miss: a target id that IS the document's own spelling, which is every
+    request on a case-sensitive host, never pays for it.
     """
-    snapshot = load_all(_db_path()).get(target)
+    snapshots = load_all(_db_path())
+    snapshot = snapshots.get(target)
+    if snapshot is None:
+        wanted = target_key(target)
+        snapshot = next(
+            (snap for tid, snap in snapshots.items() if target_key(tid) == wanted),
+            None,
+        )
     if snapshot is not None:
         return snapshot
     return CoverageSnapshot(
@@ -1733,12 +1781,20 @@ def resolve_targets() -> list[dict[str, str]]:
         # Config-declared targets come first and are always addressable, even
         # before their first build — "declared in the project config" is what
         # makes a never-built target valid, so it must not 404.
+        #
+        # The membership test is a fold on both sides, so a document whose id
+        # the config spells differently is recognised as the target already
+        # listed rather than appended as a second one.  Without it the list
+        # carried one target twice whenever the two spellings differed, and
+        # :func:`coverage_for` could answer only one of them — on a
+        # case-insensitive filesystem the duplicate was not even two files.
+        declared = {target_key(tid) for tid in targets_info}
         targets_list = [
             {"id": tid, "name": Path(_target_filename(tid, t_info)).name}
             for tid, t_info in targets_info.items()
         ]
         targets_list += [
-            {"id": tid, "name": tid} for tid in sorted(snapshots) if tid not in targets_info
+            {"id": tid, "name": tid} for tid in sorted(snapshots) if target_key(tid) not in declared
         ]
 
         if _snapshot_db_mtime() == key[1] and _config_read_ok(key[0]):
@@ -1755,11 +1811,23 @@ def _find_dll_path(target: str) -> Path | None:
     binary, which produced plausible-but-wrong disassembly for config-less
     targets) — and when the configured path names something outside the
     project tree, which is a refusal of the file rather than of the target.
+
+    The lookup folds both sides through :func:`target_key`, so a target whose id
+    the document spells differently from the config still finds its binary.  On
+    a case-insensitive filesystem this is the same identity ``coverage_for``
+    resolves, and a miss here meant ``/asm`` refused a target whose coverage the
+    dashboard was rendering from the same id.
     """
     targets = _get_targets_config()
-    if target not in targets:
-        return None
     t_info = targets.get(target)
+    if t_info is None:
+        wanted = target_key(target)
+        t_info = next(
+            (info for tid, info in targets.items() if target_key(tid) == wanted),
+            None,
+        )
+        if t_info is None:
+            return None
     filename = t_info.get("filename", "") if isinstance(t_info, dict) else ""
     if not filename:
         return None
