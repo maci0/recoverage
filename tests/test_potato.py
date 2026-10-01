@@ -1,3 +1,34 @@
+"""Potato Mode (`recoverage.potato`): the pure-HTML fallback surface.
+
+Two kinds of case share the file, and which one a test is decides what it can
+prove:
+
+- **Rendered.** `render_potato_url` runs the whole render — routing, the
+  snapshot, the grid, the panel, the topbar — and the assertion reads the HTML
+  a browser would parse. This is the only kind that can observe a bug a reader
+  would see: a count on the status line, a row missing from the list, a cell
+  that dimmed when it should not have stayed lit. Where a render test and a
+  helper test could both exist, the render one is the oracle, because the bug
+  was in the render and the helper assertions passed with it in place.
+- **Unit.** The formatting and path helpers (`_format_va`, `_build_url`,
+  `_esc`, `_wrap_text`, `_parent_url`, `_cell_dim_keys`) are called directly
+  with edge-case inputs the render path cannot be steered into cheaply. These
+  pin the argument handling and say nothing about the page, so no user-visible
+  claim is left resting on one alone.
+
+The organising rule throughout is that a case NAME is a claim about behaviour
+and the assertion has to be able to fail: the URL table below states, per
+query, what must and must not appear, so a renderer that dropped the filter,
+ignored `?search=` or echoed a payload unescaped fails rather than satisfies
+the list. The same rule is why the search groups rebuild the expected match
+set in Python (or take a hand-written document) instead of asserting that a
+string is present somewhere in the page.
+
+Fixtures: `HAS_DB` cases read the shared synthetic document set; everything
+else writes its own document into `tmp_path` via `_write_doc`, which also
+points `RECOVERAGE_DB` at it. No case reaches a real project or the network.
+"""
+
 import base64
 import functools
 import os
@@ -2819,6 +2850,13 @@ class TestSearchLimit:
         function found by its address read "2 matches".  The count therefore
         takes the names alone and `_cell_dim_keys` derives the grid's set, so
         neither the count nor the dimming can drift apart again.
+
+        The RENDER is the oracle, not `_search_functions` alone: the defect was
+        one line in the render, counting the widened dim set, and every
+        assertion on the two helpers below still passed with it in place. So
+        the page is rendered and the count the reader is actually shown is
+        compared, by NAME and by ADDRESS, because the address arm is the one
+        that reached two keys.
         """
         from recoverage.potato import _cell_dim_keys, _search_functions
 
@@ -2826,7 +2864,7 @@ class TestSearchLimit:
             tmp_path,
             monkeypatch,
             "T",
-            {".text": {"size": 16, "cells": [cell(0, 16, "exact")]}},
+            {".text": {"va": 0x401000, "size": 16, "cells": [cell(0, 16, "exact")]}},
             functions=[{"va": 0x401000, "vaStart": "0x401000", "name": "matched_row"}],
             globals_=[{"va": 0x402000, "name": "g_counter"}],
         )
@@ -2838,6 +2876,43 @@ class TestSearchLimit:
         # A global names no function row, so it carries no address with it.
         assert _cell_dim_keys(snap, {"g_counter"}) == {"g_counter"}
         assert _cell_dim_keys(snap, set()) == set()
+
+    def test_the_status_line_counts_one_match_for_a_row_found_by_its_address(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """The rendered "N matches" line counts ROWS, by name or by address.
+
+        The bug the arm above repairs was visible here and nowhere else in the
+        rendered page: the topbar counted the grid's dim set, which carries
+        each function's ``vaStart`` beside its name, so one function found by
+        its address read "2 matches". Asserting the two helpers let that
+        through; asserting the line the reader sees does not. A test on the
+        helpers alone cannot distinguish a caller that takes the names alone
+        from one that counts the widened set, which is the whole decision.
+        """
+        _write_doc(
+            tmp_path,
+            monkeypatch,
+            "T",
+            {
+                ".text": {
+                    "va": 0x401000,
+                    "size": 16,
+                    # The spelling a `.text` cell really stores, so the grid
+                    # has a key to dim on and the count has two to count.
+                    "cells": [cell(0, 16, "exact", functions=("0x401000",))],
+                }
+            },
+            functions=[{"va": 0x401000, "vaStart": "0x401000", "name": "matched_row"}],
+            globals_=[{"va": 0x402000, "name": "g_counter"}],
+        )
+        by_name = render_potato_url("/potato?target=T&section=.text&search=matched_row")
+        by_address = render_potato_url("/potato?target=T&section=.text&search=0x401000")
+        # The singular label is itself the assertion: "2 matches" is the bug's
+        # exact rendering, and `1 match` is the only one that is not.
+        assert "1 match for &quot;matched_row&quot;" in by_name, by_name[-3000:]
+        assert "1 match for &quot;0x401000&quot;" in by_address, by_address[-3000:]
+        assert "2 matches" not in by_address, by_address[-3000:]
 
     def test_globals_cap_is_deterministic(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         """With >500 matches, which globals enter the dimming set must be

@@ -1,4 +1,42 @@
-"""Tests for recoverage.api — WSGI-level endpoint tests and unit tests for validation logic."""
+"""The REST surface (`recoverage.api`), driven the way a client drives it.
+
+Every case here issues a request through the Bottle app — `conftest.wsgi_get`
+/ `wsgi_post` build a real WSGI environ and drain the response — rather than
+calling a handler directly, so routing, the `before_request` auth hook, the
+`after_request` metrics and the compression negotiation are all in the path a
+status code came from.  The handful of unit-level cases (a parser, a
+validator) are marked as such and are the only ones that bypass the app.
+
+What the file is organised around, and why each group is shaped the way it is:
+
+- **Contract, not status.** A 200 with plausible JSON is not a pass: the
+  paging groups compute the expected page from an independent full sort, the
+  search groups rebuild the matching set in Python and demand the response
+  agree row for row, and the envelope groups require the documented
+  `error`/`code`/`detail` shape. A handler that answered 200 with the wrong
+  rows fails; one that answered 500 fails.
+- **Refusals are outcomes.** The `4xx`/`5xx` groups, the origin/host/token
+  gates and the regen gate assert what a peer is told AND that the stubbed
+  pipeline was never reached, because a refusal that still ran the work is the
+  failure a status code cannot show. `assert_regen_accepted` is the other
+  direction and exists because `not status.startswith("403")` also passes on a
+  404 or a leftover cooldown.
+- **One snapshot per answer.** A rebuild committing mid-read paired one
+  build's rows with the next build's count. The lookup and list groups install
+  a reader that hands back a DIFFERENT mapping per call and require the
+  response to describe exactly one of them, which is the only way to observe a
+  pin rather than assert one.
+- **Bounds on untrusted input.** Every integer, slice offset and VA the
+  request supplies has a group pinning the ASCII-only parse and the cap, and
+  the `?index=`/`?section=`/`?status=`/`?sort=` parameters each have a
+  refusal case, because a parameter silently defaulted is a wrong answer
+  rather than a missing one.
+
+Documents come from `tests/coverage_fixture.py`: the shared synthetic set the
+document-gated classes read, or a per-test document written into `tmp_path` for
+a case that needs a specific shape. Nothing here reaches a real rebrew
+project, a real binary or the network.
+"""
 
 from __future__ import annotations
 

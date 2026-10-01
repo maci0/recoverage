@@ -1,4 +1,35 @@
-"""Tests for recoverage.server — compression, encoding, path helpers, response helpers."""
+"""`recoverage.server`: the shared kernel below the route modules, and the SPA
+contract it pins.
+
+Everything here is one of four things, and the shape of a test says which:
+
+- **A pure helper.** Folding (`fold_text`, `fold_match`), path guards
+  (`is_plain_relative`, `match_filesystem_spelling`), the integer parses, the
+  percentage and ETag builders, the access-key claim. Called directly with the
+  input that breaks it, including the boundary: a non-ASCII digit, a value past
+  a typed array's range, a filename carrying a byte outside UTF-8, a name whose
+  zone cannot place the wall clock it names.
+- **A WSGI request.** The compression/encoding/ETag groups drive the real app
+  and read the response bytes, so a negotiation or a `Vary`/`ETag` bug fails
+  rather than passes.
+- **The shipped SPA.** The `TestSpa*` classes read `web/app` sources, the built
+  `assets/app.js`/`style.css`, and where a claim is about behaviour rather than
+  spelling they run the shipped TypeScript under bun/node — colour contrast,
+  the fold table, numeric bounds, URL encoding, bidirectional layout, the
+  topbar reflow. Reading a source is a pin on the rule, not on the rendered
+  page, and each class says which of the two it is doing.
+- **A restatement.** The reconciliation, vocabulary and agreement classes
+  recompute the expected answer from the document (a per-cell walk, Python's
+  own `casefold`, the container-header format) rather than reading the same
+  helper the code reads, because comparing the two would be true by
+  construction.
+
+The whole file is the invariant that one response describes one snapshot: the
+memo, ETag and cache-key groups drive a rebuild from inside a read and require
+the answer to stay the first build's, and `TestConfigDerivedMemosFollowTheConfig
+Stat` holds the `rebrew-project.toml`-derived memos to the one invalidation
+signal they share.
+"""
 
 from __future__ import annotations
 
@@ -1493,6 +1524,47 @@ class TestTokenAuthEndpoint:
             "/api/health", headers={"Cookie": "recoverage_token=unit-test-token"}
         )
         assert status.startswith("200")
+
+    def test_the_cookie_the_page_sets_is_the_one_the_gate_reads(self) -> None:
+        """The share-link round trip, end to end and by NAME rather than by literal.
+
+        ``/?token=`` is the only way a browser hands this dashboard a
+        credential, and the cookie that request sets is the only thing carrying
+        it to the fetches and the relative links that follow. The two
+        neighbouring cases each pin ONE half with the literal cookie name, so a
+        rename of either side alone leaves both green: a writer that emits a
+        different name authenticates nothing, and a reader that looks for a
+        different one 401s a perfectly good cookie. This case takes the name
+        off the ``Set-Cookie`` the server actually produced and presents it
+        back, which is the one comparison that can fail.
+        """
+        import http.cookies
+
+        from conftest import wsgi_get
+
+        import recoverage.server as srv
+
+        status, headers, _ = wsgi_get("/?token=unit-test-token")
+        assert status.startswith("200")
+        raw = headers.get("Set-Cookie", "")
+        assert raw, "the share-link request set no cookie"
+        jar = http.cookies.SimpleCookie()
+        jar.load(raw)
+        morsel = jar.get(srv.AUTH_COOKIE_NAME)
+        assert morsel is not None, f"{raw!r} carries no cookie under the shared name"
+        assert morsel.value == "unit-test-token", morsel.value
+        assert morsel["httponly"], raw
+
+        # The cookie exactly as emitted authenticates the next request.
+        status, _, _ = wsgi_get("/api/health", headers={"Cookie": morsel.OutputString()})
+        assert status.startswith("200"), status
+        # And the SAME value under a name the server does not write is a
+        # refusal: the pair is one name, so a second spelling is a bypass.
+        other = http.cookies.SimpleCookie()
+        other["not_the_name_the_server_writes"] = "unit-test-token"
+        wrong_name = other["not_the_name_the_server_writes"].OutputString()
+        status, _, _ = wsgi_get("/api/health", headers={"Cookie": wrong_name})
+        assert status.startswith("401"), status
 
     def test_ui_route_gets_html_401_page(self) -> None:
         """A browser asking for a page gets the human-readable 401 page,
@@ -5054,10 +5126,12 @@ class TestSpaLayoutAndFeedback:
         # The server side of the claim: the cookie is set FROM `?token=`, and
         # the gate reads it back under the same name, so dropping the
         # parameter cannot lock the reader out of the page they just
-        # authenticated on.
+        # authenticated on.  The request-level proof of that pairing is
+        # `TestTokenAuthEndpoint.test_the_cookie_the_page_sets_is_the_one_the
+        # _gate_reads`, which is where the token fixture lives; grepping this
+        # module for a constant is satisfied by the constant's own docstring.
         server_py = (REPO_ROOT / "src" / "recoverage" / "server.py").read_text(encoding="utf-8")
         assert 'query_param("token")' in server_py
-        assert "AUTH_COOKIE_NAME" in server_py
 
     def test_the_same_origin_guard_wraps_both_db_supplied_paths(self) -> None:
         app = _web("App.tsx")
