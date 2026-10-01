@@ -156,6 +156,19 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the sibling checkout the same step links in. Linking `../rebrew` in place is
   still the supported way to work in a checkout whose sibling is elsewhere, and
   the path is now ignored so the link is not committed by accident.
+- Search in the dashboard missed functions the API listed. The dashboard
+  folds a term the way the server does — same composition, same case
+  folding — except that JavaScript's `toLowerCase` has no operator for
+  full case folding, so a table stood in for the characters it cannot
+  rewrite. That table held ten hand-picked ligatures and the other 173
+  were simply absent, so a symbol spelled with a micro sign (`µ` rather
+  than `μ`), a long `ſ`, or an Armenian or Cherokee ligature was folded
+  differently in the dashboard than in the query behind it: the reader
+  typed the ordinary spelling, the results panel said no function
+  matched, and the same term against the same target returned the row
+  over the API. The table now covers every character where the two
+  foldings disagree, and it is generated from the same operation the
+  server uses rather than typed out, so it cannot fall behind again.
 
 ## [4.2.0] - 2026-10-01
 

@@ -453,7 +453,22 @@ both the API list, the Potato list and the name lookup run every column
 through. The SPA folds through `format.foldForSearch` (the `foldedIndex` and
 `matchedNames` memos in `web/app/App.tsx`), which is the same NFC composition
 and, because `toLowerCase` has no one-to-many mapping, the `FULL_FOLD` table
-standing in for the expansions `casefold` has and JavaScript does not. The
+standing in for the expansions `casefold` has and JavaScript does not. That
+table is GENERATED (`tools/gen_full_fold.py`) and is every code point where
+`toLowerCase` and `str.casefold` disagree, not a hand-picked sample: it was ten
+ligatures, and the 173 it omitted were rows the API listed while the SPA
+reported "0 matches" — `µ` (MICRO SIGN) against `μ` (GREEK SMALL MU) and `ſ`
+(LATIN SMALL LETTER LONG S) against `s` are both spellings a firmware symbol
+carries. A check that derives its own cases FROM the table (each entry is a
+correct fold) passes a table that is half empty; only the completeness arm does
+not, so `tests/test_server.py`
+(`test_the_spa_fold_expansions_cover_every_casefold`) holds the shipped table
+against `str.casefold` over every scalar code point, and the generator is the
+one thing allowed to write it. One divergence is left standing on purpose:
+28 code points where JavaScript's `toLowerCase` applies a SpecialCasing
+composition Python's `str.lower` does not (`꟎` U+A7CE lowers to `꟏` in the
+browser only), which no table entry can repair because the browser never
+presents the character the key would name. The
 HAYSTACK is folded once per index, not once per keystroke: it depends only on
 `searchIndex`, so `foldedIndex` is keyed on that alone and `matchedNames` runs
 a substring test over the folded rows. Folding per query re-ran `normalize` +

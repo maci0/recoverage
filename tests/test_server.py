@@ -4297,6 +4297,73 @@ class TestSpaLocaleFormatting:
         for source, folded in _full_fold_pairs():
             assert source.casefold() == folded, source
 
+    def test_the_spa_fold_expansions_cover_every_casefold(self) -> None:
+        """The table holds EVERY case `toLowerCase` and `casefold` disagree on.
+
+        The test above holds each entry CORRECT, which a table of one correct
+        entry passes, and a correct table is not the same claim as a COMPLETE
+        one: the set of disagreeing code points is `CharacterFolding.txt`, and
+        a table written by hand from a handful of ligatures silently omits the
+        rest. The omissions are not exotic. `µ` (MICRO SIGN) against `μ`
+        (GREEK SMALL MU) is a unit a firmware symbol carries, `ſ` (LATIN
+        SMALL LETTER LONG S) against `s` is a letter a name can carry, and
+        `և` (ARMENIAN SMALL LIGATURE ECH YIWN) and the `ᲀ`-`ᲈ` Cherokee
+        series each fold to a whole word. Each one is a row the API lists and
+        the SPA reported "0 matches" for.
+
+        The oracle is `str.casefold` itself, over every scalar code point, so
+        this holds the table against the operator it stands in for rather than
+        against a restatement of it. Regenerate with
+        `tools/gen_full_fold.py --write` after a Unicode version bump.
+        """
+        expected = {
+            chr(codepoint): chr(codepoint).casefold()
+            for codepoint in range(0x110000)
+            if not 0xD800 <= codepoint <= 0xDFFF
+            # A code point `toLowerCase` rewrites is already rewritten by the
+            # time `foldForSearch` reaches its replace pass, so it can never be
+            # the character that matches and is not the table's business.
+            and chr(codepoint).lower() == chr(codepoint)
+            and chr(codepoint).casefold() != chr(codepoint)
+        }
+        assert expected, "str.casefold diverged nowhere, so this asserts nothing"
+
+        shipped = dict(_full_fold_pairs())
+        missing = {
+            key: value for key, value in expected.items() if key not in shipped
+        }
+        extra = {key: value for key, value in shipped.items() if key not in expected}
+        assert not missing, (
+            "FULL_FOLD omits code points str.casefold rewrites: "
+            + ", ".join(
+                f"{key!r}->{value!r}" for key, value in sorted(missing.items())[:10]
+            )
+        )
+        assert not extra, (
+            "FULL_FOLD carries keys toLowerCase already rewrote: "
+            + ", ".join(
+                f"{key!r}->{value!r}" for key, value in sorted(extra.items())[:10]
+            )
+        )
+
+    def test_the_spa_fold_pattern_matches_the_table_exactly(self) -> None:
+        """`FULL_FOLD_PATTERN` is the table's key set, and nothing else.
+
+        The class is what makes the fold one `replace` pass; a key in the map
+        the class does not name is an expansion that never runs, and a
+        character in the class the map does not name expands to itself. The
+        `full_fold_table()` in `tools/gen_full_fold.py` refuses a key needing
+        an escape, so the class is compared verbatim.
+        """
+        fmt = _web("lib/format.ts")
+        pattern = re.search(r"const FULL_FOLD_PATTERN = /\[(.*)\]/gu;", fmt)
+        assert pattern is not None, "FULL_FOLD_PATTERN is no longer a character class"
+        keys = set(pattern.group(1))
+        assert keys == {key for key, _ in _full_fold_pairs()}, (
+            "the pattern and the map name different characters"
+        )
+        assert len(pattern.group(1)) == len(keys), "the class names a character twice"
+
 
 class TestSpaTimestampRendering:
     """`format.dateTime` renders a document's stamp in the reader's own zone.
