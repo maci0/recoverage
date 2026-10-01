@@ -6466,6 +6466,41 @@ class TestSliceValidationDetail:
         assert data["error"] == "invalid va or size"
         assert "abc" in data["detail"]
 
+    def test_every_404_uses_a_static_error_label(self) -> None:
+        """The `error` headline is a label, not a message.
+
+        Every 404 in the family carries a static one, so a client reading the
+        headline to decide which resource it asked for sees one spelling of
+        "that row is not there" rather than one per resource. The value the
+        caller supplied -- the section name, the target, the VA -- stays in
+        `detail`, which already carried it.
+        """
+        target = require_target()
+        for path in (
+            f"/api/targets/{target}/data?section=nope",
+            f"/api/targets/{target}/sections/nope/bytes",
+            "/api/targets/nope/stats",
+            f"/api/targets/{target}/functions/0xDEADBEEF",
+        ):
+            status, headers, body = wsgi_get(path)
+            assert status == "404 Not Found", path
+            payload = json.loads(decode_body(body, headers))
+            assert set(payload) == {"error", "code", "detail"}, path
+            assert payload["code"] == "not_found", path
+            headline = payload["error"]
+            assert "\n" not in headline and "\r" not in headline, path
+            # What the caller asked for is a DATA path, never the label.
+            assert "nope" not in headline, path
+            assert "DEADBEEF" not in headline, path
+
+    def test_a_missing_section_says_which_target_and_which_section(self) -> None:
+        """The detail keeps what the static label dropped."""
+        target = require_target()
+        status, headers, body = wsgi_get(f"/api/targets/{target}/data?section=.rdata")
+        assert status == "404 Not Found"
+        detail = json.loads(decode_body(body, headers))["detail"]
+        assert target in detail and ".rdata" in detail
+
     def test_asm_unknown_format_rejected(self) -> None:
         """A typo'd representation must not silently return the text form."""
         target = require_target()

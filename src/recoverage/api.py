@@ -743,11 +743,17 @@ def _dll_not_found(target: str) -> HTTPResponse:
 
 
 def _section_not_found(target: str, section: str) -> HTTPResponse:
-    """JSON 404 for a target-scoped endpoint referencing an unknown section."""
+    """JSON 404 for a target-scoped endpoint referencing an unknown section.
+
+    A static ``error`` label, like :func:`_target_not_found` and
+    :func:`_dll_not_found`: the section name is caller-supplied and untrusted,
+    and every other 404 in the family keeps it in ``detail`` so a client
+    matching on the headline sees one spelling rather than one per section.
+    """
     return _json_err(
         404,
         {
-            "error": f"section {section} not found",
+            "error": "Section not found",
             "detail": f"target {target!r} has no section {section!r}",
         },
     )
@@ -2327,7 +2333,11 @@ def handle_api_function(target: str, va: str) -> bytes | HTTPResponse:
         return _json_err(
             404,
             {
-                "error": "not found",
+                # Capitalized like every other 404's `error` label
+                # (_target_not_found, _dll_not_found, _section_not_found and
+                # webapp._not_found), so a client that reads the headline sees
+                # one spelling of "the row is not there" across the API.
+                "error": "Not found",
                 "detail": f"no function or global matching {value!r} for target {target!r}",
             },
         )
