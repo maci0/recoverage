@@ -3,33 +3,46 @@ recoverage
 This product is licensed under the MIT License; see the LICENSE file.
 
 The distribution bundles the third-party code listed below inside its built
-browser assets (`src/recoverage/assets/app.js` and `style.css`, produced by
-`make web-build` from `web/`), each under its own license. Those grants are
-separate from the MIT license above.
+browser assets, produced by `make web-build` from `web/` and shipped in the
+wheel:
+
+  src/recoverage/assets/app.js          the dashboard bundle
+  src/recoverage/assets/highlight.js    the highlighter, loaded on first code pane
+  src/recoverage/assets/style.css       the compiled stylesheet
+
+Each grant below covers the code in the file(s) its entry names, under that
+entry's own license. Those grants are separate from the MIT license above.
 
 Preact (and preact/compat)
   Upstream: https://github.com/preactjs/preact
   License: MIT, https://github.com/preactjs/preact/blob/main/LICENSE
-  Bundled into app.js. The components are written against React's API and run
-  on preact/compat.
+  Bundled into src/recoverage/assets/app.js. The components are written against
+  React's API and run on preact/compat.
 
 highlight.js (core, and the `c` and `x86asm` grammars)
   Upstream: https://highlightjs.org
   License: BSD-3-Clause
   Version 11.12.0, copyright (c) 2006-2024 Josh Goebel and other contributors.
-  Bundled into app.js; the source banner is in the npm package.
+  Bundled into src/recoverage/assets/app.js AND
+  src/recoverage/assets/highlight.js; the source banner is in the npm package.
+  `make web-build` emits the highlighter as a SECOND build, because app.js is an
+  IIFE and an IIFE cannot code-split, so a dynamic import() of the grammars
+  would be flattened back into the entry. That output ships beside app.js and
+  the server serves it as /highlight.js, so this grant covers two files in the
+  wheel; crediting only app.js left the second one distributed under no named
+  grant.
 
 Tailwind CSS
   Upstream: https://github.com/tailwindlabs/tailwindcss
   License: MIT, https://github.com/tailwindlabs/tailwindcss/blob/main/LICENSE
-  Compiled into style.css.
+  Compiled into src/recoverage/assets/style.css.
 
 clsx, tailwind-merge, class-variance-authority
   Upstream: https://github.com/lukeed/clsx,
             https://github.com/dcastil/tailwind-merge,
             https://github.com/joe-bell/cva
   License: MIT
-  Bundled into app.js.
+  Bundled into src/recoverage/assets/app.js.
 
 Archivo
   Upstream: https://github.com/Omnibus-Type/Archivo

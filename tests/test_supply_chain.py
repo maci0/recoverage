@@ -1786,6 +1786,65 @@ class TestBundledThirdPartyAssets:
             "a bundled library left package.json; update BUNDLED_LIBRARIES with it"
         )
 
+    #: The files in the wheel's asset directory that carry GENERATED code: what
+    #: `make web-build` compiles a third-party library into. Read against the
+    #: DIRECTORY rather than held as a list that is only ever compared with
+    #: itself, because that directory is what the package-data glob ships: a
+    #: build that starts emitting another bundle puts it there, and the wheel
+    #: ships it whether or not anyone recorded a grant. The hand-written members
+    #: (the SPA shell `index.html`, the print stylesheet, the favicon) and the
+    #: two brand fonts are recoverage's own, so they carry no third-party grant.
+    _GENERATED_ASSETS = ("app.js", "highlight.js", "style.css")
+
+    def test_every_generated_asset_is_named_by_a_grant(self) -> None:
+        """A shipped bundle NOTICE does not name is code under no named grant.
+
+        The package-data glob ships the whole assets directory, so any bundle a
+        build emits rides into every install. NOTICE credited ONE generated file
+        (`app.js`, with `style.css` beside it) because that is where the
+        frontend's libraries were compiled when it was written: `vite build` now
+        emits a SECOND build for the highlighter, because `app.js` is an IIFE and
+        an IIFE cannot code-split, so a dynamic `import()` of the grammars would
+        be flattened straight back into the entry. That output ships as
+        `assets/highlight.js`, carrying highlight.js's BSD-3-Clause code, under a
+        grant that named only `app.js` -- distributed third-party code with no
+        attribution beside it in the wheel a consumer receives, which is the
+        whole failure this class exists to prevent.
+        """
+        notice = (_ROOT / "NOTICE").read_text(encoding="utf-8")
+        assets = _ROOT / "src" / "recoverage" / "assets"
+        present = {p.name for p in assets.iterdir() if p.is_file()}
+        generated = {name for name in self._GENERATED_ASSETS if name in present}
+        assert generated, (
+            f"{assets.name}/ holds none of {list(self._GENERATED_ASSETS)}, so this gate "
+            "would pass without checking anything: the bundle is gone or was renamed"
+        )
+        # The GRANT, not the whole file: the asset inventory at the top of NOTICE
+        # lists every shipped bundle, so a substring search over the document
+        # clears a name the entry carrying the license never mentions. Only a
+        # block that also declares an upstream and a license is a grant, and the
+        # match is on the asset's PATH rather than its bare name: the grant whose
+        # heading names the highlight.js library would otherwise clear the
+        # highlight.js bundle by accident, which is how the second build shipped
+        # uncredited while this gate passed. Every grant in NOTICE spells its
+        # assets that way, including the two brand fonts.
+        grants = [
+            block.group(0)
+            for block in re.finditer(r"^\S.*\n(?:  .*\n)+", notice, re.MULTILINE)
+            if "License:" in block.group(0)
+        ]
+        assert grants, "no NOTICE entry declares a license, so nothing is granted at all"
+        uncredited = sorted(
+            name
+            for name in generated
+            if not any(f"{assets.name}/{name}" in grant for grant in grants)
+        )
+        assert not uncredited, (
+            f"{[f'{assets.name}/{name}' for name in uncredited]} ship in every install and "
+            "no NOTICE entry carrying a license names them, so the third-party code "
+            "compiled into them is distributed under no grant the wheel carries"
+        )
+
 
 def _js_inventory_module() -> ModuleType:
     """`tools/bundled_js_inventory.py`, imported so the shipped list has one
@@ -1884,9 +1943,14 @@ class TestBrowserBundleInventory:
                 f"{entry.package} resolves to {spec}, bun.lock pins "
                 f"{_locked_version(entry.package)}"
             )
-            assert f"{spec} {digest} -> {entry.asset}" in body, (
+            assert f"{spec} {digest} -> {module._destinations(entry)}" in body, (
                 f"the inventory does not record {spec} with its digest and target asset"
             )
+            for asset in (entry.asset, *entry.also_in):
+                assert (_ROOT / asset).is_file(), (
+                    f"{spec} is inventoried as reaching {asset}, which does not exist; the "
+                    "wheel does not ship it, so the sbom names a file no consumer receives"
+                )
             assert entry.because.strip(), f"{entry.package} is listed without a reason it ships"
 
     def test_every_shipped_package_is_a_declared_dependency(self) -> None:

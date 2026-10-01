@@ -52,10 +52,12 @@ PACKAGE_INIT = REPO_ROOT / "src" / "recoverage" / "__init__.py"
 #: web/; between the two, a bump in package.json that skips NOTICE or skips
 #: this list fails the suite instead of shipping uncredited code.
 INVENTORY_FORMAT = (
-    "name@version <integrity-digest> -> <shipped asset>\n"
+    "name@version <integrity-digest> -> <shipped asset>[, <second asset>]\n"
     "\tOne line per npm package whose compiled output `make web-build` writes\n"
     "\tinto src/recoverage/assets/, which the wheel ships. Read from bun.lock,\n"
-    "\tso the version and digest are the resolved ones, not a declared range."
+    "\tso the version and digest are the resolved ones, not a declared range.\n"
+    "\tA second destination is listed when the package's code reaches more than\n"
+    "\tone shipped file, which `make web-build`'s two Vite builds produce."
 )
 
 
@@ -76,9 +78,18 @@ class Shipped(NamedTuple):
     #: about every package it lists.
     license_id: str
     homepage: str
+    #: Any further file in the wheel this package's code reaches, beside `asset`.
+    #: One package can compile into two files: `make web-build` runs TWO Vite
+    #: builds (web/build.ts), and highlight.js lands in the dashboard bundle and
+    #: again in the standalone highlighter, because an IIFE cannot code-split.
+    #: Recording one destination left the second file out of the sbom artifact a
+    #: scanner reads, and out of `make browser-sbom`, while NOTICE credited the
+    #: file under no name at all.
+    also_in: tuple[str, ...] = ()
 
 
 APP_JS = "src/recoverage/assets/app.js"
+HIGHLIGHT_JS = "src/recoverage/assets/highlight.js"
 STYLE_CSS = "src/recoverage/assets/style.css"
 
 #: Every devDependency `web/` or the Vite build pulls into the shipped assets.
@@ -100,6 +111,7 @@ SHIPPED = (
         "the code panes import the c and x86asm grammars",
         "BSD-3-Clause",
         "https://highlightjs.org",
+        (HIGHLIGHT_JS,),
     ),
     Shipped(
         "clsx",
@@ -197,9 +209,15 @@ def render(rows: list[tuple[Shipped, str, str]]) -> str:
         "",
     ]
     lines += [
-        f"{spec} {digest} -> {entry.asset}\n\t{entry.because}" for entry, spec, digest in rows
+        f"{spec} {digest} -> {_destinations(entry)}\n\t{entry.because}"
+        for entry, spec, digest in rows
     ]
     return "\n".join(lines) + "\n"
+
+
+def _destinations(entry: Shipped) -> str:
+    """Every file in the wheel this package's code reaches, comma-separated."""
+    return ", ".join((entry.asset, *entry.also_in))
 
 
 #: The SPDX tag a bun.lock digest spells itself with, and the algorithm name
@@ -317,7 +335,7 @@ def spdx_document(rows: list[tuple[Shipped, str, str]]) -> dict[str, Any]:
                 "copyrightText": "NOASSERTION",
                 "homepage": entry.homepage,
                 "checksums": [_checksum(digest)],
-                "comment": f"bun.lock integrity {digest}; compiled into {entry.asset}",
+                "comment": (f"bun.lock integrity {digest}; compiled into {_destinations(entry)}"),
             }
             for entry, spec, digest in rows
         ],
