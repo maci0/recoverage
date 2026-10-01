@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 import contextlib
+import importlib
+import inspect
 import itertools
 import json
 import logging
+import pkgutil
+import re
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager as ContextManager
+from types import ModuleType
+from typing import ClassVar
 from unittest.mock import patch
 
 import pytest
@@ -835,3 +841,315 @@ class TestStats:
         assert len(snap["by_route"]) == metrics.ROUTE_LABEL_MAX
         assert "/api/targets" in snap["by_route"]
         assert "/seg0" not in snap["by_route"]
+
+
+#: Sentinel for "this container declares no bound", so a bound that IS None
+#: (which bounds nothing) stays distinguishable from one never written.
+_NOT_FOUND = object()
+
+#: The type names of the containers this check reads. `frozenset` is absent on
+#: purpose: one built at import time holds a constant number of rows and
+#: nothing inserts into it, so it is the case the scan must not flag.
+_CONTAINER_KINDS = frozenset(
+    {"dict", "list", "set", "Queue", "deque", "defaultdict", "OrderedDict", "Counter"}
+)
+
+
+class TestProcessGrowthIsBounded:
+    """No container a request fills may grow without a bound.
+
+    `serve` runs for days. A map, set or queue the request path inserts into
+    and no path empties is an OOM with a slow fuse, and it is the kind of
+    defect that never reproduces in a test suite: tests exit long before the
+    accumulation matters. So the property is held against the CODE, not
+    against a run.
+
+    It is not that every container has a cap. Most of them are static: a
+    colour table, the log-escape map, the sort-column map. A container nothing
+    in the package inserts into cannot grow, and writing a bound beside a
+    21-row table would be a constant that lies. The property is the pair: a
+    container with no insertion anywhere is static, and one WITH an insertion
+    must name the bound that stops it.
+
+    Insertion sites are found, not inferred from the name — `DLL_DATA` and
+    `_auth_failures` do not read like caches and both grow. Classifying by
+    name would let a leak in under a plain name, and would demand a constant
+    beside every constant.
+    """
+
+    #: Insertions that add an element to a container. A subscript is not among
+    #: them: `NAME[` is a READ for most dicts in the tree and an insertion for
+    #: only some, so subscript sites are read through the source instead
+    #: (`_growing_containers`).
+    _INSERTIONS: ClassVar[tuple[str, ...]] = (
+        ".append(",
+        ".add(",
+        ".extend(",
+        ".setdefault(",
+        ".update(",
+        ".insert(",
+        ".put(",
+        ".appendleft(",
+    )
+
+    #: Every container the package inserts into, and the bound that stops each.
+    #: `count` is a cap an eviction path compares the container's size against;
+    #: `seconds` is a per-ROW deadline a prune reclaims on the next touch;
+    #: `peers` is a cap the transport enforces by REFUSING a connection, so
+    #: the container never reaches it; `keys` is a closed key space, spelled
+    #: either as a fixed enumeration or as the project config; `imports` is a
+    #: list the composition root fills once per route module at import,
+    #: closed by the import graph.
+    #: Read the binding site before adding a row: a bound with no enforcement
+    #: behind it is a note about an intention.
+    _BOUNDED: ClassVar[dict[str, tuple[str, str]]] = {
+        # /api/data payloads, keyed on target+section; the leader publishes
+        # and a rebuild empties it.
+        "recoverage.api._DATA_CACHE": ("_DATA_CACHE_MAX", "count"),
+        # /api/stats payloads, keyed on target.
+        "recoverage.api._STATS_CACHE": ("_STATS_CACHE_MAX", "count"),
+        # The total-count memo behind a paginated function list.
+        "recoverage.api._LIST_TOTAL_CACHE": ("_LIST_TOTAL_CACHE_MAX", "count"),
+        # The idempotency ledger for POST /api/regen, and the in-flight marker
+        # beside it, both keyed on the client's own key.
+        "recoverage.api._REGEN_COMPLETED_KEYS": ("_REGEN_LEDGER_MAX_ENTRIES", "count"),
+        "recoverage.api._REGEN_ACTIVE_KEYS": ("_REGEN_LEDGER_MAX_ENTRIES", "count"),
+        # The /data single-flight claim. A build in flight is not a row to
+        # count — dropping a LIVE leader's claim on a size would run a second
+        # build beside it — so a claim is bounded by the instant past which a
+        # prune reclaims it, and a killed owner's claim costs one slot until
+        # then.
+        "recoverage.api._DATA_CACHE_BUILDING": ("_DATA_CACHE_BUILD_WAIT_SECONDS", "seconds"),
+        # One row per CONNECTED client, capped by the refusal at the transport
+        # rather than by an eviction.
+        "recoverage.api._SSE_CLIENTS": ("_SSE_MAX_CLIENTS", "peers"),
+        # One window per peer that has failed a token guess, capped by the
+        # same map's own peer bound.
+        "recoverage.server._auth_failures": ("_AUTH_FAIL_MAX_PEERS", "peers"),
+        # Per-target image width, memoized on the binary's stamp and dropped
+        # beside the disassembly memo on a rebuild.
+        "recoverage.disasm._WIDTH_MEMO": ("_WIDTH_MEMO_MAX", "count"),
+        "recoverage.potato._FUNCTION_ROWS": ("_FUNCTION_ROWS_MAX", "count"),
+        "recoverage.potato._GRID_CACHE": ("_GRID_CACHE_MAX", "count"),
+        "recoverage.potato._PARENT_INDEX": ("_PARENT_INDEX_MAX", "count"),
+        "recoverage.potato._POTATO_STATS_CACHE": ("_POTATO_STATS_CACHE_MAX", "count"),
+        "recoverage.potato._SECTION_DATA_CACHE": ("_SECTION_DATA_CACHE_MAX", "count"),
+        # The snapshot-keyed DLL index the /asm and /bytes validators read.
+        "recoverage.server._SNAPSHOT_INDEX": ("_SNAPSHOT_INDEX_MAX", "count"),
+        # The route module's cache invalidators, registered once per route
+        # module by the composition root at import. No bound constant: the
+        # list is closed by the import graph, which `tests/test_import_graph.py`
+        # already holds acyclic and level-ordered.
+        "recoverage.api._EXTRA_INVALIDATORS": ("", "imports"),
+        # The original binary's bytes, and the stamp each was read under.
+        # Keyed on target alone, so the map is at most one entry per entry in
+        # `[targets]`: every reader validates its target against the resolved
+        # config first (`api._target_snapshot`, Potato's render), and a config
+        # edit that changes the vocabulary clears both maps on the
+        # `config_fingerprint` they are keyed beside. `recoverage.api.DLL_DATA`
+        # is the same dict under an import alias, and the eviction is the same.
+        "recoverage.server.DLL_DATA": ("", "keys"),
+        "recoverage.server._DLL_STAMPS": ("", "keys"),
+        # One precompressed SPA shell per accepted-encoding set. The key is
+        # `static_variant_key`, which draws from `SUPPORTED_ENCODINGS` in that
+        # fixed order, so it is at most 2**3 spellings however long the header
+        # the client sends is. The shell cannot change under a running server,
+        # so the map never needs emptying; the closed key space is the bound.
+        "recoverage.ui.CACHED_INDEX_COMPRESSED": ("SUPPORTED_ENCODINGS", "keys"),
+        "recoverage.ui._STATIC_CACHE": ("SUPPORTED_ENCODINGS", "keys"),
+    }
+
+    #: For each `keys` row, the function that turns a request-supplied value
+    #: into a key. The key space is only closed if every key passes through
+    #: it, so this is the claim the arm below checks rather than restates.
+    _KEY_PRODUCERS: ClassVar[dict[str, str]] = {
+        "recoverage.server.DLL_DATA": "server._find_dll_path",
+        "recoverage.server._DLL_STAMPS": "server._find_dll_path",
+        "recoverage.ui.CACHED_INDEX_COMPRESSED": "server.static_variant_key",
+        "recoverage.ui._STATIC_CACHE": "server.static_variant_key",
+    }
+
+    def _modules(self) -> list[ModuleType]:
+        """Every module in the package, walked from the composition root.
+
+        An unreferenced module is still a module `serve` imported, and its
+        containers grow on the same clock as the rest; walking is what stops a
+        new module from being outside the check by being new.
+        """
+        pending = [importlib.import_module("recoverage")]
+        seen: set[str] = set()
+        out: list[ModuleType] = []
+        while pending:
+            module = pending.pop()
+            if module.__name__ in seen:
+                continue
+            seen.add(module.__name__)
+            out.append(module)
+            # `pkgutil.walk_packages` needs a package path, and a module
+            # without one (`__main__`, a leaf like `webapp` when the root is
+            # imported as a module) is still a module whose globals can hold a
+            # growing container.
+            paths = getattr(module, "__path__", None)
+            for info in pkgutil.walk_packages(paths, module.__name__ + ".") if paths else ():
+                try:
+                    pending.append(importlib.import_module(info.name))
+                except Exception:
+                    continue
+        return out
+
+    def _source(self, module: ModuleType) -> str:
+        try:
+            return inspect.getsource(module)
+        except (OSError, TypeError):
+            return ""
+
+    def _growing_containers(self) -> dict[str, str]:
+        """Every container the package inserts into, by qualified name.
+
+        The union of two scans: a method call ON the container, and an
+        assignment into it by subscript. A container neither scan names holds
+        a fixed set of rows and cannot grow. The value is the source that
+        inserted into it, for the message to name.
+        """
+        growing: dict[str, str] = {}
+        for module in self._modules():
+            source = self._source(module)
+            if not source:
+                continue
+            for name, value in vars(module).items():
+                if name.startswith("__") or type(value).__name__ not in _CONTAINER_KINDS:
+                    continue
+                qualified = f"{module.__name__}.{name}"
+                if any(f"{name}{call}" in source for call in self._INSERTIONS):
+                    growing[qualified] = source
+                    continue
+                # `NAME[key] = value` inserts into NAME; `NAME[a][b] = c`
+                # inserts into NAME's VALUES, so only a plain subscript whose
+                # contents close on the first bracket counts.
+                if re.search(
+                    rf"^[ \t]*{re.escape(name)}\[[^\]\n]*\]\s*=(?!=)", source, re.MULTILINE
+                ):
+                    growing[qualified] = source
+        return growing
+
+    def test_every_container_the_package_fills_is_bounded(self) -> None:
+        growing = self._growing_containers()
+        assert growing, "no insertion found anywhere, so the scan is not reading the package"
+        for qualified in sorted(growing):
+            if qualified in self._BOUNDED:
+                continue
+            raise AssertionError(
+                f"{qualified} is inserted into and declares no bound. Add it to "
+                f"TestProcessGrowthIsBounded._BOUNDED with the constant that stops "
+                f"it and the kind of bound it is, or — if the scan misread a "
+                f"static table as growing — fix the scan, because a check that "
+                f"cannot read its own tree is not one."
+            )
+
+    def test_a_declared_bound_exists(self) -> None:
+        """A bound that is missing, None, zero or negative bounds nothing."""
+        for qualified, (constant, kind) in self._BOUNDED.items():
+            if not constant:
+                continue  # an `imports` row: closed by the import graph
+            if kind == "keys":
+                continue  # a vocabulary, checked by the arm that reads it
+            module_name, _, _attr = qualified.rpartition(".")
+            module = importlib.import_module(module_name)
+            bound = getattr(module, constant, _NOT_FOUND)
+            assert bound is not _NOT_FOUND, (
+                f"{qualified} is registered as bounded by {constant}, which "
+                f"{module_name} does not define"
+            )
+            assert isinstance(bound, int | float) and not isinstance(bound, bool), (
+                f"{qualified} is capped by {constant}={bound!r}, which is not a "
+                f"number: the container fills past a cap that cannot be compared"
+            )
+            assert bound > 0, (
+                f"{qualified} is capped by {constant}={bound!r}, which is not "
+                f"positive: a cap of zero bounds nothing while the name reads "
+                f"like a bound"
+            )
+
+    def test_a_count_bound_is_a_whole_number_of_rows(self) -> None:
+        """A `count` bounds how many rows fit, so a fraction is not one."""
+        for qualified, (constant, kind) in self._BOUNDED.items():
+            if kind != "count":
+                continue
+            module_name, _, _attr = qualified.rpartition(".")
+            bound = getattr(importlib.import_module(module_name), constant)
+            assert isinstance(bound, int) and not isinstance(bound, bool), (
+                f"{qualified} is bounded by {constant}={bound!r}, which is not "
+                f"a whole number of rows"
+            )
+
+    def test_a_keys_bound_is_closed_over_a_vocabulary_the_code_resolves(self) -> None:
+        """A `keys` row claims the key space cannot grow, in one of two ways.
+
+        Either the keys are drawn from a fixed spelling set — a precompressed
+        variant keyed on the accepted-encoding set, which is at most one key
+        per subset of a seven-constant vocabulary — or they are drawn from the
+        project config's `[targets]`, which the config itself closes, and the
+        map is emptied when that config changes. The first is a finite
+        enumeration, the second a vocabulary with an eviction.
+
+        What neither allows is a key taken from the request. A map keyed on a
+        client-supplied value is unbounded however it is named, so the arm
+        checks the thing that decides: the writing site maps the request value
+        through a named producer, and the producer reads the vocabulary the
+        bound names.
+        """
+        for qualified, (constant, kind) in self._BOUNDED.items():
+            if kind != "keys":
+                continue
+            module_name, _, attr = qualified.rpartition(".")
+            module = importlib.import_module(module_name)
+            source = self._source(module)
+            producer_name = self._KEY_PRODUCERS[qualified]
+            producer_module_name, _, producer_attr = producer_name.rpartition(".")
+            producer_module = importlib.import_module(
+                producer_module_name
+                if producer_module_name.startswith("recoverage")
+                else f"recoverage.{producer_module_name}"
+            )
+            producer = getattr(producer_module, producer_attr, None)
+            assert callable(producer), (
+                f"{qualified} names {producer_name} as the function mapping a "
+                f"request value into its closed key space, and no such function "
+                f"exists"
+            )
+            assert re.search(rf"\b{re.escape(producer_attr)}\(", source), (
+                f"{qualified} never calls {producer_name}, so its keys are not "
+                f"the closed set the bound claims"
+            )
+            if not constant:
+                # Closed over the project config: the map must be emptied when
+                # that config changes, or an entry outlives the configuration
+                # that authorised it. `server._clear_derived_caches` is the
+                # `config_fingerprint` arm that does it.
+                assert re.search(rf"{re.escape(attr)}\.clear\(", source), (
+                    f"{qualified} is bounded by a key space the project config "
+                    f"closes, but {module_name} never empties it: a removed "
+                    f"target's bytes outlive the config that named them"
+                )
+                continue
+            vocabulary = constant.rpartition(".")[2]
+            assert vocabulary in (self._source(producer_module) or ""), (
+                f"{qualified} is bounded by {constant}, but {producer_name} never "
+                f"reads it: the producer is what makes the key space finite, and "
+                f"it draws its values from somewhere else"
+            )
+
+    def test_a_seconds_bound_names_a_deadline_not_a_count(self) -> None:
+        """A `seconds` bound is a duration, so a whole number of seconds reads
+        like the wrong unit: 30 rows is a different claim from 30 seconds."""
+        for qualified, (constant, kind) in self._BOUNDED.items():
+            if kind != "seconds":
+                continue
+            module_name, _, _attr = qualified.rpartition(".")
+            bound = getattr(importlib.import_module(module_name), constant)
+            assert isinstance(bound, float), (
+                f"{qualified} is bounded by {constant}={bound!r}, which is not "
+                f"a duration: a `seconds` bound is read as a float interval "
+                f"throughout the package, and an int here would read as a row "
+                f"count to the next reader"
+            )
