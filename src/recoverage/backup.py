@@ -108,6 +108,12 @@ def backup_dir_from_env(coverage_dir: Path) -> Path:
     one setting the backup commands take and nothing else in the package reads
     it.  A deployment that schedules ``recoverage backup`` from cron cannot
     pass a flag, so the environment is the only channel that reaches it there.
+
+    The name is in ``config.KNOWN_VARS`` for the same reason the fuzz knobs
+    are: that set is what ``check_unknown_vars`` validates against, so a cron
+    line carrying this name would otherwise be refused by every command as a
+    misspelling — which is the one way an operator finds out that the schedule
+    is wrong, at the hour it runs.
     """
     raw = os.environ.get("RECOVERAGE_BACKUP_DIR", "")
     if raw.strip():

@@ -216,6 +216,7 @@ always wins over the environment.
 | `RECOVERAGE_MAX_CONNECTIONS` | `128` | integer `1`-`65536`: concurrent client connections admitted, one thread and one descriptor each |
 | `RECOVERAGE_CLIENT_TIMEOUT` | `120` | integer `16`-`86400`: per-socket-operation deadline in seconds; a client that cannot absorb a write inside it is cut mid-body |
 | `RECOVERAGE_DB` | resolved from the working directory | path to the coverage directory (the one holding `coverage-<target>.toml`); a path that is a file is a startup error, not an empty dashboard |
+| `RECOVERAGE_BACKUP_DIR` | a `backups/` beside the coverage directory | directory `recoverage backup` writes its archive into; read by that command and by nothing else. Never point it inside the coverage directory: the next backup would copy the previous archive as if it were a document. A scheduled job cannot pass `--to`, so this is the channel that reaches it |
 | `RECOVERAGE_FUZZ_SEED` | unset | seed for the mutation campaigns (`make fuzz`); read by the test suite, not the server |
 | `RECOVERAGE_FUZZ_ITERATIONS` | unset | round count for those campaigns; same reader |
 | `RECOVERAGE_DEV_API` | `http://127.0.0.1:8001` | the running server the `make web-dev` Vite proxy forwards `/api`, `/src` and `/original` to; read by `web/vite.config.ts`, not by any subcommand (the same rule the two fuzz knobs follow: the name is accepted so exporting it cannot refuse a command, and it changes nothing `serve` does) |
@@ -476,7 +477,7 @@ either way.
 
 Run `recoverage regen` afterwards, so the served snapshots and ETags follow the
 restored bytes. The full procedure is in
-[the recovery runbook](https://github.com/relumea/recovery-coverage/blob/main/docs/RECOVERY.md).
+[the recovery runbook](https://github.com/relumea/recoverage/blob/main/docs/RECOVERY.md).
 
 ### `recoverage open`
 

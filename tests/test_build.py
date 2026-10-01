@@ -349,7 +349,10 @@ class TestManPage:
     #: README.md's environment table instead.
     #: `tests/test_config.py::TestEnvExample` omits `RECOVERAGE_DEV_API` for
     #: the same reason and carries the same name, so the two artifacts cannot
-    #: drift apart.
+    #: drift apart. (`RECOVERAGE_BACKUP_DIR` is absent from NEITHER: it is a
+    #: real deployment setting, read by `recoverage backup`, and this page
+    #: documents it. That test class lists it as a temporary exception only
+    #: until `.env.example` carries the line.)
     _NOT_A_SETTING = frozenset(
         {"RECOVERAGE_DEV_API", "RECOVERAGE_FUZZ_ITERATIONS", "RECOVERAGE_FUZZ_SEED"}
     )

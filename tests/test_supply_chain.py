@@ -242,9 +242,12 @@ class TestRbrewPin:
         """The destination is restored from a cache the pin invalidates.
 
         Every job that runs `uv sync` materializes the same commit, so a run
-        cloned it once per job: eight identical network round trips, each with
-        the script's three attempts behind it, for a tree that is the same
-        every time. The key hashes `tools/ci_clone_rebrew.sh`, so the cache
+        cloned it once per job: one identical network round trip per job (the
+        `test` matrix runs one per OS), each with the script's three attempts
+        behind it, for a tree that is the same every time. The count is what
+        the sibling-rebrew step saves, so it is read off the workflow rather
+        than written here: a job added without the step is a gap, and a job
+        added WITH it is a round trip this cache exists to remove. The key hashes `tools/ci_clone_rebrew.sh`, so the cache
         holds exactly the commit the script pins and a pin bump misses it.
 
         There is deliberately no `restore-keys` fallback: an older rebrew that

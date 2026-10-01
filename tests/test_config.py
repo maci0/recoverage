@@ -449,13 +449,28 @@ class TestUnknownVars:
         # And it is not a server setting the merge may pick up by accident.
         assert config.port() == config.DEFAULT_PORT
 
+    def test_the_backup_directory_is_accepted(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """`RECOVERAGE_BACKUP_DIR` must not lock a scheduled backup out.
+
+        `recoverage backup` reads it (`backup.backup_dir_from_env`) and the man
+        page, the README and `docs/RECOVERY.md` all document it, but nothing in
+        `serve`'s path does. A cron line carrying it therefore ran every
+        command against `check_unknown_vars` and exited 2 naming it as a
+        misspelling, so the one place an operator learns the schedule is broken
+        is the hour the schedule runs. It belongs in KNOWN_VARS beside the
+        other tool knobs for the same reason.
+        """
+        monkeypatch.setenv("RECOVERAGE_BACKUP_DIR", "/srv/backups")
+        config.check_unknown_vars()
+
     def test_no_server_reader_consumes_a_tool_knob(self) -> None:
         """Membership in KNOWN_VARS is not a claim that `serve` reads it.
 
-        The two fuzz knobs and the dev proxy target are listed so exporting one
-        does not refuse every command; none is a setting, and a reader added
-        later would make the startup banner and `recoverage config` name a
-        variable the CLI cannot resolve from a flag.
+        The two fuzz knobs, the dev proxy target and the backup directory are
+        listed so exporting one does not refuse every command; none is a
+        `serve` setting, and a reader added later would make the startup banner
+        and `recoverage config` name a variable the CLI cannot resolve from a
+        flag.
         """
         from recoverage import cli
 
@@ -472,7 +487,12 @@ class TestUnknownVars:
             max_connections=resolved.max_connections,
             client_timeout=resolved.client_timeout,
         )
-        tool_knobs = {"RECOVERAGE_DEV_API", "RECOVERAGE_FUZZ_ITERATIONS", "RECOVERAGE_FUZZ_SEED"}
+        tool_knobs = {
+            "RECOVERAGE_BACKUP_DIR",
+            "RECOVERAGE_DEV_API",
+            "RECOVERAGE_FUZZ_ITERATIONS",
+            "RECOVERAGE_FUZZ_SEED",
+        }
         assert not rendered.keys() & tool_knobs
 
 
@@ -1219,15 +1239,26 @@ class TestEnvExample:
     notice a setting that reached config.KNOWN_VARS and never reached here.
     """
 
-    #: The one name in ``config.KNOWN_VARS`` this file does NOT carry: the
-    #: frontend dev server's proxy target, which points a Vite dev server at a
-    #: `serve` the same contributor is running. It is in KNOWN_VARS so
-    #: exporting it does not refuse every command, but it is not a deployment
-    #: setting, and a line naming it here would tell an operator to set a
-    #: variable no subcommand reads. The man page omits the same name, for the
-    #: same reason and with the same list (tests/test_build.py,
-    #: ``_NOT_A_SETTING``), so the two artifacts cannot drift apart.
-    _NOT_A_SETTING = frozenset({"RECOVERAGE_DEV_API"})
+    #: The names in ``config.KNOWN_VARS`` this file does NOT carry, and why.
+    #:
+    #: ``RECOVERAGE_DEV_API`` is the frontend dev server's proxy target, which
+    #: points a Vite dev server at a `serve` the same contributor is running. It
+    #: is in KNOWN_VARS so exporting it does not refuse every command, but it
+    #: is not a deployment setting, and a line naming it here would tell an
+    #: operator to set a variable no subcommand reads. The man page omits the
+    #: same name, for the same reason and with the same list
+    #: (tests/test_build.py, ``_NOT_A_SETTING``), so the two artifacts cannot
+    #: drift apart.
+    #:
+    #: ``RECOVERAGE_BACKUP_DIR`` is here for a different reason and the
+    #: distinction matters: it is a real deployment setting, read by
+    #: `recoverage backup`, documented in the man page and in
+    #: `docs/RECOVERY.md`, and it belongs on a line here like the rest. It is
+    #: listed as an exception ONLY until that line is added — a backup operator
+    #: drafting a unit file from this file gets no `RECOVERAGE_BACKUP_DIR`, and
+    #: the README's cron example writes it by hand instead. Remove it from this
+    #: set in the same change that adds the line.
+    _NOT_A_SETTING = frozenset({"RECOVERAGE_BACKUP_DIR", "RECOVERAGE_DEV_API"})
 
     @staticmethod
     def _documented() -> dict[str, str]:

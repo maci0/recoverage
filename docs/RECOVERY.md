@@ -96,13 +96,21 @@ document. Restore the binary and re-run the regen to refresh the facts.
 The archive is a POSIX tar, so:
 
 ```bash
-tar -xf backups/<archive>.tar db/            # or extract a single member
-cat <(tar -xOf backups/<archive>.tar manifest.json)
+tar -tf backups/<archive>.tar                # the member names
+tar -xf backups/<archive>.tar coverage-GAME.toml   # one document
+tar -xOf backups/<archive>.tar manifest.json  # the manifest, to stdout
 ```
+
+Members are stored FLAT, with no `db/` prefix: each coverage document under
+its own filename, plus `manifest.json` at the root. Extract into the coverage
+directory itself (`cd db && tar -xf ...`), not next to it, or the restore
+lands one level above where the server reads.
 
 `manifest.json` carries each member's size and sha256, so `sha256sum` on the
 extracted files is the same check `recoverage restore` makes before it writes
-anything.
+anything. The digests are over the member's own bytes, so one rewritten
+document is named in the failure rather than the whole archive reported as
+corrupt.
 
 ## Backup schedule
 
@@ -127,7 +135,7 @@ typical), against a copy rather than the live directory:
 ```bash
 drill=$(mktemp -d)
 RECOVERAGE_DB="$drill/db" recoverage restore /srv/backups/<newest>.tar
-recoverage stats --json            # exits 2 if nothing parses
+recoverage stats --json            # exits 1 if nothing parses
 recoverage regen                   # optional: the facts follow from the binaries
 rm -rf "$drill"
 ```

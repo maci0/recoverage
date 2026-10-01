@@ -48,14 +48,18 @@ ENV_PREFIX: Final = "RECOVERAGE_"
 #:   `fuzz` make target);
 #: * ``RECOVERAGE_DEV_API``, the origin ``web/vite.config.ts`` proxies
 #:   ``/api``, ``/src`` and ``/original`` to in the frontend dev loop
-#:   (``make web-dev``; CONTRIBUTING.md documents it beside the loop).
+#:   (``make web-dev``; CONTRIBUTING.md documents it beside the loop);
+#: * ``RECOVERAGE_BACKUP_DIR``, read by ``recoverage.backup.backup_dir_from_env``
+#:   and by nothing else (``recoverage backup`` is a TOOL command, not a
+#:   server setting).
 #:
-#: None of them is read anywhere under ``src/``; they change nothing `serve`
+#: None of them is read by anything ``serve`` resolves; they change nothing it
 #: does, so a reader of this set must not take membership for one of them being
 #: a server setting.
 KNOWN_VARS: Final[frozenset[str]] = frozenset(
     {
         "RECOVERAGE_ALLOW_REMOTE",
+        "RECOVERAGE_BACKUP_DIR",
         "RECOVERAGE_BIND",
         "RECOVERAGE_CLIENT_TIMEOUT",
         "RECOVERAGE_CORS",

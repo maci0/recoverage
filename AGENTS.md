@@ -278,10 +278,11 @@ input's default is empty, because the URL is a copy of a value the script
 already owns and a moved repository would leave the two disagreeing; the
 script's `REBREW_URL` default supplies it. The action also restores the
 destination from an `actions/cache` entry keyed on
-`hashFiles('tools/ci_clone_rebrew.sh')`, so the eight installing jobs of one run
-share a clone instead of each fetching the same commit, and a pin bump misses
-the key. There is no `restore-keys` fallback: an older rebrew that still
-resolves is the failure the tag-and-commit check exists to catch. A restored
+`hashFiles('tools/ci_clone_rebrew.sh')`, so every job that runs it
+(`lint`, `web-lint`, `test`, `build` and `smoke`; the `test` matrix runs one
+per OS) shares a clone instead of each fetching the same commit, and a pin
+bump misses the key. There is no `restore-keys` fallback: an older rebrew
+that still resolves is the failure the tag-and-commit check exists to catch. A restored
 tree is therefore not trusted on the cache's word; the script keeps a
 destination whose `HEAD` is `REBREW_SHA` and whose tree is clean, and clones
 over anything else, which is also what makes a second `make clone-rebrew` a
