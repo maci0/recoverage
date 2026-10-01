@@ -790,6 +790,53 @@ class TestEnvironmentInstalls:
             assert "--locked" in flags, f"Makefile installs without --locked: {flags}"
             assert "--frozen" not in flags, f"Makefile installs with --frozen: {flags}"
 
+    def test_every_target_that_shells_out_to_uv_says_uv_is_required(self) -> None:
+        """A target that runs `uv` itself names uv, or a missing one is `uv: not found`.
+
+        `python-sbom` was the one recipe that reached the uv binary directly
+        (`uv export`) with no `ensure-uv`, so a contributor without uv on PATH
+        got make's own `uv: not found` and a pointer at nothing — the answer
+        `ensure-uv`'s comment says it exists to prevent, on the only uv-reaching
+        target that never got it. The gate is a target whose RECIPE runs a
+        spelled-out `uv` command: a target reaching uv through `$(UV_RUN)`,
+        `$(UV_STDLIB)` or `$(UV_SYNC_FLAGS)` never spells one, and one reaching
+        it through `ensure-rebrew` inherits that target's own `ensure-uv`.
+        """
+        makefile = _MAKEFILE.read_text(encoding="utf-8")
+        rule = re.compile(r"^([A-Za-z][A-Za-z0-9_-]*):([^\n]*)\n((?:\t[^\n]*\n)+)", re.MULTILINE)
+
+        def unquoted(line: str) -> str:
+            """*line* with every quoted run blanked, so only a real command remains.
+
+            An invocation, not a mention: `help` prints `make setup` and
+            "uv.lock" in its own text, and a preflight's `echo` names the tool
+            it reports missing. All three sit inside shell quotes.
+            """
+            return re.sub(r"'[^']*'|\"[^\"]*\"", " ", line)
+
+        preflight = {"ensure-uv"}
+        reaches_uv = False
+        missing = []
+        for match in rule.finditer(makefile):
+            name, prerequisites, recipe = match.groups()
+            runs_uv = [
+                line
+                for line in recipe.splitlines()
+                if re.search(r"(?:^|[;&|(\s])uv (?:sync|run|build|export)\b", unquoted(line))
+            ]
+            reaches_uv = reaches_uv or bool(runs_uv)
+            # `ensure-rebrew` depends on `ensure-uv`, so a target declaring it
+            # has the preflight transitively; the rule is a target-level one.
+            declared = set(prerequisites.split()) | {name}
+            if runs_uv and not declared & preflight:
+                missing.append(name)
+            if name == "ensure-rebrew":
+                preflight.add("ensure-rebrew")
+        assert reaches_uv, (
+            "no target runs a spelled-out uv command; this check would pass vacuously"
+        )
+        assert not missing, f"these targets run uv without the ensure-uv preflight: {missing}"
+
     def test_the_python_inventory_is_reproducible_without_ci(self) -> None:
         """The sbom job's Python half has a local command, like its browser half.
 
@@ -2332,6 +2379,45 @@ class TestBrowserSpdxExport:
         else:
             with pytest.raises(module.InventoryError, match="SOURCE_DATE_EPOCH"):
                 module.spdx_document(module.resolve())
+
+    @pytest.mark.parametrize(
+        "stamp",
+        [
+            "1700_000_000",  # `_` as a digit separator
+            "  1700000000  ",  # surrounding whitespace int() strips
+            "0x6_5544_400",  # a hexadecimal stamp, not a decimal one
+            # Arabic-Indic digits, which int() reads as 1700000000. Spelled as
+            # escapes so the lint rule that flags confusable characters does not
+            # fire on the very string this test is about, the spelling
+            # test_build.py's stamp-parser cases already use.
+            "\u0661\u0667\u0660\u0660\u0660\u0660\u0660\u0660\u0660\u0660",
+            "\N{SUPERSCRIPT TWO}",  # a digit to str.isdigit, not to int()
+            "",  # set but empty, which is how a unit file spells "unset"
+        ],
+    )
+    def test_a_stamp_that_is_not_an_ascii_decimal_is_refused(
+        self, monkeypatch: pytest.MonkeyPatch, stamp: str
+    ) -> None:
+        """A stamp `int()` reads as ANOTHER number is the worst one it can take.
+
+        `int()` is not the parse this tree uses for a number: it takes digits
+        from the whole Unicode Nd set, reads `_` as a separator, strips
+        whitespace and reads a `0x` prefix as a sign. Every one of those is a
+        `SOURCE_DATE_EPOCH` that parsed to an instant nobody set, and both
+        `created` and the `documentNamespace` render it, so the uploaded SPDX
+        document stopped being diffable across runs of one commit — which is
+        the whole reason the stamp is read from the environment. The empty
+        string is here because a set-but-empty variable is how a unit file, a
+        container env and a CI job all spell "not configured", and it has to
+        reach the wall-clock fallback rather than a refusal.
+        """
+        module = _js_inventory_module()
+        monkeypatch.setenv("SOURCE_DATE_EPOCH", stamp)
+        if stamp:
+            with pytest.raises(module.InventoryError, match="SOURCE_DATE_EPOCH"):
+                module.spdx_document(module.resolve())
+        else:
+            assert module.spdx_document(module.resolve())["creationInfo"]["created"]
 
     def test_the_sbom_job_uploads_the_document(self) -> None:
         """CI produces the machine-readable half, or the gap reopens silently.

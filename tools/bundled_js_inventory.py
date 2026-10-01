@@ -235,6 +235,20 @@ _DIGEST_ALGORITHMS = {"sha512": "SHA512", "sha256": "SHA256", "sha1": "SHA1"}
 _MIN_EPOCH = -62_135_596_800
 _MAX_EPOCH = 253_402_300_799
 
+#: A Unix timestamp is an optional sign and an ASCII decimal run, which is what
+#: ``int()`` is NOT: it takes digits from the whole Unicode Nd set (so a stamp
+#: mangled past a non-ASCII locale became a DIFFERENT instant rather than the
+#: refusal this file's docstring promises), it reads ``_`` as a digit separator,
+#: and it strips surrounding whitespace.  A stamp that parses to another number
+#: is the worst outcome available here: ``created`` and the
+#: ``documentNamespace`` built from it both render it, so the uploaded document
+#: names an instant nobody set and two runs of one commit stop agreeing.  Same
+#: rule as ``config._ASCII_INT`` and ``normalize_sdist._ASCII_EPOCH``, spelled
+#: out here because this script is stdlib only and imports neither.  The sign
+#: stays because the floor above is negative: 0001-01-01T00:00:00Z is 62135596800
+#: seconds BEFORE the epoch, and the range test below is what admits it.
+_ASCII_EPOCH = re.compile(r"\A[+-]?[0-9]+\Z")
+
 
 def _checksum(digest: str) -> dict[str, str]:
     """The bun.lock integrity string as an SPDX checksum."""
@@ -259,9 +273,13 @@ def created() -> str:
     when it is there and from the clock only when it is not.
     """
     raw = os.environ.get("SOURCE_DATE_EPOCH", "")
+    if raw and not _ASCII_EPOCH.match(raw):
+        raise InventoryError(f"SOURCE_DATE_EPOCH={raw!r} is not a Unix timestamp")
     try:
         stamp = int(raw)
     except ValueError:
+        # Either unset (the wall clock below) or more digits than CPython's
+        # int() accepts: the same refusal as a stamp that is not a number.
         if raw:
             raise InventoryError(f"SOURCE_DATE_EPOCH={raw!r} is not a Unix timestamp") from None
         stamp = int(datetime.datetime.now(tz=datetime.UTC).timestamp())

@@ -566,13 +566,17 @@ browser-sbom-spdx:
 # because --locked re-resolves the graph and the path dependency ../rebrew is
 # what the job has no checkout of. So this target needs no environment and no
 # sibling either, which is why it is the only target here with no
-# `ensure-rebrew` and no UV_RUN. It prints to stdout rather than writing a
+# `ensure-rebrew` and no UV_RUN. `ensure-uv` and not `ensure-rebrew`, though:
+# the target needs no environment and no sibling, but it does shell out to the
+# uv binary, and without the preflight a checkout with no uv on PATH died on
+# "uv: not found" from inside make, naming neither the tool nor the install
+# line that fixes it. It prints to stdout rather than writing a
 # file, and the sbom job redirects it: the job names its own artifact, and a
 # file written here would be a second thing to ignore in a local run. The two
 # rebrew pin lines the export alone does not carry are appended here, read
 # from the one script that owns the pin, so the artifact a release ships and
 # the one a contributor prints name the same rebrew.
-python-sbom:
+python-sbom: ensure-uv
 	@$(SET_STRICT) \
 	uv export --frozen --all-extras --format requirements-txt --hashes; \
 	ref=$$(sed -n 's/^REBREW_REF="$${REBREW_REF:-\(.*\)}"$$/\1/p' tools/ci_clone_rebrew.sh); \
