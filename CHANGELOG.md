@@ -5,6 +5,25 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- The search box is now an editable combobox: it announces whether its match
+  list is open and how a row is reached, and Up/Down walk the list with Enter
+  taking the row the reader is on. Before, a screen reader announced a plain
+  text field, a keyboard user could reach only the map's own first match, and
+  the list was twenty tab stops they had to walk past to leave the search box.
+- The search list's active row is marked with the dashboard's own focus ring
+  rather than a fill. `surface-2` on `surface` is 1.05:1, so a reader who
+  cannot rely on the announcement had no visible indication of which match the
+  arrow keys were on. The row also survives forced colors, where the fill would
+  not have.
+- Every address in the disassembly pane now names what it does. A screen
+  reader's list of links was hundreds of rows of `0x00401000` with no way to
+  tell them apart.
+- The "Skip to main content" link now lands somewhere focusable, so the next
+  Tab continues from the start of the content rather than from wherever the
+  browser last had focus.
+
 ## [4.2.0] - 2026-10-01
 
 ### Changed

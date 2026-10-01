@@ -54,7 +54,13 @@ export function highlightCode(text: string, language: HighlightLanguage): string
   }
   return html.replaceAll(
     /(?<address>0x[0-9a-fA-F]+)/gu,
-    '<a href="#" class="asm-link" data-addr="$<address>">$<address></a>',
+    // The link is reachable by Tab and by the screen reader's link list, where
+    // it read as a bare hex number with no indication of what activating it
+    // does: a disassembly is hundreds of lines, so the link list was hundreds
+    // of rows of "0x00401000". The name says the action and names the target
+    // it jumps to; the visible text stays the address, so nothing on screen
+    // changes and the name never drifts from what is shown.
+    '<a href="#" class="asm-link" data-addr="$<address>" title="Jump to $<address>" aria-label="Jump to address $<address>">$<address></a>',
   );
 }
 

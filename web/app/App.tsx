@@ -43,6 +43,12 @@ const NAV_NOTICE_MS = 4000;
  * scanned, not to be a second index: past the cap it narrows the term. */
 const SEARCH_RESULT_LIMIT = 20;
 
+/** The id the list's row N carries, which is what the search box's
+ * `aria-activedescendant` names. One derivation, so the field and the list
+ * cannot spell the same row two different ways (an `aria-activedescendant`
+ * pointing at nothing names nothing). */
+const searchResultOptionId = (index: number): string => `search-result-${index}`;
+
 /** Sections in PE load order (ascending VA), which puts `.text` first instead
  * of leaving the section that carries the work at the end of an alphabetical
  * row. Sections without a VA sort last, keeping their relative order. */
@@ -167,6 +173,12 @@ export function App() {
   // itself changed, which left twenty rows floating over the lattice for the
   // rest of the visit after one search.
   const [resultsOpen, setResultsOpen] = useState(false);
+  // The row the arrow keys walked to inside the open list, or null while the
+  // reader has not moved through it. It is announced with
+  // `aria-activedescendant` rather than by moving focus: focus stays in the
+  // field, so a reader can keep typing while walking the list (ARIA 1.2
+  // combobox), and a list that took focus would strand the term mid-word.
+  const [activeResult, setActiveResult] = useState<number | null>(null);
   const [pinned, setPinned] = useState<Theme | null>(pinnedTheme);
   const [system, setSystem] = useState<Theme>(systemTheme);
   const theme = pinned ?? system;
@@ -644,10 +656,47 @@ export function App() {
         setQuery("");
       }
       setResultsOpen(false);
+      setActiveResult(null);
+      return;
+    }
+    // The list's own navigation, which the combobox role promises and which a
+    // pointer-only list did not: without it a keyboard user who has not
+    // pressed Enter has no way to reach a match beyond the first
+    // (WCAG 2.1.1). Down opens the list on an unopened one, so the arrow key
+    // is the whole affordance a reader needs to discover.
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      const rows = searchResults.length;
+      if (rows === 0) {
+        return;
+      }
+      event.preventDefault();
+      setResultsOpen(true);
+      const step = event.key === "ArrowDown" ? 1 : -1;
+      setActiveResult((current) => {
+        if (current === null) {
+          return event.key === "ArrowDown" ? 0 : rows - 1;
+        }
+        // Wraps, like the section tab row: the list is a ring, not a queue.
+        return (current + step + rows) % rows;
+      });
       return;
     }
     if (event.key !== "Enter") {
       return;
+    }
+    // A row the arrow keys walked to is the one Enter picks. A listbox's
+    // contract is that the active option is the selection, so Enter has to
+    // take it; falling through to the map's own first match would answer a
+    // keypress the reader aimed at one row with a different one.
+    if (resultsOpen && activeResult !== null) {
+      const chosen = searchResults[activeResult];
+      if (chosen !== undefined) {
+        event.preventDefault();
+        setResultsOpen(false);
+        setActiveResult(null);
+        jumpToAddress(chosen.va);
+        return;
+      }
     }
     if (matchedNames === null) {
       // The Enter that has nothing to jump to says so, rather than leaving the
@@ -710,6 +759,7 @@ export function App() {
     // whole new map against a name that does not exist there.
     setQuery("");
     setResultsOpen(false);
+    setActiveResult(null);
     setSelectedIndex(null);
     setTarget(next);
   };
@@ -881,14 +931,33 @@ export function App() {
                   className="h-8 w-full min-w-0 rounded-control border border-control-line bg-surface ps-8 pe-2 text-data text-text hover:border-control-line-hover"
                   placeholder="Function name or address"
                   value={query}
+                  // The editable-combobox pattern (ARIA 1.2): the field owns the
+                  // list, the arrows walk it, and the row the reader is on is
+                  // named by `aria-activedescendant` rather than by focus. A
+                  // plain `type="search"` announced nothing about the list at
+                  // all, so a screen-reader user had no way to know matches
+                  // existed or how many (WCAG 4.1.2).
+                  role="combobox"
+                  aria-expanded={resultsOpen && searchResults.length > 0}
+                  aria-controls="search-results-list"
+                  aria-autocomplete="list"
+                  aria-activedescendant={
+                    resultsOpen && activeResult !== null
+                      ? searchResultOptionId(activeResult)
+                      : undefined
+                  }
                   onChange={(event) => {
                     setQuery(event.currentTarget.value);
                     setResultsOpen(true);
+                    // A new term is a new list; the row the arrows were on
+                    // belonged to the old one and would name a row that is no
+                    // longer there.
+                    setActiveResult(null);
                   }}
                   onFocus={() => setResultsOpen(true)}
                   // The list is an overlay on the map, so focus leaving the box
-                  // for anything outside it puts the map back; focus moving to
-                  // a row of the list does not, since the pick closes it.
+                  // for anything outside it puts the map back. The rows are
+                  // not tab stops, so this fires on leaving the widget itself.
                   onBlur={(event) => {
                     const { relatedTarget: next } = event;
                     const box = searchBoxRef.current;
@@ -896,6 +965,7 @@ export function App() {
                       return;
                     }
                     setResultsOpen(false);
+                    setActiveResult(null);
                   }}
                   onKeyDown={onSearchKeyDown}
                 />
@@ -909,6 +979,7 @@ export function App() {
                   onClick={() => {
                     setQuery("");
                     setResultsOpen(false);
+                    setActiveResult(null);
                   }}
                 >
                   <Icon name="x" />
@@ -930,8 +1001,12 @@ export function App() {
                 results={searchResults}
                 total={matchedNames?.size ?? 0}
                 section={active?.name ?? null}
+                activeIndex={activeResult}
+                listId="search-results-list"
+                optionId={searchResultOptionId}
                 onPick={(result) => {
                   setResultsOpen(false);
+                  setActiveResult(null);
                   jumpToAddress(result.va);
                 }}
               />
@@ -998,9 +1073,16 @@ export function App() {
         </div>
       </header>
 
+      {/* `tabIndex={-1}` below is the skip link's target: `<main>` is not
+          focusable by default, so activating the link moved the reading
+          position without moving the focus ring, and the next Tab landed on a
+          control somewhere inside the page with nothing focused to announce as
+          its start (WCAG 2.4.1). A programmatic destination only, so it is not
+          a tab stop. */}
       <main
         className="flex flex-col gap-6 px-4 py-6 lg:flex-row lg:items-start lg:px-6"
         id="main-content"
+        tabIndex={-1}
       >
         {/* The tabpanel the section tabs control: the map and everything that
             describes it. The tab row is outside it so the panel is the one

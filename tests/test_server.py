@@ -4731,6 +4731,125 @@ class TestSpaBidirectionalText:
         assert "isolate(section.name)} coverage map" in map_ts
 
 
+class TestSpaSearchIsACombobox:
+    """The search field owns a listbox and says so.
+
+    A `type="search"` input with a list of links under it announces a text
+    field and nothing else: a screen-reader user who typed a term matching 400
+    names had no way to know the list existed, no way to hear how many rows it
+    held, and no key that reached any of them but the map's own first match.
+    The editable-combobox pattern (ARIA 1.2) is the answer, and it is a
+    contract between three things that can each break alone: the field's role
+    and state, the listbox the field points at, and the row
+    `aria-activedescendant` names. A row id the list does not render is an
+    active descendant that announces nothing, so the id is derived once and
+    both sides read it.
+    """
+
+    def test_the_field_is_an_editable_combobox_with_a_live_list(self) -> None:
+        app = _web("App.tsx")
+        assert 'role="combobox"' in app
+        assert 'aria-autocomplete="list"' in app
+        assert "aria-expanded={resultsOpen && searchResults.length > 0}" in app
+        assert 'aria-controls="search-results-list"' in app
+
+    def test_the_list_is_a_listbox_of_options_the_field_can_name(self) -> None:
+        results = _web("components/SearchResults.tsx")
+        assert 'role="listbox"' in results
+        assert 'role="option"' in results
+        assert "aria-selected={index === activeIndex}" in results
+        assert "id={optionId(index)}" in results
+
+    def test_the_option_ids_cannot_drift_apart(self) -> None:
+        """`aria-activedescendant` naming an id nothing carries leaves the
+        reader with a widget that announces no row at all, and the two sides
+        are written in different files."""
+        app = _web("App.tsx")
+        results = _web("components/SearchResults.tsx")
+        assert "const searchResultOptionId = (index: number): string =>" in app
+        assert "optionId={searchResultOptionId}" in app
+        assert "id={optionId(index)}" in results
+
+    def test_the_arrows_walk_the_list_and_enter_takes_the_active_row(self) -> None:
+        """Focus stays in the field, so the arrows have to move the row some
+        other way: an option that is not focused is announced only through
+        `aria-activedescendant`, and a listbox whose Enter answers with a
+        different row than the one the reader walked to is a widget that lies
+        about where it is."""
+        app = _web("App.tsx")
+        handler = app[app.index("const onSearchKeyDown") : app.index("const toggleFilter")]
+        assert 'event.key === "ArrowDown" || event.key === "ArrowUp"' in handler
+        assert "setActiveResult(" in handler
+        assert "if (resultsOpen && activeResult !== null)" in handler
+        assert "jumpToAddress(chosen.va);" in handler
+
+    def test_an_option_is_not_a_tab_stop(self) -> None:
+        """The list used to be buttons, so Tab walked twenty of them after the
+        field and the reader could not get past them; the option rows are not
+        focusable and the arrow keys replace that path."""
+        results = _web("components/SearchResults.tsx")
+        assert "<button" not in results
+        assert "tabIndex" not in results
+
+    def test_a_new_term_drops_the_row_the_arrows_were_on(self) -> None:
+        """`aria-activedescendant` may only name an element in the DOM, and the
+        list is rebuilt from the new term's matches."""
+        app = _web("App.tsx")
+        start = app.index("onChange={(event) => {\n                    setQuery")
+        block = app[start : app.index("}}", start) + 2]
+        assert "setActiveResult(null);" in block
+
+    def test_the_active_row_is_worn_not_merely_announced(self) -> None:
+        """The option holds no focus, so the ring is the only cue a sighted
+        reader has that the arrows moved. A fill could not be that cue:
+        `surface-2` on `surface` is 1.05:1, which is a 1.05:1 selection
+        indicator (WCAG 1.4.11)."""
+        results = _web("components/SearchResults.tsx")
+        assert "is-active" in results
+        css = _web("index.css")
+        # The standalone rule, not the forced-colors selector list that also
+        # ends `.is-active {`; `rindex` is what tells them apart.
+        start = css.rindex(".is-active {")
+        rule = css[start : css.index("}", start)]
+        assert "outline: 2px solid var(--color-accent);" in rule
+        assert "outline-offset: -2px;" in rule
+        # Forced colors replaces the token layer, and Highlight is what
+        # survives it.
+        forced_start = css.index("@media (forced-colors: active)")
+        forced = css[forced_start : css.index("}", forced_start)]
+        assert '[aria-selected="true"].is-active' in forced
+
+    def test_the_skip_link_has_something_to_land_on(self) -> None:
+        """`<main>` is not focusable, so the link moved the reading position
+        and left the next Tab to land somewhere inside the page with nothing
+        focused to announce as its start (WCAG 2.4.1)."""
+        app = _web("App.tsx")
+        start = app.index("<main\n")
+        main = app[start : app.index(">", start)]
+        assert 'id="main-content"' in main
+        assert "tabIndex={-1}" in main
+
+
+class TestSpaNamedControls:
+    """A control in the tab order and in a screen reader's link list needs a
+    name that says what it does, not what it is drawn as."""
+
+    def test_a_disassembly_address_names_its_own_action(self) -> None:
+        """The address links are real anchors, so they are in the Tab order and
+        in the screen reader's link list, where a bare hex number said nothing
+        about what activating it did. The visible text is unchanged, so the
+        name cannot drift from the address shown (WCAG 2.4.4)."""
+        hl = _web("lib/highlight.ts")
+        assert 'aria-label="Jump to address $<address>"' in hl
+        assert 'class="asm-link"' in hl
+
+    def test_the_disassembly_link_still_carries_its_own_text(self) -> None:
+        """The name is added; the address it names is still on screen, so the
+        link does not read as a label with nothing behind it."""
+        hl = _web("lib/highlight.ts")
+        assert ">$<address></a>" in hl
+
+
 class TestClockSeam:
     """Every window in the request path reads ``recoverage.clock``.
 

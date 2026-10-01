@@ -1,6 +1,7 @@
 import type { ComponentChildren } from "preact";
 
 import type { SearchEntry } from "@/api";
+import { cn } from "@/lib/cn";
 import { count, hex, isolate, plural, toVa } from "@/lib/format";
 
 /** One match, as the result list draws it. */
@@ -18,6 +19,16 @@ export type SearchResultsProps = {
   total: number;
   /** The section on screen, named beside the rows that are in it. */
   section: string | null;
+  /** The row the arrow keys walked to, or null while none is. Named by the
+   * search box's `aria-activedescendant` rather than by focus, because focus
+   * stays in the field while the list is read from (ARIA 1.2 combobox). */
+  activeIndex: number | null;
+  /** The element id the listbox carries, the target of the field's
+   * `aria-controls`. */
+  listId: string;
+  /** The row's own id, which `aria-activedescendant` points at. Derived from
+   * the row's position so it is stable across a re-render. */
+  optionId: (index: number) => string;
   onPick: (result: SearchResult) => void;
 };
 
@@ -33,6 +44,9 @@ export function SearchResults({
   results,
   total,
   section,
+  activeIndex,
+  listId,
+  optionId,
   onPick,
 }: SearchResultsProps): ComponentChildren {
   if (results.length === 0) {
@@ -44,45 +58,68 @@ export function SearchResults({
     // sticky and measured into `--topbar-h`, so a list that grew it would move
     // the map the reader is looking at every keystroke.
     <div className="search-results absolute top-full start-0 z-30 mt-1 w-full min-w-72 max-w-form overflow-hidden rounded-card bg-surface shadow-lift">
-      <ol className="m-0 max-h-72 list-none overflow-y-auto p-1">
-        {results.map((result) => (
-          <li key={`${result.name}-${result.va}`}>
-            <button
-              type="button"
-              className="search-result flex min-h-8 w-full cursor-pointer items-baseline gap-2 rounded-chip border-0 bg-transparent px-2 py-1.5 text-start font-mono text-micro text-text hover:bg-surface-2"
-              onClick={() => onPick(result)}
-            >
-              <span className="min-w-0 grow truncate" dir="auto">
-                {isolate(result.name)}
+      {/* A listbox, not an ordered list of buttons: the search box is the
+          combobox that owns it, the arrow keys move the option through
+          `aria-activedescendant` rather than through focus, and a list of
+          buttons under a plain text field is announced as a list the reader has
+          no relationship to (WCAG 4.1.2, 2.1.1). The rows are `<div>`s
+          because an option is not a control and must not be in the tab order:
+          a second set of tab stops behind the field the reader is typing in is
+          the pattern ARIA 1.2 exists to avoid. */}
+      <div
+        className="max-h-72 overflow-y-auto p-1"
+        id={listId}
+        role="listbox"
+        aria-label="Search matches"
+      >
+        {results.map((result, index) => (
+          <div
+            key={`${result.name}-${result.va}`}
+            id={optionId(index)}
+            role="option"
+            aria-selected={index === activeIndex}
+            className={cn(
+              // The active row wears the FIELD's focus ring, not a fill. The
+              // option is never focused, so the ring the reader can see on the
+              // field is the one that says where the arrows are, and the fills
+              // a selection could use (`surface-2` on `surface` is 1.05:1)
+              // told a low-vision reader nothing (WCAG 1.4.11). The 3px inset
+              // keeps it inside the list's own padding, so no row shifts when
+              // the arrow moves.
+              "search-result flex min-h-8 w-full cursor-pointer items-baseline gap-2 rounded-chip px-2 py-1.5 font-mono text-micro text-text",
+              index === activeIndex && "is-active",
+            )}
+            data-active={index === activeIndex ? "" : undefined}
+            onClick={() => onPick(result)}
+          >
+            <span className="min-w-0 grow truncate" dir="auto">
+              {isolate(result.name)}
+            </span>
+            {result.symbol === null || result.symbol === result.name ? null : (
+              <span className="min-w-0 shrink truncate text-text-muted" dir="auto">
+                {result.symbol}
               </span>
-              {result.symbol === null || result.symbol === result.name ? null : (
-                <span className="min-w-0 shrink truncate text-text-muted" dir="auto">
-                  {result.symbol}
-                </span>
-              )}
-              <span className="shrink-0 text-text-muted">{hex(result.va, 8)}</span>
-              {/* Which section each hit is in, on every row that has one. A
-                  target-wide term matches `.rdata` and `.text` alike, and the
-                  rows that were not in the section on screen carried nothing at
-                  all, so two rows in different sections read identically and the
-                  pick silently switched tabs. The current section is marked in
-                  the accent and says "in", so a row that needs a tab switch is
-                  the one that looks like it. */}
-              {result.section === null ? null : (
-                <span
-                  className={
-                    result.section === section
-                      ? "shrink-0 text-st-exact"
-                      : "shrink-0 text-text-faint"
-                  }
-                >
-                  {result.section === section ? `in ${isolate(section)}` : isolate(result.section)}
-                </span>
-              )}
-            </button>
-          </li>
+            )}
+            <span className="shrink-0 text-text-muted">{hex(result.va, 8)}</span>
+            {/* Which section each hit is in, on every row that has one. A
+                target-wide term matches `.rdata` and `.text` alike, and the
+                rows that were not in the section on screen carried nothing at
+                all, so two rows in different sections read identically and the
+                pick silently switched tabs. The current section is marked in
+                the accent and says "in", so a row that needs a tab switch is
+                the one that looks like it. */}
+            {result.section === null ? null : (
+              <span
+                className={
+                  result.section === section ? "shrink-0 text-st-exact" : "shrink-0 text-text-faint"
+                }
+              >
+                {result.section === section ? `in ${isolate(section)}` : isolate(result.section)}
+              </span>
+            )}
+          </div>
         ))}
-      </ol>
+      </div>
       {hidden > 0 ? (
         <p className="m-0 border-0 border-t border-border px-3 py-2 text-micro text-text-muted">
           {count(hidden)} more {plural(hidden, { one: "match", other: "matches" })} not shown. Narrow

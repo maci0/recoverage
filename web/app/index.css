@@ -115,7 +115,8 @@
  * are data, not decoration. */
 @media (forced-colors: active) {
   [data-active],
-  [aria-pressed="true"] {
+  [aria-pressed="true"],
+  [aria-selected="true"].is-active {
     outline: 2px solid Highlight;
     outline-offset: -2px;
   }
@@ -123,6 +124,20 @@
   .grid-canvas,
   .swatch {
     forced-color-adjust: none;
+  }
+}
+
+/* The search listbox's active row. The option is named by
+ * `aria-activedescendant` and never holds focus, so the ring the reader sees on
+ * the field is the one that says where the arrow keys are. A fill could not:
+ * `surface-2` on `surface` is 1.05:1, and the only other cue a sighted reader
+ * has is the row the highlight rings in the field. Negative offset because the
+ * option has no margin to grow into inside the list's padding, so no row
+ * shifts when the arrow moves (WCAG 1.4.11). */
+@layer components {
+  .is-active {
+    outline: 2px solid var(--color-accent);
+    outline-offset: -2px;
   }
 }
 
