@@ -7,6 +7,13 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Search no longer re-folds every name and address of every function and
+  global on every keystroke. The folds are pure functions of a snapshot that
+  does not change while the term does, so they are computed once per snapshot
+  and each search tests the folded text. On a 20,000-function target, Potato
+  Mode's grid search drops from about 520 ms to 300 ms and its function-list
+  search from 600 ms to 260 ms; the results are identical, and the differential
+  in the suite holds the two paths to the same rows.
 - The search box is now an editable combobox: it announces whether its match
   list is open and how a row is reached, and Up/Down walk the list with Enter
   taking the row the reader is on. Before, a screen reader announced a plain

@@ -16,19 +16,26 @@ its limit, and a throttle that hands out exactly as many slots as it promises.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import threading
 from collections.abc import Callable, Mapping
+from pathlib import Path
 from typing import Any
 
 import pytest
 from conftest import HAS_DB, decode_body, wsgi_get, wsgi_post
+from rebrew.coverage_toml import _snapshot as rebrew_snapshot
 
-from recoverage import api, metrics
+from recoverage import api, documents, metrics
 from recoverage import server as _server
 
 pytestmark = pytest.mark.skipif(not HAS_DB, reason="needs the synthetic coverage documents")
+
+#: The directory the shared synthetic documents live in, named so a test can
+#: read one back without reaching for a path spelling of its own.
+_DB_DIR = Path.cwd() / "db"
 
 #: Threads per concurrent test.  Enough for the check-then-act windows to be
 #: reachable on a machine with any parallelism at all, few enough that the
@@ -600,6 +607,62 @@ class TestSnapshotIndex:
         assert all(result is results[0] for result in results)
         after = sum(1 for key in _server._SNAPSHOT_INDEX if key[1] == "globals_by_va")
         assert after - before <= 1
+
+    def test_the_folded_columns_are_per_snapshot_under_a_herd(self) -> None:
+        """Two snapshots' folded tables never answer for each other.
+
+        The folded search columns are a memo every search request on a server
+        reads, keyed on snapshot identity the way the by-VA indices are.  A
+        build that published into the wrong entry would hand one request the
+        other build's names, which is a wrong answer for a request that never
+        asked for it.
+        """
+        held = _server.coverage_for("FAKEDLL")
+        # A second parse of the same document is a second DISTINCT snapshot
+        # object, which is what a rebuild produces while requests for the
+        # previous build are still in flight: coverage_for hands out one object
+        # per document version, so two targets would not do — the key is
+        # identity, not name.
+        path = _DB_DIR / "coverage-FAKEDLL.toml"
+        data = path.read_bytes()
+        digest = hashlib.sha256(data).hexdigest()
+        other = rebrew_snapshot(path, documents._parse_toml(path, data, digest), "FAKEDLL")
+        assert other is not held
+        results: dict[int, tuple[Any, Any]] = {}
+        result_lock = threading.Lock()
+        start = threading.Barrier(8)
+
+        def worker(index: int) -> None:
+            snapshot = held if index % 2 == 0 else other
+            start.wait()
+            with result_lock:
+                results.setdefault(
+                    index,
+                    (
+                        _server.folded_row_columns(snapshot, snapshot.functions),
+                        _server.folded_va_columns(snapshot, snapshot.globals),
+                    ),
+                )
+
+        _in_parallel(worker)
+
+        assert len(results) == 8
+        # Every thread that asked for one snapshot was answered with folds of
+        # THAT snapshot's rows, never the other's.  A single published table per
+        # snapshot is deliberately not asserted: the memo is bounded and the
+        # rest of this module fills it, so a build can be evicted mid-herd and
+        # two threads can legitimately build two equal tables.  The one-object
+        # property is pinned by the delta count in the test above, which reads
+        # the store it shares.
+        tables = {id(results[0][0]), id(results[1][0])}
+        assert len(tables) == 2, "the two snapshots answered with the same table"
+        for index, (table, va_table) in results.items():
+            snapshot = held if index % 2 == 0 else other
+            assert table is not None
+            for fn in snapshot.functions:
+                assert table[id(fn)][0] == _server.fold_text(fn.name)
+            for gl in snapshot.globals:
+                assert va_table[id(gl)][0] == _server.fold_text(f"0x{gl.va:08x}")
 
 
 class TestBatchLookup:

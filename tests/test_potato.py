@@ -39,12 +39,19 @@ from recoverage.potato import (
     _panel_fn_source_text,
     _progress_svg,
     _render_original_bytes,
+    _search_functions,
     _section_heading,
     _section_tab_data,
     _wrap_text,
     render_potato,
 )
-from recoverage.server import _snapshot_db_mtime, is_plain_relative
+from recoverage.server import (
+    _snapshot_db_mtime,
+    fold_can_match_hex,
+    fold_match_folded,
+    fold_needle,
+    is_plain_relative,
+)
 
 
 def render_potato_url(url: str) -> str:
@@ -2921,6 +2928,91 @@ class TestSearchAddressSpelling:
 
         snap = self._snapshot(tmp_path, monkeypatch)
         assert _search_functions(snap, query) == set()
+
+
+class TestSearchAgreesWithThePerRowFold:
+    """The snapshot-folded search must select the rows the per-row fold did.
+
+    ``_search_functions`` reads its name and address columns from the
+    snapshot's folded tables rather than folding each column of every row on
+    every keystroke.  This is the differential that keeps that a refactor: for
+    every term the two paths must return the same name set, including the
+    ``vaStart`` spellings the grid's dimming test compares against and the
+    global rows, whose arm is the one that broke when a single memo was shared
+    between the two arrays.
+    """
+
+    @staticmethod
+    def _snapshot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> CoverageSnapshot:
+        return _write_doc(
+            tmp_path,
+            monkeypatch,
+            "T",
+            {".text": {"size": 16, "cells": [cell(0, 16, "exact")]}},
+            functions=[
+                {"va": 0x401000, "name": "sub_401000", "symbol": "Sym_1", "status": "exact"},
+                {"va": 0x402000, "name": "Straße", "symbol": "STRASSE", "status": "exact"},
+                {"va": 0x403000, "name": "café", "status": "exact"},
+            ],
+            globals_=[{"va": 0x402000, "name": "g_cfg"}, {"va": 0x999000, "name": "g_zzz"}],
+        )
+
+    @staticmethod
+    def _per_row(snap: CoverageSnapshot, search_query: str) -> set[str]:
+        """The pre-fold implementation: fold every column of every row."""
+        needle = fold_needle(search_query)
+        match_hex = fold_can_match_hex(needle)
+        matched: set[str] = set()
+        for fn in snap.functions:
+            if (
+                fold_match_folded(fn.name, needle)
+                or (match_hex and fold_match_folded(fn.vaStart, needle))
+                or fold_match_folded(fn.symbol, needle)
+                or (
+                    match_hex
+                    and (
+                        fold_match_folded(f"0x{fn.va:08x}", needle)
+                        or fold_match_folded(f"0x{fn.va:x}", needle)
+                    )
+                )
+            ):
+                matched.add(fn.name)
+                if fn.vaStart:
+                    matched.add(fn.vaStart)
+        for gl in snap.globals:
+            if fold_match_folded(gl.name, needle) or (
+                match_hex
+                and (
+                    fold_match_folded(f"0x{gl.va:08x}", needle)
+                    or fold_match_folded(f"0x{gl.va:x}", needle)
+                )
+            ):
+                matched.add(gl.name)
+        return matched
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "sub",
+            "SUB_401000",
+            "0x00401000",
+            "0x401000",
+            "0x999000",
+            "0x000999000",
+            "stras",
+            "STRASSE",
+            "café",
+            "g_cfg",
+            "sym_1",
+            "zzz",
+            "nope",
+        ],
+    )
+    def test_the_folded_search_returns_what_the_per_row_fold_did(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, query: str
+    ) -> None:
+        snap = self._snapshot(tmp_path, monkeypatch)
+        assert _search_functions(snap, query) == self._per_row(snap, query), query
 
 
 class TestFunctionListSearchFolding:

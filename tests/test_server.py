@@ -49,6 +49,8 @@ from recoverage.server import (
     fold_match_folded,
     fold_needle,
     fold_text,
+    folded_row_columns,
+    folded_va_columns,
     functions_by_name,
     globals_by_name,
     globals_by_va,
@@ -922,6 +924,113 @@ class TestSnapshotVaIndices:
         second = _snapshot_for({}, globals_=[{"va": 0x2000, "name": "g_other"}])
         assert globals_by_va(first)[0x2000].name == "g_first"
         assert globals_by_va(second)[0x2000].name == "g_other"
+
+
+class TestFoldedSearchColumns:
+    """The per-snapshot fold answers exactly what the per-row fold answered.
+
+    A search loop used to fold each column of each row on each keystroke.  The
+    folds are pure functions of the frozen snapshot, so they are computed once
+    and the loop tests the folded text.  This class is the differential that
+    makes that a refactor and not a behaviour change: for every term, the two
+    paths must select the same rows.
+    """
+
+    @staticmethod
+    def _snap() -> Any:
+        return _snapshot_for(
+            {},
+            functions=[
+                {"va": 0x401000, "name": "sub_401000", "symbol": "Sym_1"},
+                {"va": 0x402000, "name": "Straße", "symbol": "STRASSE"},
+                {"va": 0x403000, "name": "café", "symbol": ""},
+                {"va": 0x404000, "name": "plain", "symbol": "other"},
+            ],
+            globals_=[
+                {"va": 0x402000, "name": "g_first"},
+                {"va": 0x403000, "name": "g_second"},
+            ],
+        )
+
+    @pytest.mark.parametrize(
+        "term",
+        ["", "sub", "SUB_401000", "0x00401000", "401000", "stras", "STRASSE", "café", "%", "nope"],
+    )
+    def test_the_folded_columns_answer_as_the_per_row_fold_did(self, term: str) -> None:
+        snap = self._snap()
+        needle = fold_needle(term)
+        match_hex = fold_can_match_hex(needle)
+        fn_columns = folded_row_columns(snap, snap.functions)
+        va_columns = folded_va_columns(snap, snap.functions)
+        for fn in snap.functions:
+            columns = fn_columns[id(fn)]
+            folded_names = needle in columns[0] or needle in columns[2] or needle in columns[1]
+            per_row = (
+                fold_match_folded(fn.name, needle)
+                or fold_match_folded(fn.vaStart, needle)
+                or fold_match_folded(fn.symbol, needle)
+            )
+            assert folded_names == per_row, fn.name
+            folded_va = va_columns[id(fn)]
+            assert (needle in folded_va[0] or needle in folded_va[1]) == (
+                match_hex
+                and (
+                    fold_match_folded(f"0x{fn.va:08x}", needle)
+                    or fold_match_folded(f"0x{fn.va:x}", needle)
+                )
+            ), fn.name
+        gl_columns = folded_row_columns(snap, snap.globals)
+        gl_va = folded_va_columns(snap, snap.globals)
+        for gl in snap.globals:
+            columns = gl_columns[id(gl)]
+            assert (needle in columns[0]) == fold_match_folded(gl.name, needle), gl.name
+            assert (needle in gl_va[id(gl)][0] or needle in gl_va[id(gl)][1]) == (
+                match_hex
+                and (
+                    fold_match_folded(f"0x{gl.va:08x}", needle)
+                    or fold_match_folded(f"0x{gl.va:x}", needle)
+                )
+            ), gl.name
+
+    def test_a_function_and_a_global_never_share_a_table(self) -> None:
+        """The two arrays are one memo each, or a function VA answers a global.
+
+        A function VA and a global VA share the ``id()`` key space, so one
+        table would hand a row the other array's folded addresses and a term
+        pasted from a global's panel would match the wrong row.
+        """
+        snap = self._snap()
+        fn_va = folded_va_columns(snap, snap.functions)
+        gl_va = folded_va_columns(snap, snap.globals)
+        assert fn_va is not gl_va
+        assert set(fn_va) != set(gl_va)
+        assert fn_va[id(snap.functions[0])] == ("0x00401000", "0x401000")
+        assert gl_va[id(snap.globals[0])] == ("0x00402000", "0x402000")
+        # The name tables are the same shape over the same two arrays, and do
+        # not collide either.
+        assert folded_row_columns(snap, snap.functions) is not folded_row_columns(
+            snap, snap.globals
+        )
+
+    def test_a_repeat_call_reuses_the_memo(self) -> None:
+        """A memo that rebuilt per call would make the per-keystroke saving nil.
+
+        Compared against a held reference rather than a second call: ``f() is
+        f()`` holds for any deterministic function, so it would not catch a
+        memo that rebuilt the table on every read.
+        """
+        snap = self._snap()
+        held = folded_row_columns(snap, snap.functions)
+        assert folded_row_columns(snap, snap.functions) is held
+        held_va = folded_va_columns(snap, snap.functions)
+        assert folded_va_columns(snap, snap.functions) is held_va
+
+    def test_two_snapshots_do_not_share_one_table(self) -> None:
+        first = self._snap()
+        second = self._snap()
+        assert folded_row_columns(first, first.functions) is not folded_row_columns(
+            second, second.functions
+        )
 
 
 class TestCoverageDocumentShapeGuard:

@@ -617,7 +617,10 @@ _SORT_SYNTAX_HINT = (
 
 
 def _filtered_functions(
-    functions: Sequence[Function], status_filter: str | None, search: str | None
+    functions: Sequence[Function],
+    status_filter: str | None,
+    search: str | None,
+    folded: Mapping[int, tuple[str, str, str]] | None = None,
 ) -> list[Function]:
     """The functions the list endpoint would serve, before paging.
 
@@ -631,6 +634,16 @@ def _filtered_functions(
     two disjuncts — SQLite's ASCII-only ``LIKE`` plus an ``rc_fold`` arm — only
     because the comparison happened in SQL; one folding in Python matches what
     the SPA highlights, which is the guarantee the fuzz campaigns assert.
+
+    *folded* is :func:`server.folded_row_columns` for *functions*, the three
+    name columns already folded for this snapshot.  A search re-folding them
+    per row is what the fold is not free for, and the rows do not change while
+    the term does, so the caller holding the snapshot passes the table in and
+    the loop pays a substring test per column.  It is optional because the
+    filter is also callable on a list the snapshot was never shown, and there
+    the per-row fold is the only way to the same answer.  The decimal VA
+    column is built and folded per row either way, and only when the term can
+    hold one (``server.fold_can_match_decimal``).
     """
     rows = [fn for fn in functions if not _server._is_data_marker(fn)]
     if status_filter is not None:
@@ -641,15 +654,34 @@ def _filtered_functions(
         # no decimal number can hold skips the arm outright
         # (server.fold_can_match_decimal).
         match_decimal = _server.fold_can_match_decimal(needle)
-        rows = [
-            fn
-            for fn in rows
-            if fold_match_folded(fn.name, needle)
-            or fold_match_folded(fn.symbol, needle)
-            or (match_decimal and fold_match_folded(str(fn.va), needle))
-            or fold_match_folded(fn.vaStart, needle)
-        ]
+        if folded is None:
+            rows = [
+                fn
+                for fn in rows
+                if fold_match_folded(fn.name, needle)
+                or fold_match_folded(fn.symbol, needle)
+                or (match_decimal and fold_match_folded(str(fn.va), needle))
+                or fold_match_folded(fn.vaStart, needle)
+            ]
+        else:
+            rows = [
+                fn
+                for fn in rows
+                if _any_column_matches(folded[id(fn)], needle)
+                or (match_decimal and fold_match_folded(str(fn.va), needle))
+            ]
     return rows
+
+
+def _any_column_matches(columns: tuple[str, str, str], needle: str) -> bool:
+    """Whether *needle* occurs in any of the three FOLDED *columns*.
+
+    The same three substring tests :func:`fold_match_folded` runs, against text
+    that has been folded once instead of once per row per keystroke.  A NULL
+    column folded as the empty string, which no non-empty term matches, so the
+    answer is the one the fold-then-test path gives.
+    """
+    return needle in columns[0] or needle in columns[1] or needle in columns[2]
 
 
 def _function_page(
@@ -1961,7 +1993,12 @@ def handle_api_functions_list(target: str) -> bytes | HTTPResponse:
         # snapshot, so the count and the rows it paginates cannot describe two
         # different builds — the guarantee `read_snapshot` used to buy with a
         # deferred read transaction.
-        rows = _filtered_functions(coverage.functions, status_filter, search)
+        rows = _filtered_functions(
+            coverage.functions,
+            status_filter,
+            search,
+            _server.folded_row_columns(coverage, coverage.functions),
+        )
         total = _function_total(snap, target, status_filter, search, rows)
         # Enumerate exactly the response fields, in order: the SPA reads
         # these keys by name, so the shape is the contract.

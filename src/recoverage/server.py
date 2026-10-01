@@ -2547,6 +2547,81 @@ def _snapshot_index[IndexT](
     return index
 
 
+def folded_row_columns(
+    snap: CoverageSnapshot, rows: Sequence[Any]
+) -> Mapping[int, tuple[str, str, str]]:
+    """``id(row) -> (folded name, folded symbol, folded vaStart)`` for *rows*.
+
+    Every server-side search compares the same three columns of every row
+    through :func:`fold_match_folded`, which re-folds each one — an NFC
+    normalization plus a ``casefold`` — on every keystroke.  The rows are
+    frozen for the snapshot's life, so those folds are pure functions of the
+    snapshot and are computed once here; a search loop then pays a substring
+    test per column instead of a fold plus the test.
+
+    Keyed by ``id(row)``, the same soundness argument the by-VA store makes:
+    the entry holds the snapshot, which holds the rows, so an id cannot name a
+    newer row while the entry lives.  A caller iterates its own FILTERED list
+    and looks each row up, so the pairing survives a filter the memo never saw.
+
+    *rows* is the snapshot's own array (``snap.functions`` or
+    ``snap.globals``); it selects which derived table is built, and the memo
+    holds the table rather than the caller's list, so a differently filtered
+    list costs no second derivation.
+    """
+
+    def build(source: Sequence[Any]) -> Mapping[int, tuple[str, str, str]]:
+        return {
+            id(row): (
+                fold_text(getattr(row, "name", "")) or "",
+                fold_text(getattr(row, "symbol", "")) or "",
+                fold_text(getattr(row, "vaStart", "")) or "",
+            )
+            for row in source
+        }
+
+    if rows is snap.functions:
+        return _snapshot_index(snap, "folded_functions", lambda: build(snap.functions))
+    return _snapshot_index(snap, "folded_globals", lambda: build(snap.globals))
+
+
+def folded_va_columns(snap: CoverageSnapshot, rows: Sequence[Any]) -> Mapping[int, tuple[str, str]]:
+    """``id(row) -> (folded "0x%08x" spelling, folded bare "0x%x" spelling)``.
+
+    The two address spellings every address-matching search compares, folded
+    once per row rather than once per row per keystroke.  It is the same
+    argument :func:`folded_row_columns` makes, over the same rows and under
+    the same ``id(row)`` key, so a caller already holding that table holds
+    these.
+
+    Built apart from the name columns, and only when a term can match a hex
+    address at all: formatting and folding two strings per row is wasted work
+    for the common case, a name the reader typed, and
+    :func:`fold_can_match_hex` is what decides that.
+
+    *rows* selects the derived table, exactly as it does in
+    :func:`folded_row_columns`: the two arrays get one memo each, because a
+    function VA and a global VA live in the same ``id()`` space and one table
+    would answer for the wrong rows.
+    """
+    if rows is snap.functions:
+        return _snapshot_index(
+            snap, "folded_va_functions", lambda: _folded_va_table(snap.functions)
+        )
+    return _snapshot_index(snap, "folded_va_globals", lambda: _folded_va_table(snap.globals))
+
+
+def _folded_va_table(rows: Sequence[Any]) -> Mapping[int, tuple[str, str]]:
+    """``id(row) -> (folded padded, folded bare)`` hex spellings of ``row.va``."""
+    return {
+        id(row): (
+            fold_text(f"0x{int(getattr(row, 'va', 0)):08x}") or "",
+            fold_text(f"0x{int(getattr(row, 'va', 0)):x}") or "",
+        )
+        for row in rows
+    }
+
+
 def globals_by_va(snap: CoverageSnapshot) -> Mapping[int, Global]:
     """``globals`` indexed by VA, one entry per snapshot.
 

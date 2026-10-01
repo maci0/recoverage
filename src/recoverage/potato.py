@@ -53,8 +53,9 @@ from recoverage.server import (
     coverage_pct,
     db_target_ids,
     fold_can_match_hex,
-    fold_match_folded,
     fold_needle,
+    folded_row_columns,
+    folded_va_columns,
     function_json,
     function_sort_key,
     global_json,
@@ -1855,21 +1856,39 @@ def _function_rows(coverage: CoverageSnapshot) -> tuple[Function, ...]:
     return rows
 
 
-def _va_matches(va: int, needle: str, match_hex: bool) -> bool:
-    """Whether *needle* matches *va* in either hex spelling this page prints.
+def _va_matches_folded(columns: tuple[str, str] | None, needle: str, match_hex: bool) -> bool:
+    """Whether *needle* matches the row's VA in either hex spelling this page prints.
 
     ``0x%08x`` and ``0x%x`` are both matched because both spellings reach the
     reader: the padded form is what the cell panel and the functions table
     print, and the bare form is what a target's ``vaStart`` spells below
     0x10000000, so a reader who pasted back the address the page had just
-    shown matched nothing when only one arm ran.  *match_hex* is the caller's
-    :func:`server.fold_can_match_hex` answer, hoisted out of the row loop: a
-    term no hex address can hold skips both formats, and neither string is
-    built for it.
+    shown matched nothing when only one arm ran.
+
+    *columns* is :func:`server.folded_va_columns`'s entry for this row — the
+    two spellings, folded once for the snapshot rather than re-formatted and
+    re-folded for every row on every keystroke — and *match_hex* is the
+    caller's :func:`server.fold_can_match_hex` answer: a term no hex address
+    can hold skips both arms, and neither spelling is even built for it.
+    ``None`` answers False, which is what a caller with no snapshot to fold
+    against gets; that path is the one the ``va``-in-hand form served.
     """
-    return match_hex and (
-        fold_match_folded(f"0x{va:08x}", needle) or fold_match_folded(f"0x{va:x}", needle)
-    )
+    if not match_hex or columns is None:
+        return False
+    return needle in columns[0] or needle in columns[1]
+
+
+def _columns_match(columns: tuple[str, str, str], needle: str) -> bool:
+    """Whether *needle* occurs in any of the row's three FOLDED name columns.
+
+    The same three substring tests :func:`server.fold_match_folded` runs —
+    ``vaStart`` before ``symbol``, the order :func:`_search_functions` has
+    always compared them in — over text folded once for the snapshot instead
+    of once per row per keystroke.  An absent column folded as the empty
+    string, which no non-empty term matches, so this is the answer the
+    fold-then-test path gives.
+    """
+    return needle in columns[0] or needle in columns[2] or needle in columns[1]
 
 
 def _search_functions(coverage: CoverageSnapshot, search_query: str) -> set[str]:
@@ -1877,8 +1896,8 @@ def _search_functions(coverage: CoverageSnapshot, search_query: str) -> set[str]
 
     Both sides fold through :func:`server.fold_match`, so a non-ASCII term
     matches and the grid highlights exactly what the API's ``?search=``
-    returns.  Addresses go through :func:`_va_matches`, and ``vaStart`` is
-    matched as well because it is the spelling a ``.text`` cell stores.
+    returns.  Addresses go through :func:`_va_matches_folded`, and ``vaStart``
+    is matched as well because it is the spelling a ``.text`` cell stores.
 
     The row cap bounds what the page can show, so it also bounds the dimming:
     a project matching more rows than the cap dims the first
@@ -1891,12 +1910,18 @@ def _search_functions(coverage: CoverageSnapshot, search_query: str) -> set[str]
         return search_matched_fns
 
     needle = fold_needle(search_query)
-    # A term no hex address can hold cannot match an address spelling, so every
-    # hex column here is folded only when it can: the two formats and folds per
-    # global, and a function's `vaStart` (server.fold_can_match_hex).  That is
-    # the same guard _functions_table_html puts on its own two VA arms, and the
-    # common case, a name the reader typed, stops folding one string per row.
+    # A term no hex address can hold cannot match an address spelling, so the
+    # two address spellings are built and folded only when it can
+    # (server.fold_can_match_hex).  That is the same guard the functions table
+    # puts on its own two VA arms, and the common case, a name the reader
+    # typed, does not build a single address string.
     match_hex = fold_can_match_hex(needle)
+    # The three name columns and the two address spellings are folded ONCE for
+    # the snapshot (server.folded_row_columns / folded_va_columns) rather than
+    # re-folded for every row on every keystroke: the rows are frozen while the
+    # term changes, and one pass over 20k rows was three folds each.
+    folded_fns = folded_row_columns(coverage, coverage.functions)
+    folded_vas = folded_va_columns(coverage, coverage.functions) if match_hex else None
     # The cap takes the FIRST rows of the sorted match set, so only that many
     # have to be ordered: nsmallest is the documented equivalent of
     # ``sorted(rows, key=...)[:_SEARCH_ROW_LIMIT]`` and keeps the same answer,
@@ -1907,10 +1932,10 @@ def _search_functions(coverage: CoverageSnapshot, search_query: str) -> set[str]
         (
             fn
             for fn in coverage.functions
-            if fold_match_folded(fn.name, needle)
-            or (match_hex and fold_match_folded(fn.vaStart, needle))
-            or fold_match_folded(fn.symbol, needle)
-            or _va_matches(fn.va, needle, match_hex)
+            if _columns_match(folded_fns[id(fn)], needle)
+            or _va_matches_folded(
+                folded_vas[id(fn)] if folded_vas is not None else None, needle, match_hex
+            )
         ),
         key=lambda fn: (fn.name, fn.vaStart),
     ):
@@ -1921,12 +1946,17 @@ def _search_functions(coverage: CoverageSnapshot, search_query: str) -> set[str]
             # cell entries against this set, so VA spellings must be included.
             search_matched_fns.add(fn.vaStart)
 
+    folded_gls = folded_row_columns(coverage, coverage.globals)
+    folded_gl_vas = folded_va_columns(coverage, coverage.globals) if match_hex else None
     gl_rows = nsmallest(
         _SEARCH_ROW_LIMIT,
         (
             gl
             for gl in coverage.globals
-            if fold_match_folded(gl.name, needle) or _va_matches(gl.va, needle, match_hex)
+            if _columns_match(folded_gls[id(gl)], needle)
+            or _va_matches_folded(
+                folded_gl_vas[id(gl)] if folded_gl_vas is not None else None, needle, match_hex
+            )
         ),
         key=lambda gl: gl.name,
     )
@@ -2590,15 +2620,20 @@ def _render_function_list(
     if search_query:
         # The VA arms are this view's own addition, where _search_functions
         # matches `vaStart` instead because that is the string a .text cell
-        # stores.
+        # stores.  The name columns come from the snapshot's folded table, and
+        # the two address spellings only when the term can hold one.
         needle = fold_needle(search_query)
         match_hex = fold_can_match_hex(needle)
+        folded = folded_row_columns(coverage, coverage.functions)
+        folded_vas = folded_va_columns(coverage, coverage.functions) if match_hex else None
         rows = [
             fn
             for fn in rows
-            if fold_match_folded(fn.name, needle)
-            or fold_match_folded(fn.symbol, needle)
-            or _va_matches(fn.va, needle, match_hex)
+            if needle in folded[id(fn)][0]
+            or needle in folded[id(fn)][1]
+            or _va_matches_folded(
+                folded_vas[id(fn)] if folded_vas is not None else None, needle, match_hex
+            )
         ]
     # The rendered list is capped (same bound as the search above) so a large
     # project's ?view=functions page doesn't build a multi-MB HTML document on
