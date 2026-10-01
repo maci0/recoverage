@@ -11,7 +11,7 @@ import re
 import threading
 import time
 import unicodedata
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from operator import attrgetter
@@ -56,16 +56,24 @@ class _CountingStream(BytesIO):
     A body handler that materializes the request body before applying its cap
     is invisible in a status-code assertion, because the refusal still comes
     out a 413. The reads counter is what tells the two apart.
+
+    The counter is PER INSTANCE.  It was a class attribute, which made it a
+    process global every case in this file added to: `reads == 0` in the
+    declared-length refusal then passed only because that case happened to be
+    collected before every other user, and a shuffled run reported 126 reads
+    against a request the contract says is refused before any read.
     """
 
-    reads = 0
+    def __init__(self, data: bytes = b"") -> None:
+        super().__init__(data)
+        self.reads = 0
 
     def read(self, size: int = -1) -> bytes:  # type: ignore[override]
-        type(self).reads += 1
+        self.reads += 1
         return super().read(size)
 
     def readline(self, size: int = -1) -> bytes:  # type: ignore[override]
-        type(self).reads += 1
+        self.reads += 1
         return super().readline(size)
 
 
@@ -3458,14 +3466,18 @@ class _ExactStream(BytesIO):
     ``read(n)`` blocks until n bytes arrive or the peer goes away.  Every other
     body test uses a plain ``BytesIO``, which short-reads at once and so cannot
     tell a read-to-the-declared-length from a read-to-EOF.
-    """
 
-    reads = 0
-    overshoot: ClassVar[list[int]] = []
+    Both the counter and the overshoot log are PER INSTANCE for the reason
+    ``_CountingStream`` documents: as class attributes they were process
+    globals, so a case asserting ``reads == 0`` was really asserting that no
+    earlier case in the run had read anything.
+    """
 
     def __init__(self, frame: bytes, trailer: bytes = b"") -> None:
         super().__init__(frame + trailer)
         self._frame_end = len(frame)
+        self.reads = 0
+        self.overshoot: list[int] = []
 
     def read(self, size: int = -1) -> bytes:  # type: ignore[override]
         self.reads += 1
@@ -4957,6 +4969,24 @@ class TestHealthConnectionCap:
     within their own cap. The gauge is what turns a refused client into a
     diagnosable server.
     """
+
+    @pytest.fixture(autouse=True)
+    def _reset_connections(self) -> Iterator[None]:
+        """Zero the gauge before and after, through the registry's own entry point.
+
+        `metrics.CONNECTIONS` is a process global whose `refused` and `max` are
+        LIFETIME fields that outlive the test that moved them: the capped-
+        connection case in `test_lifecycle.py` drives two real sockets through
+        this same gauge, so a run that happened to execute that file first left
+        `refused == 1` behind and the assertions below read a count one too
+        high.  No shared fixture resets this registry, so the class was green
+        only because file order happened to schedule it afterwards.
+        """
+        from recoverage import metrics
+
+        metrics.CONNECTIONS.reset()
+        yield
+        metrics.CONNECTIONS.reset()
 
     def test_connection_gauge_is_reported_before_any_connection(self) -> None:
         status, headers, body = wsgi_get("/api/health")

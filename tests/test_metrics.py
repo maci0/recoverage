@@ -19,9 +19,32 @@ from recoverage import clock, metrics, server
 
 @pytest.fixture(autouse=True)
 def _reset_counters() -> None:
+    """Zero the RED registry around every test in this module.
+
+    ``RequestStats.reset`` deliberately leaves the ``in_flight`` GAUGE alone
+    (a real request's release drives it down, and zeroing under it would let a
+    second release go negative).  That reasoning is about the request path,
+    where ``before_request``/``after_request`` always pair; most cases here
+    drive ``finish()`` directly to place counts in a bucket, with no
+    ``start()`` to open the matching half.  Each of those decremented the
+    gauge, so a run's final gauge was minus the number of calls the whole
+    module had made: a shuffled order took ``test_in_flight_returns_to_zero``
+    to -237 and it asserted 1.  Reaching into the private counter is the only
+    way to undo it, and it is what the next two assertions below need
+    restored to be meaningful.
+    """
     metrics.REQUESTS.reset()
+    _zero_in_flight()
     yield
     metrics.REQUESTS.reset()
+    _zero_in_flight()
+
+
+def _zero_in_flight() -> None:
+    # The private counter is the only handle there is: `reset()` deliberately
+    # leaves the gauge alone, which is right on the request path and wrong in a
+    # test module that drives `finish()` on its own.
+    metrics.REQUESTS._in_flight = 0
 
 
 def _header(headers: dict[str, str], name: str) -> str:
@@ -487,7 +510,9 @@ class TestTargetsFallbackLogging:
             )
         ]
 
-    def test_the_message_is_escaped(self, caplog: pytest.LogCaptureFixture) -> None:
+    def test_the_message_is_escaped(
+        self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """A coverage document's own parse error is untrusted text.
 
         `server._db_unavailable_err` escapes the same value for the API; an
@@ -496,7 +521,12 @@ class TestTargetsFallbackLogging:
         """
         import recoverage.api as api
 
-        api._targets_fallback_reported = None
+        # Through monkeypatch, not a bare assignment: the latch is a process
+        # global whose value outlives this test, so writing `None` here leaves
+        # the next test inheriting a "no outage open" state it never set.  The
+        # sibling test above and every `_health_reported` case in test_api.py
+        # restore through the same mechanism.
+        monkeypatch.setattr(api, "_targets_fallback_reported", None)
         with caplog.at_level(logging.WARNING, logger="recoverage"):
             self._reason("line one\nINJECTED: pwned")
         messages = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]

@@ -373,9 +373,15 @@ class TestRequestCounters:
         # reads what it read before the herd.
         assert after["in_flight"] == before["in_flight"]
         route = "/api/targets/<target>/functions"
-        assert (
-            after["by_route"][route]["requests"] - before["by_route"][route]["requests"] == issued
-        )
+        # A row is created by the first request to be served under it, so a
+        # route no earlier request in this PROCESS has taken has no row in the
+        # `before` snapshot at all.  Indexing it there raised KeyError and the
+        # case passed only because some neighbouring test had happened to
+        # request the same route first; an absent row counts zero requests,
+        # which is what the delta is about.
+        before_route = before["by_route"].get(route, {}).get("requests", 0)
+        after_route = after["by_route"][route]["requests"]
+        assert after_route - before_route == issued
 
 
 class TestAdmissionCap:

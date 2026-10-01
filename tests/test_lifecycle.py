@@ -1124,6 +1124,10 @@ class TestClientConnectionDeadline:
             server.shutdown()
             server.server_close()
             accept_thread.join(timeout=5)
+            # The gauge is a process global and `refused`/`max` are LIFETIME
+            # fields: this test's 503 refusal and its patched cap outlive it,
+            # and a health assertion elsewhere reads them as its own zeros.
+            metrics.CONNECTIONS.reset()
 
     def test_a_transport_rejection_reaches_the_app_logger(
         self, caplog: pytest.LogCaptureFixture
