@@ -804,8 +804,14 @@ export function App() {
     panel.scrollIntoView({ behavior: smooth ? "smooth" : "auto", block: "start" });
   }, [selectedIndex]);
 
+  // Clicking the block already open closes it, which is the one way back from
+  // the detail panel to the whole map. Without it the only ways out were a
+  // section or target switch: a reader who mis-clicked a block, or finished
+  // reading one, had nothing to press to dismiss the panel and no clue that
+  // switching tabs was the intended escape. Every other panel here leaves on a
+  // click outside or on Escape, so this was the one dead end in the flow.
   const onGridSelect = useCallback((index: number): void => {
-    setSelectedIndex(index);
+    setSelectedIndex((current) => (current === index ? null : index));
   }, []);
 
   const noTargets = targetReady && targets.length === 0;
@@ -1081,9 +1087,9 @@ export function App() {
             <a
               className={cn(controlVariants({ variant: "ghost" }), "no-underline")}
               href={potatoHref}
-              title="Open this view in Potato Mode, the server-rendered HTML page"
+              title="Potato Mode: this view as plain server-rendered HTML, with no JavaScript"
             >
-              Plain HTML
+              Potato Mode
             </a>
             <Button
               variant="ghost"

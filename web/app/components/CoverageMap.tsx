@@ -460,6 +460,23 @@ export function CoverageMap({
       paint();
       return;
     }
+    if (event.key === "Escape") {
+      // The way out of everything else on this page: the search box clears on
+      // it, and so does a block that is open. Escape did nothing here, so the
+      // detail panel could only be left by switching section or target.
+      if (selectedIndex === null) {
+        return;
+      }
+      event.preventDefault();
+      // `onSelect` is the toggle the click path uses, so this closes the block
+      // that is open rather than selecting the cursor's, which an arrow-key
+      // walk may have moved off. The status names the block that closed, not
+      // the one the cursor is resting on, which is not that block.
+      onSelect(selectedIndex);
+      setCursor(`${describe(selectedIndex)}, selection cleared`);
+      paint();
+      return;
+    }
     const target = stepFor(event.key, index, cols, last);
     if (target === null) {
       return;
@@ -507,7 +524,7 @@ export function CoverageMap({
       <canvas ref={canvasRef} className="grid-canvas block" aria-hidden="true" />
       <p id={hintId} className="sr-only">
         Arrow keys move between blocks, Home and End jump to the first and last, Enter or Space
-        selects the block under the cursor.
+        selects the block under the cursor, Escape closes the block that is open.
       </p>
       <p className="sr-only" role="status" aria-live="polite">
         {cursor}

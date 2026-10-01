@@ -240,6 +240,43 @@ def test_search_lists_its_matches(page: Any):
     expect(page.locator(".search-results")).to_have_count(0)
 
 
+def test_a_selected_block_can_be_closed(page: Any):
+    """Selecting a block has to be undoable from the map.
+
+    Once a block was open the detail panel had no way out: Escape cleared the
+    search box and did nothing here, clicking the open block selected it
+    again, and clicking off the lattice did nothing at all. The only escapes
+    were a section or target switch, which a reader who mis-clicked a block or
+    finished reading one would not think to try, so the panel stayed open over
+    the map for the rest of the session.
+    """
+    page.goto(f"{BASE_URL}/?section=.text")
+    page.wait_for_selector(".grid-canvas")
+
+    canvas = page.locator(".grid-canvas")
+    box = canvas.bounding_box()
+    if box is None:
+        pytest.skip("coverage map canvas did not layout")
+    corner = {"x": min(12, box["width"] / 2), "y": min(12, box["height"] / 2)}
+
+    def panel_is_open() -> bool:
+        return "Select a block on the map" not in page.locator("#panel").inner_text()
+
+    # The same block again closes it, rather than re-selecting it.
+    canvas.click(position=corner)
+    expect(page.locator("#panel")).not_to_contain_text("Select a block on the map", timeout=15000)
+    canvas.click(position=corner)
+    expect(page.locator("#panel")).to_contain_text("Select a block on the map", timeout=15000)
+
+    # And so does Escape from the map, the way every other panel on this page
+    # leaves.
+    canvas.click(position=corner)
+    assert panel_is_open()
+    page.locator(".grid").focus()
+    page.keyboard.press("Escape")
+    expect(page.locator("#panel")).to_contain_text("Select a block on the map", timeout=15000)
+
+
 def test_code_modal_names_one_scroll_region(page: Any):
     """The modal's body is the pane's scroll container, so it carries the
     focusable region and its name. The <pre> inside used to declare a second

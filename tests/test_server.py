@@ -4806,6 +4806,23 @@ class TestSpaLayoutAndFeedback:
         assert "<noscript>" in shell
         assert 'href="/potato"' in shell
 
+    def test_the_topbar_link_names_potato_mode_the_same_way_the_docs_do(self) -> None:
+        """The one place a reader is OFFERED Potato Mode called it "Plain HTML".
+
+        The README, the noscript block above, the page title and the API table
+        all spell it Potato Mode, so a reader who has met the name anywhere
+        else in the product looked for it in the topbar and found a link
+        labelled with something else. The label carries the product's name and
+        the tooltip carries what it is, which is what a reader who reached for
+        the name wants to know.
+        """
+        app = _web("App.tsx")
+        at = app.index("href={potatoHref}")
+        link = app[at : app.index("</a>", at)]
+        assert "Potato Mode" in link, link
+        assert "server-rendered HTML" in link, link
+        assert "Plain HTML" not in link, link
+
     def test_deep_links_carry_target_section_query_and_filter(self) -> None:
         app = _web("App.tsx")
         for marker in (

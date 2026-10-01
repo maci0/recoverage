@@ -21,6 +21,16 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   opener silently fell back to `webbrowser` instead of the detached, bounded,
   reaped launcher the rest of the startup path uses. Every POSIX host now takes
   the POSIX opener; macOS and Windows keep the command each of them owns.
+- A block selected on the coverage map could not be closed. Clicking it again
+  re-selected it, Escape cleared the search box and nothing else, and clicking
+  off the lattice did nothing at all, so the only ways out were switching
+  section or target — which is not what a reader who mis-clicked a block, or
+  finished reading one, reaches for. The panel stayed open over the map for
+  the rest of the session. Clicking the open block now closes it, and so does
+  Escape on the map.
+- The topbar link to Potato Mode was labelled "Plain HTML", the one place in
+  the product that view was not called Potato Mode. It now carries the name
+  the README, the no-JavaScript page and the page title all use.
 - A coverage directory holding a `coverage-<target>.toml` whose name is not
   valid UTF-8 — legal on ext4, and what a checkout, an archive or a copy off a
   Windows tool produces — took the dashboard down. The target id arrives
