@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import importlib.metadata
 import io
 import json
 import logging
@@ -12,6 +13,7 @@ import sys
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 import pytest
 import typer
@@ -167,6 +169,29 @@ class TestVersionFlag:
         result = runner.invoke(app, ["--version"])
         assert result.exit_code == 0
         assert "recoverage" in result.output
+
+    def test_version_falls_back_to_the_module_constant(self) -> None:
+        """`--version` answers from the tree's own version when metadata is gone.
+
+        ``__version__`` is the single source of truth and the installed
+        distribution's metadata is only a second copy of it.  A tree whose
+        metadata is absent (an editable install whose ``.dist-info`` was
+        pruned, a vendored checkout, a zipapp built from the sources) raised
+        ``PackageNotFoundError`` out of the eager option callback, so the one
+        question a script asks before anything else answered with a traceback
+        and exit 1.
+        """
+        from recoverage import __version__
+
+        def no_metadata(name: str) -> str:
+            raise importlib.metadata.PackageNotFoundError(name)
+
+        with mock.patch.object(importlib.metadata, "version", no_metadata):
+            result = runner.invoke(app, ["--version"])
+        assert result.exit_code == 0, result.output
+        assert result.output.strip() == f"recoverage {__version__}"
+        assert "Traceback" not in result.output
+        assert "PackageNotFoundError" not in result.output
 
 
 class TestHelpOptionNames:
@@ -2402,6 +2427,33 @@ class TestRegenFailures:
 
         result = runner.invoke(app, ["regen"])
         assert result.exit_code == 1
+        assert "Traceback" not in result.output
+
+    def test_a_project_config_rebrew_cannot_read_is_a_misconfiguration(
+        self, monkeypatch: Any
+    ) -> None:
+        """A missing or malformed rebrew-project.toml is exit 2, not a regen failure.
+
+        rebrew's ``load_config`` runs before any of its own work, so nothing was
+        rebuilt and the operator has to change something first: the same code
+        ``_db_path_or_exit`` gives the read commands for this exact file.  The
+        generic arm used to report it as "rebrew regen failed: ConfigError: ..."
+        and exit 1, which both named an internal class and filed a
+        misconfiguration as a pipeline failure.
+        """
+        from rebrew.config import ConfigError as RebrewConfigError
+
+        import recoverage.regen as regen
+
+        def boom(root: Path) -> None:
+            raise RebrewConfigError(f"{root / 'rebrew-project.toml'} is not valid TOML")
+
+        monkeypatch.setattr(regen, "run_regen", boom)
+
+        result = runner.invoke(app, ["regen"])
+        assert result.exit_code == 2, result.output
+        assert "is not valid TOML" in result.output
+        assert "ConfigError" not in result.output
         assert "Traceback" not in result.output
 
     def test_a_regen_running_elsewhere_exits_cleanly(self, monkeypatch: Any) -> None:

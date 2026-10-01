@@ -65,7 +65,11 @@ error are status and go to stderr, so a script reads the outcome from the exit
 code.
 Exits 1 without running when another regen of the same project is already
 under way, in this process or another: two writers of one coverage document
-interleave rather than converge.
+interleave rather than converge. Exits 2 when
+.I rebrew\-project.toml
+is missing or not readable as a project file: rebrew reads it before any of
+its own work, so nothing is rebuilt and the operator has to change something
+first.
 .TP
 .B open
 Open the dashboard in a browser. The address opened is the one the listener
@@ -318,7 +322,13 @@ value; and, for
 .BR check ,
 a coverage directory holding no document or a coverage document that does
 not parse, which a gate reports as an infrastructure error rather than as
-coverage below the threshold.
+coverage below the threshold; and, for
+.BR regen ,
+a missing or unreadable
+.I rebrew\-project.toml
+and, for
+.BR stats ", " export " and " check ,
+one that is not readable as a project file.
 .SH FILES
 .TP
 .I db/coverage\-<target>.toml

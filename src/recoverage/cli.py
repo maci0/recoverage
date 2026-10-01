@@ -194,9 +194,24 @@ class StructuredFormatter(logging.Formatter):
 
 def _version_callback(value: bool) -> None:
     if value:
-        from importlib.metadata import version
+        from importlib.metadata import PackageNotFoundError, version
 
-        typer.echo(f"recoverage {version('recoverage')}")
+        from recoverage import __version__
+
+        # __version__ is the single source of truth (pyproject.toml reads it),
+        # and the installed distribution's metadata is only a second copy of
+        # it.  A tree whose metadata is absent or stale — an editable install
+        # whose .dist-info was pruned, a vendored checkout, a zipapp built from
+        # the sources — used to answer `--version` with a rich traceback and
+        # exit 1, which is the one question a script asks before anything
+        # else and the one question that must never traceback.  Prefer the
+        # metadata (it is what a wheel consumer installed) and fall back to
+        # the module's own constant.
+        try:
+            installed = version("recoverage")
+        except PackageNotFoundError:
+            installed = __version__
+        typer.echo(f"recoverage {installed}")
         raise typer.Exit
 
 
@@ -643,6 +658,8 @@ def _get_stats(
 
 def _run_regen(root: Path) -> list[Path]:
     """Regenerate the coverage documents by calling rebrew's pipeline in-process."""
+    from rebrew.config import ConfigError as RebrewConfigError
+
     from recoverage.regen import (
         RegenBusyError,
         RegenDbMismatchError,
@@ -657,6 +674,15 @@ def _run_regen(root: Path) -> list[Path]:
     _secho("Running rebrew catalog + build-db...", err=True)
     try:
         return run_regen(root)
+    except RebrewConfigError as e:
+        # A missing or malformed rebrew-project.toml.  rebrew's load_config
+        # runs before any of its own work, so the pipeline never started and
+        # the operator has to change something first: the same misconfiguration
+        # (exit 2) and the same bare message _db_path_or_exit gives the read
+        # commands for this exact file, instead of the class name and the
+        # regen-failed 1 the generic arm below reported.
+        _secho(f"Error: {e}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(2) from None
     except (RegenDbMismatchError, RegenDbUnresolvableError) as e:
         # A setting this package reads and rebrew cannot honour (the mismatch),
         # or a coverage directory neither could resolve (the sibling), which is
@@ -2046,9 +2072,11 @@ def regen(no_color: bool = _no_color_option()) -> None:
     error are status, and status goes to stderr, so a caller reads the report
     from the exit code alone. Exits 2 when RECOVERAGE_DB names a directory
     rebrew would not write to (the mismatch is refused rather than reported
-    as a done regen that left the dashboard stale), 1 when rebrew fails or
-    another process already holds this project's regen lock, and 0 when it
-    succeeds, whether or not it had a built target to write.
+    as a done regen that left the dashboard stale) or when
+    rebrew-project.toml is missing or not readable as a project file (rebrew
+    reads it before any of its own work, so nothing is rebuilt), 1 when
+    rebrew fails or another process already holds this project's regen lock,
+    and 0 when it succeeds, whether or not it had a built target to write.
     """
     from recoverage.server import _project_dir
 

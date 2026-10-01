@@ -402,9 +402,13 @@ stdout the startup banner is written to.
 Exit codes: 0 = the documents were written (or rebrew had no built target to
 write for), 1 = rebrew failed or another regen of the same project already
 holds its lock, 2 = `RECOVERAGE_DB` names a directory rebrew
-would not write to.  That mismatch is refused rather than reported as a done
+would not write to, or `rebrew-project.toml` is missing or malformed.  That
+mismatch is refused rather than reported as a done
 regen that left the dashboard stale, because rebrew resolves what it writes
-from `rebrew-project.toml` alone.
+from `rebrew-project.toml` alone.  A project file rebrew cannot read is
+reported the way the read commands report it, for the same reason: rebrew
+reads it before any of its own work, so nothing is rebuilt and the operator
+has to change something first.
 
 Running it a second time *while the first is still going* is refused rather
 than run: two writers of one `coverage-<target>.toml` interleave instead of

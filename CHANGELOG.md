@@ -38,6 +38,19 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   hung. Each pass is now bounded, and a pass that outlives the bound is
   reported as "the checker could not start" rather than as a finding: nothing
   was validated, which is not the same answer as a document being wrong.
+- `recoverage regen` reported a missing or malformed `rebrew-project.toml` as
+  `Error: rebrew regen failed: ConfigNotFoundError: …` and exited 1, while
+  `stats`, `export` and `check` report the same file as a clean one-line error
+  and exit 2. rebrew reads that file before any of its own work, so nothing was
+  rebuilt and the operator has to change something first: that is
+  misconfiguration, and it now exits 2 with the same message the read commands
+  give. The internal class name is gone from the output.
+- `recoverage --version` died with a `PackageNotFoundError` traceback and exit
+  1 in a tree whose installed distribution metadata is absent — an editable
+  install whose `.dist-info` was pruned, a vendored checkout, a zipapp built
+  from the sources. The package's own `__version__` is the single source of
+  truth, so it is what the flag falls back to; the question a script asks
+  before anything else now always answers.
 - The browser SBOM's `created` stamp rendered a year before 1000 without its
   leading zeros (`1-01-01T00:00:00Z`), because `strftime`'s `%Y` is not
   zero-padded below year 1000, so a scanner reading the four-digit year SPDX
