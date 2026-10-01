@@ -7,6 +7,15 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `/api/health` answers `degraded` when the newest coverage document is more
+  than `config.DEFAULT_MAX_DB_AGE_HOURS` (24) old, and logs the transition the
+  way every other health reason does. Stale coverage is the one fault the rest
+  of the endpoint stays quiet through: the documents parse, every route
+  answers 200, the caches hit, no counter moves and no request is slow, so a
+  regen that stopped running days ago read as `healthy` until someone noticed
+  the figures were a week out of date. The bound is a constant rather than an
+  environment setting, because the build cadence belongs to the rebrew project;
+  raise it where it is defined if your coverage is built in batches.
 - Mounting the dashboard in your own WSGI server is documented: `recoverage.webapp.app`
   is the fully routed application, `recoverage.server.app` on its own registers no
   route and answers 404, and the two things the bundled listener does for you — installing
@@ -64,6 +73,23 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   original binary. Every join over target identity now folds case, so the same
   project answers the same on every host; each id is still shown and returned in
   its own spelling.
+- `serve --regen` rebuilt the whole database and then left no trace of it: it
+  ran the same pipeline `POST /api/regen` runs, in the same long-lived
+  process, but through the CLI wrapper, which prints and exits. `/api/health`
+  then read `runs: 0, in_flight: 0, last_ok: null` for the life of a server
+  that had just rebuilt everything, and the outcome reached the log as an
+  unfielded `Error:` line a filter on `event=regen` could not match. The
+  startup run now opens the same `regen` counters and writes the same
+  lifecycle lines, closing the `in_flight` gauge on both the success and the
+  failure arm, so one filter finds every rebuild the process made whichever
+  entry point started it. The standalone `recoverage regen` command is
+  unchanged, for the reason above.
+- A dashboard whose `style.css` or `app.js` could not be read logged
+  "style.css missing" and "app.js missing", which is equally true of a pruned
+  wheel, a `PermissionError` on an install the process cannot read, and a
+  half-written asset. Both lines now name the path and the exception class, so
+  a broken install is diagnosable without first guessing which of the three it
+  was.
 - A dashboard already at its concurrent event-stream cap logged its refusal
   while holding the lock that guards the cap, and every other logging path in
   the package takes its own lock on the way to the same module-wide logging

@@ -72,7 +72,7 @@ from conftest import (
 from coverage_fixture import cell, coverage_dir, write_coverage
 from rebrew.coverage_toml import CoverageSnapshot, CoverageTomlError, load_coverage
 
-from recoverage import api, webapp
+from recoverage import api, clock, webapp
 from recoverage import server as _server
 
 # Typer 0.27 help paints option names with ANSI even under CliRunner
@@ -648,6 +648,62 @@ class TestHealthDbMtime:
         assert data["mtime"] == pytest.approx(new_ns / 1e9)
         assert data["mtime_utc"] == "2023-11-14T22:14:50+00:00"
         assert data["mtime_utc"].endswith("+00:00")
+
+    def test_stale_coverage_degrades_health(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Old coverage is the one fault every other signal stays quiet through.
+
+        The documents parse, every route answers 200, the caches hit and no
+        counter moves when a regen stopped running three days ago, so a probe
+        pointed at this endpoint read ``healthy`` over week-old figures. The
+        age is judged from the newest document's mtime — the same value the
+        ``db.mtime`` stamp is derived from — and read through the clock seam,
+        so the crossing is driven rather than waited for.
+        """
+        import recoverage.api as api
+        import recoverage.config as config_mod
+
+        # The probe logs a TRANSITION, not a state, so a previous test's
+        # reading would suppress this one. Same reset the transition tests use.
+        monkeypatch.setattr(api, "_health_reported", None)
+        directory = self._point_at(tmp_path, monkeypatch)
+        doc = directory / "coverage-FRESH.toml"
+        # Past the bound rather than at it: the check is `>`, so a document
+        # exactly the bound old is current and a test using the bound itself as
+        # its value would pass for the wrong reason.
+        stale_s = clock.wall_time() - (config_mod.DEFAULT_MAX_DB_AGE_HOURS + 1) * 3600.0
+        os.utime(doc, ns=(int(stale_s * 1e9), int(stale_s * 1e9)))
+
+        with caplog.at_level(logging.WARNING, logger="recoverage"):
+            status, headers, body = wsgi_get("/api/health")
+        assert status.startswith("200")
+        payload = json.loads(decode_body(body, headers))
+        assert payload["status"] == "degraded"
+        # The reasons are folded into the transition line rather than served as
+        # a list, so the wire answer is the status and the log is the detail.
+        degraded = [r for r in caplog.records if r.levelno >= logging.WARNING]
+        assert len(degraded) == 1, [r.getMessage() for r in caplog.records]
+        assert "staleness bound" in degraded[0].getMessage()
+
+    def test_current_coverage_stays_healthy(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The other arm, and the one that keeps this a signal rather than
+        noise: a document inside the bound must degrade nothing, or the check
+        would teach an operator to ignore the very line that says it moved."""
+        import recoverage.config as config_mod
+
+        directory = self._point_at(tmp_path, monkeypatch)
+        doc = directory / "coverage-FRESH.toml"
+        fresh_s = clock.wall_time() - 60.0
+        os.utime(doc, ns=(int(fresh_s * 1e9), int(fresh_s * 1e9)))
+
+        status, headers, body = wsgi_get("/api/health")
+        assert status.startswith("200")
+        payload = json.loads(decode_body(body, headers))
+        assert config_mod.DEFAULT_MAX_DB_AGE_HOURS > 0
+        assert payload["status"] == "healthy"
 
     @pytest.mark.skipif(not HAS_TZSET, reason="no time.tzset() on this platform")
     def test_mtime_utc_is_utc_regardless_of_host_tz(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -6222,6 +6278,49 @@ class TestIndexWarmup:
         assert isinstance(caught.value, RuntimeError) and not isinstance(caught.value, OSError), (
             "a caller that keeps serving must be able to catch this and not an OSError"
         )
+
+    def test_a_degraded_sibling_names_the_path_and_the_cause(
+        self, monkeypatch: Any, tmp_path: Any, caplog: Any
+    ) -> None:
+        """style.css and app.js degrade to an empty string, so the log line is
+        the only record that the install is broken. It has to carry WHICH file
+        and WHY the read failed: "app.js missing" is equally true of a pruned
+        wheel, a PermissionError on a root-owned install and a half-written
+        asset, and those three want three different fixes.
+        """
+        import recoverage.ui as ui
+
+        (tmp_path / "index.html").write_text(
+            "<!-- INJECT_CSS --><!-- INJECT_JS -->", encoding="utf-8"
+        )
+        (tmp_path / "app.js").write_text("console.log(1);", encoding="utf-8")
+        # Unreadable rather than absent: that is the case the bare line could
+        # not tell apart from a pruned wheel, and it is the one that makes an
+        # operator reinstall for nothing.
+        stylesheet = tmp_path / "style.css"
+        stylesheet.write_text("body{}", encoding="utf-8")
+        stylesheet.chmod(0o000)
+        monkeypatch.setattr(ui, "_assets_dir", lambda: tmp_path)
+        monkeypatch.setattr(ui, "CACHED_INDEX_PAYLOAD", None)
+        monkeypatch.setattr(ui, "CACHED_INDEX_COMPRESSED", {})
+
+        if os.getuid() == 0:
+            pytest.skip("root reads a 0o000 file, so the arm under test cannot be driven")
+
+        try:
+            with caplog.at_level(logging.WARNING, logger="recoverage"):
+                ui._build_index_payload()
+        finally:
+            stylesheet.chmod(0o644)
+
+        warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+        assert len(warnings) == 1
+        message = warnings[0].getMessage()
+        assert "style.css" in message
+        assert str(stylesheet) in message
+        assert "PermissionError" in message
+        # The page still renders: this arm degrades, it does not fail `/`.
+        assert "body{}" in ui._build_index_payload().decode("utf-8")
 
     def test_the_shell_inlines_the_bundle_byte_for_byte(self) -> None:
         """The served shell carries the built app.js unchanged.

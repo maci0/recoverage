@@ -121,15 +121,38 @@ def _build_index_payload() -> bytes:
         ) from exc
     try:
         css = (assets / "style.css").read_text(encoding="utf-8")
-    except OSError:
-        _log.warning("style.css missing — dashboard SPA will render unstyled")
+    except OSError as exc:
+        # `%s: %s`, the arm above's own shape: the two degraded siblings answer
+        # a page either way, so what this line has to carry is what the
+        # operator acts on — WHICH file, and WHY the read failed.  A bare
+        # "style.css missing" cannot tell a pruned wheel (FileNotFoundError)
+        # from an install the process cannot read (PermissionError) or a
+        # half-written asset (a decode error), and all three present to the
+        # reader as an unstyled dashboard.  The path is escaped like every
+        # other value reaching the log: it is built from the package's own
+        # install location and the OSError message quotes it, and both are
+        # untrusted text as far as the line-safety guarantee goes.
+        _log.warning(
+            "style.css unreadable at %s — dashboard SPA will render unstyled (%s: %s)",
+            _server._log_safe(str(assets / "style.css")),
+            type(exc).__name__,
+            _server._log_safe(str(exc)),
+        )
         css = ""
     try:
         js = (assets / "app.js").read_text(encoding="utf-8")
-    except OSError:
-        # A shipped package asset is missing — the SPA renders but does
-        # nothing.  Log it so a broken install is diagnosable.
-        _log.warning("app.js missing — dashboard SPA will not function")
+    except OSError as exc:
+        # A shipped package asset is missing or unreadable — the SPA renders
+        # but does nothing.  Log it so a broken install is diagnosable, with
+        # the path and the class for the reason the style arm above gives: the
+        # one thing an operator needs before reinstalling is WHICH read failed
+        # and WHY, and "app.js missing" is true of all three failure modes.
+        _log.warning(
+            "app.js unreadable at %s — dashboard SPA will not function (%s: %s)",
+            _server._log_safe(str(assets / "app.js")),
+            type(exc).__name__,
+            _server._log_safe(str(exc)),
+        )
         js = ""
     html = html.replace("<!-- INJECT_CSS -->", f"<style>{rcssmin.cssmin(css)}</style>")
     html = html.replace("<!-- INJECT_JS -->", f"<script>{js.strip()}</script>")

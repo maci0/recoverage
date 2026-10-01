@@ -22,7 +22,7 @@ from coverage_fixture import cell, coverage_dir, write_coverage
 from rebrew.coverage_toml import CoverageTomlError
 from typer.testing import CliRunner
 
-from recoverage import cli, devserver, server
+from recoverage import cli, devserver, metrics, server
 from recoverage.cli import ExportFormat, app
 from recoverage.devserver import _server_class_for
 
@@ -2406,6 +2406,86 @@ class TestAllowRemoteWithoutRemoteBind:
 
         assert result.exit_code == 0
         assert "is set but --bind" not in result.output
+
+
+def _raise_exit_2(root: Path) -> None:
+    """The misconfiguration arm of `_run_regen`, for the failure path."""
+    raise typer.Exit(2)
+
+
+class TestServeRegenIsCounted:
+    """`serve --regen` is a regen the operator has to be able to find afterwards.
+
+    It runs the SAME pipeline `POST /api/regen` runs, in the same long-lived
+    process, and it is the only rebuild this process will make on its own, so
+    leaving it on the bare CLI wrapper made two failures. The counters were
+    never opened, so `/api/health` read `runs: 0, in_flight: 0, last_ok: null`
+    for the life of a server that had just rebuilt the whole database, and the
+    outcome reached the log as an unfielded `Error:` line an operator filtering
+    on `event=regen` — the pivot from the regen counters — could not match.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _reset(self) -> None:
+        metrics.REGEN.reset()
+
+    def test_a_successful_startup_run_counts_and_carries_the_lifecycle_fields(
+        self, monkeypatch: Any, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The success arm: a run in the counters, and an `ok` line with the
+        outcome and the duration as fields an aggregator can index."""
+        caplog.set_level(logging.INFO, logger="recoverage")
+        monkeypatch.setattr(cli, "_run_regen", lambda root: None)
+
+        cli._serve_regen(Path("/tmp/project"))
+
+        snap = metrics.REGEN.snapshot()
+        assert snap["runs"] == 1
+        assert snap["failures"] == 0
+        # The gauge, not a lifetime counter: a run that left `in_flight` at 1
+        # would report a rebuild in flight for the whole life of the process.
+        assert snap["in_flight"] == 0
+        assert snap["last_ok"] is True
+
+        ok = [r for r in caplog.records if getattr(r, "log_fields", {}).get("outcome") == "ok"]
+        assert len(ok) == 1
+        assert ok[0].log_fields["event"] == "regen"
+        assert "duration_s" in ok[0].log_fields
+
+    def test_a_failed_startup_run_counts_a_failure_and_closes_the_gauge(
+        self, monkeypatch: Any, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The failure arm. The exit code is `_run_regen`'s and unchanged; what
+        this adds is that the run is visible in the counters and the log, where
+        a failed startup rebuild used to leave the process looking like one that
+        had never run one."""
+        caplog.set_level(logging.INFO, logger="recoverage")
+        monkeypatch.setattr(cli, "_run_regen", _raise_exit_2)
+
+        with pytest.raises(typer.Exit):
+            cli._serve_regen(Path("/tmp/project"))
+
+        snap = metrics.REGEN.snapshot()
+        assert snap["runs"] == 1
+        assert snap["failures"] == 1
+        assert snap["in_flight"] == 0
+        assert snap["last_ok"] is False
+
+        failed = [
+            r for r in caplog.records if getattr(r, "log_fields", {}).get("outcome") == "failed"
+        ]
+        assert len(failed) == 1
+        assert failed[0].levelno == logging.ERROR
+        assert failed[0].log_fields["event"] == "regen"
+
+    def test_the_startup_and_endpoint_runs_write_one_field_shape(self) -> None:
+        """The point of sharing `metrics.regen_log_fields`: one filter over
+        `event=regen` has to find a run whichever entry point made it, or an
+        operator pivoting from the regen counters finds only half of them."""
+        from recoverage import api
+
+        assert api._regen_log_fields("ok", 1.5) == metrics.regen_log_fields("ok", 1.5)
+        assert api._regen_log_fields("failed") == metrics.regen_log_fields("failed")
 
 
 class TestRegenFailures:

@@ -589,6 +589,24 @@ automation); `watcher_alive` is `null` only in a process that never ran
 `serve`. A connected client with a dead poller answers `degraded`: every
 page still renders, none of them will ever refresh again.
 
+`status` also answers `degraded` for coverage that has gone stale: a document
+whose newest mtime is more than `config.DEFAULT_MAX_DB_AGE_HOURS` (24) hours
+old. That is the one fault every other signal here stays quiet through — the
+documents parse, every route answers 200, the caches hit, no counter moves and
+no request is slow — so a regen that stopped running three days ago is
+invisible on all of them, and a probe reading this endpoint cannot tell a
+working dashboard from one showing figures that are a week out of date. The
+bound is a constant rather than a setting on purpose: the build cadence belongs
+to the rebrew project, and a knob that only reads as "set it to something else
+next release" is worse than a documented number. Raise it where it is defined
+if your coverage is built in batches rather than on demand.
+
+`serve --regen` opens the same `regen` counters and writes the same
+`event=regen` lifecycle lines `POST /api/regen` does, so one filter over that
+field finds every rebuild the process made whichever entry point started it.
+The standalone `recoverage regen` command does not: it prints its outcome to a
+terminal that exits, so there would be nothing left to read the counter back.
+
 ### Error responses
 
 Every `/api/*` failure answers the same JSON envelope, and every error body

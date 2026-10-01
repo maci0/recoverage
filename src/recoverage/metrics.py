@@ -450,8 +450,42 @@ class RegenStats:
             self._last_ok = None
 
 
-#: The regen registry ``/api/regen`` updates and /api/health reads.
+#: The regen registry every in-process regen entry point updates, and
+#: /api/health reads.  NOT ``/api/regen`` alone: the server has a second
+#: entry point (``serve --regen``, which runs the same pipeline before the
+#: listener binds), and a run that only the HTTP handler counted left
+#: ``runs: 0`` in the snapshot of a process that had just rebuilt the whole
+#: database.
 REGEN = RegenStats()
+
+#: The ``extra=`` attribute :mod:`recoverage.server` renders a record's named
+#: fields from, named here so the regen lifecycle lines build their ``extra``
+#: against the same constant the request path does rather than spelling it.
+LOG_FIELDS_ATTR: Final = "log_fields"
+
+
+def regen_log_fields(outcome: str, elapsed_s: float | None = None) -> dict[str, dict[str, object]]:
+    """The ``extra=`` for one regen lifecycle line, from every entry point.
+
+    A regen is the one operation that runs for minutes, and the one an
+    operator has to correlate with ``/api/health``'s ``regen`` block, so every
+    line of its lifecycle carries the outcome and the elapsed time as fields:
+    the counter says three runs failed, the fields say which three and how long
+    each took, without reading the prose.
+
+    This lives beside :data:`REGEN` rather than in ``api`` because the pipeline
+    has more than one caller in this process: ``POST /api/regen`` and the
+    ``serve --regen`` startup run are the same operation, and two spellings of
+    this shape are how an operator ends up filtering on a field one of them
+    never writes.  ``elapsed_s`` is seconds (the unit the prose prints); each
+    caller closes :data:`REGEN` in milliseconds through
+    :meth:`RegenStats.finish`, which takes ``elapsed_ms``.
+    """
+    fields: dict[str, object] = {"event": "regen", "outcome": outcome}
+    if elapsed_s is not None:
+        fields["duration_s"] = round(elapsed_s, 1)
+    return {LOG_FIELDS_ATTR: fields}
+
 
 #: The names the cache counters are keyed by.  Bounded by the call sites, never
 #: by request data, so this map cannot grow the way a route label can.

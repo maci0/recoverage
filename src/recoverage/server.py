@@ -1536,8 +1536,12 @@ def peer_label() -> str:
 
 #: Name of the record attribute carrying the structured fields, read by
 #: ``cli.StructuredFormatter`` and ignored by a plain one.  ONE name, so the
-#: writer (here) and the reader (the formatter) cannot drift apart.
-LOG_FIELDS_ATTR = "log_fields"
+#: writer (here and ``metrics.regen_log_fields``, the lifecycle fields the
+#: regen pipeline writes) and the reader (the formatter) cannot drift apart.
+#: The constant lives in ``metrics`` rather than here because the regen
+#: pipeline has a second writer that is not a request path and ``metrics`` is a
+#: leaf every module can import.
+LOG_FIELDS_ATTR = metrics.LOG_FIELDS_ATTR
 
 
 def request_log_fields(

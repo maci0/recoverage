@@ -119,6 +119,23 @@ DEFAULT_MAX_CONNECTIONS: Final = 128
 #: descriptor, so a cap past this is a typo, not a deployment.
 MAX_MAX_CONNECTIONS: Final = 65_536
 
+#: How old the newest coverage document may be before `/api/health` calls the
+#: database stale, in hours.
+#:
+#: This dashboard exists to show coverage that moves with new builds, so
+#: "the data is days old" is the one fault every other signal stays quiet
+#: through: the documents parse, every route answers 200, the caches hit, no
+#: counter moves, and no request is slow.  A regen that stopped running days
+#: ago is invisible on all four.  Judging the mtime is what turns that into
+#: something a probe can alert on.
+#:
+#: Hours rather than seconds because the build cadence belongs to a rebrew
+#: project, not to this package: a firmware image is rebuilt on demand, not on
+#: a timer, so a minute-scale default would call every quiet minute degraded.
+#: A day is the "nobody rebuilt this in a working day" signal, and it is short
+#: enough to catch that before a release is cut on week-old figures.
+DEFAULT_MAX_DB_AGE_HOURS: Final = 24
+
 _TRUE_VALUES: Final[frozenset[str]] = frozenset({"1", "true", "yes", "on"})
 _FALSE_VALUES: Final[frozenset[str]] = frozenset({"0", "false", "no", "off"})
 

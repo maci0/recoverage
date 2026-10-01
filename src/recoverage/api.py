@@ -28,6 +28,7 @@ from rebrew.workspace import VA_MAX, parse_va_candidates
 from rebrew.workspace.status import COVERAGE_DB_STATUSES
 
 from recoverage import __version__, clock
+from recoverage import config as _config
 from recoverage import metrics as _metrics
 from recoverage import server as _server
 from recoverage._paths import _db_path
@@ -1305,6 +1306,34 @@ def handle_api_health() -> bytes:
             reasons.append(f"no readable coverage-*.toml in {db}")
     else:
         reasons.append(f"no coverage-*.toml document in {db}")
+    if mtime_ns is not None:
+        # The one fault every other signal here stays quiet through: the
+        # documents parse, every route answers 200, the caches hit and no
+        # counter moves, so a regen that stopped running days ago reads
+        # exactly like a working one until someone notices the figures are
+        # old.  Judged from the newest document's mtime — the same value the
+        # stamp above is derived from, so the age reported and the instant
+        # reported cannot be two different reads of two different files.
+        #
+        # Read through the clock seam like every other elapsed-time
+        # arithmetic, so a test drives the crossing from a patched clock
+        # instead of waiting a day for it, and so a replayed run decides it the
+        # same way twice.
+        #
+        # The threshold is a constant rather than a setting, deliberately: it
+        # is a property of what this package IS (a view onto a build's
+        # coverage) and not of a deployment, and a knob nobody can turn
+        # without editing source is a knob that only ever reads as "set it to
+        # something else next release". An operator who needs a different
+        # cadence raises it here, where the docstring says what the number
+        # means.
+        max_age_hours = _config.DEFAULT_MAX_DB_AGE_HOURS
+        if max_age_hours > 0:
+            age_hours = (clock.wall_time() - stamp.timestamp()) / 3600.0
+            if age_hours > max_age_hours:
+                reasons.append(
+                    f"coverage is {age_hours:.1f}h old, past the {max_age_hours}h staleness bound"
+                )
     streams = _stream_stats()
     if streams["watcher_alive"] is False and streams["clients"] > 0:
         # Connected clients with no poller means live reload is dead while
@@ -3003,16 +3032,13 @@ def _elapsed_ms(started_at: float) -> float:
 def _regen_log_fields(outcome: str, elapsed_s: float | None = None) -> dict[str, dict[str, object]]:
     """The ``extra=`` for a regen lifecycle line.
 
-    A regen is the one operation that runs for minutes and the one an
-    operator needs to correlate with ``/api/health``'s ``regen`` block, so its
-    lines carry the outcome and the elapsed time as fields: the counter says
-    three runs failed, the fields say which three and how long each took,
-    without reading the prose.
+    :func:`recoverage.metrics.regen_log_fields`, under the name this module's
+    call sites use.  The shape lives in ``metrics`` beside the :data:`~recoverage.metrics.REGEN`
+    counters it has to stay readable against, because the pipeline has a second
+    caller in this process (``serve --regen``) and one writer per caller is how
+    an operator ends up filtering on a field only one of them writes.
     """
-    fields: dict[str, object] = {"event": "regen", "outcome": outcome}
-    if elapsed_s is not None:
-        fields["duration_s"] = round(elapsed_s, 1)
-    return {_server.LOG_FIELDS_ATTR: fields}
+    return _metrics.regen_log_fields(outcome, elapsed_s)
 
 
 def _regen_forbidden(reason: str, error: str, detail: str) -> HTTPResponse:

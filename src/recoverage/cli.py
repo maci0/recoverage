@@ -728,6 +728,84 @@ def _run_regen(root: Path) -> list[Path]:
         raise typer.Exit(1) from None
 
 
+def _serve_regen(root: Path) -> None:
+    """``serve --regen``'s startup run: the same pipeline, counted and logged.
+
+    ``_run_regen`` is a CLI wrapper: it prints an outcome to stderr and turns
+    it into an exit code, and that is the whole contract when the process ends
+    at the end of the command.  ``serve --regen`` is not that — the process
+    goes on to bind a listener and serve for as long as it is up, so the run
+    is the only rebuild this process will ever do on its own, and it happens
+    before a request, a log handler level question or a ``/api/health`` probe
+    has any say in it.  Left on the bare wrapper it was invisible twice over:
+
+    * ``metrics.REGEN`` was never opened, so ``/api/health``'s ``regen`` block
+      read ``runs: 0, in_flight: 0, last_ok: null`` for the life of a server
+      that had just rebuilt the whole database, and a later failed
+      ``POST /api/regen`` was the run count of one.  The two entry points into
+      ONE pipeline disagreed about how many runs there had ever been.
+    * The outcome reached the log as a bare ``Error: ...`` printed by the
+      wrapper, carrying no ``event=regen`` field and no duration, so the line
+      the startup path writes could not be found by the same filter the
+      endpoint's own lifecycle lines answer to, and an operator pivoting from
+      the ``regen`` counter had no field to pivot on.
+
+    Both are closed here rather than inside ``_run_regen``: the standalone
+    ``recoverage regen`` command prints its outcome to a terminal that reads
+    one line and exits, so counting a process that is about to die would be a
+    counter nothing can ever read back.  This wrapper owns the same lifecycle
+    contract ``api`` applies for ``POST /api/regen`` — ``started``, then
+    ``ok`` or ``failed`` with the elapsed seconds beside them, and the
+    :data:`~recoverage.metrics.REGEN` counters closed on every arm — so one
+    filter over ``event=regen`` finds every run this process made whichever
+    endpoint started it.  It files no ``refused`` outcome, because there is no
+    arm here that produces one: a second process holding the tree's regen lock
+    is a refusal the endpoint can report to a caller, while at startup it is
+    simply the first thing this run tried to do, and it failed.
+
+    The exit-code contract is ``_run_regen``'s and is unchanged: the counters
+    are closed on the way out, and the ``typer.Exit`` it raises still exits 2
+    for a misconfiguration and 1 for a pipeline failure.  Closing them here is
+    what makes the gauge honest for the rest of the process: ``in_flight`` is a
+    gauge, and a startup run that left it at 1 would show a server with a
+    rebuild in flight for the whole of its life, long after the pipeline had
+    finished or died.
+    """
+    from recoverage import metrics
+
+    started_at = clock.monotonic()
+    metrics.REGEN.start()
+    _log.info("Regen started from serve --regen", extra=metrics.regen_log_fields("started"))
+    try:
+        _run_regen(root)
+    except typer.Exit:
+        # Every failure arm of the wrapper has already printed its own
+        # operator-facing message and picked the exit code, so this adds only
+        # the counted lifecycle the operator's log aggregator reads: the run
+        # happened, it did not finish, and how long it lasted before it gave
+        # up.  The gauge closes here rather than in each arm so no arm can be
+        # added without closing it.
+        elapsed = clock.monotonic() - started_at
+        # A wrapper exit is always a failure — the wrapper only exits non-zero
+        # when run_regen raised — so this files the same `failed` outcome the
+        # endpoint does, rather than a refusal it was not.
+        _log.error(
+            "Regen failed after %.1fs: serve --regen did not complete",
+            elapsed,
+            extra=metrics.regen_log_fields("failed", elapsed),
+        )
+        metrics.REGEN.finish(False, elapsed * 1000.0)
+        raise
+    else:
+        elapsed = clock.monotonic() - started_at
+        _log.info(
+            "Regen completed successfully in %.1fs",
+            elapsed,
+            extra=metrics.regen_log_fields("ok", elapsed),
+        )
+        metrics.REGEN.finish(True, elapsed * 1000.0)
+
+
 # ── Browser opener ─────────────────────────────────────────────────
 
 # Openers exit in well under a second; the bound only guards a wedged one.
@@ -1458,7 +1536,7 @@ def serve(
     url = dashboard_url(bind, listen_port)
 
     if regen:
-        _run_regen(root)
+        _serve_regen(root)
 
     _log.info("Starting recoverage server on %s (port=%d, cors=%s)", listen_url, listen_port, cors)
 

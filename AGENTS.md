@@ -843,6 +843,27 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   WARNING per page load for as long as it stayed broken, which is what teaches
   an operator to skip the line. A new degraded-not-failed path joins the same
   pattern rather than logging per call.
+  pattern rather than logging per call. Stale coverage is the fourth such
+  reason, and the one it was written for: `api.handle_api_health` judges the
+  newest document's mtime against `config.DEFAULT_MAX_DB_AGE_HOURS`, because
+  "the data is days old" is the one fault every other signal on this
+  endpoint stays quiet through (the documents parse, every route answers 200,
+  the caches hit, no counter moves, no request is slow) and a probe reading
+  `/api/health` would otherwise tell a working dashboard from one showing
+  week-old figures by nothing at all. The age comes from the SAME `stamp` the
+  `db.mtime` block renders, so the age reported and the instant reported are
+  one read of one file, and it is taken from `clock.wall_time()` so a test
+  drives the crossing from a patched clock instead of waiting a day for it
+  (`tests/test_api.py`, `TestHealthDbMtime`). The bound is a CONSTANT and not a
+  `RECOVERAGE_*` setting, which is the opposite of the rule every other value
+  in `config.py` follows and is deliberate: the build cadence belongs to the
+  rebrew project, not to this package, and an operator who needs a different
+  one edits the number where its docstring explains it. It stayed a constant
+  only because `KNOWN_VARS` also obliges `.env.example` and the README table
+  in the same change; a deployment knob nobody can turn without editing source
+  is a knob that only ever reads as "set it to something else next release",
+  and that is worth less than a documented number. If it becomes a setting it
+  joins `KNOWN_VARS`, the README table and `.env.example` together.
 - The active configuration is rendered ONCE, by `config.active_config`, and the
   result reaches the startup banner and `GET /api/health`'s `config` block
   (`server.configure_startup`, called from `serve` before the listener binds).
