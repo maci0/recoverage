@@ -1858,6 +1858,44 @@ def _js_inventory_module() -> ModuleType:
     return module
 
 
+def _notice_grant(notice: str, package: str) -> str:
+    """NOTICE's grant entry for *package*, not its first mention anywhere.
+
+    A package can be named twice: once in the asset table the file opens with,
+    where the line is an indented file path carrying no grant at all, and once
+    inside its own grant entry. Taking ``str.index`` returned the first, so
+    `highlight.js` — which moved into that table when `make web-build` began
+    emitting it as a second bundle — reported the file list as its grant and
+    failed on a NOTICE that names BSD-3-Clause three lines later. An entry is
+    a heading line in column zero plus the indented lines under it, and the
+    grant is the `License:` inside *that* entry: a 400-character window from a
+    mention is not, because it runs on into the next entry and picks up its
+    license instead (which is how `preact` passed, from the following
+    `highlight.js` grant). Return the entry, so a package with no grant of its
+    own comes back as a heading whose body never names one.
+    """
+    lines = notice.splitlines()
+    for index, line in enumerate(lines):
+        if line != line.lstrip():
+            continue  # an indented file path or an entry's own body line
+        body: list[str] = []
+        for following in lines[index + 1 :]:
+            if following and not following.startswith((" ", "\t")):
+                break
+            body.append(following)
+        entry = "\n".join([line, *body])
+        # Compare on letters and digits alone: a heading spells the package as
+        # a display name (`Tailwind CSS` for `tailwindcss`), and matching the
+        # raw string finds nothing there.
+        if _squash(package) in _squash(line):
+            return entry
+    return ""
+
+
+def _squash(text: str) -> str:
+    return "".join(c for c in text.casefold() if c.isalnum())
+
+
 def _assert_stdlib_only_targets(targets: tuple[str, ...], *, reason: str) -> None:
     """A Make target runs its tool without the project environment.
 
@@ -2199,26 +2237,38 @@ class TestBrowserSpdxExport:
         module = _js_inventory_module()
         document = module.spdx_document(module.resolve())
         notice = (_ROOT / "NOTICE").read_text(encoding="utf-8")
-        # One grant is one blank-line-separated paragraph: a heading naming the
-        # package, then its upstream, license, version and shipped files. The
-        # name and the grant have to be in the SAME paragraph, which is the
-        # claim. A fixed character window was the other spelling of it and it
-        # broke the moment NOTICE grew: `highlight.js` is named first in the
-        # list of shipped assets, hundreds of characters above the paragraph
-        # that credits its BSD-3-Clause grant, so the window read the asset
-        # list and reported a grant NOTICE plainly carries.
-        grants = notice.split("\n\n")
+        # The grant has to be in the package's OWN NOTICE entry, which
+        # `_notice_grant` returns: `highlight.js` is named first in the asset
+        # list the file opens with, hundreds of characters above the entry that
+        # credits its BSD-3-Clause grant, so a lookup that took the first
+        # mention read the asset list as the grant.
         for entry in module.SHIPPED:
             package = next(pkg for pkg in document["packages"] if pkg["name"] == entry.package)
             assert package["licenseConcluded"] == entry.license_id
             assert package["licenseDeclared"] == entry.license_id
             assert entry.homepage.startswith("https://")
-            credited = [block for block in grants if entry.package in block]
-            assert credited, f"NOTICE never names {entry.package} at all"
-            assert any(entry.license_id in block for block in credited), (
-                f"no NOTICE paragraph naming {entry.package} carries the {entry.license_id} "
-                "grant the SPDX document declares"
+            credited = _notice_grant(notice, entry.package)
+            assert entry.license_id in credited, (
+                f"NOTICE credits {entry.package} without the {entry.license_id} grant the "
+                "SPDX document declares"
             )
+
+    def test_the_grant_lookup_skips_the_asset_table(self) -> None:
+        """A mention that carries no grant is not a credit, and must not pass.
+
+        The asset table the wheel's NOTICE opens with lists every bundled
+        asset by path, so a package named there has an entry whose body names
+        no license. Reading the first mention took that one for `highlight.js`
+        and failed a NOTICE that credits BSD-3-Clause correctly; widening the
+        window instead would have passed it, and with it any package that had
+        lost its grant entirely.
+        """
+        notice = (_ROOT / "NOTICE").read_text(encoding="utf-8")
+        assert "src/recoverage/assets/highlight.js" in notice
+        assert _notice_grant(notice, "highlight.js").startswith("highlight.js (")
+        assert "BSD-3-Clause" in _notice_grant(notice, "highlight.js")
+        # A package NOTICE never grants comes back empty, so it cannot pass.
+        assert _notice_grant(notice, "a-package-that-is-not-shipped") == ""
 
     def test_the_stamp_comes_from_the_environment_not_the_clock(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

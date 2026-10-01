@@ -32,6 +32,62 @@ recoverage config --json   # the same object, for a script to diff
 So a deployment that upgrades onto a raised floor finds out here rather than at
 the next restart.
 
+## [Unreleased]
+
+Two changes break a consumer; everything else in this release of the
+changelog is additive or a fix.
+
+### `recoverage regen` exits 2, not 1, on an unreadable `rebrew-project.toml`
+
+Before: a missing or unreadable project file was reported as
+`Error: rebrew regen failed: ConfigNotFoundError: …` and exited 1 — the code
+this package uses for a rebrew pipeline that ran and failed.
+
+After: the same file exits 2, the code every other command uses for a setting
+or a file the operator has to change, with the same one-line message `stats`,
+`export` and `check` give and without rebrew's internal class name. Nothing was
+rebuilt in either case (rebrew reads the file before any of its own work), so
+this is a misconfiguration rather than a failed rebuild.
+
+If a script retried `regen` on any non-zero exit, it now also retries a case
+that cannot succeed until the file is fixed:
+
+```bash
+recoverage regen
+case $? in
+  0) ;;                        # documents written, or nothing to write
+  2) echo "fix rebrew-project.toml, then retry"; exit 1 ;;
+  *) echo "the rebuild failed; retrying is reasonable" ;;
+esac
+```
+
+`POST /api/regen` is unchanged: it answered 500 for this case already, and a
+client cannot tell it apart from a pipeline failure there. This change moves
+the distinction to the CLI only.
+
+### `recoverage open` writes its status line to stderr
+
+Before: `Opening <url>` was the command's stdout, so a caller that captured it
+got the URL, and an entrypoint that treated "stdout was non-empty" as "a tab
+opened" was told the tab was open on a headless run that exits 1.
+
+After: the line goes to stderr and stdout carries nothing. The URL is
+unchanged and `open` still exits 0 when a browser was launched and 1 when none
+could be.
+
+If you read the URL from stdout, take it from the log line or from
+`dashboard_url()`-shaped output instead:
+
+```bash
+# before
+url=$(recoverage open | awk '{print $2}')
+# after
+url=$(recoverage open 2>&1 >/dev/null | awk '{print $2}')
+```
+
+Only `open` changed. `export` still writes its document to stdout, `regen`
+still writes no data at all, and `stats --json` is unaffected.
+
 ## [4.0.0]
 
 Seven changes break a consumer; everything else in this release of the

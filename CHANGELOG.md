@@ -21,6 +21,24 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `serve_static_asset`, `handle_potato`), `cli.main`, `server.clear_target_cache`,
   `server.NameIndex`, `cli.ExportFormat` and the two `stats.start` counters.
 
+### Breaking
+
+- `recoverage regen` exits 2 where it exited 1 when `rebrew-project.toml` is
+  missing or unreadable as a project file. Nothing was rebuilt in either case
+  (rebrew reads the file before any of its own work), so the old 1 reported a
+  pipeline failure for what is a misconfiguration, but a script that branched
+  on the code — treating non-zero as "the rebuild failed, retry" — now sees 2,
+  which this package uses for every other case where the operator has to change
+  something first. Retry a 1; do not retry a 2. `docs/UPGRADING.md` gathers this
+  with the other breaks.
+- `recoverage open` writes its `Opening <url>` line to stderr instead of stdout.
+  The line is status, not data, and `open` is the one command that mixed the
+  two: a container entrypoint that captured stdout and treated a non-empty
+  result as an opened dashboard was told the tab was open on a headless run
+  that exits 1. A caller that reads the URL from `recoverage open`'s stdout gets
+  an empty string now. Every other command is unchanged (`export` writes its
+  document to stdout, `regen` writes no data at all).
+
 ### Changed
 
 - The dashboard's first paint got smaller: the syntax highlighter is no longer
@@ -72,19 +90,23 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   hung. Each pass is now bounded, and a pass that outlives the bound is
   reported as "the checker could not start" rather than as a finding: nothing
   was validated, which is not the same answer as a document being wrong.
-- `recoverage regen` reported a missing or malformed `rebrew-project.toml` as
-  `Error: rebrew regen failed: ConfigNotFoundError: …` and exited 1, while
-  `stats`, `export` and `check` report the same file as a clean one-line error
-  and exit 2. rebrew reads that file before any of its own work, so nothing was
-  rebuilt and the operator has to change something first: that is
-  misconfiguration, and it now exits 2 with the same message the read commands
-  give. The internal class name is gone from the output.
-- `recoverage --version` died with a `PackageNotFoundError` traceback and exit
-  1 in a tree whose installed distribution metadata is absent — an editable
-  install whose `.dist-info` was pruned, a vendored checkout, a zipapp built
-  from the sources. The package's own `__version__` is the single source of
-  truth, so it is what the flag falls back to; the question a script asks
-  before anything else now always answers.
+- `recoverage regen` no longer prints rebrew's internal class name on that
+  refusal: the missing- or malformed-`rebrew-project.toml` case it reports as
+  exit 2 (a `Breaking` change above) now gives the same one-line message
+  `stats`, `export` and `check` give, where it used to say
+  `Error: rebrew regen failed: ConfigNotFoundError: …`.
+- `recoverage --version` could name a different release than the rest of the
+  same process. It read the installed distribution's metadata, which is a
+  second copy of the version written whenever that install last synced, so an
+  editable checkout installed at 4.1.2 and bumped to 4.2.0 since answered
+  `recoverage 4.1.2` while `/api/health` and Potato Mode served 4.2.0 — two
+  answers to "what version is this" that were about different builds. The flag
+  now reads `__version__`, the single source of truth every other surface
+  reads, so a checkout, a wheel install and a zipapp all report the code they
+  are running. In a tree whose metadata is *absent* (a pruned `.dist-info`, a
+  vendored checkout) the flag also died with a `PackageNotFoundError`
+  traceback and exit 1; that is fixed by the same change, since nothing reads
+  the metadata now.
 - The browser SBOM's `created` stamp rendered a year before 1000 without its
   leading zeros (`1-01-01T00:00:00Z`), because `strftime`'s `%Y` is not
   zero-padded below year 1000, so a scanner reading the four-digit year SPDX
@@ -189,12 +211,6 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   never sent) nor the readable-response set (so the id came back unreadable).
   It is a correlation label and not a credential, so allowing it grants
   nothing, and the SPA's own refusal messages already quote it.
-- `recoverage open` writes its `Opening <url>` line to stderr instead of
-  stdout. The line is status, not data: a container entrypoint that captured
-  stdout and treated a non-empty result as an opened dashboard was told the
-  tab was open on the headless run that exits 1. Every other command keeps
-  stdout for data (`export` documents this) or for nothing at all (`regen`);
-  `open` was the one that mixed them.
 - `make web-lint` runs `lint:html`, a `uv run` reached through a `package.json`
   script, so it resolved `uv.lock` — and the lock's sibling `rebrew` path
   dependency — without the preflight every other `uv`-reaching target carries.

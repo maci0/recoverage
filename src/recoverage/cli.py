@@ -194,24 +194,22 @@ class StructuredFormatter(logging.Formatter):
 
 def _version_callback(value: bool) -> None:
     if value:
-        from importlib.metadata import PackageNotFoundError, version
-
         from recoverage import __version__
 
-        # __version__ is the single source of truth (pyproject.toml reads it),
-        # and the installed distribution's metadata is only a second copy of
-        # it.  A tree whose metadata is absent or stale — an editable install
-        # whose .dist-info was pruned, a vendored checkout, a zipapp built from
-        # the sources — used to answer `--version` with a rich traceback and
-        # exit 1, which is the one question a script asks before anything
-        # else and the one question that must never traceback.  Prefer the
-        # metadata (it is what a wheel consumer installed) and fall back to
-        # the module's own constant.
-        try:
-            installed = version("recoverage")
-        except PackageNotFoundError:
-            installed = __version__
-        typer.echo(f"recoverage {installed}")
+        # __version__ is the single source of truth (pyproject.toml reads it to
+        # write the wheel's METADATA, the man page's .TH header repeats it and
+        # `/api/health` and Potato Mode serve it), so this flag reads it too
+        # rather than asking the installed distribution's metadata, which is
+        # only a second copy of it.  Asking the metadata let this one surface
+        # answer differently from the rest of the same process: an editable
+        # install whose .dist-info was written by the last sync, a vendored
+        # checkout and a zipapp built from the sources all carry the version of
+        # whenever they were installed, so a `--version` beside an
+        # `/api/health` naming the same build reported two releases at once.  A
+        # stale `.dist-info` also used to answer with a rich traceback and exit
+        # 1, and this is the one question a script asks before anything else;
+        # the module's own constant answers it in every one of those trees.
+        typer.echo(f"recoverage {__version__}")
         raise typer.Exit
 
 

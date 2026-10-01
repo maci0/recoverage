@@ -193,6 +193,31 @@ class TestVersionFlag:
         assert "Traceback" not in result.output
         assert "PackageNotFoundError" not in result.output
 
+    def test_version_ignores_stale_distribution_metadata(self) -> None:
+        """No surface may name a different release than the code it is running.
+
+        ``__version__`` is the single source of truth; an installed
+        distribution's METADATA is a second copy of it that uv, pip and a
+        vendored checkout write whenever they last synced.  Reading it let this
+        one flag report a release the rest of the same process did not: a
+        checkout installed at 4.1.2 and bumped to 4.2.0 since answered
+        ``recoverage 4.1.2`` here while ``/api/health`` and Potato Mode served
+        4.2.0, so one process named two releases at once.  Absent metadata is
+        only the half of that this flag used to be tested for.
+        """
+        from recoverage import __version__
+
+        stale = "0.0.1"
+        assert stale != __version__
+
+        def old_metadata(name: str) -> str:
+            return stale
+
+        with mock.patch.object(importlib.metadata, "version", old_metadata):
+            result = runner.invoke(app, ["--version"])
+        assert result.exit_code == 0, result.output
+        assert result.output.strip() == f"recoverage {__version__}"
+
 
 class TestHelpOptionNames:
     """`-h` is the alias the man page documents, on the group and every command.
