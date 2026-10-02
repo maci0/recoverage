@@ -34,6 +34,7 @@ signal they share.
 from __future__ import annotations
 
 import gzip
+import inspect
 import itertools
 import json
 import logging
@@ -81,6 +82,7 @@ from recoverage.server import (
     fold_match_folded,
     fold_needle,
     fold_text,
+    folded_columns_match,
     folded_row_columns,
     folded_va_columns,
     functions_by_name,
@@ -907,6 +909,61 @@ class TestSearchColumnGuards:
             matched = fold_match_folded(spelling, needle)
             guarded = fold_can_match_hex(needle) or fold_can_match_decimal(needle)
             assert not (matched and not guarded), f"{query!r} matched {spelling!r} but was skipped"
+
+    @pytest.mark.parametrize("needle", ["needle", "longer_than_every_column"])
+    def test_the_folded_column_predicate_is_the_fold_match_answer(self, needle: str) -> None:
+        """The three folded arms must answer exactly what folding each would.
+
+        ``folded_columns_match`` is the ONE definition the API function list and
+        both Potato function lists select rows by, and it exists so three copies
+        of three substring tests cannot drift apart.  That is only true while it
+        agrees column for column with :func:`fold_match_folded` on the raw text
+        the columns were folded from — a column it dropped, or one it folded
+        where the other arm folds per row, would search a different set than the
+        one the guards above prove sound.
+        """
+        raw = ("first_column", "second_column", "third_column")
+        columns = tuple(fold_text(value) for value in raw)
+        expected = any(fold_match_folded(value, needle) for value in raw)
+        assert folded_columns_match(columns, needle) is expected, (
+            f"{needle!r}: folded {columns!r} disagreed with the raw {raw!r}"
+        )
+
+    def test_a_null_column_folds_to_empty_and_matches_nothing(self) -> None:
+        """A NULL column folds as the empty string, and no term matches it.
+
+        rebrew stores a missing symbol as null and an empty one as ``""``; both
+        have to fold to text no non-empty search term can hit, which is what
+        ``fold_match_folded``'s own contract says of the raw path.
+        """
+        assert folded_columns_match(("", "name", ""), "name") is True
+        assert folded_columns_match(("", "", ""), "name") is False
+        assert folded_columns_match(("", "", ""), "") is True
+
+    def test_no_list_surface_carries_its_own_copy_of_the_three_tests(self) -> None:
+        """The API list and Potato Mode select through the one predicate.
+
+        A private copy in a route module is how the API list and Potato Mode came
+        to try the columns in different orders; every arm is an ``in`` test so
+        the answer could not differ, but the next reader has no way to know that,
+        and a fourth arm added to one copy would.
+        """
+        import recoverage.api as api
+        import recoverage.potato as potato
+
+        assert api._server.folded_columns_match is folded_columns_match
+        code = [
+            line
+            for line in inspect.getsource(potato._columns_match).splitlines()
+            if not line.lstrip().startswith(("#", '"', "'"))
+        ]
+        assert not any("needle in columns" in line for line in code), (
+            "potato._columns_match re-spells the three tests instead of delegating"
+        )
+        delegates = [line.strip() for line in code]
+        assert "return folded_columns_match(columns, needle)" in delegates, (
+            "potato._columns_match no longer delegates to the shared predicate"
+        )
 
 
 class TestSnapshotVaIndices:

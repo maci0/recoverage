@@ -1442,11 +1442,12 @@ def _section_stats(snap: CoverageSnapshot) -> dict[str, Any]:
         }
 
     # Function counts by status.  The data-marker rows (DATA_MARKER_TYPES) live
-    # in the functions array but are data, not functions — exclude them.
+    # in the functions array but are data, not functions — exclude them, from
+    # the same memoized set both function lists read (`function_rows`), so the
+    # counts and the two surfaces that page them cannot disagree about which
+    # rows are functions.
     by_status: dict[str, int] = {}
-    for fn in snap.functions:
-        if _is_data_marker(fn):
-            continue
+    for fn in function_rows(snap):
         # "UNKNOWN" is the spelling the rest of the package uses for an
         # absent status: rebrew's writer canonicalizes to it
         # (`rebrew.coverage_toml`), its reader derives these counts with the
@@ -2780,6 +2781,7 @@ _SNAPSHOT_INDEX_KINDS = frozenset(
         "folded_globals",
         "folded_va_functions",
         "folded_va_globals",
+        "function_rows",
         "globals_by_va",
         "verify_by_va",
     }
@@ -2892,6 +2894,56 @@ def globals_by_va(snap: CoverageSnapshot) -> Mapping[int, Global]:
         return index
 
     return _snapshot_index(snap, "globals_by_va", build)
+
+
+def folded_columns_match(columns: tuple[str, str, str], needle: str) -> bool:
+    """Whether *needle* occurs in any of a row's three FOLDED name columns.
+
+    The same three substring tests :func:`fold_match_folded` runs — over text
+    folded once for the snapshot by :func:`folded_row_columns` instead of once
+    per row per keystroke.  An absent column folded as the empty string, which
+    no non-empty term matches, so this is the answer the fold-then-test path
+    gives.
+
+    ONE definition, because the API function list (``api._filtered_functions``)
+    and the Potato function list and grid (``potato._search_functions``,
+    ``potato._render_function_list``) all select on the same three folded
+    columns of the same frozen rows: three copies of three substring tests is
+    three chances to disagree about which columns a search covers.  Every arm
+    is an ``in`` test, so the order the columns are tried in cannot change the
+    answer — only how many of them a row that misses has to pay.
+    """
+    return needle in columns[0] or needle in columns[1] or needle in columns[2]
+
+
+def function_rows(snap: CoverageSnapshot) -> tuple[Any, ...]:
+    """``snap.functions`` without the data-marker rows, memoized per snapshot.
+
+    The data-marker rows (:data:`DATA_MARKER_TYPES`) live in the functions
+    array but are data, not functions, and BOTH function-list surfaces drop
+    them — the API list endpoint (``api._filtered_functions``) and Potato Mode
+    (``potato._render_function_list``) — so this is the one place the predicate
+    runs, and the two surfaces cannot list different rows.
+
+    It is a memo because the rows are frozen for the snapshot's life and the
+    filter is a per-request step: the SPA's search box is one request per
+    keystroke, so the API endpoint ran the marker predicate over every row of a
+    40,000-function target on every character typed, to drop a set that cannot
+    change until the next build.  Potato Mode already kept its own copy of this
+    tuple for exactly that reason; two memos of one derivation were two things
+    to keep in step, so this is the one and Potato's is gone.
+
+    A tuple, because callers sort in place and the cached rows are shared by
+    every request that reads the snapshot.  Keyed through :func:`_snapshot_index`
+    on the same ``id(snap)`` the by-VA indices use, for the same soundness
+    reason: the entry holds the snapshot, which holds the rows, so an id
+    cannot name a newer object while the entry lives.
+    """
+    return _snapshot_index(
+        snap,
+        "function_rows",
+        lambda: tuple(fn for fn in snap.functions if not _is_data_marker(fn)),
+    )
 
 
 def verify_by_va(snap: CoverageSnapshot) -> Mapping[int, Mapping[str, Any]]:

@@ -8,6 +8,56 @@ from conftest import decode_body, wsgi_get
 
 from recoverage import api as _api
 from recoverage import potato as _potato
+from recoverage import server as _server
+
+
+def test_function_list_does_not_rewalk_the_functions_table():
+    """A list request must not run the marker predicate over every row.
+
+    The data-marker rows (`server.DATA_MARKER_TYPES`) live in the functions
+    array, and both the API list endpoint and `server._section_stats` drop
+    them.  Dropping them is a per-row test, and the SPA's search box is a
+    request per keystroke, so a per-request pass put one walk of the whole
+    function table on every character typed to drop a set that cannot change
+    until the next build — measured at 2.05 ms over a 40,000-function target,
+    and ~20% of a search request on top of the search itself.
+
+    A WORK COUNTER, not a clock: the arm is proven by counting calls, so this
+    holds on any machine.  A search is included because that is the path the
+    cost was actually paid on.
+    """
+    calls: list[object] = []
+    real = _server._is_data_marker
+
+    def counting(fn: object) -> bool:
+        calls.append(fn)
+        return real(fn)  # pyright: ignore[reportArgumentType]
+
+    _api._clear_list_total_cache()
+    snapshot_len = len(_server.coverage_for("FAKEDLL").functions)
+    queries = (
+        "/api/targets/FAKEDLL/functions?limit=50",
+        "/api/targets/FAKEDLL/functions?limit=50&search=FAKEDLL",
+    )
+    for query in queries:
+        # The first request builds the snapshot and the memo, so it may run the
+        # predicate over the table once.  Every request after it must run it
+        # ZERO times: that is the whole content of the memo.
+        status, _h, _b = wsgi_get(query)
+        assert status.startswith("200"), status
+
+        calls.clear()
+        _server._is_data_marker = counting  # pyright: ignore[reportAttributeAccessIssue]
+        try:
+            status, _h, _b = wsgi_get(query)
+        finally:
+            _server._is_data_marker = real  # pyright: ignore[reportAttributeAccessIssue]
+        assert status.startswith("200"), status
+        assert not calls, (
+            f"{query} ran the marker predicate {len(calls)} times on a repeat "
+            f"request over a {snapshot_len}-row functions table; the "
+            "per-request pass is back"
+        )
 
 
 def test_data_memo_skips_rebuild():

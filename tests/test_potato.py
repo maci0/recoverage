@@ -2981,8 +2981,15 @@ class TestFunctionListOrdering:
         The render sorts in place, so a shared list would be reordered by one
         request for every other: the memo returns a tuple, and the render
         copies before it sorts.
+
+        The memo itself moved to :func:`server.function_rows` when the API
+        list endpoint started reading the same derived set rather than
+        re-deriving it per request; this pins it there now.
         """
-        from recoverage.potato import _function_rows, _is_data_marker
+        from recoverage import server as _server
+
+        function_rows = _server.function_rows
+        _is_data_marker = _server._is_data_marker
 
         snap = _write_doc(
             tmp_path,
@@ -3002,10 +3009,10 @@ class TestFunctionListOrdering:
             ],
         )
         expected = [fn.name for fn in snap.functions if not _is_data_marker(fn)]
-        rows = _function_rows(snap)
+        rows = function_rows(snap)
         assert [fn.name for fn in rows] == expected
         assert "g_marker" not in expected, "the fixture must exercise a real marker row"
-        assert _function_rows(snap) is rows, "a second call must hit the memo"
+        assert function_rows(snap) is rows, "a second call must hit the memo"
         assert isinstance(rows, tuple), "the render sorts, so a shared list would be mutated"
 
     @pytest.mark.parametrize("field", ["va", "name", "status", "size"])

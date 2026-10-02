@@ -929,12 +929,15 @@ class TestProcessGrowthIsBounded:
         # Per-target image width, memoized on the binary's stamp and dropped
         # beside the disassembly memo on a rebuild.
         "recoverage.disasm._WIDTH_MEMO": ("_WIDTH_MEMO_MAX", "count"),
-        "recoverage.potato._FUNCTION_ROWS": ("_FUNCTION_ROWS_MAX", "count"),
         "recoverage.potato._GRID_CACHE": ("_GRID_CACHE_MAX", "count"),
         "recoverage.potato._PARENT_INDEX": ("_PARENT_INDEX_MAX", "count"),
         "recoverage.potato._POTATO_STATS_CACHE": ("_POTATO_STATS_CACHE_MAX", "count"),
         "recoverage.potato._SECTION_DATA_CACHE": ("_SECTION_DATA_CACHE_MAX", "count"),
-        # The snapshot-keyed DLL index the /asm and /bytes validators read.
+        # The snapshot-keyed derived tables (by-VA indices, the folded search
+        # columns, the marker-free function rows) the /asm, /bytes, search and
+        # list endpoints read. `function_rows` is one of these kinds: it moved
+        # here from `potato._FUNCTION_ROWS` when the API list endpoint started
+        # reading the same derived set instead of re-deriving it per request.
         "recoverage.server._SNAPSHOT_INDEX": ("_SNAPSHOT_INDEX_MAX", "count"),
         # The route module's cache invalidators, registered once per route
         # module by the composition root at import. No bound constant: the

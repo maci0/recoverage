@@ -42,7 +42,6 @@ from recoverage.server import (
     _etag_or_304,
     _evict_oldest,
     _format_hex_dump,
-    _is_data_marker,
     _load_dll,
     _log_safe,
     _newest_mtime_ns,
@@ -54,11 +53,13 @@ from recoverage.server import (
     db_target_ids,
     fold_can_match_hex,
     fold_needle,
+    folded_columns_match,
     folded_row_columns,
     folded_va_columns,
     fs_text_bytes,
     fs_url_quote,
     function_json,
+    function_rows,
     function_sort_key,
     functions_by_name,
     global_json,
@@ -1727,8 +1728,6 @@ def clear_cells_cache() -> None:
         _POTATO_STATS_CACHE.clear()
     with _SECTION_DATA_CACHE_LOCK:
         _SECTION_DATA_CACHE.clear()
-    with _FUNCTION_ROWS_LOCK:
-        _FUNCTION_ROWS.clear()
 
 
 def _load_grid_cells(
@@ -1920,40 +1919,6 @@ def _section_pct(summary: dict[str, Any], sections: dict[str, dict[str, Any]], n
 _SEARCH_ROW_LIMIT = 500
 
 
-#: The functions that are not data markers, one entry per snapshot.  The
-#: exclusion reads only frozen rows, so it is a pure function of the snapshot
-#: and is memoized beside :func:`server.functions_by_name` in the same bounded
-#: store: the functions view re-derived it on every request, and a search
-#: keystroke is a request.
-_FUNCTION_ROWS_MAX = 4
-_FUNCTION_ROWS_LOCK = threading.Lock()
-_FUNCTION_ROWS: dict[int, tuple[CoverageSnapshot, tuple[Function, ...]]] = {}
-
-
-def _function_rows(coverage: CoverageSnapshot) -> tuple[Function, ...]:
-    """``coverage.functions`` without the data-marker rows, memoized per snapshot.
-
-    The data-marker rows (server.DATA_MARKER_TYPES) live in the functions array
-    but are data, not functions, and both the functions view and the API list
-    endpoint drop them: the two surfaces list the same rows.
-
-    A tuple, because the callers sort in place and the cached rows are shared
-    by every request that reads the snapshot.
-    """
-    key = id(coverage)
-    with _FUNCTION_ROWS_LOCK:
-        cached = _FUNCTION_ROWS.get(key)
-    if cached is not None:
-        return cached[1]
-    # The entry holds the snapshot, so `id` cannot name a newer object while
-    # this one is still referenced by it: the id is sound for the entry's life.
-    rows = tuple(fn for fn in coverage.functions if not _is_data_marker(fn))
-    with _FUNCTION_ROWS_LOCK:
-        _evict_oldest(_FUNCTION_ROWS, _FUNCTION_ROWS_MAX)
-        _FUNCTION_ROWS[key] = (coverage, rows)
-    return rows
-
-
 def _va_matches_folded(columns: tuple[str, str] | None, needle: str, match_hex: bool) -> bool:
     """Whether *needle* matches the row's VA in either hex spelling this page prints.
 
@@ -1979,14 +1944,16 @@ def _va_matches_folded(columns: tuple[str, str] | None, needle: str, match_hex: 
 def _columns_match(columns: tuple[str, str, str], needle: str) -> bool:
     """Whether *needle* occurs in any of the row's three FOLDED name columns.
 
-    The same three substring tests :func:`server.fold_match_folded` runs —
-    ``vaStart`` before ``symbol``, the order :func:`_search_functions` has
-    always compared them in — over text folded once for the snapshot instead
-    of once per row per keystroke.  An absent column folded as the empty
-    string, which no non-empty term matches, so this is the answer the
-    fold-then-test path gives.
+    The shared definition, :func:`server.folded_columns_match`, under the name
+    this module's three call sites read it by.  It was a second copy here: the
+    same three substring tests over the same three folded columns of the same
+    frozen rows, differing only in the order the arms were tried (all three are
+    ``in`` tests, so the order cannot change the answer), and the API function
+    list carried a third.  One definition in :mod:`server` is where the folded
+    columns are built, so all three surfaces read the predicate beside the
+    table it takes.
     """
-    return needle in columns[0] or needle in columns[2] or needle in columns[1]
+    return folded_columns_match(columns, needle)
 
 
 def _search_functions(coverage: CoverageSnapshot, search_query: str) -> set[str]:
@@ -2743,10 +2710,11 @@ def _render_function_list(
 
     # Base filter: the data-marker rows (server.DATA_MARKER_TYPES) live in the
     # functions array but are data markers, not functions — same exclusion as
-    # the API list endpoint and server._section_stats, so both surfaces list
-    # the same rows.  Memoized per snapshot, so a search keystroke no longer
-    # re-walks the whole array.
-    rows = list(_function_rows(coverage))
+    # the API list endpoint and server._section_stats, so all three read the
+    # one memoized set (`server.function_rows`) and cannot list different rows.
+    # Memoized per snapshot, so a search keystroke no longer re-walks the whole
+    # array.
+    rows = list(function_rows(coverage))
     if status_filter:
         rows = [fn for fn in rows if fn.status == status_filter]
     if search_query:

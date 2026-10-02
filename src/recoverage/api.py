@@ -631,8 +631,14 @@ def _filtered_functions(
     """The functions the list endpoint would serve, before paging.
 
     The data-marker rows (server.DATA_MARKER_TYPES) are data, not functions
-    (rebrew ADR 023 widened the legal marker set), so they are dropped here for
-    the count, the page and the by-status filter alike.
+    (rebrew ADR 023 widened the legal marker set), so they are dropped for the
+    count, the page and the by-status filter alike — by the caller, through
+    ``server.function_rows``, which memoizes that drop per snapshot.  This
+    function filters what it is handed and drops nothing itself: the marker
+    predicate is a per-row test, and the search box is a request per keystroke,
+    so running it here put one pass over every function of a 40,000-function
+    target on every character typed for a set that cannot change until the next
+    build.  *functions* is therefore already the marker-free set.
 
     Search folds BOTH sides through :func:`server.fold_match`, over the same
     four columns the SQL matched: the name, the symbol, the decimal VA text and
@@ -651,7 +657,7 @@ def _filtered_functions(
     column is built and folded per row either way, and only when the term can
     hold one (``server.fold_can_match_decimal``).
     """
-    rows = [fn for fn in functions if not _server._is_data_marker(fn)]
+    rows = list(functions)
     if status_filter is not None:
         rows = [fn for fn in rows if fn.status == status_filter]
     if search:
@@ -673,21 +679,10 @@ def _filtered_functions(
             rows = [
                 fn
                 for fn in rows
-                if _any_column_matches(folded[id(fn)], needle)
+                if _server.folded_columns_match(folded[id(fn)], needle)
                 or (match_decimal and fold_match_folded(str(fn.va), needle))
             ]
     return rows
-
-
-def _any_column_matches(columns: tuple[str, str, str], needle: str) -> bool:
-    """Whether *needle* occurs in any of the three FOLDED *columns*.
-
-    The same three substring tests :func:`fold_match_folded` runs, against text
-    that has been folded once instead of once per row per keystroke.  A NULL
-    column folded as the empty string, which no non-empty term matches, so the
-    answer is the one the fold-then-test path gives.
-    """
-    return needle in columns[0] or needle in columns[1] or needle in columns[2]
 
 
 def _function_page(
@@ -1641,10 +1636,18 @@ def _build_search_index(snap: CoverageSnapshot) -> dict[str, Any]:
             value["symbol"] = symbol
         return value
 
+    # First row per name wins, so the entry is only BUILT for a name the index
+    # does not already hold: `setdefault(key, entry(...))` evaluates
+    # `entry(...)` on every row and throws the dict away on a repeat, and a
+    # firmware document names the same symbol on many rows (a function and the
+    # global it touches, a thunk and its parent). The duplicate check is one
+    # `in` on a name that is nearly always already present.
     for fn in snap.functions:
-        index.setdefault(fn.name, entry(fn.name, fn.vaStart, fn.symbol))
+        if fn.name not in index:
+            index[fn.name] = entry(fn.name, fn.vaStart, fn.symbol)
     for gl in snap.globals:
-        index.setdefault(gl.name, entry(gl.name, _server.hex_addr(gl.va), ""))
+        if gl.name not in index:
+            index[gl.name] = entry(gl.name, _server.hex_addr(gl.va), "")
     return index
 
 
@@ -2129,12 +2132,14 @@ def handle_api_functions_list(target: str) -> bytes | HTTPResponse:
         # `total` and the page come from ONE filter pass over one frozen
         # snapshot, so the count and the rows it paginates cannot describe two
         # different builds — the guarantee `read_snapshot` used to buy with a
-        # deferred read transaction.
+        # deferred read transaction.  The data-marker drop is the snapshot's
+        # own memo (server.function_rows), taken before the search filter, so
+        # the pass below is the search alone.
         rows = _filtered_functions(
-            coverage.functions,
+            _server.function_rows(coverage),
             status_filter,
             search,
-            _server.folded_row_columns(coverage, coverage.functions),
+            _server.folded_row_columns(coverage, coverage.functions) if search else None,
         )
         total = _function_total(snap, target, status_filter, search, rows)
         # Enumerate exactly the response fields, in order: the SPA reads
