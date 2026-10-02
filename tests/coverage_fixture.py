@@ -153,9 +153,13 @@ def known_cell_states() -> frozenset[str]:
     silently skipped gate that let an unmapped state paint as an undocumented
     gap -- the failure these two callers exist to catch.
     """
-    from rebrew import build_db, coverage_db
+    import importlib
 
-    for module in (coverage_db, build_db):
+    for module_name in ("rebrew.coverage_db", "rebrew.build_db"):
+        try:
+            module = importlib.import_module(module_name)
+        except ImportError:
+            continue
         states = getattr(module, "_KNOWN_CELL_STATES", None)
         if states is not None:
             return frozenset(states)
