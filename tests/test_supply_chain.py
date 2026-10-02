@@ -2815,3 +2815,77 @@ class TestPythonDependencyLicenses:
             assert "license-inventory" in doc, (
                 "the license record of the Python half is unreachable from the documentation"
             )
+
+
+class TestNarrowingATestRunReachesPytest:
+    """The edit-test loop's narrowing must arrive at pytest, not at make.
+
+    `make test-one T=... FLAGS="-k name"` is the only spelling that runs one
+    test, and CONTRIBUTING documented the bare form as well: a pytest option
+    handed on the make command line is parsed by MAKE. `-k` is make's
+    --keep-going, so `-k <campaign>` builds `test-one` and then whatever make
+    finds for the campaign name -- `No rule to make target` when it matches
+    nothing, and the ENTIRE suite when the campaign is named `test`, because
+    that is a target. A contributor replaying one failing fuzz campaign got a
+    slow run of everything and a green result either way.
+
+    Driven through the real make with `-n`, so nothing runs: the assertion is
+    about the command line the recipe builds, which is the whole of the
+    defect.
+    """
+
+    @staticmethod
+    def _dry_run(*args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["make", "-n", *args],
+            cwd=_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+
+    def test_the_bare_spelling_never_becomes_a_pytest_option(self) -> None:
+        """The defect in its worst shape: the narrowing vanishes, the run goes green.
+
+        `-k test` is the case that does not even error. make reads the flag as
+        --keep-going and `test` as a goal, so it builds `test-one` and then the
+        whole suite, and the contributor replaying one campaign is told every
+        campaign passed. The assertion is therefore about what reached pytest,
+        not about the exit status: whether make errors (an unknown campaign
+        name) or silently widens (a name that is a target), `-k` is gone in
+        both, and only the second is the trap.
+        """
+        bare = self._dry_run("test-one", "T=tests/test_fuzz.py", "-k", "test")
+        pytest_lines = [ln for ln in bare.stdout.splitlines() if "python -m pytest" in ln]
+        assert not any("-k " in ln for ln in pytest_lines), (
+            f"a bare `-k test` now reaches pytest, so the Makefile changed shape: {pytest_lines}"
+        )
+        assert any("tests/ -v" in ln for ln in pytest_lines), (
+            "the bare `-k test` no longer runs the whole suite; if make stopped "
+            f"treating `test` as a goal, re-read this test before relaxing it: {pytest_lines}"
+        )
+
+    def test_the_documented_spelling_forwards_the_option(self) -> None:
+        good = self._dry_run("test-one", "T=tests/test_fuzz.py", "FLAGS=-k seeded_campaign")
+        assert good.returncode == 0, good.stderr
+        pytest_lines = [ln for ln in good.stdout.splitlines() if "python -m pytest" in ln]
+        assert pytest_lines, f"the recipe ran no pytest: {good.stdout[-400:]}"
+        assert any("-k seeded_campaign" in ln for ln in pytest_lines), (
+            f"FLAGS did not reach the pytest command line: {pytest_lines}"
+        )
+
+    def test_contributing_documents_the_spelling_that_works(self) -> None:
+        """The prose and the Makefile must agree, or the prose is the defect.
+
+        A contributor reads CONTRIBUTING, not `make help`, so a bare `-k` left
+        in the prose is a working command written down beside a broken one.
+        """
+        contributing = (_ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
+        assert re.search(r"test-one[^\n`]*\s-k\s", contributing) is None, (
+            "CONTRIBUTING documents a bare `-k` on the make command line, which "
+            "make parses as its own --keep-going and never hands to pytest"
+        )
+        assert 'FLAGS="-k' in contributing, (
+            "CONTRIBUTING no longer shows the FLAGS= spelling that does reach pytest"
+        )

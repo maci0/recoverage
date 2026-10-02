@@ -123,6 +123,8 @@ help:
 		'  make clone-rebrew       # clone the sibling rebrew pin into ../rebrew' \
 		'  make test               # full pytest suite (CI test job, minus the matrix)' \
 		'  make test-one T=<node>  # one file or nodeid, e.g. T=tests/test_api.py::TestX' \
+		'                           # pytest options go in FLAGS="-k name", never bare on' \
+		'                           # the command line: make eats a leading-dash argument' \
 		'  make test-browser       # browser tests: installs playwright + chromium, then runs them' \
 		'  make fuzz              # the seeded fuzz campaigns (SEED= / ITERATIONS= widen one)' \
 		'  make lint               # ruff check src/ tests/ tools/ (CI lint job)' \

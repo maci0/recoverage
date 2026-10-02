@@ -142,8 +142,20 @@ reproduces under `make test`, so the default is not a separate corpus.
 derived from it by the campaign's own name, so one value determines the run,
 each surface explores independently, and adding a campaign cannot shift another
 surface's inputs. A failure names the seed its own campaign drew from, and
-`RECOVERAGE_FUZZ_SEED=<that seed> make test-one T=tests/test_fuzz.py -k <campaign>`
-replays that campaign alone.
+
+```bash
+RECOVERAGE_FUZZ_SEED=<that seed> \
+  make test-one T=tests/test_fuzz.py FLAGS="-k <campaign>"
+```
+
+replays that campaign alone. The `FLAGS=` is not optional: a pytest option
+handed bare on the make command line never reaches pytest, because make parses
+a leading-dash argument as one of its own. `-k` is make's `--keep-going`, so
+`-k <campaign>` runs `test-one` and then whatever make finds for the campaign
+name — the whole `tests/test_fuzz.py` file when it matches no target, and the
+`test` target (the entire suite) when the campaign is named `test`. Either way
+the narrowing is silently dropped, and `make --` does not rescue it either: a
+goal list after `--` is still make's, not pytest's.
 
 The suite is hermetic. It builds its own synthetic coverage documents (see
 `tests/conftest.py`) and needs no project workspace, compiler toolchain, or
