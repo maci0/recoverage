@@ -1306,13 +1306,19 @@ Makefile's preflight check; uv still resolves the source in `pyproject.toml`.
   tree git cannot read rather than passing on an empty substitution: outside a
   work tree `git status` writes its error to stderr and yields nothing, which
   read as a clean bundle.
-- The cell-state vocabulary is owned by rebrew (`rebrew.coverage_db._KNOWN_CELL_STATES`)
-  and must be covered on the rendering side: `potato.COLORS` + `LEGEND_ITEMS`,
-  and `web/app/states.ts` `STATE_SLOTS`/`PALETTE_VARS`/`FILTER_KEY`. An unmapped
+- The cell-state vocabulary is owned by rebrew (published as a private
+  `_KNOWN_CELL_STATES`, and the module holding it has moved once: `build_db`
+  -> `coverage_db`) and must be covered on the rendering side: `potato.COLORS`
+  + `LEGEND_ITEMS`, and `web/app/states.ts`
+  `STATE_SLOTS`/`PALETTE_VARS`/`FILTER_KEY`. An unmapped
   state paints as an undocumented gap, which contradicts `/stats` — `verified`
   is counted there as an exact match. Tests in `test_potato.py`
   (`TestCellStateVocabularyCoverage`) and `test_server.py` (`TestSpaStateVocabulary`)
-  fail on a gap; extend all of them together when rebrew adds a state.
+  fail on a gap; extend all of them together when rebrew adds a state. Both read
+  the vocabulary through `coverage_fixture.known_cell_states`, which searches
+  the rebrew modules that own one and raises when none publishes it: a second
+  import of one spelling is what let the move above break the gate, and a
+  skipped gate reads exactly like a passing one.
 - The SPA's own arithmetic over document columns follows four rules, because
   `rebrew.coverage_toml` reads `columns`, `start`, `end` and `span` as plain
   ints with no ceiling, and a value past a JS typed array's range wraps

@@ -137,6 +137,35 @@ def cell(start: int, end: int, state: str, **extra: Any) -> dict[str, Any]:
     return _cell_row({"start": start, "end": end, "state": state, **extra})
 
 
+def known_cell_states() -> frozenset[str]:
+    """Every cell state rebrew can write, lowercase.
+
+    The vocabulary is rebrew's, not this package's (AGENTS.md: "the cell-state
+    vocabulary is owned by rebrew"), so it is READ rather than restated: a
+    hard-coded copy here is a second answer that drifts the moment rebrew adds
+    a state, which is exactly what the tests using this are for.
+
+    Which module publishes it has moved once already (``build_db`` ->
+    ``coverage_db``), and the name is private either way, so the lookup is a
+    search over the modules that own a cell-state vocabulary rather than an
+    import of one spelling of it.  A private name is read deliberately, and a
+    rename must fail HERE, with a message naming the search, rather than as a
+    silently skipped gate that let an unmapped state paint as an undocumented
+    gap -- the failure these two callers exist to catch.
+    """
+    from rebrew import build_db, coverage_db
+
+    for module in (coverage_db, build_db):
+        states = getattr(module, "_KNOWN_CELL_STATES", None)
+        if states is not None:
+            return frozenset(states)
+    raise AssertionError(
+        "no rebrew module publishes _KNOWN_CELL_STATES (searched rebrew.coverage_db "
+        "and rebrew.build_db); the cell-state vocabulary gate cannot run, so a state "
+        "rebrew can write would go unpainted beside a count that includes it"
+    )
+
+
 def render_coverage(
     target: str,
     sections: dict[str, dict[str, Any]],

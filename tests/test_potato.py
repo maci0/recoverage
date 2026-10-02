@@ -42,7 +42,7 @@ from urllib.parse import quote, unquote, urlparse
 
 import pytest
 from conftest import HAS_DB, path_the_filesystem_holds, require_target, wsgi_get
-from coverage_fixture import cell, coverage_dir, write_coverage
+from coverage_fixture import cell, coverage_dir, known_cell_states, write_coverage
 from rebrew.coverage_toml import CoverageSnapshot, load_coverage
 
 from recoverage.potato import (
@@ -3753,11 +3753,10 @@ class TestCellStateVocabularyCoverage:
     """
 
     def test_every_known_cell_state_has_a_color(self) -> None:
-        from rebrew.coverage_db import _KNOWN_CELL_STATES
 
         from recoverage.potato import COLORS
 
-        missing = sorted(_KNOWN_CELL_STATES - set(COLORS))
+        missing = sorted(known_cell_states() - set(COLORS))
         assert missing == [], f"cell states with no color (render as undocumented): {missing}"
 
     def test_verified_renders_as_a_match_not_a_gap(self) -> None:
