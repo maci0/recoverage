@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import pathlib
 import sys
+import unicodedata
 
 _ROOT = pathlib.Path(__file__).resolve().parent.parent
 _FORMAT_TS = _ROOT / "web" / "app" / "lib" / "format.ts"
@@ -63,6 +64,26 @@ def full_fold_table() -> dict[str, str]:
     return table
 
 
+def _class_order(table: dict[str, str]) -> list[str]:
+    """The table's keys in the order the character class spells them.
+
+    A key with a nonzero combining class is emitted FIRST, the rest in
+    sorted order. A character class is a set, so the order cannot change what
+    it matches; what it changes is how a reader parses it, and that is exactly
+    what this file's own lint gate judges. oxlint's
+    `no-misleading-character-class` reports U+0345 COMBINING GREEK
+    YPOGEGRAMMENI when it FOLLOWS a base character, because a combining mark
+    after a base character is a grapheme cluster and a class cannot hold one:
+    the escape spelling ``\\u{345}`` is reported identically, so writing the
+    key as a code point is not the fix and only hides the character. The key
+    itself is not negotiable — it is a scalar value ``toLowerCase`` leaves
+    alone and ``casefold`` rewrites to U+03B9, so it is a real row — and
+    leading with it is what keeps the generated file inside the gate that
+    judges the sources it was generated from.
+    """
+    return sorted(table, key=lambda key: (not unicodedata.combining(key), key))
+
+
 def render(table: dict[str, str]) -> str:
     """The table's entries and its pattern, in the shape format.ts spells."""
     keys = sorted(table)
@@ -87,7 +108,7 @@ def render(table: dict[str, str]) -> str:
         + "\n".join(rows)
         + "\n])\n"
         + "const FULL_FOLD_PATTERN = /["
-        + "".join(keys)
+        + "".join(_class_order(table))
         + "]/gu;"
     )
 

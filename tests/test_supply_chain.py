@@ -1195,7 +1195,10 @@ class TestFrontendAnalysisIsEnforced:
         a switch that falls through, a function that can reach the end
         without returning, a file spelled two ways on a case-insensitive
         filesystem, a label nothing jumps to, and unreachable code left
-        behind a return.
+        behind a return. `noUncheckedSideEffectImports` is the sixth: it
+        makes a bare side-effect import a reported error when the module
+        carries no types, which is how a stylesheet or a polyfill the
+        bundler resolves resolves to nothing.
         """
         options = json.loads(_TSCONFIG.read_text(encoding="utf-8"))["compilerOptions"]
         for flag in (
@@ -1205,10 +1208,37 @@ class TestFrontendAnalysisIsEnforced:
             "noImplicitReturns",
             "noFallthroughCasesInSwitch",
             "forceConsistentCasingInFileNames",
+            "noUncheckedSideEffectImports",
         ):
             assert options.get(flag) is True, f"web/tsconfig.json no longer sets {flag}"
         for flag in ("allowUnreachableCode", "allowUnusedLabels"):
             assert options.get(flag) is False, f"web/tsconfig.json no longer sets {flag}: false"
+
+    def test_the_build_script_stays_under_the_type_check(self) -> None:
+        """`web/build.ts` is the one TypeScript file no other gate reads.
+
+        oxlint has no type information (the Rika preset is flattened with
+        typeAware: false), so tsc is the whole type gate; and `include` named
+        `app` and `vite.config.ts` only, so the script that drives BOTH vite
+        builds — the one writing the committed app.js and highlight.js that
+        every packaging run compares — was outside it. A type error in the
+        build step surfaces as a bundle that is subtly wrong, or a `make
+        build` that fails after the commit is tagged, rather than as a line in
+        the typecheck-web job.
+        """
+        config = json.loads(_TSCONFIG.read_text(encoding="utf-8"))
+        assert "build.ts" in config["include"], (
+            "web/tsconfig.json no longer includes build.ts, so the script that "
+            "produces the committed bundle is outside the only type gate the "
+            "frontend has"
+        )
+        # It imports `./vite.config.ts` with its extension, which the compiler
+        # only resolves when this is on. Dropping it fails the check rather
+        # than quietly narrowing what is checked.
+        assert config["compilerOptions"].get("allowImportingTsExtensions") is True, (
+            "web/tsconfig.json no longer sets allowImportingTsExtensions, which is "
+            "what lets build.ts import vite.config.ts with its extension"
+        )
 
     def test_a_stale_disable_directive_fails_the_frontend_lint(self) -> None:
         """`oxlint-disable-next-line` is the frontend's `# noqa`, and it needs

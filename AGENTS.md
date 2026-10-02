@@ -478,7 +478,21 @@ correct fold) passes a table that is half empty; only the completeness arm does
 not, so `tests/test_server.py`
 (`test_the_spa_fold_expansions_cover_every_casefold`) holds the shipped table
 against `str.casefold` over every scalar code point, and the generator is the
-one thing allowed to write it. One divergence is left standing on purpose:
+one thing allowed to write it. The generated character class is also the file
+that `bun run lint:js` judges, and one key is a COMBINING mark: U+0345 COMBINING
+GREEK YPOGEGRAMMENI, which `toLowerCase` leaves alone and `casefold` rewrites
+to U+03B9. A combining mark that FOLLOWS a base character in a class is a
+grapheme cluster, and a class cannot hold one, so oxlint's
+`no-misleading-character-class` reported it and the gate was red on a committed
+tree — a generated file failing the lint that judges the sources it came from.
+Spelling the key as `ͅ` does not help: the rule reports the escape
+identically. The generator therefore emits every key with a nonzero combining
+class FIRST (`_class_order`), which changes no match (a class is a set) and
+keeps the file inside its own gate; `tests/test_server.py`
+(`test_the_spa_fold_pattern_matches_the_table_exactly`) compares the class as a
+SET, so the ordering is free there, and the rebuilt bundle was verified to
+expand the same 2692 characters as the one it replaced. One divergence is left
+standing on purpose:
 28 code points where JavaScript's `toLowerCase` applies a SpecialCasing
 composition Python's `str.lower` does not (`꟎` U+A7CE lowers to `꟏` in the
 browser only), which no table entry can repair because the browser never

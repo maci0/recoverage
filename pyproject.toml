@@ -256,6 +256,14 @@ allowed-confusables = ["×", "ſ"]
 #   below carries the reason, since every finding they produce is a fixture
 #   that deliberately binds every interface, names a token, uses /tmp, or
 #   seeds a PRNG.
+#   S110 — a `try`-`except`-`pass` that swallows the exception a log line
+#   is supposed to name. The failure this tree logs loudly everywhere else
+#   losing its only trace. It reaches a bare `except Exception` only, which is
+#   its documented default (the typed-exception opt-in is off), so a narrowly
+#   typed handler that discards its error is still this tree's own to justify.
+#   S113 is NOT in the list: it names `requests` and `httpx`, and no module
+#   here imports either, so it would be a rule with nothing to judge. Adding
+#   it with the dependency it exists to check is the change that earns it.
 #   PLC/PLW  — the pylint correctness rules outside PLE (unnecessary-dunder
 #   call, nan comparison, bad raise type, encoding-less open, useless
 #   else-on-loop, self-assignment, global-at-statement), plus the PLR and TRY
@@ -285,7 +293,7 @@ select = [
     "PLE", "INT", "C4", "RET", "RSE", "PERF", "PIE", "ISC", "FURB", "RUF",
     "T20", "ERA", "LOG", "FA", "Q", "TD", "PT",
     "S2", "S5", "S7", "S101", "S102", "S103", "S104", "S105", "S106", "S107",
-    "S108", "S310", "S311",
+    "S108", "S110", "S310", "S311",
     "S301", "S302", "S303", "S304", "S305", "S306", "S307", "S308",
     "S312", "S313", "S314", "S315", "S316", "S317", "S318", "S319",
     "S321", "S323", "S324",
@@ -301,9 +309,11 @@ select = [
     # comparing a value with itself, comparing two constants, a property that
     # takes arguments, an argument rebound from a local, a bool chain that
     # cannot short-circuit, sys.exit reachable outside the entry point, an
-    # empty comment, a dict or list index lookup whose key is known to exist.
-    "PLR0124", "PLR0133", "PLR0206", "PLR1704", "PLR1716", "PLR1722",
-    "PLR1733", "PLR1736", "PLR2044",
+    # empty comment, a dict or list index lookup whose key is known to exist,
+    # and an explicit `raise StopIteration` inside a generator, which PEP 479
+    # turns into a RuntimeError mid-iteration instead of ending it.
+    "PLR0124", "PLR0133", "PLR0206", "PLR1704", "PLR1708", "PLR1716",
+    "PLR1722", "PLR1733", "PLR1736", "PLR2044",
     # A trailing `return` at the end of a function hides the statement that
     # was meant to be the last one, which is how an assignment or a log line
     # silently stops running. It ran clean before it was written here, so it
@@ -315,6 +325,19 @@ select = [
     # B group; TRY300 (return in try) and TRY003 (long message in raise) are
     # the two this tree does not pass yet.
     "TRY002", "TRY004", "TRY201", "TRY203", "TRY400", "TRY401",
+    # flake8-type-checking: the TYPE_CHECKING block is what keeps an
+    # annotation-only import out of the request path, and these are the rules
+    # that say when the block has stopped being one. TC005 finds a block
+    # guarding nothing (the import it held moved out, so the guard is dead
+    # weight that still reads as a claim); TC007 finds a `TypeAlias` naming a
+    # TYPE_CHECKING-only symbol unquoted, which is a NameError at import.
+    # TC001-TC004 and TC010 are NOT here: TC004 misreads a runtime import
+    # that a TYPE_CHECKING import of the same name shadows
+    # (src/recoverage/devserver.py binds wsgiref's InputStream at runtime and
+    # _typeshed's for mypy), TC001/TC003 are a tree-wide import move rather
+    # than a defect class, and TC010 reports nothing on the union it documents
+    # in ruff 0.16.4 — a rule that cannot be shown to fire is not a gate.
+    "TC005", "TC007",
 ]
 # `ignore` is the one severity-downgrade list here, and the reason each entry
 # is in it is held by `recorded` in
