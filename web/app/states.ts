@@ -7,7 +7,13 @@
  * strip prints beside a differently painted cell, reads as two dashboards. The
  * geometry that consumes a slot lives in `@/grid/pack`; nothing here touches
  * the DOM, and nothing here depends on the geometry.
+ *
+ * `@/lib/format` is the one import, and it is a leaf (it imports nothing), so
+ * the dim caption below prints through `count` and `plural` the way every other
+ * figure on the page does instead of formatting a number by hand.
  */
+
+import { count, plural } from "@/lib/format";
 
 /** Cells are packed into eight palette slots.
  *
@@ -123,6 +129,81 @@ export function survivesFilter(slot: number, ground: number, active: ReadonlySet
   return active.has(FILTER_KEY[slot] ?? "");
 }
 
+/** Whether a block is dimmed: either rule the reader armed excludes it.
+ *
+ * `CoverageMap.paint` was the only place either dimming rule was spelled out,
+ * and nothing counted what survived them, so a filter naming states this
+ * section does not hold painted an empty map that read as "this section is
+ * empty", with the way back a hunt for the "All states" pill. One predicate
+ * answers both the paint and the count the caption reports, so the sentence
+ * under the lattice and the lattice itself cannot disagree.
+ *
+ * A block both rules dim is one the reader excluded twice; there is nothing for
+ * the answer to disambiguate, which is why this is a boolean and `dimSummary`
+ * names the armed rules from the two inputs instead of from this one. */
+export function isDimmed(
+  slot: number,
+  ground: number,
+  fn: string | number,
+  filters: ReadonlySet<string>,
+  matchedFns: ReadonlySet<string | number> | null,
+): boolean {
+  if (filters.size > 0 && !survivesFilter(slot, ground, filters)) {
+    return true;
+  }
+  return matchedFns !== null && !matchedFns.has(fn);
+}
+
+/** What `dimSummary` says about each combination of the two armed rules: the
+ * clause naming what dimmed the lattice, and the clause naming what undoes it.
+ * Indexed by the one key each combination has. */
+const DIM_CAUSE = {
+  filter: ["the status filter", "turn off the status filter"],
+  search: ["the search", "clear the search"],
+  both: [
+    "the status filter and the search",
+    "turn off the status filter and clear the search",
+  ],
+} as const satisfies Record<string, readonly [string, string]>;
+
+/** Which of the two armed rules the caption is describing. */
+function dimCauseKey(filtering: boolean, searching: boolean): keyof typeof DIM_CAUSE {
+  if (filtering) {
+    return searching ? "both" : "filter";
+  }
+  return "search";
+}
+
+/** The caption a partially dimmed lattice shows under itself, or null when
+ * nothing is dimming it.
+ *
+ * The moment this answers: a reader picks a status (or types a term) and the
+ * map goes blank. Dimming alone reads as "this section has no blocks", and the
+ * status strip's counts are per state over the whole target rather than over
+ * the section on screen, so neither the map nor the strip said how much of
+ * THIS section was still shown or which rule hid the rest.
+ *
+ * It names the rule and not its value: the search box above the map carries the
+ * term and the pills carry the states, so repeating either here is one more
+ * line that can fall out of step with the control it mirrors. The counts go
+ * through `count` and `plural` like every other number on the page. */
+export function dimSummary(
+  lit: number,
+  total: number,
+  filters: ReadonlySet<string>,
+  searching: boolean,
+): string | null {
+  if (total === 0 || lit >= total) {
+    return null;
+  }
+  const cause = DIM_CAUSE[dimCauseKey(filters.size > 0, searching)];
+  const blocks = plural(total, { one: "block", other: "blocks" });
+  const shown = `Showing ${count(lit)} of ${count(total)} ${blocks}, dimmed by ${cause[0]}.`;
+  if (lit > 0) {
+    return shown;
+  }
+  return `${shown} Every block here is dimmed; ${cause[1]} to see them again.`;
+}
 /** The state filters the stats strip offers, in palette order. A state the grid
  * can paint but no control can isolate is unreachable, so this list covers
  * every slot but the first (undocumented, which is the absence of a match and
