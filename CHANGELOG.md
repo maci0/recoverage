@@ -68,6 +68,16 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `docs/RECOVERY.md`'s backup crontab now says which timezone its `03:17` is.
+  The five cron fields are a wall-clock time read in whatever zone the host is
+  set to, while the archive name `recoverage backup` writes is a UTC instant, so
+  on a host that observes DST the name steps an hour against the crontab twice
+  a year (`01:17Z` in `Europe/Warsaw` summers, `02:17Z` in winters) and a
+  container with no `TZ` of its own lands wherever the daemon's zone puts it. The
+  page carries a `CRON_TZ=UTC` crontab, a `systemd` timer with
+  `OnCalendar=… UTC` and `Persistent=true`, and what to do on a stock Vixie
+  cron, which has no `CRON_TZ`. The archive name itself is unchanged, and is
+  pinned by a test against the host's zone.
 - The dashboard's first paint got smaller: the syntax highlighter is no longer
   part of the bundle the server inlines into the page, and is fetched the first
   time a code pane opens. Nothing in the first frame reads it, so every visit

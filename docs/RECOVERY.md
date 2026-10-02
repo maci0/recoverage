@@ -122,6 +122,41 @@ write returned. Run it whenever the coverage documents change:
 17 3 * * *  cd /srv/project && RECOVERAGE_BACKUP_DIR=/srv/backups recoverage backup --json >> /var/log/recoverage-backup.log 2>&1
 ```
 
+**Say which zone `03:17` is.** The five fields are a WALL-CLOCK time, read in
+whatever zone the host is set to, and the archive it writes is stamped in UTC
+(`coverage-<YYYYMMDD>T<HHMMSS.ffffff>Z`). Those are the same instant, but on a
+host that observes DST they name it in two offsets: in `Europe/Warsaw` the line
+above fires at `03:17+02:00` in summer and `03:17+01:00` in winter, so the
+archive name steps an hour against the crontab twice a year, and an operator
+reading a filename beside an incident timeline has to know which half of the
+year produced it. The host is not the only variable — a container with no `TZ`
+of its own inherits the daemon's, and one that sets `TZ` per deployment lands
+an hour apart from the run the timeline is built on.
+
+Pin it rather than leaving it to the host, with whichever the deployment
+already has:
+
+```cron
+# Cronie/systemd-style crontabs, and any host with a known zone.
+CRON_TZ=UTC
+17 3 * * *  cd /srv/project && RECOVERAGE_BACKUP_DIR=/srv/backups recoverage backup --json >> /var/log/recoverage-backup.log 2>&1
+```
+
+```ini
+# A systemd timer: OnCalendar is a wall clock too, so it names the zone as
+# well, and Persistent=true is what makes a laptop that was asleep at 03:17
+# take the backup on its next wake instead of skipping the day.
+[Timer]
+OnCalendar=*-*-* 03:17:00 UTC
+Persistent=true
+```
+
+Stock Vixie cron has no `CRON_TZ`. There, set the host's zone once
+(`timedatectl set-timezone UTC`, or `TZ=UTC` in the daemon's environment) and
+check it: `date` on the box the cron daemon runs on, not the one you are
+logged into. A `TZ=UTC` wrapper the line calls is the same rule by another
+route, and the one that survives the daemon being reinstalled.
+
 **The schedule is the RPO.** Put `RECOVERAGE_BACKUP_DIR` on a different volume
 from `db/` — a different disk, or a different host — or the backup protects
 against nothing that taking the coverage directory down would not take with it.

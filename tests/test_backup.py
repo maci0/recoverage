@@ -14,14 +14,20 @@ would not have, and they are the ones an incident needs:
 * an empty coverage directory produces an alert, not an empty archive that
   restores to an empty dashboard;
 * a member name in the manifest cannot write outside the directory the restore
-  was pointed at.
+  was pointed at;
+* the default archive name is a UTC instant whatever the host's zone is, so
+  the backup directory sorts chronologically across a DST transition and a
+  filename matches the schedule that wrote it.
 """
 
 from __future__ import annotations
 
 import io
 import json
+import os
 import tarfile
+import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -138,6 +144,52 @@ class TestWriteBackup:
         assert info.path.parent == tmp_path
         assert info.path.name.startswith("coverage-")
         assert info.path.suffix == ".tar"
+
+    def test_the_stamped_name_is_utc_and_sorts_as_one(
+        self, db: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The name is UTC whatever the host's zone is, and sorts by instant.
+
+        docs/RECOVERY.md tells an operator to pin their crontab to a stated
+        zone and then to read the archive name beside an incident timeline, so
+        the name has to answer a UTC instant rather than the host's wall clock:
+        a name following ``TZ`` puts the same run at two different-looking
+        times either side of a DST transition, and the two sort wrong against
+        the directory they are the index to.  Fixed width for the same reason:
+        a lexicographic sort IS the sort ``_ARCHIVE_PREFIX`` documents.
+        """
+        if not hasattr(time, "tzset"):
+            pytest.skip("no time.tzset() on this platform")
+        # A fixed instant, so the name is a function of the clock and the zone
+        # rather than of when the suite happened to run.
+        monkeypatch.setattr(backup.clock, "wall_time", lambda: 1_700_000_000.0)
+        expected = datetime.fromtimestamp(1_700_000_000.0, tz=UTC)
+        previous = os.environ.get("TZ")
+        written: list[str] = []
+        # `zone` holds a slash ("Europe/Warsaw"), so it is the PATH that gets
+        # flattened, not the zone name itself.
+        zones = (("Europe/Warsaw", "warsaw"), ("Pacific/Kiritimati", "kiritimati"), ("UTC", "utc"))
+        try:
+            for zone, folder in zones:
+                monkeypatch.setenv("TZ", zone)
+                time.tzset()
+                # A directory destination, so the name is the stamped one the
+                # default path builds rather than a name we chose.
+                out = tmp_path / folder
+                out.mkdir(exist_ok=True)
+                written.append(write_backup(db, out).path.name)
+        finally:
+            if previous is None:
+                monkeypatch.delenv("TZ", raising=False)
+            else:
+                monkeypatch.setenv("TZ", previous)
+            time.tzset()
+        # The same instant, so the same name: the host's zone cannot reach it.
+        assert written[0] == written[1] == written[2]
+        # Fixed width, zero padded, and carrying the ``Z`` the manifest's
+        # instant carries, so `sort` orders the directory by instant.
+        assert written[0] == "coverage-" + expected.strftime("%Y%m%dT%H%M%S.%fZ") + ".tar"
+        assert sorted(written) == written
 
     def test_two_backups_of_the_same_bytes_are_identical(self, db: Path, tmp_path: Path) -> None:
         """The member mtime is pinned, so a diff of two backups compares coverage."""

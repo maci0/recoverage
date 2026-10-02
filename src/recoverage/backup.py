@@ -149,6 +149,16 @@ def _stamp() -> str:
     ``restored_at`` in the same run.  ``%f`` to microseconds and ``Z`` rather
     than ``+00:00``: the name has to survive a filename limit on every host, and
     a colon in a filename is a quote on Windows.
+
+    UTC, never the host's local time, and fixed width — this name is the
+    backup directory's index.  ``docs/RECOVERY.md`` has the operator pin their
+    crontab to a stated zone, and the only way that promise holds on a host
+    whose ``TZ`` changes (or that observes DST) is for the name to name an
+    instant rather than a wall clock reading: a local name would step an hour
+    against the crontab at every transition, and two such names sort wrong
+    against each other.  ``sorted()`` over the directory is the "newest backup"
+    every runbook step assumes, and fixed width is what makes it the same
+    order.
     """
     return datetime.fromtimestamp(clock.wall_time(), tz=UTC).strftime("%Y%m%dT%H%M%S.%fZ")
 
