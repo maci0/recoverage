@@ -53,6 +53,33 @@ log, a pasted link, and a URL copied before the page settles all still carry
 the bearer value, so a token shared as a link should be read as disclosed to
 every system that saw the request.
 
+## Backups hold a copy of the project
+
+`recoverage backup` writes every coverage document into one tar beside the
+project (`../backups/` by default, or `$RECOVERAGE_BACKUP_DIR`). Since 4.3 the
+coverage documents are the only durable state in the package — `history` and
+`verify_results` are carried forward from the previous document and
+`rebrew build-db` cannot reproduce them — so that archive is the only copy of
+them that outlives the tree, and losing it is not something a regen repairs.
+
+Members are written `0o600` and every member's size and sha256 are recorded in
+the archive's `manifest.json`, which `recoverage restore` re-checks in full
+before it writes anything. There is no encryption and no at-rest integrity
+beyond those digests, so an archive that reaches a shared filesystem, a
+container volume or second storage should be read as a disclosed copy of the
+project's reverse-engineering output, and `$RECOVERAGE_BACKUP_DIR` deserves the
+same scrutiny as any other environment input.
+
+`recoverage restore ARCHIVE` replaces the coverage documents from that file,
+which is the same directory every served page reads. It takes no
+authentication, because it is a local command and the holder of the filesystem
+is the trust. It refuses to overwrite a document whose bytes differ unless
+`--force` is given, and `--force` overrides that check and no other. A restore
+is not logged through the package's logger and leaves no marker in the served
+output, so a rollback and a rebuild are indistinguishable to a reader. The model
+carries that as risks 12 and 13, boundary 9, and unmitigated 16 and 17;
+`docs/RECOVERY.md` carries the operational drill.
+
 ## Running under a WSGI host
 
 `recoverage.webapp.app` (`src/recoverage/webapp.py`) is the same fully routed
