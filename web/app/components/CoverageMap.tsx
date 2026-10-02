@@ -11,7 +11,7 @@ import {
   type Geometry,
   type Packed,
 } from "@/grid/pack";
-import { count, hex, isolate } from "@/lib/format";
+import { count, foldCellName, hex, isolate } from "@/lib/format";
 import { MARK_CLASS, PALETTE_VARS, STATE_LABEL, survivesFilter, type Mark } from "@/states";
 
 /** The roving tab stop's next cell for a key, or null when the key is not a
@@ -166,6 +166,28 @@ export function CoverageMap({
   // identity is "the cells changed" and a stale hit map cannot survive it.
   const pack = useMemo(() => packSection(section), [section]);
 
+  // The packed names, folded into the form `matchedFns` holds, so the paint
+  // loop's membership test is one form compared one way. Built here rather
+  // than in `isDim`: a cell's `functions[0]` is the RAW document spelling, the
+  // match set is the FOLDED one the search produced, and the two spellings of
+  // one name are different strings (an NFD symbol against an NFC row, or two
+  // rows of one build that disagree). Folding per cell per frame would put
+  // `normalize` on the hot path of every repaint; folding once per pack costs
+  // one pass when the cells or the search change and nothing between.
+  const isMatched = useMemo(() => {
+    if (matchedFns === null) {
+      return null;
+    }
+    const hit = new Set<string>();
+    for (let i = 0; i < pack.n; i += 1) {
+      const name = pack.fns[i];
+      if (matchedFns.has(foldCellName(name))) {
+        hit.add(String(i));
+      }
+    }
+    return hit;
+  }, [matchedFns, pack]);
+
   const describe = useCallback(
     (index: number): string => {
       if (index < 0 || index >= pack.n) {
@@ -261,7 +283,7 @@ export function CoverageMap({
     const filtering = filters.size > 0;
     const isDim = (index: number): boolean =>
       (filtering && !survivesFilter(states[index] ?? 0, ground[index] ?? 0, filters)) ||
-      (matchedFns !== null && !matchedFns.has(fns[index] ?? ""));
+      (isMatched !== null && !isMatched.has(String(index)));
     ctx.clearRect(0, 0, geo.width, geo.height);
     for (let pass = 0; pass < 2; pass += 1) {
       ctx.globalAlpha = pass === 0 ? 1 : 0.15;
@@ -313,7 +335,7 @@ export function CoverageMap({
     ) {
       stroke(state.focus, true);
     }
-  }, [activeFn, filters, geometry, matchedFns, pack, selectedIndex]);
+  }, [activeFn, filters, geometry, isMatched, pack, selectedIndex]);
 
   // Rebuild the state on section change, then paint on every input change.
   //

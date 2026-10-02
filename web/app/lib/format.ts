@@ -394,6 +394,27 @@ export function foldForSearch(text: string): string {
     .replace(FULL_FOLD_PATTERN, (character) => FULL_FOLD.get(character) ?? character);
 }
 
+/** The name one cell is matched under, in the form the match set holds.
+ *
+ * `matchedFns` is a set of NAMES, and the search that filled it ran
+ * `foldForSearch` over every index row — so its members are folded, while a
+ * cell's `functions[0]` is the RAW name the coverage document wrote. Every
+ * membership test against the map was byte equality between the two, and the
+ * two spellings of one name are different strings: a document built on macOS
+ * spells a symbol NFD ("cafe" + U+0301) where the function row spells it NFC,
+ * or two rows of one build disagree because a tool rewrote one of them. The
+ * search reported the match, then the dim, the section count and Enter's jump
+ * all missed it, so the map stayed undimmed under a match count above it.
+ *
+ * Folding the name on the way IN is the fix the haystack already got: one
+ * form compared two ways, instead of two forms compared one way. The digit
+ * arm (a cell whose `functions[0]` is the bare VA the set also carries) folds
+ * to itself, so one helper covers both.
+ */
+export function foldCellName(raw: string | number | undefined | null): string {
+  return foldForSearch(String(raw ?? ""));
+}
+
 /** The spaces a search box rounds off, and only those.
  *
  * `String.prototype.trim` removes every character Unicode calls whitespace:

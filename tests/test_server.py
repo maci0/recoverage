@@ -5379,6 +5379,56 @@ class TestSpaSearchFoldsLikeTheServer:
         assert nfc != nfd, "the two spellings are one string, so this asserts nothing"
         assert fold_text(nfc) == fold_text(nfd)
 
+    def test_the_match_set_and_the_cell_names_are_compared_in_one_form(self) -> None:
+        """Folding the haystack is half the contract; the membership test is
+        the other half.
+
+        `matchedFns` is a set of index NAMES and the map's dimming, the
+        section match count and Enter's jump all ask it about a cell's
+        `functions[0]` — the RAW name the coverage document wrote. The search
+        that filled the set folded every index row, so a set member is folded
+        while the cell name is not, and the two spellings of one name are
+        different strings: an NFD symbol against an NFC row, or two rows of one
+        build that disagree because a tool rewrote one of them. The search
+        reported the match and every one of those three missed it, so the map
+        stayed undimmed under a match count above it.
+
+        Both sides of THAT comparison go through `foldCellName`, the same fold
+        the haystack gets. A set that mixes raw keys with folded lookups is the
+        same defect one level down, so the members are folded at the point they
+        are added rather than at each lookup.
+        """
+        app = _web("App.tsx")
+        matched = re.search(
+            r"const matchedFns = useMemo\(\(\) => \{.*?\n  \}, \[.*?\]\);",
+            app,
+            re.DOTALL,
+        )
+        assert matched is not None, "the match set is no longer a memo"
+        body = matched.group(0)
+        assert "foldCellName(name)" in body, "the set holds a RAW name the cell never compares"
+        assert "foldCellName(va)" in body, "the bare-VA arm is added unfolded"
+        assert "new Set<string>(matchedNames)" not in body, (
+            "the set is seeded from the raw index keys rather than folded"
+        )
+
+        # Every membership test against a cell's name folds the cell's side.
+        assert "matchedFns.has(String(cell.functions" not in app, (
+            "a membership test compares the raw cell name against the folded set"
+        )
+        assert app.count("foldCellName(cell.functions?.[0])") == 2, (
+            "the section match count and Enter's jump do not both fold the cell name"
+        )
+
+        # The paint loop cannot fold per cell per frame, so it folds once per
+        # pack, and the loop reads that.
+        map_source = _web("components/CoverageMap.tsx")
+        assert 'matchedFns.has(fns[index] ?? "")' not in map_source, (
+            "the dim compares a raw packed name against the folded set"
+        )
+        assert "foldCellName(name)" in map_source, "the packed names are not folded for the dim"
+        assert "isMatched" in map_source, "the dim has no pre-folded lookup to read"
+
 
 class TestSpaLayoutAndFeedback:
     """Structural contracts of the ported map and shell.
@@ -5617,9 +5667,15 @@ class TestSpaJumpAndSearch:
         # The set is seeded with every matched NAME and then extended with that
         # name's VA spelling, so a `.text` cell holding either one dims. The
         # generic is the names' own: every member is a string, and a numeric arm
-        # no call site can satisfy is a type wider than the set is.
-        assert "new Set<string>(matchedNames)" in app
-        assert "matched.add(String(va))" in app
+        # no call site can satisfy is a type wider than the set is. Both arms
+        # are FOLDED, which is the form every membership test against a cell
+        # compares in (`foldCellName`): the index row is one spelling of a
+        # name and a cell carries the document's, and the two differ as
+        # strings. A VA is digits, so its fold is itself and the arm is
+        # unchanged in what it matches.
+        assert "const matched = new Set<string>();" in app
+        assert "matched.add(foldCellName(name))" in app
+        assert "matched.add(foldCellName(va))" in app
         assert "coverage.searchIndex[name]?.va" in app
 
     def test_enter_jumps_to_a_matched_block_in_the_section_on_screen(self) -> None:
@@ -5629,7 +5685,7 @@ class TestSpaJumpAndSearch:
         # the jump in a sibling, switching tabs away from the map the reader
         # was looking at.
         assert "active?.cells?.findIndex(" in app
-        assert 'matchedFns?.has(String(cell.functions?.[0] ?? ""))' in app
+        assert "matchedFns?.has(foldCellName(cell.functions?.[0]))" in app
         assert "setSelectedIndex(local);" in app
 
     def test_enter_outside_the_section_lands_on_the_lowest_matched_address(self) -> None:

@@ -17,6 +17,7 @@ import {
   MSG,
   count,
   errorMessage,
+  foldCellName,
   foldForSearch,
   hex,
   isolate,
@@ -498,15 +499,16 @@ export function App() {
     if (matchedNames === null) {
       return null;
     }
-    // Set<string>, not Set<string | number>: every member is added as a
-    // string (a name, or a VA run through String), and every lookup below
-    // passes a String of a cell's `functions[0]`, so the number arm was a
-    // type wider than any call site could satisfy.
-    const matched = new Set<string>(matchedNames);
+    // Members are FOLDED (`foldCellName`), the form the search that filled
+    // `matchedNames` compared in, so a cell's raw `functions[0]` — matched
+    // through `foldCellName` at every call site — agrees with the set. A
+    // digit VA folds to itself, so the bare-VA arm needs no special case.
+    const matched = new Set<string>();
     for (const name of matchedNames) {
+      matched.add(foldCellName(name));
       const va = coverage.searchIndex[name]?.va;
       if (va !== undefined) {
-        matched.add(String(va));
+        matched.add(foldCellName(va));
       }
     }
     return matched;
@@ -608,7 +610,7 @@ export function App() {
     if (matchedFns === null || cells === undefined) {
       return null;
     }
-    return cells.filter((cell) => matchedFns.has(String(cell.functions?.[0] ?? ""))).length;
+    return cells.filter((cell) => matchedFns.has(foldCellName(cell.functions?.[0]))).length;
   }, [active, matchedFns]);
 
   /** What the search status line says, or null when no query is typed. The
@@ -742,7 +744,7 @@ export function App() {
     // section the reader was reading. Within the section the cell order is the
     // map's own top-to-bottom order.
     const local =
-      active?.cells?.findIndex((cell) => matchedFns?.has(String(cell.functions?.[0] ?? ""))) ?? -1;
+      active?.cells?.findIndex((cell) => matchedFns?.has(foldCellName(cell.functions?.[0]))) ?? -1;
     if (local >= 0) {
       setSelectedIndex(local);
       gridFocus.current?.(local);
